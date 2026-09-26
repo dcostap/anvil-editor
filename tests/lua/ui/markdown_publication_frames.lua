@@ -232,6 +232,31 @@ test.describe("Markdown publication frames", function()
     end
   end)
 
+  test.it("keeps an empty nested marker raw until it has a body", function(context)
+    local view, buffer = make_view(context, "- sdfsdf\n     - \n")
+    buffer:set_selection(2, #buffer.lines[2])
+    test.equal(frame(view, 1, 2)[2].text, "     - ")
+    view:on_text_input("x")
+    local pending = frame(view, 1, 2)
+    test.equal(pending[2].text, "<widget>x", "the new item did not gain a bullet")
+    ready(view)
+    same_rows(frame(view, 1, 2), pending, "nested list first character")
+  end)
+
+  test.it("outdents the third nested item by one list level", function(context)
+    local view, buffer = make_view(context,
+      "- sdfsdf\n     - testing this thing\n     - testing \n     - \n")
+    buffer:set_selection(4, #buffer.lines[4])
+    frame(view, 1, 4)
+    test.ok(command.perform("core:unindent", view))
+    test.equal(buffer.lines[4], "- \n", "outdent left the item inside the parent")
+    local line, col = buffer:get_selection()
+    test.same({ line, col }, { 4, 3 })
+    local pending = frame(view, 1, 4)
+    ready(view)
+    same_rows(frame(view, 1, 4), pending, "third list item outdent")
+  end)
+
   test.it("keeps every visible row fixed through an offscreen file reload", function(context)
     local lines = {}
     for i = 1, 360 do

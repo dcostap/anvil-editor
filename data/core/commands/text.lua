@@ -558,6 +558,30 @@ local function markdown_space_indent(line_text, indent_length)
   )
 end
 
+local function markdown_parent_list_indent(buffer, line, indent_length)
+  local width = markdown_indent_width(
+    (buffer.lines[line] or ""):sub(1, indent_length)
+  )
+  for previous_line = line - 1, 1, -1 do
+    local text = buffer.lines[previous_line] or ""
+    if text:match("^%s*$") then break end
+    local content_start, previous_indent = markdown_list_content_start(
+      buffer, previous_line, text, true
+    )
+    if previous_indent then
+      local previous_width = markdown_indent_width(text:sub(1, previous_indent))
+      if previous_width < width then
+        -- A child marker can start up to three columns after the parent's
+        -- content column. Do not skip levels when the parent is farther away.
+        if width <= previous_width + (content_start - previous_indent - 1) + 3 then
+          return markdown_space_indent(text, previous_indent)
+        end
+        break
+      end
+    end
+  end
+end
+
 local function markdown_marker_only_task_end_col(line_text)
   local text = tostring(line_text or ""):gsub("\n$", "")
   if text:match("^[\t ]*[-%+%*][\t ]+%[[ xX]%]$")
@@ -2009,7 +2033,15 @@ local commands = {
         and content_start ~= nil
       local old_indent_length = #(line_text:match("^[\t ]*") or "")
       local l1, c1, l2, c2
-      if keep_list_caret_position and old_indent_length == 0 then
+      local parent_indent = keep_list_caret_position and old_indent_length > 0
+        and markdown_parent_list_indent(dv.buffer, line1, old_indent_length)
+      if parent_indent then
+        dv.buffer:apply_edits({ {
+          line1 = line1, col1 = 1, line2 = line1,
+          col2 = old_indent_length + 1, text = parent_indent,
+        } }, { type = "remove", merge_cursors = false })
+        l1, c1, l2, c2 = line1, col1, line2, col2
+      elseif keep_list_caret_position and old_indent_length == 0 then
         l1, c1, l2, c2 = line1, col1, line2, col2
       else
         l1, c1, l2, c2 = dv.buffer:indent_text(
