@@ -112,6 +112,18 @@ test.describe("Fuzzy Searcher result selection", function()
     test.same(picker:get_selected_result_indices(), { 2 })
   end)
 
+  test.it("keeps equal display names from separate Project roots distinct", function()
+    local picker = fuzzy.open_static_results("Results", {
+      { kind = "file", file = "src/main.lua", abs_path = "C:\\first\\src\\main.lua" },
+      { kind = "file", file = "src/main.lua", abs_path = "C:\\second\\src\\main.lua" },
+    })
+    click_result(picker, 2, "ctrl")
+    test.same(picker:get_selected_result_indices(), { 1, 2 })
+    click_result(picker, 1, "ctrl")
+    command.perform("fuzzy:next")
+    test.same(picker:get_selected_result_indices(), { 2 })
+  end)
+
   test.it("opens two selected locations in one file in separate Panes without splits", function(context)
     context.file = common.normalize_path(USERDIR .. PATHSEP .. "fuzzy-multi-" .. system.get_process_id() .. ".txt")
     local file = assert(io.open(context.file, "wb"))

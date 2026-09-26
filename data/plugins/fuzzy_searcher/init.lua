@@ -3985,9 +3985,11 @@ end
 
 function FSView:result_selection_key(result)
   if not result then return nil end
+  local path = result.abs_path or result.file and fullpath(result)
+    or result.buffer and (result.buffer.abs_filename or tostring(result.buffer))
+    or result.path and fullpath(result) or ""
   return table.concat({
-    tostring(result.kind or ""), tostring(result.file or result.abs_path or result.path or
-      (result.buffer and result.buffer.abs_filename) or ""),
+    tostring(result.kind or ""), tostring(path), tostring(result.repo or ""),
     tostring(result.revision or ""), tostring(result.revision_path or ""),
     tostring(result.line or ""), tostring(result.col or ""),
     tostring(result.label or ""), tostring(result.text or ""),
