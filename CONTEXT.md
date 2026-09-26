@@ -52,6 +52,10 @@ _Avoid_: file catalog, search database
 A temporary File Search or Text Search option that adds ignored files to that search. Hidden paths stay excluded.
 _Avoid_: disable ignores, index ignored files
 
+**Case Sensitive**:
+A temporary search option that requires matching letter case. Fuzzy matching stays available.
+_Avoid_: exact name matching
+
 **Search Modifier**:
 A temporary option that changes the search source, file filters, or result order without changing the text to match.
 Inline Search Modifiers use `modifier:value` and can combine in one search.

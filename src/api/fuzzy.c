@@ -68,6 +68,14 @@ static bool opt_spans(lua_State *L, int opts_index) {
   return spans;
 }
 
+static bool opt_case_sensitive(lua_State *L, int opts_index) {
+  if (!opts_index || !lua_istable(L, opts_index)) return false;
+  lua_getfield(L, opts_index, "case_sensitive");
+  bool enabled = lua_toboolean(L, -1) != 0;
+  lua_pop(L, 1);
+  return enabled;
+}
+
 static const char **read_string_items(lua_State *L, int table_index, uint32_t *out_count) {
   luaL_checktype(L, table_index, LUA_TTABLE);
   size_t len = lua_rawlen(L, table_index);
@@ -134,8 +142,8 @@ static void push_match_position_fields(lua_State *L, const FuzzySpan *spans, uin
   }
 }
 
-static void push_spans(lua_State *L, const FuzzyIndex *index, uint32_t entry_index, const char *query, FuzzySpan *spans, uint32_t *out_count) {
-  uint32_t count = fuzzy_match_spans(index, entry_index, query, spans, FUZZY_MAX_RETURN_SPANS);
+static void push_spans(lua_State *L, const FuzzyIndex *index, uint32_t entry_index, const char *query, bool case_sensitive, FuzzySpan *spans, uint32_t *out_count) {
+  uint32_t count = fuzzy_match_spans_case(index, entry_index, query, case_sensitive, spans, FUZZY_MAX_RETURN_SPANS);
   if (out_count) *out_count = count;
   lua_createtable(L, count, 0);
   for (uint32_t i = 0; i < count; ++i) {
@@ -144,7 +152,7 @@ static void push_spans(lua_State *L, const FuzzyIndex *index, uint32_t entry_ind
   }
 }
 
-static void push_results(lua_State *L, const FuzzyIndex *index, const char *query, FuzzySearchResult *results, uint32_t count, bool include_spans, bool has_more) {
+static void push_results(lua_State *L, const FuzzyIndex *index, const char *query, FuzzySearchResult *results, uint32_t count, bool include_spans, bool has_more, bool case_sensitive) {
   lua_createtable(L, count, 1);
   for (uint32_t i = 0; i < count; ++i) {
     FuzzySearchResult *r = &results[i];
@@ -161,7 +169,7 @@ static void push_results(lua_State *L, const FuzzyIndex *index, const char *quer
     if (include_spans) {
       FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
       uint32_t span_count = 0;
-      push_spans(L, index, r->entry_index, query, spans, &span_count);
+      push_spans(L, index, r->entry_index, query, case_sensitive, spans, &span_count);
       lua_setfield(L, -2, "spans");
       push_match_position_fields(L, spans, span_count);
     }
@@ -199,9 +207,10 @@ static int fuzzy_index_search_lua(lua_State *L) {
   bool include_spans = opt_spans(L, opts);
   uint32_t count = 0;
   bool has_more = false;
-  FuzzySearchResult *results = fuzzy_index_search(&li->index, query, limit, &count, &has_more);
+  bool case_sensitive = opt_case_sensitive(L, opts);
+  FuzzySearchResult *results = fuzzy_index_search_case(&li->index, query, limit, &count, &has_more, case_sensitive);
   if (!results && limit != 0) luaL_error(L, "out of memory");
-  push_results(L, &li->index, query, results, count, include_spans, has_more);
+  push_results(L, &li->index, query, results, count, include_spans, has_more, case_sensitive);
   free(results);
   return 1;
 }
@@ -459,8 +468,9 @@ static int file_index_search(lua_State *L) {
   bool include_spans = opt_spans(L, opts);
   uint32_t count = 0;
   bool has_more = false;
-  FuzzySearchResult *results = fuzzy_file_index_search(
-    index->index, query, limit, &count, &has_more);
+  bool case_sensitive = opt_case_sensitive(L, opts);
+  FuzzySearchResult *results = fuzzy_file_index_search_case(
+    index->index, query, limit, &count, &has_more, case_sensitive);
   if (!results && limit != 0) return luaL_error(L, "out of memory");
   lua_createtable(L, count, 1);
   for (uint32_t i = 0; i < count; ++i) {
@@ -474,8 +484,8 @@ static int file_index_search(lua_State *L) {
     lua_pushinteger(L, result->score); lua_setfield(L, -2, "score");
     if (include_spans) {
       FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
-      uint32_t span_count = fuzzy_file_index_match_spans(index->index,
-        result->entry_index, query, spans, FUZZY_MAX_RETURN_SPANS);
+      uint32_t span_count = fuzzy_file_index_match_spans_case(index->index,
+        result->entry_index, query, case_sensitive, spans, FUZZY_MAX_RETURN_SPANS);
       lua_createtable(L, span_count, 0);
       for (uint32_t s = 0; s < span_count; ++s) {
         push_span_table(L, &spans[s]);
@@ -500,12 +510,13 @@ static int f_filter(lua_State *L) {
   bool include_spans = opt_spans(L, 3);
   uint32_t count = 0;
   bool has_more = false;
-  FuzzySearchResult *results = fuzzy_index_search(&index, query, limit, &count, &has_more);
+  bool case_sensitive = opt_case_sensitive(L, 3);
+  FuzzySearchResult *results = fuzzy_index_search_case(&index, query, limit, &count, &has_more, case_sensitive);
   if (!results && limit != 0) {
     fuzzy_index_free(&index);
     luaL_error(L, "out of memory");
   }
-  push_results(L, &index, query, results, count, include_spans, has_more);
+  push_results(L, &index, query, results, count, include_spans, has_more, case_sensitive);
   free(results);
   fuzzy_index_free(&index);
   return 1;
@@ -518,11 +529,12 @@ static int match_text(lua_State *L, bool as_table) {
   (void)query_len;
   FuzzyMode mode = opt_mode(L, 3);
   bool include_spans = as_table ? opt_spans(L, 3) : false;
+  bool case_sensitive = opt_case_sensitive(L, 3);
   if (text_len > UINT32_MAX) return 0;
   FuzzyMatchBuffer buffer;
   if (!fuzzy_match_buffer_build(&buffer, mode, text, (uint32_t)text_len)) luaL_error(L, "out of memory");
   int boundary_score = 0;
-  int score = fuzzy_match_buffer_score_parts(mode, &buffer, query, &boundary_score);
+  int score = fuzzy_match_buffer_score_case(mode, &buffer, query, case_sensitive, &boundary_score);
   if (score == INT_MIN) {
     fuzzy_match_buffer_free(&buffer);
     return 0;
@@ -542,12 +554,12 @@ static int match_text(lua_State *L, bool as_table) {
   lua_pushlstring(L, text, text_len);
   lua_setfield(L, -2, "text");
   lua_pushstring(L, fuzzy_match_class_name(
-    fuzzy_match_text_class(mode, buffer.lower, buffer.len, query)));
+    fuzzy_match_text_class_case(mode, case_sensitive ? buffer.match : buffer.lower, buffer.len, query, case_sensitive)));
   lua_setfield(L, -2, "match_class");
   if (include_spans) {
     FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
-    uint32_t count = fuzzy_match_buffer_spans(mode, text, (uint32_t)text_len,
-      &buffer, query, spans, FUZZY_MAX_RETURN_SPANS);
+    uint32_t count = fuzzy_match_buffer_spans_case(mode, text, (uint32_t)text_len,
+      &buffer, query, case_sensitive, spans, FUZZY_MAX_RETURN_SPANS);
     lua_createtable(L, count, 0);
     for (uint32_t i = 0; i < count; ++i) {
       push_span_table(L, &spans[i]);

@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local command = require "core.command"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local test = require "core.test"
@@ -64,6 +65,21 @@ test.describe("Fuzzy Searcher query modifiers", function()
       return #picker.results > 1 and picker.results[1].file == "file-z-largest.txt"
     end), "expected sorting before the result limit")
     test.ok(picker.has_more)
+  end)
+
+  test.it("combines Case Sensitive with a file search modifier", function(context)
+    test.ok(common.mkdirp(context.root .. PATHSEP .. "Upper"))
+    test.ok(common.mkdirp(context.root .. PATHSEP .. "lower"))
+    write_file(context.root, "Upper" .. PATHSEP .. "RenderWidget.lua", "-- fixture\n")
+    write_file(context.root, "lower" .. PATHSEP .. "renderWidget.lua", "-- fixture\n")
+    fuzzy.open("RW sort:name")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return #picker.results == 2 end), tostring(picker.status))
+    test.ok(command.perform("fuzzy:toggle_case_sensitive"))
+    test.ok(wait_until(function()
+      return #picker.results == 1
+        and tostring(picker.results[1].file):find("RenderWidget.lua", 1, true) ~= nil
+    end), tostring(picker.status))
   end)
 
   test.it("filters Text Search by file size and orders file groups by name", function(context)

@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local http = require "core.http"
 local test = require "core.test"
 
@@ -41,6 +42,30 @@ test.describe("Fuzzy Searcher Everything search", function()
     test.equal(params.search, "file: anvil lua")
     test.equal(params.sort, "path")
     test.equal(params.path, "1")
+  end)
+
+  test.it("sends Case Sensitive to Everything without changing the path query", function()
+    local params = helpers.everything_file_search_params("Render", 80, 0, nil, true)
+    test.equal(params.search, "file: Render")
+    test.equal(params.case, "1")
+    test.equal(helpers.everything_file_search_params("Render", 80, 0).case, "0")
+  end)
+
+  test.it("restarts the same Path Search with Case Sensitive", function()
+    local requests = {}
+    http.get = function(_, params, options)
+      requests[#requests + 1] = { params = params, options = options }
+    end
+    helpers.set_everything_state("available")
+    fuzzy_searcher.open("@Needle")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.equal(requests[1].params.case, "0")
+    test.ok(command.perform("fuzzy:toggle_case_sensitive"))
+    picker:refresh(picker.input:get_text())
+    test.equal(#requests, 2)
+    test.ok(requests[1].options.is_cancelled())
+    test.equal(requests[2].params.search, "folder: Needle")
+    test.equal(requests[2].params.case, "1")
   end)
 
   test.it("preserves explicit Everything file filters", function()

@@ -74,6 +74,7 @@ struct AnvilWorkerJob {
   AnvilTSProjectSnapshot *project_snapshot_to_release;
   AnvilTSProjectSnapshot *project_query_snapshot;
   bool project_query_search_declaration;
+  bool project_query_case_sensitive;
   uint32_t project_query_offset;
   uint32_t project_query_limit;
   char **project_query_kinds;
@@ -3710,6 +3711,7 @@ static void run_project_snapshot_query_symbols(AnvilWorkerContext *context, Anvi
   bool ok = anvil_ts_project_snapshot_query_symbols(
     job->project_query_snapshot, job->value ? job->value : "",
     job->project_query_search_declaration,
+    job->project_query_case_sensitive,
     job->project_query_offset, job->project_query_limit ? job->project_query_limit : 200,
     (const char *const *)job->project_query_kinds, job->project_query_kind_count,
     (const char *const *)job->project_query_parent_names, job->project_query_parent_name_count,
@@ -4328,6 +4330,7 @@ AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorke
   job->project_query_snapshot = spec->project_query_snapshot;
   anvil_ts_project_snapshot_retain(job->project_query_snapshot);
   job->project_query_search_declaration = spec->project_query_search_declaration;
+  job->project_query_case_sensitive = spec->project_query_case_sensitive;
   job->project_query_offset = spec->project_query_offset;
   job->project_query_limit = spec->project_query_limit;
   job->project_query_kind_count = spec->project_query_kind_count;

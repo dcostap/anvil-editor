@@ -1197,6 +1197,7 @@ local function filtered_symbols(symbols, query, limit, opts)
       mode = "generic",
       limit = math.min(#texts, limit + 1),
       spans = false,
+      case_sensitive = opts.case_sensitive == true,
     }) or {}
     for i = 1, math.min(limit, #matches) do out[i] = symbols[matches[i].index] end
     return out, #matches > #out
@@ -1283,7 +1284,9 @@ local function bounded_overlay_symbols(index, suppressed, query, opts, capacity)
         if symbol_kind_allowed(symbol, kinds)
         and symbol_language_allowed(symbol, opts.language_ids or opts.languages)
         and symbol_parent_allowed(symbol, opts.parent_names) then
-          local score = query == "" and 0 or (native_fuzzy and native_fuzzy.score(symbol_fuzzy_text(symbol, opts), query, { mode = "generic" }))
+          local score = query == "" and 0 or (native_fuzzy and native_fuzzy.score(symbol_fuzzy_text(symbol, opts), query, {
+            mode = "generic", case_sensitive = opts.case_sensitive == true,
+          }))
           if query == "" or score then
             matched = matched + 1
             local candidate = { symbol = symbol, score = score or 0 }
@@ -1315,6 +1318,7 @@ local function native_project_symbols(index, snapshot, query, opts)
     offset = 0,
     limit = native_limit,
     search_declaration = opts.search_declaration == true,
+    case_sensitive = opts.case_sensitive == true,
     kinds = opts.symbol_kinds or opts.kinds,
     parent_names = opts.parent_names,
     languages = opts.language_ids or opts.languages,
@@ -1686,6 +1690,7 @@ local function native_workspace_symbols_async(query, opts, roots)
         query_snapshot = child.snapshot,
         value = tostring(query or ""),
         search_declaration = opts.search_declaration == true,
+        case_sensitive = opts.case_sensitive == true,
         offset = 0,
         limit = candidate_limit,
         kinds = opts.symbol_kinds or opts.kinds,

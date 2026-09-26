@@ -101,6 +101,7 @@ bool anvil_ts_project_snapshot_query_symbols(
   const AnvilTSProjectSnapshot *snapshot,
   const char *query,
   bool search_declaration,
+  bool case_sensitive,
   uint32_t offset,
   uint32_t limit,
   const char *const *kinds,

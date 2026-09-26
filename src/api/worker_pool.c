@@ -325,6 +325,7 @@ static int pool_submit(lua_State *L) {
   spec.project_query_offset = opt_uint32_field(L, 2, "offset", 0);
   spec.project_query_limit = opt_uint32_field(L, 2, "limit", 200);
   spec.project_query_search_declaration = opt_bool_field(L, 2, "search_declaration", NULL);
+  spec.project_query_case_sensitive = opt_bool_field(L, 2, "case_sensitive", NULL);
   luaL_argcheck(L, spec.project_query_limit <= PROJECT_RECORD_PAGE_LIMIT, 2,
     "Project query limit exceeds 4096");
   lua_getfield(L, 2, "release_snapshot");
@@ -1483,10 +1484,12 @@ static int project_snapshot_query_symbols(lua_State *L) {
   const char *query = luaL_optstring(L, 2, "");
   uint32_t offset = 0, limit = 200;
   bool search_declaration = false;
+  bool case_sensitive = false;
   if (lua_istable(L, 3)) {
     offset = opt_uint32_field(L, 3, "offset", 0);
     limit = opt_uint32_field(L, 3, "limit", 200);
     search_declaration = opt_bool_field(L, 3, "search_declaration", NULL);
+    case_sensitive = opt_bool_field(L, 3, "case_sensitive", NULL);
     luaL_argcheck(L, limit <= PROJECT_RECORD_PAGE_LIMIT, 3, "Project query limit exceeds 4096");
   }
   uint32_t kind_count = 0, parent_name_count = 0, language_count = 0, excluded_path_count = 0, included_path_count = 0;
@@ -1497,7 +1500,7 @@ static int project_snapshot_query_symbols(lua_State *L) {
   const char **included_paths = project_query_string_array(L, 3, "included_paths", &included_path_count);
   uint32_t *indices = NULL, count = 0, total = 0;
   bool has_more = false;
-  bool ok = anvil_ts_project_snapshot_query_symbols(snapshot->snapshot, query, search_declaration,
+  bool ok = anvil_ts_project_snapshot_query_symbols(snapshot->snapshot, query, search_declaration, case_sensitive,
     offset, limit,
     kinds, kind_count, parent_names, parent_name_count, languages, language_count,
     excluded_paths, excluded_path_count, included_paths, included_path_count,

@@ -105,6 +105,7 @@ typedef struct AnvilWorkerJobSpec {
   AnvilTSProjectSnapshot *project_snapshot_to_release;
   AnvilTSProjectSnapshot *project_query_snapshot;
   bool project_query_search_declaration;
+  bool project_query_case_sensitive;
   uint32_t project_query_offset;
   uint32_t project_query_limit;
   const char *const *project_query_kinds;

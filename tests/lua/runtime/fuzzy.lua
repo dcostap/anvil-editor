@@ -3,6 +3,21 @@ local common = require "core.common"
 local fuzzy = require "fuzzy"
 
 test.describe("native fuzzy Lua API", function()
+  test.it("keeps fuzzy matching but requires matching letter case when requested", function()
+    local opts = { case_sensitive = true, spans = true }
+    test.is_nil(fuzzy.match("renderWidget", "RW", opts))
+    local match = test.not_nil(fuzzy.match("RenderWidget", "RW", opts))
+    test.same(match.spans, { { 1, 1 }, { 7, 7 } })
+    local rows = fuzzy.filter({ "renderWidget", "RenderWidget", "RENDERWidget" },
+      "RW", opts)
+    test.equal(#rows, 2)
+    test.ok(rows[1].text == "RenderWidget" or rows[2].text == "RenderWidget")
+    local index = fuzzy.index({ "renderWidget", "RenderWidget" })
+    test.equal(#index:search("RW", opts), 1)
+    index:free()
+    test.equal(#fuzzy.filter({ "renderWidget", "RenderWidget" }, "RW"), 2)
+  end)
+
   test.it("filters and returns source indices", function()
     local items = { "core:pick_file", "close-window", "save-all" }
     local results = fuzzy.filter(items, "opf", { limit = 10 })

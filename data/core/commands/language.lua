@@ -4,8 +4,6 @@ local common = require "core.common"
 local config = require "core.config"
 local intelligence = require "core.language_intelligence"
 local language_mode = require "core.language_mode"
-local lsp_position = require "core.lsp.position"
-local panes = require "core.panes"
 local poi = require "core.poi"
 
 local language = {}
@@ -107,70 +105,6 @@ local function result_path(result)
   return normalize_path(result and (result.path or (result.uri and require("core.lsp.uri").uri_to_path(result.uri))))
 end
 
-local function result_buffer_range(view, result)
-  local buffer = view and view.buffer
-  local range = result.selection_range or result.range
-  if range then return range end
-  local lsp_range = result.lsp_selection_range or result.lsp_range
-  if buffer and lsp_range then
-    return lsp_position.range_lsp_to_buffer(buffer, lsp_range, result.position_encoding or "utf-16")
-  end
-end
-
-local function open_location(result, opts)
-  opts = opts or {}
-  if not result then return false, "no result" end
-  panes.record_location(panes.pane_for_view(opts.view) or opts.pane or panes.active())
-
-  if result.start_line then
-    local view = opts.view or core.active_view
-    local buffer = view and view.buffer
-    if buffer then
-      if opts.placement == "new" or (opts.pane and panes.pane_for_view(view) ~= opts.pane) then
-        view = core.root_panel:open_buffer(buffer, {
-          pane = opts.pane,
-          placement = opts.placement or "current",
-          focus = true,
-          line = result.start_line, col = result.start_col,
-          line2 = result.end_line, col2 = result.end_col,
-        }) or view
-      end
-      if view.expand_folds_covering_range then
-        view:expand_folds_covering_range(result.start_line, result.start_col, result.end_line, result.end_col, "language-location")
-      end
-      buffer:set_selection(result.start_line, result.start_col, result.end_line, result.end_col)
-      panes.record_location(panes.pane_for_view(view))
-      return true
-    end
-  end
-
-  local path = result_path(result)
-  if not path then return false, "location has no path" end
-  local function navigate(view)
-    local range = result_buffer_range(view, result)
-    if range then
-      if view.expand_folds_covering_range then view:expand_folds_covering_range(range.line1, range.col1, range.line2, range.col2, "language-location") end
-      view.buffer:set_selection(range.line1, range.col1, range.line2, range.col2)
-    elseif result.line and result.col then
-      local line2, col2 = result.line2 or result.line, result.col2 or result.col
-      if view.expand_folds_covering_range then
-        view:expand_folds_covering_range(result.line, result.col, line2, col2, "language-location")
-      elseif view.expand_folds_at_line then
-        view:expand_folds_at_line(result.line, "language-location")
-      end
-      view.buffer:set_selection(result.line, result.col, line2, col2)
-    end
-  end
-  local view = core.open_file(path, {
-    pane = opts.pane,
-    placement = opts.placement or "current",
-    focus = true,
-    navigate = navigate,
-  })
-  if not view or not view.buffer then return false, "failed to open target" end
-  return true
-end
-
 local function lsp_result_to_picker_item(result, symbol)
   local path = result_path(result)
   if not path then return nil end
@@ -251,62 +185,6 @@ local function show_locations_picker(title, status, items)
   return fuzzy.open_static_results(title, items or {}, { status = status or title })
 end
 
-local function buffer_language_id(buffer)
-  return buffer and buffer.treesitter and buffer.treesitter.language_id
-end
-
-local function tree_sitter_symbol_location(symbol)
-  if type(symbol) ~= "table" then return nil end
-  local name_start = symbol.name_range and symbol.name_range.start
-  local name_end = symbol.name_range and symbol.name_range["end"]
-  local line = name_start and name_start.line or symbol.start_line
-  local col = name_start and name_start.col or symbol.start_col
-  if not line or not col then return nil end
-  local line2 = name_end and name_end.line or symbol.end_line or line
-  local col2 = name_end and name_end.col or symbol.end_col or col
-  return {
-    path = symbol.path or symbol.abs_filename,
-    line = line,
-    col = col,
-    line2 = line2,
-    col2 = col2,
-    selection_range = { line1 = line, col1 = col, line2 = line2, col2 = col2 },
-    name = symbol.name,
-    kind = symbol.kind,
-    language_id = symbol.language_id,
-  }
-end
-
-local function exact_workspace_symbol_locations(symbol_index, symbol, buffer)
-  local results, reason, status = symbol_index.workspace_symbols(symbol, {
-    limit = 200,
-    allow_stale = true,
-  })
-  if status ~= "fresh" and status ~= "stale" then return nil, reason, nil, status end
-
-  local exact = {}
-  local current_language = buffer_language_id(buffer)
-  for _, candidate in ipairs(results or {}) do
-    if candidate.name == symbol then
-      local location = tree_sitter_symbol_location(candidate)
-      if location then exact[#exact + 1] = location end
-    end
-  end
-
-  if current_language then
-    local same_language = {}
-    for _, location in ipairs(exact) do
-      if location.language_id == current_language then same_language[#same_language + 1] = location end
-    end
-    if #same_language > 0 then exact = same_language end
-  end
-
-  if status == "stale" and reason == "indexing" then
-    return nil, reason, nil, "pending"
-  end
-  return exact, reason, nil, status
-end
-
 local function request_until_ready(request_fn, on_ready, on_unavailable, opts)
   opts = opts or {}
   local deadline = system.get_time() + navigation_timeout(opts)
@@ -330,75 +208,6 @@ local function request_until_ready(request_fn, on_ready, on_unavailable, opts)
   core.add_thread(function()
     while not step() do coroutine.yield(NAVIGATION_POLL_SECONDS) end
   end)
-end
-
-function language.goto_declaration(view, opts)
-  opts = opts or {}
-  view = view or core.active_view
-  local buffer = view and view.buffer
-  if not buffer then return false, "no active buffer" end
-  local symbol = symbol_text_at_buffer_selection(buffer)
-  if not symbol then return false, "no symbol at caret" end
-  local line, col = buffer:get_selection()
-
-  local function show_no_declaration(reason)
-    visible_log("No declaration found for %s", symbol)
-    quiet_log("Language declaration unavailable for %s: %s", symbol, tostring(reason))
-  end
-
-  local function open_declaration_results(results)
-    if #results == 1 then
-      open_location(results[1], { view = view, pane = opts.pane, placement = opts.placement })
-    elseif #results > 1 then
-      local items = {}
-      for _, result in ipairs(results) do
-        local item = lsp_result_to_picker_item(result, symbol)
-        if item then items[#items + 1] = item end
-      end
-      show_locations_picker("Declarations: " .. symbol, string.format("%d declarations", #items), items)
-    end
-  end
-
-  local function try_workspace_declaration(reason)
-    local ok, symbol_index = pcall(require, "core.treesitter.symbol_index")
-    if not ok or not symbol_index or not symbol_index.workspace_symbols then
-      show_no_declaration(reason)
-      return
-    end
-    request_until_ready(function()
-      return exact_workspace_symbol_locations(symbol_index, symbol, buffer)
-    end, function(results)
-      if #results > 0 then
-        open_declaration_results(results)
-      else
-        show_no_declaration(reason)
-      end
-    end, function(workspace_reason)
-      show_no_declaration(workspace_reason or reason)
-    end)
-  end
-
-  local function try_local_declaration(reason)
-    local fallback, fallback_reason = intelligence.local_declaration(buffer, line, col)
-    if fallback then
-      open_location(fallback, { view = view, pane = opts.pane, placement = opts.placement })
-    else
-      try_workspace_declaration(fallback_reason or reason)
-    end
-  end
-
-  request_until_ready(function()
-    return intelligence.declarations(buffer, line, col)
-  end, function(results)
-    if #results > 0 then
-      open_declaration_results(results)
-    else
-      try_local_declaration("no-declaration-results")
-    end
-  end, function(reason)
-    try_local_declaration(reason)
-  end)
-  return true
 end
 
 local function set_reference_picker_results(picker, symbol, items, status)
@@ -571,9 +380,6 @@ local function symbol_buffer_view_predicate(value)
 end
 
 command.add(symbol_buffer_view_predicate, {
-  ["editor:go_to_declaration"] = command.palette(function(view)
-    return language.goto_declaration(view)
-  end),
   ["editor:show_references"] = command.palette(function(view)
     return language.show_references(view)
   end),
@@ -584,22 +390,26 @@ command.add(buffer_view_predicate, {
 })
 
 
-poi.add_activation_provider("language-declaration", {
+poi.add_activation_provider("language-symbol-search", {
   priority = -100,
   point_at_caret = function(_, view)
     local valid, buffer_view = symbol_buffer_view_predicate(view)
     if not valid or buffer_view.context == "application" or buffer_view.buffer.git_view_pane_read_only then return nil end
     local line, col = buffer_view.buffer:get_selection()
     return {
-      kind = "declaration",
-      alternate_placement = "new",
+      kind = "symbol-search",
       line = line,
       col = col,
       line2 = line,
       col2 = col + 1,
       text_bounds = true,
-      activate = function(_, _, opts)
-        return language.goto_declaration(buffer_view, opts)
+      activate = function()
+        local symbol = symbol_text_at_buffer_selection(buffer_view.buffer)
+        if not symbol then return false end
+        return require("plugins.fuzzy_searcher").open_project_symbols(symbol, {
+          source_view = buffer_view,
+          case_sensitive = true,
+        })
       end,
     }
   end,

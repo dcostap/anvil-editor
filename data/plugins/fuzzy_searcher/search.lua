@@ -110,7 +110,9 @@ local function revision_candidates(job, spec, visit)
   for _, file in ipairs(cache.files) do
     checkpoint(job)
     local match = spec.base == "" and { score = 0, spans = {} }
-      or native.match(file.path, spec.base, { mode = "path", spans = true })
+      or native.match(file.path, spec.base, {
+        mode = "path", spans = true, case_sensitive = spec.case_sensitive,
+      })
     if match and modifiers.accepts(spec.options, { type = "file", size = file.size }) then
       local has_line = true
       if spec.line and spec.line > 1 then
@@ -143,7 +145,9 @@ local function file_candidates(job, spec, visit)
     seen[key] = true
     local display = project_paths.display_path(path)
     local match = spec.base == "" and { score = 0, spans = {} }
-      or native.match(display.text, spec.base, { mode = "path", spans = true })
+      or native.match(display.text, spec.base, {
+        mode = "path", spans = true, case_sensitive = spec.case_sensitive,
+      })
     if not match then return end
     local info = spec.metadata[key]
     if not info then
@@ -223,6 +227,7 @@ local function path_candidates(job, spec, visit)
     local done, data, failure
     http.get(spec.everything_endpoint, {
       json = "1", search = text, count = tostring(spec.limit + 1), offset = "0",
+      case = spec.case_sensitive and "1" or "0",
       path = "1", path_column = "1", size_column = "1", date_modified_column = "1",
       sort = spec.options.sort == "date" and "date_modified" or spec.options.sort or "path",
       ascending = (spec.options.sort == "date" or spec.options.sort == "size") and "0" or "1",
@@ -252,7 +257,9 @@ local function path_candidates(job, spec, visit)
   for _, entry in ipairs(entries) do
     checkpoint(job)
     local match = plan.query == "" and { score = 0, spans = {} }
-      or native.match(entry.name, plan.query, { mode = "path", spans = true })
+      or native.match(entry.name, plan.query, {
+        mode = "path", spans = true, case_sensitive = spec.case_sensitive,
+      })
     if match then
       local path = common.normalize_path(plan.scope .. PATHSEP .. entry.name)
       for _, span in ipairs(match.spans) do
@@ -270,15 +277,22 @@ local function grep_files(job, spec, candidates, visit)
     local historical = spec.options.commit ~= nil
     local by_path, args = {}, {
       spec.rg, "--no-config", "--null", "--line-number", "--column", "--no-heading",
-      "--with-filename", "--color", "never", "-i", "-F", "-e", spec.matcher.seed, "--",
+      "--with-filename", "--color", "never",
     }
     if historical then
       args = {
         git.git_path(), "-C", spec.history.repo.root, "--literal-pathspecs", "grep",
         "--no-textconv", "--no-recurse-submodules", "--full-name", "-n", "--column", "-z",
-        "--color=never", "-i", "-I", "-F", "-e", spec.matcher.seed, spec.history.revision, "--",
+        "--color=never",
       }
     end
+    if not spec.matcher.case_sensitive then args[#args + 1] = "-i" end
+    if historical then args[#args + 1] = "-I" end
+    args[#args + 1] = "-F"
+    args[#args + 1] = "-e"
+    args[#args + 1] = spec.matcher.seed
+    if historical then args[#args + 1] = spec.history.revision end
+    args[#args + 1] = "--"
     for _, file in ipairs(batch) do
       local path = historical and file.revision_path or file.abs_path
       by_path[historical and path or common.path_compare_key(path)] = file
@@ -306,7 +320,7 @@ local function grep_files(job, spec, candidates, visit)
             result.line, result.col = tonumber(line), tonumber(col)
             result.file_spans = source.match_spans
             result.path_score = source.score
-            result.path_match_class = spec.path_match_class(spec.base, source.file)
+            result.path_match_class = spec.path_match_class(spec.base, source.file, spec.case_sensitive)
             visit(result)
           end
         end

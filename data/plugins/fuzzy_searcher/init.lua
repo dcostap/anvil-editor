@@ -1277,28 +1277,28 @@ function fuzzy_searcher.restored_prompt_text(text)
   return text, false
 end
 
-local function fuzzy_match(query, text)
+local function fuzzy_match(query, text, case_sensitive)
   query = trim_query(query)
   text = tostring(text or "")
   if query == "" then return 0, {}, nil, nil end
-  local match = fuzzy_native.match(text, query, { mode = "generic", spans = true })
+  local match = fuzzy_native.match(text, query, { mode = "generic", spans = true, case_sensitive = case_sensitive })
   if not match then return nil end
   return match.score, match.spans or {}, match.selection_span, match.match_start,
     match.boundary_score or 0
 end
 
-local function fuzzy_match_file_fast(query, text)
+local function fuzzy_match_file_fast(query, text, case_sensitive)
   query = trim_query(query)
   text = tostring(text or "")
   if query == "" then return 0, {} end
-  local match = fuzzy_native.match(text, query, { mode = "path", spans = true })
+  local match = fuzzy_native.match(text, query, { mode = "path", spans = true, case_sensitive = case_sensitive })
   if not match then return nil end
   return match.score, match.spans or {}
 end
 
 local line_exists
 
-local function collect_recent_file_matches(query, line)
+local function collect_recent_file_matches(query, line, case_sensitive)
   local matches, skip_keys = {}, {}
   local empty_query = trim_query(query) == ""
 
@@ -1308,7 +1308,7 @@ local function collect_recent_file_matches(query, line)
     if key then skip_keys[key] = true end
     local score, spans = 0, {}
     if not empty_query then
-      score, spans = fuzzy_match_file_fast(query, item)
+      score, spans = fuzzy_match_file_fast(query, item, case_sensitive)
     end
     if score and line_exists(item, line) then
       matches[#matches+1] = {
@@ -1415,7 +1415,7 @@ local function fuzzy_insert_top(scored, candidate, limit)
   if #scored > limit then table.remove(scored) end
 end
 
-local function fuzzy_filter(items, query, limit, make_text)
+local function fuzzy_filter(items, query, limit, make_text, case_sensitive)
   query = trim_query(query)
   limit = math.max(0, limit or #items)
   if query == "" then
@@ -1428,7 +1428,9 @@ local function fuzzy_filter(items, query, limit, make_text)
   end
 
   if not make_text then
-    local native_results = fuzzy_native.filter(items, query, { mode = "generic", limit = limit, spans = true })
+    local native_results = fuzzy_native.filter(items, query, {
+      mode = "generic", limit = limit, spans = true, case_sensitive = case_sensitive,
+    })
     local out = {}
     for _, match in ipairs(native_results) do
       out[#out+1] = {
@@ -1448,7 +1450,7 @@ local function fuzzy_filter(items, query, limit, make_text)
   local scored = {}
   for _, item in ipairs(items) do
     local text = make_text and make_text(item) or item
-    local score, spans = fuzzy_match(query, text)
+    local score, spans = fuzzy_match(query, text, case_sensitive)
     if score then
       fuzzy_insert_top(scored, { item = item, text = text, score = score, spans = spans or {} }, limit)
     end
@@ -1520,27 +1522,29 @@ local function detect_binary_preview(path)
   return false, nil
 end
 
-local function tokenize_code_query(q)
+local function tokenize_code_query(q, case_sensitive)
   local t = {}
-  for w in tostring(q or ""):lower():gmatch("%S+") do
+  for w in (case_sensitive and tostring(q or "") or tostring(q or ""):lower()):gmatch("%S+") do
     if #w > 1 then t[#t+1] = w end
   end
   return t
 end
 
-local function parse_code_search_terms(q)
+local function parse_code_search_terms(q, case_sensitive)
   local terms = {}
   local i, n = 1, #q
 
   local function add_fuzzy_chunk(chunk)
-    for _, tok in ipairs(tokenize_code_query(chunk or "")) do
+    for _, tok in ipairs(tokenize_code_query(chunk or "", case_sensitive)) do
       terms[#terms+1] = { text = tok, exact = false }
     end
   end
 
   local function add_exact_phrase(phrase)
     phrase = tostring(phrase or "")
-    if phrase ~= "" then terms[#terms+1] = { text = phrase:lower(), exact = true, phrase = phrase } end
+    if phrase ~= "" then terms[#terms+1] = {
+      text = case_sensitive and phrase or phrase:lower(), exact = true, phrase = phrase,
+    } end
   end
 
   while i <= n do
@@ -1684,9 +1688,11 @@ local function scope_key(scope)
   return table.concat(scope, "\0")
 end
 
-local function fuzzy_job_key(root, scope, seed, include_ignored)
+local function fuzzy_job_key(root, scope, seed, include_ignored, case_sensitive)
   return root .. "\0" .. scope_key(scope) .. "\0"
-    .. (include_ignored and "ignored" or "default") .. "\0" .. seed:lower()
+    .. (include_ignored and "ignored" or "default") .. "\0"
+    .. (case_sensitive and "case" or "fold") .. "\0"
+    .. (case_sensitive and seed or seed:lower())
 end
 
 local function seed_for_tokens(tokens)
@@ -1703,7 +1709,7 @@ local function kill_fuzzy_grep_jobs()
   fuzzy_grep_jobs = {}
 end
 
-local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored)
+local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_sensitive)
   if not tokens or #tokens == 0 then return nil end
 
   -- Prefer reusing an already-warm broader stream when the user appends tokens,
@@ -1712,12 +1718,12 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored)
   local preferred_seed = seed_for_tokens(tokens)
   local reusable
   for _, tok in ipairs(tokens) do
-    local existing = fuzzy_grep_jobs[fuzzy_job_key(root, scope, tok, include_ignored)]
+    local existing = fuzzy_grep_jobs[fuzzy_job_key(root, scope, tok, include_ignored, case_sensitive)]
     if existing then reusable = existing; break end
   end
 
   local function start_job(seed)
-    local key = fuzzy_job_key(root, scope, seed, include_ignored)
+    local key = fuzzy_job_key(root, scope, seed, include_ignored, case_sensitive)
     local job = fuzzy_grep_jobs[key]
     if job then job.last_used = system.get_time(); return job end
 
@@ -1742,7 +1748,9 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored)
         "Fuzzy grep batch started seed=%s files=%s",
         tostring(seed), scope and tostring(#scope) or "all"
       )
-      local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never", "-i", "-F" }
+      local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never" }
+      if not case_sensitive then args[#args + 1] = "-i" end
+      args[#args + 1] = "-F"
       project_files.add_filter_arguments(args, include_ignored)
       args[#args + 1], args[#args + 2] = "-e", seed
       if scope then
@@ -1925,13 +1933,14 @@ local function merge_spans(spans, max_len)
   return merged
 end
 
-local function literal_spans(text, query, offset)
+local function literal_spans(text, query, offset, case_sensitive)
   local spans = {}
   text = tostring(text or "")
   query = tostring(query or ""):gsub("^%s+", ""):gsub("%s+$", "")
   if query == "" then return spans end
   offset = offset or 0
-  local lower_text, lower_query = text:lower(), query:lower()
+  local lower_text, lower_query = case_sensitive and text or text:lower(),
+    case_sensitive and query or query:lower()
   local pos = 1
   while true do
     local s, e = lower_text:find(lower_query, pos, true)
@@ -1966,10 +1975,10 @@ local function grep_content_spans(text, result, offset, line_nr)
     return offset_spans(result.content_spans, offset)
   end
   if result.exact then
-    return literal_spans(text, result.grep_query, offset)
+    return literal_spans(text, result.grep_query, offset, result.case_sensitive)
   end
   if line_nr and line_nr ~= result.line then return {} end
-  local _, spans = fuzzy_match(result.fuzzy_query or result.grep_query, text)
+  local _, spans = fuzzy_match(result.fuzzy_query or result.grep_query, text, result.case_sensitive)
   return offset_spans(spans, offset)
 end
 
@@ -2004,19 +2013,21 @@ local function grep_accept_range(result)
   return line, result.col or 1
 end
 
-function fuzzy_searcher.compile_grep(grep)
+function fuzzy_searcher.compile_grep(grep, case_sensitive)
   local exact = quoted_exact_query(grep)
-  local terms = parse_code_search_terms(grep)
+  local terms = parse_code_search_terms(grep, case_sensitive)
   if exact ~= nil or #terms <= 1 then
     local query = exact or trim_query(grep)
     return {
       seed = query,
+      case_sensitive = case_sensitive,
       match = function(text)
-        local spans = literal_spans(text, query)
+        local spans = literal_spans(text, query, nil, case_sensitive)
         if #spans == 0 then return end
-        local score, _, _, _, boundary = fuzzy_match(query, text)
+        local score, _, _, _, boundary = fuzzy_match(query, text, case_sensitive)
         return {
           exact = true, grep_query = query, content_spans = spans,
+          case_sensitive = case_sensitive,
           content_selection_span = spans[1], content_match_start = spans[1][1],
           fuzzy_score = score or 0, boundary_score = boundary or 0,
         }
@@ -2026,8 +2037,9 @@ function fuzzy_searcher.compile_grep(grep)
   local fuzzy_query = terms_fuzzy_query(terms)
   return {
     seed = seed_for_tokens(terms_to_legacy_tokens(terms)),
+    case_sensitive = case_sensitive,
     match = function(text)
-      local lower = text:lower()
+      local lower = case_sensitive and text or text:lower()
       local spans = exact_term_spans(lower, terms)
       if not spans then return end
       for _, term in ipairs(terms) do
@@ -2035,7 +2047,7 @@ function fuzzy_searcher.compile_grep(grep)
       end
       local score, fuzzy_spans, selection, start, boundary = 0, {}, nil, nil, 0
       if fuzzy_query ~= "" then
-        score, fuzzy_spans, selection, start, boundary = fuzzy_match(fuzzy_query, text)
+        score, fuzzy_spans, selection, start, boundary = fuzzy_match(fuzzy_query, text, case_sensitive)
         if not score then return end
       end
       for _, span in ipairs(fuzzy_spans) do spans[#spans + 1] = span end
@@ -2043,6 +2055,7 @@ function fuzzy_searcher.compile_grep(grep)
       if fuzzy_query ~= "" and selection and #spans == 1 then selection_span = selection end
       return {
         exact = false, grep_query = grep, fuzzy_query = fuzzy_query,
+        case_sensitive = case_sensitive,
         fuzzy_score = score + #spans * 4, boundary_score = boundary or 0,
         content_spans = spans, content_selection_span = selection_span,
         content_match_start = match_start or start,
@@ -2346,14 +2359,14 @@ function fuzzy_searcher.result_main_text(r)
   return text
 end
 
-local function merge_folder_matches(matches, query, line, limit)
+local function merge_folder_matches(matches, query, line, limit, case_sensitive)
   if line then return matches, 0 end
   query = fuzzy_searcher.path_match_query(query)
   local index = fuzzy_searcher.folders_fuzzy_index
   if not index then
     local matched = 0
     for _, folder in ipairs(fuzzy_searcher.folders_cache or {}) do
-      local score, spans = fuzzy_match_file_fast(query, folder.text)
+      local score, spans = fuzzy_match_file_fast(query, folder.text, case_sensitive)
       if score then
         matched = matched + 1
         fuzzy_insert_top(matches, {
@@ -2369,7 +2382,7 @@ local function merge_folder_matches(matches, query, line, limit)
   local search_limit = math.min(
     #(fuzzy_searcher.folders_cache or {}), math.max(limit + 64, limit)
   )
-  local results = index:search(query, { limit = search_limit, spans = true })
+  local results = index:search(query, { limit = search_limit, spans = true, case_sensitive = case_sensitive })
   for _, result in ipairs(results) do
     local folder = fuzzy_searcher.files_metadata[result.text]
     if folder and folder.is_folder then
@@ -3078,17 +3091,19 @@ fuzzy_searcher.grep_order = {
   SAME_FILE_MAX_BURST = 6,
 }
 
-function fuzzy_searcher.grep_order.path_match_class(query, text)
+function fuzzy_searcher.grep_order.path_match_class(query, text, case_sensitive)
   query = trim_query(query)
   if query == "" then return fuzzy_searcher.grep_order.PATH_NONE end
   text = tostring(text or "")
-  local match = fuzzy_native.match(text, query, { mode = "path" })
+  local match = fuzzy_native.match(text, query, {
+    mode = "path", case_sensitive = case_sensitive,
+  })
   if not match or match.match_class == "loose" then return fuzzy_searcher.grep_order.PATH_LOOSE end
   if match.match_class == "contiguous" then return fuzzy_searcher.grep_order.PATH_CONTIGUOUS end
   return fuzzy_searcher.grep_order.PATH_COMPACT
 end
 
-local function build_scope(base, line, max_count)
+local function build_scope(base, line, max_count, case_sensitive)
   if base:sub(1, 1) == ">" then base = "" end
   local limit = max_count or 200
   local list = {}
@@ -3110,7 +3125,7 @@ local function build_scope(base, line, max_count)
     list[#list+1] = abs
     meta.by_path[key] = {
       score = (tonumber(score) or 0) - rank_penalty,
-      match_class = fuzzy_searcher.grep_order.path_match_class(base, text),
+      match_class = fuzzy_searcher.grep_order.path_match_class(base, text, case_sensitive),
       text = text,
     }
   end
@@ -3119,6 +3134,7 @@ local function build_scope(base, line, max_count)
       return fuzzy_searcher.files_fuzzy_index:search(base, {
         limit = line and math.max(limit * 10, 1000) or limit,
         spans = false,
+        case_sensitive = case_sensitive,
       })
     end)
     if ok and matches then
@@ -3135,7 +3151,7 @@ local function build_scope(base, line, max_count)
     end
   end
 
-  local matches = fuzzy_filter(get_files(), base, limit + 1)
+  local matches = fuzzy_filter(get_files(), base, limit + 1, nil, case_sensitive)
   if #matches > limit then
     meta.has_more = true
     matches[#matches] = nil
@@ -3151,10 +3167,11 @@ local function build_scope(base, line, max_count)
   return list, meta
 end
 
-function fuzzy_searcher.new_grep_scope_plan(base, line)
+function fuzzy_searcher.new_grep_scope_plan(base, line, case_sensitive)
   return {
     base = base,
     line = line,
+    case_sensitive = case_sensitive,
     files = {},
     meta = nil,
     request_limit = 0,
@@ -3169,7 +3186,7 @@ function fuzzy_searcher.next_grep_scope_batch(plan)
     plan.request_limit = plan.request_limit == 0
       and 400
       or plan.request_limit * 2
-    plan.files, plan.meta = build_scope(plan.base, plan.line, plan.request_limit)
+    plan.files, plan.meta = build_scope(plan.base, plan.line, plan.request_limit, plan.case_sensitive)
     plan.complete = not (plan.meta and plan.meta.has_more)
   end
 
@@ -3274,10 +3291,11 @@ function path_search.everything_scoped_query(query, scope)
   return trim_query(query) == "" and scope_term or (scope_term .. " " .. query)
 end
 
-local function everything_folder_search_params(query, count, offset, scope)
+local function everything_folder_search_params(query, count, offset, scope, case_sensitive)
   return {
     json = "1",
     search = everything_folder_search_query(path_search.everything_scoped_query(query, scope)),
+    case = case_sensitive and "1" or "0",
     count = tostring(count),
     offset = tostring(offset or 0),
     path = "1",
@@ -3296,10 +3314,11 @@ local function everything_file_search_query(query)
   return "file: " .. query
 end
 
-local function everything_file_search_params(query, count, offset, scope)
+local function everything_file_search_params(query, count, offset, scope, case_sensitive)
   return {
     json = "1",
     search = everything_file_search_query(path_search.everything_scoped_query(query, scope)),
+    case = case_sensitive and "1" or "0",
     count = tostring(count),
     offset = tostring(offset or 0),
     path = "1",
@@ -3478,7 +3497,7 @@ function path_search.plan(text, options)
   return parts
 end
 
-function path_search.direct_result(text, line, col)
+function path_search.direct_result(text, line, col, case_sensitive)
   local mode, query = split_mode_prefix(tostring(text or ""))
   if mode ~= "" and mode ~= "@" then return nil end
   query = common.sanitize_prompt_path(query)
@@ -3509,7 +3528,7 @@ function path_search.direct_result(text, line, col)
       end
     end
     local label = common.home_encode(path)
-    local score, spans = fuzzy_match(query, label)
+    local score, spans = fuzzy_match(query, label, case_sensitive)
     return {
       kind = recent and "project" or "path",
       label = label,
@@ -3582,12 +3601,12 @@ function path_search.creation_error_label(err)
   return "filesystem operation failed"
 end
 
-local function everything_result_from_item(item, query)
+local function everything_result_from_item(item, query, case_sensitive)
   local path = everything_full_path(item)
   if not path or path == "" then return nil end
   local is_folder = item.type == "folder"
   local modified_time = filetime_to_time(item.date_modified)
-  local score, spans = fuzzy_match(query or "", path)
+  local score, spans = fuzzy_match(query or "", path, case_sensitive)
   return {
     kind = "path",
     label = path,
@@ -3661,6 +3680,7 @@ function FSView:new(prefix, opts)
   self.everything_loading_pending = false
   self.everything_loading_status = nil
   self.include_ignored = false
+  self.case_sensitive = opts.case_sensitive == true
   self.open_transition_requested_at = system.get_time()
   self.open_transition_ready_at = nil
   self.open_transition_complete = false
@@ -4937,7 +4957,7 @@ function FSView:start_file_search(query, line, reset_selection)
   end
 
   core.add_thread(function()
-    local recent_matches, skip_keys = collect_recent_file_matches(query, line)
+    local recent_matches, skip_keys = collect_recent_file_matches(query, line, self.case_sensitive)
 
     if native_file_index_ready() then
       local ok, native_results = pcall(function()
@@ -4945,6 +4965,7 @@ function FSView:start_file_search(query, line, reset_selection)
           limit = line and math.max(keep_limit * 10, 1000)
             or (keep_limit + #recent_matches + 32),
           spans = true,
+          case_sensitive = self.case_sensitive,
         })
       end)
       if ok and native_results and gen == file_search_generation and active_view == self then
@@ -4962,7 +4983,7 @@ function FSView:start_file_search(query, line, reset_selection)
         end
         local folder_match_count, folder_has_more
         general_matches, folder_match_count, folder_has_more = merge_folder_matches(
-          general_matches, query, line, keep_limit
+          general_matches, query, line, keep_limit, self.case_sensitive
         )
         table.sort(general_matches, function(a, b) return fuzzy_result_better(a, b) end)
         local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
@@ -5037,7 +5058,7 @@ function FSView:start_file_search(query, line, reset_selection)
         if empty_query then
           score, spans = 0, {}
         else
-          score, spans = fuzzy_match_file_fast(query, item)
+          score, spans = fuzzy_match_file_fast(query, item, self.case_sensitive)
         end
         if score and line_exists(item, line) then
           matched_general = matched_general + 1
@@ -5054,7 +5075,7 @@ function FSView:start_file_search(query, line, reset_selection)
     end
 
     general_matches, matched_folders, folder_has_more = merge_folder_matches(
-      general_matches, query, line, keep_limit
+      general_matches, query, line, keep_limit, self.case_sensitive
     )
 
     publish(true)
@@ -5116,7 +5137,7 @@ function FSView:start_everything_path_search(query, scope, append)
     local total = tonumber(data.totalResults) or 0
     local out = append and (kind == "folder" and self.everything_folder_results or self.everything_file_results) or {}
     for _, item in ipairs(data.results or {}) do
-      local r = everything_result_from_item(item, query)
+      local r = everything_result_from_item(item, query, self.case_sensitive)
       local wanted = r and ((kind == "folder" and r.is_folder) or (kind == "file" and not r.is_folder))
       if wanted then out[#out+1] = r end
     end
@@ -5167,13 +5188,13 @@ function FSView:start_everything_path_search(query, scope, append)
   local file_offset = append and (self.everything_file_offset or 0) or 0
   core.log_quiet("Fuzzy Path Search: Everything searching query_len=%d scoped=%s append=%s",
     #query, tostring(scope ~= nil), tostring(append))
-  request("folder", everything_folder_search_params(query, count, folder_offset, scope), function()
+  request("folder", everything_folder_search_params(query, count, folder_offset, scope, self.case_sensitive), function()
     if not folder_only then
       local file_query = query
       if self.file_picker and self.file_picker.extension_query then
         file_query = trim_query(file_query .. " " .. self.file_picker.extension_query)
       end
-      request("file", everything_file_search_params(file_query, count, file_offset, scope))
+      request("file", everything_file_search_params(file_query, count, file_offset, scope, self.case_sensitive))
     end
   end)
 end
@@ -5229,6 +5250,7 @@ function path_search.native_results(scope, query, limit, picker)
     local matches = {}
     for _, match in ipairs(fuzzy_native.filter(names, query, {
       mode = "path", limit = limit, spans = true,
+      case_sensitive = picker and picker.case_sensitive,
     })) do
       matches[#matches+1] = {
         entry = candidates[match.index],
@@ -5269,7 +5291,7 @@ function path_search.native_results(scope, query, limit, picker)
   return folders, files
 end
 
-function path_search.recent_project_results(query, scope, limit)
+function path_search.recent_project_results(query, scope, limit, case_sensitive)
   ensure_recent_project_times()
   local candidates = {}
   for _, path in ipairs(get_recent_projects()) do
@@ -5278,7 +5300,7 @@ function path_search.recent_project_results(query, scope, limit)
     end
   end
 
-  local matches = trim_query(query) == "" and nil or fuzzy_filter(candidates, query, limit + 1, display_root)
+  local matches = trim_query(query) == "" and nil or fuzzy_filter(candidates, query, limit + 1, display_root, case_sensitive)
   local out = {}
   local hidden = false
   if matches then
@@ -5383,7 +5405,7 @@ end
 
 function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
   local limit = self:result_limit()
-  local direct = path_search.direct_result(base, line, col)
+  local direct = path_search.direct_result(base, line, col, self.case_sensitive)
   self.direct_path_result = direct
   local path_plan = path_search.plan(base, { include_ignored = self.include_ignored })
   if direct and direct.exact_path and direct.is_folder and not path_plan.external then
@@ -5406,7 +5428,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
     if max_items <= 0 then self.has_more = true; return end
 
     if trim_query(query) == "" and not line and not native_file_index_ready() then
-      local recent_matches, skip_keys = collect_recent_file_matches(query, line)
+      local recent_matches, skip_keys = collect_recent_file_matches(query, line, self.case_sensitive)
       local general_matches = {}
       for _, item in ipairs(get_files()) do
         local key = file_result_key(item)
@@ -5417,7 +5439,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
       end
       local folder_match_count, folder_has_more
       general_matches, folder_match_count, folder_has_more = merge_folder_matches(
-        general_matches, query, line, max_items + 1
+        general_matches, query, line, max_items + 1, self.case_sensitive
       )
       table.sort(general_matches, function(a, b) return fuzzy_result_better(a, b) end)
       local rows, hidden = build_sectioned_file_results(recent_matches, general_matches, max_items, query, line)
@@ -5457,7 +5479,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
     end
 
     local commands = get_commands(self)
-    local matches = fuzzy_filter(commands, query, #commands, fuzzy_searcher.command_search_text)
+    local matches = fuzzy_filter(commands, query, #commands, fuzzy_searcher.command_search_text, self.case_sensitive)
     table.sort(matches, function(a, b)
       local a_opens = command.get_metadata(a.item).opens_view == true
       local b_opens = command.get_metadata(b.item).opens_view == true
@@ -5473,7 +5495,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
       if i > max_items then self.has_more = true; break end
       local name = match.item
       local identifier = name
-      local _, identifier_spans = fuzzy_match(query, identifier)
+      local _, identifier_spans = fuzzy_match(query, identifier, self.case_sensitive)
       out[#out+1] = { kind = "command", label = identifier, command = name, query = query, match_spans = identifier_spans or {}, info = command_preview_info(name), status = command_status_parts(name, self) }
     end
   end
@@ -5509,7 +5531,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
     bare_path_search = path_plan.explicit and query == "" and not scope
     local projects, projects_hidden = {}, false
     if not path_plan.project_scope then
-      projects, projects_hidden = path_search.recent_project_results(query, scope, limit)
+      projects, projects_hidden = path_search.recent_project_results(query, scope, limit, self.case_sensitive)
     end
 
     if bare_path_search then
@@ -5520,7 +5542,8 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
     else
       if everything.state == "unknown" then probe_everything(self) end
       if everything.state == "available" then
-        local everything_key = table.concat({ "paths", scope or "", query }, "\0")
+        local everything_key = table.concat({ "paths", scope or "", query,
+          self.case_sensitive and "case" or "fold" }, "\0")
         if self.path_search_query_key ~= everything_key then
           self:clear_path_search_results(false)
           self.path_search_query_key = everything_key
@@ -5782,7 +5805,8 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         for _, argument_scope in ipairs(argument_batches) do
           if argument_scope == false then argument_scope = nil end
           local job, preferred_job = ensure_fuzzy_grep_job(
-            root_entry.path, argument_scope, tokens, self.include_ignored == true
+            root_entry.path, argument_scope, tokens, self.include_ignored == true,
+            self.case_sensitive
           )
           add_job(job)
           add_job(preferred_job)
@@ -5806,7 +5830,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   end
   local exact_results = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   local fuzzy_query = terms_fuzzy_query(terms)
-  local matcher = fuzzy_searcher.compile_grep(grep)
+  local matcher = fuzzy_searcher.compile_grep(grep, self.case_sensitive)
   local initial_settle_seconds = 0.10
   local initial_settle_visible_multiplier = 2
 
@@ -5891,6 +5915,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         text = source.text,
         exact = exact_results,
         grep_query = grep,
+        case_sensitive = self.case_sensitive,
         fuzzy_query = fuzzy_query,
         base_query = base_query,
       })
@@ -5902,15 +5927,15 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         r.path_match_class = path_info.match_class
         r.path_score = path_info.score
       elseif base_query ~= "" then
-        local path_score = fuzzy_match_file_fast(base_query, r.file)
-        r.path_match_class = fuzzy_searcher.grep_order.path_match_class(base_query, r.file)
+        local path_score = fuzzy_match_file_fast(base_query, r.file, self.case_sensitive)
+        r.path_match_class = fuzzy_searcher.grep_order.path_match_class(base_query, r.file, self.case_sensitive)
         r.path_score = path_score or 0
       else
         r.path_match_class = fuzzy_searcher.grep_order.PATH_NONE
         r.path_score = 0
       end
       if base_query ~= "" then
-        local _, file_spans = fuzzy_match(base_query, r.file)
+        local _, file_spans = fuzzy_match(base_query, r.file, self.case_sensitive)
         r.file_spans = file_spans or {}
       end
 
@@ -6126,7 +6151,7 @@ function FSView:start_grep(base, line, grep)
   local scope, scope_meta, scope_plan = nil, nil, nil
   if base ~= "" or line then
     ensure_file_index()
-    scope_plan = fuzzy_searcher.new_grep_scope_plan(base, line)
+    scope_plan = fuzzy_searcher.new_grep_scope_plan(base, line, self.case_sensitive)
     scope = fuzzy_searcher.next_grep_scope_batch(scope_plan)
     scope_meta = scope_plan.meta
     if not scope then
@@ -6145,7 +6170,7 @@ function FSView:start_grep(base, line, grep)
   local exact_query = quoted_exact_query(grep)
   if exact_query and exact_query ~= "" then grep = exact_query end
 
-  local terms = parse_code_search_terms(grep)
+  local terms = parse_code_search_terms(grep, self.case_sensitive)
   if not exact_query and #terms > 1 then
     self:start_grep_fuzzy_stream(
       base, line, grep, terms, scope, roots, gen, scope_meta, scope_plan
@@ -6202,6 +6227,7 @@ function FSView:start_grep(base, line, grep)
       seen[key] = true
       r.exact = exact
       r.grep_query = grep
+      r.case_sensitive = self.case_sensitive
       if exact and r.col and grep and grep ~= "" then
         r.content_selection_span = { r.col, r.col + #grep - 1 }
         r.content_match_start = r.col
@@ -6214,15 +6240,15 @@ function FSView:start_grep(base, line, grep)
         r.path_score = path_info.score
       else
         r.path_match_class = r.base_query ~= ""
-          and fuzzy_searcher.grep_order.path_match_class(r.base_query, r.file)
+          and fuzzy_searcher.grep_order.path_match_class(r.base_query, r.file, self.case_sensitive)
           or fuzzy_searcher.grep_order.PATH_NONE
         r.path_score = 0
       end
-      local fuzzy_score, _, _, _, boundary_score = fuzzy_match(grep, r.text)
+      local fuzzy_score, _, _, _, boundary_score = fuzzy_match(grep, r.text, self.case_sensitive)
       r.fuzzy_score = fuzzy_score or 0
       r.boundary_score = boundary_score or 0
       if r.base_query ~= "" and not r.file_spans then
-        local _, file_spans = fuzzy_match(r.base_query, r.file)
+        local _, file_spans = fuzzy_match(r.base_query, r.file, self.case_sensitive)
         r.file_spans = file_spans or {}
       end
       begin_results()
@@ -6254,8 +6280,10 @@ function FSView:start_grep(base, line, grep)
         local args = {
           fuzzy_searcher.rg,
           "--line-number", "--column", "--no-heading", "--with-filename",
-          "--color", "never", "-i", "-F",
+          "--color", "never",
         }
+        if not self.case_sensitive then args[#args + 1] = "-i" end
+        args[#args + 1] = "-F"
         project_files.add_filter_arguments(args, self.include_ignored == true)
         args[#args + 1], args[#args + 2] = "-e", grep
         if root_scope then
@@ -6417,13 +6445,13 @@ local function symbol_result_from_item(item, query, opts)
   local col = item.col or (item.name_range and item.name_range.start and item.name_range.start.col) or item.start_col or 1
   local line2 = item.line2 or (item.name_range and item.name_range["end"] and item.name_range["end"].line) or item.end_line
   local col2 = item.col2 or (item.name_range and item.name_range["end"] and item.name_range["end"].col) or item.end_col
-  local _, name_spans = fuzzy_match(query, label)
+  local _, name_spans = fuzzy_match(query, label, opts.case_sensitive)
   local declaration_spans
   if opts.search_declaration and item.declaration and item.declaration ~= "" then
-    _, declaration_spans = fuzzy_match(query, item.declaration)
+    _, declaration_spans = fuzzy_match(query, item.declaration, opts.case_sensitive)
   end
   local path_query = trim_query(opts.path_query)
-  local path_score, file_spans = fuzzy_match_file_fast(path_query, file)
+  local path_score, file_spans = fuzzy_match_file_fast(path_query, file, opts.case_sensitive)
   if path_query ~= "" and not path_score then return nil end
   return {
     kind = "symbol",
@@ -6574,6 +6602,7 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
             limit = candidate_limit,
             allow_stale = false,
             search_declaration = search_declaration,
+            case_sensitive = self.case_sensitive,
           })
         else
           results, reason, status, meta = ts_symbols.workspace_symbols(query, {
@@ -6581,6 +6610,7 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
             limit = candidate_limit,
             allow_stale = false,
             search_declaration = search_declaration,
+            case_sensitive = self.case_sensitive,
           })
         end
         if async_request then
@@ -6628,6 +6658,7 @@ function FSView:start_symbol_search(query, reset_selection, path_query)
         scope = "project",
         path_query = path_query,
         search_declaration = search_declaration,
+        case_sensitive = self.case_sensitive,
       })
     else
       self:cancel_deferred_loading_feedback()
@@ -6667,12 +6698,14 @@ function FSView:start_current_buffer_symbol_search(query, reset_selection)
     local results, reason, status = ts_symbols.current_buffer_symbols(buffer, query, {
       limit = limit + 1,
       search_declaration = search_declaration,
+      case_sensitive = self.case_sensitive,
     })
     if status == "fresh" or status == "stale" then
       set_symbol_results(self, query, results, "current Buffer", status, reason, limit, {
         scope = "buffer",
         buffer = buffer,
         search_declaration = search_declaration,
+        case_sensitive = self.case_sensitive,
         select_preceding_position = query == "" and self.current_buffer_caret_selection_pending and {
           line = self.source_file_line,
           col = self.source_file_col,
@@ -6740,9 +6773,10 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
   local job
   job = fuzzy_searcher.search.start({
     base = base, line = line, col = col, grep = grep, options = self.query_modifiers,
+    case_sensitive = self.case_sensitive,
     include_ignored = self.include_ignored, metadata = self.modifier_metadata,
     limit = grep and self:max_result_limit() or self:result_limit(),
-    matcher = grep and fuzzy_searcher.compile_grep(grep), rg = fuzzy_searcher.rg,
+    matcher = grep and fuzzy_searcher.compile_grep(grep, self.case_sensitive), rg = fuzzy_searcher.rg,
     grep_less = fuzzy_searcher.grep_order.better,
     grep_results = fuzzy_searcher.grep_order.results,
     path_match_class = fuzzy_searcher.grep_order.path_match_class,
@@ -6978,6 +7012,9 @@ function FSView:active_search_modifiers()
   local modifiers = {}
   if self.include_ignored and self:can_toggle_ignored_files() then
     modifiers[#modifiers + 1] = "Ignored files included"
+  end
+  if self.case_sensitive and self:can_toggle_case_sensitive() then
+    modifiers[#modifiers + 1] = "Case Sensitive"
   end
   if self.query_modifiers and self.query_modifiers.commit then
     modifiers[#modifiers + 1] = "Commit " .. self.query_modifiers.commit:sub(1, 8) .. " — read-only"
@@ -7312,6 +7349,23 @@ function FSView:confirm(new_group)
   local result = self:activate_selected_result(new_group)
   self:restore_activation_focus(new_group)
   return result
+end
+
+function FSView:can_toggle_case_sensitive()
+  if self.static_mode then return false end
+  return fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "") ~= "!"
+end
+
+function FSView:toggle_case_sensitive()
+  if not self:can_toggle_case_sensitive() then return false end
+  self.case_sensitive = not self.case_sensitive
+  self.current_query_key = nil
+  self.force_refresh = true
+  self.dirty = true
+  self:schedule_update(true)
+  core.log_quiet("Fuzzy Searcher: case-sensitive search %s",
+    self.case_sensitive and "on" or "off")
+  return true
 end
 
 function FSView:open_selected_results(indices)
@@ -8085,6 +8139,19 @@ function open(prefix, opts)
   return active_view
 end
 
+function fuzzy_searcher.open_project_symbols(symbol, opts)
+  opts = opts or {}
+  local view = current_picker()
+  if view then view:close("replaced") end
+  active_view = FSView("$" .. tostring(symbol or ""), {
+    source_view = opts.source_view,
+    source_pane = opts.source_pane,
+    case_sensitive = opts.case_sensitive == true,
+  })
+  core.fuzzy_searcher_active_view = active_view
+  return active_view
+end
+
 function fuzzy_searcher.normalize_file_picker_options(opts)
   opts = opts or {}
   local select_type = opts.select or "any"
@@ -8247,6 +8314,16 @@ end, {
   end,
 })
 
+command.add(function()
+  local view = current_picker()
+  return view and not view:is_preview_focused() and view:can_toggle_case_sensitive()
+end, {
+  ["fuzzy:toggle_case_sensitive"] = function()
+    local view = current_picker()
+    if view then view:toggle_case_sensitive() end
+  end,
+})
+
 -- Global open shortcuts intentionally override conflicting defaults.
 core.fuzzy_searcher_install_global_keymaps = function()
   keymap.add({
@@ -8275,6 +8352,7 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["ctrl+;"] = "fuzzy:open_selected_in_filetree",
     ["ctrl+c"] = "fuzzy:copy_selected",
     ["ctrl+i"] = "fuzzy:toggle_ignored_files",
+    ["ctrl+u"] = "fuzzy:toggle_case_sensitive",
     ["tab"] = "fuzzy:fill_prompt_from_selected",
     ["up"] = "fuzzy:previous",
     ["down"] = "fuzzy:next",
@@ -8302,6 +8380,7 @@ end
 
 return {
   open = open,
+  open_project_symbols = fuzzy_searcher.open_project_symbols,
   open_file_picker = fuzzy_searcher.open_file_picker,
   open_static_results = open_static_results,
   _test = {
