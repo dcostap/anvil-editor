@@ -51,7 +51,7 @@ local function current_recorded_position(pane)
   return entry and position(entry.state and entry.state.selection_state)
 end
 
-local function record(view, state, opts, kind)
+local function record(view, state, opts, kind, record_opts)
   local pane = panes.pane_for_view(view)
   if not pane or pane.current_view ~= view then return false end
   local inserted = panes.record_location(pane, {
@@ -61,6 +61,8 @@ local function record(view, state, opts, kind)
     nearby_lines = opts.near_lines,
     nearby_columns = opts.near_columns,
     edit_near_lines = opts.edit_near_lines,
+    prefer_incoming_state = record_opts and record_opts.prefer_incoming_state,
+    no_merge = record_opts and record_opts.no_merge,
   })
   if inserted then M.navigation_place_inserted() end
   return inserted
@@ -130,7 +132,7 @@ function M.record_departure(view)
   return inserted
 end
 
-function M.perform_jump(view, action, ...)
+local function perform_jump(view, record_opts, action, ...)
   local opts = options()
   ignored_dwell_positions[view] = nil
   M.flush_edit(view, nil, true)
@@ -140,19 +142,31 @@ function M.perform_jump(view, action, ...)
   local destination = navigation_state(view)
   local old_position = position(origin.selection_state)
   local new_position = position(destination.selection_state)
-  if not old_position or not new_position or not is_far(old_position, new_position, opts) then
+  if not old_position or not new_position then
+    return table.unpack(result, 1, result.n)
+  end
+  local moved = old_position.line ~= new_position.line or old_position.col ~= new_position.col
+  if not moved or not (is_far(old_position, new_position, opts) or record_opts and record_opts.record_nearby) then
     return table.unpack(result, 1, result.n)
   end
 
   candidates[view] = nil
-  record(view, origin, opts)
-  local inserted = record(view, destination, opts)
+  record(view, origin, opts, nil, record_opts and record_opts.departure)
+  local inserted = record(view, destination, opts, nil, record_opts and record_opts.destination)
   core.log_quiet(
-    "Navigation History: large Editor jump from %d:%d to %d:%d inserted=%s",
+    "Navigation History: Editor jump from %d:%d to %d:%d inserted=%s",
     old_position.line, old_position.col, new_position.line, new_position.col,
     tostring(inserted)
   )
   return table.unpack(result, 1, result.n)
+end
+
+function M.perform_jump(view, action, ...)
+  return perform_jump(view, nil, action, ...)
+end
+
+function M.perform_jump_with_options(view, record_opts, action, ...)
+  return perform_jump(view, record_opts, action, ...)
 end
 
 function M.ignore_current_dwell(view)

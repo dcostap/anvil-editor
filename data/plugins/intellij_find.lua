@@ -503,8 +503,11 @@ local function select_match_without_history(view, state, index, scroll)
   return true
 end
 
-local function select_match(view, state, index, scroll)
-  return navigation_history.perform_jump(view, function()
+local function select_match(view, state, index, scroll, explicit)
+  return navigation_history.perform_jump_with_options(view, {
+    record_nearby = explicit == true,
+    departure = { no_merge = true }, destination = { no_merge = true },
+  }, function()
     return select_match_without_history(view, state, index, scroll)
   end)
 end
@@ -682,7 +685,7 @@ local function navigate(view, state, reverse)
     return
   end
   local index = choose_match(view, state, reverse, false)
-  select_match(view, state, index, true)
+  select_match(view, state, index, true, true)
   core.redraw = true
 end
 

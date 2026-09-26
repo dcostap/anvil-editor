@@ -4,6 +4,7 @@ local config = require "core.config"
 local Editor = require "core.editor"
 local navigation_history = require "core.navigation_history"
 local panes = require "core.panes"
+local treesitter = require "core.treesitter"
 require "core.poi"
 require "plugins.intellij_actions"
 local test = require "core.test"
@@ -372,7 +373,7 @@ test.describe("automatic Editor Navigation History", function()
     test.equal(panes.history_length(pane), 2)
   end)
 
-  test.it("does not add a nearby origin before a start or end Buffer command", function()
+  test.it("returns to the exact departure from a Buffer boundary jump", function()
     local pane = panes.create { factory = make_editor, focus = false }
     local view = pane.current_view
     core.active_view = view
@@ -382,6 +383,75 @@ test.describe("automatic Editor Navigation History", function()
 
     test.equal(panes.history_length(pane), 2)
     panes.back(pane)
+    test.equal(view:get_selection_state().selections[1], 2)
+  end)
+
+  test.it("returns to the exact symbol call after a same-Buffer definition jump", function()
+    local buffer = Buffer()
+    buffer:insert(1, 1, [[int RGE_Base_Game::start() {
+  return this->setup_palette();
+}
+
+
+
+
+
+int RGE_Base_Game::setup_palette() { return 1; }
+]])
+    buffer:set_filename("navigation-symbol-definition.cpp", "navigation-symbol-definition.cpp")
+    local pane = panes.create { factory = function() return Editor(buffer) end, focus = false }
+    local view = pane.current_view
+    core.active_view = view
+    local deadline = system.get_time() + 3
+    while system.get_time() < deadline do
+      treesitter.poll_buffer(buffer)
+      if buffer.treesitter and buffer.treesitter.status == "ready" then break end
+      coroutine.yield(0.01)
+    end
+    test.equal(buffer.treesitter.status, "ready")
+    local col = test.not_nil(buffer.lines[2]:find("setup_palette", 1, true))
+    view:set_selection_state { selections = { 2, col, 2, col }, last_selection = 1 }
+
+    test.ok(command.perform("core:activate_point_of_interest"))
+    test.equal(view:get_selection_state().selections[1], 9)
+    test.equal(panes.back(pane), view)
+    local selection = view:get_selection_state().selections
+    test.equal(selection[1], 2)
+    test.equal(selection[2], col)
+  end)
+
+  test.it("records nearby Go To Line places without merging them", function()
+    local pane = panes.create { factory = make_editor, focus = false }
+    local view = pane.current_view
+    core.active_view = view
+    view:set_selection_state { selections = { 2, 1, 2, 1 }, last_selection = 1 }
+
+    test.ok(command.perform("editor:go_to_line"))
+    core.global_prompt_bar:set_text("3")
+    core.global_prompt_bar:submit()
+
+    test.equal(view:get_selection_state().selections[1], 3)
+    test.equal(panes.history_length(pane), 3)
+    test.equal(panes.back(pane), view)
+    test.equal(view:get_selection_state().selections[1], 2)
+    test.equal(panes.back(pane), view)
+    test.equal(view:get_selection_state().selections[1], 1)
+  end)
+
+  test.it("does not add a duplicate departure when Go To Line starts at the saved place", function()
+    local pane = panes.create { factory = make_editor, focus = false }
+    local view = pane.current_view
+    core.active_view = view
+    for _, line in ipairs { 3, 4 } do
+      test.ok(command.perform("editor:go_to_line"))
+      core.global_prompt_bar:set_text(tostring(line))
+      core.global_prompt_bar:submit()
+    end
+
+    test.equal(panes.history_length(pane), 3)
+    test.equal(panes.back(pane), view)
+    test.equal(view:get_selection_state().selections[1], 3)
+    test.equal(panes.back(pane), view)
     test.equal(view:get_selection_state().selections[1], 1)
   end)
 

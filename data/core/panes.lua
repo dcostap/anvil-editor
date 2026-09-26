@@ -914,11 +914,12 @@ local function compress_navigation_repetitions(pane)
   while last < #history.entries and history.entries[last + 1].view == view do last = last + 1 end
   local keys = {}
   for index = first, last do
-    local state = history.entries[index].state
+    local entry = history.entries[index]
+    local state = entry.state
     local line, col = navigation_position(state)
     -- Compare exact caret positions for now. We may use nearby-position matching later.
     -- Views without carets compare their complete navigation state.
-    keys[#keys + 1] = line and col and (line .. ":" .. col)
+    keys[#keys + 1] = entry.no_merge and entry or line and col and (line .. ":" .. col)
       or navigation_state_key(view, state)
   end
   local removed = 0
@@ -942,7 +943,7 @@ local function compress_navigation_repetitions(pane)
 end
 
 local function matches_navigation_place(entry, view, state, opts)
-  if not entry or entry.view ~= view then return false end
+  if not entry or entry.no_merge or entry.view ~= view then return false end
   if navigation_state_key(view, entry.state) == navigation_state_key(view, state) then
     return true
   end
@@ -968,19 +969,24 @@ function M.record_location(target, opts)
   if view ~= pane.current_view then return false end
   local state = opts.state or capture_navigation_state(view)
   local current = history.entries[history.index]
-  if matches_navigation_place(current, view, state, opts) then
-    if opts.kind == "edit" then
-      current.kind = "edit"
+  -- An exact departure is already saved. Do not add a second copy of it.
+  if opts.no_merge and current and current.view == view
+      and navigation_state_key(view, current.state) == navigation_state_key(view, state) then
+    return false
+  end
+  if not opts.no_merge and matches_navigation_place(current, view, state, opts) then
+    if opts.kind == "edit" or opts.prefer_incoming_state then
+      if opts.kind then current.kind = opts.kind end
       current.state = state
       compress_navigation_repetitions(pane)
-      log_navigation_history(pane, "merge-edit-place")
-      after_mutation("merged edit location in " .. pane.id)
+      log_navigation_history(pane, "update-nearby-place")
+      after_mutation("updated nearby location in " .. pane.id)
     end
     return false
   end
   local next_entry = history.entries[history.index + 1]
-  if matches_navigation_place(next_entry, view, state, opts) then
-    if opts.kind == "edit" or next_entry.kind ~= "edit" then
+  if not opts.no_merge and matches_navigation_place(next_entry, view, state, opts) then
+    if opts.kind == "edit" or opts.prefer_incoming_state or next_entry.kind ~= "edit" then
       next_entry.state = state
       next_entry.kind = opts.kind or next_entry.kind
     end
@@ -991,7 +997,7 @@ function M.record_location(target, opts)
     return false
   end
   local index = history.index + 1
-  table.insert(history.entries, index, { view = view, state = state, kind = opts.kind })
+  table.insert(history.entries, index, { view = view, state = state, kind = opts.kind, no_merge = opts.no_merge })
   history.index = index
   compress_navigation_repetitions(pane)
   M.prune_history(pane)

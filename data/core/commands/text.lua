@@ -2380,12 +2380,19 @@ local commands = {
           core.error("Invalid line number or unmatched string")
           return
         end
-        if dv.select_and_reveal then
-          dv:select_and_reveal(line, 1, line, 1, { reason = "go-to-line" })
-        else
-          dv.buffer:set_selection(line, 1)
-          dv:scroll_to_line(line, true)
-        end
+        navigation_history.perform_jump_with_options(dv, {
+          record_nearby = true,
+          departure = { no_merge = true }, destination = { no_merge = true },
+        }, function()
+          dv:with_selection_state(function()
+            if dv.select_and_reveal then
+              dv:select_and_reveal(line, 1, line, 1, { reason = "go-to-line" })
+            else
+              dv.buffer:set_selection(line, 1)
+              dv:scroll_to_line(line, true)
+            end
+          end)
+        end)
       end,
       suggest = function(text)
         if not text:find("^%d*$") then
@@ -3379,7 +3386,7 @@ for _, name in ipairs {
   local command_name = name
   local action = commands[command_name]
   commands[command_name] = function(dv, ...)
-    return navigation_history.perform_jump(dv, action, ...)
+    return navigation_history.perform_jump_with_options(dv, { departure = { prefer_incoming_state = true } }, action, ...)
   end
 end
 

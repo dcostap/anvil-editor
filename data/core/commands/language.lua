@@ -415,7 +415,7 @@ function language.activate_symbol(view, opts)
   if not opts.placement then
     local definition = unique_local_definition(buffer, symbol, line, col)
     if definition and (definition.start_line ~= line or col < definition.start_col or col >= definition.end_col) then
-      navigation_history.perform_jump(view, function()
+      navigation_history.perform_jump_with_options(view, { departure = { prefer_incoming_state = true } }, function()
         buffer:set_selection(definition.start_line, definition.start_col, definition.end_line, definition.end_col)
         view:scroll_to_make_visible(definition.start_line, definition.start_col)
       end)
