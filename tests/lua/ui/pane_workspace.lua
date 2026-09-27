@@ -9,8 +9,11 @@ local SavedView = View:extend()
 function SavedView:new(name)
   SavedView.super.new(self)
   self.name = name
+  self.location = "start"
 end
 function SavedView:get_name() return self.name end
+function SavedView:get_navigation_state() return { location = self.location } end
+function SavedView:set_navigation_state(state) self.location = state.location end
 
 local function factory(name) return function() return SavedView(name) end end
 local function save_view(view)
@@ -86,6 +89,34 @@ test.describe("Pane Workspace state", function()
     test.equal(editor.buffer:get_text(1, 1, math.huge, math.huge), "workspace text")
     panes.reset_for_tests()
     core.buffers, core.buffer_registry = old_buffers, old_registry
+  end)
+
+  test.it("preserves normal Pane back and forward history across workspace restore", function()
+    local first = SavedView("first")
+    local pane = panes.create { factory = function() return first end }
+    first.location = "later"
+    panes.record_location(pane)
+
+    local second = SavedView("second")
+    panes.present(second, { pane = pane })
+    second.location = "later"
+    local third = SavedView("third")
+    panes.present(third, { pane = pane })
+    test.equal(panes.back(pane), second)
+
+    local state = panes.save_workspace_state(save_view)
+    test.ok(panes.restore_workspace_state(state, load_view))
+
+    pane = panes.active()
+    test.equal(pane.current_view.name, "second")
+    test.equal(pane.current_view.location, "later")
+    test.ok(panes.is_back_available(pane))
+    test.ok(panes.is_forward_available(pane))
+    test.equal(panes.back(pane).name, "first")
+    test.equal(pane.current_view.location, "later")
+    test.equal(panes.forward(pane).name, "second")
+    test.equal(pane.current_view.location, "later")
+    test.equal(panes.forward(pane).name, "third")
   end)
 
   test.it("prunes a Pane whose Current View cannot restore", function()

@@ -1698,7 +1698,7 @@ function M.save_workspace_state(save_view)
     local ok, saved = pcall(save_view, pane.current_view)
     if ok and saved then
       valid[pane] = true
-      local record = { id = pane.id, view = saved }
+      local record = { id = pane.id, view = saved, history_limit = pane.history.limit }
       if M.constraint(pane) then
         -- Keep the owner when a related capture is current at shutdown.
         record.related_views = {}
@@ -1715,6 +1715,34 @@ function M.save_workspace_state(save_view)
           if indices[entry.view] then
             record.history[#record.history + 1] = {
               view_index = indices[entry.view], state = entry.state, kind = entry.kind,
+            }
+            if index == pane.history.index then record.history_index = #record.history end
+          end
+        end
+      else
+        record.history_views = { saved }
+        record.history = {}
+        local indices = { [pane.current_view] = 1 }
+        for _, entry in ipairs(pane.history.entries) do
+          if not indices[entry.view] then
+            local saved_ok, history_view = pcall(save_view, entry.view)
+            if saved_ok and history_view then
+              record.history_views[#record.history_views + 1] = history_view
+              indices[entry.view] = #record.history_views
+            elseif not saved_ok then
+              quiet("Workspace: skipped history View for Pane %s after save failed: %s",
+                pane.id, tostring(history_view))
+            end
+          end
+        end
+        local current_state = capture_navigation_state(pane.current_view)
+        for index, entry in ipairs(pane.history.entries) do
+          local view_index = indices[entry.view]
+          if view_index then
+            record.history[#record.history + 1] = {
+              view_index = view_index,
+              state = copy_saved_data(index == pane.history.index and current_state or entry.state),
+              kind = entry.kind,
             }
             if index == pane.history.index then record.history_index = #record.history end
           end
@@ -1794,17 +1822,26 @@ function M.restore_workspace_state(state, load_view)
       -- Reconnect captures after loading their owner, even when the owner is outside history.
       owner = owner or {}
       for _, view in pairs(related) do view.pane_constraint = owner end
+      local history_views = related
+      if type(record.history_views) == "table" then
+        history_views = {}
+        for index, saved in ipairs(record.history_views) do
+          local ok, view = pcall(load_view, saved)
+          if ok and view then history_views[index] = view end
+        end
+      end
       local selected = record.history and record.history[record.history_index or 1]
-      local view = selected and related[selected.view_index]
+      local selected_view = selected and history_views[selected.view_index]
+      local view = selected_view
       local ok = view ~= nil
       if not view then ok, view = pcall(load_view, record.view) end
       if ok and view then
         local pane = create_restored_identity(view, record.id)
-        if selected and related[selected.view_index] then
+        if selected and selected_view then
           pane.history.entries = {}
           local referenced = {}
           for index, entry in ipairs(record.history) do
-            local candidate = related[entry.view_index]
+            local candidate = history_views[entry.view_index]
             if candidate then
               claim_view(pane, candidate)
               referenced[candidate] = true
@@ -1814,11 +1851,16 @@ function M.restore_workspace_state(state, load_view)
               if index == record.history_index then pane.history.index = #pane.history.entries end
             end
           end
-          for _, candidate in pairs(related) do
-            if not referenced[candidate] then
-              claim_view(pane, candidate)
-              pane.retained_views[#pane.retained_views + 1] = candidate
+          if record.related_views then
+            for _, candidate in pairs(related) do
+              if not referenced[candidate] then
+                claim_view(pane, candidate)
+                pane.retained_views[#pane.retained_views + 1] = candidate
+              end
             end
+          end
+          if record.history_limit then
+            pane.history.limit = math.max(1, math.floor(tonumber(record.history_limit) or 100))
           end
           restore_navigation_state(view, pane.history.entries[pane.history.index].state)
         end
@@ -1827,7 +1869,10 @@ function M.restore_workspace_state(state, load_view)
       else
         quiet("Workspace: pruned invalid View for Pane %s: %s", record.id, tostring(view))
       end
-      for _, candidate in pairs(related) do
+      local loaded_views = {}
+      for _, candidate in pairs(related) do loaded_views[candidate] = true end
+      for _, candidate in pairs(history_views) do loaded_views[candidate] = true end
+      for candidate in pairs(loaded_views) do
         if not M.pane_for_view(candidate) then call_lifecycle(candidate, "on_close") end
       end
     end
