@@ -41,6 +41,7 @@ BUILD = ROOT / "build-windows-x86_64"
 RESULTS_ROOT = ROOT / "tools" / "perf-results" / "render-gate"
 BASELINE_PATH = ROOT / "tools" / "baselines" / "render_perf_windows.json"
 GOLDEN_ROOT = ROOT / "tools" / "baselines" / "render"
+EDITOR_BASELINE_ROOT = RESULTS_ROOT / "editor-baseline"
 HIDDEN_LAUNCHER = ROOT / "tools" / "run_anvil_hidden_desktop.ps1"
 IMAGE_COMPARATOR = ROOT / "tools" / "compare_anvil_screenshot.ps1"
 MARKDOWN_LONG_LINK_PAYLOAD_REPETITIONS = 4950
@@ -156,6 +157,7 @@ def uses_performance_baseline(renderer: str) -> bool:
 def performance_workload_settings(settings: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(settings)
     normalized.pop("directwrite_reference", None)
+    normalized.pop("fixture_sha256", None)
     return normalized
 
 
@@ -202,9 +204,13 @@ SUITES = {
     "full": list(STANDARD_SCENARIOS),
     "visual": [name for name in STANDARD_SCENARIOS if SCENARIOS[name]["visual"]],
     "specimen": list(SPECIMEN_SCENARIOS),
-    "stress": list(perf_workloads.SCENARIOS) + ["filetree-edit-repeat", "markdown-long-link-caret-repeat"],
-    "interactive": [name for name, settings in perf_workloads.SCENARIOS.items() if settings["kind"] != "diff"],
+    "stress": [name for name in perf_workloads.SCENARIOS
+               if name not in perf_workloads.EDITOR_SCENARIOS]
+              + ["filetree-edit-repeat", "markdown-long-link-caret-repeat"],
+    "interactive": [name for name, settings in perf_workloads.SCENARIOS.items()
+                    if name not in perf_workloads.EDITOR_SCENARIOS and settings["kind"] != "diff"],
     "diff": [name for name, settings in perf_workloads.SCENARIOS.items() if settings["kind"] == "diff"],
+    "editor-regression": list(perf_workloads.EDITOR_SCENARIOS),
 }
 
 LOWER_IS_BETTER = {
@@ -216,6 +222,10 @@ LOWER_IS_BETTER = {
     "draw_emit_ms_p95": (0.08, 0.20),
     "renderer_end_ms_p50": (0.05, 0.12),
     "renderer_end_ms_p95": (0.08, 0.20),
+    "rencache_command_replay_ms_p50": (0.08, 0.15),
+    "rencache_command_replay_ms_p95": (0.12, 0.25),
+    "text_render_glyph_bitmap_cache_miss_ms_p50": (0.12, 0.15),
+    "text_render_glyph_bitmap_cache_miss_ms_p95": (0.15, 0.30),
     "update_ms_p50": (0.08, 0.10),
     "update_ms_p95": (0.12, 0.20),
     "draw_calls_avg": (0.03, 10.0),
@@ -590,6 +600,11 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         "display_packet_commands_replayed", "display_packet_frame_bytes_copied",
         "display_packet_replay_ms", "text_render_calls", "text_render_glyphs",
         "text_render_hb_shape_ms", "lua_heap_kib", "event_ms", "pre_draw_ms",
+        "rencache_command_replay_ms", "d3d11_glyph_push_ms",
+        "text_render_glyph_bitmap_cache_misses", "text_render_glyph_bitmap_cache_miss_ms",
+        "textview_line_packet_builds", "textview_line_packet_build_ms",
+        "textview_line_packet_hits", "textview_line_packet_misses",
+        "rootpanel_initial_layout_ms", "textview_body_ms", "textview_gutter_ms",
         "run_threads_ms", "gc_ms", "text_width_calls", "text_width_bytes",
         "text_render_shaped_cache_hits", "text_render_shaped_cache_misses",
     ):
@@ -820,6 +835,7 @@ def run_case(
         "ANVIL_PERF_BENCHMARK_HEARTBEAT": str(heartbeat_file),
         "ANVIL_PERF_BENCHMARK_LIFECYCLE": str(lifecycle_file),
         "ANVIL_PERF_BENCHMARK_SCREENSHOT": str(screenshot_file) if screenshot else "",
+        "ANVIL_PERF_BENCHMARK_CAPTURE_ACTIONS": "1" if screenshot and settings.get("capture_actions") else "0",
         "ANVIL_PERF_BENCHMARK_VIDEO_DIR": str(run_dir / "frames") if mode == "video" else "",
         "ANVIL_PERF_BENCHMARK_RASTER_METADATA": str(raster_metadata_file),
         "ANVIL_PERF_BENCHMARK_IMAGE_METADATA": str(image_metadata_file),
@@ -833,6 +849,8 @@ def run_case(
         "ANVIL_PERF_BENCHMARK_WINDOW_WIDTH": str(settings["window_width"]),
         "ANVIL_PERF_BENCHMARK_WINDOW_HEIGHT": str(settings["window_height"]),
     }
+    if mode == "metrics" and settings.get("capture_actions"):
+        environment["ANVIL_DOCVIEW_STATS"] = "1"
     launch_config = {
         "exe": str(exe),
         "working_directory": str(work / scenario if settings.get("kind") else work),
@@ -924,7 +942,7 @@ def run_case(
         result["action_rows"] = actions["rows"]
         result["state"]["action_sequence"] = actions["sequence"]
         result["state"].update({key: value for key, value in values.items()
-                                if key.startswith(("workload_", "diff_")) or key == "code_scale"})
+                                if key.startswith(("workload_", "diff_", "editor_")) or key == "code_scale"})
     elif result["measured_frames"] != frames:
         raise RuntimeError(f"workload mismatch: expected {frames}, got {result['measured_frames']}")
     if settings.get("scroll_lines") and result["action_count"] == 0:
@@ -964,6 +982,14 @@ def run_case(
             )
         result["screenshot"] = str(screenshot_file)
         result["stability_screenshots"] = [str(path) for path in stability_files]
+        if settings.get("capture_actions"):
+            checkpoints = sorted(run_dir.glob("action-*.png"))
+            expected = {f"action-{index:02d}" for index in settings["capture_checkpoints"]}
+            if {path.stem for path in checkpoints} != expected:
+                raise RuntimeError(
+                    f"action captures did not match checkpoints: {sorted(expected)}"
+                )
+            result["action_screenshots"] = {path.stem: str(path) for path in checkpoints}
         if scenario == "image-filtering":
             with Image.open(screenshot_file) as capture:
                 pixels = capture.convert("RGB")
@@ -1046,6 +1072,22 @@ def compare_image(baseline: Path, current: Path, output_json: Path) -> dict[str,
     return json.loads(completed.stdout)
 
 
+def compare_action_captures(
+    captures: dict[str, str], golden_root: Path, scenario: str,
+    renderer: str, run_dir: Path,
+) -> dict[str, dict[str, Any]]:
+    diffs = {}
+    for name, path in captures.items():
+        golden = golden_root / f"{scenario}-{renderer}-{name}.png"
+        if not golden.exists():
+            diffs[name] = {"visual_pass": False, "error": "missing golden"}
+        else:
+            diffs[name] = compare_image(
+                golden, Path(path), run_dir / f"{name}-visual-diff.json",
+            )
+    return diffs
+
+
 def machine_info(exe: Path, fixture: Path) -> dict[str, Any]:
     return {
         "node": platform.node(),
@@ -1093,6 +1135,18 @@ def compare_performance(current: dict[str, Any], baseline: dict[str, Any]) -> li
             })
         pairs = {"active_fps": (now["active_fps"], before["active_fps"])}
         lower_limits = dict(LOWER_IS_BETTER)
+        if scenario in perf_workloads.EDITOR_SCENARIOS:
+            # Forty action frames can contain one unrelated scheduling stall.
+            # Keep the relative check, but require an observable slowdown.
+            lower_limits["frame_ms_p95"] = (0.08, 1.0)
+            lower_limits["draw_emit_ms_p95"] = (0.08, 0.75)
+            lower_limits["renderer_end_ms_p95"] = (0.08, 0.5)
+            lower_limits["update_ms_p95"] = (0.12, 1.0)
+            if scenario == "editor-fuzzy-open":
+                # Eight queries make p95 depend on one frame. Median and FPS
+                # remain strict; require a larger change in the tail.
+                lower_limits["frame_ms_p95"] = (0.08, 3.0)
+                lower_limits["draw_emit_ms_p95"] = (0.08, 2.5)
         for action, values in now.get("actions", {}).items():
             for stat in ("latency_ms_p50", "latency_ms_p95"):
                 if stat not in values:
@@ -1334,6 +1388,10 @@ def main() -> int:
         parser.error("budgets must be finite and positive")
 
     selected_scenarios = [args.scenario] if args.scenario else SUITES[args.suite]
+    if args.actions is not None and any(
+        name in perf_workloads.EDITOR_SCENARIOS for name in selected_scenarios
+    ):
+        parser.error("editor regression scenes use fixed actions and checkpoints")
     if args.video and (not args.scenario or not SCENARIOS[args.scenario].get("video")):
         parser.error("--video requires a video-enabled --scenario")
     if not args.video and any(SCENARIOS[name].get("video") for name in selected_scenarios):
@@ -1354,17 +1412,23 @@ def main() -> int:
         RESULTS_ROOT / "specimen-baselines" / specimen_digest / args.user_state_mode
         if specimen_digest else None
     )
+    editor_selected = args.suite == "editor-regression" and not args.scenario \
+        or args.scenario in perf_workloads.EDITOR_SCENARIOS
+    default_root = local_specimen_root or (EDITOR_BASELINE_ROOT if editor_selected else None)
     args.baseline = args.baseline or (
-        local_specimen_root / "render_perf.json" if local_specimen_root else BASELINE_PATH
+        default_root / "render_perf.json" if default_root else BASELINE_PATH
     )
     golden_root = args.golden_root or (
-        local_specimen_root / "goldens" if local_specimen_root else GOLDEN_ROOT
+        default_root / "goldens" if default_root else GOLDEN_ROOT
     )
 
     baseline = None
     if args.baseline.exists():
         baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
-    baseline_scenario_names = set(SPECIMEN_SCENARIOS if specimen_selected else STANDARD_SCENARIOS)
+    baseline_scenario_names = set(
+        SPECIMEN_SCENARIOS if specimen_selected else
+        perf_workloads.EDITOR_SCENARIOS if editor_selected else STANDARD_SCENARIOS
+    )
     partial_baseline_update = set(selected_scenarios) != baseline_scenario_names
     if args.update_baseline and partial_baseline_update and not baseline:
         parser.error("partial baseline updates require an existing full baseline")
@@ -1375,12 +1439,20 @@ def main() -> int:
     run_id = time.strftime("%Y%m%d_%H%M%S") + f"_{os.getpid()}"
     run_root = RESULTS_ROOT / run_id
     app_root = run_root / "app"
-    work = run_root / "work"
+    # Fuzzy Searcher displays absolute Project paths. Keep fixture paths
+    # stable so exact-pixel goldens can compare separate private runs.
+    work = EDITOR_BASELINE_ROOT / "fixture-work" if editor_selected else run_root / "work"
     user = run_root / "user"
+    if editor_selected and work.exists():
+        shutil.rmtree(work)
     work.mkdir(parents=True)
     user.mkdir(parents=True)
     exe = copy_app_tree(app_root)
     fixture, tab_dir, _markdown_fixture = generate_fixture(work)
+    if editor_selected:
+        # Startup Project services also inspect the shared work root.
+        # Keep their Git search inside the private run.
+        run(["git", "init", "-q", str(work)])
     if args.video:
         scenario = args.scenario
         if scenario == "markdown-callout-shift":
@@ -1571,6 +1643,7 @@ def main() -> int:
         for index in range(1, metrics_runs + 1):
             take_screenshot = (
                 index == metrics_runs and settings["visual"] and not args.no_visual
+                and not settings.get("capture_actions")
             )
             case = run_case_safely(
                 exe=exe, work=work, user=case_user("metrics", index),
@@ -1597,6 +1670,25 @@ def main() -> int:
                 f"p95={case['metrics']['frame_ms_p95']:.3f}ms",
                 flush=True,
             )
+
+        if (not case_failures and settings["visual"] and not args.no_visual
+                and settings.get("capture_actions")):
+            print(f"[{scenario}] visual replay (excluded from scores)", flush=True)
+            visual_run = run_case_safely(
+                exe=exe, work=work, user=case_user("visual", 1),
+                fixture=fixture, external_fixture=external_fixture,
+                tab_dir=tab_dir, scenario=scenario, settings=settings,
+                renderer=args.renderer,
+                mode="visual", run_dir=run_root / scenario / "visual-1",
+                frames=frames, warmup_frames=warmup_frames, screenshot=True,
+                **case_watchdogs,
+            )
+            if visual_run.get("status") != "passed":
+                case_failures.append(visual_run)
+                print(
+                    f"  visual replay: {visual_run.get('failure_kind', 'failed')} "
+                    f"phase={visual_run.get('last_phase', 'unknown')}", flush=True,
+                )
 
         if case_failures:
             report["scenarios"][scenario] = {
@@ -1627,6 +1719,8 @@ def main() -> int:
             },
         }
         states = [item.get("state") for item in throughput_runs + metric_runs]
+        if visual_run:
+            states.append(visual_run.get("state"))
         scenario_report["state_consistent"] = states_consistent(states)
         if not scenario_report["state_consistent"]:
             scenario_report["status"] = "failed"
@@ -1723,6 +1817,7 @@ def main() -> int:
         if visual_run:
             current = Path(visual_run["screenshot"])
             golden = golden_root / f"{scenario}-{args.renderer}.png"
+            action_screenshots = visual_run.get("action_screenshots", {})
             if scenario == "font-raster-correctness":
                 scenario_report["font_raster"] = visual_run["font_raster"]
                 if not visual_run["font_raster"]["passed"]:
@@ -1733,11 +1828,17 @@ def main() -> int:
                     })
                     report["passed"] = False
             if args.report_only:
-                scenario_report["visual"] = {"status": "captured", "current": str(current)}
+                scenario_report["visual"] = {"status": "captured", "current": str(current),
+                                             "actions": action_screenshots}
             elif args.update_goldens:
                 scenario_report["visual"] = {
                     "status": "pending_update",
                     "golden": str(golden), "current": str(current),
+                    "action_goldens": {
+                        name: str(golden_root / f"{scenario}-{args.renderer}-{name}.png")
+                        for name in action_screenshots
+                    },
+                    "actions": action_screenshots,
                 }
             elif not golden.exists():
                 scenario_report["visual"] = {
@@ -1748,10 +1849,17 @@ def main() -> int:
             else:
                 diff_path = Path(visual_run["run_dir"]) / "visual_diff.json"
                 diff = compare_image(golden, current, diff_path)
-                passed = bool(diff["visual_pass"])
+                action_diffs = compare_action_captures(
+                    action_screenshots, golden_root, scenario,
+                    args.renderer, Path(visual_run["run_dir"]),
+                )
+                passed = bool(diff["visual_pass"]) and all(
+                    value["visual_pass"] for value in action_diffs.values()
+                )
                 scenario_report["visual"] = {
                     "status": "pass" if passed else "regression",
                     "golden": str(golden), "current": str(current), "diff": diff,
+                    "action_diffs": action_diffs,
                 }
                 if not passed:
                     report["passed"] = False
@@ -1829,6 +1937,8 @@ def main() -> int:
                 golden = Path(visual["golden"])
                 golden.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(Path(visual["current"]), golden)
+                for name, path in visual.get("actions", {}).items():
+                    shutil.copy2(Path(path), Path(visual["action_goldens"][name]))
                 visual["status"] = "updated"
             else:
                 visual["status"] = "not_updated"

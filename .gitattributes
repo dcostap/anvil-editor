@@ -9,3 +9,6 @@ resources/icons/icon.inl linguist-vendored
 data/tools/dprint/** linguist-vendored
 data/tools/dprint/*.exe -text
 data/tools/dprint/plugins/*.wasm -text
+
+# Keep the copied Unicode input byte-for-byte, including its trailing spaces.
+tests/fixtures/unicode-stress-test.txt -text whitespace=-blank-at-eol

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,33 @@ SCENARIOS = {
     "long-line-edit": scenario("edit", lines=32, line_bytes=65536, carets=1),
     "multi-caret-edit": scenario("edit", lines=4000, line_bytes=100, carets=1024),
 }
+
+
+def editor_scene(content: str, lines: int, wrap: bool = False) -> dict[str, Any]:
+    settings = scenario("editor", content=content, lines=lines, wrap=wrap)
+    settings.update(window_width=2560, window_height=1407, code_scale=1.0,
+                    actions=40, capture_actions=True, capture_checkpoints=[1, 2, 3, 40])
+    return settings
+
+
+# Keep these fixtures private and fixed across the before/after render comparison.
+EDITOR_SCENARIOS = {
+    "editor-code-small-nowrap": editor_scene("code", 24),
+    "editor-code-small-wrap": editor_scene("code", 24, True),
+    "editor-code-large-nowrap": editor_scene("code", 100000),
+    "editor-code-large-wrap": editor_scene("code", 100000, True),
+    "editor-markdown-small": editor_scene("markdown", 24, True),
+    "editor-markdown-large": editor_scene("markdown", 4000, True),
+    "editor-unicode-wrap": editor_scene("unicode", 800, True),
+    "editor-unicode-source-wrap": editor_scene("unicode-source", 204, True),
+    "editor-unicode-source-nowrap": editor_scene("unicode-source", 204),
+    "editor-fuzzy-open": dict(
+        scenario("fuzzy", files=1000, action="file-query"),
+        window_width=2560, window_height=1407, code_scale=1.0,
+        actions=8, capture_actions=True, capture_checkpoints=[1, 2, 8],
+    ),
+}
+SCENARIOS.update(EDITOR_SCENARIOS)
 # A fresh process opens the large file once. It does not measure cached reopen calls.
 for name in ("file-open-large", "file-open-huge"):
     SCENARIOS[name]["actions"] = 1
@@ -78,9 +106,42 @@ def generate(root: Path, settings: dict[str, Any]) -> dict[str, Any]:
             for i in range(1, count + 1)))
     elif kind == "edit":
         save("edit.txt", ("x" * (settings["line_bytes"] - 1) + "\n") * count)
+    elif kind == "editor":
+        content = settings["content"]
+        if content == "unicode-source":
+            source = Path(__file__).resolve().parents[1] / "tests/fixtures/unicode-stress-test.txt"
+            save("scene.txt", source.read_bytes().decode("utf-8"))
+        elif content == "code":
+            save("scene.cpp", "".join(
+                f'auto Panel_{i:06d}::draw(const Widget& widget) -> bool {{ '
+                f'const auto label = "row {i:06d} syntax and selected text"; '
+                f'return widget.paint(label, {i} * 3 + 7); }}\n'
+                for i in range(1, count + 1)))
+        elif content == "markdown":
+            save("scene.md", "".join(
+                (f"## Section {i:06d}: an editor heading\n" if i % 12 == 1 else
+                 f"- [ ] **Task {i:06d}** with *emphasis*, `inline code`, "
+                 f"and [a link](https://example.invalid/{i}) in a long paragraph "
+                 f"that wraps in the reading lane.\n")
+                for i in range(1, count + 1)))
+        elif content == "unicode":
+            samples = (
+                'café naïve e\u0301 A\u030a — ελληνικά Ελληνικά 中文 漢字 日本語',
+                'العَرَبِيَّة עברית नमस्ते ไทย 한글 🦊 👩‍💻 🚀',
+                '┌────┐ │ box │ └────┘ 𝛌 𝔄 𝒙 \t tab  🌍🌎🌏',
+            )
+            save("scene.cpp", "".join(
+                f'// Unicode row {i:04d}: {samples[(i - 1) % len(samples)]}\n'
+                for i in range(1, count + 1)))
+        else:
+            raise ValueError(f"unknown editor content: {content}")
     else:
         raise ValueError(f"unknown workload: {kind}")
     digest = hashlib.sha256()
     for item in manifest:
         digest.update((item["path"] + "\0" + item["sha256"] + "\n").encode())
+    if settings.get("capture_actions"):
+        # Do not let Git scan the source checkout above this private fixture.
+        subprocess.run(["git", "init", "-q", str(root)], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     return {"sha256": digest.hexdigest(), "files": manifest}

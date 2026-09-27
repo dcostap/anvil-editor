@@ -19,6 +19,14 @@ local function position(view, line)
   view:scroll_to_line(line, false, true)
 end
 
+local function editor_target(settings, index)
+  index = (index - 1) % 4 + 1
+  local rows = settings.lines
+  if index == 1 or index == 4 then return math.min(rows, 8) end
+  if index == 2 then return math.min(rows, 12) end
+  return math.min(rows, math.max(20, math.floor(rows / 2)))
+end
+
 function Workload.new(settings, root)
   return setmetatable({ settings = settings, root = root, completed = 0 }, Workload)
 end
@@ -64,6 +72,17 @@ function Workload:setup()
       self.view.buffer:set_selection(1, 1)
       for line = 2, settings.carets do self.view.buffer:add_selection(line, 1) end
     end)
+  elseif settings.kind == "editor" then
+    self.view = open(self:path(settings.content == "markdown" and "scene.md"
+      or settings.content == "unicode-source" and "scene.txt" or "scene.cpp"))
+    self.view:set_wrapping_enabled(settings.wrap)
+    if settings.wrap then linewrapping.update_textview_breaks(self.view) end
+    position(self.view, editor_target(settings, 1))
+    assert(#self.view.buffer.lines == settings.lines, "Editor fixture has the wrong line count")
+    assert(self.view:is_wrapping_enabled() == settings.wrap, "Editor wrapping mode changed")
+    if settings.content == "markdown" then
+      assert(self.view.__markdown_live_attached, "Markdown Live Preview did not attach")
+    end
   else
     error("unknown benchmark workload: " .. tostring(settings.kind))
   end
@@ -72,6 +91,13 @@ function Workload:setup()
 end
 
 function Workload:setup_ready()
+  if self.settings.kind == "editor" and self.settings.content == "markdown" then
+    local model = require("core.markdown.model").peek(self.view.buffer)
+    if not (model and model.status == "ready"
+      and model.published_revision == self.view.buffer.text_revision) then
+      return false
+    end
+  end
   if self.diff then
     assert(not self.diff.comparison_message, self.diff.comparison_message)
     return self.diff.diff_model ~= nil and not self.diff.updater_idx
@@ -88,13 +114,20 @@ function Workload:action_name(index)
   end
   if settings.kind == "diff" then return "diff-" .. settings.action end
   if settings.kind == "edit" then return index % 2 == 1 and "insert" or "undo" end
+  if settings.kind == "editor" then
+    return ({ "steady-redraw", "scroll-near", "jump-middle", "return-near" })[
+      (index - 1) % 4 + 1]
+  end
   return "file-" .. settings.kind
 end
 
 function Workload:dispatch(index)
   local settings = self.settings
   self.index = index
-  if settings.kind == "diff" then
+  if settings.kind == "editor" then
+    self.target_line = editor_target(settings, index)
+    position(self.view, self.target_line)
+  elseif settings.kind == "diff" then
     if settings.action == "scroll" then
       local span = math.max(1, #self.view.buffer.lines - 100)
       local line = 1 + math.floor((index - 1) * span / math.max(1, settings.actions - 1))
@@ -176,6 +209,17 @@ function Workload:action_ready()
     return false
   end
   if not self:setup_ready() then return false end
+  if self.settings.kind == "editor" then
+    assert(self.view:is_wrapping_enabled() == self.settings.wrap,
+      "Editor wrapping mode changed")
+    if self.settings.content == "markdown" then
+      assert(self.view.__markdown_live_attached, "Markdown Live Preview detached")
+    end
+    local line = self.view:with_selection_state(function()
+      return self.view.buffer:get_selection()
+    end)
+    assert(line == self.target_line, "Editor action did not reach its line")
+  end
   if self.diff then
     assert(#self.diff.a_changes > 0 and #self.diff.b_changes > 0, "Diff fixture has no changes")
     assert(self.view.size.x > 0 and self.view.size.y > 0, "Diff Side is not visible")
@@ -193,6 +237,9 @@ function Workload:state()
     diff_left_changes = self.diff and #self.diff.a_changes or 0,
     diff_right_changes = self.diff and #self.diff.b_changes or 0,
     code_scale = require("plugins.scale").get_code(),
+    editor_wrapped = self.settings.kind == "editor" and self.view:is_wrapping_enabled() or false,
+    editor_markdown_live = self.settings.kind == "editor"
+      and self.view.__markdown_live_attached == true or false,
   }
 end
 

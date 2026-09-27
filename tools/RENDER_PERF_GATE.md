@@ -7,6 +7,44 @@
 The same runner also measures interactive workloads. Do not create a separate
 hidden-window runner for editor benchmarks.
 
+### Editor render regression baseline
+
+Run this fixed matrix before renderer changes. It covers small and large C++
+files, wrapped and unwrapped code, Markdown Live Preview, generated Unicode,
+the copied `tests/fixtures/unicode-stress-test.txt`, and Fuzzy Searcher opening.
+The Unicode copy has SHA-256
+`49748c6a34c3315e726361143285c5e553cb9148aa7a62eecb44ad5a216d8960`.
+Each action uses a real Editor or Fuzzy Searcher View.
+
+Create the local baseline once, before a renderer change:
+
+```sh
+python tools/run_render_perf_gate.py --suite editor-regression \
+  --runs 3 --metrics-runs 1 --max-runs 5 --frames 24 --warmup-frames 8 \
+  --update-baseline --update-goldens
+```
+
+Run the same command without the two update flags after each change.
+The runner reads `tools/perf-results/render-gate/editor-baseline/render_perf.json`
+and the adjacent `goldens` directory by default. This location is local and
+Git-ignored. Keep its files when you want to compare later code changes.
+The suite rebuilds its fixed fixture work directory before each run. This
+keeps paths shown by Fuzzy Searcher equal in both images.
+Do not use `--report-only` for a comparison. Do not update a baseline to hide
+a regression.
+
+The gate compares frame and action costs with the baseline. It compares exact
+pixels at fixed action checkpoints and at the settled end state. It also checks three
+consecutive end captures for stability. The metrics pass records native command
+replay, glyph bitmap misses, packet builds, Editor draw, and layout costs.
+Use `--diagnose` when a measured cost needs draw scopes and LuaJIT samples.
+Capture frames are excluded from the performance scores.
+
+The matrix does not replay an interactive recording. It runs fixed actions on
+fixed files in a private app. This makes before/after comparisons repeatable.
+Editor cases run 40 actions. Fuzzy Searcher runs eight queries. `--frames`
+does not change these counts. The suite rejects `--actions`.
+
 Run the stress workloads and their diagnostic replays:
 
 ```sh

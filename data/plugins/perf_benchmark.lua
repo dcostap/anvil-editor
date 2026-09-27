@@ -44,6 +44,7 @@ local benchmark = {
   heartbeat_file = env_string("ANVIL_PERF_BENCHMARK_HEARTBEAT"),
   lifecycle_file = env_string("ANVIL_PERF_BENCHMARK_LIFECYCLE"),
   screenshot_file = env_string("ANVIL_PERF_BENCHMARK_SCREENSHOT"),
+  capture_actions = truthy(os.getenv("ANVIL_PERF_BENCHMARK_CAPTURE_ACTIONS")),
   video_dir = env_string("ANVIL_PERF_BENCHMARK_VIDEO_DIR"),
   raster_metadata_file = env_string("ANVIL_PERF_BENCHMARK_RASTER_METADATA"),
   image_metadata_file = env_string("ANVIL_PERF_BENCHMARK_IMAGE_METADATA"),
@@ -88,6 +89,11 @@ local metric_fields = {
   "display_packet_replays", "display_packet_commands_replayed",
   "display_packet_frame_bytes_copied", "display_packet_replay_ms",
   "text_render_calls", "text_render_glyphs", "text_render_hb_shape_ms",
+  "rencache_command_replay_ms", "d3d11_glyph_push_ms",
+  "text_render_glyph_bitmap_cache_misses", "text_render_glyph_bitmap_cache_miss_ms",
+  "textview_line_packet_builds", "textview_line_packet_build_ms",
+  "textview_line_packet_hits", "textview_line_packet_misses",
+  "rootpanel_initial_layout_ms", "textview_body_ms", "textview_gutter_ms",
   "lua_heap_kib", "run_threads_ms", "gc_ms", "text_width_calls",
   "text_width_bytes", "text_render_shaped_cache_hits", "text_render_shaped_cache_misses",
 }
@@ -184,7 +190,7 @@ write_result {
 }
 
 local function write_metrics()
-  if benchmark.mode == "throughput" then return true end
+  if benchmark.mode == "throughput" or benchmark.mode == "visual" then return true end
   if benchmark.metrics_file == "" then return true end
   local lines = { table.concat(metric_fields, ",") }
   for _, row in ipairs(benchmark.rows) do
@@ -786,6 +792,9 @@ local function metric_row(snapshot)
     "event_ms", "update_ms", "pre_draw_ms", "draw_emit_ms", "renderer_end_ms",
     "frame_ms", "present_ms", "core_step_ms", "total_ms", "draw_calls",
     "quad_instances", "run_threads_ms", "gc_ms",
+    "textview_line_packet_builds", "textview_line_packet_build_ms",
+    "textview_line_packet_hits", "textview_line_packet_misses",
+    "rootpanel_initial_layout_ms", "textview_body_ms", "textview_gutter_ms",
   }) do
     row[key] = tonumber(snapshot[key]) or 0
   end
@@ -797,6 +806,8 @@ local function metric_row(snapshot)
     "display_packet_replay_ms", "text_render_calls", "text_render_glyphs",
     "text_render_hb_shape_ms", "text_width_calls", "text_width_bytes",
     "text_render_shaped_cache_hits", "text_render_shaped_cache_misses", "texture_uploads",
+    "rencache_command_replay_ms", "d3d11_glyph_push_ms",
+    "text_render_glyph_bitmap_cache_misses", "text_render_glyph_bitmap_cache_miss_ms",
   }) do
     row[key] = tonumber(renderer_stats[key]) or 0
   end
@@ -1080,6 +1091,34 @@ function perf.on_frame(snapshot)
   end
   heartbeat(false)
   local ok, err = xpcall(function()
+    if benchmark.action_capture_waiting then
+      if not scroll_is_settled() then
+        benchmark.action_capture_settle_count = benchmark.action_capture_settle_count + 1
+        assert(benchmark.action_capture_settle_count < benchmark.state_settle_max_frames,
+          "action capture scroll did not settle")
+        core.redraw = true
+        return
+      end
+      local path = benchmark.action_capture_waiting
+      local captured, reason = renwindow.request_frame_capture(core.window, path)
+      assert(captured, "action capture request failed: " .. tostring(reason))
+      benchmark.action_capture_waiting = nil
+      benchmark.action_capture_pending = path
+      core.redraw = true
+      return
+    end
+    if benchmark.action_capture_pending then
+      local pending = benchmark.action_capture_pending
+      assert(system.get_file_info(pending), "action capture was not saved: " .. pending)
+      benchmark.action_capture_pending = nil
+      if benchmark.workload.completed >= benchmark.workload.settings.actions then
+        benchmark.measure_end = system.get_time()
+        begin_state_settle()
+      else
+        perform_action()
+      end
+      return
+    end
     if benchmark.phase == "warmup" then
       benchmark.warmup_count = benchmark.warmup_count + 1
       if benchmark.warmup_count >= benchmark.warmup_frames then
@@ -1093,7 +1132,7 @@ function perf.on_frame(snapshot)
       end
     elseif benchmark.phase == "measure" then
       benchmark.measure_count = benchmark.measure_count + 1
-      if benchmark.mode ~= "throughput" then
+      if benchmark.mode ~= "throughput" and benchmark.mode ~= "visual" then
         benchmark.rows[#benchmark.rows + 1] = metric_row(snapshot)
       else
         benchmark.pending_action_ms = 0
@@ -1108,6 +1147,23 @@ function perf.on_frame(snapshot)
           benchmark.workload.completed = benchmark.workload.completed + 1
         end
         complete = benchmark.workload.completed >= benchmark.workload.settings.actions
+        local capture_checkpoint = false
+        if row and benchmark.capture_actions then
+          for _, checkpoint in ipairs(benchmark.workload.settings.capture_checkpoints or {}) do
+            if checkpoint == benchmark.workload.completed then
+              capture_checkpoint = true
+              break
+            end
+          end
+        end
+        if capture_checkpoint then
+          if complete then benchmark.measure_end = system.get_time() end
+          benchmark.action_capture_waiting = common.dirname(benchmark.screenshot_file) .. PATHSEP
+            .. string.format("action-%02d.png", benchmark.workload.completed)
+          benchmark.action_capture_settle_count = 0
+          core.redraw = true
+          return
+        end
       end
       if complete then
         benchmark.measure_end = system.get_time()

@@ -33,12 +33,90 @@ class PerformanceBaselinePolicyTests(unittest.TestCase):
         self.assertFalse(gate.uses_performance_baseline("software"))
 
     def test_reference_notes_do_not_change_the_performance_workload(self):
-        old = {"frames": 600, "directwrite_reference": {"first_stable_stroke_ppem": 15}}
+        old = {"frames": 600, "fixture_sha256": "stored-in-manifest",
+               "directwrite_reference": {"first_stable_stroke_ppem": 15}}
         current = {"frames": 600, "directwrite_reference": {"continuous_at_ppem": [15]}}
         self.assertEqual(
             gate.performance_workload_settings(old),
             gate.performance_workload_settings(current),
         )
+
+    def test_editor_scenes_cover_fixed_content_and_preserve_unicode_source(self):
+        scenes = gate.perf_workloads.EDITOR_SCENARIOS
+        self.assertEqual({"code", "markdown", "unicode", "unicode-source"},
+                         {scene["content"] for scene in scenes.values() if scene["kind"] == "editor"})
+        self.assertIn("editor-fuzzy-open", scenes)
+        self.assertTrue(any(scene.get("wrap") for scene in scenes.values()))
+        self.assertTrue(any(scene.get("wrap") is False for scene in scenes.values()))
+        self.assertTrue(all(scene["capture_actions"] for scene in scenes.values()))
+        with tempfile.TemporaryDirectory() as temp:
+            scene = scenes["editor-unicode-source-wrap"]
+            result = gate.perf_workloads.generate(Path(temp), scene)
+            source = ROOT / "tests/fixtures/unicode-stress-test.txt"
+            self.assertEqual((Path(temp) / "scene.txt").read_bytes(), source.read_bytes())
+            self.assertEqual(gate.sha256(source),
+                             "49748c6a34c3315e726361143285c5e553cb9148aa7a62eecb44ad5a216d8960")
+            self.assertEqual(result["files"][0]["sha256"], gate.sha256(source))
+
+    @unittest.skipIf(gate.Image is None, "Pillow is required")
+    def test_action_capture_detects_one_changed_pixel(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            golden = root / "goldens"
+            golden.mkdir()
+            original = gate.Image.new("RGB", (8, 8), "white")
+            changed = original.copy()
+            changed.putpixel((4, 4), (0, 0, 0))
+            original.save(golden / "case-d3d11-action-01.png")
+            changed.save(root / "action-01.png")
+
+            diffs = gate.compare_action_captures(
+                {"action-01": str(root / "action-01.png")}, golden,
+                "case", "d3d11", root,
+            )
+
+            self.assertFalse(diffs["action-01"]["visual_pass"])
+
+    def test_editor_p95_requires_a_meaningful_absolute_slowdown(self):
+        name = "editor-code-small-nowrap"
+        before = {"active_fps": 155, "metrics": {
+            "frame_ms_p95": 6.377, "renderer_end_ms_p95": 3.740,
+            "update_ms_p95": 2.178,
+            "draw_emit_ms_p95": 3.981,
+        }}
+        after = {"status": "passed", "active_fps": 155, "metrics": {
+            "frame_ms_p95": 7.214, "renderer_end_ms_p95": 4.090,
+            "update_ms_p95": 2.902,
+            "draw_emit_ms_p95": 4.480,
+        }}
+        report = {"scenarios": {name: after}}
+        baseline = {"scenarios": {name: before}}
+        findings = gate.compare_performance(report, baseline)
+        self.assertFalse([item for item in findings if item["status"] == "regression"])
+
+        after["metrics"]["frame_ms_p95"] = 9.0
+        findings = gate.compare_performance(report, baseline)
+        self.assertIn("frame_ms_p95", {
+            item["metric"] for item in findings if item["status"] == "regression"
+        })
+
+    def test_short_fuzzy_metric_pass_does_not_gate_on_one_slow_frame(self):
+        name = "editor-fuzzy-open"
+        before = {"active_fps": 127, "metrics": {
+            "frame_ms_p95": 4.848, "draw_emit_ms_p95": 3.981,
+        }}
+        after = {"status": "passed", "active_fps": 127, "metrics": {
+            "frame_ms_p95": 7.102, "draw_emit_ms_p95": 5.879,
+        }}
+        report = {"scenarios": {name: after}}
+        baseline = {"scenarios": {name: before}}
+        findings = gate.compare_performance(report, baseline)
+        self.assertFalse([item for item in findings if item["status"] == "regression"])
+        after["metrics"]["frame_ms_p95"] = 9.0
+        findings = gate.compare_performance(report, baseline)
+        self.assertIn("frame_ms_p95", {
+            item["metric"] for item in findings if item["status"] == "regression"
+        })
 
 
 class MetricsSummaryTests(unittest.TestCase):
