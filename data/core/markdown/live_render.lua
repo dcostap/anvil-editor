@@ -1773,7 +1773,8 @@ function callout_runtime.reconcile_folds(view, reason)
   local instance = current_semantic_model(view)
   if not instance then return end
   local started = system.get_time()
-  local nodes, query_reason = instance:nodes_for_lines(1, #view.buffer.lines, {
+  -- Callouts are quotes; querying only quotes avoids building every node.
+  local nodes, query_reason = instance:quote_nodes_for_lines(1, #view.buffer.lines, {
     limit = 100000,
   })
   local query_ms = elapsed_ms(started)
