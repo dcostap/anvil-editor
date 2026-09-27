@@ -21,7 +21,7 @@ Create the local baseline once, before a renderer change:
 
 ```sh
 python tools/run_render_perf_gate.py --suite editor-regression \
-  --runs 3 --metrics-runs 1 --max-runs 5 --frames 24 --warmup-frames 8 \
+  --runs 3 --metrics-runs 1 --max-runs 9 --frames 24 --warmup-frames 8 \
   --update-baseline --update-goldens
 ```
 
@@ -59,7 +59,10 @@ update flags. Every other suite scene must already be in the baseline.
 
 Timing comparisons against a stored baseline are noisy on a desktop. Identical
 Lua code has moved `draw_emit_ms_p50` and `update_ms_p50` by up to 30% between
-sessions. Treat small timing flags as a prompt to rerun. Work counters, such as
+sessions. Treat small timing flags as a prompt to rerun. Record and compare a
+baseline under the same Windows power plan. A CPU limit changes every timing and
+can change which asynchronous result arrives before a capture. A baseline is
+written only when every scene is stable, so allow up to nine throughput runs. Work counters, such as
 glyph bitmap misses, text commands, and packet misses, do not depend on timing.
 
 Run the stress workloads and their diagnostic replays:
