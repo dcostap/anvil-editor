@@ -1239,6 +1239,14 @@ function gitdiff_highlight.refresh_buffer(buffer)
 	return true
 end
 
+-- True when no baseline load or debounced local diff is pending, so the
+-- change markers describe the Buffer's current text.
+function gitdiff_highlight.is_settled(buffer)
+	local state = buffer and states[buffer]
+	if not state or state.closed then return true end
+	return not state.local_worker_running and not state.base_worker_running
+end
+
 function gitdiff_highlight.discard_changes_baseline(buffer)
 	return clear_changes_baseline(buffer, false)
 end

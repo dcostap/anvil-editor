@@ -264,6 +264,14 @@ function Workload:action_ready()
   return true, self.result
 end
 
+-- Screenshots wait for asynchronous decorations so a capture never depends on
+-- how quickly a debounced background result arrives.
+function Workload:capture_ready()
+  local gitdiff = package.loaded["plugins.gitdiff_highlight"]
+  if not (gitdiff and self.view and self.view.buffer) then return true end
+  return gitdiff.is_settled(self.view.buffer)
+end
+
 function Workload:state()
   return {
     workload_kind = self.settings.kind, workload_result = self.result or "",

@@ -827,8 +827,26 @@ local function scroll_is_settled()
     and scroll_value_is_settled(scroll.y, target.y)
 end
 
+-- Debounced decorations settle in time, not frames, so captures also get a
+-- wall-clock allowance before a settle failure is reported.
+local CAPTURE_DECORATION_TIMEOUT = 10
+
+local function decorations_are_settled()
+  local workload = benchmark.workload
+  return not (workload and workload.capture_ready) or workload:capture_ready()
+end
+
+local function capture_is_ready()
+  return scroll_is_settled() and decorations_are_settled()
+end
+
+local function capture_settle_expired(count, deadline)
+  return count >= benchmark.state_settle_max_frames and system.get_time() >= deadline
+end
+
 local function begin_state_settle()
   benchmark.state_settle_count = 0
+  benchmark.state_settle_deadline = system.get_time() + CAPTURE_DECORATION_TIMEOUT
   set_phase("state_settle", "state_settle_started")
   core.redraw = true
 end
@@ -1092,10 +1110,12 @@ function perf.on_frame(snapshot)
   heartbeat(false)
   local ok, err = xpcall(function()
     if benchmark.action_capture_waiting then
-      if not scroll_is_settled() then
+      if not capture_is_ready() then
         benchmark.action_capture_settle_count = benchmark.action_capture_settle_count + 1
-        assert(benchmark.action_capture_settle_count < benchmark.state_settle_max_frames,
-          "action capture scroll did not settle")
+        assert(not capture_settle_expired(
+          benchmark.action_capture_settle_count, benchmark.action_capture_deadline
+        ), scroll_is_settled() and "action capture decorations did not settle"
+          or "action capture scroll did not settle")
         core.redraw = true
         return
       end
@@ -1161,6 +1181,7 @@ function perf.on_frame(snapshot)
           benchmark.action_capture_waiting = common.dirname(benchmark.screenshot_file) .. PATHSEP
             .. string.format("action-%02d.png", benchmark.workload.completed)
           benchmark.action_capture_settle_count = 0
+          benchmark.action_capture_deadline = system.get_time() + CAPTURE_DECORATION_TIMEOUT
           core.redraw = true
           return
         end
@@ -1183,10 +1204,16 @@ function perf.on_frame(snapshot)
       end
     elseif benchmark.phase == "state_settle" then
       benchmark.state_settle_count = benchmark.state_settle_count + 1
-      if scroll_is_settled() then
+      if capture_is_ready() then
         mark_lifecycle("state_settled")
         prepare_screenshot()
-      elseif benchmark.state_settle_count >= benchmark.state_settle_max_frames then
+      elseif scroll_is_settled()
+      and capture_settle_expired(benchmark.state_settle_count, benchmark.state_settle_deadline) then
+        fail(string.format(
+          "decorations did not settle within %d seconds", CAPTURE_DECORATION_TIMEOUT
+        ))
+      elseif not scroll_is_settled()
+      and benchmark.state_settle_count >= benchmark.state_settle_max_frames then
         local view = benchmark.view
         local scroll = view and view.scroll or {}
         local target = scroll.to or {}

@@ -135,6 +135,26 @@ test.describe("Git Editor baseline", function()
     end, 8, "clearing the Changes Baseline did not restore Git")
   end)
 
+  test.test("reports settled only once change markers describe the latest edit", function(context)
+    local root, root_arg = make_repo(context, "settled")
+    local name = "settled.txt"
+    local path = join(root, name)
+    write_file(path, "old\n")
+    commit_file(root_arg, name, "baseline")
+
+    local buffer, view = open_editor(context, path)
+    wait_for_git_count(view, 0, "initial Git baseline did not settle")
+    wait_until(function() return file_changes.is_settled(buffer) end, 8,
+      "initial change markers did not settle")
+
+    buffer:insert(1, 1, "new ")
+    test.ok(not file_changes.is_settled(buffer),
+      "an edit should leave change markers pending")
+    wait_until(function() return file_changes.is_settled(buffer) end, 8,
+      "change markers did not settle after the edit")
+    test.ok(git_point_count(view) > 0)
+  end)
+
   test.test("keeps a clean UTF-8 BOM file clean", function(context)
     local root, root_arg = make_repo(context, "bom")
     local name = "bom.txt"
