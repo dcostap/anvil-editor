@@ -416,6 +416,26 @@ function Service:lookup(path, is_directory)
   }
 end
 
+---Reports whether status for a path reflects every refresh requested so far.
+function Service:is_settled(path, is_directory)
+  if self.closed or not path then return true end
+  local state = self:state_for(path, is_directory)
+  if not state then
+    local hint = self.root_for_path(path, is_directory)
+    if hint and self.use_marker_scan then
+      local cached = self.marker_cache[common.path_compare_key(hint)]
+      hint = cached and cached.root
+    end
+    local alias = hint and self.aliases[common.path_compare_key(hint)]
+    -- Discovery is pending until it yields a repository or an error.
+    return not (alias and not alias.state and not alias.retry_at)
+  end
+  local controller = state.controller
+  local finished = controller.published_generation == controller.generation
+    or controller.last_error_generation == controller.generation
+  return not state.dirty and not controller.dirty and not controller.active and finished
+end
+
 function Service:request(path, reason)
   if self.closed then return end
   self:invalidate_lookups()
