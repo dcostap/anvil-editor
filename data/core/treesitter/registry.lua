@@ -122,6 +122,8 @@ end
 
 function registry.reload()
   local languages = {}
+  -- Add each supported grammar here and review its symbol map in
+  -- data/treesitter/languages/README.md before registering it.
   local ids = { "c", "cpp", "odin", "kotlin", "javascript", "typescript", "tsx", "markdown" }
   for _, id in ipairs(ids) do
     local config = load_config(id)

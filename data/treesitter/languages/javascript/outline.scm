@@ -1,4 +1,6 @@
 ; Bundled first-party JavaScript outline query.
+; Only function-valued top-level variables are selected. Ordinary variables
+; and class fields are not selected. See data/treesitter/languages/README.md.
 
 (class_declaration
   name: (identifier) @name) @outline.class

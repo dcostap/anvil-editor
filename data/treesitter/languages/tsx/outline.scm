@@ -1,4 +1,6 @@
-; Bundled first-party JavaScript outline query.
+; Bundled first-party TSX outline query.
+; Ordinary variables and class fields are not selected.
+; See data/treesitter/languages/README.md for the language review.
 
 (class_declaration
   name: (type_identifier) @name) @outline.class

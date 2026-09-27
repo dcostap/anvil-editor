@@ -1,6 +1,8 @@
 ; Bundled first-party Kotlin outline query.
 ; Each pattern captures one outline item as @outline.<kind> and its display name
-; as @name. Lua groups captures by Tree-sitter match id.
+; as @name. Anvil groups captures by Tree-sitter match id.
+; File and class scopes use separate function and property rules.
+; See data/treesitter/languages/README.md for the language review.
 
 (class_declaration
   (type_identifier) @name) @outline.class

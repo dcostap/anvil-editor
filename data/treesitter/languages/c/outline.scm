@@ -1,6 +1,8 @@
 ; Bundled first-party C outline query.
 ; Each pattern captures one outline item as @outline.<kind> and its display name
-; as @name. Lua groups captures by Tree-sitter match id.
+; as @name. Anvil groups captures by Tree-sitter match id.
+; The declarator patterns below list shapes, not arbitrary wrapper depth.
+; See data/treesitter/languages/README.md before extending them.
 
 (translation_unit
   (declaration

@@ -1,6 +1,8 @@
 ; Bundled first-party Odin outline query.
 ; Each pattern captures one outline item as @outline.<kind> and its display name
-; as @name. Lua groups captures by Tree-sitter match id.
+; as @name. Anvil groups captures by Tree-sitter match id.
+; Variable declarations have no scope guard. Review local behavior before
+; changing this query. See data/treesitter/languages/README.md.
 
 (procedure_declaration
   (identifier) @name

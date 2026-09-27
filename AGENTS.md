@@ -195,6 +195,14 @@ When adding new functionality, use `core.log_quiet(...)` liberally for diagnosti
 
 This is a personal fork with first-party ownership of the whole codebase, including bundled Lua plugins and defaults. Prefer clean refactors over compatibility adapters: when renaming concepts, APIs, fields, commands, or behavior, update all in-repo callers/configs/plugins/tests instead of leaving deprecated aliases, dead code, or compatibility slop. Only keep backward compatibility when the user explicitly asks for it or there is a concrete external boundary that cannot be migrated in the same change.
 
+## Tree-sitter language support
+
+Read [Tree-sitter language maps](data/treesitter/languages/README.md) before adding a language or changing symbol selection.
+Review its outline and usage queries.
+Update the language review and focused symbol tests when coverage changes.
+Keep grammar-specific work in that language's folder.
+Do not add a separate query pattern for each pointer depth or similar syntax nesting.
+
 ## Lua/plugin development
 
 Built-in plugins live in this repo under `data\plugins`.
