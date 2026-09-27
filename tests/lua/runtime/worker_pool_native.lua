@@ -997,6 +997,76 @@ Route_Message_Type :: enum c.uchar {
     test.equal(items, 2)
   end)
 
+  local function capture_keys(result)
+    local keys = {}
+    for _, capture in ipairs(result:captures("outline")) do
+      keys[#keys + 1] = string.format("%s:%d:%d", capture.capture, capture.start_byte, capture.end_byte)
+    end
+    table.sort(keys)
+    return keys
+  end
+
+  test.test("Markdown block reuse accepts patterns that capture a direct child", function()
+    local pool = new_pool("lua-native-markdown-child-reuse", 1)
+    local spec = {
+      kind = "markdown_parse",
+      text = "[a]: /x\n\nText.\n",
+      outline_query = "(paragraph) @paragraph\n(link_reference_definition (link_label) @label)",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    }
+    local before = submit_result(pool, spec)
+    spec.text = "[a]: /x\n\nText and more.\n"
+    spec.previous_result = before
+    local after = submit_result(pool, spec)
+    test.ok(after:summary().metrics.reused_block_captures > 0)
+    test.same(capture_keys(after), { "label:0:3", "paragraph:9:24" })
+  end)
+
+  test.test("Markdown block reuse finds a list split off after an edit", function()
+    local pool = new_pool("lua-native-markdown-list-split", 1)
+    local spec = {
+      kind = "markdown_parse",
+      text = "- one two\n- three\n- four\n",
+      outline_query = "(list) @list\n(list_item) @item\n(paragraph) @paragraph",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    }
+    local before = submit_result(pool, spec)
+    spec.text = "- one\n\ntwo\n- three\n- four\n"
+    local fresh = submit_result(pool, spec)
+    spec.previous_result = before
+    local incremental = submit_result(pool, spec)
+    test.same(capture_keys(incremental), capture_keys(fresh))
+  end)
+
+  test.test("Markdown block reuse matches a fresh parse when a parent changes type", function()
+    local pool = new_pool("lua-native-markdown-parent-change", 1)
+    local query = "(paragraph) @paragraph\n(link_reference_definition (link_label) @label)\n"
+      .. "(link_reference_definition (link_destination) @destination)"
+    local texts = {
+      "Para\n\n[a]: /x\n\nTail.\n",
+      "Para\n[a]: /x\n\nTail.\n",
+      "Para\n\n[a]: /x\n\nTail.\n",
+      "Para\n\n[a]:\n\nTail.\n",
+      "Para\n\n[a]: /y \"t\"\n\nTail.\n",
+    }
+    local previous
+    for _, text in ipairs(texts) do
+      local spec = {
+        kind = "markdown_parse", text = text, outline_query = query,
+        parse_timeout_ms = 1000, query_timeout_ms = 100, max_captures = 100,
+      }
+      local fresh = submit_result(pool, spec)
+      spec.previous_result = previous
+      local incremental = submit_result(pool, spec)
+      test.same(capture_keys(incremental), capture_keys(fresh), text)
+      previous = incremental
+    end
+  end)
+
   test.test("Markdown job publishes block and inline captures from one composite parse", function()
     local pool = new_pool("lua-native-markdown-parse", 1)
     local spec = {

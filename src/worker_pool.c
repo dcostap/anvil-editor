@@ -1382,6 +1382,27 @@ static bool simple_query_identifier_byte(char byte) {
     byte == '.' || byte == '?' || byte == '!';
 }
 
+static bool simple_query_token(
+  const char *source,
+  uint32_t *position,
+  uint32_t end,
+  char token
+) {
+  skip_simple_query_space(source, position, end);
+  if (*position >= end || source[*position] != token) return false;
+  (*position)++;
+  return true;
+}
+
+static bool simple_query_identifier(const char *source, uint32_t *position, uint32_t end) {
+  uint32_t start = *position;
+  while (*position < end && simple_query_identifier_byte(source[*position])) (*position)++;
+  return *position > start;
+}
+
+/* Accepts `(node) @capture` and `(parent (child) @capture)`. A match of
+ * either depends only on the captured node and its ancestors. Changed ranges
+ * cover any change to that chain, so captures outside them stay valid. */
 static bool query_is_capture_local_structural(
   const AnvilTSLanguage *language,
   const char *source
@@ -1399,18 +1420,17 @@ static bool query_is_capture_local_structural(
   for (uint32_t pattern = 0; safe && pattern < pattern_count; pattern++) {
     uint32_t position = ts_query_start_byte_for_pattern(query, pattern);
     uint32_t end = ts_query_end_byte_for_pattern(query, pattern);
-    skip_simple_query_space(source, &position, end);
-    if (position >= end || source[position++] != '(') { safe = false; break; }
-    uint32_t node_start = position;
-    while (position < end && simple_query_identifier_byte(source[position])) position++;
-    if (position == node_start) { safe = false; break; }
-    skip_simple_query_space(source, &position, end);
-    if (position >= end || source[position++] != ')') { safe = false; break; }
-    skip_simple_query_space(source, &position, end);
-    if (position >= end || source[position++] != '@') { safe = false; break; }
-    uint32_t capture_start = position;
-    while (position < end && simple_query_identifier_byte(source[position])) position++;
-    if (position == capture_start) { safe = false; break; }
+    if (!simple_query_token(source, &position, end, '(') ||
+        !simple_query_identifier(source, &position, end)) {
+      safe = false;
+      break;
+    }
+    bool nested = simple_query_token(source, &position, end, '(');
+    if (nested && !simple_query_identifier(source, &position, end)) { safe = false; break; }
+    safe = simple_query_token(source, &position, end, ')') &&
+      simple_query_token(source, &position, end, '@') &&
+      simple_query_identifier(source, &position, end) &&
+      (!nested || simple_query_token(source, &position, end, ')'));
     skip_simple_query_space(source, &position, end);
     if (position != end) safe = false;
   }
@@ -2009,8 +2029,9 @@ static bool copy_reused_block_captures(
     const AnvilWorkerTreeSitterCapture *capture = &previous->captures[i];
     uint32_t start = markdown_map_old_start_byte(capture->start_byte, edit);
     uint32_t end = markdown_map_old_end_byte(capture->end_byte, edit);
+    /* Use the requery's intersection rule, so each capture is kept or found again. */
     bool changed_overlap = changed_end > changed_start &&
-      end >= changed_start && start < changed_end;
+      end > changed_start && start < changed_end;
     if (end <= start || changed_overlap) continue;
     AnvilTSQueryCapture mapped = {
       .name = capture->name,
@@ -2082,7 +2103,11 @@ static bool run_markdown_block_query(
     if (changed_start >= snapshot->byte_len) changed_start = snapshot->byte_len - 1;
     changed_end = changed_start + 1;
   }
+  /* Changed ranges omit a container that keeps its type but gains or loses
+   * extent at a range edge: a list extended at the start, or a list split off
+   * at the end. Touching either edge therefore counts as changed. */
   if (changed_count > 0 && changed_start > 0) changed_start--;
+  if (changed_count > 0 && changed_end < snapshot->byte_len) changed_end++;
 
   AnvilWorkerTreeSitterQueryResult *query_result = &index_result->outline;
   uint32_t count_before_reuse = query_result->count;
