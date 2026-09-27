@@ -98,6 +98,39 @@ test.describe("Editor file locations in growing files", function()
     test.equal(wait_for_point(other, 50).target_line, 50)
   end)
 
+  test.it("keeps file locations in place while editing a file with many", function(context)
+    local root = USERDIR .. PATHSEP .. "editor-file-poi-edit-" .. system.get_process_id()
+    local target = root .. PATHSEP .. "target.txt"
+    context.root = root
+    context.old_project = core.root_project
+    test.ok(common.mkdirp(root))
+    local file = assert(io.open(target, "wb"))
+    file:write("target\n")
+    file:close()
+    core.root_project = function() return { path = root } end
+
+    local buffer = Buffer()
+    local lines = {}
+    for i = 1, 200 do lines[#lines + 1] = "target.txt:" .. i .. ":1" end
+    buffer:insert(1, 1, table.concat(lines, "\n"))
+    local view = Editor(buffer)
+    context.buffer = buffer
+    context.views = { view }
+    local deadline = system.get_time() + 5
+    while #view:get_points_of_interest() < 200 and system.get_time() < deadline do
+      coroutine.yield(0.01)
+    end
+    test.equal(#view:get_points_of_interest(), 200)
+
+    buffer:insert(1, 1, "note\n")
+    local points = view:get_points_of_interest()
+    test.equal(#points, 200)
+    test.equal(points[1].line, 2)
+    test.equal(points[1].target_line, 1)
+    test.equal(points[200].line, 201)
+    test.equal(points[200].target_line, 200)
+  end)
+
   test.it("refreshes a large file-location list without blocking navigation", function(context)
     local root = USERDIR .. PATHSEP .. "editor-file-poi-refresh-" .. system.get_process_id()
     local target = root .. PATHSEP .. "target.txt"

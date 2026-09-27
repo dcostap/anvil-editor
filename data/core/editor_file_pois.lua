@@ -327,6 +327,31 @@ local function map_unchanged_line(ranges, old_line)
   return old_line + delta
 end
 
+local function entry_before(left, right)
+  return left.line ~= right.line and left.line < right.line
+    or left.line == right.line and left.col < right.col
+end
+
+-- Rebased entries keep their order, so merging in the rescanned lines keeps
+-- a large list sorted without sorting it again.
+local function merge_entries(sorted, fresh)
+  if #fresh == 0 then return sorted end
+  sort_entries(fresh)
+  local merged, i, j = {}, 1, 1
+  while i <= #sorted or j <= #fresh do
+    local current, incoming = sorted[i], fresh[j]
+    if incoming and (not current or entry_before(incoming, current)) then
+      merged[#merged + 1] = incoming
+      j = j + 1
+    else
+      merged[#merged + 1] = current
+      i = i + 1
+    end
+  end
+  return merged
+end
+
+-- Unchanged lines keep their relative order, so the result stays sorted.
 local function rebase_entries(entries, ranges)
   local rebased = {}
   for _, entry in ipairs(entries or {}) do
@@ -345,7 +370,7 @@ local function rebase_entries(entries, ranges)
       end
     end
   end
-  return sort_entries(rebased)
+  return rebased
 end
 
 local function refresh_changed_lines(view, cache, transaction)
@@ -354,23 +379,25 @@ local function refresh_changed_lines(view, cache, transaction)
   if #ranges == 0 then return false end
   local candidates = rebase_entries(cache.candidates, ranges)
   local points = rebase_entries(cache.points, ranges)
+  local fresh_candidates, fresh_points = {}, {}
   local scanned = 0
   for _, range in ipairs(ranges) do
     local line1 = range.new_line1 or range.old_line1 or 1
     local line2 = range.new_line2 or line1
     for line = line1, line2 do
       local found = text_poi_locations.extract_line_candidates(
-        view.buffer.lines[line], line, MAX_CANDIDATES - #candidates
+        view.buffer.lines[line], line,
+        MAX_CANDIDATES - #candidates - #fresh_candidates
       )
-      for _, candidate in ipairs(found) do candidates[#candidates + 1] = candidate end
+      for _, candidate in ipairs(found) do fresh_candidates[#fresh_candidates + 1] = candidate end
       for _, point in ipairs(resolve_candidates(found, cache.roots)) do
-        points[#points + 1] = point
+        fresh_points[#fresh_points + 1] = point
       end
       scanned = scanned + 1
     end
   end
-  cache.candidates = sort_entries(candidates)
-  cache.points = sort_entries(points)
+  cache.candidates = merge_entries(candidates, fresh_candidates)
+  cache.points = merge_entries(points, fresh_points)
   cache.by_line = build_line_index(cache.points)
   cache.revision = buffer_revision(view.buffer)
   cache.validated_at = system.get_time()
@@ -406,8 +433,7 @@ function M.on_text_transaction(view, transaction)
     return true
   end
   local ranges = transaction.changed_ranges or {}
-  if #cache.candidates > INLINE_SCAN_LINES
-      or not can_refresh_inline(view.buffer, ranges) then
+  if not can_refresh_inline(view.buffer, ranges) then
     new_cache(view, buffer_revision(view.buffer), source, project)
     return true
   end

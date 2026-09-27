@@ -90,13 +90,10 @@ local function starts_in_uri(line, col)
 end
 
 local function add_line_matches(list, seen, limit, line, line_no)
-  -- Every supported source location has a numeric line and one of these
-  -- separators. Most editor text can skip all pattern scans.
-  if not line:find("%d") or not (
-    line:find(":", 1, true)
-    or line:find("(", 1, true)
-    or line:find("line", 1, true)
-  ) then
+  -- Every supported source location puts its line number directly after ":"
+  -- or "(", or after "line" and whitespace. Most editor text, including URLs
+  -- and prose with numbers, can skip all pattern scans.
+  if not (line:find(":%d") or line:find("%(%d") or line:find("line%s+%d")) then
     return
   end
   local function add(col1, col2, path, target_line, target_col, label)
