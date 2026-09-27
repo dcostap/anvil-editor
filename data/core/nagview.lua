@@ -19,7 +19,7 @@ local noop = function() end
 ---@field title string Dialog title
 ---@field message string Dialog message text
 ---@field options core.nagview.option[] Available button options
----@field on_selected? fun(option: core.nagview.option) Callback when option selected
+---@field on_selected? fun(option: core.nagview.option): boolean? Return false to keep the dialog open
 
 ---Modal dialog view for confirmations and alerts.
 ---Displays a message with buttons, dims the background, and captures focus.
@@ -428,7 +428,7 @@ end
 ---@param title string Dialog title
 ---@param message string Dialog message text
 ---@param options core.nagview.option[] Button options
----@param on_select? fun(option: core.nagview.option) Callback when button is clicked
+---@param on_select? fun(option: core.nagview.option): boolean? Return false to keep the dialog open
 function NagView:show(title, message, options, on_select)
   local opts = {}
   opts.title = assert(title, "No title")

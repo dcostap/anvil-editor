@@ -80,7 +80,7 @@ local function autoreload_buffer(buffer)
     not config.plugins.autoreload.always_show_nagview
   then
     reload_buffer(buffer)
-  elseif not buffer.deferred_reload then
+  elseif not buffer.deferred_reload and not buffer.autosave_conflict_prompt_visible then
     buffer.deferred_reload = true
     check_prompt_reload(buffer)
   end

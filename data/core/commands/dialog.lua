@@ -23,8 +23,7 @@ command.add("core.nagview", {
   end,
   ["core:select_dialog_entry"] = function(v)
     if v.hovered_item then
-      v.on_selected(v.options[v.hovered_item])
-      v:next()
+      if v.on_selected(v.options[v.hovered_item]) ~= false then v:next() end
     end
   end
 })

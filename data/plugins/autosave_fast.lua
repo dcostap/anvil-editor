@@ -221,8 +221,12 @@ local function save_buffer_recreating_missing_target(buffer, name, expected_disk
     update_disk_state(buffer)
     clear_dirty_if_clean(buffer)
     core.log("Saved \"%s\" as a new file", buffer.filename or name)
+    return true
   else
-    core.error("Couldn't save %s as a new file: %s", name, err)
+    if not (save_failures[buffer] and save_failures[buffer].conflict) then
+      core.error("Couldn't save %s as a new file: %s", name, err)
+    end
+    return false
   end
 end
 
@@ -251,87 +255,136 @@ local function discard_missing_file_buffer(buffer, name)
   end)
 end
 
-local function show_conflict_prompt(buffer, explicit)
+local function show_conflict_prompt(buffer)
   if buffer.autosave_conflict_prompt_visible then return end
   buffer.autosave_conflict_prompt_visible = true
   local name = buffer.filename or buffer.abs_filename or "this file"
   local prompt_disk_state = capture_disk_state(buffer)
-  local missing = save_target_missing(buffer)
-  local buttons
-  if missing then
-    buttons = {
-      { font = style.font, text = "Save as New File", default_yes = true },
-      { font = style.font, text = "Discard File" },
+  local missing = not prompt_disk_state or not prompt_disk_state.exists
+  local changed_message = string.format(
+    "%s has changed on disk since Anvil loaded or saved it.\n\nAnvil did not overwrite it. Reloading from disk will discard your unsaved Anvil edits. What do you want to do?",
+    name
+  )
+  local missing_message = string.format(
+    "%s no longer exists at its saved path.\n\nAnvil can save your current buffer as a new file at the same path and recreate any missing parent folders, or discard it and close the buffer.",
+    name
+  )
+  local function prompt_buttons()
+    if missing then
+      return {
+        { font = style.font, text = "Save as New File", default_yes = true },
+        { font = style.font, text = "Discard File" },
+        { font = style.font, text = "Cancel", default_no = true },
+      }
+    end
+    return {
+      { font = style.font, text = "Overwrite Disk" },
+      { font = style.font, text = "Reload From Disk (Discard Anvil Edits)" },
+      { font = style.font, text = "Save Copy of Current File" },
       { font = style.font, text = "Cancel", default_no = true },
     }
-  else
-    buttons = {
-      { font = style.font, text = "Overwrite Disk", default_yes = false },
-      { font = style.font, text = "Reload From Disk (Discard Anvil Edits)" },
-    }
-    if explicit then
-      buttons[#buttons + 1] = { font = style.font, text = "Save Copy of Current File" }
+  end
+  local buttons = prompt_buttons()
+  local on_select
+  local function disk_changed_again()
+    prompt_disk_state = capture_disk_state(buffer)
+    save_failures[buffer] = { conflict = true }
+    local now_missing = not prompt_disk_state or not prompt_disk_state.exists
+    if missing ~= now_missing then
+      missing = now_missing
+      buttons = prompt_buttons()
     end
-    buttons[#buttons + 1] = { font = style.font, text = "Cancel", default_no = true }
+    local message = changed_message
+      .. "\n\nThe file changed again while this choice was open. Anvil did not overwrite it. Check the current file before you choose Overwrite Disk again."
+    if missing then
+      message = missing_message
+        .. "\n\nThe file changed while this choice was open. Anvil did not save it."
+    elseif prompt_disk_state.content_read == false then
+      message = changed_message
+        .. "\n\nAnvil cannot read the current file. Save a copy or cancel."
+    end
+    if core.nag_view.on_selected == on_select then
+      core.nag_view.title = missing and "File Missing on Disk" or "File Changed on Disk"
+      core.nag_view.options = buttons
+      core.nag_view:change_hovered(1)
+      core.nag_view.message = message .. "\n"
+      core.nag_view.target_height = math.max(
+        core.nag_view:get_message_height(), core.nag_view:get_buttons_height()
+      )
+      core.redraw = true
+    end
+    core.log_quiet("Disk changed again during conflict choice for %s", buffer.filename or name)
+    return false
   end
 
+  on_select = function(item)
+    if item.text == "Save as New File" then
+      if disk_states_differ(prompt_disk_state, capture_disk_state(buffer)) then
+        return disk_changed_again()
+      end
+      local saved = save_buffer_recreating_missing_target(buffer, name, prompt_disk_state)
+      if not saved and save_failures[buffer] and save_failures[buffer].conflict then
+        return disk_changed_again()
+      end
+      buffer.autosave_conflict_prompt_visible = false
+    elseif item.text == "Discard File" then
+      buffer.autosave_conflict_prompt_visible = false
+      discard_missing_file_buffer(buffer, name)
+    elseif item.text == "Overwrite Disk" then
+      if disk_states_differ(prompt_disk_state, capture_disk_state(buffer)) then
+        return disk_changed_again()
+      end
+      if not prompt_disk_state or not prompt_disk_state.exists
+          or prompt_disk_state.content_read == false then
+        return disk_changed_again()
+      end
+      buffer.autosave_ignore_next_conflict = true
+      buffer.autosave_expected_disk_state = prompt_disk_state
+      local ok, err = pcall(buffer.save, buffer)
+      buffer.autosave_ignore_next_conflict = nil
+      buffer.autosave_expected_disk_state = nil
+      if ok then
+        buffer.autosave_conflict_prompt_visible = false
+        update_disk_state(buffer)
+        clear_dirty_if_clean(buffer)
+        core.log("Saved \"%s\"", buffer.filename or name)
+      else
+        if save_failures[buffer] and save_failures[buffer].conflict then
+          return disk_changed_again()
+        end
+        buffer.autosave_conflict_prompt_visible = false
+        core.error("Couldn't save %s: %s", name, err)
+      end
+    elseif item.text == "Reload From Disk (Discard Anvil Edits)" then
+      local current = capture_disk_state(buffer)
+      if not current or not current.exists then return disk_changed_again() end
+      buffer.autosave_conflict_prompt_visible = false
+      local ok, err = pcall(buffer.reload, buffer)
+      if ok then
+        update_disk_state(buffer)
+        clear_dirty_if_clean(buffer)
+        core.log("Reloaded \"%s\"", buffer.filename or name)
+      else
+        core.error("Couldn't reload %s: %s", name, err)
+      end
+    elseif item.text == "Save Copy of Current File" then
+      buffer.autosave_conflict_prompt_visible = false
+      core.add_thread(function()
+        -- Wait until NagView has finished closing; opening a new tab while
+        -- the modal owns the active locked node raises "Tried to add view
+        -- to locked node".
+        coroutine.yield(0)
+        save_conflict_copy_and_reload(buffer)
+      end)
+    else
+      buffer.autosave_conflict_prompt_visible = false
+    end
+  end
   core.nag_view:show(
     missing and "File Missing on Disk" or "File Changed on Disk",
-    missing and string.format(
-      "%s no longer exists at its saved path.\n\nAnvil can save your current buffer as a new file at the same path and recreate any missing parent folders, or discard it and close the buffer.",
-      name
-    ) or string.format(
-      "%s has changed on disk since Anvil loaded or saved it.\n\nAnvil did not overwrite it. Reloading from disk will discard your unsaved Anvil edits. What do you want to do?",
-      name
-    ),
+    missing and missing_message or changed_message,
     buttons,
-    function(item)
-      buffer.autosave_conflict_prompt_visible = false
-      if item.text == "Save as New File" then
-        save_buffer_recreating_missing_target(buffer, name, prompt_disk_state)
-      elseif item.text == "Discard File" then
-        discard_missing_file_buffer(buffer, name)
-      elseif item.text == "Overwrite Disk" then
-        if disk_states_differ(prompt_disk_state, capture_disk_state(buffer)) then
-          save_failures[buffer] = { conflict = true }
-          core.log_quiet(
-            "Disk changed again before overwrite approval for %s",
-            buffer.filename or name
-          )
-          show_conflict_prompt(buffer, explicit)
-          return
-        end
-        buffer.autosave_ignore_next_conflict = true
-        buffer.autosave_expected_disk_state = prompt_disk_state
-        local ok, err = pcall(buffer.save, buffer)
-        buffer.autosave_ignore_next_conflict = nil
-        buffer.autosave_expected_disk_state = nil
-        if ok then
-          update_disk_state(buffer)
-          clear_dirty_if_clean(buffer)
-          core.log("Saved \"%s\"", buffer.filename or name)
-        else
-          core.error("Couldn't save %s: %s", name, err)
-        end
-      elseif item.text == "Reload From Disk (Discard Anvil Edits)" then
-        local ok, err = pcall(buffer.reload, buffer)
-        if ok then
-          update_disk_state(buffer)
-          clear_dirty_if_clean(buffer)
-          core.log("Reloaded \"%s\"", buffer.filename or name)
-        else
-          core.error("Couldn't reload %s: %s", name, err)
-        end
-      elseif item.text == "Save Copy of Current File" then
-        core.add_thread(function()
-          -- Wait until NagView has finished closing; opening a new tab while
-          -- the modal owns the active locked node raises "Tried to add view
-          -- to locked node".
-          coroutine.yield(0)
-          save_conflict_copy_and_reload(buffer)
-        end)
-      end
-    end
+    on_select
   )
 end
 
@@ -430,6 +483,12 @@ save_buffer = function(buffer, reason)
     return false
   end
 
+  -- Keep the unsaved marker visible; only a user save or close opens the choice again.
+  if save_failures[buffer] and save_failures[buffer].conflict then
+    dirty_buffers[buffer] = nil
+    return false, "conflict"
+  end
+
   -- Retries and conflicts own future attempts after this save starts. A new
   -- edit creates a new per-Buffer deadline.
   dirty_buffers[buffer] = nil
@@ -447,7 +506,7 @@ save_buffer = function(buffer, reason)
   end
   if disk_changed_since_load_or_save(buffer) then
     save_failures[buffer] = { conflict = true }
-    show_conflict_prompt(buffer, false)
+    if not buffer.deferred_reload then show_conflict_prompt(buffer) end
     return false, "conflict"
   else
     local previous = save_failures[buffer]
@@ -505,6 +564,7 @@ function autosave_fast.save_before_close(buffer, reason)
   local saved, failure = save_buffer(buffer, reason or "tab close")
   if saved and not buffer:is_dirty() then return true, true end
   if failure == "conflict" or buffer.autosave_conflict_prompt_visible then
+    if not buffer.deferred_reload then show_conflict_prompt(buffer) end
     return false, true
   end
   core.log_quiet(
@@ -606,7 +666,7 @@ function Buffer:save(filename, abs_filename)
       core.log_quiet("Saving missing file target as a new file: %s", self.filename)
     else
       if not self.deferred_reload then
-        show_conflict_prompt(self, not self.autosave_save_reason)
+        show_conflict_prompt(self)
       end
       error(string.format("not saving %s: file changed on disk", self.filename))
     end
@@ -622,7 +682,7 @@ function Buffer:save(filename, abs_filename)
       if disk_states_differ(expected, capture_disk_state(self)) then
         save_failures[self] = { conflict = true }
         if not self.deferred_reload then
-          show_conflict_prompt(self, not self.autosave_save_reason)
+          show_conflict_prompt(self)
         end
         return false, string.format(
           "not saving %s: file changed on disk while saving",

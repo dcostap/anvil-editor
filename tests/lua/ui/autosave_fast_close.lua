@@ -2,7 +2,9 @@ local Buffer = require "core.buffer"
 local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
+local command = require "core.command"
 local Editor = require "core.editor"
+local NagView = require "core.nagview"
 local test = require "core.test"
 
 local autosave_fast = require "plugins.autosave_fast"
@@ -102,6 +104,11 @@ test.describe("Autosave save failures", function()
   test.after_each(function(context)
     autosave_fast.timeout = context.timeout
     autosave_fast.enabled = context.enabled
+    if context.real_nag_test then
+      core.nag_view.queue = {}
+      if core.nag_view.visible then core.nag_view:next() end
+      core.nag_view = context.original_nag
+    end
     if context.view then context.view:on_close() end
     if context.buffer and core.buffer_registry then
       core.buffer_registry:remove(context.buffer, true)
@@ -240,7 +247,7 @@ test.describe("Autosave save failures", function()
     test.not_ok(buffer:is_dirty())
   end)
 
-  test.it("asks again when the disk changes after overwrite approval was requested", function(context)
+  test.it("keeps one conflict choice open when the disk changes before approval", function(context)
     local buffer = Buffer(context.path, context.path, false)
     context.buffer = buffer
     local view = Editor(buffer)
@@ -248,23 +255,37 @@ test.describe("Autosave save failures", function()
     buffer:insert(1, 1, "Anvil ")
     write_file(context.path, "first external replacement\n")
 
-    local prompts = {}
-    core.nag_view.show = function(_, title, _, _, callback)
-      prompts[#prompts + 1] = { title = title, resolve = callback }
-    end
+    context.real_nag_test = true
+    context.original_nag = core.nag_view
+    core.nag_view = NagView()
     autosave_fast.save_all_dirty("changing conflict")
-    test.equal(#prompts, 1)
+    local nag = core.nag_view
+    test.equal(nag.title, "File Changed on Disk")
+    test.equal(nag.options[3].text, "Save Copy of Current File")
+    local original_choice = nag.on_selected
 
     write_file(context.path, "second external replacement\n")
-    prompts[1].resolve({ text = "Overwrite Disk" })
+    nag:change_hovered(1)
+    test.ok(command.perform("core:select_dialog_entry"))
 
     test.equal(read_file(context.path), "second external replacement\n")
     test.ok(buffer:is_dirty())
-    test.equal(#prompts, 2)
-    test.equal(prompts[2].title, "File Changed on Disk")
+    test.equal(nag.on_selected, original_choice)
+    test.equal(#nag.queue, 0)
+    test.ok(nag.message:find("changed again", 1, true))
+
+    write_file(context.path, "third external replacement\n")
+    test.ok(command.perform("core:select_dialog_entry"))
+    test.equal(read_file(context.path), "third external replacement\n")
+    test.equal(nag.on_selected, original_choice)
+    test.equal(#nag.queue, 0)
+
+    test.ok(command.perform("core:select_dialog_entry"))
+    test.equal(read_file(context.path), "Anvil original\n")
+    test.not_ok(nag.visible)
   end)
 
-  test.it("rechecks the disk while writing an approved overwrite", function(context)
+  test.it("keeps the same choice after a disk change during an approved overwrite", function(context)
     local buffer = Buffer(context.path, context.path, false)
     context.buffer = buffer
     local view = Editor(buffer)
@@ -272,12 +293,12 @@ test.describe("Autosave save failures", function()
     buffer:insert(1, 1, "Anvil ")
     write_file(context.path, "first external replacement\n")
 
-    local prompts = {}
-    core.nag_view.show = function(_, title, _, _, callback)
-      prompts[#prompts + 1] = { title = title, resolve = callback }
-    end
+    context.real_nag_test = true
+    context.original_nag = core.nag_view
+    core.nag_view = NagView()
     autosave_fast.save_all_dirty("approved changing conflict")
-    test.equal(#prompts, 1)
+    local nag = core.nag_view
+    local original_choice = nag.on_selected
 
     local sync_file = system.sync_file
     local changed = false
@@ -289,13 +310,93 @@ test.describe("Autosave save failures", function()
       end
       return ok, err
     end
-    prompts[1].resolve({ text = "Overwrite Disk" })
+    nag:change_hovered(1)
+    test.ok(command.perform("core:select_dialog_entry"))
     system.sync_file = sync_file
 
     test.equal(read_file(context.path), "second external replacement\n")
     test.ok(buffer:is_dirty())
+    test.equal(nag.on_selected, original_choice)
+    test.equal(#nag.queue, 0)
+    test.ok(nag.message:find("changed again", 1, true))
+    test.ok(command.perform("core:select_dialog_entry"))
+    test.equal(read_file(context.path), "Anvil original\n")
+    test.not_ok(nag.visible)
+  end)
+
+  test.it("offers a safe choice when the disk file disappears during a conflict", function(context)
+    local buffer = Buffer(context.path, context.path, false)
+    context.buffer = buffer
+    context.view = Editor(buffer)
+    buffer:insert(1, 1, "Anvil ")
+    write_file(context.path, "external replacement\n")
+
+    context.real_nag_test = true
+    context.original_nag = core.nag_view
+    core.nag_view = NagView()
+    autosave_fast.save_all_dirty("missing during conflict")
+    local nag = core.nag_view
+    local original_choice = nag.on_selected
+    assert(os.remove(context.path))
+
+    nag:change_hovered(1)
+    test.ok(command.perform("core:select_dialog_entry"))
+    test.equal(nag.on_selected, original_choice)
+    test.equal(nag.title, "File Missing on Disk")
+    test.equal(nag.options[1].text, "Save as New File")
+    test.equal(#nag.queue, 0)
+    test.ok(buffer:is_dirty())
+
+    test.ok(command.perform("core:select_dialog_entry"))
+    test.equal(read_file(context.path), "Anvil original\n")
+    test.not_ok(nag.visible)
+  end)
+
+  test.it("does not reopen a dismissed conflict during later Autosave attempts", function(context)
+    local buffer = Buffer(context.path, context.path, false)
+    context.buffer = buffer
+    local view = Editor(buffer)
+    context.view = view
+    buffer:insert(1, 1, "Anvil ")
+    write_file(context.path, "external replacement\n")
+
+    local prompts = {}
+    core.nag_view.show = function(_, _, _, _, callback)
+      prompts[#prompts + 1] = callback
+    end
+    autosave_fast.save_all_dirty("first conflict")
+    test.equal(#prompts, 1)
+    prompts[1]({ text = "Cancel" })
+    buffer:insert(1, 1, "more ")
+    autosave_fast.save_all_dirty("after cancel")
+
+    test.equal(#prompts, 1)
+    test.equal(read_file(context.path), "external replacement\n")
+    test.ok(view:get_name():find("*", 1, true))
+    local approved = false
+    view:can_close(function() approved = true end)
+    test.not_ok(approved)
     test.equal(#prompts, 2)
-    test.equal(prompts[2].title, "File Changed on Disk")
+    prompts[2]({ text = "Cancel" })
+    test.not_ok(pcall(buffer.save, buffer))
+    test.equal(#prompts, 3)
+  end)
+
+  test.it("does not queue a second conflict behind a pending reload choice", function(context)
+    local buffer = Buffer(context.path, context.path, false)
+    context.buffer = buffer
+    buffer:insert(1, 1, "Anvil ")
+    write_file(context.path, "external replacement\n")
+
+    local prompts = 0
+    core.nag_view.show = function() prompts = prompts + 1 end
+    buffer.deferred_reload = true
+    autosave_fast.save_all_dirty("reload choice pending")
+    test.equal(prompts, 0)
+    test.equal(read_file(context.path), "external replacement\n")
+    buffer.deferred_reload = false
+    test.not_ok(pcall(buffer.save, buffer))
+    test.equal(prompts, 1)
   end)
 
   test.it("rechecks the disk after writing temporary content", function(context)

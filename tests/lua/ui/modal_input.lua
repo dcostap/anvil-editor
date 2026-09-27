@@ -103,6 +103,29 @@ test.describe("Modal input routing", function()
     test.equal(core.active_view, previous)
   end)
 
+  test.it("keeps a confirmation open when its choice needs a new check", function()
+    local nag = NagView()
+    core.nag_view = nag
+    local attempts = 0
+    nag:show("File Changed", "Choose", {
+      { text = "Overwrite", default_yes = true },
+      { text = "Cancel", default_no = true },
+    }, function(option)
+      if option.text == "Overwrite" then
+        attempts = attempts + 1
+        if attempts == 1 then return false end
+      end
+    end)
+
+    test.ok(command.perform("core:select_dialog_entry"))
+    test.ok(nag.visible)
+    test.equal(root:modal_input_owner(), nag)
+    test.equal(#nag.queue, 0)
+    test.ok(command.perform("core:select_dialog_entry"))
+    test.equal(attempts, 2)
+    test.not_ok(nag.visible)
+  end)
+
   test.it("updates a confirmation without an affirmative default", function()
     local nag = NagView()
     core.nag_view = nag
