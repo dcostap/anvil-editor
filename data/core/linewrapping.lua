@@ -958,7 +958,7 @@ local function wrap_settings_signature(textview, default_font, width)
     continuation_indicator_width = continuation_indicator_lane_width(),
     require_tokenization = require_tokenization,
     syntax_generation = require_tokenization
-      and (textview.buffer.highlighter.packet_reset_generation or 0) or 0,
+      and (textview.buffer.highlighter.render_generation or 0) or 0,
     syntax_font_signature = syntax_font_signature,
     indent_size = indent_size,
   }

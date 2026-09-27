@@ -1277,7 +1277,7 @@ local function get_unwrapped_width_settings(self)
   local highlighter = self.buffer.highlighter
   parts[#parts + 1] = tostring(indent_size)
   parts[#parts + 1] = tostring(SCALE or 1)
-  parts[#parts + 1] = tostring(highlighter.packet_reset_generation or 0)
+  parts[#parts + 1] = tostring(highlighter.render_generation or 0)
   parts[#parts + 1] = tostring(core.render_style_generation or 0)
   parts[#parts + 1] = tostring(self.__line_render_generation or 0)
   parts[#parts + 1] = tostring(

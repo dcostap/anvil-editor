@@ -185,7 +185,12 @@ end
 
 function Highlighter:invalidate_render_cache(first_line, last_line)
   self.render_line_frame_cache = nil
-  self.packet_reset_generation = (self.packet_reset_generation or 0) + 1
+  -- Caches without per-line invalidation compare this on every change.
+  self.render_generation = (self.render_generation or 0) + 1
+  -- Line packets drop ranged changes by line; only a full reset clears them all.
+  if not first_line then
+    self.packet_reset_generation = (self.packet_reset_generation or 0) + 1
+  end
   if first_line then
     invalidate_line_packets(self, first_line, math.max(0, (last_line or first_line) - first_line))
   else

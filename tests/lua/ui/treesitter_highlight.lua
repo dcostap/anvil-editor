@@ -138,6 +138,80 @@ test.describe("Tree-sitter TextView highlighting", function()
     buffer:on_close()
   end)
 
+  local function packet_buffer(name, text)
+    local buffer = cpp_buffer(text or
+      "int a = 1;\nint b = 2;\nint c = 3;\nint d = 4;\nint e = 5;\nint f = 6;"
+    )
+    buffer:set_filename(name, name)
+    return buffer
+  end
+
+  local function packet_view(buffer)
+    local view = Editor(buffer)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 1000, 1000
+    view.__test_force_line_packets = true
+    view:set_wrapping_enabled(false)
+    return view
+  end
+
+  local function draw_packet_lines(view)
+    local line_height = view:get_line_height()
+    for line = 1, #view.buffer.lines do
+      pcall(line_packets.draw_content, view, line, 0, (line - 1) * line_height)
+    end
+  end
+
+  local function packet_text_colors(view, line)
+    local colors = {}
+    for _, command in ipairs(line_packets.inspect_line(view, line) or {}) do
+      if command.type == "text" and command.text:match("%S") then
+        colors[#colors + 1] = table.concat(command.color, ",")
+      end
+    end
+    return colors
+  end
+
+  test.it("keeps cached line packets for lines a one-line edit does not change", function()
+    local buffer = packet_buffer("ui_tree_sitter_packet_edit.cpp")
+    test.ok(wait_ready(buffer))
+    local view = packet_view(buffer)
+    draw_packet_lines(view)
+    local before = line_packets.diagnostics(view).builds
+    test.equal(before, 6)
+
+    buffer:insert(4, 10, "0")
+    test.ok(wait_ready(buffer))
+    draw_packet_lines(view)
+
+    local rebuilt = line_packets.diagnostics(view).builds - before
+    test.ok(rebuilt >= 1, "the edited line should rebuild its packet")
+    test.ok(rebuilt < 6, string.format(
+      "a one-line edit rebuilt all %d line packets", rebuilt))
+    buffer:on_close()
+  end)
+
+  test.it("recolors cached line packets below an edit that opens a block comment", function()
+    local style = require "core.style"
+    -- The closing marker on the last line lets the inserted opener form one comment.
+    local buffer = packet_buffer("ui_tree_sitter_packet_comment.cpp",
+      "int a = 1;\nint b = 2;\nint c = 3;\nint d = 4;\nint e = 5;\n*/")
+    test.ok(wait_ready(buffer))
+    local view = packet_view(buffer)
+    draw_packet_lines(view)
+    local comment = table.concat(style.syntax.comment, ",")
+    test.ok(packet_text_colors(view, 5)[1] ~= comment)
+
+    buffer:insert(2, 1, "/* ")
+    test.ok(wait_ready(buffer))
+    draw_packet_lines(view)
+
+    local colors = packet_text_colors(view, 5)
+    test.ok(#colors > 0)
+    for _, color in ipairs(colors) do test.equal(color, comment) end
+    buffer:on_close()
+  end)
+
   test.it("keeps C++ syntax colors stable when line wrapping changes", function()
     local config = require "core.config"
     local buffer = cpp_buffer("class Box { void draw() { return; } };")
