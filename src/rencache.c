@@ -1094,6 +1094,7 @@ void rencache_end_frame(RenCache *ren_cache) {
     SDL_PropertiesID props = SDL_GetSurfaceProperties(rs.surface);
     SDL_SetNumberProperty(props, "anvil_d3d11_generation",
                           SDL_GetNumberProperty(props, "anvil_d3d11_generation", 0) + 1);
+    anvil_d3d11_note_surface_generation();
   }
 
   /* swap cell buffer and reset */

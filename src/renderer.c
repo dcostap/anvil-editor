@@ -488,6 +488,7 @@ static SDL_Surface *font_allocate_glyph_surface(RenFont *font, FT_GlyphSlot slot
   SDL_SetPointerProperty(userdata, "metric", (void *) metric);
   SDL_SetNumberProperty(userdata, "anvil_d3d11_generation",
                         SDL_GetNumberProperty(userdata, "anvil_d3d11_generation", 0) + 1);
+  anvil_d3d11_note_surface_generation();
   return atlas->surfaces[surface_idx];
 }
 

@@ -63,6 +63,8 @@ void anvil_d3d11_abort_frame_reason(SDL_Window *window, const char *reason);
 
 void anvil_d3d11_forget_window(SDL_Window *window);
 void anvil_d3d11_forget_surface(SDL_Surface *surface);
+/* Call after bumping a surface's "anvil_d3d11_generation" property. */
+void anvil_d3d11_note_surface_generation(void);
 void anvil_d3d11_shutdown(void);
 #else
 static inline bool anvil_d3d11_enabled(void) { return false; }
@@ -138,6 +140,7 @@ static inline void anvil_d3d11_abort_frame(SDL_Window *window) { (void)window; }
 static inline void anvil_d3d11_abort_frame_reason(SDL_Window *window, const char *reason) { (void)window; (void)reason; }
 static inline void anvil_d3d11_forget_window(SDL_Window *window) { (void)window; }
 static inline void anvil_d3d11_forget_surface(SDL_Surface *surface) { (void)surface; }
+static inline void anvil_d3d11_note_surface_generation(void) {}
 static inline void anvil_d3d11_shutdown(void) {}
 #endif
 

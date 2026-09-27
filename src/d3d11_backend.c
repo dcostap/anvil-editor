@@ -47,7 +47,19 @@ struct D3D11CachedTexture {
   int mode;
   uint64_t last_update_frame;
   uint64_t last_used_frame;
+  /* The surface generation was current at this frame and write epoch. */
+  uint64_t checked_frame;
+  uint64_t checked_epoch;
 };
+
+/* Direct-mapped front for the cached texture list. Glyph replay looks up an
+   atlas surface for every quad, so the list walk must not run per glyph. */
+#define D3D11_TEXTURE_LOOKUP_SLOTS 256
+typedef struct {
+  SDL_Surface *surface;
+  int mode;
+  D3D11CachedTexture *texture;
+} D3D11TextureLookup;
 
 typedef struct D3D11Window D3D11Window;
 struct D3D11Window {
@@ -171,6 +183,7 @@ typedef struct D3D11State {
   ID3D11ShaderResourceView *quad_srvs[ANVIL_D3D11_QUAD_TEXTURE_SLOTS];
   int quad_srv_count;
   ID3D11ShaderResourceView *quad_last_texture_srv;
+  int quad_last_texture_slot;
   int quad_texture_runs;
   RenTransform transform;
   ID3D11Texture2D *white_texture;
@@ -182,6 +195,9 @@ typedef struct D3D11State {
   uint8_t *texture_upload_scratch;
   size_t texture_upload_scratch_capacity;
   D3D11CachedTexture *textures;
+  D3D11TextureLookup texture_lookup[D3D11_TEXTURE_LOOKUP_SLOTS];
+  /* Advances whenever any surface's "anvil_d3d11_generation" changes. */
+  uint64_t surface_generation_epoch;
   uint64_t frame_index;
   D3D11Window *windows;
   D3D11Stats stats;
@@ -191,6 +207,8 @@ typedef struct D3D11State {
 } D3D11State;
 
 static D3D11State g_d3d11;
+
+static void d3d11_clear_texture_lookup(void);
 
 void anvil_d3d11_set_transform(RenTransform transform) {
   g_d3d11.transform = transform;
@@ -845,6 +863,7 @@ void anvil_d3d11_forget_surface(SDL_Surface *surface) {
       *link = t->next;
       d3d11_release_cached_texture(t);
       free(t);
+      d3d11_clear_texture_lookup();
       continue;
     }
     link = &t->next;
@@ -862,6 +881,7 @@ static void d3d11_prune_texture_cache(uint64_t max_age_frames) {
       *link = t->next;
       d3d11_release_cached_texture(t);
       free(t);
+      d3d11_clear_texture_lookup();
       g_d3d11.stats.frame.texture_prunes++;
       continue;
     }
@@ -1268,9 +1288,32 @@ bool anvil_d3d11_push_rect_grid(SDL_Window *window, float x, float y, float step
   return true;
 }
 
+void anvil_d3d11_note_surface_generation(void) {
+  g_d3d11.surface_generation_epoch++;
+}
+
+static D3D11TextureLookup *d3d11_texture_lookup_slot(SDL_Surface *surface, int mode) {
+  uintptr_t key = (uintptr_t)surface;
+  key ^= key >> 12;
+  key = (key >> 4) ^ (uintptr_t)mode * 0x9E3779B1u;
+  return &g_d3d11.texture_lookup[key & (D3D11_TEXTURE_LOOKUP_SLOTS - 1)];
+}
+
+/* Call whenever a cached texture is freed so no slot keeps its pointer. */
+static void d3d11_clear_texture_lookup(void) {
+  memset(g_d3d11.texture_lookup, 0, sizeof(g_d3d11.texture_lookup));
+}
+
 static D3D11CachedTexture *d3d11_find_cached_texture(SDL_Surface *surface, int mode) {
+  D3D11TextureLookup *slot = d3d11_texture_lookup_slot(surface, mode);
+  if (slot->texture && slot->surface == surface && slot->mode == mode) return slot->texture;
   for (D3D11CachedTexture *t = g_d3d11.textures; t; t = t->next) {
-    if (t->surface == surface && t->mode == mode) return t;
+    if (t->surface == surface && t->mode == mode) {
+      slot->surface = surface;
+      slot->mode = mode;
+      slot->texture = t;
+      return t;
+    }
   }
   return NULL;
 }
@@ -1289,6 +1332,8 @@ static bool d3d11_recreate_cached_texture(D3D11CachedTexture *t, SDL_Surface *su
   t->format = surface->format;
   t->mode = mode;
   t->last_update_frame = 0;
+  t->checked_frame = 0;
+  t->checked_epoch = 0;
   g_d3d11.stats.frame.texture_recreates++;
 
   D3D11_TEXTURE2D_DESC desc;
@@ -1339,10 +1384,21 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
       t->format != surface->format || t->mode != mode) {
     if (!d3d11_recreate_cached_texture(t, surface, mode)) return false;
   }
+  /* No surface generation can change without advancing the epoch, and the
+     frame-keyed fallback cannot change within a frame. */
+  if (t->checked_frame != 0
+      && t->checked_frame == g_d3d11.frame_index
+      && t->checked_epoch == g_d3d11.surface_generation_epoch) {
+    return true;
+  }
   SDL_PropertiesID props = SDL_GetSurfaceProperties(surface);
   Sint64 generation = SDL_GetNumberProperty(props, "anvil_d3d11_generation", -1);
   uint64_t update_key = generation >= 0 ? (uint64_t)generation : g_d3d11.frame_index;
-  if (t->last_update_frame == update_key) return true;
+  if (t->last_update_frame == update_key) {
+    t->checked_frame = g_d3d11.frame_index;
+    t->checked_epoch = g_d3d11.surface_generation_epoch;
+    return true;
+  }
 
   const int width = surface->w;
   const int height = surface->h;
@@ -1396,6 +1452,8 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
   g_d3d11.stats.frame.texture_uploads++;
   g_d3d11.stats.frame.texture_upload_bytes += rgba_size;
   t->last_update_frame = update_key;
+  t->checked_frame = g_d3d11.frame_index;
+  t->checked_epoch = g_d3d11.surface_generation_epoch;
   return true;
 }
 
@@ -1607,10 +1665,16 @@ static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
       g_d3d11.stats.frame.texture_batch_breaks++;
     }
     int slot = -1;
-    for (int i = 0; i < g_d3d11.quad_srv_count; i++) {
-      if (g_d3d11.quad_srvs[i] == srv) {
-        slot = i;
-        break;
+    /* Consecutive glyphs usually share an atlas. Every reset that can drop
+       its slot also clears quad_last_texture_srv. */
+    if (g_d3d11.quad_last_texture_srv == srv) {
+      slot = g_d3d11.quad_last_texture_slot;
+    } else {
+      for (int i = 0; i < g_d3d11.quad_srv_count; i++) {
+        if (g_d3d11.quad_srvs[i] == srv) {
+          slot = i;
+          break;
+        }
       }
     }
     if (slot < 0 && g_d3d11.quad_srv_count >= ANVIL_D3D11_QUAD_TEXTURE_SLOTS) {
@@ -1624,6 +1688,7 @@ static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
       g_d3d11.quad_last_texture_srv = srv;
       g_d3d11.quad_texture_runs++;
     }
+    g_d3d11.quad_last_texture_slot = slot;
     queued.pad0 = (float)slot;
   }
   if (!d3d11_reserve_quad_instances(1)) return false;
@@ -2002,6 +2067,7 @@ void anvil_d3d11_shutdown(void) {
     tex = next;
   }
   g_d3d11.textures = NULL;
+  d3d11_clear_texture_lookup();
   d3d11_release_white_texture();
   d3d11_release_upload_texture();
   free(g_d3d11.texture_upload_scratch);
