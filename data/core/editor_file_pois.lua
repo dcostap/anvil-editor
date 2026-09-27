@@ -9,6 +9,9 @@ local M = {}
 
 local MAX_CANDIDATES = 32768
 local ACTION_REVALIDATION_INTERVAL = 1
+local INLINE_SCAN_LINES = 128
+local INLINE_SCAN_BYTES = 32768
+local SCAN_SLICE_SECONDS = 0.002
 
 local function perf_add(name, value)
   if not core.perf_frame_stats then return end
@@ -117,18 +120,170 @@ local function scan_buffer(buffer)
   return candidates
 end
 
-local function new_cache(view, revision, source, project)
+local function can_scan_inline(buffer, first)
+  local lines = buffer.lines or {}
+  if #lines - first + 1 > INLINE_SCAN_LINES then return false end
+  local bytes = 0
+  for i = first, #lines do
+    bytes = bytes + #lines[i]
+    if bytes > INLINE_SCAN_BYTES then return false end
+  end
+  return true
+end
+
+local function can_refresh_inline(buffer, ranges)
+  local lines, count, bytes = buffer.lines or {}, 0, 0
+  for _, range in ipairs(ranges) do
+    local first = range.new_line1 or range.old_line1 or 1
+    local last = range.new_line2 or first
+    count = count + last - first + 1
+    if count > INLINE_SCAN_LINES then return false end
+    for line = first, last do
+      bytes = bytes + #(lines[line] or "")
+      if bytes > INLINE_SCAN_BYTES then return false end
+    end
+  end
+  return true
+end
+
+local function is_append(old_lines, new_lines)
+  if not old_lines or #new_lines <= #old_lines then return false end
+  for i = 1, #old_lines do
+    if old_lines[i] ~= new_lines[i] then return false end
+  end
+  return true
+end
+
+local function scan_async(view, cache, first)
+  local buffer = view.buffer
+  core.add_thread(function()
+    local candidates, points, by_line = {}, {}, {}
+    local slice_start = system.get_time()
+    local function yield_if_needed()
+      if system.get_time() - slice_start >= SCAN_SLICE_SECONDS then
+        coroutine.yield(0)
+        slice_start = system.get_time()
+      end
+    end
+    if view.textview_closed or view.editor_file_poi_cache ~= cache then return end
+    if first > 1 then
+      for _, candidate in ipairs(cache.candidates) do
+        candidates[#candidates + 1] = candidate
+        yield_if_needed()
+      end
+      for _, point in ipairs(cache.points) do
+        points[#points + 1] = point
+        yield_if_needed()
+      end
+      for line, entries in pairs(cache.by_line) do
+        by_line[line] = entries
+        yield_if_needed()
+      end
+    end
+    local scanned = 0
+    local line = first
+    while line <= #buffer.lines do
+      if view.textview_closed or view.editor_file_poi_cache ~= cache
+          or buffer_revision(buffer) ~= cache.revision then return end
+      if #candidates >= MAX_CANDIDATES then break end
+      local found = text_poi_locations.extract_line_candidates(
+        buffer.lines[line], line, MAX_CANDIDATES - #candidates
+      )
+      for _, candidate in ipairs(found) do candidates[#candidates + 1] = candidate end
+      for _, point in ipairs(resolve_candidates(found, cache.roots)) do
+        points[#points + 1] = point
+        local entries = by_line[point.line]
+        if not entries or entries == cache.by_line[point.line] then
+          local copy = {}
+          for _, entry in ipairs(entries or {}) do copy[#copy + 1] = entry end
+          entries = copy
+          by_line[point.line] = entries
+        end
+        entries[#entries + 1] = point
+      end
+      scanned = scanned + 1
+      yield_if_needed()
+      line = line + 1
+    end
+    if view.textview_closed or view.editor_file_poi_cache ~= cache
+        or buffer_revision(buffer) ~= cache.revision then return end
+    cache.candidates, cache.points, cache.by_line = candidates, points, by_line
+    cache.validated_at = system.get_time()
+    cache.pending = nil
+    core.redraw = true
+    core.log_quiet("Editor file locations scanned: path=%s lines=%d points=%d",
+      buffer:get_name(), scanned, #points)
+  end)
+end
+
+local function revalidate_async(view, cache)
+  if cache.revalidating then return end
+  cache.revalidating = true
+  local buffer = view.buffer
+  core.add_thread(function()
+    local points, by_line = {}, {}
+    local slice_start = system.get_time()
+    for _, candidate in ipairs(cache.candidates) do
+      if view.textview_closed or view.editor_file_poi_cache ~= cache
+          or buffer_revision(buffer) ~= cache.revision then return end
+      for _, point in ipairs(resolve_candidates({ candidate }, cache.roots)) do
+        points[#points + 1] = point
+        local entries = by_line[point.line] or {}
+        by_line[point.line] = entries
+        entries[#entries + 1] = point
+      end
+      if system.get_time() - slice_start >= SCAN_SLICE_SECONDS then
+        coroutine.yield(0)
+        slice_start = system.get_time()
+      end
+    end
+    if view.textview_closed or view.editor_file_poi_cache ~= cache
+        or buffer_revision(buffer) ~= cache.revision then return end
+    cache.points, cache.by_line = points, by_line
+    cache.validated_at = system.get_time()
+    cache.revalidating = nil
+    core.redraw = true
+  end)
+end
+
+local function new_cache(view, revision, source, project, previous, append)
+  local buffer = view.buffer
+  local first = append and #previous.lines + 1 or 1
   local cache = {
     revision = revision,
     source_path = source,
     project_path = project,
     roots = roots_for_paths(source, project),
-    candidates = scan_buffer(view.buffer),
-    points = nil,
-    by_line = nil,
+    candidates = append and previous.candidates or {},
+    points = append and previous.points or {},
+    by_line = append and previous.by_line or {},
+    lines = buffer.lines,
     validated_at = 0,
   }
-  resolve_cache(cache)
+  view.editor_file_poi_cache = cache
+  if can_scan_inline(buffer, first) then
+    if append then
+      for line = first, #buffer.lines do
+        if #cache.candidates >= MAX_CANDIDATES then break end
+        local found = text_poi_locations.extract_line_candidates(
+          buffer.lines[line], line, MAX_CANDIDATES - #cache.candidates
+        )
+        for _, candidate in ipairs(found) do cache.candidates[#cache.candidates + 1] = candidate end
+        for _, point in ipairs(resolve_candidates(found, cache.roots)) do
+          cache.points[#cache.points + 1] = point
+          cache.by_line[line] = cache.by_line[line] or {}
+          cache.by_line[line][#cache.by_line[line] + 1] = point
+        end
+      end
+      cache.validated_at = system.get_time()
+    else
+      cache.candidates = scan_buffer(buffer)
+      resolve_cache(cache)
+    end
+  else
+    cache.pending = true
+    scan_async(view, cache, first)
+  end
   return cache
 end
 
@@ -145,7 +300,6 @@ local function cache_for(view)
     return cache
   end
   cache = new_cache(view, revision, source, project)
-  view.editor_file_poi_cache = cache
   return cache
 end
 
@@ -232,11 +386,36 @@ function M.on_text_transaction(view, transaction)
   if not cache or not transaction or not transaction.changed then return false end
   local source = source_path(view)
   local project = project_path()
-  if cache.source_path ~= source or cache.project_path ~= project
-      or not refresh_changed_lines(view, cache, transaction) then
+  if cache.source_path ~= source or cache.project_path ~= project then
     view.editor_file_poi_cache = nil
     return false
   end
+  if transaction.full_snapshot and transaction.content_changed == false then
+    cache.revision = buffer_revision(view.buffer)
+    cache.lines = view.buffer.lines
+    return true
+  end
+  if transaction.full_snapshot or cache.pending then
+    local append = is_append(cache.lines, view.buffer.lines)
+    if append and cache.pending then
+      cache.revision = buffer_revision(view.buffer)
+      cache.lines = view.buffer.lines
+      return true
+    end
+    new_cache(view, buffer_revision(view.buffer), source, project, cache, append)
+    return true
+  end
+  local ranges = transaction.changed_ranges or {}
+  if #cache.candidates > INLINE_SCAN_LINES
+      or not can_refresh_inline(view.buffer, ranges) then
+    new_cache(view, buffer_revision(view.buffer), source, project)
+    return true
+  end
+  if not refresh_changed_lines(view, cache, transaction) then
+    view.editor_file_poi_cache = nil
+    return false
+  end
+  cache.lines = view.buffer.lines
   return true
 end
 
@@ -247,10 +426,14 @@ local function points_for_view(view, opts)
   local cache = cache_for(view)
   opts = opts or {}
   local now = system.get_time()
-  if opts.force_revalidate == true
+  if not cache.pending and (opts.force_revalidate == true
       or not cache.points
-      or now - cache.validated_at >= ACTION_REVALIDATION_INTERVAL then
-    resolve_cache(cache)
+      or now - cache.validated_at >= ACTION_REVALIDATION_INTERVAL) then
+    if #cache.candidates > INLINE_SCAN_LINES then
+      revalidate_async(view, cache)
+    else
+      resolve_cache(cache)
+    end
   end
   return cache.points
 end
@@ -260,7 +443,7 @@ function M.update(view)
   local buffer = view and view.buffer
   if not buffer or buffer.binary then return end
   local cache = cache_for(view)
-  if not cache.points then resolve_cache(cache) end
+  if not cache.points and not cache.pending then resolve_cache(cache) end
   if started then
     perf_add("editor_file_poi_update_ms", (system.get_time() - started) * 1000)
   end

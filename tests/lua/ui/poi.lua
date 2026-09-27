@@ -267,9 +267,11 @@ test.describe("Point of Interest navigation", function()
 
     local get_file_info = system.get_file_info
     local file_info_calls = 0
-    system.get_file_info = function(...)
-      file_info_calls = file_info_calls + 1
-      return get_file_info(...)
+    system.get_file_info = function(path, ...)
+      if common.path_equals(path, target_path) then
+        file_info_calls = file_info_calls + 1
+      end
+      return get_file_info(path, ...)
     end
     local ok, err = pcall(function()
       buffer:insert(2, 1, "changed ")
