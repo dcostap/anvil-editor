@@ -22,24 +22,26 @@ end
 
 local function pipe_positions(text)
   local positions = {}
-  local escaped, ticks = false, 0
+  local ticks = 0
   local i = 1
-  while i <= #text do
-    local char = text:sub(i, i)
-    if escaped then
-      escaped = false
-    elseif char == "\\" then
-      escaped = true
-    elseif char == "`" then
+  while true do
+    -- Only backslashes, backticks, and pipes affect the result.
+    i = text:find("[\\`|]", i)
+    if not i then break end
+    local byte = text:byte(i)
+    if byte == 92 then
+      -- A backslash escapes the next byte, whatever it is.
+      i = i + 2
+    elseif byte == 96 then
       local finish = i
-      while text:sub(finish + 1, finish + 1) == "`" do finish = finish + 1 end
+      while text:byte(finish + 1) == 96 do finish = finish + 1 end
       local count = finish - i + 1
       if ticks == 0 then ticks = count elseif ticks == count then ticks = 0 end
-      i = finish
-    elseif char == "|" and ticks == 0 then
-      positions[#positions + 1] = i
+      i = finish + 1
+    else
+      if ticks == 0 then positions[#positions + 1] = i end
+      i = i + 1
     end
-    i = i + 1
   end
   return positions
 end
@@ -129,17 +131,28 @@ local function source_index(buffer)
   -- hit testing, selection handling, and metric calculation, so searching
   -- around the requested line (the old implementation) multiplies this work
   -- by the number of visual rows in the buffer.
+  -- An edit changes few lines, so rows are reused by source text. Only lines
+  -- with a pipe can be table rows.
   local rows = {}
+  local previous_by_text = cached and cached.rows_by_text
+  local rows_by_text = {}
   for line = 1, line_count do
-    local row = source_row(line_text(buffer, line))
-    if row then
-      -- Keep the index compact. Full cell bounds are only needed by the
-      -- presentation parser and by the uncommon empty-row extension path.
-      rows[line] = {
-        columns = row.columns,
-        delimiter = delimiter_row(row),
-      }
+    local source = buffer.lines[line] or ""
+    local entry = rows_by_text[source]
+    if entry == nil then
+      if previous_by_text then entry = previous_by_text[source] end
+      if entry == nil then
+        local row = source:find("|", 1, true) and source_row(line_text(buffer, line))
+        -- Keep the index compact. Full cell bounds are only needed by the
+        -- presentation parser and by the uncommon empty-row extension path.
+        entry = row and {
+          columns = row.columns,
+          delimiter = delimiter_row(row),
+        } or false
+      end
+      rows_by_text[source] = entry
     end
+    if entry then rows[line] = entry end
   end
 
   local by_line = {}
@@ -172,7 +185,7 @@ local function source_index(buffer)
 
   cached = {
     revision = revision, line_count = line_count,
-    rows = rows, by_line = by_line,
+    rows = rows, by_line = by_line, rows_by_text = rows_by_text,
   }
   source_indexes[buffer] = cached
   return cached
