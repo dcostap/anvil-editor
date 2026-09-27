@@ -227,7 +227,7 @@ fail:
   return false;
 }
 
-static bool parse_inline_regions(
+static bool parse_inline_region(
   AnvilMarkdownTree *result,
   TSParser *inline_parser,
   TSNode node,
@@ -237,24 +237,15 @@ static bool parse_inline_regions(
   ParseRun *run,
   char **error
 ) {
-  if (is_inline_region(node)) {
+  {
     if (ts_node_end_byte(node) <= ts_node_start_byte(node)) return true;
-    TSRange *ranges = NULL;
-    uint32_t range_count = 0;
-    if (!build_region_ranges(node, &ranges, &range_count)) {
-      if (error) *error = parser_strdup("failed to build Markdown inline included ranges");
-      return false;
-    }
-    if (range_count == 0) {
-      free(ranges);
-      return true;
-    }
     TSRange source_range = {
       .start_point = ts_node_start_point(node),
       .end_point = ts_node_end_point(node),
       .start_byte = ts_node_start_byte(node),
       .end_byte = ts_node_end_byte(node),
     };
+    uint32_t cursor_before_match = *previous_cursor;
     TSTree *old_tree = NULL;
     bool reused = false;
     bool old_range_affected = true;
@@ -286,15 +277,29 @@ static bool parse_inline_regions(
     }
     TSTree *tree = NULL;
     if (old_tree && !old_range_affected) {
+      /* An unaffected region keeps its tree, so it needs no included ranges. */
       tree = old_tree;
       old_tree = NULL;
       reused = true;
     } else {
+      TSRange *ranges = NULL;
+      uint32_t range_count = 0;
+      if (!build_region_ranges(node, &ranges, &range_count)) {
+        if (old_tree) ts_tree_delete(old_tree);
+        if (error) *error = parser_strdup("failed to build Markdown inline included ranges");
+        return false;
+      }
+      if (range_count == 0) {
+        free(ranges);
+        if (old_tree) ts_tree_delete(old_tree);
+        *previous_cursor = cursor_before_match;
+        return true;
+      }
       tree = parse_with_ranges(inline_parser, result->snapshot, ranges, range_count, old_tree, run);
+      free(ranges);
     }
     if (tree && (old_tree || reused)) result->reused_inline_count++;
     if (old_tree) ts_tree_delete(old_tree);
-    free(ranges);
     if (!tree) {
       if (error) *error = parser_strdup(run->cancelled
         ? "Markdown parse cancelled"
@@ -308,14 +313,42 @@ static bool parse_inline_regions(
     }
     return true;
   }
+}
 
-  uint32_t child_count = ts_node_child_count(node);
-  for (uint32_t i = 0; i < child_count; i++) {
-    if (!parse_inline_regions(
-      result, inline_parser, ts_node_child(node, i), previous, edit, previous_cursor, run, error
-    )) return false;
+/* Visits inline regions in document order. A cursor walk visits each node
+ * once; indexed child lookups rescan siblings and cost O(n^2) per parent. */
+static bool parse_inline_regions(
+  AnvilMarkdownTree *result,
+  TSParser *inline_parser,
+  TSNode root,
+  const AnvilMarkdownTree *previous,
+  const TSInputEdit *edit,
+  uint32_t *previous_cursor,
+  ParseRun *run,
+  char **error
+) {
+  TSTreeCursor cursor = ts_tree_cursor_new(root);
+  bool ok = true;
+  for (;;) {
+    TSNode node = ts_tree_cursor_current_node(&cursor);
+    if (is_inline_region(node)) {
+      if (!parse_inline_region(
+        result, inline_parser, node, previous, edit, previous_cursor, run, error
+      )) {
+        ok = false;
+        break;
+      }
+    } else if (ts_tree_cursor_goto_first_child(&cursor)) {
+      continue;
+    }
+    bool advanced = false;
+    while (!(advanced = ts_tree_cursor_goto_next_sibling(&cursor))) {
+      if (!ts_tree_cursor_goto_parent(&cursor)) break;
+    }
+    if (!advanced) break;
   }
-  return true;
+  ts_tree_cursor_delete(&cursor);
+  return ok;
 }
 
 static AnvilMarkdownTree *markdown_tree_parse_internal(
