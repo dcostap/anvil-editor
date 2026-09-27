@@ -241,12 +241,35 @@ end
 ---@param at number Index at which to start splicing.
 ---@param remove number Number of elements to remove.
 ---@param insert? any[] A table containing elements to insert after splicing.
+---Moves `a1[f..e]` to `a2[t..]` like Lua 5.3 `table.move`, and returns `a2`.
+---The compatibility `table.move` reads and writes each element through the C
+---API. This loop is compiled by the JIT and is much faster on large arrays.
+---@param a1 table
+---@param f integer
+---@param e integer
+---@param t integer
+---@param a2? table
+---@return table
+function common.move(a1, f, e, t, a2)
+  a2 = a2 or a1
+  if e >= f then
+    local d = t - f
+    if t > e or t <= f or a2 ~= a1 then
+      for i = f, e do a2[i + d] = a1[i] end
+    else
+      for i = e, f, -1 do a2[i + d] = a1[i] end
+    end
+  end
+  return a2
+end
+
+
 function common.splice(t, at, remove, insert)
   assert(remove >= 0, "bad argument #3 to 'splice' (non-negative value expected)")
   insert = insert or {}
   local len = #insert
-  if remove ~= len then table.move(t, at + remove, #t + remove, at + len) end
-  table.move(insert, 1, len, at, t)
+  if remove ~= len then common.move(t, at + remove, #t + remove, at + len) end
+  common.move(insert, 1, len, at, t)
 end
 
 

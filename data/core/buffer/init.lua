@@ -1422,14 +1422,21 @@ end
 local has_table_new, table_new = pcall(require, "table.new")
 if not has_table_new then table_new = function() return {} end end
 
-local function line_starts_for(lines)
+-- Byte offsets use one start per block of lines. A per-line array would
+-- allocate a whole-Buffer table for every keystroke and feed the collector.
+local LINE_OFFSET_BLOCK = 64
+
+local function line_offsets_for(lines)
   local count = #lines
-  local starts, offset = table_new(count, 0), 0
-  for i = 1, count do
-    starts[i] = offset
-    offset = offset + #lines[i]
+  local blocks, offset, block = table_new(math.floor(count / LINE_OFFSET_BLOCK) + 1, 0), 0, 0
+  for first = 1, count, LINE_OFFSET_BLOCK do
+    block = block + 1
+    blocks[block] = offset
+    for i = first, math.min(first + LINE_OFFSET_BLOCK - 1, count) do
+      offset = offset + #lines[i]
+    end
   end
-  return starts, offset
+  return { lines = lines, count = count, blocks = blocks, total = offset }
 end
 
 local function sanitize_position_in_lines(lines, line, col)
@@ -1442,26 +1449,29 @@ local function sanitize_position_in_lines(lines, line, col)
   return line, common.clamp(col, 1, #(lines[line] or ""))
 end
 
-local function position_to_offset(starts, line, col)
-  return starts[line] + col - 1
+local function position_to_offset(index, line, col)
+  local first = math.floor((line - 1) / LINE_OFFSET_BLOCK) * LINE_OFFSET_BLOCK + 1
+  local offset, lines = index.blocks[(first - 1) / LINE_OFFSET_BLOCK + 1], index.lines
+  for i = first, line - 1 do offset = offset + #lines[i] end
+  return offset + col - 1
 end
 
-local function offset_to_position(lines, starts, total, offset)
+local function offset_to_position(index, offset)
+  local lines, count = index.lines, index.count
   if offset <= 0 then return 1, 1 end
-  if offset >= total then return #lines, #(lines[#lines] or "") end
-  local lo, hi = 1, #lines
-  while lo <= hi do
-    local mid = math.floor((lo + hi) / 2)
-    local next_start = starts[mid + 1] or total + 1
-    if offset < starts[mid] then
-      hi = mid - 1
-    elseif offset >= next_start then
-      lo = mid + 1
-    else
-      return mid, offset - starts[mid] + 1
-    end
+  if offset >= index.total then return count, #(lines[count] or "") end
+  local blocks = index.blocks
+  local lo, hi = 1, #blocks
+  while lo < hi do
+    local mid = math.floor((lo + hi + 1) / 2)
+    if blocks[mid] <= offset then lo = mid else hi = mid - 1 end
   end
-  return #lines, #(lines[#lines] or "")
+  local line, start = (lo - 1) * LINE_OFFSET_BLOCK + 1, blocks[lo]
+  while line < count and offset >= start + #lines[line] do
+    start = start + #lines[line]
+    line = line + 1
+  end
+  return line, offset - start + 1
 end
 
 local function text_from_lines(lines, line1, col1, line2, col2)
@@ -1500,7 +1510,7 @@ local function append_span(out, lines, line1, col1, line2, col2)
   if line2 > line1 + 1 then
     -- Whole lines keep their boundaries; move the references in one call.
     local at = #out
-    table.move(lines, line1 + 1, line2 - 1, at, out)
+    common.move(lines, line1 + 1, line2 - 1, at, out)
     out[at + line2 - line1 - 1] = ""
   end
   append_text_linewise(out, lines[line2]:sub(1, col2 - 1))
@@ -1511,7 +1521,7 @@ local function append_span_to_end(out, lines, line, col)
   append_text_linewise(out, lines[line]:sub(col))
   if line < #lines then
     -- Unchanged lines already have the correct boundaries. Copy references only.
-    table.move(lines, line + 1, #lines, #out, out)
+    common.move(lines, line + 1, #lines, #out, out)
   end
 end
 
@@ -1522,8 +1532,9 @@ local function finalize_lines(out)
 end
 
 -- Locate positions in the edited text without constructing that text.
-local function edit_position_map(old_lines, edits, starts, total)
-  if not starts then starts, total = line_starts_for(old_lines) end
+local function edit_position_map(old_lines, edits, index)
+  index = index or line_offsets_for(old_lines)
+  local total = index.total
   local spans, delta = {}, 0
   local old_line, old_col, new_line, new_col = 1, 1, 1, 1
   local function translate_position(line, col, from_line, from_col, to_line, to_col)
@@ -1561,12 +1572,12 @@ local function edit_position_map(old_lines, edits, starts, total)
       shift = shift + #edit.text - (edit.end_offset - edit.start_offset)
       ol, oc, nl, nc = edit.line2, edit.col2, span.end_line, span.end_col
     end
-    local line, col = offset_to_position(old_lines, starts, total, offset - shift)
+    local line, col = offset_to_position(index, offset - shift)
     return translate_position(line, col, ol, oc, nl, nc)
   end
   local function map_position(line, col, affinity)
     line, col = sanitize_position_in_lines(old_lines, line, col)
-    local offset = position_to_offset(starts, line, col)
+    local offset = position_to_offset(index, line, col)
     local shift = 0
     for _, edit in ipairs(edits) do
       if offset < edit.start_offset then break end
@@ -1591,7 +1602,7 @@ function Buffer:apply_edits(edits, opts)
   local time = opts.time or system.get_time()
   local owner_id = opts.owner_id or current_selection_owner_id(self)
   local old_lines = self.lines
-  local old_starts, old_total = line_starts_for(old_lines)
+  local old_index = line_offsets_for(old_lines)
   local old_selections = copy_array(self.selections)
   local old_last_selection = self.last_selection or 1
   local normalized = {}
@@ -1627,8 +1638,8 @@ function Buffer:apply_edits(edits, opts)
     local text = self:normalize_edit_text(edit.text or "", edit, opts)
     local old_text = text_from_lines(old_lines, line1, col1, line2, col2)
     if opts.allow_selection_only or old_text ~= text then
-      local start_offset = position_to_offset(old_starts, line1, col1)
-      local end_offset = position_to_offset(old_starts, line2, col2)
+      local start_offset = position_to_offset(old_index, line1, col1)
+      local end_offset = position_to_offset(old_index, line2, col2)
       normalized[#normalized + 1] = {
         line1 = line1, col1 = col1, line2 = line2, col2 = col2,
         text = text, old_text = old_text, idx = edit.idx, selection = edit.selection,
@@ -1682,7 +1693,7 @@ function Buffer:apply_edits(edits, opts)
   end
   append_span_to_end(out, old_lines, cursor_line, cursor_col)
   local new_lines = finalize_lines(out)
-  local position, map_position = edit_position_map(old_lines, normalized, old_starts, old_total)
+  local position, map_position = edit_position_map(old_lines, normalized, old_index)
 
   local delta = 0
   for _, edit in ipairs(normalized) do
@@ -1820,8 +1831,7 @@ end
 function Buffer:raw_insert(line, col, text, undo_stack, time)
   self:notify_text_change_listeners("before", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
   local linewrapping_old_lines = #self.lines
-  local old_starts = line_starts_for(self.lines)
-  local start_offset = position_to_offset(old_starts, line, col)
+  local start_offset = position_to_offset(line_offsets_for(self.lines), line, col)
   -- split text into lines and merge with line at insertion point
   local lines = split_lines(text)
   local len = #lines[#lines]
@@ -1889,9 +1899,9 @@ function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time)
   local linewrapping_old_lines = #self.lines
   -- push undo
   local text = self:get_text(line1, col1, line2, col2)
-  local old_starts = line_starts_for(self.lines)
-  local start_offset = position_to_offset(old_starts, line1, col1)
-  local end_offset = position_to_offset(old_starts, line2, col2)
+  local old_index = line_offsets_for(self.lines)
+  local start_offset = position_to_offset(old_index, line1, col1)
+  local end_offset = position_to_offset(old_index, line2, col2)
   push_selection_undo(self, undo_stack, time)
   push_undo(undo_stack, time, "insert", line1, col1, text)
 
@@ -1988,15 +1998,15 @@ end
 local function plan_normalized_edits(self, edits, opts)
   opts = opts or {}
   local old_lines = self.lines
-  local starts = line_starts_for(old_lines)
+  local index = line_offsets_for(old_lines)
   local normalized = {}
   for _, edit in ipairs(edits) do
     local line1, col1 = sanitize_position_in_lines(old_lines, edit.line1, edit.col1)
     local line2, col2 = sanitize_position_in_lines(old_lines, edit.line2, edit.col2)
     line1, col1, line2, col2 = sort_positions(line1, col1, line2, col2)
     local text = self:normalize_edit_text(edit.text or "", edit, opts)
-    local start_offset = position_to_offset(starts, line1, col1)
-    local end_offset = position_to_offset(starts, line2, col2)
+    local start_offset = position_to_offset(index, line1, col1)
+    local end_offset = position_to_offset(index, line2, col2)
     normalized[#normalized + 1] = {
       line1 = line1, col1 = col1, line2 = line2, col2 = col2,
       text = text, idx = edit.idx,
@@ -2071,7 +2081,7 @@ end
 local function clip_overlapping_edits_to_later_starts(self, normalized)
   if #normalized < 2 then return normalized end
   local old_lines = self.lines
-  local starts, total = line_starts_for(old_lines)
+  local index = line_offsets_for(old_lines)
   local clipped = {}
   local next_start
   for i = #normalized, 1, -1 do
@@ -2081,7 +2091,7 @@ local function clip_overlapping_edits_to_later_starts(self, normalized)
       end_offset = next_start
     end
     if edit.start_offset < end_offset or edit.start_offset == edit.end_offset then
-      local line2, col2 = offset_to_position(old_lines, starts, total, end_offset)
+      local line2, col2 = offset_to_position(index, end_offset)
       clipped[#clipped + 1] = {
         line1 = edit.line1,
         col1 = edit.col1,
