@@ -539,6 +539,45 @@ test.describe("TextView selection scrolling", function()
     test.equal(line_packets.diagnostics(view).resident_packets, 0)
   end)
 
+  test.it("reuses an unwrapped line packet after a redraw", function(context)
+    local view, buffer = open_editor(context, "visible words with spaces\n")
+    disable_wrapping(view)
+    view.__test_force_line_packets = true
+
+    local x, y = view:get_line_screen_position(1)
+    local function draw()
+      renderer.begin_frame(core.window)
+      local ok, err = pcall(view.draw_line_text, view, 1, x, y)
+      renderer.end_frame()
+      if not ok then error(err, 0) end
+      return renderer.get_last_frame_stats()
+    end
+    draw()
+    local replay = draw()
+    local commands = line_packets.inspect_line(view, 1)
+    local diagnostics = line_packets.diagnostics(view)
+
+    test.equal(diagnostics.builds, 1)
+    test.ok(diagnostics.hits >= 1)
+    test.ok(replay.display_packet_replays > 0)
+    test.ok(commands and #commands > 0, "expected text commands in the cached line")
+    local original = {}
+    for _, item in ipairs(commands) do
+      if item.type == "text" then original[#original + 1] = item.text end
+    end
+    test.ok(table.concat(original):find("visible words", 1, true))
+
+    buffer:insert(1, 1, "new ")
+    draw()
+    local changed = line_packets.inspect_line(view, 1)
+    local text = {}
+    for _, item in ipairs(changed or {}) do
+      if item.type == "text" then text[#text + 1] = item.text end
+    end
+    test.ok(table.concat(text):find("new visible words", 1, true),
+      "expected an edit to replace the cached line")
+  end)
+
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
     local prefix = string.rep("x", 120)
     local target = "NEEDLE"

@@ -67,4 +67,18 @@ test.describe("TextView shared text layouts", function()
     test.equal(layout_width(view, 1), wide_char)
     test.equal(layout_width(view, 2), ascii)
   end)
+
+  test.it("measures an edited unwrapped line after scrolling past cached rows", function(context)
+    local lines = { "漢" }
+    for i = 2, 300 do lines[i] = "row " .. i end
+    local view, buffer = make_view(context, table.concat(lines, "\n") .. "\n")
+    view:set_wrapping_enabled(false)
+    local font = test.not_nil(view:get_font())
+
+    for i = 1, 300 do layout_width(view, i) end
+    test.equal(layout_width(view, 1), font:get_width("漢"))
+
+    buffer:insert(1, 1, "new ")
+    test.equal(layout_width(view, 1), font:get_width("new 漢"))
+  end)
 end)

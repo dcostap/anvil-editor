@@ -37,7 +37,26 @@ local function same_tokens(a, b)
   return true
 end
 
-function Layout.get(view, line, first, last, leading, _wrapped)
+local function remember_line(cache, line, layout)
+  local slot = cache.line_entries[line]
+  if slot then
+    slot.layout = layout
+    return
+  end
+  local slots = cache.line_slots
+  if #slots < MAX_CACHED_ROWS then
+    slot = { line = line, layout = layout }
+    slots[#slots + 1] = slot
+  else
+    slot = slots[cache.line_head]
+    cache.line_entries[slot.line] = nil
+    slot.line, slot.layout = line, layout
+    cache.line_head = cache.line_head % MAX_CACHED_ROWS + 1
+  end
+  cache.line_entries[line] = slot
+end
+
+function Layout.get(view, line, first, last, leading, wrapped)
   local default_font = view:get_font()
   local _, tabs = view.buffer:get_indent_info()
   local override = view:decoration_text_color(line)
@@ -61,19 +80,35 @@ function Layout.get(view, line, first, last, leading, _wrapped)
   local cache = view.__plain_text_layouts
   if not cache then
     -- Ring buffer: reuse keeps the newest rows, and eviction costs no shifting.
-    cache = { slots = {}, head = 1, count = 0 }
+    cache = {
+      slots = {}, head = 1, count = 0,
+      line_entries = {}, line_slots = {}, line_head = 1,
+    }
     view.__plain_text_layouts = cache
     core.log_quiet("Shared text layout enabled for %s", view.buffer:get_name())
   end
   local token_id = override and view.buffer.lines[line] or tokens
   local slots, count = cache.slots, cache.count
+  local line_slot = not wrapped and cache.line_entries[line]
+  local cached = line_slot and line_slot.layout
+  if cached and cached.resident and cached.key == key then
+    if cached.token_id == token_id then return cached end
+    if same_tokens(cached.tokens, tokens) then
+      cached.token_id = token_id
+      return cached
+    end
+  end
   for i = 1, count do
     local entry = slots[i]
     if entry.key == key then
-      if entry.token_id == token_id then return entry end
+      if entry.token_id == token_id then
+        if not wrapped then remember_line(cache, line, entry) end
+        return entry
+      end
       -- Some providers hand out equal tokens in a new table. Accept them once.
       if same_tokens(entry.tokens, tokens) then
         entry.token_id = token_id
+        if not wrapped then remember_line(cache, line, entry) end
         return entry
       end
     end
@@ -143,9 +178,12 @@ function Layout.get(view, line, first, last, leading, _wrapped)
     slots[count] = self
     cache.count = count
   else
+    slots[cache.head].resident = false
     slots[cache.head] = self
     cache.head = cache.head % MAX_CACHED_ROWS + 1
   end
+  self.resident = true
+  if not wrapped then remember_line(cache, line, self) end
   return self
 end
 

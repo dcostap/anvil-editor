@@ -29,6 +29,9 @@ function line_packets.persistent_contributor_config(name, defaults)
 end
 local DEFAULT_MAX_PACKETS = 1024
 local DEFAULT_MAX_BYTES = 12 * 1024 * 1024
+-- A packet for an unwrapped line includes the whole line. Keep long lines on
+-- the existing viewport-limited draw path instead of caching offscreen text.
+local MAX_UNWRAPPED_PACKET_BYTES = 512
 -- Long physical lines are compiled in viewport-sized slices.  Align those
 -- slices to stable row chunks so a one-row scroll does not rebuild the same
 -- text packet with a shifted first/last row on every frame.
@@ -225,11 +228,14 @@ local function eligible(view, line)
     return false, "native_api_missing"
   end
   if not standard_textview(view) then return false, "nonstandard_textview" end
-  if not view.wrapped_settings then return false, "unwrapped" end
+  if not (view.buffer and view.buffer.lines[line]) then return false, "missing_line" end
+  if not view.wrapped_settings
+  and #view.buffer.lines[line] > MAX_UNWRAPPED_PACKET_BYTES then
+    return false, "unwrapped"
+  end
   if view.has_visual_metric_providers and view:has_visual_metric_providers() then
     return false, "variable_visual_metrics"
   end
-  if not (view.buffer and view.buffer.lines[line]) then return false, "missing_line" end
   if markdown_live_mode(view) then return false, "markdown_live" end
   if view:get_line_render(line) then return false, "custom_render_line" end
   if view:decoration_text_color(line) then return false, "decoration_text_color" end
