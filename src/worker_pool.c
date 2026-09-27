@@ -1953,6 +1953,7 @@ static void run_treesitter_index_text(AnvilWorkerContext *context, AnvilWorkerJo
 static bool markdown_extension_capture_name(const char *name) {
   return name && (strcmp(name, "span.wiki_link") == 0 || strcmp(name, "span.embed") == 0 ||
     strcmp(name, "span.highlight") == 0 || strcmp(name, "span.comment") == 0 ||
+    strcmp(name, "span.tag") == 0 || strcmp(name, "content.tag") == 0 ||
     strncmp(name, "marker.wiki_", 12) == 0 || strncmp(name, "marker.embed_", 13) == 0 ||
     strncmp(name, "marker.highlight_", 17) == 0 || strncmp(name, "marker.comment_", 15) == 0 ||
     strcmp(name, "content.target") == 0 || strcmp(name, "content.alias") == 0 ||
@@ -2090,24 +2091,22 @@ static bool run_markdown_block_query(
     );
   }
 
-  uint32_t changed_start = snapshot->byte_len;
-  uint32_t changed_end = 0;
+  /* The requery window covers the edited bytes and every changed range.
+   * Changed ranges report structure only, so they omit a token that absorbs
+   * inserted text and a container that keeps its type but gains or loses
+   * extent at a range edge, such as a list extended at the start or split
+   * off at the end. Touching the window therefore counts as changed. */
+  uint32_t changed_start = edit->start_byte;
+  uint32_t changed_end = edit->new_end_byte;
   for (uint32_t i = 0; i < changed_count; i++) {
     TSRange range = anvil_markdown_tree_changed_range(tree, i);
     if (range.start_byte < changed_start) changed_start = range.start_byte;
     if (range.end_byte > changed_end) changed_end = range.end_byte;
   }
-  if (changed_count == 0) {
-    changed_start = changed_end = snapshot->byte_len;
-  } else if (changed_end <= changed_start && snapshot->byte_len > 0) {
-    if (changed_start >= snapshot->byte_len) changed_start = snapshot->byte_len - 1;
-    changed_end = changed_start + 1;
-  }
-  /* Changed ranges omit a container that keeps its type but gains or loses
-   * extent at a range edge: a list extended at the start, or a list split off
-   * at the end. Touching either edge therefore counts as changed. */
-  if (changed_count > 0 && changed_start > 0) changed_start--;
-  if (changed_count > 0 && changed_end < snapshot->byte_len) changed_end++;
+  if (changed_end > snapshot->byte_len) changed_end = snapshot->byte_len;
+  if (changed_start > changed_end) changed_start = changed_end;
+  if (changed_start > 0) changed_start--;
+  if (changed_end < snapshot->byte_len) changed_end++;
 
   AnvilWorkerTreeSitterQueryResult *query_result = &index_result->outline;
   uint32_t count_before_reuse = query_result->count;
@@ -2118,11 +2117,6 @@ static bool run_markdown_block_query(
     return false;
   }
   index_result->reused_block_capture_count += query_result->count - count_before_reuse;
-  if (changed_count == 0) {
-    query_result->status = pool_strdup("ready");
-    if (!query_result->status) pool_set_error(fatal_error, "out of memory storing Markdown block status");
-    return true;
-  }
   return run_treesitter_index_query(
     index_result, language, "outline", source, source_len,
     anvil_markdown_tree_block_tree(tree), snapshot, changed_start, changed_end, run,

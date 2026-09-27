@@ -1024,6 +1024,50 @@ Route_Message_Type :: enum c.uchar {
     test.same(capture_keys(after), { "label:0:3", "paragraph:9:24" })
   end)
 
+  test.test("Markdown incremental parses keep one capture per tag", function()
+    local pool = new_pool("lua-native-markdown-tag-reuse", 1)
+    local spec = {
+      kind = "markdown_parse",
+      text = "Intro\n\nSee #topic here.\n\nOther.\n",
+      outline_query = "(paragraph) @paragraph",
+      usage_query = "(emphasis) @span.emphasis",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      usage_query_timeout_ms = 100,
+      max_captures = 100,
+      usage_max_captures = 100,
+    }
+    local previous = submit_result(pool, spec)
+    for _, text in ipairs({ "Intro\n\nSee #topic here.\n\nOther text.\n", "Intro\n\nSee #topic here.\n\nOther texts.\n" }) do
+      spec.text = text
+      spec.previous_result = previous
+      previous = submit_result(pool, spec)
+      local tags = 0
+      for _, capture in ipairs(previous:captures("usage", { limit = 1000 })) do
+        if capture.capture == "span.tag" then tags = tags + 1 end
+      end
+      test.equal(tags, 1, text)
+    end
+  end)
+
+  test.test("Markdown block reuse extends a marker that absorbs inserted text", function()
+    local pool = new_pool("lua-native-markdown-marker-extent", 1)
+    local spec = {
+      kind = "markdown_parse",
+      text = "Intro.\n\n- item\n",
+      outline_query = "(list_marker_minus) @marker\n(paragraph) @paragraph",
+      parse_timeout_ms = 1000,
+      query_timeout_ms = 100,
+      max_captures = 100,
+    }
+    local before = submit_result(pool, spec)
+    spec.text = "Intro.\n\n-  item\n"
+    local fresh = submit_result(pool, spec)
+    spec.previous_result = before
+    local incremental = submit_result(pool, spec)
+    test.same(capture_keys(incremental), capture_keys(fresh))
+  end)
+
   test.test("Markdown block reuse finds a list split off after an edit", function()
     local pool = new_pool("lua-native-markdown-list-split", 1)
     local spec = {
