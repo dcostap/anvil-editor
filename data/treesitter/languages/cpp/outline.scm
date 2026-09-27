@@ -1,27 +1,17 @@
 ; Bundled first-party C++ outline query.
 ; Each pattern captures one outline item as @outline.<kind> and its display name
 ; as @name. Anvil groups captures by Tree-sitter match id.
-; The declarator patterns below list shapes, not arbitrary wrapper depth.
-; See data/treesitter/languages/README.md before extending them.
+; @name.declarator follows the C++ declarator to its name in the shared extractor.
+; See data/treesitter/languages/README.md.
 
 (translation_unit
   (declaration
-    declarator: [
-      (identifier) @name
-      (pointer_declarator declarator: (identifier) @name)
-      (reference_declarator (identifier) @name)
-      (array_declarator declarator: (identifier) @name)
-    ]) @outline.variable)
+    declarator: (_) @name.declarator) @outline.variable)
 
-(translation_unit
-  (declaration
-    declarator: (init_declarator
-      declarator: [
-        (identifier) @name
-        (pointer_declarator declarator: (identifier) @name)
-        (reference_declarator (identifier) @name)
-        (array_declarator declarator: (identifier) @name)
-      ])) @outline.variable)
+(namespace_definition
+  body: (declaration_list
+    (declaration
+      declarator: (_) @name.declarator) @outline.variable))
 
 (namespace_definition
   name: (_) @name) @outline.namespace
@@ -48,18 +38,7 @@
 
 (field_declaration
   type: (_) @signature
-  declarator: [
-    (field_identifier) @name
-    (pointer_declarator
-      declarator: (field_identifier) @name)
-    (pointer_declarator
-      declarator: (pointer_declarator
-        declarator: (field_identifier) @name))
-    (reference_declarator
-      (field_identifier) @name)
-    (array_declarator
-      declarator: (field_identifier) @name)
-  ]) @outline.field
+  declarator: (_) @name.declarator) @outline.field
 
 (field_declaration
   declarator: (function_declarator
@@ -109,8 +88,4 @@
       parameters: (parameter_list) @signature.params))) @outline.method
 
 (type_definition
-  declarator: (type_identifier) @name) @outline.type
-
-(type_definition
-  declarator: (qualified_identifier
-    name: (_) @name)) @outline.type
+  declarator: (_) @name.declarator) @outline.type

@@ -309,6 +309,25 @@ function outline.get_buffer_outline(buffer, opts)
     if symbol then symbols[#symbols + 1] = symbol end
   end
   table.sort(symbols, compare_symbols)
+  -- A function-valued variable matches both the variable and function rules.
+  -- Keep the function entry at that name and location.
+  local unique = {}
+  for _, symbol in ipairs(symbols) do
+    local previous = unique[#unique]
+    local same_name = previous and previous.name == symbol.name
+      and previous.start_byte == symbol.start_byte and previous.end_byte == symbol.end_byte
+      and previous.name_range.start.line == symbol.name_range.start.line
+      and previous.name_range.start.col == symbol.name_range.start.col
+    local function_variable = same_name and
+      ((previous.kind == "function" and symbol.kind == "variable")
+        or (previous.kind == "variable" and symbol.kind == "function"))
+    if function_variable then
+      if symbol.kind == "function" then unique[#unique] = symbol end
+    else
+      unique[#unique + 1] = symbol
+    end
+  end
+  symbols = unique
   assign_parents(symbols)
   return symbols
 end

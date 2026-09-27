@@ -545,6 +545,31 @@ static bool build_symbols(AnvilTSProjectFileResult *result, const AnvilTSSnapsho
   }
 
   if (!sort_symbols(result)) goto oom;
+  // A function-valued variable has two outline matches at the same location.
+  // Keep the function entry, not a second variable entry.
+  uint32_t unique_count = 0;
+  for (uint32_t i = 0; i < result->symbol_count; i++) {
+    Symbol *symbol = &result->symbols[i];
+    Symbol *previous = unique_count ? &result->symbols[unique_count - 1] : NULL;
+    bool same_location = previous && previous->range.start_byte == symbol->range.start_byte &&
+      previous->range.end_byte == symbol->range.end_byte &&
+      previous->name_range.start_byte == symbol->name_range.start_byte &&
+      previous->name_range.end_byte == symbol->name_range.end_byte;
+    bool previous_function = same_location && previous->kind.length == 8 &&
+      memcmp(slice_text(result, previous->kind), "function", 8) == 0;
+    bool symbol_function = same_location && symbol->kind.length == 8 &&
+      memcmp(slice_text(result, symbol->kind), "function", 8) == 0;
+    bool previous_variable = same_location && previous->kind.length == 8 &&
+      memcmp(slice_text(result, previous->kind), "variable", 8) == 0;
+    bool symbol_variable = same_location && symbol->kind.length == 8 &&
+      memcmp(slice_text(result, symbol->kind), "variable", 8) == 0;
+    if ((previous_function && symbol_variable) || (previous_variable && symbol_function)) {
+      if (symbol_function) *previous = *symbol;
+      continue;
+    }
+    result->symbols[unique_count++] = *symbol;
+  }
+  result->symbol_count = unique_count;
   if (!assign_symbol_parents(result)) goto oom;
   for (uint32_t i = 0; i < group_count; i++) free(groups[i].signatures);
   free(groups);

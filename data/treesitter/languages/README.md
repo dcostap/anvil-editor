@@ -11,6 +11,8 @@ Each language owns its selection rules under `data/treesitter/languages/<id>/`:
 
 The outline query captures each selected item as `@outline.<kind>`.
 It captures the item's name as `@name` in the same match.
+The C and C++ queries can capture `@name.declarator` instead.
+The shared Tree-sitter service follows the declarator to its name without a pointer-depth limit.
 Optional `@signature` captures supply display text.
 Anvil's shared code turns these captures into symbol records.
 It uses source ranges to group members under containers.
@@ -27,18 +29,18 @@ The gaps below need work before Anvil can claim complete symbol coverage.
 
 | Language | Current selection | Known limit or review need |
 | --- | --- | --- |
-| C | File-scope variables, function definitions, function-like macros, named types, enum members, and fields. | Declarator patterns cover only listed pointer and array shapes. Function declarations and object-like macros have no outline pattern. |
-| C++ | File-scope variables, namespaces, named types, enum members, fields, methods, and function definitions. | Globals require a translation-unit parent. Fields stop at two pointer layers. Other declarator shapes need review. |
-| JavaScript | Classes, functions, methods, and top-level variables with function values. | Ordinary variables and class fields have no outline pattern. Function declarations have no top-level scope guard. |
-| TypeScript | JavaScript selections plus interfaces, type aliases, enums, and method signatures. | Ordinary variables, class fields, and enum members have no outline pattern. |
-| TSX | The same selection as TypeScript, with its own grammar and query file. | The TypeScript omissions apply here too. Keep TSX tests separate from TypeScript tests. |
+| C | File variables, function definitions and direct declarations, macros, named types, enum members, and fields. | Declarator names no longer have a pointer-depth limit. More complex function declarations need review. |
+| C++ | File and namespace variables, namespaces, named types, enum members, fields, methods, and function definitions. | Declarator names no longer have a pointer-depth limit. Other declaration forms need review. |
+| JavaScript | Classes, file functions, methods, file variables, and class fields. | Function-valued variables stay functions. Destructured variables and computed field names need separate work. |
+| TypeScript | JavaScript selections plus interfaces, type aliases, enums, enum members, method signatures, and property signatures. | Destructured variables and computed field names need separate work. |
+| TSX | The same selection as TypeScript, with its own grammar and query file. | Keep TSX tests separate from TypeScript tests. |
 | Kotlin | Classes, objects, top-level functions and properties, class methods and properties, constructor properties, type aliases, and enum entries. | Function and property rules select named file and class scopes. Review other scopes when users need them. |
-| Odin | Procedures, named types, fields, enum entries, constants, variables, packages, and foreign blocks. | The variable rule has no scope guard. Check local declarations before claiming globals-only results. |
+| Odin | Procedures, named types, fields, enum entries, constants, variables, packages, and foreign blocks. | A procedure-local short variable did not enter the index in the focused test. Check other forms as needed. |
 | Markdown | ATX and setext headings. | Headings are the only symbols. There is no usage query. |
 
 This review does not prove that every grammar shape works.
-C and C++ still use shape-by-shape declarator patterns.
-Do not extend those patterns one pointer layer at a time.
+Add focused cases when a user finds a missed declaration.
+Do not extend declarator patterns one pointer layer at a time.
 
 ## Add or change a language
 
@@ -57,6 +59,7 @@ See `tests/lua/runtime/treesitter_javascript_typescript.lua` and `treesitter_mar
 
 Keep one query file per grammar when its syntax nodes differ.
 Put shared record building in `data/core/treesitter/outline.lua` and `src/treesitter/project_file.c`.
+The shared declarator traversal lives in `src/treesitter/service.c`.
 Update both paths when symbol extraction changes.
 A query edit needs a Tree-sitter reload and a fresh Project index.
 The dev app reads these files through a source-data junction.

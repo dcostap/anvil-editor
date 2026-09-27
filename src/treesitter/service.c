@@ -589,6 +589,31 @@ static bool query_match_predicates(
   return true;
 }
 
+// The C and C++ outline queries mark the declarator, not a fixed pointer depth.
+// Follow grammar fields to its name. A direct function declarator is a function,
+// not a variable or field; a pointer inside it declares a function pointer.
+static TSNode outline_declarator_name(TSNode node) {
+  while (!ts_node_is_null(node)) {
+    const char *type = ts_node_type(node);
+    if (strcmp(type, "identifier") == 0 || strcmp(type, "field_identifier") == 0 ||
+        strcmp(type, "type_identifier") == 0) return node;
+    TSNode next = ts_node_child_by_field_name(node, "declarator", 10);
+    if (strcmp(type, "function_declarator") == 0 &&
+        (ts_node_is_null(next) || strcmp(ts_node_type(next), "parenthesized_declarator") != 0)) {
+      return (TSNode) {0};
+    }
+    if (ts_node_is_null(next) && strcmp(type, "qualified_identifier") == 0) {
+      next = ts_node_child_by_field_name(node, "name", 4);
+    }
+    if (ts_node_is_null(next) && (strcmp(type, "parenthesized_declarator") == 0 ||
+        strcmp(type, "reference_declarator") == 0)) {
+      next = ts_node_named_child(node, 0);
+    }
+    node = next;
+  }
+  return (TSNode) {0};
+}
+
 bool anvil_ts_query_captures_in_tree_with_cursor(
   TSTree *tree,
   const AnvilTSSnapshot *snapshot,
@@ -644,29 +669,36 @@ bool anvil_ts_query_captures_in_tree_with_cursor(
     int32_t priority = query_pattern_priority(query, match.pattern_index);
     for (uint16_t i = 0; i < match.capture_count; i++) {
       const TSQueryCapture *capture = &match.captures[i];
-      uint32_t start = ts_node_start_byte(capture->node);
-      uint32_t end = ts_node_end_byte(capture->node);
+      uint32_t name_len = 0;
+      const char *name = ts_query_capture_name_for_id(query, capture->index, &name_len);
+      TSNode node = capture->node;
+      if (name_len == 15 && memcmp(name, "name.declarator", 15) == 0) {
+        node = outline_declarator_name(node);
+        name = "name";
+        name_len = 4;
+      }
+      if (ts_node_is_null(node)) continue;
+      uint32_t start = ts_node_start_byte(node);
+      uint32_t end = ts_node_end_byte(node);
       if (end <= byte_start || start >= byte_end || end <= start) continue;
       if (max_captures > 0 && order >= max_captures) {
         service_set_error(error, "Tree-sitter query capture limit exceeded");
         ok = false;
         goto done;
       }
-      uint32_t name_len = 0;
-      const char *name = ts_query_capture_name_for_id(query, capture->index, &name_len);
       AnvilTSQueryCapture out;
       out.name = name;
       out.name_len = name_len;
       out.start_byte = start;
       out.end_byte = end;
-      out.start_point = ts_node_start_point(capture->node);
-      out.end_point = ts_node_end_point(capture->node);
+      out.start_point = ts_node_start_point(node);
+      out.end_point = ts_node_end_point(node);
       out.priority = priority;
       out.match_id = match.id;
       out.pattern_index = match.pattern_index;
       out.capture_index = capture->index;
       out.order = order++;
-      out.node_id = (uint64_t)(uintptr_t)capture->node.id;
+      out.node_id = (uint64_t)(uintptr_t)node.id;
       if (!callback(&out, payload)) {
         ok = false;
         goto done;
