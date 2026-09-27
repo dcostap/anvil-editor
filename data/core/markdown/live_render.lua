@@ -4915,12 +4915,13 @@ function edit_visual_projection.find_capture(view, pre_edit_lines, source, any_e
   -- transaction hook still runs before Editor drops its old line cache, so a
   -- resident rendered visual can be adopted here even when that bounded
   -- capture missed its logical line.
+  -- Cached Buffer lines keep their newline. Comparing interned strings avoids
+  -- stripping every resident line on each edit.
+  local source_line = source .. "\n"
   for _, cached in pairs(view.__line_render_cache
     and view.__line_render_cache.lines or {}) do
     local render = cached.render_line ~= false and cached.render_line or nil
-    local cached_source = cached.source_line
-      and cached.source_line:gsub("\n$", "")
-    if cached_source == source
+    if (cached.source_line == source_line or cached.source_line == source)
       and (any_exact
         or edit_visual_projection.contains_retainable_presentation(render))
     then
