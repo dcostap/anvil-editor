@@ -49,6 +49,11 @@ class PerformanceBaselinePolicyTests(unittest.TestCase):
         self.assertTrue(any(scene.get("wrap") for scene in scenes.values()))
         self.assertTrue(any(scene.get("wrap") is False for scene in scenes.values()))
         self.assertTrue(all(scene["capture_actions"] for scene in scenes.values()))
+        editor_actions = {(scene["content"], scene.get("action", "jump"))
+                          for scene in scenes.values() if scene["kind"] == "editor"}
+        for content in ("code", "markdown"):
+            for action in ("jump", "type", "scroll"):
+                self.assertIn((content, action), editor_actions)
         with tempfile.TemporaryDirectory() as temp:
             scene = scenes["editor-unicode-source-wrap"]
             result = gate.perf_workloads.generate(Path(temp), scene)

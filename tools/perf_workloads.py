@@ -29,10 +29,14 @@ SCENARIOS = {
 }
 
 
-def editor_scene(content: str, lines: int, wrap: bool = False) -> dict[str, Any]:
+def editor_scene(content: str, lines: int, wrap: bool = False,
+                 action: str = "jump") -> dict[str, Any]:
     settings = scenario("editor", content=content, lines=lines, wrap=wrap)
+    if action != "jump":
+        settings["action"] = action
+    checkpoints = [1, 15, 30, 40] if action == "scroll" else [1, 2, 3, 40]
     settings.update(window_width=2560, window_height=1407, code_scale=1.0,
-                    actions=40, capture_actions=True, capture_checkpoints=[1, 2, 3, 40])
+                    actions=40, capture_actions=True, capture_checkpoints=checkpoints)
     return settings
 
 
@@ -47,6 +51,11 @@ EDITOR_SCENARIOS = {
     "editor-unicode-wrap": editor_scene("unicode", 800, True),
     "editor-unicode-source-wrap": editor_scene("unicode-source", 204, True),
     "editor-unicode-source-nowrap": editor_scene("unicode-source", 204),
+    "editor-code-large-type": editor_scene("code", 100000, action="type"),
+    "editor-code-large-scroll": editor_scene("code", 100000, action="scroll"),
+    "editor-markdown-large-type": editor_scene("markdown", 4000, True, action="type"),
+    "editor-markdown-large-scroll": editor_scene("markdown", 4000, True, action="scroll"),
+    "editor-unicode-source-scroll": editor_scene("unicode-source", 204, True, action="scroll"),
     "editor-fuzzy-open": dict(
         scenario("fuzzy", files=1000, action="file-query"),
         window_width=2560, window_height=1407, code_scale=1.0,

@@ -19,6 +19,12 @@ local function position(view, line)
   view:scroll_to_line(line, false, true)
 end
 
+-- One-letter words stay below the autocomplete threshold, so typing draws no popup.
+local TYPED_TEXT = "a b c d e f g h i j k l m n o p q r s t "
+local TYPE_LINE = 8
+-- Smooth scroll moves down for most ticks, then back up, so it passes rows in both directions.
+local SCROLL_DOWN_TICKS = 30
+
 local function editor_target(settings, index)
   index = (index - 1) % 4 + 1
   local rows = settings.lines
@@ -77,8 +83,18 @@ function Workload:setup()
       or settings.content == "unicode-source" and "scene.txt" or "scene.cpp"))
     self.view:set_wrapping_enabled(settings.wrap)
     if settings.wrap then linewrapping.update_textview_breaks(self.view) end
-    position(self.view, editor_target(settings, 1))
     assert(#self.view.buffer.lines == settings.lines, "Editor fixture has the wrong line count")
+    if settings.action == "type" then
+      local line = math.min(settings.lines, TYPE_LINE)
+      self.view:with_selection_state(function()
+        self.view.buffer:set_selection(line, math.huge)
+      end)
+      self.view:scroll_to_line(1, false, true)
+      self.typed_line = line
+      self.typed_original = self.view.buffer.lines[line]:gsub("\n$", "")
+    else
+      position(self.view, editor_target(settings, 1))
+    end
     assert(self.view:is_wrapping_enabled() == settings.wrap, "Editor wrapping mode changed")
     if settings.content == "markdown" then
       assert(self.view.__markdown_live_attached, "Markdown Live Preview did not attach")
@@ -114,6 +130,10 @@ function Workload:action_name(index)
   end
   if settings.kind == "diff" then return "diff-" .. settings.action end
   if settings.kind == "edit" then return index % 2 == 1 and "insert" or "undo" end
+  if settings.kind == "editor" and settings.action == "type" then return "type-char" end
+  if settings.kind == "editor" and settings.action == "scroll" then
+    return index <= SCROLL_DOWN_TICKS and "wheel-down" or "wheel-up"
+  end
   if settings.kind == "editor" then
     return ({ "steady-redraw", "scroll-near", "jump-middle", "return-near" })[
       (index - 1) % 4 + 1]
@@ -124,7 +144,13 @@ end
 function Workload:dispatch(index)
   local settings = self.settings
   self.index = index
-  if settings.kind == "editor" then
+  if settings.kind == "editor" and settings.action == "type" then
+    assert(core.active_view == self.view, "Editor lost input focus")
+    core.on_event("textinput", TYPED_TEXT:sub(index, index))
+  elseif settings.kind == "editor" and settings.action == "scroll" then
+    assert(command.perform("core:scroll", index <= SCROLL_DOWN_TICKS and -1 or 1),
+      "Editor did not accept the wheel scroll")
+  elseif settings.kind == "editor" then
     self.target_line = editor_target(settings, index)
     position(self.view, self.target_line)
   elseif settings.kind == "diff" then
@@ -215,10 +241,18 @@ function Workload:action_ready()
     if self.settings.content == "markdown" then
       assert(self.view.__markdown_live_attached, "Markdown Live Preview detached")
     end
-    local line = self.view:with_selection_state(function()
-      return self.view.buffer:get_selection()
-    end)
-    assert(line == self.target_line, "Editor action did not reach its line")
+    if self.settings.action == "type" then
+      local expected = self.typed_original .. TYPED_TEXT:sub(1, self.index) .. "\n"
+      if self.view.buffer.lines[self.typed_line] ~= expected then return false end
+    elseif self.settings.action == "scroll" then
+      local scroll = self.view.scroll
+      if math.abs(scroll.y - scroll.to.y) >= 0.5 then return false end
+    else
+      local line = self.view:with_selection_state(function()
+        return self.view.buffer:get_selection()
+      end)
+      assert(line == self.target_line, "Editor action did not reach its line")
+    end
   end
   if self.diff then
     assert(#self.diff.a_changes > 0 and #self.diff.b_changes > 0, "Diff fixture has no changes")

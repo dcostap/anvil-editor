@@ -1320,7 +1320,8 @@ def markdown_report(report: dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", choices=sorted(SUITES), default="quick")
-    parser.add_argument("--scenario", choices=sorted(SCENARIOS))
+    parser.add_argument("--scenario", choices=sorted(SCENARIOS), action="append",
+                        help="run this scenario instead of a suite; repeat to run several")
     parser.add_argument("--renderer", choices=("d3d11", "software"), default="d3d11")
     parser.add_argument("--runs", type=int)
     parser.add_argument("--metrics-runs", type=int)
@@ -1360,7 +1361,8 @@ def main() -> int:
 
     if os.name != "nt":
         raise RuntimeError("the isolated D3D11 gate requires Windows")
-    stress = args.suite in ("stress", "interactive", "diff") or args.scenario in perf_workloads.SCENARIOS
+    stress = args.suite in ("stress", "interactive", "diff") or any(
+        name in perf_workloads.SCENARIOS for name in args.scenario or ())
     full = args.suite == "full"
     runs = args.runs if args.runs is not None else (5 if full else 3)
     metrics_runs = args.metrics_runs if args.metrics_runs is not None else 2
@@ -1387,18 +1389,19 @@ def main() -> int:
     if any(not math.isfinite(value) or value <= 0 for value in (args.frame_budget_ms, args.action_budget_ms)):
         parser.error("budgets must be finite and positive")
 
-    selected_scenarios = [args.scenario] if args.scenario else SUITES[args.suite]
+    selected_scenarios = list(dict.fromkeys(args.scenario)) if args.scenario else SUITES[args.suite]
     if args.actions is not None and any(
         name in perf_workloads.EDITOR_SCENARIOS for name in selected_scenarios
     ):
         parser.error("editor regression scenes use fixed actions and checkpoints")
-    if args.video and (not args.scenario or not SCENARIOS[args.scenario].get("video")):
+    if args.video and (not args.scenario or len(selected_scenarios) != 1
+                       or not SCENARIOS[selected_scenarios[0]].get("video")):
         parser.error("--video requires a video-enabled --scenario")
     if not args.video and any(SCENARIOS[name].get("video") for name in selected_scenarios):
         parser.error("video scenarios require --video")
     if args.user_state_mode == "reuse" and any(SCENARIOS[name].get("kind") == "open" for name in selected_scenarios):
         parser.error("first-open workloads require --user-state-mode clean")
-    suite_label = f"scenario:{args.scenario}" if args.scenario else args.suite
+    suite_label = f"scenario:{','.join(selected_scenarios)}" if args.scenario else args.suite
     specimen_selected = any(name in SPECIMEN_SCENARIOS for name in selected_scenarios)
     if specimen_selected and not args.specimen:
         parser.error("specimen scenarios require --specimen PATH")
@@ -1412,8 +1415,10 @@ def main() -> int:
         RESULTS_ROOT / "specimen-baselines" / specimen_digest / args.user_state_mode
         if specimen_digest else None
     )
-    editor_selected = args.suite == "editor-regression" and not args.scenario \
-        or args.scenario in perf_workloads.EDITOR_SCENARIOS
+    editor_names = [name for name in selected_scenarios if name in perf_workloads.EDITOR_SCENARIOS]
+    if editor_names and len(editor_names) != len(selected_scenarios):
+        parser.error("editor regression scenes cannot run with other scenarios")
+    editor_selected = bool(editor_names)
     default_root = local_specimen_root or (EDITOR_BASELINE_ROOT if editor_selected else None)
     args.baseline = args.baseline or (
         default_root / "render_perf.json" if default_root else BASELINE_PATH
@@ -1454,7 +1459,7 @@ def main() -> int:
         # Keep their Git search inside the private run.
         run(["git", "init", "-q", str(work)])
     if args.video:
-        scenario = args.scenario
+        scenario = selected_scenarios[0]
         if scenario == "markdown-callout-shift":
             fixture_name = "markdown-callout.md"
             source = "> [!NOTE] Callout words that wrap across several visual rows\n\nsentinel"

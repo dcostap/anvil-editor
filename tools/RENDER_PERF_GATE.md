@@ -11,7 +11,8 @@ hidden-window runner for editor benchmarks.
 
 Run this fixed matrix before renderer changes. It covers small and large C++
 files, wrapped and unwrapped code, Markdown Live Preview, generated Unicode,
-the copied `tests/fixtures/unicode-stress-test.txt`, and Fuzzy Searcher opening.
+the copied `tests/fixtures/unicode-stress-test.txt`, typing, smooth scrolling,
+and Fuzzy Searcher opening.
 The Unicode copy has SHA-256
 `49748c6a34c3315e726361143285c5e553cb9148aa7a62eecb44ad5a216d8960`.
 Each action uses a real Editor or Fuzzy Searcher View.
@@ -45,6 +46,22 @@ fixed files in a private app. This makes before/after comparisons repeatable.
 Editor cases run 40 actions. Fuzzy Searcher runs eight queries. `--frames`
 does not change these counts. The suite rejects `--actions`.
 
+Editor scenes use one of three actions:
+
+- **jump**: moves the caret between fixed lines without smooth scrolling.
+- **type**: types one character per action at the end of line 8. The
+  one-letter words stay below the autocomplete threshold, so no popup appears.
+- **scroll**: sends 30 wheel ticks down and 10 up through `core:scroll`. Each
+  action waits for smooth scrolling to settle, so animation frames are scored.
+
+To add scenes to an existing baseline, repeat `--scenario` and pass both
+update flags. Every other suite scene must already be in the baseline.
+
+Timing comparisons against a stored baseline are noisy on a desktop. Identical
+Lua code has moved `draw_emit_ms_p50` and `update_ms_p50` by up to 30% between
+sessions. Treat small timing flags as a prompt to rerun. Work counters, such as
+glyph bitmap misses, text commands, and packet misses, do not depend on timing.
+
 Run the stress workloads and their diagnostic replays:
 
 ```sh
@@ -53,7 +70,7 @@ python tools/run_render_perf_gate.py --suite stress --diagnose --report-only
 
 Use `--suite interactive` for search, file switching, file opens, and edits.
 Use `--suite diff` for the Diff View size variants.
-Use `--scenario NAME` for one workload.
+Use `--scenario NAME` for one workload. Repeat it to run several.
 
 For a short verification run:
 
