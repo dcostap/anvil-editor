@@ -49,6 +49,24 @@ test.describe("core.buffer batch edit primitive", function()
     test.equal(#tx.inverse_edits, 3)
   end)
 
+  test.it("keeps whole unchanged lines before, between, and after edits", function()
+    local buffer = Buffer()
+    set_text(buffer, "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8")
+    local old_lines = buffer.lines
+
+    buffer:apply_edits({
+      { line1 = 4, col1 = 1, line2 = 4, col2 = 1, text = "A" },
+      { line1 = 6, col1 = 1, line2 = 6, col2 = 3, text = "B" },
+    }, { type = "batch" })
+
+    test.same(buffer.lines, {
+      "l1\n", "l2\n", "l3\n", "Al4\n", "l5\n", "B\n", "l7\n", "l8\n",
+    })
+    test.same(old_lines, {
+      "l1\n", "l2\n", "l3\n", "l4\n", "l5\n", "l6\n", "l7\n", "l8\n",
+    })
+  end)
+
   test.it("rejects overlapping edits atomically", function()
     local buffer = Buffer()
     set_text(buffer, "abcdef")

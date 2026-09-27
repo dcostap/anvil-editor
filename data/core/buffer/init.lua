@@ -1417,9 +1417,15 @@ local function copy_array(t)
   return res
 end
 
+-- Presize whole-Buffer arrays so large files avoid repeated rehash growth.
+-- The PUC Lua build (-Djit=false) has no table.new and grows them instead.
+local has_table_new, table_new = pcall(require, "table.new")
+if not has_table_new then table_new = function() return {} end end
+
 local function line_starts_for(lines)
-  local starts, offset = {}, 0
-  for i = 1, #lines do
+  local count = #lines
+  local starts, offset = table_new(count, 0), 0
+  for i = 1, count do
     starts[i] = offset
     offset = offset + #lines[i]
   end
@@ -1492,12 +1498,10 @@ local function append_span(out, lines, line1, col1, line2, col2)
   end
   append_text_linewise(out, lines[line1]:sub(col1))
   if line2 > line1 + 1 then
+    -- Whole lines keep their boundaries; move the references in one call.
     local at = #out
-    for line = line1 + 1, line2 - 1 do
-      out[at] = lines[line]
-      at = at + 1
-    end
-    out[at] = ""
+    table.move(lines, line1 + 1, line2 - 1, at, out)
+    out[at + line2 - line1 - 1] = ""
   end
   append_text_linewise(out, lines[line2]:sub(1, col2 - 1))
 end
@@ -1507,11 +1511,7 @@ local function append_span_to_end(out, lines, line, col)
   append_text_linewise(out, lines[line]:sub(col))
   if line < #lines then
     -- Unchanged lines already have the correct boundaries. Copy references only.
-    local at = #out
-    for i = line + 1, #lines do
-      out[at] = lines[i]
-      at = at + 1
-    end
+    table.move(lines, line + 1, #lines, #out, out)
   end
 end
 
@@ -1672,7 +1672,8 @@ function Buffer:apply_edits(edits, opts)
     self:notify_text_change_listeners("before", { type = transaction.type, kind = "apply_edits", transaction = transaction })
     before_listener_ms = (system.get_time() - started) * 1000
   end
-  local out = { "" }
+  local out = table_new(#old_lines, 0)
+  out[1] = ""
   local cursor_line, cursor_col = 1, 1
   for _, edit in ipairs(normalized) do
     append_span(out, old_lines, cursor_line, cursor_col, edit.line1, edit.col1)
