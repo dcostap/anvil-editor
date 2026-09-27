@@ -136,7 +136,8 @@ typedef enum {
 typedef enum {
   EGlyphNone = 0,             // glyph is not loaded
   EGlyphXAdvance = (1 << 0L), // xadvance is loaded
-  EGlyphBitmap = (1 << 1L)    // bitmap is loaded
+  EGlyphBitmap = (1 << 1L),   // bitmap is loaded
+  EGlyphEmpty = (1 << 2L)     // glyph has no bitmap, such as a ligature spacer
 } ERenGlyphFlags;
 
 // metrics for a loaded glyph
@@ -1081,6 +1082,7 @@ static GlyphMetric *font_load_glyph_metric(RenFont *font, unsigned int glyph_id,
 
 static SDL_Surface *font_load_glyph_bitmap_impl(RenFont *font, unsigned int glyph_id, unsigned int bitmap_idx, GlyphMetric *metric) {
   if (metric->flags & EGlyphBitmap) return font->glyphs.atlas[metric->format][metric->atlas_idx].surfaces[metric->surface_idx];
+  if (metric->flags & EGlyphEmpty) return NULL;
 
   // render the glyph for a bitmap_idx
   FT_Int32 load_option = font->raster_policy.bitmap_load_flags;
@@ -1103,8 +1105,11 @@ static SDL_Surface *font_load_glyph_bitmap_impl(RenFont *font, unsigned int glyp
       (slot->bitmap.pixel_mode != FT_PIXEL_MODE_MONO
         && slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY
         && slot->bitmap.pixel_mode != FT_PIXEL_MODE_LCD
-        && slot->bitmap.pixel_mode != FT_PIXEL_MODE_BGRA))
+        && slot->bitmap.pixel_mode != FT_PIXEL_MODE_BGRA)) {
+    // remember the empty result so each redraw does not render the glyph again
+    metric->flags |= EGlyphEmpty;
     return NULL;
+  }
 
   float bitmap_scale = slot->bitmap.pixel_mode == FT_PIXEL_MODE_BGRA ? font->color_scale : 1.0f;
   unsigned int glyph_width = slot->bitmap.width;
@@ -1183,7 +1188,7 @@ static SDL_Surface *font_load_glyph_bitmap_impl(RenFont *font, unsigned int glyp
 
 static SDL_Surface *font_load_glyph_bitmap(RenFont *font, unsigned int glyph_id,
                                             unsigned int bitmap_idx, GlyphMetric *metric) {
-  if (metric->flags & EGlyphBitmap) {
+  if (metric->flags & (EGlyphBitmap | EGlyphEmpty)) {
     return font_load_glyph_bitmap_impl(font, glyph_id, bitmap_idx, metric);
   }
   uint64_t started = SDL_GetPerformanceCounter();
