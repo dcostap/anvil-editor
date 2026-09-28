@@ -151,15 +151,15 @@ function Service:notify(line1, line2, reason)
 end
 
 function Service:queue_ready_notification(line1, line2)
-  self.ready_line1 = math.min(self.ready_line1 or line1, line1)
-  self.ready_line2 = math.max(self.ready_line2 or line2 or line1, line2 or line1)
+  self.ready_ranges = self.ready_ranges or {}
+  self.ready_ranges[line1] = math.max(self.ready_ranges[line1] or line1, line2 or line1)
 end
 
 function Service:flush_ready_notifications()
-  if not self.ready_line1 then return end
-  local line1, line2 = self.ready_line1, self.ready_line2
-  self.ready_line1, self.ready_line2 = nil, nil
-  self:notify(line1, line2, "ready")
+  local ranges = self.ready_ranges
+  if not ranges then return end
+  self.ready_ranges = nil
+  for line1, line2 in pairs(ranges) do self:notify(line1, line2, "ready") end
 end
 
 function Service:release_heavy_caches(reason)
@@ -170,7 +170,7 @@ function Service:release_heavy_caches(reason)
   self.blocks = {}
   self.queue = {}
   self.queued = {}
-  self.ready_line1, self.ready_line2 = nil, nil
+  self.ready_ranges = nil
   self.active_block = nil
   self.render_lru_head, self.render_lru_tail = nil, nil
   self.diagnostics.blocks = 0
@@ -409,7 +409,7 @@ function Service:cancel_queued_work(reason)
   self.generation = self.generation + 1
   self.queue = {}
   self.queued = {}
-  self.ready_line1, self.ready_line2 = nil, nil
+  self.ready_ranges = nil
   self.active_block = nil
   self.diagnostics.queued_blocks = 0
   self.diagnostics.cancellations = self.diagnostics.cancellations + 1

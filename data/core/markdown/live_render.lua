@@ -1172,9 +1172,13 @@ local function reference_definitions(view)
     core.add_thread(function()
       coroutine.yield(0)
       if view.__markdown_live_attached and current_semantic_model(view) == instance then
-        prepare_reference_definitions(view, instance)
-        view:invalidate_line_render(PROVIDER_ID)
-        core.redraw = true
+        local definitions = prepare_reference_definitions(view, instance)
+        -- The pending lookup already returns an empty set. With no old or new
+        -- definitions, publication cannot change any reference presentation.
+        if next(definitions) or (cache and next(cache.definitions)) then
+          view:invalidate_line_render(PROVIDER_ID)
+          core.redraw = true
+        end
       end
       if view.__markdown_live_reference_prepare_pending == instance.generation then
         view.__markdown_live_reference_prepare_pending = nil
@@ -6219,9 +6223,17 @@ function provider:horizontal_extent(view)
   for _, node in ipairs(nodes or {}) do
     if node.type == "table" and not seen[node.id] then
       seen[node.id] = true
-      local table_node = markdown_tables.extend_semantic_table(
-        view, node.source.line1, node
-      )
+      local table_node = node
+      local source_line1, source_line2 = markdown_tables.source_bounds(view, node.source.line1)
+      local semantic_line2 = node.source.line2
+      if node.source.col2 == 1 and semantic_line2 > node.source.line1 then
+        semantic_line2 = semantic_line2 - 1
+      end
+      -- This node already came from the current table query. Only an empty-row
+      -- extension needs another semantic lookup for its source bounds.
+      if source_line1 ~= node.source.line1 or (source_line2 or 0) > semantic_line2 then
+        table_node = markdown_tables.extend_semantic_table(view, node.source.line1, node)
+      end
       local layout = table_layout(view, table_node, false)
       if layout then width = math.max(width, layout.total_width or 0) end
     end
@@ -6361,40 +6373,43 @@ function provider:on_text_transaction(view, transaction, line1, line2)
         break
       end
     end
-    if not opening_changed then
+    fence_line1, fence_line2 = owner.fence_service:on_text_transaction(transaction)
+    if not opening_changed and fence_line1 then
       for cached_line, captured in pairs(pre_edit_lines or {}) do
         local source = (view.buffer.lines[cached_line] or ""):gsub("\n$", "")
         if captured.fenced and captured.render_line and captured.source_text == source then
           cached_fence_lines[cached_line] = {
             revision = view.buffer.text_revision,
             source_text = source,
-            render_line = clone_render_line(captured.render_line),
+            render_line = captured.render_line,
           }
         end
       end
-      for cached_line, cached in pairs(
-        view.__line_render_cache and view.__line_render_cache.lines or {}
-      ) do
-        if owner.fence_service:contains_line(cached_line) then
-          local render = cached.render_line ~= false and cached.render_line or nil
+      local cached_lines = view.__line_render_cache and view.__line_render_cache.lines or {}
+      for cached_line = fence_line1, fence_line2 or fence_line1 do
+        local cached = cached_lines[cached_line]
+        local render = cached and cached.render_line or nil
+        if render and render.markdown_code_block
+          and owner.fence_service:contains_line(cached_line)
+        then
           local source = (view.buffer.lines[cached_line] or ""):gsub("\n$", "")
           if render and render.source_text == source then
             cached_fence_lines[cached_line] = {
               revision = view.buffer.text_revision,
               source_text = source,
-              render_line = clone_render_line(render),
+              render_line = render,
             }
           end
         end
       end
     end
-    fence_line1, fence_line2 = owner.fence_service:on_text_transaction(transaction)
     if fence_line1 then
       owner.pending_lines = owner.pending_lines or {}
       for cached_line, cached in pairs(cached_fence_lines) do
         if cached_line >= fence_line1 and cached_line <= (fence_line2 or fence_line1)
           and not owner.pending_lines[cached_line]
         then
+          cached.render_line = clone_render_line(cached.render_line)
           edit_visual_projection.store_pending_render(owner, cached_line, cached)
         end
       end
@@ -7366,12 +7381,9 @@ local function bind_fence_service(view, instance)
     if view.__markdown_live_owner ~= owner or not view.__markdown_live_attached then return end
     line1 = common.clamp(line1 or 1, 1, #view.buffer.lines)
     line2 = common.clamp(line2 or line1, line1, #view.buffer.lines)
-    owner.fence_invalidation_line1 = math.min(
-      owner.fence_invalidation_line1 or line1, line1
-    )
-    owner.fence_invalidation_line2 = math.max(
-      owner.fence_invalidation_line2 or line2, line2
-    )
+    owner.fence_invalidation_ranges = owner.fence_invalidation_ranges or {}
+    local ranges = owner.fence_invalidation_ranges
+    ranges[#ranges + 1] = { line1 = line1, line2 = line2 }
     owner.fence_invalidation_count = (owner.fence_invalidation_count or 0) + 1
     owner.fence_invalidation_serial = (owner.fence_invalidation_serial or 0) + 1
     local serial = owner.fence_invalidation_serial
@@ -7379,18 +7391,30 @@ local function bind_fence_service(view, instance)
       coroutine.yield(0.05)
       if view.__markdown_live_owner ~= owner or not view.__markdown_live_attached then return end
       if owner.fence_invalidation_serial ~= serial then return end
-      local pending_line1 = owner.fence_invalidation_line1
-      local pending_line2 = owner.fence_invalidation_line2
+      local pending = owner.fence_invalidation_ranges
       local count = owner.fence_invalidation_count or 0
-      owner.fence_invalidation_line1 = nil
-      owner.fence_invalidation_line2 = nil
+      owner.fence_invalidation_ranges = nil
       owner.fence_invalidation_count = nil
-      if not pending_line1 then return end
-      view:invalidate_line_render(PROVIDER_ID, pending_line1, pending_line2)
-      view:invalidate_visual_metrics(PROVIDER_ID, pending_line1, pending_line2)
+      if not pending then return end
+      table.sort(pending, function(a, b) return a.line1 < b.line1 end)
+      local merged = {}
+      for _, range in ipairs(pending) do
+        local previous = merged[#merged]
+        if previous and range.line1 <= previous.line2 + 1 then
+          previous.line2 = math.max(previous.line2, range.line2)
+        else
+          merged[#merged + 1] = range
+        end
+      end
+      -- Separate fences do not change the prose between them. Keep those gaps
+      -- out of wrapping work instead of invalidating one whole-Buffer span.
+      for _, range in ipairs(merged) do
+        view:invalidate_line_render(PROVIDER_ID, range.line1, range.line2)
+        view:invalidate_visual_metrics(PROVIDER_ID, range.line1, range.line2)
+      end
       core.log_quiet(
-        "Markdown Live Preview coalesced %d fence refresh(es) into lines %d-%d",
-        count, pending_line1, pending_line2
+        "Markdown Live Preview coalesced %d fence refresh(es) into %d range(s)",
+        count, #merged
       )
       core.redraw = true
     end)
@@ -7403,8 +7427,7 @@ local function unbind_fence_service(view)
   owner.fence_service:remove_listener(owner.fence_listener_id)
   owner.fence_service = nil
   owner.fence_listener_id = nil
-  owner.fence_invalidation_line1 = nil
-  owner.fence_invalidation_line2 = nil
+  owner.fence_invalidation_ranges = nil
   owner.fence_invalidation_count = nil
   owner.fence_invalidation_serial = (owner.fence_invalidation_serial or 0) + 1
 end

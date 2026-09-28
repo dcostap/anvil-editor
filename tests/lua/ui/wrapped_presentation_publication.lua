@@ -1,4 +1,5 @@
 local Buffer = require "core.buffer"
+local core = require "core"
 local TextView = require "core.textview"
 local wrapping = require "core.linewrapping"
 local test = require "core.test"
@@ -6,6 +7,66 @@ local test = require "core.test"
 test.describe("Wrapped presentation publication", function()
   test.after_each(function(context)
     if context.view then context.view:release_owned_features("test") end
+  end)
+
+  test.it("finishes a sliced presentation while one line keeps changing", function(context)
+    local buffer = Buffer()
+    buffer:insert(1, 1, string.rep("words words words words\n", 12))
+    local view = TextView(buffer)
+    context.view = view
+    view.size.x, view.size.y = 200, 400
+    local small = view:get_font()
+    local large = small:copy(small:get_size() * 2)
+    local font, changing_font = small, small
+    view:add_line_render_provider("changing-line", {
+      line_generation = function(_, _, line)
+        return line == 1 and changing_font or font
+      end,
+      render_line = function(_, _, line)
+        return { fragments = {
+          { source_col1 = 1, source_col2 = #buffer.lines[line],
+            text = buffer.lines[line]:gsub("\n$", ""),
+            font = line == 1 and changing_font or font },
+        } }
+      end,
+    })
+    view:set_wrapping_enabled(true)
+    wrapping.complete_async_reconstruction(view)
+    local before = view:get_visual_row_count_for_line(2)
+    local add_thread, get_time = core.add_thread, system.get_time
+    local jobs, clock, completed = {}, get_time(), false
+    -- Control the scheduler and slice clock, not layout state. Each turn can
+    -- prepare one line. Local presentation changes continue between turns.
+    core.add_thread = function(fn) jobs[#jobs + 1] = coroutine.create(fn) end
+    system.get_time = function() clock = clock + 1; return clock end
+    local ok, err = pcall(function()
+      font = large
+      view:invalidate_line_render("changing-line", nil, nil, {
+        defer_wrapped_reconstruction = true,
+        on_wrapped_reconstructed = function(success) completed = success end,
+      })
+      for turn = 1, #buffer.lines * 3 do
+        changing_font = turn % 2 == 0 and small or large
+        view:invalidate_line_render("changing-line", 1, 1)
+        local scheduled = jobs
+        jobs = {}
+        for _, job in ipairs(scheduled) do
+          local resumed, failure = coroutine.resume(job)
+          if not resumed then error(failure, 0) end
+          if coroutine.status(job) ~= "dead" then jobs[#jobs + 1] = job end
+        end
+        if completed then break end
+      end
+    end)
+    core.add_thread, system.get_time = add_thread, get_time
+    if not ok then error(err, 0) end
+    test.ok(completed, "local changes prevented the pending presentation from completing")
+    test.ok(view:get_visual_row_count_for_line(2) > before)
+    test.equal(view:get_visual_row_count_for_line(1),
+      changing_font == large and view:get_visual_row_count_for_line(2) or before,
+      "the repaired line must publish its latest wrap geometry")
+    test.equal(view:get_line_render(2).fragments[1].font, large)
+    test.equal(view:get_line_render(1).fragments[1].font, changing_font)
   end)
 
   test.it("adopts rendered text and wrapped rows together during a sliced rebuild", function(context)

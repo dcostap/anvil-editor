@@ -2061,12 +2061,13 @@ end
 
 function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
   opts = opts or {}
+  local previous_generation = self.__line_render_invalidation_generation or 0
   self.__line_render_snapshot_kind = nil
   self.__line_render_snapshot_id = nil
   self.__line_render_snapshot_lines = nil
   self.__line_render_snapshot_provider_generations = nil
   self.__line_render_invalidation_generation =
-    (self.__line_render_invalidation_generation or 0) + 1
+    previous_generation + 1
   local perf = package.loaded["core.perf"]
   if perf and perf.is_recording and perf.is_recording() and perf.add_detail then
     local caller = debug.getinfo(2, "Sl") or {}
@@ -2112,15 +2113,20 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
       local invalidated_layout_lines = layout_line2 - layout_line1 + 1
       local defer_wrapped_reconstruction = opts.defer_wrapped_reconstruction
         or invalidated_layout_lines > MAX_SYNC_LINE_RENDER_WRAP_LINES
+      local rebased = linewrapping.invalidate_async_range(
+        self, layout_line1, layout_line2, previous_generation
+      )
       local wrap_change
       if defer_wrapped_reconstruction then
         perf_frame_add("linewrapping_async_line_render_invalidation_calls", 1)
-        linewrapping.reconstruct_breaks_async(
-          self, self.wrapped_settings.font, self.wrapped_settings.width, {
-            budget_ms = opts.wrapped_reconstruction_budget_ms,
-            on_complete = opts.on_wrapped_reconstructed,
-          }
-        )
+        if not rebased or opts.on_wrapped_reconstructed then
+          linewrapping.reconstruct_breaks_async(
+            self, self.wrapped_settings.font, self.wrapped_settings.width, {
+              budget_ms = opts.wrapped_reconstruction_budget_ms,
+              on_complete = opts.on_wrapped_reconstructed,
+            }
+          )
+        end
       else
         wrap_change = linewrapping.update_breaks(
           self, layout_line1, layout_line2, 0

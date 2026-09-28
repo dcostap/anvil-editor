@@ -1014,9 +1014,24 @@ function LineWrapping.reconstruct_breaks(textview, default_font, width)
   perf_elapsed("linewrapping_reconstruct_breaks_ms", perf_start)
 end
 
----Rebuild a wrapped layout in bounded main-thread slices and atomically adopt
----it when complete. The existing layout remains readable while the new one is
----prepared, avoiding a whole-Buffer publication stall.
+---Keep prepared lines outside a local invalidation range.
+---Restart instead when the line count or invalidation sequence changed.
+function LineWrapping.invalidate_async_range(textview, line1, line2, previous_generation)
+  local token = textview.__async_wrap_reconstruction
+  if not token or token.buffer ~= textview.buffer
+    or token.line_count ~= #textview.buffer.lines
+    or token.line_render_invalidation_generation ~= previous_generation
+  then return false end
+  for line = math.max(1, line1), math.min(line2 or line1, token.next_line - 1) do
+    token.dirty_lines[line] = true
+  end
+  token.revision = textview.buffer.text_revision or 0
+  token.line_render_invalidation_generation = textview.__line_render_invalidation_generation or 0
+  perf_frame_add("linewrapping_async_reconstruct_rebases", 1)
+  return true
+end
+
+---Rebuild in bounded slices. Publish rendered plans and wrapped rows together.
 function LineWrapping.reconstruct_breaks_async(textview, default_font, width, opts)
   opts = opts or {}
   if width == math.huge then
@@ -1031,10 +1046,9 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     revision = buffer.text_revision or 0,
     line_count = #buffer.lines,
     next_line = 1,
-    wrapped_lines = {},
-    wrapped_line_to_idx = {},
+    line_breaks = {},
+    dirty_lines = {},
     wrapped_line_offsets = {},
-    wrapped_row_count = 0,
     work_ms = 0,
     yields = 0,
     settings = wrap_settings_signature(textview, default_font, width),
@@ -1073,9 +1087,19 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
 
   local function finish()
     if not current() then return false end
+    local wrapped_lines, wrapped_line_to_idx = {}, {}
+    local wrapped_row_count = 0
+    for line = 1, token.line_count do
+      wrapped_line_to_idx[line] = wrapped_row_count + 1
+      for _, col in ipairs(token.line_breaks[line]) do
+        wrapped_row_count = wrapped_row_count + 1
+        wrapped_lines[wrapped_row_count * 2 - 1] = line
+        wrapped_lines[wrapped_row_count * 2] = col
+      end
+    end
     local viewport_anchor = textview:capture_viewport_anchor()
-    textview.wrapped_lines = token.wrapped_lines
-    textview.wrapped_line_to_idx = token.wrapped_line_to_idx
+    textview.wrapped_lines = wrapped_lines
+    textview.wrapped_line_to_idx = wrapped_line_to_idx
     textview.wrapped_line_offsets = token.wrapped_line_offsets
     textview.wrapped_presentations = token.measurement.presentations
     textview.wrapped_settings = token.settings
@@ -1089,7 +1113,7 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     perf_frame_add("linewrapping_async_reconstruct_commits", 1)
     core.log_quiet(
       "Committed sliced wrapped layout for %s: lines=%d rows=%d work_ms=%.3f yields=%d",
-      buffer:get_name(), token.line_count, token.wrapped_row_count,
+      buffer:get_name(), token.line_count, wrapped_row_count,
       token.work_ms, token.yields
     )
     if opts.on_complete then
@@ -1137,21 +1161,22 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     token.measurement.perf_active = perf_diagnostics_active()
     local started = system.get_time()
     local lines = 0
-    while token.next_line <= token.line_count do
-      local line = token.next_line
+    while token.next_line <= token.line_count or next(token.dirty_lines) do
+      -- Finish the forward pass before repairs. A changing early line must
+      -- not consume every slice and prevent later lines from being prepared.
+      local dirty_line = token.next_line > token.line_count and next(token.dirty_lines) or nil
+      local line = dirty_line or token.next_line
       local breaks, offset = LineWrapping.compute_line_breaks(
         buffer, default_font, line, width, token.measurement.mode,
         textview, token.measurement
       )
+      token.line_breaks[line] = breaks
       token.wrapped_line_offsets[line] = offset
-      token.wrapped_line_to_idx[line] = token.wrapped_row_count + 1
-      for _, col in ipairs(breaks) do
-        token.wrapped_row_count = token.wrapped_row_count + 1
-        local row_offset = token.wrapped_row_count * 2
-        token.wrapped_lines[row_offset - 1] = line
-        token.wrapped_lines[row_offset] = col
+      if dirty_line then
+        token.dirty_lines[line] = nil
+      else
+        token.next_line = line + 1
       end
-      token.next_line = line + 1
       lines = lines + 1
       if (system.get_time() - started) * 1000 >= budget_ms then break end
     end
@@ -1159,7 +1184,7 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     token.work_ms = token.work_ms + work_ms
     perf_frame_add("linewrapping_async_reconstruct_lines", lines)
     perf_frame_add("linewrapping_async_reconstruct_ms", work_ms)
-    if token.next_line > token.line_count then
+    if token.next_line > token.line_count and not next(token.dirty_lines) then
       finish()
       return "complete"
     end
