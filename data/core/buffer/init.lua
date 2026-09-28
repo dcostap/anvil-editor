@@ -1549,20 +1549,43 @@ local function edit_position_map(old_lines, edits, index)
       line, col, pos = line + 1, 1, nl + 1
     end
   end
+  -- Sorted edits that do not overlap allow binary searches. shifts[i] is the
+  -- byte delta after edit i. Planned edits can overlap, so keep the scan.
+  local shifts, ordered = {}, true
   for i, edit in ipairs(edits) do
     local line, col = translate_position(edit.line1, edit.col1, old_line, old_col, new_line, new_col)
     local end_line, end_col = advance(line, col, edit.text, #edit.text)
     spans[i] = { start = edit.start_offset + delta, line = line, col = col,
       end_line = end_line, end_col = end_col }
     delta = delta + #edit.text - (edit.end_offset - edit.start_offset)
+    shifts[i] = delta
+    if i > 1 and edits[i - 1].end_offset > edit.start_offset then ordered = false end
     old_line, old_col = edit.line2, edit.col2
     new_line, new_col = end_line, end_col
   end
+  local count = #spans
   local new_total = total + delta
   local function position(offset)
     -- The last byte is the final caret position, not a phantom trailing line.
     offset = common.clamp(offset, 0, math.max(0, new_total - 1))
     local shift, ol, oc, nl, nc = 0, 1, 1, 1, 1
+    if ordered then
+      -- The last edit that starts at or before the offset decides the mapping.
+      local lo, hi = 0, count
+      while lo < hi do
+        local mid = math.floor((lo + hi + 1) / 2)
+        if spans[mid].start <= offset then lo = mid else hi = mid - 1 end
+      end
+      if lo > 0 then
+        local edit, span = edits[lo], spans[lo]
+        if offset < span.start + #edit.text then
+          return advance(span.line, span.col, edit.text, offset - span.start)
+        end
+        shift, ol, oc, nl, nc = shifts[lo], edit.line2, edit.col2, span.end_line, span.end_col
+      end
+      local line, col = offset_to_position(index, offset - shift)
+      return translate_position(line, col, ol, oc, nl, nc)
+    end
     for i, edit in ipairs(edits) do
       local span = spans[i]
       if offset < span.start then break end
@@ -1579,6 +1602,24 @@ local function edit_position_map(old_lines, edits, index)
     line, col = sanitize_position_in_lines(old_lines, line, col)
     local offset = position_to_offset(index, line, col)
     local shift = 0
+    if ordered then
+      -- End offsets do not decrease. Edits that end before the offset only shift it.
+      local lo, hi = 1, count + 1
+      while lo < hi do
+        local mid = math.floor((lo + hi) / 2)
+        if edits[mid].end_offset >= offset then hi = mid else lo = mid + 1 end
+      end
+      shift = shifts[lo - 1] or 0
+      local edit = edits[lo]
+      if edit and offset >= edit.start_offset then
+        if edit.start_offset == edit.end_offset and offset == edit.start_offset then
+          if affinity == "after" then shift = shift + #edit.text end
+        else
+          return position(edit.start_offset + shift)
+        end
+      end
+      return position(offset + shift)
+    end
     for _, edit in ipairs(edits) do
       if offset < edit.start_offset then break end
       if edit.start_offset == edit.end_offset and offset == edit.start_offset then
