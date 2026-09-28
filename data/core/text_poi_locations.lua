@@ -89,13 +89,16 @@ local function starts_in_uri(line, col)
   return token:match("%a[%w+.-]*:") ~= nil
 end
 
+-- Every supported source location puts its line number directly after ":"
+-- or "(", or after "line" and whitespace. Most editor text, including URLs
+-- and prose with numbers, can skip all pattern scans. Trailing line breaks
+-- cannot change the answer because no digit follows them.
+local function may_have_location(line)
+  return line:find(":%d") or line:find("%(%d") or line:find("line%s+%d")
+end
+
 local function add_line_matches(list, seen, limit, line, line_no)
-  -- Every supported source location puts its line number directly after ":"
-  -- or "(", or after "line" and whitespace. Most editor text, including URLs
-  -- and prose with numbers, can skip all pattern scans.
-  if not (line:find(":%d") or line:find("%(%d") or line:find("line%s+%d")) then
-    return
-  end
+  if not may_have_location(line) then return end
   local function add(col1, col2, path, target_line, target_col, label)
     if #list < limit and not starts_in_uri(line, col1) then
       add_candidate(
@@ -208,11 +211,14 @@ local function sort(candidates)
 end
 
 function locations.extract_line_candidates(text, line_no, limit)
+  text = tostring(text or "")
+  -- File scans call this for every line. Skip the copy without its line break.
+  if not may_have_location(text) then return {} end
   limit = math.max(0, math.floor(tonumber(limit) or math.huge))
   local candidates = {}
   add_line_matches(
     candidates, {}, limit,
-    tostring(text or ""):gsub("[\r\n]+$", ""),
+    text:gsub("[\r\n]+$", ""),
     math.max(1, math.floor(tonumber(line_no) or 1))
   )
   return sort(candidates)
