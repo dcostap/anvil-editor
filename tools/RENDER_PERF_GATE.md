@@ -65,6 +65,16 @@ can change which asynchronous result arrives before a capture. A baseline is
 written only when every scene is stable, so allow up to nine throughput runs. Work counters, such as
 glyph bitmap misses, text commands, and packet misses, do not depend on timing.
 
+Comparisons replay the saved baseline app beside each candidate repetition.
+Run order alternates. Each process uses a separate private user directory.
+Timing thresholds compare these current reference measurements, not old desktop timings.
+The report retains both sets of repetitions. Pixel and state checks still use the accepted baseline.
+A reference crash, timeout, or state mismatch fails the comparison.
+
+Keep the baseline run's `app` directory unchanged. It contains the reference executable and runtime data.
+The runner rejects a missing snapshot or changed executable. Establish a new baseline if that snapshot is lost.
+Do not replace reference files with the current build to make a comparison pass.
+
 Run the stress workloads and their diagnostic replays:
 
 ```sh

@@ -1062,6 +1062,47 @@ def run_case_safely(**kwargs: Any) -> dict[str, Any]:
         }
 
 
+def run_case_pair(reference_exe: Path | None, references: dict[str, list], **kwargs: Any) -> dict[str, Any]:
+    if reference_exe is None:
+        return run_case_safely(**kwargs)
+    directory = kwargs["run_dir"]
+    reference_args = dict(kwargs, exe=reference_exe, screenshot=False,
+                          run_dir=directory.with_name("reference-" + directory.name),
+                          user=kwargs["user"].with_name("reference-" + kwargs["user"].name))
+    # Alternate order so the candidate does not always receive the warmer machine.
+    candidate = None
+    if len(references.get(kwargs["mode"], [])) % 2 == 1:
+        candidate = run_case_safely(**kwargs)
+    reference = run_case_safely(**reference_args)
+    references.setdefault(kwargs["mode"], []).append(reference)
+    if reference.get("status") != "passed":
+        return dict(reference, failure_kind="reference_" + reference.get("failure_kind", "failed"))
+    return candidate if candidate is not None else run_case_safely(**kwargs)
+
+
+def summarize_reference(runs: dict[str, list]) -> dict[str, Any]:
+    throughput, metrics = runs["throughput"], runs["metrics"]
+    result = {
+        "active_fps": statistics.median(item["active_fps"] for item in throughput),
+        "active_fps_runs": [item["active_fps"] for item in throughput],
+        "metrics": summarize_runs([item["metrics"] for item in metrics]),
+        "lifecycle": summarize_case_lifecycle(throughput),
+        "state": throughput[0].get("state"),
+        "actions": {
+            name: summarize_runs([item["actions"][name] for item in throughput])
+            for name in throughput[0].get("actions", {})
+        },
+        "runs": runs,
+    }
+    if runs.get("paced-metrics"):
+        paced = runs["paced-metrics"]
+        result["paced"] = {
+            "active_fps": statistics.median(item["active_fps"] for item in paced),
+            "metrics": summarize_runs([item["metrics"] for item in paced]),
+        }
+    return result
+
+
 def compare_image(baseline: Path, current: Path, output_json: Path) -> dict[str, Any]:
     completed = run([
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -1134,6 +1175,7 @@ def compare_performance(current: dict[str, Any], baseline: dict[str, Any]) -> li
                 "current_state": now.get("state"),
                 "baseline_state": before.get("state"),
             })
+        before = now.get("reference", before)
         pairs = {"active_fps": (now["active_fps"], before["active_fps"])}
         lower_limits = dict(LOWER_IS_BETTER)
         if scenario in perf_workloads.EDITOR_SCENARIOS:
@@ -1244,6 +1286,7 @@ def markdown_report(report: dict[str, Any]) -> str:
         f"- Suite: `{report['suite']}`",
         f"- Renderer: `{report.get('renderer', 'd3d11')}`",
         f"- Performance baseline: `{report.get('baseline_status', 'compared')}`",
+        f"- Timing reference: `{'paired replay' if report.get('reference_exe') else 'stored measurements'}`",
         f"- Result: **{verdict}**",
         f"- Absolute budget flags: {sum(len(case.get('red_flags', [])) for case in report['scenarios'].values())}",
         f"- Run directory: `{report['run_dir']}`",
@@ -1437,6 +1480,13 @@ def main() -> int:
     baseline = None
     if args.baseline.exists():
         baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+    reference_exe = None
+    if baseline and uses_performance_baseline(args.renderer) and not (args.report_only or args.update_baseline):
+        reference_exe = Path(baseline["run_dir"]) / "app" / "bin" / "anvil.exe"
+        if not reference_exe.is_file():
+            parser.error("baseline runtime snapshot is missing; establish a fresh baseline")
+        if sha256(reference_exe) != baseline.get("machine", {}).get("exe_sha256"):
+            parser.error("baseline executable changed; establish a fresh baseline")
     baseline_scenario_names = set(
         SPECIMEN_SCENARIOS if specimen_selected else
         perf_workloads.EDITOR_SCENARIOS if editor_selected else STANDARD_SCENARIOS
@@ -1536,6 +1586,7 @@ def main() -> int:
         "passed": True,
         "diagnose": args.diagnose,
         "report_only": args.report_only,
+        "reference_exe": str(reference_exe) if reference_exe else None,
         "budgets": {"frame_ms": args.frame_budget_ms, "action_ms": args.action_budget_ms},
         "workload_manifests": workload_manifests,
     }
@@ -1584,6 +1635,7 @@ def main() -> int:
             "action_timeout_seconds": args.action_timeout_seconds,
         }
         throughput_runs = []
+        reference_runs: dict[str, list] = {}
         case_failures = []
         def case_user(mode: str, index: int) -> Path:
             if args.user_state_mode == "reuse":
@@ -1592,7 +1644,7 @@ def main() -> int:
         state_primer = None
         if args.user_state_mode == "reuse":
             print(f"[{scenario}] user-state primer", flush=True)
-            state_primer = run_case_safely(
+            state_primer = run_case_pair(reference_exe, {},
                 exe=exe, work=work, user=case_user("primer", 0),
                 fixture=fixture, external_fixture=external_fixture,
                 tab_dir=tab_dir, scenario=scenario, settings=settings,
@@ -1615,7 +1667,7 @@ def main() -> int:
         print(f"[{scenario}] throughput runs: {runs} minimum", flush=True)
         while True:
             index = len(throughput_runs) + 1
-            case = run_case_safely(
+            case = run_case_pair(reference_exe, reference_runs,
                 exe=exe, work=work, user=case_user("throughput", index),
                 fixture=fixture, external_fixture=external_fixture,
                 tab_dir=tab_dir, scenario=scenario, settings=settings,
@@ -1636,6 +1688,8 @@ def main() -> int:
             if len(throughput_runs) < runs:
                 continue
             noise = relative_mad([item["active_fps"] for item in throughput_runs])
+            if reference_runs:
+                noise = max(noise, relative_mad([item["active_fps"] for item in reference_runs["throughput"]]))
             if (args.report_only or not uses_performance_baseline(args.renderer)
                     or noise <= 0.06 or len(throughput_runs) >= args.max_runs):
                 break
@@ -1657,7 +1711,7 @@ def main() -> int:
                 index == metrics_runs and settings["visual"] and not args.no_visual
                 and not settings.get("capture_actions")
             )
-            case = run_case_safely(
+            case = run_case_pair(reference_exe, reference_runs,
                 exe=exe, work=work, user=case_user("metrics", index),
                 fixture=fixture, external_fixture=external_fixture,
                 tab_dir=tab_dir, scenario=scenario, settings=settings,
@@ -1786,7 +1840,7 @@ def main() -> int:
             print(f"[{scenario}] present-paced runs: {paced_runs}", flush=True)
             paced_results = []
             for index in range(1, paced_runs + 1):
-                case = run_case_safely(
+                case = run_case_pair(reference_exe, reference_runs,
                     exe=exe, work=work, user=case_user("paced", index),
                     fixture=fixture, external_fixture=external_fixture,
                     tab_dir=tab_dir, scenario=scenario, settings=settings,
@@ -1826,6 +1880,16 @@ def main() -> int:
                 / scenario_report["paced"]["target_fps"]
                 if scenario_report["paced"]["target_fps"] else 0.0
             )
+        if reference_runs:
+            scenario_report["reference"] = summarize_reference(reference_runs)
+            reference_states = [item.get("state") for group in reference_runs.values() for item in group]
+            if not states_consistent(reference_states + [scenario_report["state"]]):
+                scenario_report["status"] = "failed"
+                scenario_report["failures"] = [{"failure_kind": "reference_state_instability"}]
+                report["passed"] = False
+            if relative_mad(scenario_report["reference"]["active_fps_runs"]) > 0.06:
+                scenario_report["throughput_stable"] = False
+                report["passed"] = False
         if visual_run:
             current = Path(visual_run["screenshot"])
             golden = golden_root / f"{scenario}-{args.renderer}.png"

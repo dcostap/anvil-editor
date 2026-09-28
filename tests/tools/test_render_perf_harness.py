@@ -31,6 +31,44 @@ gate = load_gate()
 
 
 class PerformanceBaselinePolicyTests(unittest.TestCase):
+    def test_reference_replay_has_separate_user_state_and_cannot_hide_a_failure(self):
+        reference_exe = Path("reference/anvil.exe")
+        arguments = dict(exe=Path("candidate/anvil.exe"), user=Path("users/case"),
+                         run_dir=Path("runs/throughput-1"), mode="throughput", screenshot=False)
+
+        def launch(**kwargs):
+            return {"status": "passed", "exe": kwargs["exe"], "user": kwargs["user"]}
+
+        references = {}
+        with patch.object(gate, "run_case_safely", side_effect=launch):
+            candidate = gate.run_case_pair(reference_exe, references, **arguments)
+        reference = references["throughput"][0]
+        self.assertEqual(candidate["exe"], arguments["exe"])
+        self.assertEqual(reference["exe"], reference_exe)
+        self.assertNotEqual(candidate["user"], reference["user"])
+
+        def failed_reference(**kwargs):
+            return ({"status": "failed", "failure_kind": "watchdog_timeout"}
+                    if kwargs["exe"] == reference_exe else launch(**kwargs))
+
+        with patch.object(gate, "run_case_safely", side_effect=failed_reference):
+            result = gate.run_case_pair(reference_exe, {}, **arguments)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failure_kind"], "reference_watchdog_timeout")
+
+    def test_comparison_uses_the_replayed_reference_without_hiding_a_real_slowdown(self):
+        old = {"status": "passed", "active_fps": 100, "metrics": {"frame_ms_p50": 10}}
+        reference = {"status": "passed", "active_fps": 80, "metrics": {"frame_ms_p50": 12.5}}
+        current = {**reference, "reference": reference}
+        baseline = {"scenarios": {"case": old}}
+        report = {"scenarios": {"case": current}}
+        self.assertFalse(any(x["status"] == "regression"
+                             for x in gate.compare_performance(report, baseline)))
+        current["active_fps"] = 40
+        current["metrics"] = {"frame_ms_p50": 25}
+        self.assertTrue(any(x["status"] == "regression"
+                            for x in gate.compare_performance(report, baseline)))
+
     def test_short_legacy_run_cannot_claim_a_performance_comparison(self):
         with patch.object(sys, "argv", ["gate", "--scenario", "wrapped-document-steady",
                                       "--frames", "2", "--warmup-frames", "1"]):
