@@ -4855,8 +4855,6 @@ local function fragment_is_hovered(fragment)
   return fragment.hovered or (fragment.hover_group and fragment.hover_group.hovered)
 end
 
-local LINK_HOVER_FILL_DURATION = 0.08
-
 ---Discard normalized fragment copies after mutating a render line in place.
 ---@param render_line table?
 function TextView:invalidate_line_render_fragment_normalization(render_line)
@@ -5958,8 +5956,6 @@ local function update_render_hover_state(view, x, y)
   end
 
   if view.hovered_render_fragment ~= hovered_fragment then
-    local previous_group = view.hovered_render_fragment
-      and view.hovered_render_fragment.hover_group
     if view.hovered_render_fragment then
       view.hovered_render_fragment.hovered = nil
       if view.hovered_render_fragment.hover_group then
@@ -5969,13 +5965,6 @@ local function update_render_hover_state(view, x, y)
     view.hovered_render_fragment = hovered_fragment
     if hovered_fragment then
       hovered_fragment.hovered = true
-      local fill = hovered_fragment.hover_group or hovered_fragment
-      if (hovered_fragment.hover_fill_up or hovered_fragment.hover_group)
-        and (not hovered_fragment.hover_group or previous_group ~= hovered_fragment.hover_group)
-      then
-        fill.hover_fill_start = system.get_time()
-        fill.hover_fill_done = nil
-      end
       if hovered_fragment.hover_group then hovered_fragment.hover_group.hovered = true end
     end
     core.redraw = true
@@ -6364,15 +6353,6 @@ function TextView:update()
   local perf_active = core.perf_frame_stats ~= nil
   local update_start = perf_active and system.get_time()
   local file_open_update = file_open_view_update_begin(self)
-
-  local hovered = self.hovered_render_fragment
-  local fill = hovered and (hovered.hover_group or hovered)
-  if fill and fill.hover_fill_start and not fill.hover_fill_done then
-    if system.get_time() - fill.hover_fill_start >= LINK_HOVER_FILL_DURATION then
-      fill.hover_fill_done = true
-    end
-    core.redraw = true
-  end
 
   -- clear cache if font or indent size changed
   local phase_start = perf_active and system.get_time()
@@ -6994,18 +6974,8 @@ local function draw_render_fragment_background(fragment, x, y, width, height, fo
     renderer.draw_rect(x, y, width, height, fragment.background)
   end
   if fragment_is_hovered(fragment) and fragment_uses_hand_cursor(fragment) then
-    local hover_y, hover_height = y, height
-    local fill = fragment.hover_group or fragment
-    if fragment.hover_fill_up and fill.hover_fill_start then
-      local progress = math.min(1,
-        (system.get_time() - fill.hover_fill_start) / LINK_HOVER_FILL_DURATION
-      )
-      local initial = math.min(height, math.max(1, math.floor(2 * SCALE)))
-      hover_height = initial + (height - initial) * progress
-      hover_y = y + height - hover_height
-    end
     renderer.draw_rect(
-      x, hover_y, width, hover_height,
+      x, y, width, height,
       fragment.hover_background or style.interactive_hover_background
     )
   end
