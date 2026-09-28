@@ -5849,82 +5849,54 @@ end
 function live._markdown_code_copy_button_fragment(view, fenced)
   local block_id = live._markdown_code_block_id(fenced)
   local line_height = fenced_code_line_height(view)
-  local button_size = math.max(12 * SCALE, math.floor(line_height * 0.72))
-  local hit_padding = math.max(2 * SCALE, math.floor(button_size * 0.16))
-  local hit_size = button_size + hit_padding * 2
-  local right_padding = math.max(6 * SCALE, math.floor(line_height * 0.30))
-
-  local function draw_outline(x, y, size, thickness, color)
-    renderer.draw_rect(x, y, size, thickness, color)
-    renderer.draw_rect(x, y + size - thickness, size, thickness, color)
-    renderer.draw_rect(x, y + thickness, thickness, size - thickness * 2, color)
-    renderer.draw_rect(
-      x + size - thickness, y + thickness,
-      thickness, size - thickness * 2, color
-    )
-  end
+  local font = style.get_small_font(style.font)
+  local button_width = math.max(font:get_width("Copy"), font:get_width("Copied"))
+    + 14 * SCALE
+  local button_height = math.min(line_height, font:get_height() + 5 * SCALE)
+  local hit_padding = 3 * SCALE
+  local hit_width = button_width + hit_padding * 2
 
   return {
     source_col1 = 1,
     source_col2 = 1,
     text = "",
     width = 0,
-    hit_width = hit_size,
+    hit_width = hit_width,
     layout_x = math.max(
       0,
       view:get_presentation_viewport_width() - view:get_gutter_width()
-        - button_size - hit_padding - right_padding
+        - hit_width - 8 * SCALE
     ),
     markdown_code_copy_button = true,
     markdown_code_block_id = block_id,
     widget = {
-      width = hit_size,
-      height = hit_size,
+      width = hit_width,
+      height = line_height,
       cursor = "hand",
       suppress_hover_overlay = true,
       draw = function(_, fragment, x, y, row_height)
         local owner = view.__markdown_live_owner
         if not owner or owner.markdown_code_copy_hover_id ~= block_id then return end
         local button_x = x + hit_padding
-        local button_y = y + math.max(0, (row_height - button_size) / 2)
+        local button_y = y + math.max(0, (row_height - button_height) / 2)
         local feedback = owner.markdown_code_copy_feedback_token
           and owner.markdown_code_copy_feedback_until
           and owner.markdown_code_copy_feedback_block_id == block_id
           and system.get_time() < owner.markdown_code_copy_feedback_until
-        local background = { table.unpack(
-          feedback and style.good or style.markdown_live_code_header
-        ) }
-        background[4] = (background[4] or 255) * (
-          feedback and 0.68 or (fragment.hovered and 0.55 or 0.32)
-        )
-        renderer.draw_rounded_rect(
-          button_x, button_y, button_size, button_size,
-          math.max(2 * SCALE, button_size * 0.18), background
-        )
-
-        local foreground = { table.unpack(style.text) }
-        foreground[4] = (foreground[4] or 255) * (feedback and 1 or 0.9)
-        local thickness = math.max(1, math.floor(SCALE))
-        if feedback then
-          local glyph = "✓"
-          renderer.draw_text(
-            style.font, glyph,
-            button_x + math.floor((button_size - style.font:get_width(glyph)) / 2),
-            button_y + math.floor((button_size - style.font:get_height()) / 2),
-            foreground
+        if fragment.hovered then
+          renderer.draw_rounded_rect(
+            button_x, button_y, button_width, button_height,
+            4 * SCALE, style.interactive_hover_background
           )
-        else
-          local icon_size = math.max(9 * SCALE, math.floor(button_size * 0.58))
-          local icon_offset = math.max(2 * SCALE, math.floor(icon_size * 0.24))
-          local icon_x = button_x + math.floor(
-            (button_size - icon_size - icon_offset) / 2
-          )
-          local icon_y = button_y + math.floor(
-            (button_size - icon_size - icon_offset) / 2
-          )
-          draw_outline(icon_x + icon_offset, icon_y, icon_size, thickness, foreground)
-          draw_outline(icon_x, icon_y + icon_offset, icon_size, thickness, foreground)
         end
+        local label = feedback and "Copied" or "Copy"
+        renderer.draw_text(
+          font, label,
+          button_x + math.floor((button_width - font:get_width(label)) / 2),
+          button_y + math.floor((button_height - font:get_height()) / 2),
+          feedback and style.good or fragment.hovered and style.text
+            or style.markdown_live_code_header
+        )
       end,
       on_mouse_pressed = function(_, owner, _, button)
         if button ~= "left" then return false end
