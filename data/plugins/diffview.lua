@@ -2687,7 +2687,11 @@ local function open_diff_source_at_caret()
   local line, col = with_textview_selection(side_view, function()
     return side_view.buffer:get_selection(false)
   end)
-  if content.kind == "fragment" then line = FragmentBuffer.map_line(side_view.buffer, line) end
+  if content.kind == "fragment" then
+    line = FragmentBuffer.map_line(side_view.buffer, line)
+  elseif content.source_line then
+    line = content.source_line + line - 1
+  end
   local buffer = content.kind == "buffer" and content.buffer
     or content.kind == "fragment" and content.buffer
     or core.open_buffer(path)

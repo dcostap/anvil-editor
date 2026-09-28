@@ -347,6 +347,33 @@ test.describe("DiffView batch behavior", function()
     test.equal(line, 2)
   end)
 
+  test.it("opens an offset text Diff source at its source line", function(context)
+    local path = core.project_absolute_path("tmp-diff-open-offset-source.txt")
+    pcall(os.remove, path)
+    write_file(path, "one\ntwo\nthree\nfour\nfive\n")
+    context.cleanup_shared_file = path
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.text("other", { editable = false }),
+        diffview.content.text("old three\nold four", {
+          source_path = path, source_line = 3, editable = false,
+        }),
+      },
+    }, true))
+    panes.place(function() return view end, { placement = "current", focus = true })
+    view.buffer_view_b:with_selection_state(function()
+      view.buffer_view_b.buffer:set_selection(2, 1)
+    end)
+    core.set_active_view(view.buffer_view_b)
+
+    test.ok(command.perform("diff:open_file_at_caret"))
+    local editor = panes.active().current_view
+    test.ok(editor:is(Editor))
+    test.equal(editor.buffer, core.open_buffer(path))
+    local line = editor:with_selection_state(function() return editor.buffer:get_selection() end)
+    test.equal(line, 4)
+  end)
+
   test.it("compares clipboard text with an editable mapped Untitled selection", function(context)
     local source = Buffer(nil, nil, true)
     source:insert(1, 1, "before selected after")
