@@ -2995,18 +2995,21 @@ local function task_checkbox_widget(
     suppress_hover_background = true,
     checked = checked,
     draw = function(_, fragment, x, y, visual_row_height)
+      local visual_size = math.max(
+        8, box_size - math.max(1, math.floor(3 * SCALE))
+      )
       local is_checked = fragment.checked
       local checkbox_color = is_checked and style.markdown_live_task_checked
         or style.markdown_live_task_unchecked
       local border = math.max(1, math.floor(SCALE))
       local box_x = x + box_area_x + math.floor((box_area_width - box_size) / 2)
-      local box_y = y + math.floor((visual_row_height - box_size) / 2)
-      local radius = math.max(border, math.floor(box_size * 0.22))
+      local box_y = y + math.floor((visual_row_height - visual_size) / 2)
+      local radius = math.max(border, math.floor(visual_size * 0.22))
       if fragment.hovered then
         local hover_padding = math.max(2, math.floor(2 * SCALE))
         renderer.draw_rounded_rect(
           box_x - hover_padding, box_y - hover_padding,
-          box_size + hover_padding * 2, box_size + hover_padding * 2,
+          visual_size + hover_padding * 2, visual_size + hover_padding * 2,
           radius + hover_padding, style.markdown_live_task_hover
         )
         if not is_checked then
@@ -3014,15 +3017,15 @@ local function task_checkbox_widget(
         end
       end
       renderer.draw_rounded_rect(
-        box_x, box_y, box_size, box_size, radius, checkbox_color
+        box_x, box_y, visual_size, visual_size, radius, checkbox_color
       )
       if is_checked then
         draw_task_checkmark(
-          box_x, box_y, box_size, style.markdown_live_task_checkmark,
+          box_x, box_y, visual_size, style.markdown_live_task_checkmark,
           checkmark_font
         )
       else
-        local inner_size = math.max(1, box_size - border * 2)
+        local inner_size = math.max(1, visual_size - border * 2)
         renderer.draw_rounded_rect(
           box_x + border, box_y + border,
           inner_size, inner_size, math.max(0, radius - border),
