@@ -1341,7 +1341,7 @@ local function image_only_render_line(view, text, line, span, active)
       -- source anchor participate in ordinary selection geometry.
       image.image_block = true
       image.image_block_col1 = span.col1
-      image.image_block_col2 = span.col2
+      image.image_block_col2 = #text + 1
       image.image_block_active = true
       image.image_block_layout_x = leading_width
       fragments[#fragments + 1] = image
@@ -1354,6 +1354,22 @@ local function image_only_render_line(view, text, line, span, active)
   end
   if image.widget and span.col1 > 1 then
     image.draw_x_offset = markdown_live_body_font(view):get_width(text:sub(1, span.col1 - 1))
+  end
+  if image.widget then
+    image.source_col1, image.source_col2 = #text + 1, #text + 1
+    image.width = 0
+    image.image_block = true
+    image.image_block_col1, image.image_block_col2 = span.col1, #text + 1
+    image.image_block_active = true
+    return {
+      source_text = text,
+      fragments = {
+        { source_col1 = 1, source_col2 = span.col1, hidden = true },
+        live._image_attachment_link(view, line, span, { base_font = body_font }),
+        image,
+        { source_col1 = span.col2, source_col2 = #text + 1, hidden = true },
+      },
+    }
   end
   return {
     source_text = text,
@@ -1555,6 +1571,26 @@ local function link_text_source_range(line_text, span, label)
   end
 end
 
+function live._image_attachment_link(view, line, span, opts)
+  local link = span.link
+  local embedded = images.is_data_image(link.path)
+  local path = not embedded and ((link.path or ""):match("^[^?]+") or "") or ""
+  local name = embedded and "Embedded image"
+    or path:match("[^/\\]+$") or path
+  if name == "" then name = link.alt or "image" end
+  local label = link.kind == "embed" and link.alias and link.alias ~= ""
+    and link.alias or name
+  local fragment = {
+    source_col1 = span.col1,
+    source_col2 = span.col2,
+    text = "▧ " .. label,
+    background = style.markdown_live_attachment_bg,
+    attachment_chip = true,
+    image_attachment_link = true,
+  }
+  return decorate_link_fragment(view, line, span, fragment, opts)
+end
+
 local function semantic_link_fragments(view, line_text, line, reveal_units, opts)
   local fragments = {}
   for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
@@ -1583,6 +1619,8 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
       end
     elseif span.link then
       local fragment = image_fragment(view, span, image_link and { block = true } or nil)
+      local image = image_link and fragment and fragment.widget and fragment
+      if image then fragment = live._image_attachment_link(view, line, span, opts) end
       if not fragment then
         local link = span.link
         local kind, icon = attachment_kind(link.path or link.raw_target)
@@ -1611,16 +1649,18 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
           fragment.text_source_col2 = text_col2
         end
       end
-      fragment = decorate_link_fragment(view, line, span, fragment, opts)
+      if not image then fragment = decorate_link_fragment(view, line, span, fragment, opts) end
       if fragment then
-        if image_link and fragment.widget then
-          fragment.width = 0
-          fragment.image_anchor = true
-          fragment.image_block = true
-          fragment.image_block_col1, fragment.image_block_col2 = span.col1, span.col2
-          fragment.image_block_active = false
-        end
         fragments[#fragments + 1] = fragment
+        if image then
+          image.source_col1, image.source_col2 = span.col2, span.col2
+          image.width = 0
+          image.image_anchor = true
+          image.image_block = true
+          image.image_block_col1, image.image_block_col2 = span.col1, span.col2
+          image.image_block_active = true
+          fragments[#fragments + 1] = image
+        end
         local preview = embed_preview_fragment(view, line_text, span)
         if preview then fragments[#fragments + 1] = preview end
       end
@@ -4484,7 +4524,10 @@ local function split_pending_render(view, render_line, text)
         local col1 = fragment.source_col1 or 1
         local col2 = fragment.source_col2 or col1
         local from, to = math.max(col1, line_start), math.min(col2, line_end)
-        if from < to or (from == to and col1 == col2 and from == line_start) then
+        if from < to or (from == to and col1 == col2 and from == line_start)
+          or fragment.image_anchor and col1 == col2 and col1 >= line_start
+            and (col1 < line_end or not newline and col1 == line_end)
+        then
           if fragment.widget and (from ~= col1 or to ~= col2) then return nil end
           local copy = {}
           for key, value in pairs(fragment) do copy[key] = value end
@@ -7032,9 +7075,7 @@ local function build_render_line(view, line, _context)
         end
       end
       render_line = prose_render_line(view, text, render_line)
-      if image_revealed then
-        render_line = layout_inline_image_rows(view, text, render_line)
-      end
+      render_line = layout_inline_image_rows(view, text, render_line)
       return render_line
     end
   end

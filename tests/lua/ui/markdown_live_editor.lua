@@ -4159,6 +4159,49 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("shows an image attachment link above the preview until its source is edited", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-image-link-" .. system.get_process_id() .. ".png"
+    local fp = test.not_nil(io.open(image_path, "wb"))
+    fp:write("png")
+    fp:close()
+    local filename = common.basename(image_path)
+    local old_load_image = canvas.load_image
+    canvas.load_image = function()
+      return {
+        get_size = function() return 64, 32 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local ok, err = pcall(function()
+      for _, source in ipairs({ "![Alt](" .. filename .. ")", "![[" .. filename .. "]]" }) do
+        for _, prefix in ipairs({ "", "before " }) do
+          local view, buffer = make_view(prefix .. source .. "\nother", USERDIR .. PATHSEP .. "note.md")
+          buffer:set_selection(2, 1)
+          refresh(view)
+          local render_line = test.not_nil(view:get_line_render(1))
+          local rows = test.not_nil(render_line.position_rows)
+          test.equal(rows[1].source_col1, 1)
+          test.equal(rows[1].source_col2, #prefix + #source + 1)
+          test.ok(render_line.layout_height > rows[1].height)
+          test.equal(visible_render_text(view, 1), prefix .. "▧ " .. filename)
+          local link
+          for _, fragment in ipairs(render_line.fragments) do
+            if fragment.image_attachment_link then link = fragment break end
+          end
+          test.ok(test.not_nil(link).underline)
+          test.equal(link.source_col1, #prefix + 1)
+          test.equal(link.source_col2, #prefix + #source + 1)
+
+          buffer:set_selection(1, #prefix + 3)
+          test.equal(visible_render_text(view, 1), prefix .. source)
+        end
+      end
+    end)
+    canvas.load_image = old_load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("renders project-local image fragments", function(context)
     local image_path = USERDIR .. PATHSEP .. "markdown-live-image-" .. system.get_process_id() .. ".png"
     local fp = io.open(image_path, "wb")
@@ -4518,12 +4561,15 @@ test.describe("Markdown Live Preview", function()
 
       test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
       local pending = test.not_nil(view:get_line_render(1))
+      local has_image = false
       for _, fragment in ipairs(pending.fragments or {}) do
         test.equal(fragment.on_mouse_pressed, nil)
         if fragment.widget then
           test.equal(fragment.widget.on_mouse_pressed, nil)
+          has_image = has_image or fragment.widget.type == "image"
         end
       end
+      test.ok(has_image, "the image must stay visible during the pending edit")
 
       command.perform("core:move_to_previous_line")
       core.active_view = old_active
@@ -4831,7 +4877,7 @@ test.describe("Markdown Live Preview", function()
       view:update()
 
       local x, y = view:get_line_screen_position(1)
-      x, y = x + 10, y + 10
+      x, y = x + 10, y + view:get_line_render(1).position_rows[1].height + 10
       root.mouse.x, root.mouse.y = x, y
       root.overlapping_view = view
       view:on_mouse_moved(x, y, 0, 0)
@@ -4879,7 +4925,8 @@ test.describe("Markdown Live Preview", function()
 
     refresh(view)
     local x, y = view:get_line_screen_position(1)
-    test.ok(view:on_mouse_pressed("left", x + 10, y + 10, 1))
+    local link_row = view:get_line_render(1).position_rows[1]
+    test.ok(view:on_mouse_pressed("left", x + 10, y + link_row.height + 10, 1))
     test.equal(opened_path, image_path)
     local line = buffer:get_selection()
     test.equal(line, 1)
