@@ -32,6 +32,7 @@ function M.attach(view, source, tab, point_source, selected_path)
           filename = content.kind == "file" and content.filename or nil,
           text = content.kind ~= "file" and table.concat(side.buffer.lines):gsub("\n$", "") or nil,
           name = content.name, source_path = content.source_path,
+          source_line = content.source_line, git_revision = content.git_revision,
         }
       end
       state.content_titles = view.request.content_titles
@@ -103,7 +104,10 @@ function M.from_state(state)
     local contents = {}
     for index, saved in ipairs(state.contents) do
       contents[index] = saved.filename and diff.content.file(saved.filename)
-        or diff.content.text(saved.text or "", { name = saved.name, source_path = saved.source_path, editable = false })
+        or diff.content.text(saved.text or "", {
+          name = saved.name, source_path = saved.source_path,
+          source_line = saved.source_line, git_revision = saved.git_revision, editable = false,
+        })
     end
     view = diff.open({ title = state.title, contents = contents, content_titles = state.content_titles }, true)
   elseif state.images then

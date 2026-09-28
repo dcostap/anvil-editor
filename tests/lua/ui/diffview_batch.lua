@@ -58,6 +58,12 @@ test.describe("DiffView batch behavior", function()
 
   test.after_each(function(context)
     core.active_view = context.original_active_view
+    if context.restore_file_at then context.restore_file_at() end
+    if context.historical_buffer then
+      for i = #core.buffers, 1, -1 do
+        if core.buffers[i] == context.historical_buffer then table.remove(core.buffers, i) end
+      end
+    end
     if context.restore_diff_folding_config then context.restore_diff_folding_config() end
     if context.cleanup_readonly_file then pcall(os.remove, context.cleanup_readonly_file) end
     if context.cleanup_replace_file then pcall(os.remove, context.cleanup_replace_file) end
@@ -372,6 +378,47 @@ test.describe("DiffView batch behavior", function()
     test.equal(editor.buffer, core.open_buffer(path))
     local line = editor:with_selection_state(function() return editor.buffer:get_selection() end)
     test.equal(line, 4)
+  end)
+
+  test.it("opens the full committed file behind an offset Diff Side", function(context)
+    local backend = require "plugins.git.backend"
+    local original_file_at = backend.file_at
+    context.restore_file_at = function() backend.file_at = original_file_at end
+    local rev = string.rep("a", 40)
+    backend.file_at = function(repo, requested_rev, relpath, opts, callback)
+      test.equal(repo, "C:/repo")
+      test.equal(requested_rev, rev)
+      test.equal(relpath, "src/old.lua")
+      callback("one\ntwo\nthree\nfour\nfive\n", nil)
+    end
+    local view = track(context, "diffviews", diffview.open({
+      contents = {
+        diffview.content.text("other"),
+        diffview.content.text("three\nfour", {
+          source_line = 3,
+          git_revision = { repo = "C:/repo", rev = rev, relpath = "src/old.lua" },
+        }),
+      },
+    }, true))
+    panes.place(function() return view end, { placement = "current", focus = true })
+    view.buffer_view_b:with_selection_state(function()
+      view.buffer_view_b.buffer:set_selection(2, 2)
+    end)
+    core.set_active_view(view.buffer_view_b)
+
+    test.ok(command.perform("diff:open_historical_file_at_caret"))
+    local opened = panes.active().current_view
+    context.historical_buffer = opened.buffer
+    test.equal(opened.buffer.git_historical_rev, rev)
+    test.equal(opened.buffer.git_historical_path, "src/old.lua")
+    test.equal(opened.buffer.abs_filename, nil)
+    test.equal(opened.buffer.read_only, true)
+    test.equal(text(opened.buffer), "one\ntwo\nthree\nfour\nfive\n")
+    local line, col = opened:with_selection_state(function()
+      return opened.buffer:get_selection()
+    end)
+    test.equal(line, 4)
+    test.equal(col, 2)
   end)
 
   test.it("compares clipboard text with an editable mapped Untitled selection", function(context)

@@ -179,6 +179,7 @@ local function content_text(text, opts)
     editable = opts.editable, owns_buffer = true,
     read_only_reason = opts.read_only_reason, syntax_hint = opts.syntax_hint,
     source_path = opts.source_path, source_line = opts.source_line,
+    git_revision = opts.git_revision,
   }
 end
 
@@ -2706,11 +2707,75 @@ local function open_diff_source_at_caret()
   return true
 end
 
+local function committed_git_source(content)
+  local source = content and content.git_revision
+  if not (source and type(source.repo) == "string" and source.repo ~= ""
+      and type(source.relpath) == "string" and source.relpath ~= ""
+      and type(source.rev) == "string"
+      and (#source.rev == 40 or #source.rev == 64)
+      and source.rev:match("^%x+$")) then return nil end
+  return source
+end
+
+local function open_historical_file_at_caret()
+  local parent, side_view, _, content = active_diff_side()
+  local source = committed_git_source(content)
+  if not source then
+    diff_status("This Diff Side has no committed Git file")
+    return false
+  end
+  local historical = require "plugins.git.historical_buffer"
+  local line, col = with_textview_selection(side_view, function()
+    return side_view.buffer:get_selection(false)
+  end)
+  if content.source_line then line = content.source_line + line - 1 end
+  local function show(text)
+    -- A delayed Git result must not replace a different active View.
+    if core.active_view ~= side_view or side_view.diff_view_parent ~= parent then
+      core.log_quiet("Discarded stale historical Diff Side result for %s", source.relpath)
+      return
+    end
+    local view, err = historical.open(source.repo, source.rev, source.relpath, text)
+    if not view then
+      core.warn("Diff View: Cannot open Historical Buffer: %s", err.message or err.kind or err)
+      return
+    end
+    view:with_selection_state(function()
+      view.buffer:set_selection(line, col, line, col)
+    end)
+    core.set_active_view(view)
+    core.log_quiet("Opened historical Diff Side %s at %s:%d", source.rev:sub(1, 8), source.relpath, line)
+  end
+  if historical.find(historical.key(source.repo, source.rev, source.relpath)) then
+    show("")
+  else
+    require("plugins.git.backend").file_at(source.repo, source.rev, source.relpath, {}, function(text, err)
+      if core.active_view ~= side_view or side_view.diff_view_parent ~= parent then return end
+      if err then
+        core.warn("Diff View: Cannot load Historical Buffer: %s", err.message or err.kind or err)
+        return
+      end
+      show(text or "")
+    end)
+  end
+  return true
+end
+
 command.add(function()
   return active_diff_side() ~= nil
 end, {
   ["diff:open_file_at_caret"] = command.palette(open_diff_source_at_caret, {
     keywords = { "compare", "source" },
+    opens_view = true,
+  }),
+})
+
+command.add(function()
+  local _, _, _, content = active_diff_side()
+  return committed_git_source(content) ~= nil
+end, {
+  ["diff:open_historical_file_at_caret"] = command.palette(open_historical_file_at_caret, {
+    keywords = { "compare", "git", "revision" },
     opens_view = true,
   }),
 })

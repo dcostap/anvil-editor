@@ -1000,6 +1000,15 @@ local function changed_file_side_path(file, side)
   return file.new_path or file.path or file.old_path
 end
 
+local function committed_source(model, rev, relpath)
+  if not (model and model.repo and model.repo.root and relpath) then return nil end
+  if rev == model.backend.EMPTY_TREE then return nil end
+  rev = model:resolve_historical_rev(rev)
+  if type(rev) ~= "string" or (#rev ~= 40 and #rev ~= 64)
+      or not rev:match("^%x+$") then return nil end
+  return { repo = model.repo.root, rev = rev, relpath = relpath }
+end
+
 function GitView:absolute_repo_path(path)
   if not path or path == "" then return nil end
   if common.is_absolute_path(path) then return common.normalize_path(path) end
@@ -2071,7 +2080,7 @@ function GitView:ensure_diff_view(tab, transition_trace)
   local diffview = require "plugins.diffview"
   local left_source_path = self:absolute_repo_path(changed_file_side_path(selected_file, "left"))
   local right_source_path = self:absolute_repo_path(changed_file_side_path(selected_file, "right"))
-  local function source(text, current_path, name, source_path)
+  local function source(text, current_path, name, source_path, revision)
     if current_path then
       return diffview.content.file(self:absolute_repo_path(current_path), {
         name = name,
@@ -2084,15 +2093,21 @@ function GitView:ensure_diff_view(tab, transition_trace)
       editable = false,
       read_only_reason = "Historical Git content is read-only",
       source_path = source_path,
+      git_revision = revision,
     })
   end
+  local status = selected_file and (selected_file.status or selected_file.kind)
   local view = diffview.open({
     title = tab.title or "Commit Diff View",
     kind = "git",
     compare_type = diffview.Viewer.type.STRING_STRING,
     contents = {
-      left = source(tab.left_text, tab.left_current_path, tab.left_name, left_source_path),
-      right = source(tab.right_text, tab.right_current_path, tab.right_name, right_source_path),
+      left = source(tab.left_text, tab.left_current_path, tab.left_name, left_source_path,
+        status ~= "added" and status ~= "untracked"
+          and committed_source(self.model, tab.left, changed_file_side_path(selected_file, "left")) or nil),
+      right = source(tab.right_text, tab.right_current_path, tab.right_name, right_source_path,
+        status ~= "deleted"
+          and committed_source(self.model, tab.right, changed_file_side_path(selected_file, "right")) or nil),
     },
     content_titles = { left = tab.left_name, right = tab.right_name },
     editable_policy = "content",
@@ -2205,7 +2220,17 @@ function GitView:ensure_history_diff_view(tab)
   end
 
   local diffview = require "plugins.diffview"
-  local function source(text, current_path, fragment, name)
+  local commit = tab.commits and tab.commits[tab.selected_commit]
+  local left_rev = commit and (commit.kind == "local_changes" and "HEAD"
+    or commit.parents and commit.parents[1] or self.model.backend.EMPTY_TREE)
+  local right_rev = commit and (commit.kind == "local_changes"
+    and self.model.backend.WORKING_TREE or commit.hash)
+  local right_path = commit and (commit.kind == "local_changes" and tab.relpath
+    or commit.history_path or tab.relpath)
+  local left_path = commit and (commit.kind == "local_changes"
+    and (tab.local_changes_head_path or tab.relpath)
+    or commit.history_parent_path or right_path)
+  local function source(text, current_path, fragment, name, revision, source_line)
     if fragment then
       local path = self:absolute_repo_path(tab.relpath)
       local buffer = core.open_buffer(path)
@@ -2225,16 +2250,21 @@ function GitView:ensure_history_diff_view(tab)
     return diffview.content.text(text or "", {
       name = name, editable = false,
       read_only_reason = "Historical Git content is read-only",
-      source_path = self:absolute_repo_path(tab.relpath),
-      source_line = tab.preview_source_line,
+      source_path = self:absolute_repo_path(revision and revision.relpath or tab.relpath),
+      source_line = source_line,
+      git_revision = revision,
     })
   end
   local view = diffview.open({
     title = tab.title or "File History View",
     kind = "git-history",
     contents = {
-      source(tab.preview_left_text, nil, nil, tab.preview_left_name),
-      source(tab.preview_right_text, tab.preview_right_current_path, tab.preview_right_fragment, tab.preview_right_name),
+      source(tab.preview_left_text, nil, nil, tab.preview_left_name,
+        tab.preview_left_name ~= "File did not exist" and committed_source(self.model, left_rev, left_path) or nil,
+        tab.preview_left_source_line or tab.preview_source_line),
+      source(tab.preview_right_text, tab.preview_right_current_path, tab.preview_right_fragment, tab.preview_right_name,
+        tab.preview_right_name ~= "File did not exist" and committed_source(self.model, right_rev, right_path) or nil,
+        tab.preview_source_line),
     },
     content_titles = { tab.preview_left_name, tab.preview_right_name },
     editable_policy = "content",

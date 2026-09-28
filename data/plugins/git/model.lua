@@ -1143,6 +1143,7 @@ function Model:load_history_preview(tab, callback)
     tab.preview_left_text = tracked.left_text or ""
     tab.preview_right_text = tracked.right_text or ""
     tab.preview_source_line = math.max(1, tracked.right_start_line or context.start_line)
+    tab.preview_left_source_line = math.max(1, tracked.left_start_line or context.start_line)
     tab.preview_right_fragment = nil
     tab.preview_right_current_path = nil
     tab.preview_left_name = (tracked.left_start_line == 0 and tracked.left_text == "")
@@ -1171,6 +1172,7 @@ function Model:load_history_preview(tab, callback)
         tab.preview_right_text = local_tracked and local_tracked.right_text
           or line_fragment(right_text, context.start_line, context.end_line)
         tab.preview_source_line = local_tracked and local_tracked.right_start_line or context.start_line
+        tab.preview_left_source_line = local_tracked and local_tracked.left_start_line or context.start_line
         tab.preview_right_fragment = right_current_path and {
           start_line = local_tracked and local_tracked.right_start_line or context.start_line,
           end_line = local_tracked
@@ -1182,6 +1184,7 @@ function Model:load_history_preview(tab, callback)
         tab.preview_left_text = normalize_for_diff(left_text)
         tab.preview_right_text = normalize_for_diff(right_text)
         tab.preview_source_line = nil
+        tab.preview_left_source_line = nil
         tab.preview_right_fragment = nil
       end
       tab.preview_right_current_path = right_current_path
