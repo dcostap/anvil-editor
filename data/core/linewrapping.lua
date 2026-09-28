@@ -91,20 +91,6 @@ local function each_wrapped_textview(buffer, fn)
   end
 end
 
-function LineWrapping.notify_buffer_raw_insert(buffer, line, old_lines)
-  each_wrapped_textview(buffer, function(textview)
-    local lines = #buffer.lines - old_lines
-    LineWrapping.update_breaks(textview, line, line, lines)
-  end)
-end
-
-function LineWrapping.notify_buffer_raw_remove(buffer, line1, line2, old_lines)
-  each_wrapped_textview(buffer, function(textview)
-    local lines = #buffer.lines - old_lines
-    LineWrapping.update_breaks(textview, line1, line2, lines)
-  end)
-end
-
 function LineWrapping.notify_buffer_text_input(buffer, result)
   if not result or not result.changed then return end
   each_wrapped_textview(buffer, function(textview)
@@ -112,59 +98,56 @@ function LineWrapping.notify_buffer_text_input(buffer, result)
   end)
 end
 
-function LineWrapping.notify_buffer_text_transaction(buffer, transaction)
+function LineWrapping.notify_textview_text_transaction(textview, transaction)
   local ranges = transaction and transaction.changed_ranges
-  if not ranges then return end
-  each_wrapped_textview(buffer, function(textview)
-    if transaction and transaction.type == "load" then
-      -- A loaded snapshot is a revision boundary. Let transaction/render
-      -- providers reset their state first, then prepare the new wrapped layout
-      -- in slices and adopt it atomically. The previous committed rows remain
-      -- readable until the replacement is complete.
-      textview.__wrap_reload_reconstruction_serial =
-        (textview.__wrap_reload_reconstruction_serial or 0) + 1
-      local serial = textview.__wrap_reload_reconstruction_serial
-      core.add_thread(function()
-        coroutine.yield(0)
-        if textview.buffer ~= buffer
-          or textview.__wrap_reload_reconstruction_serial ~= serial
-          or not textview.wrapped_settings
-          or textview.__presentation_reload_frozen
-        then
-          return
-        end
-        local pending = textview.__async_wrap_reconstruction
-        if pending and pending.buffer == buffer
-          and pending.revision == (buffer.text_revision or 0)
-        then
-          core.log_quiet(
-            "Reused pending wrapped layout after loaded snapshot for %s revision=%d",
-            buffer:get_name(), buffer.text_revision or 0
-          )
-          return
-        end
-        local settings = textview.wrapped_settings
+  if not ranges or not textview.wrapped_settings then return end
+  local buffer = textview.buffer
+  if transaction and transaction.type == "load" then
+    -- Prepare replacement rows in slices. Keep committed rows readable until
+    -- the replacement is complete and the provider releases its frozen layout.
+    textview.__wrap_reload_reconstruction_serial =
+      (textview.__wrap_reload_reconstruction_serial or 0) + 1
+    local serial = textview.__wrap_reload_reconstruction_serial
+    core.add_thread(function()
+      coroutine.yield(0)
+      if textview.buffer ~= buffer
+        or textview.__wrap_reload_reconstruction_serial ~= serial
+        or not textview.wrapped_settings
+        or textview.__presentation_reload_frozen
+      then
+        return
+      end
+      local pending = textview.__async_wrap_reconstruction
+      if pending and pending.buffer == buffer
+        and pending.revision == (buffer.text_revision or 0)
+      then
         core.log_quiet(
-          "Preparing wrapped layout after loaded snapshot for %s revision=%d",
+          "Reused pending wrapped layout after loaded snapshot for %s revision=%d",
           buffer:get_name(), buffer.text_revision or 0
         )
-        LineWrapping.reconstruct_breaks_async(
-          textview, settings.font, settings.width, { budget_ms = 4 }
-        )
-      end)
-      return
-    end
-    if #ranges == 1 then
-      local range = ranges[1]
-      if not LineWrapping.update_same_line_suffix_breaks(textview, range, transaction) then
-        LineWrapping.update_breaks(textview, range.old_line1, range.old_line2, range.line_delta or 0)
+        return
       end
-    elseif not LineWrapping.update_multiple_nonstructural_breaks(
-      textview, ranges
-    ) then
-      LineWrapping.reconstruct_breaks(textview, textview.wrapped_settings.font, textview.wrapped_settings.width)
+      local settings = textview.wrapped_settings
+      core.log_quiet(
+        "Preparing wrapped layout after loaded snapshot for %s revision=%d",
+        buffer:get_name(), buffer.text_revision or 0
+      )
+      LineWrapping.reconstruct_breaks_async(
+        textview, settings.font, settings.width, { budget_ms = 4 }
+      )
+    end)
+    return
+  end
+  if #ranges == 1 then
+    local range = ranges[1]
+    if not LineWrapping.update_same_line_suffix_breaks(textview, range, transaction) then
+      LineWrapping.update_breaks(textview, range.old_line1, range.old_line2, range.line_delta or 0)
     end
-  end)
+  elseif not LineWrapping.update_multiple_nonstructural_breaks(
+    textview, ranges
+  ) then
+    LineWrapping.reconstruct_breaks(textview, textview.wrapped_settings.font, textview.wrapped_settings.width)
+  end
 end
 
 function LineWrapping.notify_buffer_close(buffer)

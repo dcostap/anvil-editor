@@ -9046,10 +9046,17 @@ Buffer.register_text_transaction_handler("textview-render-caches", function(buff
       if line_structure_changed and not providers_handle_line_structure and line1 then
         invalid_line2 = math.max(invalid_line2 or line1, #buffer.lines)
       end
+      -- Prepare provider presentation before any wrapping measurements. Batch
+      -- edits can rebuild the whole Buffer, including unchanged headings.
+      local wrap_started = system.get_time()
+      linewrapping.notify_textview_text_transaction(view, transaction)
+      local wrap_elapsed = (system.get_time() - wrap_started) * 1000
+      if wrap_elapsed >= 8 then
+        core.log_quiet("TextView slow linewrap transaction: elapsed=%.1fms revision=%d path=%s",
+          wrap_elapsed, buffer.text_revision, buffer:get_name())
+      end
       if view:has_line_render_providers() then
-        -- Line wrapping observes the text transaction before render providers
-        -- build their pending presentation. Remeasure after the provider hooks
-        -- so wrapping never exposes breaks computed from an interim fallback.
+        -- Provider changes can extend beyond the source edits measured above.
         view:invalidate_line_render("text-change", invalid_line1, invalid_line2)
       end
       if view:has_visual_metric_providers() then

@@ -1874,7 +1874,6 @@ end
 
 function Buffer:raw_insert(line, col, text, undo_stack, time)
   self:notify_text_change_listeners("before", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
-  local linewrapping_old_lines = #self.lines
   local start_offset = position_to_offset(line_offsets_for(self.lines), line, col)
   -- split text into lines and merge with line at insertion point
   local lines = split_lines(text)
@@ -1910,13 +1909,11 @@ function Buffer:raw_insert(line, col, text, undo_stack, time)
   self.highlighter:insert_notify(line, #lines - 1)
   self:clear_cache(line, #lines - 1)
   self:sanitize_selection()
-  linewrapping.notify_buffer_raw_insert(self, line, linewrapping_old_lines)
   self.text_revision = (self.text_revision or 0) + 1
   self:on_text_transaction({
     applied = true,
     changed = true,
     type = "raw_insert",
-    linewrapping_already_notified = true,
     edits = {
       {
         line1 = line, col1 = col, line2 = line, col2 = col,
@@ -1940,7 +1937,6 @@ end
 
 function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time)
   self:notify_text_change_listeners("before", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2 })
-  local linewrapping_old_lines = #self.lines
   -- push undo
   local text = self:get_text(line1, col1, line2, col2)
   local old_index = line_offsets_for(self.lines)
@@ -1978,13 +1974,11 @@ function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time)
   self.highlighter:remove_notify(line1, line_removal)
   self:clear_cache(line1, line_removal)
   self:sanitize_selection()
-  linewrapping.notify_buffer_raw_remove(self, line1, line2, linewrapping_old_lines)
   self.text_revision = (self.text_revision or 0) + 1
   self:on_text_transaction({
     applied = true,
     changed = true,
     type = "raw_remove",
-    linewrapping_already_notified = true,
     edits = {
       {
         line1 = line1, col1 = col1, line2 = line2, col2 = col2,
@@ -2599,14 +2593,6 @@ end
 
 -- Internal transaction hook for batch-aware buffer change observers.
 function Buffer:on_text_transaction(transaction)
-  if not (transaction and transaction.linewrapping_already_notified) then
-    local started = system.get_time()
-    linewrapping.notify_buffer_text_transaction(self, transaction)
-    local elapsed = (system.get_time() - started) * 1000
-    if elapsed >= 8 then
-      core.log_quiet("Buffer slow linewrap transaction: elapsed=%.1fms revision=%d path=%s", elapsed, self.text_revision, self:get_name())
-    end
-  end
   for id, handler in pairs(text_transaction_handlers) do
     local started = system.get_time()
     local ok, err = pcall(handler, self, transaction)
