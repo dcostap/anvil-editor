@@ -2291,11 +2291,14 @@ local function table_layout(view, table_node, allow_pending)
   if not cache or cache.generation ~= instance.generation
     or cache.theme_generation ~= theme_generation
   then
+    local previous_buckets = cache and cache.theme_generation == theme_generation
+      and cache.buckets or nil
     cache = {
       generation = instance.generation,
       theme_generation = theme_generation,
       buckets = {},
       bucket_order = {},
+      previous_buckets = previous_buckets,
     }
     view.__markdown_live_table_layout_cache = cache
   end
@@ -2321,6 +2324,25 @@ local function table_layout(view, table_node, allow_pending)
   local layouts = bucket.layouts
   if layouts[table_node.id] ~= nil then
     return layouts[table_node.id] or nil
+  end
+
+  -- A semantic publication does not change every table. Reuse a layout only
+  -- when its identity, geometry, source range and complete source still match.
+  local previous_bucket = cache.previous_buckets and cache.previous_buckets[geometry_key]
+  local previous = previous_bucket and previous_bucket.layouts[table_node.id]
+  if previous and previous.line1 == line1 and previous.line2 == line2 then
+    local unchanged = true
+    for line = line1, line2 do
+      if previous.rows[line].text ~= (view.buffer.lines[line] or ""):gsub("\n$", "") then
+        unchanged = false
+        break
+      end
+    end
+    if unchanged then
+      layouts[table_node.id] = previous
+      perf_frame_add("markdown_live_table_layout_reuses", 1)
+      return previous
+    end
   end
 
   local rows, columns, canonical = {}, nil, true
@@ -7231,7 +7253,6 @@ local function invalidate_semantic_publication(view, instance, reason)
     tostring(reason), #(ranges or {}), publication_lines
   ), 1)
   local range_expand_ms = elapsed_ms(range_expand_started)
-  view.__markdown_live_table_layout_cache = nil
   local prune_images_ms, line_invalidate_ms, metric_invalidate_ms = 0, 0, 0
   local global_invalidation = not (ranges and #ranges > 0)
   local deferred_wrapped_invalidation = ranges and #ranges > 0
