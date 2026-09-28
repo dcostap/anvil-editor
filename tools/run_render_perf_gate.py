@@ -1454,10 +1454,10 @@ def main() -> int:
     user.mkdir(parents=True)
     exe = copy_app_tree(app_root)
     fixture, tab_dir, _markdown_fixture = generate_fixture(work)
-    if editor_selected:
-        # Startup Project services also inspect the shared work root.
-        # Keep their Git search inside the private run.
-        run(["git", "init", "-q", str(work)])
+    # Startup Project services and Git status colors inspect the work root.
+    # Keep their Git search inside the private run. The source checkout can
+    # have large ignored directories and outside Git activity.
+    run(["git", "init", "-q", str(work)])
     if args.video:
         scenario = selected_scenarios[0]
         if scenario == "markdown-callout-shift":
