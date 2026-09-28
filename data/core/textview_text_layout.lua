@@ -148,8 +148,13 @@ function Layout.get(view, line, first, last, leading, wrapped)
       local last_byte = math.min(#source.text, first_byte + MAX_RUN_BYTES - 1)
       if last_byte < #source.text then
         -- Keep bounded draw commands. Prefer a word boundary, then a UTF-8 boundary.
-        local boundary = source.text:sub(first_byte, last_byte):match(".*()[ \t]")
-        if boundary then last_byte = first_byte + boundary - 1 end
+        for i = last_byte, first_byte, -1 do
+          local byte = source.text:byte(i)
+          if byte == 32 or byte == 9 then
+            last_byte = i
+            break
+          end
+        end
         while last_byte > first_byte do
           local byte = source.text:byte(last_byte + 1)
           if byte < 128 or byte >= 192 then break end

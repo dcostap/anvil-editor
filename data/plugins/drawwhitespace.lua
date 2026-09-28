@@ -838,7 +838,8 @@ local function draw_legacy_whitespace(self, idx, x, y)
   end
 
   local line_text = self.buffer.lines[idx]
-  if not line_text or not line_text:find("[ \t]") then
+  -- Plain searches use memchr. A character class walks long lines byte by byte.
+  if not line_text or not (line_text:find(" ", 1, true) or line_text:find("\t", 1, true)) then
     return
   end
 
