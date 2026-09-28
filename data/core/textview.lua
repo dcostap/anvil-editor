@@ -9090,6 +9090,11 @@ Buffer.register_text_transaction_handler("textview-render-caches", function(buff
           wrap_elapsed, buffer.text_revision, buffer:get_name())
       end
       if view:has_line_render_providers() then
+        -- Apply the source edit's row change before provider invalidation
+        -- replaces it with a second change measured against the new wrap map.
+        if view.__line_render_wrap_change and view:has_visual_metric_providers() then
+          view:invalidate_visual_metrics("text-change", invalid_line1, invalid_line2)
+        end
         -- Provider changes can extend beyond the source edits measured above.
         view:invalidate_line_render("text-change", invalid_line1, invalid_line2)
       end
