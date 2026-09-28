@@ -1877,6 +1877,16 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
     if not cache then return end
     if not self.wrapped_settings then
       invalidate_visual_metric_rows(self, cache, line1, line2)
+      -- Keep unchanged rows when only the Buffer revision changed. The dirty
+      -- rows still measure the current render plans. A row-count, provider,
+      -- or geometry change keeps the full-rebuild path.
+      local revision = self.buffer.text_revision or 0
+      if cache.text_revision ~= revision
+        and cache.signature == self:get_visual_metric_signature(nil, nil, cache.text_revision)
+      then
+        cache.text_revision = revision
+        cache.signature = self:get_visual_metric_signature()
+      end
       return
     end
 

@@ -98,6 +98,41 @@ test.describe("Markdown heading geometry", function()
     test.equal(visible_text(view), "# Head **bold** and other!")
   end)
 
+  test.it("updates unwrapped row geometry through consecutive pending heading edits", function(context)
+    local view, buffer = make_view(context,
+      "# Reference\n\n" .. string.rep("ordinary\n", 80)
+        .. "target\n\n# Last", false)
+    local heading_height = view:get_position_visual_row_height(1, 1)
+    local body_height = view:get_position_visual_row_height(83, 1)
+    test.ok(heading_height > body_height)
+    view:with_selection_state(function() buffer:set_selection(83, 1) end)
+
+    local function check(height)
+      local plan = test.not_nil(view:get_line_render(83))
+      local drawn_height = plan.text_row_height
+        + (plan.first_row_content_y_offset or 0) + (plan.final_row_spacing or 0)
+      test.equal(view:get_position_visual_row_height(83, 1), drawn_height,
+        "row geometry must use the displayed text and its spacing")
+      test.equal(view:get_position_visual_row_height(83, 1), height)
+      test.equal(view:get_visual_row_y_offset(84) - view:get_visual_row_y_offset(83), height)
+      test.equal(view:get_position_visual_row_height(1, 1), heading_height)
+      test.equal(view:get_position_visual_row_height(85, 1), heading_height)
+    end
+
+    buffer:insert(83, 1, "# ")
+    test.equal(model.peek(buffer).status, "pending")
+    check(heading_height)
+    buffer:insert(83, 3, "new ")
+    test.equal(model.peek(buffer).status, "pending")
+    check(heading_height)
+    ready(view)
+    check(heading_height)
+
+    buffer:remove(83, 1, 83, 3)
+    ready(view)
+    check(body_height)
+  end)
+
   for _, wrapped in ipairs { false, true } do
     test.it("aligns selection past heading text with its content row (wrapped=" .. tostring(wrapped) .. ")", function(context)
       local view, buffer = make_view(context, "# Selected heading", wrapped)
