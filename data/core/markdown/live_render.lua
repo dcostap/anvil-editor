@@ -6577,15 +6577,16 @@ local function final_visual_row_for_line(view, line, entry)
   return entry and entry.row_in_line == view:get_visual_row_count_for_line(line)
 end
 
-local function with_block_spacing(view, line, entry, height, leading_spacing)
+local function with_block_spacing(view, line, entry, height, render_line)
   if not height then return height end
+  local leading_spacing = tonumber(render_line.first_row_content_y_offset) or 0
   if leading_spacing and leading_spacing > 0
     and (not entry or entry.row_in_line == 1)
   then
     height = height + leading_spacing
   end
   if final_visual_row_for_line(view, line, entry) then
-    height = height + block_spacing_after(view, line)
+    height = height + (render_line.final_row_spacing or 0)
   end
   return height
 end
@@ -6599,7 +6600,6 @@ local function compute_line_height(view, line, entry)
   local render_line = view:get_line_render(line)
   if not render_line then return view:get_line_height() end
   if render_line.metric_height then return render_line.metric_height end
-  local leading_spacing = tonumber(render_line.first_row_content_y_offset) or 0
   local body_height = render_line.text_row_height
     or markdown_live_body_line_height(view)
   if wrapped then
@@ -6609,20 +6609,20 @@ local function compute_line_height(view, line, entry)
     if final_row then
       height = math.max(height, render_line_metric_height(view, render_line))
     end
-    return with_block_spacing(view, line, entry, height, leading_spacing)
+    return with_block_spacing(view, line, entry, height, render_line)
   end
   if render_line.layout_height then
     return with_block_spacing(
-      view, line, entry, render_line.layout_height, leading_spacing
+      view, line, entry, render_line.layout_height, render_line
     )
   end
   if render_line.table_row_height then
     return with_block_spacing(
-      view, line, entry, render_line.table_row_height, leading_spacing
+      view, line, entry, render_line.table_row_height, render_line
     )
   end
   local height = math.max(body_height, render_line_metric_height(view, render_line))
-  return with_block_spacing(view, line, entry, height, leading_spacing)
+  return with_block_spacing(view, line, entry, height, render_line)
 end
 
 function provider:line_height(view, line, entry)
@@ -6982,6 +6982,15 @@ function provider:render_line(view, line, context)
     safe.markdown_buffer_revision = revision
     safe.markdown_semantic_revision = render_line.markdown_semantic_revision
     return safe
+  end
+  -- Spacing belongs to the render plan too. Do not query newer semantics
+  -- while measuring a plan retained by a sliced wrapped-layout rebuild.
+  local spacing = block_spacing_after(view, line)
+  if render_line.final_row_spacing ~= spacing then
+    local copy = {}
+    for key, value in pairs(render_line) do copy[key] = value end
+    copy.final_row_spacing = spacing
+    render_line = copy
   end
   return render_line
 end

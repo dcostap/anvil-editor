@@ -4476,6 +4476,19 @@ local function line_render_signature(view, line, snapshot_provider_generations)
 end
 
 function TextView:get_line_render(line)
+  -- A sliced rebuild measures new provider output without publishing it.
+  -- Drawing, hit testing and row metrics keep using the committed plan.
+  local committed = not self.__resolving_line_render and self.__async_wrap_reconstruction
+    and self.wrapped_presentations and self.wrapped_presentations[line]
+  if committed and committed.source_line == self.buffer.lines[line] then
+    return committed.render_line or nil
+  end
+  return self:resolve_line_render(line)
+end
+
+---Resolve current provider output for layout preparation. Display consumers
+---use get_line_render so they cannot observe an unfinished wrapped layout.
+function TextView:resolve_line_render(line)
   if not self:has_line_render_providers() then return nil end
   -- Repeated geometry and draw queries must reuse the line resolved earlier
   -- in this UI phase. Explicit invalidation clears the snapshot.
@@ -4541,7 +4554,12 @@ function TextView:get_line_render(line)
   for _, entry in ipairs(self:line_render_provider_entries()) do
     local provider = entry.provider
     if provider and provider.render_line then
+      -- A provider can read another line while it prepares this one, such as
+      -- a Markdown list continuation reading its parent's indentation.
+      local resolving = self.__resolving_line_render
+      self.__resolving_line_render = true
       local ok, render_line = pcall(provider.render_line, provider, self, line, context)
+      self.__resolving_line_render = resolving
       if ok and render_line and not render_line.raw_passthrough then
         render_line.source_text = render_line.source_text or source_text
         resolved = render_line

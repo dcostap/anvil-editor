@@ -437,6 +437,7 @@ local function new_measurement_context(buffer, default_font, textview)
     char_widths = {},
     extra_indent_widths = {},
     has_line_render_providers = has_line_render_providers,
+    presentations = has_line_render_providers and {} or nil,
     perf_active = perf_diagnostics_active(),
   }
 end
@@ -666,7 +667,13 @@ function LineWrapping.compute_line_breaks_from_col(
   local may_have_render_line = textview and textview.get_line_render
     and (not measurement or measurement.has_line_render_providers)
   if may_have_render_line then
-    local render_line = textview:get_line_render(line)
+    local render_line = textview:resolve_line_render(line)
+    if measurement and measurement.presentations then
+      measurement.presentations[line] = {
+        source_line = buffer.lines[line],
+        render_line = render_line or false,
+      }
+    end
     if render_line and render_line.disable_wrapping then
       return finish({ start_col }, 0, "rendered_disabled")
     end
@@ -892,6 +899,7 @@ function LineWrapping.clear_wrap_cache(textview)
   textview.wrapped_lines = nil
   textview.wrapped_line_to_idx = nil
   textview.wrapped_line_offsets = nil
+  textview.wrapped_presentations = nil
   textview.wrapped_settings = nil
   textview.wrapped_buffer_line_count = nil
   textview.wrapped_text_revision = nil
@@ -997,6 +1005,7 @@ function LineWrapping.reconstruct_breaks(textview, default_font, width)
         textview.wrapped_lines[row_offset] = col
       end
     end
+    textview.wrapped_presentations = measurement.presentations
   else
     LineWrapping.clear_wrap_cache(textview)
   end
@@ -1068,6 +1077,7 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     textview.wrapped_lines = token.wrapped_lines
     textview.wrapped_line_to_idx = token.wrapped_line_to_idx
     textview.wrapped_line_offsets = token.wrapped_line_offsets
+    textview.wrapped_presentations = token.measurement.presentations
     textview.wrapped_settings = token.settings
     textview.wrapped_buffer_line_count = token.line_count
     textview.wrapped_text_revision = token.revision
@@ -1095,12 +1105,18 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
   local budget_ms = math.max(1, tonumber(opts.budget_ms) or 4)
   local function advance()
     if not current() then
-      if base_current() and not line_render_current() then
+      if textview.__async_wrap_reconstruction == token
+        and textview.buffer == buffer and textview.wrapped_settings
+        and not textview.__presentation_reload_frozen
+      then
+        -- A local edit cannot cancel a whole-Buffer presentation update.
+        -- Restart from current source; keep the last committed rows readable.
         textview.__async_wrap_reconstruction = nil
         perf_frame_add("linewrapping_async_reconstruct_restarts", 1)
         core.log_quiet(
-          "Restarting sliced wrapped layout after line-render invalidation for %s at line %d/%d",
-          buffer:get_name(), token.next_line, token.line_count
+          "Restarting sliced wrapped layout for %s at line %d/%d: revision=%d current=%d",
+          buffer:get_name(), token.next_line, token.line_count,
+          token.revision, buffer.text_revision or 0
         )
         LineWrapping.reconstruct_breaks_async(
           textview, default_font, width, opts
@@ -1394,6 +1410,10 @@ function LineWrapping.update_same_line_suffix_breaks(textview, range, transactio
     textview,
     measurement
   )
+  if measurement.presentations then
+    textview.wrapped_presentations = textview.wrapped_presentations or {}
+    textview.wrapped_presentations[line] = measurement.presentations[line]
+  end
   if restart_col == 1 then
     textview.wrapped_line_offsets[line] = new_begin_width
   end
@@ -1478,6 +1498,26 @@ function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines)
       new_pairs[#new_pairs + 1] = line
       new_pairs[#new_pairs + 1] = b
     end
+  end
+
+  -- Commit the measured presentation with its row map, including updates
+  -- that leave all wrap positions unchanged.
+  if measurement.presentations then
+    textview.wrapped_presentations = textview.wrapped_presentations or {}
+    if net_lines == 0 then
+      for line = new_line1, new_line2 do
+        textview.wrapped_presentations[line] = measurement.presentations[line]
+      end
+    else
+      local replacements = {}
+      for line = new_line1, new_line2 do
+        replacements[#replacements + 1] = measurement.presentations[line]
+      end
+      common.splice(textview.wrapped_presentations, old_line1,
+        old_line2 - old_line1 + 1, replacements)
+    end
+  else
+    textview.wrapped_presentations = nil
   end
 
   -- When the recomputed wrapped layout is identical to the current one, skip
