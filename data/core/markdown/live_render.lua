@@ -2995,21 +2995,18 @@ local function task_checkbox_widget(
     suppress_hover_background = true,
     checked = checked,
     draw = function(_, fragment, x, y, visual_row_height)
-      local visual_size = math.max(
-        8, box_size - math.max(1, math.floor(3 * SCALE))
-      )
       local is_checked = fragment.checked
       local checkbox_color = is_checked and style.markdown_live_task_checked
         or style.markdown_live_task_unchecked
       local border = math.max(1, math.floor(SCALE))
       local box_x = x + box_area_x + math.floor((box_area_width - box_size) / 2)
-      local box_y = y + math.floor((visual_row_height - visual_size) / 2)
-      local radius = math.max(border, math.floor(visual_size * 0.22))
+      local box_y = y + math.floor((visual_row_height - box_size) / 2)
+      local radius = math.max(border, math.floor(box_size * 0.22))
       if fragment.hovered then
         local hover_padding = math.max(2, math.floor(2 * SCALE))
         renderer.draw_rounded_rect(
           box_x - hover_padding, box_y - hover_padding,
-          visual_size + hover_padding * 2, visual_size + hover_padding * 2,
+          box_size + hover_padding * 2, box_size + hover_padding * 2,
           radius + hover_padding, style.markdown_live_task_hover
         )
         if not is_checked then
@@ -3017,15 +3014,15 @@ local function task_checkbox_widget(
         end
       end
       renderer.draw_rounded_rect(
-        box_x, box_y, visual_size, visual_size, radius, checkbox_color
+        box_x, box_y, box_size, box_size, radius, checkbox_color
       )
       if is_checked then
         draw_task_checkmark(
-          box_x, box_y, visual_size, style.markdown_live_task_checkmark,
+          box_x, box_y, box_size, style.markdown_live_task_checkmark,
           checkmark_font
         )
       else
-        local inner_size = math.max(1, visual_size - border * 2)
+        local inner_size = math.max(1, box_size - border * 2)
         renderer.draw_rounded_rect(
           box_x + border, box_y + border,
           inner_size, inner_size, math.max(0, radius - border),
@@ -3286,10 +3283,11 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
         math.floor(SCALE * 12), math.floor(body_font:get_height() * 0.84)
       )
       local box_size = task and list_control_size
+      local list_extra_gap = math.max(1, math.floor(4 * SCALE))
       local task_source_width = task and math.max(
         body_font:get_width("[ ]"), body_font:get_width("[x]"),
         body_font:get_width("[X]"), box_size + math.floor(SCALE * 2)
-      )
+      ) + list_extra_gap
       local function toggle_task(_, owner, _, button)
         if button ~= "left" then return false end
         local selection = owner:get_selection_state()
@@ -3327,7 +3325,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
           string.rep(" ", markdown_visual_indent_width(markdown_indent_width(indent)))
         )
         local raw_width = body_font:get_width(raw)
-        local marker_gap_width = body_font:get_width(" ")
+        local marker_gap_width = body_font:get_width(" ") + list_extra_gap
         local marker_control_width = math.max(
           body_font:get_width("-"), list_control_size
         )
@@ -3470,7 +3468,8 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
             text_source_col1 = task.col1, text_source_col2 = task.col2,
             text = task_raw, width = task_source_width,
             text_x_offset = math.max(
-              0, (task_source_width - body_font:get_width(task_raw)) / 2
+              0, (task_source_width - list_extra_gap
+                - body_font:get_width(task_raw)) / 2
             ),
             color = style.markdown_live_list_marker,
             semantic_id = task_semantic_id,
@@ -3480,7 +3479,8 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
           }
         else
           local checkbox_widget = task_checkbox_widget(
-            task_source_width, row_height, box_size, checked, checkmark_font
+            task_source_width, row_height, box_size, checked, checkmark_font,
+            0, task_source_width - list_extra_gap
           )
           checkbox_widget.on_mouse_pressed = toggle_task
           fragments[#fragments + 1] = {
@@ -3492,7 +3492,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
             markdown_task_checkbox = true, checked = checked,
             suppress_bracketmatch = true,
             markdown_list_content_col = task_content_col,
-            draw_x_offset = math.floor((task_source_width - box_size) / 2),
+            draw_x_offset = math.floor(
+              (task_source_width - list_extra_gap - box_size) / 2
+            ),
             hit_width = box_size,
             widget = checkbox_widget,
           }
@@ -4181,7 +4183,8 @@ function edit_visual_projection.pending_list_render(
     math.floor(SCALE * 12), math.floor(body_font:get_height() * 0.84)
   )
   local marker_control_width = math.max(body_font:get_width("-"), control_size)
-  local marker_gap_width = body_font:get_width(" ")
+  local list_extra_gap = math.max(1, math.floor(4 * SCALE))
+  local marker_gap_width = body_font:get_width(" ") + list_extra_gap
   local marker_width = indent_width + math.max(
     marker_control_width + marker_gap_width,
     parsed.ordered and body_font:get_width(parsed.token .. " ") or 0
@@ -4261,7 +4264,7 @@ function edit_visual_projection.pending_list_render(
       local checkbox_width = parsed.ordered and math.max(
         body_font:get_width("[ ]"), body_font:get_width("[x]"),
         body_font:get_width("[X]"), control_size + math.floor(SCALE * 2)
-      ) or marker_width
+      ) + list_extra_gap or marker_width
       if task_prefix_will_reveal then
         local source_width = body_font:get_width(
           current_text:sub(1, parsed.content_col - 1)
@@ -4271,7 +4274,8 @@ function edit_visual_projection.pending_list_render(
         )
       end
       local box_area_x = parsed.ordered and 0 or indent_width
-      local box_area_width = parsed.ordered and checkbox_width or marker_control_width
+      local box_area_width = parsed.ordered
+        and checkbox_width - list_extra_gap or marker_control_width
       local checkmark_font = markdown_live_scaled_font(
         view, style.prose_strong_font,
         math.max(1, math.floor(body_font:get_size() * 0.88))
