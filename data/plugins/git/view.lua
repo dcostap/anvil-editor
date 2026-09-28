@@ -2250,7 +2250,9 @@ function GitView:ensure_history_diff_view(tab)
     return diffview.content.text(text or "", {
       name = name, editable = false,
       read_only_reason = "Historical Git content is read-only",
-      source_path = self:absolute_repo_path(revision and revision.relpath or tab.relpath),
+      -- Open File opens today's file. A renamed commit keeps its old path
+      -- only in git_revision, for opening the committed file.
+      source_path = self:absolute_repo_path(tab.relpath),
       source_line = source_line,
       git_revision = revision,
     })

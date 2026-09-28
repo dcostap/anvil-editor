@@ -26,8 +26,8 @@ local fake_backend = {
   end,
 }
 
-local function open_git_view()
-  local _, view = git_view.open_log({ path = "C:/repo" }, {
+local function open_git_view(root)
+  local _, view = git_view.open_log({ path = root or "C:/repo" }, {
     window = { id = 4545, get_size = function() return 640, 480 end },
     window_id = 4545,
     git_view_opts = { backend = fake_backend },
@@ -127,5 +127,41 @@ test.describe("Open historical file from Diff Side", function()
     test.equal(#opened.buffer.lines, 30)
     local line = opened:with_selection_state(function() return opened.buffer:get_selection() end)
     test.equal(line, 12)
+  end)
+
+  test.it("opens the current file from a File History excerpt recorded before a rename", function()
+    local root = USERDIR .. PATHSEP .. "diff-history-rename-" .. tostring(system.get_process_id())
+    system.mkdir(root)
+    system.mkdir(root .. PATHSEP .. "src")
+    local fp = assert(io.open(root .. PATHSEP .. "src" .. PATHSEP .. "new.lua", "wb"))
+    fp:write(string.rep("current line\n", 30))
+    fp:close()
+    local view = open_git_view(root)
+    local parent_rev, rev = string.rep("d", 40), string.rep("e", 40)
+    local tab = {
+      id = "history-renamed-selection", kind = "file_history", title = "File History",
+      relpath = "src/new.lua", history_context = { type = "selection", start_line = 20, end_line = 21 },
+      commits = { {
+        hash = rev, parents = { parent_rev }, history_path = "src/old.lua",
+        history_parent_path = "src/old.lua",
+        selection_diff = {
+          left_text = "old eleven\nold twelve", right_text = "new twenty\nnew twenty-one",
+          left_start_line = 11, right_start_line = 20,
+        },
+      } },
+      selected_commit = 1,
+    }
+    test.ok(view.model:load_history_preview(tab))
+    local diff = view:ensure_history_diff_view(tab)
+    focus_side(diff, "right", 2)
+
+    test.ok(command.perform("diff:open_file_at_caret"))
+    local opened = panes.active().current_view
+    test.equal(opened.buffer.abs_filename:gsub("\\", "/"):match("[^/]+/[^/]+$"), "src/new.lua")
+    local line = opened:with_selection_state(function() return opened.buffer:get_selection() end)
+    test.equal(line, 21)
+    os.remove(root .. PATHSEP .. "src" .. PATHSEP .. "new.lua")
+    system.rmdir(root .. PATHSEP .. "src")
+    system.rmdir(root)
   end)
 end)
