@@ -3268,8 +3268,8 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       end
       local body_font = markdown_live_body_font(view)
       local checkmark_font = markdown_live_scaled_font(
-        view, style.markdown_body_font,
-        math.max(1, math.floor(body_font:get_size() * 0.75))
+        view, style.prose_strong_font,
+        math.max(1, math.floor(body_font:get_size() * 0.80))
       )
       local row_height = markdown_live_body_line_height(view)
       local checked = task and attributes.task_checked ~= nil
@@ -4278,8 +4278,8 @@ function edit_visual_projection.pending_list_render(
       local box_area_width = parsed.ordered
         and checkbox_width - list_extra_gap or marker_control_width
       local checkmark_font = markdown_live_scaled_font(
-        view, style.markdown_body_font,
-        math.max(1, math.floor(body_font:get_size() * 0.75))
+        view, style.prose_strong_font,
+        math.max(1, math.floor(body_font:get_size() * 0.80))
       )
       add {
         source_col1 = parsed.ordered and parsed.marker_content_col or 1,
