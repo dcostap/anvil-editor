@@ -1257,6 +1257,57 @@ static bool pattern_push_captures_filtered(
   return true;
 }
 
+bool Lutf8_pattern_first_bytes(const char *pattern, size_t len, unsigned char out[256]) {
+  const char *p = pattern;
+  const char *ep = pattern + len;
+  if (p < ep && *p == '^') p++;
+
+  MatchState ms;
+  memset(&ms, 0, sizeof(ms));
+  ms.p_end = ep;
+  memset(out, 0, 256);
+  /* Any byte of a multibyte character can start a match. */
+  memset(out + 0x80, 1, 0x80);
+
+  /* Collect the bytes that can start the first consumed character. Optional
+  items add their bytes and pass to the next item. Position captures and
+  frontiers consume nothing. The first required item ends the search. */
+  for (;;) {
+    while (ep - p >= 2 && p[0] == '(' && p[1] == ')') p += 2;
+    if (p >= ep) return false;
+    if (*p == '(' || *p == ')') return false;
+    if (*p == '$' && p + 1 == ep) return false;
+    if (*p == L_ESC && p + 1 < ep) {
+      char next = p[1];
+      if (next == 'f') {
+        if (p + 2 >= ep || p[2] != '[') return false;
+        const char *frontier_end = classend(&ms, p + 2);
+        if (!frontier_end || ms.errmsg) return false;
+        p = frontier_end;
+        continue;
+      }
+      if (next == 'b' || (next >= '0' && next <= '9')) return false;
+    }
+
+    const char *item_end = classend(&ms, p);
+    if (!item_end || ms.errmsg) return false;
+    for (int b = 0; b < 0x80; b++) {
+      if (out[b]) continue;
+      char source = (char) b;
+      ms.src_init = &source;
+      ms.src_end = &source + 1;
+      ms.errmsg = NULL;
+      out[b] = pattern_singlematch(&ms, &source, p, item_end) ? 1 : 0;
+      if (ms.errmsg) return false;
+    }
+    if (item_end < ep && (*item_end == '*' || *item_end == '?' || *item_end == '-')) {
+      p = item_end + 1;
+      continue;
+    }
+    return true;
+  }
+}
+
 static int pattern_nospecials(const char *p, const char *ep) {
   while (p < ep) {
     if (strpbrk(p, SPECIALS))
@@ -1269,7 +1320,7 @@ static int pattern_nospecials(const char *p, const char *ep) {
 static bool Lutf8_find_internal(
   const char* s, size_t len,
   const char* pattern, size_t pattern_len,
-  int64_t offset, bool plain, bool find,
+  int64_t offset, bool plain, bool find, bool ascii,
   utf8_pattern_result_t *result,
   utf8_pattern_offset_writer_t writer,
   void *writer_ctx,
@@ -1281,7 +1332,11 @@ static bool Lutf8_find_internal(
 
   if (errmsg) *errmsg = NULL;
   offset = offset <= 0 ? 1 : offset;
-  const char *init = utf8_relat(s, es, (int) offset);
+  /* In ASCII text each character is one byte. Skip the walk from the start
+  of the line, which made each search cost the position of its offset. */
+  const char *init = ascii
+    ? ((size_t) offset <= len + 1 ? s + offset - 1 : NULL)
+    : utf8_relat(s, es, (int) offset);
   if (init == NULL) {
     if (offset > 0) return false;
     init = s;
@@ -1359,7 +1414,7 @@ utf8_pattern_result_result_t Lutf8_find(
   utf8_pattern_result_result_t result = {false, NULL, {NULL, 0}};
   const char *errmsg = NULL;
   bool matched = Lutf8_find_internal(
-    s, len, pattern, pattern_len, offset, plain, find,
+    s, len, pattern, pattern_len, offset, plain, find, false,
     &result.val, NULL, NULL, &errmsg
   );
   if (!matched && errmsg) {
@@ -1373,12 +1428,12 @@ utf8_pattern_result_result_t Lutf8_find(
 bool Lutf8_find_noalloc(
   const char* s, size_t len,
   const char* pattern, size_t pattern_len,
-  int64_t offset, bool plain, bool find,
+  int64_t offset, bool plain, bool find, bool ascii,
   utf8_pattern_offset_writer_t writer, void* writer_ctx,
   const char** errmsg
 ) {
   return Lutf8_find_internal(
-    s, len, pattern, pattern_len, offset, plain, find,
+    s, len, pattern, pattern_len, offset, plain, find, ascii,
     NULL, writer, writer_ctx, errmsg
   );
 }

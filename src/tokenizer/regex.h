@@ -75,7 +75,9 @@ typedef enum {
   REGEX_OPTION_NOTBOL = PCRE2_NOTBOL,
   REGEX_OPTION_NOTEOL = PCRE2_NOTEOL,
   REGEX_OPTION_NOTEMPTY = PCRE2_NOTEMPTY,
-  REGEX_OPTION_NOTEMPTY_ATSTART = PCRE2_NOTEMPTY_ATSTART
+  REGEX_OPTION_NOTEMPTY_ATSTART = PCRE2_NOTEMPTY_ATSTART,
+  /* The caller guarantees that the subject is valid UTF-8. */
+  REGEX_OPTION_NO_UTF_CHECK = PCRE2_NO_UTF_CHECK
 } RegexOption;
 
 regex_pattern_result regex_pattern_init(const char* pattern, size_t pattern_len);

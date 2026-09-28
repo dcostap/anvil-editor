@@ -61,6 +61,10 @@ typedef struct {
   TokenizerString display_pattern;
   TokenizerTypeList types;
   struct TokenizerSyntax *subsyntax;
+  /* first_bytes[b] is 1 when the opening code can match at a position that
+  starts with byte b. Only valid when has_first_bytes is set. */
+  bool has_first_bytes;
+  unsigned char first_bytes[256];
 } TokenizerPattern;
 
 typedef struct TokenizerSyntax {
@@ -982,12 +986,26 @@ static void tokenizer_import_code_part(
   size_t code_len = whole_line ? raw_len - 1 : raw_len;
   pattern->code[part] = tokenizer_string_dup(code, code_len);
   pattern->anchored_code[part] = tokenizer_string_dup_anchored(code, code_len);
+  if (part == 0 && !pattern->is_regex) {
+    pattern->has_first_bytes = Lutf8_pattern_first_bytes(code, code_len, pattern->first_bytes);
+  }
 
   if (pattern->is_regex) {
     regex_pattern_result result = regex_pattern_init(code, code_len);
     if (!result.err) {
       pattern->regex[part] = result.val;
       pattern->regex_ready[part] = true;
+      /* PCRE2 builds this table only when every match starts with one of its
+      code units. pcre2_match uses it the same way to skip start positions. */
+      const uint8_t *bitmap = NULL;
+      if (part == 0 &&
+          pcre2_pattern_info(result.val.re, PCRE2_INFO_FIRSTBITMAP, &bitmap) == 0 &&
+          bitmap) {
+        for (int b = 0; b < 256; b++) {
+          pattern->first_bytes[b] = (bitmap[b / 8] >> (b % 8)) & 1;
+        }
+        pattern->has_first_bytes = true;
+      }
     } else {
       pattern->disabled = true;
     }
@@ -1204,6 +1222,7 @@ static bool tokenizer_find_text(
         next,
         false,
         true,
+        text->is_ascii,
         tokenizer_find_results_push_int64,
         out,
         NULL
@@ -1218,7 +1237,9 @@ static bool tokenizer_find_text(
         text->text,
         text->byte_len,
         (int64_t) tokenizer_text_byte_at(text, next),
-        anchored ? REGEX_OPTION_ANCHORED : 0,
+        /* ASCII is valid UTF-8, so PCRE2 need not check the rest of the line. */
+        (anchored ? REGEX_OPTION_ANCHORED : 0)
+          | (text->is_ascii ? REGEX_OPTION_NO_UTF_CHECK : 0),
         tokenizer_find_results_push_size,
         scratch,
         NULL
@@ -1481,8 +1502,20 @@ static int f_tokenizer_tokenize(lua_State *L) {
     }
 
     bool matched = false;
+    /* Patterns that must consume a character cannot match past the end of
+    the text, or at a byte that cannot start them. Skip those attempts.
+    Regex searches start at this byte. Lua pattern searches find their
+    start by walking UTF-8, which can disagree on invalid text, so their
+    table is used only for ASCII text. */
+    int first_byte = (size_t) i <= text.char_len
+      ? (unsigned char) text.text[tokenizer_text_byte_at(&text, i) - 1]
+      : -1;
     for (size_t n = 0; n < cursor.current_syntax->pattern_count; n++) {
       TokenizerPattern *pattern = &cursor.current_syntax->patterns[n];
+      if (pattern->has_first_bytes && (pattern->is_regex || text.is_ascii)
+          && (first_byte < 0 || !pattern->first_bytes[first_byte])) {
+        continue;
+      }
       bool found = tokenizer_find_text(
         L, &text, pattern, i, true, false, &find_results, &raw_find_results
       );

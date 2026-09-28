@@ -233,10 +233,18 @@ bool regex_pattern_find_noalloc(
   size_t base_offset = regex_offset_relative(offset, subject_len) - 1;
   subject_len -= base_offset;
   if (opts < 0) opts = 0;
-  pcre2_match_data* md = pcre2_match_data_create_from_pattern(self->re, NULL);
+  /* The tokenizer calls this at each position of a line. Keep one match
+  block per pattern instead of allocating one for every call. */
+  if (!self->match_data) {
+    self->match_data = pcre2_match_data_create_from_pattern(self->re, NULL);
+    if (!self->match_data) {
+      if (errmsg) *errmsg = "failed to allocate regex match data";
+      return false;
+    }
+  }
+  pcre2_match_data* md = self->match_data;
   int rc = pcre2_match(self->re, (PCRE2_SPTR)&subject[base_offset], subject_len, 0, opts, md, NULL);
   if (rc < 0) {
-    pcre2_match_data_free(md);
     if (rc != PCRE2_ERROR_NOMATCH && errmsg) *errmsg = "regex matching error";
     return false;
   }
@@ -246,7 +254,6 @@ bool regex_pattern_find_noalloc(
     if (errmsg) {
       *errmsg = "regex matching error: \\K was used in an assertion to set the match start after its end";
     }
-    pcre2_match_data_free(md);
     return false;
   }
 
@@ -259,7 +266,6 @@ bool regex_pattern_find_noalloc(
     }
   }
 
-  pcre2_match_data_free(md);
   return ok;
 }
 

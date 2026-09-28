@@ -122,10 +122,15 @@ utf8_pattern_result_result_t Lutf8_find(
   const char* pattern, size_t pattern_len,
   int64_t offset, bool plain, bool find
 );
+/* Fill out[b] with 1 when a match of pattern, anchored at a position, can
+start with byte b. Returns false when no such filter is known, for example
+when the pattern can match an empty string. */
+bool Lutf8_pattern_first_bytes(const char *pattern, size_t len, unsigned char out[256]);
+/* Pass ascii=true only when every byte of s is ASCII. */
 bool Lutf8_find_noalloc(
   const char* s, size_t len,
   const char* pattern, size_t pattern_len,
-  int64_t offset, bool plain, bool find,
+  int64_t offset, bool plain, bool find, bool ascii,
   utf8_pattern_offset_writer_t writer, void* writer_ctx,
   const char** errmsg
 );
