@@ -4391,45 +4391,12 @@ raw_pending_source_render = function(view, render_line, current_text, code)
 end
 
 local interactive_table_render_line
-local metric_records = {}
-
--- Use the same row descriptor as TextView. A retained line has either exact
--- row heights or a uniform height, never competing logical and row heights.
-function metric_records.height(record, row)
-  if not record or row < 1 or row > record.row_count then return nil end
-  return record.heights and record.heights[row]
-    or row == 1 and record.first_height
-    or row == record.row_count and record.final_height or record.height
-end
-
-function metric_records.single(height)
-  return { row_count = 1, height = height }
-end
-
-function metric_records.store(state, line, entry)
+function edit_visual_projection.store_pending_render(state, line, entry)
   state.pending_lines = state.pending_lines or {}
   state.pending_lines[line] = entry
-  if entry and state.pending_metrics then
-    state.pending_metrics[line] = nil
-  end
 end
 
-function metric_records.clear(state, line1, line2)
-  if not state then return end
-  if not line1 then state.pending_sparse_metrics = nil end
-  for _, records in ipairs({ state.published_metrics or {}, state.pending_metrics or {} }) do
-    if line1 then
-      for line = line1, line2 or line1 do records[line] = nil end
-    else
-      for line in pairs(records) do records[line] = nil end
-    end
-  end
-  for line, pending in pairs(state.pending_lines or {}) do
-    if not line1 or line >= line1 and line <= (line2 or line1) then pending.metrics = nil end
-  end
-end
-
-function metric_records.restore_edit_anchor(view, transaction)
+function edit_visual_projection.restore_edit_anchor(view, transaction)
   local owner = view.__markdown_live_owner
   local anchor = owner and owner.pre_edit_anchor
   if not anchor then return end
@@ -4447,12 +4414,10 @@ local function publish_pending_table_row(view, line, render_line)
   local state = view.__markdown_live_owner
   if not (state and render_line) then return false end
   local current = (view.buffer.lines[line] or ""):gsub("\n$", "")
-  metric_records.store(state, line, {
+  edit_visual_projection.store_pending_render(state, line, {
     revision = view.buffer.text_revision,
     source_text = current,
     render_line = render_line,
-    metrics = metric_records.single(render_line.layout_height
-      or view:get_position_visual_row_height(line, 1)),
     table_geometry = table_geometry_signature(view),
   })
   return true
@@ -4747,7 +4712,6 @@ local function capture_pre_edit_renders(view, change)
   local capture_started = system.get_time()
   local owner = view.__markdown_live_owner
   if not owner or view_in_source_mode and view_in_source_mode(view) then return end
-  metric_records.validate_geometry(view)
   owner.pre_edit_anchor = view:capture_viewport_anchor()
   local lines = {}
   local transaction = change and change.transaction
@@ -4824,13 +4788,6 @@ local function capture_pre_edit_renders(view, change)
     visible_line1, visible_line2 = capture_line1, capture_line2
   end
   owner.pre_edit_lines = {}
-  local metric_cache = view.__visual_metric_cache
-  local metrics_current = metric_cache
-    and metric_cache.signature == view:get_visual_metric_signature()
-    and not metric_cache.dirty_rows
-  local sparse = metrics_current and metric_cache.sparse_metrics
-    and metric_cache.sparse_metrics[PROVIDER_ID]
-  owner.pending_sparse_metrics = owner.pending_sparse_metrics or sparse and sparse.complete
   local captured, removed_raw_rows = 0, 0
   for line in pairs(lines) do
     local render = cached_render_line(view, line)
@@ -4851,20 +4808,6 @@ local function capture_pre_edit_renders(view, change)
     local background = semantic_line_background
       and semantic_line_background(view, line) or nil
     if not background and pending then background = pending.background end
-    local row_heights
-    if view.wrapped_settings and metrics_current then
-      local first, _, count = linewrapping.get_line_idx_col_count(view, line)
-      row_heights = {}
-      for row = 1, count do
-        row_heights[row] = view:get_visual_row_height(first + row - 1)
-      end
-    end
-    local captured_metrics = row_heights and {
-        row_count = #row_heights, heights = row_heights, source_text = view.buffer.lines[line],
-      }
-      or pending and pending.metrics
-      or owner.pending_metrics and owner.pending_metrics[line]
-      or owner.published_metrics and owner.published_metrics[line]
     local fenced = service and service:contains_line(line) or false
     fenced = fenced or pending and pending.render_line
       and (pending.render_line.markdown_code_block
@@ -4898,7 +4841,6 @@ local function capture_pre_edit_renders(view, change)
       render_line = render and clone_render_line(render) or nil,
       raw_passthrough = raw_passthrough,
       raw_source_removed = raw_source_removed,
-      metrics = captured_metrics,
       fenced = fenced,
       indented = not preview_item and (owner.pending_indented_lines
         and owner.pending_indented_lines[line]
@@ -4993,25 +4935,22 @@ function edit_visual_projection.can_retain(view, line, render_line)
   return edit_visual_projection.contains_retainable_presentation(render_line)
 end
 
-local function pending_entry(view, render_line, source_text, metrics, provenance)
+local function pending_entry(view, render_line, source_text, provenance)
   if not render_line or render_line.source_text ~= source_text then return nil end
-  -- Only retain resolved measurements. Measure new or changed rows from their current render plan.
   return {
     revision = view.buffer.text_revision,
     source_text = source_text,
     render_line = render_line,
-    metrics = metrics,
     provenance = provenance,
   }
 end
 
 local function build_edit_projection(view, transaction, pre_edit_lines)
   local owner = view.__markdown_live_owner
-  if not owner or not transaction or transaction.type == "load" then return {}, {} end
+  if not owner or not transaction or transaction.type == "load" then return {} end
   pre_edit_lines = pre_edit_lines or {}
   local ranges = edit_projection.ordered_changed_ranges(transaction)
-  local previous_metrics = owner.pending_metrics or owner.published_metrics or {}
-  local next_lines, next_metrics = {}, {}
+  local next_lines = {}
   local selection_state = current_selection_state(view)
   local projected_selection_state = selection_state
   if transaction.new_selections and core.active_view == view then
@@ -5047,7 +4986,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     return captured.raw_passthrough or captured.indented or false
   end
 
-  local function retain(old_line, render_line, metrics, fenced, background)
+  local function retain(old_line, render_line, fenced, background)
     local new_line = edit_projection.map_unchanged_line(ranges, old_line)
     if not new_line or next_lines[new_line] then return end
     render_line = render_line or cached_render_line(view, old_line)
@@ -5056,16 +4995,8 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       local retained_render = clone_render_line(render_line)
       retained_render.markdown_pending_code_background =
         fenced or retained_render.markdown_code_block or nil
-      local retained_metrics = metrics or previous_metrics[old_line]
-      if new_line ~= old_line and (
-        retained_render.first_row_content_y_offset
-        or retained_render.callout_record
-      ) then
-        retained_metrics = nil
-      end
       local entry = pending_entry(
-        view, retained_render, source,
-        retained_metrics, "retained"
+        view, retained_render, source, "retained"
       )
       if entry then
         entry.background = background
@@ -5073,7 +5004,6 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
           view, entry.render_line, new_line
         )
         next_lines[new_line] = entry
-        next_metrics[new_line] = nil
         return true
       end
     end
@@ -5081,7 +5011,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
 
   for old_line, captured in pairs(pre_edit_lines) do
     retain(
-      old_line, captured.render_line, captured.metrics, captured.fenced,
+      old_line, captured.render_line, captured.fenced,
       captured.background
     )
   end
@@ -5092,7 +5022,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   local retained_rows = 0
   for old_line, entry in pairs(snapshot and snapshot.rows or {}) do
     if retain(
-      old_line, entry.render_line, entry.metrics,
+      old_line, entry.render_line,
       entry.render_line and entry.render_line.markdown_pending_code_background,
       entry.background
     ) then retained_rows = retained_rows + 1 end
@@ -5103,18 +5033,6 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       retained_rows, view.buffer.text_revision
     )
   end
-  local function retain_metrics(old_line, metrics)
-    -- Rebase numbers without creating render plans for offscreen lines.
-    local new_line = edit_projection.map_unchanged_line(ranges, old_line)
-    if metrics and new_line and not next_lines[new_line]
-      and not next_metrics[new_line]
-    then
-      next_metrics[new_line] = metrics
-    end
-  end
-  for old_line, metrics in pairs(previous_metrics) do retain_metrics(old_line, metrics) end
-  for old_line, entry in pairs(owner.pending_lines or {}) do retain_metrics(old_line, entry.metrics) end
-
   local function publish(line, render, captured, provenance)
     if not render then return false end
     local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
@@ -5291,16 +5209,8 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     end
     render.markdown_pending_code_background = captured and captured.fenced
       or render.markdown_code_block or nil
-    local captured_metrics = captured and captured.source_text == source
-      and captured.metrics or nil
-    if captured_metrics and captured.source_line ~= line and (
-      render.first_row_content_y_offset or render.callout_record
-    ) then
-      captured_metrics = nil
-    end
     local entry = pending_entry(
       view, render, source,
-      captured_metrics,
       provenance or render.markdown_pending_provenance
     )
     if not entry then return false end
@@ -5308,7 +5218,6 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     refresh_projected_reveal(view, line, projected_selection_state, entry)
     edit_visual_projection.rebind_image_consumers(view, entry.render_line, line)
     next_lines[line] = entry
-    next_metrics[line] = nil
     return true
   end
 
@@ -5451,7 +5360,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     end
   end
 
-  return next_lines, next_metrics
+  return next_lines
 end
 
 local function capture_edit_projection(view, transaction)
@@ -5464,14 +5373,13 @@ local function capture_edit_projection(view, transaction)
   local previous_callouts = owner.pending_callouts or {}
   local ranges = edit_projection.ordered_changed_ranges(transaction)
   edit_visual_projection.rebase_image_consumers(view, ranges)
-  owner.pending_lines, owner.pending_metrics = build_edit_projection(
+  owner.pending_lines = build_edit_projection(
     view, transaction, pre_edit_lines
   )
   local snapshot = owner.presentation_snapshot
   if snapshot then
     snapshot.revision = view.buffer.text_revision
     snapshot.rows = owner.pending_lines
-    snapshot.metrics = owner.pending_metrics
   end
   local pending_indented = {}
   local pending_indented_sources = {}
@@ -5633,7 +5541,6 @@ local function pending_render(view, line)
       revision = view.buffer.text_revision,
       source_text = frozen.source_text,
       render_line = frozen.render_line,
-      metrics = frozen.metrics,
       provenance = "reload-frozen",
     }
   end
@@ -5664,7 +5571,7 @@ local function pending_render(view, line)
       and owner.pending_indented_lines[line] == true
     local render = raw_pending_source_render(view, nil, text, code == true)
     return pending_entry(
-      view, render, text, nil, render.markdown_pending_provenance
+      view, render, text, render.markdown_pending_provenance
     )
   end
   if owner and owner.pre_edit_transaction
@@ -6205,34 +6112,13 @@ local function provider_generation_state(view)
   return cache
 end
 
-function metric_records.validate_geometry(view)
-  local state = provider_generation_state(view)
-  local owner = view.__markdown_live_owner
-  if not owner then return state end
-  if not state.metrics_geometry then
-    state.metrics_geometry = table.concat({
-      state.prose_typography_signature, tostring(state.presentation_generation),
-      tostring(state.theme_generation), tostring(state.body_font_size),
-      tostring(state.scrollbar_width), tostring(state.padding_x), tostring(state.scale),
-      tostring(state.interactive_tables),
-    }, ":")
-  end
-  local geometry = state.metrics_geometry .. ":" .. tostring(view.wrapping_enabled)
-    .. ":" .. tostring(view:get_line_height())
-  if owner.metrics_geometry ~= geometry then
-    metric_records.clear(owner)
-    owner.metrics_geometry = geometry
-  end
-  return state
-end
-
 function provider:generation_seed(view)
-  return metric_records.validate_geometry(view)
+  return provider_generation_state(view)
 end
 
 local function provider_metric_generation(view)
   perf_frame_add("markdown_live_provider_generation_requests", 1)
-  local state = metric_records.validate_geometry(view)
+  local state = provider_generation_state(view)
   if state.metric_generation then
     perf_frame_add("markdown_live_provider_generation_cache_hits", 1)
     return state.metric_generation
@@ -6270,7 +6156,7 @@ function provider:metric_generation(view)
 end
 
 function provider:generation(view)
-  local state = metric_records.validate_geometry(view)
+  local state = provider_generation_state(view)
   if state.generation then return state.generation end
   state.generation = provider_metric_generation(view)
     -- Text transactions and semantic publications invalidate their changed
@@ -6392,9 +6278,6 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     -- edit and mouse callbacks removed by clone_render_line().
     owner.reload_frozen_lines = owner.pre_edit_lines
     owner.pending_lines = {}
-    owner.pending_metrics = {}
-    owner.published_metrics = {}
-    owner.pending_sparse_metrics = nil
     owner.pending_indented_lines = {}
     owner.pending_indented_sources = {}
     owner.pending_callouts = {}
@@ -6463,7 +6346,6 @@ function provider:on_text_transaction(view, transaction, line1, line2)
             revision = view.buffer.text_revision,
             source_text = source,
             render_line = clone_render_line(captured.render_line),
-            metrics = captured.metrics,
           }
         end
       end
@@ -6478,7 +6360,6 @@ function provider:on_text_transaction(view, transaction, line1, line2)
               revision = view.buffer.text_revision,
               source_text = source,
               render_line = clone_render_line(render),
-              metrics = owner.published_metrics and owner.published_metrics[cached_line],
             }
           end
         end
@@ -6491,7 +6372,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
         if cached_line >= fence_line1 and cached_line <= (fence_line2 or fence_line1)
           and not owner.pending_lines[cached_line]
         then
-          metric_records.store(owner, cached_line, cached)
+          edit_visual_projection.store_pending_render(owner, cached_line, cached)
         end
       end
     end
@@ -6552,7 +6433,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
         return count
       end)()
     )
-    metric_records.restore_edit_anchor(view, transaction)
+    edit_visual_projection.restore_edit_anchor(view, transaction)
     return affected_line1 ~= math.huge and affected_line1 or nil,
       affected_line2 ~= -math.huge and affected_line2 or nil,
       true
@@ -6580,7 +6461,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     tostring(affected_line1), tostring(affected_line2), pending_count,
     tostring(owner and owner.semantic_pending_line)
   )
-  metric_records.restore_edit_anchor(view, transaction)
+  edit_visual_projection.restore_edit_anchor(view, transaction)
   return affected_line1,
     affected_line2,
     true
@@ -6712,23 +6593,6 @@ end
 local function compute_line_height(view, line, entry)
   if view_in_source_mode(view) then return nil end
   local wrapped = line_is_wrapped(view, line)
-  local semantic_model = current_semantic_model(view)
-  local render_model = render_semantic_model(view, line)
-  local pending = pending_render(view, line)
-  local owner = view.__markdown_live_owner
-  if not semantic_model then
-    local record = pending and pending.metrics
-      or owner and owner.pending_metrics and owner.pending_metrics[line]
-    local count = view:get_visual_row_count_for_line(line)
-    if record and record.row_count == count then
-      return metric_records.height(record, entry and entry.row_in_line or 1)
-    end
-  end
-  if not pending and not render_model and owner and owner.semantic_pending_line
-    and line >= owner.semantic_pending_line
-  then
-    return view:get_line_height()
-  end
   -- Resolve the presentation once through Editor's line cache. Metrics and
   -- drawing now consume the same fragment/widget/layout plan instead of
   -- independently rebuilding headings, images, tables, and inline spans.
@@ -6767,38 +6631,17 @@ end
 
 ---Resolve one logical line once for a visual-metric pass. Wrapped body rows
 ---share a height; only the final row can add widgets or block spacing.
+---TextView owns the measurement cache. Pending edits retain render plans,
+---not a second height cache that can override the plan used for drawing.
 function provider:line_metrics(view, line, row_count)
   row_count = math.max(1, row_count or 1)
-  local owner = view.__markdown_live_owner
-  local semantic_model = current_semantic_model(view)
-  if not semantic_model then
-    local pending = pending_render(view, line)
-    local record = pending and pending.metrics
-      or owner and owner.pending_metrics and owner.pending_metrics[line]
-    if record and record.row_count == row_count then return record end
-  end
   local height = compute_line_height(view, line, { row_in_line = 1 })
-  local record = row_count == 1 and metric_records.single(height) or {
+  return row_count == 1 and { row_count = 1, height = height } or {
     row_count = row_count,
     first_height = height,
     height = compute_line_height(view, line, { row_in_line = 2 }),
     final_height = compute_line_height(view, line, { row_in_line = row_count }),
   }
-  if semantic_model and owner then
-    record.source_text = view.buffer.lines[line]
-    owner.published_metrics = owner.published_metrics or {}
-    owner.published_metrics[line] = record
-  elseif owner then
-    record.source_text = view.buffer.lines[line]
-    local pending = owner.pending_lines and owner.pending_lines[line]
-    if pending then
-      pending.metrics = record
-    else
-      owner.pending_metrics = owner.pending_metrics or {}
-      owner.pending_metrics[line] = record
-    end
-  end
-  return record
 end
 
 local sparse_metric_node_types = {
@@ -6827,9 +6670,6 @@ function provider:sparse_line_metrics(view)
   if not instance then
     local snapshot = owner and owner.presentation_snapshot
     if snapshot and snapshot.sparse_lines then
-      for line in pairs(owner.pending_metrics or {}) do
-        snapshot.sparse_lines[line] = true
-      end
       for line in pairs(owner.pending_lines or {}) do
         snapshot.sparse_lines[line] = true
       end
@@ -6867,7 +6707,6 @@ function provider:sparse_line_metrics(view)
             end
           end
         end
-        for line in pairs(owner.pending_metrics or {}) do lines[line] = true end
         for line in pairs(owner.pending_lines or {}) do lines[line] = true end
         if snapshot then snapshot.sparse_lines = lines end
         return {
@@ -6877,13 +6716,7 @@ function provider:sparse_line_metrics(view)
         }
       end
     end
-    if not owner or not owner.pending_sparse_metrics
-      or owner.semantic_pending_wrap_line
-    then return nil end
-    local lines = {}
-    for line in pairs(owner.pending_metrics or {}) do lines[line] = true end
-    for line in pairs(owner.pending_lines or {}) do lines[line] = true end
-    return { complete = true, default_height = markdown_live_body_line_height(view), lines = lines }
+    return nil
   end
   local nodes, reason = instance:nodes_for_lines(1, #view.buffer.lines, {
     limit = 100000,
@@ -6897,7 +6730,6 @@ function provider:sparse_line_metrics(view)
       for line = line1, line2 do lines[line] = true end
     end
   end
-  for line in pairs(owner and owner.published_metrics or {}) do lines[line] = true end
   return {
     complete = true,
     default_height = markdown_live_body_line_height(view),
@@ -7171,7 +7003,6 @@ local function apply_source_mode(view, enabled, reason)
   if owner.source_mode == enabled then return false end
   owner.source_mode = enabled
   owner.markdown_code_copy_hover_id = nil
-  metric_records.clear(owner)
   view.view_icon = live.view_icon
   if enabled then view.view_icon = nil end
   if enabled then
@@ -7300,14 +7131,8 @@ local function invalidate_semantic_publication(view, instance, reason)
   local pending_line = owner and owner.semantic_pending_line
   local pending_wrap_line = owner and owner.semantic_pending_wrap_line
   if owner then
-    -- Local publications can remeasure only a few rows. Keep measurements for every unchanged line.
-    local published_metrics = {}
     local fence_presentations = {}
-    for line, record in pairs(owner.pending_metrics or {}) do
-      published_metrics[line] = record
-    end
     for line, pending in pairs(owner.pending_lines or {}) do
-      if pending.metrics then published_metrics[line] = pending.metrics end
       if pending.render_line and pending.render_line.markdown_fence_source then
         fence_presentations[line] = pending
       end
@@ -7317,7 +7142,6 @@ local function invalidate_semantic_publication(view, instance, reason)
       core.log_quiet("Markdown kept code presentation until replacement tokens are ready: revision=%d",
         view.buffer.text_revision)
     end
-    owner.published_metrics = published_metrics
     local raw = owner.raw_fallback_record
     if raw and raw.revision == view.buffer.text_revision and raw.count > 0 then
       core.log_quiet(
@@ -7337,8 +7161,6 @@ local function invalidate_semantic_publication(view, instance, reason)
       fence_reconcile_ms = elapsed_ms(reconcile_started)
     end
     owner.pending_lines = nil
-    owner.pending_metrics = nil
-    owner.pending_sparse_metrics = nil
     owner.pending_indented_lines = nil
     owner.pending_indented_sources = nil
     owner.pending_callouts = nil
@@ -7742,7 +7564,6 @@ refresh_projected_reveal = function(view, line, state, projected_entry)
   end
   if not changed then return false end
   entry.render_line = render
-  entry.metrics = nil
   return true
 end
 
@@ -7915,7 +7736,6 @@ local function invalidate_selection_lines(view, new_state, old_state)
     end
     view:invalidate_line_render(PROVIDER_ID, line1, line2)
     if not preserves_metrics then
-      metric_records.clear(view.__markdown_live_owner, line1, line2)
       view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
     end
   end
