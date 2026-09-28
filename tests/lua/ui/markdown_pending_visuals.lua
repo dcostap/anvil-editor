@@ -5,17 +5,24 @@ local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
+local wrapping = require "core.linewrapping"
 local Project = require "core.project"
 local style = require "core.style"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 
-local function wait_ready(instance)
+local function wait_ready(view)
+  local instance = test.not_nil(markdown_model.peek(view.buffer))
   local deadline = system.get_time() + 5
   repeat
     local pool = worker_pool.current_system()
     if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
-    if instance.status == "ready" then return true end
+    if instance.status == "ready" then
+      -- Parser publication starts layout preparation. Observe the completed
+      -- presentation before testing continuity through the next edit.
+      wrapping.complete_async_reconstruction(view)
+      return true
+    end
     coroutine.yield(0.01)
   until system.get_time() >= deadline
   return instance.status == "ready"
@@ -92,7 +99,7 @@ test.describe("Markdown pending visual continuity", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       local decoration
       for _, entry in ipairs(view:decoration_provider_entries()) do
         if entry.id == "markdown-live" then decoration = entry.provider break end
@@ -113,7 +120,7 @@ test.describe("Markdown pending visual continuity", function()
         check_backgrounds()
         view:update()
         check_backgrounds()
-        test.ok(wait_ready(instance), instance.reason)
+        test.ok(wait_ready(view), instance.reason)
         check_backgrounds()
       end
     end)
@@ -133,7 +140,7 @@ test.describe("Markdown pending visual continuity", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       local function checkbox_size()
         local renderer = require "renderer"
         for _, fragment in ipairs(view:get_line_render(1).fragments) do
@@ -156,7 +163,7 @@ test.describe("Markdown pending visual continuity", function()
       buffer:insert(1, 11, "!")
       test.equal(instance.status, "pending")
       test.same(checkbox_size(), before)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.same(checkbox_size(), before)
     end)
     if view then markdown.live_render.detach(view) end
@@ -176,12 +183,12 @@ test.describe("Markdown pending visual continuity", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(view:get_line_render(3), nil)
       buffer:insert(3, 9, "!")
       test.equal(instance.status, "pending")
       test.equal(view:get_line_render(3), nil)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(view:get_line_render(3), nil)
     end)
     if view then markdown.live_render.detach(view) end
@@ -203,13 +210,13 @@ test.describe("Markdown pending visual continuity", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(count_visuals(view, "attachment_chip"), 1)
       buffer:apply_edits({
         { line1 = 2, col1 = 1, line2 = 2, col2 = 1, text = "![[manual.pdf]]\n" },
       }, { type = "insert" })
       test.equal(count_visuals(view, "attachment_chip"), 2)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       markdown.live_render.detach(view)
       view:on_close()
       core.buffer_registry:remove(view.buffer, true)
@@ -221,13 +228,13 @@ test.describe("Markdown pending visual continuity", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(count_visuals(view, "attachment_chip"), 1)
 
       exit_empty_list(buffer)
 
       test.equal(count_visuals(view, "attachment_chip"), 1)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(count_visuals(view, "attachment_chip"), 1)
     end)
     if view then markdown.live_render.detach(view) end
@@ -266,14 +273,14 @@ test.describe("Markdown pending visual continuity", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.ok(wait_vault_ready(index), index.reason)
       test.equal(count_visuals(view, "embed_preview"), 1)
       buffer:apply_edits({
         { line1 = 2, col1 = 1, line2 = 2, col2 = 1, text = "![[Target]]\n" },
       }, { type = "insert" })
       test.equal(count_visuals(view, "embed_preview"), 2)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       markdown.live_render.detach(view)
       view:on_close()
       core.buffer_registry:remove(view.buffer, true)
@@ -285,14 +292,14 @@ test.describe("Markdown pending visual continuity", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.ok(wait_vault_ready(index), index.reason)
       test.equal(count_visuals(view, "embed_preview"), 1)
 
       exit_empty_list(buffer)
 
       test.equal(count_visuals(view, "embed_preview"), 1)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(count_visuals(view, "embed_preview"), 1)
     end)
     if view then markdown.live_render.detach(view) end
@@ -326,13 +333,13 @@ test.describe("Markdown pending visual continuity", function()
         core.active_view = view
         markdown.live_render.refresh_view(view)
         local instance = test.not_nil(markdown_model.peek(buffer))
-        test.ok(wait_ready(instance), instance.reason)
+        test.ok(wait_ready(view), instance.reason)
         test.ok(count_flag(view, 2, item[3]) > 0, item[1])
 
         exit_empty_list(buffer)
 
         test.ok(count_flag(view, 3, item[3]) > 0, item[1])
-        test.ok(wait_ready(instance), instance.reason)
+        test.ok(wait_ready(view), instance.reason)
         test.ok(count_flag(view, 3, item[3]) > 0, item[1])
         markdown.live_render.detach(view)
       end
@@ -360,13 +367,13 @@ test.describe("Markdown pending visual continuity", function()
       end
       decoration = test.not_nil(decoration)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(decoration:line_background(view, 3), style.markdown_live_code_background)
 
       exit_empty_list(buffer)
 
       test.equal(decoration:line_background(view, 4), style.markdown_live_code_background)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(decoration:line_background(view, 4), style.markdown_live_code_background)
     end)
     if view then markdown.live_render.detach(view) end
@@ -393,13 +400,13 @@ test.describe("Markdown pending visual continuity", function()
       end
       decoration = test.not_nil(decoration)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.not_nil(decoration:line_background_descriptor(view, 3))
 
       exit_empty_list(buffer)
 
       test.not_nil(decoration:line_background_descriptor(view, 4))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.not_nil(decoration:line_background_descriptor(view, 4))
     end)
     if view then markdown.live_render.detach(view) end
@@ -427,7 +434,7 @@ test.describe("Markdown pending visual continuity", function()
       end
       decoration = test.not_nil(decoration)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.not_nil(decoration:line_background_descriptor(view, 2))
 
       buffer:apply_edits({
@@ -439,7 +446,7 @@ test.describe("Markdown pending visual continuity", function()
         decoration:line_background_descriptor(view, 3),
         "the duplicated callout body lost its card while semantics were pending"
       )
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.not_nil(decoration:line_background_descriptor(view, 3))
     end)
     if view then markdown.live_render.detach(view) end
@@ -467,7 +474,7 @@ test.describe("Markdown pending visual continuity", function()
       end
       decoration = test.not_nil(decoration)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(decoration:line_background(view, 3), style.markdown_live_code_background)
 
       buffer:apply_edits({
@@ -480,7 +487,7 @@ test.describe("Markdown pending visual continuity", function()
         style.markdown_live_code_background,
         "the duplicated indented-code line lost its background while semantics were pending"
       )
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(decoration:line_background(view, 4), style.markdown_live_code_background)
     end)
     if view then markdown.live_render.detach(view) end
@@ -508,14 +515,14 @@ test.describe("Markdown pending visual continuity", function()
       end
       decoration = test.not_nil(decoration)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
 
       buffer:insert(2, 5, "\n")
 
       test.equal(instance.status, "pending")
       test.equal(view:get_line_render(2), nil)
       test.equal(decoration:line_background(view, 2), nil)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(view:get_line_render(2), nil)
       test.equal(decoration:line_background(view, 2), nil)
     end)
@@ -544,14 +551,14 @@ test.describe("Markdown pending visual continuity", function()
       end
       decoration = test.not_nil(decoration)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
 
       buffer:insert(2, #buffer.lines[2] - 1, "!")
 
       test.equal(instance.status, "pending")
       test.equal(view:get_line_render(2), nil)
       test.equal(decoration:line_background(view, 2), nil)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(view:get_line_render(2), nil)
       test.equal(decoration:line_background(view, 2), nil)
     end)
@@ -575,7 +582,7 @@ test.describe("Markdown pending visual continuity", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       local source_height = view:get_line_height()
       for line = 1, 4 do
         test.equal(view:get_position_visual_row_height(line, 1), source_height)
@@ -594,7 +601,7 @@ test.describe("Markdown pending visual continuity", function()
           )
         )
       end
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
     end)
     if view then markdown.live_render.detach(view) end
     config.markdown_live_editor = old_live
@@ -616,7 +623,7 @@ test.describe("Markdown pending visual continuity", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(visible_render_text(view, 2), "")
 
       buffer:insert(2, #buffer.lines[2] - 1, "!")
@@ -626,7 +633,7 @@ test.describe("Markdown pending visual continuity", function()
         visible_render_text(view, 2), "",
         "comment content became visible during a pending edit"
       )
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(view), instance.reason)
       test.equal(visible_render_text(view, 2), "")
     end)
     if view then markdown.live_render.detach(view) end

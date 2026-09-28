@@ -5040,7 +5040,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     local previous_list = captured
       and edit_visual_projection.source_list_prefix(captured.source_text or "")
     local current_list = edit_visual_projection.source_list_prefix(source)
-    local preview_item = not (captured and captured.fenced)
+    local preview_item = not retains_raw_list_source(captured)
       and edit_visual_projection.preview_list_item_for_line(view, line, source) ~= nil
     local instance = current_list and not preview_item
       and markdown_model.peek(view.buffer)
