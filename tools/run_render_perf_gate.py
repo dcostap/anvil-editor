@@ -118,6 +118,8 @@ SCENARIOS: dict[str, dict[str, Any]] = {
 }
 
 STANDARD_SCENARIOS = tuple(SCENARIOS)
+LEGACY_MEASURE_FRAMES = 600
+LEGACY_WARMUP_FRAMES = 180
 
 # Use this focused scene explicitly until it has a full-suite baseline.
 SCENARIOS["image-viewer"] = {
@@ -231,7 +233,6 @@ LOWER_IS_BETTER = {
     "draw_calls_avg": (0.03, 10.0),
     "rencache_commands_avg": (0.03, 10.0),
     "paced_interval_ms_p95": (0.10, 0.30),
-    "paced_interval_ms_max": (0.20, 2.0),
     "paced_interval_over_33_33_fraction": (0.25, 0.01),
     "startup_total_ms": (0.10, 20.0),
 }
@@ -1166,10 +1167,8 @@ def compare_performance(current: dict[str, Any], baseline: dict[str, Any]) -> li
                 now["paced"]["metrics"]["interval_ms_p95"],
                 before["paced"]["metrics"]["interval_ms_p95"],
             )
-            pairs["paced_interval_ms_max"] = (
-                now["paced"]["metrics"].get("interval_ms_max", 0),
-                before["paced"]["metrics"].get("interval_ms_max", 0),
-            )
+            # Report maxima, but do not compare single scheduling outliers.
+            # P95 and sustained missed-frame fractions remain gated.
             pairs["paced_interval_over_33_33_fraction"] = (
                 now["paced"]["metrics"].get("interval_over_33_33_fraction", 0),
                 before["paced"]["metrics"].get("interval_over_33_33_fraction", 0),
@@ -1363,6 +1362,9 @@ def main() -> int:
         raise RuntimeError("the isolated D3D11 gate requires Windows")
     stress = args.suite in ("stress", "interactive", "diff") or any(
         name in perf_workloads.SCENARIOS for name in args.scenario or ())
+    selected_scenarios = list(dict.fromkeys(args.scenario)) if args.scenario else SUITES[args.suite]
+    legacy_scoring = (uses_performance_baseline(args.renderer) and not args.report_only
+                      and any(name in STANDARD_SCENARIOS for name in selected_scenarios))
     full = args.suite == "full"
     runs = args.runs if args.runs is not None else (5 if full else 3)
     metrics_runs = args.metrics_runs if args.metrics_runs is not None else 2
@@ -1370,8 +1372,10 @@ def main() -> int:
     # Quick and full suites use identical per-scenario workloads so both can
     # compare against one full-suite baseline. Quick is faster by selecting
     # fewer scenarios and repetitions, not by changing the workload.
-    frames = args.frames if args.frames is not None else (120 if stress else 600)
-    warmup_frames = args.warmup_frames if args.warmup_frames is not None else (20 if stress else 180)
+    frames = args.frames if args.frames is not None else (
+        120 if stress and not legacy_scoring else LEGACY_MEASURE_FRAMES)
+    warmup_frames = args.warmup_frames if args.warmup_frames is not None else (
+        20 if stress and not legacy_scoring else LEGACY_WARMUP_FRAMES)
     if (runs < 1 or metrics_runs < 1 or paced_runs < 1 or frames < 2
             or warmup_frames < 1 or args.max_runs < 1):
         parser.error("run and frame counts must be positive")
@@ -1389,7 +1393,10 @@ def main() -> int:
     if any(not math.isfinite(value) or value <= 0 for value in (args.frame_budget_ms, args.action_budget_ms)):
         parser.error("budgets must be finite and positive")
 
-    selected_scenarios = list(dict.fromkeys(args.scenario)) if args.scenario else SUITES[args.suite]
+    if legacy_scoring and (frames < LEGACY_MEASURE_FRAMES or warmup_frames < LEGACY_WARMUP_FRAMES):
+        parser.error(
+            "short legacy runs are smoke checks; use --report-only, or at least "
+            f"{LEGACY_MEASURE_FRAMES} frames and {LEGACY_WARMUP_FRAMES} warmup frames")
     if args.actions is not None and any(
         name in perf_workloads.EDITOR_SCENARIOS for name in selected_scenarios
     ):

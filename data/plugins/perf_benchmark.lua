@@ -832,6 +832,8 @@ end
 local CAPTURE_DECORATION_TIMEOUT = 10
 
 local function decorations_are_settled()
+  -- Legacy scenes also draw file captions, including inactive tabs.
+  if not require("core.perf_workloads").buffers_ready(core.buffers) then return false end
   local workload = benchmark.workload
   return not (workload and workload.capture_ready) or workload:capture_ready()
 end
@@ -1254,7 +1256,7 @@ core.add_thread(function()
     heartbeat(false)
     coroutine.yield()
     settle_frames = settle_frames + 1
-  until settle_frames >= 30 and scenario_is_ready()
+  until settle_frames >= 30 and scenario_is_ready() and decorations_are_settled()
   mark_lifecycle("scenario_ready")
   for _ = 1, 5 do
     core.redraw = true

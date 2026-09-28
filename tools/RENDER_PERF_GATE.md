@@ -255,6 +255,15 @@ and completion. `startup_total_ms` covers process launch through the first
 ready frame; readiness is not replaced by an arbitrary delay. Exact pixel
 stability remains a separate three-capture check after measurement.
 
+All scenes wait for file Git status and diff decorations before warmup and capture.
+This includes legacy scenes and inactive tab captions. Consecutive identical
+captures alone cannot prove that a pending decoration has finished.
+
+Use the default 600 measured frames and 180 warmup frames for legacy timing comparisons.
+The fixed-action editor workloads have separate settings. Short legacy runs,
+such as 24 measured frames and eight warmup frames, are smoke checks only.
+Their timing percentiles can depend on one cold frame. Do not use them for performance claims.
+
 The detailed F11 profiler remains a diagnostic tool and is intentionally not used for performance scores.
 
 ### Explicit visual replays
@@ -461,7 +470,10 @@ The gate checks both a relative regression budget and workload integrity:
 - any crash, startup stall, heartbeat stall, wall timeout, missing artifact, or
   unstable state is a hard failure
 
-Raw p99 values are reported but not gated because they are more sensitive to unrelated system scheduling. Performance timing is intentionally kept out of Meson correctness tests; run this local hardware gate for performance changes.
+Raw p99 values and paced interval maxima are reported but not gated.
+One delayed Present can change the maximum while ordinary frame costs stay unchanged.
+P95 and sustained missed-frame fractions remain gated.
+Performance timing stays outside Meson correctness tests. Use this local hardware gate for performance changes.
 
 ## Per-change workflow
 

@@ -266,14 +266,25 @@ end
 
 -- Screenshots wait for asynchronous decorations so a capture never depends on
 -- how quickly a debounced background result arrives.
+function Workload.buffers_ready(buffers)
+  local gitdiff = package.loaded["plugins.gitdiff_highlight"]
+  local git_status = package.loaded["plugins.file_git_status"]
+  for _, buffer in ipairs(buffers) do
+    local path = buffer.abs_filename
+    if path then
+      if gitdiff and not gitdiff.is_settled(buffer) then return false end
+      if git_status and not git_status:is_settled(path, false) then return false end
+    end
+  end
+  return true
+end
+
 function Workload:capture_ready()
   local buffer = self.view and self.view.buffer
-  local gitdiff = package.loaded["plugins.gitdiff_highlight"]
-  if gitdiff and buffer and not gitdiff.is_settled(buffer) then return false end
+  if buffer and not Workload.buffers_ready({ buffer }) then return false end
   -- Tab titles and picker rows color file names by their Git status.
   local git_status = package.loaded["plugins.file_git_status"]
-  local path = self.picker and self:path("project") or buffer and buffer.abs_filename
-  return not (git_status and path) or git_status:is_settled(path, self.picker ~= nil)
+  return not (git_status and self.picker) or git_status:is_settled(self:path("project"), true)
 end
 
 function Workload:state()

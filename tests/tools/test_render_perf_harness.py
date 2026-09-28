@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import io
 import json
+from contextlib import redirect_stderr
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,6 +31,16 @@ gate = load_gate()
 
 
 class PerformanceBaselinePolicyTests(unittest.TestCase):
+    def test_short_legacy_run_cannot_claim_a_performance_comparison(self):
+        with patch.object(sys, "argv", ["gate", "--scenario", "wrapped-document-steady",
+                                      "--frames", "2", "--warmup-frames", "1"]):
+            with patch.object(gate, "build_anvil", side_effect=AssertionError("unsafe scoring run")):
+                error = io.StringIO()
+                with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+                    gate.main()
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("smoke", error.getvalue())
+
     def test_only_d3d11_uses_the_performance_baseline(self):
         self.assertTrue(gate.uses_performance_baseline("d3d11"))
         self.assertFalse(gate.uses_performance_baseline("software"))
@@ -125,6 +138,23 @@ class PerformanceBaselinePolicyTests(unittest.TestCase):
 
 
 class MetricsSummaryTests(unittest.TestCase):
+    def test_one_paced_outlier_does_not_claim_a_repeatable_slowdown(self):
+        before = {"scenarios": {"case": {
+            "status": "passed", "active_fps": 400, "metrics": {},
+            "paced": {"active_fps": 165, "metrics": {
+                "interval_ms_p95": 6.1, "interval_ms_max": 8.5,
+                "interval_over_33_33_fraction": 0,
+            }},
+        }}}
+        after = json.loads(json.dumps(before))
+        after["scenarios"]["case"]["paced"]["metrics"]["interval_ms_max"] = 30.4
+        findings = gate.compare_performance(after, before)
+        self.assertFalse(any(item["status"] == "regression" for item in findings))
+        # A sustained tail slowdown must still fail.
+        after["scenarios"]["case"]["paced"]["metrics"]["interval_ms_p95"] = 12
+        findings = gate.compare_performance(after, before)
+        self.assertTrue(any(item["status"] == "regression" for item in findings))
+
     def test_reports_stutter_budgets_consecutive_misses_and_progression(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "metrics.csv"
