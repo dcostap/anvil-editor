@@ -1080,8 +1080,8 @@ def run_case_pair(reference_exe: Path | None, references: dict[str, list], **kwa
     return candidate if candidate is not None else run_case_safely(**kwargs)
 
 
-def summarize_reference(runs: dict[str, list]) -> dict[str, Any]:
-    throughput, metrics = runs["throughput"], runs["metrics"]
+def summarize_measurements(runs: dict[str, list]) -> dict[str, Any]:
+    throughput, metrics = runs["throughput"], runs.get("metrics", [])
     result = {
         "active_fps": statistics.median(item["active_fps"] for item in throughput),
         "active_fps_runs": [item["active_fps"] for item in throughput],
@@ -1145,6 +1145,62 @@ def repository_info() -> dict[str, Any]:
     revision = run(["git", "rev-parse", "HEAD"], check=False).stdout.strip()
     status = run(["git", "status", "--short"], check=False).stdout.splitlines()
     return {"revision": revision, "dirty": bool(status), "changed_paths": status}
+
+
+def timing_mode(metric: str) -> str | None:
+    if metric.startswith("paced_") and ("_ms" in metric or metric.endswith("fps")):
+        return "paced-metrics"
+    if metric in ("active_fps", "startup_total_ms") or metric.startswith("action."):
+        return "throughput"
+    return "metrics" if "_ms" in metric else None
+
+
+def paired_timing_confidence(now: dict, before: dict, metric: str) -> dict[str, float] | None:
+    mode = timing_mode(metric)
+    groups = now.get("runs") or {"throughput": now.get("throughput_runs", []),
+                                 "metrics": now.get("metric_runs", []),
+                                 "paced-metrics": now.get("paced", {}).get("runs", [])}
+    pairs = list(zip(groups.get(mode, []), before.get("runs", {}).get(mode, [])))
+
+    def value(item: dict) -> float | None:
+        if metric in ("active_fps", "paced_active_fps"):
+            return item.get("active_fps")
+        if metric == "startup_total_ms":
+            return summarize_case_lifecycle([item]).get(metric)
+        if metric.startswith("action."):
+            name, statistic = metric[7:].rsplit(".", 1)
+            return item.get("actions", {}).get(name, {}).get(statistic)
+        key = metric.removeprefix("paced_")
+        return item.get("metrics", {}).get(key)
+
+    values = [(value(a), value(b)) for a, b in pairs]
+    if len(values) < 2 or any(a is None or b is None for a, b in values):
+        return None
+    direction = -1 if metric in HIGHER_IS_BETTER else 1
+    differences = [(a - b) * direction for a, b in values]
+    # One-sided 95% Student t bounds, with each process as one observation.
+    # The n=10 value remains conservative for larger samples.
+    critical = {2: 6.314, 3: 2.920, 4: 2.353, 5: 2.132, 6: 2.015,
+                7: 1.943, 8: 1.895, 9: 1.860}.get(len(pairs), 1.833)
+
+    def lower(values: list[float]) -> float:
+        return statistics.mean(values) - critical * statistics.stdev(values) / math.sqrt(len(values))
+
+    result = {"pairs": len(pairs), "absolute_lower_95": lower(differences)}
+    if all(b > 0 for _, b in values):
+        result["relative_lower_95"] = lower([
+            difference / pair[1] for difference, pair in zip(differences, values)
+        ])
+    return result
+
+
+def uncertain_pairs(scenario: str, mode: str, runs: dict, references: dict) -> bool:
+    current = summarize_measurements(runs)
+    current.update(status="passed", reference=summarize_measurements(references))
+    findings = compare_performance({"scenarios": {scenario: current}},
+                                   {"scenarios": {scenario: current["reference"]}})
+    return any(item["status"] == "inconclusive" and timing_mode(item["metric"]) == mode
+               for item in findings)
 
 
 def compare_performance(current: dict[str, Any], baseline: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1245,6 +1301,14 @@ def compare_performance(current: dict[str, Any], baseline: dict[str, Any]) -> li
                         2 * relative_mad(before.get("active_fps_runs", [])),
                     )
                 failed = reference - value > abs_limit and -relative > rel_limit
+            status = "regression" if failed else "pass"
+            confidence = None
+            if failed and timing_mode(metric) and now.get("reference"):
+                confidence = paired_timing_confidence(now, before, metric)
+                if not confidence or confidence["absolute_lower_95"] <= abs_limit or (
+                    confidence.get("relative_lower_95", math.inf) <= rel_limit
+                ):
+                    status = "inconclusive"
             findings.append({
                 "scenario": scenario,
                 "metric": metric,
@@ -1252,7 +1316,8 @@ def compare_performance(current: dict[str, Any], baseline: dict[str, Any]) -> li
                 "baseline": reference,
                 "relative_change": relative,
                 "relative_limit": rel_limit,
-                "status": "regression" if failed else "pass",
+                "status": status,
+                "paired_confidence": confidence,
             })
     for item in findings:
         scenario = current.get("scenarios", {}).get(item.get("scenario"), {})
@@ -1410,7 +1475,7 @@ def main() -> int:
                       and any(name in STANDARD_SCENARIOS for name in selected_scenarios))
     full = args.suite == "full"
     runs = args.runs if args.runs is not None else (5 if full else 3)
-    metrics_runs = args.metrics_runs if args.metrics_runs is not None else 2
+    metrics_runs = args.metrics_runs if args.metrics_runs is not None else 3
     paced_runs = args.paced_runs if args.paced_runs is not None else 1
     # Quick and full suites use identical per-scenario workloads so both can
     # compare against one full-suite baseline. Quick is faster by selecting
@@ -1690,10 +1755,12 @@ def main() -> int:
             noise = relative_mad([item["active_fps"] for item in throughput_runs])
             if reference_runs:
                 noise = max(noise, relative_mad([item["active_fps"] for item in reference_runs["throughput"]]))
+            uncertain = reference_runs and uncertain_pairs(
+                scenario, "throughput", {"throughput": throughput_runs}, reference_runs)
             if (args.report_only or not uses_performance_baseline(args.renderer)
-                    or noise <= 0.06 or len(throughput_runs) >= args.max_runs):
+                    or (noise <= 0.06 and not uncertain) or len(throughput_runs) >= args.max_runs):
                 break
-            print(f"  throughput noise {noise:.1%}; automatically adding a repetition", flush=True)
+            print(f"  throughput noise {noise:.1%}, uncertain={bool(uncertain)}; adding a repetition", flush=True)
 
         if case_failures:
             report["scenarios"][scenario] = {
@@ -1706,9 +1773,10 @@ def main() -> int:
         print(f"[{scenario}] metrics runs: {metrics_runs}", flush=True)
         metric_runs = []
         visual_run: dict[str, Any] | None = None
-        for index in range(1, metrics_runs + 1):
+        while True:
+            index = len(metric_runs) + 1
             take_screenshot = (
-                index == metrics_runs and settings["visual"] and not args.no_visual
+                index >= metrics_runs and settings["visual"] and not args.no_visual
                 and not settings.get("capture_actions")
             )
             case = run_case_pair(reference_exe, reference_runs,
@@ -1736,6 +1804,14 @@ def main() -> int:
                 f"p95={case['metrics']['frame_ms_p95']:.3f}ms",
                 flush=True,
             )
+            if len(metric_runs) < metrics_runs:
+                continue
+            if reference_runs and len(metric_runs) < args.max_runs and uncertain_pairs(
+                scenario, "metrics", {"throughput": throughput_runs, "metrics": metric_runs}, reference_runs
+            ):
+                print("  uncertain paired timing; automatically adding a repetition", flush=True)
+                continue
+            break
 
         if (not case_failures and settings["visual"] and not args.no_visual
                 and settings.get("capture_actions")):
@@ -1839,7 +1915,8 @@ def main() -> int:
         if settings.get("paced"):
             print(f"[{scenario}] present-paced runs: {paced_runs}", flush=True)
             paced_results = []
-            for index in range(1, paced_runs + 1):
+            while True:
+                index = len(paced_results) + 1
                 case = run_case_pair(reference_exe, reference_runs,
                     exe=exe, work=work, user=case_user("paced", index),
                     fixture=fixture, external_fixture=external_fixture,
@@ -1862,6 +1939,15 @@ def main() -> int:
                     f"interval p95={case['metrics']['interval_ms_p95']:.3f}ms",
                     flush=True,
                 )
+                if len(paced_results) < paced_runs:
+                    continue
+                if reference_runs and len(paced_results) < args.max_runs and uncertain_pairs(
+                    scenario, "paced-metrics", {"throughput": throughput_runs, "metrics": metric_runs,
+                                               "paced-metrics": paced_results}, reference_runs
+                ):
+                    print("  uncertain paced timing; automatically adding a repetition", flush=True)
+                    continue
+                break
             if case_failures:
                 scenario_report["status"] = "failed"
                 scenario_report["failures"] = case_failures
@@ -1881,7 +1967,7 @@ def main() -> int:
                 if scenario_report["paced"]["target_fps"] else 0.0
             )
         if reference_runs:
-            scenario_report["reference"] = summarize_reference(reference_runs)
+            scenario_report["reference"] = summarize_measurements(reference_runs)
             reference_states = [item.get("state") for group in reference_runs.values() for item in group]
             if not states_consistent(reference_states + [scenario_report["state"]]):
                 scenario_report["status"] = "failed"
@@ -1990,6 +2076,8 @@ def main() -> int:
             if same_machine and same_fixture and same_workload and same_renderer else []
         )
         report["performance_findings"] = findings
+        if any(item["status"] == "inconclusive" for item in findings):
+            report["inconclusive"] = True
         if (not same_machine or not same_fixture or not same_workload or not same_renderer
                 or any(item["status"] in ("regression", "missing", "inconclusive")
                        for item in findings)):

@@ -71,6 +71,11 @@ Timing thresholds compare these current reference measurements, not old desktop 
 The report retains both sets of repetitions. Pixel and state checks still use the accepted baseline.
 A reference crash, timeout, or state mismatch fails the comparison.
 
+A timing breach must also clear a one-sided 95% bound on paired process differences.
+Uncertain timing results add paired repetitions, up to `--max-runs`.
+Remaining uncertainty is `INCONCLUSIVE`, not a proven regression or a passing comparison.
+The existing timing budgets and strict work-count checks do not change.
+
 Keep the baseline run's `app` directory unchanged. It contains the reference executable and runtime data.
 The runner rejects a missing snapshot or changed executable. Establish a new baseline if that snapshot is lost.
 Do not replace reference files with the current build to make a comparison pass.

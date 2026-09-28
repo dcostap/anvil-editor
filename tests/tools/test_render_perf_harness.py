@@ -58,14 +58,20 @@ class PerformanceBaselinePolicyTests(unittest.TestCase):
 
     def test_comparison_uses_the_replayed_reference_without_hiding_a_real_slowdown(self):
         old = {"status": "passed", "active_fps": 100, "metrics": {"frame_ms_p50": 10}}
-        reference = {"status": "passed", "active_fps": 80, "metrics": {"frame_ms_p50": 12.5}}
-        current = {**reference, "reference": reference}
+        reference = {"status": "passed", "active_fps": 80, "metrics": {"frame_ms_p50": 12.5},
+                     "runs": {"throughput": [{"active_fps": 80} for _ in range(3)],
+                              "metrics": [{"metrics": {"frame_ms_p50": 12.5}} for _ in range(3)]}}
+        current = {"status": "passed", "active_fps": 80, "metrics": {"frame_ms_p50": 12.5},
+                   "reference": reference, "throughput_runs": reference["runs"]["throughput"],
+                   "metric_runs": reference["runs"]["metrics"]}
         baseline = {"scenarios": {"case": old}}
         report = {"scenarios": {"case": current}}
         self.assertFalse(any(x["status"] == "regression"
                              for x in gate.compare_performance(report, baseline)))
         current["active_fps"] = 40
         current["metrics"] = {"frame_ms_p50": 25}
+        current["throughput_runs"] = [{"active_fps": 40} for _ in range(3)]
+        current["metric_runs"] = [{"metrics": {"frame_ms_p50": 25}} for _ in range(3)]
         self.assertTrue(any(x["status"] == "regression"
                             for x in gate.compare_performance(report, baseline)))
 
@@ -176,6 +182,23 @@ class PerformanceBaselinePolicyTests(unittest.TestCase):
 
 
 class MetricsSummaryTests(unittest.TestCase):
+    def test_noisy_paired_timing_is_inconclusive_but_a_consistent_slowdown_fails(self):
+        metric = "frame_ms_p50"
+        reference = {"active_fps": 100, "metrics": {metric: 10}, "runs": {
+            "metrics": [{"metrics": {metric: 10}} for _ in range(3)],
+        }}
+        current = {"status": "passed", "active_fps": 100, "metrics": {metric: 12},
+                   "reference": reference, "metric_runs": [
+                       {"metrics": {metric: value}} for value in (9.9, 12, 12.5)]}
+        report = {"scenarios": {"case": current}}
+        baseline = {"scenarios": {"case": reference}}
+        finding = next(x for x in gate.compare_performance(report, baseline) if x["metric"] == metric)
+        self.assertEqual(finding["status"], "inconclusive")
+        current["metrics"][metric] = 20
+        current["metric_runs"] = [{"metrics": {metric: 20}} for _ in range(3)]
+        finding = next(x for x in gate.compare_performance(report, baseline) if x["metric"] == metric)
+        self.assertEqual(finding["status"], "regression")
+
     def test_one_paced_outlier_does_not_claim_a_repeatable_slowdown(self):
         before = {"scenarios": {"case": {
             "status": "passed", "active_fps": 400, "metrics": {},
