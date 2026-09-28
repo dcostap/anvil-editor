@@ -832,10 +832,11 @@ end
 local function state_selection_iterator(invariant, idx)
   local target = invariant[3] and (idx*4 - 7) or (idx*4 + 1)
   if target > #invariant[1] or target <= 0 or (type(invariant[3]) == "number" and invariant[3] ~= idx - 1) then return end
+  local s = invariant[1]
   if invariant[2] then
-    return idx+(invariant[3] and -1 or 1), sort_positions(table.unpack(invariant[1], target, target+4))
+    return idx+(invariant[3] and -1 or 1), sort_positions(s[target], s[target+1], s[target+2], s[target+3], s[target+4])
   else
-    return idx+(invariant[3] and -1 or 1), table.unpack(invariant[1], target, target+4)
+    return idx+(invariant[3] and -1 or 1), s[target], s[target+1], s[target+2], s[target+3], s[target+4]
   end
 end
 
@@ -1160,10 +1161,12 @@ local function selection_iterator(invariant, idx)
   local target = invariant[3] and (idx*4 - 7) or (idx*4 + 1)
   if target > #invariant[1] or target <= 0 or (type(invariant[3]) == "number" and invariant[3] ~= idx - 1) then return end
   perf_frame_add("buffer_get_selections_iters", 1)
+  -- Index directly. The compatibility table.unpack goes through the C API.
+  local s = invariant[1]
   if invariant[2] then
-    return idx+(invariant[3] and -1 or 1), sort_positions(table.unpack(invariant[1], target, target+4))
+    return idx+(invariant[3] and -1 or 1), sort_positions(s[target], s[target+1], s[target+2], s[target+3], s[target+4])
   else
-    return idx+(invariant[3] and -1 or 1), table.unpack(invariant[1], target, target+4)
+    return idx+(invariant[3] and -1 or 1), s[target], s[target+1], s[target+2], s[target+3], s[target+4]
   end
 end
 
