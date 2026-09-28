@@ -1056,7 +1056,7 @@ local function image_fragment(view, span, opts)
         padding = padding,
         hover_outline_padding = 0,
         hover_outline_outside = true,
-        hover_inner_outline_color = style.markdown_live_image_hover_inner_border,
+        hover_outline_color = style.dim,
         suppress_hover_background = true,
         cursor = "hand",
         on_mouse_pressed = function(_, owner, hit, button)
@@ -1356,6 +1356,9 @@ local function image_only_render_line(view, text, line, span, active)
     image.draw_x_offset = markdown_live_body_font(view):get_width(text:sub(1, span.col1 - 1))
   end
   if image.widget then
+    local link = live._image_attachment_link(view, line, span, { base_font = body_font })
+    local hover_group = {}
+    link.hover_group, image.hover_group = hover_group, hover_group
     image.source_col1, image.source_col2 = #text + 1, #text + 1
     image.width = 0
     image.image_block = true
@@ -1365,7 +1368,7 @@ local function image_only_render_line(view, text, line, span, active)
       source_text = text,
       fragments = {
         { source_col1 = 1, source_col2 = span.col1, hidden = true },
-        live._image_attachment_link(view, line, span, { base_font = body_font }),
+        link,
         image,
         { source_col1 = span.col2, source_col2 = #text + 1, hidden = true },
       },
@@ -1414,6 +1417,7 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     local missing = resolution.status == "missing" or resolution.subtarget_missing
     fragment.color = missing and style.markdown_live_link_error or style.markdown_live_link
     fragment.underline = true
+    fragment.hover_fill_up = true
   end
   local bold, italic, strike, highlight, code = false, false, false, false, false
   local ids = { span.semantic_id }
@@ -1653,6 +1657,8 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
       if fragment then
         fragments[#fragments + 1] = fragment
         if image then
+          local hover_group = {}
+          fragment.hover_group, image.hover_group = hover_group, hover_group
           image.source_col1, image.source_col2 = span.col2, span.col2
           image.width = 0
           image.image_anchor = true

@@ -4851,6 +4851,10 @@ local function fragment_uses_hand_cursor(fragment)
   )
 end
 
+local function fragment_is_hovered(fragment)
+  return fragment.hovered or (fragment.hover_group and fragment.hover_group.hovered)
+end
+
 ---Discard normalized fragment copies after mutating a render line in place.
 ---@param render_line table?
 function TextView:invalidate_line_render_fragment_normalization(render_line)
@@ -5952,9 +5956,17 @@ local function update_render_hover_state(view, x, y)
   end
 
   if view.hovered_render_fragment ~= hovered_fragment then
-    if view.hovered_render_fragment then view.hovered_render_fragment.hovered = nil end
+    if view.hovered_render_fragment then
+      view.hovered_render_fragment.hovered = nil
+      if view.hovered_render_fragment.hover_group then
+        view.hovered_render_fragment.hover_group.hovered = nil
+      end
+    end
     view.hovered_render_fragment = hovered_fragment
-    if hovered_fragment then hovered_fragment.hovered = true end
+    if hovered_fragment then
+      hovered_fragment.hovered = true
+      if hovered_fragment.hover_group then hovered_fragment.hover_group.hovered = true end
+    end
     core.redraw = true
   end
 
@@ -6042,6 +6054,9 @@ function TextView:on_mouse_left()
   TextView.super.on_mouse_left(self)
   if self.hovered_render_fragment then
     self.hovered_render_fragment.hovered = nil
+    if self.hovered_render_fragment.hover_group then
+      self.hovered_render_fragment.hover_group.hovered = nil
+    end
     self.hovered_render_fragment = nil
     core.redraw = true
   end
@@ -6958,7 +6973,7 @@ local function draw_render_fragment_background(fragment, x, y, width, height, fo
   if fragment.background and (force or not fragment.background_under_selection) then
     renderer.draw_rect(x, y, width, height, fragment.background)
   end
-  if fragment.hovered and fragment_uses_hand_cursor(fragment) then
+  if fragment_is_hovered(fragment) and fragment_uses_hand_cursor(fragment) then
     renderer.draw_rect(
       x, y, width, height,
       fragment.hover_background or style.interactive_hover_background
@@ -6972,7 +6987,7 @@ local function draw_render_fragment_text(
   if not fragment.text_lines
   and not fragment.width
   and not fragment.background
-  and not fragment.hovered
+  and not fragment_is_hovered(fragment)
   and not fragment.overdraw
   and not fragment.strikethrough
   and not fragment.underline
@@ -7101,7 +7116,7 @@ local function draw_render_widget(view, fragment, x, y, row_height, context)
     return false
   end
   if widget.suppress_hover_overlay
-  or not (fragment.hovered and fragment_uses_hand_cursor(fragment))
+  or not (fragment_is_hovered(fragment) and fragment_uses_hand_cursor(fragment))
   then
     return true
   end
@@ -7145,7 +7160,7 @@ local function draw_render_widget(view, fragment, x, y, row_height, context)
   end
   draw_render_widget_outline(
     outline_left, outline_top, outline_width, outline_height,
-    border, style.interactive_hover_border
+    border, widget.hover_outline_color or style.interactive_hover_border
   )
 
   local inner_color = widget.hover_inner_outline_color

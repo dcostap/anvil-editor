@@ -177,7 +177,6 @@ style.markdown_live_reference_definition = style.dim
 style.markdown_live_math_background = style.background2
 style.markdown_live_footnote = style.accent
 style.markdown_live_image_background = style.background2
-style.markdown_live_image_hover_inner_border = c("000000")
 style.markdown_live_image_loading = style.dim
 style.markdown_live_image_blocked = p("warning_stripe")
 style.markdown_live_image_error = style.error
