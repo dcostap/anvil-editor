@@ -5617,13 +5617,33 @@ local clipboard_paste_provider = attachments.paste_provider()
 function poi_provider:points_of_interest(view)
   local instance = current_semantic_model(view)
   if not instance then return {} end
-  local nodes, reason = instance:inline_nodes_for_lines(1, #view.buffer.lines, { limit = 32768 })
+  local nodes, reason = instance:nodes_for_lines(1, #view.buffer.lines, { limit = 32768 })
   if reason == "limit" then
-    core.log_quiet("Markdown link POIs exceeded the 32768-capture bound for %s", view.buffer:get_name())
+    core.log_quiet("Markdown POIs exceeded the 32768-capture bound for %s", view.buffer:get_name())
     return {}
   end
-  local points, seen = {}, {}
+  local points, seen, seen_tasks = {}, {}, {}
   for _, node in ipairs(nodes or {}) do
+    if node.type == "list" or node.type == "list_item" then
+      local attributes = node.attributes or {}
+      local marker = attributes.task_unchecked or attributes.task_checked
+      if not marker then
+        marker = source_task_marker(
+          view.buffer.lines[node.source.line1] or "", attributes.list
+        )
+      end
+      if marker then
+        local line = marker.line1
+        local text = view.buffer.lines[line] or ""
+        local key = line .. ":" .. marker.col1
+        if text:sub(marker.col1, marker.col2 - 1) == "[ ]" and not seen_tasks[key] then
+          seen_tasks[key] = true
+          points[#points + 1] = {
+            line = line, col = marker.col1, kind = "markdown-task",
+          }
+        end
+      end
+    end
     if (node.type == "link" or node.type == "image" or node.type == "link_reference"
       or node.type == "wiki_link" or node.type == "embed")
       and node.source.line1 == node.source.line2 and not seen[node.id]
