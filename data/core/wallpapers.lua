@@ -16,6 +16,7 @@ local files = {
   image9 = "wallpaper9.jpg",
   image10 = "wallpaper10.png",
   image11 = "wallpaper11.png",
+  image12 = "wallpaper12.png",
 }
 
 function wallpapers.current()
@@ -35,8 +36,9 @@ end
 
 function wallpapers.options()
   local choices = { { name = "none", text = "None" } }
-  for index = 1, 11 do
+  for index = 1, math.huge do
     local name = "image" .. index
+    if not files[name] then break end
     choices[#choices + 1] = { name = name, text = name }
   end
   return choices
