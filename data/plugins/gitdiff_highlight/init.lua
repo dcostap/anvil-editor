@@ -231,6 +231,7 @@ local function use_buffer_fallback(buffer, error_message)
 	state.repo_root = nil
 	state.rel_path = nil
 	state.head_identity = nil
+	state.base_abs_filename = nil
 	state.base_from_head_path = false
 	state.loading = false
 	state.background_reload = false
@@ -261,6 +262,7 @@ local function clear_state(buffer, error_message)
 	state.repo_root = nil
 	state.rel_path = nil
 	state.head_identity = nil
+	state.base_abs_filename = nil
 	state.background_reload = false
 	state.ranges = {}
 	state.line_index = {}
@@ -457,6 +459,26 @@ local function git(args, max_stdout)
 	return nil, "", err.message or err.kind
 end
 
+-- One HEAD lookup serves every open Editor refreshed by the same shared Git
+-- publication, instead of one lookup per Editor.
+local HEAD_CHECK_REUSE_SECONDS = 0.5
+local head_checks = {}
+
+local function shared_head_identity(root)
+	local key = common.path_compare_key(root)
+	local check = head_checks[key]
+	if check and (not check.done or system.get_time() - check.done_at <= HEAD_CHECK_REUSE_SECONDS) then
+		while not check.done do coroutine.yield(0.01) end
+	else
+		check = {}
+		head_checks[key] = check
+		local rc, output = git({ "-C", root, "rev-parse", "--verify", "HEAD" }, 64 * 1024)
+		check.identity = rc == 0 and trim_eol(output) or nil
+		check.done, check.done_at = true, system.get_time()
+	end
+	return check.identity
+end
+
 local function head_path_for_staged_rename(root, rel)
 	local rc, output, err = git({
 		"--no-optional-locks", "--literal-pathspecs", "-C", root,
@@ -599,16 +621,16 @@ schedule_base_reload = function(buffer, reason)
 	-- Keep the shared status service aware of open Editors. This discovery does
 	-- not request a refresh and therefore cannot create a watcher loop.
 	git_status:lookup(buffer.abs_filename, false)
+	local shared_reason = tostring(reason or ""):match("^shared%-git%-") ~= nil
+	if not shared_reason and reason ~= "queued-base-reload" then state.foreground_reload = true end
 	if state.base_worker_running then
 		state.base_reload_requested = true
-		state.background_reload = state.background_reload
-			or tostring(reason or ""):match("^shared%-git%-") ~= nil
+		state.background_reload = state.background_reload or shared_reason
 		return
 	end
 	state.base_worker_running = true
 	state.loading = true
-	state.background_reload = state.background_reload
-		or tostring(reason or ""):match("^shared%-git%-") ~= nil
+	state.background_reload = state.background_reload or shared_reason
 	state.local_generation = state.local_generation + 1
 	state.base_generation = state.base_generation + 1
 	local base_generation = state.base_generation
@@ -623,6 +645,22 @@ schedule_base_reload = function(buffer, reason)
 			clear_state(buffer, "binary file")
 			finish_base_worker(buffer, state)
 			return
+		end
+
+		local foreground = state.foreground_reload
+		state.foreground_reload = false
+		if not foreground and state.background_reload and state.base_from_head_path
+			and state.head_identity and state.base_lines and state.base_abs_filename == full_path then
+			local head_identity = shared_head_identity(state.repo_root)
+			if base_generation ~= ensure_state(buffer).base_generation then finish_base_worker(buffer, state); return end
+			if head_identity == state.head_identity then
+				state.loading = false
+				if not state.base_reload_requested then state.background_reload = false end
+				state.error = nil
+				finish_base_worker(buffer, state)
+				schedule_local_diff(buffer, reason or "base-reload")
+				return
+			end
 		end
 
 		local rc, root, err = git({ "-C", file_dir, "rev-parse", "--show-toplevel" }, 64 * 1024)
@@ -759,6 +797,7 @@ schedule_base_reload = function(buffer, reason)
 		if not current_state.base_reload_requested then current_state.background_reload = false end
 		current_state.repo_root = root
 		current_state.rel_path = rel
+		current_state.base_abs_filename = full_path
 		current_state.head_identity = unborn_head and "UNBORN" or trim_eol(head_output)
 		current_state.base_from_head_path = base_from_head_path
 		current_state.baseline_kind = "git"
