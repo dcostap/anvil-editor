@@ -15,6 +15,7 @@ local files = {
   image8 = "wallpaper8.jpg",
   image9 = "wallpaper9.jpg",
   image10 = "wallpaper10.png",
+  image11 = "wallpaper11.png",
 }
 
 function wallpapers.current()
@@ -34,7 +35,7 @@ end
 
 function wallpapers.options()
   local choices = { { name = "none", text = "None" } }
-  for index = 1, 10 do
+  for index = 1, 11 do
     local name = "image" .. index
     choices[#choices + 1] = { name = name, text = name }
   end
