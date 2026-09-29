@@ -23,11 +23,16 @@ local Highlighter = require "core.buffer.highlighter"
 local TextView = require "core.textview"
 local GlobalPromptBar = require "core.global_prompt_bar"
 local MessageBox = require "widget.messagebox"
+local find_overview = require "plugins.intellij_find.overview"
+local find_scanner = require "core.local_find_scan"
+local worker_pool = require "core.worker_pool"
 
 local find_state_by_view = setmetatable({}, { __mode = "k" })
 local last_global_query = ""
 local update_after_input
 local FIND_NAV_VISIBLE_MARGIN_LINES = 4
+local SCAN_SLICE_SECONDS = .002
+local SCAN_SLICE_MAX_STEPS = 8192
 
 local SingleLineHighlighter = Highlighter:extend()
 function SingleLineHighlighter:get_line(idx)
@@ -269,36 +274,28 @@ local function build_match_indexes_by_line(matches)
   return by_line
 end
 
-local function find_all_matches(buffer, state, ranges)
+local function find_all_matches(buffer, state, ranges, checkpoint, external_line)
   local query = field_text(state.find)
   if not buffer or query == "" then return {}, nil end
 
-  local matches = {}
-  local compiled
-  if state.regex then
-    local ok, result = pcall(regex.compile, query, state.case_sensitive and "" or "i")
-    if not ok or not result then return {}, "Invalid regex" end
-    compiled = result
-  elseif not state.case_sensitive then
-    query = query:lower()
-  end
+  local matches, by_line = {}, {}
+  local search, err = find_scanner.compile(query, state.regex, state.case_sensitive)
+  if not search then return {}, err end
 
+  local current_line
+  local function emit(first, last)
+    matches[#matches + 1] = { line = current_line, col1 = first, col2 = last }
+    local indexes = by_line[current_line] or {}
+    by_line[current_line] = indexes
+    indexes[#indexes + 1] = #matches
+  end
   local function scan_line(line_nr)
+    current_line = line_nr
     local line_text = buffer.lines[line_nr]
-    local source = (not state.regex and not state.case_sensitive) and line_text:lower() or line_text
-    local pos = 1
-    while pos <= #source do
-      local s, e
-      if state.regex then
-        s, e = regex.find_offsets(compiled, source, pos)
-      else
-        s, e = source:find(query, pos, true)
-      end
-      if not s then break end
-      if e and e >= s and (e ~= #source or s ~= e) then
-        matches[#matches + 1] = { line = line_nr, col1 = s, col2 = e == #source and e or e + 1 }
-      end
-      pos = math.max((e or s) + 1, s + 1)
+    if external_line and #line_text > 65536 then
+      external_line(line_text, emit)
+    else
+      find_scanner.line(line_text, search, emit, checkpoint)
     end
   end
 
@@ -310,7 +307,7 @@ local function find_all_matches(buffer, state, ranges)
     for line = 1, #buffer.lines do scan_line(line) end
   end
 
-  return matches, nil
+  return matches, nil, by_line
 end
 
 local function same_query(state)
@@ -323,13 +320,14 @@ local function matches_are_current(buffer, state)
   return state.match_buffer == buffer and state.match_revision == buffer.text_revision and same_query(state)
 end
 
-local function remember_matches(buffer, state)
+local function remember_matches(buffer, state, indexes)
   state.match_buffer = buffer
   state.match_revision = buffer.text_revision
   state.match_query = field_text(state.find)
   state.match_regex = state.regex
   state.match_case_sensitive = state.case_sensitive
-  state.match_indexes_by_line = build_match_indexes_by_line(state.matches)
+  state.match_indexes_by_line = indexes or build_match_indexes_by_line(state.matches)
+  state.match_set_revision = (state.match_set_revision or 0) + 1
 end
 
 Buffer.register_text_transaction_handler("local-find", function(buffer, transaction)
@@ -393,9 +391,18 @@ local function selection_match_index(view, matches)
   local l1, c1, l2, c2 = table.unpack(view:with_selection_state(function()
     return { view.buffer:get_selection(true) }
   end))
-  for i, match in ipairs(matches or {}) do
+  local lo, hi = 1, #matches + 1
+  while lo < hi do
+    local mid = math.floor((lo + hi) / 2)
+    local match = matches[mid]
+    if match.line < l1 or (match.line == l1 and match.col1 < c1) then
+      lo = mid + 1
+    else hi = mid end
+  end
+  local match = matches[lo]
+  if match then
     if match.line == l1 and match.line == l2 and match.col1 == c1 and match.col2 == c2 then
-      return i
+      return lo
     end
   end
   return 0
@@ -424,13 +431,14 @@ end
 local function choose_match_from_position(matches, line, col)
   if not matches or #matches == 0 then return 0 end
   line, col = line or 1, col or 1
-  for i, match in ipairs(matches) do
-    if match.line == line and match.col1 == col then return i end
+  local lo, hi = 1, #matches + 1
+  while lo < hi do
+    local mid = math.floor((lo + hi) / 2)
+    local match = matches[mid]
+    if compare_pos(match.line, match.col1, line, col) < 0 then lo = mid + 1
+    else hi = mid end
   end
-  for i, match in ipairs(matches) do
-    if compare_pos(match.line, match.col1, line, col) >= 0 then return i end
-  end
-  return 1
+  return lo <= #matches and lo or 1
 end
 
 local function choose_match(view, state, reverse, from_origin)
@@ -447,22 +455,23 @@ local function choose_match(view, state, reverse, from_origin)
   end))
   local line, col = reverse and l1 or l2, reverse and c1 or c2
 
-  if reverse then
-    for i = #matches, 1, -1 do
-      local match = matches[i]
-      if compare_pos(match.line, match.col1, line, col) < 0 then return i end
-    end
-    return #matches
+  local lo, hi = 1, #matches + 1
+  while lo < hi do
+    local mid = math.floor((lo + hi) / 2)
+    local match = matches[mid]
+    local cmp = compare_pos(match.line, reverse and match.col1 or match.col2, line, col)
+    if reverse and cmp < 0 or not reverse and cmp <= 0 then lo = mid + 1
+    else hi = mid end
   end
-
-  for i, match in ipairs(matches) do
-    if compare_pos(match.line, match.col2, line, col) > 0 then return i end
-  end
-  return 1
+  if reverse then return lo > 1 and lo - 1 or #matches end
+  return lo <= #matches and lo or 1
 end
 
 local function set_status(state)
-  if field_text(state.find) == "" then
+  if state.pending then
+    state.info = "Searching…"
+    state.error = false
+  elseif field_text(state.find) == "" then
     state.info = ""
     state.error = false
   elseif state.error and state.error ~= true then
@@ -512,12 +521,119 @@ local function select_match(view, state, index, scroll, explicit)
   end)
 end
 
-local function refresh_matches(view, state, opts)
+local refresh_matches
+local function cancel_scan(state)
+  local scan = state.pending
+  local pool = worker_pool.current_system()
+  if scan and scan.job and pool then pool:cancel(scan.job) end
+  state.pending = nil
+end
+
+local function advance_scan(view, state)
+  local scan = state.pending
+  if not scan then return end
+  local selection = copy_selection(view)
+  for i = 1, 4 do
+    if selection[i] ~= scan.selection[i] then
+      -- A later caret move takes priority over a pending search reveal.
+      scan.opts.select, scan.opts.after_scan = false, nil
+      scan.actions = {}
+      break
+    end
+  end
+  if scan.buffer ~= view.buffer or scan.revision ~= view.buffer.text_revision
+      or scan.query ~= field_text(state.find) or scan.regex ~= state.regex
+      or scan.case_sensitive ~= state.case_sensitive then
+    cancel_scan(state)
+    state.current = scan.current
+    refresh_matches(view, state, scan.opts)
+    if state.pending then
+      state.pending.actions = scan.actions
+    else
+      for _, action in ipairs(scan.actions) do action() end
+    end
+    return
+  end
+  scan.deadline = system.get_time() + SCAN_SLICE_SECONDS
+  local ok, matches, err, indexes = coroutine.resume(scan.thread)
+  if not ok then
+    cancel_scan(state)
+    state.matches, state.match_error = {}, tostring(matches)
+    remember_matches(view.buffer, state, {})
+    refresh_matches(view, state, scan.opts)
+    core.log_quiet("Local find: scan failed in %s: %s", view.buffer:get_name(), tostring(matches))
+    return
+  end
+  if coroutine.status(scan.thread) ~= "dead" then
+    set_status(state)
+    core.redraw = true
+    return
+  end
+  state.pending = nil
+  state.current = scan.current
+  state.matches, state.match_error = matches, err
+  remember_matches(view.buffer, state, indexes)
+  refresh_matches(view, state, scan.opts)
+  if scan.opts.after_scan then scan.opts.after_scan() end
+  for _, action in ipairs(scan.actions) do action() end
+  core.log_quiet("Local find: searched %d lines in %s", #view.buffer.lines, view.buffer:get_name())
+  core.redraw = true
+end
+
+refresh_matches = function(view, state, opts)
   opts = opts or {}
   if not matches_are_current(view.buffer, state) then
-    state.matches, state.match_error = find_all_matches(view.buffer, state)
-    remember_matches(view.buffer, state)
-    core.log_quiet("Local find: searched %d lines in %s", #view.buffer.lines, view.buffer:get_name())
+    local pending = state.pending
+    if pending and pending.buffer == view.buffer
+        and pending.revision == view.buffer.text_revision
+        and pending.query == field_text(state.find) and pending.regex == state.regex
+        and pending.case_sensitive == state.case_sensitive then return end
+    cancel_scan(state)
+    local scan = { buffer = view.buffer, revision = view.buffer.text_revision,
+      query = field_text(state.find), regex = state.regex,
+      case_sensitive = state.case_sensitive, opts = opts, actions = {}, current = state.current,
+      selection = copy_selection(view) }
+    state.pending = scan
+    state.match_revision = nil
+    state.matches, state.match_indexes_by_line = {}, {}
+    state.current, state.found, state.error = 0, false, false
+    scan.thread = coroutine.create(function()
+      local work = 0
+      return find_all_matches(scan.buffer, state, nil, function()
+        work = work + 1
+        if work % 32 == 0 and (work >= SCAN_SLICE_MAX_STEPS or system.get_time() >= scan.deadline) then
+          work = 0
+          coroutine.yield()
+        end
+      end, function(text, emit)
+        -- A native find or lowercase call cannot yield inside a long line.
+        -- Copy that immutable line to a worker and receive bounded batches.
+        local done, failure
+        scan.job = assert(worker_pool.system():submit {
+          kind = "local_find_line", priority = "interactive",
+          payload = { text = text, query = scan.query, regex = scan.regex,
+            case_sensitive = scan.case_sensitive },
+          is_stale = function()
+            return state.pending ~= scan or view.buffer ~= scan.buffer
+              or scan.buffer.text_revision ~= scan.revision
+              or field_text(state.find) ~= scan.query or state.regex ~= scan.regex
+              or state.case_sensitive ~= scan.case_sensitive
+          end,
+          on_result = function(message)
+            local batch = message.payload
+            for i = 1, #batch, 2 do emit(batch[i], batch[i + 1]) end
+          end,
+          on_complete = function() done = true end,
+          on_error = function(message) failure, done = message.error, true end,
+          on_cancelled = function() failure, done = "Find scan cancelled", true end,
+        })
+        repeat coroutine.yield() until done
+        scan.job = nil
+        if failure then error(failure) end
+      end)
+    end)
+    advance_scan(view, state)
+    return
   end
   state.error = state.match_error
   state.change_id = view.buffer:get_change_id()
@@ -577,17 +693,21 @@ function update_after_input(view, state)
     state.preserve_current_after_input = true
   end
 
-  refresh_matches(view, state, { select = false, scroll = false })
-  if field_text(state.find) ~= "" and #(state.matches or {}) > 0 then
-    local line, col = selection_search_start(origin)
-    local index = choose_match_from_position(state.matches, line, col)
-    select_match(view, state, index, true)
-  elseif restore_origin and state.origin then
-    set_selection(view, state.origin)
-    state.current = 0
-    state.found = false
-    set_status(state)
+  local function after_scan()
+    if field_text(state.find) ~= "" and #(state.matches or {}) > 0 then
+      local line, col = selection_search_start(origin)
+      local index = choose_match_from_position(state.matches, line, col)
+      select_match(view, state, index, true)
+    elseif restore_origin and state.origin then
+      set_selection(view, state.origin)
+      state.current = 0
+      state.found = false
+      set_status(state)
+    end
   end
+  local current = matches_are_current(view.buffer, state)
+  refresh_matches(view, state, { select = false, scroll = false, after_scan = after_scan })
+  if current then after_scan() end
 
   last_global_query = field_text(state.find)
   core.redraw = true
@@ -636,6 +756,7 @@ local function close_find(view, state, hide)
   if not state then return end
   state.input_active = false
   if hide then
+    cancel_scan(state)
     state.visible = false
     state.matches = {}
     state.match_indexes_by_line = {}
@@ -678,6 +799,10 @@ local function navigate(view, state, reverse)
   if state.change_id ~= view.buffer:get_change_id() or not matches_are_current(view.buffer, state) then
     refresh_matches(view, state, { scroll = false })
   end
+  if state.pending then
+    table.insert(state.pending.actions, function() navigate(view, state, reverse) end)
+    return
+  end
   if #(state.matches or {}) == 0 then
     state.current = 0
     set_status(state)
@@ -693,6 +818,10 @@ local function add_match_to_selection(view, state, reverse)
   if not state or field_text(state.find) == "" then return end
   if state.change_id ~= view.buffer:get_change_id() or not matches_are_current(view.buffer, state) then
     refresh_matches(view, state, { scroll = false })
+  end
+  if state.pending then
+    table.insert(state.pending.actions, function() add_match_to_selection(view, state, reverse) end)
+    return
   end
   local index = choose_match(view, state, reverse, false)
   local match = state.matches and state.matches[index]
@@ -723,6 +852,10 @@ local function replace_current_match(view, state)
     refresh_matches(view, state, { scroll = false })
   end
 
+  if state.pending then
+    table.insert(state.pending.actions, function() replace_current_match(view, state) end)
+    return
+  end
   local replaced = false
   view:with_selection_state(function()
     local d = view.buffer
@@ -779,6 +912,10 @@ end
 local function confirm_replace_all(view, state)
   if not state or field_text(state.find) == "" then return end
   refresh_matches(view, state, { scroll = false })
+  if state.pending then
+    table.insert(state.pending.actions, function() confirm_replace_all(view, state) end)
+    return
+  end
   local matches = {}
   for i, match in ipairs(state.matches or {}) do
     matches[i] = { line = match.line, col1 = match.col1, col2 = match.col2 }
@@ -1015,29 +1152,7 @@ local textview_on_mouse_pressed_wrapper
 local function draw_find_overview(view)
   local state = visible_find_state(view)
   if not state or #state.matches == 0 then return end
-  local source_h = math.max(1, view:get_scrollable_size())
-
-  local function draw_match(match, selected)
-    local first_row = view:get_visual_row(match.line, match.col1, false)
-    local last_row = view:get_visual_row(match.line, math.max(match.col1, match.col2 - 1), false)
-    local start_offset = view:get_visual_row_y_offset(first_row)
-    local end_offset = view:get_visual_row_y_offset(last_row + 1)
-    local x, y, w, h = view.v_scrollbar:get_overview_marker_rect(
-      start_offset / source_h, end_offset / source_h
-    )
-    if x then
-      renderer.draw_rect(x, y, w, h,
-        selected and style.search_overview or style.search_overview_secondary)
-    end
-  end
-
-  for index, match in ipairs(state.matches) do
-    if index ~= state.current then draw_match(match, false) end
-  end
-  -- Keep the selected match visible when several matches share a marker row.
-  local selected = state.matches[state.current]
-  if selected then draw_match(selected, true) end
-  view.v_scrollbar:draw_thumb()
+  find_overview.draw(view, state)
 end
 
 local textview_surface_focus_targets = TextView.get_surface_focus_targets
@@ -1142,7 +1257,9 @@ local function make_local_find_update(base)
     local state = visible_find_state(self)
     if state then
       update_find_input_fields(self, state)
-      if state.change_id ~= self.buffer:get_change_id() or not matches_are_current(self.buffer, state) then
+      if state.pending then
+        advance_scan(self, state)
+      elseif state.change_id ~= self.buffer:get_change_id() or not matches_are_current(self.buffer, state) then
         refresh_matches(self, state, {
           scroll = false,
           restore_origin = false,
@@ -1151,6 +1268,7 @@ local function make_local_find_update(base)
       end
     end
     local result = base(self, ...)
+    if state then find_overview.update(self, state) end
     TextView.__local_find_update_depth = old_depth
     return result
   end
