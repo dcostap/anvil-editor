@@ -31,7 +31,7 @@ local function fixture(options)
       check = function(_, callback)
         local pending = events
         events = {}
-        for _, path in ipairs(pending) do callback("C:/repo", path) end
+        for _, event in ipairs(pending) do callback("C:/repo", event.path, event.precise, event.kind) end
       end,
     } end,
     publish = function() publications = publications + 1 end,
@@ -49,7 +49,7 @@ local function fixture(options)
   return service, discoveries, commands, {
     advance = function(seconds) now = now + seconds end,
     publications = function() return publications end,
-    change = function(path) events[#events+1] = path end,
+    change = function(path, precise, kind) events[#events+1] = { path = path, precise = precise, kind = kind } end,
     set_active = function(value) active = value end,
     set_result = function(value) result = value end,
   }
@@ -307,6 +307,28 @@ test.describe("Shared repository Git status", function()
     service:update()
     test.equal(#commands, 6, "a missed event must still get a later check")
     test.equal(#discoveries, 1, "periodic checks must reuse repository discovery")
+    service:close()
+  end)
+
+  test.it("ignores Git lock files and .git directory churn from its own queries", function()
+    local service, discoveries, commands, clock = fixture()
+    service:lookup("C:/repo/one/file.lua")
+    discoveries[1].callback({ root = "C:/repo" })
+    clock.advance(1)
+    service:update()
+    commands[1].callback({ stdout = " M one/file.lua\0" })
+    commands[2].callback({ stdout = "2\t1\tone/file.lua\0" })
+    clock.change("C:/repo/.git", true, "content")
+    clock.change("C:/repo/.git/index.lock", true, "membership")
+    service:update()
+    clock.advance(5)
+    service:update()
+    test.equal(#commands, 2, "Git's own lock churn must not start another refresh")
+    clock.change("C:/repo/.git/index", true, "membership")
+    service:update()
+    clock.advance(5)
+    service:update()
+    test.equal(#commands, 4, "an index change from another Git client must refresh")
     service:close()
   end)
 

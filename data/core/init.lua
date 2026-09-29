@@ -3433,25 +3433,37 @@ function core.run_step(options)
   local run_threads_ms = threads_end_time * 1000
 
   local worker_pool_module = package.loaded["core.worker_pool"]
-  if worker_pool_module and worker_pool_module.current_system then
-    local pool = worker_pool_module.current_system()
-    if pool then
+  if worker_pool_module and worker_pool_module.open_pools then
+    local pools = worker_pool_module.open_pools()
+    if #pools > 0 then
       local drain_started = system.get_time()
-      local _, drain_stats = pool:drain({
-        max_ms = config.worker_pool_drain_budget_ms or 1.0,
-        max_messages = config.worker_pool_drain_max_messages or 64,
-      })
+      worker_pool_drain_ms, worker_pool_drain_messages = 0, 0
+      worker_pool_dispatch_ms, worker_pool_callback_ms, worker_pool_callbacks = 0, 0, 0
+      worker_pool_slowest_dispatch_ms, worker_pool_slowest_message_type = 0, ""
+      worker_pool_slowest_callback_ms, worker_pool_slowest_callback_name = 0, ""
+      for _, pool in ipairs(pools) do
+        local pool_started = system.get_time()
+        local _, drain_stats = pool:drain({
+          max_ms = config.worker_pool_drain_budget_ms or 1.0,
+          max_messages = config.worker_pool_drain_max_messages or 64,
+        })
+        drain_stats = drain_stats or pool.last_drain_stats or {}
+        worker_pool_drain_ms = worker_pool_drain_ms
+          + (drain_stats.elapsed_ms or (system.get_time() - pool_started) * 1000)
+        worker_pool_drain_messages = worker_pool_drain_messages + (drain_stats.messages or 0)
+        worker_pool_dispatch_ms = worker_pool_dispatch_ms + (drain_stats.dispatch_ms or 0)
+        worker_pool_callback_ms = worker_pool_callback_ms + (drain_stats.callback_ms or 0)
+        worker_pool_callbacks = worker_pool_callbacks + (drain_stats.callbacks or 0)
+        if (drain_stats.slowest_dispatch_ms or 0) > worker_pool_slowest_dispatch_ms then
+          worker_pool_slowest_dispatch_ms = drain_stats.slowest_dispatch_ms
+          worker_pool_slowest_message_type = drain_stats.slowest_message_type or ""
+        end
+        if (drain_stats.slowest_callback_ms or 0) > worker_pool_slowest_callback_ms then
+          worker_pool_slowest_callback_ms = drain_stats.slowest_callback_ms
+          worker_pool_slowest_callback_name = drain_stats.slowest_callback_name or ""
+        end
+      end
       worker_pool_drain_wall_ms = (system.get_time() - drain_started) * 1000
-      drain_stats = drain_stats or pool.last_drain_stats or {}
-      worker_pool_drain_ms = drain_stats.elapsed_ms or worker_pool_drain_wall_ms
-      worker_pool_drain_messages = drain_stats.messages or 0
-      worker_pool_dispatch_ms = drain_stats.dispatch_ms or 0
-      worker_pool_callback_ms = drain_stats.callback_ms or 0
-      worker_pool_callbacks = drain_stats.callbacks or 0
-      worker_pool_slowest_dispatch_ms = drain_stats.slowest_dispatch_ms or 0
-      worker_pool_slowest_message_type = drain_stats.slowest_message_type or ""
-      worker_pool_slowest_callback_ms = drain_stats.slowest_callback_ms or 0
-      worker_pool_slowest_callback_name = drain_stats.slowest_callback_name or ""
       if worker_pool_drain_wall_ms > 20 then
         core.log_quiet(
           "Worker pool drain slow: wall=%.1fms drain=%.1fms messages=%d dispatch=%.1fms callback=%.1fms slow_dispatch=%.1fms/%s slow_callback=%.1fms/%s",
@@ -3531,10 +3543,10 @@ function core.run_step(options)
         startup.finish("stopped", core.restart_request and "restart" or "quit")
       end
       local worker_pool_module = package.loaded["core.worker_pool"]
-      if worker_pool_module and worker_pool_module.shutdown_system then
-        system.log_shutdown("system worker pool shutdown begin")
-        worker_pool_module.shutdown_system({ cancel_running = true, timeout_ms = 1000 })
-        system.log_shutdown("system worker pool shutdown end")
+      if worker_pool_module and worker_pool_module.shutdown_all then
+        system.log_shutdown("worker pools shutdown begin")
+        worker_pool_module.shutdown_all({ cancel_running = true, timeout_ms = 1000 })
+        system.log_shutdown("worker pools shutdown end")
       end
       core.worker_pool_frame_stats = nil
       if core.session_log then

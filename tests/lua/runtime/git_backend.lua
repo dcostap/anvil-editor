@@ -644,7 +644,7 @@ test.describe("plugins.git.backend", function()
       test.equal(run({ backend.git_path(), "-C", git_root, "mv", "plain.txt", "renamed.txt" }), 0)
 
       local records, callback_err
-      backend.path_status({ root = root }, "renamed.txt", { optional_locks = false }, function(result, err)
+      backend.path_status({ root = root }, "renamed.txt", {}, function(result, err)
         records, callback_err = result, err
       end)
       wait_until(function() return records ~= nil or callback_err ~= nil end, 5, "path status callback did not run")

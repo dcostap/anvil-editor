@@ -6,6 +6,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local process = require "core.process"
+local worker_pool = require "core.worker_pool"
 
 local backend = {}
 
@@ -951,31 +952,15 @@ local function append_args(dst, src)
   for _, value in ipairs(src or {}) do dst[#dst + 1] = value end
 end
 
-local function read_available(proc, stream, chunks, cap)
-  while true do
-    local chunk, errmsg, errcode = proc:read(stream, 8192)
-    if chunk and #chunk > 0 then
-      chunks[#chunks + 1] = chunk
-      cap.total = cap.total + #chunk
-      if cap.total > cap.max then return false, "output too large" end
-    elseif errcode == process.ERROR_WOULDBLOCK or chunk == "" then
-      return true
-    elseif not chunk then
-      if errcode == process.ERROR_PIPE or (errmsg == nil and errcode == nil) then return true end
-      return false, errmsg or "process read failed"
-    else
-      return true
-    end
-  end
+local GIT_POOL_WORKERS = 3
+
+local function git_pool()
+  return worker_pool.named("git", { worker_count = GIT_POOL_WORKERS })
 end
 
-local function callback_once(job, callback, result, err)
-  if job.callback_done then return end
-  job.callback_done = true
-  if callback then callback(result, err) end
-end
-
----Run git asynchronously. Callback receives `(result, err)`.
+---Run git asynchronously on the Git worker pool. Callback receives `(result, err)`.
+---Every command runs with `--no-optional-locks`, so reads never rewrite
+---`.git/index` and wake the repository watcher.
 ---@param repo table|string|nil Repo table with `root`, cwd string, or nil.
 ---@param args string[] Git subcommand arguments, excluding git executable.
 ---@param opts table?
@@ -993,134 +978,86 @@ function backend.run_git(repo, args, opts, callback)
   }
   next_job_id = next_job_id + 1
 
-  core.add_thread(function()
-    if not backend.is_enabled() then
-      callback_once(job, callback, nil, disabled_error())
-      return
-    end
-    local executable = opts.git_path or backend.git_path()
-    if not executable then
-      callback_once(job, callback, nil, disabled_error())
-      return
-    end
-    local command = { executable }
-    if opts.optional_locks == false then command[#command + 1] = "--no-optional-locks" end
-    if root and root ~= "" then
-      command[#command + 1] = "-C"
-      command[#command + 1] = git_arg_path(root)
-    end
-    append_args(command, args)
-    core.log_quiet("Git backend: start job=%s cwd=%s args=%s", tostring(job.id), tostring(root), table.concat(args or {}, " "))
-    local proc, start_err, start_code = process.start(command, {
-      stdin = opts.stdin_data and process.REDIRECT_PIPE or process.REDIRECT_DISCARD,
-      stdout = process.REDIRECT_PIPE,
-      stderr = process.REDIRECT_PIPE,
-      env = opts.env,
-    })
-    if not proc then
-      callback_once(job, callback, nil, {
-        kind = "start_failed",
-        message = start_err or "process start failed",
-        code = start_code,
-      })
-      return
-    end
-
-    job.proc = proc
-    local stdout, stderr = {}, {}
-    local out_cap = { total = 0, max = max_output }
-    local err_cap = { total = 0, max = opts.max_stderr or 512 * 1024 }
-
-    if opts.stdin_data then
-      local offset = 1
-      while offset <= #opts.stdin_data do
-        if job.cancelled then
-          if proc.terminate then proc:terminate() end
-          callback_once(job, callback, nil, { kind = "cancelled", message = "Git job cancelled" })
-          return
-        end
-        local chunk = opts.stdin_data:sub(offset, offset + 16383)
-        local written, write_err, write_code = proc.stdin:write(chunk, { scan = opts.scan or 0.01 })
-        if not written then
-          if proc.terminate then proc:terminate() end
-          callback_once(job, callback, nil, {
-            kind = "write_failed", message = write_err or "Git input write failed", code = write_code,
-          })
-          return
-        end
-        offset = offset + written
-        local ok, read_err = read_available(proc, process.STREAM_STDOUT, stdout, out_cap)
-        if not ok then
-          if proc.terminate then proc:terminate() end
-          callback_once(job, callback, nil, { kind = "output_too_large", message = read_err })
-          return
-        end
-      end
-      proc.stdin:close()
-    end
-
-    while proc:running() do
-      if job.cancelled then
-        if proc.terminate then proc:terminate() end
-        callback_once(job, callback, nil, { kind = "cancelled", message = "Git job cancelled" })
-        return
-      end
-      local ok, err = read_available(proc, process.STREAM_STDOUT, stdout, out_cap)
-      if not ok then
-        if proc.terminate then proc:terminate() end
-        callback_once(job, callback, nil, { kind = "output_too_large", message = err })
-        return
-      end
-      ok, err = read_available(proc, process.STREAM_STDERR, stderr, err_cap)
-      if not ok then
-        if proc.terminate then proc:terminate() end
-        callback_once(job, callback, nil, { kind = "stderr_too_large", message = err })
-        return
-      end
-      coroutine.yield(opts.scan or 0.01)
-    end
-
-    if job.cancelled then
-      callback_once(job, callback, nil, { kind = "cancelled", message = "Git job cancelled" })
-      return
-    end
-
-    local ok, drain_err = read_available(proc, process.STREAM_STDOUT, stdout, out_cap)
-    if not ok then
-      callback_once(job, callback, nil, { kind = "output_too_large", message = drain_err })
-      return
-    end
-    ok, drain_err = read_available(proc, process.STREAM_STDERR, stderr, err_cap)
-    if not ok then
-      callback_once(job, callback, nil, { kind = "stderr_too_large", message = drain_err })
-      return
-    end
-    local code = proc:wait(process.WAIT_INFINITE, opts.scan or 0.01)
-    local result = {
-      job_id = job.id,
-      generation = job.generation,
-      code = code,
-      stdout = table.concat(stdout),
-      stderr = table.concat(stderr),
-    }
-    if code == 0 then
-      callback_once(job, callback, result, nil)
-    else
-      callback_once(job, callback, nil, {
-        kind = "exit",
-        code = code,
-        stdout = result.stdout,
-        stderr = result.stderr,
-        message = result.stderr ~= "" and result.stderr or ("git exited " .. tostring(code)),
-      })
-    end
-  end)
-
-  function job:cancel()
-    self.cancelled = true
-    if self.proc and self.proc.terminate then self.proc:terminate() end
+  local function finish(result, err)
+    if job.callback_done then return end
+    job.callback_done = true
+    if callback then callback(result, err) end
   end
 
+  local function finish_later(err)
+    core.add_thread(function() finish(nil, err) end)
+  end
+
+  function job:cancel()
+    if self.cancelled then return end
+    self.cancelled = true
+    if self.handle then git_pool():cancel(self.handle) end
+    finish(nil, { kind = "cancelled", message = "Git job cancelled" })
+  end
+
+  local executable = backend.is_enabled() and (opts.git_path or backend.git_path())
+  if not executable then
+    finish_later(disabled_error())
+    return job
+  end
+  local command = { executable, "--no-optional-locks" }
+  if root and root ~= "" then
+    command[#command + 1] = "-C"
+    command[#command + 1] = git_arg_path(root)
+  end
+  append_args(command, args)
+  core.log_quiet("Git backend: submit job=%s cwd=%s args=%s", tostring(job.id), tostring(root), table.concat(args or {}, " "))
+
+  local handle, submit_err = git_pool():submit {
+    kind = "process_capture",
+    payload = {
+      command = command,
+      env = opts.env,
+      stdin_data = opts.stdin_data,
+      max_output = max_output,
+      max_stderr = opts.max_stderr or 512 * 1024,
+    },
+    on_result = function(message)
+      local payload = message.payload or {}
+      if payload.error then
+        local err = payload.error
+        if err.kind == "output_too_large" or err.kind == "stderr_too_large" then
+          err.message = err.kind == "output_too_large" and "output too large" or "stderr too large"
+        end
+        finish(nil, err)
+        return
+      end
+      local result = {
+        job_id = job.id,
+        generation = job.generation,
+        code = payload.code,
+        stdout = payload.stdout or "",
+        stderr = payload.stderr or "",
+      }
+      if result.code == 0 then
+        finish(result, nil)
+      else
+        finish(nil, {
+          kind = "exit",
+          code = result.code,
+          stdout = result.stdout,
+          stderr = result.stderr,
+          message = result.stderr ~= "" and result.stderr or ("git exited " .. tostring(result.code)),
+        })
+      end
+    end,
+    on_error = function(message)
+      finish(nil, { kind = "worker_failed", message = tostring(message.error or message.payload or "Git worker failed") })
+    end,
+    on_cancelled = function()
+      finish(nil, { kind = "cancelled", message = "Git job cancelled" })
+    end,
+  }
+  if not handle then
+    finish_later({ kind = "start_failed", message = tostring(submit_err or "Git worker pool unavailable") })
+    return job
+  end
+  job.handle = handle
   return job
 end
 
@@ -1181,7 +1118,7 @@ end
 local function run_git_sync(cwd, args, max_output)
   local executable = backend.git_path()
   if not executable then return nil, disabled_error() end
-  local command = { executable }
+  local command = { executable, "--no-optional-locks" }
   if cwd and cwd ~= "" then
     command[#command + 1] = "-C"
     command[#command + 1] = git_arg_path(cwd)

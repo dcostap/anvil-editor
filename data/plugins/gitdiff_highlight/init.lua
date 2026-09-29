@@ -439,60 +439,22 @@ local function write_debug_dump(buffer)
 	return path
 end
 
-local function read_available(proc, stream, chunks, cap)
-	while true do
-		local chunk, errmsg, errcode = proc:read(stream, 8192)
-		if chunk and #chunk > 0 then
-			chunks[#chunks + 1] = chunk
-			cap.total = cap.total + #chunk
-			if cap.total > cap.max then return false, "output too large" end
-		elseif errcode == process.ERROR_WOULDBLOCK or chunk == "" then
-			return true
-		elseif not chunk then
-			if errcode == process.ERROR_PIPE or (errmsg == nil and errcode == nil) then return true end
-			return false, errmsg or "process read failed"
-		else
-			return true
-		end
-	end
-end
-
-local function run_process_capture(args, max_stdout)
-	local proc, start_err = process.start(args, {
-		stdout = process.REDIRECT_PIPE,
-		stderr = process.REDIRECT_PIPE,
-	})
-	if not proc then
-		if args[1] == git_executable() then warn_git_missing(start_err) end
-		return nil, "", start_err or "process start failed"
-	end
-
-	local stdout_chunks, stderr_chunks = {}, {}
-	local stdout_cap = { total = 0, max = max_stdout or plugin_config.max_file_size + 1 }
-	local stderr_cap = { total = 0, max = 64 * 1024 }
-
-	while proc:running() do
-		local ok, err = read_available(proc, process.STREAM_STDOUT, stdout_chunks, stdout_cap)
-		if not ok then proc:kill(); return nil, table.concat(stdout_chunks), err end
-		ok, err = read_available(proc, process.STREAM_STDERR, stderr_chunks, stderr_cap)
-		if not ok then proc:kill(); return nil, table.concat(stdout_chunks), err end
-		coroutine.yield(0.02)
-	end
-
-	local ok, err = read_available(proc, process.STREAM_STDOUT, stdout_chunks, stdout_cap)
-	if not ok then return nil, table.concat(stdout_chunks), err end
-	ok, err = read_available(proc, process.STREAM_STDERR, stderr_chunks, stderr_cap)
-	if not ok then return nil, table.concat(stdout_chunks), err end
-
-	return proc:returncode() or 0, table.concat(stdout_chunks), table.concat(stderr_chunks)
-end
-
+-- Runs on the Git worker pool; the calling coroutine waits without blocking
+-- the UI thread on process creation.
 local function git(args, max_stdout)
-	local path = git_executable()
-	if not path then return nil, "", "Git integration is disabled" end
-	local full = { path }
-	for _, arg in ipairs(args) do full[#full + 1] = arg end
-	return run_process_capture(full, max_stdout)
+	if not git_executable() then return nil, "", "Git integration is disabled" end
+	local done, result, err
+	git_backend.run_git(nil, args, {
+		max_output = max_stdout or plugin_config.max_file_size + 1,
+		max_stderr = 64 * 1024,
+	}, function(res, e)
+		done, result, err = true, res, e
+	end)
+	while not done do coroutine.yield(0.01) end
+	if result then return 0, result.stdout, result.stderr end
+	if err.kind == "exit" then return err.code, err.stdout or "", err.stderr or "" end
+	if err.kind == "start_failed" then warn_git_missing(err.message) end
+	return nil, "", err.message or err.kind
 end
 
 local function head_path_for_staged_rename(root, rel)

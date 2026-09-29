@@ -926,7 +926,6 @@ test.describe("plugins.git.model", function()
       return { cancel = function() end }
     end
     backend.path_status = function(repo, relpath, opts, callback)
-      test.equal(opts.optional_locks, false)
       callback({ { kind = "deleted", path = relpath } }, nil)
       return { cancel = function() end }
     end
@@ -964,7 +963,6 @@ test.describe("plugins.git.model", function()
       return { cancel = function() end }
     end
     backend.path_status = function(repo, relpath, opts, callback)
-      test.equal(opts.optional_locks, false)
       callback({ {
         kind = "renamed", path = "src/new.lua",
         old_path = "src/old.lua", new_path = "src/new.lua",
@@ -1065,7 +1063,6 @@ test.describe("plugins.git.model", function()
     end
     local status_calls = 0
     backend.path_status = function(repo, relpath, opts, callback)
-      test.equal(opts.optional_locks, false)
       status_calls = status_calls + 1
       callback(status_calls == 1 and { {
         kind = "renamed", old_path = "src/old.lua", new_path = "src/new.lua",
@@ -1638,7 +1635,6 @@ test.describe("plugins.git.model", function()
     backend.run_git = function(repo, args, opts, callback)
       if args[1] == "status" then
         status_args = args
-        test.equal(opts.optional_locks, false)
         status_calls = status_calls + 1
         local stdout = table.concat({ "?? new.lua", "" }, "\0")
         callback({ code = 0, stdout = stdout }, nil)

@@ -462,9 +462,13 @@ function Service:request(path, reason)
   end
 end
 
-function Service:filesystem_changed(state, path)
+function Service:filesystem_changed(state, path, precise, kind)
   if path then
     path = common.normalize_path(path)
+    -- Every Git command, including this service's own queries, creates and
+    -- removes index.lock, which touches the .git entry. Precise watchers also
+    -- report the real metadata writes (index, HEAD, refs) as their own paths.
+    if precise and kind == "content" and common.basename(path) == ".git" then return end
     if self:marker_change_directory(path) then
       self:invalidate_discovery(path)
       self:mark_dirty(state, "git-marker")
@@ -508,7 +512,7 @@ function Service:update()
       self:release(key, state)
     else
       local ok, err = pcall(function()
-        state.watcher:check(function(dir, leaf) self:filesystem_changed(state, leaf or dir) end)
+        state.watcher:check(function(dir, leaf, precise, kind) self:filesystem_changed(state, leaf or dir, precise, kind) end)
       end)
       if not ok and not state.watch_error then
         state.watch_error = true

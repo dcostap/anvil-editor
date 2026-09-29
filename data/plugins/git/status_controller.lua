@@ -235,7 +235,7 @@ function Controller:start_git(generation, root, repo, reason)
   end
   local status_job = self.backend.run_git(repo,
     { "status", "--porcelain=v1", "--ignored", "--untracked-files=normal", "-z" },
-    { generation = generation, max_output = self.max_output, optional_locks = false },
+    { generation = generation, max_output = self.max_output },
     function(result, err)
       if not self:is_current(generation, root) then return end
       if not result then return self:finish_failure(generation, root, "status", err) end
@@ -248,7 +248,7 @@ function Controller:start_git(generation, root, repo, reason)
     local done = false
     local job = self.backend.run_git(repo,
       { "diff", "--numstat", "--no-renames", "-z", revision, "--" },
-      { generation = generation, max_output = self.max_output, optional_locks = false },
+      { generation = generation, max_output = self.max_output },
       function(result, err)
         done = true
         if not self:is_current(generation, root) then return end

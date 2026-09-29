@@ -7,6 +7,7 @@ local worker_pool = {}
 worker_pool.__index = worker_pool
 
 local system_pool
+local named_pools = {}
 local pool_sequence = 0
 
 local DEFAULT_DRAIN_BUDGET_MS = 1.0
@@ -154,7 +155,32 @@ function worker_pool.current_system()
   if system_pool and not system_pool.closed then return system_pool end
 end
 
-function worker_pool.shutdown_system(options)
+---Return a long-lived pool reserved for one kind of blocking work, such as
+---child processes, so it cannot occupy the system pool's workers.
+function worker_pool.named(name, options)
+  local pool = named_pools[name]
+  if not pool or pool.closed then
+    pool = worker_pool.new(common.merge({ name = name }, options or {}))
+    named_pools[name] = pool
+  end
+  return pool
+end
+
+---Every open pool that the UI loop must drain, system pool first.
+function worker_pool.open_pools()
+  local pools = {}
+  if system_pool and not system_pool.closed then pools[1] = system_pool end
+  for _, pool in pairs(named_pools) do
+    if not pool.closed then pools[#pools + 1] = pool end
+  end
+  return pools
+end
+
+function worker_pool.shutdown_all(options)
+  for name, pool in pairs(named_pools) do
+    pool:shutdown(options)
+    named_pools[name] = nil
+  end
   if system_pool then
     system_pool:shutdown(options)
     system_pool = nil

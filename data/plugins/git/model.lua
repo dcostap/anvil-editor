@@ -942,7 +942,7 @@ function Model:refresh_local_changes_revision(tab, callback)
     if err and self.backend.is_missing_path_error and self.backend.is_missing_path_error(err) then
       if source_path == tab.relpath and self.backend.path_status then
         local status_job, status_done
-        status_job = self.backend.path_status(self.repo, tab.relpath, { optional_locks = false }, function(records, status_err)
+        status_job = self.backend.path_status(self.repo, tab.relpath, {}, function(records, status_err)
           status_done = true
           self:_untrack_job(status_job)
           if tab.local_changes_job == status_job then tab.local_changes_job = nil end
@@ -995,7 +995,7 @@ function Model:refresh_local_changes_revision(tab, callback)
         return
       end
       local status_job, status_done
-      status_job = self.backend.path_status(self.repo, tab.relpath, { optional_locks = false }, function(records, status_err)
+      status_job = self.backend.path_status(self.repo, tab.relpath, {}, function(records, status_err)
         status_done = true
         self:_untrack_job(status_job)
         if tab.local_changes_job == status_job then tab.local_changes_job = nil end
@@ -1440,7 +1440,7 @@ function Model:load_changed_files(tab, callback)
     status_job = self.backend.run_git(
       self.repo,
       { "status", "--porcelain=v1", "-z", "--untracked-files=all" },
-      { optional_locks = false },
+      {},
       function(result, err)
         status_done = true
         self:_untrack_job(status_job)
@@ -1930,7 +1930,7 @@ function Model:_start_refresh_jobs(repo, generation, callback)
   status_job = self.backend.run_git(
     repo,
     { "status", "--porcelain=v2", "-z", "--untracked-files=all" },
-    { optional_locks = false },
+    {},
     function(result, err)
       status_done = true
       self:_untrack_job(status_job)
