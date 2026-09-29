@@ -807,7 +807,11 @@ function RootPanel:draw()
   local pane_views = self:pane_views()
   self:draw_wallpaper(#pane_views > 0)
   local group = panes().visible_group()
-  for _, view in ipairs(pane_views) do call_view(view, "draw") end
+  for _, view in ipairs(pane_views) do
+    core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
+    call_view(view, "draw")
+    core.pop_clip_rect()
+  end
   if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
   local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")

@@ -12,6 +12,53 @@ local function near(actual, expected)
 end
 
 test.describe("Window wallpaper", function()
+  test.it("keeps Pane content out of translucent Title and Status Bars", function()
+    local config = require "core.config"
+    local old_wallpaper = config.wallpaper
+    local old_clip = core.clip_rect_stack[1]
+    config.wallpaper = "image1"
+    local root = RootPanel()
+    root.size.x, root.size.y = 320, 200
+    root.wallpaper = canvas.new(8, 8, { 40, 100, 80, 255 })
+    root.wallpaper_name = "image1"
+    root.begin_keyboard_caret_frame = function() end
+    root.draw_keyboard_caret = function() end
+    local pane = View()
+    pane.position.y = 40
+    pane.size.x, pane.size.y = 320, 120
+    local pane_color
+    pane.draw = function() renderer.draw_rect(0, 0, 320, 200, pane_color) end
+    root.pane_views = function() return { pane } end
+    local title, status = View(), View()
+    title.draw = function() renderer.draw_rect(0, 0, 320, 40, { 30, 30, 30, 128 }) end
+    status.draw = function() renderer.draw_rect(0, 160, 320, 40, { 30, 30, 30, 128 }) end
+    root.shell_views = function() return { title, status } end
+    local window = renwindow.create("wallpaper-shell-clipping", 320, 200)
+    local function pixels(color)
+      pane_color = color
+      renderer.begin_frame(window)
+      core.clip_rect_stack[1] = { 0, 0, 320, 200 }
+      renderer.set_clip_rect(0, 0, 320, 200)
+      root:draw()
+      renderer.end_frame()
+      return {
+        renwindow.get_color(window, 10, 20),
+        renwindow.get_color(window, 10, 100),
+        renwindow.get_color(window, 10, 180),
+      }
+    end
+    local ok, err = pcall(function()
+      local red = pixels({ 255, 0, 0, 255 })
+      local green = pixels({ 0, 255, 0, 255 })
+      test.same(red[1], green[1], "the Title Bar must show only the wallpaper behind it")
+      test.not_equal(red[2][1], green[2][1], "the Pane must still draw inside its bounds")
+      test.same(red[3], green[3], "the Status Bar must show only the wallpaper behind it")
+    end)
+    config.wallpaper = old_wallpaper
+    core.clip_rect_stack[1] = old_clip
+    if not ok then error(err, 0) end
+  end)
+
   test.it("shows the wallpaper through the current line", function()
     local view = TextView(Buffer(nil, nil, true))
     view.size.x, view.size.y = 200, 100
@@ -34,16 +81,20 @@ test.describe("Window wallpaper", function()
     root.wallpaper = image
     root.wallpaper_name = "image1"
     root.size.x, root.size.y = 600, 400
-    root.pane_views = function() return { { draw = function() end } } end
+    local pane = View()
+    pane.size.x, pane.size.y = 600, 400
+    root.pane_views = function() return { pane } end
     root.shell_views = function() return {} end
     root.begin_keyboard_caret_frame = function() end
     root.draw_keyboard_caret = function() end
     root.draw_active_app_overlay = function() end
     local previous = require("plugins.settings").config.theme or "dark"
-    local old_rect, old_scaled = renderer.draw_rect, renderer.draw_canvas_scaled
+    local old_rect, old_scaled, old_clip =
+      renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect
     local backdrop
     renderer.draw_rect = function(_, _, _, _, color) backdrop = color end
     renderer.draw_canvas_scaled = function() end
+    renderer.set_clip_rect = function() end
     local ok, failure = pcall(function()
       local function visibility(theme)
         core.reload_module("colors." .. theme)
@@ -58,7 +109,7 @@ test.describe("Window wallpaper", function()
       test.ok(bright > ordinary, "a light theme needs more visible image detail")
     end)
     core.reload_module("colors." .. (previous == "dark" and "default" or previous))
-    renderer.draw_rect, renderer.draw_canvas_scaled = old_rect, old_scaled
+    renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect = old_rect, old_scaled, old_clip
     if not ok then error(failure, 0) end
   end)
 
@@ -71,10 +122,12 @@ test.describe("Window wallpaper", function()
     root.begin_keyboard_caret_frame = function() end
     root.draw_keyboard_caret = function() end
     root.draw_active_app_overlay = function() end
-    local old_rect, old_scaled = renderer.draw_rect, renderer.draw_canvas_scaled
+    local old_rect, old_scaled, old_clip =
+      renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect
     local fills = {}
     renderer.draw_rect = function(_, _, _, _, color) fills[#fills + 1] = color end
     renderer.draw_canvas_scaled = function() end
+    renderer.set_clip_rect = function() end
     local ok, err = pcall(function()
       root.pane_views = function() return {} end
       root:draw()
@@ -90,7 +143,7 @@ test.describe("Window wallpaper", function()
       test.ok(math.abs(empty_visibility - loaded_visibility) <= 1 / 255,
         "the loading frame must not show more of the image")
     end)
-    renderer.draw_rect, renderer.draw_canvas_scaled = old_rect, old_scaled
+    renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect = old_rect, old_scaled, old_clip
     if not ok then error(err, 0) end
   end)
 
@@ -119,16 +172,18 @@ test.describe("Window wallpaper", function()
     root.wallpaper_name = "image1"
     root.position.x, root.position.y = 0, 0
     local draws = {}
-    root.pane_views = function()
-      return { { draw = function() draws[#draws + 1] = "pane" end } }
-    end
+    local pane = View()
+    pane.size.x, pane.size.y = 1600, 900
+    pane.draw = function() draws[#draws + 1] = "pane" end
+    root.pane_views = function() return { pane } end
     root.shell_views = function()
       return { { draw = function() draws[#draws + 1] = "shell" end } }
     end
     root.begin_keyboard_caret_frame = function() end
     root.draw_keyboard_caret = function() end
     root.draw_active_app_overlay = function() end
-    local old_scaled, old_rect = renderer.draw_canvas_scaled, renderer.draw_rect
+    local old_scaled, old_rect, old_clip =
+      renderer.draw_canvas_scaled, renderer.draw_rect, renderer.set_clip_rect
     local rectangle
     renderer.draw_canvas_scaled = function(_, x, y, w, h)
       draws[#draws + 1] = "wallpaper"
@@ -138,6 +193,7 @@ test.describe("Window wallpaper", function()
       draws[#draws + 1] = "backdrop"
       test.ok(color[4] > 0 and color[4] < 255)
     end
+    renderer.set_clip_rect = function() end
 
     local ok, err = pcall(function()
       root.size.x, root.size.y = 400, 600
@@ -157,7 +213,7 @@ test.describe("Window wallpaper", function()
       near(rectangle[3], 1600)
       near(rectangle[4], 1066.6667)
     end)
-    renderer.draw_canvas_scaled, renderer.draw_rect = old_scaled, old_rect
+    renderer.draw_canvas_scaled, renderer.draw_rect, renderer.set_clip_rect = old_scaled, old_rect, old_clip
     if not ok then error(err, 0) end
   end)
 end)
