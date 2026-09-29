@@ -11,6 +11,9 @@ local Controller = {}
 Controller.__index = Controller
 
 local REFRESH_INTERVAL = 2
+-- Idle time after a refresh, as a multiple of its duration. Large repositories
+-- under continuous writes then spend at most a third of the time in Git.
+local SLOW_REFRESH_BACKOFF = 2
 
 local function now()
   return system and system.get_time and system.get_time() or os.clock()
@@ -110,6 +113,7 @@ function git_status.new(options)
     active = false,
     pending_reason = nil,
     last_start = -math.huge,
+    next_allowed = -math.huge,
     coalesced_requests = 0,
     last_error = nil,
     last_error_generation = nil,
@@ -149,8 +153,19 @@ function Controller:is_current(generation, root)
     and common.path_equals(self.repository.root, root)
 end
 
+function Controller:note_finished()
+  local finished = self.clock()
+  local duration = math.max(0, finished - self.last_start)
+  self.next_allowed = finished + SLOW_REFRESH_BACKOFF * duration
+  if SLOW_REFRESH_BACKOFF * duration > self.refresh_interval then
+    log_quiet("Shared Git slow refresh root=%s duration=%.2fs backoff=%.2fs",
+      self.repository.root, duration, SLOW_REFRESH_BACKOFF * duration)
+  end
+end
+
 function Controller:finish_failure(generation, root, phase, err)
   if not self:is_current(generation, root) then return end
+  self:note_finished()
   self:cancel_active(phase .. "-failed")
   self.last_error = err or { kind = phase .. "_failed", message = "Git status refresh failed" }
   self.last_error_generation = generation
@@ -173,6 +188,7 @@ function Controller:adopt(snapshot, generation, root, repository_root, reason)
     release_snapshot(snapshot)
     return
   end
+  self:note_finished()
   local previous = self.snapshot
   self.snapshot = snapshot
   self.snapshot_repository_root = repository_root
@@ -196,6 +212,7 @@ function Controller:build(generation, root, repo, status_text, numstat_text, rea
   if not self:is_current(generation, root) then return end
   if self.snapshot and self.snapshot_repository_root == repo.root
       and self.status_text == status_text and self.numstat_text == numstat_text then
+    self:note_finished()
     self.published_generation = generation
     self.last_error = nil
     self.last_error_generation = nil
@@ -290,7 +307,10 @@ end
 
 function Controller:update()
   if self.active or not self.dirty then return false end
-  if self.clock() - self.last_start < self.refresh_interval then return false end
+  local now = self.clock()
+  if now - self.last_start < self.refresh_interval then return false end
+  local manual = self.pending_reason == "manual" or self.pending_reason == "manual-refresh"
+  if now < self.next_allowed and not manual then return false end
   self:start()
   return true
 end
