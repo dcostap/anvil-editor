@@ -59,13 +59,13 @@ test.describe("TODO comment highlighting", function()
     for _, line in ipairs({ 2, 3, 4 }) do
       local colors = drawn_colors(view, line)
       for word, color in pairs(colors) do
-        test.equal(color, style.syntax.warning, word .. " on line " .. line)
+        test.equal(color, style.syntax.todo, word .. " on line " .. line)
       end
     end
-    test.not_equal(drawn_colors(view, 1).TODO, style.syntax.warning)
-    test.not_equal(drawn_colors(view, 5).unrelated, style.syntax.warning)
-    test.equal(drawn_colors(view, 6).TODO, style.syntax.warning)
-    test.not_equal(drawn_colors(view, 8).separate, style.syntax.warning)
+    test.not_equal(drawn_colors(view, 1).TODO, style.syntax.todo)
+    test.not_equal(drawn_colors(view, 5).unrelated, style.syntax.todo)
+    test.equal(drawn_colors(view, 6).TODO, style.syntax.todo)
+    test.not_equal(drawn_colors(view, 8).separate, style.syntax.todo)
     buffer:on_close()
   end)
 
@@ -75,10 +75,10 @@ test.describe("TODO comment highlighting", function()
     local view = TextView(buffer)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 1000, 1000
-    test.equal(drawn_colors(view, 1).start, style.syntax.warning)
-    test.equal(drawn_colors(view, 2).continue, style.syntax.warning)
-    test.not_equal(drawn_colors(view, 1).before, style.syntax.warning)
-    test.not_equal(drawn_colors(view, 3).after, style.syntax.warning)
+    test.equal(drawn_colors(view, 1).start, style.syntax.todo)
+    test.equal(drawn_colors(view, 2).continue, style.syntax.todo)
+    test.not_equal(drawn_colors(view, 1).before, style.syntax.todo)
+    test.not_equal(drawn_colors(view, 3).after, style.syntax.todo)
     buffer:on_close()
   end)
 
@@ -87,9 +87,9 @@ test.describe("TODO comment highlighting", function()
     local view = TextView(buffer)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 1000, 1000
-    test.equal(drawn_colors(view, 1).plan, style.syntax.warning)
-    test.equal(drawn_colors(view, 2).next, style.syntax.warning)
-    test.not_equal(drawn_colors(view, 3).TODO, style.syntax.warning)
+    test.equal(drawn_colors(view, 1).plan, style.syntax.todo)
+    test.equal(drawn_colors(view, 2).next, style.syntax.todo)
+    test.not_equal(drawn_colors(view, 3).TODO, style.syntax.todo)
     buffer:on_close()
   end)
 
@@ -112,12 +112,12 @@ test.describe("TODO comment highlighting", function()
       end
     end
 
-    local warning = table.concat(style.syntax.warning, ",")
-    test.equal(color_on(1), warning)
+    local todo = table.concat(style.syntax.todo, ",")
+    test.equal(color_on(1), todo)
     buffer:remove(2, 4, 2, 9)
-    test.not_equal(color_on(1), warning)
+    test.not_equal(color_on(1), todo)
     buffer:insert(2, 4, "TODO:")
-    test.equal(color_on(1), warning)
+    test.equal(color_on(1), todo)
     buffer:on_close()
   end)
 end)

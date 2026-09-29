@@ -264,6 +264,7 @@ style.syntax["markup"] = p("doc_markup")
 style.syntax["punctuation"] = p("semicolon")
 style.syntax["error"] = p("invalid_string_escape_effect")
 style.syntax["warning"] = p("warning_stripe")
+style.syntax["todo"] = c("006dcc")
 
 -- IntelliJ Light semantic refinements.
 style.syntax["keyword.return"] = p("java_keyword")

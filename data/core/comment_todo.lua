@@ -87,7 +87,7 @@ function comment_todo.apply(highlighter, idx, tokens, raw_tokens_at)
 
   local colored = {}
   for _, type_name, part in tokenizer.each_token(tokens) do
-    add_token(colored, is_comment(type_name) and "warning" or type_name, part)
+    add_token(colored, is_comment(type_name) and "todo" or type_name, part)
   end
   return colored
 end
