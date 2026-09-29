@@ -1,6 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local tokenizer = require "core.tokenizer"
+local comment_todo = require "core.comment_todo"
 local Object = require "core.object"
 
 local language_intelligence
@@ -184,6 +185,9 @@ function Highlighter:update_notify(line, n)
 end
 
 function Highlighter:invalidate_render_cache(first_line, last_line)
+  comment_todo.invalidate(self, first_line, last_line, function(line, count)
+    invalidate_line_packets(self, line, count)
+  end)
   self.render_line_frame_cache = nil
   -- Caches without per-line invalidation compare this on every change.
   self.render_generation = (self.render_generation or 0) + 1
@@ -274,14 +278,18 @@ function Highlighter:get_render_line(idx)
   end
 
   local intelligence = get_language_intelligence()
-  if intelligence then
-    local tokens, _, provider_id = intelligence.render_tokens(self.buffer, idx)
-    if tokens then
-      return finish(text, tokens, provider_id or "language-intelligence")
+  local function raw_line(line_idx)
+    if intelligence then
+      local tokens, _, provider_id = intelligence.render_tokens(self.buffer, line_idx)
+      if tokens then return tokens, provider_id or "language-intelligence" end
     end
+    return self:get_line(line_idx).tokens, "tokenizer"
   end
-  local line = self:get_line(idx)
-  return finish(line.text, line.tokens, "tokenizer")
+  local tokens, source = raw_line(idx)
+  tokens = comment_todo.apply(self, idx, tokens, function(line_idx)
+    return raw_line(line_idx)
+  end)
+  return finish(text, tokens, source)
 end
 
 function Highlighter:each_render_token(idx, scol)
