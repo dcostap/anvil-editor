@@ -211,6 +211,11 @@ Send a copy of the input, then check its revision before applying results on the
 Do not read live Editor or UI objects from a worker.
 The pool returns results to the UI during its budgeted frame drain.
 
+Starting a child process can block for hundreds of milliseconds on Windows.
+Do not call `process.start` on the UI thread for recurring work.
+Submit a `process_capture` job instead. Git uses `worker_pool.named("git")` through `plugins.git.backend.run_git`.
+The UI loop drains named pools and shuts them down with the system pool.
+
 ## Tree-sitter language support
 
 Read [Tree-sitter language maps](data/treesitter/languages/README.md) before adding a language or changing symbol selection.
