@@ -1053,6 +1053,7 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     yields = 0,
     settings = wrap_settings_signature(textview, default_font, width),
     measurement = measurement,
+    on_complete = opts.on_complete,
     line_render_invalidation_generation =
       textview.__line_render_invalidation_generation or 0,
     has_line_render_providers = measurement.has_line_render_providers,
@@ -1656,6 +1657,14 @@ function LineWrapping.update_textview_breaks(textview, width)
   local stale_line_count = textview.wrapped_buffer_line_count ~= #textview.buffer.lines
   local stale_text = textview.wrapped_text_revision ~= (textview.buffer.text_revision or 0)
   local settings_changed = not same_wrap_settings(textview.wrapped_settings, settings)
+  local pending = textview.__async_wrap_reconstruction
+  local pending_current = pending and pending.buffer == textview.buffer
+    and pending.revision == (textview.buffer.text_revision or 0)
+    and pending.line_count == #textview.buffer.lines
+  if pending_current and not stale_line_count and not stale_text
+    and same_wrap_settings(pending.settings, settings) then
+    return
+  end
   if stale_line_count or stale_text or settings_changed then
     if stale_line_count then
       perf_frame_add("linewrapping_update_textview_breaks_line_count_changed", 1)
@@ -1665,7 +1674,15 @@ function LineWrapping.update_textview_breaks(textview, width)
       perf_frame_add("linewrapping_update_textview_breaks_width_changed", 1)
     end
     textview.scroll.to.x = 0
-    LineWrapping.reconstruct_breaks(textview, settings.font, width)
+    if pending_current and not stale_line_count and not stale_text then
+      -- A pending presentation has not replaced the committed rows yet.
+      -- A resize must not turn that sliced work into a full UI-thread pass.
+      LineWrapping.reconstruct_breaks_async(textview, settings.font, width, {
+        on_complete = pending.on_complete,
+      })
+    else
+      LineWrapping.reconstruct_breaks(textview, settings.font, width)
+    end
   end
   perf_frame_add("linewrapping_update_textview_breaks_calls", 1)
   perf_elapsed("linewrapping_update_textview_breaks_ms", perf_start)
