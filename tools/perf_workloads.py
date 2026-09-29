@@ -16,6 +16,12 @@ def scenario(kind: str, **settings: Any) -> dict[str, Any]:
 SCENARIOS = {
     "find-overview": scenario("find", lines=6000, wrap=False),
     "find-overview-wrap": scenario("find", lines=600, wrap=True),
+    "find-overview-wrap-reference": scenario("find", lines=600, wrap=True,
+        reference_overview=True),
+    "find-overview-alpha": dict(scenario("find", lines=6000, wrap=False,
+        repeats=12, marker_alpha=7), window_height=480),
+    "find-overview-alpha-reference": dict(scenario("find", lines=6000, wrap=False,
+        repeats=12, marker_alpha=7, reference_overview=True), window_height=480),
     "diff-scroll-medium": scenario("diff", lines=4000, change_every=8, action="scroll"),
     "diff-scroll-large": scenario("diff", lines=40000, change_every=8, action="scroll"),
     "diff-steady-large": scenario("diff", lines=40000, change_every=8, action="redraw"),
@@ -89,7 +95,7 @@ def generate(root: Path, settings: dict[str, Any]) -> dict[str, Any]:
     count = settings.get("lines", 1)
     if kind == "find":
         save("find.c", "".join(
-            ("int input = input + 1; /* input */" * (12 if settings["wrap"] else 1)
+            ("int input = input + 1; /* input */" * settings.get("repeats", 12 if settings["wrap"] else 1)
              + "\n") if i % 7 < 3 else "/* no match */\n"
             for i in range(count)))
     elif kind == "diff":

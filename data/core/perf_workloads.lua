@@ -53,6 +53,39 @@ function Workload:setup()
     assert(command.perform("editor:find"))
     self.find_input = core.active_view
     self.find_input:set_text("input")
+    if settings.marker_alpha then
+      local style = require "core.style"
+      style.search_overview_secondary = { 230, 50, 170, settings.marker_alpha }
+      style.search_overview = { 70, 116, 181, 113 }
+      style.scrollbar_overview_min_height = 1.37
+    end
+    if settings.reference_overview then
+      -- Pixel reference: the former per-match overview, using public geometry.
+      local TextView = require "core.textview"
+      local style = require "core.style"
+      self.view.draw_scrollbar = function(view)
+        local depth = TextView.__local_find_draw_scrollbar_depth or 0
+        TextView.__local_find_draw_scrollbar_depth = depth + 1
+        TextView.draw_scrollbar(view)
+        TextView.__local_find_draw_scrollbar_depth = depth
+        local state = self.find_input.local_find_state
+        local source_h = math.max(1, view:get_scrollable_size())
+        local function draw(match, color)
+          local first = view:get_visual_row(match.line, match.col1, false)
+          local last = view:get_visual_row(match.line, math.max(match.col1, match.col2 - 1), false)
+          local x, y, w, h = view.v_scrollbar:get_overview_marker_rect(
+            view:get_visual_row_y_offset(first) / source_h,
+            view:get_visual_row_y_offset(last + 1) / source_h)
+          if x then renderer.draw_rect(x, y, w, h, color) end
+        end
+        for index, match in ipairs(state.matches) do
+          if index ~= state.current then draw(match, style.search_overview_secondary) end
+        end
+        local selected = state.matches[state.current]
+        if selected then draw(selected, style.search_overview) end
+        view.v_scrollbar:draw_thumb()
+      end
+    end
   elseif settings.kind == "diff" then
     self.diff = assert(require("plugins.diffview").file_to_file(
       self:path("left.lua"), self:path("right.lua")))
