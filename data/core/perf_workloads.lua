@@ -45,7 +45,15 @@ function Workload:setup()
   local settings = self.settings
   require("plugins.scale").set(1)
   require("plugins.scale").set_code(settings.code_scale)
-  if settings.kind == "diff" then
+  if settings.kind == "find" then
+    self.view = open(self:path("find.c"))
+    self.view:set_wrapping_enabled(settings.wrap)
+    if settings.wrap then linewrapping.update_textview_breaks(self.view) end
+    position(self.view, math.floor(settings.lines / 2))
+    assert(command.perform("editor:find"))
+    self.find_input = core.active_view
+    self.find_input:set_text("input")
+  elseif settings.kind == "diff" then
     self.diff = assert(require("plugins.diffview").file_to_file(
       self:path("left.lua"), self:path("right.lua")))
     self.view = self.diff.buffer_view_b
@@ -107,6 +115,10 @@ function Workload:setup()
 end
 
 function Workload:setup_ready()
+  if self.find_input then
+    local state = self.find_input.local_find_state
+    if state.pending or (state.overview and not state.overview.complete) then return false end
+  end
   if self.settings.kind == "editor" and self.settings.content == "markdown" then
     local model = require("core.markdown.model").peek(self.view.buffer)
     if not (model and model.status == "ready"
@@ -144,7 +156,9 @@ end
 function Workload:dispatch(index)
   local settings = self.settings
   self.index = index
-  if settings.kind == "editor" and settings.action == "type" then
+  if settings.kind == "find" then
+    assert(command.perform("editor:find_field_next"))
+  elseif settings.kind == "editor" and settings.action == "type" then
     assert(core.active_view == self.view, "Editor lost input focus")
     core.on_event("textinput", TYPED_TEXT:sub(index, index))
   elseif settings.kind == "editor" and settings.action == "scroll" then

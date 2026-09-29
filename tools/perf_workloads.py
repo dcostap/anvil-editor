@@ -14,6 +14,8 @@ def scenario(kind: str, **settings: Any) -> dict[str, Any]:
 
 
 SCENARIOS = {
+    "find-overview": scenario("find", lines=6000, wrap=False),
+    "find-overview-wrap": scenario("find", lines=600, wrap=True),
     "diff-scroll-medium": scenario("diff", lines=4000, change_every=8, action="scroll"),
     "diff-scroll-large": scenario("diff", lines=40000, change_every=8, action="scroll"),
     "diff-steady-large": scenario("diff", lines=40000, change_every=8, action="redraw"),
@@ -85,7 +87,12 @@ def generate(root: Path, settings: dict[str, Any]) -> dict[str, Any]:
 
     kind = settings["kind"]
     count = settings.get("lines", 1)
-    if kind == "diff":
+    if kind == "find":
+        save("find.c", "".join(
+            ("int input = input + 1; /* input */" * (12 if settings["wrap"] else 1)
+             + "\n") if i % 7 < 3 else "/* no match */\n"
+            for i in range(count)))
+    elif kind == "diff":
         left, right = [], []
         for i in range(1, count + 1):
             line = f'local row_{i:07d} = "stable value {i:07d} office affine éλ漢字"\n'
