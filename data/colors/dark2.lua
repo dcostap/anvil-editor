@@ -197,12 +197,12 @@ style.diff_delete_background = p("deleted_bg")
 style.diff_insert_background = style.diff_insert
 style.diff_modify_background = style.diff_modify
 style.diff_modify_inline = c("314c5b")
-style.diff_marker_delete = { common.color "rgba(171, 97, 108, 0.70)" }
-style.diff_marker_insert = { common.color "rgba(103, 162, 122, 0.68)" }
-style.diff_marker_modify = { common.color "rgba(121, 160, 184, 0.68)" }
-style.diff_overview_delete = { common.color "rgba(209, 131, 138, 0.54)" }
-style.diff_overview_insert = { common.color "rgba(143, 189, 156, 0.52)" }
-style.diff_overview_modify = { common.color "rgba(145, 182, 193, 0.52)" }
+style.diff_marker_delete = { common.color "rgba(228, 97, 104, 0.74)" }
+style.diff_marker_insert = { common.color "rgba(67, 184, 110, 0.72)" }
+style.diff_marker_modify = { common.color "rgba(75, 159, 226, 0.72)" }
+style.diff_overview_delete = { common.color "rgba(228, 97, 104, 0.58)" }
+style.diff_overview_insert = { common.color "rgba(67, 184, 110, 0.54)" }
+style.diff_overview_modify = { common.color "rgba(75, 159, 226, 0.54)" }
 style.search_selection = c("395747")
 style.search_selection_text = nil
 style.search_selection_outline = c("a0c5a9")
@@ -285,9 +285,9 @@ style.project_path_separator = style.dim
 style.diffview_plain_text = p("text_fg")
 
 -- Git changed-line colors
-style.git_change_addition = c("699c7a")
-style.git_change_modification = c("719eae")
-style.git_change_deletion = c("b66f79")
+style.git_change_addition = c("43b86e")
+style.git_change_modification = c("4b9fe2")
+style.git_change_deletion = c("e46168")
 style.gitdiff_width = common.round(2 * SCALE)
 style.git_graph_colors = {
   c("87b9a1"), c("91b6c1"), c("b1b0cb"), c("c9aa78"), c("c28e9a"), c("85b5b6"),

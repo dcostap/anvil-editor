@@ -145,12 +145,12 @@ style.diff_delete_background = { common.color "rgba(255, 229, 229, 0.80)" }
 style.diff_insert_background = c("e3f7e7")
 style.diff_modify_background = c("edf3ff")
 style.diff_modify_inline = { common.color "rgba(210, 219, 255, 0.85)" }
-style.diff_marker_delete = { common.color "rgba(207, 117, 125, 0.58)" }
-style.diff_marker_insert = { common.color "rgba(98, 157, 112, 0.52)" }
-style.diff_marker_modify = { common.color "rgba(106, 140, 181, 0.50)" }
-style.diff_overview_delete = { common.color "rgba(196, 88, 99, 0.38)" }
-style.diff_overview_insert = { common.color "rgba(65, 137, 82, 0.34)" }
-style.diff_overview_modify = { common.color "rgba(76, 116, 164, 0.30)" }
+style.diff_marker_delete = { common.color "rgba(196, 52, 67, 0.72)" }
+style.diff_marker_insert = { common.color "rgba(22, 129, 44, 0.72)" }
+style.diff_marker_modify = { common.color "rgba(34, 102, 187, 0.72)" }
+style.diff_overview_delete = { common.color "rgba(196, 52, 67, 0.54)" }
+style.diff_overview_insert = { common.color "rgba(22, 129, 44, 0.54)" }
+style.diff_overview_modify = { common.color "rgba(34, 102, 187, 0.54)" }
 style.search_selection = c("f0e3dc")
 style.search_selection_text = p("text_fg")
 style.search_selection_outline = style.accent
@@ -220,9 +220,9 @@ style.filetree_folder_row_background = { common.color "rgba(0, 0, 0, 0.035)" }
 style.diffview_plain_text = c("080808")
 
 -- Git changed-line colors
-style.git_change_addition = c("08a91f")
-style.git_change_modification = {47, 169, 255, 255}
-style.git_change_deletion = c("ff5065")
+style.git_change_addition = c("16812c")
+style.git_change_modification = c("2266bb")
+style.git_change_deletion = c("c43443")
 style.gitdiff_width = common.round(2 * SCALE)
 style.git_graph_colors = {
   c("0053ff"), c("08a91f"), c("7c3aed"), c("b66a00"), c("d82f55"), c("008c86"),
@@ -235,9 +235,9 @@ style.git_ref_tag = c("9a5700")
 -- File tree Git status and line-count colors
 style.filetree_git_status_ignored = c("bd6b00")
 style.filetree_git_status_untracked = c("db3b4b")
-style.filetree_git_status_added = c("08a91f")
-style.filetree_git_status_modified = c("2f6fbd")
-style.filetree_git_status_deleted = c("db3b4b")
+style.filetree_git_status_added = style.git_change_addition
+style.filetree_git_status_modified = style.git_change_modification
+style.filetree_git_status_deleted = style.git_change_deletion
 style.filetree_git_status_unmerged = style.error
 style.filetree_git_line_additions = style.git_change_addition
 style.filetree_git_line_deletions = style.git_change_deletion
