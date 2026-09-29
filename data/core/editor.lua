@@ -49,6 +49,7 @@ end
 
 function Editor:on_close()
   require("core.poi").clear_remote_source(self)
+  editor_file_pois.close(self)
   Editor.super.on_close(self)
   self:release_buffer()
   if self.discard_buffer_on_close and core.buffer_registry

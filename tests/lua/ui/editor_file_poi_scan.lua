@@ -25,6 +25,60 @@ test.describe("Editor file locations in growing files", function()
     if context.root then common.rm(context.root, true) end
   end)
 
+  test.it("keeps the UI responsive while scanning one long line", function(context)
+    coroutine.yield(0.01) -- Let the test runner start before measuring a UI step.
+    local buffer = Buffer()
+    buffer:insert(1, 1, string.rep("missing.txt:9:4 ", 22000))
+    local view = Editor(buffer)
+    context.buffer = buffer
+    context.views = { view }
+    test.equal(#view:get_points_of_interest(), 0)
+
+    for _ = 1, 8 do
+      local started = system.get_time()
+      coroutine.yield(0.01)
+      local elapsed = system.get_time() - started
+      test.ok(elapsed < 0.3, "file-location scanning blocked the UI for " .. elapsed .. " seconds")
+    end
+  end)
+
+  test.it("does not publish file locations from a replaced long line", function(context)
+    local root = USERDIR .. PATHSEP .. "editor-file-poi-stale-" .. system.get_process_id()
+    local source = root .. PATHSEP .. "source.txt"
+    local target = root .. PATHSEP .. "target.txt"
+    context.root = root
+    context.old_project = core.root_project
+    test.ok(common.mkdirp(root))
+    local file = assert(io.open(target, "wb"))
+    file:write("target\n")
+    file:close()
+    file = assert(io.open(source, "wb"))
+    file:write(string.rep("missing.txt:9:4 ", 22000), "target.txt:7:1\n")
+    file:close()
+    core.root_project = function() return { path = root } end
+
+    local buffer = Buffer(source, source, false)
+    local view = Editor(buffer)
+    context.buffer = buffer
+    context.views = { view }
+    view:get_points_of_interest()
+    coroutine.yield(0.01)
+
+    file = assert(io.open(source, "wb"))
+    file:write("target.txt:31:1\n")
+    file:close()
+    buffer:reload()
+    test.equal(wait_for_point(view, 31).target_line, 31)
+    for _ = 1, 20 do
+      coroutine.yield(0.01)
+      for _, point in ipairs(view:get_points_of_interest()) do
+        if point.kind == "editor-file-location" then
+          test.equal(point.target_line, 31)
+        end
+      end
+    end
+  end)
+
   test.it("publishes a large reload after the UI can run again", function(context)
     local root = USERDIR .. PATHSEP .. "editor-file-poi-scan-" .. system.get_process_id()
     local source = root .. PATHSEP .. "source.txt"
@@ -67,7 +121,9 @@ test.describe("Editor file locations in growing files", function()
     local fresh = Editor(buffer)
     context.views[#context.views + 1] = fresh
     fresh:update()
-    test.equal(#fresh:get_points_of_interest(), 0)
+    for _, fresh_point in ipairs(fresh:get_points_of_interest()) do
+      test.ok(fresh_point.kind ~= "editor-file-location")
+    end
     test.equal(wait_for_point(fresh, 25).target_line, 25)
     fresh:on_close()
 
@@ -77,7 +133,12 @@ test.describe("Editor file locations in growing files", function()
     file:close()
     buffer:reload()
     -- Locations in the unchanged prefix remain available during an append scan.
-    test.equal(view:get_points_of_interest()[1].target_line, 25)
+    local retained
+    for _, point_after_append in ipairs(view:get_points_of_interest()) do
+      if point_after_append.kind == "editor-file-location"
+          and point_after_append.target_line == 25 then retained = point_after_append end
+    end
+    test.not_nil(retained)
     file = assert(io.open(source, "ab"))
     for _ = 1, 2000 do file:write("still growing\n") end
     file:write("target.txt:40:1\n")
@@ -93,7 +154,9 @@ test.describe("Editor file locations in growing files", function()
     file:write("target.txt:50:1\n")
     file:close()
     buffer:reload()
-    test.equal(#view:get_points_of_interest(), 0)
+    for _, stale_point in ipairs(view:get_points_of_interest()) do
+      test.ok(stale_point.kind ~= "editor-file-location")
+    end
     test.equal(wait_for_point(view, 50).target_line, 50)
     test.equal(wait_for_point(other, 50).target_line, 50)
   end)

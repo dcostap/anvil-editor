@@ -4,6 +4,7 @@ local common = require "core.common"
 local style = require "core.style"
 local text_poi_locations = require "core.text_poi_locations"
 local TextView = require "core.textview"
+local worker_pool = require "core.worker_pool"
 
 local M = {}
 
@@ -154,6 +155,13 @@ local function is_append(old_lines, new_lines)
   return true
 end
 
+local function cancel_scan(cache)
+  if not cache or not cache.worker_handle then return end
+  local pool = worker_pool.current_system()
+  if pool then pool:cancel(cache.worker_handle) end
+  cache.worker_handle = nil
+end
+
 local function scan_async(view, cache, first)
   local buffer = view.buffer
   core.add_thread(function()
@@ -165,7 +173,11 @@ local function scan_async(view, cache, first)
         slice_start = system.get_time()
       end
     end
-    if view.textview_closed or view.editor_file_poi_cache ~= cache then return end
+    local function current()
+      return not view.textview_closed and view.editor_file_poi_cache == cache
+        and buffer_revision(buffer) == cache.revision
+    end
+    if not current() then return end
     if first > 1 then
       for _, candidate in ipairs(cache.candidates) do
         candidates[#candidates + 1] = candidate
@@ -180,33 +192,69 @@ local function scan_async(view, cache, first)
         yield_if_needed()
       end
     end
-    local scanned = 0
-    local line = first
+    local scanned, line = 0, first
+    local pool = worker_pool.system()
     while line <= #buffer.lines do
-      if view.textview_closed or view.editor_file_poi_cache ~= cache
-          or buffer_revision(buffer) ~= cache.revision then return end
+      if not current() then return end
       if #candidates >= MAX_CANDIDATES then break end
-      local found = text_poi_locations.extract_line_candidates(
-        buffer.lines[line], line, MAX_CANDIDATES - #candidates
-      )
-      for _, candidate in ipairs(found) do candidates[#candidates + 1] = candidate end
-      for _, point in ipairs(resolve_candidates(found, cache.roots)) do
-        points[#points + 1] = point
-        local entries = by_line[point.line]
-        if not entries or entries == cache.by_line[point.line] then
-          local copy = {}
-          for _, entry in ipairs(entries or {}) do copy[#copy + 1] = entry end
-          entries = copy
-          by_line[point.line] = entries
+      local lines, bytes, chunk_first = {}, 0, line
+      repeat
+        local text = buffer.lines[line]
+        lines[#lines + 1] = text
+        bytes = bytes + #text
+        line = line + 1
+        yield_if_needed()
+      until line > #buffer.lines or #lines >= INLINE_SCAN_LINES or bytes >= INLINE_SCAN_BYTES
+      if not current() then return end
+      local chunks, chunk_index, done, failure = {}, 1, false, nil
+      local handle, err = pool:submit {
+        kind = "core.workers.file_locations",
+        priority = "background",
+        payload = { lines = lines, first = chunk_first, limit = MAX_CANDIDATES - #candidates },
+        is_stale = function() return not current() end,
+        on_result = function(message) chunks[#chunks + 1] = message.payload end,
+        on_complete = function() done = true end,
+        on_error = function(message) failure, done = message.error, true end,
+        on_cancelled = function() done = true end,
+      }
+      if not handle then failure, done = err, true end
+      cache.worker_handle = handle
+      while not done or chunk_index <= #chunks do
+        if not current() then cancel_scan(cache) return end
+        local found = chunks[chunk_index]
+        if found then
+          chunks[chunk_index] = false
+          chunk_index = chunk_index + 1
+          for _, candidate in ipairs(found) do
+            candidates[#candidates + 1] = candidate
+            for _, point in ipairs(resolve_candidates({ candidate }, cache.roots)) do
+              points[#points + 1] = point
+              local entries = by_line[point.line]
+              if not entries or entries == cache.by_line[point.line] then
+                local copy = {}
+                for _, entry in ipairs(entries or {}) do copy[#copy + 1] = entry end
+                entries = copy
+                by_line[point.line] = entries
+              end
+              entries[#entries + 1] = point
+            end
+            yield_if_needed()
+          end
+        else
+          coroutine.yield(0.01)
+          slice_start = system.get_time()
         end
-        entries[#entries + 1] = point
       end
-      scanned = scanned + 1
-      yield_if_needed()
-      line = line + 1
+      cache.worker_handle = nil
+      if failure then
+        cache.pending = nil
+        core.log_quiet("Editor file-location worker failed: path=%s error=%s",
+          buffer:get_name(), tostring(failure))
+        return
+      end
+      scanned = scanned + #lines
     end
-    if view.textview_closed or view.editor_file_poi_cache ~= cache
-        or buffer_revision(buffer) ~= cache.revision then return end
+    if not current() then return end
     cache.candidates, cache.points, cache.by_line = candidates, points, by_line
     cache.validated_at = system.get_time()
     cache.pending = nil
@@ -248,6 +296,7 @@ end
 
 local function new_cache(view, revision, source, project, previous, append)
   local buffer = view.buffer
+  cancel_scan(view.editor_file_poi_cache)
   local first = append and #previous.lines + 1 or 1
   local cache = {
     revision = revision,
@@ -285,6 +334,11 @@ local function new_cache(view, revision, source, project, previous, append)
     scan_async(view, cache, first)
   end
   return cache
+end
+
+function M.close(view)
+  cancel_scan(view.editor_file_poi_cache)
+  view.editor_file_poi_cache = nil
 end
 
 local function cache_for(view)
