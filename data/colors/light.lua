@@ -72,7 +72,7 @@ local C = {
   not_used = "a8adbd",
   not_used_effect = "c9ccd6",
   warning_effect = "f2bf57",
-  warning_stripe = "f2bf57",
+  warning_stripe = "925a00",
   write_identifier_under_caret_bg = "fce8f4",
   write_identifier_under_caret_stripe = "f0a8d2",
 }

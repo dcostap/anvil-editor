@@ -70,7 +70,7 @@ local C = {
   not_used = "817e75",
   not_used_effect = "514f49",
   warning_effect = "ba8550",
-  warning_stripe = "dfa05c",
+  warning_stripe = "f7a932",
   write_identifier_under_caret_bg = "48353d",
   write_identifier_under_caret_stripe = "bc8997",
 }

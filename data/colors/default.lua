@@ -73,7 +73,7 @@ local C = {
   not_used = "94959c",
   not_used_effect = "56595c",
   warning_effect = "717b7b",
-  warning_stripe = "be9117",
+  warning_stripe = "eeb217",
   write_identifier_under_caret_bg = "503653",
   write_identifier_under_caret_stripe = "b56277",
 }
@@ -153,7 +153,8 @@ style.markdown_live_link_error = style.error
 style.markdown_live_inline_code_bg = style.background2
 style.markdown_live_code_background = style.background2
 style.markdown_live_code_header = style.dim
-style.markdown_live_highlight_bg = p("warning_stripe")
+-- Keep this background separate from the brighter warning text color.
+style.markdown_live_highlight_bg = c("be9117")
 style.markdown_live_quote_bar = style.accent
 style.markdown_live_quote_background = { 255, 255, 255, 13 }
 style.markdown_live_callout_palette = {
