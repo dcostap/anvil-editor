@@ -159,7 +159,7 @@ local rules = {
   yaml = { extensions = list("yaml", "yml"), line_comment = "#", indent_after = list(":%s*$", "^%s*%-%s+.*:%s*$"), outdent_before = list() },
   toml = { extensions = list("toml"), line_comment = "#", indent_after = brace_indent_after, outdent_before = brace_outdent_before },
   xml = { extensions = list("xml", "xsd", "xsl", "svg"), block_comment = { "<!--", "-->" }, indent_after = list("<[%w:_-][^>/]*>%s*$"), outdent_before = list("^%s*</") },
-  markdown = { extensions = list("md", "markdown", "mdown"), line_comment = nil, indent_after = list("^%s*[%-%*%+]%s+.*:%s*$", "^%s*>%s+.*:%s*$"), outdent_before = list() },
+  markdown = { extensions = list("md", "markdown", "mdown"), line_comment = nil, indent_after = list("^%s*>%s+.*:%s*$"), outdent_before = list() },
   dockerfile = { filenames = list("Dockerfile", "Containerfile"), extensions = list("dockerfile"), line_comment = "#", indent_after = list("\\%s*$"), outdent_before = list() },
   makefile = { filenames = list("Makefile", "makefile", "GNUmakefile"), extensions = list("mk", "make"), line_comment = "#", indent_after = list(":%s*$"), outdent_before = list() },
   cmake = { extensions = list("cmake"), filenames = list("CMakeLists.txt"), line_comment = "#", indent_after = list("%f[%w]function%s*%b()%s*$", "%f[%w]macro%s*%b()%s*$", "%f[%w]if%s*%b()%s*$", "%f[%w]foreach%s*%b()%s*$", "%f[%w]while%s*%b()%s*$"), outdent_before = list("^%s*endfunction%f[%W]", "^%s*endmacro%f[%W]", "^%s*endif%f[%W]", "^%s*endforeach%f[%W]", "^%s*endwhile%f[%W]") },

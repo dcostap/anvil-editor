@@ -529,14 +529,14 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "- first second\nafter\n")
   end)
 
-  test.it("indents Markdown list items ending in a colon instead of continuing the marker", function(context)
+  test.it("continues Markdown list items ending in a colon", function(context)
     local buffer, view = new_editor(context, "- item:", "sample.md")
     core.set_active_view(view)
     buffer:set_selection(1, #"- item:" + 1, 1, #"- item:" + 1)
 
     test.ok(command.perform("core:newline"))
 
-    test.equal(text(buffer), "- item:\n  \n")
+    test.equal(text(buffer), "- item:\n- \n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
 
