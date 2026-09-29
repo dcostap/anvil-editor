@@ -346,6 +346,12 @@ function ThemeEditor:on_mouse_released(button, x, y)
   return ThemeEditor.super.on_mouse_released(self, button, x, y)
 end
 
+function ThemeEditor:draw_background(color)
+  core.root_panel:draw_wallpaper_region(
+    self.position.x, self.position.y, self.size.x, self.size.y)
+  ThemeEditor.super.draw_background(self, color)
+end
+
 function ThemeEditor:draw()
   if not ThemeEditor.super.draw(self) then return false end
   local x = self.position.x + self:get_width()
