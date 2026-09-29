@@ -9,6 +9,7 @@ local worker_pool = require "core.worker_pool"
 local M = {}
 
 local MAX_CANDIDATES = 32768
+local MAX_SCAN_BYTES = 1024 * 1024
 local ACTION_REVALIDATION_INTERVAL = 1
 local INLINE_SCAN_LINES = 128
 local INLINE_SCAN_BYTES = 32768
@@ -57,6 +58,30 @@ end
 
 local function buffer_revision(buffer)
   return buffer and (buffer.text_revision or buffer:get_change_id()) or 0
+end
+
+local function file_too_large(buffer)
+  local revision = buffer_revision(buffer)
+  local lines = buffer.lines or {}
+  local check = buffer.editor_file_poi_size_check
+  if check and check.revision == revision and check.lines == lines then
+    return check.too_large
+  end
+  -- The disk size can be stale after edits. Count current text only once per revision.
+  local bytes = 0
+  for _, text in ipairs(lines) do
+    bytes = bytes + #text
+    if bytes > MAX_SCAN_BYTES then break end
+  end
+  local too_large = bytes > MAX_SCAN_BYTES
+  buffer.editor_file_poi_size_check = {
+    revision = revision, lines = lines, too_large = too_large,
+  }
+  if too_large then
+    core.log_quiet("Editor file locations skipped: path=%s size exceeds %d bytes",
+      buffer:get_name(), MAX_SCAN_BYTES)
+  end
+  return too_large
 end
 
 local function existing_file(path)
@@ -465,6 +490,10 @@ end
 function M.on_text_transaction(view, transaction)
   local cache = view and view.editor_file_poi_cache
   if not cache or not transaction or not transaction.changed then return false end
+  if file_too_large(view.buffer) then
+    M.close(view)
+    return true
+  end
   local source = source_path(view)
   local project = project_path()
   if cache.source_path ~= source or cache.project_path ~= project then
@@ -502,6 +531,10 @@ end
 local function points_for_view(view, opts)
   local buffer = view and view.buffer
   if not buffer or buffer.binary then return {} end
+  if file_too_large(buffer) then
+    if view.editor_file_poi_cache then M.close(view) end
+    return {}
+  end
 
   local cache = cache_for(view)
   opts = opts or {}
@@ -522,6 +555,10 @@ function M.update(view)
   local started = core.perf_frame_stats and system.get_time()
   local buffer = view and view.buffer
   if not buffer or buffer.binary then return end
+  if file_too_large(buffer) then
+    if view.editor_file_poi_cache then M.close(view) end
+    return
+  end
   local cache = cache_for(view)
   if not cache.points and not cache.pending then resolve_cache(cache) end
   if started then

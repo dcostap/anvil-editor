@@ -79,6 +79,47 @@ test.describe("Editor file locations in growing files", function()
     end
   end)
 
+  test.it("skips file locations in an oversized file and resumes after it shrinks", function(context)
+    local root = USERDIR .. PATHSEP .. "editor-file-poi-size-" .. system.get_process_id()
+    local source = root .. PATHSEP .. "source.txt"
+    local target = root .. PATHSEP .. "target.txt"
+    context.root = root
+    context.old_project = core.root_project
+    test.ok(common.mkdirp(root))
+    local file = assert(io.open(target, "wb"))
+    file:write("target\n")
+    file:close()
+    file = assert(io.open(source, "wb"))
+    file:write("target.txt:9:4\n")
+    local plain_line = string.rep("x", 2048) .. "\n"
+    for _ = 1, 512 do file:write(plain_line) end
+    file:close()
+    core.root_project = function() return { path = root } end
+
+    local buffer = Buffer(source, source, false)
+    local view = Editor(buffer)
+    context.buffer = buffer
+    context.views = { view }
+    local deadline = system.get_time() + 2
+    repeat
+      for _, point in ipairs(view:get_points_of_interest()) do
+        test.ok(point.kind ~= "editor-file-location")
+      end
+      coroutine.yield(0.01)
+    until system.get_time() >= deadline
+
+    file = assert(io.open(source, "wb"))
+    file:write("target.txt:9:4\n")
+    file:close()
+    buffer:reload()
+    test.equal(wait_for_point(view, 9).target_col, 4)
+
+    buffer:insert(1, 1, string.rep(plain_line, 512))
+    for _, point in ipairs(view:get_points_of_interest()) do
+      test.ok(point.kind ~= "editor-file-location")
+    end
+  end)
+
   test.it("publishes a large reload after the UI can run again", function(context)
     local root = USERDIR .. PATHSEP .. "editor-file-poi-scan-" .. system.get_process_id()
     local source = root .. PATHSEP .. "source.txt"
