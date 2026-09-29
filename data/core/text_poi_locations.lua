@@ -85,7 +85,7 @@ end
 
 local function starts_in_uri(line, col)
   local prefix = line:sub(1, math.max(0, (col or 1) - 1))
-  local token = (prefix:match("([^%s\"']*)$") or ""):gsub("^[%(%[%{%<]+", "")
+  local token = (prefix:match("^.*[%s\"']([^%s\"']*)$") or prefix):gsub("^[%(%[%{%<]+", "")
   return token:match("%a[%w+.-]*:") ~= nil
 end
 
@@ -194,13 +194,15 @@ local function add_line_matches(list, seen, limit, line, line_no)
   for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+):(%d+)()") do add(s, e, path, target_line, target_col) end
   for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+),(%d+)()") do add(s, e, path, target_line, target_col) end
   for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+)()") do if not line:sub(e):match("^[:,]%d") then add(s, e, path, target_line, 1) end end
-  for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+):(%d+)()") do add(s, e, path, target_line, target_col) end
-  for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+),(%d+)()") do add(s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("()([^%s:\"'()<>|]+):(%d+)()") do if not line:sub(e):match("^[:,]%d") then add(s, e, path, target_line, 1) end end
+  -- Start at token boundaries. Retrying a failed path at every byte makes a
+  -- long JSONL field with one :number take quadratic time on the UI thread.
+  for s, path, target_line, target_col, e in line:gmatch("%f[^%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+):(%d+)()") do add(s, e, path, target_line, target_col) end
+  for s, path, target_line, target_col, e in line:gmatch("%f[^%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+),(%d+)()") do add(s, e, path, target_line, target_col) end
+  for s, path, target_line, e in line:gmatch("%f[^%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+)()") do if not line:sub(e):match("^[:,]%d") then add(s, e, path, target_line, 1) end end
   for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%,(%d+)%)()") do add(s, e, path, target_line, target_col) end
   for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%)()") do if line:sub(e, e) ~= "," then add(s, e, path, target_line, 1) end end
-  for s, path, target_line, target_col, e in line:gmatch("()([^%s:\"'<>|]+)%((%d+)%,(%d+)%)()") do add(s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("()([^%s:\"'<>|]+)%((%d+)%)()") do if line:sub(e, e) ~= "," then add(s, e, path, target_line, 1) end end
+  for s, path, target_line, target_col, e in line:gmatch("%f[^%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%,(%d+)%)()") do add(s, e, path, target_line, target_col) end
+  for s, path, target_line, e in line:gmatch("%f[^%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%)()") do if line:sub(e, e) ~= "," then add(s, e, path, target_line, 1) end end
 end
 
 local function sort(candidates)
