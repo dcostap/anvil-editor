@@ -195,6 +195,22 @@ When adding new functionality, use `core.log_quiet(...)` liberally for diagnosti
 
 This is a personal fork with first-party ownership of the whole codebase, including bundled Lua plugins and defaults. Prefer clean refactors over compatibility adapters: when renaming concepts, APIs, fields, commands, or behavior, update all in-repo callers/configs/plugins/tests instead of leaving deprecated aliases, dead code, or compatibility slop. Only keep backward compatibility when the user explicitly asks for it or there is a concrete external boundary that cannot be migrated in the same change.
 
+## Background work infrastructure
+
+`core.add_thread` schedules a Lua coroutine on the UI thread. It is not an OS thread.
+It yields only when the code calls `coroutine.yield`. A long operation between yields blocks the UI.
+
+Anvil already has real worker threads in `data/core/worker_pool.lua`.
+Lua jobs run in separate Lua states through `thread.create` and channels.
+Add Lua job handlers under `data/core/workers`.
+The same pool supports native C jobs through `src/worker_pool.c` and `src/api/worker_pool.c`.
+Native jobs need a supported job kind; they do not run arbitrary Lua code.
+
+Use the worker pool for scans or other work that can exceed one UI frame.
+Send a copy of the input, then check its revision before applying results on the UI thread.
+Do not read live Editor or UI objects from a worker.
+The pool returns results to the UI during its budgeted frame drain.
+
 ## Tree-sitter language support
 
 Read [Tree-sitter language maps](data/treesitter/languages/README.md) before adding a language or changing symbol selection.
