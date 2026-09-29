@@ -1699,8 +1699,10 @@ function Model:subscribe_status_service()
       if model.on_update then model.on_update(model) end
       return
     end
+    -- Presented Git Views flush this from update, so hidden sessions and
+    -- background tabs do not reload the log for every repository change.
     model.shared_refresh_pending = true
-    model:flush_shared_refresh()
+    core.redraw = true
   end)
   self.status_subscribed = true
   self.status_subscription_root = root
@@ -1829,7 +1831,6 @@ function Model:_finish_refresh(generation, total_commits, log_page, local_change
   self:load_commit_changed_files(tab.commits[tab.selected_commit])
   self.shared_refresh_active = false
   if callback then callback(self, err) end
-  self:flush_shared_refresh()
 end
 
 function Model:_start_refresh_jobs(repo, generation, callback)
@@ -2102,7 +2103,6 @@ function Model:load_more_log(callback)
     end
     if callback then callback(self, err) end
     self.shared_refresh_active = false
-    self:flush_shared_refresh()
   end)
   if not log_done then self:_track_job(log_job) end
   return true

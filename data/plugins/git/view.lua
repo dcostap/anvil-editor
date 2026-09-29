@@ -1892,6 +1892,7 @@ function GitView:maybe_load_more_commits()
 end
 
 function GitView:update()
+  self.model:flush_shared_refresh()
   self:update_pane_buffers(false)
   self:maybe_load_more_commits()
   self:sync_selection_from_pane()

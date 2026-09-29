@@ -1956,6 +1956,39 @@ test.describe("Git View command", function()
     test.ok(diff.buffer_view_b.scroll.to.y > 0)
   end)
 
+  test.test("reloads the Git Log after repository changes only while its tab is shown", function(context)
+    local notify
+    local status_service = {
+      subscribe = function(_, _, callback) notify = callback end,
+      unsubscribe = function() end,
+      lookup = function() end,
+    }
+    local log_runs = 0
+    local backend = common.merge({}, fake_backend)
+    backend.run_git = function(repo, args, opts, callback)
+      if args[1] == "log" then log_runs = log_runs + 1 end
+      callback({ code = 0, stdout = "" }, nil)
+      return { cancel = function() end }
+    end
+    local _, view = git_view.open_log(context.project, {
+      window = fake_window(1111),
+      window_id = 1111,
+      git_view_opts = { backend = backend, status_service = status_service },
+    })
+    test.not_nil(notify, "the Git View must follow shared repository changes")
+    local loaded = log_runs
+
+    local pane = panes.pane_for_view(view)
+    panes.present(View(), { pane = pane })
+    notify("C:/repo", "filesystem")
+    core.root_panel:update()
+    test.equal(log_runs, loaded, "a background Git View tab must not reload its log")
+
+    panes.present(view, { pane = pane })
+    core.root_panel:update()
+    test.equal(log_runs, loaded + 1, "showing the Git View must load the pending change")
+  end)
+
   test.test("saves and restores hidden Git View Pane Tab state", function(context)
     local session, view = open_fake_git_view(context.project)
     local history_tab = view.model:open_file_history("src/app.lua")

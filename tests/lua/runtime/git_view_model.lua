@@ -236,7 +236,7 @@ test.describe("plugins.git.model", function()
     test.equal(model:log_tab().error.message, "status failed")
   end)
 
-  test.test("refreshes after a completed shared Git status update", function()
+  test.test("refreshes for a completed shared Git status update once a view presents it", function()
     local status_callback
     local subscriptions, lookups, log_calls = 0, 0, 0
     local model
@@ -266,7 +266,8 @@ test.describe("plugins.git.model", function()
     test.equal(log_calls, 1)
 
     status_callback("C:/repo", "filesystem", nil)
-
+    test.equal(log_calls, 1, "a shared update waits for a presenting Git View")
+    model:flush_shared_refresh()
     test.equal(log_calls, 2)
   end)
 
@@ -296,6 +297,7 @@ test.describe("plugins.git.model", function()
     test.equal(log_calls, 1)
     test.equal(model:log_tab().error, status_err)
     status_callback("C:/repo", "refresh", nil)
+    model:flush_shared_refresh()
     test.equal(log_calls, 2)
     test.equal(model:log_tab().error, nil)
   end)
