@@ -31,6 +31,7 @@ public sealed class AnvilHiddenDesktopResult {
   public long PeakPrivateBytes;
   public bool DumpWritten;
   public string DumpPath;
+  public int UiProcessor;
 }
 
 public static class AnvilHiddenDesktopLauncher {
@@ -124,6 +125,15 @@ public static class AnvilHiddenDesktopLauncher {
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern uint ResumeThread(IntPtr hThread);
 
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetProcessAffinityMask(IntPtr process, out UIntPtr mask, out UIntPtr systemMask);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern UIntPtr SetThreadAffinityMask(IntPtr thread, UIntPtr mask);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool SetThreadPriority(IntPtr thread, int priority);
+
   [DllImport("Dbghelp.dll", SetLastError = true)]
   private static extern bool MiniDumpWriteDump(
     IntPtr hProcess, uint processId, IntPtr hFile, uint dumpType,
@@ -136,6 +146,7 @@ public static class AnvilHiddenDesktopLauncher {
   private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
   private const uint CREATE_NEW_PROCESS_GROUP = 0x00000200;
   private const uint CREATE_SUSPENDED = 0x00000004;
+  private const int THREAD_PRIORITY_ABOVE_NORMAL = 1;
   private const uint WAIT_TIMEOUT = 0x00000102;
   private const uint WAIT_OBJECT_0 = 0;
   private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
@@ -241,7 +252,7 @@ public static class AnvilHiddenDesktopLauncher {
     string exe, string[] args, string workingDirectory,
     string desktopName, int timeoutMilliseconds, string heartbeatPath,
     int startupTimeoutMilliseconds, int heartbeatTimeoutMilliseconds,
-    string resourceSamplesPath, string timeoutDumpPath) {
+    string resourceSamplesPath, string timeoutDumpPath, bool stableUiScheduling) {
     IntPtr desktop = CreateDesktop(
       desktopName, IntPtr.Zero, IntPtr.Zero, 0, DESKTOP_ALL_ACCESS, IntPtr.Zero);
     if (desktop == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -266,6 +277,23 @@ public static class AnvilHiddenDesktopLauncher {
 
       if (!AssignProcessToJobObject(job, pi.hProcess)) {
         throw new Win32Exception(Marshal.GetLastWin32Error());
+      }
+      int uiProcessor = -1;
+      if (stableUiScheduling) {
+        UIntPtr available, systemMask;
+        if (!GetProcessAffinityMask(pi.hProcess, out available, out systemMask)) {
+          throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        if (available == UIntPtr.Zero) {
+          throw new InvalidOperationException("The benchmark requires a nonempty process affinity mask.");
+        }
+        ulong bits = available.ToUInt64(), selected = 1;
+        uiProcessor = 0;
+        while ((bits >>= 1) != 0) { selected <<= 1; uiProcessor++; }
+        if (SetThreadAffinityMask(pi.hThread, new UIntPtr(selected)) == UIntPtr.Zero
+            || !SetThreadPriority(pi.hThread, THREAD_PRIORITY_ABOVE_NORMAL)) {
+          throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
       }
       if (ResumeThread(pi.hThread) == UInt32.MaxValue) {
         throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -334,6 +362,7 @@ public static class AnvilHiddenDesktopLauncher {
       }
       return new AnvilHiddenDesktopResult {
         ProcessId = pi.dwProcessId,
+        UiProcessor = uiProcessor,
         ExitCode = unchecked((int)exitCode),
         TimedOut = timedOut,
         TerminationReason = terminationReason,
@@ -389,12 +418,15 @@ try {
     [int]$configData.heartbeat_timeout_seconds
   } else { 0 }
   $desktopName = "AnvilBenchmark_" + [Guid]::NewGuid().ToString("N")
+  $stableUiScheduling = ($configData.PSObject.Properties.Name -contains "stable_ui_scheduling") -and
+    [bool]$configData.stable_ui_scheduling
   $result = [AnvilHiddenDesktopLauncher]::Run(
     $exe, $arguments, $workingDirectory, $desktopName, $TimeoutSeconds * 1000,
     $heartbeatPath, $startupTimeoutSeconds * 1000, $heartbeatTimeoutSeconds * 1000,
-    $resourceSamplesPath, $timeoutDumpPath)
+    $resourceSamplesPath, $timeoutDumpPath, $stableUiScheduling)
   $output = [ordered]@{
     pid = $result.ProcessId
+    ui_processor = $result.UiProcessor
     exit_code = $result.ExitCode
     timed_out = $result.TimedOut
     termination_reason = $result.TerminationReason

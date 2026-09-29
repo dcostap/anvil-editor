@@ -446,6 +446,55 @@ class LauncherOutputTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "win32", "hidden desktop launcher is Windows-only")
 class HiddenDesktopIntegrationTests(unittest.TestCase):
+    def test_fixed_scheduling_limits_the_main_thread_but_not_workers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result_path = root / "threads.json"
+            script_path = root / "threads.py"
+            script_path.write_text('''
+import ctypes, json, sys, threading
+from pathlib import Path
+k = ctypes.WinDLL("kernel32", use_last_error=True)
+k.GetCurrentThread.restype = k.GetCurrentProcess.restype = ctypes.c_void_p
+k.GetThreadGroupAffinity.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+k.GetThreadPriority.argtypes = [ctypes.c_void_p]
+k.GetProcessAffinityMask.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+class Affinity(ctypes.Structure):
+    _fields_ = [("mask", ctypes.c_size_t), ("group", ctypes.c_ushort),
+                ("reserved", ctypes.c_ushort * 3)]
+def inspect():
+    affinity = Affinity()
+    thread = k.GetCurrentThread()
+    assert k.GetThreadGroupAffinity(thread, ctypes.byref(affinity))
+    return {"mask": affinity.mask, "priority": k.GetThreadPriority(thread)}
+main, workers = inspect(), []
+worker = threading.Thread(target=lambda: workers.append(inspect()))
+worker.start()
+worker.join()
+process, system = ctypes.c_size_t(), ctypes.c_size_t()
+assert k.GetProcessAffinityMask(k.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(system))
+Path(sys.argv[1]).write_text(json.dumps({"main": main, "worker": workers[0], "process": process.value}))
+''', encoding="utf-8")
+            config_path = root / "launch.json"
+            config_path.write_text(json.dumps({
+                "exe": sys.executable, "working_directory": str(root),
+                "arguments": [str(script_path), str(result_path)], "environment": {},
+                "stable_ui_scheduling": True,
+            }), encoding="utf-8")
+            completed = subprocess.run([
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", str(LAUNCHER_PATH), "-Config", str(config_path),
+                "-TimeoutSeconds", "10",
+            ], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+            state = json.loads(result_path.read_text())
+            self.assertGreater(state["main"]["mask"], 0)
+            self.assertEqual(state["main"]["mask"] & (state["main"]["mask"] - 1), 0)
+            self.assertEqual(state["worker"]["mask"], state["process"])
+            self.assertGreater(state["main"]["priority"], state["worker"]["priority"])
+            launcher = gate.parse_launcher_output(completed.stdout)
+            self.assertEqual(state["main"]["mask"], 1 << launcher["ui_processor"])
+
     def test_timeout_terminates_spawned_descendants(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

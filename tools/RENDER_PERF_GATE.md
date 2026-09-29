@@ -76,6 +76,10 @@ Uncertain timing results add paired repetitions, up to `--max-runs`.
 Remaining uncertainty is `INCONCLUSIVE`, not a proven regression or a passing comparison.
 The existing timing budgets and strict work-count checks do not change.
 
+The gate pins each owned app's main thread to the highest allowed logical CPU.
+It gives that thread above-normal priority. Worker threads keep their normal scheduling and process affinity.
+Each launcher result records `ui_processor`. The gate does not change other processes or the system power plan.
+
 Keep the baseline run's `app` directory unchanged. It contains the reference executable and runtime data.
 The runner rejects a missing snapshot or changed executable. Establish a new baseline if that snapshot is lost.
 Do not replace reference files with the current build to make a comparison pass.

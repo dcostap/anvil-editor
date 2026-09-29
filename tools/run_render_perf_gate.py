@@ -853,6 +853,7 @@ def run_case(
     if mode == "metrics" and settings.get("capture_actions"):
         environment["ANVIL_DOCVIEW_STATS"] = "1"
     launch_config = {
+        "stable_ui_scheduling": True,
         "exe": str(exe),
         "working_directory": str(work / scenario if settings.get("kind") else work),
         # The benchmark plugin owns file/view activation. Passing the fixture
@@ -1135,6 +1136,7 @@ def machine_info(exe: Path, fixture: Path) -> dict[str, Any]:
         "node": platform.node(),
         "platform": platform.platform(),
         "processor": platform.processor(),
+        "ui_thread_policy": "highest allowed logical CPU; above-normal thread priority",
         "python": platform.python_version(),
         "exe_sha256": sha256(exe),
         "fixture_sha256": sha256(fixture),
