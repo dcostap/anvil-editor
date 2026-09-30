@@ -51,6 +51,15 @@ terminal_config.config_spec = {
     min = 1000,
     max = 100000,
   },
+  {
+    label = "Minimum Text Contrast",
+    description = "Correct hard-to-read terminal colors. Set 1 to keep program colors unchanged.",
+    path = "minimum_contrast",
+    type = "number",
+    default = terminal_config.minimum_contrast,
+    min = 1,
+    max = 21,
+  },
 }
 
 local function buffer_path()
@@ -98,6 +107,9 @@ local function session_colors()
     background = packed_color(style.terminal_background),
     cursor_color = packed_color(style.terminal_cursor),
     palette = palette,
+    minimum_contrast = terminal_config.minimum_contrast,
+    selection_background = packed_color(style.selection),
+    selection_alpha = style.selection[4] or 255,
   }
 end
 
@@ -218,6 +230,7 @@ function TerminalView:new(options)
     cwd = options.cwd or project_path(options.cwd_mode or terminal_config.cwd_mode),
     shell = options.shell or terminal_config.shell,
   }
+  self.minimum_contrast = terminal_config.minimum_contrast
   next_session_id = next_session_id + 1
   self.session_id = next_session_id
   self.state = "new"
@@ -254,8 +267,8 @@ function TerminalView:new(options)
   self.theme_generation = core.color_theme_generation or 0
   self.state = "running"
   self.running = true
-  core.log_quiet("Terminal session %d started: cwd=%s cols=%d rows=%d",
-    self.session_id, self.launch_options.cwd, self.cols, self.rows)
+  core.log_quiet("Terminal session %d started: cwd=%s cols=%d rows=%d minimum contrast=%g",
+    self.session_id, self.launch_options.cwd, self.cols, self.rows, self.minimum_contrast)
 end
 
 function TerminalView:get_name()
@@ -303,7 +316,7 @@ function terminal_capture_style_provider:render_line(view, line, context)
         text = context.source_text:sub(col1, col2 - 1),
         color = rgb(
           view, span.fg, view.terminal_foreground or style.text,
-          span.faint and 140 or 255
+          span.alpha or (span.faint and 140 or 255)
         ),
         background = span.background and rgb(
           view, span.background, view.terminal_background or style.background
@@ -470,6 +483,7 @@ function TerminalView:adopt_session(session)
   self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
+  self.minimum_contrast = terminal_config.minimum_contrast
   self.state = "running"
   self.running = true
   self.exit_code = nil
@@ -662,10 +676,13 @@ function TerminalView:update()
   if not self.session then return end
 
   local theme_generation = core.color_theme_generation or 0
-  if theme_generation ~= self.theme_generation then
-    self.theme_generation = theme_generation
+  if theme_generation ~= self.theme_generation or
+      self.minimum_contrast ~= terminal_config.minimum_contrast then
     if self.session:set_colors(session_colors()) then
+      self.theme_generation = theme_generation
+      self.minimum_contrast = terminal_config.minimum_contrast
       self.snapshot = self.session:snapshot(self.snapshot)
+      core.log_quiet("Terminal colors updated: minimum contrast=%g", self.minimum_contrast)
       core.redraw = true
     end
   end
@@ -879,8 +896,8 @@ function TerminalView:draw()
     local y = origin_y + (row_index - 1) * self.cell_height
     if y >= self.position.y + self.size.y then break end
     for _, span in ipairs(row.backgrounds or {}) do
-      local color = span.selected and style.selection
-        or rgb(self, span.color, background)
+      local color = span.color and rgb(self, span.color, background)
+        or (span.selected and style.selection or background)
       renderer.draw_rect(
         origin_x + span.col * self.cell_width,
         y,
@@ -904,8 +921,7 @@ function TerminalView:draw()
       if run.blink and not blink_on then goto continue_run end
       local x = origin_x + run.col * self.cell_width
       local width = run.columns * self.cell_width
-      local color = rgb(self, run.fg, style.text)
-      if run.faint then color = rgb(self, run.fg, style.text, 140) end
+      local color = rgb(self, run.fg, style.text, run.alpha or (run.faint and 140 or 255))
       local font = cell_font(self, run)
       if renderer.draw_text_known_bounds then
         renderer.draw_text_known_bounds(

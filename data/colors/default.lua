@@ -135,7 +135,8 @@ style.error = c("c56a6a")
 style.modified = p("ctrl_clickable")
 
 -- Integrated terminal colors. Applications can override these per session
--- through VT control sequences. Explicit RGB colors remain unchanged.
+-- through VT control sequences. The Terminal View corrects low-contrast text
+-- at display time without changing the program's stored colors.
 style.terminal_foreground = p("text_fg")
 style.terminal_background = p("text_bg")
 style.terminal_cursor = c("ffffff")

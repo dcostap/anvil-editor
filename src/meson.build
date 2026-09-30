@@ -161,6 +161,7 @@ if host_machine.system() == 'windows'
         d3d11_quad_shader,
         'zig_abi_compat.c',
         'api/terminal_native.c',
+        'terminal_contrast.c',
     ]
     if embedded_runtime
         anvil_sources += 'embedded_runtime.c'
