@@ -1234,10 +1234,10 @@ local function line_comment_at_start(dv)
   clear_selection_origin(buffer)
 end
 
-local function offset_in_any_selection(buffer, starts, offset)
+local function position_in_any_selection(buffer, line, col)
   for _, l1, c1, l2, c2 in buffer:get_selections(true) do
-    local s, e = pos_to_offset(starts, l1, c1), pos_to_offset(starts, l2, c2)
-    if offset >= s and offset < e then return true end
+    if (line > l1 or line == l1 and col >= c1)
+        and (line < l2 or line == l2 and col < c2) then return true end
   end
   return false
 end
@@ -1272,41 +1272,31 @@ local function add_selection_for_next_occurrence(dv)
     return
   end
 
-  local full_text, starts = build_text_index(buffer)
-
   -- Continue from the active/last-added selection, not from the bottom-most
   -- selection. After wrap-around, the active selection is above older ones.
   local _, _, active_l2, active_c2 = buffer:get_selection_idx(buffer.last_selection, true)
-  local last_end_offset = pos_to_offset(starts, active_l2, active_c2)
 
   local state = add_next_occurrence_state[key]
   local wrap_armed = state and state.text == text and state.armed
-  local start_offset = wrap_armed and 0 or last_end_offset
+  local start_line, start_col = wrap_armed and 1 or active_l2, wrap_armed and 1 or active_c2
   local find_text = config.select_add_next_no_case and text:lower() or text
-  local haystack = config.select_add_next_no_case and full_text:lower() or full_text
+  local search = require "line_search"
+  local l1, c1, l2, c2
+  repeat
+    l1, c1, l2, c2 = search.next(buffer.lines, find_text, start_line, start_col,
+      not config.select_add_next_no_case)
+    if not l1 then break end
+    start_line, start_col = l2, c2
+  until not position_in_any_selection(buffer, l1, c1)
 
-  local function find_unselected_from(search_at)
-    while true do
-      local s, e = haystack:find(find_text, search_at, true)
-      if not s then return nil, nil end
-      local off = s - 1
-      if not offset_in_any_selection(buffer, starts, off) then
-        return off, e
-      end
-      search_at = e + 1
-    end
-  end
-
-  local found_start, found_end = find_unselected_from(start_offset + 1)
-
-  if not found_start then
+  if not l1 then
     -- First press at EOF only arms wrap and does nothing. Press again to wrap.
     add_next_occurrence_state[key] = { text = text, armed = true }
     return
   end
 
-  local l1, c1 = offset_to_pos(buffer, starts, found_start)
-  local l2, c2 = offset_to_pos(buffer, starts, found_end)
+  l1, c1 = buffer:sanitize_position(l1, c1)
+  l2, c2 = buffer:sanitize_position(l2, c2)
   buffer:add_selection(l2, c2, l1, c1)
   dv:scroll_to_make_visible(l2, c2)
   add_next_occurrence_state[key] = nil
