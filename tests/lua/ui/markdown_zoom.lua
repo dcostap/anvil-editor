@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local config = require "core.config"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
@@ -58,6 +59,69 @@ local function geometry(view)
 end
 
 test.describe("Markdown zoom", function()
+  test.it("draws larger row spacing when zooming an unchanged Markdown Editor", function()
+    coroutine.yield(0.05)
+    local old_live, old_active = config.markdown_live_editor, core.active_view
+    local old_scale, old_code = scale.get(), scale.get_code()
+    local centered = config.plugins.centered_editor
+    local old_pane_only = centered.pane_views_only
+    local panes = require "core.panes"
+    panes.reset_for_tests()
+    config.markdown_live_editor, centered.pane_views_only = true, false
+    local view, buffer = make_view("# Heading one\n# Heading two\nParagraph one\nParagraph two\nFollowing paragraph", true)
+    view.size.x, view.size.y = 1600, 1000
+    panes.place(function() return view end, { placement = "new", focus = true })
+    buffer:set_selection(5, 1)
+    local ok, err = pcall(function()
+      core.set_active_view(view)
+      settle(view)
+      local function draw_positions()
+        local old_text, old_rect, old_round = renderer.draw_text, renderer.draw_rect, renderer.draw_rounded_rect
+        local old_push, old_pop = core.push_clip_rect, core.pop_clip_rect
+        local drawn = {}
+        renderer.draw_text = function(font, text, x, y)
+          if text == "Heading one" or text == "Heading two"
+            or text == "Paragraph one" or text == "Paragraph two"
+          then
+            drawn[text] = { y = y, height = font:get_height() }
+          end
+          return x + font:get_width(text)
+        end
+        renderer.draw_rect, renderer.draw_rounded_rect = function() end, function() end
+        core.push_clip_rect, core.pop_clip_rect = function() end, function() end
+        local success, failure = pcall(view.draw, view)
+        renderer.draw_text, renderer.draw_rect, renderer.draw_rounded_rect = old_text, old_rect, old_round
+        core.push_clip_rect, core.pop_clip_rect = old_push, old_pop
+        if not success then error(failure, 0) end
+        for _, text in ipairs { "Heading one", "Heading two", "Paragraph one", "Paragraph two" } do
+          test.not_nil(drawn[text], "missing drawn text: " .. text)
+        end
+        return drawn
+      end
+      local before = draw_positions()
+      for _ = 1, 12 do
+        test.ok(command.perform("editor:zoom_in"))
+        core.root_panel:update()
+        coroutine.yield(0.01)
+      end
+      local after = draw_positions()
+      for _, pair in ipairs { { "Heading one", "Heading two" }, { "Paragraph one", "Paragraph two" } } do
+        local first, second = pair[1], pair[2]
+        test.ok(after[first].height > before[first].height)
+        test.ok(after[second].y - after[first].y > before[second].y - before[first].y,
+          "font grew without drawn row spacing")
+        test.ok(after[second].y - after[first].y >= after[first].height,
+          "drawn row spacing does not fit the font")
+      end
+    end)
+    core.active_view = old_active
+    panes.reset_for_tests()
+    scale.set(old_scale)
+    scale.set_code(old_code)
+    centered.pane_views_only, config.markdown_live_editor = old_pane_only, old_live
+    if not ok then error(err, 0) end
+  end)
+
   for _, wrapped in ipairs { false, true } do
     for _, edited_line in ipairs { 1, 3, 6 } do
       test.it("resizes pending formatted rows, wrapping=" .. tostring(wrapped)
