@@ -11,6 +11,7 @@ local panes = require "core.panes"
 local style = require "core.style"
 local text_capture = require "core.text_capture"
 local text_poi_locations = require "core.text_poi_locations"
+local theme_edits = require "core.theme_edits"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
 
@@ -53,21 +54,15 @@ terminal_config.config_spec = {
   },
   {
     label = "Minimum Text Contrast",
-    description = "Correct hard-to-read terminal colors. Set 1 to keep program colors unchanged.",
-    path = "minimum_contrast",
-    type = "number",
-    default = terminal_config.minimum_contrast,
-    min = 1,
-    max = 21,
+    description = "Set text contrast for the active theme. Set 1 to keep program colors unchanged.",
+    type = "button",
+    on_click = "terminal:set_minimum_text_contrast",
   },
   {
     label = "Color Vividness",
-    description = "Increase corrected color intensity without reducing contrast. 0 keeps the current correction; 100 uses the strongest available color.",
-    path = "color_vividness",
-    type = "number",
-    default = terminal_config.color_vividness,
-    min = 0,
-    max = 100,
+    description = "Set corrected color intensity for the active theme, without reducing contrast.",
+    type = "button",
+    on_click = "terminal:set_color_vividness",
   },
 }
 
@@ -116,8 +111,8 @@ local function session_colors()
     background = packed_color(style.terminal_background),
     cursor_color = packed_color(style.terminal_cursor),
     palette = palette,
-    minimum_contrast = terminal_config.minimum_contrast,
-    color_vividness = terminal_config.color_vividness,
+    minimum_contrast = style.terminal_minimum_contrast,
+    color_vividness = style.terminal_color_vividness,
     selection_background = packed_color(style.selection),
     selection_alpha = style.selection[4] or 255,
   }
@@ -240,8 +235,8 @@ function TerminalView:new(options)
     cwd = options.cwd or project_path(options.cwd_mode or terminal_config.cwd_mode),
     shell = options.shell or terminal_config.shell,
   }
-  self.minimum_contrast = terminal_config.minimum_contrast
-  self.color_vividness = terminal_config.color_vividness
+  self.minimum_contrast = style.terminal_minimum_contrast
+  self.color_vividness = style.terminal_color_vividness
   next_session_id = next_session_id + 1
   self.session_id = next_session_id
   self.state = "new"
@@ -495,8 +490,8 @@ function TerminalView:adopt_session(session)
   self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
-  self.minimum_contrast = terminal_config.minimum_contrast
-  self.color_vividness = terminal_config.color_vividness
+  self.minimum_contrast = style.terminal_minimum_contrast
+  self.color_vividness = style.terminal_color_vividness
   self.state = "running"
   self.running = true
   self.exit_code = nil
@@ -688,12 +683,12 @@ function TerminalView:sync_colors()
   if not self.session then return false end
   local theme_generation = core.color_theme_generation or 0
   if theme_generation ~= self.theme_generation or
-      self.minimum_contrast ~= terminal_config.minimum_contrast or
-      self.color_vividness ~= terminal_config.color_vividness then
+      self.minimum_contrast ~= style.terminal_minimum_contrast or
+      self.color_vividness ~= style.terminal_color_vividness then
     if self.session:set_colors(session_colors()) then
       self.theme_generation = theme_generation
-      self.minimum_contrast = terminal_config.minimum_contrast
-      self.color_vividness = terminal_config.color_vividness
+      self.minimum_contrast = style.terminal_minimum_contrast
+      self.color_vividness = style.terminal_color_vividness
       self.snapshot = self.session:snapshot(self.snapshot)
       core.log_quiet("Terminal session %d colors updated: minimum contrast=%g vividness=%g",
         self.session_id, self.minimum_contrast, self.color_vividness)
@@ -1618,9 +1613,16 @@ M.TerminalTextCaptureView = TerminalTextCaptureView
 M.from_state = TerminalView.from_state
 TerminalView._module_name = "plugins.terminal"
 
+local function active_theme_name()
+  local name = core.color_theme_module:sub(8)
+  return name == "default" and "dark" or name
+end
+
 local function prompt_color_setting(label, key, minimum, maximum)
+  local theme = active_theme_name()
+  local style_key = "terminal_" .. key
   core.global_prompt_bar:enter(label, {
-    text = tostring(terminal_config[key]),
+    text = tostring(style[style_key]),
     select_text = true,
     show_suggestions = false,
     validate = function(text)
@@ -1629,8 +1631,14 @@ local function prompt_color_setting(label, key, minimum, maximum)
     end,
     submit = function(text)
       local value = tonumber(text)
-      require("plugins.settings").apply_config("plugins.terminal." .. key, value)
-      core.log_quiet("Terminal color setting updated: %s=%g", key, value)
+      local draft, load_error = theme_edits.load(theme)
+      if not draft then core.error("%s", load_error); return end
+      draft.terminal = draft.terminal or {}
+      draft.terminal[key] = value
+      local path, save_error = theme_edits.save(theme, draft, false)
+      if not path then core.error("Could not save terminal colors: %s", save_error); return end
+      if active_theme_name() == theme then style[style_key] = value end
+      core.log_quiet("Terminal color setting saved for theme %s: %s=%g", theme, key, value)
       core.redraw = true
     end,
   })
@@ -1646,6 +1654,29 @@ command.add(nil, {
     prompt_color_setting("Terminal Color Vividness (0-100%)", "color_vividness", 0, 100)
   end, {
     keywords = { "terminal", "color", "saturation", "chroma", "intensity" },
+  }),
+  ["terminal:copy_color_settings"] = command.palette(function()
+    local module = core.color_theme_module
+    local filename = module:sub(8) .. ".lua"
+    local path = package.searchpath(module, package.path)
+    local lines = {
+      "Make these tested terminal color values the defaults for this theme.",
+      "Keep other themes unchanged.",
+      "Theme: " .. active_theme_name(),
+      "Source module: " .. module,
+      "Loaded source file: " .. tostring(path),
+    }
+    if path and common.path_equals(path, DATADIR .. "/colors/" .. filename) then
+      lines[#lines + 1] = "Repository file: data/colors/" .. filename
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = string.format("style.terminal_minimum_contrast = %.17g", style.terminal_minimum_contrast)
+    lines[#lines + 1] = string.format("style.terminal_color_vividness = %.17g", style.terminal_color_vividness)
+    system.set_clipboard(table.concat(lines, "\n"))
+    core.log_quiet("Terminal color settings copied for theme %s", active_theme_name())
+    return true
+  end, {
+    keywords = { "terminal", "theme", "color", "defaults", "clipboard", "export" },
   }),
   ["terminal:focus_next"] = command.palette(function()
     local terminals = M.open_views()

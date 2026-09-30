@@ -1,7 +1,6 @@
-local config = require "core.config"
 local command = require "core.command"
 local core = require "core"
-local settings = require "plugins.settings"
+local style = require "core.style"
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 
@@ -43,21 +42,21 @@ end
 
 test.describe("Terminal contrast display", function()
   test.before_each(function(context)
-    context.minimum = config.plugins.terminal.minimum_contrast
+    context.minimum = style.terminal_minimum_contrast
   end)
   test.after_each(function(context)
     if context.view then context.view:on_close() end
     terminal._set_native_for_tests(nil)
-    config.plugins.terminal.minimum_contrast = context.minimum
+    style.terminal_minimum_contrast = context.minimum
   end)
 
   test.it("applies contrast setting changes to an existing Terminal View", function(context)
     local session, view = fake_session(context)
-    test.equal(session.options.minimum_contrast, config.plugins.terminal.minimum_contrast)
-    config.plugins.terminal.minimum_contrast = 1
+    test.equal(session.options.minimum_contrast, style.terminal_minimum_contrast)
+    style.terminal_minimum_contrast = 1
     view:update()
     test.equal(session.colors.minimum_contrast, 1)
-    config.plugins.terminal.minimum_contrast = 7
+    style.terminal_minimum_contrast = 7
     view:update()
     test.equal(session.colors.minimum_contrast, 7)
   end)
@@ -96,25 +95,107 @@ test.describe("Terminal contrast display", function()
   end)
 end)
 
-test.describe("Terminal contrast command", function()
+test.describe("Terminal color settings by theme", function()
   test.before_each(function(context)
     core.global_prompt_bar:exit(true)
+    context.theme_module = core.color_theme_module or "colors.default"
     context.active_view = core.active_view
-    context.minimum = config.plugins.terminal.minimum_contrast
-    context.vividness = config.plugins.terminal.color_vividness
-    context.settings_config = settings.config
-    settings.config = {}
-    os.remove(USERDIR .. "/user_settings.lua")
+    context.clipboard = system.get_clipboard() or ""
+    for name, values in pairs({ terminal_test_light = { 5, 20 }, terminal_test_dark = { 3, 40 } }) do
+      package.preload["colors." .. name] = function()
+        style.terminal_minimum_contrast = values[1]
+        style.terminal_color_vividness = values[2]
+        return style
+      end
+      os.remove(USERDIR .. "/colors/edits/" .. name .. ".lua")
+    end
   end)
 
   test.after_each(function(context)
     core.global_prompt_bar:exit(true)
     if context.view then context.view:on_close() end
     terminal._set_native_for_tests(nil)
-    config.plugins.terminal.minimum_contrast = context.minimum
-    config.plugins.terminal.color_vividness = context.vividness
-    settings.config = context.settings_config
-    os.remove(USERDIR .. "/user_settings.lua")
+    for _, name in ipairs({ "terminal_test_light", "terminal_test_dark" }) do
+      package.preload["colors." .. name] = nil
+      package.loaded["colors." .. name] = nil
+      os.remove(USERDIR .. "/colors/edits/" .. name .. ".lua")
+    end
+    core.reload_module(context.theme_module)
+    system.set_clipboard(context.clipboard)
+    if context.active_view then core.set_active_view(context.active_view) end
+  end)
+
+  test.it("restores each theme's saved terminal values without changing other theme edits", function(context)
+    local edits = require "core.theme_edits"
+    test.ok(edits.save("terminal_test_light", { palette = {}, rules = {
+      ["syntax.comment"] = { enabled = true, color = { 10, 20, 30, 255 } },
+    } }, false))
+    core.reload_module("colors.terminal_test_light")
+    local session, view = fake_session(context)
+    test.equal(session.options.minimum_contrast, 5)
+    test.equal(session.options.color_vividness, 20)
+    test.ok(command.perform("terminal:set_minimum_text_contrast"))
+    core.global_prompt_bar:set_text("6.25")
+    core.global_prompt_bar:submit()
+    test.ok(command.perform("terminal:set_color_vividness"))
+    core.global_prompt_bar:set_text("75")
+    core.global_prompt_bar:submit()
+
+    core.reload_module("colors.terminal_test_dark")
+    view:update_suspended()
+    test.equal(session.colors.minimum_contrast, 3)
+    test.equal(session.colors.color_vividness, 40)
+    core.reload_module("colors.terminal_test_light")
+    view:update()
+    test.equal(session.colors.minimum_contrast, 6.25)
+    test.equal(session.colors.color_vividness, 75)
+    test.same(style.syntax.comment, { 10, 20, 30, 255 })
+  end)
+
+  test.it("copies the displayed theme and effective terminal values without writing source files", function()
+    core.reload_module("colors.light")
+    style.terminal_minimum_contrast = 6.25
+    style.terminal_color_vividness = 75
+    local path = assert(package.searchpath("colors.light", package.path))
+    local function read_source()
+      local file = assert(io.open(path, "rb"))
+      local text = file:read("*a")
+      file:close()
+      return text
+    end
+    local before = read_source()
+    test.ok(command.perform("terminal:copy_color_settings"))
+    local copied = system.get_clipboard()
+    test.contains(copied, "Theme: light")
+    test.contains(copied, "data/colors/light.lua")
+    test.contains(copied, "style.terminal_minimum_contrast = 6.25")
+    test.contains(copied, "style.terminal_color_vividness = 75")
+    test.contains(copied, "defaults")
+    test.equal(read_source(), before)
+  end)
+end)
+
+test.describe("Terminal contrast command", function()
+  test.before_each(function(context)
+    core.global_prompt_bar:exit(true)
+    context.active_view = core.active_view
+    context.theme_module = core.color_theme_module
+    context.path = USERDIR .. "/colors/edits/terminal_prompt_test.lua"
+    os.remove(context.path)
+    package.preload["colors.terminal_prompt_test"] = function() return style end
+    core.reload_module("colors.terminal_prompt_test")
+    context.minimum = style.terminal_minimum_contrast
+    context.vividness = style.terminal_color_vividness
+  end)
+
+  test.after_each(function(context)
+    core.global_prompt_bar:exit(true)
+    if context.view then context.view:on_close() end
+    terminal._set_native_for_tests(nil)
+    os.remove(context.path)
+    package.preload["colors.terminal_prompt_test"] = nil
+    package.loaded["colors.terminal_prompt_test"] = nil
+    core.reload_module(context.theme_module)
     if context.active_view then core.set_active_view(context.active_view) end
   end)
 
@@ -128,12 +209,12 @@ test.describe("Terminal contrast command", function()
     bar:set_text("7.25")
     bar:submit()
 
-    test.equal(config.plugins.terminal.minimum_contrast, 7.25)
+    test.equal(style.terminal_minimum_contrast, 7.25)
     test.not_equal(core.active_view, bar)
     view:update()
     test.equal(session.colors.minimum_contrast, 7.25)
-    local saved = dofile(USERDIR .. "/user_settings.lua")
-    test.equal(saved.config.plugins.terminal.minimum_contrast, 7.25)
+    local saved = dofile(context.path)
+    test.equal(saved.terminal.minimum_contrast, 7.25)
   end)
 
   test.it("sets and saves vividness for an existing Terminal View", function(context)
@@ -145,12 +226,12 @@ test.describe("Terminal contrast command", function()
     bar:set_text("72.5")
     bar:submit()
 
-    test.equal(config.plugins.terminal.color_vividness, 72.5)
+    test.equal(style.terminal_color_vividness, 72.5)
     view:update()
     test.equal(session.colors.color_vividness, 72.5)
-    local saved = dofile(USERDIR .. "/user_settings.lua")
-    test.equal(saved.config.plugins.terminal.color_vividness, 72.5)
-    test.equal(config.plugins.terminal.minimum_contrast, context.minimum)
+    local saved = dofile(context.path)
+    test.equal(saved.terminal.color_vividness, 72.5)
+    test.equal(style.terminal_minimum_contrast, context.minimum)
   end)
 
   test.it("accepts both ends of the vividness range", function()
@@ -158,13 +239,13 @@ test.describe("Terminal contrast command", function()
       test.ok(command.perform("terminal:set_color_vividness"))
       core.global_prompt_bar:set_text(tostring(value))
       core.global_prompt_bar:submit()
-      test.equal(config.plugins.terminal.color_vividness, value)
+      test.equal(style.terminal_color_vividness, value)
     end
   end)
 
   test.it("applies vividness changes while a Terminal View is suspended", function(context)
     local session, view = fake_session(context)
-    config.plugins.terminal.color_vividness = 60
+    style.terminal_color_vividness = 60
     view:update_suspended()
     test.equal(session.colors.color_vividness, 60)
   end)
@@ -175,9 +256,9 @@ test.describe("Terminal contrast command", function()
     for _, text in ipairs({ "-0.1", "100.1", "", "not a number", "nan", "inf", "1e309" }) do
       bar:set_text(text)
       bar:submit()
-      test.equal(config.plugins.terminal.color_vividness, context.vividness)
+      test.equal(style.terminal_color_vividness, context.vividness)
       test.ok(core.active_view == bar, "Invalid vividness input closed the prompt: " .. text)
-      test.equal(system.get_file_info(USERDIR .. "/user_settings.lua"), nil)
+      test.equal(system.get_file_info(context.path), nil)
     end
   end)
 
@@ -187,7 +268,7 @@ test.describe("Terminal contrast command", function()
       test.ok(command.perform("terminal:set_minimum_text_contrast"))
       bar:set_text(tostring(value))
       bar:submit()
-      test.equal(config.plugins.terminal.minimum_contrast, value)
+      test.equal(style.terminal_minimum_contrast, value)
       test.not_equal(core.active_view, bar)
     end
   end)
@@ -198,9 +279,9 @@ test.describe("Terminal contrast command", function()
     for _, text in ipairs({ "0.5", "21.1", "", "not a number", "nan", "inf", "1e309" }) do
       bar:set_text(text)
       bar:submit()
-      test.equal(config.plugins.terminal.minimum_contrast, context.minimum)
+      test.equal(style.terminal_minimum_contrast, context.minimum)
       test.ok(core.active_view == bar, "Invalid contrast input closed the prompt: " .. text)
-      test.equal(system.get_file_info(USERDIR .. "/user_settings.lua"), nil)
+      test.equal(system.get_file_info(context.path), nil)
     end
   end)
 
@@ -210,7 +291,7 @@ test.describe("Terminal contrast command", function()
     bar:set_text("7.25")
     bar:exit(false)
 
-    test.equal(config.plugins.terminal.minimum_contrast, context.minimum)
-    test.equal(system.get_file_info(USERDIR .. "/user_settings.lua"), nil)
+    test.equal(style.terminal_minimum_contrast, context.minimum)
+    test.equal(system.get_file_info(context.path), nil)
   end)
 end)

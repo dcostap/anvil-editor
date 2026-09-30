@@ -132,8 +132,6 @@ plugin_defaults("terminal", {
   shell = nil,
   cwd_mode = "project",
   scrollback_lines = 10000,
-  minimum_contrast = 4.5,
-  color_vividness = 0,
 })
 plugin_defaults("diffview", {
   whitespace_mode = "trim",

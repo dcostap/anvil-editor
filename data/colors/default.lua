@@ -140,6 +140,8 @@ style.modified = p("ctrl_clickable")
 style.terminal_foreground = p("text_fg")
 style.terminal_background = p("text_bg")
 style.terminal_cursor = c("ffffff")
+style.terminal_minimum_contrast = 4.5
+style.terminal_color_vividness = 0
 style.terminal_palette = {
   c("1c1e26"), c("e05260"), c("59a577"), c("e9b379"),
   -- Normal ANSI blue is also a common background. Keep it dark enough

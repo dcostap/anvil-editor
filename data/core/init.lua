@@ -535,6 +535,7 @@ function core.init()
   end
 
   style = startup_measure("load_default_colors", function() return require "colors.default" end)
+  core.color_theme_module = "colors.default"
   cli = startup_measure("load_core_cli", function() return require "core.cli" end)
   command = startup_measure("load_core_command", function() return require "core.command" end)
   keymap = startup_measure("load_core_keymap", function() return require "core.keymap" end)
@@ -1462,6 +1463,7 @@ function core.reload_module(name, options)
     if err then core.error("%s", err) end
     local base = theme_edits.capture(style)
     theme_edits.apply(style, base, draft)
+    core.color_theme_module = name
     core.theme_edit_custom_syntax = theme_edits.custom_syntax_keys(base, draft)
     map_new_syntax_colors()
     core.color_theme_generation = (core.color_theme_generation or 0) + 1

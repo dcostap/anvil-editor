@@ -1,7 +1,12 @@
--- Named colors and rule overrides for saved color themes.
+-- Named colors, rule overrides, and terminal settings for saved color themes.
 local common = require "core.common"
 
 local edits = {}
+
+local terminal_settings = {
+  minimum_contrast = { style_key = "terminal_minimum_contrast", min = 1, max = 21 },
+  color_vividness = { style_key = "terminal_color_vividness", min = 0, max = 100 },
+}
 
 local function color(value)
   if type(value) ~= "table" then return nil end
@@ -34,6 +39,10 @@ end
 
 function edits.capture(style)
   local base = {entries = {}, by_path = {}, palette = {}, palette_refs = {}}
+  base.terminal = {}
+  for key, option in pairs(terminal_settings) do
+    base.terminal[key] = style[option.style_key]
+  end
   for name, value in pairs(style.theme_palette or {}) do
     if is_color(value) then
       base.palette[name] = color(value)
@@ -65,6 +74,13 @@ end
 
 function edits.apply(style, base, draft)
   draft = draft or {}
+  for key, option in pairs(terminal_settings) do
+    local value = draft.terminal and draft.terminal[key]
+    if type(value) ~= "number" or not (value >= option.min and value <= option.max) then
+      value = base.terminal[key]
+    end
+    style[option.style_key] = value
+  end
   for name, original in pairs(base.palette) do
     local ref = style.theme_palette[name]
     for i = 1, 4 do ref[i] = original[i] end
