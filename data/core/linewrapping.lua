@@ -8,6 +8,7 @@ local LineWrapping = {}
 
 local views_by_buffer = setmetatable({}, { __mode = "k" })
 local width_providers = {}
+local perf_frame_add
 
 function LineWrapping.register_width_provider(id, fn)
   assert(type(id) == "string" and id ~= "", "line wrapping width provider id must be a non-empty string")
@@ -138,6 +139,7 @@ function LineWrapping.notify_textview_text_transaction(textview, transaction)
     end)
     return
   end
+  LineWrapping.rebase_async_transaction(textview, ranges)
   if #ranges == 1 then
     local range = ranges[1]
     if not LineWrapping.update_same_line_suffix_breaks(textview, range, transaction) then
@@ -148,6 +150,52 @@ function LineWrapping.notify_textview_text_transaction(textview, transaction)
   ) then
     LineWrapping.reconstruct_breaks(textview, textview.wrapped_settings.font, textview.wrapped_settings.width)
   end
+end
+
+---Keep the forward pass after an edit. Repair affected prepared lines later.
+function LineWrapping.rebase_async_transaction(textview, ranges)
+  local token = textview.__async_wrap_reconstruction
+  if not token or token.buffer ~= textview.buffer or #ranges ~= 1
+    or token.line_render_invalidation_generation ~= (textview.__line_render_invalidation_generation or 0)
+  then return false end
+  local range = ranges[1]
+  local first, last = range.old_line1, range.old_line2
+  local delta = range.line_delta or 0
+  if token.line_count + delta ~= #textview.buffer.lines then return false end
+  local old_next = token.next_line
+  local old_prepared = old_next - 1
+  if old_next > last then
+    token.next_line = old_next + delta
+  elseif old_next >= first then
+    token.next_line = first
+  end
+  local prepared = token.next_line - 1
+  local function shift(cache)
+    if not cache or first > old_prepared then return end
+    if last < old_prepared then
+      table.move(cache, last + 1, old_prepared, last + 1 + delta)
+    end
+    for line = first, math.min(last + delta, prepared) do cache[line] = nil end
+    for line = prepared + 1, old_prepared do cache[line] = nil end
+  end
+  shift(token.line_breaks)
+  shift(token.wrapped_line_offsets)
+  shift(token.measurement.presentations)
+  local dirty = {}
+  for line in pairs(token.dirty_lines) do
+    if line < first then dirty[line] = true
+    elseif line > last then dirty[line + delta] = true end
+  end
+  local repair_last = math.min(last + delta, prepared)
+  -- Render providers can depend on absolute line positions. Repair shifted
+  -- prepared plans instead of publishing their former positions or heights.
+  if delta ~= 0 and token.has_line_render_providers then repair_last = prepared end
+  for line = first, repair_last do dirty[line] = true end
+  token.dirty_lines = dirty
+  token.line_count = #textview.buffer.lines
+  token.revision = textview.buffer.text_revision or 0
+  perf_frame_add("linewrapping_async_reconstruct_rebases", 1)
+  return true
 end
 
 function LineWrapping.notify_buffer_close(buffer)
@@ -229,7 +277,7 @@ config.plugins.linewrapping.config_spec = {
   }
 }
 
-local function perf_frame_add(key, amount)
+perf_frame_add = function(key, amount)
   if not core.perf_frame_stats then return end
   local perf = package.loaded["core.perf"]
   if perf and perf.frame_add then perf.frame_add(key, amount or 1) end
