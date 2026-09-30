@@ -58,6 +58,10 @@ static bool system_event_is_handled(uint32_t type) {
 
     /* Drag & drop */
     case SDL_EVENT_DROP_FILE:
+    case SDL_EVENT_DROP_TEXT:
+    case SDL_EVENT_DROP_BEGIN:
+    case SDL_EVENT_DROP_POSITION:
+    case SDL_EVENT_DROP_COMPLETE:
 
     /* Keyboard */
     case SDL_EVENT_KEY_DOWN:
@@ -114,6 +118,10 @@ static uint32_t system_event_window_id(const SDL_Event *event) {
     case SDL_EVENT_KEY_UP:
       return event->key.windowID;
     case SDL_EVENT_DROP_FILE:
+    case SDL_EVENT_DROP_TEXT:
+    case SDL_EVENT_DROP_BEGIN:
+    case SDL_EVENT_DROP_POSITION:
+    case SDL_EVENT_DROP_COMPLETE:
       return event->drop.windowID;
     case SDL_EVENT_FINGER_DOWN:
     case SDL_EVENT_FINGER_UP:
@@ -189,6 +197,14 @@ void system_push_event(const SDL_Event *event) {
         system_event_queue[idx].motion.yrel += event->motion.yrel;
         return;
       }
+    }
+  /* A drop position has no payload. Keep only the latest consecutive position. */
+  } else if (event->type == SDL_EVENT_DROP_POSITION && system_event_queue_count > 0) {
+    int idx = (system_event_queue_read + system_event_queue_count - 1) % SYSTEM_EVENT_QUEUE_SIZE;
+    if (system_event_queue[idx].type == SDL_EVENT_DROP_POSITION &&
+        system_event_queue[idx].drop.windowID == event->drop.windowID) {
+      system_event_queue[idx] = *event;
+      return;
     }
   /* Coalesce consecutive finger-motion events for the same finger */
   } else if (event->type == SDL_EVENT_FINGER_MOTION) {

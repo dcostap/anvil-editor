@@ -678,9 +678,128 @@ function RootPanel:on_touch_moved(x, y, ...)
   return call_view(self.touched_view, "on_touch_moved", x, y, ...)
 end
 
-function RootPanel:on_file_dropped(filename, x, y)
+function RootPanel:resolve_external_drop_target(x, y)
+  if not x or not y or self:modal_input_owner() then return end
+  local title = core.title_bar
+  if title and title.get_external_drop_target then
+    local target = title:get_external_drop_target(x, y)
+    if target then return target end
+    if y < title.position.y + title.size.y then return end
+  end
   local group = panes().visible_group()
-  local hit_pane = group and x and y and layout.pane_at(group.root, x, y) or nil
+  local pane = group and layout.pane_at(group.root, x, y)
+  if pane then
+    return { kind = "current", pane = pane }
+  elseif not group then
+    local rect = self.content_rect
+    if rect and x >= rect.x and x < rect.x + rect.w
+      and y >= rect.y and y < rect.y + rect.h then
+      return { kind = "new", area = "work", rect = rect }
+    end
+  end
+end
+
+function RootPanel:get_external_drop_target()
+  local drop = self.external_drop
+  if not drop then return end
+  return self:resolve_external_drop_target(drop.x, drop.y)
+end
+
+function RootPanel:on_drop_begin()
+  self.external_drop = { files = {}, seen = {}, text = {} }
+  core.redraw = true
+  core.log_quiet("External drop: began")
+end
+
+function RootPanel:on_drop_moved(x, y)
+  if not self.external_drop then self:on_drop_begin() end
+  self.external_drop.x, self.external_drop.y = x, y
+  core.redraw = true
+end
+
+function RootPanel:on_text_dropped(text, x, y)
+  if not self.external_drop then self:on_drop_begin() end
+  self:on_drop_moved(x, y)
+  self.external_drop.text[#self.external_drop.text + 1] = text
+end
+
+function RootPanel:on_drop_complete()
+  local drop = self.external_drop
+  local target = self:get_external_drop_target()
+  self.external_drop = nil
+  core.redraw = true
+  if not drop or not target then
+    core.log_quiet("External drop: cancelled or outside a drop target")
+    return
+  end
+  core.log_quiet("External drop: completed target=%s files=%d text_parts=%d",
+    target.kind, #drop.files, #drop.text)
+  local opened, failed = 0, 0
+  for _, filename in ipairs(drop.files) do
+    if self:open_dropped_file(filename, drop.x, drop.y, target) then
+      opened = opened + 1
+    else
+      failed = failed + 1
+    end
+  end
+  if target.kind == "new" and #drop.text > 0 then
+    local text = table.concat(drop.text):gsub("\r\n", "\n"):gsub("\r", "\n")
+    if text ~= "" then
+      local Buffer = require "core.buffer"
+      local buffer = Buffer(nil, nil, true)
+      buffer:insert(1, 1, text)
+      if self:open_buffer(buffer, { placement = "new", reason = "text-drop" }) then
+        opened = opened + 1
+      end
+    end
+  end
+  if target.kind == "new" and opened > 0 and failed == 0 and core.status_bar then
+    core.status_bar:show_message(style.log.INFO.icon, style.drop_target_accent, opened == 1
+      and "Opened in a new Pane" or string.format("Opened %d items in new Panes", opened))
+  end
+end
+
+function RootPanel:on_file_dropped(filename, x, y)
+  if self.external_drop then
+    self:on_drop_moved(x, y)
+    local path = system.absolute_path(filename) or filename
+    if not self.external_drop.seen[path] then
+      self.external_drop.seen[path] = true
+      self.external_drop.files[#self.external_drop.files + 1] = path
+    end
+    return true
+  end
+  local title = core.title_bar
+  if title and title.get_external_drop_target and x and y
+    and y >= title.position.y and y < title.position.y + title.size.y then
+    local target = self:resolve_external_drop_target(x, y)
+    if not target then return false end
+    return self:open_dropped_file(filename, x, y, target)
+  end
+  return self:open_dropped_file(filename, x, y)
+end
+
+function RootPanel:open_dropped_file(filename, x, y, target)
+  if target and target.kind == "new" then
+    local info, err = system.get_file_info(filename)
+    if not info or (info.type ~= "dir" and info.type ~= "file") then
+      core.error("Could not open dropped path: %s (%s)", filename, tostring(err or "unsupported path"))
+      return false
+    end
+    local view
+    if info.type == "dir" then
+      view, err = require("plugins.filetree").open(filename, {
+        placement = "new", reason = "directory-drop",
+      })
+    else
+      view, err = core.open_file(filename, { placement = "new", reason = "file-drop" })
+    end
+    if not view then core.error("Could not open dropped path: %s (%s)", filename, tostring(err)) end
+    core.log_quiet("External drop: new Pane path=%s opened=%s", filename, tostring(view ~= nil))
+    return view
+  end
+  local group = panes().visible_group()
+  local hit_pane = target and target.pane or (group and x and y and layout.pane_at(group.root, x, y))
   local target_pane = hit_pane or panes().active()
   local consumed = hit_pane and call_view(
     hit_pane.current_view, "on_file_dropped", filename, x, y
@@ -816,6 +935,31 @@ function RootPanel:draw()
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
   local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")
   self:draw_active_app_overlay()
+  local drop_target = self:get_external_drop_target()
+  if drop_target and drop_target.area ~= "titlebar" then
+    local pane = drop_target.pane
+    local rect = drop_target.rect or {
+      x = pane.position.x, y = pane.position.y, w = pane.size.x, h = pane.size.y,
+    }
+    local x, y, w, h = rect.x, rect.y, rect.w, rect.h
+    local stroke = math.max(1, SCALE)
+    core.push_clip_rect(x, y, w, h)
+    renderer.draw_rect(x, y, w, h, style.drop_target_background)
+    renderer.draw_rect(x, y, w, stroke, style.drop_target_accent)
+    renderer.draw_rect(x, y + h - stroke, w, stroke, style.drop_target_accent)
+    renderer.draw_rect(x, y, stroke, h, style.drop_target_accent)
+    renderer.draw_rect(x + w - stroke, y, stroke, h, style.drop_target_accent)
+    local text = drop_target.kind == "new" and "Drop to open in new Panes"
+      or "Drop here · Title Bar opens new Panes"
+    local font = style.view_text_font
+    if font:get_width(text) + style.padding.x * 2 > w then text = "Drop here" end
+    local width = math.min(w, font:get_width(text) + style.padding.x * 2)
+    local height = font:get_height() + style.padding.y * 2
+    local label_x, label_y = x + (w - width) / 2, y + (h - height) / 2
+    renderer.draw_rounded_rect(label_x, label_y, width, height, 6 * SCALE, style.background2)
+    common.draw_text(font, style.text, text, "center", label_x, label_y, width, height)
+    core.pop_clip_rect()
+  end
   local navigation_history = package.loaded["core.navigation_history"]
   if navigation_history then navigation_history.draw_feedback(self) end
   perf_end("rootpanel_overlays_draw", overlay_started, overlay_scope)

@@ -2293,6 +2293,15 @@ function core.on_event(type, ...)
     if type == "restored" then core.request_window_reactivation_repaint("restored") end
   elseif type == "exposed" then
     core.request_window_reactivation_repaint("exposed")
+  elseif type == "dropbegin" then
+    core.root_panel:on_drop_begin()
+  elseif type == "dropmoved" then
+    core.root_panel:on_drop_moved(...)
+  elseif type == "dropcomplete" then
+    core.root_panel:on_drop_complete()
+  elseif type == "textdropped" then
+    local modal = dispatch_modal_input("text_dropped", ...)
+    if not modal then core.root_panel:on_text_dropped(...) end
   elseif type == "filedropped" then
     local modal = dispatch_modal_input("file_dropped", ...)
     if not modal then core.root_panel:on_file_dropped(...) end

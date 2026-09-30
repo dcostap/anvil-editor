@@ -504,6 +504,18 @@ Current Anvil SDL3 patch:
 
 When updating SDL3 upstream, verify this patch still applies. If it fails, rebase/regenerate the patch against the new SDL3 revision and keep it tracked in the top-level Anvil repo.
 
+SDL3 text-drop patch:
+
+- `subprojects/packagefiles/sdl3-complete-text-drop.patch`
+- listed by `diff_files` in `subprojects/sdl3.wrap`
+- keeps each Windows text drop complete, including blank lines and trailing newlines
+- leaves file URI lists unchanged
+
+Keep this patch when updating SDL3 unless upstream preserves complete text drops.
+Title Bar drops open files, images, folders, and text in new Panes.
+Folders open File Trees, not Projects. Native window controls are not drop targets.
+Run `anvil:drop-events` and `ui/external_drop.lua` for focused checks.
+
 Current Anvil Ghostty patch:
 
 - `subprojects/packagefiles/ghostty-semantic-prompt-fresh-line-option.patch`

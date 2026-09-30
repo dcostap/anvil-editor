@@ -130,6 +130,14 @@ SCENARIOS["image-viewer"] = {
     "paced": False,
 }
 SCENARIOS["image-filtering"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["titlebar-file-drop"] = {
+    "start_line": 1700,
+    "tab_count": 8,
+    "window_width": 1100,
+    "window_height": 700,
+    "visual": True,
+    "paced": False,
+}
 for wallpaper_theme in ("light", "light2", "dark2"):
     SCENARIOS[f"wallpaper-{wallpaper_theme}"] = {
         "start_line": 1700,

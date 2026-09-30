@@ -242,7 +242,8 @@ local function set_position(view, line)
 end
 
 local function setup_tabs(primary)
-  if benchmark.scenario ~= "tab-heavy-titlebar" then return end
+  if benchmark.scenario ~= "tab-heavy-titlebar"
+    and benchmark.scenario ~= "titlebar-file-drop" then return end
   assert(benchmark.tab_dir ~= "", "tab-heavy-titlebar requires a tab fixture directory")
   local panes = require "core.panes"
   for i = 1, benchmark.tab_count do
@@ -628,6 +629,13 @@ local function setup_scenario()
   local view = open_file(benchmark.fixture)
   mark_lifecycle("fixture_opened")
   setup_tabs(view)
+  if benchmark.scenario == "titlebar-file-drop" then
+    core.root_panel:update_layout()
+    core.title_bar:update()
+    core.on_event("dropbegin")
+    core.on_event("dropmoved", core.title_bar.position.x + 20 * SCALE,
+      core.title_bar.position.y + core.title_bar.size.y / 2)
+  end
   if benchmark.scenario == "renderer-primitives" then
     view = open_primitive_view()
   elseif benchmark.scenario == "image-viewer" then

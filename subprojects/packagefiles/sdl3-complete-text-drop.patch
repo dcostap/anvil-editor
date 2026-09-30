@@ -1,0 +1,62 @@
+diff --git a/src/video/windows/SDL_windowswindow.c b/src/video/windows/SDL_windowswindow.c
+index 506fdc1..f51e62e 100644
+--- a/src/video/windows/SDL_windowswindow.c
++++ b/src/video/windows/SDL_windowswindow.c
+@@ -1924,15 +1924,8 @@ static STDMETHODIMP SDLDropTarget_Drop(SDLDropTarget *target,
+                     char *text = (char *)SDL_malloc(bsize + sizeof(Uint32));
+                     SDL_memcpy((Uint8 *)text, buffer, bsize);
+                     SDL_memset((Uint8 *)text + bsize, 0, sizeof(Uint32));
+-                    char *saveptr = NULL;
+-                    char *token = SDL_strtok_r(text, "\r\n", &saveptr);
+-                    while (token != NULL) {
+-                        SDL_LogTrace(SDL_LOG_CATEGORY_INPUT,
+-                                     ". In Drop Text, text (%lu of %lu) '%s'",
+-                                     (unsigned long)SDL_strlen(token), (unsigned long)bsize, token);
+-                        SDL_SendDropText(target->window, (char *)token);
+-                        token = SDL_strtok_r(NULL, "\r\n", &saveptr);
+-                    }
++                    // Anvil: retain blank lines and trailing newlines in text drops.
++                    SDL_SendDropText(target->window, text);
+                     SDL_free(text);
+                 }
+                 GlobalUnlock(med.hGlobal);
+@@ -1973,19 +1966,8 @@ static STDMETHODIMP SDLDropTarget_Drop(SDLDropTarget *target,
+                         SDL_LogTrace(SDL_LOG_CATEGORY_INPUT,
+                                      ". In Drop Text for StringToUTF8, format %08x '%s', memory (%lu) %p",
+                                      fetc.cfFormat, format_mime, (unsigned long)lbuffer, buffer);
+-                        char *text = (char *)SDL_malloc(lbuffer + sizeof(Uint32));
+-                        SDL_memcpy((Uint8 *)text, buffer, lbuffer);
+-                        SDL_memset((Uint8 *)text + lbuffer, 0, sizeof(Uint32));
+-                        char *saveptr = NULL;
+-                        char *token = SDL_strtok_r(text, "\r\n", &saveptr);
+-                        while (token != NULL) {
+-                            SDL_LogTrace(SDL_LOG_CATEGORY_INPUT,
+-                                         ". In Drop Text, text (%lu of %lu) '%s'",
+-                                         (unsigned long)SDL_strlen(token), (unsigned long)lbuffer, token);
+-                            SDL_SendDropText(target->window, (char *)token);
+-                            token = SDL_strtok_r(NULL, "\r\n", &saveptr);
+-                        }
+-                        SDL_free(text);
++                        // Anvil: retain the complete Unicode text payload.
++                        SDL_SendDropText(target->window, (const char *)buffer);
+                         SDL_free((void *)buffer);
+                     }
+                 }
+@@ -2024,15 +2006,8 @@ static STDMETHODIMP SDLDropTarget_Drop(SDLDropTarget *target,
+                     char *text = (char *)SDL_malloc(bsize + sizeof(Uint32));
+                     SDL_memcpy((Uint8 *)text, buffer, bsize);
+                     SDL_memset((Uint8 *)text + bsize, 0, sizeof(Uint32));
+-                    char *saveptr = NULL;
+-                    char *token = SDL_strtok_r(text, "\r\n", &saveptr);
+-                    while (token != NULL) {
+-                        SDL_LogTrace(SDL_LOG_CATEGORY_INPUT,
+-                                     ". In Drop Text, text (%lu of %lu) '%s'",
+-                                     (unsigned long)SDL_strlen(token), (unsigned long)bsize, token);
+-                        SDL_SendDropText(target->window, (char *)token);
+-                        token = SDL_strtok_r(NULL, "\r\n", &saveptr);
+-                    }
++                    // Anvil: retain blank lines and trailing newlines in text drops.
++                    SDL_SendDropText(target->window, text);
+                     SDL_free(text);
+                 }
+                 GlobalUnlock(med.hGlobal);

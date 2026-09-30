@@ -404,6 +404,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     return SDL_APP_FAILURE;
   }
   SDL_SetEventEnabled(SDL_EVENT_DROP_FILE, true);
+  SDL_SetEventEnabled(SDL_EVENT_DROP_TEXT, true);
+  SDL_SetEventEnabled(SDL_EVENT_DROP_BEGIN, true);
+  SDL_SetEventEnabled(SDL_EVENT_DROP_POSITION, true);
+  SDL_SetEventEnabled(SDL_EVENT_DROP_COMPLETE, true);
 
   if (ren_init() != 0) {
     fprintf(stderr, "Error initializing renderer: %s\n", SDL_GetError());

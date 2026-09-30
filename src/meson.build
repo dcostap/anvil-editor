@@ -251,6 +251,14 @@ font_raster_test = executable('font_raster_test',
 )
 test('font-raster', font_raster_test, env: anvil_test_env)
 
+drop_events_test = executable('drop_events_test',
+    ['../tests/native/drop_events_test.c', 'system_events.c', 'resize_diagnostics.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('drop-events', drop_events_test, env: anvil_test_env)
+
 git_status_index_test = executable('git_status_index_test',
     ['../tests/native/git_status_index_test.c', 'git_status_index.c'],
     include_directories: anvil_includes,

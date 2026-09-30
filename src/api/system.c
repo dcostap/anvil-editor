@@ -67,6 +67,10 @@ static Uint32 event_window_id(const SDL_Event *e) {
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
       return e->window.windowID;
     case SDL_EVENT_DROP_FILE:
+    case SDL_EVENT_DROP_TEXT:
+    case SDL_EVENT_DROP_BEGIN:
+    case SDL_EVENT_DROP_POSITION:
+    case SDL_EVENT_DROP_COMPLETE:
       return e->drop.windowID;
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
@@ -276,7 +280,6 @@ static void push_win32_error(lua_State *L, DWORD rc) {
 
 static int f_poll_event(lua_State *L) {
   char buf[16];
-  float mx, my;
   int w, h;
   SDL_Event e;
 
@@ -361,16 +364,27 @@ top:
       return 1;
 
 
+    case SDL_EVENT_DROP_BEGIN:
+      lua_pushstring(L, "dropbegin");
+      return 1;
+
+    case SDL_EVENT_DROP_COMPLETE:
+      lua_pushstring(L, "dropcomplete");
+      return 1;
+
+    case SDL_EVENT_DROP_POSITION:
     case SDL_EVENT_DROP_FILE:
+    case SDL_EVENT_DROP_TEXT:
       {
         RenWindow* window_renderer = ren_find_window_from_id(e.drop.windowID);
-        SDL_GetMouseState(&mx, &my);
-        lua_pushstring(L, "filedropped");
-        lua_pushstring(L, e.drop.data);
-        // a DND into dock event fired before a window is created
-        lua_pushinteger(L, mx * (window_renderer ? window_renderer->scale_x : 0));
-        lua_pushinteger(L, my * (window_renderer ? window_renderer->scale_y : 0));
-        return 4;
+        bool position = e.type == SDL_EVENT_DROP_POSITION;
+        lua_pushstring(L, position ? "dropmoved" :
+          e.type == SDL_EVENT_DROP_FILE ? "filedropped" : "textdropped");
+        if (!position) lua_pushstring(L, e.drop.data);
+        /* OLE drops do not update SDL's ordinary mouse state. */
+        lua_pushnumber(L, e.drop.x * (window_renderer ? window_renderer->scale_x : 1));
+        lua_pushnumber(L, e.drop.y * (window_renderer ? window_renderer->scale_y : 1));
+        return position ? 3 : 4;
       }
 
     case SDL_EVENT_KEY_DOWN:

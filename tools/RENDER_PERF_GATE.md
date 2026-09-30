@@ -407,6 +407,9 @@ case.
 Use `--scenario image-viewer` for image controls, transparency, a fit preview, and a clipped pan at actual size.
 This focused scene is not in the default suites. It does not yet have a full-suite performance baseline.
 
+Use `--scenario titlebar-file-drop` to check external-drop feedback over a Title Bar with several Tabs.
+The scene sends internal drop events. It does not move the mouse or use a user's window.
+
 Use `--scenario image-filtering --renderer d3d11` to check image sampling through captured pixels.
 The check covers reduced fine detail, enlarged color transitions, transparent edges, and unchanged pixels at actual size.
 It uses independent expected colors, not a visual golden, to test filtering behavior.

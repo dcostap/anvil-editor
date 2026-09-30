@@ -403,6 +403,16 @@ function TitleBar:caption_at(x, y)
   end
 end
 
+function TitleBar:get_external_drop_target(x, y)
+  if not self.visible or self.size.y <= 0 then return end
+  local rect = {
+    x = self.position.x, y = self.position.y,
+    w = math.max(0, (self.caption_rects[1] and self.caption_rects[1].x
+      or self.position.x + self.size.x) - self.position.x), h = self.size.y,
+  }
+  if contains(rect, x, y) then return { kind = "new", area = "titlebar", rect = rect } end
+end
+
 function TitleBar:on_mouse_moved(x, y, ...)
   self.mouse_x, self.mouse_y = x, y
   self.hovered_entry = self:entry_at(x, y)
@@ -689,6 +699,48 @@ function TitleBar:draw_pane_drag()
   }, style.text)
 end
 
+function TitleBar:draw_external_drop()
+  local root = core.root_panel
+  local target = root and root.get_external_drop_target and root:get_external_drop_target()
+  if not target or target.area ~= "titlebar" then return end
+  local rect = target.rect
+  local inset = math.min(3 * SCALE, rect.h / 4)
+  local stroke = math.max(1, SCALE)
+  local x, y = rect.x + inset, rect.y + inset
+  local w, h = math.max(0, rect.w - inset * 2), rect.h - inset * 2
+  core.push_clip_rect(rect.x, rect.y, rect.w, rect.h)
+  renderer.draw_rect(rect.x, rect.y, rect.w, rect.h, style.titlebar)
+  renderer.draw_rounded_rect(x, y, w, h, 6 * SCALE, style.drop_target_accent)
+  renderer.draw_rounded_rect(x + stroke, y + stroke, math.max(0, w - stroke * 2),
+    math.max(0, h - stroke * 2), 5 * SCALE, style.titlebar)
+  renderer.draw_rounded_rect(x + stroke, y + stroke, math.max(0, w - stroke * 2),
+    math.max(0, h - stroke * 2), 5 * SCALE, style.drop_target_background)
+
+  local font = style.view_text_font
+  local padding = style.padding.x
+  local icon_size = math.min(12 * SCALE, h / 2)
+  local icon_x, icon_y = x + padding, y + (h - icon_size) / 2
+  renderer.draw_rect(icon_x, icon_y + (icon_size - stroke) / 2,
+    icon_size, stroke, style.drop_target_accent)
+  renderer.draw_rect(icon_x + (icon_size - stroke) / 2, icon_y,
+    stroke, icon_size, style.drop_target_accent)
+  local label_x = icon_x + icon_size + padding
+  local detail_font = project_title_font()
+  local detail = "Files · Folders · Text"
+  local detail_width = detail_font:get_width(detail)
+  local label = "Drop to open in new Panes"
+  local show_detail = w > label_x - x + font:get_width(label) + detail_width + padding * 3
+  local label_width = math.max(0, x + w - padding - label_x
+    - (show_detail and detail_width + padding * 2 or 0))
+  renderer.draw_text(font, fit_text(font, label, label_width), label_x,
+    y + math.floor((h - font:get_height()) / 2), style.text)
+  if show_detail then
+    renderer.draw_text(detail_font, detail, x + w - padding - detail_width,
+      y + math.floor((h - detail_font:get_height()) / 2), style.dim)
+  end
+  core.pop_clip_rect()
+end
+
 function TitleBar:draw()
   if self.size.y <= 0 then return end
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y,
@@ -768,6 +820,7 @@ function TitleBar:draw()
     draw_caption_glyph(i, rect, color)
   end
   self:draw_pane_drag()
+  self:draw_external_drop()
 end
 
 return TitleBar
