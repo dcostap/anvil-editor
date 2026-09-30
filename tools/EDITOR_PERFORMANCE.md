@@ -182,6 +182,19 @@ The final profile still prepared 12,001 plain lines and another 12,001 semantic 
 Widths still changed between `803.65104166667` and `744.66666666667`.
 Single-preparation Markdown opening remains incomplete. Do not claim that requirement as implemented.
 
+The next geometry fix installs the Markdown attachment state before its providers.
+Provider invalidation now measures the current font and viewport width, not the old committed width.
+This prevents a replacement layout from preparing the previous reading lane.
+
+`wrap_provider_resize.lua` failed because provider publication retained the old viewport width.
+`markdown_wrap_attachment.lua` failed because attachment published rows for the previous lane.
+Both targeted tests pass after the fix.
+Wrapped publication, Markdown open/resize, and Markdown metric reuse also pass.
+Caret geometry passes 16/16; lane scope passes 1/1.
+Markdown frame coherence passes 10/11 in both the original reference and candidate.
+Its existing empty-nested-dash failure is unrelated to this change.
+These checks prove geometry behavior, not single-preparation performance.
+
 ## Final focused checks
 
 - Protected Tree-sitter: 85/85 passed.

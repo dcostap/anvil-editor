@@ -7874,6 +7874,8 @@ function live.attach(view)
   if view.__markdown_live_attached then return false end
   ensure_owner(view)
   live._install_code_copy_hover(view)
+  -- All providers must observe the reading lane during their installation.
+  view.__markdown_live_attached = true
   view:add_visual_metric_provider(PROVIDER_ID, provider)
   view:add_decoration_provider(PROVIDER_ID, decoration_provider)
   -- Install gutter policy before the render provider reconstructs soft-wrap
@@ -7925,7 +7927,6 @@ function live.attach(view)
     )
     invalidate_selection_lines(owner, new_state, old_state)
   end)
-  view.__markdown_live_attached = true
   -- Live Preview needs soft wraps to keep prose inside its reading lane.
   -- Ordinary Editors may still keep the global unwrapped default.
   if not view.__wrapping_user_override then

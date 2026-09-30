@@ -2126,7 +2126,7 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
         perf_frame_add("linewrapping_async_line_render_invalidation_calls", 1)
         if not rebased or opts.on_wrapped_reconstructed then
           linewrapping.reconstruct_breaks_async(
-            self, self.wrapped_settings.font, self.wrapped_settings.width, {
+            self, self:get_font(), self:compute_wrap_width(), {
               budget_ms = opts.wrapped_reconstruction_budget_ms,
               on_complete = opts.on_wrapped_reconstructed,
             }
@@ -2160,7 +2160,7 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
     then
       perf_frame_add("linewrapping_async_line_render_invalidation_calls", 1)
       linewrapping.reconstruct_breaks_async(
-        self, self.wrapped_settings.font, self.wrapped_settings.width, {
+        self, self:get_font(), self:compute_wrap_width(), {
           budget_ms = opts.wrapped_reconstruction_budget_ms,
           on_complete = opts.on_wrapped_reconstructed,
         }
@@ -2168,7 +2168,7 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
     else
       perf_frame_add("linewrapping_reconstruct_line_render_invalidation_calls", 1)
       linewrapping.reconstruct_breaks(
-        self, self.wrapped_settings.font, self.wrapped_settings.width
+        self, self:get_font(), self:compute_wrap_width()
       )
     end
     self.__line_render_wrap_invalidating = nil
