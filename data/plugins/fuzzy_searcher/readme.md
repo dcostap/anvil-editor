@@ -1,3 +1,31 @@
+# Navigation History Search
+
+Use `^` or run `fuzzy:open_navigation_history` from the Command Palette.
+The default shortcut is Ctrl+H.
+
+```text
+^parser
+^return value
+```
+
+This mode searches Navigation Places in the source Pane only.
+With no query, it shows reverse history order, including forward entries.
+It selects the current entry and brings that row into view.
+Repeated visits remain separate results.
+
+Editor rows show the file location, enclosing Tree-sitter symbol, and code line.
+Text comes from the current Buffer, including unsaved edits.
+Symbol labels appear when the Tree-sitter index is ready.
+Other Views show their names and icons. File Trees also show their saved directories.
+
+Search matches file paths, code text, symbol names, and View labels.
+Search Modifiers and other mode markers remain literal query text after `^`.
+
+Preview does not change the source Pane or its history.
+Activation restores the exact entry, including its selection and scroll position.
+It does not open another file or create another Pane.
+Large or binary Buffers can remain selectable without a text preview.
+
 # Search Modifiers
 
 Add `modifier:value` tokens to File Search or Text Search.

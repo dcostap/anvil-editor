@@ -42,7 +42,9 @@ end
 local function mode_marker(text)
   local first = text:find("%S") or 1
   local prefix = text:sub(first, first)
-  if prefix == "!" or prefix == ">" or prefix == "@" then return first, first, prefix end
+  if prefix == "!" or prefix == ">" or prefix == "@" or prefix == "^" then
+    return first, first, prefix
+  end
   if text:sub(first, first + 1) == "$$" then return first, first + 1, "$$" end
   local quoted = false
   for i = 1, #text do
@@ -55,8 +57,8 @@ end
 function modifiers.parse(text)
   text = tostring(text or "")
   local result = { text = text, tokens = {}, active = false }
-  -- Shell text and command identifiers own their colons.
-  if text:match("^%s*[!>]") then
+  -- These modes search literal text, not file metadata.
+  if text:match("^%s*[!>^]") then
     result.marker_first, result.marker_last, result.mode = mode_marker(text)
     return result
   end

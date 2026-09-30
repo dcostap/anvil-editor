@@ -465,6 +465,11 @@ _Avoid_: Pane Command Bar, Terminal View input
 The floating picker used for fuzzy navigation and search modes, such as files, projects, grep, symbols, and commands.
 _Avoid_: fuzzy searcher popup
 
+**Navigation History Search**:
+A Fuzzy Searcher mode for finding Navigation Places in its source Pane's Navigation History.
+Activating a result restores that exact Navigation Place, including its View state.
+_Avoid_: checkpoint search, bookmark search
+
 **Passive File Preview**:
 A read-only Fuzzy Searcher file view with no caret or Current Line Highlight. Search matches can remain highlighted.
 _Avoid_: Generic preview, inactive Editor

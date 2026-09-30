@@ -9,6 +9,7 @@ local MODE_LABELS = {
   ["#"] = "Text Search",
   ["$"] = "Project Symbol Search",
   ["$$"] = "Current Buffer Symbol Search",
+  ["^"] = "Navigation History Search",
   [">"] = "Command Palette",
   ["!"] = "Shell Command Mode",
 }
@@ -38,7 +39,13 @@ local function result_text(result, support)
 
   local parts = {}
   local main = support.result_main_text(result)
-  if result.kind == "grep" then
+  if result.kind == "navigation_place" then
+    add_part(parts, result.current and "Current Navigation Place" or nil)
+    add_part(parts, result_location(result) or result.label)
+    local symbol = result.enclosing_symbol
+    add_part(parts, symbol and (symbol.declaration or symbol.name))
+    add_part(parts, result.buffer and main or result.text)
+  elseif result.kind == "grep" then
     add_part(parts, result_location(result))
     add_part(parts, main)
   elseif result.kind == "symbol" then

@@ -1141,7 +1141,7 @@ load_recent_commands()
 local function parse_query(s)
   local modifiers = fuzzy_searcher.modifiers.parse(s)
   s = modifiers.text
-  if modifiers.mode == "!" or modifiers.mode == ">" then return s end
+  if modifiers.mode == "!" or modifiers.mode == ">" or modifiers.mode == "^" then return s end
   local before, grep, symbol = s, nil, nil
   local marker = fuzzy_searcher.modifiers.parse(s)
   local grep_pos = marker.mode == "#" and marker.marker_first
@@ -1179,6 +1179,7 @@ end
 fuzzy_searcher.mode_prefixes = {
   ["#"] = true, ["@"] = true, [">"] = true, ["!"] = true,
   ["$"] = true, ["$$"] = true,
+  ["^"] = true,
 }
 fuzzy_searcher.prompt_history_loaded = false
 fuzzy_searcher.prompt_history = {}
@@ -1290,6 +1291,7 @@ function fuzzy_searcher.restored_prompt_text(text)
   if mode == "" then return "", false end
   if mode == "@" then return "@", false end
   if mode == "!" then return "!", false end
+  if mode == "^" then return "^", false end
   local latest = fuzzy_searcher.prompt_history_for_mode(mode)[1]
   if latest ~= nil then return latest, true end
   return text, false
@@ -2357,7 +2359,7 @@ end
 function fuzzy_searcher.result_main_text(r)
   if not r then return nil end
   local text
-  if r.kind == "grep" then
+  if r.kind == "grep" or r.kind == "navigation_place" and r.buffer then
     text = r.text or r.label or r.file
   elseif r.kind == "command" then
     text = r.label or r.command
@@ -2987,6 +2989,15 @@ grep_row_columns = function(width, ratio)
   return path_w, gap, math.max(0, width - path_w - gap)
 end
 
+function fuzzy_searcher.line_result_location(result)
+  local line = tonumber(result.line) or 1
+  if result.kind == "navigation_place" then
+    return result.current and "● " or "^ ", string.format(":%d:%d", line, result.col or 1)
+  end
+  return result.exact and "# " or "~# ",
+    line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
+end
+
 function FSView:grep_file_column_width(font, path_w)
   local results = self.results
   local count = #results
@@ -3003,10 +3014,8 @@ function FSView:grep_file_column_width(font, path_w)
 
   local width = 0
   for _, result in ipairs(results) do
-    if result.kind == "grep" then
-      local line = tonumber(result.line) or 1
-      local suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
-      local prefix = result.exact and "# " or "~# "
+    if result.kind == "grep" or result.kind == "navigation_place" and result.buffer then
+      local prefix, suffix = fuzzy_searcher.line_result_location(result)
       width = math.max(width, fuzzy_searcher.file_result_full_width(
         font, result.file, prefix, suffix, true
       ))
@@ -3033,11 +3042,11 @@ local function draw_grep_result_row(
   collapsed_context_x, file_column_width, edit_metadata_width
 )
   local path_w, gap, text_w = grep_row_columns(width)
-  local symbol = fuzzy_searcher.grep_enclosing_symbol(result)
+  local history = result.kind == "navigation_place"
+  local symbol = result.enclosing_symbol
+  if not history then symbol = fuzzy_searcher.grep_enclosing_symbol(result) end
   local context_gap = math.max(8 * (SCALE or 1), style.padding.x * 2)
-  local prefix = result.exact and "# " or "~# "
-  local line = tonumber(result.line) or 1
-  local line_suffix = line <= 9999 and string.format(":%-4d", line) or ":" .. tostring(line)
+  local prefix, line_suffix = fuzzy_searcher.line_result_location(result)
   local filename_width = fuzzy_searcher.file_result_full_width(
     font, result.file, prefix, line_suffix, true
   )
@@ -3048,7 +3057,7 @@ local function draw_grep_result_row(
   if not show_metadata then
     edit_metadata_width = 0
     content_width = path_w
-  elseif not collapse_file then
+  elseif not collapse_file and not history then
     local metadata_parts = fuzzy_searcher.grep_edit_metadata_parts(result)
     fuzzy_searcher.draw_file_metadata(
       font, result, x, y, path_w, metadata_parts, nil, false
@@ -3088,7 +3097,7 @@ local function draw_grep_result_row(
   local preview_y = y + math.max(0, math.floor((font:get_height() - preview_font:get_height()) / 2))
   local text_x = x + path_w + gap
   local text = tostring(result.text or "")
-  local spans = grep_content_spans(text, result, 0)
+  local spans = history and result.content_spans or grep_content_spans(text, result, 0)
   local anchor = result.col or true
   local leading = #(text:match("^%s*") or "")
   if leading > 0 then
@@ -3869,7 +3878,12 @@ function FSView:is_deep_code_mode()
     return r and (r.kind == "grep" or r.kind == "symbol")
   end
   local mode = fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "")
-  return mode == "#" or mode == "$" or mode == "$$"
+  return mode == "#" or mode == "$" or mode == "$$" or mode == "^"
+end
+
+function FSView:is_navigation_history_mode()
+  return not self.static_mode and not self.file_picker
+    and fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "") == "^"
 end
 
 function FSView:is_full_width_mode()
@@ -4035,7 +4049,7 @@ function FSView:can_mark_result(index)
   local result = self.results[index]
   return not self.file_picker and result and not result.header
     and (result.file or result.buffer and result.line) and not result.is_folder
-    and result.kind ~= "create_path"
+    and result.kind ~= "create_path" and result.kind ~= "navigation_place"
 end
 
 function FSView:get_selected_result_indices()
@@ -4339,6 +4353,7 @@ function FSView:clear_preview_view()
   end
   self.preview_view = nil
   if preview and preview.on_close then preview:on_close() end
+  self.preview_source_buffer = nil
   self.preview_key = nil
   self.preview_target_line = nil
   self.preview_highlight_key = nil
@@ -4494,7 +4509,43 @@ function FSView:update_preview_view()
   local path = r.revision and r.revision_path or fullpath(r)
   local key = path
   local view
-  if r.revision then
+  if r.kind == "navigation_place" and r.buffer then
+    key = table.concat({ "navigation", r.abs_path or "", tostring(r.buffer.text_revision),
+      tostring(r.buffer.syntax) }, ":")
+    if self.preview_key ~= key or self.preview_source_buffer ~= r.buffer then
+      self:clear_preview_view()
+      self.preview_key = key
+      self.preview_source_buffer = r.buffer
+      local reason = r.buffer.binary and "Binary text preview is not available" or nil
+      local bytes, lines = 0, {}
+      for _, text in ipairs(r.buffer.lines) do
+        if reason then break end
+        bytes = bytes + #text
+        if bytes > fuzzy_searcher.preview_text_max_bytes then reason = "File is too large to preview"; break end
+        if #text > 16 * 1024 then reason = "Line too long to preview. Open the result to view the file."; break end
+        lines[#lines + 1] = text
+      end
+      if reason then
+        self.preview_blocked = { reason = reason, path = r.file }
+        core.log_quiet("Navigation History Search: preview skipped: %s (%s)", r.file, reason)
+        return nil
+      end
+      -- Keep source selections, search ranges, and Buffer lifecycle independent.
+      local buffer = Buffer()
+      buffer.disable_language_services = true
+      buffer.disable_treesitter = true
+      buffer.disable_gitdiff_highlight = true
+      buffer.lines = lines
+      buffer.crlf = r.buffer.crlf
+      if r.abs_path then buffer:set_filename(r.buffer.filename, r.abs_path) end
+      buffer:set_syntax(r.buffer.syntax, "navigation-preview", { notify = false })
+      buffer.read_only = true
+      buffer.read_only_reason = "Fuzzy Searcher previews are read-only"
+      self.preview_view = preview_text_view.new(buffer)
+    end
+    view = self.preview_view
+    if not view then return nil end
+  elseif r.revision then
     view = self:prepare_historical_preview(r)
     if not view then return nil end
   elseif ImageView.is_supported(path) then
@@ -4580,8 +4631,10 @@ function FSView:update_preview_view()
         view.buffer:clear_search_selections()
         local selections = {}
         local search_ranges = {}
-        if r.kind == "grep" then
-          for _, span in ipairs(grep_content_spans(view.buffer.lines[target] or "", r, 0, target) or {}) do
+        if r.kind == "grep" or r.kind == "navigation_place" then
+          local spans = r.kind == "navigation_place" and r.content_spans
+            or grep_content_spans(view.buffer.lines[target] or "", r, 0, target)
+          for _, span in ipairs(spans or {}) do
             local col1, col2 = span[1], span[2] + 1
             view.buffer:add_search_selection(target, col1, target, col2)
             search_ranges[#search_ranges + 1] = { target, col1, target, col2 }
@@ -4616,7 +4669,9 @@ function FSView:update_preview_view()
           end
           view.buffer.last_selection = 1
         else
-          view.buffer:set_selection(target, 1, target, 1)
+          local col = r.kind == "navigation_place" and r.col or 1
+          view.buffer:set_selection(target, col, target, col)
+          if r.kind == "navigation_place" then reveal_col1, reveal_col2 = col, col end
         end
       end)
       view:scroll_to_line(target, false, false)
@@ -6836,6 +6891,88 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
   self.modifier_job = job
 end
 
+function FSView:refresh_navigation_history(text, reset_selection)
+  local pane = panes.find(self.source_pane)
+  local selected = not reset_selection and self:selected_result()
+  local parsed = fuzzy_searcher.modifiers.parse(text)
+  local query = trim_query(text:sub(parsed.marker_last + 1))
+  local symbol_index = require "core.treesitter.symbol_index"
+  if not self.navigation_history_started then
+    for _, root in ipairs(project_paths.search_roots("symbols")) do
+      symbol_index.ensure_scan(root.path or root)
+    end
+    self.navigation_history_started = true
+    core.log_quiet("Navigation History Search: opened pane=%s", pane and pane.id or "none")
+  end
+
+  local out = {}
+  for index = #(pane and pane.history.entries or {}), 1, -1 do
+    local entry = pane.history.entries[index]
+    local view, state = entry.view, entry.state or {}
+    local label = view:get_name()
+    local row = {
+      kind = "navigation_place", view = view, history_entry = entry,
+      history_index = index, current = index == pane.history.index,
+      label = label, text = "", query = query,
+    }
+    local selection = state.selection_state
+    if selection and view.buffer then
+      local selections = selection.selections or {}
+      local offset = ((selection.last_selection or 1) - 1) * 4 + 1
+      row.buffer = view.buffer
+      row.line = common.clamp(selections[offset] or 1, 1, #row.buffer.lines)
+      row.col = selections[offset + 1] or 1
+      row.abs_path = common.normalize_path(row.buffer.abs_filename)
+      local project = core.root_project()
+      row.file = row.abs_path and project and common.path_belongs_to(row.abs_path, project.path)
+        and common.relative_path(project.path, row.abs_path) or row.abs_path or label
+      row.text = (row.buffer:get_utf8_line(row.line) or ""):gsub("[\r\n]+$", "")
+        :sub(1, fuzzy_searcher.fuzzy_line_max_chars)
+      if row.abs_path then symbol_index.remember_open_buffer(row.buffer) end
+      row.enclosing_symbol = fuzzy_searcher.grep_enclosing_symbol(row)
+    else
+      row.text = state.current_dir or state.root or ""
+      if type(row.text) ~= "string" then row.text = "" end
+    end
+
+    local best
+    for _, value in ipairs({ row.file or label, row.text,
+      row.enclosing_symbol and fuzzy_searcher.symbol_declaration_text(row.enclosing_symbol, false) or "" }) do
+      local score = fuzzy_match(query, value, self.case_sensitive)
+      if score and (not best or score > best) then best = score end
+    end
+    if best then
+      row.score = best
+      local _, path_spans = fuzzy_match(query, row.file or label, self.case_sensitive)
+      local _, content_spans = fuzzy_match(query, row.text, self.case_sensitive)
+      row.match_spans, row.content_spans = path_spans or {}, content_spans or {}
+      row.file_spans = row.match_spans
+      out[#out + 1] = row
+    end
+  end
+  if query ~= "" then
+    table.sort(out, function(a, b)
+      if a.score ~= b.score then return a.score > b.score end
+      return a.history_index > b.history_index
+    end)
+  end
+  self.results, self.has_more = out, false
+  self.selected = 1
+  for index, row in ipairs(out) do
+    if selected and row.history_entry == selected.history_entry
+      or reset_selection and query == "" and row.current then
+      self.selected = index
+      break
+    end
+  end
+  self.status = string.format("%d Navigation Places — source Pane", #out)
+  self:ensure_selection_visible()
+  if reset_selection and query == "" then
+    self.list_scroll.y = (self.viewport_offset - 1) * self:list_metrics().lh
+    self.list_scroll.move_data_y = nil
+  end
+end
+
 function FSView:refresh(text)
   if self.static_mode then
     self:refresh_static()
@@ -6857,6 +6994,11 @@ function FSView:refresh(text)
   local query_key = table.concat({ text, base, tostring(line or ""), tostring(col or ""), tostring(grep or ""), tostring(symbol or "") }, "\0")
   local query_changed = query_key ~= self.current_query_key
 
+  if self:is_navigation_history_mode() and system.get_time() >= (self.next_navigation_refresh or 0) then
+    self.dirty = true
+    self.next_navigation_refresh = system.get_time() + 0.25
+  end
+
   if query_changed then
     if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
     self.revision_open_token = nil
@@ -6871,7 +7013,17 @@ function FSView:refresh(text)
   self.last_files_generation = fuzzy_searcher.files_generation
   self.last_files_scope_generation = fuzzy_searcher.files_scope_generation
 
-  if self.query_modifiers.active then
+  if self:is_navigation_history_mode() then
+    if self.modifier_job then self.modifier_job:cancel(); self.modifier_job = nil end
+    self.path_search_active = false
+    if self.path_search_query_key then self:clear_path_search_results(true) end
+    fuzzy_searcher.cancel_symbol_search()
+    kill_file_search()
+    kill_grep()
+    kill_fuzzy_grep_jobs()
+    self:cancel_deferred_loading_feedback()
+    self:refresh_navigation_history(text, query_changed)
+  elseif self.query_modifiers.active then
     if files_changed or files_scope_changed then self.modifier_metadata = nil end
     if query_changed or force_refresh or files_changed or files_scope_changed then
       self:start_modifier_search(base, line, col, grep, query_changed)
@@ -7256,6 +7408,7 @@ function FSView:open_file_result(r, new_group, restore, done)
 end
 
 function FSView:open_focused_preview(new_group)
+  if self:is_navigation_history_mode() then return self:confirm() end
   local preview = self.preview_view
   local result = self:selected_result()
   if not (preview and preview:extends(TextView) and result and result.file) then return false end
@@ -7440,6 +7593,22 @@ end
 function FSView:activate_selected_result(new_group)
   local r = self:selected_result()
   if not r then return end
+  if r.kind == "navigation_place" then
+    local pane = panes.find(self.source_pane)
+    local view, err = panes.go_to_history_entry(pane, r.history_entry)
+    if not view then
+      self.status = err
+      self.dirty = true
+      self:schedule_update(true)
+      core.log_quiet("Navigation History Search: activation failed: %s", err)
+      return false
+    end
+    self:close()
+    panes.focus(pane)
+    core.log_quiet("Navigation History Search: restored pane=%s index=%d",
+      pane.id, pane.history.index)
+    return true
+  end
   if r.kind == "shell_command" then
     local text = trim_query(r.shell_command)
     if text == "" then return end
@@ -7741,7 +7910,9 @@ function FSView:draw_open_content()
   local has_visible_split = false
   for idx = first, last do
     local r = self.results[idx]
-    if r and r.kind == "grep" then has_visible_split = true; break end
+    if r and (r.kind == "grep" or r.kind == "navigation_place" and r.buffer) then
+      has_visible_split = true; break
+    end
   end
   local grep_file_column_width, grep_edit_metadata_width
   if has_visible_split then
@@ -7845,7 +8016,24 @@ function FSView:draw_open_content()
           )
         end
       end
-      if r.kind == "grep" then
+      if r.kind == "navigation_place" then
+        reset_rendered_file_group()
+        if r.buffer then
+          draw_grep_result_row(font, r, x + pad, row_y, row_text_w, false,
+            nil, nil, grep_file_column_width, 0)
+        else
+          local cx = x + pad
+          local prefix = r.current and "● " or "^ "
+          cx = renderer.draw_text(font, prefix, cx, row_y, style.dim)
+          local icon = view_icons.for_view(r.view)
+          local icon_width = view_icons.draw(icon, cx, row_y, font:get_height())
+          if icon_width > 0 then cx = cx + icon_width + style.padding.x end
+          local path_w, gap, text_w = grep_row_columns(math.max(0, x + pad + row_text_w - cx))
+          draw_highlighted_text(style.view_text_font, r.label, cx, row_y, path_w, style.text, r.match_spans)
+          draw_highlighted_text(style.get_small_font(font), r.text, cx + path_w + gap,
+            row_y, text_w, style.dim, r.content_spans)
+        end
+      elseif r.kind == "grep" then
         local file = tostring(r.file or "")
         local collapse_file = file ~= "" and previous_rendered_file_kind == "grep"
           and file == previous_rendered_file
@@ -7935,7 +8123,13 @@ function FSView:draw_open_content()
   local r = self:selected_result()
   local px, py, preview_w, preview_h = self:preview_bounds()
   if not (full_width_mode and not vertical_preview) then
-    if r and r.kind == "command" then
+    if r and r.kind == "navigation_place" and not r.buffer then
+      core.push_clip_rect(px, py, preview_w, preview_h)
+      renderer.draw_text(style.view_text_font, r.label, px, py, style.accent)
+      draw_highlighted_text(font, r.text, px, py + lh, preview_w, style.text, r.content_spans)
+      renderer.draw_text(font, "Enter: restore this Navigation Place", px, py + lh * 3, style.dim)
+      core.pop_clip_rect()
+    elseif r and r.kind == "command" then
       core.push_clip_rect(px, py, preview_w, preview_h)
       renderer.draw_text(font, "Command", px, py, style.accent)
       draw_highlighted_text(font, r.command, px, py + lh, preview_w, style.text, r.match_spans or {})
@@ -8268,6 +8462,10 @@ command.add(nil, {
   ["fuzzy:open_grep"] = command.palette(function() open("#") end, { opens_view = true }),
   ["fuzzy:open_symbols"] = command.palette(function() open("$") end, { opens_view = true }),
   ["fuzzy:open_current_buffer_symbols"] = command.palette(function() open("$$") end, { opens_view = true }),
+  ["fuzzy:open_navigation_history"] = command.palette(function()
+    local context = command.get_invocation_context() or {}
+    return open("^", { source_view = context.source_view, source_pane = context.source_pane })
+  end, { opens_view = true, keywords = { "navigation history", "checkpoint", "back", "forward" } }),
   ["fuzzy:open_commands"] = {
     perform = function() open(">") end,
     metadata = { record_last = false },
@@ -8375,6 +8573,7 @@ core.fuzzy_searcher_install_global_keymaps = function()
     ["ctrl+l"] = "fuzzy:open_current_file",
     ["ctrl+shift+j"] = "fuzzy:open_symbols",
     ["ctrl+j"] = "fuzzy:open_current_buffer_symbols",
+    ["ctrl+h"] = "fuzzy:open_navigation_history",
     ["ctrl+shift+f"] = "fuzzy:open_grep",
     ["ctrl+shift+a"] = "fuzzy:open_commands",
   }, true)

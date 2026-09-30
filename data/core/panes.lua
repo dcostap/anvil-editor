@@ -657,7 +657,7 @@ end
 local function set_history_index(pane, index, opts)
   local history = pane.history
   if index < 1 or index > #history.entries then return nil end
-  if index == history.index then return pane.current_view end
+  if index == history.index and not (opts and opts.restore_current) then return pane.current_view end
   local old = pane.current_view
   local next_view = history.entries[index].view
   if old ~= next_view then
@@ -674,6 +674,18 @@ local function set_history_index(pane, index, opts)
   if not opts or opts.focus ~= false then M.focus(pane) end
   after_mutation("navigated " .. pane.id)
   return pane.current_view
+end
+
+-- Resolve by entry identity so an old picker cannot activate a replacement entry.
+function M.go_to_history_entry(target, entry)
+  local pane = M.find(target)
+  if not pane then return nil, "The source Pane is no longer available" end
+  for index, candidate in ipairs(pane.history.entries) do
+    if candidate == entry then
+      return set_history_index(pane, index, { restore_current = true })
+    end
+  end
+  return nil, "The Navigation Place is no longer available"
 end
 
 local function history_has_view(pane, view)
