@@ -950,7 +950,7 @@ function RootPanel:draw()
     renderer.draw_rect(x, y, stroke, h, style.drop_target_accent)
     renderer.draw_rect(x + w - stroke, y, stroke, h, style.drop_target_accent)
     local text = drop_target.kind == "new" and "Drop to open in new Panes"
-      or "Drop here · Title Bar opens new Panes"
+      or "Drop here"
     local font = style.view_text_font
     if font:get_width(text) + style.padding.x * 2 > w then text = "Drop here" end
     local width = math.min(w, font:get_width(text) + style.padding.x * 2)
