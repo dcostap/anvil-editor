@@ -1596,6 +1596,25 @@ M.from_state = TerminalView.from_state
 TerminalView._module_name = "plugins.terminal"
 
 command.add(nil, {
+  ["terminal:set_minimum_text_contrast"] = command.palette(function()
+    core.global_prompt_bar:enter("Terminal Minimum Text Contrast (1-21; 1 = off)", {
+      text = tostring(terminal_config.minimum_contrast),
+      select_text = true,
+      show_suggestions = false,
+      validate = function(text)
+        local value = tonumber(text)
+        return value ~= nil and value >= 1 and value <= 21
+      end,
+      submit = function(text)
+        local value = tonumber(text)
+        require("plugins.settings").apply_config("plugins.terminal.minimum_contrast", value)
+        core.log_quiet("Terminal minimum text contrast set to %g", value)
+        core.redraw = true
+      end,
+    })
+  end, {
+    keywords = { "terminal", "color", "correction", "strength", "readability" },
+  }),
   ["terminal:focus_next"] = command.palette(function()
     local terminals = M.open_views()
     if #terminals == 0 then return false end

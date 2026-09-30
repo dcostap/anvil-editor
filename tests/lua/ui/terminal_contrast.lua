@@ -1,4 +1,7 @@
 local config = require "core.config"
+local command = require "core.command"
+local core = require "core"
+local settings = require "plugins.settings"
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 
@@ -90,5 +93,77 @@ test.describe("Terminal contrast display", function()
     test.same(capture:get_line_render(1).fragments[1].color, { 0, 80, 0, 255 })
     test.equal(capture:get_line_render(2).fragments[1].color[4], 0)
     capture:on_close()
+  end)
+end)
+
+test.describe("Terminal contrast command", function()
+  test.before_each(function(context)
+    core.global_prompt_bar:exit(true)
+    context.active_view = core.active_view
+    context.minimum = config.plugins.terminal.minimum_contrast
+    context.settings_config = settings.config
+    settings.config = {}
+    os.remove(USERDIR .. "/user_settings.lua")
+  end)
+
+  test.after_each(function(context)
+    core.global_prompt_bar:exit(true)
+    if context.view then context.view:on_close() end
+    terminal._set_native_for_tests(nil)
+    config.plugins.terminal.minimum_contrast = context.minimum
+    settings.config = context.settings_config
+    os.remove(USERDIR .. "/user_settings.lua")
+    if context.active_view then core.set_active_view(context.active_view) end
+  end)
+
+  test.it("sets and saves terminal contrast through the Global Prompt Bar", function(context)
+    local session, view = fake_session(context)
+    local bar = core.global_prompt_bar
+
+    test.ok(command.perform("terminal:set_minimum_text_contrast"))
+    test.equal(core.active_view, bar)
+    test.equal(bar:get_text(), tostring(context.minimum))
+    bar:set_text("7.25")
+    bar:submit()
+
+    test.equal(config.plugins.terminal.minimum_contrast, 7.25)
+    test.not_equal(core.active_view, bar)
+    view:update()
+    test.equal(session.colors.minimum_contrast, 7.25)
+    local saved = dofile(USERDIR .. "/user_settings.lua")
+    test.equal(saved.config.plugins.terminal.minimum_contrast, 7.25)
+  end)
+
+  test.it("accepts correction off and the maximum contrast ratio", function()
+    local bar = core.global_prompt_bar
+    for _, value in ipairs({ 1, 21 }) do
+      test.ok(command.perform("terminal:set_minimum_text_contrast"))
+      bar:set_text(tostring(value))
+      bar:submit()
+      test.equal(config.plugins.terminal.minimum_contrast, value)
+      test.not_equal(core.active_view, bar)
+    end
+  end)
+
+  test.it("keeps invalid contrast input in the prompt without changing settings", function(context)
+    local bar = core.global_prompt_bar
+    test.ok(command.perform("terminal:set_minimum_text_contrast"))
+    for _, text in ipairs({ "0.5", "21.1", "", "not a number", "nan", "inf", "1e309" }) do
+      bar:set_text(text)
+      bar:submit()
+      test.equal(config.plugins.terminal.minimum_contrast, context.minimum)
+      test.ok(core.active_view == bar, "Invalid contrast input closed the prompt: " .. text)
+      test.equal(system.get_file_info(USERDIR .. "/user_settings.lua"), nil)
+    end
+  end)
+
+  test.it("keeps terminal contrast unchanged when the prompt is canceled", function(context)
+    local bar = core.global_prompt_bar
+    test.ok(command.perform("terminal:set_minimum_text_contrast"))
+    bar:set_text("7.25")
+    bar:exit(false)
+
+    test.equal(config.plugins.terminal.minimum_contrast, context.minimum)
+    test.equal(system.get_file_info(USERDIR .. "/user_settings.lua"), nil)
   end)
 end)

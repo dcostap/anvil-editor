@@ -1239,6 +1239,15 @@ local function save_settings()
   end
 end
 
+---Apply and save a plain config value.
+---@param path string
+---@param value any
+function settings.apply_config(path, value)
+  set_config_value(config, path, value)
+  set_config_value(settings.config, path, value)
+  save_settings()
+end
+
 local function find_color_theme(name)
   name = normalize_color_theme_name(name)
   for _, details in ipairs(get_installed_colors()) do
