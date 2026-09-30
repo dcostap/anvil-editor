@@ -4,6 +4,7 @@ int luaopen_system(lua_State *L);
 int luaopen_renderer(lua_State *L);
 int luaopen_renwindow(lua_State *L);
 int luaopen_regex(lua_State *L);
+int luaopen_line_search(lua_State *L);
 int luaopen_process(lua_State *L);
 int luaopen_thread(lua_State* L);
 int luaopen_dirmonitor(lua_State* L);
@@ -78,6 +79,7 @@ static const luaL_Reg libs[] = {
   { "renderer",   luaopen_renderer   },
   { "renwindow",  luaopen_renwindow  },
   { "regex",      luaopen_regex      },
+  { "line_search", luaopen_line_search },
   { "process",    luaopen_process    },
   { "thread",     luaopen_thread     },
   { "dirmonitor", luaopen_dirmonitor },

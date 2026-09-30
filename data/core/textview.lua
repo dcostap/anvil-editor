@@ -7713,21 +7713,33 @@ local function draw_render_line_under_selection_backgrounds(view, render_line, x
   end
 end
 
-function TextView:draw_search_match_background(line, col1, col2, primary)
+function TextView:draw_search_match_background(line, col1, col2, primary, rectangles)
   local bg = self:search_match_style(primary)
   for x1, y, x2, h in self:iter_text_range_screen_segments(
     line, col1, col2
   ) do
-    if x2 > x1 then renderer.draw_rect(x1, y, x2 - x1, h, bg) end
+    if x2 > x1 then
+      if rectangles then rectangles[#rectangles + 1] = { x1, y, x2, h } end
+      renderer.draw_rect(x1, y, x2 - x1, h, bg)
+    end
   end
 end
 
-function TextView:draw_search_match_outline(line, col1, col2, primary)
+function TextView:draw_search_match_outline(line, col1, col2, primary, rectangles)
   local _, outline = self:search_match_style(primary)
   local t = math.max(1, common.round(SCALE))
-  for x1, y, x2, h in self:iter_text_range_screen_segments(
-    line, col1, col2
-  ) do
+  local segments
+  if rectangles and #rectangles > 0 then
+    local i = 0
+    segments = function()
+      i = i + 1
+      local rect = rectangles[i]
+      if rect then return table.unpack(rect) end
+    end
+  else
+    segments = self:iter_text_range_screen_segments(line, col1, col2)
+  end
+  for x1, y, x2, h in segments do
     if x2 > x1 then
       renderer.draw_rect(x1, y, x2 - x1, t, outline)
       renderer.draw_rect(x1, y + h - t, x2 - x1, t, outline)

@@ -4,6 +4,7 @@ anvil_sources = [
     'api/renderer.c',
     'api/renwindow.c',
     'api/regex.c',
+    'api/line_search.c',
     'api/system.c',
     'api/process.c',
     'api/channel.c',

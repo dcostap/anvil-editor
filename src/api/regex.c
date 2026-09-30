@@ -11,6 +11,11 @@ typedef struct RegexContainer {
   pcre2_code* re;
 } RegexContainer;
 
+void *api_regex_compiled(lua_State *L, int index) {
+  RegexContainer *self = luaL_checkudata(L, index, API_TYPE_REGEX);
+  return self->re;
+}
+
 typedef struct RegexState {
   pcre2_code* re;
   pcre2_match_data* match_data;

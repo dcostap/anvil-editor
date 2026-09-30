@@ -26,6 +26,7 @@ local MessageBox = require "widget.messagebox"
 local find_overview = require "plugins.intellij_find.overview"
 local find_scanner = require "core.local_find_scan"
 local worker_pool = require "core.worker_pool"
+local line_search = require "line_search"
 
 local find_state_by_view = setmetatable({}, { __mode = "k" })
 local last_global_query = ""
@@ -274,13 +275,49 @@ local function build_match_indexes_by_line(matches)
   return by_line
 end
 
-local function find_all_matches(buffer, state, ranges, checkpoint, external_line)
+local function find_all_matches(buffer, state, ranges, checkpoint, external_line, reveal)
   local query = field_text(state.find)
   if not buffer or query == "" then return {}, nil end
 
   local matches, by_line = {}, {}
   local search, err = find_scanner.compile(query, state.regex, state.case_sensitive)
   if not search then return {}, err end
+
+  if not ranges then
+    local index = line_search.begin(buffer.lines)
+    local pending = state.pending
+    local caret_line, caret_col = pending.start_line, pending.start_col
+    local nearest_reported = false
+    for _, range in ipairs { { caret_line, #buffer.lines }, { 1, caret_line - 1 } } do
+      local next_line = range[1]
+      while next_line <= range[2] do
+        local long_line, nearest
+        next_line, long_line, nearest = index:advance(buffer.lines, search.query, search.compiled,
+          state.case_sensitive, next_line, .006, 65536, range[2], caret_line, caret_col,
+          reveal and #buffer.lines >= 8192 and not nearest_reported)
+        if nearest and reveal then nearest_reported = true; reveal(nearest) end
+        if long_line then
+          local line = next_line
+          external_line(buffer.lines[line], nil, function(batch)
+            index:add_ranges(line, batch)
+            if reveal then
+              for i = 1, #batch, 2 do
+                if line ~= caret_line or batch[i] >= caret_col then
+                  nearest_reported = true
+                  reveal { line = line, col1 = batch[i], col2 = batch[i + 1] }
+                  break
+                end
+              end
+            end
+          end)
+          next_line = next_line + 1
+        end
+        if next_line <= range[2] and checkpoint then checkpoint(true) end
+      end
+    end
+    index:finish()
+    return index
+  end
 
   local current_line
   local function emit(first, last)
@@ -326,7 +363,26 @@ local function remember_matches(buffer, state, indexes)
   state.match_query = field_text(state.find)
   state.match_regex = state.regex
   state.match_case_sensitive = state.case_sensitive
-  state.match_indexes_by_line = indexes or build_match_indexes_by_line(state.matches)
+  if type(state.matches) == "userdata" then
+    state.match_index = state.matches
+    -- Small searches keep their inspectable result table. Large searches stay
+    -- packed in C; rendering and navigation materialize only requested ranges.
+    if #state.match_index <= 65536 then
+      local matches = {}
+      for i = 1, #state.match_index do matches[i] = state.match_index[i] end
+      state.matches = matches
+    end
+    state.match_indexes_by_line = setmetatable({}, { __index = function(_, line)
+      local first, last = state.match_index:line_range(line)
+      if not first or last < first then return end
+      local result = {}
+      for i = first, last do result[#result + 1] = i end
+      return result
+    end })
+  else
+    state.match_index = nil
+    state.match_indexes_by_line = indexes or build_match_indexes_by_line(state.matches)
+  end
   state.match_set_revision = (state.match_set_revision or 0) + 1
 end
 
@@ -351,6 +407,31 @@ Buffer.register_text_transaction_handler("local-find", function(buffer, transact
       end
       if #ranges > 0 and state.match_buffer == buffer and same_query(state)
           and state.match_revision == buffer.text_revision - 1 then
+        local long_line = false
+        for _, range in ipairs(ranges) do
+          for line = range.new_line1, range.new_line2 do
+            if #buffer.lines[line] > 65536 then long_line = true; break end
+          end
+          if long_line then break end
+        end
+        if state.match_index and long_line then
+          state.match_revision = nil
+          core.log_quiet("Local find: deferred long-line edit scan in %s", buffer:get_name())
+        elseif state.match_index then
+          local search, err = find_scanner.compile(field_text(state.find), state.regex, state.case_sensitive)
+          if search then
+            local shift = 0
+            for _, range in ipairs(ranges) do
+              state.match_index:replace(buffer.lines, search.query, search.compiled, state.case_sensitive,
+                range.old_line1 + shift, range.old_line2 + shift, range.new_line1, range.new_line2)
+              shift = range.new_line2 - range.old_line2
+            end
+            state.matches, state.match_error = state.match_index, nil
+            remember_matches(buffer, state)
+          else
+            state.match_revision, state.match_error = nil, err
+          end
+        else
         local added, err = find_all_matches(buffer, state, ranges)
         local matches, old, index, added_index, shift = {}, state.matches, 1, 1, 0
         local function retain(match)
@@ -376,6 +457,7 @@ Buffer.register_text_transaction_handler("local-find", function(buffer, transact
         end
         state.matches, state.match_error = matches, err
         remember_matches(buffer, state)
+        end
       else
         state.match_revision = nil
         core.log_quiet("Local find: invalidated matches for %s after %s",
@@ -593,19 +675,23 @@ refresh_matches = function(view, state, opts)
       query = field_text(state.find), regex = state.regex,
       case_sensitive = state.case_sensitive, opts = opts, actions = {}, current = state.current,
       selection = copy_selection(view) }
+    scan.start_line, scan.start_col = selection_search_start(opts.early_origin or state.origin or scan.selection)
     state.pending = scan
     state.match_revision = nil
     state.matches, state.match_indexes_by_line = {}, {}
     state.current, state.found, state.error = 0, false, false
     scan.thread = coroutine.create(function()
+      if #scan.buffer.lines >= 8192 or #scan.buffer.lines[1] > 65536 then
+        coroutine.yield()
+      end
       local work = 0
-      return find_all_matches(scan.buffer, state, nil, function()
+      return find_all_matches(scan.buffer, state, nil, function(force)
         work = work + 1
-        if work % 32 == 0 and (work >= SCAN_SLICE_MAX_STEPS or system.get_time() >= scan.deadline) then
+        if force or work % 32 == 0 and (work >= SCAN_SLICE_MAX_STEPS or system.get_time() >= scan.deadline) then
           work = 0
           coroutine.yield()
         end
-      end, function(text, emit)
+      end, function(text, emit, emit_batch)
         -- A native find or lowercase call cannot yield inside a long line.
         -- Copy that immutable line to a worker and receive bounded batches.
         local done, failure
@@ -621,7 +707,8 @@ refresh_matches = function(view, state, opts)
           end,
           on_result = function(message)
             local batch = message.payload
-            for i = 1, #batch, 2 do emit(batch[i], batch[i + 1]) end
+            if emit_batch then emit_batch(batch)
+            else for i = 1, #batch, 2 do emit(batch[i], batch[i + 1]) end end
           end,
           on_complete = function() done = true end,
           on_error = function(message) failure, done = message.error, true end,
@@ -630,6 +717,14 @@ refresh_matches = function(view, state, opts)
         repeat coroutine.yield() until done
         scan.job = nil
         if failure then error(failure) end
+      end, function(match)
+        if scan.revealed or #scan.buffer.lines < 8192
+            or opts.select == false and not opts.after_scan then return end
+        scan.revealed = true
+        state.matches = { match }
+        state.match_indexes_by_line = { [match.line] = { 1 } }
+        select_match(view, state, 1, opts.scroll)
+        scan.selection = copy_selection(view)
       end)
     end)
     advance_scan(view, state)
@@ -706,7 +801,7 @@ function update_after_input(view, state)
     end
   end
   local current = matches_are_current(view.buffer, state)
-  refresh_matches(view, state, { select = false, scroll = false, after_scan = after_scan })
+  refresh_matches(view, state, { select = false, scroll = true, after_scan = after_scan, early_origin = origin })
   if current then after_scan() end
 
   last_global_query = field_text(state.find)
@@ -863,7 +958,8 @@ local function replace_current_match(view, state)
     local match = state.matches and state.matches[state.current]
     if not (match and match.line == l1 and match.line == l2 and match.col1 == c1 and match.col2 == c2) then
       match = nil
-      for _, candidate in ipairs(state.matches or {}) do
+      for i = 1, #state.matches do
+        local candidate = state.matches[i]
         if candidate.line == l1 and candidate.line == l2 and candidate.col1 == c1 and candidate.col2 == c2 then
           match = candidate
           break
@@ -890,7 +986,8 @@ local function perform_replace_all(view, state, matches, replacement)
   view:with_selection_state(function()
     local d = view.buffer
     local edits = {}
-    for _, match in ipairs(matches) do
+    for i = 1, #matches do
+      local match = matches[i]
       edits[#edits + 1] = {
         line1 = match.line,
         col1 = match.col1,
@@ -917,7 +1014,8 @@ local function confirm_replace_all(view, state)
     return
   end
   local matches = {}
-  for i, match in ipairs(state.matches or {}) do
+  for i = 1, #state.matches do
+    local match = state.matches[i]
     matches[i] = { line = match.line, col1 = match.col1, col2 = match.col2 }
   end
   local count = #matches
@@ -1151,8 +1249,15 @@ local textview_on_mouse_pressed_wrapper
 
 local function draw_find_overview(view)
   local state = visible_find_state(view)
-  if not state or #state.matches == 0 then return end
+  if not state then return end
   find_overview.draw(view, state)
+end
+
+local sync_scrollbar_geometry = TextView.sync_scrollbar_geometry
+function TextView:sync_scrollbar_geometry()
+  sync_scrollbar_geometry(self)
+  local state = visible_find_state(self)
+  if state then find_overview.update(self, state) end
 end
 
 local textview_surface_focus_targets = TextView.get_surface_focus_targets
@@ -1193,10 +1298,12 @@ local function make_local_find_draw_line_body(base)
 
     local state = visible_find_state(self)
     local line_matches = state and state.match_indexes_by_line and state.match_indexes_by_line[line]
+    local rectangles = line_matches and {}
     if line_matches and #line_matches > 0 then
-      for _, idx in ipairs(line_matches) do
+      for position, idx in ipairs(line_matches) do
         local match = state.matches[idx]
-        self:draw_search_match_background(match.line, match.col1, match.col2, idx == state.current)
+        rectangles[position] = {}
+        self:draw_search_match_background(match.line, match.col1, match.col2, idx == state.current, rectangles[position])
       end
     end
 
@@ -1209,9 +1316,9 @@ local function make_local_find_draw_line_body(base)
     self.show_current_line_highlight = old_show_current_line_highlight
 
     if line_matches and #line_matches > 0 then
-      for _, idx in ipairs(line_matches) do
+      for position, idx in ipairs(line_matches) do
         local match = state.matches[idx]
-        self:draw_search_match_outline(match.line, match.col1, match.col2, idx == state.current)
+        self:draw_search_match_outline(match.line, match.col1, match.col2, idx == state.current, rectangles[position])
       end
     end
 
