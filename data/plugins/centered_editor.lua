@@ -160,6 +160,9 @@ end
 function M.get_lane_rect(view)
   -- Keep the lane stable while the Text View measures unwrapped content.
   -- Wide lines use horizontal scrolling instead of moving the editor.
+  if view.__centered_editor_in_lane_geometry then
+    return view.position.x, view.size.x
+  end
   return get_base_lane_rect(view)
 end
 
