@@ -24,6 +24,7 @@ live.view_icon = require("core.view_icons").register(
 local edit_visual_projection = {}
 local refresh_projected_reveal
 local heading_render_line
+local provider_generation_state
 
 local PROVIDER_ID = "markdown-live"
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
@@ -586,7 +587,13 @@ local function markdown_live_scaled_font(view, source, size)
     fonts = {}
     cache[source] = fonts
   end
-  if not fonts[size] then fonts[size] = source:copy(size) end
+  if not fonts[size] then
+    fonts[size] = source:copy(size)
+    view.__markdown_live_font_measurements = view.__markdown_live_font_measurements or {}
+    view.__markdown_live_font_measurements[fonts[size]] = {
+      source = source, anchor = "scale", factor = size / SCALE,
+    }
+  end
   return fonts[size]
 end
 
@@ -661,6 +668,16 @@ local function inline_style_font(
   local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
   if not cache[key] then
     cache[key] = font:copy(size)
+    view.__markdown_live_font_measurements = view.__markdown_live_font_measurements or {}
+    local base_measurement = view.__markdown_live_font_measurements[base_font]
+    local anchor = base_measurement and base_measurement.anchor == "scale" and "scale"
+      or span_type == "code" and not base_font and "code" or "body"
+    local anchor_size = anchor == "scale" and SCALE
+      or anchor == "code" and view:get_font():get_size()
+      or markdown_live_body_font(view):get_size()
+    view.__markdown_live_font_measurements[cache[key]] = {
+      source = font, anchor = anchor, factor = size / anchor_size,
+    }
   end
   return cache[key]
 end
@@ -3564,6 +3581,8 @@ end
 
 local function prose_render_line(view, line_text, render_line)
   local font = markdown_live_body_font(view)
+  render_line.markdown_typography_generation = render_line.markdown_typography_generation
+    or provider_generation_state(view).typography_generation
   for _, fragment in ipairs(render_line.fragments or {}) do
     if fragment.background_under_selection then
       render_line.under_selection_backgrounds = true
@@ -6092,7 +6111,7 @@ function decoration_provider:line_number_gutter_visible(view)
   return false
 end
 
-local function provider_generation_state(view)
+provider_generation_state = function(view)
   -- Wrapped-row topology is tracked by Editor's metric signature. It is not
   -- a Markdown presentation change: coupling it to this generation made a
   -- local wrap splice look like a buffer-wide metric invalidation.
@@ -6127,6 +6146,8 @@ local function provider_generation_state(view)
     and cache.padding_x == padding_x
     and cache.interactive_tables == (config.markdown_live_interactive_tables == true)
     and cache.scale == SCALE
+    and cache.line_height == config.line_height
+    and cache.heading_line_height == config.markdown_live_heading_line_height
     and cache.semantic_pending_line == semantic_pending_line
     and cache.semantic_adoption_generation == semantic_adoption_generation
   then
@@ -6152,9 +6173,16 @@ local function provider_generation_state(view)
     padding_x = padding_x,
     interactive_tables = config.markdown_live_interactive_tables == true,
     scale = SCALE,
+    line_height = config.line_height,
+    heading_line_height = config.markdown_live_heading_line_height,
     semantic_pending_line = semantic_pending_line,
     semantic_adoption_generation = semantic_adoption_generation,
   }
+  cache.typography_generation = cache.prose_typography_signature
+    .. ":code-size:" .. tostring(body_font_size)
+    .. ":scale:" .. tostring(SCALE)
+    .. ":line-height:" .. tostring(config.line_height)
+    .. ":heading-line-height:" .. tostring(config.markdown_live_heading_line_height)
   view.__markdown_live_provider_generation_state = cache
   return cache
 end
@@ -6191,7 +6219,7 @@ local function provider_metric_generation(view)
   -- `markdown_live_body_font()` may return a fresh size-adjusted copy. Keying
   -- by that temporary object's identity makes an unchanged layout look new
   -- whenever wrapping is locally refreshed.
-  state.metric_generation = state.prose_typography_signature .. ":" .. tostring(font:get_size())
+  state.metric_generation = state.typography_generation .. ":" .. tostring(font:get_size())
     .. ":width:" .. tostring(table_width)
     .. ":image-width:" .. tostring(image_width)
     .. ":interactive-tables:" .. tostring(state.interactive_tables)
@@ -6604,6 +6632,7 @@ heading_render_line = function(view, text, heading, reveal_units)
   )
   return prose_render_line(view, text, {
     source_text = text,
+    markdown_heading_level = heading.level,
     text_row_height = text_row_height,
     first_row_content_y_offset = markdown_block_gap(view),
     highlight_height = text_row_height,
@@ -6822,6 +6851,60 @@ local function record_raw_fallback(view, line, reason)
   end
 end
 
+local function remeasure_projected_line(view, line, entry)
+  local previous = entry.render_line
+  local text = entry.source_text
+  local render = clone_render_line(previous)
+  local function current_font(font)
+    local measurement = view.__markdown_live_font_measurements
+      and view.__markdown_live_font_measurements[font]
+    if not measurement then return font end
+    local anchor_size = measurement.anchor == "scale" and SCALE
+      or measurement.anchor == "code" and view:get_font():get_size()
+      or markdown_live_body_font(view):get_size()
+    local size = render.markdown_heading_level
+      and heading_font(view, render.markdown_heading_level):get_size()
+      or measurement.factor * anchor_size
+    local current = markdown_live_scaled_font(view, measurement.source, size)
+    if current ~= measurement.source then
+      view.__markdown_live_font_measurements[current] = measurement
+    end
+    return current
+  end
+  for _, fragment in ipairs(render.fragments or {}) do
+    fragment.font = current_font(fragment.font)
+  end
+  render.continuation_indent_font = current_font(render.continuation_indent_font)
+  render.text_row_height = previous.markdown_code_block and fenced_code_line_height(view) or nil
+  render.caret_height = nil
+  render.metric_height = nil
+  render.position_rows = nil
+  render.layout_height = nil
+  render.first_row_content_y_offset = nil
+  if render.markdown_code_block then
+    render.caret_height = render.text_row_height
+    render.metric_height = previous.metric_height and view:get_line_height() or nil
+    if render.x_offset then render.x_offset = view:get_font():get_width(" ") end
+    return render
+  end
+  if render.markdown_heading_level then
+    render.text_row_height = math.max(
+      markdown_live_body_line_height(view),
+      heading_text_row_height(view, render.markdown_heading_level)
+    )
+    render.caret_height = render.text_row_height
+    render.highlight_height = render.text_row_height
+    render.first_row_content_y_offset = markdown_block_gap(view)
+  end
+  render = prose_render_line(view, text, render)
+  if edit_visual_projection.has_list_prefix(render) then
+    render = edit_visual_projection.pending_list_render(
+      view, line, render, text, current_selection_state(view)
+    ) or render
+  end
+  return layout_inline_image_rows(view, text, render)
+end
+
 local function build_render_line(view, line, _context)
   if view_in_source_mode(view) then
     return { raw_passthrough = true }
@@ -6841,7 +6924,21 @@ local function build_render_line(view, line, _context)
   else
     owner = view.__markdown_live_owner
   end
-  if pending and not current_semantic_model(view) then return pending.render_line end
+  if pending and not current_semantic_model(view) then
+    if pending.render_line.markdown_typography_generation
+      == provider_generation_state(view).typography_generation
+    then
+      return pending.render_line
+    end
+    -- Unchanged source still has published Markdown data. Rebuild its whole
+    -- layout, including widgets, instead of reusing old measurements.
+    if not render_semantic_model(view, line) then
+      pending.render_line = remeasure_projected_line(view, line, pending)
+      core.log_quiet("Markdown remeasured edited presentation after typography change: line=%d revision=%d",
+        line, view.buffer.text_revision)
+      return pending.render_line
+    end
+  end
   if not render_semantic_model(view, line) then
     local semantic_model = owner and owner.semantic_model
     local semantic_pending = owner and (
@@ -6982,10 +7079,14 @@ end
 function provider:render_line(view, line, context)
   local render_line = build_render_line(view, line, context)
   if not render_line or render_line.raw_passthrough then return render_line end
+  render_line.markdown_typography_generation = provider_generation_state(view).typography_generation
 
   local revision = view.buffer.text_revision or 0
   local semantic = render_semantic_model(view, line)
   local pending = pending_render(view, line)
+  if pending and not current_semantic_model(view) then
+    pending.render_line = render_line
+  end
   local provenance
   if current_semantic_model(view) then
     provenance = "current"
