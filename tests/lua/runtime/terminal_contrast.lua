@@ -15,6 +15,23 @@ local function contrast(a, b)
   return (math.max(a, b) + 0.05) / (math.min(a, b) + 0.05)
 end
 
+-- Measure Oklab chroma with the published color-space definition.
+local function chroma(rgb)
+  local function linear(value)
+    value = value / 255
+    return value <= 0.04045 and value / 12.92 or ((value + 0.055) / 1.055) ^ 2.4
+  end
+  local r = linear(math.floor(rgb / 65536) % 256)
+  local g = linear(math.floor(rgb / 256) % 256)
+  local b = linear(rgb % 256)
+  local l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ^ (1 / 3)
+  local m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ^ (1 / 3)
+  local s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ^ (1 / 3)
+  local a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+  local blue = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+  return math.sqrt(a * a + blue * blue)
+end
+
 local function find_run(snapshot, text)
   for _, row in ipairs(snapshot.rows) do
     for _, run in ipairs(row.text_runs) do
@@ -48,6 +65,7 @@ local function start_session(context, options)
   options.cell_width, options.cell_height = 8, 16
   options.foreground, options.background = 0x080808, 0xffffff
   options.minimum_contrast = options.minimum_contrast or 4.5
+  options.color_vividness = options.color_vividness or 100
   options.cwd = system.getcwd()
   options.shell = [[powershell.exe -NoLogo -NoProfile -File tests/fixtures/terminal_contrast.ps1]]
   local session, err = native.new(options)
@@ -83,6 +101,57 @@ test.describe("Terminal contrast correction", function()
     local g = math.floor(run.fg / 256) % 256
     local b = run.fg % 256
     test.ok(g > r and g > b, "Corrected green text lost its color")
+  end)
+
+  test.it("adds vividness to corrected colors without losing contrast", function(context)
+    local session, snapshot = start_session(context, { color_vividness = 0 })
+    local baseline = find_run(snapshot, "LOW").fg
+    test.ok(session:set_colors({ color_vividness = 100 }))
+    snapshot = session:snapshot(snapshot)
+    local vivid = find_run(snapshot, "LOW").fg
+    test.ok(chroma(vivid) > chroma(baseline), "Vividness did not increase color intensity")
+    test.ok(contrast(vivid, 0xffffff) >= 4.5, "Vividness reduced contrast below the target")
+    test.ok(math.floor(vivid / 256) % 256 > math.floor(vivid / 65536) % 256
+      and math.floor(vivid / 256) % 256 > vivid % 256, "Vivid green text lost its hue")
+
+    test.ok(session:set_colors({ color_vividness = 50 }))
+    snapshot = session:snapshot(snapshot)
+    local middle = find_run(snapshot, "LOW").fg
+    test.ok(chroma(middle) > chroma(baseline) and chroma(middle) < chroma(vivid))
+    test.ok(contrast(middle, 0xffffff) >= 4.5)
+    test.ok(session:set_colors({ color_vividness = 0 }))
+    test.equal(find_run(session:snapshot(snapshot), "LOW").fg, baseline)
+  end)
+
+  test.it("adds vividness against dark cell backgrounds too", function(context)
+    local session, snapshot = start_session(context, { color_vividness = 0 })
+    local baseline = find_run(snapshot, "LOW_DARK").fg
+    test.ok(session:set_colors({ color_vividness = 100 }))
+    local vivid = find_run(session:snapshot(snapshot), "LOW_DARK").fg
+    test.ok(chroma(vivid) > chroma(baseline))
+    test.ok(contrast(vivid, 0) >= 4.5)
+    test.ok(vivid % 256 > math.floor(vivid / 65536) % 256, "Vivid blue text lost its hue")
+  end)
+
+  test.it("does not add a hue to neutral text", function(context)
+    local session, snapshot = start_session(context, { color_vividness = 0 })
+    local baseline = find_run(snapshot, "GRAY").fg
+    test.ok(session:set_colors({ color_vividness = 100 }))
+    test.equal(find_run(session:snapshot(snapshot), "GRAY").fg, baseline)
+  end)
+
+  test.it("keeps black when the contrast target leaves no room for color", function(context)
+    local _, snapshot = start_session(context, { minimum_contrast = 21, color_vividness = 100 })
+    test.equal(find_run(snapshot, "LOW").fg, 0)
+  end)
+
+  test.it("rejects invalid native vividness values without changing colors", function(context)
+    local session, snapshot = start_session(context)
+    local baseline = find_run(snapshot, "LOW").fg
+    for _, value in ipairs({ -1, 101, math.huge, 0 / 0 }) do
+      test.ok(not pcall(session.set_colors, session, { color_vividness = value }))
+      test.equal(find_run(session:snapshot(snapshot), "LOW").fg, baseline)
+    end
   end)
 
   test.it("keeps readable program colors and respects explicit backgrounds", function(context)

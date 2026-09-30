@@ -60,6 +60,15 @@ terminal_config.config_spec = {
     min = 1,
     max = 21,
   },
+  {
+    label = "Color Vividness",
+    description = "Increase corrected color intensity without reducing contrast. 0 keeps the current correction; 100 uses the strongest available color.",
+    path = "color_vividness",
+    type = "number",
+    default = terminal_config.color_vividness,
+    min = 0,
+    max = 100,
+  },
 }
 
 local function buffer_path()
@@ -108,6 +117,7 @@ local function session_colors()
     cursor_color = packed_color(style.terminal_cursor),
     palette = palette,
     minimum_contrast = terminal_config.minimum_contrast,
+    color_vividness = terminal_config.color_vividness,
     selection_background = packed_color(style.selection),
     selection_alpha = style.selection[4] or 255,
   }
@@ -231,6 +241,7 @@ function TerminalView:new(options)
     shell = options.shell or terminal_config.shell,
   }
   self.minimum_contrast = terminal_config.minimum_contrast
+  self.color_vividness = terminal_config.color_vividness
   next_session_id = next_session_id + 1
   self.session_id = next_session_id
   self.state = "new"
@@ -267,8 +278,9 @@ function TerminalView:new(options)
   self.theme_generation = core.color_theme_generation or 0
   self.state = "running"
   self.running = true
-  core.log_quiet("Terminal session %d started: cwd=%s cols=%d rows=%d minimum contrast=%g",
-    self.session_id, self.launch_options.cwd, self.cols, self.rows, self.minimum_contrast)
+  core.log_quiet("Terminal session %d started: cwd=%s cols=%d rows=%d minimum contrast=%g vividness=%g",
+    self.session_id, self.launch_options.cwd, self.cols, self.rows,
+    self.minimum_contrast, self.color_vividness)
 end
 
 function TerminalView:get_name()
@@ -484,6 +496,7 @@ function TerminalView:adopt_session(session)
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
   self.minimum_contrast = terminal_config.minimum_contrast
+  self.color_vividness = terminal_config.color_vividness
   self.state = "running"
   self.running = true
   self.exit_code = nil
@@ -671,21 +684,30 @@ function TerminalView:sync_focus()
   return true
 end
 
-function TerminalView:update()
-  TerminalView.super.update(self)
-  if not self.session then return end
-
+function TerminalView:sync_colors()
+  if not self.session then return false end
   local theme_generation = core.color_theme_generation or 0
   if theme_generation ~= self.theme_generation or
-      self.minimum_contrast ~= terminal_config.minimum_contrast then
+      self.minimum_contrast ~= terminal_config.minimum_contrast or
+      self.color_vividness ~= terminal_config.color_vividness then
     if self.session:set_colors(session_colors()) then
       self.theme_generation = theme_generation
       self.minimum_contrast = terminal_config.minimum_contrast
+      self.color_vividness = terminal_config.color_vividness
       self.snapshot = self.session:snapshot(self.snapshot)
-      core.log_quiet("Terminal colors updated: minimum contrast=%g", self.minimum_contrast)
+      core.log_quiet("Terminal session %d colors updated: minimum contrast=%g vividness=%g",
+        self.session_id, self.minimum_contrast, self.color_vividness)
       core.redraw = true
+      return true
     end
   end
+  return false
+end
+
+function TerminalView:update()
+  TerminalView.super.update(self)
+  if not self.session then return end
+  self:sync_colors()
 
   local blink_phase = math.floor((system.get_time() - core.blink_start) /
     math.max(0.1, config.blink_period / 2))
@@ -799,6 +821,7 @@ end
 
 function TerminalView:update_suspended()
   if not self.session then return end
+  self:sync_colors()
   self:sync_focus()
   self:sync_geometry()
   self:service_session(false)
@@ -1595,25 +1618,34 @@ M.TerminalTextCaptureView = TerminalTextCaptureView
 M.from_state = TerminalView.from_state
 TerminalView._module_name = "plugins.terminal"
 
+local function prompt_color_setting(label, key, minimum, maximum)
+  core.global_prompt_bar:enter(label, {
+    text = tostring(terminal_config[key]),
+    select_text = true,
+    show_suggestions = false,
+    validate = function(text)
+      local value = tonumber(text)
+      return value ~= nil and value >= minimum and value <= maximum
+    end,
+    submit = function(text)
+      local value = tonumber(text)
+      require("plugins.settings").apply_config("plugins.terminal." .. key, value)
+      core.log_quiet("Terminal color setting updated: %s=%g", key, value)
+      core.redraw = true
+    end,
+  })
+end
+
 command.add(nil, {
   ["terminal:set_minimum_text_contrast"] = command.palette(function()
-    core.global_prompt_bar:enter("Terminal Minimum Text Contrast (1-21; 1 = off)", {
-      text = tostring(terminal_config.minimum_contrast),
-      select_text = true,
-      show_suggestions = false,
-      validate = function(text)
-        local value = tonumber(text)
-        return value ~= nil and value >= 1 and value <= 21
-      end,
-      submit = function(text)
-        local value = tonumber(text)
-        require("plugins.settings").apply_config("plugins.terminal.minimum_contrast", value)
-        core.log_quiet("Terminal minimum text contrast set to %g", value)
-        core.redraw = true
-      end,
-    })
+    prompt_color_setting("Terminal Minimum Text Contrast (1-21; 1 = off)", "minimum_contrast", 1, 21)
   end, {
     keywords = { "terminal", "color", "correction", "strength", "readability" },
+  }),
+  ["terminal:set_color_vividness"] = command.palette(function()
+    prompt_color_setting("Terminal Color Vividness (0-100%)", "color_vividness", 0, 100)
+  end, {
+    keywords = { "terminal", "color", "saturation", "chroma", "intensity" },
   }),
   ["terminal:focus_next"] = command.palette(function()
     local terminals = M.open_views()

@@ -72,6 +72,10 @@ static bool in_gamut(LinearRgb rgb) {
   return rgb.r >= 0 && rgb.r <= 1 && rgb.g >= 0 && rgb.g <= 1 && rgb.b >= 0 && rgb.b <= 1;
 }
 
+static uint32_t encode_rgb(LinearRgb rgb) {
+  return pack((GhosttyColorRgb) { encoded(rgb.r), encoded(rgb.g), encoded(rgb.b) });
+}
+
 static uint32_t gamut_color(Oklab color) {
   LinearRgb rgb = from_oklab(color);
   if (!in_gamut(rgb)) {
@@ -85,7 +89,7 @@ static uint32_t gamut_color(Oklab color) {
       else high = scale;
     }
   }
-  return pack((GhosttyColorRgb) { encoded(rgb.r), encoded(rgb.g), encoded(rgb.b) });
+  return encode_rgb(rgb);
 }
 
 static double ratio(uint32_t fg, uint32_t bg) {
@@ -118,6 +122,85 @@ static uint32_t corrected_color(uint32_t foreground, uint32_t background, double
   return best;
 }
 
+// At a fixed hue and chroma, find the lightness interval inside sRGB.
+static bool lightness_bounds(Oklab color, double *lower, double *upper) {
+  double lower_low = 0, lower_high = 1, upper_low = 0, upper_high = 1;
+  for (int i = 0; i < 20; i++) {
+    color.l = (lower_low + lower_high) / 2;
+    LinearRgb rgb = from_oklab(color);
+    if (rgb.r < 0 || rgb.g < 0 || rgb.b < 0) lower_low = color.l;
+    else lower_high = color.l;
+    color.l = (upper_low + upper_high) / 2;
+    rgb = from_oklab(color);
+    if (rgb.r > 1 || rgb.g > 1 || rgb.b > 1) upper_high = color.l;
+    else upper_low = color.l;
+  }
+  *lower = lower_high;
+  *upper = upper_low;
+  color.l = *lower;
+  if (!in_gamut(from_oklab(color))) return false;
+  color.l = *upper;
+  return *lower <= *upper && in_gamut(from_oklab(color));
+}
+
+static bool chroma_fits(Oklab color, uint32_t background, double minimum) {
+  double lower, upper;
+  if (!lightness_bounds(color, &lower, &upper)) return false;
+  color.l = lower;
+  if (ratio(encode_rgb(from_oklab(color)), background) >= minimum) return true;
+  color.l = upper;
+  return ratio(encode_rgb(from_oklab(color)), background) >= minimum;
+}
+
+static uint32_t vivid_color(
+  uint32_t foreground, uint32_t background, double minimum, uint32_t baseline, double amount
+) {
+  if (amount <= 0 || ratio(baseline, background) < minimum) return baseline;
+  Oklab original = to_oklab(foreground), base = to_oklab(baseline);
+  double original_chroma = hypot(original.a, original.b);
+  // Neutral colors have no hue. Do not give them one from matrix roundoff.
+  if (original_chroma < 0.00001) return baseline;
+  Oklab hue = { 0, original.a / original_chroma, original.b / original_chroma };
+  double low = 0, high = 1;
+  for (int i = 0; i < 20; i++) {
+    double chroma = (low + high) / 2;
+    Oklab candidate = { 0, hue.a * chroma, hue.b * chroma };
+    if (chroma_fits(candidate, background, minimum)) low = chroma;
+    else high = chroma;
+  }
+  double base_chroma = hypot(base.a, base.b);
+  if (low <= base_chroma) return baseline;
+  double chroma = base_chroma + (low - base_chroma) * amount / 100;
+  Oklab color = { 0, hue.a * chroma, hue.b * chroma };
+  double lower, upper;
+  if (!lightness_bounds(color, &lower, &upper)) return baseline;
+  double preferred = fmax(lower, fmin(upper, base.l));
+  color.l = preferred;
+  uint32_t preferred_rgb = encode_rgb(from_oklab(color));
+  if (ratio(preferred_rgb, background) >= minimum) return preferred_rgb;
+
+  // Meet the target with the smallest extra lightness change at this chroma.
+  uint32_t best = baseline;
+  double best_change = 2;
+  for (int direction = 0; direction < 2; direction++) {
+    double endpoint = direction ? upper : lower;
+    color.l = endpoint;
+    uint32_t result = encode_rgb(from_oklab(color));
+    if (ratio(result, background) < minimum) continue;
+    double pass = 0, fail = 1;
+    for (int i = 0; i < 16; i++) {
+      double step = (pass + fail) / 2;
+      color.l = endpoint + (preferred - endpoint) * step;
+      uint32_t candidate = encode_rgb(from_oklab(color));
+      if (ratio(candidate, background) >= minimum) { pass = step; result = candidate; }
+      else fail = step;
+    }
+    double change = fabs(endpoint + (preferred - endpoint) * pass - base.l);
+    if (change < best_change) { best_change = change; best = result; }
+  }
+  return best;
+}
+
 TerminalInk terminal_contrast_ink(
   TerminalContrast *contrast, uint32_t foreground, uint32_t background,
   uint8_t alpha, uint32_t codepoint
@@ -132,6 +215,9 @@ TerminalInk terminal_contrast_ink(
   uint32_t visible = terminal_color_blend(foreground, background, alpha);
   if (ratio(visible, background) < contrast->minimum) {
     result.foreground = corrected_color(visible, background, contrast->minimum);
+    result.foreground = vivid_color(
+      visible, background, contrast->minimum, result.foreground, contrast->vividness
+    );
     result.alpha = 255;
   }
   *entry = (TerminalContrastEntry) { foreground, background, alpha, true, result };

@@ -13,6 +13,25 @@ Open Settings, then Terminal. Change **Minimum Text Contrast**.
 
 The Lua setting is `config.plugins.terminal.minimum_contrast`.
 
+The Command Palette also has **Terminal: Set Minimum Text Contrast**.
+It opens the Global Prompt Bar and saves the entered value.
+
+### Color Vividness
+
+Run **Terminal: Set Color Vividness** and enter a percentage from `0` to `100`.
+You can also change **Color Vividness** under Settings, then Terminal.
+
+- `0` keeps the previous correction. This is the default.
+- `100` requests the strongest available color intensity while keeping hue and contrast.
+- Intermediate values increase color intensity between those two results.
+
+The value applies to corrected text only. Already-readable text keeps its original color.
+Neutral text stays neutral. High contrast targets can leave little room for color intensity.
+Changing vividness can also change lightness to keep the requested contrast.
+
+Anvil saves the value as `config.plugins.terminal.color_vividness`.
+Changes apply to running Terminal Views, including hidden Views.
+
 ## Behavior
 
 Anvil checks text against its cell background after reversed colors and selection highlighting.
@@ -29,6 +48,8 @@ Saved captures retain their captured colors.
 Anvil changes display colors only. Color queries still report the terminal model's original colors.
 The bounded session cache stores results for text/background/opacity combinations.
 Changing the contrast setting clears that cache.
+Changing vividness also clears the cache. Vividness uses a bounded Oklab chroma search inside sRGB.
+The search checks final RGB contrast and keeps the closest available lightness at the requested chroma.
 
 A high target can exceed the best possible contrast for a background.
 In that case, Anvil uses black or white, whichever gives more contrast.

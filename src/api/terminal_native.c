@@ -199,9 +199,11 @@ typedef struct {
   bool has_cursor;
   bool has_palette;
   bool has_minimum_contrast;
+  bool has_color_vividness;
   bool has_selection_background;
   bool has_selection_alpha;
   double minimum_contrast;
+  double color_vividness;
   GhosttyColorRgb selection_background;
   uint8_t selection_alpha;
   GhosttyColorRgb foreground;
@@ -784,6 +786,11 @@ static void close_session(TerminalSession *session) {
 static bool set_terminal_colors(TerminalSession *session, const TerminalColors *colors) {
   if (colors->has_minimum_contrast) {
     session->contrast.minimum = colors->minimum_contrast;
+  }
+  if (colors->has_color_vividness) {
+    session->contrast.vividness = colors->color_vividness;
+  }
+  if (colors->has_minimum_contrast || colors->has_color_vividness) {
     memset(session->contrast.entries, 0, sizeof(session->contrast.entries));
   }
   if (colors->has_selection_background) {
@@ -964,6 +971,14 @@ static TerminalColors read_terminal_colors(lua_State *L, int table_index) {
     luaL_argcheck(L, isfinite(colors.minimum_contrast) && colors.minimum_contrast >= 1 &&
       colors.minimum_contrast <= 21, table_index, "terminal contrast must be between 1 and 21");
     colors.has_minimum_contrast = true;
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, table_index, "color_vividness");
+  if (!lua_isnil(L, -1)) {
+    colors.color_vividness = luaL_checknumber(L, -1);
+    luaL_argcheck(L, isfinite(colors.color_vividness) && colors.color_vividness >= 0 &&
+      colors.color_vividness <= 100, table_index, "terminal vividness must be between 0 and 100");
+    colors.has_color_vividness = true;
   }
   lua_pop(L, 1);
   lua_getfield(L, table_index, "selection_alpha");

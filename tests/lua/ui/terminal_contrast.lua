@@ -101,6 +101,7 @@ test.describe("Terminal contrast command", function()
     core.global_prompt_bar:exit(true)
     context.active_view = core.active_view
     context.minimum = config.plugins.terminal.minimum_contrast
+    context.vividness = config.plugins.terminal.color_vividness
     context.settings_config = settings.config
     settings.config = {}
     os.remove(USERDIR .. "/user_settings.lua")
@@ -111,6 +112,7 @@ test.describe("Terminal contrast command", function()
     if context.view then context.view:on_close() end
     terminal._set_native_for_tests(nil)
     config.plugins.terminal.minimum_contrast = context.minimum
+    config.plugins.terminal.color_vividness = context.vividness
     settings.config = context.settings_config
     os.remove(USERDIR .. "/user_settings.lua")
     if context.active_view then core.set_active_view(context.active_view) end
@@ -132,6 +134,51 @@ test.describe("Terminal contrast command", function()
     test.equal(session.colors.minimum_contrast, 7.25)
     local saved = dofile(USERDIR .. "/user_settings.lua")
     test.equal(saved.config.plugins.terminal.minimum_contrast, 7.25)
+  end)
+
+  test.it("sets and saves vividness for an existing Terminal View", function(context)
+    local session, view = fake_session(context)
+    local bar = core.global_prompt_bar
+    test.equal(session.options.color_vividness, context.vividness)
+    test.ok(command.perform("terminal:set_color_vividness"))
+    test.equal(bar:get_text(), tostring(context.vividness))
+    bar:set_text("72.5")
+    bar:submit()
+
+    test.equal(config.plugins.terminal.color_vividness, 72.5)
+    view:update()
+    test.equal(session.colors.color_vividness, 72.5)
+    local saved = dofile(USERDIR .. "/user_settings.lua")
+    test.equal(saved.config.plugins.terminal.color_vividness, 72.5)
+    test.equal(config.plugins.terminal.minimum_contrast, context.minimum)
+  end)
+
+  test.it("accepts both ends of the vividness range", function()
+    for _, value in ipairs({ 0, 100 }) do
+      test.ok(command.perform("terminal:set_color_vividness"))
+      core.global_prompt_bar:set_text(tostring(value))
+      core.global_prompt_bar:submit()
+      test.equal(config.plugins.terminal.color_vividness, value)
+    end
+  end)
+
+  test.it("applies vividness changes while a Terminal View is suspended", function(context)
+    local session, view = fake_session(context)
+    config.plugins.terminal.color_vividness = 60
+    view:update_suspended()
+    test.equal(session.colors.color_vividness, 60)
+  end)
+
+  test.it("keeps invalid vividness input in the prompt without changing settings", function(context)
+    local bar = core.global_prompt_bar
+    test.ok(command.perform("terminal:set_color_vividness"))
+    for _, text in ipairs({ "-0.1", "100.1", "", "not a number", "nan", "inf", "1e309" }) do
+      bar:set_text(text)
+      bar:submit()
+      test.equal(config.plugins.terminal.color_vividness, context.vividness)
+      test.ok(core.active_view == bar, "Invalid vividness input closed the prompt: " .. text)
+      test.equal(system.get_file_info(USERDIR .. "/user_settings.lua"), nil)
+    end
   end)
 
   test.it("accepts correction off and the maximum contrast ratio", function()

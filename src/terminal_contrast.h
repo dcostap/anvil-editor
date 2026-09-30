@@ -21,6 +21,7 @@ typedef struct {
 
 typedef struct {
   double minimum;
+  double vividness;
   TerminalContrastEntry entries[TERMINAL_CONTRAST_CACHE_SIZE];
 } TerminalContrast;
 

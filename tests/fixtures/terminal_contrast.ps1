@@ -10,5 +10,6 @@ $escape = [char]27
 [Console]::Write($escape + '[0;38;2;166;227;161;48;2;0;0;0mDARK' + "`r`n")
 [Console]::Write($escape + '[0;2;38;2;255;255;255;48;2;0;0;0mDIM_DARK' + "`r`n")
 [Console]::Write($escape + '[0;38;2;30;35;40;48;2;0;0;0mLOW_DARK' + "`r`n")
+[Console]::Write($escape + '[0;38;2;200;200;200mGRAY' + "`r`n")
 [Console]::Write($escape + '[0mANVIL_CONTRAST_READY')
 Start-Sleep -Seconds 30
