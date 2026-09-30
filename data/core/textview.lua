@@ -2674,6 +2674,10 @@ function TextView:clear_composed_visual_row_cache()
   self.__composed_visual_row_snapshot_kind = nil
   self.__composed_visual_row_snapshot_id = nil
   self.__composed_visual_row_snapshot_rows = nil
+  -- A changed row map also ends any metric snapshot in this UI phase.
+  self.__visual_metric_snapshot_kind = nil
+  self.__visual_metric_snapshot_id = nil
+  self.__visual_metric_snapshot_cache = nil
 end
 
 function TextView:remove_visual_row_provider(id)
