@@ -30,6 +30,19 @@ The UI publishes completed trees and changed ranges without traversing old trees
 `tests/lua/runtime/treesitter_parse_followup.lua` checks bounded parser resumption.
 It also compares highlights, outline, and symbols with a fresh parse after queued edits.
 
+The ownership review covers submission, stale completion, cancellation, close, and shutdown in `src/treesitter/service.c`.
+Each parse job retains its state and owns its snapshot, copied trees, and untransferred ranges.
+Successful polling moves the new tree and snapshot into the state.
+It moves ranges into the poll result and nulls the job pointer.
+The cleanup queue owns retired data. Workers release it outside the service lock.
+Stale or cancelled jobs keep their data until cleanup; they cannot publish it.
+Close cancels active work and moves committed data into a cleanup job.
+If that allocation fails, close uses the existing synchronous release fallback.
+Completed jobs for closed Buffers stay owned until polling cleanup or shutdown.
+Shutdown cancels work, joins workers, detaches queues, then releases remaining jobs outside the lock.
+These paths retain ownership until release. The review did not add a second ownership model.
+Allocation-failure handling was reviewed in source, not tested with fault injection.
+
 ## Add Next Occurrence
 
 The command uses native streaming KMP over Buffer lines.
@@ -158,6 +171,24 @@ Current unchanged-revision images match exactly. The original 997-pixel images a
 Thus code and history identify the race, but cannot prove the exact historical image difference.
 Keep the existing readiness and paired timing checks. Do not weaken pixel or timing limits.
 
+The first fresh baseline passed, but its next comparison failed with `KeyError: run_dir`.
+Baseline publication had omitted the runtime path required by paired replay.
+The baseline now retains that path. Missing snapshots produce a clear error instead of a lookup exception.
+The targeted CLI test failed before this fix. All 24 gate harness tests pass after it.
+
+The complete fresh baseline at `20260930_174052_46652` passes all eight standard scenes with zero absolute flags.
+The unchanged-revision comparison at `20260930_174509_57812` also passes, using paired reference processes.
+No comparison used update flags or report-only mode. Timing and exact-pixel limits remain unchanged.
+Wrapped steady frame p50 / p95 is 1.304 / 1.623 ms in the baseline and 1.315 / 1.680 ms afterward.
+Wrapped scroll changes from 1.385 / 1.992 ms to 1.395 / 2.046 ms.
+Every captured standard scene passes exact pixel and state checks.
+The local baseline is `tools/perf-results/render-gate/task-baseline/render_perf.json`; adjacent `goldens` holds its images.
+Keep its referenced `app` directory. It contains the accepted runtime, not the current working files.
+
+The final Find capture run is `20260930_175542_32016`.
+Alpha and wrapped overview images each match their per-match reference with zero changed pixels and zero ignored edge pixels.
+This short pixel check has ten budget flags. It does not replace the complete timing comparison above.
+
 The ordinary View redraw distributions appear in `LOCAL_FIND_PERFORMANCE.md`.
 The corrected Root Panel probe also includes shell Views, layout, and renderer completion.
 The test loop and probe now use the same private window and viewport.
@@ -212,6 +243,42 @@ Markdown frame coherence passes 10/11 in both the original reference and candida
 Its existing empty-nested-dash failure is unrelated to this change.
 These checks prove geometry behavior, not single-preparation performance.
 
+A row-map change now clears the current metric snapshot, not the retained metric tree.
+The real UI-frame resize regression failed on `1f2e195d`: the scrollbar kept the previous row heights.
+It passes with snapshot invalidation. This keeps incremental metric updates during typing.
+
+The unchanged 600-section software probe at `1f2e195d` reports wrapped readiness at 2716 ms and unwrapped readiness at 1068 ms.
+Wrapped fast frames have p50 / p95 / max of 72.14 / 122.41 / 123.26 ms.
+Unwrapped fast frames have 92.72 / 150.16 / 154.31 ms.
+Both modes report zero pending full wrap-rebuild frames while typing.
+
+The later preparation trace has one plain pass and one complete semantic pass.
+Plain preparation costs 23.65 ms. It prepares 12,001 lines before Markdown attachment.
+That pass supplies the committed rows required by the existing open/resize contract.
+Removing it would change `set_wrapping_enabled` behavior for callers that attach Markdown later.
+Its cost is less than 1% of measured opening time. Further removal is not justified here.
+The semantic pass prepares every line; later fence results repair a few changed lines.
+Do not describe these distinct presentations as one total preparation pass.
+
+Cold-frame timing separates 45–113 ms of software renderer completion from typical 5–14 ms updates and 2–7 ms emission.
+The software probe therefore does not meet the historical 24–36 ms worst-frame target.
+That limit was already exceeded by the reference. Do not hide renderer completion or report emission alone.
+
+An experiment gave direct View calls and background slices their own global phase flags.
+It reduced idle lookup work but did not improve complete opening or cold-frame latency reliably.
+It also enabled native packet paths absent from the original probe.
+The experiment was removed. No extra phase wrapper or larger slice budget remains.
+Further renderer work requires a separate measured change and pixel checks, not reduced Markdown coverage.
+
+The final serial reference/candidate repeat uses `1f2e195d` and the final Lua implementation.
+Wrapped readiness is 3191 / 2995 ms; unwrapped readiness is 1448 / 1456 ms.
+Wrapped fast-frame average is 118.47 / 119.20 ms; p50 / p95 is 116.14 / 171.44 versus 114.52 / 158.30 ms.
+Unwrapped fast-frame average is 130.07 / 119.54 ms; p50 / p95 is 111.04 / 230.32 versus 120.86 / 187.05 ms.
+Both modes pass and report zero pending wrap-rebuild frames. These variable results do not prove a new typing speedup.
+The reference also exceeds the requested worst-frame limit. Single-pass opening and that limit remain unmet.
+Further Part 7 work was not accepted: the measured plain pass is small, and the broader experiment changes probe paths.
+The committed fixes preserve current geometry and metric publication without delaying a required layout or raising budgets.
+
 ## Final focused checks
 
 - Protected Tree-sitter: 85/85 passed.
@@ -234,3 +301,9 @@ The final checks used isolated Meson apps. They did not replace or restart the d
 - `b849db71`: streaming Next Occurrence search.
 - `66c36298`: batched UTF-8 I/O and worker save preparation.
 - `16306853`: stable centered-lane geometry inside its scope.
+- `cd32ee2d`: initial performance results and measurement limits.
+- `61889d78`: complete Root Panel redraw measurements.
+- `1f2e195d`: provider wraps at the current reading width.
+- `aa263c44`: repeatable scroll targets and reference captions.
+- `66f93ed9`: metric snapshot invalidation after row-map changes.
+- `8d650507`: saved render-baseline runtime path.
