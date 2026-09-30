@@ -41,7 +41,9 @@ local function capture_active_textview_caret_y()
   local TextView = package.loaded["core.textview"]
   local view = core.active_view
   if not TextView or not view or not view.extends or not view:extends(TextView) then return nil end
-  local line, col = view.buffer:get_selection()
+  local line, col = view:with_selection_state(function()
+    return view.buffer:get_selection()
+  end)
   local y = view:get_caret_highlight_geometry(line, col)
   return { view = view, line = line, col = col, y = y }
 end
@@ -49,12 +51,18 @@ end
 local function restore_active_textview_caret_y(anchor)
   if not anchor or not anchor.view or not anchor.view.buffer then return end
   local view = anchor.view
-  local y = view:get_caret_highlight_geometry(anchor.line, anchor.col)
-  local target = (view.scroll.to.y or view.scroll.y or 0) + (y - anchor.y)
-  local max = view:get_scrollable_size() - view.size.y
-  target = common.clamp(target, 0, max)
-  view.scroll.y = target
-  view.scroll.to.y = target
+  view:with_selection_state(function()
+    -- Publish visible geometry before restoring the caret. A large Markdown
+    -- buffer can still rebuild its offscreen wrapped layout in the background.
+    view:invalidate_measurement_dependent_layout("zoom")
+    view:get_visual_row_metric_cache()
+    local y = view:get_caret_highlight_geometry(anchor.line, anchor.col)
+    local target = (view.scroll.to.y or view.scroll.y or 0) + (y - anchor.y)
+    local max = view:get_scrollable_size() - view.size.y
+    target = common.clamp(target, 0, max)
+    view.scroll.y = target
+    view.scroll.to.y = target
+  end)
 end
 
 ---@class plugins.scale

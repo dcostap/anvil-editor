@@ -2129,6 +2129,7 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
             self, self:get_font(), self:compute_wrap_width(), {
               budget_ms = opts.wrapped_reconstruction_budget_ms,
               on_complete = opts.on_wrapped_reconstructed,
+              update_visible = opts.update_visible,
             }
           )
         end
@@ -2163,6 +2164,7 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
         self, self:get_font(), self:compute_wrap_width(), {
           budget_ms = opts.wrapped_reconstruction_budget_ms,
           on_complete = opts.on_wrapped_reconstructed,
+          update_visible = opts.update_visible,
         }
       )
     else
@@ -4433,6 +4435,21 @@ function TextView:get_visible_cols_range(line, extra_cols)
 end
 
 
+---Read the displayed viewport without resolving changed font or provider state.
+---Measurement changes use this range to update visible rows before background work.
+function TextView:get_committed_visible_line_range()
+  local cache = self.__visual_metric_cache
+  if not cache then return nil end
+  local top = math.max(0, self.scroll.y - style.padding.y)
+  local bottom = top + self.size.y
+  local first_row = metric_tree_row_at_y(cache.height_tree, cache.row_count, top)
+  local last_row = metric_tree_row_at_y(cache.height_tree, cache.row_count, bottom)
+  first_row, last_row = overscan_metric_rows(cache, first_row, last_row, cache.row_count)
+  local first = self:get_metric_row_entry(first_row)
+  local last = self:get_metric_row_entry(last_row)
+  return first.line, last.fold and last.fold.line2 or last.line
+end
+
 ---Get the range of visible lines in the current viewport.
 ---@return integer minline First visible line
 ---@return integer maxline Last visible line
@@ -6376,12 +6393,14 @@ end
 ---@param reason string
 function TextView:invalidate_measurement_dependent_layout(reason)
   if self:has_line_render_providers() then
-    self:invalidate_line_render(reason)
+    self:invalidate_line_render(reason, nil, nil, { update_visible = true })
   end
   if self:has_visual_metric_providers() then
     self:invalidate_visual_metrics(reason)
   end
   self.__measurement_layout_scale = SCALE
+  self.__measurement_layout_font = self:get_font()
+  self.__measurement_layout_font_size = self.__measurement_layout_font:get_size()
 end
 
 function TextView:on_scale_change(new_scale)
@@ -6415,7 +6434,8 @@ function TextView:update()
     self.cache_font_size = font:get_size()
     self.cache_indent_size = indent_size
   end
-  if font_changed then
+  if font_changed and (self.__measurement_layout_font ~= font
+    or self.__measurement_layout_font_size ~= font:get_size()) then
     self:invalidate_measurement_dependent_layout("font-change")
   end
   perf_elapsed("textview_update_cache_ms", phase_start)

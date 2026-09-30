@@ -1087,6 +1087,25 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     if opts.on_complete then opts.on_complete(true) end
     return true
   end
+  local settings = wrap_settings_signature(textview, default_font, width)
+  local visible_line1, visible_line2
+  if textview.wrapped_settings and (opts.update_visible
+    or not same_wrap_settings(textview.wrapped_settings, settings)) then
+    visible_line1, visible_line2 = textview:get_committed_visible_line_range()
+  end
+  if visible_line1 then
+    -- Font and width changes must appear in the first redraw. Keep only the
+    -- offscreen rebuild deferred; publish each visible plan with its wrap map.
+    local anchor = textview:capture_viewport_anchor()
+    textview.__async_wrap_reconstruction = nil
+    LineWrapping.update_breaks(textview, visible_line1, visible_line2, 0, {
+      font = default_font, width = width,
+    })
+    textview.wrapped_settings = settings
+    textview:restore_viewport_anchor(anchor)
+    core.log_quiet("Updated visible wrapped layout before background measurement: lines=%d-%d path=%s",
+      visible_line1, visible_line2, textview.buffer:get_name())
+  end
   local buffer = textview.buffer
   local measurement = new_measurement_context(buffer, default_font, textview)
   local token = {
@@ -1099,7 +1118,7 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     wrapped_line_offsets = {},
     work_ms = 0,
     yields = 0,
-    settings = wrap_settings_signature(textview, default_font, width),
+    settings = settings,
     measurement = measurement,
     on_complete = opts.on_complete,
     line_render_invalidation_generation =
@@ -1108,6 +1127,30 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
   }
   textview.__async_wrap_reconstruction = token
   perf_frame_add("linewrapping_async_reconstruct_calls", 1)
+
+  if visible_line1 then
+    -- Zooming out can expose rows beyond the old viewport. Measure those
+    -- rows too, until the displayed viewport contains only current geometry.
+    textview:invalidate_visual_metrics("visible-wrap-measurement")
+    while true do
+      local first, last = textview:get_visible_line_range()
+      if first >= visible_line1 and last <= visible_line2 then break end
+      local anchor = textview:capture_viewport_anchor()
+      if first < visible_line1 then
+        LineWrapping.update_breaks(textview, first, visible_line1 - 1, 0, {
+          font = default_font, width = width,
+        })
+      end
+      if last > visible_line2 then
+        LineWrapping.update_breaks(textview, visible_line2 + 1, last, 0, {
+          font = default_font, width = width,
+        })
+      end
+      visible_line1, visible_line2 = math.min(first, visible_line1), math.max(last, visible_line2)
+      textview:restore_viewport_anchor(anchor)
+      textview:invalidate_visual_metrics("visible-wrap-measurement")
+    end
+  end
 
   local function base_current()
     return textview.__async_wrap_reconstruction == token
@@ -1531,7 +1574,8 @@ function LineWrapping.update_same_line_suffix_breaks(textview, range, transactio
   return true
 end
 
-function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines)
+function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines, opts)
+  opts = opts or {}
   if perf_recording() then
     local caller = debug.getinfo(2, "Sl") or {}
     perf_detail(string.format(
@@ -1557,14 +1601,14 @@ function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines)
   local new_pairs = {}
   local new_offsets = {}
   local measurement = new_measurement_context(
-    textview.buffer, textview.wrapped_settings.font, textview
+    textview.buffer, opts.font or textview.wrapped_settings.font, textview
   )
 
   for line = new_line1, new_line2 do
     perf_lines = perf_lines + 1
     local breaks, begin_width = LineWrapping.compute_line_breaks(
-      textview.buffer, textview.wrapped_settings.font, line,
-      textview.wrapped_settings.width, measurement.mode,
+      textview.buffer, opts.font or textview.wrapped_settings.font, line,
+      opts.width or textview.wrapped_settings.width, measurement.mode,
       textview, measurement
     )
     new_offsets[#new_offsets + 1] = begin_width
