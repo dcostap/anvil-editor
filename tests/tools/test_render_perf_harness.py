@@ -31,6 +31,17 @@ gate = load_gate()
 
 
 class PerformanceBaselinePolicyTests(unittest.TestCase):
+    def test_comparison_rejects_a_baseline_without_its_runtime_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            baseline = Path(temp) / "baseline.json"
+            baseline.write_text(json.dumps({"schema": 2, "scenarios": {}}), encoding="utf-8")
+            with patch.object(sys, "argv", ["gate", "--no-build", "--baseline", str(baseline)]):
+                error = io.StringIO()
+                with redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+                    gate.main()
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("runtime snapshot is missing", error.getvalue())
+
     def test_reference_replay_has_separate_user_state_and_cannot_hide_a_failure(self):
         reference_exe = Path("reference/anvil.exe")
         arguments = dict(exe=Path("candidate/anvil.exe"), user=Path("users/case"),

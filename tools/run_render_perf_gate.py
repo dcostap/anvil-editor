@@ -1555,6 +1555,8 @@ def main() -> int:
         baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
     reference_exe = None
     if baseline and uses_performance_baseline(args.renderer) and not (args.report_only or args.update_baseline):
+        if not baseline.get("run_dir"):
+            parser.error("baseline runtime snapshot is missing; establish a fresh baseline")
         reference_exe = Path(baseline["run_dir"]) / "app" / "bin" / "anvil.exe"
         if not reference_exe.is_file():
             parser.error("baseline runtime snapshot is missing; establish a fresh baseline")
@@ -2127,6 +2129,7 @@ def main() -> int:
         baseline_document = {
             "schema": report["schema"],
             "created": run_id,
+            "run_dir": report["run_dir"],
             "machine": report["machine"],
             "repository": {
                 "revision": report["repository"]["revision"],
