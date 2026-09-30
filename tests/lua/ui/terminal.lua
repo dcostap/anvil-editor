@@ -197,6 +197,10 @@ test.describe("Terminal View", function()
   end)
 
   test.after_each(function(context)
+    if context.previous_clipboard ~= nil then
+      system.set_clipboard(context.previous_clipboard)
+    end
+    if context.previous_nag_show then core.nag_view.show = context.previous_nag_show end
     for _, view in ipairs(terminal.open_views()) do
       local pane = panes.pane_for_view(view)
       if pane then panes.close(pane, { force = true }) else view:on_close() end
@@ -1288,8 +1292,12 @@ test.describe("Terminal View", function()
     test.equal(calls.text[1][9][4], 140)
   end)
 
-  test.it("handles terminal bells and clipboard requests", function(context)
+  test.it("copies terminal text without a permission prompt", function(context)
     local view = terminal.open()
+    context.previous_clipboard = system.get_clipboard() or ""
+    context.previous_nag_show = core.nag_view.show
+    local prompted = false
+    core.nag_view.show = function() prompted = true end
     local previous_active_view = core.active_view
     local previous_flash_window = system.flash_window
     local flash_count = 0
@@ -1299,39 +1307,32 @@ test.describe("Terminal View", function()
       { type = "bell" },
       { type = "clipboard", text = "terminal clipboard" },
     }
-    local previous_show = core.nag_view.show
-    core.nag_view.show = function() end
     view:handle_events()
-    core.nag_view.show = previous_show
     core.active_view = previous_active_view
     system.flash_window = previous_flash_window
     test.equal(view.bell_count, 1)
     test.equal(flash_count, 0)
-    test.equal(view.active_clipboard_request.text, "terminal clipboard")
+    test.equal(system.get_clipboard(), "terminal clipboard")
+    test.ok(not prompted)
   end)
 
-  test.it("binds clipboard approval to one immutable request", function()
+  test.it("applies later terminal clipboard writes and clear requests directly", function(context)
     local view = terminal.open()
-    local previous_show = core.nag_view.show
-    local previous_clipboard = system.get_clipboard()
-    local prompts = {}
-    core.nag_view.show = function(_, title, message, buttons, callback)
-      prompts[#prompts + 1] = { title, message, buttons, callback }
-    end
+    context.previous_clipboard = system.get_clipboard() or ""
+    context.previous_nag_show = core.nag_view.show
+    local prompted = false
+    core.nag_view.show = function() prompted = true end
 
     view.snapshot.events = { { type = "clipboard", text = "first request" } }
     view:handle_events()
+    test.equal(system.get_clipboard(), "first request")
     view.snapshot.events = { { type = "clipboard", text = "second request" } }
     view:handle_events()
-    test.equal(#prompts, 1)
-    prompts[1][4]({ text = "Allow" })
-    test.equal(system.get_clipboard(), "first request")
-    test.equal(#prompts, 2)
-    prompts[2][4]({ text = "Allow" })
     test.equal(system.get_clipboard(), "second request")
-
-    core.nag_view.show = previous_show
-    system.set_clipboard(previous_clipboard or "")
+    view.snapshot.events = { { type = "clipboard", text = "", clear = true } }
+    view:handle_events()
+    test.equal(system.get_clipboard() or "", "")
+    test.ok(not prompted)
   end)
 
   test.it("renders real ConPTY output through Terminal View", function(context)

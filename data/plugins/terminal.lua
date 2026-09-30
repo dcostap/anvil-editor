@@ -804,45 +804,15 @@ function TerminalView:update_suspended()
   self:service_session(false)
 end
 
-function TerminalView:prompt_clipboard_request(request)
-  self.active_clipboard_request = request
-  local preview = tostring(request.text or ""):gsub("[%c]", " "):sub(1, 80)
-  local message = string.format(
-    "A terminal program wants to replace the clipboard (%d bytes).\n\n%s",
-    #tostring(request.text or ""), preview
-  )
-  core.nag_view:show(
-    "Terminal Clipboard Request",
-    message,
-    {
-      { text = "Allow", default_yes = false },
-      { text = "Deny", default_no = true },
-    },
-    function(item)
-      if item.text == "Allow" and self.active_clipboard_request == request then
-        system.set_clipboard(request.text)
-      end
-      if self.active_clipboard_request == request then
-        self.active_clipboard_request = nil
-      end
-      local queued = self.queued_clipboard_request
-      self.queued_clipboard_request = nil
-      if queued and self.session then self:prompt_clipboard_request(queued) end
-    end
-  )
-end
-
 function TerminalView:handle_events()
   for _, event in ipairs((self.snapshot and self.snapshot.events) or {}) do
     if event.type == "bell" then
       self.bell_count = (self.bell_count or 0) + (event.count or 1)
     elseif event.type == "clipboard" and event.text ~= nil then
-      local request = { text = event.text, clear = event.clear == true }
-      if self.active_clipboard_request then
-        self.queued_clipboard_request = request
-      else
-        self:prompt_clipboard_request(request)
-      end
+      system.set_clipboard(event.text)
+      core.log_quiet(
+        "Terminal session %d wrote %d clipboard bytes", self.session_id, #event.text
+      )
     elseif event.type == "notification" then
       self.notification_count = (self.notification_count or 0) + (event.count or 1)
       core.log_quiet(
@@ -1580,8 +1550,6 @@ function TerminalView:can_close(approve)
 end
 
 function TerminalView:on_close()
-  self.active_clipboard_request = nil
-  self.queued_clipboard_request = nil
   if self.session then
     if self.vt_trace_path then self:stop_vt_trace() end
     local stats = self.session.stats and self.session:stats() or {}
