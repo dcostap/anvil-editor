@@ -5,7 +5,11 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <string.h>
+#include <limits.h>
 #include <uchardet.h>
+
+int api_utf8_isvalid(const char *text, size_t len);
+void api_utf8_push_clean(lua_State *L, const char *text, size_t len);
 
 #ifdef _WIN32
   #include <windows.h>
@@ -594,7 +598,70 @@ int f_strip_bom(lua_State* L) {
 }
 
 
+static int f_split_lines(lua_State *L) {
+  size_t len;
+  const char *text = luaL_checklstring(L, 1, &len);
+  size_t count = 1;
+  for (const char *p = text; p < text + len; ) {
+    const char *newline = memchr(p, '\n', (size_t) (text + len - p));
+    if (!newline) break;
+    count++;
+    p = newline + 1;
+  }
+  lua_createtable(L, count > INT_MAX ? 0 : (int) count, 0); /* source lines */
+  lua_newtable(L); /* clean display lines */
+  lua_createtable(L, count > INT_MAX ? 0 : (int) count, 0); /* highlighter validity */
+  int crlf = 0, binary = 0;
+  size_t line = 1, start = 0;
+  size_t previous_start = 0, previous_bytes = 0;
+  int previous_invalid = 0;
+  while (start < len) {
+    const char *newline = memchr(text + start, '\n', len - start);
+    size_t end = newline ? (size_t) (newline - text) : len;
+    size_t bytes = end - start;
+    int carriage = bytes && text[end - 1] == '\r';
+    if (carriage) { bytes--; crlf = 1; }
+    if (line > 1 && bytes == previous_bytes &&
+        !memcmp(text + start, text + previous_start, bytes)) {
+      lua_rawgeti(L, 2, line - 1);
+      if (previous_invalid) {
+        lua_rawgeti(L, 3, line - 1);
+        lua_rawseti(L, 3, line);
+      }
+    } else {
+    if (newline && !carriage) {
+      lua_pushlstring(L, text + start, bytes + 1);
+    } else {
+      luaL_Buffer buffer;
+      luaL_buffinit(L, &buffer);
+      luaL_addlstring(&buffer, text + start, bytes);
+      luaL_addchar(&buffer, '\n');
+      luaL_pushresult(&buffer);
+    }
+    previous_invalid = !api_utf8_isvalid(text + start, bytes);
+    if (previous_invalid) {
+      binary = 1;
+      size_t normalized_len;
+      const char *normalized = lua_tolstring(L, -1, &normalized_len);
+      api_utf8_push_clean(L, normalized, normalized_len);
+      lua_rawseti(L, 3, line);
+    }
+    }
+    previous_start = start;
+    previous_bytes = bytes;
+    lua_rawseti(L, 2, line);
+    lua_pushboolean(L, 0); lua_rawseti(L, 4, line);
+    line++;
+    start = newline ? end + 1 : len;
+  }
+  if (line == 1) { lua_pushliteral(L, "\n"); lua_rawseti(L, 2, 1); }
+  lua_pushboolean(L, crlf);
+  lua_pushboolean(L, binary);
+  return 5;
+}
+
 static const luaL_Reg lib[] = {
+  { "split_lines",     f_split_lines    },
   { "detect",          f_detect          },
   { "detect_string",   f_detect_string   },
   { "convert",         f_convert         },

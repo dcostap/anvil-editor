@@ -419,7 +419,18 @@ function Buffer:should_show_dirty_marker()
   return buffer_should_show_dirty_marker(self)
 end
 
-local save_buffer
+local save_buffer, schedule_idle_save
+
+local function make_save_guard(buffer, expected)
+  return function()
+    if disk_states_differ(expected, capture_disk_state(buffer)) then
+      save_failures[buffer] = { conflict = true }
+      if not buffer.deferred_reload then show_conflict_prompt(buffer) end
+      return false, string.format("not saving %s: file changed on disk while saving", buffer.filename)
+    end
+    return true
+  end
+end
 
 local function retry_delay(attempts)
   local base = math.max(0.01, math.min(1, tonumber(autosave_fast.timeout) or 1))
@@ -492,10 +503,8 @@ save_buffer = function(buffer, reason)
   -- Retries and conflicts own future attempts after this save starts. A new
   -- edit creates a new per-Buffer deadline.
   dirty_buffers[buffer] = nil
-  buffer.autosave_save_reason = reason or true
   local recovering = save_failures[buffer] ~= nil
-  local ok, err = pcall(buffer.save, buffer)
-  buffer.autosave_save_reason = nil
+  local function finish(ok, err)
   if ok then
     save_failures[buffer] = nil
     update_disk_state(buffer)
@@ -504,7 +513,8 @@ save_buffer = function(buffer, reason)
     if recovering then core.log("Autosave recovered for \"%s\"", buffer.filename) end
     return true
   end
-  if disk_changed_since_load_or_save(buffer) then
+  if save_failures[buffer] and save_failures[buffer].conflict
+    or disk_changed_since_load_or_save(buffer) then
     save_failures[buffer] = { conflict = true }
     if not buffer.deferred_reload then show_conflict_prompt(buffer) end
     return false, "conflict"
@@ -531,6 +541,33 @@ save_buffer = function(buffer, reason)
     end
   end
   return false, err
+  end
+
+  if reason == "idle" or reason == "retry" or reason == "deferred View close"
+    or reason == "buffer focus lost" then
+    if buffer.pending_save then return true end
+    if (buffer.loaded_file_size or 0) >= 262144 and buffer:can_save_async()
+      and not disk_changed_since_load_or_save(buffer) then
+      local expected = disk_state[buffer] or capture_disk_state(buffer)
+      local submitted, request = pcall(buffer.save_async, buffer, function(ok, err)
+        finish(ok, err)
+        if ok and should_autosave_buffer(buffer) and not dirty_buffers[buffer] then
+          local now = system.get_time()
+          dirty_buffers[buffer] = {
+            first_dirty_at = now, due_at = now + autosave_fast.timeout,
+            hard_due_at = now + autosave_fast.max_delay,
+          }
+          schedule_idle_save()
+        end
+      end, make_save_guard(buffer, expected))
+      if not submitted then return finish(false, request) end
+      if request then return request.status ~= "failed", request.error end
+    end
+  end
+  buffer.autosave_save_reason = reason or true
+  local ok, err = pcall(buffer.save, buffer)
+  buffer.autosave_save_reason = nil
+  return finish(ok, err)
 end
 
 function autosave_fast.save_all_dirty(reason)
@@ -574,7 +611,7 @@ function autosave_fast.save_before_close(buffer, reason)
   return false, false
 end
 
-local function schedule_idle_save()
+schedule_idle_save = function()
   if loop_running then return end
   loop_running = true
   core.add_thread(function()
@@ -678,25 +715,14 @@ function Buffer:save(filename, abs_filename)
     local expected = self.autosave_expected_disk_state
       or disk_state[self]
       or capture_disk_state(self)
-    self.safe_write_guard = function()
-      if disk_states_differ(expected, capture_disk_state(self)) then
-        save_failures[self] = { conflict = true }
-        if not self.deferred_reload then
-          show_conflict_prompt(self)
-        end
-        return false, string.format(
-          "not saving %s: file changed on disk while saving",
-          self.filename
-        )
-      end
-      return true
-    end
+    self.safe_write_guard = make_save_guard(self, expected)
   end
   local ok, result = pcall(save, self, filename, abs_filename)
   self.safe_write_guard = previous_guard
   if not ok then
     local failure = save_failures[self]
-    if not self.autosave_save_reason and not (failure and failure.conflict) then
+    if not self.autosave_save_reason and not self.prepared_save
+      and not (failure and failure.conflict) then
       local attempts = (failure and failure.attempts or 0) + 1
       save_failures[self] = {
         attempts = attempts,
@@ -747,6 +773,34 @@ TextView.close_approval_handler = function(view, approve)
     return true
   end
   if buffer:is_dirty() then
+    if should_autosave_buffer(buffer) and (buffer.loaded_file_size or 0) >= 262144
+      and buffer:can_save_async() and not disk_changed_since_load_or_save(buffer) then
+      if view.close_save_pending then return true end
+      view.close_save_pending = true
+      core.add_thread(function()
+        while not view.textview_closed do
+          save_buffer(buffer, "deferred View close")
+          local request = buffer.pending_save
+          while request and request.status == "pending" and not view.textview_closed do
+            coroutine.yield(.001)
+          end
+          if view.textview_closed then break end
+          if not buffer:is_dirty() then
+            view.close_save_pending = nil
+            approve()
+            return
+          end
+          if not request or request.status ~= "saved" then
+            view.close_save_pending = nil
+            if not buffer.autosave_conflict_prompt_visible then view:confirm_close(approve) end
+            return
+          end
+          -- New edits need another durable snapshot before this View can close.
+        end
+        view.close_save_pending = nil
+      end)
+      return true
+    end
     local saved, handled = autosave_fast.save_before_close(buffer, "View close")
     if saved then
       approve()

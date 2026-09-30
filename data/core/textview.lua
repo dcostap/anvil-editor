@@ -1068,6 +1068,11 @@ function TextView:can_close(approve)
   -- Returning true means that the policy owns the approval decision.
   local close_handler = TextView.close_approval_handler
   if close_handler and close_handler(self, approve) then return end
+  self:confirm_close(approve)
+end
+
+---Use the normal close choice after a close policy fails to save.
+function TextView:confirm_close(approve)
   local references = core.buffer_registry
     and core.buffer_registry:reference_count(self.buffer)
     or #core.get_views_referencing_buffer(self.buffer)

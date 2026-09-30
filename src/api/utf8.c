@@ -1751,6 +1751,10 @@ static int Lutf8_isvalid(lua_State *L) {
   return 1;
 }
 
+int api_utf8_isvalid(const char *text, size_t len) {
+  return utf8_invalid_offset(text, text + len) == NULL;
+}
+
 static int Lutf8_invalidoffset(lua_State *L) {
   const char *e, *s = check_utf8(L, 1, &e);
   const char *orig_s = s;
@@ -1822,6 +1826,15 @@ static int Lutf8_clean(lua_State *L) {
       return 2;
     }
   }
+}
+
+void api_utf8_push_clean(lua_State *L, const char *text, size_t len) {
+  lua_pushcfunction(L, Lutf8_clean);
+  lua_pushlstring(L, text, len);
+  lua_pushliteral(L, "\032");
+  lua_pushboolean(L, 1);
+  lua_call(L, 3, 2);
+  lua_pop(L, 1);
 }
 
 static int Lutf8_isnfc(lua_State *L) {

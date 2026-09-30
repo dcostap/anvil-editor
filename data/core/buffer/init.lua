@@ -19,6 +19,15 @@ local tokenizer = require "core.tokenizer"
 ---@field read_only_reason? string Message shown when the user tries to edit this Buffer
 local Buffer = Object:extend()
 
+local function cancel_pending_save(buffer)
+  local request = buffer.pending_save
+  if not request then return end
+  buffer.pending_save = nil
+  request.status = "cancelled"
+  request.pool:cancel(request.job)
+  os.remove(request.path)
+end
+
 local function file_open_stage_begin(name)
   local perf = package.loaded["core.perf"]
   return perf and perf.file_open_stage_begin and perf.file_open_stage_begin(name)
@@ -209,6 +218,7 @@ end
 local copy_file, prompt_stale_backup
 
 function Buffer:load(filename)
+  cancel_pending_save(self)
   local load_stage = file_open_stage_begin("buffer_load_contents")
   if prompt_stale_backup then prompt_stale_backup(filename) end
   local file_info = system.get_file_info(filename)
@@ -260,20 +270,12 @@ function Buffer:load(filename)
     end
     content = nil
   else
-    for line in fp:lines() do
-      if (i == 1) then line = encoding.strip_bom(line, "UTF-8") end
-      if line:byte(-1) == 13 then
-        line = line:sub(1, -2)
-        self.crlf = true
-      end
-      table.insert(self.lines, line .. "\n")
-      if not line:uisvalid() then
-        self.binary = true
-        self.clean_lines[i] = line:uclean("\26", true) .. "\n"
-      end
-      self.highlighter.lines[i] = false
-      i = i + 1
-    end
+    local text = assert(fp:read("*a"))
+    text = encoding.strip_bom(text, "UTF-8")
+    local crlf, binary
+    self.lines, self.clean_lines, self.highlighter.lines, crlf, binary = encoding.split_lines(text)
+    if crlf then self.crlf = true end
+    if binary then self.binary = true end
   end
   if #self.lines == 0 then
     table.insert(self.lines, "\n")
@@ -471,7 +473,7 @@ local function ensure_parent_directory(filename)
   core.log_quiet("Created parent directory hierarchy \"%s\" before saving", dir)
 end
 
-local function write_file_safely(filename, writer, before_replace)
+local function write_file_safely(filename, writer, before_replace, prepared)
   ensure_parent_directory(filename)
 
   local safe = config.safe_write ~= false
@@ -481,9 +483,20 @@ local function write_file_safely(filename, writer, before_replace)
     or (target_info.link_count or 1) > 1
   )
   local atomic = safe and not preserve_identity
-  local write_path = atomic and unique_sidecar_name(filename, "anvil-tmp") or filename
+  local write_path = atomic and (prepared and prepared.path
+    or unique_sidecar_name(filename, "anvil-tmp")) or filename
 
   local function run_guard()
+    if prepared then
+      local info = system.get_file_info(filename)
+      if not info or info.file_id ~= prepared.target_info.file_id then
+        error("save target changed while preparing the file")
+      end
+      if prepared.guard then
+        local allowed, err = prepared.guard()
+        if not allowed then error(err or "file changed while saving") end
+      end
+    end
     if not before_replace then return end
     local allowed, guard_err = before_replace()
     if not allowed then error(guard_err or "file changed while saving") end
@@ -532,6 +545,7 @@ local function write_file_safely(filename, writer, before_replace)
     run_guard()
   end
 
+  if not (atomic and prepared) then
   local opened, fp = pcall(open_for_writing, write_path)
   if not opened then
     if atomic then os.remove(write_path) end
@@ -555,6 +569,7 @@ local function write_file_safely(filename, writer, before_replace)
       restore_backup(backup, err)
     end
     error(err)
+  end
   end
 
   if atomic then
@@ -621,6 +636,8 @@ end
 
 
 function Buffer:save(filename, abs_filename)
+  local prepared = self.prepared_save
+  if not prepared then cancel_pending_save(self) end
   if not filename then
     assert(self.filename, "no filename set to default to")
     filename = self.filename
@@ -636,7 +653,7 @@ function Buffer:save(filename, abs_filename)
   end
 
   local output
-  if self:needs_encoding_conversion() then
+  if not prepared and self:needs_encoding_conversion() then
     output = table.concat(self.lines)
     if self.crlf then output = output:gsub("\n", "\r\n") end
     local errmsg
@@ -653,21 +670,115 @@ function Buffer:save(filename, abs_filename)
   end
 
   write_file_safely(abs_filename, function(fp)
+    if prepared then
+      output = prepared.text
+      if prepared.crlf then output = output:gsub("\n", "\r\n") end
+      if prepared.bom then output = prepared.bom .. output end
+    end
     if output then
       check_io(fp:write(output))
     else
       if self.bom then check_io(fp:write(self.bom)) end
+      local batch, bytes = {}, 0
       for _, line in ipairs(self.lines) do
         if self.crlf then line = line:gsub("\n", "\r\n") end
-        check_io(fp:write(line))
+        batch[#batch + 1], bytes = line, bytes + #line
+        if bytes >= 65536 then
+          check_io(fp:write(table.concat(batch)))
+          batch, bytes = {}, 0
+        end
       end
+      if #batch > 0 then check_io(fp:write(table.concat(batch))) end
     end
-  end, self.safe_write_guard)
+  end, self.safe_write_guard, prepared)
 
   self:set_filename(filename, abs_filename)
   self.new_file = false
-  self:clean()
+  if prepared then
+    self.clean_change_id = prepared.change_id
+    if self:get_change_id() == prepared.change_id
+      and self.text_revision ~= prepared.revision
+      and table.concat(self.lines) ~= prepared.text then
+      self.clean_change_id = -1
+    end
+  else
+    self:clean()
+  end
   if core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
+end
+
+---Return whether a worker can prepare this file without changing save rules.
+function Buffer:can_save_async()
+  if not self.abs_filename or self:needs_encoding_conversion()
+    or config.safe_write == false or not system.sync_file
+    or not system.atomic_replace_file then return false end
+  local info = system.get_file_info(self.abs_filename)
+  if not info or info.type ~= "file" or info.symlink or (info.link_count or 1) > 1 then return false end
+  local documents = package.loaded["core.lsp.documents"]
+  if documents and #documents.states_for_buffer(self) > 0 then return false end
+  return true
+end
+
+---Prepare a durable temporary file on a worker, then use normal save hooks.
+---Only one request runs per Buffer. Later edits remain dirty.
+function Buffer:save_async(on_finish, guard)
+  if self.pending_save then return self.pending_save end
+  if not self:can_save_async() then return nil, "save requires synchronous file handling" end
+  local request = {
+    status = "pending", text = table.concat(self.lines),
+    filename = self.filename, abs_filename = self.abs_filename,
+    encoding = self.encoding, crlf = self.crlf, bom = self.bom,
+    revision = self.text_revision, change_id = self:get_change_id(),
+    target_info = system.get_file_info(self.abs_filename),
+    path = unique_sidecar_name(self.abs_filename, "anvil-tmp"),
+    guard = guard or self.safe_write_guard,
+    pool = require("core.worker_pool").named("file_io", { worker_count = 1 }),
+  }
+  self.pending_save = request
+  local function finish(status, err)
+    os.remove(request.path)
+    request.text = nil
+    if request.status == "cancelled" then return end
+    if self.pending_save == request then self.pending_save = nil end
+    request.status, request.error = status, err
+    core.log_quiet("Background save %s for %s: %s", status, request.filename, err or "complete")
+    if on_finish then on_finish(status == "saved", err, request) end
+  end
+  local job, err = request.pool:submit {
+    kind = "buffer_write", priority = "background",
+    payload = { text = request.text, path = request.path, crlf = request.crlf, bom = request.bom,
+      queued_at = system.get_time() },
+    on_result = function(message)
+      if message.type ~= "final" then return end
+      request.worker_ms, request.write_ms, request.sync_ms = message.prepared_ms, message.write_ms, message.sync_ms
+      request.queue_ms = message.queue_ms
+      request.delivery_ms = (system.get_time() - (message.finished_at or system.get_time())) * 1000
+      if self.pending_save ~= request or request.status == "cancelled" then
+        finish("cancelled")
+        return
+      end
+      if self.abs_filename ~= request.abs_filename or self.encoding ~= request.encoding
+        or self.crlf ~= request.crlf or self.bom ~= request.bom or not self:can_save_async() then
+        finish("failed", "save settings changed while preparing the file")
+        return
+      end
+      self.prepared_save = request
+      local started = system.get_time()
+      local ok, save_err = pcall(self.save, self)
+      request.completion_ms = (system.get_time() - started) * 1000
+      core.log_quiet("Background save preparation %.3fms, sync %.3fms, completion %.3fms for %s",
+        request.worker_ms or 0, request.sync_ms or 0, request.completion_ms, request.filename)
+      self.prepared_save = nil
+      finish(ok and "saved" or "failed", save_err)
+    end,
+    on_error = function(message) finish("failed", message.error) end,
+    on_cancelled = function() finish("cancelled") end,
+    on_stale = function() finish("cancelled") end,
+  }
+  if not job then finish("failed", err); return request end
+  request.job = job
+  core.log_quiet("Started background save for %s at revision %d", request.filename, request.revision)
+  return request
 end
 
 
@@ -2618,6 +2729,7 @@ end
 
 -- For plugins to get notified when a buffer is closed
 function Buffer:on_close()
+  cancel_pending_save(self)
   language_mode.cancel_content_detection(self)
   self:notify_metadata_listeners({
     kind = "close",
