@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
@@ -16,6 +17,7 @@
 
 #include "api.h"
 #include "../custom_events.h"
+#include "../terminal_contrast.h"
 
 #define TERMINAL_READ_BUDGET (128u * 1024u)
 #define TERMINAL_READ_QUEUE_CAPACITY (4u * 1024u * 1024u)
@@ -148,6 +150,9 @@ typedef struct {
   uint32_t cell_height;
   GhosttyColorScheme color_scheme;
   bool color_scheme_known;
+  TerminalContrast contrast;
+  uint32_t selection_background;
+  uint8_t selection_alpha;
   bool closed;
   TerminalState state;
   uint64_t state_revision;
@@ -193,6 +198,12 @@ typedef struct {
   bool has_background;
   bool has_cursor;
   bool has_palette;
+  bool has_minimum_contrast;
+  bool has_selection_background;
+  bool has_selection_alpha;
+  double minimum_contrast;
+  GhosttyColorRgb selection_background;
+  uint8_t selection_alpha;
   GhosttyColorRgb foreground;
   GhosttyColorRgb background;
   GhosttyColorRgb cursor;
@@ -771,6 +782,14 @@ static void close_session(TerminalSession *session) {
 }
 
 static bool set_terminal_colors(TerminalSession *session, const TerminalColors *colors) {
+  if (colors->has_minimum_contrast) {
+    session->contrast.minimum = colors->minimum_contrast;
+    memset(session->contrast.entries, 0, sizeof(session->contrast.entries));
+  }
+  if (colors->has_selection_background) {
+    session->selection_background = color_value(colors->selection_background);
+  }
+  if (colors->has_selection_alpha) session->selection_alpha = colors->selection_alpha;
   if (colors->has_foreground && ghostty_terminal_set(
       session->terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &colors->foreground
     ) != GHOSTTY_SUCCESS) return false;
@@ -936,6 +955,25 @@ static TerminalColors read_terminal_colors(lua_State *L, int table_index) {
   colors.has_foreground = read_color_field(L, table_index, "foreground", &colors.foreground);
   colors.has_background = read_color_field(L, table_index, "background", &colors.background);
   colors.has_cursor = read_color_field(L, table_index, "cursor_color", &colors.cursor);
+  colors.has_selection_background = read_color_field(
+    L, table_index, "selection_background", &colors.selection_background
+  );
+  lua_getfield(L, table_index, "minimum_contrast");
+  if (!lua_isnil(L, -1)) {
+    colors.minimum_contrast = luaL_checknumber(L, -1);
+    luaL_argcheck(L, isfinite(colors.minimum_contrast) && colors.minimum_contrast >= 1 &&
+      colors.minimum_contrast <= 21, table_index, "terminal contrast must be between 1 and 21");
+    colors.has_minimum_contrast = true;
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, table_index, "selection_alpha");
+  if (!lua_isnil(L, -1)) {
+    lua_Integer alpha = luaL_checkinteger(L, -1);
+    luaL_argcheck(L, alpha >= 0 && alpha <= 255, table_index, "selection alpha is out of range");
+    colors.selection_alpha = (uint8_t)alpha;
+    colors.has_selection_alpha = true;
+  }
+  lua_pop(L, 1);
 
   lua_getfield(L, table_index, "palette");
   if (!lua_isnil(L, -1)) {
@@ -964,6 +1002,10 @@ static int f_terminal_set_colors(lua_State *L) {
   TerminalColors colors = read_terminal_colors(L, 2);
   bool ok = terminal_model_available(session) && set_terminal_colors(session, &colors) &&
     ghostty_render_state_update(session->render_state, session->terminal) == GHOSTTY_SUCCESS;
+  if (ok) {
+    GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
+    ghostty_render_state_set(session->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &dirty);
+  }
   lua_pushboolean(L, ok);
   return 1;
 }
@@ -2152,6 +2194,7 @@ typedef struct {
   uint32_t foreground;
   uint32_t background;
   uint32_t underline_color;
+  uint8_t alpha;
   int underline;
   bool active;
   bool has_background;
@@ -2174,7 +2217,7 @@ static GhosttyColorRgb capture_style_color(
 }
 
 static void read_capture_style(
-  const GhosttyGridRef *ref, const GhosttyRenderStateColors *colors,
+  TerminalSession *session, const GhosttyGridRef *ref, const GhosttyRenderStateColors *colors,
   TerminalCaptureStyleRun *run
 ) {
   GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
@@ -2194,8 +2237,18 @@ static void read_capture_style(
     background = swap;
     run->has_background = true;
   }
-  run->foreground = color_value(foreground);
   run->background = color_value(background);
+  GhosttyCell cell = 0;
+  uint32_t codepoint = 0;
+  if (ghostty_grid_ref_cell(ref, &cell) == GHOSTTY_SUCCESS) {
+    ghostty_cell_get(cell, GHOSTTY_CELL_DATA_CODEPOINT, &codepoint);
+  }
+  TerminalInk ink = terminal_contrast_ink(
+    &session->contrast, color_value(foreground), run->background,
+    style.invisible ? 0 : style.faint ? 140 : 255, codepoint
+  );
+  run->foreground = ink.foreground;
+  run->alpha = ink.alpha;
   run->bold = style.bold;
   run->italic = style.italic;
   run->faint = style.faint;
@@ -2203,9 +2256,12 @@ static void read_capture_style(
   run->strikethrough = style.strikethrough;
   if (style.underline_color.tag != GHOSTTY_STYLE_COLOR_NONE) {
     run->has_underline_color = true;
-    run->underline_color = color_value(capture_style_color(
+    uint32_t underline_color = color_value(capture_style_color(
       style.underline_color, foreground, colors
     ));
+    run->underline_color = terminal_contrast_ink(
+      &session->contrast, underline_color, run->background, 255, codepoint
+    ).foreground;
   }
 }
 
@@ -2213,6 +2269,7 @@ static bool same_capture_style(
   const TerminalCaptureStyleRun *left, const TerminalCaptureStyleRun *right
 ) {
   return left->foreground == right->foreground &&
+    left->alpha == right->alpha &&
     left->has_background == right->has_background &&
     (!left->has_background || left->background == right->background) &&
     left->bold == right->bold && left->italic == right->italic &&
@@ -2232,6 +2289,7 @@ static void flush_capture_style(
   set_integer_field(L, "col1", (lua_Integer)run->start_offset + 1);
   set_integer_field(L, "col2", (lua_Integer)run->end_offset + 1);
   set_integer_field(L, "fg", run->foreground);
+  set_integer_field(L, "alpha", run->alpha);
   if (run->has_background) {
     set_integer_field(L, "background", run->background);
   }
@@ -2312,7 +2370,7 @@ static void push_capture_styles(
         .end_offset = byte_offset + cell_length,
         .active = true,
       };
-      read_capture_style(&ref, colors, &current);
+      read_capture_style(session, &ref, colors, &current);
       if (!active.active || !same_capture_style(&active, &current)) {
         flush_capture_style(
           L, line_styles_index, &run_count, &active
@@ -2906,6 +2964,7 @@ typedef struct {
   uint32_t foreground;
   uint32_t background;
   int underline;
+  uint8_t alpha;
   uint8_t columns;
   bool has_text;
   bool has_background;
@@ -2927,6 +2986,7 @@ typedef struct {
   int start_col;
   int end_col;
   uint32_t foreground;
+  uint8_t alpha;
   int underline;
   bool active;
   bool bold;
@@ -2956,6 +3016,7 @@ static void read_render_cell(
   GhosttyColorRgb background = colors->background;
   GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
   GhosttyCell raw_cell = 0;
+  uint32_t codepoint = 0;
   GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
 
   GhosttyResult text_result = ghostty_render_state_row_cells_get(
@@ -2974,6 +3035,7 @@ static void read_render_cell(
     session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw_cell
   ) == GHOSTTY_SUCCESS && raw_cell) {
     ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_WIDE, &wide);
+    ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_CODEPOINT, &codepoint);
   }
 
   cell->has_text = text_result == GHOSTTY_SUCCESS && grapheme.len > 0;
@@ -3011,10 +3073,27 @@ static void read_render_cell(
   if (ghostty_render_state_row_cells_get(
     session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &cell->selected
   ) != GHOSTTY_SUCCESS) cell->selected = false;
+  if (cell->selected) {
+    cell->background = terminal_color_blend(
+      session->selection_background, cell->background, session->selection_alpha
+    );
+  }
+  TerminalInk ink = terminal_contrast_ink(
+    &session->contrast, cell->foreground, cell->background,
+    style.invisible ? 0 : style.faint ? 140 : 255, codepoint
+  );
+  cell->foreground = ink.foreground;
+  cell->alpha = ink.alpha;
+  if (cell->underline_color_has_value) {
+    cell->underline_color = terminal_contrast_ink(
+      &session->contrast, cell->underline_color, cell->background, 255, codepoint
+    ).foreground;
+  }
 }
 
 static bool same_text_run(const TerminalTextRun *run, const TerminalRenderCell *cell) {
   return run->foreground == cell->foreground && run->bold == cell->bold &&
+    run->alpha == cell->alpha &&
     run->italic == cell->italic && run->underline == cell->underline &&
     run->strikethrough == cell->strikethrough && run->faint == cell->faint &&
     run->blink == cell->blink && run->overline == cell->overline &&
@@ -3032,6 +3111,7 @@ static void flush_text_run(
   set_integer_field(L, "col", run->start_col);
   set_integer_field(L, "columns", run->end_col - run->start_col);
   set_integer_field(L, "fg", run->foreground);
+  set_integer_field(L, "alpha", run->alpha);
   if (run->bold) set_boolean_field(L, "bold", true);
   if (run->italic) set_boolean_field(L, "italic", true);
   if (run->faint) set_boolean_field(L, "faint", true);
@@ -3056,7 +3136,7 @@ static void flush_background_span(
   set_integer_field(L, "col", span->start_col);
   set_integer_field(L, "columns", end_col - span->start_col);
   if (span->selected) set_boolean_field(L, "selected", true);
-  else set_integer_field(L, "color", span->color);
+  set_integer_field(L, "color", span->color);
   lua_rawseti(L, backgrounds_index, ++*span_count);
   span->active = false;
 }
@@ -3083,7 +3163,7 @@ static void push_render_row(
     bool draw_background = cell.selected || cell.has_background;
     uint32_t background_color = cell.background;
     if (!draw_background || (span.active &&
-        (span.selected != cell.selected || (!cell.selected && span.color != background_color)))) {
+        (span.selected != cell.selected || span.color != background_color))) {
       flush_background_span(L, backgrounds_index, &span_count, &span, col);
     }
     if (draw_background && !span.active) {
@@ -3101,6 +3181,7 @@ static void push_render_row(
         run.start_col = col;
         run.end_col = col;
         run.foreground = cell.foreground;
+        run.alpha = cell.alpha;
         run.bold = cell.bold;
         run.italic = cell.italic;
         run.faint = cell.faint;

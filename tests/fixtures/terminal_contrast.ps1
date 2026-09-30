@@ -1,0 +1,14 @@
+$escape = [char]27
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::Write($escape + '[2J' + $escape + '[H')
+[Console]::Write($escape + '[0;38;2;166;227;161mLOW' + "`r`n")
+[Console]::Write($escape + '[0;38;2;0;80;0mREADABLE' + "`r`n")
+[Console]::Write($escape + '[0;2;38;2;0;80;0mDIM' + "`r`n")
+[Console]::Write($escape + '[0;38;2;255;255;255;48;2;240;240;240;7mINVERSE' + "`r`n")
+[Console]::Write($escape + '[0;38;2;166;227;161m' + [char]0x2588 + [char]0xe0b0 + "`r`n")
+[Console]::Write($escape + '[0;8;38;2;166;227;161mHIDDEN' + "`r`n")
+[Console]::Write($escape + '[0;38;2;166;227;161;48;2;0;0;0mDARK' + "`r`n")
+[Console]::Write($escape + '[0;2;38;2;255;255;255;48;2;0;0;0mDIM_DARK' + "`r`n")
+[Console]::Write($escape + '[0;38;2;30;35;40;48;2;0;0;0mLOW_DARK' + "`r`n")
+[Console]::Write($escape + '[0mANVIL_CONTRAST_READY')
+Start-Sleep -Seconds 30
