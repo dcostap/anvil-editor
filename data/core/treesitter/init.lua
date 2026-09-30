@@ -93,9 +93,8 @@ end
 
 local function buffer_fingerprint(buffer)
   if not buffer or not buffer.lines then return "0:0::" end
-  local byte_len = 0
-  for _, line in ipairs(buffer.lines) do byte_len = byte_len + #line end
-  return table.concat({ tostring(#buffer.lines), tostring(byte_len), buffer.lines[1] or "", buffer.lines[#buffer.lines] or "" }, "\0")
+  return table.concat({ tostring(#buffer.lines), tostring(buffer.text_revision or 0),
+    buffer.lines[1] or "", buffer.lines[#buffer.lines] or "" }, "\0")
 end
 
 -- Avoid requiring core.common before core has finished bootstrap in unusual test loaders.
@@ -183,6 +182,16 @@ end
 function treesitter.schedule_parse(buffer, edit)
   local ts = buffer and buffer.treesitter
   if not ts or not ts.native or not buffer.lines then return false end
+  local status = ts.native:status()
+  if status == "queued" or status == "parsing" then
+    if ts.scheduled_revision ~= buffer.text_revision
+      or ts.scheduled_fingerprint ~= buffer_fingerprint(buffer) then
+      ts.latest_parse_pending = true
+      ts.snapshot_requests_coalesced = (ts.snapshot_requests_coalesced or 0) + 1
+    end
+    return true
+  end
+  ts.latest_parse_pending = nil
   ts.snapshots_constructed = (ts.snapshots_constructed or 0) + 1
   ts.generation = (ts.generation or 0) + 1
   ts.parse_generation = ts.generation
@@ -190,6 +199,7 @@ function treesitter.schedule_parse(buffer, edit)
   ts.reason = nil
   ts.last_poll_changed = false
   ts.scheduled_fingerprint = buffer_fingerprint(buffer)
+  ts.scheduled_revision = buffer.text_revision
   local remapped_stale_cache = edit and ts.stale_renderable and remap_stale_highlight_cache(ts, edit, #buffer.lines)
   if not remapped_stale_cache then ts.highlight_cache = {} end
   ts.selection_history = {}
@@ -207,11 +217,10 @@ function treesitter.schedule_parse(buffer, edit)
       buffer.highlighter:invalidate_render_cache()
     end
   end
-  local snapshot_bytes = 0
-  for _, line in ipairs(buffer.lines) do snapshot_bytes = snapshot_bytes + #line end
   local native_stage = file_open_stage_begin("treesitter_schedule_parse")
   local snapshot_started = system.get_time()
-  local ok, err = ts.native:schedule_parse(buffer.lines, ts.generation, edit)
+  local ok, detail = ts.native:schedule_parse(buffer.lines, ts.generation, edit)
+  local snapshot_bytes = ok and detail or 0
   local snapshot_ms = (system.get_time() - snapshot_started) * 1000
   ts.snapshot_bytes = (ts.snapshot_bytes or 0) + snapshot_bytes
   ts.snapshot_ms = (ts.snapshot_ms or 0) + snapshot_ms
@@ -219,9 +228,9 @@ function treesitter.schedule_parse(buffer, edit)
   file_open_stage_end(native_stage)
   if not ok then
     ts.status = "failed"
-    ts.reason = err or "schedule failed"
+    ts.reason = detail or "schedule failed"
     log_quiet("Tree-sitter: failed to schedule %s generation=%d: %s", buffer_name(buffer), ts.generation, tostring(ts.reason))
-    return false, err
+    return false, detail
   end
   local status = ts.native:status()
   ts.status = status or "queued"
@@ -245,6 +254,7 @@ local function schedule_coalesced_parse(buffer)
     local current = buffer.treesitter
     if current ~= ts or not ts.native then return end
     ts.pending_parse_thread = false
+    if ts.scheduled_revision == buffer.text_revision then return end
     treesitter.schedule_parse(buffer, nil)
   end)
   return true
@@ -352,7 +362,7 @@ function treesitter.on_text_transaction(buffer, transaction)
     ts.stale_renderable = false
     ts.stale_unrenderable = true
     ts.status = "stale"
-    if ts.native.cancel then ts.native:cancel() end
+    ts.latest_parse_pending = true
     schedule_coalesced_parse(buffer)
   end
 end
@@ -361,6 +371,18 @@ function treesitter.poll_buffer(buffer)
   local ts = buffer and buffer.treesitter
   if not ts or not ts.native then return nil end
   local status, changed, discarded_stale, changed_ranges = ts.native:poll(ts.generation or 0)
+  if ts.latest_parse_pending and status ~= "queued" and status ~= "parsing" then
+    -- The completed tree belongs to the previous text. Do not publish its
+    -- symbols or highlights against the latest Buffer. Parse that text once.
+    ts.parses_completed = (ts.parses_completed or 0) + (status == "ready" and 1 or 0)
+    ts.parses_failed = (ts.parses_failed or 0) + (status == "failed" and 1 or 0)
+    if status == "failed" then
+      local _, reason = ts.native:status()
+      log_quiet("Tree-sitter: previous parse failed for %s: %s", buffer_name(buffer), tostring(reason))
+    end
+    treesitter.schedule_parse(buffer, nil)
+    return ts.status, false, false
+  end
   ts.status = status or ts.status
   ts.last_poll_changed = changed or false
   ts.last_discarded_stale = discarded_stale or false
@@ -376,6 +398,9 @@ function treesitter.poll_buffer(buffer)
     ts.reason = reason
   end
   if changed then
+    ts.parses_completed = (ts.parses_completed or 0) + (ts.status == "ready" and 1 or 0)
+    ts.parses_failed = (ts.parses_failed or 0) + (ts.status == "failed" and 1 or 0)
+    ts.parses_canceled = (ts.parses_canceled or 0) + (ts.status == "canceled" and 1 or 0)
     local partial = ts.status == "ready" and type(changed_ranges) == "table"
     if partial then
       ts.highlight_cache = ts.highlight_cache or {}

@@ -44,7 +44,14 @@ struct AnvilTSParseJob {
   uint32_t parse_timeout_ms;
   uint64_t started_ticks;
   TSTree *old_tree;
+  TSTree *comparison_tree;
   TSTree *result_tree;
+  TSTree *retired_tree;
+  AnvilTSSnapshot *retired_snapshot;
+  TSRange *changed_ranges;
+  uint32_t changed_range_count;
+  bool changed_ranges_available;
+  bool cleanup;
   bool canceled;
   bool timed_out;
   bool failed;
@@ -207,6 +214,11 @@ static int service_worker_main(void *userdata) {
       break;
     }
     AnvilTSParseJob *job = dequeue_job_locked();
+    if (job && job->cleanup) {
+      service_unlock();
+      job_free(job);
+      continue;
+    }
     service.running_jobs[worker_index] = job;
     if (job && job->state->active_job == job && !job->state->closed && !SDL_GetAtomicInt(&job->cancel)) {
       job->state->status = ANVIL_TS_STATE_PARSING;
@@ -229,18 +241,15 @@ static int service_worker_main(void *userdata) {
         TSParseOptions options;
         options.payload = job;
         options.progress_callback = parse_progress;
-        job->started_ticks = SDL_GetTicks();
-        job->result_tree = ts_parser_parse_with_options(parser, job->old_tree, input, options);
+        do {
+          job->timed_out = false;
+          job->started_ticks = SDL_GetTicks();
+          job->result_tree = ts_parser_parse_with_options(parser, job->old_tree, input, options);
+          /* Tree-sitter retains its parse stack after a progress timeout.
+           * Resume the same immutable input on this worker, not from scratch. */
+        } while (!job->result_tree && job->timed_out && !SDL_GetAtomicInt(&job->cancel));
         if (SDL_GetAtomicInt(&job->cancel)) {
           job->canceled = true;
-          if (job->result_tree) {
-            ts_tree_delete(job->result_tree);
-            job->result_tree = NULL;
-          }
-          ts_parser_reset(parser);
-        } else if (job->timed_out) {
-          job->failed = true;
-          job->error = service_strdup("Tree-sitter parse timed out");
           if (job->result_tree) {
             ts_tree_delete(job->result_tree);
             job->result_tree = NULL;
@@ -250,6 +259,10 @@ static int service_worker_main(void *userdata) {
           job->failed = true;
           job->error = service_strdup("Tree-sitter parse returned no tree");
           ts_parser_reset(parser);
+        } else if (job->comparison_tree) {
+          job->changed_ranges_available = true;
+          job->changed_ranges = ts_tree_get_changed_ranges(job->comparison_tree,
+            job->result_tree, &job->changed_range_count);
         }
       }
       if (parser) ts_parser_delete(parser);
@@ -921,6 +934,7 @@ static bool buffer_state_schedule_parse_internal(
     anvil_ts_snapshot_free(state->current_snapshot);
     state->current_snapshot = snapshot;
   }
+  if (state->current_tree) job->comparison_tree = ts_tree_copy(state->current_tree);
   SDL_SetAtomicInt(&job->cancel, 0);
   state->refcount++;
   state->active_job = job;
@@ -959,7 +973,11 @@ static void job_detach_state_locked(AnvilTSParseJob *job) {
 static void job_free(AnvilTSParseJob *job) {
   if (!job) return;
   if (job->old_tree) ts_tree_delete(job->old_tree);
+  if (job->comparison_tree) ts_tree_delete(job->comparison_tree);
   if (job->result_tree) ts_tree_delete(job->result_tree);
+  if (job->retired_tree) ts_tree_delete(job->retired_tree);
+  anvil_ts_snapshot_free(job->retired_snapshot);
+  free(job->changed_ranges);
   anvil_ts_snapshot_free(job->snapshot);
   free(job->error);
   AnvilTSBufferState *state = job->state;
@@ -1008,15 +1026,13 @@ AnvilTSPollResult anvil_ts_buffer_state_poll(
     state->active_job = NULL;
     if (job->result_tree && !job->canceled && !job->failed) {
       if (state->current_tree) {
-        result.changed_ranges_available = true;
-        result.changed_ranges = ts_tree_get_changed_ranges(
-          state->current_tree,
-          job->result_tree,
-          &result.changed_range_count
-        );
-        ts_tree_delete(state->current_tree);
+        result.changed_ranges_available = job->changed_ranges_available;
+        result.changed_ranges = job->changed_ranges;
+        result.changed_range_count = job->changed_range_count;
+        job->changed_ranges = NULL;
       }
-      anvil_ts_snapshot_free(state->current_snapshot);
+      job->retired_tree = state->current_tree;
+      job->retired_snapshot = state->current_snapshot;
       state->current_tree = job->result_tree;
       state->current_snapshot = job->snapshot;
       job->result_tree = NULL;
@@ -1038,14 +1054,14 @@ AnvilTSPollResult anvil_ts_buffer_state_poll(
   }
   if (!service.completed_head) service.completed_tail = NULL;
   result.status = state->status;
-  service_unlock();
-
   while (to_free) {
     AnvilTSParseJob *next = to_free->completed_next;
     to_free->completed_next = NULL;
-    job_free(to_free);
+    to_free->cleanup = true;
+    enqueue_job_locked(to_free);
     to_free = next;
   }
+  service_unlock();
   return result;
 }
 
@@ -1067,7 +1083,17 @@ void anvil_ts_buffer_state_close(AnvilTSBufferState *state) {
   }
   state->closed = true;
   if (state->active_job) SDL_SetAtomicInt(&state->active_job->cancel, 1);
-  if (state->current_tree) {
+  AnvilTSParseJob *cleanup = (AnvilTSParseJob *) calloc(1, sizeof(*cleanup));
+  if (cleanup) {
+    cleanup->cleanup = true;
+    cleanup->state = state;
+    state->refcount++;
+    cleanup->retired_tree = state->current_tree;
+    cleanup->retired_snapshot = state->current_snapshot;
+    state->current_tree = NULL;
+    state->current_snapshot = NULL;
+    enqueue_job_locked(cleanup);
+  } else if (state->current_tree) {
     ts_tree_delete(state->current_tree);
     state->current_tree = NULL;
   }

@@ -405,6 +405,7 @@ static int state_schedule_parse(lua_State *L) {
     return 2;
   }
 
+  uint32_t snapshot_bytes = snapshot->byte_len;
   if (!anvil_ts_buffer_state_schedule_parse_with_edit(userdata->state, snapshot, generation, edit_ptr, &error)) {
     anvil_ts_snapshot_free(snapshot);
     lua_pushnil(L);
@@ -413,7 +414,8 @@ static int state_schedule_parse(lua_State *L) {
     return 2;
   }
   lua_pushboolean(L, true);
-  return 1;
+  lua_pushinteger(L, snapshot_bytes);
+  return 2;
 }
 
 static int state_poll(lua_State *L) {
