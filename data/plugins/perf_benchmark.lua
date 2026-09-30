@@ -236,7 +236,9 @@ end
 local function set_position(view, line)
   line = math.max(1, math.min(#view.buffer.lines, line))
   view.buffer:set_selection(line, 1)
-  view:scroll_to_line(line, true)
+  -- Each scripted position has one target. Visibility during the previous
+  -- animation must not decide whether this action sets a new target.
+  view:scroll_to_line(line, false)
 end
 
 local function setup_tabs(primary)

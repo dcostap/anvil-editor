@@ -136,10 +136,27 @@ Their only differences were scenario names in the titlebar.
 The alpha comparison changed 3963 caption pixels. The wrapped comparison changed 4161 caption pixels.
 Both differences stayed inside `(14, 4, 297, 30)`.
 
-The full standard gate rejected a fresh baseline because wrapped scrolling ended at different offsets.
+The full standard gate rejected the first baseline attempt because wrapped scrolling ended at different offsets.
 Otherwise identical states ended at `40842.0` or `40830.5` pixels.
-Do not use that run as a passing baseline. No baseline or golden image was promoted.
-Relative timing and scroll-state repeatability still need a gate fix.
+The focused red run reproduced both offsets across unchanged processes.
+The gate had skipped a scroll target when its line was visible during the preceding animation.
+Scripted positions now always set their centered target. The editor's scroll methods stay unchanged.
+The same three-run gate passes after this fix. Every final offset is `40830.5`.
+Its frame p50 / p95 is 1.426 / 2.150 ms, with zero absolute flags.
+
+Find pixel references now share their scene's fixture directory name.
+Before this change, different Project captions caused 3963 and 4161 changed pixels.
+Both whole-image comparisons now have zero changed pixels and zero ignored edge pixels.
+The four Find scenes pass capture and state checks. Their slow per-match reference drawing produces budget flags.
+These focused runs check pixels; they do not establish a performance baseline.
+
+The historical caption race already has a fix in `a508d62d`.
+Tab labels get their color from asynchronous file Git status.
+That commit added decoration readiness to legacy warmup and capture.
+It also rejected short legacy timing comparisons and stopped gating single paced maxima.
+Current unchanged-revision images match exactly. The original 997-pixel images are unavailable here.
+Thus code and history identify the race, but cannot prove the exact historical image difference.
+Keep the existing readiness and paired timing checks. Do not weaken pixel or timing limits.
 
 The ordinary View redraw distributions appear in `LOCAL_FIND_PERFORMANCE.md`.
 The corrected Root Panel probe also includes shell Views, layout, and renderer completion.

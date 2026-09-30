@@ -278,6 +278,14 @@ All scenes wait for file Git status and diff decorations before warmup and captu
 This includes legacy scenes and inactive tab captions. Consecutive identical
 captures alone cannot prove that a pending decoration has finished.
 
+Legacy scripted positions always set a centered scroll target.
+They do not skip a target because the line is visible during the preceding animation.
+That skip made unchanged wrapped-scroll runs end at different offsets.
+
+Find overview reference scenes use the same fixture directory name as their measured scene.
+This keeps Project captions equal for whole-image pixel comparisons.
+The runner still keeps separate process data, metrics, and capture artifacts.
+
 Use the default 600 measured frames and 180 warmup frames for legacy timing comparisons.
 The fixed-action editor workloads have separate settings. Short legacy runs,
 such as 24 measured frames and eight warmup frames, are smoke checks only.

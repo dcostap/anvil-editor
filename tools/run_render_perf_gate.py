@@ -163,6 +163,12 @@ def performance_workload_settings(settings: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def workload_root(work: Path, scenario: str, settings: dict[str, Any]) -> Path:
+    # Pixel references need the same Project caption as the measured scene.
+    name = scenario.removesuffix("-reference") if settings.get("reference_overview") else scenario
+    return work / name
+
+
 SPECIMEN_SCENARIOS: dict[str, dict[str, Any]] = {
     "specimen-startup": {
         "fixture": "external",
@@ -795,7 +801,7 @@ def run_case(
     actions_file = run_dir / "actions.csv"
     workload_file = run_dir / "workload.json"
     if settings.get("kind"):
-        workload_file.write_text(json.dumps(dict(settings, root=str(work / scenario))), encoding="utf-8")
+        workload_file.write_text(json.dumps(dict(settings, root=str(workload_root(work, scenario, settings)))), encoding="utf-8")
     case_fixture = (
         work / "fixtures" / "markdown-long-link.md"
         if settings.get("fixture") == "markdown-long-link" else fixture
@@ -855,7 +861,7 @@ def run_case(
     launch_config = {
         "stable_ui_scheduling": True,
         "exe": str(exe),
-        "working_directory": str(work / scenario if settings.get("kind") else work),
+        "working_directory": str(workload_root(work, scenario, settings) if settings.get("kind") else work),
         # The benchmark plugin owns file/view activation. Passing the fixture
         # on the command line would enqueue a second deferred open that can
         # steal focus back from custom visual scenes during warmup.
@@ -1625,8 +1631,9 @@ def main() -> int:
     workload_manifests = {}
     for name in selected_scenarios:
         if name in perf_workloads.SCENARIOS:
-            workload_manifests[name] = perf_workloads.generate(work / name, SCENARIOS[name])
-            (work / name / "manifest.json").write_text(json.dumps(workload_manifests[name], indent=2), encoding="utf-8")
+            root = workload_root(work, name, SCENARIOS[name])
+            workload_manifests[name] = perf_workloads.generate(root, SCENARIOS[name])
+            (root / "manifest.json").write_text(json.dumps(workload_manifests[name], indent=2), encoding="utf-8")
     external_fixture = None
     specimen_metadata = None
     if specimen_source:
