@@ -41,6 +41,9 @@ local function coverage_complete(state)
 end
 
 test.it("measures complete Local Find latency and ordinary redraw", function()
+  -- Let startup finish before choosing the measured Pane. A delayed startup
+  -- error can otherwise replace it with the Log View on the first yield.
+  for _ = 1, 3 do coroutine.yield(0) end
   local autosave_enabled = autosave.enabled
   autosave.enabled = false
   local path = USERDIR .. PATHSEP .. "find-large.c"
@@ -60,12 +63,22 @@ test.it("measures complete Local Find latency and ordinary redraw", function()
   view.position.x, view.position.y = 0, 0
   view.size.x, view.size.y = 1100, 800
   local window = renwindow.create("Local Find probe", 1100, 800)
+  local previous_window = core.window
   local root = os.getenv("FIND_PROBE_ROOT") and core.root_panel or view
   if root ~= view then
+    -- The test loop also lays out the Root Panel between coroutine resumes.
+    -- Keep both update paths on the same private renderer window.
+    core.window = window
     root.position.x, root.position.y = 0, 0
     root.size.x, root.size.y = 1100, 800
   end
   local function frame(samples)
+    if root ~= view then
+      assert(root.size.x == 1100 and root.size.y == 800,
+        string.format("Root Panel viewport changed: %.1fx%.1f", root.size.x, root.size.y))
+      assert(root:pane_views()[1] == view,
+        string.format("Root Panel shows %s instead of the probe Editor", tostring(root:pane_views()[1])))
+    end
     local start = system.get_time()
     local previous_snapshot, previous_render = core.ui_snapshot_active, core.render_frame_active
     core.ui_snapshot_id = (core.ui_snapshot_id or 0) + 1
@@ -144,6 +157,21 @@ test.it("measures complete Local Find latency and ordinary redraw", function()
       until false
       local samples = {}
       for _ = 1, 5 do frame() end
+      if root ~= view then
+        local draw, painted = view.draw, false
+        view.draw = function(self, ...)
+          painted = true
+          return draw(self, ...)
+        end
+        frame()
+        view.draw = draw
+        assert(painted and view.size.x > 500 and view.size.y > 400,
+          string.format("Root Panel did not draw the visible Editor: painted=%s size=%.1fx%.1f panes=%d owner=%s visible=%s",
+            tostring(painted), view.size.x, view.size.y, #root:pane_views(),
+            tostring(panes.pane_for_view(view)), tostring(panes.visible_group())))
+        print(string.format("PROBE %s find=%s visible_editor=%.1fx%.1f",
+          name, tostring(find), view.size.x, view.size.y))
+      end
       for _ = 1, 40 do frame(samples); coroutine.yield() end
       report(name .. (find and "_find_frame_ms" or "_frame_ms"), samples)
       if os.getenv("FIND_PROBE_PROFILE") then
@@ -191,6 +219,7 @@ test.it("measures complete Local Find latency and ordinary redraw", function()
   end
   buffer:clean()
   panes.reset_for_tests()
+  core.window = previous_window
   os.remove(path)
   autosave.enabled = autosave_enabled
 end)

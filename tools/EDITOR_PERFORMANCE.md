@@ -142,9 +142,33 @@ Do not use that run as a passing baseline. No baseline or golden image was promo
 Relative timing and scroll-state repeatability still need a gate fix.
 
 The ordinary View redraw distributions appear in `LOCAL_FIND_PERFORMANCE.md`.
-The added Root Panel probe did not complete its candidate wrapped case.
-Its unusually low candidate unwrapped draw cost also needs validation against the visible Editor.
-Do not use those Root Panel results or claim that Root Panel and Status Bar work is complete.
+The corrected Root Panel probe also includes shell Views, layout, and renderer completion.
+The test loop and probe now use the same private window and viewport.
+The probe waits for startup before selecting its Pane.
+A missing optional package-manager binary had opened the Log View after the first yield.
+Both former measurements therefore had invalid layout or visibility assumptions.
+
+Two probe checks failed before correction: viewport changed to `800x600`, then the Log View replaced the Editor.
+The corrected probe verifies actual Editor drawing at `1100x739` in all four cases.
+Both reference and candidate probes pass. Timed frames use no detailed recorder.
+
+| Root Panel update, draw, and renderer completion | Reference median / p95 | Candidate median / p95 |
+|---|---:|---:|
+| Unwrapped, Find open | 9.179 / 36.668 ms | 7.909 / 14.476 ms |
+| Unwrapped, Find closed | 2.418 / 3.282 ms | 2.813 / 3.310 ms |
+| Wrapped, Find open | 13.005 / 20.961 ms | 10.325 / 36.765 ms |
+| Wrapped, Find closed | 2.249 / 2.974 ms | 2.312 / 3.434 ms |
+
+The wrapped Find tail did not improve in this sample. Neither Find-open median meets the 6.06 ms budget.
+Reference parsing failed; candidate parsing completed. Their syntax drawing work is not equivalent.
+Keep these limits when reading the comparison.
+
+Separate scope samples put candidate Root Panel layout at 0.210–0.292 ms.
+Status Bar update costs 0.162–0.241 ms. Editor update costs 0.047–0.090 ms.
+Find line-body drawing costs 6.836–7.464 ms and dominates emission.
+Without Find, line-body drawing costs 1.869–2.180 ms.
+The current measurements do not support a new panel or Status Bar cache.
+Such caches would add invalidation rules for a small measured cost.
 
 The required Markdown probe used 600 sections and 12,001 lines.
 Software-renderer wrapped open took 3347 ms before and 3254 ms after.
