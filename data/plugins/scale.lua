@@ -37,31 +37,28 @@ local function scale_font_once(font, factor, seen)
   end
 end
 
-local function capture_active_textview_caret_y()
+local function capture_active_textview_center()
   local TextView = package.loaded["core.textview"]
   local view = core.active_view
   if not TextView or not view or not view.extends or not view:extends(TextView) then return nil end
-  local line, col = view:with_selection_state(function()
-    return view.buffer:get_selection()
+  return view:with_selection_state(function()
+    return { view = view, center = view:capture_viewport_center() }
   end)
-  local y = view:get_caret_highlight_geometry(line, col)
-  return { view = view, line = line, col = col, y = y }
 end
 
-local function restore_active_textview_caret_y(anchor)
+local function restore_active_textview_center(anchor)
   if not anchor or not anchor.view or not anchor.view.buffer then return end
   local view = anchor.view
   view:with_selection_state(function()
-    -- Publish visible geometry before restoring the caret. A large Markdown
+    -- Publish visible geometry before restoring the center. A large Markdown
     -- buffer can still rebuild its offscreen wrapped layout in the background.
     view:invalidate_measurement_dependent_layout("zoom")
-    view:get_visual_row_metric_cache()
-    local y = view:get_caret_highlight_geometry(anchor.line, anchor.col)
-    local target = (view.scroll.to.y or view.scroll.y or 0) + (y - anchor.y)
-    local max = view:get_scrollable_size() - view.size.y
-    target = common.clamp(target, 0, max)
-    view.scroll.y = target
-    view.scroll.to.y = target
+    view:restore_viewport_center(anchor.center)
+    if anchor.center then
+      core.log_quiet("Zoom center: %s:%d:%d row_fraction=%.3f scroll_y=%.1f",
+        view.buffer:get_name(), anchor.center.line, anchor.center.col,
+        anchor.center.fraction, view.scroll.y)
+    end
   end)
 end
 
@@ -120,7 +117,7 @@ function scale.set(scale)
 
   scale = common.clamp(scale, MIN_SCALE, MAX_SCALE)
 
-  local active_caret_y = capture_active_textview_caret_y()
+  local active_center = capture_active_textview_center()
 
   -- save scroll positions
   local v_scrolls = {}
@@ -194,7 +191,7 @@ function scale.set(scale)
     view.scroll.to.x = view.scroll.x
   end
 
-  restore_active_textview_caret_y(active_caret_y)
+  restore_active_textview_center(active_center)
 
   core.redraw = true
 end
@@ -205,7 +202,7 @@ function scale.set_code(scale)
 
   scale = common.clamp(scale, MIN_SCALE, MAX_SCALE)
 
-  local active_caret_y = capture_active_textview_caret_y()
+  local active_center = capture_active_textview_center()
 
   local s = scale / current_code_scale
   current_code_scale = scale
@@ -221,7 +218,7 @@ function scale.set_code(scale)
     scale_font_once(font, s, scaled_fonts)
   end
 
-  restore_active_textview_caret_y(active_caret_y)
+  restore_active_textview_center(active_center)
 
   core.redraw = true
 end

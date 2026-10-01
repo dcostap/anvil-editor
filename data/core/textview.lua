@@ -3660,6 +3660,52 @@ function TextView:capture_viewport_anchor()
   return { line = line, col = col or 1, content_y = metric_tree_sum(cache.height_tree, row - 1) }
 end
 
+local function viewport_center_scroll_y(view, anchor)
+  local row = view:get_visual_row(anchor.line, anchor.col, false)
+  return style.padding.y + view:get_visual_row_y_offset(row)
+    + anchor.fraction * view:get_visual_row_height(row) - view.size.y / 2
+end
+
+---Capture the Buffer position and row fraction at the viewport's center.
+function TextView:capture_viewport_center()
+  if self.__pending_viewport_center then return self.__pending_viewport_center end
+  local retained = self.__retained_viewport_center
+  if retained and retained.revision == self.buffer.text_revision
+    and math.abs(viewport_center_scroll_y(self, retained) - self.scroll.y) <= 1
+  then
+    -- Keep the same source column through repeated zooms. Rewrapping can
+    -- place it inside a row with a different starting column.
+    return retained
+  end
+  local y = self.scroll.y + self.size.y / 2 - style.padding.y
+  local row = self:get_visual_row_at_y(math.max(0, y))
+  local line, col = self:get_visual_row_line_col(row)
+  if not line then return nil end
+  return {
+    line = line, col = col or 1,
+    fraction = common.clamp(
+      (y - self:get_visual_row_y_offset(row)) / self:get_visual_row_height(row), 0, 1
+    ),
+    revision = self.buffer.text_revision,
+  }
+end
+
+local function apply_viewport_center(view, anchor)
+  local y = viewport_center_scroll_y(view, anchor)
+  local max_scroll = math.max(0, view:get_scrollable_size() - view.size.y)
+  view.scroll.y = common.clamp(y, 0, max_scroll)
+  view.scroll.to.y = view.scroll.y
+  view.scroll.move_data_y = nil
+end
+
+---Restore the center now and after the next viewport layout update.
+function TextView:restore_viewport_center(anchor)
+  if not anchor then return end
+  apply_viewport_center(self, anchor)
+  self.__pending_viewport_center = anchor
+  self.__retained_viewport_center = anchor
+end
+
 ---Restore an anchor when the replacement row measurements become available.
 function TextView:restore_viewport_anchor(anchor)
   self.__pending_viewport_anchor = anchor
@@ -6446,6 +6492,10 @@ function TextView:update()
     perf_elapsed("textview_update_wrap_cache_ms", wrap_start)
   end
 
+  local zoom_center = self.__pending_viewport_center
+  self.__pending_viewport_center = nil
+  if zoom_center then apply_viewport_center(self, zoom_center) end
+
   if self.__pending_line_scroll and self.size.y > 0 then
     local pending = self.__pending_line_scroll
     self.__pending_line_scroll = nil
@@ -6474,7 +6524,7 @@ function TextView:update()
     if core.active_view == self and not ime.editing then
       local scroll_start = perf_active and system.get_time()
       self:scroll_to_make_visible(line1, col1, self.needs_initial_scroll_validation,
-        jump and { vertical = false } or nil)
+        (jump or (zoom_center and not selection_moved)) and { vertical = false } or nil)
       perf_elapsed("textview_scroll_to_make_visible_ms", scroll_start)
       self.needs_initial_scroll_validation = nil
     end
