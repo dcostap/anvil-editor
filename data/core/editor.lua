@@ -144,6 +144,8 @@ function Editor.from_state(state)
   editor.scroll.x, editor.scroll.to.x = scroll.x or 0, scroll.x or 0
   editor.scroll.y, editor.scroll.to.y = scroll.y or 0, scroll.y or 0
   editor.needs_initial_scroll_validation = true
+  -- Restore presentation before feature state, even when another Pane keeps focus.
+  require("core.markdown.live_render").refresh_view(editor)
   editor:restore_owned_feature_state(state.owned_features)
   return editor
 end
