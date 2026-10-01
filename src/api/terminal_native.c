@@ -28,6 +28,7 @@
 #define TERMINAL_SCROLLBACK_MAX_BYTES (64u * 1024u * 1024u)
 #define TERMINAL_DRAIN_QUIET_MS 250u
 #define TERMINAL_DRAIN_MAX_MS 5000u
+#define TERMINAL_SYNC_OUTPUT_TIMEOUT_MS 1000u
 #define TERMINAL_OUTPUT_EVENT "terminaloutput"
 
 static void *terminal_alloc(
@@ -167,6 +168,8 @@ typedef struct {
   uint64_t rejected_writes;
   uint64_t forced_drain_finalizations;
   uint64_t render_generation;
+  uint64_t synchronized_output_started_ms;
+  bool render_pending;
   LONG bell_count;
   char *clipboard_text;
   size_t clipboard_text_length;
@@ -216,6 +219,38 @@ static void push_status(lua_State *L, TerminalSession *session);
 static void set_integer_field(lua_State *L, const char *name, lua_Integer value);
 static void set_boolean_field(lua_State *L, const char *name, bool value);
 static uint32_t color_value(GhosttyColorRgb color);
+
+/* Keep the last completed screen while the application repaints it.
+   libghostty-vt tracks this mode, but the caller must pause publication. */
+static GhosttyResult update_terminal_render_state(TerminalSession *session) {
+  session->render_pending = true;
+  GhosttyTerminalModeConfig mode = {
+    .mode = GHOSTTY_MODE_SYNC_OUTPUT,
+    .value = false,
+  };
+  GhosttyResult result = ghostty_terminal_get(
+    session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode
+  );
+  if (result != GHOSTTY_SUCCESS) return result;
+  if (mode.value) {
+    uint64_t now = GetTickCount64();
+    if (!session->synchronized_output_started_ms) {
+      session->synchronized_output_started_ms = now;
+    }
+    if (now - session->synchronized_output_started_ms < TERMINAL_SYNC_OUTPUT_TIMEOUT_MS &&
+        session->state != TERMINAL_STATE_EXITED && session->state != TERMINAL_STATE_FAILED) {
+      return GHOSTTY_SUCCESS;
+    }
+    /* A missing end marker must not leave the screen frozen. */
+    mode.value = false;
+    result = ghostty_terminal_set(session->terminal, GHOSTTY_TERMINAL_OPT_MODE, &mode);
+    if (result != GHOSTTY_SUCCESS) return result;
+  }
+  session->synchronized_output_started_ms = 0;
+  result = ghostty_render_state_update(session->render_state, session->terminal);
+  if (result == GHOSTTY_SUCCESS) session->render_pending = false;
+  return result;
+}
 
 static const char *terminal_state_name(TerminalState state) {
   switch (state) {
@@ -928,7 +963,7 @@ static bool initialize_terminal(
     session->terminal, session->cols, session->rows,
     session->cell_width, session->cell_height
   );
-  return ghostty_render_state_update(session->render_state, session->terminal) == GHOSTTY_SUCCESS;
+  return update_terminal_render_state(session) == GHOSTTY_SUCCESS;
 }
 
 static GhosttyColorRgb unpack_color(lua_Integer value) {
@@ -1016,7 +1051,7 @@ static int f_terminal_set_colors(lua_State *L) {
   luaL_checktype(L, 2, LUA_TTABLE);
   TerminalColors colors = read_terminal_colors(L, 2);
   bool ok = terminal_model_available(session) && set_terminal_colors(session, &colors) &&
-    ghostty_render_state_update(session->render_state, session->terminal) == GHOSTTY_SUCCESS;
+    update_terminal_render_state(session) == GHOSTTY_SUCCESS;
   if (ok) {
     GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
     ghostty_render_state_set(session->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &dirty);
@@ -1412,10 +1447,11 @@ static int f_terminal_update(lua_State *L) {
     changed = true;
   }
 
-  if (changed) {
-    if (ghostty_render_state_update(session->render_state, session->terminal) != GHOSTTY_SUCCESS) {
-      changed = false;
-    } else {
+  if (changed) session->render_pending = true;
+  changed = false;
+  if (session->render_pending) {
+    if (update_terminal_render_state(session) == GHOSTTY_SUCCESS && !session->render_pending) {
+      changed = true;
       session->render_generation++;
       invalidate_search_scan(session);
     }
@@ -1465,6 +1501,13 @@ static int f_terminal_update(lua_State *L) {
     close_handle(&session->process);
     release_terminal_transport(session);
     set_terminal_state(session, TERMINAL_STATE_EXITED);
+  }
+  if (session->render_pending &&
+      (session->state == TERMINAL_STATE_EXITED || session->state == TERMINAL_STATE_FAILED) &&
+      update_terminal_render_state(session) == GHOSTTY_SUCCESS && !session->render_pending) {
+    changed = true;
+    session->render_generation++;
+    invalidate_search_scan(session);
   }
   lua_pushboolean(L, changed);
   push_status(L, session);
@@ -1655,7 +1698,7 @@ static int f_terminal_resize(lua_State *L) {
   session->rows = rows;
   session->cell_width = cell_width;
   session->cell_height = cell_height;
-  ghostty_render_state_update(session->render_state, session->terminal);
+  update_terminal_render_state(session);
   session->render_generation++;
   invalidate_search_scan(session);
   lua_pushboolean(L, true);
@@ -1672,7 +1715,7 @@ static int f_terminal_clear(lua_State *L) {
   ghostty_terminal_vt_write(
     session->terminal, clear_sequence, sizeof(clear_sequence) - 1
   );
-  ghostty_render_state_update(session->render_state, session->terminal);
+  update_terminal_render_state(session);
   session->render_generation++;
   invalidate_search_scan(session);
   lua_pushboolean(L, true);
@@ -1946,7 +1989,7 @@ static int f_terminal_scroll(lua_State *L) {
     viewport.value.delta = (intptr_t)luaL_checkinteger(L, 2);
   }
   ghostty_terminal_scroll_viewport(session->terminal, viewport);
-  ghostty_render_state_update(session->render_state, session->terminal);
+  update_terminal_render_state(session);
   lua_pushboolean(L, true);
   return 1;
 }
@@ -2021,7 +2064,7 @@ static int f_terminal_selection_gesture(lua_State *L) {
       session->terminal, GHOSTTY_TERMINAL_OPT_SELECTION, &selection
     ) == GHOSTTY_SUCCESS;
   }
-  if (ok) ghostty_render_state_update(session->render_state, session->terminal);
+  if (ok) update_terminal_render_state(session);
   lua_pushboolean(L, ok);
   GhosttySelectionGestureAutoscroll autoscroll = GHOSTTY_SELECTION_GESTURE_AUTOSCROLL_NONE;
   if (ghostty_selection_gesture_get(
@@ -2062,7 +2105,7 @@ static int f_terminal_select(lua_State *L) {
     ghostty_terminal_set(
       session->terminal, GHOSTTY_TERMINAL_OPT_SELECTION, &selection
     ) == GHOSTTY_SUCCESS &&
-    ghostty_render_state_update(session->render_state, session->terminal) == GHOSTTY_SUCCESS;
+    update_terminal_render_state(session) == GHOSTTY_SUCCESS;
   lua_pushboolean(L, ok);
   return 1;
 }
@@ -2077,7 +2120,7 @@ static int f_terminal_clear_selection(lua_State *L) {
     session->terminal, GHOSTTY_TERMINAL_OPT_SELECTION, NULL
   );
   if (result == GHOSTTY_SUCCESS) {
-    ghostty_render_state_update(session->render_state, session->terminal);
+    update_terminal_render_state(session);
   }
   lua_pushboolean(L, result == GHOSTTY_SUCCESS);
   return 1;
@@ -2793,7 +2836,7 @@ static int f_terminal_search(lua_State *L) {
     lua_pushboolean(L, false);
     return 1;
   }
-  ghostty_render_state_update(session->render_state, session->terminal);
+  update_terminal_render_state(session);
   lua_pushboolean(L, true);
   lua_pushinteger(L, (lua_Integer)found_row);
   return 2;
