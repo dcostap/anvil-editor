@@ -105,6 +105,16 @@ test.describe("Rust Tree-sitter support", function()
     test.equal(require("core.syntax").get("example.rs", "").name, "Rust")
   end)
 
+  test.it("offers the bundled Rust Language Mode for an Untitled Buffer", function()
+    require "plugins.anvil_language_rust"
+    local buffer = Buffer()
+    local changed, err = require("core.language_mode").set_buffer_mode(buffer, "Rust", { persist = false })
+    test.ok(changed, err)
+    test.equal(buffer.syntax.name, "Rust")
+    test.equal(test.not_nil(buffer.treesitter).language_id, "rust")
+    buffer:on_close()
+  end)
+
   test.it("outlines Rust declarations without local names and highlights source", function()
     local buffer, symbols = buffer_outline(source)
     test.same(symbol_names(symbols), expected)

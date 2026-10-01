@@ -33,6 +33,7 @@ local core_plugins = {
   intellij_actions = true,
   intellij_find = true,
   anvil_language_json = true,
+  anvil_language_rust = true,
   scale_debug_log = true,
   selection_surround = true,
   smart_indent_rules = true,
@@ -206,6 +207,7 @@ plugin_defaults("scale", {
 require_core_plugin "intellij_actions"
 reload_core_plugin "global_prompt_bar_sanitize"
 require_core_plugin "intellij_find"
+require_core_plugin "anvil_language_rust"
 require_core_plugin "document_format"
 require_core_plugin "untitled_recovery"
 require_core_plugin "untitled_tabs"

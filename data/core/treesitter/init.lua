@@ -272,7 +272,18 @@ function treesitter.attach_or_update_buffer(buffer, reason)
     return buffer.treesitter
   end
 
-  local language = registry.get(buffer_path(buffer), first_bytes(buffer, 512))
+  local language
+  if buffer.language_mode_override or buffer.language_mode_inferred then
+    local name = buffer.syntax and buffer.syntax.name
+    for _, candidate in ipairs(registry.get_languages()) do
+      if candidate.name == name then
+        language = candidate
+        break
+      end
+    end
+  else
+    language = registry.get(buffer_path(buffer), first_bytes(buffer, 512))
+  end
   if not language then
     treesitter.close_buffer(buffer)
     return nil
