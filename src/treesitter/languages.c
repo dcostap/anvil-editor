@@ -6,6 +6,7 @@ const TSLanguage *tree_sitter_c(void);
 const TSLanguage *tree_sitter_cpp(void);
 const TSLanguage *tree_sitter_odin(void);
 const TSLanguage *tree_sitter_kotlin(void);
+const TSLanguage *tree_sitter_rust(void);
 const TSLanguage *tree_sitter_javascript(void);
 const TSLanguage *tree_sitter_typescript(void);
 const TSLanguage *tree_sitter_tsx(void);
@@ -17,6 +18,7 @@ static const AnvilTSLanguage anvil_ts_languages[] = {
   { "cpp", "0.23.4", tree_sitter_cpp },
   { "odin", "1.3.0", tree_sitter_odin },
   { "kotlin", "0.4.0", tree_sitter_kotlin },
+  { "rust", "0.24.2", tree_sitter_rust },
   { "javascript", "0.25.0", tree_sitter_javascript },
   { "typescript", "0.23.2", tree_sitter_typescript },
   { "tsx", "0.23.2", tree_sitter_tsx },

@@ -22,7 +22,7 @@ The query must select declarations, not all identifiers. Tree-sitter node types 
 
 ## Review of registered languages
 
-This review covers the eight languages in `data/core/treesitter/registry.lua`.
+This review covers the nine languages in `data/core/treesitter/registry.lua`.
 It describes the current outline queries, not all forms that each grammar can parse.
 Every registered language has an outline query.
 The gaps below need work before Anvil can claim complete symbol coverage.
@@ -35,6 +35,7 @@ The gaps below need work before Anvil can claim complete symbol coverage.
 | TypeScript | JavaScript selections plus interfaces, type aliases, enums, enum members, method signatures, and property signatures. | Destructured variables and computed field names need separate work. |
 | TSX | The same selection as TypeScript, with its own grammar and query file. | Keep TSX tests separate from TypeScript tests. |
 | Kotlin | Classes, objects, top-level functions and properties, class methods and properties, constructor properties, type aliases, and enum entries. | Function and property rules select named file and class scopes. Review other scopes when users need them. |
+| Rust | Modules, structs, unions, enums, variants, named fields, traits, type aliases, constants, statics, macros, functions, and impl methods. Impl blocks group methods under the target type name. | Tuple fields have no names. Impl targets cover named, qualified, and generic types, not references or other compound types. Macro expansion and imported names are not indexed. Nested local types and destructured bindings need further review. Usage results are syntactic hints. |
 | Odin | Procedures, named types, fields, enum entries, constants, variables, packages, and foreign blocks. | A procedure-local short variable did not enter the index in the focused test. Check other forms as needed. |
 | Markdown | ATX and setext headings. | Headings are the only symbols. There is no usage query. |
 
@@ -56,6 +57,7 @@ Do not extend declarator patterns one pointer layer at a time.
 Use `tests/lua/runtime/treesitter_project_index_contract.lua` for native Project records.
 Use `tests/lua/runtime/treesitter_global_symbols.lua` for C and C++ Project cases.
 See `tests/lua/runtime/treesitter_javascript_typescript.lua` and `treesitter_markdown_symbols.lua` for Buffer examples.
+Use `tests/lua/runtime/treesitter_rust.lua` for Rust Buffer and native Project cases.
 
 Keep one query file per grammar when its syntax nodes differ.
 Put shared record building in `data/core/treesitter/outline.lua` and `src/treesitter/project_file.c`.

@@ -17,6 +17,7 @@ local ICON_FILES = {
   record = "record",
   enum = "enum",
   interface = "interface",
+  impl = "interface",
   field = "field",
   enum_member = "constant",
   variable = "variable",

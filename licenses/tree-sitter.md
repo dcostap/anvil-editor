@@ -7,6 +7,7 @@
 - Tree-sitter C++ grammar: `tree-sitter/tree-sitter-cpp` commit `f41e1a044c8a84ea9fa8577fdd2eab92ec96de02`, version `0.23.4`.
 - Tree-sitter Odin grammar: `tree-sitter-grammars/tree-sitter-odin` commit `d2ca8efb4487e156a60d5bd6db2598b872629403`, version `1.3.0`.
 - Tree-sitter Kotlin grammar: `fwcd/tree-sitter-kotlin` commit `c8ac3d2627240160b999a2c100de3babbdb8f419`, version `0.4.0`.
+- Tree-sitter Rust grammar: `tree-sitter/tree-sitter-rust` commit `77a3747266f4d621d0757825e6b11edcbf991ca5`, version `0.24.2`.
 - Tree-sitter JavaScript grammar: `tree-sitter/tree-sitter-javascript` commit `44c892e0be055ac465d5eeddae6d3e194424e7de`, version `0.25.0`.
 - Tree-sitter TypeScript and TSX grammars: `tree-sitter/tree-sitter-typescript` commit `f975a621f4e7f532fe322e13c4f79495e0a7b2e7`, version `0.23.2`.
 - Tree-sitter Markdown block and inline grammars: `tree-sitter-grammars/tree-sitter-markdown` commit `c3570720f7f7bbad22fe96603f106276618e0cf5`, version `0.5.3`.
@@ -18,6 +19,7 @@ The build uses tracked Meson wraps plus tracked packagefile Meson build definiti
 - `subprojects/tree-sitter-cpp.wrap`
 - `subprojects/tree-sitter-odin.wrap`
 - `subprojects/tree-sitter-kotlin.wrap`
+- `subprojects/tree-sitter-rust.wrap`
 - `subprojects/tree-sitter-javascript.wrap`
 - `subprojects/tree-sitter-typescript.wrap`
 - `subprojects/tree-sitter-markdown.wrap`
@@ -26,6 +28,7 @@ The build uses tracked Meson wraps plus tracked packagefile Meson build definiti
 - `subprojects/packagefiles/tree-sitter-cpp/meson.build`
 - `subprojects/packagefiles/tree-sitter-odin/meson.build`
 - `subprojects/packagefiles/tree-sitter-kotlin/meson.build`
+- `subprojects/packagefiles/tree-sitter-rust/meson.build`
 - `subprojects/packagefiles/tree-sitter-javascript/meson.build`
 - `subprojects/packagefiles/tree-sitter-typescript/meson.build`
 - `subprojects/packagefiles/tree-sitter-markdown/meson.build`
@@ -44,6 +47,7 @@ Tree-sitter C grammar ABI version: `15`.
 Tree-sitter C++ grammar ABI version: `14`.
 Tree-sitter Odin grammar ABI version: `14`.
 Tree-sitter Kotlin grammar ABI version: `14`.
+Tree-sitter Rust grammar ABI version: `15`.
 Tree-sitter JavaScript grammar ABI version: `15`.
 Tree-sitter TypeScript and TSX grammar ABI version: `14`.
 Tree-sitter Markdown block and inline grammar ABI version: `15`.
@@ -167,6 +171,28 @@ SOFTWARE.
 ### Tree-sitter Kotlin grammar
 
 Copyright (c) 2019 fwcd
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### Tree-sitter Rust grammar
+
+Copyright (c) 2017 Maxim Sokolov
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
