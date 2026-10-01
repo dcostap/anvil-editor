@@ -51,7 +51,8 @@ function counts.get(path, modified, show_hidden)
       running = false
     end)
   end
-  return nil, true
+  -- Keep the last count visible while directory activity invalidates its timestamp.
+  return cached, true
 end
 
 return counts

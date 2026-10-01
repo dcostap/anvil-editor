@@ -14,6 +14,7 @@ local project_paths = require "core.project_paths"
 local panes = require "core.panes"
 local storage = require "core.storage"
 local DirWatch = require "core.dirwatch"
+local linewrapping = require "core.linewrapping"
 local file_git_status = require "plugins.file_git_status"
 local path_tree = require "plugins.path_tree"
 
@@ -972,7 +973,7 @@ function FileTreeView:queue_filesystem_sync(path, reason)
   end
 
   core.log_quiet("File Tree filesystem sync from %s: %s", reason or "watch", tostring(path))
-  self:refresh_preserving_selection_paths(true, self:filesystem_reveal_paths(path))
+  self:refresh_preserving_selection_paths(true, self:filesystem_reveal_paths(path), nil, nil, true)
   self.filesystem_sync_deferred = false
   return true
 end
@@ -1075,7 +1076,7 @@ function FileTreeView:update_filesystem_watches()
   end
 end
 
-function FileTreeView:handle_filesystem_watch_change(changed_dir)
+function FileTreeView:handle_filesystem_watch_change(changed_dir, changed_path, precise, kind)
   changed_dir = changed_dir and common.normalize_path(changed_dir)
   if not changed_dir or not self.filesystem_watched_dirs[changed_dir] then return end
 
@@ -1084,6 +1085,10 @@ function FileTreeView:handle_filesystem_watch_change(changed_dir)
   if old_signature == new_signature then return end
 
   self.filesystem_dir_signatures[changed_dir] = new_signature
+  core.log_quiet(
+    "File Tree directory changed: directory=%s path=%s precise=%s kind=%s",
+    changed_dir, tostring(changed_path), tostring(precise), tostring(kind)
+  )
   self:queue_filesystem_sync(changed_dir, "watch")
 end
 
@@ -1094,8 +1099,8 @@ function FileTreeView:start_filesystem_watch()
   core.add_thread(function()
     while view.filesystem_watch_running and view.filesystem_watch do
       local ok, err = pcall(function()
-        view.filesystem_watch:check(function(changed_dir)
-          view:handle_filesystem_watch_change(changed_dir)
+        view.filesystem_watch:check(function(changed_dir, changed_path, precise, kind)
+          view:handle_filesystem_watch_change(changed_dir, changed_path, precise, kind)
         end)
       end)
       if not ok then
@@ -1346,7 +1351,7 @@ function FileTreeView:get_path_target()
   return path and { path = path } or nil
 end
 
-function FileTreeView:restore_selection_paths(snapshot)
+function FileTreeView:restore_selection_paths(snapshot, reveal_selection)
   if not snapshot or not snapshot.selections then return false end
 
   local _, _, entries_snapshot = self:build_entries(false)
@@ -1371,7 +1376,9 @@ function FileTreeView:restore_selection_paths(snapshot)
 
     last_selection = common.clamp(math.floor(tonumber(last_selection) or 1), 1, #restored / 4)
     self:set_selection_state({ selections = restored, last_selection = last_selection })
-    if primary_line then self:scroll_to_make_visible(primary_line, primary_col or 1) end
+    if primary_line and reveal_selection ~= false then
+      self:scroll_to_make_visible(primary_line, primary_col or 1)
+    end
     return true
   end
 
@@ -1467,12 +1474,21 @@ function FileTreeView:append_project_path_sections(out)
   end
 end
 
-function FileTreeView:refresh_preserving_selection_paths(preserve_expansion, reveal_paths, path_map, selection_paths)
+function FileTreeView:refresh_preserving_selection_paths(preserve_expansion, reveal_paths, path_map, selection_paths, preserve_scroll)
+  local x, y, to_x, to_y = self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y
   selection_paths = selection_paths or self:capture_selection_paths()
   self:refresh(false, preserve_expansion, reveal_paths)
   selection_paths = self:remap_selection_paths(selection_paths, path_map)
-  if selection_paths and not self:restore_selection_paths(selection_paths) then
+  if selection_paths and not self:restore_selection_paths(selection_paths, not preserve_scroll) then
     core.log_quiet("File Tree refresh could not restore selection by path")
+  end
+  if preserve_scroll then
+    self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = x, y, to_x, to_y
+    -- Row changes from filesystem updates are not user caret movement.
+    self.last_line1, self.last_col1, self.last_line2, self.last_col2 = self.buffer:get_selection()
+    self.last_line_end = linewrapping.has_wrapped_line_end_affinity(self, self.last_line1, self.last_col1)
+    local _, _, position_row = self:get_position_line_render_row(self.last_line1, self.last_col1)
+    self.last_position_row = position_row
   end
 end
 
