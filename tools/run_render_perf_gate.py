@@ -130,6 +130,13 @@ SCENARIOS["image-viewer"] = {
     "paced": False,
 }
 SCENARIOS["image-filtering"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["terminal-blocks"] = {
+    "start_line": 1,
+    "window_width": 1400,
+    "window_height": 1100,
+    "visual": True,
+    "paced": False,
+}
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,
     "tab_count": 8,
@@ -1018,6 +1025,27 @@ def run_case(
                                 f"image filtering failed: {sample['name']}: expected {expected}, got {actual}"
                             )
             result["image_filtering"] = "passed"
+        if scenario == "terminal-blocks":
+            with Image.open(screenshot_file) as capture:
+                pixels = capture.convert("RGB")
+                with image_metadata_file.open(newline="", encoding="utf-8") as metadata:
+                    for sample in csv.DictReader(metadata):
+                        x, y = int(sample["x"]), int(sample["y"])
+                        expected = tuple(int(sample[channel]) for channel in ("r", "g", "b"))
+                        def matches(color):
+                            return all(abs(a - e) <= 1 for a, e in zip(color, expected))
+                        if sample["kind"] == "coverage":
+                            count = sum(matches(pixels.getpixel((px, py)))
+                                        for py in range(y, y + int(sample["h"]))
+                                        for px in range(x, x + int(sample["w"])))
+                            if count != int(sample["count"]):
+                                raise RuntimeError(f"terminal shade coverage failed: {sample}: got {count}")
+                        elif not matches(pixels.getpixel((x, y))):
+                            raise RuntimeError(
+                                f"terminal block pixels failed: {sample['name']} at {x},{y}: "
+                                f"expected {expected}, got {pixels.getpixel((x, y))}"
+                            )
+            result["terminal_blocks"] = "passed"
         if scenario == "font-raster-correctness":
             fixtures = read_font_raster_metadata(raster_metadata_file)
             result["font_raster"] = analyze_font_raster_seams(

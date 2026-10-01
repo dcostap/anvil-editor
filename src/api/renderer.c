@@ -532,6 +532,18 @@ static int f_draw_rect(lua_State *L) {
   return 0;
 }
 
+static int f_draw_rect_grid(lua_State *L) {
+  RenWindow *window = ren_get_target_window();
+  if (!window) return luaL_error(L, "no target window found");
+  lua_Integer count = luaL_checkinteger(L, 6);
+  luaL_argcheck(L, count > 0 && count <= INT_MAX, 6, "invalid rectangle-grid count");
+  rencache_draw_rect_grid(&window->cache,
+    luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+    luaL_checknumber(L, 4), luaL_checknumber(L, 5), (int)count,
+    luaXL_checkcolor(L, 7, 255));
+  return 0;
+}
+
 static LuaTextLayout *check_text_layout(lua_State *L, int index) {
   return (LuaTextLayout *)luaL_checkudata(L, index, API_TYPE_TEXT_LAYOUT);
 }
@@ -1609,6 +1621,7 @@ static const luaL_Reg lib[] = {
   { "push_transform",     f_push_transform     },
   { "pop_transform",      f_pop_transform      },
   { "draw_rect",          f_draw_rect          },
+  { "draw_rect_grid",     f_draw_rect_grid     },
   { "draw_rounded_rect",  f_draw_rounded_rect  },
   { "draw_text",          f_draw_text          },
   { "draw_text_known_bounds", f_draw_text_known_bounds },

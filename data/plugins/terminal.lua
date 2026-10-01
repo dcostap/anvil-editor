@@ -8,6 +8,7 @@ local file_context = require "core.file_context"
 local ime = require "core.ime"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
+local blocks = require "plugins.terminal.blocks"
 local style = require "core.style"
 local text_capture = require "core.text_capture"
 local text_poi_locations = require "core.text_poi_locations"
@@ -276,6 +277,7 @@ function TerminalView:new(options)
   core.log_quiet("Terminal session %d started: cwd=%s cols=%d rows=%d minimum contrast=%g vividness=%g",
     self.session_id, self.launch_options.cwd, self.cols, self.rows,
     self.minimum_contrast, self.color_vividness)
+  core.log_quiet("Terminal session %d renders Block Elements from cell geometry", self.session_id)
 end
 
 function TerminalView:get_name()
@@ -911,7 +913,10 @@ function TerminalView:draw()
       local width = run.columns * self.cell_width
       local color = rgb(self, run.fg, style.text, run.alpha or (run.faint and 140 or 255))
       local font = cell_font(self, run)
-      if renderer.draw_text_known_bounds then
+      if run.block then
+        blocks.draw(run.block, origin_x, y, self.cell_width, self.cell_height,
+          run.col, run.columns, color)
+      elseif renderer.draw_text_known_bounds then
         renderer.draw_text_known_bounds(
           font, run.text, x, y,
           math.floor(x), math.floor(y), math.ceil(width), math.ceil(self.cell_height),

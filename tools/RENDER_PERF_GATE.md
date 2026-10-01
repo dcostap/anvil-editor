@@ -410,6 +410,12 @@ This focused scene is not in the default suites. It does not yet have a full-sui
 Use `--scenario titlebar-file-drop` to check external-drop feedback over a Title Bar with several Tabs.
 The scene sends internal drop events. It does not move the mouse or use a user's window.
 
+Use `--scenario terminal-blocks` to check terminal Block Elements on either renderer.
+The scene checks continuous bars at fractional cell widths on light and dark backgrounds.
+It checks faint ink, complementary halves, all block fractions, quadrants, and shade coverage.
+The checks compare pixels with independent expected values. They do not need stored goldens.
+This focused scene is not in the default suites.
+
 Use `--scenario image-filtering --renderer d3d11` to check image sampling through captured pixels.
 The check covers reduced fine detail, enlarged color transitions, transparent edges, and unchanged pixels at actual size.
 It uses independent expected colors, not a visual golden, to test filtering behavior.

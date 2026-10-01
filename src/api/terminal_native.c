@@ -2978,6 +2978,7 @@ typedef struct {
   size_t text_length;
   uint32_t foreground;
   uint32_t background;
+  uint32_t block;
   int underline;
   uint8_t alpha;
   uint8_t columns;
@@ -3001,6 +3002,7 @@ typedef struct {
   int start_col;
   int end_col;
   uint32_t foreground;
+  uint32_t block;
   uint8_t alpha;
   int underline;
   bool active;
@@ -3085,6 +3087,12 @@ static void read_render_cell(
     cell->underline_color = color_value(colors->palette[style.underline_color.value.palette]);
   }
   cell->columns = wide == GHOSTTY_CELL_WIDE_WIDE ? 2 : 1;
+  /* Only standalone Block Elements use cell geometry. Keep combined
+     graphemes on the font path so their marks remain visible. */
+  if (codepoint >= 0x2580 && codepoint <= 0x259f && grapheme.len == 3
+      && cell->columns == 1) {
+    cell->block = codepoint;
+  }
   if (ghostty_render_state_row_cells_get(
     session->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_SELECTED, &cell->selected
   ) != GHOSTTY_SUCCESS) cell->selected = false;
@@ -3107,7 +3115,8 @@ static void read_render_cell(
 }
 
 static bool same_text_run(const TerminalTextRun *run, const TerminalRenderCell *cell) {
-  return run->foreground == cell->foreground && run->bold == cell->bold &&
+  return run->block == cell->block &&
+    run->foreground == cell->foreground && run->bold == cell->bold &&
     run->alpha == cell->alpha &&
     run->italic == cell->italic && run->underline == cell->underline &&
     run->strikethrough == cell->strikethrough && run->faint == cell->faint &&
@@ -3127,6 +3136,7 @@ static void flush_text_run(
   set_integer_field(L, "columns", run->end_col - run->start_col);
   set_integer_field(L, "fg", run->foreground);
   set_integer_field(L, "alpha", run->alpha);
+  if (run->block) set_integer_field(L, "block", run->block);
   if (run->bold) set_boolean_field(L, "bold", true);
   if (run->italic) set_boolean_field(L, "italic", true);
   if (run->faint) set_boolean_field(L, "faint", true);
@@ -3196,6 +3206,7 @@ static void push_render_row(
         run.start_col = col;
         run.end_col = col;
         run.foreground = cell.foreground;
+        run.block = cell.block;
         run.alpha = cell.alpha;
         run.bold = cell.bold;
         run.italic = cell.italic;

@@ -644,6 +644,11 @@ local function setup_scenario()
     view = open_image_filtering_scene()
   elseif benchmark.scenario == "font-raster-correctness" then
     view = open_font_raster_view()
+  elseif benchmark.scenario == "terminal-blocks" then
+    view = require("core.terminal_block_scene")()
+    require("core.panes").place(function() return view end, {
+      placement = "current", focus = true, reason = "perf-terminal-blocks",
+    })
   elseif benchmark.scenario == "filetree-edit-repeat" then
     local root = common.dirname(benchmark.fixture) .. PATHSEP .. "editable-tree"
     view = require("plugins.filetree").new()
