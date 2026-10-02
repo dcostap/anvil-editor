@@ -3,6 +3,9 @@ local common = require "core.common"
 local style = require "core.style"
 local View = require "core.view"
 local TerminalView = require("plugins.terminal").TerminalView
+local core = require "core"
+local config = require "core.config"
+local CaretRenderer = require "core.caret_renderer"
 
 local Scene = View:extend()
 function Scene:get_name() return "Terminal Block Elements" end
@@ -44,9 +47,9 @@ end
 
 function Scene:draw()
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, {32,36,42,255})
-  local samples = { "kind,name,x,y,w,h,r,g,b,count" }
+  local samples = { "kind,name,x,y,w,h,r,g,b,count,target_x" }
   local function pixel(name, x, y, color)
-    samples[#samples + 1] = string.format("pixel,%s,%d,%d,1,1,%d,%d,%d,0",
+    samples[#samples + 1] = string.format("pixel,%s,%d,%d,1,1,%d,%d,%d,0,",
       name, x, y, color[1], color[2], color[3])
   end
   local foreground = 0x7788cc
@@ -115,12 +118,51 @@ function Scene:draw()
     view.snapshot.rows[row] = { backgrounds = {}, text_runs = runs }
   end
   draw_terminal(view)
+
+  -- Font ink must keep its color under a block cursor, with or without a trail.
+  for index, mode in ipairs {"direct", "animated", "horizontal"} do
+    local columns = mode == "horizontal" and 3 or 1
+    local reference = terminal(self.fonts[24], self.position.x + 700,
+      self.position.y + 890 + (index - 1) * 36, 0x101824)
+    reference.cell_width = math.ceil(reference.cell_width)
+    reference.snapshot.rows = {{ backgrounds = {}, text_runs = {{
+      col = 0, columns = columns, text = string.rep("M", columns), fg = 0xffffff,
+    }} }}
+    draw_terminal(reference)
+    local caret = terminal(self.fonts[24], reference.position.x + 80,
+      reference.position.y, 0x101824)
+    caret.cell_width = reference.cell_width
+    caret.snapshot.rows = reference.snapshot.rows
+    caret.snapshot.cursor = { visible = true, x = 0, y = 0, style = "block", color = 0x102030 }
+    caret.running, caret.focused = true, true
+    local old_animated, old_caret = config.animated_caret, core.root_panel.caret_renderer
+    config.animated_caret = mode ~= "direct"
+    core.root_panel.caret_renderer = CaretRenderer.new()
+    core.root_panel:begin_keyboard_caret_frame()
+    draw_terminal(caret)
+    if mode == "horizontal" then
+      core.root_panel.caret_renderer:draw(0)
+      core.root_panel:begin_keyboard_caret_frame()
+      caret.snapshot.cursor.x = 2
+      draw_terminal(caret)
+      core.root_panel.caret_renderer:draw(1 / 60)
+    else
+      core.root_panel:draw_keyboard_caret()
+    end
+    core.root_panel.caret_renderer, config.animated_caret = old_caret, old_animated
+    if not self.metadata_written then
+      samples[#samples + 1] = string.format("ink,cursor-%s,%d,%d,%d,%d,255,255,255,0,%d",
+        mode, reference.position.x + 6,
+        reference.position.y + 6, columns * reference.cell_width, reference.cell_height,
+        caret.position.x + 6)
+    end
+  end
   if self.metadata_written then return end
   for index, example in ipairs(expected) do
     local left = math.floor(view.position.x + 6 + 0.5) + ((index - 1) % 16) * 16
     local top = math.floor(view.position.y + 6 + 0.5) + math.floor((index - 1) / 16) * 16
     if type(example) == "number" then
-      samples[#samples + 1] = string.format("coverage,shade,%d,%d,16,16,%d,%d,%d,%d",
+      samples[#samples + 1] = string.format("coverage,shade,%d,%d,16,16,%d,%d,%d,%d,",
         left, top, fg[1], fg[2], fg[3], example)
     else
       for y = 0, 15 do

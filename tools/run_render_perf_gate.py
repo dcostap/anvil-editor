@@ -1032,9 +1032,23 @@ def run_case(
                     for sample in csv.DictReader(metadata):
                         x, y = int(sample["x"]), int(sample["y"])
                         expected = tuple(int(sample[channel]) for channel in ("r", "g", "b"))
-                        def matches(color):
-                            return all(abs(a - e) <= 1 for a, e in zip(color, expected))
-                        if sample["kind"] == "coverage":
+                        def matches(color, tolerance=1):
+                            return all(abs(a - e) <= tolerance for a, e in zip(color, expected))
+                        if sample["kind"] == "ink":
+                            ink = [(px, py) for py in range(y, y + int(sample["h"]))
+                                   for px in range(x, x + int(sample["w"]))
+                                   if matches(pixels.getpixel((px, py)), 3)]
+                            if not ink:
+                                raise RuntimeError(f"terminal cursor reference has no full ink: {sample['name']}")
+                            target_dx = int(sample["target_x"]) - x
+                            for px, py in ink:
+                                actual = pixels.getpixel((px + target_dx, py))
+                                if not matches(actual, 3):
+                                    raise RuntimeError(
+                                        f"terminal cursor covers font ink: {sample['name']} at {px},{py}: "
+                                        f"expected {expected}, got {actual}"
+                                    )
+                        elif sample["kind"] == "coverage":
                             count = sum(matches(pixels.getpixel((px, py)))
                                         for py in range(y, y + int(sample["h"]))
                                         for px in range(x, x + int(sample["w"])))

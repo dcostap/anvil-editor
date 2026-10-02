@@ -856,6 +856,109 @@ local function cell_font(view, cell)
   return view.font
 end
 
+local function draw_text_run(view, run, origin_x, y, blink_on)
+  if run.blink and not blink_on then return end
+  local x = origin_x + run.col * view.cell_width
+  local width = run.columns * view.cell_width
+  local color = rgb(view, run.fg, style.text, run.alpha or (run.faint and 140 or 255))
+  local font = cell_font(view, run)
+  if run.block then
+    blocks.draw(run.block, origin_x, y, view.cell_width, view.cell_height,
+      run.col, run.columns, color)
+  elseif renderer.draw_text_known_bounds then
+    renderer.draw_text_known_bounds(
+      font, run.text, x, y,
+      math.floor(x), math.floor(y), math.ceil(width), math.ceil(view.cell_height),
+      color
+    )
+  else
+    renderer.draw_text(font, run.text, x, y, color)
+  end
+  if run.underline and run.underline ~= 0 then
+    local underline_color = rgb(view, run.underline_color, color)
+    local thickness = math.max(1, common.round(SCALE))
+    local underline_y = y + view.cell_height - thickness
+    if run.underline == 3 then
+      local step = math.max(2, common.round(2 * SCALE))
+      for offset = 0, width - 1, step do
+        renderer.draw_rect(x + offset, underline_y - ((offset / step) % 2) * thickness,
+          math.min(step, width - offset), thickness, underline_color)
+      end
+    elseif run.underline == 4 or run.underline == 5 then
+      local mark = run.underline == 4 and thickness or math.max(3, common.round(3 * SCALE))
+      local gap = math.max(2, common.round(2 * SCALE))
+      for offset = 0, width - 1, mark + gap do
+        renderer.draw_rect(x + offset, underline_y, math.min(mark, width - offset),
+          thickness, underline_color)
+      end
+    else
+      renderer.draw_rect(x, underline_y, width, thickness, underline_color)
+    end
+    if run.underline == 2 then
+      renderer.draw_rect(x, underline_y - 2 * thickness, width, thickness, underline_color)
+    end
+  end
+  if run.strikethrough then
+    renderer.draw_rect(
+      x, y + math.floor(view.cell_height / 2),
+      width, math.max(1, common.round(SCALE)), color
+    )
+  end
+  if run.overline then
+    renderer.draw_rect(x, y, width, math.max(1, common.round(SCALE)), color)
+  end
+end
+
+local function draw_hover_line(view, origin_x, origin_y)
+  local hover = view.hover_point
+  if not (hover and hover.row ~= nil and hover.col ~= nil) then return end
+  renderer.draw_rect(
+    origin_x + hover.col * view.cell_width,
+    origin_y + hover.row * view.cell_height + view.cell_height - math.max(1, common.round(SCALE)),
+    math.max(view.cell_width,
+      ((hover.end_col or hover.col) - hover.col + 1) * view.cell_width),
+    math.max(1, common.round(SCALE)), style.link or style.text
+  )
+end
+
+function TerminalView:draw_block_cursor(x, y, width, height, color, blink_on)
+  -- Composition text has its own foreground layer. Do not replace it with grid text.
+  if self.composition and self.composition.text ~= "" then
+    return renderer.draw_rect(x, y, width, height, color)
+  end
+  local snapshot = self.snapshot
+  local rows = snapshot.rows or {}
+  local background = rgb(self, snapshot.background, style.background)
+  local origin_x, origin_y = self.position.x + PADDING, self.position.y + PADDING
+  local first = math.max(1, math.floor((y - origin_y) / self.cell_height) + 1)
+  local last = math.min(#rows, math.ceil((y + height - origin_y) / self.cell_height))
+  core.push_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
+  core.push_clip_rect(x, y, width, height)
+  -- Replace the covered pixels with background, cursor, then text.
+  -- Drawing text over its old pixels would apply its opacity twice.
+  local left, top = math.floor(x), math.floor(y)
+  renderer.draw_rect(left, top, math.ceil(x + width) - left, math.ceil(y + height) - top, background)
+  for row_index = first, last do
+    local row_y = origin_y + (row_index - 1) * self.cell_height
+    for _, span in ipairs(rows[row_index].backgrounds or {}) do
+      local span_color = span.color and rgb(self, span.color, background)
+        or (span.selected and style.selection or background)
+      renderer.draw_rect(origin_x + span.col * self.cell_width, row_y,
+        span.columns * self.cell_width, self.cell_height, span_color)
+    end
+  end
+  renderer.draw_rect(x, y, width, height, color)
+  for row_index = first, last do
+    local row_y = origin_y + (row_index - 1) * self.cell_height
+    for _, run in ipairs(rows[row_index].text_runs or {}) do
+      draw_text_run(self, run, origin_x, row_y, blink_on)
+    end
+  end
+  draw_hover_line(self, origin_x, origin_y)
+  core.pop_clip_rect()
+  core.pop_clip_rect()
+end
+
 function TerminalView:draw()
   local draw_scope = perf_scope_begin("terminal", true)
   local snapshot = self.snapshot
@@ -908,71 +1011,12 @@ function TerminalView:draw()
     if y >= self.position.y + self.size.y then break end
     for _, run in ipairs(row.text_runs or {}) do
       if run.blink then self.has_blinking_content = true end
-      if run.blink and not blink_on then goto continue_run end
-      local x = origin_x + run.col * self.cell_width
-      local width = run.columns * self.cell_width
-      local color = rgb(self, run.fg, style.text, run.alpha or (run.faint and 140 or 255))
-      local font = cell_font(self, run)
-      if run.block then
-        blocks.draw(run.block, origin_x, y, self.cell_width, self.cell_height,
-          run.col, run.columns, color)
-      elseif renderer.draw_text_known_bounds then
-        renderer.draw_text_known_bounds(
-          font, run.text, x, y,
-          math.floor(x), math.floor(y), math.ceil(width), math.ceil(self.cell_height),
-          color
-        )
-      else
-        renderer.draw_text(font, run.text, x, y, color)
-      end
-      if run.underline and run.underline ~= 0 then
-        local underline_color = rgb(self, run.underline_color, color)
-        local thickness = math.max(1, common.round(SCALE))
-        local underline_y = y + self.cell_height - thickness
-        if run.underline == 3 then
-          local step = math.max(2, common.round(2 * SCALE))
-          for offset = 0, width - 1, step do
-            renderer.draw_rect(x + offset, underline_y - ((offset / step) % 2) * thickness,
-              math.min(step, width - offset), thickness, underline_color)
-          end
-        elseif run.underline == 4 or run.underline == 5 then
-          local mark = run.underline == 4 and thickness or math.max(3, common.round(3 * SCALE))
-          local gap = math.max(2, common.round(2 * SCALE))
-          for offset = 0, width - 1, mark + gap do
-            renderer.draw_rect(x + offset, underline_y, math.min(mark, width - offset),
-              thickness, underline_color)
-          end
-        else
-          renderer.draw_rect(x, underline_y, width, thickness, underline_color)
-        end
-        if run.underline == 2 then
-          renderer.draw_rect(x, underline_y - 2 * thickness, width, thickness, underline_color)
-        end
-      end
-      if run.strikethrough then
-        renderer.draw_rect(
-          x, y + math.floor(self.cell_height / 2),
-          width, math.max(1, common.round(SCALE)), color
-        )
-      end
-      if run.overline then
-        renderer.draw_rect(x, y, width, math.max(1, common.round(SCALE)), color)
-      end
-      ::continue_run::
+      draw_text_run(self, run, origin_x, y, blink_on)
     end
   end
   perf_scope_end(phase_scope)
 
-  local hover = self.hover_point
-  if hover and hover.row ~= nil and hover.col ~= nil then
-    renderer.draw_rect(
-      origin_x + hover.col * self.cell_width,
-      origin_y + hover.row * self.cell_height + self.cell_height - math.max(1, common.round(SCALE)),
-      math.max(self.cell_width,
-        ((hover.end_col or hover.col) - hover.col + 1) * self.cell_width),
-      math.max(1, common.round(SCALE)), style.link or style.text
-    )
-  end
+  draw_hover_line(self, origin_x, origin_y)
 
   phase_scope = perf_scope_begin("cursor")
   local cursor = snapshot.cursor
@@ -983,7 +1027,7 @@ function TerminalView:draw()
     local value = cursor.color or snapshot.foreground
     local color = rgb(self, value, style.caret)
     local cursor_style = self.focused and cursor.style or "hollow"
-    local function draw_cursor_rect(cx, cy, cw, ch, cursor_color)
+    local function draw_cursor_rect(cx, cy, cw, ch, cursor_color, draw)
       local root = core.root_panel
       if config.animated_caret and self.focused
         and root and root.submit_keyboard_caret
@@ -994,6 +1038,7 @@ function TerminalView:draw()
           width = cw,
           height = ch,
           color = cursor_color,
+          draw_rect = draw,
           owner = self,
           line = cursor.y or 0,
           col = cursor.x or 0,
@@ -1001,7 +1046,7 @@ function TerminalView:draw()
           cell_height = self.cell_height,
         }
       else
-        renderer.draw_rect(cx, cy, cw, ch, cursor_color)
+        (draw or renderer.draw_rect)(cx, cy, cw, ch, cursor_color)
       end
     end
     if cursor_style == "bar" then
@@ -1024,7 +1069,10 @@ function TerminalView:draw()
     else
       draw_cursor_rect(
         x, y, self.cell_width, self.cell_height,
-        rgb(self, value, style.caret, 110)
+        rgb(self, value, style.caret, 110),
+        function(cx, cy, cw, ch, cursor_color)
+          self:draw_block_cursor(cx, cy, cw, ch, cursor_color, blink_on)
+        end
       )
     end
   end

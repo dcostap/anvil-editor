@@ -414,6 +414,8 @@ Use `--scenario terminal-blocks` to check terminal Block Elements on either rend
 The scene checks continuous bars at fractional cell widths on light and dark backgrounds.
 It checks faint ink, complementary halves, all block fractions, quadrants, and shade coverage.
 The checks compare pixels with independent expected values. They do not need stored goldens.
+The checks also verify that block cursors preserve font ink.
+They cover direct drawing, animated drawing, and horizontal motion.
 This focused scene is not in the default suites.
 
 Use `--scenario image-filtering --renderer d3d11` to check image sampling through captured pixels.
