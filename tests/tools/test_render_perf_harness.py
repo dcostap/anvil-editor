@@ -193,6 +193,22 @@ class PerformanceBaselinePolicyTests(unittest.TestCase):
 
 
 class MetricsSummaryTests(unittest.TestCase):
+    def test_reports_upload_bytes_and_shapes_without_treating_missing_counters_as_zero(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "metrics.csv"
+            path.write_text(
+                "texture_upload_bytes,text_render_hb_shapes\n1024,3\n4096,7\n0,0\n",
+                encoding="utf-8",
+            )
+            summary = gate.summarize_metrics(path)
+            self.assertEqual(summary["texture_upload_bytes_total"], 5120)
+            self.assertEqual(summary["texture_upload_bytes_max"], 4096)
+            self.assertEqual(summary["text_render_hb_shapes_total"], 10)
+            path.write_text("frame_ms\n2\n3\n", encoding="utf-8")
+            summary = gate.summarize_metrics(path)
+            self.assertNotIn("texture_upload_bytes_total", summary)
+            self.assertNotIn("text_render_hb_shapes_total", summary)
+
     def test_noisy_paired_timing_is_inconclusive_but_a_consistent_slowdown_fails(self):
         metric = "frame_ms_p50"
         reference = {"active_fps": 100, "metrics": {metric: 10}, "runs": {

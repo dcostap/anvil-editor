@@ -50,6 +50,8 @@ struct D3D11CachedTexture {
   /* The surface generation was current at this frame and write epoch. */
   uint64_t checked_frame;
   uint64_t checked_epoch;
+  int uploaded_glyph_rows;
+  bool glyph_atlas;
 };
 
 /* Direct-mapped front for the cached texture list. Glyph replay looks up an
@@ -181,6 +183,7 @@ typedef struct D3D11State {
   int quad_instance_capacity;
   int quad_instance_buffer_capacity;
   ID3D11ShaderResourceView *quad_srvs[ANVIL_D3D11_QUAD_TEXTURE_SLOTS];
+  D3D11CachedTexture *quad_cached_textures[ANVIL_D3D11_QUAD_TEXTURE_SLOTS];
   int quad_srv_count;
   ID3D11ShaderResourceView *quad_last_texture_srv;
   int quad_last_texture_slot;
@@ -1115,7 +1118,7 @@ static bool d3d11_flush_quads(void);
 static bool d3d11_ensure_white_texture(void);
 static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
                              const D3D11QuadInstance *inst,
-                             bool texture_dependent);
+                             bool texture_dependent, D3D11CachedTexture *cached_texture);
 
 bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor clear_color) {
   if (!anvil_d3d11_enabled() || !window || width <= 0 || height <= 0) return false;
@@ -1208,7 +1211,7 @@ bool anvil_d3d11_push_rect(SDL_Window *window, RenRect rect, RenRect clip, RenCo
   float ca = color.a / 255.0f;
 
   D3D11QuadInstance inst = { x0, y0, x1, y1, 0, 0, 1, 1, cr, cg, cb, ca, 3.0f, 0, 0, 0 };
-  return d3d11_queue_quad(g_d3d11.white_srv, &inst, false);
+  return d3d11_queue_quad(g_d3d11.white_srv, &inst, false, NULL);
 }
 
 bool anvil_d3d11_push_rounded_rect(SDL_Window *window, RenRect rect, float radius, RenRect clip, RenColor color) {
@@ -1244,7 +1247,7 @@ bool anvil_d3d11_push_rounded_rect(SDL_Window *window, RenRect rect, float radiu
     cr, cg, cb, ca,
     4.0f, radius, width, height,
   };
-  return d3d11_queue_quad(g_d3d11.white_srv, &inst, false);
+  return d3d11_queue_quad(g_d3d11.white_srv, &inst, false, NULL);
 }
 
 static inline RenRect d3d11_float_rect_to_grid(float x, float y, float w, float h) {
@@ -1283,7 +1286,7 @@ bool anvil_d3d11_push_rect_grid(SDL_Window *window, float x, float y, float step
     float x1 = (float)(r.x + r.width);
     float y1 = (float)(r.y + r.height);
     D3D11QuadInstance inst = { x0, y0, x1, y1, 0, 0, 1, 1, cr, cg, cb, ca, 3.0f, 0, 0, 0 };
-    if (!d3d11_queue_quad(g_d3d11.white_srv, &inst, false)) return false;
+    if (!d3d11_queue_quad(g_d3d11.white_srv, &inst, false, NULL)) return false;
   }
   return true;
 }
@@ -1334,6 +1337,9 @@ static bool d3d11_recreate_cached_texture(D3D11CachedTexture *t, SDL_Surface *su
   t->last_update_frame = 0;
   t->checked_frame = 0;
   t->checked_epoch = 0;
+  t->uploaded_glyph_rows = 0;
+  t->glyph_atlas = mode < ANVIL_D3D11_IMAGE_TEXTURE
+    && SDL_HasProperty(SDL_GetSurfaceProperties(surface), "anvil_d3d11_glyph_rows");
   g_d3d11.stats.frame.texture_recreates++;
 
   D3D11_TEXTURE2D_DESC desc;
@@ -1401,14 +1407,26 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
   }
 
   const int width = surface->w;
-  const int height = surface->h;
+  int first_row = 0;
+  int last_row = surface->h;
+  Sint64 glyph_rows = SDL_GetNumberProperty(props, "anvil_d3d11_glyph_rows", -1);
+  if (mode < ANVIL_D3D11_IMAGE_TEXTURE && glyph_rows >= 0
+      && glyph_rows <= surface->h && t->last_update_frame != 0) {
+    /* The first upload initializes the complete texture. Later writes only
+       append glyph rows, including writes across multiple batch flushes. */
+    first_row = t->uploaded_glyph_rows;
+    last_row = (int)glyph_rows;
+  }
+  const int height = last_row - first_row;
+  if (height <= 0) return false;
   size_t rgba_size = (size_t)width * (size_t)height * 4u;
   if (!d3d11_ensure_texture_upload_scratch(rgba_size)) return false;
   uint8_t *rgba = g_d3d11.texture_upload_scratch;
 
   const int bpp = SDL_BYTESPERPIXEL(surface->format);
   for (int y = 0; y < height; y++) {
-    const uint8_t *src = (const uint8_t *)surface->pixels + (size_t)y * (size_t)surface->pitch;
+    const uint8_t *src = (const uint8_t *)surface->pixels
+      + (size_t)(y + first_row) * (size_t)surface->pitch;
     uint8_t *dst = rgba + (size_t)y * (size_t)width * 4u;
     for (int x = 0; x < width; x++, dst += 4) {
       if (mode == 0) {
@@ -1443,15 +1461,17 @@ static bool d3d11_update_cached_texture(D3D11CachedTexture *t, SDL_Surface *surf
     }
   }
 
+  D3D11_BOX box = { 0, (UINT)first_row, 0, (UINT)width, (UINT)last_row, 1 };
   g_d3d11.context->lpVtbl->UpdateSubresource(g_d3d11.context,
                                              (ID3D11Resource *)t->texture,
-                                             0, NULL, rgba, (UINT)(width * 4), 0);
+                                             0, &box, rgba, (UINT)(width * 4), 0);
   if (mode == ANVIL_D3D11_IMAGE_TEXTURE) {
     g_d3d11.context->lpVtbl->GenerateMips(g_d3d11.context, t->srv);
   }
   g_d3d11.stats.frame.texture_uploads++;
   g_d3d11.stats.frame.texture_upload_bytes += rgba_size;
   t->last_update_frame = update_key;
+  t->uploaded_glyph_rows = glyph_rows >= 0 ? (int)glyph_rows : 0;
   t->checked_frame = g_d3d11.frame_index;
   t->checked_epoch = g_d3d11.surface_generation_epoch;
   return true;
@@ -1465,7 +1485,13 @@ static D3D11CachedTexture *d3d11_get_cached_texture(SDL_Surface *surface, int mo
     t->next = g_d3d11.textures;
     g_d3d11.textures = t;
   }
-  if (!d3d11_update_cached_texture(t, surface, mode)) return NULL;
+  if (!t->texture || !t->srv || t->width != surface->w || t->height != surface->h ||
+      t->format != surface->format || t->mode != mode) {
+    if (!d3d11_recreate_cached_texture(t, surface, mode)) return NULL;
+  }
+  if (!t->glyph_atlas && !d3d11_update_cached_texture(t, surface, mode)) {
+    return NULL;
+  }
   t->last_used_frame = g_d3d11.frame_index;
   return t;
 }
@@ -1567,6 +1593,12 @@ static bool d3d11_flush_quads(void) {
   LARGE_INTEGER t0, t1;
   QueryPerformanceCounter(&t0);
 
+  for (int i = 0; i < g_d3d11.quad_srv_count; i++) {
+    D3D11CachedTexture *texture = g_d3d11.quad_cached_textures[i];
+    if (texture && !d3d11_update_cached_texture(texture, texture->surface, texture->mode))
+      return false;
+  }
+
   D3D11_MAPPED_SUBRESOURCE mapped;
   HRESULT hr = g_d3d11.context->lpVtbl->Map(g_d3d11.context,
                                             (ID3D11Resource *)g_d3d11.quad_vbuf,
@@ -1638,7 +1670,7 @@ static bool d3d11_flush_quads(void) {
 
 static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
                              const D3D11QuadInstance *inst,
-                             bool texture_dependent) {
+                             bool texture_dependent, D3D11CachedTexture *cached_texture) {
   if (!srv || !inst) return false;
   D3D11QuadInstance queued = *inst;
   queued.x0 = g_d3d11.transform.offset_x
@@ -1683,6 +1715,7 @@ static bool d3d11_queue_quad(ID3D11ShaderResourceView *srv,
     if (slot < 0) {
       slot = g_d3d11.quad_srv_count;
       g_d3d11.quad_srvs[g_d3d11.quad_srv_count++] = srv;
+      g_d3d11.quad_cached_textures[slot] = cached_texture;
     }
     if (g_d3d11.quad_last_texture_srv != srv) {
       g_d3d11.quad_last_texture_srv = srv;
@@ -1747,6 +1780,8 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   float u1 = (sx0 + (cx1 - dx0) * (sx1 - sx0) / (dx1 - dx0)) / (float)surface->w;
   float v1 = (sy0 + (cy1 - dy0) * (sy1 - sy0) / (dy1 - dy0)) / (float)surface->h;
 
+  /* Only append-only glyph atlases can defer writes. Images and canvases
+     retain their command-time upload order. */
   D3D11CachedTexture *tex = d3d11_get_cached_texture(surface, mode);
   if (!tex || !tex->srv) {
     if (measure) {
@@ -1765,7 +1800,7 @@ bool anvil_d3d11_push_texture(SDL_Window *window, SDL_Surface *surface,
   D3D11QuadInstance inst = { cx0, cy0, cx1, cy1, u0, v0, u1, v1, cr, cg, cb, ca,
     image ? 2.0f : (float)mode, 0, image ? 1.0f : 0.0f, 0 };
 
-  bool result = d3d11_queue_quad(tex->srv, &inst, true);
+  bool result = d3d11_queue_quad(tex->srv, &inst, true, tex->glyph_atlas ? tex : NULL);
   if (measure) {
     QueryPerformanceCounter(&t1);
     frame->glyph_push_ms += d3d11_ms_between(t0, t1);
@@ -1818,7 +1853,7 @@ bool anvil_d3d11_push_pixels(SDL_Window *window, const char *bytes, size_t len,
   float cr = 1.0f, cg = 1.0f, cb = 1.0f, ca = 1.0f;
   D3D11QuadInstance inst = { cx0, cy0, cx1, cy1, u0, v0, u1, v1, cr, cg, cb, ca, 2.0f, 0, 0, 0 };
 
-  if (!d3d11_queue_quad(g_d3d11.upload_srv, &inst, true)) return false;
+  if (!d3d11_queue_quad(g_d3d11.upload_srv, &inst, true, NULL)) return false;
   return d3d11_flush_quads();
 }
 

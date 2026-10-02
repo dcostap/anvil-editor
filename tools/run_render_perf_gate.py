@@ -28,7 +28,7 @@ except ImportError:  # Unit-testable metric/specimen helpers on non-Windows host
     msvcrt = None  # type: ignore[assignment]
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageChops
 except ImportError:  # The non-visual harness remains usable without Pillow.
     Image = None  # type: ignore[assignment]
 
@@ -130,6 +130,13 @@ SCENARIOS["image-viewer"] = {
     "paced": False,
 }
 SCENARIOS["image-filtering"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["glyph-cache-growth"] = {
+    "start_line": 1,
+    "window_width": 1400,
+    "window_height": 900,
+    "visual": True,
+    "paced": False,
+}
 SCENARIOS["terminal-blocks"] = {
     "start_line": 1,
     "window_width": 1400,
@@ -617,7 +624,8 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         "action_ms", "update_ms", "draw_emit_ms", "renderer_end_ms", "frame_ms",
         "present_ms", "core_step_ms", "total_ms", "draw_calls", "quad_instances",
         "texture_batch_breaks", "quad_batches", "unique_batch_srvs",
-        "repeated_batch_srvs", "texture_uploads", "rencache_commands", "rencache_text_commands",
+        "repeated_batch_srvs", "texture_uploads", "texture_upload_bytes", "text_render_hb_shapes",
+        "rencache_commands", "rencache_text_commands",
         "rencache_command_bytes", "display_packet_replays",
         "display_packet_commands_replayed", "display_packet_frame_bytes_copied",
         "display_packet_replay_ms", "text_render_calls", "text_render_glyphs",
@@ -630,6 +638,8 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         "run_threads_ms", "gc_ms", "text_width_calls", "text_width_bytes",
         "text_render_shaped_cache_hits", "text_render_shaped_cache_misses",
     ):
+        if key in ("texture_upload_bytes", "text_render_hb_shapes") and key not in rows[0]:
+            continue
         vals = numbers(key)
         result[f"{key}_avg"] = statistics.fmean(vals)
         result[f"{key}_p50"] = percentile(vals, 0.50)
@@ -637,6 +647,9 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         result[f"{key}_p99"] = percentile(vals, 0.99)
         if key == "texture_uploads":
             result["texture_uploads_max"] = max(vals)
+        if key in ("texture_upload_bytes", "text_render_hb_shapes"):
+            result[f"{key}_max"] = max(vals)
+            result[f"{key}_total"] = sum(vals)
         if key.endswith("_ms") or key.endswith("_kib"):
             add_progression_metrics(result, key, vals)
     draws = result["draw_calls_avg"]
@@ -1013,6 +1026,25 @@ def run_case(
                     f"action captures did not match checkpoints: {sorted(expected)}"
                 )
             result["action_screenshots"] = {path.stem: str(path) for path in checkpoints}
+        if scenario == "glyph-cache-growth":
+            with Image.open(screenshot_file) as capture:
+                pixels = capture.convert("RGB")
+                with image_metadata_file.open(newline="", encoding="utf-8") as metadata:
+                    sample = next(csv.DictReader(metadata))
+                x, y, reference_x, width, height = (
+                    int(sample[key]) for key in ("x", "y", "reference_x", "w", "h")
+                )
+                cold = pixels.crop((x, y, x + width, y + height))
+                warm = pixels.crop((reference_x, y, reference_x + width, y + height))
+                if len(cold.getcolors(width * height) or []) < 2:
+                    raise RuntimeError("glyph cache scene contains no visible glyphs")
+                # Equal glyph coverage at different screen positions can
+                # differ by one channel unit after GPU blend rounding.
+                # Golden comparisons and repeated captures remain exact.
+                difference = ImageChops.difference(cold, warm)
+                if any(high > 1 for _, high in difference.getextrema()):
+                    raise RuntimeError("glyph cache growth changed rendered pixels")
+            result["glyph_cache_growth"] = "passed"
         if scenario == "image-filtering":
             with Image.open(screenshot_file) as capture:
                 pixels = capture.convert("RGB")
