@@ -1034,20 +1034,33 @@ def run_case(
                         expected = tuple(int(sample[channel]) for channel in ("r", "g", "b"))
                         def matches(color, tolerance=1):
                             return all(abs(a - e) <= tolerance for a, e in zip(color, expected))
-                        if sample["kind"] == "ink":
+                        if sample["kind"] == "cursor_ink":
+                            reference = tuple(int(sample[f"reference_{channel}"]) for channel in ("r", "g", "b"))
+                            cursor = tuple(int(sample[f"cursor_{channel}"]) for channel in ("r", "g", "b"))
                             ink = [(px, py) for py in range(y, y + int(sample["h"]))
                                    for px in range(x, x + int(sample["w"]))
-                                   if matches(pixels.getpixel((px, py)), 3)]
+                                   if all(abs(a - e) <= 3 for a, e in zip(pixels.getpixel((px, py)), reference))]
                             if not ink:
                                 raise RuntimeError(f"terminal cursor reference has no full ink: {sample['name']}")
                             target_dx = int(sample["target_x"]) - x
+                            covered = {px for px in range(x, x + int(sample["w"]))
+                                       if all(abs(a - e) <= 1 for a, e in
+                                              zip(pixels.getpixel((px + target_dx, y)), cursor))}
+                            if not covered:
+                                raise RuntimeError(f"terminal block cursor is not opaque: {sample['name']}")
+                            checked = 0
                             for px, py in ink:
+                                if px not in covered:
+                                    continue
+                                checked += 1
                                 actual = pixels.getpixel((px + target_dx, py))
                                 if not matches(actual, 3):
                                     raise RuntimeError(
-                                        f"terminal cursor covers font ink: {sample['name']} at {px},{py}: "
+                                        f"terminal cursor text lacks contrast: {sample['name']} at {px},{py}: "
                                         f"expected {expected}, got {actual}"
                                     )
+                            if not checked:
+                                raise RuntimeError(f"terminal cursor covers no reference ink: {sample['name']}")
                         elif sample["kind"] == "coverage":
                             count = sum(matches(pixels.getpixel((px, py)))
                                         for py in range(y, y + int(sample["h"]))

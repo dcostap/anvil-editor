@@ -1,5 +1,6 @@
 local command = require "core.command"
 local core = require "core"
+local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
 local terminal = require "plugins.terminal"
@@ -28,14 +29,17 @@ end
 local function record_draw(view)
   local old_text, old_known, old_rect = renderer.draw_text, renderer.draw_text_known_bounds, renderer.draw_rect
   local old_rounded = renderer.draw_rounded_rect
+  local old_clip = renderer.set_clip_rect
   local calls = { text = {}, rect = {} }
   renderer.draw_text = function(...) calls.text[#calls.text + 1] = { ... } end
   renderer.draw_text_known_bounds = renderer.draw_text
   renderer.draw_rect = function(...) calls.rect[#calls.rect + 1] = { ... } end
   renderer.draw_rounded_rect = function(...) calls.rect[#calls.rect + 1] = { ... } end
+  renderer.set_clip_rect = function() end
   local ok, err = pcall(function() view:draw() end)
   renderer.draw_text, renderer.draw_text_known_bounds, renderer.draw_rect = old_text, old_known, old_rect
   renderer.draw_rounded_rect = old_rounded
+  renderer.set_clip_rect = old_clip
   if not ok then error(err) end
   return calls
 end
@@ -43,11 +47,13 @@ end
 test.describe("Terminal contrast display", function()
   test.before_each(function(context)
     context.minimum = style.terminal_minimum_contrast
+    context.animated = config.animated_caret
   end)
   test.after_each(function(context)
     if context.view then context.view:on_close() end
     terminal._set_native_for_tests(nil)
     style.terminal_minimum_contrast = context.minimum
+    config.animated_caret = context.animated
   end)
 
   test.it("applies contrast setting changes to an existing Terminal View", function(context)
@@ -78,6 +84,21 @@ test.describe("Terminal contrast display", function()
       end
     end
     test.ok(found_background, "Selected text did not use its resolved background")
+  end)
+
+  test.it("does not reveal concealed text under a filled cursor", function(context)
+    local session, view = fake_session(context)
+    session.image.rows = {{ backgrounds = {}, text_runs = {{
+      col = 0, columns = 1, text = "M", fg = 0x080808, alpha = 0,
+    }} }}
+    session.image.cursor = { visible = true, style = "block", x = 0, y = 0, color = 0 }
+    view.size.x, view.size.y = 800, 300
+    view.focused, view.running = true, true
+    config.animated_caret = false
+    local calls = record_draw(view)
+    for _, call in ipairs(calls.text) do
+      test.equal(call[#call][4], 0, "Cursor contrast revealed concealed text")
+    end
   end)
 
   test.it("keeps corrected and hidden opacity in Terminal Text Capture", function()

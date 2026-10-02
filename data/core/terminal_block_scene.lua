@@ -47,7 +47,7 @@ end
 
 function Scene:draw()
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, {32,36,42,255})
-  local samples = { "kind,name,x,y,w,h,r,g,b,count,target_x" }
+  local samples = { "kind,name,x,y,w,h,r,g,b,count,target_x,reference_r,reference_g,reference_b,cursor_r,cursor_g,cursor_b" }
   local function pixel(name, x, y, color)
     samples[#samples + 1] = string.format("pixel,%s,%d,%d,1,1,%d,%d,%d,0,",
       name, x, y, color[1], color[2], color[3])
@@ -119,42 +119,53 @@ function Scene:draw()
   end
   draw_terminal(view)
 
-  -- Font ink must keep its color under a block cursor, with or without a trail.
-  for index, mode in ipairs {"direct", "animated", "horizontal"} do
-    local columns = mode == "horizontal" and 3 or 1
-    local reference = terminal(self.fonts[24], self.position.x + 700,
-      self.position.y + 890 + (index - 1) * 36, 0x101824)
-    reference.cell_width = math.ceil(reference.cell_width)
-    reference.snapshot.rows = {{ backgrounds = {}, text_runs = {{
-      col = 0, columns = columns, text = string.rep("M", columns), fg = 0xffffff,
-    }} }}
-    draw_terminal(reference)
-    local caret = terminal(self.fonts[24], reference.position.x + 80,
-      reference.position.y, 0x101824)
-    caret.cell_width = reference.cell_width
-    caret.snapshot.rows = reference.snapshot.rows
-    caret.snapshot.cursor = { visible = true, x = 0, y = 0, style = "block", color = 0x102030 }
-    caret.running, caret.focused = true, true
-    local old_animated, old_caret = config.animated_caret, core.root_panel.caret_renderer
-    config.animated_caret = mode ~= "direct"
-    core.root_panel.caret_renderer = CaretRenderer.new()
-    core.root_panel:begin_keyboard_caret_frame()
-    draw_terminal(caret)
-    if mode == "horizontal" then
-      core.root_panel.caret_renderer:draw(0)
+  -- Cursor text must contrast with the cursor, not the surrounding background.
+  local cursor_cases = {
+    { name = "light", background = 0xf2f4f8, foreground = 0x101824, cursor = 0x000000, text = {255,255,255} },
+    { name = "dark", background = 0x101824, foreground = 0xffffff, cursor = 0xffffff, text = {0,0,0} },
+    { name = "blue", background = 0xf2f4f8, foreground = 0x101824, cursor = 0x224488, text = {255,255,255} },
+    { name = "cream", background = 0x101824, foreground = 0xffffff, cursor = 0xe0ca8c, text = {0,0,0} },
+    { name = "green", background = 0xf2f4f8, foreground = 0x101824, cursor = 0x00ff00, text = {0,0,0} },
+  }
+  for case_index, case in ipairs(cursor_cases) do
+    for index, mode in ipairs {"direct", "animated", "horizontal"} do
+      local columns = mode == "horizontal" and 3 or 1
+      local reference = terminal(self.fonts[24], self.position.x + 700 + (case_index - 1) * 140,
+        self.position.y + 890 + (index - 1) * 36, case.background)
+      reference.cell_width = math.ceil(reference.cell_width)
+      reference.snapshot.rows = {{ backgrounds = {}, text_runs = {{
+        col = 0, columns = columns, text = string.rep("M", columns), fg = case.foreground,
+      }} }}
+      draw_terminal(reference)
+      local caret = terminal(self.fonts[24], reference.position.x + 80,
+        reference.position.y, case.background)
+      caret.cell_width = reference.cell_width
+      caret.snapshot.rows = reference.snapshot.rows
+      caret.snapshot.cursor = { visible = true, x = 0, y = 0, style = "block", color = case.cursor }
+      caret.running, caret.focused = true, true
+      local old_animated, old_caret = config.animated_caret, core.root_panel.caret_renderer
+      config.animated_caret = mode ~= "direct"
+      core.root_panel.caret_renderer = CaretRenderer.new()
       core.root_panel:begin_keyboard_caret_frame()
-      caret.snapshot.cursor.x = 2
       draw_terminal(caret)
-      core.root_panel.caret_renderer:draw(1 / 60)
-    else
-      core.root_panel:draw_keyboard_caret()
-    end
-    core.root_panel.caret_renderer, config.animated_caret = old_caret, old_animated
-    if not self.metadata_written then
-      samples[#samples + 1] = string.format("ink,cursor-%s,%d,%d,%d,%d,255,255,255,0,%d",
-        mode, reference.position.x + 6,
-        reference.position.y + 6, columns * reference.cell_width, reference.cell_height,
-        caret.position.x + 6)
+      if mode == "horizontal" then
+        core.root_panel.caret_renderer:draw(0)
+        core.root_panel:begin_keyboard_caret_frame()
+        caret.snapshot.cursor.x = 2
+        draw_terminal(caret)
+        core.root_panel.caret_renderer:draw(1 / 60)
+      else
+        core.root_panel:draw_keyboard_caret()
+      end
+      core.root_panel.caret_renderer, config.animated_caret = old_caret, old_animated
+      if not self.metadata_written then
+        local ref, cursor = channels(case.foreground), channels(case.cursor)
+        samples[#samples + 1] = string.format("cursor_ink,%s-%s,%d,%d,%d,%d,%d,%d,%d,0,%d,%d,%d,%d,%d,%d,%d",
+          case.name, mode, reference.position.x + 6,
+          reference.position.y + 6, columns * reference.cell_width, reference.cell_height,
+          case.text[1], case.text[2], case.text[3], caret.position.x + 6,
+          ref[1], ref[2], ref[3], cursor[1], cursor[2], cursor[3])
+      end
     end
   end
   if self.metadata_written then return end
