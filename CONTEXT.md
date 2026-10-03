@@ -9,7 +9,7 @@ The editor application developed in this repository.
 _Avoid_: Pragtical, Lite XL
 
 **Anvil Window**:
-A top-level application window that contains one or more open Projects and presents one Selected Project.
+A top-level application window that presents one Selected Project beside the Project Sidebar. Several Anvil Windows can be open at once. A Project appears in at most one Anvil Window and can move to another.
 _Avoid_: Host window, Project window
 
 **App State**:
@@ -25,8 +25,12 @@ The Project currently presented in an Anvil Window.
 _Avoid_: Active Project, Current Project, hosted app
 
 **Project Sidebar**:
-The optional application sidebar for viewing, selecting, opening, and closing Projects in one Anvil Window.
+The application sidebar listing recent Projects and their Terminal Sessions. Every Anvil Window shows the same list. Selecting a Project shown in another Anvil Window brings that window to the front.
 _Avoid_: Project panel, app switcher, side panel
+
+**Dormant Project**:
+A Project listed in an Anvil Window that is not currently loaded for editing. Selecting it loads it with its saved Workspace.
+_Avoid_: unopened Project, closed Project, inactive Project
 
 **Root Project**:
 The first project loaded into Anvil, used as the default base for relative paths and project-level behavior.
@@ -521,6 +525,10 @@ _Avoid_: Command Output panel, slot output panel, tabbed Command Output View
 **Terminal View**:
 An interactive View connected to a running shell or terminal application.
 _Avoid_: Terminal panel, terminal buffer, console
+
+**Terminal Session**:
+The running shell or terminal application behind a Terminal View. It belongs to one Project and can keep running while no Terminal View shows it.
+_Avoid_: PTY, terminal process, shell instance
 
 **Terminal Text Capture**:
 A Text Capture containing stable text from a Terminal View while that terminal continues to run.
