@@ -18,6 +18,8 @@
 #include "api.h"
 #include "../custom_events.h"
 #include "../terminal_contrast.h"
+#include "../terminal_model.h"
+#include "../terminal_host.h"
 
 #define TERMINAL_READ_BUDGET (128u * 1024u)
 #define TERMINAL_READ_QUEUE_CAPACITY (4u * 1024u * 1024u)
@@ -25,66 +27,9 @@
 #define TERMINAL_CLIPBOARD_MAX_BYTES (1024u * 1024u)
 #define TERMINAL_NOTIFICATION_MAX_BYTES (64u * 1024u)
 #define TERMINAL_HYPERLINK_MAX_BYTES (32u * 1024u)
-#define TERMINAL_SCROLLBACK_MAX_BYTES (64u * 1024u * 1024u)
-#define TERMINAL_DRAIN_QUIET_MS 250u
-#define TERMINAL_DRAIN_MAX_MS 5000u
 #define TERMINAL_SYNC_OUTPUT_TIMEOUT_MS 1000u
 #define TERMINAL_CURSOR_HIDE_HOLD_MS 30u
 #define TERMINAL_OUTPUT_EVENT "terminaloutput"
-
-static void *terminal_alloc(
-  void *ctx, size_t len, uint8_t alignment, uintptr_t ret_addr
-) {
-  (void)ctx;
-  (void)alignment;
-  (void)ret_addr;
-  return HeapAlloc(GetProcessHeap(), 0, len);
-}
-
-static bool terminal_resize(
-  void *ctx, void *memory, size_t memory_len, uint8_t alignment,
-  size_t new_len, uintptr_t ret_addr
-) {
-  (void)ctx;
-  (void)memory;
-  (void)alignment;
-  (void)ret_addr;
-  return new_len <= memory_len;
-}
-
-static void *terminal_remap(
-  void *ctx, void *memory, size_t memory_len, uint8_t alignment,
-  size_t new_len, uintptr_t ret_addr
-) {
-  (void)ctx;
-  (void)memory_len;
-  (void)alignment;
-  (void)ret_addr;
-  return HeapReAlloc(GetProcessHeap(), 0, memory, new_len);
-}
-
-static void terminal_free(
-  void *ctx, void *memory, size_t memory_len, uint8_t alignment,
-  uintptr_t ret_addr
-) {
-  (void)ctx;
-  (void)memory_len;
-  (void)alignment;
-  (void)ret_addr;
-  if (memory) HeapFree(GetProcessHeap(), 0, memory);
-}
-
-static const GhosttyAllocatorVtable terminal_allocator_vtable = {
-  .alloc = terminal_alloc,
-  .resize = terminal_resize,
-  .remap = terminal_remap,
-  .free = terminal_free,
-};
-
-static const GhosttyAllocator terminal_allocator = {
-  .ctx = NULL,
-  .vtable = &terminal_allocator_vtable,
-};
 
 typedef enum {
   TERMINAL_STATE_NEW,
@@ -96,15 +41,13 @@ typedef enum {
 } TerminalState;
 
 typedef struct {
-  HPCON pseudoconsole;
-  HANDLE input_write;
-  HANDLE output_read;
+  AnvilIPCPipe pipe;
   HANDLE process;
-  HANDLE process_thread;
-  HANDLE job;
+  DWORD host_pid, shell_pid;
+  uint64_t attached_at, replay_bytes;
+  volatile LONG host_exited;
   HANDLE reader_thread;
   HANDLE writer_thread;
-  HANDLE pseudoconsole_close_thread;
   CRITICAL_SECTION read_lock;
   CONDITION_VARIABLE read_ready;
   uint8_t *read_queue;
@@ -127,7 +70,6 @@ typedef struct {
   volatile LONG write_failed;
   volatile LONG read_failed;
   volatile LONG reader_done;
-  volatile LONG discard_output;
   volatile LONG output_event_pending;
   DWORD read_error;
   DWORD write_error;
@@ -158,16 +100,12 @@ typedef struct {
   bool closed;
   TerminalState state;
   uint64_t state_revision;
-  uint64_t process_exit_seen_ms;
-  uint64_t drain_empty_seen_ms;
-  volatile LONG64 last_output_ms;
   volatile LONG64 output_bytes_read;
   uint64_t output_bytes_parsed;
   uint64_t input_bytes_queued;
   uint64_t read_queue_high_water;
   uint64_t write_queue_high_water;
   uint64_t rejected_writes;
-  uint64_t forced_drain_finalizations;
   uint64_t render_generation;
   uint64_t synchronized_output_started_ms;
   uint64_t cursor_hide_started_ms;
@@ -325,35 +263,44 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
   TerminalSession *session = (TerminalSession *)userdata;
   uint8_t buffer[65536];
 
+  bool replaying = true;
   while (InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
-    DWORD read = 0;
-    BOOL read_ok = ReadFile(session->output_read, buffer, sizeof(buffer), &read, NULL);
-    if (!read_ok || read == 0) {
-      DWORD error = GetLastError();
-      if (InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
-          error != ERROR_BROKEN_PIPE && error != ERROR_PIPE_NOT_CONNECTED) {
-        session->read_error = error;
+    AnvilIPCHeader header;
+    if (!anvil_ipc_pipe_read(&session->pipe, &header, buffer, sizeof(buffer))) {
+      if (InterlockedCompareExchange(&session->closing, 0, 0) == 0 && !session->host_exited) {
+        session->read_error = GetLastError();
         InterlockedExchange(&session->read_failed, 1);
       }
       break;
     }
-    InterlockedExchange64(&session->last_output_ms, (LONG64)GetTickCount64());
+    if (header.type == ANVIL_TERMINAL_REPLAY_END && replaying && !header.size) {
+      replaying = false;
+      continue;
+    }
+    if (header.type == ANVIL_TERMINAL_EXITED && !replaying && header.size == sizeof(AnvilTerminalExited)) {
+      AnvilTerminalExited exited; memcpy(&exited, buffer, sizeof(exited));
+      session->exit_code = exited.exit_code;
+      session->exit_code_known = true;
+      InterlockedExchange(&session->host_exited, 1);
+      break;
+    }
+    if ((replaying && header.type != ANVIL_TERMINAL_REPLAY) ||
+        (!replaying && header.type != ANVIL_TERMINAL_OUTPUT) || !header.size) {
+      session->read_error = ERROR_INVALID_DATA;
+      InterlockedExchange(&session->read_failed, 1);
+      break;
+    }
+    DWORD read = header.size;
+    if (replaying) InterlockedAdd64((LONG64 *)&session->replay_bytes, read);
     InterlockedAdd64(&session->output_bytes_read, (LONG64)read);
-
-    if (InterlockedCompareExchange(&session->discard_output, 0, 0) != 0) continue;
 
     size_t offset = 0;
     EnterCriticalSection(&session->read_lock);
     bool queue_was_empty = session->read_queue_count == 0;
     while (offset < read && InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
       while (session->read_queue_count == TERMINAL_READ_QUEUE_CAPACITY &&
-             InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
-             InterlockedCompareExchange(&session->discard_output, 0, 0) == 0) {
+             InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
         SleepConditionVariableCS(&session->read_ready, &session->read_lock, INFINITE);
-      }
-      if (InterlockedCompareExchange(&session->discard_output, 0, 0) != 0) {
-        offset = read;
-        break;
       }
       if (InterlockedCompareExchange(&session->closing, 0, 0) != 0) break;
 
@@ -377,23 +324,6 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
   InterlockedExchange(&session->reader_done, 1);
   wake_for_terminal_output(session);
   return 0;
-}
-
-static DWORD WINAPI terminal_pseudoconsole_close_main(void *userdata) {
-  TerminalSession *session = (TerminalSession *)userdata;
-  HPCON pseudoconsole = (HPCON)InterlockedExchangePointer(
-    (PVOID volatile *)&session->pseudoconsole, NULL
-  );
-  if (pseudoconsole) ClosePseudoConsole(pseudoconsole);
-  wake_for_terminal_output(session);
-  return 0;
-}
-
-static void start_pseudoconsole_close(TerminalSession *session) {
-  if (!session->pseudoconsole || session->pseudoconsole_close_thread) return;
-  session->pseudoconsole_close_thread = CreateThread(
-    NULL, 0, terminal_pseudoconsole_close_main, session, 0, NULL
-  );
 }
 
 static DWORD WINAPI terminal_writer_main(void *userdata) {
@@ -420,24 +350,17 @@ static DWORD WINAPI terminal_writer_main(void *userdata) {
     LeaveCriticalSection(&session->write_lock);
     if (amount == 0) continue;
 
-    size_t offset = 0;
-    while (offset < amount && InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
-      DWORD written = 0;
-      if (!WriteFile(
-        session->input_write, buffer + offset, (DWORD)(amount - offset), &written, NULL
-      ) || written == 0) {
-        DWORD error = GetLastError();
-        EnterCriticalSection(&session->write_lock);
-        if (InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
-            error != ERROR_OPERATION_ABORTED && error != ERROR_BROKEN_PIPE &&
-            error != ERROR_PIPE_NOT_CONNECTED) {
-          session->write_error = error;
-          InterlockedExchange(&session->write_failed, 1);
-        }
-        LeaveCriticalSection(&session->write_lock);
-        return 0;
+    if (!anvil_ipc_pipe_write_records(&session->pipe, buffer, amount)) {
+      DWORD error = GetLastError();
+      EnterCriticalSection(&session->write_lock);
+      if (InterlockedCompareExchange(&session->closing, 0, 0) == 0 &&
+          !session->host_exited) {
+        session->write_error = error;
+        InterlockedExchange(&session->write_failed, 1);
       }
-      offset += written;
+      LeaveCriticalSection(&session->write_lock);
+      wake_for_terminal_output(session);
+      return 0;
     }
   }
   return 0;
@@ -506,45 +429,58 @@ static void push_windows_error(lua_State *L, const char *prefix, DWORD code) {
   }
 }
 
-static bool write_all(TerminalSession *session, const uint8_t *data, size_t length) {
-  if (!terminal_is_live(session) || session->closed || !session->input_write ||
+static bool enqueue_record(TerminalSession *session, uint16_t type, const uint8_t *data, size_t length) {
+  if (!terminal_is_live(session) || session->closed || !session->pipe.handle ||
       !session->write_lock_initialized) {
     return false;
   }
-  if (length > TERMINAL_WRITE_QUEUE_CAPACITY) {
+  if (length > TERMINAL_WRITE_QUEUE_CAPACITY - sizeof(AnvilIPCHeader)) {
     session->rejected_writes++;
     return false;
   }
   EnterCriticalSection(&session->write_lock);
   if (InterlockedCompareExchange(&session->write_failed, 0, 0) != 0 ||
       InterlockedCompareExchange(&session->closing, 0, 0) != 0 ||
-      !session->input_write) {
+      !session->pipe.handle) {
     LeaveCriticalSection(&session->write_lock);
     return false;
   }
-  if (length > TERMINAL_WRITE_QUEUE_CAPACITY - session->write_queue_count) {
+  size_t records = length ? (length + ANVIL_TERMINAL_MAX_PAYLOAD - 1) / ANVIL_TERMINAL_MAX_PAYLOAD : 1;
+  size_t framed_length = length + records * sizeof(AnvilIPCHeader);
+  if (framed_length > TERMINAL_WRITE_QUEUE_CAPACITY - session->write_queue_count) {
     session->rejected_writes++;
     LeaveCriticalSection(&session->write_lock);
     return false;
   }
   size_t offset = 0;
-  while (offset < length) {
-    size_t tail = (session->write_queue_head + session->write_queue_count) %
-      TERMINAL_WRITE_QUEUE_CAPACITY;
-    size_t contiguous = TERMINAL_WRITE_QUEUE_CAPACITY - tail;
-    size_t amount = length - offset;
-    if (amount > contiguous) amount = contiguous;
-    memcpy(session->write_queue + tail, data + offset, amount);
-    session->write_queue_count += amount;
-    if (session->write_queue_count > session->write_queue_high_water) {
-      session->write_queue_high_water = session->write_queue_count;
+  for (size_t index = 0; index < records; index++) {
+    size_t count = length - offset;
+    if (count > ANVIL_TERMINAL_MAX_PAYLOAD) count = ANVIL_TERMINAL_MAX_PAYLOAD;
+    AnvilIPCHeader header = { count, type, ANVIL_TERMINAL_PROTOCOL_VERSION };
+    const uint8_t *parts[] = { (const uint8_t *)&header, data ? data + offset : NULL };
+    size_t lengths[] = { sizeof(header), count };
+    for (size_t part = 0; part < 2; part++) {
+      size_t done = 0;
+      while (done < lengths[part]) {
+        size_t tail = (session->write_queue_head + session->write_queue_count) % TERMINAL_WRITE_QUEUE_CAPACITY;
+        size_t amount = lengths[part] - done;
+        if (amount > TERMINAL_WRITE_QUEUE_CAPACITY - tail) amount = TERMINAL_WRITE_QUEUE_CAPACITY - tail;
+        memcpy(session->write_queue + tail, parts[part] + done, amount);
+        session->write_queue_count += amount; done += amount;
+      }
     }
-    offset += amount;
+    offset += count;
   }
-  session->input_bytes_queued += length;
+  if (session->write_queue_count > session->write_queue_high_water) session->write_queue_high_water = session->write_queue_count;
+  if (type == ANVIL_TERMINAL_INPUT) session->input_bytes_queued += length;
   WakeConditionVariable(&session->write_ready);
   LeaveCriticalSection(&session->write_lock);
   return true;
+}
+
+static bool write_all(TerminalSession *session, const uint8_t *data, size_t length) {
+  if (!length) return terminal_is_live(session) && !session->closed;
+  return enqueue_record(session, ANVIL_TERMINAL_INPUT, data, length);
 }
 
 static void terminal_write_pty(
@@ -740,19 +676,8 @@ static void free_terminal_objects(TerminalSession *session) {
 static void release_terminal_transport(TerminalSession *session) {
   if (!session || session->transport_released) return;
   session->transport_released = true;
-  if (session->pseudoconsole_close_thread) {
-    InterlockedExchange(&session->discard_output, 1);
-    if (session->read_lock_initialized) {
-      EnterCriticalSection(&session->read_lock);
-      session->read_queue_count = 0;
-      session->read_queue_head = 0;
-      WakeAllConditionVariable(&session->read_ready);
-      LeaveCriticalSection(&session->read_lock);
-    }
-    WaitForSingleObject(session->pseudoconsole_close_thread, INFINITE);
-    close_handle(&session->pseudoconsole_close_thread);
-  }
   InterlockedExchange(&session->closing, 1);
+  anvil_ipc_pipe_cancel(&session->pipe);
   if (session->read_lock_initialized) {
     EnterCriticalSection(&session->read_lock);
     WakeAllConditionVariable(&session->read_ready);
@@ -773,12 +698,7 @@ static void release_terminal_transport(TerminalSession *session) {
     WaitForSingleObject(session->writer_thread, INFINITE);
     close_handle(&session->writer_thread);
   }
-  close_handle(&session->input_write);
-  close_handle(&session->output_read);
-  if (session->pseudoconsole) {
-    ClosePseudoConsole(session->pseudoconsole);
-    session->pseudoconsole = NULL;
-  }
+  anvil_ipc_pipe_close(&session->pipe);
   if (session->read_lock_initialized) {
     DeleteCriticalSection(&session->read_lock);
     session->read_lock_initialized = false;
@@ -798,15 +718,10 @@ static void release_terminal_transport(TerminalSession *session) {
 }
 
 static void terminate_terminal_process(TerminalSession *session) {
-  if (session->job) {
-    close_handle(&session->job);
-  } else if (session->process) {
-    DWORD exit_code = 0;
-    if (GetExitCodeProcess(session->process, &exit_code) && exit_code == STILL_ACTIVE) {
-      TerminateProcess(session->process, 1);
-    }
-  }
-  close_handle(&session->process_thread);
+  /* Disconnect first. Milestone 1 hosts end their shell on every disconnect. */
+  release_terminal_transport(session);
+  if (session->process && WaitForSingleObject(session->process, 6000) == WAIT_TIMEOUT)
+    TerminateProcess(session->process, 1);
   close_handle(&session->process);
 }
 
@@ -893,22 +808,12 @@ static bool initialize_terminal(
   TerminalSession *session, const TerminalColors *colors,
   const size_t *scrollback_max_lines
 ) {
-  if (ghostty_terminal_new(
-    &terminal_allocator, &session->terminal, session->cols, session->rows
-  ) != GHOSTTY_SUCCESS) {
+  if (!anvil_terminal_model_new(
+    &session->terminal, session->cols, session->rows,
+    session->cell_width, session->cell_height, scrollback_max_lines
+  )) {
     return false;
   }
-  size_t scrollback_max_bytes = TERMINAL_SCROLLBACK_MAX_BYTES;
-  if (scrollback_max_lines && (
-      ghostty_terminal_set(
-        session->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
-        &scrollback_max_bytes
-      ) != GHOSTTY_SUCCESS ||
-      ghostty_terminal_set(
-        session->terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
-        scrollback_max_lines
-      ) != GHOSTTY_SUCCESS
-    )) return false;
   if (ghostty_render_state_new(
     &terminal_allocator, &session->render_state
   ) != GHOSTTY_SUCCESS) return false;
@@ -975,19 +880,6 @@ static bool initialize_terminal(
     session->terminal, GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
     (const void *)terminal_desktop_notification
   );
-  /*
-   * Pi emits OSC 133 A inside synchronized repaints as a zero-width zone marker.
-   * Ghostty gives A its specified fresh-line action. Pi does not track that move.
-   * A later Pi erase can therefore remove a user message from Ghostty's model.
-   * Suppress the move only during synchronized output. Keep normal shell behavior.
-   * See tests/fixtures/terminal_semantic_prompt_repaint.ps1 and Pi issue #2971.
-   */
-  bool semantic_prompt_fresh_line_in_synchronized_output = false;
-  if (ghostty_terminal_set(
-      session->terminal,
-      GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE_IN_SYNCHRONIZED_OUTPUT,
-      &semantic_prompt_fresh_line_in_synchronized_output
-    ) != GHOSTTY_SUCCESS) return false;
   if (!set_terminal_colors(session, colors)) return false;
   ghostty_terminal_resize(
     session->terminal, session->cols, session->rows,
@@ -1090,212 +982,6 @@ static int f_terminal_set_colors(lua_State *L) {
   return 1;
 }
 
-static bool create_kill_job(TerminalSession *session) {
-  session->job = CreateJobObjectW(NULL, NULL);
-  if (!session->job) return false;
-
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
-  memset(&limits, 0, sizeof(limits));
-  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-  if (!SetInformationJobObject(
-    session->job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)
-  )) {
-    close_handle(&session->job);
-    return false;
-  }
-  if (!AssignProcessToJobObject(session->job, session->process)) {
-    close_handle(&session->job);
-    return false;
-  }
-  return true;
-}
-
-#ifndef ANVIL_PROJECT_VERSION_STR
-#define ANVIL_PROJECT_VERSION_STR "unknown"
-#endif
-
-static bool environment_entry_has_key(const wchar_t *entry, const wchar_t *key) {
-  size_t length = wcslen(key);
-  return _wcsnicmp(entry, key, length) == 0 && entry[length] == L'=';
-}
-
-static wchar_t *terminal_environment(void) {
-  LPWCH inherited = GetEnvironmentStringsW();
-  if (!inherited) return NULL;
-  static const wchar_t *keys[] = {
-    L"TERM_PROGRAM", L"TERM_PROGRAM_VERSION", L"TERM", L"COLORTERM",
-  };
-  static const wchar_t *fixed_prefixes[] = {
-    L"TERM_PROGRAM=anvil", L"TERM_PROGRAM_VERSION=", L"TERM=xterm-256color",
-    L"COLORTERM=truecolor",
-  };
-  wchar_t *version = utf8_to_wide(ANVIL_PROJECT_VERSION_STR);
-  if (!version) {
-    FreeEnvironmentStringsW(inherited);
-    return NULL;
-  }
-  size_t chars = 2;
-  for (const wchar_t *entry = inherited; *entry; entry += wcslen(entry) + 1) {
-    bool replace = false;
-    for (size_t index = 0; index < 4; index++) {
-      if (environment_entry_has_key(entry, keys[index])) { replace = true; break; }
-    }
-    if (!replace) chars += wcslen(entry) + 1;
-  }
-  chars += wcslen(fixed_prefixes[0]) + 1;
-  chars += wcslen(fixed_prefixes[1]) + wcslen(version) + 1;
-  chars += wcslen(fixed_prefixes[2]) + 1;
-  chars += wcslen(fixed_prefixes[3]) + 1;
-  wchar_t *block = (wchar_t *)HeapAlloc(GetProcessHeap(), 0, chars * sizeof(wchar_t));
-  if (!block) {
-    HeapFree(GetProcessHeap(), 0, version);
-    FreeEnvironmentStringsW(inherited);
-    return NULL;
-  }
-  wchar_t *out = block;
-  for (const wchar_t *entry = inherited; *entry; entry += wcslen(entry) + 1) {
-    bool replace = false;
-    for (size_t index = 0; index < 4; index++) {
-      if (environment_entry_has_key(entry, keys[index])) { replace = true; break; }
-    }
-    if (replace) continue;
-    size_t length = wcslen(entry) + 1;
-    memcpy(out, entry, length * sizeof(wchar_t));
-    out += length;
-  }
-  size_t length = wcslen(fixed_prefixes[0]) + 1;
-  memcpy(out, fixed_prefixes[0], length * sizeof(wchar_t)); out += length;
-  length = wcslen(fixed_prefixes[1]);
-  memcpy(out, fixed_prefixes[1], length * sizeof(wchar_t)); out += length;
-  length = wcslen(version);
-  memcpy(out, version, length * sizeof(wchar_t)); out += length; *out++ = L'\0';
-  for (size_t index = 2; index < 4; index++) {
-    length = wcslen(fixed_prefixes[index]) + 1;
-    memcpy(out, fixed_prefixes[index], length * sizeof(wchar_t)); out += length;
-  }
-  *out = L'\0';
-  HeapFree(GetProcessHeap(), 0, version);
-  FreeEnvironmentStringsW(inherited);
-  return block;
-}
-
-static bool create_shell_process(
-  TerminalSession *session, const char *command_utf8, const char *cwd_utf8, DWORD *error_out
-) {
-  wchar_t *command = utf8_to_wide(command_utf8);
-  wchar_t *cwd = cwd_utf8 && cwd_utf8[0] ? utf8_to_wide(cwd_utf8) : NULL;
-  if (!command || (cwd_utf8 && cwd_utf8[0] && !cwd)) {
-    if (command) HeapFree(GetProcessHeap(), 0, command);
-    if (cwd) HeapFree(GetProcessHeap(), 0, cwd);
-    *error_out = ERROR_NOT_ENOUGH_MEMORY;
-    return false;
-  }
-
-  SIZE_T attribute_size = 0;
-  InitializeProcThreadAttributeList(NULL, 1, 0, &attribute_size);
-  PPROC_THREAD_ATTRIBUTE_LIST attributes =
-    (PPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, attribute_size);
-  if (!attributes) {
-    HeapFree(GetProcessHeap(), 0, command);
-    if (cwd) HeapFree(GetProcessHeap(), 0, cwd);
-    *error_out = ERROR_NOT_ENOUGH_MEMORY;
-    return false;
-  }
-
-  bool initialized = InitializeProcThreadAttributeList(attributes, 1, 0, &attribute_size) != FALSE;
-  bool updated = initialized && UpdateProcThreadAttribute(
-    attributes, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-    session->pseudoconsole, sizeof(session->pseudoconsole), NULL, NULL
-  ) != FALSE;
-
-  STARTUPINFOEXW startup;
-  PROCESS_INFORMATION process;
-  memset(&startup, 0, sizeof(startup));
-  memset(&process, 0, sizeof(process));
-  startup.StartupInfo.cb = sizeof(startup);
-  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-  startup.lpAttributeList = attributes;
-  wchar_t *environment = terminal_environment();
-
-  bool created = updated && environment && CreateProcessW(
-    NULL, command, NULL, NULL, FALSE,
-    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
-    environment, cwd, &startup.StartupInfo, &process
-  ) != FALSE;
-  *error_out = created ? ERROR_SUCCESS : environment ? GetLastError() : ERROR_NOT_ENOUGH_MEMORY;
-
-  if (initialized) DeleteProcThreadAttributeList(attributes);
-  HeapFree(GetProcessHeap(), 0, attributes);
-  HeapFree(GetProcessHeap(), 0, command);
-  if (environment) HeapFree(GetProcessHeap(), 0, environment);
-  if (cwd) HeapFree(GetProcessHeap(), 0, cwd);
-
-  if (!created) return false;
-  session->process = process.hProcess;
-  session->process_thread = process.hThread;
-  if (!create_kill_job(session)) {
-    *error_out = GetLastError();
-    TerminateProcess(session->process, 1);
-    WaitForSingleObject(session->process, INFINITE);
-    close_handle(&session->process_thread);
-    close_handle(&session->process);
-    return false;
-  }
-  if (ResumeThread(session->process_thread) == (DWORD)-1) {
-    *error_out = GetLastError();
-    close_handle(&session->job);
-    WaitForSingleObject(session->process, INFINITE);
-    close_handle(&session->process_thread);
-    close_handle(&session->process);
-    return false;
-  }
-  set_terminal_state(session, TERMINAL_STATE_RUNNING);
-  return true;
-}
-
-static bool create_pseudoconsole(
-  TerminalSession *session, const char *shell, const char *cwd, DWORD *error_out
-) {
-  HANDLE input_read = NULL;
-  HANDLE output_write = NULL;
-  SECURITY_ATTRIBUTES security = {
-    .nLength = sizeof(SECURITY_ATTRIBUTES),
-    .lpSecurityDescriptor = NULL,
-    .bInheritHandle = TRUE,
-  };
-
-  if (!CreatePipe(&input_read, &session->input_write, &security, 0) ||
-      !CreatePipe(&session->output_read, &output_write, &security, 0)) {
-    *error_out = GetLastError();
-    close_handle(&input_read);
-    close_handle(&output_write);
-    return false;
-  }
-  SetHandleInformation(session->input_write, HANDLE_FLAG_INHERIT, 0);
-  SetHandleInformation(session->output_read, HANDLE_FLAG_INHERIT, 0);
-
-  COORD size = { (SHORT)session->cols, (SHORT)session->rows };
-  HRESULT result = CreatePseudoConsole(size, input_read, output_write, 0, &session->pseudoconsole);
-  if (FAILED(result)) {
-    close_handle(&input_read);
-    close_handle(&output_write);
-    *error_out = HRESULT_CODE(result);
-    return false;
-  }
-
-  bool created = false;
-  if (shell && shell[0]) {
-    created = create_shell_process(session, shell, cwd, error_out);
-  } else if (create_shell_process(session, "pwsh.exe -NoLogo", cwd, error_out)) {
-    created = true;
-  } else {
-    created = create_shell_process(session, "powershell.exe -NoLogo", cwd, error_out);
-  }
-  close_handle(&input_read);
-  close_handle(&output_write);
-  return created;
-}
-
 static int f_terminal_new(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   TerminalColors colors = read_terminal_colors(L, 1);
@@ -1313,7 +999,6 @@ static int f_terminal_new(lua_State *L) {
   memset(session, 0, sizeof(*session));
   session->state = TERMINAL_STATE_NEW;
   session->state_revision = 1;
-  InterlockedExchange64(&session->last_output_ms, (LONG64)GetTickCount64());
   luaL_setmetatable(L, API_TYPE_TERMINAL_SESSION);
 
   lua_getfield(L, 1, "cols");
@@ -1339,15 +1024,25 @@ static int f_terminal_new(lua_State *L) {
   const char *shell = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
 
   DWORD error = ERROR_SUCCESS;
-  if (!create_pseudoconsole(session, shell, cwd, &error)) {
+  lua_getglobal(L, "USERDIR");
+  const char *userdir = lua_tostring(L, -1);
+  AnvilTerminalSize size = { session->cols, session->rows, session->cell_width, session->cell_height };
+  bool started = anvil_terminal_host_launch(&session->pipe, &session->process,
+    &session->host_pid, &session->shell_pid, &session->replay_bytes,
+    userdir ? userdir : ".", shell, cwd, size,
+    has_scrollback_max_lines ? &scrollback_max_lines : NULL, &error);
+  lua_pop(L, 1);
+  if (!started) {
     lua_pop(L, 2);
     close_session(session);
     lua_pop(L, 1);
     lua_pushnil(L);
-    push_windows_error(L, "Could not start ConPTY", error);
+    push_windows_error(L, "Could not start Terminal Session process", error);
     return 2;
   }
   lua_pop(L, 2);
+  set_terminal_state(session, TERMINAL_STATE_RUNNING);
+  session->attached_at = GetTickCount64();
 
   if (!start_terminal_io(session)) {
     close_session(session);
@@ -1370,20 +1065,8 @@ static int f_terminal_new(lua_State *L) {
   return 1;
 }
 
-static bool process_running(TerminalSession *session) {
-  if (!session->process || session->closed) return false;
-  DWORD wait = WaitForSingleObject(session->process, 0);
-  if (wait == WAIT_TIMEOUT) return true;
-  if (wait != WAIT_OBJECT_0) return false;
-  DWORD exit_code = 0;
-  if (!GetExitCodeProcess(session->process, &exit_code)) return false;
-  session->exit_code = exit_code;
-  session->exit_code_known = true;
-  return false;
-}
-
 static bool output_drained(TerminalSession *session) {
-  if (!session->read_lock_initialized || !session->output_read) return true;
+  if (!session->read_lock_initialized || !session->pipe.handle) return true;
   bool empty = true;
   EnterCriticalSection(&session->read_lock);
   empty = session->read_queue_count == 0;
@@ -1403,27 +1086,10 @@ static void push_status(lua_State *L, TerminalSession *session) {
     lua_pushinteger(L, session->exit_code);
     lua_setfield(L, -2, "exit_code");
   }
-  if (read_failed || write_failed) {
-    DWORD error = read_failed ? session->read_error : session->write_error;
-    const char *operation = read_failed ? "output" : "input";
-    char *message = NULL;
-    FormatMessageA(
-      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-        FORMAT_MESSAGE_IGNORE_INSERTS,
-      NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-      (char *)&message, 0, NULL
-    );
-    if (message) {
-      size_t length = strlen(message);
-      while (length > 0 && (message[length - 1] == '\r' || message[length - 1] == '\n')) {
-        message[--length] = '\0';
-      }
-      lua_pushfstring(L, "ConPTY %s failed: %s", operation, message);
-      LocalFree(message);
-    } else {
-      lua_pushfstring(L, "ConPTY %s failed: Windows error %d", operation, (int)error);
-    }
+  if (session->state == TERMINAL_STATE_FAILED && (read_failed || write_failed)) {
+    lua_pushliteral(L, "The Terminal Session process ended unexpectedly");
     lua_setfield(L, -2, "error");
+    set_integer_field(L, "transport_error", read_failed ? session->read_error : session->write_error);
   }
 }
 
@@ -1493,44 +1159,22 @@ static int f_terminal_update(lua_State *L) {
   output_remains = session->read_queue_count > 0;
   LeaveCriticalSection(&session->read_lock);
   if (output_remains) wake_for_terminal_output(session);
-  uint64_t now = GetTickCount64();
-  if (session->state == TERMINAL_STATE_RUNNING && !process_running(session)) {
-    session->process_exit_seen_ms = now;
-    session->drain_empty_seen_ms = 0;
-    LONG64 last_output = InterlockedCompareExchange64(&session->last_output_ms, 0, 0);
-    if ((uint64_t)last_output < now) {
-      InterlockedExchange64(&session->last_output_ms, (LONG64)now);
-    }
+  bool host_exited = InterlockedCompareExchange(&session->host_exited, 0, 0) != 0;
+  bool was_draining = session->state == TERMINAL_STATE_DRAINING;
+  if (session->state == TERMINAL_STATE_RUNNING && host_exited) {
     set_terminal_state(session, TERMINAL_STATE_DRAINING);
-    start_pseudoconsole_close(session);
   }
   bool read_failed = InterlockedCompareExchange(&session->read_failed, 0, 0) != 0;
   bool write_failed = InterlockedCompareExchange(&session->write_failed, 0, 0) != 0;
-  if ((session->state == TERMINAL_STATE_RUNNING ||
-       session->state == TERMINAL_STATE_DRAINING) && (read_failed || write_failed)) {
+  if ((session->state == TERMINAL_STATE_RUNNING || session->state == TERMINAL_STATE_DRAINING) &&
+      (read_failed || (write_failed && session->reader_done && !host_exited))) {
     set_terminal_state(session, TERMINAL_STATE_FAILED);
     terminate_terminal_process(session);
     release_terminal_transport(session);
   }
-  uint64_t last_output = (uint64_t)InterlockedCompareExchange64(
-    &session->last_output_ms, 0, 0
-  );
-  bool drained = session->state == TERMINAL_STATE_DRAINING && output_drained(session);
-  if (drained && session->drain_empty_seen_ms == 0) session->drain_empty_seen_ms = now;
-  if (!drained) session->drain_empty_seen_ms = 0;
-  bool drain_expired = session->state == TERMINAL_STATE_DRAINING &&
-    now - session->process_exit_seen_ms >= TERMINAL_DRAIN_MAX_MS;
-  bool drain_complete = session->state == TERMINAL_STATE_DRAINING &&
-    drained && now - last_output >= TERMINAL_DRAIN_QUIET_MS &&
-    now - session->drain_empty_seen_ms >= TERMINAL_DRAIN_QUIET_MS;
-  if (drain_complete || drain_expired) {
-    if (drain_expired) {
-      session->forced_drain_finalizations++;
-    }
-    if (session->job) close_handle(&session->job);
-    close_handle(&session->process_thread);
-    close_handle(&session->process);
-    release_terminal_transport(session);
+  /* Publish draining once, even when EXITED arrives with an empty local queue. */
+  if (was_draining && session->state == TERMINAL_STATE_DRAINING && output_drained(session)) {
+    terminate_terminal_process(session);
     set_terminal_state(session, TERMINAL_STATE_EXITED);
   }
   if (session->render_pending &&
@@ -1696,9 +1340,11 @@ static int f_terminal_stats(lua_State *L) {
   set_integer_field(L, "read_queue_high_water", (lua_Integer)read_queue_high_water);
   set_integer_field(L, "write_queue_high_water", (lua_Integer)session->write_queue_high_water);
   set_integer_field(L, "rejected_writes", (lua_Integer)session->rejected_writes);
-  set_integer_field(L, "forced_drain_finalizations",
-    (lua_Integer)session->forced_drain_finalizations);
   set_integer_field(L, "render_generation", (lua_Integer)session->render_generation);
+  set_integer_field(L, "host_pid", session->host_pid);
+  set_integer_field(L, "shell_pid", session->shell_pid);
+  set_integer_field(L, "attached_at", session->attached_at);
+  set_integer_field(L, "replay_bytes", InterlockedCompareExchange64((LONG64 *)&session->replay_bytes, 0, 0));
   return 1;
 }
 
@@ -1708,14 +1354,15 @@ static int f_terminal_resize(lua_State *L) {
   uint16_t rows = (uint16_t)luaL_checkinteger(L, 3);
   uint32_t cell_width = (uint32_t)luaL_checkinteger(L, 4);
   uint32_t cell_height = (uint32_t)luaL_checkinteger(L, 5);
-  if (!terminal_is_live(session) || session->transport_released || !session->pseudoconsole ||
-      cols == 0 || rows == 0 || cell_width == 0 || cell_height == 0) {
+  if (!terminal_is_live(session) || session->transport_released || !session->pipe.handle ||
+      cols == 0 || rows == 0 || cols > 32767 || rows > 32767 ||
+      cell_width == 0 || cell_height == 0) {
     lua_pushboolean(L, false);
     return 1;
   }
 
-  COORD size = { (SHORT)cols, (SHORT)rows };
-  if (FAILED(ResizePseudoConsole(session->pseudoconsole, size))) {
+  AnvilTerminalSize size = { cols, rows, cell_width, cell_height };
+  if (!enqueue_record(session, ANVIL_TERMINAL_RESIZE, (const uint8_t *)&size, sizeof(size))) {
     lua_pushboolean(L, false);
     return 1;
   }

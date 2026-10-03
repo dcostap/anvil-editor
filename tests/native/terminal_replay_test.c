@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../src/terminal_model.h"
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL: %s\n", #x); return 1; } } while (0)
 
@@ -77,7 +78,12 @@ int main(void) {
     /* The fallback must start at byte zero, never at a truncated VT prefix. */
     const char *raw = alternate ? "one\r\ntwo\r\nthree\r\nfour\r\nfive\033[?1049hALT\033[2;4H" : primary;
     ghostty_terminal_vt_write(a, (const uint8_t *)raw, strlen(raw));
-    ghostty_terminal_vt_write(b, (const uint8_t *)raw, strlen(raw));
+    AnvilTerminalReplay replay = {0};
+    size_t split = strlen(raw) / 2;
+    anvil_terminal_replay_append(&replay, (const uint8_t *)raw, split);
+    anvil_terminal_replay_append(&replay, (const uint8_t *)raw + split, strlen(raw) - split);
+    CHECK(!replay.overflow);
+    ghostty_terminal_vt_write(b, replay.bytes, replay.length);
     CHECK(compare(a, b) == 0);
     if (alternate) {
       ghostty_terminal_vt_write(a, (const uint8_t *)"\033[?1049l", 8);
@@ -85,6 +91,12 @@ int main(void) {
       CHECK(compare(a, b) == 0);
     }
     ghostty_terminal_free(a); ghostty_terminal_free(b);
+    /* An incomplete prefix must not become a suffix replay. */
+    anvil_terminal_replay_append(&replay, (const uint8_t *)raw, ANVIL_TERMINAL_REPLAY_LIMIT);
+    CHECK(replay.overflow && !replay.bytes && replay.length == 0);
+    anvil_terminal_replay_append(&replay, (const uint8_t *)raw, strlen(raw));
+    CHECK(replay.overflow && !replay.bytes && replay.length == 0);
+    anvil_terminal_replay_free(&replay);
   }
   puts("raw replay preserves primary scrollback, alternate screen, and cursor");
   return 0;

@@ -268,6 +268,7 @@ function TerminalView:new(options)
     return
   end
   self.session = session
+  self:log_session_attach()
   self.session_cell_width = self.native_cell_width
   self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
@@ -486,8 +487,15 @@ function TerminalView:create_session()
   return session
 end
 
+function TerminalView:log_session_attach()
+  local stats = self.session:stats()
+  core.log_quiet("Terminal session %d attached: host=%d shell=%d replay=%d bytes",
+    self.session_id, stats.host_pid, stats.shell_pid, stats.replay_bytes)
+end
+
 function TerminalView:adopt_session(session)
   self.session = session
+  self:log_session_attach()
   self.session_cell_width = self.native_cell_width
   self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
@@ -620,6 +628,8 @@ function TerminalView:apply_status(status)
   self.running = kind == "running"
   if kind == "exited" then self.exit_code = status.exit_code end
   if status.error and status.error ~= self.reported_error then
+    core.log_quiet("Terminal session %d transport failure: %s (Windows error %s)",
+      self.session_id, status.error, tostring(status.transport_error))
     self.reported_error = status.error
     if kind == "failed" then self.launch_error = status.error end
     core.error(status.error)

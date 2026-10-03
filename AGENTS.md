@@ -108,6 +108,7 @@ Use the BAT files in the repo root
   - close Anvil first if binaries may be replaced
   - rebuilds and updates the dev portable app
   - restores the source-data junctions
+  - ends all Anvil processes, including Terminal Session hosts; running shells end too
 
 - `launch-anvil-debug.bat`
   - explicitly launches the unstripped `build-windows-x86_64\src\anvil.exe`

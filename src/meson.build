@@ -164,10 +164,14 @@ if host_machine.system() == 'windows'
         d3d11_quad_shader,
         'zig_abi_compat.c',
         'api/terminal_native.c',
+        'ipc_pipe.c',
+        'conpty.c',
+        'terminal_model.c',
+        'terminal_host.c',
         'terminal_contrast.c',
     ]
     terminal_replay_test = executable('terminal_replay_test',
-        '../tests/native/terminal_replay_test.c', 'zig_abi_compat.c',
+        '../tests/native/terminal_replay_test.c', 'terminal_model.c', 'zig_abi_compat.c',
         dependencies: ghostty_vt_dep,
     )
     if embedded_runtime

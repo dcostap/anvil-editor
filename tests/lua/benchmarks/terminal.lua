@@ -26,13 +26,14 @@ test.describe("Terminal native benchmark", function()
     }
     test.ok(session, err)
     local samples, snapshot = {}, nil
-    local function wait_for(text)
+    local function wait_for(text, measured)
       local deadline = system.get_time() + 10
       repeat
         local changed = session:update()
         if changed then snapshot = session:snapshot(snapshot) end
         if snapshot and snapshot_text(snapshot):find(text, 1, true) then return true end
-        coroutine.yield(0.0001)
+        -- Poll measured echoes without Windows Sleep timer rounding.
+        if not measured then coroutine.yield(0.001) end
       until system.get_time() >= deadline
       return false
     end
@@ -41,7 +42,7 @@ test.describe("Terminal native benchmark", function()
       for index = 1, 80 do
         local started = system.get_time()
         test.ok(session:write("x"))
-        test.ok(wait_for("ECHO_READY" .. string.rep("x", index)), "echo did not arrive")
+        test.ok(wait_for("ECHO_READY" .. string.rep("x", index), true), "echo did not arrive")
         samples[#samples + 1] = (system.get_time() - started) * 1000
       end
     end)

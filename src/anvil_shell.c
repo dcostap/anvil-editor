@@ -75,7 +75,7 @@ typedef struct {
 
   PROCESS_INFORMATION process;
   HANDLE job;
-  AnvilSurfacePipe pipe;
+  AnvilIPCPipe pipe;
   bool connected;
 
   SDL_Mutex *lock;
@@ -180,7 +180,8 @@ static bool launch_child(int argc, char **argv, const char *pipe_name) {
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
   ZeroMemory(&limits, sizeof(limits));
   limits.BasicLimitInformation.LimitFlags =
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK |
+    JOB_OBJECT_LIMIT_BREAKAWAY_OK;
   if (!shell.job ||
       !SetInformationJobObject(shell.job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
     free(command_line);
@@ -254,12 +255,12 @@ static bool wait_for_child_connection(void) {
 static int SDLCALL reader_thread(void *data) {
   (void)data;
   uint8_t *payload = malloc(ANVIL_SURFACE_MAX_PAYLOAD);
-  AnvilSurfaceHeader header;
+  AnvilIPCHeader header;
   if (payload && wait_for_child_connection() &&
-      anvil_surface_pipe_read(&shell.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD) &&
+      anvil_ipc_pipe_read(&shell.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD) &&
       header.type == ANVIL_SURFACE_MSG_HELLO) {
     push_shell_event(SHELL_EVENT_CONNECTED, NULL, 0);
-    while (anvil_surface_pipe_read(&shell.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
+    while (anvil_ipc_pipe_read(&shell.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
       if (header.type == ANVIL_SURFACE_MSG_FRAME) {
         if (header.size != sizeof(AnvilSurfaceFrame)) continue;
         SDL_LockMutex(shell.lock);
@@ -303,7 +304,7 @@ static int SDLCALL writer_thread(void *data) {
     if (!shell.queue_head) shell.queue_tail = NULL;
     shell.queue_bytes -= message->size;
     SDL_UnlockMutex(shell.lock);
-    anvil_surface_pipe_write(&shell.pipe, message->type, message->payload, message->size, NULL, 0);
+    anvil_ipc_pipe_write(&shell.pipe, message->type, message->payload, message->size, NULL, 0);
     free(message);
   }
   return 0;
@@ -1053,7 +1054,7 @@ static bool create_pipe(char *name, size_t name_size) {
     PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
     1, SHELL_PIPE_BUFFER, SHELL_PIPE_BUFFER, 0, NULL);
   if (handle == INVALID_HANDLE_VALUE) return false;
-  if (!anvil_surface_pipe_init(&shell.pipe, handle)) {
+  if (!anvil_ipc_pipe_init(&shell.pipe, handle, ANVIL_SURFACE_PROTOCOL_VERSION, ANVIL_SURFACE_MAX_PAYLOAD)) {
     CloseHandle(handle);
     return false;
   }

@@ -66,12 +66,6 @@ typedef enum {
 } AnvilSurfaceCursor;
 
 typedef struct {
-  uint32_t size;    /* payload bytes after this header */
-  uint16_t type;
-  uint16_t version;
-} AnvilSurfaceHeader;
-
-typedef struct {
   int32_t pixel_w, pixel_h;          /* surface size */
   int32_t window_x, window_y;        /* shell window bounds, for saved app state */
   int32_t window_w, window_h;
@@ -127,29 +121,6 @@ typedef struct {
  * happen before Lua logging exists, so this is the only record of them. */
 void anvil_surface_log_init(const char *role);
 
-#ifdef _WIN32
-#include <windows.h>
-
-typedef struct {
-  HANDLE handle;
-  HANDLE read_event;
-  HANDLE write_event;
-  CRITICAL_SECTION write_lock;
-  bool lock_ready;
-} AnvilSurfacePipe;
-
-bool anvil_surface_pipe_init(AnvilSurfacePipe *pipe, HANDLE handle);
-void anvil_surface_pipe_close(AnvilSurfacePipe *pipe);
-
-/* Blocks until one whole message arrives. Returns false on EOF, error, or a
- * message that breaks the size or version bounds. */
-bool anvil_surface_pipe_read(AnvilSurfacePipe *pipe, AnvilSurfaceHeader *header,
-                             void *payload, uint32_t capacity);
-
-/* Writes one message as a single record. Safe from several threads. */
-bool anvil_surface_pipe_write(AnvilSurfacePipe *pipe, uint16_t type,
-                              const void *payload, uint32_t size,
-                              const void *tail, uint32_t tail_size);
-#endif
+#include "ipc_pipe.h"
 
 #endif

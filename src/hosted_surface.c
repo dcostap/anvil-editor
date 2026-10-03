@@ -28,7 +28,7 @@ typedef struct {
 static struct {
   bool active;
   char pipe_name[256];
-  AnvilSurfacePipe pipe;
+  AnvilIPCPipe pipe;
   SDL_Thread *reader;
   SDL_Window *window;
   Uint32 window_id;
@@ -191,8 +191,8 @@ static int SDLCALL reader_thread(void *data) {
   (void)data;
   uint8_t *payload = malloc(ANVIL_SURFACE_MAX_PAYLOAD);
   if (!payload) return 1;
-  AnvilSurfaceHeader header;
-  while (anvil_surface_pipe_read(&hosted.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
+  AnvilIPCHeader header;
+  while (anvil_ipc_pipe_read(&hosted.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
     switch (header.type) {
       case ANVIL_SURFACE_MSG_CONFIGURE:
         if (header.size != sizeof(AnvilSurfaceConfigure)) break;
@@ -230,7 +230,7 @@ static int SDLCALL reader_thread(void *data) {
 
 static void send_message(uint16_t type, const void *payload, uint32_t size) {
   if (!hosted.active) return;
-  anvil_surface_pipe_write(&hosted.pipe, type, payload, size, NULL, 0);
+  anvil_ipc_pipe_write(&hosted.pipe, type, payload, size, NULL, 0);
 }
 
 static void send_int(uint16_t type, int value) {
@@ -255,7 +255,7 @@ bool anvil_hosted_surface_connect(void) {
     }
     WaitNamedPipeA(hosted.pipe_name, 100);
   }
-  if (!anvil_surface_pipe_init(&hosted.pipe, handle)) {
+  if (!anvil_ipc_pipe_init(&hosted.pipe, handle, ANVIL_SURFACE_PROTOCOL_VERSION, ANVIL_SURFACE_MAX_PAYLOAD)) {
     CloseHandle(handle);
     return false;
   }
@@ -263,15 +263,15 @@ bool anvil_hosted_surface_connect(void) {
   if (!hosted.config_lock) return false;
 
   AnvilSurfaceHello hello = { (uint32_t)GetCurrentProcessId() };
-  if (!anvil_surface_pipe_write(&hosted.pipe, ANVIL_SURFACE_MSG_HELLO, &hello, sizeof(hello), NULL, 0)) {
+  if (!anvil_ipc_pipe_write(&hosted.pipe, ANVIL_SURFACE_MSG_HELLO, &hello, sizeof(hello), NULL, 0)) {
     SDL_Log("Hosted surface could not greet the shell.");
     return false;
   }
 
   /* Startup reads the display scale and initial size, so wait for them. */
-  AnvilSurfaceHeader header = { 0 };
+  AnvilIPCHeader header = { 0 };
   AnvilSurfaceConfigure config;
-  bool read = anvil_surface_pipe_read(&hosted.pipe, &header, &config, sizeof(config));
+  bool read = anvil_ipc_pipe_read(&hosted.pipe, &header, &config, sizeof(config));
   if (!read || header.type != ANVIL_SURFACE_MSG_CONFIGURE || header.size != sizeof(config)) {
     SDL_Log("Hosted surface did not receive its first configuration: read=%d type=%u size=%u error=%lu",
             read, (unsigned)header.type, (unsigned)header.size, (unsigned long)GetLastError());

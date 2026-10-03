@@ -13,6 +13,7 @@
 #include "shutdown_diagnostics.h"
 #include "win32_single_instance.h"
 #include "anvil_shell.h"
+#include "terminal_host.h"
 #include "hosted_surface.h"
 #include "input_latency_probe.h"
 #include "surface_protocol.h"
@@ -356,6 +357,12 @@ static bool init_lua_state(AppState *app) {
 static bool shell_mode = false;
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
+#ifdef _WIN32
+  if (argc > 1 && strcmp(argv[1], "--terminal-session") == 0) {
+    /* No Lua, single-instance forwarding, window, or SDL initialization. */
+    exit(anvil_terminal_host_main(argc, argv));
+  }
+#endif
   if (argc > 1 && strcmp(argv[1], ANVIL_SHELL_ARG) == 0) {
     shell_mode = true;
     return anvil_shell_init(appstate, argc, argv);

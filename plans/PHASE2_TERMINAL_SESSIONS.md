@@ -4,7 +4,8 @@ This is the implementation plan for Phase 2 of
 [the multiprocess shell plan](MULTIPROCESS_SHELL_PLAN.md). Read that plan first,
 especially "Terminal Sessions", "Session registry", and "IPC".
 
-Status: not started. Phases 0 and 1 are done.
+Status: Milestone 1 is implemented. Milestones 2 to 4 have not started.
+Phases 0 and 1 are done.
 
 Formatter check: `anvil:terminal-replay` failed with the requested VT extras.
 Primary replay added leading spaces. Alternate replay restored the active screen,
@@ -190,6 +191,47 @@ Each milestone ends with focused tests, a commit, and the dev build updated with
 `update-anvil-dev-build.bat`. Follow the red-green rules in AGENTS.md.
 
 ### Milestone 1: the session process and attach
+
+Implemented: the native host owns ConPTY, the shell job, and a replay model.
+The editor uses framed pipe transport. Both models use the shared model options.
+The host checks the client PID and session ID. The editor checks the server PID.
+Every disconnect ends the host and shell. There is no registry or reattach yet.
+An oversized raw prefix becomes unavailable; it never becomes a suffix replay.
+
+Focused checks on 2026-10-03:
+
+- `ui/terminal.lua`: 66 passed, including the new host termination test.
+  Before implementation, that test failed because the session had no host PID.
+- `ui/terminal_contrast.lua`: 14 passed.
+- `runtime/terminal_native.lua`: 27 passed; WSL skipped because no distribution was available.
+  Its drain test exposed a skipped `draining` status. It passed after fixing that transition.
+- `anvil:terminal-replay`: passed. Disabling prefix overflow rejection made the test fail.
+  Restoring rejection made it pass. Formatter results remain diagnostic, not a success claim.
+- Hosted surface input: eight samples passed on each renderer after the shared pipe refactor.
+- Lua syntax checks passed for the changed Lua files.
+
+`terminal-native-perf` passed before and after. The typing check uses 80 echoes.
+It measures queued input through the parsed screen, not display scanout.
+The final measurement polls echoes without a sleep delay.
+For that baseline, the original native transport came from commit `362fd5f3`.
+The Milestone 1 transport was restored before the after measurement.
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Typing echo p50 | 15.571 ms | 15.533 ms |
+| Typing echo p95 | 16.116 ms | 16.098 ms |
+| Typing echo max | 16.568 ms | 16.475 ms |
+| 20,000 output lines | 5,548.526 ms | 5,135.059 ms |
+| Update p50 | 0.0079 ms | 0.0057 ms |
+| Update p95 | 0.0287 ms | 0.0215 ms |
+| Snapshot p50 | 0.2788 ms | 0.2566 ms |
+| Snapshot p95 | 0.6018 ms | 0.4950 ms |
+| Ten-session update total | 12.032 ms / 3,560 calls | 55.282 ms / 1,950 calls |
+
+The echo p50 change is -0.038 ms, within the 1 ms budget.
+Output and multi-session runs include process scheduling noise. They do not prove a speed increase.
+The dev update BAT already ends every Anvil process, including hosts.
+The standalone script uses a separate candidate executable and does not replace the dev executable.
 
 - Do the refactors: `ipc_pipe`, `conpty`, `terminal_model`.
 - Build the host, the protocol, and the client transport.

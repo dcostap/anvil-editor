@@ -19,6 +19,7 @@ local function fake_session(context)
   function session:focus() return true end
   function session:update() return false, { kind = "running", revision = 1 } end
   function session:close() end
+  function session:stats() return { host_pid = 0, shell_pid = 0, replay_bytes = 0 } end
   terminal._set_native_for_tests({
     new = function(options) session.options = options; return session end,
   })

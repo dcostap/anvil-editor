@@ -85,7 +85,7 @@ if exist "%~1\src\api\api.h" (
 exit /b 0
 
 :KillAnvil
-rem Close all running Anvil processes so the portable exe/com are not locked.
+rem Close all Anvil processes, including Terminal Session hosts, before install.
 rem Try graceful termination first, then force anything left behind.
 taskkill /IM anvil.exe /T >nul 2>nul
 taskkill /IM anvil.com /T >nul 2>nul

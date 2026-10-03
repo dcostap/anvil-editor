@@ -174,6 +174,7 @@ local function fake_native()
       return true, 17
     end
     function session:close() self.closed = true end
+    function session:stats() return { host_pid = 0, shell_pid = 0, replay_bytes = 0 } end
     sessions[#sessions + 1] = session
     return session
   end
@@ -1333,6 +1334,36 @@ test.describe("Terminal View", function()
     view:handle_events()
     test.equal(system.get_clipboard() or "", "")
     test.ok(not prompted)
+  end)
+
+  test.it("shows a failed terminal when its host process ends", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" }
+    test.ok(view and view.session)
+    local stats = view.session:stats()
+    test.ok(stats.host_pid and stats.host_pid > 0, "session has no host PID")
+    test.ok(stats.shell_pid and stats.shell_pid > 0 and stats.shell_pid ~= stats.host_pid)
+    local ffi = require "ffi"
+    ffi.cdef [[
+      void * __stdcall OpenProcess(unsigned long access, int inherit, unsigned long pid);
+      int __stdcall TerminateProcess(void *process, unsigned int code);
+      int __stdcall CloseHandle(void *handle);
+    ]]
+    local kernel = ffi.load("kernel32")
+    local process = kernel.OpenProcess(1, 0, stats.host_pid)
+    test.ok(process ~= nil)
+    local ended = kernel.TerminateProcess(process, 99)
+    kernel.CloseHandle(process)
+    test.ok(ended ~= 0)
+    local deadline = system.get_time() + 5
+    repeat
+      view:update()
+      if view.state == "failed" then break end
+      coroutine.yield(0.001)
+    until system.get_time() >= deadline
+    test.equal(view.state, "failed")
+    test.contains(view.launch_error, "The Terminal Session process ended unexpectedly")
   end)
 
   test.it("renders real ConPTY output through Terminal View", function(context)
