@@ -185,6 +185,16 @@ def performance_workload_settings(settings: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def native_path(path: Path | str) -> str:
+    """Format a path for the Windows app, even under MinGW Python.
+
+    MinGW Python writes C:/dir paths, even from pathlib.PureWindowsPath. Lua's
+    Windows path helpers split on backslashes only, so a forward-slash path
+    breaks them.
+    """
+    return str(path).replace("/", "\\")
+
+
 def workload_root(work: Path, scenario: str, settings: dict[str, Any]) -> Path:
     # Pixel references need the same Project caption as the measured scene.
     name = scenario.removesuffix("-reference") if settings.get("reference_overview") else scenario
@@ -829,7 +839,7 @@ def run_case(
     actions_file = run_dir / "actions.csv"
     workload_file = run_dir / "workload.json"
     if settings.get("kind"):
-        workload_file.write_text(json.dumps(dict(settings, root=str(workload_root(work, scenario, settings)))), encoding="utf-8")
+        workload_file.write_text(json.dumps(dict(settings, root=native_path(workload_root(work, scenario, settings)))), encoding="utf-8")
     case_fixture = (
         work / "fixtures" / "markdown-long-link.md"
         if settings.get("fixture") == "markdown-long-link" else fixture
@@ -843,10 +853,10 @@ def run_case(
             raise RuntimeError(f"scenario {scenario} requires an external specimen")
         case_fixture = external_fixture
     environment = {
-        "ANVIL_USERDIR": str(user),
-        "USERPROFILE": str(user),
-        "HOME": str(user),
-        "GIT_CEILING_DIRECTORIES": str(work.parent),
+        "ANVIL_USERDIR": native_path(user),
+        "USERPROFILE": native_path(user),
+        "HOME": native_path(user),
+        "GIT_CEILING_DIRECTORIES": native_path(work.parent),
         "ANVIL_RENDERER": renderer,
         # The IPC plugin uses a process-global shared-memory channel. Disable
         # it before startup so a benchmark can never hand its fixture to the
@@ -859,21 +869,21 @@ def run_case(
         "ANVIL_PERF_BENCHMARK_SCENARIO": scenario,
         "ANVIL_PERF_BENCHMARK_THEME": str(settings.get("theme", "")),
         "ANVIL_PERF_BENCHMARK_MODE": mode,
-        "ANVIL_PERF_BENCHMARK_FILE": str(case_fixture),
-        "ANVIL_PERF_BENCHMARK_TAB_DIR": str(tab_dir),
-        "ANVIL_PERF_BENCHMARK_RESULT": str(result_file),
-        "ANVIL_PERF_BENCHMARK_METRICS": str(metrics_file),
-        "ANVIL_PERF_BENCHMARK_ACTIONS": str(actions_file),
-        "ANVIL_PERF_BENCHMARK_WORKLOAD": str(workload_file) if settings.get("kind") else "",
-        "ANVIL_PERF_BENCHMARK_PROFILE_DIR": str(run_dir),
+        "ANVIL_PERF_BENCHMARK_FILE": native_path(case_fixture),
+        "ANVIL_PERF_BENCHMARK_TAB_DIR": native_path(tab_dir),
+        "ANVIL_PERF_BENCHMARK_RESULT": native_path(result_file),
+        "ANVIL_PERF_BENCHMARK_METRICS": native_path(metrics_file),
+        "ANVIL_PERF_BENCHMARK_ACTIONS": native_path(actions_file),
+        "ANVIL_PERF_BENCHMARK_WORKLOAD": native_path(workload_file) if settings.get("kind") else "",
+        "ANVIL_PERF_BENCHMARK_PROFILE_DIR": native_path(run_dir),
         "ANVIL_PERF_BENCHMARK_ACTION_TIMEOUT": str(action_timeout_seconds),
-        "ANVIL_PERF_BENCHMARK_HEARTBEAT": str(heartbeat_file),
-        "ANVIL_PERF_BENCHMARK_LIFECYCLE": str(lifecycle_file),
-        "ANVIL_PERF_BENCHMARK_SCREENSHOT": str(screenshot_file) if screenshot else "",
+        "ANVIL_PERF_BENCHMARK_HEARTBEAT": native_path(heartbeat_file),
+        "ANVIL_PERF_BENCHMARK_LIFECYCLE": native_path(lifecycle_file),
+        "ANVIL_PERF_BENCHMARK_SCREENSHOT": native_path(screenshot_file) if screenshot else "",
         "ANVIL_PERF_BENCHMARK_CAPTURE_ACTIONS": "1" if screenshot and settings.get("capture_actions") else "0",
-        "ANVIL_PERF_BENCHMARK_VIDEO_DIR": str(run_dir / "frames") if mode == "video" else "",
-        "ANVIL_PERF_BENCHMARK_RASTER_METADATA": str(raster_metadata_file),
-        "ANVIL_PERF_BENCHMARK_IMAGE_METADATA": str(image_metadata_file),
+        "ANVIL_PERF_BENCHMARK_VIDEO_DIR": native_path(run_dir / "frames") if mode == "video" else "",
+        "ANVIL_PERF_BENCHMARK_RASTER_METADATA": native_path(raster_metadata_file),
+        "ANVIL_PERF_BENCHMARK_IMAGE_METADATA": native_path(image_metadata_file),
         "ANVIL_PERF_BENCHMARK_CAPTURE_FRAMES": "3",
         "ANVIL_PERF_BENCHMARK_CAPTURE_SETTLE_FRAMES": "5",
         "ANVIL_PERF_BENCHMARK_WARMUP_FRAMES": str(warmup_frames),
@@ -888,16 +898,16 @@ def run_case(
         environment["ANVIL_DOCVIEW_STATS"] = "1"
     launch_config = {
         "stable_ui_scheduling": True,
-        "exe": str(exe),
-        "working_directory": str(workload_root(work, scenario, settings) if settings.get("kind") else work),
+        "exe": native_path(exe),
+        "working_directory": native_path(workload_root(work, scenario, settings) if settings.get("kind") else work),
         # The benchmark plugin owns file/view activation. Passing the fixture
         # on the command line would enqueue a second deferred open that can
         # steal focus back from custom visual scenes during warmup.
         "arguments": [],
         "environment": environment,
-        "heartbeat_path": str(heartbeat_file),
-        "resource_samples_path": str(resource_samples_file),
-        "timeout_dump_path": str(timeout_dump_file),
+        "heartbeat_path": native_path(heartbeat_file),
+        "resource_samples_path": native_path(resource_samples_file),
+        "timeout_dump_path": native_path(timeout_dump_file),
         "startup_timeout_seconds": startup_timeout_seconds,
         "heartbeat_timeout_seconds": heartbeat_timeout_seconds,
     }

@@ -420,6 +420,38 @@ class SpecimenTests(unittest.TestCase):
             self.assertNotIn(str(source), json.dumps(metadata))
 
 
+class LaunchEnvironmentTests(unittest.TestCase):
+    def test_app_receives_native_windows_paths_from_a_forward_slash_python(self):
+        # MinGW Python formats Windows paths with forward slashes. The app's
+        # Lua path helpers split Windows paths on backslashes only.
+        class ForwardSlashPath(type(Path())):
+            def __str__(self):
+                return super().__str__().replace("\\", "/")
+
+        class Captured(Exception):
+            pass
+
+        def capture(config_path, timeout_seconds):
+            raise Captured(json.loads(Path(config_path).read_text(encoding="utf-8")))
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = ForwardSlashPath(temp)
+            settings = dict(gate.SCENARIOS["renderer-primitives"])
+            with patch.object(gate, "invoke_hidden", side_effect=capture):
+                with self.assertRaises(Captured) as raised:
+                    gate.run_case(
+                        exe=root / "anvil.exe", work=root / "work", user=root / "user",
+                        fixture=root / "fixture.lua", tab_dir=root / "tabs",
+                        scenario="renderer-primitives", settings=settings, mode="visual",
+                        run_dir=root / "run", renderer="software", frames=1,
+                        warmup_frames=1, screenshot=True,
+                    )
+        environment = raised.exception.args[0]["environment"]
+        for key in ("ANVIL_USERDIR", "ANVIL_PERF_BENCHMARK_FILE", "ANVIL_PERF_BENCHMARK_SCREENSHOT",
+                    "ANVIL_PERF_BENCHMARK_RESULT", "ANVIL_PERF_BENCHMARK_PROFILE_DIR"):
+            self.assertNotIn("/", environment[key], key)
+
+
 class LauncherOutputTests(unittest.TestCase):
     def test_parses_structured_launcher_result_after_diagnostic_output(self):
         output = "diagnostic line\n" + json.dumps({
