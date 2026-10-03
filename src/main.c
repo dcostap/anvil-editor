@@ -695,7 +695,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     const char *reason = anvil_resize_diag_event_reason(event->type);
     anvil_resize_diag_log(&(AnvilResizeDiagEvent){
       .category = "sdl_event",
-      .name = app->live_resize ? "skip_live_resize_duplicate" : "immediate_resize_candidate",
+      .name = app->live_resize && !anvil_hosted_surface_active()
+        ? "skip_live_resize_duplicate" : "immediate_resize_candidate",
       .reason = reason,
       .window_id = event->window.windowID,
       .live_resize = app->live_resize,
@@ -704,7 +705,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
       .point_w = event->window.data1,
       .point_h = event->window.data2
     });
-    if (!app->live_resize) {
+    /* A direct window renders live-resize frames from its native WM_SIZE. A
+     * hosted window has no native frame; its resize events drive them. */
+    if (!app->live_resize || anvil_hosted_surface_active()) {
       anvil_request_resize_frame_for_window(SDL_GetWindowFromID(event->window.windowID), reason);
     }
   }

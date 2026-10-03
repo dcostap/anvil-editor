@@ -12,6 +12,10 @@
 #define TEXT_RING_SIZE 4096
 #define MEMORY_LOCK_TIMEOUT_MS 100
 
+/* Live-resize frame scheduling lives in main.c. */
+void anvil_set_live_resize(bool live_resize);
+void anvil_request_resize_frame_for_window(SDL_Window *window, const char *reason);
+
 typedef struct {
   HANDLE mapping;
   HANDLE mutex;
@@ -154,7 +158,16 @@ static void SDLCALL apply_configure(void *data) {
   SDL_UnlockMutex(hosted.config_lock);
   hosted.config_applied = true;
 
+  /* The shell waits for a frame of each new size while it live-resizes, so
+   * resize frames must render immediately instead of at the refresh rate. */
+  bool live_resize = hosted.config.live_resize != 0;
+  if (live_resize != (previous.live_resize != 0)) {
+    anvil_set_live_resize(live_resize);
+  }
   apply_window_size();
+  if (had_config && previous.live_resize && !live_resize) {
+    anvil_request_resize_frame_for_window(hosted.window, "exit_sizemove");
+  }
   if (!had_config) return;
   if (previous.display_scale != hosted.config.display_scale) {
     push_window_event(SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED);

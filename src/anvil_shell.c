@@ -4,7 +4,9 @@
 
 #include "surface_protocol.h"
 #include "input_latency_probe.h"
+#include "win32_frame_hwnd.h"
 
+#include <windowsx.h>
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <stdio.h>
@@ -24,6 +26,8 @@
 #define SHELL_FORCE_CLOSE_NS (3ull * SDL_NS_PER_SECOND)
 #define SHELL_SYNC_TIMEOUT_MS 100
 #define SHELL_PIPE_BUFFER (64u * 1024u)
+/* How long one resize step waits for a surface frame of the new size. */
+#define SHELL_RESIZE_WAIT_MS 50
 
 typedef struct ShellMessage {
   struct ShellMessage *next;
@@ -42,6 +46,8 @@ enum {
 
 typedef struct {
   SDL_Window *window;
+  HWND hwnd;
+  WNDPROC sdl_wndproc;
   Uint32 event_type;
 
   ID3D11Device *device;
@@ -79,6 +85,13 @@ typedef struct {
   /* Frames coalesce: the main thread composites only the newest one. */
   AnvilSurfaceFrame latest_frame;
   bool frame_pending;
+  SDL_Condition *frame_cond;
+
+  /* Resize steps present only after the surface catches up to the new size.
+   * A step that times out stops that wait until a matching frame arrives, so
+   * a slow surface process can not make every step wait. */
+  bool live_resize;
+  bool resize_wait_disabled;
 
   float scale;
   int sidebar_w;
@@ -254,6 +267,7 @@ static int SDLCALL reader_thread(void *data) {
         shell.latest_frame.name[ANVIL_SURFACE_NAME_MAX - 1] = '\0';
         bool notify = !shell.frame_pending;
         shell.frame_pending = true;
+        SDL_BroadcastCondition(shell.frame_cond);
         SDL_UnlockMutex(shell.lock);
         if (notify) push_shell_event(SHELL_EVENT_FRAME, NULL, 0);
         continue;
@@ -353,14 +367,24 @@ static float current_refresh_rate(void) {
   return mode && mode->refresh_rate > 0 ? mode->refresh_rate : 0.0f;
 }
 
+/* Inside the Win32 sizing loop SDL's cached size can trail the real client
+ * rect by one message, so read the HWND directly. */
+static void client_pixel_size(int *width, int *height) {
+  RECT rect = { 0 };
+  GetClientRect(shell.hwnd, &rect);
+  *width = (int)(rect.right - rect.left);
+  *height = (int)(rect.bottom - rect.top);
+}
+
 static void send_configure(void) {
   if (!shell.connected) return;
   AnvilSurfaceConfigure config = shell.last_config;
   config.window_mode = current_window_mode();
+  config.live_resize = shell.live_resize;
   if (config.window_mode != ANVIL_SURFACE_WINDOW_MINIMIZED) {
     /* A minimized window keeps the last surface size. */
     int pixel_w = 0, pixel_h = 0;
-    SDL_GetWindowSizeInPixels(shell.window, &pixel_w, &pixel_h);
+    client_pixel_size(&pixel_w, &pixel_h);
     config.pixel_w = SDL_max(1, pixel_w - shell.sidebar_w);
     config.pixel_h = SDL_max(1, pixel_h);
     SDL_GetWindowPosition(shell.window, &config.window_x, &config.window_y);
@@ -413,10 +437,9 @@ static bool init_d3d11(void) {
   }
   if (SUCCEEDED(hr)) hr = adapter->lpVtbl->GetParent(adapter, &IID_IDXGIFactory2, (void **)&factory);
 
-  HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(shell.window),
-                                           SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+  HWND hwnd = shell.hwnd;
   int pixel_w = 0, pixel_h = 0;
-  SDL_GetWindowSizeInPixels(shell.window, &pixel_w, &pixel_h);
+  client_pixel_size(&pixel_w, &pixel_h);
   if (SUCCEEDED(hr) && hwnd) {
     DXGI_SWAP_CHAIN_DESC1 desc;
     ZeroMemory(&desc, sizeof(desc));
@@ -445,7 +468,7 @@ static bool init_d3d11(void) {
 
 static void resize_buffers(void) {
   int pixel_w = 0, pixel_h = 0;
-  SDL_GetWindowSizeInPixels(shell.window, &pixel_w, &pixel_h);
+  client_pixel_size(&pixel_w, &pixel_h);
   if (pixel_w <= 0 || pixel_h <= 0) return;
   if (pixel_w == shell.buffer_w && pixel_h == shell.buffer_h) return;
   shell.context->lpVtbl->OMSetRenderTargets(shell.context, 0, NULL, NULL);
@@ -582,17 +605,65 @@ static void finish_latency_probe(void) {
   _Exit(0);
 }
 
-static void handle_frame(void) {
+/* Copies the newest published frame into the private surface texture. */
+static bool load_pending_frame(AnvilSurfaceFrame *frame) {
   SDL_LockMutex(shell.lock);
-  AnvilSurfaceFrame frame = shell.latest_frame;
+  bool pending = shell.frame_pending;
+  *frame = shell.latest_frame;
   shell.frame_pending = false;
   SDL_UnlockMutex(shell.lock);
+  if (!pending) return false;
 
-  bool loaded = frame.kind == ANVIL_SURFACE_FRAME_D3D11 ? load_d3d11_frame(&frame)
-              : frame.kind == ANVIL_SURFACE_FRAME_SHARED_MEMORY ? load_memory_frame(&frame)
+  bool loaded = frame->kind == ANVIL_SURFACE_FRAME_D3D11 ? load_d3d11_frame(frame)
+              : frame->kind == ANVIL_SURFACE_FRAME_SHARED_MEMORY ? load_memory_frame(frame)
               : false;
-  if (!loaded) return;
+  if (!loaded) return false;
   shell.have_surface = true;
+  if (shell.surface_w == shell.buffer_w - shell.sidebar_w && shell.surface_h == shell.buffer_h) {
+    shell.resize_wait_disabled = false;
+  }
+  return true;
+}
+
+static bool wait_for_surface_size(int width, int height) {
+  Uint64 deadline = SDL_GetTicksNS() + SHELL_RESIZE_WAIT_MS * SDL_NS_PER_MS;
+  bool matched = false;
+  SDL_LockMutex(shell.lock);
+  for (;;) {
+    if (shell.frame_pending && shell.latest_frame.width == width && shell.latest_frame.height == height) {
+      matched = true;
+      break;
+    }
+    Uint64 now = SDL_GetTicksNS();
+    if (now >= deadline) break;
+    SDL_WaitConditionTimeout(shell.frame_cond, shell.lock,
+                             (Sint32)SDL_max(1, (deadline - now) / SDL_NS_PER_MS));
+  }
+  SDL_UnlockMutex(shell.lock);
+  return matched;
+}
+
+/* Runs inside WM_SIZE, so Windows shows the new window size only together
+ * with surface content of that size. This is how the direct window stays
+ * smooth during live resize. */
+static void resize_step(void) {
+  resize_buffers();
+  send_configure();
+  int width = shell.buffer_w - shell.sidebar_w, height = shell.buffer_h;
+  bool stale = !shell.have_surface || shell.surface_w != width || shell.surface_h != height;
+  if (stale && shell.connected && shell.shown && !shell.resize_wait_disabled &&
+      !wait_for_surface_size(width, height)) {
+    shell.resize_wait_disabled = true;
+    SDL_Log("Anvil shell resize to %dx%d timed out waiting for the surface", width, height);
+  }
+  AnvilSurfaceFrame frame;
+  load_pending_frame(&frame);
+  if (shell.shown) composite_and_present();
+}
+
+static void handle_frame(void) {
+  AnvilSurfaceFrame frame;
+  if (!load_pending_frame(&frame)) return;
   composite_and_present();
   if (!shell.shown) {
     SDL_Log("Anvil shell showing its first %s frame %dx%d",
@@ -692,35 +763,6 @@ static void handle_message(ShellMessage *message) {
 /* ------------------------------------------------------------------------ */
 /* Window and input                                                         */
 
-static SDL_HitTestResult SDLCALL shell_hit_test(SDL_Window *window, const SDL_Point *pt, void *data) {
-  (void)data;
-  int w = 0, h = 0;
-  SDL_GetWindowSize(window, &w, &h);
-  const AnvilSurfaceHitTest *hit = &shell.hit;
-  int border = hit->enabled ? hit->resize_border : (int)(8 * shell.scale);
-  int title_height = hit->enabled ? hit->title_height : 0;
-  int controls_width = hit->enabled ? hit->controls_width : 0;
-  int x = pt->x, y = pt->y;
-
-  if (y < title_height && x > border && x < w - controls_width) {
-    int surface_x = x - shell.sidebar_w;
-    if ((hit->client_width > 0 && surface_x >= hit->client_x &&
-         surface_x < hit->client_x + hit->client_width) ||
-        (hit->client2_width > 0 && surface_x >= hit->client2_x &&
-         surface_x < hit->client2_x + hit->client2_width)) {
-      return SDL_HITTEST_NORMAL;
-    }
-    return SDL_HITTEST_DRAGGABLE;
-  }
-  if (x < border && y < border) return SDL_HITTEST_RESIZE_TOPLEFT;
-  if (x > w - border && y < border) return SDL_HITTEST_RESIZE_TOPRIGHT;
-  if (x > w - border && y > h - border) return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
-  if (x < border && y > h - border) return SDL_HITTEST_RESIZE_BOTTOMLEFT;
-  if (y > h - border) return SDL_HITTEST_RESIZE_BOTTOM;
-  if (x < border) return SDL_HITTEST_RESIZE_LEFT;
-  return SDL_HITTEST_NORMAL;
-}
-
 static void forward_event(const SDL_Event *event, const char *text) {
   AnvilSurfaceInput input;
   SDL_zero(input);
@@ -732,6 +774,14 @@ static void forward_event(const SDL_Event *event, const char *text) {
 static void leave_surface(void) {
   if (!shell.pointer_in_surface) return;
   shell.pointer_in_surface = false;
+  /* Motion outside the surface clears Title Bar hover state that the leave
+   * event alone does not reach. */
+  SDL_Event outside;
+  SDL_zero(outside);
+  outside.type = SDL_EVENT_MOUSE_MOTION;
+  outside.motion.x = -1.0f;
+  outside.motion.y = -1.0f;
+  forward_event(&outside, NULL);
   SDL_Event leave;
   SDL_zero(leave);
   leave.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
@@ -812,25 +862,19 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
       request_close();
       break;
-    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-      resize_buffers();
-      composite_and_present();
-      send_configure();
-      break;
     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
       update_scale();
-      composite_and_present();
-      send_configure();
+      resize_step();
       break;
+    /* WM_SIZE resizes and presents. These only keep the surface's window
+     * bounds and mode current. */
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_RESIZED:
     case SDL_EVENT_WINDOW_MOVED:
     case SDL_EVENT_WINDOW_MINIMIZED:
     case SDL_EVENT_WINDOW_MAXIMIZED:
     case SDL_EVENT_WINDOW_RESTORED:
       send_configure();
-      break;
-    case SDL_EVENT_WINDOW_EXPOSED:
-      composite_and_present();
       break;
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
     case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -879,6 +923,117 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
 }
 
 /* ------------------------------------------------------------------------ */
+/* Native frame                                                             */
+
+static void push_window_event(SDL_EventType type, float x, float y) {
+  SDL_Event event;
+  SDL_zero(event);
+  event.type = type;
+  if (type == SDL_EVENT_MOUSE_MOTION) {
+    event.motion.windowID = SDL_GetWindowID(shell.window);
+    event.motion.x = x;
+    event.motion.y = y;
+  } else {
+    event.window.windowID = SDL_GetWindowID(shell.window);
+  }
+  SDL_PushEvent(&event);
+}
+
+static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+  switch (msg) {
+    case WM_NCCALCSIZE:
+      return win32_frame_hwnd_nccalcsize(hwnd, wparam, lparam);
+
+    case WM_NCHITTEST: {
+      Win32FrameHitTest hit = {
+        .title_height = shell.hit.title_height,
+        .controls_width = shell.hit.controls_width,
+        .resize_border = shell.hit.resize_border,
+        .client_x = shell.hit.client_x,
+        .client_width = shell.hit.client_width,
+        .client2_x = shell.hit.client2_x,
+        .client2_width = shell.hit.client2_width,
+        .content_x = shell.sidebar_w,
+      };
+      return win32_frame_hwnd_hit_test(hwnd, &hit, lparam);
+    }
+
+    case WM_GETMINMAXINFO:
+      CallWindowProcW(shell.sdl_wndproc, hwnd, msg, wparam, lparam);
+      win32_frame_hwnd_apply_work_area(hwnd, (MINMAXINFO *)lparam);
+      return 0;
+
+    case WM_NCACTIVATE:
+      /* SDL tracks keyboard focus from this message; the frame is drawn by
+       * the surface, so suppress the default non-client repaint. */
+      CallWindowProcW(shell.sdl_wndproc, hwnd, msg, wparam, lparam);
+      return TRUE;
+
+    case WM_ERASEBKGND:
+      return 1;
+
+    case WM_ENTERSIZEMOVE:
+    case WM_EXITSIZEMOVE: {
+      LRESULT result = CallWindowProcW(shell.sdl_wndproc, hwnd, msg, wparam, lparam);
+      shell.live_resize = msg == WM_ENTERSIZEMOVE;
+      send_configure();
+      return result;
+    }
+
+    case WM_SIZE: {
+      LRESULT result = CallWindowProcW(shell.sdl_wndproc, hwnd, msg, wparam, lparam);
+      if (wparam != SIZE_MINIMIZED && shell.swapchain) resize_step();
+      return result;
+    }
+
+    case WM_PAINT: {
+      LRESULT result = CallWindowProcW(shell.sdl_wndproc, hwnd, msg, wparam, lparam);
+      if (shell.shown) composite_and_present();
+      return result;
+    }
+
+    case WM_NCMOUSEMOVE: {
+      /* Title Bar caption areas are non-client, but the surface draws hover
+       * state there. */
+      POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
+      ScreenToClient(hwnd, &pt);
+      push_window_event(SDL_EVENT_MOUSE_MOTION, (float)pt.x, (float)pt.y);
+      TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE | TME_NONCLIENT, hwnd, HOVER_DEFAULT };
+      TrackMouseEvent(&tme);
+      break;
+    }
+
+    case WM_NCMOUSELEAVE:
+      push_window_event(SDL_EVENT_WINDOW_MOUSE_LEAVE, 0, 0);
+      break;
+
+    case WM_NCRBUTTONUP:
+      if (wparam == HTCAPTION) {
+        win32_frame_hwnd_show_system_menu(hwnd, lparam);
+        return 0;
+      }
+      break;
+
+    case WM_DPICHANGED:
+    case WM_SETTINGCHANGE:
+    case WM_THEMECHANGED:
+      win32_frame_hwnd_update_dwm(hwnd, true, NULL);
+      break;
+  }
+  return CallWindowProcW(shell.sdl_wndproc, hwnd, msg, wparam, lparam);
+}
+
+static bool install_native_frame(void) {
+  shell.hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(shell.window),
+                                            SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+  if (!shell.hwnd) return false;
+  shell.sdl_wndproc = (WNDPROC)GetWindowLongPtrW(shell.hwnd, GWLP_WNDPROC);
+  SetWindowLongPtrW(shell.hwnd, GWLP_WNDPROC, (LONG_PTR)shell_wndproc);
+  win32_frame_hwnd_apply_style(shell.hwnd, false);
+  return true;
+}
+
+/* ------------------------------------------------------------------------ */
 /* Lifecycle                                                                */
 
 static void set_window_icon(void) {
@@ -916,8 +1071,6 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
   SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
   SDL_SetHint(SDL_HINT_IME_IMPLEMENTED_UI, "composition");
-  SDL_SetHint("SDL_BORDERLESS_WINDOWED_STYLE", "1");
-  SDL_SetHint("SDL_BORDERLESS_RESIZABLE_STYLE", "1");
   SDL_SetHint("SDL_MOUSE_DOUBLE_CLICK_RADIUS", "4");
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
     SDL_Log("Anvil shell could not initialize SDL: %s", SDL_GetError());
@@ -932,21 +1085,21 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   shell.event_type = SDL_RegisterEvents(1);
   shell.lock = SDL_CreateMutex();
   shell.queue_cond = SDL_CreateCondition();
-  if (!shell.event_type || !shell.lock || !shell.queue_cond) return SDL_APP_FAILURE;
+  shell.frame_cond = SDL_CreateCondition();
+  if (!shell.event_type || !shell.lock || !shell.queue_cond || !shell.frame_cond) return SDL_APP_FAILURE;
 
   const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
   int width = mode ? (int)(mode->w * 0.8) : 1280;
   int height = mode ? (int)(mode->h * 0.8) : 800;
   shell.window = SDL_CreateWindow("Anvil", width, height,
-    SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS);
-  if (!shell.window) {
+    SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
+  if (!shell.window || !install_native_frame()) {
     SDL_Log("Anvil shell could not create its window: %s", SDL_GetError());
     return SDL_APP_FAILURE;
   }
   update_scale();
   SDL_SetWindowMinimumSize(shell.window, 240 + shell.sidebar_w, 180);
   set_window_icon();
-  SDL_SetWindowHitTest(shell.window, shell_hit_test, NULL);
   if (!init_d3d11()) {
     SDL_Log("Anvil shell could not initialize Direct3D 11.");
     return SDL_APP_FAILURE;

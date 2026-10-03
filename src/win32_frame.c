@@ -12,6 +12,7 @@
 #include "system_events.h"
 #include "resize_diagnostics.h"
 #include "win32_frame.h"
+#include "win32_frame_hwnd.h"
 
 void anvil_request_resize_frame(void);
 void anvil_request_resize_frame_reason(const char *reason);
@@ -172,13 +173,13 @@ static int system_metric_for_dpi(HWND hwnd, int metric) {
   return GetSystemMetrics(metric);
 }
 
-static bool is_maximized(HWND hwnd) {
+bool win32_frame_hwnd_is_maximized(HWND hwnd) {
   WINDOWPLACEMENT placement;
   placement.length = sizeof(placement);
   return GetWindowPlacement(hwnd, &placement) && placement.showCmd == SW_MAXIMIZE;
 }
 
-static void update_dwm(HWND hwnd, bool enabled) {
+void win32_frame_hwnd_update_dwm(HWND hwnd, bool enabled, const COLORREF *frame_color) {
   BOOL dark = enabled ? TRUE : FALSE;
   DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
@@ -190,15 +191,18 @@ static void update_dwm(HWND hwnd, bool enabled) {
   MARGINS margins = enabled ? (MARGINS){ 1, 1, 1, 1 } : (MARGINS){ 0, 0, 0, 0 };
   DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-  Win32FrameData *frame = (Win32FrameData *) GetPropW(hwnd, ANVIL_WIN32_FRAME_PROP);
-  COLORREF frame_color = enabled && frame && frame->has_background_color
-    ? frame->background_color
-    : (COLORREF)DWMWA_COLOR_DEFAULT;
-  DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &frame_color, sizeof(frame_color));
-  DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &frame_color, sizeof(frame_color));
+  COLORREF color = enabled && frame_color ? *frame_color : (COLORREF)DWMWA_COLOR_DEFAULT;
+  DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &color, sizeof(color));
+  DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &color, sizeof(color));
 }
 
-static void apply_monitor_work_area(HWND hwnd, MINMAXINFO *mmi) {
+static void update_dwm(HWND hwnd, bool enabled) {
+  Win32FrameData *frame = (Win32FrameData *) GetPropW(hwnd, ANVIL_WIN32_FRAME_PROP);
+  bool has_color = frame && frame->has_background_color;
+  win32_frame_hwnd_update_dwm(hwnd, enabled, has_color ? &frame->background_color : NULL);
+}
+
+void win32_frame_hwnd_apply_work_area(HWND hwnd, MINMAXINFO *mmi) {
   HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
   MONITORINFO mi;
   mi.cbSize = sizeof(mi);
@@ -212,7 +216,7 @@ static void apply_monitor_work_area(HWND hwnd, MINMAXINFO *mmi) {
   mmi->ptMaxSize.y = work.bottom - work.top;
 }
 
-static LRESULT handle_nccalcsize(HWND hwnd, WPARAM wparam, LPARAM lparam) {
+LRESULT win32_frame_hwnd_nccalcsize(HWND hwnd, WPARAM wparam, LPARAM lparam) {
   if (!wparam) return 0;
 
   NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS *) lparam;
@@ -220,7 +224,7 @@ static LRESULT handle_nccalcsize(HWND hwnd, WPARAM wparam, LPARAM lparam) {
   /* Returning 0 removes the standard caption from the client calculation, but
      when maximized the client rect must be constrained to the monitor work area
      or the app draws under the taskbar. */
-  if (is_maximized(hwnd)) {
+  if (win32_frame_hwnd_is_maximized(hwnd)) {
     /* Use the proposed maximized rect instead of MonitorFromWindow().  During
        restore from minimized, USER32 can still associate the HWND with its
        old normal/iconic location while rgrc[0] already contains the real
@@ -239,10 +243,7 @@ static LRESULT handle_nccalcsize(HWND hwnd, WPARAM wparam, LPARAM lparam) {
   return 0;
 }
 
-static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
-  RenWindow *ren = frame->ren;
-  if (!ren) return HTCLIENT;
-
+LRESULT win32_frame_hwnd_hit_test(HWND hwnd, const Win32FrameHitTest *hit, LPARAM lparam) {
   POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
   RECT wr;
   GetWindowRect(hwnd, &wr);
@@ -252,14 +253,9 @@ static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
   const int x = pt.x - wr.left;
   const int y = pt.y - wr.top;
 
-  int resize = ren->hit_test_info.resize_border;
-  int title_height = ren->hit_test_info.title_height;
-  int controls_width = ren->hit_test_info.controls_width;
-  int client_x = ren->hit_test_info.titlebar_client_x;
-  int client_width = ren->hit_test_info.titlebar_client_width;
-  int client2_x = ren->hit_test_info.titlebar_client2_x;
-  int client2_width = ren->hit_test_info.titlebar_client2_width;
-
+  int resize = hit->resize_border;
+  const int title_height = hit->title_height;
+  const int controls_width = hit->controls_width;
   if (resize <= 0) resize = scale_for_dpi(hwnd, 8);
 
   if (title_height > 0 && y >= 0 && y < title_height &&
@@ -276,7 +272,7 @@ static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
   const bool top = y >= 0 && y < resize;
   const bool bottom = y < height && y >= height - resize;
 
-  if (!is_maximized(hwnd)) {
+  if (!win32_frame_hwnd_is_maximized(hwnd)) {
     if (top && left) return HTTOPLEFT;
     if (top && right) return HTTOPRIGHT;
     if (bottom && left) return HTBOTTOMLEFT;
@@ -288,8 +284,11 @@ static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
   }
 
   if (title_height > 0 && y >= 0 && y < title_height) {
-    if ((client_width > 0 && x >= client_x && x < client_x + client_width) ||
-        (client2_width > 0 && x >= client2_x && x < client2_x + client2_width)) {
+    const int content_x = x - hit->content_x;
+    if ((hit->client_width > 0 && content_x >= hit->client_x &&
+         content_x < hit->client_x + hit->client_width) ||
+        (hit->client2_width > 0 && content_x >= hit->client2_x &&
+         content_x < hit->client2_x + hit->client2_width)) {
       return HTCLIENT;
     }
 
@@ -299,6 +298,23 @@ static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
   }
 
   return HTCLIENT;
+}
+
+static LRESULT hit_test(Win32FrameData *frame, HWND hwnd, LPARAM lparam) {
+  RenWindow *ren = frame->ren;
+  if (!ren) return HTCLIENT;
+  const HitTestInfo *info = &ren->hit_test_info;
+  Win32FrameHitTest hit = {
+    .title_height = info->title_height,
+    .controls_width = info->controls_width,
+    .resize_border = info->resize_border,
+    .client_x = info->titlebar_client_x,
+    .client_width = info->titlebar_client_width,
+    .client2_x = info->titlebar_client2_x,
+    .client2_width = info->titlebar_client2_width,
+    .content_x = 0,
+  };
+  return win32_frame_hwnd_hit_test(hwnd, &hit, lparam);
 }
 
 static void push_sdl_mouse_motion_at(Win32FrameData *frame, float x, float y) {
@@ -385,18 +401,18 @@ static void live_resize_frame(Win32FrameData *frame, const char *reason) {
 }
 
 static void toggle_maximize(HWND hwnd) {
-  if (is_maximized(hwnd)) {
+  if (win32_frame_hwnd_is_maximized(hwnd)) {
     ShowWindow(hwnd, SW_RESTORE);
   } else {
     ShowWindow(hwnd, SW_MAXIMIZE);
   }
 }
 
-static void show_system_menu(HWND hwnd, LPARAM lparam) {
+void win32_frame_hwnd_show_system_menu(HWND hwnd, LPARAM lparam) {
   HMENU menu = GetSystemMenu(hwnd, FALSE);
   if (!menu) return;
 
-  const bool maximized = is_maximized(hwnd);
+  const bool maximized = win32_frame_hwnd_is_maximized(hwnd);
   EnableMenuItem(menu, SC_RESTORE, MF_BYCOMMAND | (maximized ? MF_ENABLED : MF_GRAYED));
   EnableMenuItem(menu, SC_MOVE, MF_BYCOMMAND | (maximized ? MF_GRAYED : MF_ENABLED));
   EnableMenuItem(menu, SC_SIZE, MF_BYCOMMAND | (maximized ? MF_GRAYED : MF_ENABLED));
@@ -485,12 +501,12 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       break;
 
     case WM_NCCALCSIZE:
-      if (frame->enabled) return handle_nccalcsize(hwnd, wparam, lparam);
+      if (frame->enabled) return win32_frame_hwnd_nccalcsize(hwnd, wparam, lparam);
       break;
 
     case WM_GETMINMAXINFO:
       if (frame->enabled) {
-        apply_monitor_work_area(hwnd, (MINMAXINFO *) lparam);
+        win32_frame_hwnd_apply_work_area(hwnd, (MINMAXINFO *) lparam);
         return 0;
       }
       break;
@@ -571,7 +587,7 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
 
     case WM_NCRBUTTONUP:
       if (frame->enabled && wparam == HTCAPTION) {
-        show_system_menu(hwnd, lparam);
+        win32_frame_hwnd_show_system_menu(hwnd, lparam);
         return 0;
       }
       break;
@@ -617,24 +633,36 @@ bool win32_frame_enable(RenWindow *ren, bool enable) {
 
   frame->enabled = enable;
 
-  LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
   if (enable) {
-    style |= WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
-    SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+    win32_frame_hwnd_apply_style(hwnd, no_redirection_bitmap_enabled());
+    update_dwm(hwnd, true);
+    return true;
   }
 
   LONG_PTR exstyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-  if (enable && no_redirection_bitmap_enabled()) {
+  SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exstyle & ~WS_EX_NOREDIRECTIONBITMAP);
+  update_dwm(hwnd, false);
+  SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+    SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+  return true;
+}
+
+void win32_frame_hwnd_apply_style(HWND hwnd, bool no_redirection_bitmap) {
+  LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+  style |= WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+  SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+
+  LONG_PTR exstyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+  if (no_redirection_bitmap) {
     exstyle |= WS_EX_NOREDIRECTIONBITMAP;
   } else {
     exstyle &= ~WS_EX_NOREDIRECTIONBITMAP;
   }
   SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exstyle);
-  update_dwm(hwnd, enable);
+  win32_frame_hwnd_update_dwm(hwnd, true, NULL);
 
   SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
     SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-  return true;
 }
 
 bool win32_frame_get_metrics(RenWindow *ren, int *button_width, int *title_height, int *resize_border) {

@@ -792,7 +792,6 @@ static int f_set_window_hit_test(lua_State *L) {
     float scale = window_renderer->scale_x;
     AnvilSurfaceHitTest hit = {0};
     if (lua_gettop(L) > 1) {
-      hit.enabled = 1;
       hit.title_height = luaL_checkinteger(L, 2) / scale;
       hit.controls_width = luaL_checkinteger(L, 3) / scale;
       hit.resize_border = luaL_checkinteger(L, 4) / scale;
@@ -835,9 +834,9 @@ static int f_set_window_hit_test(lua_State *L) {
 static int f_set_window_native_frame(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   bool enable = lua_toboolean(L, 2);
-  /* The shell draws the native frame region itself. */
+  /* The shell window always has the native frame. */
   if (is_hosted(window_renderer)) {
-    lua_pushboolean(L, false);
+    lua_pushboolean(L, enable);
     return 1;
   }
   if (enable) SDL_SetWindowHitTest(window_renderer->cache.window, NULL, NULL);
