@@ -639,6 +639,10 @@ function TerminalView:service_session(include_rows)
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end
   local state_changed = self:apply_status(status)
+  -- The native session may hold a screen update briefly (cursor repaint,
+  -- synchronized output). Keep stepping so the held update is published even
+  -- when no more output arrives.
+  if status and status.render_pending then core.redraw = true end
   if changed then
     self:clear_point_hover()
     if not include_rows then self.rows_dirty = true end

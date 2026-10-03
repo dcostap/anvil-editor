@@ -29,6 +29,7 @@
 #define TERMINAL_DRAIN_QUIET_MS 250u
 #define TERMINAL_DRAIN_MAX_MS 5000u
 #define TERMINAL_SYNC_OUTPUT_TIMEOUT_MS 1000u
+#define TERMINAL_CURSOR_HIDE_HOLD_MS 30u
 #define TERMINAL_OUTPUT_EVENT "terminaloutput"
 
 static void *terminal_alloc(
@@ -169,7 +170,9 @@ typedef struct {
   uint64_t forced_drain_finalizations;
   uint64_t render_generation;
   uint64_t synchronized_output_started_ms;
+  uint64_t cursor_hide_started_ms;
   bool render_pending;
+  bool cursor_visible_published;
   LONG bell_count;
   char *clipboard_text;
   size_t clipboard_text_length;
@@ -247,8 +250,35 @@ static GhosttyResult update_terminal_render_state(TerminalSession *session) {
     if (result != GHOSTTY_SUCCESS) return result;
   }
   session->synchronized_output_started_ms = 0;
+
+  /* ConPTY wraps each shell repaint in cursor hide and show writes that can
+     reach the screen model in separate reads. Publishing between them draws a
+     frame without a cursor. Hold a visible cursor's hide briefly so the matching
+     show can arrive. An application that keeps the cursor hidden is published
+     once the hold expires. */
+  GhosttyTerminalModeConfig cursor_mode = {
+    .mode = GHOSTTY_MODE_CURSOR_VISIBLE,
+    .value = true,
+  };
+  result = ghostty_terminal_get(
+    session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &cursor_mode
+  );
+  if (result != GHOSTTY_SUCCESS) return result;
+  if (!cursor_mode.value && session->cursor_visible_published &&
+      session->state != TERMINAL_STATE_EXITED && session->state != TERMINAL_STATE_FAILED) {
+    uint64_t now = GetTickCount64();
+    if (!session->cursor_hide_started_ms) session->cursor_hide_started_ms = now;
+    if (now - session->cursor_hide_started_ms < TERMINAL_CURSOR_HIDE_HOLD_MS) {
+      return GHOSTTY_SUCCESS;
+    }
+  }
+  session->cursor_hide_started_ms = 0;
+
   result = ghostty_render_state_update(session->render_state, session->terminal);
-  if (result == GHOSTTY_SUCCESS) session->render_pending = false;
+  if (result == GHOSTTY_SUCCESS) {
+    session->render_pending = false;
+    session->cursor_visible_published = cursor_mode.value;
+  }
   return result;
 }
 
@@ -1364,10 +1394,11 @@ static bool output_drained(TerminalSession *session) {
 static void push_status(lua_State *L, TerminalSession *session) {
   bool read_failed = InterlockedCompareExchange(&session->read_failed, 0, 0) != 0;
   bool write_failed = InterlockedCompareExchange(&session->write_failed, 0, 0) != 0;
-  lua_createtable(L, 0, 4);
+  lua_createtable(L, 0, 5);
   lua_pushstring(L, terminal_state_name(session->state));
   lua_setfield(L, -2, "kind");
   set_integer_field(L, "revision", (lua_Integer)session->state_revision);
+  set_boolean_field(L, "render_pending", session->render_pending);
   if (session->state == TERMINAL_STATE_EXITED && session->exit_code_known) {
     lua_pushinteger(L, session->exit_code);
     lua_setfield(L, -2, "exit_code");
