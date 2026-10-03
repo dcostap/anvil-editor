@@ -165,8 +165,11 @@ It reports drag and client regions. The shell uses them for hit testing.
 
 ### Resize
 
-The shell resizes immediately. It sends the new size to the Project process.
-Until a frame at the new size arrives, the shell draws the last frame unscaled.
+The shell window uses the same native frame as a direct window.
+Each `WM_SIZE` resizes the swapchain and sends the new size to the Project process.
+The shell waits up to 50 ms for a frame at the new size before it presents.
+A timed-out wait stops further waits until a frame of the right size arrives.
+During a live resize, the Project process renders without the refresh-rate throttle.
 
 ### Hidden Projects
 
@@ -312,8 +315,8 @@ the shell because the shell presents with D3D11 instead of a GDI window blit.
 The clock stops when Present returns, not at scanout. A private desktop paces
 Present differently from the interactive desktop.
 
-Still to check by hand: IME composition and candidates, live resize, mixed-DPI moves,
-and maximize, restore, and snapping.
+Checked by hand: edge resize, live-resize smoothness, maximize, restore, snapping, and close.
+Still to check by hand: IME composition and candidates, and mixed-DPI moves.
 
 ### Phase 1: Workspace durability
 
