@@ -65,6 +65,32 @@ local function run_last_captured_thread(context)
   end
 end
 
+-- Saves during use run on the real UI scheduler. Yielding from a test lets
+-- them run.
+local function wait_seconds(seconds)
+  local deadline = system.get_time() + seconds
+  while system.get_time() < deadline do coroutine.yield(0.05) end
+end
+
+-- Yielding runs real UI frames, so these tests keep the real root panel and
+-- only replace the saved Pane state.
+local function save_panes_with_view(view)
+  panes.save_workspace_state = function(save_view)
+    local state = empty_leaf_state()
+    state.visible_group_id = "group-1"
+    state.focused_pane_id = "pane-1"
+    state.groups[1] = { id = "group-1", layout = { kind = "pane", pane_id = "pane-1" } }
+    state.panes[1] = { id = "pane-1", view = save_view(view) }
+    return state
+  end
+end
+
+local function saved_label(key)
+  local saved = storage.load("ws", key)
+  local pane = saved and saved.pane_state and saved.pane_state.panes and saved.pane_state.panes[1]
+  return pane and pane.view.state.label
+end
+
 local function make_fake_pane_host(label, state, buffer)
   local view = { buffer = buffer }
   function view:get_state()
@@ -499,6 +525,58 @@ test.describe("Workspace persistence", function()
     test.equal(opened.opts.placement, "new")
     test.equal(opened.opts.focus, true)
     test.equal(opened.opts.reason, "initial-project")
+  end)
+
+  test.test("saves Workspace changes during use without a Project switch or exit", function(context)
+    local source_path = join_path(context.temp_root, "source_project")
+    local project_path = join_path(context.temp_root, "test_project")
+    local view_state = { label = "restored" }
+    local _, view = make_fake_pane_host("restored", view_state)
+    save_panes_with_view(view)
+    core.projects = { Project(source_path) }
+    core.recent_projects = {}
+    replace_buffers()
+    core.visited_files = {}
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+    core.add_thread = context.original_add_thread
+
+    view_state.label = "edited"
+    core.request_workspace_save("test edit")
+    local deadline = system.get_time() + 15
+    local key
+    repeat
+      coroutine.yield(0.05)
+      key = workspace_keys_for_path(project_path)[1]
+    until (key and saved_label(key) == "edited") or system.get_time() > deadline
+
+    test.not_nil(key)
+    test.equal(saved_label(key), "edited")
+  end)
+
+  test.test("does not replace saved Workspace state before it is restored", function(context)
+    local source_path = join_path(context.temp_root, "source_project")
+    local project_path = join_path(context.temp_root, "test_project")
+    storage.save("ws", "test_project-10", {
+      path = project_path,
+      pane_state = leaf_state("saved"),
+      project_paths = {},
+      visited_files = {},
+    })
+    local _, view = make_fake_pane_host("not-restored-yet")
+    save_panes_with_view(view)
+    core.projects = { Project(source_path) }
+    core.recent_projects = {}
+    replace_buffers()
+    core.visited_files = {}
+
+    -- The restore thread stays captured, so the Workspace never finishes restoring.
+    core.set_project(project_path)
+    core.add_thread = context.original_add_thread
+    core.request_workspace_save("test edit", 0)
+    wait_seconds(1)
+
+    test.equal(saved_label("test_project-10"), "saved")
   end)
 
   test.test("same-window Project switch does not overwrite destination workspace with empty tabs", function(context)

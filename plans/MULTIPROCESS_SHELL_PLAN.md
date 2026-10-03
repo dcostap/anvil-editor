@@ -323,6 +323,12 @@ Still to check by hand: IME composition and candidates, and mixed-DPI moves.
 Add debounced and periodic Workspace saves.
 This phase is independent and useful immediately.
 
+Status: done. Input, View activation, and files sent by another process request
+a save. The save runs after 1 s without such activity, and at most 10 s after the
+first request. Losing window focus saves at once. Nothing is saved while a
+Project's Workspace restores, so startup can not replace good state. A save that
+matches the last write does not touch the disk.
+
 ### Phase 2: Terminal Session processes
 
 Move ConPTY ownership into Terminal Session processes.

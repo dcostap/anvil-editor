@@ -11,6 +11,15 @@ local untitled_recovery = require "plugins.untitled_recovery"
 
 local STORAGE_MODULE = "ws"
 
+-- Saves during use bound how much Workspace state a crash loses. A save waits
+-- for activity to settle, but never longer than the maximum delay.
+local SAVE_QUIET_SECONDS = 1
+local SAVE_MAX_DELAY_SECONDS = 10
+local SAVE_EVENTS = {
+  keypressed = true, textinput = true, mousepressed = true, mousereleased = true,
+  mousewheel = true, filedropped = true, textdropped = true, singleinstanceopen = true,
+}
+
 local function invalid_workspace_filename(filename)
   return type(filename) == "string" and filename:find("[%z\1-\31]") ~= nil
 end
@@ -38,6 +47,13 @@ end
 local loaded_workspace_key
 local loaded_workspace_path
 local suppress_next_exit_workspace_save = false
+-- False while a Project's Workspace restores. Saves during use would replace
+-- the saved state with the partly restored one.
+local workspace_restored = false
+local pending_save
+local save_thread_running = false
+local last_saved_key
+local last_saved_text
 
 local function empty_window_requested()
   return core.empty_window_request == true
@@ -264,9 +280,11 @@ local function ensure_initial_filetree_pane()
 end
 
 
-local function save_workspace()
+---@param during_use? boolean A save while the Project stays open. It reuses the
+---restored key and skips the write when nothing changed.
+local function save_workspace(during_use)
   if empty_window_requested() then
-    core.log_quiet("Workspace: skipped save for an empty Anvil window")
+    if not during_use then core.log_quiet("Workspace: skipped save for an empty Anvil window") end
     return true
   end
 
@@ -275,15 +293,19 @@ local function save_workspace()
 
   local project_dir = project.path
   local key = loaded_key_for(project_dir)
-  local entries = matching_workspace_entries(project_dir)
-  if not key then
-    key = entries[1] and entries[1].key or allocate_workspace_key(project_dir)
+  if not (during_use and key) then
+    local entries = matching_workspace_entries(project_dir)
+    if not key then
+      key = entries[1] and entries[1].key or allocate_workspace_key(project_dir)
+    end
+    clear_duplicate_workspace_entries(entries, key)
   end
-  clear_duplicate_workspace_entries(entries, key)
 
-  untitled_recovery.flush_all("workspace save", true)
+  -- Untitled recovery flushes changed buffers on its own schedule. A save
+  -- during use only needs the pending ones.
+  untitled_recovery.flush_all("workspace save", not during_use)
   local pane_state = panes.save_workspace_state(save_view)
-  storage.save(STORAGE_MODULE, key, {
+  local workspace = {
     version = 1,
     path = project_dir,
     pane_state = pane_state,
@@ -291,16 +313,60 @@ local function save_workspace()
     language_modes = language_mode.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
     zoom = scale.save_workspace_state(),
-  })
+  }
+  local text = common.serialize(workspace, { sort = true })
+  if during_use and key == last_saved_key and text == last_saved_text then return end
+  storage.save(STORAGE_MODULE, key, workspace)
+  last_saved_key, last_saved_text = key, text
   loaded_workspace_key = key
   loaded_workspace_path = project_dir
   if core.log_quiet then
     core.log_quiet(
-      "Workspace: saved %s for %s with %d view(s)",
+      "Workspace: saved %s for %s with %d view(s)%s",
       key,
       project_dir,
-      count_saved_views(pane_state)
+      count_saved_views(pane_state),
+      during_use and " during use" or ""
     )
+  end
+end
+
+
+local function run_pending_saves()
+  while pending_save do
+    local now = system.get_time()
+    local due = math.min(pending_save.due_at, pending_save.first_at + SAVE_MAX_DELAY_SECONDS)
+    if now < due then
+      coroutine.yield(due - now)
+    else
+      local reason = pending_save.reason
+      pending_save = nil
+      if workspace_restored then
+        core.try(save_workspace, true)
+      else
+        core.log_quiet("Workspace: skipped save during use (%s) before the Workspace restored", reason)
+      end
+    end
+  end
+  save_thread_running = false
+end
+
+
+---Saves the Workspace once activity settles.
+---@param reason string
+---@param delay? number Seconds of quiet before the save. Defaults to a short delay.
+function core.request_workspace_save(reason, delay)
+  local now = system.get_time()
+  local due_at = now + (delay or SAVE_QUIET_SECONDS)
+  if pending_save then
+    pending_save.due_at = delay == 0 and due_at or math.max(pending_save.due_at, due_at)
+  else
+    pending_save = { first_at = now, due_at = due_at }
+  end
+  pending_save.reason = reason
+  if not save_thread_running then
+    save_thread_running = true
+    core.add_thread(run_pending_saves)
   end
 end
 
@@ -350,6 +416,7 @@ local function load_workspace()
     end
 
     restore_workspace_state()
+    workspace_restored = true
   end)
 end
 
@@ -361,6 +428,7 @@ if not core.__workspace_hooks_installed then
   function core.set_project(project)
     local was_empty_window = empty_window_requested()
     core.try(save_workspace)
+    workspace_restored = false
     if was_empty_window then
       core.empty_window_request = false
       core.log_quiet("Workspace: enabled persistence after the empty window opened a Project")
@@ -407,11 +475,37 @@ if not core.__workspace_hooks_installed then
     end
     exit(quit_fn, force)
   end
+
+  local on_event = core.on_event
+  function core.on_event(type, ...)
+    local result = on_event(type, ...)
+    if type == "focuslost" then
+      core.request_workspace_save(type, 0)
+    elseif SAVE_EVENTS[type] then
+      core.request_workspace_save(type)
+    end
+    return result
+  end
+
+  -- Covers Views opened without input, such as files sent by another process.
+  local set_active_view = core.set_active_view
+  function core.set_active_view(view, focus_context)
+    focus_context = focus_context or core.focus_change_context(2)
+    local result = set_active_view(view, focus_context)
+    core.request_workspace_save("active view")
+    return result
+  end
 end
 
 local run = core.run
 function core.run(...)
-  if #core.buffers == 0 then core.try(load_workspace) end
+  if #core.buffers == 0 then
+    core.try(load_workspace)
+  else
+    -- Files opened at startup replace the saved Workspace; the exit save
+    -- already treats this session as the current state.
+    workspace_restored = true
+  end
   core.run = run
   return core.run(...)
 end
