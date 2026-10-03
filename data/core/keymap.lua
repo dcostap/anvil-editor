@@ -221,6 +221,7 @@ function keymap.on_key_pressed(k, ...)
   else
     local stroke = key_to_stroke(k)
     local commands, performed = keymap.map[stroke], false
+    core.log_quiet("Input trace: keymap stroke=%s candidates=%d", stroke, commands and #commands or 0)
     if commands then
       for _, cmd in ipairs(commands) do
         if type(cmd) == "function" then
@@ -233,6 +234,8 @@ function keymap.on_key_pressed(k, ...)
         else
           performed = command.perform(cmd, ...)
         end
+        core.log_quiet("Input trace: keymap stroke=%s command=%s performed=%s",
+          stroke, tostring(cmd), tostring(performed))
         if performed then break end
       end
       return performed

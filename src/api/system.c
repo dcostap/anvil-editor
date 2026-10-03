@@ -222,6 +222,8 @@ static void push_key_event_info(lua_State *L, const SDL_KeyboardEvent *event) {
   lua_setfield(L, -2, "modifiers");
   lua_pushboolean(L, event->repeat);
   lua_setfield(L, -2, "repeat");
+  lua_pushnumber(L, (lua_Number)event->timestamp / 1000000000.0);
+  lua_setfield(L, -2, "timestamp");
   lua_pushboolean(L, (event->mod & SDL_KMOD_SHIFT) != 0);
   lua_setfield(L, -2, "shift");
   lua_pushboolean(L, (event->mod & SDL_KMOD_CTRL) != 0);
@@ -603,6 +605,18 @@ top:
   return 0;
 }
 
+
+static int f_drain_input_trace(lua_State *L) {
+  luaL_Buffer buffer;
+  luaL_buffinit(L, &buffer);
+  char line[SYSTEM_INPUT_TRACE_LINE_SIZE];
+  while (system_input_trace_read(line)) {
+    luaL_addstring(&buffer, line);
+    luaL_addchar(&buffer, '\n');
+  }
+  luaL_pushresult(&buffer);
+  return 1;
+}
 
 static int f_pending_event_count(lua_State *L) {
   lua_pushinteger(L, system_pending_event_count());
@@ -2529,6 +2543,7 @@ static const luaL_Reg lib[] = {
   { "set_shutdown_log",      f_set_shutdown_log      },
   { "log_shutdown",          f_log_shutdown          },
   { "poll_event",            f_poll_event            },
+  { "drain_input_trace",     f_drain_input_trace     },
   { "wait_event",            f_wait_event            },
   { "has_pending_events",    f_has_pending_events    },
   { "pending_event_count",   f_pending_event_count   },

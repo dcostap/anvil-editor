@@ -2,6 +2,75 @@
 #include "system_events.h"
 #include "input_latency_probe.h"
 #include "resize_diagnostics.h"
+#include <stdarg.h>
+
+/* Native callbacks must not write files or call Lua. Report any lost records. */
+#define INPUT_TRACE_CAPACITY 2048
+static SDL_InitState input_trace_init;
+static SDL_Mutex *input_trace_mutex;
+static char input_trace_lines[INPUT_TRACE_CAPACITY][SYSTEM_INPUT_TRACE_LINE_SIZE];
+static unsigned input_trace_read, input_trace_count;
+static Uint64 input_trace_sequence, input_trace_lost;
+
+static bool input_trace_ready(void) {
+  if (SDL_ShouldInit(&input_trace_init)) {
+    input_trace_mutex = SDL_CreateMutex();
+    SDL_SetInitialized(&input_trace_init, input_trace_mutex != NULL);
+  }
+  return input_trace_mutex != NULL;
+}
+
+void system_input_trace(const char *format, ...) {
+  if (!input_trace_ready()) return;
+  SDL_LockMutex(input_trace_mutex);
+  Uint64 sequence = ++input_trace_sequence;
+  if (input_trace_count == INPUT_TRACE_CAPACITY) {
+    input_trace_lost++;
+  } else {
+    char *line = input_trace_lines[(input_trace_read + input_trace_count++) % INPUT_TRACE_CAPACITY];
+    int prefix = SDL_snprintf(line, SYSTEM_INPUT_TRACE_LINE_SIZE,
+      "native seq=%llu ticks_ns=%llu thread=%llu ",
+      (unsigned long long)sequence, (unsigned long long)SDL_GetTicksNS(),
+      (unsigned long long)SDL_GetCurrentThreadID());
+    va_list args;
+    va_start(args, format);
+    SDL_vsnprintf(line + prefix, SYSTEM_INPUT_TRACE_LINE_SIZE - prefix, format, args);
+    va_end(args);
+  }
+  SDL_UnlockMutex(input_trace_mutex);
+}
+
+bool system_input_trace_read(char line[SYSTEM_INPUT_TRACE_LINE_SIZE]) {
+  if (!input_trace_ready()) return false;
+  SDL_LockMutex(input_trace_mutex);
+  bool available = input_trace_lost || input_trace_count;
+  if (input_trace_lost) {
+    SDL_snprintf(line, SYSTEM_INPUT_TRACE_LINE_SIZE,
+      "native trace-overflow dropped_newest=%llu", (unsigned long long)input_trace_lost);
+    input_trace_lost = 0;
+  } else if (input_trace_count) {
+    SDL_strlcpy(line, input_trace_lines[input_trace_read], SYSTEM_INPUT_TRACE_LINE_SIZE);
+    input_trace_read = (input_trace_read + 1) % INPUT_TRACE_CAPACITY;
+    input_trace_count--;
+  }
+  SDL_UnlockMutex(input_trace_mutex);
+  return available;
+}
+
+static void trace_input_event(const SDL_Event *event, const char *stage, int depth) {
+  if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) {
+    system_input_trace("sdl stage=%s event=%s timestamp_ns=%llu window=%u keyboard=%u "
+      "scancode=%u keycode=%u modifiers=0x%x repeat=%d queue=%d",
+      stage, event->type == SDL_EVENT_KEY_DOWN ? "keydown" : "keyup",
+      (unsigned long long)event->key.timestamp, event->key.windowID, event->key.which,
+      (unsigned)event->key.scancode, (unsigned)event->key.key, event->key.mod,
+      event->key.repeat, depth);
+  } else if (event->type == SDL_EVENT_WINDOW_FOCUS_GAINED || event->type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+    system_input_trace("sdl stage=%s event=%s timestamp_ns=%llu window=%u queue=%d",
+      stage, event->type == SDL_EVENT_WINDOW_FOCUS_GAINED ? "focusgained" : "focuslost",
+      (unsigned long long)event->window.timestamp, event->window.windowID, depth);
+  }
+}
 
 /* ---------------------------------------------------------------------------
  * Internal event queue for SDL3 main-callback mode.
@@ -227,6 +296,7 @@ void system_push_event(const SDL_Event *event) {
                     % SYSTEM_EVENT_QUEUE_SIZE;
     system_event_queue[write_idx] = *event;
     system_event_queue_count++;
+    trace_input_event(event, "queued", system_event_queue_count);
     anvil_resize_diag_log(&(AnvilResizeDiagEvent){
       .category = "event_queue",
       .name = "push",
@@ -237,6 +307,7 @@ void system_push_event(const SDL_Event *event) {
       .count_a = queue_depth_before
     });
   } else {
+    trace_input_event(event, "dropped-full", system_event_queue_count);
     anvil_resize_diag_log(&(AnvilResizeDiagEvent){
       .category = "event_queue",
       .name = "drop_full",
@@ -261,6 +332,8 @@ void system_flush_events(uint32_t type) {
       if (src != dst)
         system_event_queue[dst] = system_event_queue[src];
       new_count++;
+    } else {
+      trace_input_event(&system_event_queue[src], "flushed", system_event_queue_count);
     }
   }
   system_event_queue_read  = new_read;
@@ -280,6 +353,7 @@ bool system_event_pop(SDL_Event *event) {
   *event = system_event_queue[system_event_queue_read];
   system_event_queue_read  = (system_event_queue_read + 1) % SYSTEM_EVENT_QUEUE_SIZE;
   system_event_queue_count--;
+  trace_input_event(event, "polled", system_event_queue_count);
   anvil_latency_probe_note_event(event);
   return true;
 }

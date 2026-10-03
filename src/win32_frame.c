@@ -428,6 +428,24 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   Win32FrameData *frame = (Win32FrameData *) GetPropW(hwnd, ANVIL_WIN32_FRAME_PROP);
   if (!frame) return DefWindowProcW(hwnd, msg, wparam, lparam);
 
+  if (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) {
+    system_input_trace("win32 msg=0x%x hwnd=%p foreground=%p focus=%p message_ms=%lu "
+      "vk=%lu scancode=%lu extended=%d alt_context=%d previous=%d released=%d repeat_count=%lu "
+      "async_ctrl=%d async_shift=%d async_alt=%d async_r=%d",
+      msg, (void *)hwnd, (void *)GetForegroundWindow(), (void *)GetFocus(),
+      (unsigned long)(DWORD)GetMessageTime(), (unsigned long)wparam,
+      (unsigned long)(((uintptr_t)lparam >> 16) & 0xff),
+      (int)(((uintptr_t)lparam >> 24) & 1), (int)(((uintptr_t)lparam >> 29) & 1),
+      (int)(((uintptr_t)lparam >> 30) & 1), (int)(((uintptr_t)lparam >> 31) & 1),
+      (unsigned long)((uintptr_t)lparam & 0xffff),
+      !!(GetAsyncKeyState(VK_CONTROL) & 0x8000), !!(GetAsyncKeyState(VK_SHIFT) & 0x8000),
+      !!(GetAsyncKeyState(VK_MENU) & 0x8000), !!(GetAsyncKeyState('R') & 0x8000));
+  } else if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_ACTIVATE) {
+    system_input_trace("win32 focus msg=0x%x hwnd=%p foreground=%p focus=%p wparam=%llu",
+      msg, (void *)hwnd, (void *)GetForegroundWindow(), (void *)GetFocus(),
+      (unsigned long long)wparam);
+  }
+
   switch (msg) {
     case WM_ENTERSIZEMOVE:
       if (frame->enabled) {

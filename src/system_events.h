@@ -26,4 +26,9 @@ int system_pending_event_count(void);
  * Returns true if an event was available, false if the queue was empty. */
 bool system_event_pop(SDL_Event *event);
 
+/* Keep native input records in memory until Lua writes the session log. */
+#define SYSTEM_INPUT_TRACE_LINE_SIZE 512
+void system_input_trace(SDL_PRINTF_FORMAT_STRING const char *format, ...) SDL_PRINTF_VARARG_FUNC(1);
+bool system_input_trace_read(char line[SYSTEM_INPUT_TRACE_LINE_SIZE]);
+
 #endif /* SYSTEM_EVENTS_H */

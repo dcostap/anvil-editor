@@ -186,6 +186,8 @@ C:\Projects\c_projects\anvil-portable\user\logs\anvil-*.log
 
 Check the newest file first when you investigate a crash or unexpected behavior. These logs are machine-local state and must stay outside the repo.
 
+Keyboard events include an always-on `Input trace:` diagnostic. See [keyboard input trace](tools/INPUT_TRACE.md) for stages and limits.
+
 Accepted exits also write `anvil-<date>-<time>-p<pid>-shutdown.log` beside the matching session log.
 Use both files when you investigate a slow close. See [shutdown diagnostics](tools/SHUTDOWN_DIAGNOSTICS.md).
 

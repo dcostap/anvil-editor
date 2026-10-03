@@ -4772,13 +4772,17 @@ function FSView:on_modal_key_pressed(key, ...)
     fuzzy_focus_log("key-picker-command", self,
       "key=" .. tostring(key) .. " stroke=" .. tostring(stroke)
         .. " cmd=" .. tostring(picker_cmd))
-    command.perform(picker_cmd, ...)
+    local performed = command.perform(picker_cmd, ...)
+    core.log_quiet("Input trace: picker stroke=%s command=%s performed=%s",
+      stroke, picker_cmd, tostring(performed))
   elseif textbox_cmd and (not self.static_mode or textbox_cmd == "core:copy") then
     ensure_input_focus(self)
     fuzzy_focus_log("key-textbox-command", self,
       "key=" .. tostring(key) .. " stroke=" .. tostring(stroke)
         .. " cmd=" .. tostring(textbox_cmd))
-    command.perform(textbox_cmd, ...)
+    local performed = command.perform(textbox_cmd, ...)
+    core.log_quiet("Input trace: picker stroke=%s command=%s performed=%s",
+      stroke, textbox_cmd, tostring(performed))
   elseif modal_should_let_text_input_through(key, stroke, event) and not self.static_mode then
     ensure_input_focus(self)
     self._awaiting_textinput = {
@@ -7592,6 +7596,9 @@ end
 
 function FSView:activate_selected_result(new_group)
   local r = self:selected_result()
+  core.log_quiet("Input trace: picker activate selected=%s count=%d kind=%s file=%s line=%s new_group=%s",
+    tostring(self.selected), #self.results, tostring(r and r.kind),
+    tostring(r and (r.file or r.abs_path or r.path)), tostring(r and r.line), tostring(new_group))
   if not r then return end
   if r.kind == "navigation_place" then
     local pane = panes.find(self.source_pane)

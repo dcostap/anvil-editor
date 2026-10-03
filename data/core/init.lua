@@ -529,6 +529,7 @@ function core.init()
   else
     core.log_quiet("Session log unavailable: %s", tostring(session_log_error or "unknown error"))
   end
+  core.log_quiet("Input trace: enabled; native keyboard events and Lua routes enter the session log")
   if config.plugins and config.plugins.ipc and config.plugins.ipc.single_instance == false and system.set_native_single_instance_enabled then
     system.set_native_single_instance_enabled(false)
     core.log_quiet("Native single-instance handoff disabled by config.plugins.ipc.single_instance=false")
@@ -2176,6 +2177,25 @@ local function record_focus_input_event(type, ...)
   end
 end
 
+local function trace_keyboard_input(stage, type, key, event, route)
+  event = event or {}
+  local root = core.root_panel
+  local modal = root and root.modal_inputs and root.modal_inputs[#root.modal_inputs]
+  local held = {}
+  for _, name in ipairs { "ctrl", "shift", "alt", "altgr", "super" } do
+    if keymap.modkeys[name] then held[#held + 1] = name end
+  end
+  core.log_quiet(
+    "Input trace: lua %s event=%s key=%s%s time=%.6f scancode=%s keycode=%s modifiers=%s repeat=%s " ..
+    "timestamp=%s event_modifiers=%s held_modifiers=%s window=%s active=%s owner=%s ime=%s",
+    stage, type, tostring(key), route and (" route=" .. route) or "", system.get_time(),
+    tostring(event.scancode), tostring(event.keycode), tostring(event.modifiers), tostring(event["repeat"]),
+    tostring(event.timestamp), modifier_summary(event), #held > 0 and table.concat(held, "+") or "none",
+    tostring(system.get_last_event_window_id()), focus_view_label(core.active_view),
+    tostring(modal and modal.label or "none"), tostring(ime.editing)
+  )
+end
+
 function core.on_event(type, ...)
   core.current_event_context = event_summary(type, ...)
   record_focus_input_event(type, ...)
@@ -2183,6 +2203,10 @@ function core.on_event(type, ...)
   local active = core.active_view
   local active_type = active and active.type_name
   local fuzzy_input_debug = active_type == "plugins.fuzzy_searcher"
+  if type == "keypressed" or type == "keyreleased" then
+    local key, event = ...
+    trace_keyboard_input("received", type, key, event)
+  end
   if type == "textinput" then
     if fuzzy_input_debug then
       local text = (...)
@@ -2201,17 +2225,22 @@ function core.on_event(type, ...)
     -- In some cases during IME composition input is still sent to us
     -- so we just ignore it.
     if ime.editing then
+      local key, event = ...
+      trace_keyboard_input("route", type, key, event, "ime-composition")
       core.current_event_context = nil
       return false
     end
     local key, event = ...
     local modal, action = dispatch_modal_input("key_pressed", key, event)
     if modal and action ~= "keymap" then
+      trace_keyboard_input("route", type, key, event,
+        action == "target" and "modal-target" or "modal-consumed")
       if action == "target" then core.root_panel:on_key_pressed(key, event) end
       -- SDL emits printable text separately through textinput only when the
       -- keypressed event remains unconsumed.
       did_keymap = action ~= "target"
     else
+      trace_keyboard_input("route", type, key, event, modal and "modal-keymap" or "keymap")
       local modifier_key = key == "left ctrl" or key == "right ctrl"
         or key == "left shift" or key == "right shift"
         or key == "left alt" or key == "right alt"
@@ -2219,14 +2248,20 @@ function core.on_event(type, ...)
         or key == "left windows" or key == "right windows"
       if not (event and event.altgr) or modifier_key then
         did_keymap = keymap.on_key_pressed(...)
+      else
+        trace_keyboard_input("route", type, key, event, "altgr-skip-keymap")
       end
       if not did_keymap then
+        trace_keyboard_input("route", type, key, event, "view-fallback")
         did_keymap = core.root_panel:on_key_pressed(...) == true
       end
     end
+    trace_keyboard_input("result", type, key, event, did_keymap and "handled" or "unhandled")
   elseif type == "keyreleased" then
     keymap.on_key_released(...)
     local modal = dispatch_modal_input("key_released", ...)
+    local key, event = ...
+    trace_keyboard_input("route", type, key, event, modal and "modal-release" or "view-release")
     if not modal then core.root_panel:on_key_released(...) end
   elseif type == "mousemoved" then
     local modal = dispatch_modal_input("mouse_moved", ...)
@@ -2670,6 +2705,12 @@ local function new_perf_frame_stats()
   }
 end
 
+local function drain_input_trace()
+  for line in system.drain_input_trace():gmatch("[^\n]+") do
+    core.log_quiet("Input trace: %s", line)
+  end
+end
+
 function core.step(next_frame_time, options)
   options = options or {}
   local session_log = core.session_log
@@ -2716,6 +2757,7 @@ function core.step(next_frame_time, options)
     if core.startup_trace_active and startup then startup.event(event_type) end
   end
   for type, a,b,c,d in system.poll_event do
+    drain_input_trace()
     local event_item_start = system.get_time()
     step_stats.event_count = step_stats.event_count + 1
     local event_window_id = system.get_last_event_window_id and system.get_last_event_window_id()
@@ -2745,6 +2787,7 @@ function core.step(next_frame_time, options)
     note_event(type, event_item_start)
     event_received = type
   end
+  drain_input_trace()
   step_stats.event_ms = (system.get_time() - event_start_time) * 1000
   if #event_type_order > 0 then
     local event_types = {}
