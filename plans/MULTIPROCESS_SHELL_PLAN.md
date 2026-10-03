@@ -17,7 +17,8 @@ quit, a crash, or a reboot.
 
 ## Product decisions
 
-- One shell process owns every Anvil Window, the Project Sidebar, and window controls.
+- One native shell process owns every Anvil Window, window controls, and the Project
+  Sidebar model. A separate Sidebar process draws the Project Sidebar.
 - Each Anvil Window presents one Selected Project.
 - The user can open any number of Anvil Windows.
 - A Project is loaded at most once. It appears in at most one Anvil Window.
@@ -32,29 +33,46 @@ quit, a crash, or a reboot.
 ## Process model
 
 ```text
-anvil.exe                        shell: windows, sidebar, compositing, persistence
+anvil.exe                        shell: native windows, input, compositing, persistence
+├─ anvil.exe --sidebar           one Project Sidebar process: Lua UI, offscreen surface
 ├─ anvil.exe --project <path>    one per loaded Project: editor runtime, offscreen surface
 └─ anvil.exe --terminal-session  one per Terminal Session: ConPTY and terminal model
 ```
 
-All three modes use the same executable.
+All four modes use the same executable.
 
 ### Shell
 
-The shell runs Lua with the normal renderer, theme, and fonts.
-It does not load Project code, Buffers, indexes, LSP, or Git.
+The shell is native C. It never initializes Lua and never loads plugins or user
+configuration. Every keystroke and frame passes through it, so nothing in it may
+block on Lua, garbage collection, or plugin code.
 
 It owns:
 
 - native windows, placement, DPI, and window controls;
-- input capture and forwarding;
-- compositing of Project surfaces;
-- the Project Sidebar model;
-- Project process lifetime;
+- input capture and routing;
+- compositing of surfaces from the Sidebar and Project processes;
+- the Project Sidebar model: recent Projects, order, and status;
+- Sidebar and Project process lifetime;
 - shell state persistence.
 
-A shell crash is recoverable. Project processes and Terminal Sessions keep running.
-A restarted shell adopts them again.
+The shell draws only window controls, surface backgrounds, and status overlays
+such as "not responding". It uses the native renderer API directly.
+
+A shell crash closes every Anvil Window. The Sidebar process, Project processes, and
+Terminal Sessions keep running. A restarted shell adopts them again.
+
+### Sidebar process
+
+The Sidebar process draws the Project Sidebar with the normal Lua UI, renderer,
+theme, and fonts. It renders into an offscreen surface like a Project process.
+
+One Sidebar process serves every Anvil Window. It renders one surface per window.
+It shows the shell's Project Sidebar model and sends user actions back to the shell.
+It owns no Project state.
+
+A Sidebar crash or hang blanks only the sidebar. Window controls and Projects keep
+working. The shell restarts the Sidebar process.
 
 ### Project process
 
@@ -84,7 +102,8 @@ A Terminal Session crash affects only that terminal.
 | --- | --- | --- |
 | Project process crash | That Project's surface goes blank | Shell shows a restart action. Terminal Sessions stay live. |
 | Project process hang | That Project stops drawing | Shell detects it and offers Wait or Restart. Other Projects stay usable. |
-| Shell crash | All Anvil Windows close | Next launch adopts running Projects and Terminal Sessions. |
+| Sidebar process crash or hang | The sidebar blanks or freezes | Shell restarts it. Windows and Projects stay usable. |
+| Shell crash | All Anvil Windows close | Next launch adopts running Sidebar, Project, and Terminal Session processes. |
 | Terminal Session crash | One terminal ends | Revive it from its latest snapshot. |
 | Reboot or kill-all | Everything ends | Restore windows and Workspaces. Revive terminals from snapshots. |
 
@@ -93,11 +112,11 @@ A Terminal Session crash affects only that terminal.
 ### Rendering
 
 Today each window creates a D3D11 swapchain for its HWND.
-In Project mode, the D3D11 backend renders into a shared texture instead.
+In Sidebar and Project modes, the D3D11 backend renders into a shared texture instead.
 
 - Use NT shared handles and keyed mutexes.
 - Double-buffer the shared textures.
-- The Project process signals each completed frame over its pipe.
+- The surface process signals each completed frame over its pipe.
 - The shell draws the latest completed frame and presents it.
 
 The software renderer uses a shared-memory surface with the same frame protocol.
@@ -123,8 +142,9 @@ Lua callers keep their current APIs.
 
 ### Input
 
-The shell receives SDL input and forwards it to the Selected Project's process.
-The Project process pushes forwarded events into its normal event queue.
+The shell receives SDL input in native code. It routes each event to the Sidebar or
+Selected Project surface under the pointer or holding keyboard focus.
+The receiving process pushes forwarded events into its normal event queue.
 
 Forward:
 
@@ -232,9 +252,10 @@ Adoption checks that the PID is alive and completes a handshake before trust.
 
 Channels:
 
-- shell to Project process: lifecycle, surfaces, input, window requests, sidebar data;
+- shell to Project process: lifecycle, surfaces, input, window requests;
+- shell to Sidebar process: surfaces, input, the Project Sidebar model, user actions;
 - Project process to Terminal Session: attach, output, input, resize;
-- shell to Terminal Session: status for the Project Sidebar.
+- shell to Terminal Session: status for the Project Sidebar model.
 
 ## Direct mode
 
@@ -278,14 +299,16 @@ policy. Terminals become crash-safe before the shell exists.
 
 ### Phase 3: hosted single Project
 
-Add the shell and the hosted surface backend.
+Add the native shell and the hosted surface backend.
+The shell draws window controls and status overlays without Lua.
 One Project must look and behave like current Anvil.
 
-### Phase 4: several Projects
+### Phase 4: several Projects and the Sidebar process
 
 Add Dormant and loaded Projects, Project switching, hidden rendering suppression,
 Project crash restart, and hang detection.
-Add the Project Sidebar model with Terminal Session status.
+Add the shell's Project Sidebar model with Terminal Session status.
+Add the Sidebar process with a minimal list UI, plus its crash restart.
 
 ### Phase 5: several Anvil Windows
 
@@ -294,7 +317,8 @@ to the front.
 
 ### Phase 6: shell restart and restore
 
-Adopt running Projects and Terminal Sessions after a shell restart.
+Adopt the running Sidebar process, Projects, and Terminal Sessions after a shell
+restart.
 Restore windows, Selected Projects, and Workspaces after a full quit or reboot.
 
 ### Phase 7: sidebar presentation
@@ -307,5 +331,6 @@ Design the final Project Sidebar UI.
 - IME behavior with a shell-owned window.
 - Ghostty formatter coverage for scrollback and the alternate screen.
 - GPU device loss in the shell or in a Project process.
-- Memory use with many loaded Projects.
+- Memory use with many loaded Projects, plus the Sidebar process.
+- Sidebar appearing after the window opens, because its process starts separately.
 - Foreground activation rules when the shell raises another Anvil Window.
