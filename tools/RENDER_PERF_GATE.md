@@ -414,11 +414,27 @@ Use `--scenario terminal-blocks` to check terminal Block Elements on either rend
 The scene checks continuous bars at fractional cell widths on light and dark backgrounds.
 It checks faint ink, complementary halves, all block fractions, quadrants, and shade coverage.
 The checks compare pixels with independent expected values. They do not need stored goldens.
+The checks also verify readable text inside light, dark, and colored block cursors.
+They cover direct drawing, animated drawing, and horizontal motion.
 This focused scene is not in the default suites.
 
 Use `--scenario image-filtering --renderer d3d11` to check image sampling through captured pixels.
 The check covers reduced fine detail, enlarged color transitions, transparent edges, and unchanged pixels at actual size.
 It uses independent expected colors, not a visual golden, to test filtering behavior.
+
+Use `--scenario glyph-cache-growth --report-only` to check glyph atlas growth.
+The scene compares pixels from growing fonts with separate warm fonts.
+It allows one channel unit for GPU blend rounding at different screen positions.
+Golden comparisons and repeated captures remain exact.
+It covers monochrome, grayscale, subpixel phases, ligatures, fallback text, color emoji, and clipping.
+The renderer primitives scene checks alpha and draw order separately.
+Eighteen font groups force texture-slot flushes.
+Measured frames repeat cold allocation and growth across three frames.
+Final captures use the complete text and must remain stable.
+Run this scene on both renderers. It is not in the default suites.
+
+The metrics report includes total and maximum texture upload bytes and HarfBuzz shapes.
+Older CSV files without these counters do not report zero work for them.
 
 The prior Edge comparison showed continuity at 15, 16, 18, and 24 ppem. It did
 not establish the first stable DirectWrite size. That threshold remains

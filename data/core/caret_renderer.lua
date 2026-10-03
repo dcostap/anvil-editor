@@ -290,6 +290,11 @@ local function trail_color(points, target)
     (color[4] or 255) * math.sqrt(thin_width / width) }
 end
 
+local function draw_caret_rect(target, x, y)
+  local draw = target.draw_rect or renderer.draw_rect
+  draw(x, y, target.width, target.height, target.color)
+end
+
 function CaretRenderer:draw(
   now, animation_length, min_animation_length, trail_size,
   min_distance, full_distance, min_speed, max_speed,
@@ -365,10 +370,7 @@ function CaretRenderer:draw(
     local animating = math.abs(target.x - self.horizontal_x) > 0.1
     if not animating then self.horizontal_x = target.x end
     self:sync_horizontal_corners(target)
-    renderer.draw_rect(
-      self.horizontal_x, target.y,
-      target.width, target.height, target.color
-    )
+    draw_caret_rect(target, self.horizontal_x, target.y)
     return animating
   end
 
@@ -395,9 +397,7 @@ function CaretRenderer:draw(
   -- The fractional polygon can extend beyond the pixel-aligned caret rectangle.
   -- Stop drawing it when the trail has reached the target.
   if animating then renderer.draw_poly(points, trail_color(points, target)) end
-  renderer.draw_rect(
-    target.x, target.y, target.width, target.height, target.color
-  )
+  draw_caret_rect(target, target.x, target.y)
   return animating
 end
 

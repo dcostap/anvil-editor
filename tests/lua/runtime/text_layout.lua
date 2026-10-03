@@ -3,6 +3,20 @@ local style = require "core.style"
 local test = require "core.test"
 
 test.describe("Native text layout", function()
+  test.it("keeps Unicode layout stable while measuring other text", function()
+    local font = renderer.font.load(DATADIR .. "/fonts/JetBrainsMono-Regular.ttf",
+      14 * SCALE, { ligatures = true })
+    local text = "office->é!=caféλ"
+    local expected = font:text_layout(text)
+    for index = 1, 6000 do font:get_width("é" .. index .. "->x") end
+    local actual = font:text_layout(text)
+    test.equal(actual:width(), expected:width())
+    for offset = 0, #text do
+      test.equal(actual:width_at(offset), expected:width_at(offset))
+    end
+    test.equal(font:get_width(text), expected:width())
+  end)
+
   test.it("maps UTF-8 byte offsets and horizontal positions in one layout", function()
     local font = test.not_nil(style.code_font or style.font)
     local text = "abé cd"

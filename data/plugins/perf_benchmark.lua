@@ -84,11 +84,11 @@ local metric_fields = {
   "completion_ms", "action_id", "action_age_ms", "action_ms", "event_ms", "update_ms", "pre_draw_ms",
   "draw_emit_ms", "renderer_end_ms", "frame_ms", "present_ms", "core_step_ms",
   "total_ms", "draw_calls", "quad_instances", "texture_batch_breaks",
-  "quad_batches", "unique_batch_srvs", "repeated_batch_srvs", "texture_uploads",
+  "quad_batches", "unique_batch_srvs", "repeated_batch_srvs", "texture_uploads", "texture_upload_bytes",
   "rencache_commands", "rencache_text_commands", "rencache_command_bytes",
   "display_packet_replays", "display_packet_commands_replayed",
   "display_packet_frame_bytes_copied", "display_packet_replay_ms",
-  "text_render_calls", "text_render_glyphs", "text_render_hb_shape_ms",
+  "text_render_calls", "text_render_glyphs", "text_render_hb_shape_ms", "text_render_hb_shapes",
   "rencache_command_replay_ms", "d3d11_glyph_push_ms",
   "text_render_glyph_bitmap_cache_misses", "text_render_glyph_bitmap_cache_miss_ms",
   "textview_line_packet_builds", "textview_line_packet_build_ms",
@@ -326,6 +326,90 @@ local function open_primitive_view()
   return view
 end
 
+local function open_glyph_cache_view()
+  local view = View()
+  view.fonts, view.references, view.reset_fonts = {}, {}, {}
+  local modes = { "none", "grayscale", "subpixel" }
+  local cold_fallbacks, warm_fallbacks = {}, {}
+  for index, mode in ipairs(modes) do
+    cold_fallbacks[index], warm_fallbacks[index] = {}, {}
+    for fallback = 2, math.min(3, #style.code_font) do
+      local options = { antialiasing = mode, ligatures = true }
+      local cold = style.code_font[fallback]:copy(14 / SCALE, options)
+      cold_fallbacks[index][#cold_fallbacks[index] + 1] = cold
+      warm_fallbacks[index][#warm_fallbacks[index] + 1] =
+        style.code_font[fallback]:copy(14 / SCALE, options)
+      view.reset_fonts[#view.reset_fonts + 1] = cold
+    end
+  end
+  for row = 1, 18 do
+    local index = (row - 1) % 3 + 1
+    local options = { antialiasing = modes[index], ligatures = true }
+    local cold = style.code_font[1]:copy(14 / SCALE, options)
+    local fonts = { cold }
+    local references = { style.code_font[1]:copy(14 / SCALE, options) }
+    for fallback, font in ipairs(cold_fallbacks[index]) do
+      fonts[#fonts + 1] = font
+      references[#references + 1] = warm_fallbacks[index][fallback]
+    end
+    view.fonts[row] = renderer.font.group(fonts)
+    view.references[row] = renderer.font.group(references)
+    view.reset_fonts[#view.reset_fonts + 1] = cold
+  end
+  local samples = {
+    "office->affine!=012345",
+    "é λ 漢字 é العربية",
+    "😀 🚀 🦊 ❤ □ ┌──┐",
+  }
+  view.step = 0
+  function view:get_name() return "Glyph Cache Growth" end
+  function view:draw()
+    renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y,
+      { 0, 0, 0, 255 })
+    local measuring = benchmark.phase == "warmup" or benchmark.phase == "measure"
+    local stage = 3
+    if measuring then
+      self.step = self.step + 1
+      stage = (self.step - 1) % 3 + 1
+      if stage == 1 then
+        for _, font in ipairs(self.reset_fonts) do font:set_size(14 / SCALE) end
+      end
+    end
+    -- Independent warm fonts draw the same content. Cold fonts append new
+    -- glyphs across frames. Eighteen groups also force texture-slot flushes.
+    for row = 1, 18 do
+      local top = self.position.y + (20 + (row - 1) * 40) * SCALE
+      local phase = modes[(row - 1) % 3 + 1] == "subpixel"
+        and (math.floor((row - 1) / 3) % 3) / 3 or 0
+      local color = { 255, 255, 255, 255 }
+      for column, fonts in ipairs { self.fonts, self.references } do
+        local left = self.position.x + (24 + (column - 1) * 640) * SCALE
+        core.push_clip_rect(left, top, 580 * SCALE, 32 * SCALE)
+        for part = 1, stage do
+          local text_x = left + ((part - 1) * 190 + phase) * SCALE
+          renderer.draw_text_known_bounds(fonts[row], samples[part], text_x, top,
+            left, top, 580 * SCALE, 32 * SCALE, color)
+        end
+        core.pop_clip_rect()
+      end
+    end
+    if not self.metadata_written then
+      local ok, err = write_atomic(benchmark.image_metadata_file,
+        string.format("x,y,reference_x,w,h\n%d,%d,%d,%d,%d\n",
+          (self.position.x + 24 * SCALE) * SCALE,
+          (self.position.y + 20 * SCALE) * SCALE,
+          (self.position.x + 664 * SCALE) * SCALE,
+          580 * SCALE * SCALE, 712 * SCALE * SCALE))
+      self.metadata_written = ok
+      if not ok then core.log_quiet("Glyph cache metadata write will retry: %s", err) end
+    end
+  end
+  require("core.panes").place(function() return view end, {
+    placement = "current", focus = true, reason = "perf-glyph-cache",
+  })
+  return view
+end
+
 local FontRasterView = View:extend()
 
 local function open_image_viewer_scene()
@@ -394,7 +478,9 @@ local function open_image_filtering_scene()
   alpha:render()
   function scene:get_name() return "Image Filtering" end
   function scene:draw()
-    self:draw_background({ 255, 255, 255, 255 })
+    -- Wallpaper changes the expected blend at transparent image edges.
+    renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y,
+      { 255, 255, 255, 255 })
     renderer.draw_canvas_scaled(stripes, 80, 140, 64, 64)
     renderer.draw_canvas_scaled(colors, 200, 140, 129, 64)
     renderer.draw_canvas_scaled(alpha, 400, 140, 129, 64)
@@ -638,6 +724,8 @@ local function setup_scenario()
   end
   if benchmark.scenario == "renderer-primitives" then
     view = open_primitive_view()
+  elseif benchmark.scenario == "glyph-cache-growth" then
+    view = open_glyph_cache_view()
   elseif benchmark.scenario == "image-viewer" then
     view = open_image_viewer_scene()
   elseif benchmark.scenario == "image-filtering" then
@@ -821,6 +909,7 @@ local function metric_row(snapshot)
     "display_packet_replay_ms", "text_render_calls", "text_render_glyphs",
     "text_render_hb_shape_ms", "text_width_calls", "text_width_bytes",
     "text_render_shaped_cache_hits", "text_render_shaped_cache_misses", "texture_uploads",
+    "texture_upload_bytes", "text_render_hb_shapes",
     "rencache_command_replay_ms", "d3d11_glyph_push_ms",
     "text_render_glyph_bitmap_cache_misses", "text_render_glyph_bitmap_cache_miss_ms",
   }) do

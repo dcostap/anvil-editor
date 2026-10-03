@@ -28,7 +28,7 @@ except ImportError:  # Unit-testable metric/specimen helpers on non-Windows host
     msvcrt = None  # type: ignore[assignment]
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageChops
 except ImportError:  # The non-visual harness remains usable without Pillow.
     Image = None  # type: ignore[assignment]
 
@@ -130,6 +130,13 @@ SCENARIOS["image-viewer"] = {
     "paced": False,
 }
 SCENARIOS["image-filtering"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["glyph-cache-growth"] = {
+    "start_line": 1,
+    "window_width": 1400,
+    "window_height": 900,
+    "visual": True,
+    "paced": False,
+}
 SCENARIOS["terminal-blocks"] = {
     "start_line": 1,
     "window_width": 1400,
@@ -617,7 +624,8 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         "action_ms", "update_ms", "draw_emit_ms", "renderer_end_ms", "frame_ms",
         "present_ms", "core_step_ms", "total_ms", "draw_calls", "quad_instances",
         "texture_batch_breaks", "quad_batches", "unique_batch_srvs",
-        "repeated_batch_srvs", "texture_uploads", "rencache_commands", "rencache_text_commands",
+        "repeated_batch_srvs", "texture_uploads", "texture_upload_bytes", "text_render_hb_shapes",
+        "rencache_commands", "rencache_text_commands",
         "rencache_command_bytes", "display_packet_replays",
         "display_packet_commands_replayed", "display_packet_frame_bytes_copied",
         "display_packet_replay_ms", "text_render_calls", "text_render_glyphs",
@@ -630,6 +638,8 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         "run_threads_ms", "gc_ms", "text_width_calls", "text_width_bytes",
         "text_render_shaped_cache_hits", "text_render_shaped_cache_misses",
     ):
+        if key in ("texture_upload_bytes", "text_render_hb_shapes") and key not in rows[0]:
+            continue
         vals = numbers(key)
         result[f"{key}_avg"] = statistics.fmean(vals)
         result[f"{key}_p50"] = percentile(vals, 0.50)
@@ -637,6 +647,9 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         result[f"{key}_p99"] = percentile(vals, 0.99)
         if key == "texture_uploads":
             result["texture_uploads_max"] = max(vals)
+        if key in ("texture_upload_bytes", "text_render_hb_shapes"):
+            result[f"{key}_max"] = max(vals)
+            result[f"{key}_total"] = sum(vals)
         if key.endswith("_ms") or key.endswith("_kib"):
             add_progression_metrics(result, key, vals)
     draws = result["draw_calls_avg"]
@@ -1013,6 +1026,25 @@ def run_case(
                     f"action captures did not match checkpoints: {sorted(expected)}"
                 )
             result["action_screenshots"] = {path.stem: str(path) for path in checkpoints}
+        if scenario == "glyph-cache-growth":
+            with Image.open(screenshot_file) as capture:
+                pixels = capture.convert("RGB")
+                with image_metadata_file.open(newline="", encoding="utf-8") as metadata:
+                    sample = next(csv.DictReader(metadata))
+                x, y, reference_x, width, height = (
+                    int(sample[key]) for key in ("x", "y", "reference_x", "w", "h")
+                )
+                cold = pixels.crop((x, y, x + width, y + height))
+                warm = pixels.crop((reference_x, y, reference_x + width, y + height))
+                if len(cold.getcolors(width * height) or []) < 2:
+                    raise RuntimeError("glyph cache scene contains no visible glyphs")
+                # Equal glyph coverage at different screen positions can
+                # differ by one channel unit after GPU blend rounding.
+                # Golden comparisons and repeated captures remain exact.
+                difference = ImageChops.difference(cold, warm)
+                if any(high > 1 for _, high in difference.getextrema()):
+                    raise RuntimeError("glyph cache growth changed rendered pixels")
+            result["glyph_cache_growth"] = "passed"
         if scenario == "image-filtering":
             with Image.open(screenshot_file) as capture:
                 pixels = capture.convert("RGB")
@@ -1032,9 +1064,36 @@ def run_case(
                     for sample in csv.DictReader(metadata):
                         x, y = int(sample["x"]), int(sample["y"])
                         expected = tuple(int(sample[channel]) for channel in ("r", "g", "b"))
-                        def matches(color):
-                            return all(abs(a - e) <= 1 for a, e in zip(color, expected))
-                        if sample["kind"] == "coverage":
+                        def matches(color, tolerance=1):
+                            return all(abs(a - e) <= tolerance for a, e in zip(color, expected))
+                        if sample["kind"] == "cursor_ink":
+                            reference = tuple(int(sample[f"reference_{channel}"]) for channel in ("r", "g", "b"))
+                            cursor = tuple(int(sample[f"cursor_{channel}"]) for channel in ("r", "g", "b"))
+                            ink = [(px, py) for py in range(y, y + int(sample["h"]))
+                                   for px in range(x, x + int(sample["w"]))
+                                   if all(abs(a - e) <= 3 for a, e in zip(pixels.getpixel((px, py)), reference))]
+                            if not ink:
+                                raise RuntimeError(f"terminal cursor reference has no full ink: {sample['name']}")
+                            target_dx = int(sample["target_x"]) - x
+                            covered = {px for px in range(x, x + int(sample["w"]))
+                                       if all(abs(a - e) <= 1 for a, e in
+                                              zip(pixels.getpixel((px + target_dx, y)), cursor))}
+                            if not covered:
+                                raise RuntimeError(f"terminal block cursor is not opaque: {sample['name']}")
+                            checked = 0
+                            for px, py in ink:
+                                if px not in covered:
+                                    continue
+                                checked += 1
+                                actual = pixels.getpixel((px + target_dx, py))
+                                if not matches(actual, 3):
+                                    raise RuntimeError(
+                                        f"terminal cursor text lacks contrast: {sample['name']} at {px},{py}: "
+                                        f"expected {expected}, got {actual}"
+                                    )
+                            if not checked:
+                                raise RuntimeError(f"terminal cursor covers no reference ink: {sample['name']}")
+                        elif sample["kind"] == "coverage":
                             count = sum(matches(pixels.getpixel((px, py)))
                                         for py in range(y, y + int(sample["h"]))
                                         for px in range(x, x + int(sample["w"])))
