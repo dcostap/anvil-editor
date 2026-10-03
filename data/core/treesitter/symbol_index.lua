@@ -591,8 +591,8 @@ local function submit_native_run(index, generation, opts, phase)
   opts = opts or {}
   phase = phase or "combined"
   if phase ~= "combined" and index.header_mode then
-    local listed = project_files.cached(index.root)
-    local current_mode = listed and registry.header_mode(listed)
+    local extensions = project_files.extensions(index.root)
+    local current_mode = extensions and registry.header_mode(extensions)
     if current_mode and current_mode ~= index.header_mode then
       log_quiet("Tree-sitter Project index: .h mode changed %s -> %s under %s; rebuilding",
         index.header_mode, current_mode, index.root)
@@ -793,7 +793,7 @@ submit_worker_scan = function(index, generation, opts, phase)
         files[#files + 1] = { path = file.path }
         if i % 128 == 0 then safe_yield(0) end
       end
-      index.header_mode = registry.header_mode(listed)
+      index.header_mode = registry.header_mode(project_files.extensions(index.root))
       log_quiet("Tree-sitter Project index: .h mode=%s under %s", index.header_mode, index.root)
       local run_opts = common.merge(opts, { files = files })
       submit_native_run(index, generation, run_opts, phase)

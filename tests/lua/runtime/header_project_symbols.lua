@@ -2,7 +2,9 @@ local common = require "core.common"
 local Buffer = require "core.buffer"
 local Project = require "core.project"
 local core = require "core"
+local project_files = require "core.project_files"
 local project_paths = require "core.project_paths"
+local registry = require "core.treesitter.registry"
 local test = require "core.test"
 local symbol_index = require "core.treesitter.symbol_index"
 local treesitter = require "core.treesitter"
@@ -98,6 +100,32 @@ test.describe("Project header symbols", function()
       coroutine.yield(0.03)
     until system.get_time() >= deadline
     test.equal(has_symbol(results, "SCREEN_WIDTH", "macro"), 1)
+    common.rm(root, true)
+  end)
+
+  test.it("opens a header with the language of the Project's current sources", function()
+    local root = project("language", {
+      ["drawarea.cpp"] = "int draw() { return 0; }\n",
+      ["drawarea.h"] = "class TDrawSystem { public: long ScreenWidth; };\n",
+    })
+    local previous_projects = core.projects
+    core.projects = { Project(root) }
+    project_paths.load_workspace_state(nil)
+    local header = root .. PATHSEP .. "drawarea.h"
+    test.not_nil(project_files.list(root))
+    test.equal(registry.get(header, "").id, "cpp")
+
+    os.remove(root .. PATHSEP .. "drawarea.cpp")
+    write_file(root .. PATHSEP .. "sample.c", "int main(void) { return 0; }\n")
+    test.not_nil(project_files.list(root, { refresh = true }))
+    test.equal(registry.get(header, "").id, "c")
+
+    write_file(root .. PATHSEP .. "drawarea.cpp", "int draw() { return 0; }\n")
+    test.not_nil(project_files.list(root, { refresh = true }))
+    test.equal(registry.get(header, "").id, "cpp")
+
+    core.projects = previous_projects
+    project_paths.load_workspace_state(nil)
     common.rm(root, true)
   end)
 

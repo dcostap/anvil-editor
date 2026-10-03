@@ -271,7 +271,7 @@ end
 
 local function index_paths(entry, scanned_directories, scanned_searchable_directories)
   local root = entry.root
-  entry.paths, entry.directories = {}, {}
+  entry.paths, entry.directories, entry.extensions = {}, {}, {}
   entry.searchable_directories = scanned_searchable_directories or {}
   local root_key = common.path_compare_key(root)
   entry.directories[root_key] = root
@@ -283,6 +283,8 @@ local function index_paths(entry, scanned_directories, scanned_searchable_direct
   end
   for _, file in ipairs(entry.files or {}) do
     entry.paths[common.path_compare_key(file.path)] = true
+    local extension = file.path:match("%.([^%.\\/]+)$")
+    if extension then entry.extensions[extension:lower()] = true end
     local directory = common.dirname(file.path)
     while directory and common.path_belongs_to(directory, root) do
       local key = common.path_compare_key(directory)
@@ -346,6 +348,7 @@ local function scan_entry(entry)
     local snapshot = { root = root, files = files }
     index_paths(snapshot, directories, searchable_directories)
     entry.files, entry.paths, entry.directories = files, snapshot.paths, snapshot.directories
+    entry.extensions = snapshot.extensions
     entry.searchable_directories, entry.directory_list = snapshot.searchable_directories, snapshot.directory_list
     entry.error = nil
     entry.generation = (entry.generation or 0) + 1
@@ -787,6 +790,13 @@ function project_files.cached(root, opts)
   opts = opts or {}
   local entry = cache[cache_key(root, opts.include_ignored == true)]
   return entry and entry.files or nil
+end
+
+---Return the set of lowercase file extensions in the cached Project list, or nil before its first scan.
+function project_files.extensions(root, opts)
+  opts = opts or {}
+  local entry = cache[cache_key(root, opts.include_ignored == true)]
+  return entry and entry.files and entry.extensions or nil
 end
 
 function project_files.watch_status(root)

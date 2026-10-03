@@ -148,14 +148,12 @@ function registry.get_by_id(id)
   return nil
 end
 
-function registry.header_mode(files)
-  local has_c, has_cpp = false, false
-  for _, file in ipairs(files or {}) do
-    local path = (type(file) == "table" and file.path or file):lower()
-    if path:match("%.c$") then has_c = true end
-    if path:match("%.cc$") or path:match("%.cpp$") or path:match("%.cxx$") or path:match("%.c%+%+$") then has_cpp = true end
-    if has_c and has_cpp then return "mixed" end
-  end
+---Classify a Project's .h files from its set of lowercase file extensions.
+function registry.header_mode(extensions)
+  extensions = extensions or {}
+  local has_c = extensions.c == true
+  local has_cpp = extensions.cc or extensions.cpp or extensions.cxx or extensions["c++"]
+  if has_c and has_cpp then return "mixed" end
   return has_cpp and "cpp" or "c"
 end
 
@@ -177,8 +175,8 @@ end
 function registry.get(filename, header)
   if filename and filename:lower():match("%.h$") then
     local resolved = require("core.project_paths").resolve(filename)
-    local files = resolved and require("core.project_files").cached(resolved.entry.path)
-    if files and registry.header_mode(files) ~= "c" then return registry.get_by_id("cpp") end
+    local extensions = resolved and require("core.project_files").extensions(resolved.entry.path)
+    if extensions and registry.header_mode(extensions) ~= "c" then return registry.get_by_id("cpp") end
   end
   return (filename and find(filename, "files"))
       or (header and find(header, "headers"))
