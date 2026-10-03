@@ -5,6 +5,7 @@
 #include "../renwindow.h"
 #include "../rencache.h"
 #include "../d3d11_backend.h"
+#include "../hosted_surface.h"
 
 static RenWindow *persistant_window = NULL;
 
@@ -46,6 +47,8 @@ static int f_renwin_create(lua_State *L) {
     return luaL_error(L, "Error creating anvil window: %s", SDL_GetError());
   }
   init_window_icon(window);
+  /* Size the hosted surface to the shell before the renderer allocates. */
+  anvil_hosted_surface_register_window(window);
 
   RenWindow **window_renderer = (RenWindow**)lua_newuserdata(L, sizeof(RenWindow*));
   luaL_setmetatable(L, API_TYPE_RENWINDOW);
@@ -99,6 +102,13 @@ static int f_renwin_restore(lua_State *L) {
 
 static int f_get_refresh_rate(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+
+  if (anvil_hosted_surface_is_window(window_renderer->cache.window)) {
+    float hz = anvil_hosted_surface_refresh_rate();
+    if (hz > 0) lua_pushnumber(L, hz);
+    else lua_pushnil(L);
+    return 1;
+  }
 
   SDL_DisplayID display = SDL_GetDisplayForWindow(window_renderer->cache.window);
   if (!display) return 0;

@@ -1,5 +1,6 @@
 #include <SDL3/SDL.h>
 #include "system_events.h"
+#include "input_latency_probe.h"
 #include "resize_diagnostics.h"
 
 /* ---------------------------------------------------------------------------
@@ -279,5 +280,6 @@ bool system_event_pop(SDL_Event *event) {
   *event = system_event_queue[system_event_queue_read];
   system_event_queue_read  = (system_event_queue_read + 1) % SYSTEM_EVENT_QUEUE_SIZE;
   system_event_queue_count--;
+  anvil_latency_probe_note_event(event);
   return true;
 }

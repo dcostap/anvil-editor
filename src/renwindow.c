@@ -2,6 +2,7 @@
 #include "renwindow.h"
 #include "win32_frame.h"
 #include "d3d11_backend.h"
+#include "hosted_surface.h"
 #include "resize_diagnostics.h"
 #include "system_events.h"
 
@@ -45,8 +46,9 @@ static void setup_renderer(RenWindow *ren, int w, int h) {
   /* When Anvil's custom D3D11 path is enabled, do not create SDL_Renderer.
      SDL's renderer owns its own swapchain for this HWND; creating our custom
      swapchain on the same window as SDL's swapchain causes broken/flickering
-     presentation. The SDL renderer is only the fallback path. */
-  if (anvil_d3d11_enabled()) {
+     presentation. The SDL renderer is only the fallback path. Hosted
+     surfaces publish their frames to the shell and never present here. */
+  if (anvil_d3d11_enabled() || anvil_hosted_surface_is_window(ren->cache.window)) {
     if (ren->cache.texture) {
       SDL_DestroyTexture(ren->cache.texture);
       ren->cache.texture = NULL;

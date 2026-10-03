@@ -12,7 +12,10 @@
 #include "resize_diagnostics.h"
 #include "shutdown_diagnostics.h"
 #include "win32_single_instance.h"
-#include "win32_window_handoff.h"
+#include "anvil_shell.h"
+#include "hosted_surface.h"
+#include "input_latency_probe.h"
+#include "surface_protocol.h"
 #include "treesitter/service.h"
 #ifdef ANVIL_EMBEDDED_RUNTIME
   #include "embedded_runtime.h"
@@ -349,15 +352,19 @@ static bool init_lua_state(AppState *app) {
 }
 
 
+/* `anvil --shell` runs the native shell instead of the Lua application. */
+static bool shell_mode = false;
+
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
-  int handoff_manager_result = anvil_window_handoff_run_probe_manager(argc, argv);
-  if (handoff_manager_result >= 0) {
-    return handoff_manager_result == 0 ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
+  if (argc > 1 && strcmp(argv[1], ANVIL_SHELL_ARG) == 0) {
+    shell_mode = true;
+    return anvil_shell_init(appstate, argc, argv);
   }
-  anvil_window_handoff_init_child();
+  bool hosted = anvil_hosted_surface_parse_args(&argc, argv);
+  if (hosted) anvil_surface_log_init("hosted");
+  anvil_latency_probe_init(hosted ? "hosted" : "direct");
 #ifdef _WIN32
-  if (!anvil_window_handoff_is_probe_child() &&
-      anvil_single_instance_forward_or_own(argc, argv)) {
+  if (!hosted && anvil_single_instance_forward_or_own(argc, argv)) {
     return SDL_APP_SUCCESS;
   }
 #endif
@@ -403,6 +410,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     fprintf(stderr, "Error initializing sdl: %s", SDL_GetError());
     return SDL_APP_FAILURE;
   }
+  if (hosted && !anvil_hosted_surface_connect()) {
+    fprintf(stderr, "Error connecting to the Anvil shell\n");
+    return SDL_APP_FAILURE;
+  }
   SDL_SetEventEnabled(SDL_EVENT_DROP_FILE, true);
   SDL_SetEventEnabled(SDL_EVENT_DROP_TEXT, true);
   SDL_SetEventEnabled(SDL_EVENT_DROP_BEGIN, true);
@@ -421,8 +432,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   }
   custom_events_initialized = true;
 
-  if (!anvil_window_handoff_is_probe_child() &&
-      !anvil_single_instance_start_server()) {
+  if (!hosted && !anvil_single_instance_start_server()) {
     /* Non-fatal: release native ownership so secondaries do not wait on a
      * pipe server that is unavailable. Existing Lua IPC remains fallback. */
     anvil_single_instance_stop();
@@ -672,6 +682,7 @@ static bool event_wants_immediate_resize_frame(const SDL_Event *event) {
 }
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
+  if (shell_mode) return anvil_shell_event(appstate, event);
   AppState *app = (AppState *)appstate;
   system_push_event(event);
 
@@ -703,11 +714,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
+  if (shell_mode) return anvil_shell_iterate(appstate);
   return app_run_step((AppState *)appstate);
 }
 
 
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+  if (shell_mode) {
+    anvil_shell_quit(appstate, result);
+    return;
+  }
   anvil_shutdown_diag_log("SDL_AppQuit begin result=%d", (int)result);
   AppState *app = appstate;
   if (app) {

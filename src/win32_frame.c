@@ -12,7 +12,6 @@
 #include "system_events.h"
 #include "resize_diagnostics.h"
 #include "win32_frame.h"
-#include "win32_window_handoff.h"
 
 void anvil_request_resize_frame(void);
 void anvil_request_resize_frame_reason(const char *reason);
@@ -413,12 +412,6 @@ static LRESULT CALLBACK frame_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   Win32FrameData *frame = (Win32FrameData *) GetPropW(hwnd, ANVIL_WIN32_FRAME_PROP);
   if (!frame) return DefWindowProcW(hwnd, msg, wparam, lparam);
 
-  intptr_t handoff_result = 0;
-  if (anvil_window_handoff_handle_message(
-        hwnd, msg, (uintptr_t)wparam, (intptr_t)lparam, &handoff_result)) {
-    return (LRESULT)handoff_result;
-  }
-
   switch (msg) {
     case WM_ENTERSIZEMOVE:
       if (frame->enabled) {
@@ -620,7 +613,6 @@ bool win32_frame_enable(RenWindow *ren, bool enable) {
       return false;
     }
     ren->win32_frame = frame;
-    anvil_window_handoff_register_window(ren->cache.window);
   }
 
   frame->enabled = enable;

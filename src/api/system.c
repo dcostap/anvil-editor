@@ -22,7 +22,7 @@
 #include "../resize_diagnostics.h"
 #include "../shutdown_diagnostics.h"
 #include "../win32_single_instance.h"
-#include "../win32_window_handoff.h"
+#include "../hosted_surface.h"
 #ifdef _WIN32
   #include <direct.h>
   #include <io.h>
@@ -118,6 +118,12 @@ static void str_tolower(char *p) {
     *p = tolower(*p);
     p++;
   }
+}
+
+/* A hosted surface's SDL window is hidden. The shell owns the visible window,
+** so window requests for it are forwarded instead of applied locally. */
+static bool is_hosted(RenWindow *window_renderer) {
+  return window_renderer && anvil_hosted_surface_is_window(window_renderer->cache.window);
 }
 
 #define RESIZE_FROM_TOP 0
@@ -436,8 +442,9 @@ top:
 
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
       {
-        if (e.button.button == 1) { SDL_CaptureMouse(1); }
         RenWindow* window_renderer = ren_find_window_from_id(e.button.windowID);
+        /* The shell captures the mouse for hosted surfaces. */
+        if (e.button.button == 1 && !is_hosted(window_renderer)) { SDL_CaptureMouse(1); }
         lua_pushstring(L, "mousepressed");
         lua_pushstring(L, button_name(e.button.button));
         lua_pushnumber(L, e.button.x * (window_renderer ? window_renderer->scale_x :0));
@@ -448,8 +455,8 @@ top:
 
     case SDL_EVENT_MOUSE_BUTTON_UP:
       {
-        if (e.button.button == 1) { SDL_CaptureMouse(0); }
         RenWindow* window_renderer = ren_find_window_from_id(e.button.windowID);
+        if (e.button.button == 1 && !is_hosted(window_renderer)) { SDL_CaptureMouse(0); }
         lua_pushstring(L, "mousereleased");
         lua_pushstring(L, button_name(e.button.button));
         lua_pushnumber(L, e.button.x * (window_renderer ? window_renderer->scale_x : 0));
@@ -558,6 +565,12 @@ top:
       {
         RenWindow* window_renderer = ren_find_window_from_id(e.window.windowID);
         if (!window_renderer) goto top;
+        if (is_hosted(window_renderer)) {
+          /* The shell reports the scale of the display that shows us. */
+          lua_pushstring(L, "scalechanged");
+          lua_pushnumber(L, anvil_hosted_surface_display_scale());
+          return 2;
+        }
         Uint64 flags = SDL_GetWindowFlags(window_renderer->cache.window);
         if (flags & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)) {
           /* SDL/Win32 can report bogus display scale while a minimized/hidden
@@ -681,6 +694,11 @@ static int f_set_cursor(lua_State *L) {
   }
 #endif
   int opt = luaL_checkoption(L, 1, "arrow", cursor_opts);
+  if (anvil_hosted_surface_active()) {
+    /* cursor_opts order matches AnvilSurfaceCursor. */
+    anvil_hosted_surface_set_cursor((AnvilSurfaceCursor)opt);
+    return 0;
+  }
   int n = cursor_enums[opt];
   SDL_Cursor *cursor = cursor_cache[opt];
   if (!cursor) {
@@ -705,7 +723,9 @@ static int f_get_scale(lua_State *L) {
   return 1;
 #else
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  lua_pushnumber(L, SDL_GetWindowDisplayScale(window_renderer->cache.window));
+  lua_pushnumber(L, is_hosted(window_renderer)
+    ? anvil_hosted_surface_display_scale()
+    : SDL_GetWindowDisplayScale(window_renderer->cache.window));
   return 1;
 #endif /* ANVIL_USE_SDL_RENDERER */
 }
@@ -714,7 +734,8 @@ static int f_get_scale(lua_State *L) {
 static int f_set_window_title(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   const char *title = luaL_checkstring(L, 2);
-  SDL_SetWindowTitle(window_renderer->cache.window, title);
+  if (is_hosted(window_renderer)) anvil_hosted_surface_set_title(title);
+  else SDL_SetWindowTitle(window_renderer->cache.window, title);
   return 0;
 }
 
@@ -725,6 +746,11 @@ enum { WIN_NORMAL, WIN_MINIMIZED, WIN_MAXIMIZED, WIN_FULLSCREEN };
 static int f_set_window_mode(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   int n = luaL_checkoption(L, 2, "normal", window_opts);
+  if (is_hosted(window_renderer)) {
+    /* window_opts order matches AnvilSurfaceWindowMode. */
+    anvil_hosted_surface_set_window_mode((AnvilSurfaceWindowMode)n);
+    return 0;
+  }
   SDL_SetWindowFullscreen(window_renderer->cache.window, n == WIN_FULLSCREEN);
   if (n == WIN_NORMAL) { SDL_RestoreWindow(window_renderer->cache.window); }
   if (n == WIN_MAXIMIZED) { SDL_MaximizeWindow(window_renderer->cache.window); }
@@ -737,6 +763,10 @@ static int f_set_window_bordered(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   SDL_Window *win = window_renderer->cache.window;
   bool bordered = lua_toboolean(L, 2);
+  if (is_hosted(window_renderer)) {
+    anvil_hosted_surface_set_bordered(bordered);
+    return 0;
+  }
 #if defined(SDL_PLATFORM_WINDOWS)
   // Hack on windows to force drawing of TitleBar.
   // If maximized and removing borders, force a state "reset".
@@ -758,6 +788,22 @@ static int f_set_window_bordered(lua_State *L) {
 
 static int f_set_window_hit_test(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  if (is_hosted(window_renderer)) {
+    float scale = window_renderer->scale_x;
+    AnvilSurfaceHitTest hit = {0};
+    if (lua_gettop(L) > 1) {
+      hit.enabled = 1;
+      hit.title_height = luaL_checkinteger(L, 2) / scale;
+      hit.controls_width = luaL_checkinteger(L, 3) / scale;
+      hit.resize_border = luaL_checkinteger(L, 4) / scale;
+      hit.client_x = luaL_optinteger(L, 5, 0) / scale;
+      hit.client_width = luaL_optinteger(L, 6, 0) / scale;
+      hit.client2_x = luaL_optinteger(L, 7, 0) / scale;
+      hit.client2_width = luaL_optinteger(L, 8, 0) / scale;
+    }
+    anvil_hosted_surface_set_hit_test(&hit);
+    return 0;
+  }
   if (lua_gettop(L) == 1) {
     SDL_SetWindowHitTest(window_renderer->cache.window, NULL, NULL);
     win32_frame_set_hit_test(window_renderer, 0, 0, 0, 0, 0, 0, 0);
@@ -789,6 +835,11 @@ static int f_set_window_hit_test(lua_State *L) {
 static int f_set_window_native_frame(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   bool enable = lua_toboolean(L, 2);
+  /* The shell draws the native frame region itself. */
+  if (is_hosted(window_renderer)) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
   if (enable) SDL_SetWindowHitTest(window_renderer->cache.window, NULL, NULL);
   lua_pushboolean(L, win32_frame_enable(window_renderer, enable));
   return 1;
@@ -825,6 +876,14 @@ static int f_get_last_event_window_id(lua_State *L) {
 static int f_get_window_size(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   int x, y, w, h;
+  if (is_hosted(window_renderer)) {
+    anvil_hosted_surface_window_bounds(&x, &y, &w, &h);
+    lua_pushinteger(L, w);
+    lua_pushinteger(L, h);
+    lua_pushinteger(L, x);
+    lua_pushinteger(L, y);
+    return 4;
+  }
 #if defined(SDL_PLATFORM_WINDOWS)
   if (window_renderer->win32_frame) {
     SDL_PropertiesID props = SDL_GetWindowProperties(window_renderer->cache.window);
@@ -856,6 +915,7 @@ static int f_get_window_size(lua_State *L) {
 static int f_set_window_visible(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   bool visible = lua_toboolean(L, 2);
+  if (is_hosted(window_renderer)) return 0;
   if (visible) SDL_ShowWindow(window_renderer->cache.window);
   else SDL_HideWindow(window_renderer->cache.window);
   return 0;
@@ -867,6 +927,10 @@ static int f_set_window_size(lua_State *L) {
   double h = luaL_checknumber(L, 3);
   double x = luaL_checknumber(L, 4);
   double y = luaL_checknumber(L, 5);
+  if (is_hosted(window_renderer)) {
+    anvil_hosted_surface_set_bounds((int)x, (int)y, (int)w, (int)h);
+    return 0;
+  }
 #if defined(SDL_PLATFORM_WINDOWS)
   if (window_renderer->win32_frame) {
     SDL_PropertiesID props = SDL_GetWindowProperties(window_renderer->cache.window);
@@ -888,6 +952,10 @@ static int f_set_window_size(lua_State *L) {
 
 static int f_window_has_focus(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  if (is_hosted(window_renderer)) {
+    lua_pushboolean(L, anvil_hosted_surface_has_focus());
+    return 1;
+  }
   SDL_Window *window = window_renderer->cache.window;
   unsigned flags = SDL_GetWindowFlags(window);
   bool has_focus = (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
@@ -976,6 +1044,10 @@ static int f_window_focus_diagnostics(lua_State *L) {
 
 static int f_get_window_mode(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  if (is_hosted(window_renderer)) {
+    lua_pushstring(L, window_opts[anvil_hosted_surface_window_mode()]);
+    return 1;
+  }
   unsigned flags = SDL_GetWindowFlags(window_renderer->cache.window);
   if (flags & SDL_WINDOW_FULLSCREEN) {
     lua_pushstring(L, "fullscreen");
@@ -996,7 +1068,8 @@ static int f_set_text_input_rect(lua_State *L) {
   rect.y = luaL_checknumber(L, 3);
   rect.w = luaL_checknumber(L, 4);
   rect.h = luaL_checknumber(L, 5);
-  SDL_SetTextInputArea(window_renderer->cache.window, &rect, 0);
+  if (is_hosted(window_renderer)) anvil_hosted_surface_set_text_input_area(&rect, 0);
+  else SDL_SetTextInputArea(window_renderer->cache.window, &rect, 0);
   return 0;
 }
 
@@ -1006,20 +1079,27 @@ static int f_flash_window(lua_State *L) {
   SDL_FlashOperation flash = strcmp(operation, "until_focused") == 0
     ? SDL_FLASH_UNTIL_FOCUSED
     : strcmp(operation, "cancel") == 0 ? SDL_FLASH_CANCEL : SDL_FLASH_BRIEFLY;
+  if (is_hosted(window_renderer)) {
+    anvil_hosted_surface_flash((int)flash);
+    lua_pushboolean(L, true);
+    return 1;
+  }
   lua_pushboolean(L, SDL_FlashWindow(window_renderer->cache.window, flash));
   return 1;
 }
 
 static int f_clear_ime(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  SDL_ClearComposition(window_renderer->cache.window);
+  if (is_hosted(window_renderer)) anvil_hosted_surface_clear_ime();
+  else SDL_ClearComposition(window_renderer->cache.window);
   return 0;
 }
 
 
 static int f_raise_window(lua_State *L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  SDL_RaiseWindow(window_renderer->cache.window);
+  if (is_hosted(window_renderer)) anvil_hosted_surface_raise();
+  else SDL_RaiseWindow(window_renderer->cache.window);
   return 0;
 }
 
@@ -1824,13 +1904,8 @@ static int f_set_native_single_instance_enabled(lua_State *L) {
   return 0;
 }
 
-static int f_project_is_selected(lua_State *L) {
-  lua_pushboolean(L, anvil_window_handoff_project_is_selected());
-  return 1;
-}
-
-static int f_is_project_child(lua_State *L) {
-  lua_pushboolean(L, anvil_window_handoff_is_probe_child());
+static int f_is_hosted_surface(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_active());
   return 1;
 }
 
@@ -2055,6 +2130,10 @@ static int f_load_native_plugin(lua_State *L) {
 static int f_text_input(lua_State* L) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   if (!window_renderer) return 0;
+  if (is_hosted(window_renderer)) {
+    anvil_hosted_surface_set_text_input(lua_toboolean(L, 2));
+    return 0;
+  }
   if (lua_toboolean(L, 2)) {
     SDL_StartTextInput(window_renderer->cache.window);
   } else {
@@ -2408,8 +2487,16 @@ static int f_get_display_info(lua_State* L) {
     current_scale = mode->pixel_density;
   }
 
-  lua_pushnumber(L, current_scale);
-  lua_pushnumber(L, mode->refresh_rate);
+  /* A hosted surface is shown on the shell's display, not the primary one. */
+  if (anvil_hosted_surface_active()) {
+    current_scale = anvil_hosted_surface_display_scale();
+    float hosted_hz = anvil_hosted_surface_refresh_rate();
+    lua_pushnumber(L, current_scale);
+    lua_pushnumber(L, hosted_hz > 0 ? hosted_hz : mode->refresh_rate);
+  } else {
+    lua_pushnumber(L, current_scale);
+    lua_pushnumber(L, mode->refresh_rate);
+  }
   lua_pushnumber(L, mode->w);
   lua_pushnumber(L, mode->h);
   lua_pushnumber(L, default_scale);
@@ -2484,8 +2571,7 @@ static const luaL_Reg lib[] = {
   { "get_process_id",        f_get_process_id        },
   { "get_time",              f_get_time              },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
-  { "project_is_selected", f_project_is_selected },
-  { "is_project_child",    f_is_project_child    },
+  { "is_hosted_surface",     f_is_hosted_surface     },
   { "sleep",                 f_sleep                 },
   { "exec",                  f_exec                  },
 #ifdef _WIN32

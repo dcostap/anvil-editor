@@ -245,9 +245,12 @@ Adoption checks that the PID is alive and completes a handshake before trust.
 
 - Use named pipes with length-prefixed, versioned, bounded messages.
 - Use fixed binary headers and UTF-8 payloads.
-- Reject remote clients. Restrict pipes to the current user.
-- Authenticate each connection with a random token.
-- Never log tokens.
+- Reject remote clients. Open each pipe with `FILE_FLAG_FIRST_PIPE_INSTANCE`.
+- Name each pipe with the server PID and random bits.
+- Authenticate a child connection with `GetNamedPipeClientProcessId`. The client must
+  be the process that the server started. Default pipe security already limits access
+  to the current user, so the pipes need no custom DACL and no token.
+- Clients open pipes with `SECURITY_IDENTIFICATION`, so a server can not impersonate them.
 - Do not add a general RPC framework.
 
 Channels:
@@ -283,6 +286,34 @@ Measure and verify:
 - D3D11 and software renderers.
 
 Stop and reconsider if typing latency or IME is visibly worse than direct mode.
+
+Status: implemented as `anvil --shell [args]`. The shell starts one hosted process,
+forwards input, and composites its frames beside a placeholder sidebar strip.
+
+- D3D11 frames use a keyed-mutex texture shared by name.
+- Software frames use a named file mapping and copy only dirty rectangles.
+- The shell presents with D3D11 for both renderers.
+- `ANVIL_SURFACE_LOG=<file>` logs the shell and the hosted process to one file.
+
+`tools/run_surface_latency_probe.py` measures typing latency on a private desktop. It
+injects tagged key presses into the window that receives real input. It stops the
+clock when a presented frame contains the edit. Results on 2026-10-03, 240 samples
+per row:
+
+| Mode | Renderer | p50 | p90 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| direct | d3d11 | 7.41 ms | 16.89 ms | 21.78 ms | 48.45 ms |
+| shell | d3d11 | 7.57 ms | 16.18 ms | 20.03 ms | 24.31 ms |
+| direct | software | 18.75 ms | 26.67 ms | 32.82 ms | 47.57 ms |
+| shell | software | 11.17 ms | 20.35 ms | 24.11 ms | 41.03 ms |
+
+The shell adds no measurable typing latency with D3D11. Software is faster through
+the shell because the shell presents with D3D11 instead of a GDI window blit.
+The clock stops when Present returns, not at scanout. A private desktop paces
+Present differently from the interactive desktop.
+
+Still to check by hand: IME composition and candidates, live resize, mixed-DPI moves,
+and maximize, restore, and snapping.
 
 ### Phase 1: Workspace durability
 

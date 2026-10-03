@@ -15,6 +15,7 @@
 #include <string.h>
 #include "d3d11_backend.h"
 #include "d3d11_quad_shader.h"
+#include "hosted_surface.h"
 #include "resize_diagnostics.h"
 
 #ifndef SAFE_RELEASE
@@ -76,6 +77,13 @@ struct D3D11Window {
   int buffer_count;
   DXGI_SWAP_EFFECT swap_effect;
   char *capture_path;
+  /* Hosted windows have no swapchain. Frames render into backbuffer and are
+     copied into a named shared texture that the shell composites. */
+  bool hosted;
+  ID3D11Texture2D *shared_texture;
+  IDXGIKeyedMutex *shared_mutex;
+  HANDLE shared_handle;
+  char shared_name[ANVIL_SURFACE_NAME_MAX];
 };
 
 typedef struct D3D11FrameStats {
@@ -515,7 +523,8 @@ bool anvil_d3d11_enabled(void) {
 }
 
 bool anvil_d3d11_is_present_paced(void) {
-  if (!anvil_d3d11_enabled()) return false;
+  /* Hosted frames are published without Present; the shell paces display. */
+  if (!anvil_d3d11_enabled() || anvil_hosted_surface_active()) return false;
   if (d3d11_present_sync_interval() == 0) return false;
   return !(anvil_resize_diag_live_resize() && d3d11_should_present_zero_live_resize());
 }
@@ -832,6 +841,66 @@ static void d3d11_release_window_buffers(D3D11Window *w) {
   if (!w) return;
   SAFE_RELEASE(w->rtv);
   SAFE_RELEASE(w->backbuffer);
+  SAFE_RELEASE(w->shared_mutex);
+  SAFE_RELEASE(w->shared_texture);
+  if (w->shared_handle) {
+    CloseHandle(w->shared_handle);
+    w->shared_handle = NULL;
+  }
+}
+
+static bool d3d11_create_hosted_buffers(D3D11Window *w, int width, int height) {
+  static unsigned serial = 0;
+  d3d11_release_window_buffers(w);
+
+  D3D11_TEXTURE2D_DESC desc;
+  memset(&desc, 0, sizeof(desc));
+  desc.Width = (UINT)width;
+  desc.Height = (UINT)height;
+  desc.MipLevels = 1;
+  desc.ArraySize = 1;
+  desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  desc.SampleDesc.Count = 1;
+  desc.Usage = D3D11_USAGE_DEFAULT;
+  desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+  HRESULT hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, NULL, &w->backbuffer);
+  if (SUCCEEDED(hr)) {
+    hr = g_d3d11.device->lpVtbl->CreateRenderTargetView(g_d3d11.device,
+                                                         (ID3D11Resource *)w->backbuffer,
+                                                         NULL, &w->rtv);
+  }
+  if (SUCCEEDED(hr)) {
+    desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    hr = g_d3d11.device->lpVtbl->CreateTexture2D(g_d3d11.device, &desc, NULL, &w->shared_texture);
+  }
+  if (SUCCEEDED(hr)) {
+    hr = w->shared_texture->lpVtbl->QueryInterface(w->shared_texture, &IID_IDXGIKeyedMutex,
+                                                   (void **)&w->shared_mutex);
+  }
+  IDXGIResource1 *resource = NULL;
+  if (SUCCEEDED(hr)) {
+    hr = w->shared_texture->lpVtbl->QueryInterface(w->shared_texture, &IID_IDXGIResource1,
+                                                   (void **)&resource);
+  }
+  if (SUCCEEDED(hr)) {
+    /* A new name per allocation tells the shell to reopen the texture. */
+    snprintf(w->shared_name, sizeof(w->shared_name), "Local\\AnvilSurface-%lu-%u",
+             (unsigned long)GetCurrentProcessId(), ++serial);
+    wchar_t wide_name[ANVIL_SURFACE_NAME_MAX];
+    MultiByteToWideChar(CP_UTF8, 0, w->shared_name, -1, wide_name, ANVIL_SURFACE_NAME_MAX);
+    hr = resource->lpVtbl->CreateSharedHandle(resource, NULL,
+                                              DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                                              wide_name, &w->shared_handle);
+  }
+  SAFE_RELEASE(resource);
+  if (FAILED(hr)) {
+    d3d11_release_window_buffers(w);
+    if (d3d11_device_lost(hr)) d3d11_reset_device();
+    return false;
+  }
+  w->width = width;
+  w->height = height;
+  return true;
 }
 
 static void d3d11_destroy_window(D3D11Window *w) {
@@ -947,6 +1016,17 @@ static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, in
   w->window = window;
   w->hwnd = hwnd;
 
+  if (anvil_hosted_surface_is_window(window)) {
+    w->hosted = true;
+    if (!d3d11_create_hosted_buffers(w, width, height)) {
+      d3d11_destroy_window(w);
+      return NULL;
+    }
+    w->next = g_d3d11.windows;
+    g_d3d11.windows = w;
+    return w;
+  }
+
   DXGI_SWAP_CHAIN_DESC1 desc;
   memset(&desc, 0, sizeof(desc));
   desc.Width = d3d11_should_infer_swapchain_size() ? 0 : (UINT)width;
@@ -1006,6 +1086,11 @@ static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, in
 }
 
 static bool d3d11_resize_window(D3D11Window *w, int width, int height) {
+  if (w && w->hosted) {
+    if (w->width == width && w->height == height && w->backbuffer) return true;
+    d3d11_unbind_resize_references();
+    return d3d11_create_hosted_buffers(w, width, height);
+  }
   if (!w || !w->swapchain) return false;
   if (g_d3d11.stats.enabled && g_d3d11.stats.active) {
     g_d3d11.stats.frame.resize_hr = S_OK;
@@ -1945,10 +2030,52 @@ static bool d3d11_capture_backbuffer(D3D11Window *w, const char *path) {
   return saved;
 }
 
+#define D3D11_HOSTED_SYNC_TIMEOUT_MS 1000
+
+static void d3d11_reset_frame_state(void) {
+  g_d3d11.active_window = NULL;
+  g_d3d11.quad_instance_count = 0;
+  g_d3d11.quad_srv_count = 0;
+  g_d3d11.quad_last_texture_srv = NULL;
+  g_d3d11.quad_texture_runs = 0;
+}
+
+static bool d3d11_publish_hosted_frame(D3D11Window *w) {
+  LARGE_INTEGER copy_start, copy_end;
+  QueryPerformanceCounter(&copy_start);
+  /* AcquireSync reports a timeout as a success code, so require S_OK. */
+  HRESULT hr = w->shared_mutex->lpVtbl->AcquireSync(w->shared_mutex, 0, D3D11_HOSTED_SYNC_TIMEOUT_MS);
+  bool acquired = hr == S_OK;
+  if (acquired) {
+    g_d3d11.context->lpVtbl->CopyResource(g_d3d11.context,
+                                          (ID3D11Resource *)w->shared_texture,
+                                          (ID3D11Resource *)w->backbuffer);
+    w->shared_mutex->lpVtbl->ReleaseSync(w->shared_mutex, 0);
+    g_d3d11.context->lpVtbl->Flush(g_d3d11.context);
+  }
+  QueryPerformanceCounter(&copy_end);
+  g_d3d11.stats.frame.present_ms = d3d11_ms_between(copy_start, copy_end);
+  g_d3d11.last_present_ms = g_d3d11.stats.frame.present_ms;
+  g_d3d11.last_sync_interval = 0;
+  d3d11_reset_frame_state();
+  if (!acquired) {
+    g_d3d11.stats.frame.fail_reason = "hosted_sync";
+    d3d11_stats_end(false, FAILED(hr) ? hr : E_ABORT);
+    if (d3d11_device_lost(hr)) d3d11_reset_device();
+    return false;
+  }
+  if (d3d11_should_clear_state_after_present()) {
+    g_d3d11.context->lpVtbl->ClearState(g_d3d11.context);
+  }
+  d3d11_stats_end(true, S_OK);
+  anvil_hosted_surface_publish_d3d11(w->window, w->shared_name, w->width, w->height);
+  return true;
+}
+
 bool anvil_d3d11_end_frame(SDL_Window *window) {
   if (window != g_d3d11.active_window) return false;
   D3D11Window *w = d3d11_find_window(window);
-  if (!w || !w->swapchain || !w->rtv) {
+  if (!w || !(w->swapchain || w->hosted) || !w->rtv) {
     anvil_d3d11_abort_frame_reason(window, "end_frame_no_window");
     return false;
   }
@@ -1967,6 +2094,8 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
     SDL_free(capture_path);
   }
 
+  if (w->hosted) return d3d11_publish_hosted_frame(w);
+
   LARGE_INTEGER present_start, present_end, dwm_start, dwm_end;
   UINT sync_interval = d3d11_present_sync_interval();
   if (anvil_resize_diag_live_resize() && d3d11_should_present_zero_live_resize()) sync_interval = 0;
@@ -1977,11 +2106,7 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
   g_d3d11.stats.frame.present_ms = d3d11_ms_between(present_start, present_end);
   g_d3d11.last_present_ms = g_d3d11.stats.frame.present_ms;
   g_d3d11.last_sync_interval = (int)sync_interval;
-  g_d3d11.active_window = NULL;
-  g_d3d11.quad_instance_count = 0;
-  g_d3d11.quad_srv_count = 0;
-  g_d3d11.quad_last_texture_srv = NULL;
-  g_d3d11.quad_texture_runs = 0;
+  d3d11_reset_frame_state();
   if (FAILED(hr)) {
     g_d3d11.stats.frame.fail_reason = "present";
     d3d11_stats_end(false, hr);
@@ -2014,7 +2139,8 @@ bool anvil_d3d11_end_frame(SDL_Window *window) {
 bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
                          float scale_x, float scale_y,
                          RenRect *rects, int rect_count) {
-  if (!anvil_d3d11_enabled() || !window || !surface || !surface->pixels || rect_count <= 0) {
+  if (!anvil_d3d11_enabled() || !window || !surface || !surface->pixels || rect_count <= 0 ||
+      anvil_hosted_surface_is_window(window)) {
     return false;
   }
   if (!d3d11_init()) return false;

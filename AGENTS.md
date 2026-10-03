@@ -422,7 +422,7 @@ There is not a separate Lua framework for in-process UI tests: they are ordinary
 - **Headless/runtime tests** instantiate non-visual objects such as Documents, commands, fuzzy indexes, processes, threads, and pure helper modules, then assert their state.
 - **In-process UI tests** instantiate or reuse Anvil UI objects such as Document Views, panels, prompt bars, widgets, tabs/nodes, fuzzy pickers, and settings views. They drive behavior by calling methods/event handlers programmatically, such as `core.on_event(...)`, `core.root_panel:on_mouse_pressed(...)`, `view:on_mouse_moved(...)`, `node:set_active_view(...)`, or widget `on_change(...)`, then assert Lua state/layout/focus directly. These are the preferred layer for TDD of editor UI behavior.
 - **Isolated renderer checks** run the real renderer on a private desktop. Use the [render performance gate](tools/RENDER_PERF_GATE.md) for pixel checks and renderer diagnostics.
-- **Native window tests** check platform behavior, such as `tests/gui/smoke/project-window-handoff-test.ps1`. Use these only for changes that require native window behavior.
+- **Native window tests** check platform behavior through `tools/run_anvil_hidden_desktop.ps1`, such as `tools/run_surface_latency_probe.py` for the `--shell` compositor. Use these only for changes that require native window behavior.
 
 When adding or changing runtime/editor behavior, prefer adding or adjusting Lua tests in `tests/lua/runtime` or `tests/lua/ui` alongside the implementation. Use in-process UI tests for focus, layout, panel, widget, Document View, prompt bar, fuzzy picker, and command-routing behavior whenever possible.
 

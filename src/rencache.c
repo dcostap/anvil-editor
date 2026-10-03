@@ -28,7 +28,8 @@
 #include "renwindow.h"
 #include "d3d11_backend.h"
 #include "win32_frame.h"
-#include "win32_window_handoff.h"
+#include "hosted_surface.h"
+#include "input_latency_probe.h"
 
 /* a cache over the software renderer -- all drawing operations are stored as
 ** commands when issued. At the end of the frame we write the commands to a grid
@@ -72,6 +73,18 @@ static void rencache_activate_window(SDL_Window *window) {
   if (attached) AttachThreadInput(current_thread, foreground_thread, FALSE);
 }
 #endif
+
+static void rencache_finish_latency_probe(void) {
+  _Exit(0);
+}
+
+/* In direct mode this process owns the visible window, so it generates the
+** latency probe input and records when a frame reached Present. */
+static void rencache_note_direct_present(SDL_Window *window) {
+  if (!anvil_latency_probe_enabled()) return;
+  anvil_latency_probe_start(window, rencache_finish_latency_probe);
+  anvil_latency_probe_presented(anvil_latency_probe_consumed_seq());
+}
 #define CMD_BUF_CANVAS_INIT_SIZE (1024 * 64)
 #define COMMAND_BARE_SIZE offsetof(Command, command)
 
@@ -847,17 +860,18 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
     command_replay_start, SDL_GetPerformanceCounter()
   );
   if (!anvil_d3d11_end_frame(ren_cache->window)) return false;
-  if (anvil_window_handoff_allow_show(ren_cache->window)) {
+  /* The shell shows hosted surfaces; their SDL window stays hidden. */
+  if (!anvil_hosted_surface_is_window(ren_cache->window)) {
     SDL_ShowWindow(ren_cache->window);
-  }
-  if (!ren_cache->window_shown && anvil_window_handoff_allow_show(ren_cache->window)) {
-    SDL_RaiseWindow(ren_cache->window);
+    if (!ren_cache->window_shown) {
+      SDL_RaiseWindow(ren_cache->window);
 #ifdef _WIN32
-    rencache_activate_window(ren_cache->window);
+      rencache_activate_window(ren_cache->window);
 #endif
-    ren_cache->window_shown = true;
+      ren_cache->window_shown = true;
+    }
+    rencache_note_direct_present(ren_cache->window);
   }
-  anvil_window_handoff_frame_presented(ren_cache->window);
   ren_text_stats_end_frame();
   g_rencache_last_frame_stats = g_rencache_frame_stats;
   ren_cache->command_buf_idx = 0;
@@ -1147,6 +1161,20 @@ void rencache_get_size(RenCache *ren_cache, int *w, int *h) {
 void rencache_update_rects(RenCache *rc, RenRect *rects, int count) {
   // TODO: Does not work nicely with multiple windows
   static bool initial_window = true;
+  if (rc->window && anvil_hosted_surface_is_window(rc->window)) {
+    /* Too many dirty rects publish the whole surface. */
+    SDL_Rect dirty[64];
+    RenSurface rs = rencache_get_surface(rc);
+    int dirty_count = count <= (int)SDL_arraysize(dirty) ? count : 0;
+    for (int i = 0; i < dirty_count; i++) {
+      dirty[i] = (SDL_Rect){
+        (int)(rects[i].x * rs.scale_x), (int)(rects[i].y * rs.scale_y),
+        (int)(rects[i].width * rs.scale_x), (int)(rects[i].height * rs.scale_y)
+      };
+    }
+    anvil_hosted_surface_publish_software(rc->window, rs.surface, dirty, dirty_count);
+    return;
+  }
   if (rc->window){
 #ifdef ANVIL_USE_SDL_RENDERER
     bool presented = anvil_d3d11_present(rc->window, rc->rensurface.surface,
@@ -1172,7 +1200,7 @@ void rencache_update_rects(RenCache *rc, RenRect *rects, int count) {
 #else
     SDL_UpdateWindowSurfaceRects(rc->window, (SDL_Rect*) rects, count);
 #endif
-    if (initial_window && anvil_window_handoff_allow_show(rc->window)) {
+    if (initial_window) {
       SDL_ShowWindow(rc->window);
       if (!rc->window_shown) {
         SDL_RaiseWindow(rc->window);
@@ -1183,6 +1211,6 @@ void rencache_update_rects(RenCache *rc, RenRect *rects, int count) {
       }
       initial_window = false;
     }
-    anvil_window_handoff_frame_presented(rc->window);
+    rencache_note_direct_present(rc->window);
   }
 }
