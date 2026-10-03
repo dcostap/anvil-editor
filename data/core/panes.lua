@@ -1416,13 +1416,28 @@ local function record_departure(view)
   if navigation_history then navigation_history.record_departure(view) end
 end
 
-function M.back(target)
+local function navigation_file(view)
+  return view.buffer and view.buffer.abs_filename or view
+end
+
+local function navigate_history(target, direction, by_file)
   local pane = M.find(target or M.active_pane)
   if not pane then return nil end
   record_departure(pane.current_view)
   M.prune_history(pane)
-  local current = pane.history.entries[pane.history.index]
-  if current and (current.kind == "edit" or current.kind == "dwell" or pane.history.index == 1)
+  local history = pane.history
+  local index = history.index + direction
+  if by_file then
+    index = history.index
+    local file = navigation_file(pane.current_view)
+    while index + direction >= 1 and index + direction <= #history.entries do
+      index = index + direction
+      if navigation_file(history.entries[index].view) ~= file then break end
+    end
+  end
+  local current = history.entries[history.index]
+  if direction == -1 and (not by_file or index == history.index)
+      and current and (current.kind == "edit" or current.kind == "dwell" or history.index == 1)
       and current.view == pane.current_view then
     local live = capture_navigation_state(pane.current_view)
     if navigation_state_key(current.view, current.state)
@@ -1436,15 +1451,24 @@ function M.back(target)
       return pane.current_view
     end
   end
-  return set_history_index(pane, pane.history.index - 1)
+  if index == history.index then return nil end
+  return set_history_index(pane, index)
+end
+
+function M.back(target)
+  return navigate_history(target, -1)
 end
 
 function M.forward(target)
-  local pane = M.find(target or M.active_pane)
-  if not pane then return nil end
-  record_departure(pane.current_view)
-  M.prune_history(pane)
-  return set_history_index(pane, pane.history.index + 1)
+  return navigate_history(target, 1)
+end
+
+function M.back_file(target)
+  return navigate_history(target, -1, true)
+end
+
+function M.forward_file(target)
+  return navigate_history(target, 1, true)
 end
 
 function M.is_back_available(target)

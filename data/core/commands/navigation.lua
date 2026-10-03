@@ -12,10 +12,12 @@ command.add(nil, {
 
 command.add(function() return panes.is_back_available() end, {
   ["core:navigate_back"] = command.palette(function() panes.back() end),
+  ["core:navigate_back_file"] = command.palette(function() panes.back_file() end),
 })
 
 command.add(function() return panes.is_forward_available() end, {
   ["core:navigate_forward"] = command.palette(function() panes.forward() end),
+  ["core:navigate_forward_file"] = command.palette(function() panes.forward_file() end),
 })
 
 local function navigate_mouse(button, ...)
@@ -43,6 +45,10 @@ end
 keymap.add {
   ["alt+left"] = "core:navigate_back",
   ["alt+right"] = "core:navigate_forward",
+  ["alt+shift+left"] = "core:navigate_back_file",
+  ["alt+shift+right"] = "core:navigate_forward_file",
   ["xclick"] = function(...) return navigate_mouse("x", ...) end,
   ["yclick"] = function(...) return navigate_mouse("y", ...) end,
+  ["shift+xclick"] = "core:navigate_back_file",
+  ["shift+yclick"] = "core:navigate_forward_file",
 }
