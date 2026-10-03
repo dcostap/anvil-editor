@@ -337,6 +337,8 @@ Keep the current single-process editor as the client.
 Deliver attach, the session registry, busy detection, snapshots, revival, and the quit
 policy. Terminals become crash-safe before the shell exists.
 
+Implementation plan: [Phase 2: Terminal Session processes](PHASE2_TERMINAL_SESSIONS.md).
+
 ### Phase 3: hosted single Project
 
 Add the native shell and the hosted surface backend.
