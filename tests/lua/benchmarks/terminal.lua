@@ -16,6 +16,43 @@ local function percentile(values, fraction)
 end
 
 test.describe("Terminal native benchmark", function()
+  test.it("records typing echo latency", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local native = require "terminal_native"
+    local script = system.getcwd() .. "/tests/fixtures/terminal_typing_echo.ps1"
+    local session, err = native.new {
+      cols = 120, rows = 12, cell_width = 8, cell_height = 16,
+      shell = string.format('powershell.exe -NoLogo -NoProfile -File "%s"', script),
+    }
+    test.ok(session, err)
+    local samples, snapshot = {}, nil
+    local function wait_for(text)
+      local deadline = system.get_time() + 10
+      repeat
+        local changed = session:update()
+        if changed then snapshot = session:snapshot(snapshot) end
+        if snapshot and snapshot_text(snapshot):find(text, 1, true) then return true end
+        coroutine.yield(0.0001)
+      until system.get_time() >= deadline
+      return false
+    end
+    local ok, failure = pcall(function()
+      test.ok(wait_for("ECHO_READY"), "echo fixture did not start")
+      for index = 1, 80 do
+        local started = system.get_time()
+        test.ok(session:write("x"))
+        test.ok(wait_for("ECHO_READY" .. string.rep("x", index)), "echo did not arrive")
+        samples[#samples + 1] = (system.get_time() - started) * 1000
+      end
+    end)
+    session:close()
+    if not ok then error(failure) end
+    print("terminal-native-typing " .. common.serialize {
+      samples = #samples, p50_ms = percentile(samples, 0.50),
+      p95_ms = percentile(samples, 0.95), max_ms = percentile(samples, 1.00),
+    })
+  end)
+
   test.it("records sustained output update and snapshot costs", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

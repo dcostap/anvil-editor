@@ -166,6 +166,10 @@ if host_machine.system() == 'windows'
         'api/terminal_native.c',
         'terminal_contrast.c',
     ]
+    terminal_replay_test = executable('terminal_replay_test',
+        '../tests/native/terminal_replay_test.c', 'zig_abi_compat.c',
+        dependencies: ghostty_vt_dep,
+    )
     if embedded_runtime
         anvil_sources += 'embedded_runtime.c'
         anvil_cargs += '-DANVIL_EMBEDDED_RUNTIME'
@@ -245,6 +249,9 @@ fuzzy_test = executable('fuzzy_test',
     include_directories: anvil_includes,
     c_args: anvil_cargs,
 )
+if host_machine.system() == 'windows'
+    test('terminal-replay', terminal_replay_test, env: anvil_test_env, suite: 'anvil')
+endif
 test('fuzzy', fuzzy_test, env: anvil_test_env)
 
 font_raster_test = executable('font_raster_test',

@@ -6,6 +6,13 @@ especially "Terminal Sessions", "Session registry", and "IPC".
 
 Status: not started. Phases 0 and 1 are done.
 
+Formatter check: `anvil:terminal-replay` failed with the requested VT extras.
+Primary replay added leading spaces. Alternate replay restored the active screen,
+but lost the primary screen and its scrollback. `screen.h` has no separate screen
+formatter. `snapshot.h` has a binary codec, not a separate primary VT formatter.
+Raw replay from byte zero passed the row text, cursor, scrollback, and screen checks.
+Use a bounded raw prefix. Never replay a prefix after it exceeds its bound.
+
 ## Goal
 
 Each terminal's ConPTY and shell run in a Terminal Session process. The editor
