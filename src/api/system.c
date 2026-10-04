@@ -1,5 +1,4 @@
 #include <SDL3/SDL.h>
-#include <SDL3_image/SDL_image.h>
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -23,6 +22,7 @@
 #include "../shutdown_diagnostics.h"
 #include "../win32_single_instance.h"
 #include "../hosted_surface.h"
+#include "../window_backend.h"
 #ifdef _WIN32
   #include <direct.h>
   #include <io.h>
@@ -118,68 +118,6 @@ static void str_tolower(char *p) {
     *p = tolower(*p);
     p++;
   }
-}
-
-/* A hosted surface's SDL window is hidden. The shell owns the visible window,
-** so window requests for it are forwarded instead of applied locally. */
-static bool is_hosted(RenWindow *window_renderer) {
-  return window_renderer && anvil_hosted_surface_is_window(window_renderer->cache.window);
-}
-
-#define RESIZE_FROM_TOP 0
-#define RESIZE_FROM_RIGHT 0
-
-static SDL_HitTestResult SDLCALL hit_test(SDL_Window *window, const SDL_Point *pt, void *data) {
-  const HitTestInfo hit_info = ((RenWindow *)data)->hit_test_info;
-  const int resize_border = hit_info.resize_border;
-  const int controls_width = hit_info.controls_width;
-  int w, h;
-
-  SDL_GetWindowSize(window, &w, &h);
-
-  if (pt->y < hit_info.title_height &&
-    #if RESIZE_FROM_TOP
-    pt->y > resize_border &&
-    #endif
-    pt->x > resize_border && pt->x < w - controls_width) {
-    if ((hit_info.titlebar_client_width > 0 &&
-         pt->x >= hit_info.titlebar_client_x &&
-         pt->x < hit_info.titlebar_client_x + hit_info.titlebar_client_width) ||
-        (hit_info.titlebar_client2_width > 0 &&
-         pt->x >= hit_info.titlebar_client2_x &&
-         pt->x < hit_info.titlebar_client2_x + hit_info.titlebar_client2_width)) {
-      return SDL_HITTEST_NORMAL;
-    }
-    return SDL_HITTEST_DRAGGABLE;
-  }
-
-  #define REPORT_RESIZE_HIT(name) { \
-    return SDL_HITTEST_RESIZE_##name; \
-  }
-
-  if (pt->x < resize_border && pt->y < resize_border) {
-    REPORT_RESIZE_HIT(TOPLEFT);
-  #if RESIZE_FROM_TOP
-  } else if (pt->x > resize_border && pt->x < w - controls_width && pt->y < resize_border) {
-    REPORT_RESIZE_HIT(TOP);
-  #endif
-  } else if (pt->x > w - resize_border && pt->y < resize_border) {
-    REPORT_RESIZE_HIT(TOPRIGHT);
-  #if RESIZE_FROM_RIGHT
-  } else if (pt->x > w - resize_border && pt->y > resize_border && pt->y < h - resize_border) {
-    REPORT_RESIZE_HIT(RIGHT);
-  #endif
-  } else if (pt->x > w - resize_border && pt->y > h - resize_border) {
-    REPORT_RESIZE_HIT(BOTTOMRIGHT);
-  } else if (pt->x < w - resize_border && pt->x > resize_border && pt->y > h - resize_border) {
-    REPORT_RESIZE_HIT(BOTTOM);
-  } else if (pt->x < resize_border && pt->y > h - resize_border) {
-    REPORT_RESIZE_HIT(BOTTOMLEFT);
-  } else if (pt->x < resize_border && pt->y < h - resize_border && pt->y > resize_border) {
-    REPORT_RESIZE_HIT(LEFT);
-  }
-
-  return SDL_HITTEST_NORMAL;
 }
 
 static const char *numpad[] = { "end", "down", "pagedown", "left", "clear", "right", "home", "up", "pageup", "insert", "delete" };
@@ -446,7 +384,7 @@ top:
       {
         RenWindow* window_renderer = ren_find_window_from_id(e.button.windowID);
         /* The shell captures the mouse for hosted surfaces. */
-        if (e.button.button == 1 && !is_hosted(window_renderer)) { SDL_CaptureMouse(1); }
+        if (e.button.button == 1) anvil_window_capture(window_renderer, true);
         lua_pushstring(L, "mousepressed");
         lua_pushstring(L, button_name(e.button.button));
         lua_pushnumber(L, e.button.x * (window_renderer ? window_renderer->scale_x :0));
@@ -458,7 +396,7 @@ top:
     case SDL_EVENT_MOUSE_BUTTON_UP:
       {
         RenWindow* window_renderer = ren_find_window_from_id(e.button.windowID);
-        if (e.button.button == 1 && !is_hosted(window_renderer)) { SDL_CaptureMouse(0); }
+        if (e.button.button == 1) anvil_window_capture(window_renderer, false);
         lua_pushstring(L, "mousereleased");
         lua_pushstring(L, button_name(e.button.button));
         lua_pushnumber(L, e.button.x * (window_renderer ? window_renderer->scale_x : 0));
@@ -567,10 +505,10 @@ top:
       {
         RenWindow* window_renderer = ren_find_window_from_id(e.window.windowID);
         if (!window_renderer) goto top;
-        if (is_hosted(window_renderer)) {
+        if (anvil_window_hosted(window_renderer)) {
           /* The shell reports the scale of the display that shows us. */
           lua_pushstring(L, "scalechanged");
-          lua_pushnumber(L, anvil_hosted_surface_display_scale());
+          lua_pushnumber(L, anvil_window_scale(window_renderer));
           return 2;
         }
         Uint64 flags = SDL_GetWindowFlags(window_renderer->cache.window);
@@ -582,13 +520,16 @@ top:
         ren_resize_window(window_renderer);
         if (anvil_resize_diag_live_resize()) win32_frame_sync_client_size(window_renderer);
         lua_pushstring(L, "scalechanged");
-        float new_scale = SDL_GetWindowDisplayScale(window_renderer->cache.window);
+        float new_scale = anvil_window_display_scale(window_renderer);
         lua_pushnumber(L, new_scale);
         return 2;
       }
 
     default:
       // Custom event types are higher than SDL_EVENT_USER
+      if (anvil_hosted_surface_loss_event(e.type)) {
+        lua_pushliteral(L, "shelllost"); return 1;
+      }
       if (e.type >= SDL_EVENT_USER) {
         CustomEventCallback cec = get_custom_event_callback_by_type(e.type);
         if (cec != NULL) {
@@ -649,33 +590,6 @@ static int f_wait_event(lua_State *L) {
 }
 
 
-static SDL_Cursor *create_grab_cursor(void) {
-  static const char svg[] =
-    "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>"
-    "<path fill='white' stroke='#202020' stroke-width='1.2' stroke-linejoin='round' d='"
-    "M8.5 21 C7.5 19 6 17 4.3 14.6 L2.8 12.5 C1.4 10.6 3.5 9.2 4.8 10.6 "
-    "L7 12.5 V5 C7 3 10 3 10 5 V10 H10.5 V3.5 C10.5 1.5 13.5 1.5 13.5 3.5 "
-    "V10 H14 V5 C14 3 17 3 17 5 V11 H17.5 V7.5 C17.5 5.5 20.5 5.5 20.5 7.5 "
-    "V14 C20.5 17 18.5 19.5 18 21 Z'/></svg>";
-  SDL_IOStream *stream = SDL_IOFromConstMem(svg, sizeof(svg) - 1);
-  if (!stream) return NULL;
-  SDL_Surface *surface = IMG_LoadSVG_IO(stream);
-  SDL_CloseIO(stream);
-  if (!surface) return NULL;
-  stream = SDL_IOFromConstMem(svg, sizeof(svg) - 1);
-  if (stream) {
-    SDL_Surface *large = IMG_LoadSizedSVG_IO(stream, 48, 48);
-    SDL_CloseIO(stream);
-    if (large) {
-      SDL_AddSurfaceAlternateImage(surface, large);
-      SDL_DestroySurface(large);
-    }
-  }
-  SDL_Cursor *cursor = SDL_CreateColorCursor(surface, 12, 12);
-  SDL_DestroySurface(surface);
-  return cursor;
-}
-
 static const char *cursor_opts[] = {
   "arrow",
   "ibeam",
@@ -688,41 +602,12 @@ static const char *cursor_opts[] = {
   NULL
 };
 
-static const int cursor_enums[] = {
-  SDL_SYSTEM_CURSOR_DEFAULT,
-  SDL_SYSTEM_CURSOR_TEXT,
-  SDL_SYSTEM_CURSOR_EW_RESIZE,
-  SDL_SYSTEM_CURSOR_NS_RESIZE,
-  SDL_SYSTEM_CURSOR_POINTER,
-  SDL_SYSTEM_CURSOR_CROSSHAIR,
-  SDL_SYSTEM_CURSOR_MOVE,
-  -1
-};
-
-static SDL_Cursor *cursor_cache[SDL_arraysize(cursor_enums)];
-
 static int f_set_cursor(lua_State *L) {
 #if defined(_WIN32)
-  if (anvil_resize_diag_live_resize()) {
-    return 0;
-  }
+  if (anvil_resize_diag_live_resize()) return 0;
 #endif
-  int opt = luaL_checkoption(L, 1, "arrow", cursor_opts);
-  if (anvil_hosted_surface_active()) {
-    /* cursor_opts order matches AnvilSurfaceCursor. */
-    anvil_hosted_surface_set_cursor((AnvilSurfaceCursor)opt);
-    return 0;
-  }
-  int n = cursor_enums[opt];
-  SDL_Cursor *cursor = cursor_cache[opt];
-  if (!cursor) {
-    cursor = n < 0 ? create_grab_cursor() : SDL_CreateSystemCursor(n);
-    cursor_cache[opt] = cursor;
-  }
-  SDL_SetCursor(cursor);
-  return 0;
+  anvil_window_cursor(luaL_checkoption(L, 1, "arrow", cursor_opts)); return 0;
 }
-
 
 static int f_has_pending_events(lua_State *L) {
   lua_pushboolean(L, system_has_pending_events());
@@ -731,144 +616,64 @@ static int f_has_pending_events(lua_State *L) {
 
 
 static int f_get_scale(lua_State *L) {
-#ifdef ANVIL_USE_SDL_RENDERER
-  /* Since scaling is performed internally always return 1 */
-  lua_pushinteger(L, 1);
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  lua_pushnumber(L, anvil_window_scale(ren));
   return 1;
-#else
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  lua_pushnumber(L, is_hosted(window_renderer)
-    ? anvil_hosted_surface_display_scale()
-    : SDL_GetWindowDisplayScale(window_renderer->cache.window));
-  return 1;
-#endif /* ANVIL_USE_SDL_RENDERER */
 }
+
 
 
 static int f_set_window_title(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  const char *title = luaL_checkstring(L, 2);
-  if (is_hosted(window_renderer)) anvil_hosted_surface_set_title(title);
-  else SDL_SetWindowTitle(window_renderer->cache.window, title);
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  anvil_window_title(ren, luaL_checkstring(L, 2)); return 0;
 }
+
 
 
 static const char *window_opts[] = { "normal", "minimized", "maximized", "fullscreen", 0 };
 enum { WIN_NORMAL, WIN_MINIMIZED, WIN_MAXIMIZED, WIN_FULLSCREEN };
 
 static int f_set_window_mode(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  int n = luaL_checkoption(L, 2, "normal", window_opts);
-  if (is_hosted(window_renderer)) {
-    /* window_opts order matches AnvilSurfaceWindowMode. */
-    anvil_hosted_surface_set_window_mode((AnvilSurfaceWindowMode)n);
-    return 0;
-  }
-  SDL_SetWindowFullscreen(window_renderer->cache.window, n == WIN_FULLSCREEN);
-  if (n == WIN_NORMAL) { SDL_RestoreWindow(window_renderer->cache.window); }
-  if (n == WIN_MAXIMIZED) { SDL_MaximizeWindow(window_renderer->cache.window); }
-  if (n == WIN_MINIMIZED) { SDL_MinimizeWindow(window_renderer->cache.window); }
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  anvil_window_set_mode(ren, luaL_checkoption(L, 2, "normal", window_opts)); return 0;
 }
+
 
 
 static int f_set_window_bordered(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  SDL_Window *win = window_renderer->cache.window;
-  bool bordered = lua_toboolean(L, 2);
-  if (is_hosted(window_renderer)) {
-    anvil_hosted_surface_set_bordered(bordered);
-    return 0;
-  }
-#if defined(SDL_PLATFORM_WINDOWS)
-  // Hack on windows to force drawing of TitleBar.
-  // If maximized and removing borders, force a state "reset".
-  // Fixes: https://github.com/anvil/anvil/issues/425
-  bool was_maximized = (SDL_GetWindowFlags(win) & SDL_WINDOW_MAXIMIZED);
-  if (was_maximized && !bordered) {
-    SDL_RestoreWindow(win);
-    SDL_SetWindowBordered(win, bordered);
-    SDL_MaximizeWindow(win);
-  } else {
-    SDL_SetWindowBordered(win, bordered);
-  }
-#else
-  SDL_SetWindowBordered(win, bordered);
-#endif
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  anvil_window_bordered(ren, lua_toboolean(L, 2)); return 0;
 }
+
 
 
 static int f_set_window_hit_test(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  if (is_hosted(window_renderer)) {
-    float scale = window_renderer->scale_x;
-    AnvilSurfaceHitTest hit = {0};
-    if (lua_gettop(L) > 1) {
-      hit.title_height = luaL_checkinteger(L, 2) / scale;
-      hit.controls_width = luaL_checkinteger(L, 3) / scale;
-      hit.resize_border = luaL_checkinteger(L, 4) / scale;
-      hit.client_x = luaL_optinteger(L, 5, 0) / scale;
-      hit.client_width = luaL_optinteger(L, 6, 0) / scale;
-      hit.client2_x = luaL_optinteger(L, 7, 0) / scale;
-      hit.client2_width = luaL_optinteger(L, 8, 0) / scale;
-    }
-    anvil_hosted_surface_set_hit_test(&hit);
-    return 0;
-  }
-  if (lua_gettop(L) == 1) {
-    SDL_SetWindowHitTest(window_renderer->cache.window, NULL, NULL);
-    win32_frame_set_hit_test(window_renderer, 0, 0, 0, 0, 0, 0, 0);
-    return 0;
-  }
-  float scale = window_renderer->scale_x;
-  int title_height = luaL_checkinteger(L, 2) / scale;
-  int controls_width = luaL_checkinteger(L, 3) / scale;
-  int resize_border = luaL_checkinteger(L, 4) / scale;
-  window_renderer->hit_test_info.title_height = title_height;
-  window_renderer->hit_test_info.controls_width = controls_width;
-  int client_x = luaL_optinteger(L, 5, 0) / scale;
-  int client_width = luaL_optinteger(L, 6, 0) / scale;
-  int client2_x = luaL_optinteger(L, 7, 0) / scale;
-  int client2_width = luaL_optinteger(L, 8, 0) / scale;
-  window_renderer->hit_test_info.resize_border = resize_border;
-  window_renderer->hit_test_info.titlebar_client_x = client_x;
-  window_renderer->hit_test_info.titlebar_client_width = client_width;
-  window_renderer->hit_test_info.titlebar_client2_x = client2_x;
-  window_renderer->hit_test_info.titlebar_client2_width = client2_width;
-  win32_frame_set_hit_test(window_renderer, title_height, controls_width, resize_border, client_x, client_width, client2_x, client2_width);
-#if defined(SDL_PLATFORM_WINDOWS)
-  if (window_renderer->win32_frame) return 0;
-#endif
-  SDL_SetWindowHitTest(window_renderer->cache.window, &hit_test, window_renderer);
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  if (lua_gettop(L) == 1) { anvil_window_hit_test(ren, NULL); return 0; }
+  float scale = ren->scale_x;
+  AnvilSurfaceHitTest hit = {
+    luaL_checkinteger(L, 2) / scale, luaL_checkinteger(L, 3) / scale, luaL_checkinteger(L, 4) / scale,
+    luaL_optinteger(L, 5, 0) / scale, luaL_optinteger(L, 6, 0) / scale,
+    luaL_optinteger(L, 7, 0) / scale, luaL_optinteger(L, 8, 0) / scale,
+  };
+  anvil_window_hit_test(ren, &hit); return 0;
 }
+
 
 static int f_set_window_native_frame(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  bool enable = lua_toboolean(L, 2);
-  /* The shell window always has the native frame. */
-  if (is_hosted(window_renderer)) {
-    lua_pushboolean(L, enable);
-    return 1;
-  }
-  if (enable) SDL_SetWindowHitTest(window_renderer->cache.window, NULL, NULL);
-  lua_pushboolean(L, win32_frame_enable(window_renderer, enable));
-  return 1;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  lua_pushboolean(L, anvil_window_native_frame(ren, lua_toboolean(L, 2))); return 1;
 }
 
+
 static int f_get_window_frame_metrics(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**) luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  int button_width, title_height, resize_border;
-  if (win32_frame_get_metrics(window_renderer, &button_width, &title_height, &resize_border)) {
-    lua_pushinteger(L, button_width * window_renderer->scale_x);
-    lua_pushinteger(L, title_height * window_renderer->scale_x);
-    lua_pushinteger(L, resize_border * window_renderer->scale_x);
-    return 3;
-  }
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  int button, title, border;
+  if (!anvil_window_frame_metrics(ren, &button, &title, &border)) return 0;
+  lua_pushinteger(L, button * ren->scale_x); lua_pushinteger(L, title * ren->scale_x);
+  lua_pushinteger(L, border * ren->scale_x); return 3;
 }
+
 
 
 static int f_get_window_id(lua_State *L) {
@@ -887,103 +692,33 @@ static int f_get_last_event_window_id(lua_State *L) {
 }
 
 static int f_get_window_size(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  int x, y, w, h;
-  if (is_hosted(window_renderer)) {
-    anvil_hosted_surface_window_bounds(&x, &y, &w, &h);
-    lua_pushinteger(L, w);
-    lua_pushinteger(L, h);
-    lua_pushinteger(L, x);
-    lua_pushinteger(L, y);
-    return 4;
-  }
-#if defined(SDL_PLATFORM_WINDOWS)
-  if (window_renderer->win32_frame) {
-    SDL_PropertiesID props = SDL_GetWindowProperties(window_renderer->cache.window);
-    HWND hwnd = (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-    RECT wr;
-    if (hwnd && GetWindowRect(hwnd, &wr)) {
-      x = wr.left;
-      y = wr.top;
-      w = wr.right - wr.left;
-      h = wr.bottom - wr.top;
-      lua_pushinteger(L, w);
-      lua_pushinteger(L, h);
-      lua_pushinteger(L, x);
-      lua_pushinteger(L, y);
-      return 4;
-    }
-  }
-#endif
-  SDL_GetWindowSize(window_renderer->cache.window, &w, &h);
-  SDL_GetWindowPosition(window_renderer->cache.window, &x, &y);
-  lua_pushinteger(L, w);
-  lua_pushinteger(L, h);
-  lua_pushinteger(L, x);
-  lua_pushinteger(L, y);
-  return 4;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  int x, y, w, h; anvil_window_bounds(ren, &x, &y, &w, &h);
+  lua_pushinteger(L, w); lua_pushinteger(L, h); lua_pushinteger(L, x); lua_pushinteger(L, y); return 4;
 }
+
 
 
 static int f_set_window_visible(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  bool visible = lua_toboolean(L, 2);
-  if (is_hosted(window_renderer)) return 0;
-  if (visible) SDL_ShowWindow(window_renderer->cache.window);
-  else SDL_HideWindow(window_renderer->cache.window);
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  anvil_window_visible(ren, lua_toboolean(L, 2)); return 0;
 }
 
+
 static int f_set_window_size(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  double w = luaL_checknumber(L, 2);
-  double h = luaL_checknumber(L, 3);
-  double x = luaL_checknumber(L, 4);
-  double y = luaL_checknumber(L, 5);
-  if (is_hosted(window_renderer)) {
-    anvil_hosted_surface_set_bounds((int)x, (int)y, (int)w, (int)h);
-    return 0;
-  }
-#if defined(SDL_PLATFORM_WINDOWS)
-  if (window_renderer->win32_frame) {
-    SDL_PropertiesID props = SDL_GetWindowProperties(window_renderer->cache.window);
-    HWND hwnd = (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-    if (hwnd) {
-      SetWindowPos(hwnd, NULL, (int) x, (int) y, (int) w, (int) h,
-        SWP_NOZORDER | SWP_NOACTIVATE);
-      ren_resize_window(window_renderer);
-      return 0;
-    }
-  }
-#endif
-  SDL_SetWindowSize(window_renderer->cache.window, w, h);
-  SDL_SetWindowPosition(window_renderer->cache.window, x, y);
-  ren_resize_window(window_renderer);
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  int w = luaL_checknumber(L, 2), h = luaL_checknumber(L, 3);
+  int x = luaL_checknumber(L, 4), y = luaL_checknumber(L, 5);
+  anvil_window_set_bounds(ren, x, y, w, h); return 0;
 }
+
 
 
 static int f_window_has_focus(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  if (is_hosted(window_renderer)) {
-    lua_pushboolean(L, anvil_hosted_surface_has_focus());
-    return 1;
-  }
-  SDL_Window *window = window_renderer->cache.window;
-  unsigned flags = SDL_GetWindowFlags(window);
-  bool has_focus = (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
-
-#ifdef _WIN32
-  /* SDL can retain either focus state after an Alt-Tab transition. Use the
-  ** foreground HWND in both directions so Lua can repair stale input state. */
-  SDL_PropertiesID props = SDL_GetWindowProperties(window);
-  HWND hwnd = (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-  if (hwnd) has_focus = GetForegroundWindow() == hwnd;
-#endif
-
-  lua_pushboolean(L, has_focus);
-  return 1;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  lua_pushboolean(L, anvil_window_focus(ren)); return 1;
 }
+
 
 
 static int f_window_focus_diagnostics(lua_State *L) {
@@ -1056,65 +791,39 @@ static int f_window_focus_diagnostics(lua_State *L) {
 }
 
 static int f_get_window_mode(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  if (is_hosted(window_renderer)) {
-    lua_pushstring(L, window_opts[anvil_hosted_surface_window_mode()]);
-    return 1;
-  }
-  unsigned flags = SDL_GetWindowFlags(window_renderer->cache.window);
-  if (flags & SDL_WINDOW_FULLSCREEN) {
-    lua_pushstring(L, "fullscreen");
-  } else if (flags & SDL_WINDOW_MINIMIZED) {
-    lua_pushstring(L, "minimized");
-  } else if (flags & SDL_WINDOW_MAXIMIZED) {
-    lua_pushstring(L, "maximized");
-  } else {
-    lua_pushstring(L, "normal");
-  }
-  return 1;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  lua_pushstring(L, window_opts[anvil_window_mode(ren)]); return 1;
 }
+
 
 static int f_set_text_input_rect(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  SDL_Rect rect;
-  rect.x = luaL_checknumber(L, 2);
-  rect.y = luaL_checknumber(L, 3);
-  rect.w = luaL_checknumber(L, 4);
-  rect.h = luaL_checknumber(L, 5);
-  if (is_hosted(window_renderer)) anvil_hosted_surface_set_text_input_area(&rect, 0);
-  else SDL_SetTextInputArea(window_renderer->cache.window, &rect, 0);
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  SDL_Rect rect = { luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4), luaL_checknumber(L, 5) };
+  anvil_window_text_area(ren, &rect); return 0;
 }
+
 
 static int f_flash_window(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   const char *operation = luaL_optstring(L, 2, "briefly");
-  SDL_FlashOperation flash = strcmp(operation, "until_focused") == 0
-    ? SDL_FLASH_UNTIL_FOCUSED
-    : strcmp(operation, "cancel") == 0 ? SDL_FLASH_CANCEL : SDL_FLASH_BRIEFLY;
-  if (is_hosted(window_renderer)) {
-    anvil_hosted_surface_flash((int)flash);
-    lua_pushboolean(L, true);
-    return 1;
-  }
-  lua_pushboolean(L, SDL_FlashWindow(window_renderer->cache.window, flash));
-  return 1;
+  SDL_FlashOperation flash = !strcmp(operation, "until_focused") ? SDL_FLASH_UNTIL_FOCUSED
+    : !strcmp(operation, "cancel") ? SDL_FLASH_CANCEL : SDL_FLASH_BRIEFLY;
+  lua_pushboolean(L, anvil_window_flash(ren, flash)); return 1;
 }
 
+
 static int f_clear_ime(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  if (is_hosted(window_renderer)) anvil_hosted_surface_clear_ime();
-  else SDL_ClearComposition(window_renderer->cache.window);
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  anvil_window_clear_ime(ren); return 0;
 }
+
 
 
 static int f_raise_window(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  if (is_hosted(window_renderer)) anvil_hosted_surface_raise();
-  else SDL_RaiseWindow(window_renderer->cache.window);
-  return 0;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  anvil_window_raise(ren); return 0;
 }
+
 
 
 static int f_allow_process_foreground(lua_State *L) {
@@ -1974,12 +1683,17 @@ static int f_open_in_system(lua_State *L) {
 #endif
 
 static int f_set_window_opacity(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  double n = luaL_checknumber(L, 2);
-  int r = SDL_SetWindowOpacity(window_renderer->cache.window, n);
-  lua_pushboolean(L, r > -1);
-  return 1;
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  lua_pushboolean(L, anvil_window_opacity(ren, luaL_checknumber(L, 2))); return 1;
 }
+
+static int f_prepare_project_exit(lua_State *L) {
+  const char *path = luaL_optstring(L, 1, NULL);
+  if (path) luaL_argcheck(L, strlen(path) < 32768 && !strchr(path, '\n') && !strchr(path, '\r'), 1, "invalid Project path");
+  anvil_hosted_surface_exit_intent(path);
+  return 0;
+}
+
 
 typedef void (*fptr)(void);
 
@@ -2140,20 +1854,12 @@ static int f_load_native_plugin(lua_State *L) {
 }
 
 
-static int f_text_input(lua_State* L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  if (!window_renderer) return 0;
-  if (is_hosted(window_renderer)) {
-    anvil_hosted_surface_set_text_input(lua_toboolean(L, 2));
-    return 0;
-  }
-  if (lua_toboolean(L, 2)) {
-    SDL_StartTextInput(window_renderer->cache.window);
-  } else {
-    SDL_StopTextInput(window_renderer->cache.window);
-  }
+static int f_text_input(lua_State *L) {
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  if (ren) anvil_window_text_input(ren, lua_toboolean(L, 2));
   return 0;
 }
+
 
 static int f_setenv(lua_State* L) {
   const char *key = luaL_checkstring(L, 1);
@@ -2392,7 +2098,7 @@ static int open_dialog(lua_State* L, SDL_FileDialogType type) {
 
   SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, dd->filters);
   SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, n_filters);
-  SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, window_renderer->cache.window);
+  SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, anvil_window_dialog_parent(window_renderer));
   SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, options.default_location);
   SDL_SetBooleanProperty(props, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, options.allow_many);
   SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, options.title);
@@ -2500,16 +2206,10 @@ static int f_get_display_info(lua_State* L) {
     current_scale = mode->pixel_density;
   }
 
-  /* A hosted surface is shown on the shell's display, not the primary one. */
-  if (anvil_hosted_surface_active()) {
-    current_scale = anvil_hosted_surface_display_scale();
-    float hosted_hz = anvil_hosted_surface_refresh_rate();
-    lua_pushnumber(L, current_scale);
-    lua_pushnumber(L, hosted_hz > 0 ? hosted_hz : mode->refresh_rate);
-  } else {
-    lua_pushnumber(L, current_scale);
-    lua_pushnumber(L, mode->refresh_rate);
-  }
+  float refresh = mode->refresh_rate;
+  anvil_window_initial_display(&current_scale, &refresh);
+  lua_pushnumber(L, current_scale);
+  lua_pushnumber(L, refresh);
   lua_pushnumber(L, mode->w);
   lua_pushnumber(L, mode->h);
   lua_pushnumber(L, default_scale);
@@ -2586,6 +2286,7 @@ static const luaL_Reg lib[] = {
   { "get_time",              f_get_time              },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "is_hosted_surface",     f_is_hosted_surface     },
+  { "prepare_project_exit",  f_prepare_project_exit  },
   { "sleep",                 f_sleep                 },
   { "exec",                  f_exec                  },
 #ifdef _WIN32

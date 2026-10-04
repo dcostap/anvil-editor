@@ -4,7 +4,7 @@ This plan follows [Phase 2](PHASE2_TERMINAL_SESSIONS.md) and
 [the multiprocess shell plan](MULTIPROCESS_SHELL_PLAN.md).
 Read both before implementation.
 
-Status: Milestone 1 is authorized. Later milestones remain planned.
+Status: Milestone 1 is complete. Later milestones remain planned.
 Phase 2 Milestones 1 to 4 are complete.
 
 ## Goal
@@ -274,6 +274,69 @@ Run the portable updater after native changes, with advance warning about Termin
 - Test startup errors, authenticated connection, authoritative getters, and hidden-window ownership.
 - Test immediate shell-loss save/detach and the hard deadline, including a stalled Lua loop.
 - Test intentional Project quit and duplicate-Project behavior against direct mode.
+
+Implemented:
+
+- The shell launches explicit `--project <path>` mode and validates the child PID.
+- The Project checks the pipe server PID and retains the shell process handle.
+- `src/window_backend.c/.h` owns direct/hosted window operations and render-window creation.
+- Hosted getters use cached shell configuration. Window requests use a bounded native writer queue.
+- The shell no longer owns a kill-on-close Project job.
+- Shell loss sends a distinct event, saves the Workspace, detaches Views, and bypasses interactive quit policy.
+- A native watcher ends a stalled Project after five seconds. It does not run potentially blocked DLL teardown.
+- Restart and same-window switch replace the Project process while retaining the shell process.
+- New Window starts an independent shell. Advertised duplicate launches exit intentionally before Workspace restore.
+- Intentional quit, including a nonzero Project status, closes the shell without showing Failed.
+- Repeated Close no longer forces termination. Explicit forced-close UI remains in Milestone 4.
+
+Native Failed controls, Restart Project UI, and GPU failure handling remain in later milestones.
+Hosted dialogs currently have no parent; they never use the hidden render window.
+Milestone 4 adds the shell parent and asynchronous dialog results.
+
+Focused red-green evidence:
+
+- The saved baseline failed explicit Project launch: `shell did not launch explicit Project mode`.
+- It failed replacement: `hosted restart reused the old Project process`.
+- It failed shell-loss persistence: `shell loss did not save the latest Workspace`.
+- It failed the stalled-loop case: `native deadline did not protect a stalled Lua loop`.
+- Nine hosted launch/lifecycle cases pass, including invalid launch, nonzero quit, and independent New Window.
+- Four direct/hosted duplicate cases pass. They check forwarding, last-completed Workspace saves, and Terminal single-client conflicts.
+- The six focused direct Terminal lifecycle checks pass through Meson.
+- Lua syntax, Python compilation, native build, and diff checks pass.
+
+The fixture uses background-eligible coroutines so an unfocused private desktop continues its OS polling.
+Early missing-result runs exposed fixture setup and scheduling faults; they are not regression evidence.
+
+Typing-to-Present measurements used 240 samples, three runs, and copied app data on a private desktop.
+Each row contains 720 completed samples. No run lost samples.
+D3D11 after-values use a repeat without concurrent fault checks; software uses the first complete after-run.
+
+| Mode / renderer | p50 before → after | p90 before → after | p99 before → after | Maximum before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Direct / D3D11 | 6.41 → 7.11 ms | 15.79 → 15.76 ms | 20.28 → 19.14 ms | 239.12 → 48.43 ms |
+| Hosted / D3D11 | 7.32 → 6.54 ms | 16.19 → 15.88 ms | 19.46 → 19.31 ms | 30.47 → 25.61 ms |
+| Direct / software | 17.95 → 18.21 ms | 26.77 → 26.89 ms | 30.42 → 31.65 ms | 32.42 → 37.60 ms |
+| Hosted / software | 11.59 → 10.58 ms | 20.88 → 19.96 ms | 24.97 → 23.15 ms | 480.02 → 26.45 ms |
+
+The first after-run showed a 705.66 ms direct D3D11 maximum and a 55.02 ms p99.
+That run overlapped fault checks. The isolated repeat showed 48.43 ms and 19.14 ms, respectively.
+This does not prove a cause. Retain both results instead of hiding the first tail.
+Hosted D3D11 p50 was 0.57 ms below direct in the repeat, within the added-latency target.
+Do not claim a causal performance gain from these small median differences or isolated maxima.
+These measurements stop at native Present, not physical scanout or terminal shell replies.
+
+Verification commands:
+
+```sh
+python tools/run_surface_latency_probe.py --no-build --project-case launch \
+  --project-case invalid --project-case shell-loss --project-case stalled-loss \
+  --project-case quit --project-case quit-error --project-case restart \
+  --project-case switch --project-case new-window --keep
+python tools/run_surface_latency_probe.py --no-build --mode shell --mode direct \
+  --project-case conflict --project-case duplicate --keep
+meson test -C build-windows-x86_64 anvil:lua-ui \
+  --test-args ui/terminal_sessions_lifecycle.lua
+```
 
 ### Milestone 2: native controls and placeholder
 

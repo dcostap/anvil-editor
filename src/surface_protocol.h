@@ -12,11 +12,13 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 2u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 3u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
 #define ANVIL_SHELL_ARG "--shell"
+#define ANVIL_PROJECT_ARG "--project"
+#define ANVIL_PROJECT_RESTART_ARG "--anvil-project-restart"
 
 typedef enum {
   /* Shell to surface process. */
@@ -38,6 +40,10 @@ typedef enum {
   ANVIL_SURFACE_MSG_RAISE = 73,
   ANVIL_SURFACE_MSG_FLASH = 74,
   ANVIL_SURFACE_MSG_SET_BOUNDS = 75,
+  ANVIL_SURFACE_MSG_VISIBLE = 76,
+  ANVIL_SURFACE_MSG_OPACITY = 77,
+  ANVIL_SURFACE_MSG_EXIT_INTENT = 78,
+  ANVIL_SURFACE_MSG_RESTART = 79,
 } AnvilSurfaceMessageType;
 
 typedef enum {
@@ -73,6 +79,7 @@ typedef struct {
   int32_t live_resize;               /* the shell is in a Win32 move/size loop */
   float display_scale;
   float refresh_hz;
+  int32_t button_width, title_height, resize_border;
 } AnvilSurfaceConfigure;
 
 typedef struct {

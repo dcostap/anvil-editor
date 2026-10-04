@@ -23,7 +23,6 @@
 #define SHELL_CONNECT_TIMEOUT_MS 30000
 #define SHELL_EXIT_WAIT_MS 10000
 #define SHELL_WRITE_QUEUE_LIMIT (8u * 1024u * 1024u)
-#define SHELL_FORCE_CLOSE_NS (3ull * SDL_NS_PER_SECOND)
 #define SHELL_SYNC_TIMEOUT_MS 100
 #define SHELL_PIPE_BUFFER (64u * 1024u)
 /* How long one resize step waits for a surface frame of the new size. */
@@ -74,7 +73,12 @@ typedef struct {
   char memory_name[ANVIL_SURFACE_NAME_MAX];
 
   PROCESS_INFORMATION process;
-  HANDLE job;
+  SDL_Thread *reader, *writer;
+  bool writer_stop;
+  bool intentional_exit;
+  bool failed_close;
+  char *restart_path, *project_path;
+  int project_arg;
   AnvilIPCPipe pipe;
   bool connected;
 
@@ -106,6 +110,7 @@ typedef struct {
 } Shell;
 
 static Shell shell;
+static bool start_project(int argc, char **argv);
 
 /* ------------------------------------------------------------------------ */
 /* Child process                                                            */
@@ -140,7 +145,7 @@ static size_t append_quoted_arg(char *out, const char *arg) {
 static wchar_t *build_child_command_line(const wchar_t *exe, const char *pipe_arg,
                                          int argc, char **argv) {
   int exe_len = WideCharToMultiByte(CP_UTF8, 0, exe, -1, NULL, 0, NULL, NULL);
-  size_t capacity = (size_t)exe_len * 2 + strlen(pipe_arg) * 2 + 16;
+  size_t capacity = (size_t)exe_len * 2 + strlen(pipe_arg) * 2 + strlen(shell.project_path) * 2 + 128;
   for (int i = 2; i < argc; i++) capacity += strlen(argv[i]) * 2 + 4;
   char *exe_utf8 = malloc((size_t)exe_len);
   char *line = malloc(capacity);
@@ -148,9 +153,13 @@ static wchar_t *build_child_command_line(const wchar_t *exe, const char *pipe_ar
   if (exe_utf8 && line) {
     WideCharToMultiByte(CP_UTF8, 0, exe, -1, exe_utf8, exe_len, NULL, NULL);
     size_t n = append_quoted_arg(line, exe_utf8);
+    line[n++] = ' '; n += append_quoted_arg(line + n, ANVIL_PROJECT_ARG);
+    line[n++] = ' '; n += append_quoted_arg(line + n, shell.project_path);
     line[n++] = ' ';
     n += append_quoted_arg(line + n, pipe_arg);
+    if (shell.restart_path) { line[n++] = ' '; n += append_quoted_arg(line + n, ANVIL_PROJECT_RESTART_ARG); }
     for (int i = 2; i < argc; i++) {
+      if (i == shell.project_arg) continue;
       line[n++] = ' ';
       n += append_quoted_arg(line + n, argv[i]);
     }
@@ -174,20 +183,6 @@ static bool launch_child(int argc, char **argv, const char *pipe_name) {
   wchar_t *command_line = build_child_command_line(exe, pipe_arg, argc, argv);
   if (!command_line) return false;
 
-  /* The job kills the surface process if the shell dies. Processes the
-   * surface starts, such as new windows and terminals, break away. */
-  shell.job = CreateJobObjectW(NULL, NULL);
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
-  ZeroMemory(&limits, sizeof(limits));
-  limits.BasicLimitInformation.LimitFlags =
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK |
-    JOB_OBJECT_LIMIT_BREAKAWAY_OK;
-  if (!shell.job ||
-      !SetInformationJobObject(shell.job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
-    free(command_line);
-    return false;
-  }
-
   STARTUPINFOW startup;
   ZeroMemory(&startup, sizeof(startup));
   startup.cb = sizeof(startup);
@@ -195,11 +190,8 @@ static bool launch_child(int argc, char **argv, const char *pipe_name) {
                                 NULL, NULL, &startup, &shell.process);
   free(command_line);
   if (!created) return false;
-  if (!AssignProcessToJobObject(shell.job, shell.process.hProcess)) {
-    TerminateProcess(shell.process.hProcess, 1);
-    return false;
-  }
   ResumeThread(shell.process.hThread);
+  SDL_Log("Shell started Project pid=%lu path=%s", (unsigned long)shell.process.dwProcessId, shell.project_path);
   return true;
 }
 
@@ -258,7 +250,8 @@ static int SDLCALL reader_thread(void *data) {
   AnvilIPCHeader header;
   if (payload && wait_for_child_connection() &&
       anvil_ipc_pipe_read(&shell.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD) &&
-      header.type == ANVIL_SURFACE_MSG_HELLO) {
+      header.type == ANVIL_SURFACE_MSG_HELLO && header.size == sizeof(AnvilSurfaceHello) &&
+      ((AnvilSurfaceHello *)payload)->pid == shell.process.dwProcessId) {
     push_shell_event(SHELL_EVENT_CONNECTED, NULL, 0);
     while (anvil_ipc_pipe_read(&shell.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
       if (header.type == ANVIL_SURFACE_MSG_FRAME) {
@@ -298,7 +291,8 @@ static int SDLCALL writer_thread(void *data) {
   (void)data;
   for (;;) {
     SDL_LockMutex(shell.lock);
-    while (!shell.queue_head) SDL_WaitCondition(shell.queue_cond, shell.lock);
+    while (!shell.queue_head && !shell.writer_stop) SDL_WaitCondition(shell.queue_cond, shell.lock);
+    if (shell.writer_stop) { SDL_UnlockMutex(shell.lock); return 0; }
     ShellMessage *message = shell.queue_head;
     shell.queue_head = message->next;
     if (!shell.queue_head) shell.queue_tail = NULL;
@@ -388,11 +382,24 @@ static void send_configure(void) {
     client_pixel_size(&pixel_w, &pixel_h);
     config.pixel_w = SDL_max(1, pixel_w - shell.sidebar_w);
     config.pixel_h = SDL_max(1, pixel_h);
-    SDL_GetWindowPosition(shell.window, &config.window_x, &config.window_y);
-    SDL_GetWindowSize(shell.window, &config.window_w, &config.window_h);
+    RECT rect;
+    if (GetWindowRect(shell.hwnd, &rect)) {
+      config.window_x = rect.left; config.window_y = rect.top;
+      config.window_w = rect.right - rect.left; config.window_h = rect.bottom - rect.top;
+    }
   }
   config.display_scale = shell.scale;
   config.refresh_hz = current_refresh_rate();
+  typedef UINT (WINAPI *DpiForWindow)(HWND);
+  typedef int (WINAPI *MetricForDpi)(int, UINT);
+  HMODULE user32 = GetModuleHandleW(L"user32.dll");
+  DpiForWindow dpi_for_window = (DpiForWindow)GetProcAddress(user32, "GetDpiForWindow");
+  MetricForDpi metric = (MetricForDpi)GetProcAddress(user32, "GetSystemMetricsForDpi");
+  UINT dpi = dpi_for_window ? dpi_for_window(shell.hwnd) : 96;
+  config.button_width = metric ? metric(SM_CXSIZE, dpi) : GetSystemMetrics(SM_CXSIZE);
+  config.title_height = metric ? metric(SM_CYSIZE, dpi) : GetSystemMetrics(SM_CYSIZE);
+  config.resize_border = metric ? metric(SM_CXSIZEFRAME, dpi) + metric(SM_CXPADDEDBORDER, dpi)
+    : GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
   if (memcmp(&config, &shell.last_config, sizeof(config)) == 0 && shell.last_config.pixel_w) return;
   shell.last_config = config;
   shell_send(ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0);
@@ -602,7 +609,7 @@ static void composite_and_present(void) {
 }
 
 static void finish_latency_probe(void) {
-  if (shell.job) TerminateJobObject(shell.job, 0);
+  if (shell.process.hProcess) TerminateProcess(shell.process.hProcess, 0);
   _Exit(0);
 }
 
@@ -706,6 +713,28 @@ static void handle_message(ShellMessage *message) {
   const void *payload = message->payload;
   int value = message->size == sizeof(AnvilSurfaceInt) ? ((const AnvilSurfaceInt *)payload)->value : 0;
   switch (message->type) {
+    case ANVIL_SURFACE_MSG_EXIT_INTENT:
+      if (!message->size) { shell.intentional_exit = true; SDL_Log("Project exit accepted by shell"); }
+      break;
+    case ANVIL_SURFACE_MSG_RESTART:
+      if (message->size > 1 && message->size < 32768 &&
+          ((const char *)payload)[message->size - 1] == 0 && !memchr(payload, 0, message->size - 1)) {
+        free(shell.restart_path); shell.restart_path = _strdup(payload);
+        shell.intentional_exit = true;
+      }
+      break;
+    case ANVIL_SURFACE_MSG_VISIBLE:
+      if (message->size == sizeof(AnvilSurfaceInt)) {
+        if (value && shell.have_surface) { SDL_ShowWindow(shell.window); shell.shown = true; }
+        else if (!value) { SDL_HideWindow(shell.window); shell.shown = false; }
+      }
+      break;
+    case ANVIL_SURFACE_MSG_OPACITY:
+      if (message->size == sizeof(float)) {
+        float opacity; memcpy(&opacity, payload, sizeof(opacity));
+        if (opacity >= 0 && opacity <= 1) SDL_SetWindowOpacity(shell.window, opacity);
+      }
+      break;
     case ANVIL_SURFACE_MSG_CURSOR:
       shell.child_cursor = value;
       if (shell.pointer_in_surface || shell.surface_buttons) apply_cursor(value);
@@ -749,8 +778,7 @@ static void handle_message(ShellMessage *message) {
       if (message->size != sizeof(AnvilSurfaceBounds)) break;
       const AnvilSurfaceBounds *bounds = payload;
       if (bounds->w <= 0 || bounds->h <= 0) break;
-      SDL_SetWindowPosition(shell.window, bounds->x, bounds->y);
-      SDL_SetWindowSize(shell.window, bounds->w, bounds->h);
+      SetWindowPos(shell.hwnd, NULL, bounds->x, bounds->y, bounds->w, bounds->h, SWP_NOZORDER | SWP_NOACTIVATE);
       break;
     }
     case ANVIL_SURFACE_MSG_BORDERED:
@@ -818,15 +846,13 @@ static void route_button(SDL_Event *event) {
 }
 
 static void request_close(void) {
-  Uint64 now = SDL_GetTicksNS();
-  if (shell.close_requested_ns && now - shell.close_requested_ns > SHELL_FORCE_CLOSE_NS) {
-    /* The surface process did not close after a second request. */
-    TerminateProcess(shell.process.hProcess, 1);
-    return;
+  if (shell.process.hProcess && WaitForSingleObject(shell.process.hProcess, 0) == WAIT_OBJECT_0) {
+    shell.failed_close = true; return;
   }
+  Uint64 now = SDL_GetTicksNS();
   if (!shell.close_requested_ns) shell.close_requested_ns = now;
   if (!shell.connected) {
-    TerminateProcess(shell.process.hProcess, 1);
+    shell.failed_close = true;
     return;
   }
   shell_send(ANVIL_SURFACE_MSG_CLOSE, NULL, 0, NULL, 0);
@@ -853,7 +879,19 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         break;
       case SHELL_EVENT_EXITED:
         SDL_Log("Anvil shell surface process exited with code %d", (int)(intptr_t)event->user.data2);
-        return (intptr_t)event->user.data2 == 0 ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
+        if (shell.restart_path) {
+          free(shell.project_path); shell.project_path = _strdup(shell.restart_path);
+          if (!start_project(0, NULL)) return SDL_APP_FAILURE;
+          free(shell.restart_path); shell.restart_path = NULL;
+          return SDL_APP_CONTINUE;
+        }
+        if (shell.intentional_exit) return SDL_APP_SUCCESS;
+        /* Native overlay actions arrive in Milestone 2. Retain the failed window now. */
+        shell.connected = false;
+        SDL_Log("Project failed unexpectedly; retain shell for recovery");
+        SDL_SetWindowTitle(shell.window, "Anvil - Project failed");
+        SDL_ShowWindow(shell.window); shell.shown = true;
+        return SDL_APP_CONTINUE;
     }
     return SDL_APP_CONTINUE;
   }
@@ -862,6 +900,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     case SDL_EVENT_QUIT:
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
       request_close();
+      if (shell.failed_close) return SDL_APP_SUCCESS;
       break;
     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
       update_scale();
@@ -1061,6 +1100,58 @@ static bool create_pipe(char *name, size_t name_size) {
   return true;
 }
 
+static bool choose_project(int argc, char **argv) {
+  char *cwd = SDL_GetCurrentDirectory();
+  if (!cwd) return false;
+  shell.project_path = _strdup(cwd); SDL_free(cwd);
+  shell.project_arg = -1;
+  for (int i = 2; i < argc; i++) {
+    if (argv[i][0] == '-') continue;
+    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[i], -1, NULL, 0);
+    wchar_t *path = count > 0 ? malloc(count * sizeof(wchar_t)) : NULL;
+    wchar_t full[32768];
+    if (!path || !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[i], -1, path, count)) { free(path); return false; }
+    DWORD n = GetFullPathNameW(path, SDL_arraysize(full), full, NULL); free(path);
+    DWORD attrs = n && n < SDL_arraysize(full) ? GetFileAttributesW(full) : INVALID_FILE_ATTRIBUTES;
+    if (attrs == INVALID_FILE_ATTRIBUTES) return false;
+    if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+      wchar_t *slash = wcsrchr(full, L'\\'); if (!slash) return false;
+      if (slash == full + 2) slash[1] = 0; else *slash = 0;
+    } else shell.project_arg = i;
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, full, -1, NULL, 0, NULL, NULL);
+    free(shell.project_path); shell.project_path = bytes > 0 ? malloc(bytes) : NULL;
+    if (!shell.project_path) return false;
+    WideCharToMultiByte(CP_UTF8, 0, full, -1, shell.project_path, bytes, NULL, NULL);
+    break;
+  }
+  return shell.project_path != NULL;
+}
+
+static bool start_project(int argc, char **argv) {
+  /* Replacement starts only after the old process exited. Join cancelled transport users first. */
+  if (shell.reader || shell.writer) {
+    shell.connected = false;
+    anvil_ipc_pipe_cancel(&shell.pipe);
+    SDL_LockMutex(shell.lock); shell.writer_stop = true; SDL_BroadcastCondition(shell.queue_cond); SDL_UnlockMutex(shell.lock);
+    if (shell.writer) SDL_WaitThread(shell.writer, NULL);
+    if (shell.reader) SDL_WaitThread(shell.reader, NULL);
+    shell.reader = shell.writer = NULL;
+    anvil_ipc_pipe_close(&shell.pipe);
+    CloseHandle(shell.process.hThread); CloseHandle(shell.process.hProcess);
+    while (shell.queue_head) { ShellMessage *next = shell.queue_head->next; free(shell.queue_head); shell.queue_head = next; }
+    shell.queue_tail = NULL; shell.queue_bytes = 0; shell.writer_stop = false;
+    shell.frame_pending = false; shell.have_surface = false; shell.close_requested_ns = 0;
+    shell.last_config = (AnvilSurfaceConfigure){0}; shell.surface_buttons = 0; shell.pointer_in_surface = false;
+    SDL_ClearComposition(shell.window); SDL_CaptureMouse(false);
+  }
+  shell.intentional_exit = false;
+  char pipe_name[128];
+  if (!create_pipe(pipe_name, sizeof(pipe_name)) || !launch_child(argc, argv, pipe_name)) return false;
+  shell.reader = SDL_CreateThread(reader_thread, "anvil-shell-reader", NULL);
+  shell.writer = SDL_CreateThread(writer_thread, "anvil-shell-writer", NULL);
+  return shell.reader && shell.writer;
+}
+
 SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   *appstate = &shell;
   shell.child_cursor = ANVIL_SURFACE_CURSOR_ARROW;
@@ -1106,16 +1197,10 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
     return SDL_APP_FAILURE;
   }
 
-  char pipe_name[128];
-  if (!create_pipe(pipe_name, sizeof(pipe_name)) || !launch_child(argc, argv, pipe_name)) {
+  if (!choose_project(argc, argv) || !start_project(argc, argv)) {
     SDL_Log("Anvil shell could not start its surface process: %lu", (unsigned long)GetLastError());
     return SDL_APP_FAILURE;
   }
-  SDL_Thread *reader = SDL_CreateThread(reader_thread, "anvil-shell-reader", NULL);
-  SDL_Thread *writer = SDL_CreateThread(writer_thread, "anvil-shell-writer", NULL);
-  if (!reader || !writer) return SDL_APP_FAILURE;
-  SDL_DetachThread(reader);
-  SDL_DetachThread(writer);
   return SDL_APP_CONTINUE;
 }
 
@@ -1127,10 +1212,8 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
 void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   (void)appstate;
   (void)result;
-  /* Closing the job ends a surface process that is still running. Process
-   * exit releases the remaining handles and GPU objects. */
-  if (shell.job) CloseHandle(shell.job);
-  shell.job = NULL;
+  /* Project loss detection owns save/detach and its deadline. Never kill it with a shell job. */
+  if (shell.pipe.handle) anvil_ipc_pipe_cancel(&shell.pipe);
 }
 
 #else

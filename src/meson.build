@@ -44,6 +44,7 @@ anvil_sources = [
     'win32_single_instance.c',
     'surface_protocol.c',
     'hosted_surface.c',
+    'window_backend.c',
     'input_latency_probe.c',
     'anvil_shell.c',
     'resize_diagnostics.c',

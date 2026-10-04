@@ -369,6 +369,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     return anvil_shell_init(appstate, argc, argv);
   }
   bool hosted = anvil_hosted_surface_parse_args(&argc, argv);
+  if (!anvil_hosted_surface_parse_valid()) {
+    fprintf(stderr, "Invalid Project mode or hosted connection arguments\n");
+    return SDL_APP_FAILURE;
+  }
   if (hosted) anvil_surface_log_init("hosted");
   anvil_latency_probe_init(hosted ? "hosted" : "direct");
 #ifdef _WIN32
@@ -454,7 +458,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   app->L                 = NULL;
   app->argc              = argc;
   app->argv              = argv;
-  app->has_restarted      = 0;
+  app->has_restarted      = anvil_hosted_surface_restarted();
   app->core_run_step_ref  = -1;
   app->in_run_step        = false;
   app->live_resize        = false;
@@ -580,6 +584,13 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
     lua_pop(app->L, 2);
 
     if (restart) {
+      if (anvil_hosted_surface_active()) {
+        char *path = SDL_GetCurrentDirectory();
+        if (!path) return SDL_APP_FAILURE;
+        anvil_hosted_surface_exit_intent(path);
+        SDL_free(path);
+        return SDL_APP_SUCCESS;
+      }
       /* Re-initialize the Lua state in place — mirrors the goto in old main(). */
       anvil_shutdown_diag_log("restart Lua close begin");
       lua_close(app->L);
@@ -592,6 +603,7 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
       return SDL_APP_CONTINUE;
     }
 
+    anvil_hosted_surface_exit_intent(NULL);
     return exit_status == 0 ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
   }
 

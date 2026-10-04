@@ -210,6 +210,7 @@ local function launch_anvil_window(arguments, description)
   local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
   local process_ok, process = pcall(require, "core.process")
   local command_args = { exe }
+  if PLATFORM == "Windows" and system.is_hosted_surface() then command_args[#command_args + 1] = "--shell" end
   for _, argument in ipairs(arguments) do command_args[#command_args + 1] = argument end
 
   -- Launch directly instead of going through system.exec's legacy
@@ -2177,6 +2178,14 @@ local function record_focus_input_event(type, ...)
   end
 end
 
+function core.on_shell_lost()
+  if core.shell_lost then return end
+  core.shell_lost = true
+  core.log_quiet("Shell lost: save Workspace, detach Terminal Sessions, and exit now; named unsaved contents may be lost")
+  -- Bypass interactive quit policy. Workspace exit saves and detaches Views.
+  core.exit(function() core.quit_request = true end, true)
+end
+
 local function trace_keyboard_input(stage, type, key, event, route)
   event = event or {}
   local root = core.root_panel
@@ -2197,6 +2206,8 @@ local function trace_keyboard_input(stage, type, key, event, route)
 end
 
 function core.on_event(type, ...)
+  if type == "shelllost" then core.on_shell_lost(); return true end
+  if core.shell_lost and (type == "quit" or type == "windowclosed") then return true end
   core.current_event_context = event_summary(type, ...)
   record_focus_input_event(type, ...)
   local did_keymap = false

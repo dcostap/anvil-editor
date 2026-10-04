@@ -16,6 +16,10 @@ bool anvil_hosted_surface_parse_args(int *argc, char **argv);
  * reader. Needs the SDL event subsystem. */
 bool anvil_hosted_surface_connect(void);
 bool anvil_hosted_surface_active(void);
+bool anvil_hosted_surface_restarted(void);
+bool anvil_hosted_surface_parse_valid(void);
+bool anvil_hosted_surface_loss_event(Uint32 type);
+void anvil_hosted_surface_exit_intent(const char *restart_path);
 
 /* The first window created in hosted mode becomes the hosted surface. */
 void anvil_hosted_surface_register_window(SDL_Window *window);
@@ -42,5 +46,8 @@ void anvil_hosted_surface_set_bordered(bool bordered);
 void anvil_hosted_surface_set_bounds(int x, int y, int w, int h);
 void anvil_hosted_surface_raise(void);
 void anvil_hosted_surface_flash(int operation);
+void anvil_hosted_surface_set_visible(bool visible);
+bool anvil_hosted_surface_set_opacity(float opacity);
+bool anvil_hosted_surface_frame_metrics(int *button, int *title, int *border);
 
 #endif

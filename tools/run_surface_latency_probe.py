@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from run_render_perf_gate import (
-    build_anvil, copy_app_tree, invoke_hidden, native_path, read_key_values,
+    ROOT, build_anvil, copy_app_tree, invoke_hidden, native_path, read_key_values,
 )
 
 DISABLED_PLUGINS = "ipc,autorestart,autoreload,autosave_fast,autosaveonfocuslost"
@@ -102,6 +102,9 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-build", action="store_true")
+    parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
+    parser.add_argument("--project-case", action="append", choices=["launch", "invalid", "quit", "quit-error", "shell-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "conflict"],
+                        help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)
     parser.add_argument("--warmup-ms", type=int, default=5000)
@@ -119,6 +122,45 @@ def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="anvil-surface-latency-"))
     try:
         exe = copy_app_tree(work / "app")
+        if args.reference_exe:
+            shutil.copy2(args.reference_exe, exe)
+        if args.project_case:
+            shutil.copy2(ROOT / "tests/fixtures/hosted_project_probe.lua",
+                         work / "app/share/anvil/plugins/hosted_project_probe.lua")
+            failed = False
+            for mode in args.mode or ["shell"]:
+                for action in args.project_case:
+                    case_dir = work / f"project-{mode}-{action}"
+                    for name in ("driver", "Project", "Replacement", "user"):
+                        (case_dir / name).mkdir(parents=True)
+                    (case_dir / "Project/edited.txt").write_bytes(b"on disk\n")
+                    (case_dir / "Project/second.txt").write_bytes(b"second instance\n")
+                    if action == "conflict":
+                        (case_dir / "user/init.lua").write_text(
+                            'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n', encoding="utf-8")
+                    result = case_dir / "result.lua"
+                    config = {
+                        "exe": native_path(exe), "working_directory": native_path(case_dir / "driver"),
+                        "arguments": [native_path(case_dir / "driver")],
+                        "environment": {
+                            "ANVIL_USERDIR": native_path(case_dir / "user"),
+                            "USERPROFILE": native_path(case_dir / "user"), "HOME": native_path(case_dir / "user"),
+                            "ANVIL_PROJECT_PROBE": action, "ANVIL_PROJECT_PROBE_MODE": mode,
+                            "ANVIL_PROJECT_PROBE_ROOT": native_path(case_dir).replace("\\", "/"),
+                            "ANVIL_PROJECT_PROBE_RESULT": native_path(result),
+                            "ANVIL_TEST_DISABLE_PLUGINS": "autorestart,autoreload,autosave_fast,autosaveonfocuslost",
+                            "ANVIL_RENDERER": (args.renderer or ["d3d11"])[0],
+                            "ANVIL_SURFACE_LOG": native_path(case_dir / "surface.log"),
+                        }, "startup_timeout_seconds": 0, "stable_ui_scheduling": False,
+                    }
+                    config_path = case_dir / "launch.json"
+                    config_path.write_text(json.dumps(config), encoding="utf-8")
+                    launcher = invoke_hidden(config_path, 60)
+                    text = result.read_text(encoding="utf-8") if result.exists() else "missing result"
+                    ok = '["ok"]=true' in text and not launcher.get("timed_out")
+                    failed |= not ok
+                    print(f"Project {mode}/{action}: {'PASS' if ok else 'FAIL'} {text}", flush=True)
+            return int(failed)
         cases: list[dict[str, Any]] = []
         # Interleave modes so drift on the machine affects both equally.
         for run_index in range(args.runs):

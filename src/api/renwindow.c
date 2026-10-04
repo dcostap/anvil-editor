@@ -6,6 +6,7 @@
 #include "../rencache.h"
 #include "../d3d11_backend.h"
 #include "../hosted_surface.h"
+#include "../window_backend.h"
 
 static RenWindow *persistant_window = NULL;
 
@@ -28,27 +29,11 @@ static int f_renwin_create(lua_State *L) {
   if (video_init() != 0)
     return luaL_error(L, "Error creating anvil window: %s", SDL_GetError());
 
-  if (width < 1 || height < 1) {
-    const SDL_DisplayMode* dm = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
-
-    if (width < 1) {
-      width = dm->w * 0.8;
-    }
-    if (height < 1) {
-      height = dm->h * 0.8;
-    }
-  }
-
-  SDL_Window *window = SDL_CreateWindow(
-    title, width, height,
-    SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN
-  );
+  SDL_Window *window = anvil_window_create(title, width, height);
   if (!window) {
     return luaL_error(L, "Error creating anvil window: %s", SDL_GetError());
   }
   init_window_icon(window);
-  /* Size the hosted surface to the shell before the renderer allocates. */
-  anvil_hosted_surface_register_window(window);
 
   RenWindow **window_renderer = (RenWindow**)lua_newuserdata(L, sizeof(RenWindow*));
   luaL_setmetatable(L, API_TYPE_RENWINDOW);
@@ -101,26 +86,9 @@ static int f_renwin_restore(lua_State *L) {
 }
 
 static int f_get_refresh_rate(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-
-  if (anvil_hosted_surface_is_window(window_renderer->cache.window)) {
-    float hz = anvil_hosted_surface_refresh_rate();
-    if (hz > 0) lua_pushnumber(L, hz);
-    else lua_pushnil(L);
-    return 1;
-  }
-
-  SDL_DisplayID display = SDL_GetDisplayForWindow(window_renderer->cache.window);
-  if (!display) return 0;
-
-  const SDL_DisplayMode *mode;
-  if ((mode = SDL_GetCurrentDisplayMode(display)) && mode->refresh_rate > 0)
-    lua_pushnumber(L, mode->refresh_rate);
-  else if ((mode = SDL_GetDesktopDisplayMode(display)) && mode->refresh_rate > 0)
-    lua_pushnumber(L, mode->refresh_rate);
-  else
-    lua_pushnil(L);
-
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  float hz = anvil_window_refresh_rate(ren);
+  if (hz > 0) lua_pushnumber(L, hz); else lua_pushnil(L);
   return 1;
 }
 

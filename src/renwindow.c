@@ -1,5 +1,6 @@
 #include <assert.h>
 #include "renwindow.h"
+#include "window_backend.h"
 #include "win32_frame.h"
 #include "d3d11_backend.h"
 #include "hosted_surface.h"
@@ -245,7 +246,7 @@ void renwin_update_scale(RenWindow *ren) {
 }
 
 void renwin_show_window(RenWindow *ren) {
-  SDL_ShowWindow(ren->cache.window);
+  anvil_window_visible(ren, true);
 }
 
 void renwin_free(RenWindow *ren) {
