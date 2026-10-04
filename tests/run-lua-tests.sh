@@ -69,6 +69,10 @@ if [ -d "$sourcedir/subprojects/ppm" ]; then
 fi
 
 cp "$builddir/start.lua" "$datadir/core/"
+if [ -f "$builddir/conpty.dll" ]; then
+  mkdir -p "$datadir/conpty"
+  cp "$builddir/conpty.dll" "$builddir/OpenConsole.exe" "$datadir/conpty/"
+fi
 
 # Keep test fixtures isolated from the source tree. Some Windows UI tests leave
 # temp project files until process shutdown; those are discarded with rundir.

@@ -90,6 +90,8 @@ copy_anvil_build () {
   mkdir -p "$bindir" "$datadir"
   if [[ $run_windows == true ]]; then
     cp "$builddir/src/anvil.exe" "$bindir"
+    mkdir -p "$datadir/conpty"
+    cp "$builddir/conpty.dll" "$builddir/OpenConsole.exe" "$datadir/conpty/"
   else
     cp "$builddir/src/anvil" "$bindir"
   fi

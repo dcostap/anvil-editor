@@ -504,6 +504,10 @@ def copy_app_tree(destination: Path) -> Path:
             shutil.copytree(source, datadir / name)
     shutil.copy2(start_lua, datadir / "core" / "start.lua")
     shutil.copytree(ROOT / "resources" / "icons", datadir / "icons")
+    conpty = datadir / "conpty"
+    conpty.mkdir()
+    for name in ("conpty.dll", "OpenConsole.exe"):
+        shutil.copy2(BUILD / name, conpty / name)
     return bindir / "anvil.exe"
 
 

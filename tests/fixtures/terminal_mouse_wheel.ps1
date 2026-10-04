@@ -9,11 +9,13 @@ public static class WheelConsoleMode {
 }
 '@
 
-if (-not [WheelConsoleMode]::SetConsoleMode([WheelConsoleMode]::GetStdHandle(-10), 0x0200)) { exit 3 }
 $escape = [char]27
 [Console]::Write($escape + '[?1049h' + $escape + '[?7l' + $escape + '[?1000h' +
   $escape + '[?1002h' + $escape + '[?1003h' + $escape + '[?1004h' +
-  $escape + '[?1006h' + $escape + '[2J' + $escape + '[H' + 'WHEEL_READY')
+  $escape + '[?1006h' + $escape + '[2J' + $escape + '[H')
+# Pi enables mouse reporting before it sets raw console input.
+if (-not [WheelConsoleMode]::SetConsoleMode([WheelConsoleMode]::GetStdHandle(-10), 0x0208)) { exit 3 }
+[Console]::Write('WHEEL_READY')
 $inputStream = [Console]::OpenStandardInput()
 do {
   $bytes = New-Object System.Collections.Generic.List[byte]

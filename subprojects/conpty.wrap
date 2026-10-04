@@ -1,0 +1,7 @@
+[wrap-file]
+directory = conpty-1.24.261001001
+source_url = https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.24.261001001/microsoft.windows.console.conpty.1.24.261001001.nupkg
+source_filename = conpty-1.24.261001001.zip
+source_hash = 4d6aaddc1d2385c9f5897df28f33879f699f8f2783315d5204cf3d8c3616ac5f
+lead_directory_missing = true
+patch_directory = conpty

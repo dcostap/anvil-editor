@@ -25,6 +25,7 @@ $oldRuntimeRoot = $env:ANVIL_EMBEDDED_RUNTIME_ROOT
 $oldUserDir = $env:ANVIL_USERDIR
 $oldHeadless = $env:ANVIL_HEADLESS_TEST
 $oldDprintCache = $env:DPRINT_CACHE_DIR
+$oldVideoDriver = $env:SDL_VIDEO_DRIVER
 
 try {
   New-Item -ItemType Directory -Path $testRoot | Out-Null
@@ -71,6 +72,32 @@ try {
   Assert-True ($LASTEXITCODE -eq 0) "The extracted dprint formatter did not run."
   Assert-True ($formatOutput.Contains('{ "one": 1 }')) "The extracted dprint formatter returned unexpected JSON."
 
+  $dataRoot = Split-Path -Parent $startFile.Directory.FullName
+  Assert-True (Test-Path (Join-Path $dataRoot "conpty\conpty.dll")) "The embedded runtime omitted conpty.dll."
+  Assert-True (Test-Path (Join-Path $dataRoot "conpty\OpenConsole.exe")) "The embedded runtime omitted OpenConsole.exe."
+
+  # Use only the copied executable and its extracted runtime for mouse input.
+  $fixtureDir = Join-Path $testRoot "tests\fixtures"
+  $testDir = Join-Path $testRoot "tests\lua\ui"
+  New-Item -ItemType Directory -Path $fixtureDir, $testDir -Force | Out-Null
+  Copy-Item (Join-Path $PSScriptRoot "..\..\fixtures\terminal_mouse_wheel.ps1") $fixtureDir
+  Copy-Item (Join-Path $PSScriptRoot "..\..\lua\ui\terminal_mouse_wheel.lua") $testDir
+  $env:SDL_VIDEO_DRIVER = "dummy"
+  $wheelLog = Join-Path $testRoot "wheel-test.log"
+  $wheelError = Join-Path $testRoot "wheel-test-error.log"
+  $wheel = Start-Process -FilePath $copyPath -WorkingDirectory $testRoot -PassThru `
+    -ArgumentList "test tests/lua/ui/terminal_mouse_wheel.lua" `
+    -RedirectStandardOutput $wheelLog -RedirectStandardError $wheelError
+  $null = $wheel.Handle
+  if (-not $wheel.WaitForExit(30000)) {
+    $wheel.Kill()
+    throw "The standalone terminal mouse test timed out."
+  }
+  $wheel.WaitForExit()
+  Assert-True ($wheel.ExitCode -eq 0) ("Standalone terminal mouse input failed (exit code: $($wheel.ExitCode)): " +
+    (Get-Content $wheelLog, $wheelError | Out-String))
+  $env:SDL_VIDEO_DRIVER = $oldVideoDriver
+
   $marker = Get-ChildItem -LiteralPath $runtimeRoot -Filter ".complete" -File -Recurse |
     Select-Object -First 1
   Assert-True ($null -ne $marker) "The embedded runtime did not write its completion marker."
@@ -99,5 +126,6 @@ finally {
   $env:ANVIL_USERDIR = $oldUserDir
   $env:ANVIL_HEADLESS_TEST = $oldHeadless
   $env:DPRINT_CACHE_DIR = $oldDprintCache
+  $env:SDL_VIDEO_DRIVER = $oldVideoDriver
   Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

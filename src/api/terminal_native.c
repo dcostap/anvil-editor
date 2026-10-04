@@ -1282,9 +1282,11 @@ static int f_terminal_new(lua_State *L) {
       } else { close_handle(&session->process); error = ERROR_INVALID_DATA; }
     } else error = ERROR_INVALID_DATA;
   } else {
+    lua_getglobal(L, "DATADIR");
+    const char *datadir = luaL_checkstring(L, -1);
     started = anvil_terminal_host_launch(&session->pipe, &session->process,
       &session->host_pid, &session->shell_pid, &session->replay_bytes, session->id,
-      userdir ? userdir : ".", project, shell, cwd, size,
+      userdir ? userdir : ".", project, shell, cwd, datadir, size,
       has_scrollback_max_lines ? &scrollback_max_lines : NULL, &error);
   }
   lua_settop(L, 2);

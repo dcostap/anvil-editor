@@ -237,7 +237,7 @@ static bool apply_size(TerminalHost *host, AnvilTerminalSize size) {
   if (!size.cols || !size.rows || size.cols > 32767 || size.rows > 32767 ||
       !size.cell_width || !size.cell_height) return false;
   if ((size.cols != host->size.cols || size.rows != host->size.rows) &&
-      FAILED(ResizePseudoConsole(host->pty.pseudoconsole, (COORD){size.cols, size.rows}))) return false;
+      FAILED(anvil_conpty_resize(host->pty.pseudoconsole, (COORD){size.cols, size.rows}))) return false;
   if (ghostty_terminal_resize(host->model, size.cols, size.rows,
       size.cell_width, size.cell_height) != GHOSTTY_SUCCESS) return false;
   host->size = size;
@@ -363,7 +363,7 @@ static bool attach_client(TerminalHost *host) {
 
 static DWORD WINAPI close_console(void *userdata) {
   TerminalHost *host = userdata;
-  ClosePseudoConsole(host->pty.pseudoconsole);
+  anvil_conpty_close_console(host->pty.pseudoconsole);
   return 0;
 }
 
@@ -389,7 +389,7 @@ static bool shell_busy(DWORD pid) {
 }
 
 int anvil_terminal_host_main(int argc, char **argv) {
-  if (argc != 13 || !anvil_terminal_id_valid(argv[2]) || strlen(argv[4]) > 32000) return 1;
+  if (argc != 14 || !anvil_terminal_id_valid(argv[2]) || strlen(argv[4]) > 32000) return 1;
   char expected_pipe[128]; snprintf(expected_pipe, sizeof(expected_pipe), "\\\\.\\pipe\\anvil-terminal-%s", argv[2]);
   if (strcmp(argv[3], expected_pipe) != 0) return 1;
   TerminalHost host = { .id = argv[2], .pipe_name = argv[3], .shell = argv[5],
@@ -406,6 +406,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
   snprintf(host.log_path, sizeof(host.log_path), "%s/logs/terminal-session-%s.log", argv[4], argv[2]);
   snprintf(host.record_path, sizeof(host.record_path), "%s/terminal-sessions/%s.lua", argv[4], argv[2]);
   host_log(&host, "start");
+  host_log(&host, "ConPTY runtime: %s/conpty", argv[13]);
   BOOL in_job = FALSE;
   if (IsProcessInJob(GetCurrentProcess(), NULL, &in_job) && in_job)
     host_log(&host, "breakaway unavailable: host remains in parent job");
@@ -428,7 +429,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
       !size.cell_width || !size.cell_height ||
       !anvil_terminal_model_new(&host.model, size.cols, size.rows, size.cell_width,
         size.cell_height, strcmp(argv[11], "-1") == 0 ? NULL : &lines) ||
-      !anvil_conpty_start(&host.pty, argv[5], argv[6], &error) || !write_registry(&host)) goto cleanup;
+      !anvil_conpty_start(&host.pty, argv[5], argv[6], argv[13], &error) || !write_registry(&host)) goto cleanup;
   host.reader = CreateThread(NULL, 0, host_reader, &host, 0, NULL);
   if (!host.reader) goto cleanup;
   exit_code = 0;
@@ -605,6 +606,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 DWORD *host_pid, DWORD *shell_pid, uint64_t *replay_bytes,
                                 char id[ANVIL_TERMINAL_ID_LENGTH + 1],
                                 const char *userdir, const char *project, const char *shell, const char *cwd,
+                                const char *datadir,
                                 AnvilTerminalSize size, const size_t *scrollback_lines, DWORD *error) {
   uint8_t random[16]; char name[128];
   typedef BOOLEAN (WINAPI *RandomFunction)(void *, ULONG);
@@ -622,7 +624,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
   snprintf(cw, sizeof(cw), "%u", size.cell_width); snprintf(ch, sizeof(ch), "%u", size.cell_height);
   if (scrollback_lines) snprintf(lines, sizeof(lines), "%zu", *scrollback_lines); else strcpy(lines, "-1");
   const char *args[] = { "--terminal-session", id, name, userdir, shell ? shell : "",
-    cwd ? cwd : "", cols, rows, cw, ch, lines, project ? project : "" };
+    cwd ? cwd : "", cols, rows, cw, ch, lines, project ? project : "", datadir };
   wchar_t *command = calloc(32768, sizeof(wchar_t));
   if (!command) { *error = ERROR_NOT_ENOUGH_MEMORY; return false; }
   size_t n = quote_arg(command, exe);

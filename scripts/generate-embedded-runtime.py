@@ -26,6 +26,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--resource-script", required=True, type=Path)
     parser.add_argument("--extra-languages", action="store_true")
+    parser.add_argument("--conpty-dll", required=True, type=Path)
+    parser.add_argument("--conpty-host", required=True, type=Path)
     return parser.parse_args()
 
 
@@ -65,6 +67,8 @@ def collect_files(args: argparse.Namespace) -> dict[str, Path]:
     add_tree(files, source_root / "resources" / "icons", "icons")
     add_tree(files, source_root / "subprojects" / "luajit" / "src" / "jit", "jit")
     add_file(files, "jit/vmdef.lua", args.vmdef_file.resolve())
+    add_file(files, "conpty/conpty.dll", args.conpty_dll.resolve())
+    add_file(files, "conpty/OpenConsole.exe", args.conpty_host.resolve())
 
     if args.extra_languages:
         plugin_root = source_root / "subprojects" / "plugins" / "plugins"
@@ -77,6 +81,7 @@ def collect_files(args: argparse.Namespace) -> dict[str, Path]:
     add_file(files, "doc/LICENSE", source_root / "LICENSE")
     add_file(files, "doc/licenses.md", source_root / "licenses" / "licenses.md")
     add_file(files, "doc/tree-sitter.md", source_root / "licenses" / "tree-sitter.md")
+    add_file(files, "doc/conpty.md", source_root / "licenses" / "conpty.md")
 
     missing = [str(path) for path in files.values() if not path.is_file()]
     if missing:

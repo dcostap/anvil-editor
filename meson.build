@@ -420,7 +420,7 @@ else
     endif
 endif
 
-install_data('licenses/licenses.md', 'licenses/tree-sitter.md', install_dir : anvil_docdir)
+install_data('licenses/licenses.md', 'licenses/tree-sitter.md', 'licenses/conpty.md', install_dir : anvil_docdir)
 
 install_subdir('data/core' , install_dir : anvil_datadir, exclude_files : 'start.lua')
 install_subdir('data/models', install_dir : anvil_datadir)
@@ -471,6 +471,13 @@ if embedded_runtime and (use_system_lua or not get_option('jit'))
 endif
 
 embedded_runtime_rc = []
+conpty_runtime_files = []
+if host_machine.system() == 'windows'
+    conpty_project = subproject('conpty', default_options: ['data_dir=' + anvil_datadir])
+    conpty_runtime_files = conpty_project.get_variable('conpty_runtime_files')
+    configure_file(input: conpty_runtime_files[0], output: 'conpty.dll', copy: true)
+    configure_file(input: conpty_runtime_files[1], output: 'OpenConsole.exe', copy: true)
+endif
 if embedded_runtime
     embedded_runtime_python = find_program('python3', 'python')
     embedded_runtime_command = [
@@ -481,13 +488,15 @@ if embedded_runtime
         '--vmdef-file', '@INPUT1@',
         '--output', '@OUTPUT0@',
         '--resource-script', '@OUTPUT1@',
+        '--conpty-dll', conpty_runtime_files[0],
+        '--conpty-host', conpty_runtime_files[1],
     ]
     if get_option('extra_languages')
         embedded_runtime_command += '--extra-languages'
     endif
     embedded_runtime_archive = custom_target(
         'anvil-embedded-runtime',
-        input : [configured_start, luajit_vmdef],
+        input : [configured_start, luajit_vmdef] + conpty_runtime_files,
         output : ['anvil-runtime.bin', 'embedded-runtime.rc'],
         command : embedded_runtime_command,
         build_by_default : true,

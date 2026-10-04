@@ -1,6 +1,20 @@
 #include "conpty.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+
+static HMODULE conpty_library;
+static HRESULT (WINAPI *conpty_create)(COORD, HANDLE, HANDLE, DWORD, HPCON *);
+static HRESULT (WINAPI *conpty_resize)(HPCON, COORD);
+static void (WINAPI *conpty_close)(HPCON);
+
+HRESULT anvil_conpty_resize(HPCON console, COORD size) {
+  return conpty_resize(console, size);
+}
+
+void anvil_conpty_close_console(HPCON console) {
+  conpty_close(console);
+}
 
 void anvil_conpty_kill(AnvilConPTY *pty) {
   if (pty->job) { CloseHandle(pty->job); pty->job = NULL; }
@@ -9,7 +23,7 @@ void anvil_conpty_kill(AnvilConPTY *pty) {
 
 void anvil_conpty_close(AnvilConPTY *pty) {
   anvil_conpty_kill(pty);
-  if (pty->pseudoconsole) { ClosePseudoConsole(pty->pseudoconsole); pty->pseudoconsole = NULL; }
+  if (pty->pseudoconsole) { anvil_conpty_close_console(pty->pseudoconsole); pty->pseudoconsole = NULL; }
   if (pty->input_write) CloseHandle(pty->input_write);
   if (pty->output_read) CloseHandle(pty->output_read);
   if (pty->process) CloseHandle(pty->process);
@@ -200,8 +214,32 @@ static bool create_shell_process(
 }
 
 bool anvil_conpty_start(
-  AnvilConPTY *session, const char *shell, const char *cwd, DWORD *error_out
+  AnvilConPTY *session, const char *shell, const char *cwd, const char *datadir, DWORD *error_out
 ) {
+  if (!conpty_library) {
+    size_t length = strlen(datadir) + sizeof("/conpty/conpty.dll");
+    char *path = malloc(length);
+    if (!path) { *error_out = ERROR_NOT_ENOUGH_MEMORY; return false; }
+    snprintf(path, length, "%s/conpty/conpty.dll", datadir);
+    wchar_t *wide = utf8_to_wide(path);
+    free(path);
+    if (!wide) { *error_out = ERROR_NO_UNICODE_TRANSLATION; return false; }
+    HMODULE library = LoadLibraryExW(wide, NULL,
+      LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    *error_out = GetLastError();
+    HeapFree(GetProcessHeap(), 0, wide);
+    if (!library) return false;
+    conpty_create = (void *)GetProcAddress(library, "ConptyCreatePseudoConsole");
+    conpty_resize = (void *)GetProcAddress(library, "ConptyResizePseudoConsole");
+    conpty_close = (void *)GetProcAddress(library, "ConptyClosePseudoConsole");
+    if (!conpty_create || !conpty_resize || !conpty_close) {
+      *error_out = ERROR_PROC_NOT_FOUND;
+      FreeLibrary(library);
+      return false;
+    }
+    /* Keep the DLL loaded until this Terminal Session host exits. */
+    conpty_library = library;
+  }
   HANDLE input_read = NULL;
   HANDLE output_write = NULL;
   SECURITY_ATTRIBUTES security = {
@@ -221,7 +259,7 @@ bool anvil_conpty_start(
   SetHandleInformation(session->output_read, HANDLE_FLAG_INHERIT, 0);
 
   COORD size = { (SHORT)session->cols, (SHORT)session->rows };
-  HRESULT result = CreatePseudoConsole(size, input_read, output_write, 0, &session->pseudoconsole);
+  HRESULT result = conpty_create(size, input_read, output_write, 0, &session->pseudoconsole);
   if (FAILED(result)) {
     close_handle(&input_read);
     close_handle(&output_write);

@@ -310,7 +310,7 @@ static void init_start(lua_State* L)
     "local match = require('utf8extra').match\n"
     "local exedir = match(EXEFILE, '^(.*)" ANVIL_PATHSEP_PATTERN ANVIL_NONPATHSEP_PATTERN "$')\n"
     "local prefix = os.getenv('ANVIL_PREFIX') or match(exedir, '^(.*)" ANVIL_PATHSEP_PATTERN "bin$')\n"
-    "dofile((MACOS_RESOURCES or (prefix and prefix .. '/share/anvil' or exedir .. '/data')) .. '/core/start.lua')\n"
+    "dofile((EMBEDDED_DATADIR or MACOS_RESOURCES or (prefix and prefix .. '/share/anvil' or exedir .. '/data')) .. '/core/start.lua')\n"
   ;
 
   if (luaL_loadstring(L, lua_code)) {
@@ -373,6 +373,7 @@ static int f_thread_create(lua_State *L)
   copy_global("PLATFORM", L, thread->L);
   copy_global("ARCH", L, thread->L);
   copy_global("EXEFILE", L, thread->L);
+  copy_global("EMBEDDED_DATADIR", L, thread->L);
   copy_global("HOME", L, thread->L);
   copy_global("LUAJIT", L, thread->L);
 

@@ -4,7 +4,7 @@ local test = require "core.test"
 local terminal = require "plugins.terminal"
 
 test.describe("Terminal View wheel input", function()
-  test.it("routes wheel input to the full-screen application under the pointer", function()
+  test.it("sends wheel input after a full-screen application sets raw console input", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     panes.reset_for_tests()
     terminal._set_native_for_tests(nil)
@@ -18,7 +18,8 @@ test.describe("Terminal View wheel input", function()
       while system.get_time() < deadline do
         core.root_panel:update()
         view:update()
-        if view.snapshot.mouse_tracking then break end
+        if view.snapshot.mouse_tracking
+          and view.session:text_capture().text:find("WHEEL_READY", 1, true) then break end
         coroutine.yield(0.005)
       end
       test.ok(view.snapshot.mouse_tracking, "Application mouse tracking is not active")

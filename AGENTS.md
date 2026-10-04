@@ -40,6 +40,14 @@ and Zig. `scripts\ensure-zig.sh` downloads the pinned Zig release into
 `%LOCALAPPDATA%\anvil-build-tools` when it is missing. The build needs network
 access for this download and for Meson subprojects on a clean machine.
 
+Windows Terminal Sessions use bundled Microsoft ConPTY, not the system console host.
+`subprojects/conpty.wrap` pins the package and its SHA-256 hash.
+Meson installs `conpty.dll` and `OpenConsole.exe` into `data/conpty`.
+The standalone runtime includes both files and their license.
+Keep both files together. Do not fall back to the system console host.
+That host can drop Pi's mouse mode when Pi sets raw input during startup.
+Run `ui/terminal_mouse_wheel.lua` and the standalone smoke test after ConPTY updates.
+
 The standalone option is `-Dembedded_runtime=true`. It is off by default.
 `scripts\build-standalone-windows.sh` enables it, strips the executable, runs
 the standalone smoke test, and promotes the result only after the test passes.

@@ -13,7 +13,10 @@ typedef struct {
   uint16_t cols, rows;
 } AnvilConPTY;
 
-bool anvil_conpty_start(AnvilConPTY *pty, const char *shell, const char *cwd, DWORD *error);
+bool anvil_conpty_start(AnvilConPTY *pty, const char *shell, const char *cwd,
+                        const char *datadir, DWORD *error);
+HRESULT anvil_conpty_resize(HPCON console, COORD size);
+void anvil_conpty_close_console(HPCON console);
 void anvil_conpty_kill(AnvilConPTY *pty);
 void anvil_conpty_close(AnvilConPTY *pty);
 #endif
