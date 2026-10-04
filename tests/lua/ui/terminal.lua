@@ -1398,6 +1398,40 @@ test.describe("Terminal View", function()
     test.contains(view.launch_error, "The Terminal Session process ended unexpectedly")
   end)
 
+  test.it("closes the client without waiting for or killing a suspended host", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" }
+    test.ok(view and view.session)
+    local ffi = require "ffi"
+    ffi.cdef [[
+      void * __stdcall OpenProcess(unsigned long access, int inherit, unsigned long pid);
+      int __stdcall TerminateProcess(void *process, unsigned int code);
+      int __stdcall CloseHandle(void *handle);
+      unsigned long __stdcall WaitForSingleObject(void *handle, unsigned long milliseconds);
+      long __stdcall NtSuspendProcess(void *process);
+      long __stdcall NtResumeProcess(void *process);
+    ]]
+    local kernel, nt = ffi.load("kernel32"), ffi.load("ntdll")
+    local process = kernel.OpenProcess(0x100801, 0, view.session:stats().host_pid)
+    test.ok(process ~= nil)
+    local ok, failure = pcall(function()
+      test.equal(nt.NtSuspendProcess(process), 0)
+      local started = system.get_time()
+      view:on_close()
+      -- Allow scheduling noise, but reject waiting seconds for a stopped host.
+      test.ok(system.get_time() - started < 1,
+        "closing the client waited for the suspended host")
+      -- A stopped host cannot finish until the test resumes it.
+      test.equal(kernel.WaitForSingleObject(process, 0), 258,
+        "normal close killed the host instead of releasing the client")
+    end)
+    nt.NtResumeProcess(process)
+    if kernel.WaitForSingleObject(process, 6000) == 258 then kernel.TerminateProcess(process, 1) end
+    kernel.CloseHandle(process)
+    if not ok then error(failure) end
+  end)
+
   test.it("renders real ConPTY output through Terminal View", function(context)
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)

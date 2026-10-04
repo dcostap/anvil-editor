@@ -720,7 +720,8 @@ static void release_terminal_transport(TerminalSession *session) {
 static void terminate_terminal_process(TerminalSession *session) {
   /* Disconnect first. Milestone 1 hosts end their shell on every disconnect. */
   release_terminal_transport(session);
-  if (session->process && WaitForSingleObject(session->process, 6000) == WAIT_TIMEOUT)
+  /* Never wait for a host on the UI thread. Its kill job owns shell cleanup. */
+  if (session->process && session->state == TERMINAL_STATE_FAILED)
     TerminateProcess(session->process, 1);
   close_handle(&session->process);
 }
@@ -734,7 +735,6 @@ static void close_session(TerminalSession *session) {
     close_handle(&session->vt_trace_file);
   }
   terminate_terminal_process(session);
-  release_terminal_transport(session);
   free_terminal_objects(session);
   if (session->snapshot_text) {
     HeapFree(GetProcessHeap(), 0, session->snapshot_text);
@@ -1170,7 +1170,6 @@ static int f_terminal_update(lua_State *L) {
       (read_failed || (write_failed && session->reader_done && !host_exited))) {
     set_terminal_state(session, TERMINAL_STATE_FAILED);
     terminate_terminal_process(session);
-    release_terminal_transport(session);
   }
   /* Publish draining once, even when EXITED arrives with an empty local queue. */
   if (was_draining && session->state == TERMINAL_STATE_DRAINING && output_drained(session)) {

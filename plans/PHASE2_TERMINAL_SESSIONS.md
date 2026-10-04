@@ -12,7 +12,8 @@ Primary replay added leading spaces. Alternate replay restored the active screen
 but lost the primary screen and its scrollback. `screen.h` has no separate screen
 formatter. `snapshot.h` has a binary codec, not a separate primary VT formatter.
 Raw replay from byte zero passed the row text, cursor, scrollback, and screen checks.
-Use a bounded raw prefix. Never replay a prefix after it exceeds its bound.
+Milestone 1 uses a bounded raw prefix. Milestone 2 must replace it with the
+Ghostty snapshot codec. Remove `AnvilTerminalReplay` in that milestone.
 
 ## Goal
 
@@ -24,7 +25,7 @@ scrollback. A Terminal Session that died is revived from its last snapshot.
 The editor's terminal model, rendering, selection, search, and input encoding stay
 where they are. Only the byte transport changes.
 
-## Current design
+## Design before Milestone 1
 
 - `src/api/terminal_native.c` (3,500 lines) is the Lua module `terminal_native`.
   `native.new(options)` creates a `TerminalSession` userdata. It owns:
@@ -130,8 +131,9 @@ Editor to host:
 Host to editor:
 
 - `WELCOME { host_pid, shell_pid, state }`
-- `REPLAY bytes`: VT state from the formatter, possibly in several chunks, then
-  `REPLAY_END`. Sent once after `WELCOME`, before any `OUTPUT`.
+- `REPLAY bytes`: a binary Ghostty snapshot, in bounded chunks, then `REPLAY_END`.
+  Sent once after `WELCOME`, before any `OUTPUT`. This replaces Milestone 1's raw replay.
+  Change the terminal protocol version when this payload changes.
 - `OUTPUT bytes`: raw ConPTY output, in order.
 - `STATUS { busy, ... }`: from Milestone 3.
 - `EXITED { exit_code }`: after the host drained the remaining ConPTY output.
@@ -140,13 +142,19 @@ The editor's writer queue holds framed records, so `INPUT` and `RESIZE` stay in
 order. `f_terminal_resize` enqueues `RESIZE` instead of calling
 `ResizePseudoConsole`.
 
-The editor's reader thread unpacks `REPLAY` and `OUTPUT` into the existing
-`read_queue`. `f_terminal_update` stays almost unchanged. Replace
-`process_running()` with the host's `EXITED` flag. The host drains ConPTY, so the
-editor's draining only empties its own queue.
+The editor's reader thread keeps snapshot bytes separate from raw `OUTPUT` bytes.
+It must not feed a binary snapshot into `ghostty_terminal_vt_write`.
+The UI thread restores READY first, then restores history in bounded update steps.
+It starts parsing queued `OUTPUT` after FINISH validates.
+The host's `EXITED` flag replaces local shell process checks.
+The host drains ConPTY, so the editor's draining only empties its own queue.
 
 A pipe that breaks without `EXITED` means the host died. Move to `failed` with
 "The Terminal Session process ended unexpectedly", until Milestone 4 adds revival.
+
+Milestone 1 normal close releases the client transport and closes its host process handle.
+It never waits for the host to exit on the UI thread.
+Only the failed path calls `TerminateProcess`. The host's kill job ends the shell.
 
 ## Host internals
 
@@ -167,26 +175,32 @@ A pipe that breaks without `EXITED` means the host died. Move to `failed` with
   Then wait for the client to disconnect, up to a few seconds.
   Delete the registry record and exit.
 
-## Replay with the Ghostty formatter
+## Replay with the Ghostty snapshot codec
 
-This is the biggest risk, so verify it first, before any other Phase 2 work.
+Milestone 1's formatter probe failed. The raw prefix is temporary, not the reattach design.
+Milestone 2 uses `ghostty/vt/snapshot.h`. Milestone 4 uses the same codec for disk snapshots.
 
-- `ghostty/vt/formatter.h`: `ghostty_formatter_terminal_new`, then
-  `ghostty_formatter_format_alloc`, with the VT format and these extras: `palette`,
-  `modes`, `scrolling_region`, `tabstops`, `pwd`, `keyboard`, and screen `cursor`,
-  `style`, `hyperlink`, `kitty_keyboard`, and `charsets`.
-- The formatter formats the active screen. Check whether that includes primary
-  scrollback, and what happens when the alternate screen is active. Also look at
-  `snapshot.h` and `screen.h` for a way to format the primary screen separately.
-- Goal: the replay rebuilds the primary scrollback, then enters the alternate screen
-  (`CSI ? 1049 h`) and draws it when it was active, then restores modes and the
-  cursor.
-- If the formatter can't do this, fall back to a bounded raw-output ring that is
-  replayed from session start while it fits. Replaying raw output from the middle
-  of a stream is not acceptable.
-- Write a native or Lua test: feed known VT into model A, format it, feed the result
-  into an empty model B, then compare row text, the cursor, scrollback length, and
-  the alternate-screen flag.
+- Enable bounded `GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES` tracking before the host receives VT input.
+  This permits snapshots between reads, including unfinished VT and UTF-8 input.
+- On attach, resize the host model, then encode it while holding the model lock.
+  Use `ghostty_snapshot_encode_alloc` or the codec's writer API.
+  Do not change the checkpoint while its REPLAY records wait for queue space.
+  Send the complete snapshot through FINISH, then `REPLAY_END`, then live `OUTPUT`.
+- Restore the snapshot on the UI thread with `ghostty_snapshot_decoder_ready`.
+  This returns a new terminal, not bytes to feed into the old terminal.
+  Replace the editor model safely. Restore its callbacks, userdata, shared options, and render state.
+  The host model still has no `write_pty` callback.
+- Publish the READY screen first. Call `ghostty_snapshot_decoder_next` in bounded update steps.
+  Keep the decoder's source bytes and returned terminal alive until FINISH validates.
+  Apply queued live output only after history finishes, so replay retains all applicable history.
+- The decoder's reader must not return zero bytes for temporary starvation.
+  Keep network waits off the UI thread. Reject truncated, corrupt, or oversized snapshots.
+- Remove `AnvilTerminalReplay` and its raw prefix storage, append logic, and overflow behavior.
+  Replay depends on current model state, not the amount of output since session start.
+- Use red-green codec round-trip tests for row text, cursor, primary scrollback, and alternate-screen state.
+  Check the retained primary screen after leaving the alternate screen.
+  Check unfinished parser input by continuing the stream after restoration.
+  The reattach test must also work after more than 8 MB of earlier raw output.
 
 ## Milestones
 
@@ -246,6 +260,29 @@ Milestone 1 backpressure correction, 2026-10-04:
 - Queue waits release the model lock. Replay stays fixed while its records wait.
   The drain deadline pauses during backpressure. The exit deadline starts after `EXITED` is sent.
 
+Milestone 1 close correction, 2026-10-04:
+
+- The test suspends its own host process, then closes the Terminal View.
+  Before the fix, close waited for the host and failed the UI responsiveness check.
+  After the fix, close returns while the host is suspended.
+  The test resumes the host and waits for cleanup outside the close operation.
+  `ui/terminal.lua` passes all 68 tests.
+- `runtime/terminal_native.lua` passes 27 tests. WSL remains unavailable and skips one test.
+- Milestone 2's replay design now uses the snapshot codec. No Milestone 2 code is implemented yet.
+
+`terminal-native-perf` passed before and after these corrections:
+
+| Measurement | Before fixes | After fixes |
+| --- | ---: | ---: |
+| Typing echo p50 | 15.917 ms | 15.575 ms |
+| Typing echo p95 | 16.065 ms | 16.118 ms |
+| 20,000 output lines | 5,056.040 ms | 5,820.386 ms |
+| Update p50 / p95 | 0.0055 / 0.0200 ms | 0.0082 / 0.0270 ms |
+| Snapshot p50 / p95 | 0.2578 / 0.4824 ms | 0.3065 / 0.6187 ms |
+| Ten-session update total | 52.054 ms / 2,110 calls | 6.671 ms / 2,170 calls |
+
+Echo p50 changed by -0.342 ms. The benchmark remains within its budgets.
+
 - Do the refactors: `ipc_pipe`, `conpty`, `terminal_model`.
 - Build the host, the protocol, and the client transport.
 - The host ends when its client disconnects, with or without `DETACH`. Behavior
@@ -262,6 +299,7 @@ Milestone 1 backpressure correction, 2026-10-04:
 
 ### Milestone 2: the registry and reattach
 
+- Replace raw prefix replay with the snapshot codec described above before adding reattach.
 - The host writes `USERDIR/terminal-sessions/<id>.lua` (or JSON) with atomic
   replacement:
   - version;
@@ -321,7 +359,7 @@ Milestone 1 backpressure correction, 2026-10-04:
 
 ### Milestone 4: snapshots and revival
 
-- The host writes a formatter snapshot to `USERDIR/terminal-sessions/<id>.snapshot`
+- The host writes a Ghostty codec snapshot to `USERDIR/terminal-sessions/<id>.snapshot`
   with atomic replacement, at most every 2 s after output. It also writes one when
   the shell exits and when the host shuts down. Bound it to about 8 MB by trimming
   the oldest scrollback.
@@ -332,7 +370,8 @@ Milestone 1 backpressure correction, 2026-10-04:
     offer it.
 - Revival: if the record exists but the host is gone (reboot, crash, or kill), start
   a new host with `--revive-from <snapshot>` in the last cwd.
-  - The host feeds the snapshot into its model, then writes a revival marker line
+  - The host decodes the snapshot into its model with the same codec used for attach.
+    It then writes a revival marker line
     such as `--- Restored session; the previous shell ended ---`.
   - The client gets all of this through the normal replay.
   - If a command was interrupted, the view offers "Rerun <command>". It never

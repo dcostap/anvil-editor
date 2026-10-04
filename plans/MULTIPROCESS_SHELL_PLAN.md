@@ -182,15 +182,16 @@ Its timers, Autosave, indexes, LSP, and Terminal Session connections continue.
 
 A Project process connects to a Terminal Session over a pipe.
 
-1. The session sends its current state as VT sequences from the Ghostty formatter.
-2. The Project process feeds that state into its own Ghostty terminal.
+1. The session sends its current state with the Ghostty snapshot codec.
+2. The Project process restores READY first, then primary and alternate-screen history.
 3. The session then streams raw PTY output.
 4. The Project process sends encoded input and resize requests.
 
 Terminal rendering in the Project process stays unchanged.
 
-The formatter must restore scrollback and the alternate screen. Verify this first.
-If it cannot, replay a bounded raw-output buffer instead.
+The formatter probe failed to retain primary state during alternate-screen replay.
+Milestone 1 uses a bounded raw prefix. Milestone 2 replaces it with the snapshot codec.
+Use that same codec for disk snapshots and revival.
 
 ### Busy detection
 
@@ -371,7 +372,7 @@ Design the final Project Sidebar UI.
 
 - Typing latency through shared-texture compositing.
 - IME behavior with a shell-owned window.
-- Ghostty formatter coverage for scrollback and the alternate screen.
+- Ghostty snapshot codec coverage for scrollback, both screens, and unfinished VT input.
 - GPU device loss in the shell or in a Project process.
 - Memory use with many loaded Projects, plus the Sidebar process.
 - Sidebar appearing after the window opens, because its process starts separately.
