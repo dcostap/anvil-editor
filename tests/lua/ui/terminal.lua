@@ -496,6 +496,7 @@ test.describe("Terminal View", function()
 
   test.it("services hidden output without rebuilding rows or repeating state work", function(context)
     local view = terminal.open()
+    local normal_cursor = view.cursor
     local session = context.sessions[1]
 
     view:service_session(false)
@@ -510,7 +511,7 @@ test.describe("Terminal View", function()
     test.equal(session.snapshot_calls, 1)
     test.equal(session.snapshot_requests[1], false)
     test.equal(view.bell_count, 2)
-    test.equal(view.cursor, "ibeam")
+    test.equal(view.cursor, normal_cursor)
 
     view:service_session(true)
     test.equal(session.snapshot_calls, 2)
@@ -1098,6 +1099,7 @@ test.describe("Terminal View", function()
 
   test.it("detects plain HTTP text and clears its hover when Ctrl is released", function(context)
     local view = terminal.open()
+    local normal_cursor = view.cursor
     local text = "http://example.test/path"
     local columns = {}
     for index = 1, #text do columns[index] = index - 1 end
@@ -1110,7 +1112,7 @@ test.describe("Terminal View", function()
     keymap.modkeys.ctrl = false
     view:on_key_released("left ctrl", { scancode = 224 })
     test.equal(view.hover_point, nil)
-    test.equal(view.cursor, "ibeam")
+    test.equal(view.cursor, normal_cursor)
   end)
 
   test.it("cancels URI activation when the pointer leaves terminal cells", function(context)

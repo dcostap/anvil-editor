@@ -255,7 +255,7 @@ function TerminalView:new(options)
   self.context = "workspace"
   self.terminal_view = true
   self.scrollable = true
-  self.cursor = "ibeam"
+  self.cursor = "arrow"
   self:refresh_cell_metrics()
   self.cols, self.rows = 80, 24
   self.color_cache = {}
@@ -1513,10 +1513,10 @@ local function same_point(a, b)
 end
 
 function TerminalView:clear_point_hover()
-  if not self.hover_point and not self.hover_cell and self.cursor == "ibeam" then return false end
+  if not self.hover_point and not self.hover_cell and self.cursor == "arrow" then return false end
   self.hover_point = nil
   self.hover_cell = nil
-  self.cursor = "ibeam"
+  self.cursor = "arrow"
   core.redraw = true
   return true
 end
@@ -1630,7 +1630,7 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
     if cell ~= self.hover_cell then
       self.hover_cell = cell
       self.hover_point = self:point_of_interest_at(col, row)
-      self.cursor = self.hover_point and "hand" or "ibeam"
+      self.cursor = self.hover_point and "hand" or "arrow"
       core.redraw = true
     end
     return self.hover_point ~= nil
