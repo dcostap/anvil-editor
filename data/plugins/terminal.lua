@@ -1689,14 +1689,22 @@ end
 
 function TerminalView:on_mouse_wheel(delta_y)
   if not self.session then return false end
-  if self.snapshot and self.snapshot.mouse_tracking and not keymap.modkeys.shift then
+  if not keymap.modkeys.shift then
     local x, y = core.root_panel.mouse.x, core.root_panel.mouse.y
     local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
     local button = delta_y > 0 and "four" or "five"
-    self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
-    return true
+    -- Input follows live terminal modes, not the last display snapshot.
+    local sent, encoded = self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
+    core.log_quiet(
+      "Terminal session %d wheel: delta=%s position=%.1f,%.1f sent=%s encoded=%s snapshot_tracking=%s",
+      self.log_id, tostring(delta_y), pixel_x, pixel_y, tostring(sent), tostring(encoded),
+      tostring(self.snapshot and self.snapshot.mouse_tracking)
+    )
+    if encoded then return true end
   end
   local delta = delta_y > 0 and -3 or 3
+  core.log_quiet("Terminal session %d wheel: route=history delta=%d shift=%s",
+    self.log_id, delta, tostring(keymap.modkeys.shift == true))
   if self.session:scroll("delta", delta) then
     self:clear_point_hover()
     self.snapshot = self.session:snapshot(self.snapshot)

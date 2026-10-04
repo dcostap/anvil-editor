@@ -134,7 +134,7 @@ local function fake_native()
     end
     function session:mouse(...)
       self.mouse_events[#self.mouse_events + 1] = { ... }
-      return true, true
+      return true, self.report_mouse ~= false
     end
     function session:focus(focused)
       self.focus_events[#self.focus_events + 1] = focused
@@ -997,6 +997,32 @@ test.describe("Terminal View", function()
     test.equal(session.mouse_events[2][1], "motion")
     test.equal(session.mouse_events[3][1], "release")
     test.ok(session.selection_cleared)
+  end)
+
+  test.it("sends wheel input when application mouse mode changes before the display snapshot", function(context)
+    local view = terminal.open()
+    view.snapshot.mouse_tracking = false
+    local session = context.sessions[1]
+    session.report_mouse = true
+
+    test.ok(view:on_mouse_wheel(1))
+
+    test.equal(#session.scrolls, 0)
+    test.equal(#session.mouse_events, 1)
+    test.equal(session.mouse_events[1][2], "four")
+  end)
+
+  test.it("scrolls terminal history when the application does not accept wheel input", function(context)
+    local view = terminal.open()
+    view.snapshot.mouse_tracking = true
+    local session = context.sessions[1]
+    session.report_mouse = false
+
+    test.ok(view:on_mouse_wheel(-1))
+
+    test.equal(#session.scrolls, 1)
+    test.equal(session.scrolls[1][1], "delta")
+    test.ok(session.scrolls[1][2] > 0)
   end)
 
   test.it("maps fractional mouse geometry to the same native cell", function(context)
