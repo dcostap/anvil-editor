@@ -288,7 +288,7 @@ function Buffer:load(filename)
   local transaction_stage = file_open_stage_begin("buffer_load_transaction")
   restore_registered_selection_states(self, selection_snapshots)
   local content_changed = old_text ~= table.concat(self.lines)
-  self:on_text_transaction({
+  local transaction = {
     applied = true,
     changed = true,
     type = "load",
@@ -303,6 +303,11 @@ function Buffer:load(filename)
         line_delta = #self.lines - math.max(1, old_line_count),
       },
     },
+  }
+  self:on_text_transaction(transaction)
+  self:notify_text_change_listeners("after", {
+    kind = "load",
+    transaction = transaction,
   })
   file_open_stage_end(transaction_stage)
   file_open_stage_end(load_stage)
