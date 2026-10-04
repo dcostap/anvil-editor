@@ -14,50 +14,30 @@ local comments_cache = {}
 local auto_detect_max_lines = 150
 
 
-local function indent_occurrences_more_than_once(stat, idx)
-  if stat[idx-1] and stat[idx-1] == stat[idx] then
-    return true
-  elseif stat[idx+1] and stat[idx+1] == stat[idx] then
-    return true
-  end
-  return false
-end
-
-
-local function optimal_indent_from_stat(stat)
-  if #stat == 0 then return nil, 0 end
-  table.sort(stat, function(a, b) return a > b end)
-  local best_indent = 0
-  local best_score = 0
-  local count = #stat
-  for x=1, count do
-    local indent = stat[x]
-    local score = 0
-    for y=1, count do
-      if y ~= x and stat[y] % indent == 0 then
-        score = score + 1
-      elseif
-        indent > stat[y]
-        and
-        (
-          indent_occurrences_more_than_once(stat, y)
-          or
-          (y == count and stat[y] > 1)
-        )
-      then
-        score = 0
-        break
-      end
+local function optimal_indent_from_stat(widths, changes, change_count)
+  local best_indent, best_score, best_matches = nil, 0, 0
+  for indent, score in pairs(changes) do
+    local matches = 0
+    for _, width in ipairs(widths) do
+      if width % indent == 0 then matches = matches + 1 end
     end
-    if score > best_score then
-      best_indent = indent
-      best_score = score
+    -- Require repeated changes and agreement from most indented lines.
+    -- Alignment and stray spaces may disagree without rejecting the candidate.
+    local supported = score >= 2 and matches >= #widths * 0.6
+    if indent == 1 then
+      -- Every width divides by one. Only direct changes can support size one.
+      supported = score >= 3 and score >= change_count * 0.8
     end
-    if score > 0 then
-      break
+    if supported and (
+      score > best_score
+      or (score == best_score and matches > best_matches)
+      or (score == best_score and matches == best_matches
+        and (not best_indent or indent < best_indent))
+    ) then
+      best_indent, best_score, best_matches = indent, score, matches
     end
   end
-  return best_score > 0 and best_indent or nil, best_score
+  return best_indent, best_score
 end
 
 
@@ -333,28 +313,43 @@ end
 
 
 local function detect_indent_stat(buffer)
-  local stat = {}
+  local widths = {}
+  local changes, change_count = {}, 0
+  local previous_indent
   local tab_count = 0
   local runs = 1
   local max_lines = auto_detect_max_lines
   for i, text in get_non_empty_lines(buffer.syntax, buffer.lines) do
     local spaces = text:match("^ +")
-    if spaces then table.insert(stat, spaces:len()) end
+    if spaces then table.insert(widths, #spaces) end
     local tabs = text:match("^\t+")
-    if tabs then tab_count = tab_count + 1 end
+    if tabs then
+      tab_count = tab_count + 1
+      previous_indent = nil
+    else
+      local indent = spaces and #spaces or 0
+      if previous_indent ~= nil and indent ~= previous_indent then
+        local change = math.abs(indent - previous_indent)
+        changes[change] = (changes[change] or 0) + 1
+        change_count = change_count + 1
+      end
+      previous_indent = indent
+    end
     -- if nothing found for first lines try at least 4 more times
-    if i == max_lines and runs < 5 and #stat == 0 and tab_count == 0 then
+    if i == max_lines and runs < 5 and #widths == 0 and tab_count == 0 then
       max_lines = max_lines + auto_detect_max_lines
       runs = runs + 1
     -- Stop parsing when files is very long. Not needed for euristic determination.
     elseif i > max_lines then break end
   end
-  local indent, score = optimal_indent_from_stat(stat)
-  if tab_count > score then
+  local indent, score = optimal_indent_from_stat(widths, changes, change_count)
+  -- Compare styles by line counts. A space score now counts level changes.
+  if tab_count >= 2 and tab_count > #widths then
     return "hard", config.indent_size, tab_count
-  else
-    return "soft", indent or config.indent_size, score or 0
+  elseif indent and #widths >= tab_count then
+    return "soft", indent, score
   end
+  return config.tab_type, config.indent_size, 0
 end
 
 function detectindent.detect(buffer)

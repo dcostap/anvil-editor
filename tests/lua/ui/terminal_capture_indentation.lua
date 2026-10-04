@@ -15,9 +15,9 @@ local function draw(view)
   if not ok then error(err, 0) end
 end
 
-local function open_capture()
+local function open_capture(text)
   local view = terminal.TerminalTextCaptureView(nil, {
-    text = " title\n\n" .. string.rep(" ", 80) .. "output\n first\n next\n",
+    text = text or " title\n\n" .. string.rep(" ", 80) .. "output\n first\n next\n",
   })
   panes.create { factory = function() return view end }
   view.position.x, view.position.y = 0, 0
@@ -41,7 +41,7 @@ test.describe("Terminal Text Capture indentation", function()
   end)
 
   test.it("does not treat terminal screen spacing as confirmed file indentation", function()
-    local view = open_capture()
+    local view = open_capture("root\n    child\n        nested\n    child again\nroot again\n")
     draw(view)
     local indent_type, size, confirmed = view.buffer:get_indent_info()
     test.equal(indent_type, "soft")
