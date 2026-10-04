@@ -71,6 +71,7 @@ test.describe("Terminal Session restoration", function()
       or terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
     if state then panes.place(function() return view end, { placement = "current", focus = true }) end
     context.views[#context.views + 1] = view
+    test.ok(wait_for(view, function() return view.state == "running" or view.state == "failed" end))
     test.equal(view.state, "running", view.launch_error)
     retain_processes(context, view.session)
     return view
@@ -99,9 +100,16 @@ test.describe("Terminal Session restoration", function()
       session_id = record.session_id, host_pid = record.host_pid,
       host_creation_time = record.host_creation_time, pipe_name = record.pipe_name,
     }
-    if session then session:close() end
-    test.equal(session, nil)
-    test.ok(err)
+    test.ok(session, err)
+    local deadline = system.get_time() + 8
+    local status
+    repeat
+      _, status = session:update()
+      if status.kind == "failed" then break end
+      coroutine.yield(0.01)
+    until system.get_time() >= deadline
+    session:close()
+    test.equal(status.kind, "failed")
     mark(view, "first_client_still_works")
   end)
 

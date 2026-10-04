@@ -54,6 +54,9 @@ typedef struct {
   size_t scrollback_lines;
   bool has_scrollback_lines;
   ReconnectJob *reconnect;
+  uint64_t reconnect_started, reconnect_at;
+  DWORD reconnect_delay;
+  bool initial_restore, preserve_grid, terminate_on_failure;
   uint8_t *replay;
   size_t replay_length, replay_capacity;
   volatile LONG replay_complete;
@@ -778,10 +781,20 @@ typedef struct {
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
 } FinalCommand;
 
+static volatile LONG pending_close_commands;
+
+/* Called after Lua teardown, not from a normal UI update. One budget for all jobs. */
+void anvil_terminal_wait_for_close(void) {
+  uint64_t deadline = GetTickCount64() + 1000;
+  while (InterlockedCompareExchange(&pending_close_commands, 0, 0) && GetTickCount64() < deadline)
+    Sleep(5);
+}
+
 static DWORD WINAPI final_command_main(void *userdata) {
   FinalCommand *command = userdata;
   DWORD error;
   anvil_terminal_host_control(command->process, command->host_pid, command->id, command->type, &error);
+  if (command->type == ANVIL_TERMINAL_CLOSE) InterlockedDecrement(&pending_close_commands);
   if (command->process) CloseHandle(command->process);
   free(command);
   return 0;
@@ -800,9 +813,13 @@ static void send_final_command(TerminalSession *session, HANDLE process, uint16_
   if (!command) { CloseHandle(process); return; }
   *command = (FinalCommand){ .process = process, .type = type, .host_pid = session->host_pid };
   memcpy(command->id, session->id, sizeof(command->id));
+  if (type == ANVIL_TERMINAL_CLOSE) InterlockedIncrement(&pending_close_commands);
   HANDLE thread = CreateThread(NULL, 0, final_command_main, command, 0, NULL);
   if (thread) CloseHandle(thread);
-  else { CloseHandle(process); free(command); }
+  else {
+    if (type == ANVIL_TERMINAL_CLOSE) InterlockedDecrement(&pending_close_commands);
+    CloseHandle(process); free(command);
+  }
 }
 
 /* Reconnect owns no Lua or UI objects. Closing its view does not join this job. */
@@ -828,9 +845,10 @@ static void release_reconnect(ReconnectJob *job) {
 
 static DWORD WINAPI reconnect_main(void *userdata) {
   ReconnectJob *job = userdata;
-  job->connected = anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
+  bool connected = anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
     &job->shell_pid, job->id, &job->size, &job->error);
   EnterCriticalSection(&job->lock);
+  job->connected = connected;
   uint16_t final_type = job->final_type;
   if (!final_type) InterlockedExchange(&job->done, 1);
   LeaveCriticalSection(&job->lock);
@@ -843,6 +861,7 @@ static DWORD WINAPI reconnect_main(void *userdata) {
   }
   /* Reconnecting views request updates while this job runs. Do not access SDL:
      a cancelled job can outlive the editor's window and Lua state. */
+  if (final_type == ANVIL_TERMINAL_CLOSE) InterlockedDecrement(&pending_close_commands);
   release_reconnect(job);
   return 0;
 }
@@ -854,6 +873,7 @@ static bool start_reconnect(TerminalSession *session) {
   job->references = 2;
   job->host_pid = session->host_pid;
   job->size = (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
+  if (session->preserve_grid) job->size.cols = job->size.rows = 0;
   memcpy(job->id, session->id, sizeof(job->id));
   DuplicateHandle(GetCurrentProcess(), session->process, GetCurrentProcess(), &job->process,
     0, FALSE, DUPLICATE_SAME_ACCESS);
@@ -862,6 +882,23 @@ static bool start_reconnect(TerminalSession *session) {
   CloseHandle(thread);
   session->reconnect = job;
   return true;
+}
+
+static bool cancel_reconnect(TerminalSession *session, uint16_t type) {
+  ReconnectJob *job = session->reconnect;
+  if (!job) return false;
+  EnterCriticalSection(&job->lock);
+  bool owns_command = !job->done;
+  if (owns_command) {
+    /* An unaccepted restore does not own another client's shell. */
+    if (session->initial_restore && !job->connected) type = ANVIL_TERMINAL_DETACH;
+    job->final_type = type;
+    if (type == ANVIL_TERMINAL_CLOSE) InterlockedIncrement(&pending_close_commands);
+  } else if (job->connected) session->attach_count = session->attach_count ? session->attach_count : 1;
+  LeaveCriticalSection(&job->lock);
+  session->reconnect = NULL;
+  release_reconnect(job);
+  return owns_command;
 }
 
 static void clear_replay(TerminalSession *session) {
@@ -874,7 +911,7 @@ static void clear_replay(TerminalSession *session) {
 static void terminate_terminal_process(TerminalSession *session) {
   release_terminal_transport(session);
   /* Never wait for a host on the UI thread. Its kill job owns shell cleanup. */
-  if (session->process && session->state == TERMINAL_STATE_FAILED)
+  if (session->process && session->state == TERMINAL_STATE_FAILED && session->terminate_on_failure)
     TerminateProcess(session->process, 1);
   close_handle(&session->process);
 }
@@ -884,15 +921,7 @@ static void close_session(TerminalSession *session) {
   session->closed = true;
   uint16_t final_type = session->detached ? ANVIL_TERMINAL_DETACH : ANVIL_TERMINAL_CLOSE;
   HANDLE process = retain_handle(session->process);
-  bool job_owns_command = false;
-  if (session->reconnect) {
-    ReconnectJob *job = session->reconnect;
-    EnterCriticalSection(&job->lock);
-    if (!job->done) { job->final_type = final_type; job_owns_command = true; }
-    LeaveCriticalSection(&job->lock);
-    session->reconnect = NULL;
-    release_reconnect(job);
-  }
+  bool job_owns_command = cancel_reconnect(session, final_type);
   if (session->vt_trace_file) {
     FlushFileBuffers(session->vt_trace_file);
     close_handle(&session->vt_trace_file);
@@ -1247,8 +1276,9 @@ static int f_terminal_new(lua_State *L) {
       if (anvil_terminal_host_identity(session->process, (DWORD)pid, created)) {
         session->host_pid = (DWORD)pid;
         memcpy(session->id, id, sizeof(session->id));
-        started = anvil_terminal_host_connect(&session->pipe, session->process, session->host_pid,
-          &session->shell_pid, session->id, &size, &error);
+        session->initial_restore = true;
+        session->preserve_grid = !has_size;
+        started = true; /* The worker authenticates the pipe and waits for WELCOME. */
       } else { close_handle(&session->process); error = ERROR_INVALID_DATA; }
     } else error = ERROR_INVALID_DATA;
   } else {
@@ -1259,7 +1289,7 @@ static int f_terminal_new(lua_State *L) {
   }
   lua_settop(L, 2);
   if (!started) {
-    if (!id) set_terminal_state(session, TERMINAL_STATE_FAILED);
+    if (!id) { session->terminate_on_failure = true; set_terminal_state(session, TERMINAL_STATE_FAILED); }
     close_session(session);
     lua_pop(L, 1);
     lua_pushnil(L);
@@ -1267,13 +1297,13 @@ static int f_terminal_new(lua_State *L) {
     lua_pushinteger(L, error);
     return 3;
   }
-  set_terminal_state(session, TERMINAL_STATE_RUNNING);
-  session->cols = size.cols; session->rows = size.rows;
+  set_terminal_state(session, id ? TERMINAL_STATE_RECONNECTING : TERMINAL_STATE_RUNNING);
+  if (!id) { session->cols = size.cols; session->rows = size.rows; }
   session->cell_width = size.cell_width; session->cell_height = size.cell_height;
   session->attached_at = GetTickCount64();
-  session->attach_count = 1;
+  session->attach_count = id ? 0 : 1;
 
-  if (!start_terminal_io(session)) {
+  if (!id && !start_terminal_io(session)) {
     session->detached = id != NULL;
     close_session(session);
     lua_pop(L, 1);
@@ -1292,6 +1322,15 @@ static int f_terminal_new(lua_State *L) {
     lua_pushnil(L);
     lua_pushliteral(L, "Could not initialize libghostty-vt");
     return 2;
+  }
+  if (id) {
+    session->transport_released = true;
+    session->reconnect_started = GetTickCount64();
+    session->reconnect_delay = 250;
+    if (!start_reconnect(session)) {
+      close_session(session); lua_pop(L, 1); lua_pushnil(L);
+      lua_pushliteral(L, "Could not start Terminal Session attach worker"); return 2;
+    }
   }
   return 1;
 }
@@ -1331,6 +1370,9 @@ static void push_status(lua_State *L, TerminalSession *session) {
 }
 
 static void fail_transport(TerminalSession *session, DWORD error) {
+  cancel_reconnect(session, ANVIL_TERMINAL_DETACH);
+  session->terminate_on_failure = session->attach_count &&
+    (error == ERROR_INVALID_DATA || error == ERROR_NOT_ENOUGH_MEMORY);
   session->read_error = error;
   InterlockedExchange(&session->read_failed, 1);
   set_terminal_state(session, TERMINAL_STATE_FAILED);
@@ -1351,11 +1393,23 @@ static bool service_transport(TerminalSession *session) {
     session->replay_finished = false;
     InterlockedExchange(&session->replay_complete, 0);
     set_terminal_state(session, TERMINAL_STATE_RECONNECTING);
+    session->reconnect_started = GetTickCount64();
+    session->reconnect_delay = 250;
+    session->reconnect_at = 0;
     if (!start_reconnect(session)) fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
   }
   if (session->state == TERMINAL_STATE_RECONNECTING) {
+    uint64_t now = GetTickCount64();
+    if (now - session->reconnect_started >= 30000) {
+      fail_transport(session, ERROR_TIMEOUT); return false;
+    }
     ReconnectJob *job = session->reconnect;
-    if (!job || !InterlockedCompareExchange(&job->done, 0, 0)) return false;
+    if (!job) {
+      if (now >= session->reconnect_at && !start_reconnect(session))
+        fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
+      return false;
+    }
+    if (!InterlockedCompareExchange(&job->done, 0, 0)) return false;
     EnterCriticalSection(&job->lock);
     bool connected = job->connected;
     DWORD error = job->error;
@@ -1363,13 +1417,18 @@ static bool service_transport(TerminalSession *session) {
     if (connected) {
       handle = job->pipe.handle; job->pipe.handle = NULL;
       session->shell_pid = job->shell_pid;
+      session->cols = job->size.cols; session->rows = job->size.rows;
+      session->cell_width = job->size.cell_width; session->cell_height = job->size.cell_height;
     }
     LeaveCriticalSection(&job->lock);
     session->reconnect = NULL; release_reconnect(job);
     if (!connected) {
-      if (WaitForSingleObject(session->process, 0) != WAIT_TIMEOUT ||
+      if (session->initial_restore || WaitForSingleObject(session->process, 0) != WAIT_TIMEOUT ||
           error == ERROR_INVALID_DATA || error == ERROR_ACCESS_DENIED) fail_transport(session, error);
-      else if (!start_reconnect(session)) fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
+      else {
+        session->reconnect_at = now + session->reconnect_delay;
+        session->reconnect_delay = session->reconnect_delay < 2000 ? session->reconnect_delay * 2 : 2000;
+      }
       return false;
     }
     session->read_queue_head = session->read_queue_count = 0;
@@ -1385,6 +1444,7 @@ static bool service_transport(TerminalSession *session) {
       fail_transport(session, ERROR_NOT_ENOUGH_MEMORY); return false;
     }
     session->attached_at = GetTickCount64(); session->attach_count++;
+    session->initial_restore = session->preserve_grid = false;
     set_terminal_state(session, TERMINAL_STATE_RUNNING);
   }
   return !session->transport_released;

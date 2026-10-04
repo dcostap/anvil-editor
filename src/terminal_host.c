@@ -485,7 +485,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
     uint64_t sent_at = InterlockedCompareExchange64(&host.exit_sent_ms, 0, 0);
     if (exit_queued && (!host.attached || (sent_at && now - sent_at > 3000))) break;
     if (!host.attached && !exited_at && now >= busy_probe_at) {
-      busy_probe_at = now + 500;
+      busy_probe_at = now + 2000;
       if (shell_busy(GetProcessId(host.pty.process))) idle_since = 0;
       else if (!idle_since) idle_since = now;
       uint64_t last = InterlockedCompareExchange64(&host.last_output, 0, 0);

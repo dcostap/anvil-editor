@@ -316,13 +316,14 @@ function TerminalView:new(options)
     return
   end
   self.session = session
-  self:log_session_attach()
+  local attaching = session:stats().attach_count == 0
+  if not attaching then self:log_session_attach() end
   self.session_cell_width = self.native_cell_width
   self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
-  self.state = "running"
-  self.running = true
+  self.state = attaching and "reconnecting" or "running"
+  self.running = self.state == "running"
   core.log_quiet("Terminal session %d started: cwd=%s cols=%d rows=%d minimum contrast=%g vividness=%g",
     self.log_id, self.launch_options.cwd, self.cols, self.rows,
     self.minimum_contrast, self.color_vividness)

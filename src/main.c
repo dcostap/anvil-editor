@@ -14,6 +14,7 @@
 #include "win32_single_instance.h"
 #include "anvil_shell.h"
 #include "terminal_host.h"
+#include "api/terminal_native.h"
 #include "hosted_surface.h"
 #include "input_latency_probe.h"
 #include "surface_protocol.h"
@@ -749,6 +750,11 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
       lua_close(app->L);
       anvil_shutdown_diag_log("Lua close end");
     }
+#ifdef _WIN32
+    anvil_shutdown_diag_log("terminal CLOSE drain begin");
+    anvil_terminal_wait_for_close();
+    anvil_shutdown_diag_log("terminal CLOSE drain end");
+#endif
     SDL_free(app);
   }
   anvil_shutdown_diag_log("native single instance stop begin");

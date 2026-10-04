@@ -61,6 +61,7 @@ test.describe("Terminal Session lifecycle", function()
       or terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
     if state then panes.place(function() return view end, { placement = "current", focus = true }) end
     context.views[#context.views + 1] = view
+    test.ok(wait_for(view, function() return view.state == "running" or view.state == "failed" end))
     test.equal(view.state, "running", view.launch_error)
     local ffi = require "ffi"
     ffi.cdef [[
