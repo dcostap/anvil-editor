@@ -390,8 +390,12 @@ local textview_draw = TextView.draw
 function TextView:draw(...)
   textview_draw(self, ...)
   if self.init_detectindent then
+    -- Terminal spacing describes screen layout, not file indentation.
+    if self.terminal_text_capture then
+      core.log_quiet("Indent detection skipped for Terminal Text Capture: %s", self.buffer:get_name())
+    end
     -- perform detection only for Buffers loaded in the UI
-    if #core.get_views_referencing_buffer(self.buffer) > 0 then
+    if not self.terminal_text_capture and #core.get_views_referencing_buffer(self.buffer) > 0 then
       local type, size, confirmed = self.buffer:get_indent_info()
       if not confirmed then
         update_cache(self.buffer)

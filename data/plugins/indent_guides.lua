@@ -173,7 +173,7 @@ end
 
 local function emit_indent_guides(self, line, x, y, emit_grid, emit_rect)
   local conf = indent_guides
-  if conf.enabled and not markdown_live_mode(self) then
+  if conf.enabled and not self.terminal_text_capture and not markdown_live_mode(self) then
     local _, indent_size = self.buffer:get_indent_info()
     indent_size = indent_size or config.indent_size or 2
     local indent_cols = effective_indent_cols(self.buffer, line, indent_size)
@@ -236,6 +236,7 @@ end
 local indent_contributor = {
   packet_enabled = function(view)
     return indent_guides.enabled
+      and not view.terminal_text_capture
       and not indent_guides.highlight_active
       and not markdown_live_mode(view)
   end,
