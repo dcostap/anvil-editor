@@ -677,15 +677,34 @@ local function set_history_index(pane, index, opts)
 end
 
 -- Resolve by entry identity so an old picker cannot activate a replacement entry.
-function M.go_to_history_entry(target, entry)
+local function resolve_history_entry(target, entry)
   local pane = M.find(target)
   if not pane then return nil, "The source Pane is no longer available" end
   for index, candidate in ipairs(pane.history.entries) do
     if candidate == entry then
-      return set_history_index(pane, index, { restore_current = true })
+      return pane, index
     end
   end
   return nil, "The Navigation Place is no longer available"
+end
+
+function M.go_to_history_entry(target, entry)
+  local pane, index = resolve_history_entry(target, entry)
+  if not pane then return nil, index end
+  return set_history_index(pane, index, { restore_current = true })
+end
+
+---Copy a saved Navigation Place into a new Pane Group without changing its source.
+function M.copy_history_entry(target, entry)
+  local source, err = resolve_history_entry(target, entry)
+  if not source then return nil, err end
+  if not entry.view.duplicate then return nil, "This View does not support copying" end
+  return M.create { factory = function()
+    local copy = entry.view:duplicate()
+    if not copy or copy == entry.view then error("This View does not support copying", 0) end
+    restore_navigation_state(copy, entry.state)
+    return copy
+  end }
 end
 
 local function history_has_view(pane, view)

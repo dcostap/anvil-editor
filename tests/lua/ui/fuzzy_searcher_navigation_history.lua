@@ -22,6 +22,11 @@ end
 function PlaceView:get_name() return self.name end
 function PlaceView:get_navigation_state() return { place = self.place } end
 function PlaceView:set_navigation_state(state) self.place = state.place end
+function PlaceView:duplicate()
+  local copy = PlaceView(self.name)
+  copy.place = self.place
+  return copy
+end
 
 local function editor_pane(context)
   local buffer = Buffer(nil, nil, true)
@@ -118,6 +123,39 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     test.same(editor:get_selection_state().selections, { 20, 3, 20, 7 })
     panes.forward(pane)
     test.same(editor:get_selection_state().selections, { 70, 5, 70, 5 })
+  end)
+
+  test.it("opens the selected checkpoint in a new Pane Group and keeps the picker focused", function(context)
+    local pane, editor, buffer = editor_pane(context)
+    editor:set_selection_state { selections = { 22, 1, 22, 1 }, last_selection = 1 }
+    local source_state = editor:get_navigation_state()
+    local picker = fuzzy_searcher.open("^")
+    picker:select_result(2)
+
+    test.ok(command.perform("core:activate_point_of_interest_alternate"))
+
+    local destination = panes.active()
+    test.not_equal(destination.group, pane.group)
+    local copy = destination.current_view
+    test.not_equal(copy, editor)
+    test.equal(copy.buffer, buffer)
+    test.same(copy:get_selection_state().selections, { 20, 3, 20, 7 })
+    test.equal(copy.scroll.to.x, 2)
+    test.equal(copy.scroll.to.y, 400)
+    test.same(editor:get_navigation_state(), source_state)
+    test.equal(pane.current_view, editor)
+    test.equal(pane.history.index, 2)
+    test.equal(panes.history_length(pane), 3)
+    test.equal(panes.history_length(destination), 1)
+    test.equal(core.fuzzy_searcher_active_view, picker)
+    test.equal(core.active_view, picker.input.textview)
+
+    test.ok(command.perform("core:activate_point_of_interest_alternate"))
+    test.equal(panes.count(), 3)
+    test.same(panes.active().current_view:get_selection_state().selections, { 20, 3, 20, 7 })
+    test.same(editor:get_navigation_state(), source_state)
+    test.equal(core.fuzzy_searcher_active_view, picker)
+    test.equal(core.active_view, picker.input.textview)
   end)
 
   test.it("shows the current entry immediately when it is outside the newest result page", function()
@@ -232,7 +270,7 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     local picker = fuzzy_searcher.open("^File Tree")
     test.equal(#picker.results, 3)
     picker:select_result(3)
-    picker:confirm(true)
+    picker:confirm(false)
     test.equal(panes.count(), 1)
     test.equal(pane.current_view, source)
     test.equal(source.place, 1)
@@ -242,6 +280,46 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     test.equal(panes.forward(pane), terminal)
     test.equal(panes.forward(pane), source)
     test.equal(source.place, 3)
+  end)
+
+  test.it("copies a saved stateful View without changing its source state or history", function()
+    local source = PlaceView("File Tree")
+    local pane = panes.create { factory = function() return source end }
+    source.place = 2
+    panes.record_location(pane)
+    source.place = 3
+    panes.record_location(pane)
+    local picker = fuzzy_searcher.open("^File Tree")
+    picker:select_result(3)
+
+    test.ok(command.perform("core:activate_point_of_interest_alternate"))
+
+    local destination = panes.active()
+    test.not_equal(destination.group, pane.group)
+    test.not_equal(destination.current_view, source)
+    test.equal(destination.current_view.place, 1)
+    test.equal(source.place, 3)
+    test.equal(pane.current_view, source)
+    test.equal(pane.history.index, 3)
+    test.equal(panes.history_length(pane), 3)
+    test.equal(panes.history_length(destination), 1)
+    test.equal(core.fuzzy_searcher_active_view, picker)
+    test.equal(core.active_view, picker.input.textview)
+  end)
+
+  test.it("keeps the source and picker unchanged when the View cannot be copied", function()
+    local view = View()
+    local pane = panes.create { factory = function() return view end }
+    local picker = fuzzy_searcher.open("^")
+
+    test.not_ok(picker:confirm(true))
+
+    test.equal(panes.count(), 1)
+    test.equal(pane.current_view, view)
+    test.equal(panes.history_length(pane), 1)
+    test.equal(core.fuzzy_searcher_active_view, picker)
+    test.equal(core.active_view, picker.input.textview)
+    test.ok(picker.status:find("does not support copying", 1, true))
   end)
 
   test.it("searches file paths and code text without interpreting other mode markers", function(context)
@@ -262,10 +340,15 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     picker:select_result(1)
     local place = picker:selected_result().history_entry
     panes.close_view(pane, { view = editor, force = true })
+    local count = panes.count()
     test.not_ok(picker:confirm())
     test.not_ok(picker.closed)
     test.ok(picker.status:find("no longer available", 1, true))
     test.is_nil(panes.go_to_history_entry(pane, place))
+    test.not_ok(picker:confirm(true))
+    test.not_ok(picker.closed)
+    test.ok(picker.status:find("no longer available", 1, true))
+    test.equal(panes.count(), count)
   end)
 
   test.it("finds and displays the enclosing Tree-sitter symbol from unsaved code", function(context)

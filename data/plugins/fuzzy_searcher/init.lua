@@ -7669,7 +7669,13 @@ function FSView:activate_selected_result(new_group)
   if not r then return end
   if r.kind == "navigation_place" then
     local pane = panes.find(self.source_pane)
-    local view, err = panes.go_to_history_entry(pane, r.history_entry)
+    local view, err, destination
+    if new_group then
+      destination, err = panes.copy_history_entry(pane, r.history_entry)
+      view = destination and destination.current_view
+    else
+      view, err = panes.go_to_history_entry(pane, r.history_entry)
+    end
     if not view then
       self.status = err
       self.dirty = true
@@ -7677,10 +7683,15 @@ function FSView:activate_selected_result(new_group)
       core.log_quiet("Navigation History Search: activation failed: %s", err)
       return false
     end
-    self:close()
-    panes.focus(pane)
-    core.log_quiet("Navigation History Search: restored pane=%s index=%d",
-      pane.id, pane.history.index)
+    if new_group then
+      core.log_quiet("Navigation History Search: copied place from pane=%s to pane=%s",
+        pane.id, destination.id)
+    else
+      self:close()
+      panes.focus(pane)
+      core.log_quiet("Navigation History Search: restored pane=%s index=%d",
+        pane.id, pane.history.index)
+    end
     return true
   end
   if r.kind == "shell_command" then
