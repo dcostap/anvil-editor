@@ -2586,18 +2586,6 @@ end
 local draw_file_result_row
 local grep_row_columns
 
-function fuzzy_searcher.grep_enclosing_symbol(result)
-  if not result or not result.abs_path then return nil end
-  local line = tonumber(result.line) or 1
-  local col = tonumber(result.col or result.content_match_start) or 1
-  local symbol_index = require "core.treesitter.symbol_index"
-  -- The index owns the cache and invalidates it when symbols change.
-  local symbol = symbol_index.enclosing_symbol(result.abs_path, line, col, {
-    kinds = { "function", "method" },
-  })
-  if symbol and symbol.name and symbol.name ~= "" then return symbol end
-end
-
 function fuzzy_searcher.symbol_declaration_text(symbol, include_suffix)
   if include_suffix == nil then include_suffix = true end
   local declaration = tostring(symbol and symbol.declaration or "")
@@ -3044,7 +3032,6 @@ local function draw_grep_result_row(
   local path_w, gap, text_w = grep_row_columns(width)
   local history = result.kind == "navigation_place"
   local symbol = result.enclosing_symbol
-  if not history then symbol = fuzzy_searcher.grep_enclosing_symbol(result) end
   local context_gap = math.max(8 * (SCALE or 1), style.padding.x * 2)
   local prefix, line_suffix = fuzzy_searcher.line_result_location(result)
   local filename_width = fuzzy_searcher.file_result_full_width(
@@ -7818,6 +7805,44 @@ function FSView:poll_modifier_result_metadata()
   end
 end
 
+function FSView:prepare_visible_grep_context(metrics)
+  if not self:is_visible() then return end
+  local first, shift = self:displayed_list_offset(metrics)
+  local last = math.min(#self.results, first + metrics.result_rows - 1 + (shift > 0 and 1 or 0))
+  local locations, rows = {}, {}
+  for i = first, last do
+    local result = self.results[i]
+    if result.kind == "grep" and not result.header then
+      result.enclosing_symbol = nil
+      if result.abs_path then
+        locations[#locations + 1] = {
+          path = result.abs_path,
+          line = tonumber(result.line) or 1,
+          col = tonumber(result.col or result.content_match_start) or 1,
+        }
+        rows[#rows + 1] = result
+      end
+    end
+  end
+  if #locations == 0 then return end
+
+  -- Share one open-Buffer snapshot across visible rows. Painting only reads
+  -- these results; the index keeps context current after edits and rescans.
+  local perf = core.perf_frame_stats and package.loaded["core.perf"]
+  local started = perf and system.get_time()
+  local symbols = require("core.treesitter.symbol_index").enclosing_symbols(
+    locations, { kinds = { "function", "method" } }
+  )
+  for i, entry in ipairs(symbols) do
+    local symbol = entry.symbol
+    if symbol and symbol.name and symbol.name ~= "" then rows[i].enclosing_symbol = symbol end
+  end
+  if perf then
+    perf.add_detail("fuzzy_grep_context_ms", (system.get_time() - started) * 1000)
+    perf.add_detail("fuzzy_grep_context_rows", #locations)
+  end
+end
+
 function FSView:update()
   if self.closing then
     local _, _, complete = self:closing_transition()
@@ -7867,6 +7892,7 @@ function FSView:update()
     math.max(0, #self.results - metrics.result_rows) * metrics.lh)
   self:move_towards(self.list_scroll, "y", (self.viewport_offset - 1) * metrics.lh, 0.2, "scroll")
   self:update_selected_preview()
+  self:prepare_visible_grep_context(metrics)
   if self:is_visible() and self:search_status_label() then
     core.redraw = true
   end

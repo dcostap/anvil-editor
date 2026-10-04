@@ -2,7 +2,6 @@ local test = require "core.test"
 local core = require "core"
 local style = require "core.style"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
-local symbol_index = require "core.treesitter.symbol_index"
 local symbol_icons = require "core.symbol_icons"
 local file_icons = require "core.file_icons"
 
@@ -13,7 +12,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
 
   test.before_each(function()
     saved = {
-      enclosing_symbol = symbol_index.enclosing_symbol,
       draw_text = renderer.draw_text,
       draw_rect = renderer.draw_rect,
       draw_canvas = renderer.draw_canvas,
@@ -24,7 +22,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
 
   test.after_each(function()
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
-    symbol_index.enclosing_symbol = saved.enclosing_symbol
     renderer.draw_text = saved.draw_text
     renderer.draw_rect = saved.draw_rect
     renderer.draw_canvas = saved.draw_canvas
@@ -35,18 +32,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
   test.it("draws the enclosing function without parameters at the file column edge", function()
     renderer.draw_canvas = function() end
     local calls = {}
-    symbol_index.enclosing_symbol = function(path, line, col, opts)
-      test.equal(path, "C:/project/src/parser.lua")
-      test.equal(line, 42)
-      test.equal(col, 9)
-      test.same(opts.kinds, { "function", "method" })
-      return {
-        name = "parse_expression",
-        kind = "function",
-        declaration = "Parser::parse_expression(Token token)",
-        declaration_name_span = { 9, 24 },
-      }
-    end
     renderer.draw_text = function(font, text, x, _, color)
       calls[#calls + 1] = { text = text, x = x, color = color }
       return x + font:get_width(text)
@@ -64,6 +49,11 @@ test.describe("Fuzzy Searcher Text Search context", function()
       text = "return parse_expression(token)",
       exact = true,
       grep_query = "parse_expression",
+      enclosing_symbol = {
+        name = "parse_expression", kind = "function",
+        declaration = "Parser::parse_expression(Token token)",
+        declaration_name_span = { 9, 24 },
+      },
     }, 0, 0, 1400, false)
 
     local context_call, signature_call
@@ -82,7 +72,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
   test.it("keeps only edit-time metadata in text results", function()
     local calls = {}
     renderer.draw_canvas = function() end
-    symbol_index.enclosing_symbol = function() end
     renderer.draw_text = function(font, text, x)
       calls[#calls + 1] = { text = text, x = x, right = x + font:get_width(text) }
       return x + font:get_width(text)
@@ -122,17 +111,14 @@ test.describe("Fuzzy Searcher Text Search context", function()
         declaration_name_span = { 20, 41 },
       },
     }
-    symbol_index.enclosing_symbol = function(_, line)
-      return symbols[line]
-    end
     local line_right, directory_count = nil, 0
     local picker = fuzzy_searcher.open_static_results("Text Search", {
       {
-        kind = "grep", file = "src/Panel.cpp", abs_path = "C:/project/src/Panel.cpp",
+        kind = "grep", file = "src/Panel.cpp",
         line = 10, col = 1, text = "matched content", exact = true,
       },
       {
-        kind = "grep", file = "src/Command.cpp", abs_path = "C:/project/src/Command.cpp",
+        kind = "grep", file = "src/Command.cpp",
         line = 20, col = 1, text = "matched content", exact = true,
       },
     })
@@ -141,6 +127,8 @@ test.describe("Fuzzy Searcher Text Search context", function()
     picker.open_transition_complete = true
     picker.update_selected_preview = function() end
     picker:update()
+    picker.results[1].enclosing_symbol = symbols[10]
+    picker.results[2].enclosing_symbol = symbols[20]
 
     local original_draw_rounded_rect = renderer.draw_rounded_rect
     local original_draw_text_known_bounds = renderer.draw_text_known_bounds
@@ -162,7 +150,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     renderer.set_clip_rect = function() end
     renderer.draw_canvas = function() end
     file_icons.draw = function() end
-    local ok, err = pcall(function() picker:draw() end)
+    local ok, err = pcall(function() picker:draw_open_content() end)
     renderer.draw_rounded_rect = original_draw_rounded_rect
     renderer.draw_text_known_bounds = original_draw_text_known_bounds
     renderer.set_clip_rect = original_set_clip_rect
@@ -237,7 +225,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     renderer.draw_text_known_bounds = function() end
     renderer.set_clip_rect = function() end
     renderer.draw_canvas = function() end
-    local ok, err = pcall(function() picker:draw() end)
+    local ok, err = pcall(function() picker:draw_open_content() end)
     renderer.draw_text = saved_draw_text
     renderer.draw_rect = saved_draw_rect
     renderer.draw_rounded_rect = saved_draw_rounded_rect
@@ -257,14 +245,6 @@ test.describe("Fuzzy Searcher Text Search context", function()
     local calls = {}
     local symbol_x
     renderer.draw_canvas = function() end
-    symbol_index.enclosing_symbol = function()
-      return {
-        name = "ApplyCollisionAlt",
-        kind = "function",
-        declaration = "CPhysical::ApplyCollisionAlt(CEntity *B, CColPoint &colpoint, float &impulse)",
-        declaration_name_span = { 12, 28 },
-      }
-    end
     renderer.draw_text = function(font, text, x)
       calls[#calls + 1] = { font = font, text = text, x = x }
       return x + font:get_width(text)
@@ -284,6 +264,11 @@ test.describe("Fuzzy Searcher Text Search context", function()
       text = "return parse_expression(token)",
       exact = true,
       grep_query = "parse_expression",
+      enclosing_symbol = {
+        name = "ApplyCollisionAlt", kind = "function",
+        declaration = "CPhysical::ApplyCollisionAlt(CEntity *B, CColPoint &colpoint, float &impulse)",
+        declaration_name_span = { 12, 28 },
+      },
     }, 0, 0, 1100, false)
 
     local line_call

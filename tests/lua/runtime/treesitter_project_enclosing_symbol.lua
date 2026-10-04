@@ -18,6 +18,8 @@ test.describe("Tree-sitter Project enclosing symbols", function()
   local pool
 
   test.after_each(function()
+    local core = require "core"
+    if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close("replaced") end
     if pool then
       pool:shutdown({ cancel_running = true })
       pool = nil
@@ -179,6 +181,7 @@ test.describe("Tree-sitter Project enclosing symbols", function()
     index.status, index.symbol_status = "ready", "ready"
     pool = native_pool.new({ name = "scope-refresh", worker_count = 1 })
     local row = { kind = "grep", abs_path = path, file = "scope-refresh.c", line = 1, col = 20, text = "return 1;" }
+    local picker = fuzzy_searcher.open_static_results("Text Search", { row })
     for _, name in ipairs({ "before", "after" }) do
       test.not_nil(pool:submit({
         kind = "treesitter_index_text", language = "c", path = path,
@@ -195,6 +198,7 @@ test.describe("Tree-sitter Project enclosing symbols", function()
       local builder = native_pool.new_project_builder({ usage_cap = 10 })
       test.ok(result:adopt_project(builder:id(), { fingerprint = name, usage_complete = true }))
       index.native_snapshot = builder:freeze()
+      picker:update()
       local drawn = {}
       local draw_text = renderer.draw_text
       local draw_canvas, draw_rect = renderer.draw_canvas, renderer.draw_rect
