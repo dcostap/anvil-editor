@@ -1,7 +1,7 @@
 local core = require "core"
 local common = require "core.common"
 local DirWatch = require "core.dirwatch"
-local process = require "core.process"
+local process_stream = require "core.process_stream"
 local worker_pool = require "core.worker_pool"
 
 local project_files = {}
@@ -156,30 +156,14 @@ local function scan_directories(root, ignored_paths, hidden_paths)
 end
 
 local function scan(root, include_ignored)
-  local proc, start_error = process.start(project_files.scan_command(include_ignored), {
+  local stream, start_error = process_stream.start(project_files.scan_command(include_ignored), {
     cwd = root,
-    stdout = process.REDIRECT_PIPE,
-    stderr = process.REDIRECT_PIPE,
-    stdin = process.REDIRECT_DISCARD,
+    stderr = true,
   })
-  if not proc then return nil, start_error or "could not start ripgrep" end
+  if not stream then return nil, start_error or "could not start ripgrep" end
 
   local ignore_debug = { pending = "", paths = {}, hidden_paths = {} }
-  local debug_done = false
-  core.add_background_thread(function()
-    while proc:running() do
-      local ok, chunk = pcall(
-        proc.stderr.read, proc.stderr, 64 * 1024,
-        { scan = 0.001, timeout = WORK_SLICE_SECONDS }
-      )
-      if ok and chunk then consume_ignore_debug(ignore_debug, chunk, root) end
-    end
-    local ok, tail = pcall(proc.stderr.read, proc.stderr, "all")
-    if ok and tail then consume_ignore_debug(ignore_debug, tail .. "\n", root) end
-    debug_done = true
-  end)
-
-  local files, pending = {}, ""
+  local files = {}
   local invalid_windows_paths = 0
   local function add_file(relative)
     if PLATFORM == "Windows" and common.path_has_windows_reserved_filename(relative) then
@@ -191,50 +175,29 @@ local function scan(root, include_ignored)
       path = common.normalize_path(root .. PATHSEP .. relative),
     }
   end
-  local progress_deadline = system.get_time() + 30
   local state = cooperative_state()
   while true do
-    if system.get_time() >= progress_deadline then
-      if proc:running() then pcall(function() proc:kill() end) end
-      proc:wait(process.WAIT_DEADLINE)
-      return nil, "ripgrep file scan timed out"
-    end
-    local ok, chunk_or_error = pcall(
-      proc.stdout.read, proc.stdout, 256 * 1024,
-      { scan = 0.001, timeout = WORK_SLICE_SECONDS }
-    )
-    if ok and chunk_or_error then
-      progress_deadline = system.get_time() + 30
-      local text = pending .. chunk_or_error
-      local start = 1
-      while true do
-        local stop = text:find("\0", start, true)
-        if not stop then break end
-        local relative = text:sub(start, stop - 1):gsub("^%.[/\\]", "")
-        if relative ~= "" then add_file(relative) end
-        start = stop + 1
-        yield_if_due(state)
-      end
-      pending = text:sub(start)
-    elseif not ok and not tostring(chunk_or_error):find("timeout expired", 1, true) then
-      if proc:running() then pcall(function() proc:kill() end) end
-      proc:wait(process.WAIT_DEADLINE)
-      return nil, tostring(chunk_or_error)
-    elseif not proc:running() then
+    local debug_text = stream:take_stderr()
+    if debug_text then consume_ignore_debug(ignore_debug, debug_text, root) end
+    local relative = stream:read_until("\0")
+    if relative then
+      relative = relative:gsub("^%.[/\\]", "")
+      if relative ~= "" then add_file(relative) end
+      yield_if_due(state)
+    elseif stream.done then
       break
+    elseif system.get_time() - stream.last_output_time >= 30 then
+      stream:cancel()
+      return nil, "ripgrep file scan timed out"
+    else
+      coroutine.yield(0.001)
+      state.deadline = system.get_time() + WORK_SLICE_SECONDS
     end
-    coroutine.yield(0.001)
-    state.deadline = system.get_time() + WORK_SLICE_SECONDS
   end
-
-  local exit_code = proc:wait(process.WAIT_DEADLINE)
-  while not debug_done do coroutine.yield(0) end
-  if exit_code ~= 0 and exit_code ~= 1 then
-    return nil, "ripgrep exited with code " .. tostring(exit_code)
-  end
-  if pending ~= "" then
-    pending = pending:gsub("^%.[/\\]", "")
-    add_file(pending)
+  consume_ignore_debug(ignore_debug, (stream:take_stderr() or "") .. "\n", root)
+  if stream.error then return nil, stream.error end
+  if stream.exit_code ~= 0 and stream.exit_code ~= 1 then
+    return nil, "ripgrep exited with code " .. tostring(stream.exit_code)
   end
   if invalid_windows_paths > 0 then
     core.log_quiet("Project files: skipped %d path(s) with reserved Windows device names",

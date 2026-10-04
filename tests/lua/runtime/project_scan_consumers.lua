@@ -1,6 +1,6 @@
 local core = require "core"
 local common = require "core.common"
-local process = require "core.process"
+local process_stream = require "core.process_stream"
 local project_files = require "core.project_files"
 local symbol_index = require "core.treesitter.symbol_index"
 local test = require "core.test"
@@ -33,11 +33,11 @@ test.describe("Project scan consumers", function()
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000))
     test.ok(common.mkdirp(context.root))
     write(context.root .. PATHSEP .. "existing.c", "int existing_symbol(void) { return 1; }\n")
-    context.process_start = process.start
+    context.process_start = process_stream.start
   end)
 
   test.after_each(function(context)
-    process.start = context.process_start
+    process_stream.start = context.process_start
     symbol_index.reset_for_tests()
     project_files.invalidate(context.root)
     test.ok(common.rm(context.root, true))
@@ -45,7 +45,7 @@ test.describe("Project scan consumers", function()
 
   test.it("uses a completed Project listing when the scanner is unavailable", function(context)
     test.not_nil(project_files.list(context.root))
-    process.start = function(args, opts)
+    process_stream.start = function(args, opts)
       if opts and common.path_equals(opts.cwd, context.root) then
         return nil, "The file scanner is unavailable"
       end

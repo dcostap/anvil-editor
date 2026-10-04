@@ -217,6 +217,8 @@ The pool returns results to the UI during its budgeted frame drain.
 Starting a child process can block for hundreds of milliseconds on Windows.
 Do not call `process.start` on the UI thread for recurring work.
 Submit a `process_capture` job instead. Git uses `worker_pool.named("git")` through `plugins.git.backend.run_git`.
+For output that must stream while the process runs, such as ripgrep, use `core.process_stream`.
+Cancel each stream you stop reading; an unread stream holds its worker once its output window fills.
 The UI loop drains named pools and shuts them down with the system pool.
 
 ## Tree-sitter language support

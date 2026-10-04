@@ -3,6 +3,7 @@ local common = require "core.common"
 local command = require "core.command"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
+local process_stream = require "core.process_stream"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -23,8 +24,8 @@ end
 
 local function install_controlled_grep(context, filename, lines, pause_after)
   local released = false
-  context.original_process_start = process.start
-  process.start = function(args, options)
+  context.original_stream_start = process_stream.start
+  process_stream.start = function(args, options)
     local is_grep = false
     for _, argument in ipairs(args or {}) do
       if argument == "--vimgrep" or argument == "--line-number" then
@@ -32,28 +33,23 @@ local function install_controlled_grep(context, filename, lines, pause_after)
         break
       end
     end
-    if not is_grep then return context.original_process_start(args, options) end
+    if not is_grep then return context.original_stream_start(args, options) end
 
     local next_line = 1
-    local running = true
-    return {
-      stdout = {
-        read = function()
-          if next_line > pause_after and not released then error("timeout expired") end
-          local text = lines[next_line]
-          if not text then
-            running = false
-            return nil
-          end
-          local result = string.format("%s:%d:1:%s", filename, next_line, text)
-          next_line = next_line + 1
-          return result
-        end,
-      },
-      running = function() return running end,
-      kill = function() running = false end,
-      wait = function() return running and nil or 0 end,
-    }
+    local stream = { done = false }
+    function stream:read_line()
+      if self.done or (next_line > pause_after and not released) then return nil end
+      local text = lines[next_line]
+      if not text then
+        self.done, self.exit_code = true, 0
+        return nil
+      end
+      local result = string.format("%s:%d:1:%s", filename, next_line, text)
+      next_line = next_line + 1
+      return result
+    end
+    function stream:cancel() self.done, self.error = true, "cancelled" end
+    return stream
   end
   return function() released = true end
 end
@@ -72,7 +68,7 @@ test.describe("Fuzzy Searcher exact grep", function()
 
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
-    if context.original_process_start then process.start = context.original_process_start end
+    if context.original_stream_start then process_stream.start = context.original_stream_start end
     project_paths.configure_workspace {}
     core.projects = context.original_projects
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end

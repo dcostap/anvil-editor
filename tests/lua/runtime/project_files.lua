@@ -80,7 +80,7 @@ test.describe("Project files", function()
   for _, scope in ipairs { "root", "all", "refresh" } do
     test.it("keeps a shared scan through " .. scope .. " cache invalidation", function(context)
       local project_files = require "core.project_files"
-      local process = require "core.process"
+      local process_stream = require "core.process_stream"
       local root = join(USERDIR, "project-files-shared-" .. scope .. "-" .. system.get_process_id())
       assert(common.mkdirp(join(root, "empty")))
       write(join(root, "visible.lua"), "return true\n")
@@ -88,16 +88,16 @@ test.describe("Project files", function()
         assert(project_files.list(root))
         write(join(root, "added.lua"), "return false\n")
       end
-      local start = process.start
+      local start = process_stream.start
       local started, release = false, false
       local first, second
       context.cleanup = function()
         release = true
-        process.start = start
+        process_stream.start = start
         project_files.invalidate(root)
         common.rm(root, true)
       end
-      process.start = function(args, opts)
+      process_stream.start = function(args, opts)
         if opts and common.path_equals(opts.cwd, root) then
           started = true
           while not release do coroutine.yield(0) end

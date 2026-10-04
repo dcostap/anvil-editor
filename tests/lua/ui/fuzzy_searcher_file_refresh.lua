@@ -3,7 +3,7 @@ local common = require "core.common"
 local command = require "core.command"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
-local process = require "core.process"
+local process_stream = require "core.process_stream"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -48,7 +48,7 @@ test.describe("Fuzzy Searcher file refresh", function()
 
   test.after_each(function(context)
     helpers.cancel_file_index_for_test()
-    if context.original_process_start then process.start = context.original_process_start end
+    if context.original_stream_start then process_stream.start = context.original_stream_start end
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
@@ -133,23 +133,18 @@ test.describe("Fuzzy Searcher file refresh", function()
     write_file(existing)
     helpers.set_file_cache_for_test({ helpers.file_display_item(existing) })
 
-    local fake_running = true
     local fake_started = false
-    local fake_process = {
-      stdout = {
-        read = function()
-          coroutine.yield(0.01)
-          error("timeout expired")
-        end,
-      },
-      running = function() return fake_running end,
-      kill = function() fake_running = false end,
-      wait = function() return fake_running and nil or 0 end,
+    local fake_scan = {
+      done = false,
+      last_output_time = math.huge,
+      read_until = function() return nil end,
+      take_stderr = function() return nil end,
+      cancel = function(self) self.done, self.error = true, "cancelled" end,
     }
-    context.original_process_start = process.start
-    process.start = function()
+    context.original_stream_start = process_stream.start
+    process_stream.start = function()
       fake_started = true
-      return fake_process
+      return fake_scan
     end
 
     helpers.refresh_file_index_for_test()
@@ -283,10 +278,10 @@ test.describe("Fuzzy Searcher file refresh", function()
     end), "expected Project file prewarming to complete")
 
     local scanner_starts = 0
-    context.original_process_start = process.start
-    process.start = function(...)
+    context.original_stream_start = process_stream.start
+    process_stream.start = function(...)
       scanner_starts = scanner_starts + 1
-      return context.original_process_start(...)
+      return context.original_stream_start(...)
     end
     fuzzy_searcher.open("prewarmed-project-file")
     local picker = assert(core.fuzzy_searcher_active_view)

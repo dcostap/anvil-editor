@@ -6,7 +6,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local common = require "core.common"
 local config = require "core.config"
-local process = require "core.process"
+local process_stream = require "core.process_stream"
 local http = require "core.http"
 local storage = require "core.storage"
 local Buffer = require "core.buffer"
@@ -345,7 +345,7 @@ fuzzy_searcher.command_usage = storage.load("fuzzy_searcher", "command_usage")
 if type(fuzzy_searcher.command_usage) ~= "table" then fuzzy_searcher.command_usage = {} end
 local recent_project_times = {}
 local line_count_cache = {}
-local grep_proc
+local grep_stream
 local grep_generation = 0
 local file_search_generation = 0
 local symbol_generation = 0
@@ -554,13 +554,8 @@ ensure_recent_project_times()
 wrap_project_openers()
 
 local function kill_grep()
-  if grep_proc then
-    local proc = grep_proc
-    if proc:running() then pcall(function() proc:kill() end) end
-    if proc.stdout then pcall(function() proc.stdout:close() end) end
-    pcall(function() proc:wait(250, 0.001) end)
-  end
-  grep_proc = nil
+  if grep_stream then grep_stream:cancel() end
+  grep_stream = nil
 end
 
 local function kill_file_search()
@@ -1723,7 +1718,7 @@ end
 
 local function kill_fuzzy_grep_jobs()
   for _, job in pairs(fuzzy_grep_jobs) do
-    if job.proc and job.proc:running() then pcall(function() job.proc:kill() end) end
+    if job.stream then job.stream:cancel() end
     job.cancelled = true
   end
   fuzzy_grep_jobs = {}
@@ -1779,9 +1774,10 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
       else
         args[#args + 1] = "."
       end
-      local proc = process.start(args, { cwd = root, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
-      job.proc = proc
-      if not proc then
+      local stream, start_error = process_stream.start(args, { cwd = root })
+      job.stream = stream
+      if not stream then
+        core.log_quiet("Fuzzy grep could not start under %s: %s", tostring(root), tostring(start_error))
         job.done = true
         job.version = job.version + 1
         for thread_key in pairs(job.wake_threads or {}) do core.wake_thread(thread_key) end
@@ -1792,12 +1788,10 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
       local max_line_chars = fuzzy_searcher.fuzzy_line_max_chars or 1200
       local slice_start = system.get_time()
       while not job.cancelled and job.scanned < max_scanned do
-        local ok, line_or_error = pcall(
-          proc.stdout.read, proc.stdout, "line", { scan = 0.001, timeout = 0.1 }
-        )
-        if ok and line_or_error then
+        local line = stream:read_line()
+        if line then
           job.scanned = job.scanned + 1
-          local r = decorate_grep_result(parse_vimgrep(line_or_error), root)
+          local r = decorate_grep_result(parse_vimgrep(line), root)
           if r and #(r.text or "") <= max_line_chars then
             local key = r.file .. ":" .. tostring(r.line)
             if not job.seen[key] then
@@ -1808,20 +1802,21 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
             end
           end
           slice_start = yield_if_over_budget(slice_start)
-        elseif not ok and not tostring(line_or_error):find("timeout expired", 1, true) then
-          core.log_quiet("Fuzzy grep read failed under %s: %s", tostring(root), tostring(line_or_error))
-          break
-        elseif not proc:running() then
+        elseif stream.done then
+          if stream.error and not job.cancelled then
+            core.log_quiet("Fuzzy grep failed under %s: %s", tostring(root), tostring(stream.error))
+          end
           break
         else
-          coroutine.yield(1 / config.fps)
+          -- Output arrives during the frame's worker drain. Poll briefly
+          -- rather than by frame rate, which is zero without a display.
+          coroutine.yield(0.004)
           slice_start = system.get_time()
         end
       end
 
-      job.truncated = proc:running() or job.scanned >= max_scanned
-      if proc:running() then pcall(function() proc:kill() end) end
-      proc:wait(process.WAIT_DEADLINE)
+      job.truncated = not stream.done or job.scanned >= max_scanned
+      stream:cancel()
       job.done = true
       job.version = job.version + 1
       for thread_key in pairs(job.wake_threads or {}) do core.wake_thread(thread_key) end
@@ -5897,7 +5892,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   for key, job in pairs(fuzzy_grep_jobs) do
     if not added_jobs[key] then
       job.cancelled = true
-      if job.proc and job.proc:running() then pcall(function() job.proc:kill() end) end
+      if job.stream then job.stream:cancel() end
       fuzzy_grep_jobs[key] = nil
       core.log_quiet("Fuzzy grep: retired obsolete job %s", tostring(job.seed))
     end
@@ -6366,30 +6361,31 @@ function FSView:start_grep(base, line, grep)
         else
           args[#args + 1] = "."
         end
-        local proc = process.start(args, { cwd = root.path, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_DISCARD, stdin = process.REDIRECT_DISCARD })
-        grep_proc = proc
+        local stream, start_error = process_stream.start(args, { cwd = root.path })
+        grep_stream = stream
 
-        if proc then
+        if stream then
           while gen == grep_generation and active_view == self do
-            local ok, line_or_error = pcall(
-              proc.stdout.read, proc.stdout, "line", { scan = 0.001, timeout = 0.1 }
-            )
-            if ok and line_or_error then
-              local result = decorate_grep_result(parse_vimgrep(line_or_error), root.path)
+            local line = stream:read_line()
+            if line then
+              local result = decorate_grep_result(parse_vimgrep(line), root.path)
               if result then add_result(result, seen, true) end
               yield_if_due()
-            elseif not ok and not tostring(line_or_error):find("timeout expired", 1, true) then
-              core.log_quiet("Fuzzy grep read failed under %s: %s", tostring(root.path), tostring(line_or_error))
-              break
-            elseif not proc:running() then
+            elseif stream.done then
+              if stream.error and stream.error ~= "cancelled" then
+                core.log_quiet("Exact grep failed under %s: %s", tostring(root.path), tostring(stream.error))
+              end
               break
             else
-              coroutine.yield(1 / config.fps)
+              -- Output arrives during the frame's worker drain. Poll briefly
+              -- rather than by frame rate, which is zero without a display.
+              coroutine.yield(0.004)
             end
           end
-          if proc:running() then pcall(function() proc:kill() end) end
-          proc:wait(process.WAIT_DEADLINE)
-          if grep_proc == proc then grep_proc = nil end
+          stream:cancel()
+          if grep_stream == stream then grep_stream = nil end
+        else
+          core.log_quiet("Exact grep could not start under %s: %s", tostring(root.path), tostring(start_error))
         end
         core.log_quiet(
           "Exact grep batch finished files=%s matches=%d yields=%d",
