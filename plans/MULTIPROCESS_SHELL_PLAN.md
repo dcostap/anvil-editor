@@ -332,13 +332,15 @@ matches the last write does not touch the disk.
 
 ### Phase 2: Terminal Session processes
 
-Milestones 1 to 3 are implemented. Terminal Sessions publish registry records and survive client disconnects.
+Milestones 1 to 4 are implemented. Terminal Sessions publish registry records and survive client disconnects.
 The editor reattaches with binary snapshots, including after a pipe break or writer stall.
 Restart and same-window Project switch detach their views. Tab close still ends the session.
 Busy status and the quit policy are implemented. Idle sessions close on normal quit.
 Busy sessions use Keep, End, or Cancel, with a remembered choice in user storage.
 Restored clients connect on workers. Reconnect retries and shutdown CLOSE delivery have bounded waits.
-Disk snapshots and revival remain in Milestone 4.
+Hosts write bounded, atomic disk snapshots. A dead host can revive its screen and start a new shell in the saved cwd.
+Interrupted commands require explicit Rerun approval. Project snapshot counts and expired dead records have bounds.
+The corrected benchmark measures generated shell replies. Shared wake events no longer fill the event queue.
 
 Move ConPTY ownership into Terminal Session processes.
 Keep the current single-process editor as the client.

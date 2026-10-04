@@ -22,6 +22,18 @@ local next_log_id = 0
 
 local PADDING = 6
 
+function M.cleanup_records(id)
+  if PLATFORM ~= "Windows" then return end
+  return require("core.worker_pool").system():submit {
+    kind = "core.workers.terminal_sessions", priority = "background",
+    payload = { userdir = USERDIR, id = id },
+    on_result = function(message)
+      core.log_quiet("Terminal Session record cleanup: removed=%d", message.payload.removed or 0)
+    end,
+    on_error = function(message) core.log_quiet("Terminal Session record cleanup failed: %s", tostring(message.error)) end,
+  }
+end
+
 ---@class config.plugins.terminal
 local terminal_config = config.plugins.terminal
 terminal_config.config_spec = {
@@ -225,10 +237,10 @@ local function session_record(id)
     return nil, "invalid session ID"
   end
   local path = USERDIR .. PATHSEP .. "terminal-sessions" .. PATHSEP .. id .. ".lua"
-  local file, err = io.open(path, "rb")
-  if not file then return nil, err end
-  local text = file:read(1024 * 1024 + 1)
-  file:close()
+  local text, error = terminal_native().read_session_record(id)
+  if not text then
+    return nil, "Cannot read session record: " .. tostring(error), error ~= 2 and error ~= 3 and error ~= 13
+  end
   if not text or #text > 1024 * 1024 then return nil, "record exceeds the size limit" end
   local chunk, parse_error = load(text, "@" .. path, "t", {})
   if not chunk then return nil, parse_error end
@@ -240,8 +252,8 @@ local function session_record(id)
       or record.host_creation_time:find("[^0-9a-f]")
       or record.pipe_name ~= "\\\\.\\pipe\\anvil-terminal-" .. id
       or type(record.project_path) ~= "string" or type(record.cwd) ~= "string"
-      or type(record.shell) ~= "string" or record.status ~= "running"
-      or type(record.snapshot_path) ~= "string" then
+      or type(record.shell) ~= "string" or (record.status ~= "running" and record.status ~= "exited")
+      or record.snapshot_path ~= USERDIR .. "/terminal-sessions/" .. id .. ".snapshot" then
     return nil, "invalid session record"
   end
   return record
@@ -287,9 +299,14 @@ function TerminalView:new(options)
   native_options.cwd, native_options.shell = self.launch_options.cwd, self.launch_options.shell
   native_options.scrollback_lines = terminal_config.scrollback_lines
   native_options.project_path = project_path("project")
-  local record, record_error
+  local record, record_error, inaccessible
   if options.session_id then
-    record, record_error = session_record(options.session_id)
+    record, record_error, inaccessible = session_record(options.session_id)
+    if inaccessible then
+      self.state, self.running, self.launch_error = "failed", false, record_error
+      core.log_quiet("Terminal Session %s restore failed: %s", options.session_id, record_error)
+      return
+    end
     if record then
       native_options.cols, native_options.rows = nil, nil
       native_options.session_id = record.session_id
@@ -301,10 +318,18 @@ function TerminalView:new(options)
     end
   end
   local session, start_error, transport_error = native.new(native_options)
-  if record and not session and transport_error ~= 231 then -- ERROR_PIPE_BUSY: do not create a second shell.
-    core.log_quiet("Terminal Session %s attach rejected: %s; start a new shell", record.session_id, tostring(start_error))
+  if record and not session and transport_error ~= 231 and transport_error ~= 5 then
+    core.log_quiet("Terminal Session %s attach rejected: %s", record.session_id, tostring(start_error))
     native_options.session_id, native_options.host_pid = nil, nil
     native_options.host_creation_time, native_options.pipe_name = nil, nil
+    native_options.cwd = validated_terminal_directory(record.cwd) or self.launch_options.cwd
+    self.launch_options.cwd = native_options.cwd
+    if transport_error == 1067 and system.get_file_info(record.snapshot_path) then
+      native_options.revive_from, native_options.revive_session_id = record.snapshot_path, record.session_id
+      native_options.project_path = record.project_path
+      self.interrupted_command = record.interrupted_command
+      core.log_quiet("Terminal Session %s revival requested from disk", record.session_id)
+    end
     session, start_error = native.new(native_options)
   end
   if not session then
@@ -549,15 +574,16 @@ end
 
 function TerminalView:adopt_session(session)
   self.session = session
-  self:log_session_attach()
+  local attaching = session:stats().attach_count == 0
+  if not attaching then self:log_session_attach() end
   self.session_cell_width = self.native_cell_width
   self.session_cell_height = self.cell_height
   self.snapshot = session:snapshot()
   self.theme_generation = core.color_theme_generation or 0
   self.minimum_contrast = style.terminal_minimum_contrast
   self.color_vividness = style.terminal_color_vividness
-  self.state = "running"
-  self.running = true
+  self.state = attaching and "reconnecting" or "running"
+  self.running = not attaching
   self.exit_code = nil
   self.reported_error = nil
   self.launch_error = nil
@@ -572,6 +598,60 @@ function TerminalView:adopt_session(session)
   self.focused = nil
   self:sync_focus()
   core.redraw = true
+end
+
+function TerminalView:rerun_interrupted_command()
+  local text = self.interrupted_command
+  if self.state ~= "running" or not self.session or type(text) ~= "string" or
+      text == "" or #text > 16384 or text:find("[%z\r\n]") then return false end
+  local shell = self.launch_options.shell:lower()
+  if shell == "" or shell:find("powershell", 1, true) or shell:find("pwsh", 1, true) then text = "& " .. text end
+  local ok = self.session:write(text .. "\r")
+  if ok then
+    self.interrupted_command = nil
+    core.log_quiet("Terminal Session %s interrupted command rerun accepted", tostring(self.session_id))
+  end
+  return ok
+end
+
+function TerminalView:offer_interrupted_command()
+  local text = self.interrupted_command
+  if self.rerun_offered or type(text) ~= "string" or text == "" or text:find("[%z\r\n]") or #text > 16384 then return end
+  self.rerun_offered = true
+  core.nag_view:show("Restored Terminal", "The previous shell ended. The interrupted command has not run.", {
+    { text = "Rerun " .. text, rerun = true }, { text = "Discard" },
+  }, function(option)
+    if option.rerun then self:rerun_interrupted_command() else self.interrupted_command = nil end
+  end)
+  core.log_quiet("Terminal Session %s interrupted command offered; no automatic rerun", tostring(self.session_id))
+end
+
+function TerminalView:revive_lost_host()
+  if self.revival_attempted then return false end
+  local record = session_record(self.session_id)
+  if not record or not system.get_file_info(record.snapshot_path) then return false end
+  self.revival_attempted = true
+  local native = terminal_native()
+  if not native then return false end
+  local options = session_colors()
+  options.cols, options.rows = self.cols, self.rows
+  options.cell_width, options.cell_height = self.native_cell_width, self.cell_height
+  options.shell = record.shell
+  options.cwd = validated_terminal_directory(record.cwd) or self.launch_options.cwd
+  options.project_path, options.scrollback_lines = record.project_path, terminal_config.scrollback_lines
+  options.revive_from, options.revive_session_id = record.snapshot_path, record.session_id
+  local session, err = native.new(options)
+  if not session then
+    core.log_quiet("Terminal Session %s revival rejected: %s", record.session_id, tostring(err))
+    return false
+  end
+  self.launch_options.cwd, self.launch_options.shell = options.cwd, options.shell
+  self.interrupted_command = record.interrupted_command
+  local previous = self.session
+  if previous then previous:detach() end
+  self:adopt_session(session)
+  core.log_quiet("Terminal Session %s lost its host; revive from disk", record.session_id)
+  return true
 end
 
 function TerminalView:restart()
@@ -699,11 +779,13 @@ function TerminalView:service_session(include_rows)
   local record_perf = include_rows and perf_is_recording()
   local update_started = record_perf and system.get_time()
   local changed, status = self.session:update()
+  if status.kind == "failed" and status.host_gone and self:revive_lost_host() then return true end
   if status.kind == "running" and status.attach_count ~= self.attach_count then self:log_session_attach() end
   if record_perf then
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end
   local state_changed = self:apply_status(status)
+  if status.revived and status.kind == "running" and not status.replaying then self:offer_interrupted_command() end
   -- The native session may hold a screen update briefly (cursor repaint,
   -- synchronized output). Keep stepping so the held update is published even
   -- when no more output arrives.
@@ -1748,6 +1830,7 @@ function TerminalView:on_close()
     )
   end
   TerminalView.super.on_close(self)
+  if self.session_id then M.cleanup_records(self.session_id) end
 end
 
 function M.open(options)
@@ -2046,4 +2129,5 @@ function core.quit(force, exit_code)
   end)
 end
 
+M.cleanup_records()
 return M

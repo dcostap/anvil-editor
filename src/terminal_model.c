@@ -79,11 +79,11 @@ bool anvil_terminal_model_new(GhosttyTerminal *model, uint16_t cols, uint16_t ro
     ghostty_terminal_resize(*model, cols, rows, cell_width, cell_height) == GHOSTTY_SUCCESS;
 }
 
-typedef struct { uint8_t *bytes; size_t length, capacity; } SnapshotBuffer;
+typedef struct { uint8_t *bytes; size_t length, capacity, limit; } SnapshotBuffer;
 
 static bool snapshot_write(void *userdata, const uint8_t *bytes, size_t length) {
   SnapshotBuffer *buffer = userdata;
-  if (length > ANVIL_TERMINAL_SNAPSHOT_LIMIT - buffer->length) return false;
+  if (length > buffer->limit - buffer->length) return false;
   size_t required = buffer->length + length;
   if (required > buffer->capacity) {
     size_t capacity = buffer->capacity ? buffer->capacity : 65536;
@@ -97,12 +97,50 @@ static bool snapshot_write(void *userdata, const uint8_t *bytes, size_t length) 
   return true;
 }
 
-bool anvil_terminal_snapshot_encode(GhosttyTerminal model, uint8_t **bytes, size_t *length) {
-  SnapshotBuffer buffer = {0};
+static bool encode_limit(GhosttyTerminal model, uint8_t **bytes, size_t *length, size_t limit) {
+  SnapshotBuffer buffer = { .limit = limit };
   *bytes = NULL; *length = 0;
   if (ghostty_snapshot_encode(model, (GhosttyWriter){ snapshot_write, &buffer }) != GHOSTTY_SUCCESS) {
     free(buffer.bytes); return false;
   }
   *bytes = buffer.bytes; *length = buffer.length;
   return true;
+}
+
+bool anvil_terminal_snapshot_encode(GhosttyTerminal model, uint8_t **bytes, size_t *length) {
+  return encode_limit(model, bytes, length, ANVIL_TERMINAL_SNAPSHOT_LIMIT);
+}
+
+bool anvil_terminal_snapshot_decode(const uint8_t *bytes, size_t length, GhosttyTerminal *model) {
+  GhosttySnapshotDecoder decoder = NULL;
+  *model = NULL;
+  size_t consumed = 0;
+  bool ok = length <= ANVIL_TERMINAL_SNAPSHOT_LIMIT &&
+    ghostty_snapshot_decoder_new_buf(&terminal_allocator, &decoder, bytes, length) == GHOSTTY_SUCCESS &&
+    ghostty_snapshot_decoder_decode(decoder, model) == GHOSTTY_SUCCESS &&
+    ghostty_snapshot_decoder_get(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_SOURCE_OFFSET, &consumed) == GHOSTTY_SUCCESS &&
+    consumed == length;
+  ghostty_snapshot_decoder_free(decoder);
+  if (!ok && *model) { ghostty_terminal_free(*model); *model = NULL; }
+  return ok;
+}
+
+bool anvil_terminal_disk_snapshot_encode(GhosttyTerminal model, uint8_t **bytes, size_t *length) {
+  if (encode_limit(model, bytes, length, ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT)) return true;
+  uint8_t *full = NULL; size_t count = 0;
+  GhosttyTerminal copy = NULL;
+  if (!anvil_terminal_snapshot_encode(model, &full, &count)) return false;
+  bool ok = anvil_terminal_snapshot_decode(full, count, &copy);
+  free(full);
+  size_t continuation = ANVIL_TERMINAL_CONTINUATION_LIMIT;
+  ok = ok && ghostty_terminal_set(copy, GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES, &continuation) == GHOSTTY_SUCCESS;
+  size_t budget = 0;
+  ok = ok && ghostty_terminal_get(copy, GHOSTTY_TERMINAL_DATA_SCROLLBACK_MAX_BYTES, &budget) == GHOSTTY_SUCCESS;
+  for (budget /= 2; ok; budget /= 2) {
+    ok = ghostty_terminal_set(copy, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &budget) == GHOSTTY_SUCCESS;
+    if (ok && encode_limit(copy, bytes, length, ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT)) break;
+    if (!budget) { ok = false; break; }
+  }
+  if (copy) ghostty_terminal_free(copy);
+  return ok;
 }

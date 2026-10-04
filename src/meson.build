@@ -167,11 +167,12 @@ if host_machine.system() == 'windows'
         'ipc_pipe.c',
         'conpty.c',
         'terminal_model.c',
+        'terminal_snapshot.c',
         'terminal_host.c',
         'terminal_contrast.c',
     ]
     terminal_replay_test = executable('terminal_replay_test',
-        '../tests/native/terminal_replay_test.c', 'terminal_model.c', 'zig_abi_compat.c',
+        '../tests/native/terminal_replay_test.c', 'terminal_model.c', 'terminal_snapshot.c', 'zig_abi_compat.c',
         dependencies: ghostty_vt_dep,
     )
     if embedded_runtime

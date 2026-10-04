@@ -5,6 +5,7 @@
 #include "terminal_host.h"
 #include "conpty.h"
 #include "terminal_model.h"
+#include "terminal_snapshot.h"
 #include <tlhelp32.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,7 +41,11 @@ typedef struct {
   volatile LONG64 last_output, exit_sent_ms;
   HANDLE reader, writer, client, console_close;
   const char *id, *pipe_name, *project, *shell, *cwd;
-  char log_path[32768], record_path[32768];
+  char log_path[32768], record_path[32768], snapshot_path[32768];
+  char last_cwd[32768], interrupted_command[16384];
+  bool explicit_close, shell_ended;
+  uint64_t snapshot_at, snapshot_revision;
+  volatile LONG64 model_revision;
 } TerminalHost;
 
 static wchar_t *wide_string(const char *text) {
@@ -96,12 +101,39 @@ static void registry_string(FILE *file, const char *key, const char *text) {
   fputs("\",\n", file);
 }
 
+static HANDLE registry_lock(const char *id) {
+  char name[96]; snprintf(name, sizeof(name), "Local\\AnvilTerminalRecord-%s", id);
+  HANDLE mutex = CreateMutexA(NULL, FALSE, name);
+  DWORD waited = mutex ? WaitForSingleObject(mutex, 5000) : WAIT_FAILED;
+  if (waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED) return mutex;
+  if (mutex) CloseHandle(mutex);
+  return NULL;
+}
+
+static bool registry_host_live(TerminalHost *host) {
+  wchar_t *path = wide_string(host->record_path);
+  FILE *file = path ? _wfopen(path, L"rb") : NULL; free(path);
+  if (!file) return false;
+  char text[65536]; size_t count = fread(text, 1, sizeof(text) - 1, file); fclose(file); text[count] = 0;
+  char *pid_field = strstr(text, "host_pid = "), *time_field = strstr(text, "host_creation_time = \"");
+  unsigned long pid = 0; unsigned long long expected = 0;
+  if (!pid_field || !time_field || sscanf(pid_field, "host_pid = %lu", &pid) != 1 ||
+      sscanf(time_field, "host_creation_time = \"%llx", &expected) != 1) return true;
+  HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) return GetLastError() != ERROR_INVALID_PARAMETER;
+  char created[17], wanted[17]; snprintf(wanted, sizeof(wanted), "%016llx", expected);
+  bool live = WaitForSingleObject(process, 0) != WAIT_OBJECT_0 &&
+    (!creation_time(process, created) || !strcmp(created, wanted));
+  CloseHandle(process);
+  return live;
+}
+
 static bool write_registry(TerminalHost *host) {
-  char temporary[32772], created[17], snapshot[32768];
+  char temporary[32772], created[17];
   if (!creation_time(GetCurrentProcess(), created)) return false;
+  HANDLE mutex = registry_lock(host->id);
+  if (!mutex) return false;
   snprintf(temporary, sizeof(temporary), "%s.tmp", host->record_path);
-  snprintf(snapshot, sizeof(snapshot), "%.*s.snapshot",
-    (int)(strlen(host->record_path) - 4), host->record_path);
   wchar_t *path = wide_string(host->record_path), *temp = wide_string(temporary);
   FILE *file = temp ? _wfopen(temp, L"wb") : NULL;
   bool ok = path && file;
@@ -113,9 +145,10 @@ static bool write_registry(TerminalHost *host) {
     registry_string(file, "pipe_name", host->pipe_name);
     registry_string(file, "project_path", host->project);
     registry_string(file, "shell", host->shell);
-    registry_string(file, "cwd", host->cwd);
-    registry_string(file, "status", "running");
-    registry_string(file, "snapshot_path", snapshot);
+    registry_string(file, "cwd", host->last_cwd);
+    registry_string(file, "status", host->shell_ended ? "exited" : "running");
+    registry_string(file, "snapshot_path", host->snapshot_path);
+    registry_string(file, "interrupted_command", host->interrupted_command);
     fputs("}\n", file);
     ok = !ferror(file);
   }
@@ -124,19 +157,20 @@ static bool write_registry(TerminalHost *host) {
   if (!ok && temp) DeleteFileW(temp);
   free(path); free(temp);
   if (!ok) host_log(host, "failure: registry write Windows error=%lu", (unsigned long)GetLastError());
+  ReleaseMutex(mutex); CloseHandle(mutex);
   return ok;
 }
 
 static void delete_registry(TerminalHost *host) {
+  HANDLE mutex = registry_lock(host->id);
+  if (!mutex) return;
   wchar_t *path = wide_string(host->record_path);
   if (path) DeleteFileW(path);
   free(path);
-  char snapshot[32768];
-  snprintf(snapshot, sizeof(snapshot), "%.*s.snapshot",
-    (int)(strlen(host->record_path) - 4), host->record_path);
-  path = wide_string(snapshot);
+  path = wide_string(host->snapshot_path);
   if (path) DeleteFileW(path);
   free(path);
+  ReleaseMutex(mutex); CloseHandle(mutex);
 }
 
 /* Transport failure is a detach, never a shell failure. Caller may hold lock. */
@@ -201,6 +235,7 @@ static DWORD WINAPI host_reader(void *userdata) {
     /* Only the editor answers terminal queries. Detached queries go unanswered.
        ConPTY itself answers cursor-position DSR requests. */
     ghostty_terminal_vt_write(host->model, bytes, read);
+    InterlockedIncrement64(&host->model_revision);
     if (host->attached && !host->stop) queue_record(host, ANVIL_TERMINAL_OUTPUT, bytes, read);
     InterlockedExchange64(&host->last_output, GetTickCount64());
     LeaveCriticalSection(&host->lock);
@@ -242,6 +277,7 @@ static bool apply_size(TerminalHost *host, AnvilTerminalSize size) {
   if (ghostty_terminal_resize(host->model, size.cols, size.rows,
       size.cell_width, size.cell_height) != GHOSTTY_SUCCESS) return false;
   host->size = size;
+  InterlockedIncrement64(&host->model_revision);
   return true;
 }
 
@@ -263,6 +299,7 @@ static DWORD WINAPI host_client(void *userdata) {
       EnterCriticalSection(&host->lock); bool ok = apply_size(host, size); LeaveCriticalSection(&host->lock);
       if (!ok) break;
     } else if (header.type == ANVIL_TERMINAL_CLOSE && !header.size) {
+      host->explicit_close = true;
       host_log(host, "close requested"); stop_host(host); return 0;
     } else if (header.type == ANVIL_TERMINAL_CLEAR && !header.size) {
       static const uint8_t clear[] = "\033[2J\033[3J\033[H";
@@ -271,6 +308,7 @@ static DWORD WINAPI host_client(void *userdata) {
         SleepConditionVariableCS(&host->space, &host->lock, INFINITE);
       if (host->attached && !host->stop) {
         ghostty_terminal_vt_write(host->model, clear, sizeof(clear) - 1);
+        InterlockedIncrement64(&host->model_revision);
         queue_record(host, ANVIL_TERMINAL_OUTPUT, clear, sizeof(clear) - 1);
       }
       LeaveCriticalSection(&host->lock);
@@ -320,6 +358,7 @@ static bool attach_client(TerminalHost *host) {
     if (anvil_ipc_pipe_write(&host->pipe, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome), NULL, 0) &&
         anvil_ipc_pipe_read(&host->pipe, &header, NULL, 0) && !header.size) {
       if (header.type == ANVIL_TERMINAL_CLOSE) {
+        host->explicit_close = true;
         host_log(host, "close requested through control connection"); stop_host(host);
       } else if (header.type == ANVIL_TERMINAL_DETACH) host_log(host, "detach requested through control connection");
     }
@@ -379,21 +418,123 @@ static void join_reader(TerminalHost *host) {
 }
 
 /* Unknown process state is busy: do not end a shell on a failed probe. */
-static bool shell_busy(DWORD pid) {
+static bool shell_busy(DWORD pid, char *command, size_t capacity) {
+  command[0] = 0;
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   if (snapshot == INVALID_HANDLE_VALUE) return true;
   PROCESSENTRY32W entry = { .dwSize = sizeof(entry) };
   bool busy = false;
   if (!Process32FirstW(snapshot, &entry)) busy = true;
-  else do { if (entry.th32ParentProcessID == pid) { busy = true; break; } }
+  else do { if (entry.th32ParentProcessID == pid) {
+      busy = true;
+      HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+      typedef LONG (WINAPI *QueryProcess)(HANDLE, ULONG, void *, ULONG, ULONG *);
+      QueryProcess query = (QueryProcess)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess");
+      ULONG needed = 0;
+      if (process && query) query(process, 60 /* ProcessCommandLineInformation */, NULL, 0, &needed);
+      uint8_t *buffer = needed && needed <= 32768 ? malloc(needed) : NULL;
+      if (buffer && query(process, 60, buffer, needed, &needed) >= 0) {
+        struct { USHORT length, maximum; wchar_t *buffer; } *text = (void *)buffer;
+        uintptr_t start = (uintptr_t)buffer, ptr = (uintptr_t)text->buffer;
+        if (ptr >= start && ptr - start <= needed && text->length <= needed - (ptr - start)) {
+          int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text->buffer, text->length / 2,
+            command, (int)capacity - 1, NULL, NULL);
+          if (count > 0) command[count] = 0;
+        }
+      }
+      free(buffer);
+      if (process) CloseHandle(process);
+      break;
+    } }
     while (Process32NextW(snapshot, &entry));
   if (!busy && GetLastError() != ERROR_NO_MORE_FILES) busy = true;
   CloseHandle(snapshot);
   return busy;
 }
 
+static void capture_cwd(TerminalHost *host) {
+  GhosttyString pwd = {0};
+  if (ghostty_terminal_get(host->model, GHOSTTY_TERMINAL_DATA_PWD, &pwd) != GHOSTTY_SUCCESS ||
+      !pwd.ptr || !pwd.len || pwd.len >= sizeof(host->last_cwd)) return;
+  char text[32768]; memcpy(text, pwd.ptr, pwd.len); text[pwd.len] = 0;
+  char *path = text;
+  if (!strncmp(path, "file://localhost/", 17)) path += 16;
+  else if (!strncmp(path, "file:///", 8)) path += 7;
+  if (path[0] == '/' && path[1] && path[2] == ':') path++;
+  char decoded[32768]; size_t count = 0;
+  for (; *path; path++) {
+    unsigned ch = (unsigned char)*path;
+    if (ch == '%' && path[1] && path[2]) {
+      unsigned hex = 0;
+      if (sscanf(path + 1, "%2x", &hex) != 1) return;
+      ch = hex; path += 2;
+    }
+    if (ch < 32 || ch == 127) return;
+    decoded[count++] = (char)ch;
+  }
+  decoded[count] = 0;
+  if (!(count > 2 && decoded[1] == ':') && strncmp(decoded, "\\\\", 2)) return;
+  wchar_t *wide = wide_string(decoded);
+  DWORD attrs = wide ? GetFileAttributesW(wide) : INVALID_FILE_ATTRIBUTES;
+  free(wide);
+  if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) strcpy(host->last_cwd, decoded);
+}
+
+/* Runs in the host, never in the editor's UI thread. */
+static bool save_snapshot(TerminalHost *host) {
+  uint8_t *bytes = NULL; size_t length = 0;
+  EnterCriticalSection(&host->lock);
+  uint64_t revision = InterlockedCompareExchange64(&host->model_revision, 0, 0);
+  capture_cwd(host);
+  bool ok = anvil_terminal_disk_snapshot_encode(host->model, &bytes, &length);
+  LeaveCriticalSection(&host->lock);
+  DWORD error = ERROR_INVALID_DATA;
+  if (ok) ok = anvil_terminal_snapshot_store(host->snapshot_path, host->project, host->id, bytes, length, &error);
+  free(bytes);
+  host->snapshot_at = GetTickCount64();
+  if (ok) { host->snapshot_revision = revision; write_registry(host); }
+  host_log(host, "disk snapshot %s: bytes=%zu Windows error=%lu", ok ? "saved" : "failed", length, (unsigned long)error);
+  return ok;
+}
+
+static bool prepare_revival(GhosttyTerminal model, uint16_t rows) {
+  uint8_t *alternate = NULL; size_t length = 0;
+  GhosttyTerminalScreen screen;
+  if (ghostty_terminal_get(model, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen) != GHOSTTY_SUCCESS) return false;
+  if (screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE) {
+    GhosttyFormatter formatter = NULL;
+    GhosttyFormatterTerminalOptions options = {
+      .size = sizeof(options), .emit = GHOSTTY_FORMATTER_FORMAT_VT, .trim = true,
+    };
+    bool ok = ghostty_formatter_terminal_new(NULL, &formatter, model, options) == GHOSTTY_SUCCESS &&
+      ghostty_formatter_format_buf(formatter, NULL, 0, &length) == GHOSTTY_OUT_OF_SPACE &&
+      length <= ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT;
+    if (ok) alternate = malloc(length ? length : 1);
+    ok = ok && alternate && ghostty_formatter_format_buf(formatter, alternate, length, &length) == GHOSTTY_SUCCESS;
+    ghostty_formatter_free(formatter);
+    if (!ok) { free(alternate); return false; }
+  }
+  /* Reset parser and app modes. Keep primary history. Do not replay binary bytes as VT. */
+  char reset[256];
+  int n = snprintf(reset, sizeof(reset), "\030\033\\\033[?2026l\033[?1049l\033[!p"
+    "\033[?1000;1002;1003;1004;1005;1006;1015;2004l\033[>0u\033[0m\033[r\033[%u;1H\r\n", rows);
+  ghostty_terminal_vt_write(model, (const uint8_t *)reset, n);
+  if (alternate) {
+    for (unsigned i = 0; i < rows; i++) ghostty_terminal_vt_write(model, (const uint8_t *)"\r\n", 2);
+    /* Copy the last visible alternate screen into primary history before the marker. */
+    ghostty_terminal_vt_write(model, alternate, length);
+    ghostty_terminal_vt_write(model, (const uint8_t *)"\r\n", 2);
+    free(alternate);
+  }
+  const char *marker = "--- Restored session; the previous shell ended ---\r\n";
+  ghostty_terminal_vt_write(model, (const uint8_t *)marker, strlen(marker));
+  for (unsigned i = 0; i < rows; i++) ghostty_terminal_vt_write(model, (const uint8_t *)"\r\n", 2);
+  return true;
+}
+
 int anvil_terminal_host_main(int argc, char **argv) {
-  if (argc != 14 || !anvil_terminal_id_valid(argv[2]) || strlen(argv[4]) > 32000) return 1;
+  if ((argc != 14 && argc != 16) || !anvil_terminal_id_valid(argv[2]) || strlen(argv[4]) > 32000 ||
+      (argc == 16 && strcmp(argv[14], "--revive-from"))) return 1;
   char expected_pipe[128]; snprintf(expected_pipe, sizeof(expected_pipe), "\\\\.\\pipe\\anvil-terminal-%s", argv[2]);
   if (strcmp(argv[3], expected_pipe) != 0) return 1;
   TerminalHost host = { .busy = true, .id = argv[2], .pipe_name = argv[3], .shell = argv[5],
@@ -409,6 +550,8 @@ int anvil_terminal_host_main(int argc, char **argv) {
   }
   snprintf(host.log_path, sizeof(host.log_path), "%s/logs/terminal-session-%s.log", argv[4], argv[2]);
   snprintf(host.record_path, sizeof(host.record_path), "%s/terminal-sessions/%s.lua", argv[4], argv[2]);
+  snprintf(host.snapshot_path, sizeof(host.snapshot_path), "%s/terminal-sessions/%s.snapshot", argv[4], argv[2]);
+  snprintf(host.last_cwd, sizeof(host.last_cwd), "%s", host.cwd);
   host_log(&host, "start");
   host_log(&host, "ConPTY runtime: %s/conpty", argv[13]);
   BOOL in_job = FALSE;
@@ -419,6 +562,8 @@ int anvil_terminal_host_main(int argc, char **argv) {
   host.size = size;
   size_t lines = (size_t)strtoull(argv[11], NULL, 10);
   DWORD error = 0, exit_code = 1;
+  HANDLE revival_lock = NULL;
+  bool ever_running = false;
   HANDLE handle = CreateNamedPipeA(argv[3], PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
     FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
     PIPE_REJECT_REMOTE_CLIENTS, 1, 65536, 65536, 0, NULL);
@@ -429,13 +574,28 @@ int anvil_terminal_host_main(int argc, char **argv) {
                           ANVIL_TERMINAL_MAX_PAYLOAD)) { handle = INVALID_HANDLE_VALUE; goto cleanup; }
   handle = INVALID_HANDLE_VALUE;
   host.pty.cols = size.cols; host.pty.rows = size.rows;
-  if (!size.cols || !size.rows || size.cols > 32767 || size.rows > 32767 ||
-      !size.cell_width || !size.cell_height ||
-      !anvil_terminal_model_new(&host.model, size.cols, size.rows, size.cell_width,
-        size.cell_height, strcmp(argv[11], "-1") == 0 ? NULL : &lines) ||
+  if (argc == 16) {
+    revival_lock = registry_lock(host.id);
+    if (!revival_lock || registry_host_live(&host)) { error = ERROR_PIPE_BUSY; goto cleanup; }
+    /* The path is derived from the validated session ID, never from a record's arbitrary path. */
+    if (strcmp(argv[15], host.snapshot_path) ||
+        !anvil_terminal_snapshot_load(host.snapshot_path, host.project, host.id, &host.model, &error)) goto cleanup;
+    uint16_t cols = 0, rows = 0;
+    ghostty_terminal_get(host.model, GHOSTTY_TERMINAL_DATA_COLS, &cols);
+    ghostty_terminal_get(host.model, GHOSTTY_TERMINAL_DATA_ROWS, &rows);
+    if (!cols || !rows) goto cleanup;
+    size.cols = cols; size.rows = rows; host.size = size;
+    if (!anvil_terminal_model_options(host.model, strcmp(argv[11], "-1") == 0 ? NULL : &lines)) goto cleanup;
+    if (!prepare_revival(host.model, rows)) { error = ERROR_INVALID_DATA; goto cleanup; }
+    host_log(&host, "revival: restored disk screen; start new shell");
+  } else if (!anvil_terminal_model_new(&host.model, size.cols, size.rows, size.cell_width,
+        size.cell_height, strcmp(argv[11], "-1") == 0 ? NULL : &lines)) goto cleanup;
+  if (!size.cols || !size.rows || size.cols > 32767 || size.rows > 32767 || !size.cell_width || !size.cell_height ||
       !anvil_conpty_start(&host.pty, argv[5], argv[6], argv[13], &error) || !write_registry(&host)) goto cleanup;
+  if (revival_lock) { ReleaseMutex(revival_lock); CloseHandle(revival_lock); revival_lock = NULL; }
   host.reader = CreateThread(NULL, 0, host_reader, &host, 0, NULL);
   if (!host.reader) goto cleanup;
+  ever_running = true;
   exit_code = 0;
   uint64_t exited_at = 0, drain_started = 0, idle_since = GetTickCount64(), busy_probe_at = 0;
   bool exit_queued = false;
@@ -464,6 +624,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
       else idle_since = 0;
     }
     if (!exited_at && WaitForSingleObject(host.pty.process, 0) == WAIT_OBJECT_0) {
+      host.shell_ended = true;
       exited_at = now; GetExitCodeProcess(host.pty.process, &exit_code); drain_started = now;
       host.console_close = CreateThread(NULL, 0, close_console, &host, 0, NULL);
       host_log(&host, "shell exit code=%lu; drain", (unsigned long)exit_code);
@@ -491,10 +652,14 @@ int anvil_terminal_host_main(int argc, char **argv) {
     if (exit_queued && (!host.attached || (sent_at && now - sent_at > 3000))) break;
     if (!exited_at && now >= busy_probe_at) {
       busy_probe_at = now + (host.attached ? 500 : 2000);
-      bool busy = shell_busy(GetProcessId(host.pty.process));
+      char command[16384];
+      bool busy = shell_busy(GetProcessId(host.pty.process), command, sizeof(command));
+      bool command_changed = strcmp(command, host.interrupted_command) != 0;
+      if (command_changed) strcpy(host.interrupted_command, command);
       EnterCriticalSection(&host.lock);
       if (host.busy != busy) { host.busy = busy; host.status_pending = true; }
       LeaveCriticalSection(&host.lock);
+      if (command_changed) write_registry(&host);
       if (host.attached || busy) idle_since = 0;
       else if (!idle_since) idle_since = now;
       uint64_t last = InterlockedCompareExchange64(&host.last_output, 0, 0);
@@ -510,9 +675,12 @@ int anvil_terminal_host_main(int argc, char **argv) {
       if (queue_record(&host, ANVIL_TERMINAL_STATUS, &status, sizeof(status))) host.status_pending = false;
     }
     LeaveCriticalSection(&host.lock);
+    uint64_t revision = InterlockedCompareExchange64(&host.model_revision, 0, 0);
+    if (host.model && revision != host.snapshot_revision && now - host.snapshot_at >= 2000) save_snapshot(&host);
     Sleep(10);
   }
 cleanup:
+  if (revival_lock) { ReleaseMutex(revival_lock); CloseHandle(revival_lock); }
   host_log(&host, "exit Windows error=%lu", (unsigned long)error);
   stop_host(&host);
   if (accepting) {
@@ -520,7 +688,7 @@ cleanup:
     DWORD done; GetOverlappedResult(host.pipe.handle, &accept, &done, TRUE);
   }
   if (accept.hEvent) CloseHandle(accept.hEvent);
-  delete_registry(&host);
+  if (host.explicit_close) delete_registry(&host);
   /* Keep draining until ClosePseudoConsole releases its output sink. */
   anvil_conpty_kill(&host.pty);
   if (host.pty.pseudoconsole && !host.console_close)
@@ -529,6 +697,7 @@ cleanup:
     host_log(&host, "failure: ConPTY close timeout; end host"); ExitProcess(1);
   }
   join_reader(&host);
+  if (!host.explicit_close && ever_running) save_snapshot(&host);
   join_thread(&host.client); join_thread(&host.writer);
   if (host.console_close) { CloseHandle(host.console_close); host.pty.pseudoconsole = NULL; }
   anvil_conpty_close(&host.pty); anvil_ipc_pipe_close(&host.pipe);
@@ -623,29 +792,31 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 char id[ANVIL_TERMINAL_ID_LENGTH + 1],
                                 const char *userdir, const char *project, const char *shell, const char *cwd,
                                 const char *datadir,
-                                AnvilTerminalSize size, const size_t *scrollback_lines, DWORD *error) {
+                                const char *revive_from,
+                                AnvilTerminalSize *size, const size_t *scrollback_lines, DWORD *error) {
   uint8_t random[16]; char name[128];
   typedef BOOLEAN (WINAPI *RandomFunction)(void *, ULONG);
   HMODULE library = LoadLibraryW(L"advapi32.dll");
   RandomFunction random_function = library ? (RandomFunction)GetProcAddress(library, "SystemFunction036") : NULL;
-  bool random_ok = random_function && random_function(random, sizeof(random));
+  bool random_ok = revive_from ? anvil_terminal_id_valid(id) : random_function && random_function(random, sizeof(random));
   if (library) FreeLibrary(library);
   if (!random_ok) { *error = ERROR_GEN_FAILURE; return false; }
-  for (size_t i = 0; i < sizeof(random); i++) snprintf(id + i * 2, 3, "%02x", random[i]);
+  if (!revive_from) for (size_t i = 0; i < sizeof(random); i++) snprintf(id + i * 2, 3, "%02x", random[i]);
   snprintf(name, sizeof(name), "\\\\.\\pipe\\anvil-terminal-%s", id);
   wchar_t exe[32768]; DWORD exe_len = GetModuleFileNameW(NULL, exe, 32768);
   if (!exe_len || exe_len * 2 + 3 >= 32768) { *error = ERROR_FILENAME_EXCED_RANGE; return false; }
   char cols[16], rows[16], cw[16], ch[16], lines[32];
-  snprintf(cols, sizeof(cols), "%u", size.cols); snprintf(rows, sizeof(rows), "%u", size.rows);
-  snprintf(cw, sizeof(cw), "%u", size.cell_width); snprintf(ch, sizeof(ch), "%u", size.cell_height);
+  snprintf(cols, sizeof(cols), "%u", size->cols); snprintf(rows, sizeof(rows), "%u", size->rows);
+  snprintf(cw, sizeof(cw), "%u", size->cell_width); snprintf(ch, sizeof(ch), "%u", size->cell_height);
   if (scrollback_lines) snprintf(lines, sizeof(lines), "%zu", *scrollback_lines); else strcpy(lines, "-1");
   const char *args[] = { "--terminal-session", id, name, userdir, shell ? shell : "",
-    cwd ? cwd : "", cols, rows, cw, ch, lines, project ? project : "", datadir };
+    cwd ? cwd : "", cols, rows, cw, ch, lines, project ? project : "", datadir, "--revive-from", revive_from };
   wchar_t *command = calloc(32768, sizeof(wchar_t));
   if (!command) { *error = ERROR_NOT_ENOUGH_MEMORY; return false; }
   size_t n = quote_arg(command, exe);
   bool valid = true;
-  for (size_t i = 0; i < sizeof(args) / sizeof(args[0]); i++) {
+  size_t arg_count = revive_from ? sizeof(args) / sizeof(args[0]) : sizeof(args) / sizeof(args[0]) - 2;
+  for (size_t i = 0; i < arg_count; i++) {
     wchar_t *arg = wide_string(args[i]);
     if (!arg || n + wcslen(arg) * 2 + 4 >= 32768) { free(arg); valid = false; break; }
     command[n++] = L' '; n += quote_arg(command + n, arg); free(arg);
@@ -664,5 +835,6 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
   if (!created) return false;
   CloseHandle(info.hThread); *process = info.hProcess; *host_pid = info.dwProcessId;
   *replay_bytes = 0;
-  return anvil_terminal_host_connect(pipe, *process, *host_pid, shell_pid, id, &size, error);
+  if (revive_from) { size->cols = 0; size->rows = 0; }
+  return anvil_terminal_host_connect(pipe, *process, *host_pid, shell_pid, id, size, error);
 }

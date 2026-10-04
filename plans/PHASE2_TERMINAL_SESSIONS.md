@@ -4,7 +4,7 @@ This is the implementation plan for Phase 2 of
 [the multiprocess shell plan](MULTIPROCESS_SHELL_PLAN.md). Read that plan first,
 especially "Terminal Sessions", "Session registry", and "IPC".
 
-Status: Milestones 1 to 3 are implemented. Milestone 4 has not started.
+Status: Milestones 1 to 4 are implemented.
 Phases 0 and 1 are done.
 
 Formatter check: `anvil:terminal-replay` failed with the requested VT extras.
@@ -471,6 +471,8 @@ Transport output and tail checks passed. This test-loop warning remains outside 
 
 ### Milestone 4: snapshots and revival
 
+Implemented. The host owns disk encoding and writes. Revival starts on the existing connection worker.
+
 Preparation follow-ups:
 
 - `terminal:reset_quit_choice` clears user storage and writes a quiet log. The command test passes.
@@ -513,6 +515,48 @@ Preparation follow-ups:
     revival marker, and a live shell;
   - snapshot writes are bounded and atomic: a partial file never replaces a good
     one.
+
+Implementation notes:
+
+- Disk payloads have an 8 MiB limit. Encoding trims a copy, not the live terminal.
+  Oversized screens or parser continuation fail without replacing the last good snapshot.
+- Each Project keeps at most 32 snapshots. Its mutex protects eviction and publication.
+  One fixed staging file per Project bounds files left by a crash.
+  The host flushes the staging file before atomic replacement.
+- A model revision tracks pending writes, including clear and resize. A clock tick cannot hide later output.
+- Records store OSC 7 cwd and the busy child's command line. Changed commands update the record.
+  The host writes its final snapshot after output drains, including after a normal shell exit.
+- Revival retains the session ID and saved grid. It resets old parser and application modes before starting the shell.
+  It copies the decoded active alternate grid into primary history before the marker. Binary replay still uses the codec.
+  The view waits for replay before offering the interrupted command. Rerun needs explicit approval.
+- Shared-delete record reads permit atomic replacement. Read access errors do not start another shell.
+- A system worker removes expired dead records at startup and dead records after explicit View close.
+  Host identity checks remain conservative. A per-session mutex prevents cleanup from racing revival.
+  Deletion uses derived paths, not a record's supplied snapshot path.
+
+Focused checks:
+
+- The first revival check failed because the host did not write a disk snapshot.
+- Disabling the disk bound accepted an oversized unfinished payload. Restoring the bound made the check pass.
+- Disabling the rerun offer failed with "revival did not offer the interrupted command".
+- Disabling open-View revival failed with "open View did not revive".
+- Disabling cleanup left an expired dead record. The worker now removes it and keeps recent and live records.
+- The alternate-screen check failed because revival lost the last visible grid.
+- Six revival checks cover host loss, explicit rerun, OSC 7 cwd, corrupt data, final output, and alternate-screen history.
+  Cleanup and all six lifecycle checks pass. The native codec and disk checks pass.
+  The dead-host fallback check now removes the snapshot to test the fresh-shell path.
+
+Corrected benchmark, before disk snapshots versus after:
+
+| Measurement | Before disk snapshots | After disk snapshots |
+| --- | ---: | ---: |
+| Generated reply p50 / p95 | 0.213 / 0.239 ms | 0.199 / 0.253 ms |
+| 20,000 output lines | 5,383.614 ms | 5,684.978 ms |
+| Update p50 / p95 | 0.0070 / 0.0171 ms | 0.0077 / 0.0205 ms |
+| Snapshot p50 / p95 | 0.2794 / 0.4660 ms | 0.2992 / 0.5009 ms |
+| Ten-session update total | 6.071 ms / 2,360 calls | 8.887 ms / 1,900 calls |
+
+All three limits pass. Neither run reports dropped events. Do not treat small differences as causal improvements.
 
 ## Pitfalls
 
