@@ -489,8 +489,8 @@ Preparation follow-ups:
 - Attached busy probes remain at 500 ms. Detached probes remain at 2 s.
 
 - The host writes a Ghostty codec snapshot to `USERDIR/terminal-sessions/<id>.snapshot`
-  with atomic replacement, at most every 2 s after output. It also writes one when
-  the shell exits and when the host shuts down. Bound it to about 8 MB by trimming
+  with atomic replacement, at most every 20 s while the model changes. It also writes on detach,
+  after shell output drains, and when the host shuts down. Bound it to about 8 MB by trimming
   the oldest scrollback.
 - The record also stores:
   - the last cwd, from OSC 7 through the model's pwd, or else the launch cwd;
@@ -520,9 +520,13 @@ Implementation notes:
 
 - Disk payloads have an 8 MiB limit. Encoding trims a copy, not the live terminal.
   Oversized screens or parser continuation fail without replacing the last good snapshot.
+- The host lock protects one plain encoding. Decode, trim, cwd checks, validation, and publication run after unlock.
+  The decoded copy supplies OSC 7 metadata; disk work never reads the live model.
 - Each Project keeps at most 32 snapshots. Its mutex protects eviction and publication.
   One fixed staging file per Project bounds files left by a crash.
   The host flushes the staging file before atomic replacement.
+  Only final shell/host saves use `_commit` and write-through replacement.
+  Detach publishes immediately without a disk durability wait.
 - A model revision tracks pending writes, including clear and resize. A clock tick cannot hide later output.
 - Records store OSC 7 cwd and the busy child's command line. Changed commands update the record.
   The host writes its final snapshot after output drains, including after a normal shell exit.
@@ -557,6 +561,40 @@ Corrected benchmark, before disk snapshots versus after:
 | Ten-session update total | 6.071 ms / 2,360 calls | 8.887 ms / 1,900 calls |
 
 All three limits pass. Neither run reports dropped events. Do not treat small differences as causal improvements.
+
+Snapshot and Rerun follow-ups:
+
+- Fresh-screen detach checks failed with "host acknowledged detach without saving its screen" before the fix.
+  Detach now publishes before its registry acknowledgement. The six revival checks pass.
+- PowerShell Rerun originally failed the native argument check.
+  It now uses `Start-Process -NoNewWindow -Wait` with a literal executable and the original argument string.
+  This preserves quotes, empty arguments, metacharacters, and literal `%TEMP%` without PowerShell expansion.
+  `--%` alone would still expand environment-variable arguments.
+- Prompt-helper probes originally offered `starship.exe` as an interrupted command.
+  The probe now skips `starship.exe` and `oh-my-posh.exe` when selecting a command.
+  It keeps their busy status conservative and continues looking for another child.
+- `ui/terminal_rerun_windows.lua` checks real native arguments and both helper process names.
+- `benchmarks/terminal_snapshot.lua` fills 6,000 colored rows, then samples generated shell replies for 25 s.
+  It crosses a periodic checkpoint and reports host capture and total-save costs.
+  This measures shell output latency, not rendered keyboard latency.
+
+The native codec/disk target, two Rerun checks, and six revival checks pass.
+Lua, PowerShell, and shell syntax checks pass.
+Two identical large-scrollback runs per version produced these results:
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Generated reply p95 | 1.844 to 2.017 ms | 1.671 to 1.680 ms |
+| Worst generated reply | 83.831 to 109.472 ms | 11.090 to 11.325 ms |
+| Full captured payload | Not logged | 14,743,178 to 14,745,272 bytes |
+| Locked plain capture | Not logged | 15 to 16 ms |
+| Complete save | Not logged | 78 to 93 ms |
+
+The payload exceeds the disk limit and exercises copy-only history trimming.
+The final run samples 2,143 replies and passes the 300 ms stall bound.
+Host times use `GetTickCount64`; its coarse resolution limits capture-time precision.
+No run reports dropped terminal notifications.
+This is a save-path comparison with the same ConPTY runtime, not a display-latency claim.
 
 ## Pitfalls
 

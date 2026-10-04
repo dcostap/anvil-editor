@@ -78,6 +78,11 @@ static int round_trip(int alternate, int utf8) {
   return 0;
 }
 
+static bool disk_encode(GhosttyTerminal model, uint8_t **bytes, size_t *length) {
+  return anvil_terminal_snapshot_encode(model, bytes, length) &&
+    anvil_terminal_disk_snapshot_prepare(bytes, length, NULL);
+}
+
 static int disk_bounds(void) {
   GhosttyTerminal model = NULL, restored = NULL;
   size_t lines = 100000;
@@ -91,7 +96,7 @@ static int disk_bounds(void) {
   size_t before = 0, after = 0, kept = 0;
   ghostty_terminal_get(model, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &before);
   uint8_t *bytes = NULL; size_t length = 0;
-  CHECK(anvil_terminal_disk_snapshot_encode(model, &bytes, &length));
+  CHECK(disk_encode(model, &bytes, &length));
   CHECK(length <= ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT);
   CHECK(anvil_terminal_snapshot_decode(bytes, length, &restored));
   ghostty_terminal_get(model, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &after);
@@ -114,7 +119,7 @@ static int disk_bounds(void) {
   size_t oversized = ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT + 1024;
   uint8_t *payload = malloc(oversized); CHECK(payload); memset(payload, 'A', oversized);
   ghostty_terminal_vt_write(model, payload, oversized); free(payload);
-  CHECK(!anvil_terminal_disk_snapshot_encode(model, &bytes, &length));
+  CHECK(!disk_encode(model, &bytes, &length));
   ghostty_terminal_get(model, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &after);
   CHECK(before == after);
   ghostty_terminal_free(model); free(bytes);
@@ -130,34 +135,34 @@ static int disk_atomic_and_quota(void) {
   CHECK(anvil_terminal_model_new(&model, 20, 3, 8, 16, NULL));
   ghostty_terminal_vt_write(model, (const uint8_t *)"atomic saved screen", 19);
   uint8_t *bytes = NULL; size_t length = 0; DWORD error;
-  CHECK(anvil_terminal_disk_snapshot_encode(model, &bytes, &length));
+  CHECK(disk_encode(model, &bytes, &length));
   for (unsigned i = 0; i <= ANVIL_TERMINAL_PROJECT_SNAPSHOTS; i++) {
     snprintf(id, sizeof(id), "%032x", i);
     snprintf(path, sizeof(path), "%s/%s.snapshot", directory, id);
-    CHECK(anvil_terminal_snapshot_store(path, "project-one", id, bytes, length, &error));
+    CHECK(anvil_terminal_snapshot_store(path, "project-one", id, bytes, length, false, &error));
   }
   char pattern[MAX_PATH + 80]; snprintf(pattern, sizeof(pattern), "%s/*.snapshot", directory);
   WIN32_FIND_DATAA entry; HANDLE scan = FindFirstFileA(pattern, &entry); unsigned count = 0;
   CHECK(scan != INVALID_HANDLE_VALUE);
   do { count++; } while (FindNextFileA(scan, &entry)); FindClose(scan);
   CHECK(count == ANVIL_TERMINAL_PROJECT_SNAPSHOTS);
-  CHECK(!anvil_terminal_snapshot_store(path, "project-one", id, bytes, length - 1, &error));
+  CHECK(!anvil_terminal_snapshot_store(path, "project-one", id, bytes, length - 1, false, &error));
   GhosttyTerminal replacement = NULL;
   CHECK(anvil_terminal_model_new(&replacement, 20, 3, 8, 16, NULL));
   ghostty_terminal_vt_write(replacement, (const uint8_t *)"unpublished text", 16);
   uint8_t *next = NULL; size_t next_length = 0;
-  CHECK(anvil_terminal_disk_snapshot_encode(replacement, &next, &next_length));
+  CHECK(disk_encode(replacement, &next, &next_length));
   HANDLE locked = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   CHECK(locked != INVALID_HANDLE_VALUE);
-  CHECK(!anvil_terminal_snapshot_store(path, "project-one", id, next, next_length, &error));
+  CHECK(!anvil_terminal_snapshot_store(path, "project-one", id, next, next_length, true, &error));
   CloseHandle(locked); free(next); ghostty_terminal_free(replacement);
   CHECK(anvil_terminal_snapshot_load(path, "project-one", id, &restored, &error));
   CHECK(compare(model, restored) == 0); ghostty_terminal_free(restored); restored = NULL;
   CHECK(!anvil_terminal_snapshot_load(path, "project-two", id, &restored, &error));
   snprintf(id, sizeof(id), "%032x", 999);
   snprintf(path, sizeof(path), "%s/%s.snapshot", directory, id);
-  CHECK(anvil_terminal_snapshot_store(path, "project-two", id, bytes, length, &error));
+  CHECK(anvil_terminal_snapshot_store(path, "project-two", id, bytes, length, true, &error));
   scan = FindFirstFileA(pattern, &entry); count = 0;
   CHECK(scan != INVALID_HANDLE_VALUE);
   do { count++; snprintf(path, sizeof(path), "%s/%s", directory, entry.cFileName); DeleteFileA(path); }

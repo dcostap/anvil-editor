@@ -66,7 +66,7 @@ static bool make_room(const wchar_t *path, uint64_t project) {
 }
 
 bool anvil_terminal_snapshot_store(const char *path, const char *project, const char *id,
-                                  const uint8_t *bytes, size_t length, DWORD *error) {
+                                  const uint8_t *bytes, size_t length, bool final, DWORD *error) {
   *error = ERROR_INVALID_DATA;
   GhosttyTerminal check = NULL;
   if (strlen(id) != 32 || !length || length > ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT ||
@@ -93,9 +93,10 @@ bool anvil_terminal_snapshot_store(const char *path, const char *project, const 
   DiskHeader header = { .magic = "ANVSNP1", .project = owner, .length = length };
   memcpy(header.id, id, 32);
   ok = file && fwrite(&header, sizeof(header), 1, file) == 1 && fwrite(bytes, 1, length, file) == length;
-  if (ok) ok = fflush(file) == 0 && _commit(_fileno(file)) == 0;
+  if (ok) ok = fflush(file) == 0 && (!final || _commit(_fileno(file)) == 0);
   if (file && fclose(file)) ok = false;
-  if (ok) ok = make_room(dest, owner) && MoveFileExW(temporary, dest, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+  if (ok) ok = make_room(dest, owner) && MoveFileExW(temporary, dest,
+    MOVEFILE_REPLACE_EXISTING | (final ? MOVEFILE_WRITE_THROUGH : 0));
   *error = ok ? ERROR_SUCCESS : GetLastError();
   if (!ok && file) DeleteFileW(temporary);
   free(dest);

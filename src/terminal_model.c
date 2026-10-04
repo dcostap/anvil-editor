@@ -125,22 +125,24 @@ bool anvil_terminal_snapshot_decode(const uint8_t *bytes, size_t length, Ghostty
   return ok;
 }
 
-bool anvil_terminal_disk_snapshot_encode(GhosttyTerminal model, uint8_t **bytes, size_t *length) {
-  if (encode_limit(model, bytes, length, ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT)) return true;
-  uint8_t *full = NULL; size_t count = 0;
+bool anvil_terminal_disk_snapshot_prepare(uint8_t **bytes, size_t *length, GhosttyTerminal *decoded) {
+  if (decoded) *decoded = NULL;
   GhosttyTerminal copy = NULL;
-  if (!anvil_terminal_snapshot_encode(model, &full, &count)) return false;
-  bool ok = anvil_terminal_snapshot_decode(full, count, &copy);
-  free(full);
+  bool ok = anvil_terminal_snapshot_decode(*bytes, *length, &copy);
   size_t continuation = ANVIL_TERMINAL_CONTINUATION_LIMIT;
   ok = ok && ghostty_terminal_set(copy, GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES, &continuation) == GHOSTTY_SUCCESS;
-  size_t budget = 0;
-  ok = ok && ghostty_terminal_get(copy, GHOSTTY_TERMINAL_DATA_SCROLLBACK_MAX_BYTES, &budget) == GHOSTTY_SUCCESS;
-  for (budget /= 2; ok; budget /= 2) {
-    ok = ghostty_terminal_set(copy, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &budget) == GHOSTTY_SUCCESS;
-    if (ok && encode_limit(copy, bytes, length, ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT)) break;
-    if (!budget) { ok = false; break; }
+  if (ok && *length > ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT) {
+    size_t budget = 0;
+    ok = ghostty_terminal_get(copy, GHOSTTY_TERMINAL_DATA_SCROLLBACK_MAX_BYTES, &budget) == GHOSTTY_SUCCESS;
+    uint8_t *trimmed = NULL; size_t count = 0;
+    for (budget /= 2; ok; budget /= 2) {
+      ok = ghostty_terminal_set(copy, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &budget) == GHOSTTY_SUCCESS;
+      if (ok && encode_limit(copy, &trimmed, &count, ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT)) break;
+      if (!budget) { ok = false; break; }
+    }
+    if (ok) { free(*bytes); *bytes = trimmed; *length = count; }
   }
-  if (copy) ghostty_terminal_free(copy);
+  if (ok && decoded) *decoded = copy;
+  else if (copy) ghostty_terminal_free(copy);
   return ok;
 }

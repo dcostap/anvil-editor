@@ -326,6 +326,8 @@ static void join_thread(HANDLE *thread) {
   CloseHandle(*thread); *thread = NULL;
 }
 
+static bool save_snapshot(TerminalHost *host, bool final);
+
 static void disconnect_client(TerminalHost *host) {
   stop_client(host);
   join_thread(&host->client); join_thread(&host->writer);
@@ -339,6 +341,7 @@ static void disconnect_client(TerminalHost *host) {
   ResetEvent(host->pipe.stop_event);
   InterlockedExchange(&host->client_stop, 0);
   host_log(host, host->stop ? "client closed; end host" : "detached; shell remains live");
+  if (!host->stop && host->model) save_snapshot(host, false);
 }
 
 static bool attach_client(TerminalHost *host) {
@@ -427,6 +430,9 @@ static bool shell_busy(DWORD pid, char *command, size_t capacity) {
   if (!Process32FirstW(snapshot, &entry)) busy = true;
   else do { if (entry.th32ParentProcessID == pid) {
       busy = true;
+      /* A prompt helper is a child, but not a command worth offering again.
+         Keep scanning: another child can hold the interrupted command. */
+      if (!_wcsicmp(entry.szExeFile, L"oh-my-posh.exe") || !_wcsicmp(entry.szExeFile, L"starship.exe")) continue;
       HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
       typedef LONG (WINAPI *QueryProcess)(HANDLE, ULONG, void *, ULONG, ULONG *);
       QueryProcess query = (QueryProcess)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess");
@@ -452,9 +458,9 @@ static bool shell_busy(DWORD pid, char *command, size_t capacity) {
   return busy;
 }
 
-static void capture_cwd(TerminalHost *host) {
+static void capture_cwd(TerminalHost *host, GhosttyTerminal snapshot) {
   GhosttyString pwd = {0};
-  if (ghostty_terminal_get(host->model, GHOSTTY_TERMINAL_DATA_PWD, &pwd) != GHOSTTY_SUCCESS ||
+  if (ghostty_terminal_get(snapshot, GHOSTTY_TERMINAL_DATA_PWD, &pwd) != GHOSTTY_SUCCESS ||
       !pwd.ptr || !pwd.len || pwd.len >= sizeof(host->last_cwd)) return;
   char text[32768]; memcpy(text, pwd.ptr, pwd.len); text[pwd.len] = 0;
   char *path = text;
@@ -481,19 +487,28 @@ static void capture_cwd(TerminalHost *host) {
 }
 
 /* Runs in the host, never in the editor's UI thread. */
-static bool save_snapshot(TerminalHost *host) {
+static bool save_snapshot(TerminalHost *host, bool final) {
   uint8_t *bytes = NULL; size_t length = 0;
   EnterCriticalSection(&host->lock);
+  uint64_t started = GetTickCount64();
   uint64_t revision = InterlockedCompareExchange64(&host->model_revision, 0, 0);
-  capture_cwd(host);
-  bool ok = anvil_terminal_disk_snapshot_encode(host->model, &bytes, &length);
+  /* Capture once. Decode, trim, validate metadata, and publish after unlock. */
+  bool ok = anvil_terminal_snapshot_encode(host->model, &bytes, &length);
+  uint64_t capture_ms = GetTickCount64() - started;
   LeaveCriticalSection(&host->lock);
+  size_t captured = length;
+  GhosttyTerminal copy = NULL;
+  if (ok) ok = anvil_terminal_disk_snapshot_prepare(&bytes, &length, &copy);
+  if (ok) capture_cwd(host, copy);
+  if (copy) ghostty_terminal_free(copy);
   DWORD error = ERROR_INVALID_DATA;
-  if (ok) ok = anvil_terminal_snapshot_store(host->snapshot_path, host->project, host->id, bytes, length, &error);
+  if (ok) ok = anvil_terminal_snapshot_store(host->snapshot_path, host->project, host->id, bytes, length, final, &error);
   free(bytes);
   host->snapshot_at = GetTickCount64();
   if (ok) { host->snapshot_revision = revision; write_registry(host); }
-  host_log(host, "disk snapshot %s: bytes=%zu Windows error=%lu", ok ? "saved" : "failed", length, (unsigned long)error);
+  host_log(host, "disk snapshot %s: captured=%zu bytes=%zu capture_ms=%llu total_ms=%llu final=%d Windows error=%lu",
+    ok ? "saved" : "failed", captured, length, (unsigned long long)capture_ms,
+    (unsigned long long)(GetTickCount64() - started), final, (unsigned long)error);
   return ok;
 }
 
@@ -598,7 +613,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
   ever_running = true;
   exit_code = 0;
   uint64_t exited_at = 0, drain_started = 0, idle_since = GetTickCount64(), busy_probe_at = 0;
-  bool exit_queued = false;
+  bool exit_queued = false, final_snapshot_saved = false;
   while (!host.stop) {
     uint64_t now = GetTickCount64();
     if ((host.client || host.writer) && host.client_stop) {
@@ -640,6 +655,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
            now - last >= ANVIL_TERMINAL_DRAIN_QUIET_MS && host.reader_done) ||
           (!backpressured && now - drain_started >= ANVIL_TERMINAL_DRAIN_MAX_MS)) {
         join_reader(&host);
+        if (!host.explicit_close) final_snapshot_saved = save_snapshot(&host, true);
         AnvilTerminalExited exited = { exit_code };
         EnterCriticalSection(&host.lock);
         bool queued = queue_record(&host, ANVIL_TERMINAL_EXITED, &exited, sizeof(exited));
@@ -676,7 +692,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
     }
     LeaveCriticalSection(&host.lock);
     uint64_t revision = InterlockedCompareExchange64(&host.model_revision, 0, 0);
-    if (host.model && revision != host.snapshot_revision && now - host.snapshot_at >= 2000) save_snapshot(&host);
+    if (host.model && revision != host.snapshot_revision && now - host.snapshot_at >= 20000) save_snapshot(&host, false);
     Sleep(10);
   }
 cleanup:
@@ -697,7 +713,9 @@ cleanup:
     host_log(&host, "failure: ConPTY close timeout; end host"); ExitProcess(1);
   }
   join_reader(&host);
-  if (!host.explicit_close && ever_running) save_snapshot(&host);
+  if (!host.explicit_close && ever_running && (!final_snapshot_saved ||
+      host.snapshot_revision != (uint64_t)InterlockedCompareExchange64(&host.model_revision, 0, 0)))
+    save_snapshot(&host, true);
   join_thread(&host.client); join_thread(&host.writer);
   if (host.console_close) { CloseHandle(host.console_close); host.pty.pseudoconsole = NULL; }
   anvil_conpty_close(&host.pty); anvil_ipc_pipe_close(&host.pipe);

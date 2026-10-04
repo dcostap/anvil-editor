@@ -80,6 +80,9 @@ cp -R "$sourcedir/tests/lua" "$workdir/tests/"
 if [ -d "$sourcedir/tests/fixtures" ]; then
   cp -R "$sourcedir/tests/fixtures" "$workdir/tests/"
 fi
+if [ -f "$builddir/subprojects/luajit/src/luajit.exe" ]; then
+  cp "$builddir/subprojects/luajit/src/luajit.exe" "$workdir/tests/fixtures/terminal argv's.exe"
+fi
 
 cd "$workdir"
 export SDL_VIDEO_DRIVER="${SDL_VIDEO_DRIVER:-dummy}"

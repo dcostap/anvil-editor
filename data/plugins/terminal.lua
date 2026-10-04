@@ -605,7 +605,16 @@ function TerminalView:rerun_interrupted_command()
   if self.state ~= "running" or not self.session or type(text) ~= "string" or
       text == "" or #text > 16384 or text:find("[%z\r\n]") then return false end
   local shell = self.launch_options.shell:lower()
-  if shell == "" or shell:find("powershell", 1, true) or shell:find("pwsh", 1, true) then text = "& " .. text end
+  if shell == "" or shell:find("powershell", 1, true) or shell:find("pwsh", 1, true) then
+    local exe, args = text:match('^%s*"([^"]+)"%s*(.*)$')
+    if not exe then exe, args = text:match('^%s*([^%s"]+)%s*(.*)$') end
+    if not exe then return false end
+    local function quote(value) return "'" .. value:gsub("'", "''") .. "'" end
+    -- Pass the original argument string to CreateProcess, not PowerShell's parser.
+    -- Unlike --%, this also preserves literal %ENVIRONMENT_VARIABLE% arguments.
+    text = "Start-Process -FilePath " .. quote(exe)
+      .. (args ~= "" and " -ArgumentList " .. quote(args) or "") .. " -NoNewWindow -Wait"
+  end
   local ok = self.session:write(text .. "\r")
   if ok then
     self.interrupted_command = nil

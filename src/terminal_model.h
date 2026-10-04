@@ -16,6 +16,8 @@ bool anvil_terminal_model_new(GhosttyTerminal *model, uint16_t cols, uint16_t ro
 bool anvil_terminal_snapshot_encode(GhosttyTerminal model, uint8_t **bytes, size_t *length);
 /* Decode through FINISH. Reject trailing bytes. The caller owns the model. */
 bool anvil_terminal_snapshot_decode(const uint8_t *bytes, size_t length, GhosttyTerminal *model);
-/* Trim a copy, never the live model. A large active screen or continuation can fail. */
-bool anvil_terminal_disk_snapshot_encode(GhosttyTerminal model, uint8_t **bytes, size_t *length);
+/* Prepare an owned plain encoding; trim a copy, never the live model.
+   A large active screen or continuation can fail.
+   The caller frees the decoded copy, if requested. */
+bool anvil_terminal_disk_snapshot_prepare(uint8_t **bytes, size_t *length, GhosttyTerminal *decoded);
 #endif
