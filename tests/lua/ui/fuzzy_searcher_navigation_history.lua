@@ -49,6 +49,7 @@ end
 test.describe("Fuzzy Searcher Navigation History Search", function()
   test.before_each(function(context)
     context.editors = {}
+    context.buffers = {}
     context.active_view = core.active_view
     context.projects, context.cwd = core.projects, system.getcwd()
     context.root = USERDIR .. PATHSEP .. "navigation-search-project"
@@ -71,6 +72,7 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
       editor:on_close()
       core.buffer_registry:remove(editor.buffer, true)
     end
+    for _, buffer in ipairs(context.buffers) do core.buffer_registry:remove(buffer, true) end
     symbol_index.reset_for_tests()
     project_paths.configure_workspace {}
     core.projects = context.projects
@@ -164,6 +166,43 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     test.same(editor:get_selection_state().selections, { 20, 3, 20, 7 })
     test.equal(editor.scroll.to.x, 2)
     test.equal(editor.scroll.to.y, 400)
+  end)
+
+  test.it("refreshes changed source text and added places while many Buffers are open", function(context)
+    local pane, editor, buffer = editor_pane(context)
+    for line = 2, 60 do
+      editor:set_selection_state { selections = { line, 1, line, 1 }, last_selection = 1 }
+      panes.record_location(pane, { no_merge = true })
+    end
+    for index = 1, 60 do
+      local other = Buffer(nil, nil, true)
+      other.filename = "unrelated-" .. index .. ".txt"
+      other.abs_filename = context.root .. PATHSEP .. other.filename
+      core.buffer_registry:register(other, other.abs_filename)
+      context.buffers[#context.buffers + 1] = other
+    end
+    local picker = fuzzy_searcher.open("^")
+    local count = #picker.results
+    test.ok(count >= 60)
+    -- Measure the public refresh operation without a machine-dependent limit.
+    local started = system.get_time()
+    for _ = 1, 5 do picker:refresh_navigation_history("^", false) end
+    print(string.format("Navigation History unchanged refresh probe: %.3f ms",
+      (system.get_time() - started) * 1000))
+    buffer:insert(60, 1, "changed ")
+    picker:refresh_navigation_history("^", false)
+    local changed
+    for _, row in ipairs(picker.results) do if row.line == 60 then changed = row end end
+    test.equal(test.not_nil(changed).text, "changed source line 60")
+    panes.present(PlaceView("Added View"), { pane = pane })
+    picker:refresh_navigation_history("^", false)
+    test.equal(#picker.results, count + 1)
+    local added
+    for _, row in ipairs(picker.results) do if row.label == "Added View" then added = row end end
+    test.not_nil(added)
+    picker.input:set_text("^changed source line 60")
+    test.equal(#picker.results, 1)
+    test.equal(picker.results[1].line, 60)
   end)
 
   test.it("switches previews between different Buffers with the same text revision", function(context)
@@ -279,5 +318,22 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     test.ok(drawn["new_name"], "expected the enclosing symbol in the history row")
     test.ok(drawn["history.c"], "expected the filename in the history row")
     test.ok(drawn["return 1;"], "expected the source line in the history row")
+    buffer:remove(1, 5, 1, 13)
+    buffer:insert(1, 5, "later_name")
+    picker:refresh_navigation_history("^new_name", false)
+    test.equal(#picker.results, 0, "the old symbol must not match after an edit")
+    picker.input:set_text("^later_name")
+    found = nil
+    deadline = system.get_time() + 10
+    repeat
+      treesitter.poll_buffer(buffer)
+      local pool = worker_pool.current_system()
+      if pool then pool:drain { max_ms = 5, max_messages = 64 } end
+      picker:update()
+      for _, result in ipairs(picker.results) do if result.line == 2 then found = result end end
+      if found then break end
+      coroutine.yield(0.02)
+    until system.get_time() >= deadline
+    test.equal(test.not_nil(found).enclosing_symbol.name, "later_name")
   end)
 end)

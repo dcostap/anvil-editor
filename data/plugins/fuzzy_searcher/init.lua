@@ -6895,6 +6895,48 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
   self.modifier_job = job
 end
 
+function FSView:navigation_history_inputs(pane, text, symbol_index)
+  local values = {}
+  local function add(value) values[#values + 1] = tostring(value) end
+  add(pane)
+  add(pane and pane.history.index)
+  add(text)
+  add(self.case_sensitive)
+  add(project_paths.generation())
+  local project = core.root_project()
+  add(project and project.path)
+  for _, root in ipairs(project_paths.search_roots("symbols")) do
+    local index = symbol_index.status(root.path or root)
+    add(index.root)
+    add(index.generation)
+    add(index.native_snapshot)
+    add(index.overlay_generation)
+    add(index.symbol_status)
+  end
+  for _, entry in ipairs(pane and pane.history.entries or {}) do
+    local state, buffer = entry.state or {}, entry.view.buffer
+    add(entry)
+    add(entry.view:get_name())
+    add(state.current_dir)
+    add(state.root)
+    local selection = state.selection_state
+    add(selection ~= nil)
+    local offset = ((selection and selection.last_selection or 1) - 1) * 4 + 1
+    local selections = selection and selection.selections or {}
+    add(selections[offset])
+    add(selections[offset + 1])
+    add(buffer)
+    if buffer then
+      add(buffer.abs_filename)
+      add(buffer:get_change_id())
+      add(buffer.disable_language_services)
+      add(buffer.disable_treesitter)
+      add(buffer.treesitter and buffer.treesitter.status)
+    end
+  end
+  return table.concat(values, "\0")
+end
+
 function FSView:refresh_navigation_history(text, reset_selection)
   local pane = panes.find(self.source_pane)
   local selected = not reset_selection and self:selected_result()
@@ -6909,7 +6951,11 @@ function FSView:refresh_navigation_history(text, reset_selection)
     core.log_quiet("Navigation History Search: opened pane=%s", pane and pane.id or "none")
   end
 
-  local out = {}
+  local signature = self:navigation_history_inputs(pane, text, symbol_index)
+  if not reset_selection and self.navigation_history_signature == signature then return end
+  local started = system.get_time()
+
+  local rows, locations, location_rows, remembered = {}, {}, {}, {}
   for index = #(pane and pane.history.entries or {}), 1, -1 do
     local entry = pane.history.entries[index]
     local view, state = entry.view, entry.state or {}
@@ -6932,13 +6978,27 @@ function FSView:refresh_navigation_history(text, reset_selection)
         and common.relative_path(project.path, row.abs_path) or row.abs_path or label
       row.text = (row.buffer:get_utf8_line(row.line) or ""):gsub("[\r\n]+$", "")
         :sub(1, fuzzy_searcher.fuzzy_line_max_chars)
-      if row.abs_path then symbol_index.remember_open_buffer(row.buffer) end
-      row.enclosing_symbol = fuzzy_searcher.grep_enclosing_symbol(row)
+      if row.abs_path then
+        if not remembered[row.buffer] then
+          symbol_index.remember_open_buffer(row.buffer)
+          remembered[row.buffer] = true
+        end
+        locations[#locations + 1] = { path = row.abs_path, line = row.line, col = row.col }
+        location_rows[#location_rows + 1] = row
+      end
     else
       row.text = state.current_dir or state.root or ""
       if type(row.text) ~= "string" then row.text = "" end
     end
+    rows[#rows + 1] = row
+  end
 
+  local symbols = symbol_index.enclosing_symbols(locations, { kinds = { "function", "method" } })
+  for i, result in ipairs(symbols) do location_rows[i].enclosing_symbol = result.symbol end
+
+  local out = {}
+  for _, row in ipairs(rows) do
+    local label = row.label
     local best
     for _, value in ipairs({ row.file or label, row.text,
       row.enclosing_symbol and fuzzy_searcher.symbol_declaration_text(row.enclosing_symbol, false) or "" }) do
@@ -6974,6 +7034,13 @@ function FSView:refresh_navigation_history(text, reset_selection)
   if reset_selection and query == "" then
     self.list_scroll.y = (self.viewport_offset - 1) * self:list_metrics().lh
     self.list_scroll.move_data_y = nil
+  end
+  -- A lookup can schedule overlays. Save the signature after that work.
+  self.navigation_history_signature = self:navigation_history_inputs(pane, text, symbol_index)
+  local elapsed = (system.get_time() - started) * 1000
+  if elapsed > 10 then
+    core.log_quiet("Navigation History Search: refreshed places=%d matches=%d elapsed_ms=%.1f",
+      #rows, #out, elapsed)
   end
 end
 

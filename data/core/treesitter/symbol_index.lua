@@ -1077,27 +1077,31 @@ local function enclosing_symbol_from_list(symbols, line, col, kinds)
   return best and public_symbol(best) or nil
 end
 
-function symbol_index.enclosing_symbol(path, line, col, opts)
-  opts = opts or {}
+local function enclosing_symbol_at(path, line, col, opts, roots, contexts)
   path = path and common.normalize_path(path) or nil
   line = math.floor(tonumber(line) or 0)
   col = math.floor(tonumber(col) or 1)
   if not path or path == "" or line < 1 or col < 1 then return nil, "invalid-location" end
 
-  for _, root in ipairs(project_path_roots("symbols", opts)) do
+  for _, root in ipairs(roots) do
     if common.path_belongs_to(path, root) then
       local index = indexes[root]
       if not index then return nil, "index-unavailable" end
-      refresh_current_core_buffers_for_index(index)
-      if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
+      local context = contexts[root]
+      if not context then
+        refresh_current_core_buffers_for_index(index)
+        if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
+        context = {}
+        contexts[root] = context
+      end
 
       local overlay = index.open_buffers and index.open_buffers[path]
       if overlay_entry_current(overlay) then
         return enclosing_symbol_from_list(overlay.symbols, line, col, opts.kinds), nil
       end
 
-      local suppressed = overlay_paths(index)
-      if suppressed[path] then return nil, "overlay-indexing" end
+      if not context.suppressed then context.suppressed = overlay_paths(index) end
+      if context.suppressed[path] then return nil, "overlay-indexing" end
       local snapshot = index.native_snapshot
       if not snapshot or type(snapshot.enclosing_symbol) ~= "function" then
         return nil, index.symbol_status == "indexing" and "indexing" or "index-unavailable"
@@ -1128,6 +1132,26 @@ function symbol_index.enclosing_symbol(path, line, col, opts)
     end
   end
   return nil, "outside-project"
+end
+
+function symbol_index.enclosing_symbol(path, line, col, opts)
+  opts = opts or {}
+  return enclosing_symbol_at(path, line, col, opts, project_path_roots("symbols", opts), {})
+end
+
+---Find enclosing symbols for locations against one open-Buffer snapshot.
+---Return one result per location. Missing symbols keep their place.
+---@param locations table[] Each location has path, line, and optional col.
+---@return table[] Each result has an optional symbol and reason.
+function symbol_index.enclosing_symbols(locations, opts)
+  opts = opts or {}
+  local roots, contexts, results = project_path_roots("symbols", opts), {}, {}
+  for i, location in ipairs(locations) do
+    local symbol, reason = enclosing_symbol_at(location.path, location.line, location.col,
+      opts, roots, contexts)
+    results[i] = { symbol = symbol, reason = reason }
+  end
+  return results
 end
 
 local function symbol_language_allowed(symbol, languages)
