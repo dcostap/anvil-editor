@@ -34,17 +34,32 @@
 typedef enum {
   TERMINAL_STATE_NEW,
   TERMINAL_STATE_RUNNING,
+  TERMINAL_STATE_RECONNECTING,
   TERMINAL_STATE_DRAINING,
   TERMINAL_STATE_EXITED,
   TERMINAL_STATE_FAILED,
   TERMINAL_STATE_CLOSED,
 } TerminalState;
 
+typedef struct TerminalColors TerminalColors;
+typedef struct ReconnectJob ReconnectJob;
 typedef struct {
   AnvilIPCPipe pipe;
   HANDLE process;
   DWORD host_pid, shell_pid;
   uint64_t attached_at, replay_bytes;
+  uint64_t attach_count;
+  char id[ANVIL_TERMINAL_ID_LENGTH + 1];
+  TerminalColors *colors;
+  size_t scrollback_lines;
+  bool has_scrollback_lines;
+  ReconnectJob *reconnect;
+  uint8_t *replay;
+  size_t replay_length, replay_capacity;
+  volatile LONG replay_complete;
+  GhosttySnapshotDecoder decoder;
+  bool replay_finished;
+  bool detached;
   volatile LONG host_exited;
   HANDLE reader_thread;
   HANDLE writer_thread;
@@ -137,7 +152,7 @@ typedef struct {
   uint64_t search_scan_generation;
 } TerminalSession;
 
-typedef struct {
+struct TerminalColors {
   bool has_foreground;
   bool has_background;
   bool has_cursor;
@@ -154,7 +169,7 @@ typedef struct {
   GhosttyColorRgb background;
   GhosttyColorRgb cursor;
   GhosttyColorRgb palette[16];
-} TerminalColors;
+};
 
 static void push_status(lua_State *L, TerminalSession *session);
 static void set_integer_field(lua_State *L, const char *name, lua_Integer value);
@@ -224,6 +239,7 @@ static const char *terminal_state_name(TerminalState state) {
   switch (state) {
     case TERMINAL_STATE_NEW: return "new";
     case TERMINAL_STATE_RUNNING: return "running";
+    case TERMINAL_STATE_RECONNECTING: return "reconnecting";
     case TERMINAL_STATE_DRAINING: return "draining";
     case TERMINAL_STATE_EXITED: return "exited";
     case TERMINAL_STATE_FAILED: return "failed";
@@ -274,7 +290,14 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       break;
     }
     if (header.type == ANVIL_TERMINAL_REPLAY_END && replaying && !header.size) {
+      if (!session->replay_length) {
+        session->read_error = ERROR_INVALID_DATA;
+        InterlockedExchange(&session->read_failed, 1);
+        break;
+      }
       replaying = false;
+      InterlockedExchange(&session->replay_complete, 1);
+      wake_for_terminal_output(session);
       continue;
     }
     if (header.type == ANVIL_TERMINAL_EXITED && !replaying && header.size == sizeof(AnvilTerminalExited)) {
@@ -291,7 +314,31 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       break;
     }
     DWORD read = header.size;
-    if (replaying) InterlockedAdd64((LONG64 *)&session->replay_bytes, read);
+    if (replaying) {
+      /* Collect the complete bounded snapshot on this worker. The UI decoder
+         never sees temporary reader starvation as end-of-file. */
+      if (read > ANVIL_TERMINAL_SNAPSHOT_LIMIT - session->replay_length) {
+        session->read_error = ERROR_INVALID_DATA;
+        InterlockedExchange(&session->read_failed, 1);
+        break;
+      }
+      size_t required = session->replay_length + read;
+      if (required > session->replay_capacity) {
+        size_t capacity = session->replay_capacity ? session->replay_capacity : 65536;
+        while (capacity < required) capacity *= 2;
+        uint8_t *next = realloc(session->replay, capacity);
+        if (!next) {
+          session->read_error = ERROR_NOT_ENOUGH_MEMORY;
+          InterlockedExchange(&session->read_failed, 1);
+          break;
+        }
+        session->replay = next; session->replay_capacity = capacity;
+      }
+      memcpy(session->replay + session->replay_length, buffer, read);
+      session->replay_length += read;
+      InterlockedAdd64((LONG64 *)&session->replay_bytes, read);
+      continue;
+    }
     InterlockedAdd64(&session->output_bytes_read, (LONG64)read);
 
     size_t offset = 0;
@@ -300,9 +347,15 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
     while (offset < read && InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
       while (session->read_queue_count == TERMINAL_READ_QUEUE_CAPACITY &&
              InterlockedCompareExchange(&session->closing, 0, 0) == 0) {
-        SleepConditionVariableCS(&session->read_ready, &session->read_lock, INFINITE);
+        SleepConditionVariableCS(&session->read_ready, &session->read_lock, 200);
+        /* A full local queue must not hide a peer disconnect indefinitely. */
+        if (!session->closing && !PeekNamedPipe(session->pipe.handle, NULL, 0, NULL, NULL, NULL)) {
+          session->read_error = GetLastError();
+          InterlockedExchange(&session->read_failed, 1);
+          break;
+        }
       }
-      if (InterlockedCompareExchange(&session->closing, 0, 0) != 0) break;
+      if (session->closing || session->read_failed) break;
 
       size_t tail = (session->read_queue_head + session->read_queue_count) %
         TERMINAL_READ_QUEUE_CAPACITY;
@@ -320,6 +373,7 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
     }
     LeaveCriticalSection(&session->read_lock);
     if (queue_was_empty && offset > 0) wake_for_terminal_output(session);
+    if (session->read_failed) break;
   }
   InterlockedExchange(&session->reader_done, 1);
   wake_for_terminal_output(session);
@@ -717,8 +771,107 @@ static void release_terminal_transport(TerminalSession *session) {
   }
 }
 
+typedef struct {
+  HANDLE process;
+  uint16_t type;
+  DWORD host_pid;
+  char id[ANVIL_TERMINAL_ID_LENGTH + 1];
+} FinalCommand;
+
+static DWORD WINAPI final_command_main(void *userdata) {
+  FinalCommand *command = userdata;
+  DWORD error;
+  anvil_terminal_host_control(command->process, command->host_pid, command->id, command->type, &error);
+  if (command->process) CloseHandle(command->process);
+  free(command);
+  return 0;
+}
+
+static HANDLE retain_handle(HANDLE handle) {
+  HANDLE retained = NULL;
+  if (handle) DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), &retained,
+    0, FALSE, DUPLICATE_SAME_ACCESS);
+  return retained;
+}
+
+static void send_final_command(TerminalSession *session, HANDLE process, uint16_t type) {
+  if (!process || !session->attach_count) { if (process) CloseHandle(process); return; }
+  FinalCommand *command = malloc(sizeof(*command));
+  if (!command) { CloseHandle(process); return; }
+  *command = (FinalCommand){ .process = process, .type = type, .host_pid = session->host_pid };
+  memcpy(command->id, session->id, sizeof(command->id));
+  HANDLE thread = CreateThread(NULL, 0, final_command_main, command, 0, NULL);
+  if (thread) CloseHandle(thread);
+  else { CloseHandle(process); free(command); }
+}
+
+/* Reconnect owns no Lua or UI objects. Closing its view does not join this job. */
+struct ReconnectJob {
+  CRITICAL_SECTION lock;
+  volatile LONG references, done;
+  uint16_t final_type;
+  AnvilIPCPipe pipe;
+  HANDLE process;
+  DWORD host_pid, shell_pid, error;
+  AnvilTerminalSize size;
+  char id[ANVIL_TERMINAL_ID_LENGTH + 1];
+  bool connected;
+};
+
+static void release_reconnect(ReconnectJob *job) {
+  if (!job || InterlockedDecrement(&job->references) != 0) return;
+  anvil_ipc_pipe_close(&job->pipe);
+  CloseHandle(job->process);
+  DeleteCriticalSection(&job->lock);
+  free(job);
+}
+
+static DWORD WINAPI reconnect_main(void *userdata) {
+  ReconnectJob *job = userdata;
+  job->connected = anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
+    &job->shell_pid, job->id, &job->size, &job->error);
+  EnterCriticalSection(&job->lock);
+  uint16_t final_type = job->final_type;
+  if (!final_type) InterlockedExchange(&job->done, 1);
+  LeaveCriticalSection(&job->lock);
+  if (final_type && job->connected) {
+    job->pipe.timeout_ms = 5000;
+    anvil_ipc_pipe_write(&job->pipe, final_type, NULL, 0, NULL, 0);
+  } else if (final_type) {
+    anvil_ipc_pipe_close(&job->pipe);
+    anvil_terminal_host_control(job->process, job->host_pid, job->id, final_type, &job->error);
+  }
+  /* Reconnecting views request updates while this job runs. Do not access SDL:
+     a cancelled job can outlive the editor's window and Lua state. */
+  release_reconnect(job);
+  return 0;
+}
+
+static bool start_reconnect(TerminalSession *session) {
+  ReconnectJob *job = calloc(1, sizeof(*job));
+  if (!job) return false;
+  InitializeCriticalSection(&job->lock);
+  job->references = 2;
+  job->host_pid = session->host_pid;
+  job->size = (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
+  memcpy(job->id, session->id, sizeof(job->id));
+  DuplicateHandle(GetCurrentProcess(), session->process, GetCurrentProcess(), &job->process,
+    0, FALSE, DUPLICATE_SAME_ACCESS);
+  HANDLE thread = job->process ? CreateThread(NULL, 0, reconnect_main, job, 0, NULL) : NULL;
+  if (!thread) { job->references = 1; release_reconnect(job); return false; }
+  CloseHandle(thread);
+  session->reconnect = job;
+  return true;
+}
+
+static void clear_replay(TerminalSession *session) {
+  if (session->decoder) ghostty_snapshot_decoder_free(session->decoder);
+  session->decoder = NULL;
+  free(session->replay); session->replay = NULL;
+  session->replay_length = session->replay_capacity = 0;
+}
+
 static void terminate_terminal_process(TerminalSession *session) {
-  /* Disconnect first. Milestone 1 hosts end their shell on every disconnect. */
   release_terminal_transport(session);
   /* Never wait for a host on the UI thread. Its kill job owns shell cleanup. */
   if (session->process && session->state == TERMINAL_STATE_FAILED)
@@ -729,13 +882,30 @@ static void terminate_terminal_process(TerminalSession *session) {
 static void close_session(TerminalSession *session) {
   if (!session || session->closed) return;
   session->closed = true;
-  set_terminal_state(session, TERMINAL_STATE_CLOSED);
+  uint16_t final_type = session->detached ? ANVIL_TERMINAL_DETACH : ANVIL_TERMINAL_CLOSE;
+  HANDLE process = retain_handle(session->process);
+  bool job_owns_command = false;
+  if (session->reconnect) {
+    ReconnectJob *job = session->reconnect;
+    EnterCriticalSection(&job->lock);
+    if (!job->done) { job->final_type = final_type; job_owns_command = true; }
+    LeaveCriticalSection(&job->lock);
+    session->reconnect = NULL;
+    release_reconnect(job);
+  }
   if (session->vt_trace_file) {
     FlushFileBuffers(session->vt_trace_file);
     close_handle(&session->vt_trace_file);
   }
   terminate_terminal_process(session);
+  /* Use a fresh control connection: a cancelled write may leave a partial frame.
+     No final write, connect, or host wait runs on the UI thread. */
+  if (job_owns_command) { if (process) CloseHandle(process); }
+  else send_final_command(session, process, final_type);
+  set_terminal_state(session, TERMINAL_STATE_CLOSED);
+  clear_replay(session);
   free_terminal_objects(session);
+  free(session->colors); session->colors = NULL;
   if (session->snapshot_text) {
     HeapFree(GetProcessHeap(), 0, session->snapshot_text);
     session->snapshot_text = NULL;
@@ -764,6 +934,19 @@ static void close_session(TerminalSession *session) {
 }
 
 static bool set_terminal_colors(TerminalSession *session, const TerminalColors *colors) {
+  if (session->colors && session->colors != colors) {
+#define SAVE_COLOR(flag, field) if (colors->flag) { session->colors->flag = true; \
+    memcpy(&session->colors->field, &colors->field, sizeof(colors->field)); }
+    SAVE_COLOR(has_foreground, foreground)
+    SAVE_COLOR(has_background, background)
+    SAVE_COLOR(has_cursor, cursor)
+    SAVE_COLOR(has_palette, palette)
+    SAVE_COLOR(has_minimum_contrast, minimum_contrast)
+    SAVE_COLOR(has_color_vividness, color_vividness)
+    SAVE_COLOR(has_selection_background, selection_background)
+    SAVE_COLOR(has_selection_alpha, selection_alpha)
+#undef SAVE_COLOR
+  }
   if (colors->has_minimum_contrast) {
     session->contrast.minimum = colors->minimum_contrast;
   }
@@ -803,6 +986,9 @@ static bool set_terminal_colors(TerminalSession *session, const TerminalColors *
   }
   return true;
 }
+
+static bool configure_terminal_model(TerminalSession *session, const TerminalColors *colors,
+                                     const size_t *scrollback_max_lines);
 
 static bool initialize_terminal(
   TerminalSession *session, const TerminalColors *colors,
@@ -851,6 +1037,12 @@ static bool initialize_terminal(
     GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_RELEASE
   ) != GHOSTTY_SUCCESS) return false;
 
+  return configure_terminal_model(session, colors, scrollback_max_lines);
+}
+
+static bool configure_terminal_model(TerminalSession *session, const TerminalColors *colors,
+                                     const size_t *scrollback_max_lines) {
+  if (!anvil_terminal_model_options(session->terminal, scrollback_max_lines)) return false;
   ghostty_terminal_set(session->terminal, GHOSTTY_TERMINAL_OPT_USERDATA, session);
   ghostty_terminal_set(
     session->terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, (const void *)terminal_write_pty
@@ -881,11 +1073,9 @@ static bool initialize_terminal(
     (const void *)terminal_desktop_notification
   );
   if (!set_terminal_colors(session, colors)) return false;
-  ghostty_terminal_resize(
-    session->terminal, session->cols, session->rows,
-    session->cell_width, session->cell_height
-  );
-  return update_terminal_render_state(session) == GHOSTTY_SUCCESS;
+  session->render_pending = false;
+  session->cursor_visible_published = false;
+  return ghostty_render_state_update(session->render_state, session->terminal) == GHOSTTY_SUCCESS;
 }
 
 static GhosttyColorRgb unpack_color(lua_Integer value) {
@@ -1000,11 +1190,20 @@ static int f_terminal_new(lua_State *L) {
   session->state = TERMINAL_STATE_NEW;
   session->state_revision = 1;
   luaL_setmetatable(L, API_TYPE_TERMINAL_SESSION);
+  session->has_scrollback_lines = has_scrollback_max_lines;
+  session->scrollback_lines = scrollback_max_lines;
+  session->colors = malloc(sizeof(colors));
+  if (!session->colors) {
+    lua_pop(L, 1); lua_pushnil(L); lua_pushliteral(L, "Could not allocate terminal colors"); return 2;
+  }
+  *session->colors = colors;
 
   lua_getfield(L, 1, "cols");
+  bool has_size = !lua_isnil(L, -1);
   session->cols = (uint16_t)luaL_optinteger(L, -1, 80);
   lua_pop(L, 1);
   lua_getfield(L, 1, "rows");
+  has_size = has_size || !lua_isnil(L, -1);
   session->rows = (uint16_t)luaL_optinteger(L, -1, 24);
   lua_pop(L, 1);
   lua_getfield(L, 1, "cell_width");
@@ -1026,25 +1225,56 @@ static int f_terminal_new(lua_State *L) {
   DWORD error = ERROR_SUCCESS;
   lua_getglobal(L, "USERDIR");
   const char *userdir = lua_tostring(L, -1);
+  lua_getfield(L, 1, "project_path");
+  const char *project = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+  lua_getfield(L, 1, "session_id");
+  const char *id = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
   AnvilTerminalSize size = { session->cols, session->rows, session->cell_width, session->cell_height };
-  bool started = anvil_terminal_host_launch(&session->pipe, &session->process,
-    &session->host_pid, &session->shell_pid, &session->replay_bytes,
-    userdir ? userdir : ".", shell, cwd, size,
-    has_scrollback_max_lines ? &scrollback_max_lines : NULL, &error);
-  lua_pop(L, 1);
+  bool started = false;
+  if (id) {
+    if (!has_size) { size.cols = 0; size.rows = 0; }
+    lua_getfield(L, 1, "host_pid");
+    lua_Integer pid = lua_isnumber(L, -1) ? lua_tointeger(L, -1) : 0;
+    lua_getfield(L, 1, "host_creation_time");
+    const char *created = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
+    lua_getfield(L, 1, "pipe_name");
+    const char *name = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
+    char expected[128]; snprintf(expected, sizeof(expected), "\\\\.\\pipe\\anvil-terminal-%s", id);
+    if (anvil_terminal_id_valid(id) && pid > 0 && (uint64_t)pid <= UINT32_MAX &&
+        name && strcmp(name, expected) == 0) {
+      session->process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+        FALSE, (DWORD)pid);
+      if (anvil_terminal_host_identity(session->process, (DWORD)pid, created)) {
+        session->host_pid = (DWORD)pid;
+        memcpy(session->id, id, sizeof(session->id));
+        started = anvil_terminal_host_connect(&session->pipe, session->process, session->host_pid,
+          &session->shell_pid, session->id, &size, &error);
+      } else { close_handle(&session->process); error = ERROR_INVALID_DATA; }
+    } else error = ERROR_INVALID_DATA;
+  } else {
+    started = anvil_terminal_host_launch(&session->pipe, &session->process,
+      &session->host_pid, &session->shell_pid, &session->replay_bytes, session->id,
+      userdir ? userdir : ".", project, shell, cwd, size,
+      has_scrollback_max_lines ? &scrollback_max_lines : NULL, &error);
+  }
+  lua_settop(L, 2);
   if (!started) {
-    lua_pop(L, 2);
+    if (!id) set_terminal_state(session, TERMINAL_STATE_FAILED);
     close_session(session);
     lua_pop(L, 1);
     lua_pushnil(L);
     push_windows_error(L, "Could not start Terminal Session process", error);
-    return 2;
+    lua_pushinteger(L, error);
+    return 3;
   }
-  lua_pop(L, 2);
   set_terminal_state(session, TERMINAL_STATE_RUNNING);
+  session->cols = size.cols; session->rows = size.rows;
+  session->cell_width = size.cell_width; session->cell_height = size.cell_height;
   session->attached_at = GetTickCount64();
+  session->attach_count = 1;
 
   if (!start_terminal_io(session)) {
+    session->detached = id != NULL;
     close_session(session);
     lua_pop(L, 1);
     lua_pushnil(L);
@@ -1056,6 +1286,7 @@ static int f_terminal_new(lua_State *L) {
       session, &colors,
       has_scrollback_max_lines ? &scrollback_max_lines : NULL
     )) {
+    session->detached = id != NULL;
     close_session(session);
     lua_pop(L, 1);
     lua_pushnil(L);
@@ -1081,16 +1312,144 @@ static void push_status(lua_State *L, TerminalSession *session) {
   lua_pushstring(L, terminal_state_name(session->state));
   lua_setfield(L, -2, "kind");
   set_integer_field(L, "revision", (lua_Integer)session->state_revision);
-  set_boolean_field(L, "render_pending", session->render_pending);
+  set_integer_field(L, "attach_count", session->attach_count);
+  set_boolean_field(L, "render_pending", session->render_pending ||
+    session->state == TERMINAL_STATE_RECONNECTING ||
+    (session->state == TERMINAL_STATE_RUNNING && !session->replay_finished));
+  set_boolean_field(L, "replaying", !session->replay_finished);
   if (session->state == TERMINAL_STATE_EXITED && session->exit_code_known) {
     lua_pushinteger(L, session->exit_code);
     lua_setfield(L, -2, "exit_code");
   }
   if (session->state == TERMINAL_STATE_FAILED && (read_failed || write_failed)) {
-    lua_pushliteral(L, "The Terminal Session process ended unexpectedly");
+    lua_pushstring(L, read_failed && session->read_error == ERROR_INVALID_DATA
+      ? "The Terminal Session snapshot or protocol is invalid"
+      : "The Terminal Session process ended unexpectedly");
     lua_setfield(L, -2, "error");
     set_integer_field(L, "transport_error", read_failed ? session->read_error : session->write_error);
   }
+}
+
+static void fail_transport(TerminalSession *session, DWORD error) {
+  session->read_error = error;
+  InterlockedExchange(&session->read_failed, 1);
+  set_terminal_state(session, TERMINAL_STATE_FAILED);
+  terminate_terminal_process(session);
+  clear_replay(session);
+}
+
+static bool service_transport(TerminalSession *session) {
+  bool fault = session->read_failed || (session->write_failed && session->reader_done && !session->host_exited);
+  if (session->state == TERMINAL_STATE_RUNNING && fault) {
+    if (session->read_error == ERROR_INVALID_DATA || session->read_error == ERROR_NOT_ENOUGH_MEMORY ||
+        !session->process || WaitForSingleObject(session->process, 0) != WAIT_TIMEOUT) {
+      fail_transport(session, session->read_error ? session->read_error : session->write_error);
+      return false;
+    }
+    release_terminal_transport(session);
+    clear_replay(session);
+    session->replay_finished = false;
+    InterlockedExchange(&session->replay_complete, 0);
+    set_terminal_state(session, TERMINAL_STATE_RECONNECTING);
+    if (!start_reconnect(session)) fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
+  }
+  if (session->state == TERMINAL_STATE_RECONNECTING) {
+    ReconnectJob *job = session->reconnect;
+    if (!job || !InterlockedCompareExchange(&job->done, 0, 0)) return false;
+    EnterCriticalSection(&job->lock);
+    bool connected = job->connected;
+    DWORD error = job->error;
+    HANDLE handle = NULL;
+    if (connected) {
+      handle = job->pipe.handle; job->pipe.handle = NULL;
+      session->shell_pid = job->shell_pid;
+    }
+    LeaveCriticalSection(&job->lock);
+    session->reconnect = NULL; release_reconnect(job);
+    if (!connected) {
+      if (WaitForSingleObject(session->process, 0) != WAIT_TIMEOUT ||
+          error == ERROR_INVALID_DATA || error == ERROR_ACCESS_DENIED) fail_transport(session, error);
+      else if (!start_reconnect(session)) fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
+      return false;
+    }
+    session->read_queue_head = session->read_queue_count = 0;
+    session->write_queue_head = session->write_queue_count = 0;
+    session->read_error = session->write_error = 0;
+    InterlockedExchange(&session->read_failed, 0); InterlockedExchange(&session->write_failed, 0);
+    InterlockedExchange(&session->reader_done, 0); InterlockedExchange(&session->closing, 0);
+    InterlockedExchange64((LONG64 *)&session->replay_bytes, 0);
+    InterlockedExchange(&session->output_event_pending, 0);
+    session->transport_released = false;
+    if (!anvil_ipc_pipe_init(&session->pipe, handle, ANVIL_TERMINAL_PROTOCOL_VERSION,
+                            ANVIL_TERMINAL_MAX_PAYLOAD) || !start_terminal_io(session)) {
+      fail_transport(session, ERROR_NOT_ENOUGH_MEMORY); return false;
+    }
+    session->attached_at = GetTickCount64(); session->attach_count++;
+    set_terminal_state(session, TERMINAL_STATE_RUNNING);
+  }
+  return !session->transport_released;
+}
+
+/* READY is one published update. History uses bounded page steps afterward. */
+static bool service_replay(TerminalSession *session, bool *changed) {
+  if (session->replay_finished) return true;
+  if (!InterlockedCompareExchange(&session->replay_complete, 0, 0)) return false;
+  if (!session->decoder) {
+    GhosttyTerminal restored = NULL;
+    GhosttyRenderState render = NULL;
+    GhosttySelectionGesture gesture = NULL;
+    size_t continuation = ANVIL_TERMINAL_CONTINUATION_LIMIT;
+    if (ghostty_snapshot_decoder_new_buf(&terminal_allocator, &session->decoder,
+        session->replay, session->replay_length) != GHOSTTY_SUCCESS ||
+        ghostty_snapshot_decoder_set(session->decoder, GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES,
+          &continuation) != GHOSTTY_SUCCESS ||
+        ghostty_snapshot_decoder_ready(session->decoder, &restored) != GHOSTTY_SUCCESS ||
+        ghostty_render_state_new(&terminal_allocator, &render) != GHOSTTY_SUCCESS ||
+        ghostty_selection_gesture_new(&terminal_allocator, &gesture) != GHOSTTY_SUCCESS) {
+      clear_replay(session);
+      if (gesture) ghostty_selection_gesture_free(gesture, restored);
+      if (render) ghostty_render_state_free(render);
+      if (restored) ghostty_terminal_free(restored);
+      fail_transport(session, ERROR_INVALID_DATA); return false;
+    }
+    /* Gesture pins belong to the old model. Release them before that model. */
+    ghostty_selection_gesture_free(session->selection_gesture, session->terminal);
+    ghostty_render_state_free(session->render_state);
+    ghostty_terminal_free(session->terminal);
+    session->terminal = restored; session->render_state = render;
+    session->selection_gesture = gesture;
+    session->synchronized_output_started_ms = session->cursor_hide_started_ms = 0;
+    if (!configure_terminal_model(session, session->colors,
+        session->has_scrollback_lines ? &session->scrollback_lines : NULL)) {
+      fail_transport(session, ERROR_INVALID_DATA); return false;
+    }
+    session->render_generation++; invalidate_search_scan(session);
+    *changed = true;
+    return false;
+  }
+  uint64_t deadline = GetTickCount64() + 2;
+  for (unsigned pages = 0; pages < 4; pages++) {
+    GhosttyResult result = ghostty_snapshot_decoder_next(session->decoder);
+    if (result == GHOSTTY_NO_VALUE) {
+      size_t consumed = 0;
+      if (ghostty_snapshot_decoder_get(session->decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_SOURCE_OFFSET,
+          &consumed) != GHOSTTY_SUCCESS || consumed != session->replay_length) {
+        fail_transport(session, ERROR_INVALID_DATA); return false;
+      }
+      clear_replay(session); session->replay_finished = true;
+      ghostty_terminal_resize(session->terminal, session->cols, session->rows,
+        session->cell_width, session->cell_height);
+      session->render_pending = true;
+      return true;
+    }
+    if (result != GHOSTTY_SUCCESS) { fail_transport(session, ERROR_INVALID_DATA); return false; }
+    session->render_pending = true;
+    if (GetTickCount64() >= deadline) break;
+  }
+  if (update_terminal_render_state(session) == GHOSTTY_SUCCESS && !session->render_pending) {
+    session->render_generation++; invalidate_search_scan(session); *changed = true;
+  }
+  return false;
 }
 
 static int f_terminal_update(lua_State *L) {
@@ -1100,15 +1459,15 @@ static int f_terminal_update(lua_State *L) {
     push_status(L, session);
     return 2;
   }
-  if (session->transport_released) {
-    lua_pushboolean(L, false);
+  bool changed = false;
+  if (!service_transport(session) || !service_replay(session, &changed)) {
+    lua_pushboolean(L, changed);
     push_status(L, session);
     return 2;
   }
 
   uint8_t buffer[65536];
   size_t total = 0;
-  bool changed = false;
   while (total < TERMINAL_READ_BUDGET) {
     size_t amount = 0;
     EnterCriticalSection(&session->read_lock);
@@ -1166,10 +1525,9 @@ static int f_terminal_update(lua_State *L) {
   }
   bool read_failed = InterlockedCompareExchange(&session->read_failed, 0, 0) != 0;
   bool write_failed = InterlockedCompareExchange(&session->write_failed, 0, 0) != 0;
-  if ((session->state == TERMINAL_STATE_RUNNING || session->state == TERMINAL_STATE_DRAINING) &&
+  if (session->state == TERMINAL_STATE_DRAINING &&
       (read_failed || (write_failed && session->reader_done && !host_exited))) {
-    set_terminal_state(session, TERMINAL_STATE_FAILED);
-    terminate_terminal_process(session);
+    fail_transport(session, read_failed ? session->read_error : session->write_error);
   }
   /* Publish draining once, even when EXITED arrives with an empty local queue. */
   if (was_draining && session->state == TERMINAL_STATE_DRAINING && output_drained(session)) {
@@ -1344,6 +1702,8 @@ static int f_terminal_stats(lua_State *L) {
   set_integer_field(L, "shell_pid", session->shell_pid);
   set_integer_field(L, "attached_at", session->attached_at);
   set_integer_field(L, "replay_bytes", InterlockedCompareExchange64((LONG64 *)&session->replay_bytes, 0, 0));
+  lua_pushstring(L, session->id); lua_setfield(L, -2, "session_id");
+  set_integer_field(L, "attach_count", session->attach_count);
   return 1;
 }
 
@@ -1365,7 +1725,7 @@ static int f_terminal_resize(lua_State *L) {
     lua_pushboolean(L, false);
     return 1;
   }
-  if (ghostty_terminal_resize(
+  if (session->replay_finished && ghostty_terminal_resize(
     session->terminal, cols, rows, cell_width, cell_height
   ) != GHOSTTY_SUCCESS) {
     lua_pushboolean(L, false);
@@ -1389,6 +1749,8 @@ static int f_terminal_clear(lua_State *L) {
     return 1;
   }
   static const uint8_t clear_sequence[] = "\x1b[2J\x1b[3J\x1b[H";
+  if (!enqueue_record(session, ANVIL_TERMINAL_CLEAR, NULL, 0)) { lua_pushboolean(L, false); return 1; }
+  if (!session->replay_finished) { lua_pushboolean(L, true); return 1; }
   ghostty_terminal_vt_write(
     session->terminal, clear_sequence, sizeof(clear_sequence) - 1
   );
@@ -3126,6 +3488,20 @@ static int f_terminal_close(lua_State *L) {
   return 0;
 }
 
+static int f_terminal_detach(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  session->detached = true;
+  close_session(session);
+  return 0;
+}
+
+/* External transport fault injection; tests assert recovery, not worker details. */
+static int f_break_transport_for_tests(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  anvil_ipc_pipe_cancel(&session->pipe);
+  return 0;
+}
+
 static int f_terminal_gc(lua_State *L) {
   close_session(check_session(L, 1));
   return 0;
@@ -3155,12 +3531,14 @@ static const luaL_Reg terminal_methods[] = {
   { "snapshot", f_terminal_snapshot },
   { "stats", f_terminal_stats },
   { "close", f_terminal_close },
+  { "detach", f_terminal_detach },
   { "__gc", f_terminal_gc },
   { NULL, NULL },
 };
 
 static const luaL_Reg terminal_module[] = {
   { "new", f_terminal_new },
+  { "_break_transport_for_tests", f_break_transport_for_tests },
   { NULL, NULL },
 };
 

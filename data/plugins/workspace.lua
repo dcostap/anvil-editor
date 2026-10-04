@@ -424,10 +424,19 @@ end
 if not core.__workspace_hooks_installed then
   core.__workspace_hooks_installed = true
 
+  local function close_workspace_views()
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(pane)) do
+        if view.context == "workspace" and view.on_workspace_close then core.try(view.on_workspace_close, view) end
+      end
+    end
+  end
+
   local set_project = core.set_project
   function core.set_project(project)
     local was_empty_window = empty_window_requested()
     core.try(save_workspace)
+    close_workspace_views()
     workspace_restored = false
     if was_empty_window then
       core.empty_window_request = false
@@ -472,6 +481,7 @@ if not core.__workspace_hooks_installed then
         core.try(save_workspace)
       end
       system.log_shutdown("Workspace exit save end")
+      close_workspace_views()
     end
     exit(quit_fn, force)
   end

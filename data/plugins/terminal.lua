@@ -18,7 +18,7 @@ local view_icons = require "core.view_icons"
 
 local M = {}
 local native_override
-local next_session_id = 0
+local next_log_id = 0
 
 local PADDING = 6
 
@@ -196,7 +196,7 @@ function TerminalView:refresh_cell_metrics()
   if changed and self.cell_width then
     core.log_quiet(
       "Terminal session %d cell geometry changed: %.2fx%d -> %.2fx%d",
-      self.session_id or 0, self.cell_width, self.cell_height, cell_width, cell_height
+      self.log_id or 0, self.cell_width, self.cell_height, cell_width, cell_height
     )
   end
   self.font = font
@@ -220,6 +220,33 @@ local function sanitize_title(title)
   return table.concat(parts)
 end
 
+local function session_record(id)
+  if type(id) ~= "string" or #id ~= 32 or id:find("[^0-9a-f]") then
+    return nil, "invalid session ID"
+  end
+  local path = USERDIR .. PATHSEP .. "terminal-sessions" .. PATHSEP .. id .. ".lua"
+  local file, err = io.open(path, "rb")
+  if not file then return nil, err end
+  local text = file:read(1024 * 1024 + 1)
+  file:close()
+  if not text or #text > 1024 * 1024 then return nil, "record exceeds the size limit" end
+  local chunk, parse_error = load(text, "@" .. path, "t", {})
+  if not chunk then return nil, parse_error end
+  local ok, record = pcall(chunk)
+  if not ok or type(record) ~= "table" or record.version ~= 1 or record.session_id ~= id
+      or type(record.host_pid) ~= "number" or record.host_pid % 1 ~= 0
+      or record.host_pid <= 0 or record.host_pid > 0xffffffff
+      or type(record.host_creation_time) ~= "string" or #record.host_creation_time ~= 16
+      or record.host_creation_time:find("[^0-9a-f]")
+      or record.pipe_name ~= "\\\\.\\pipe\\anvil-terminal-" .. id
+      or type(record.project_path) ~= "string" or type(record.cwd) ~= "string"
+      or type(record.shell) ~= "string" or record.status ~= "running"
+      or type(record.snapshot_path) ~= "string" then
+    return nil, "invalid session record"
+  end
+  return record
+end
+
 function TerminalView:new(options)
   TerminalView.super.new(self)
   self.pane_constraint = {}
@@ -236,13 +263,14 @@ function TerminalView:new(options)
     cwd = options.cwd or project_path(options.cwd_mode or terminal_config.cwd_mode),
     shell = options.shell or terminal_config.shell,
   }
+  self.session_id = options.session_id
   self.minimum_contrast = style.terminal_minimum_contrast
   self.color_vividness = style.terminal_color_vividness
-  next_session_id = next_session_id + 1
-  self.session_id = next_session_id
+  next_log_id = next_log_id + 1
+  self.log_id = next_log_id
   self.state = "new"
   core.log_quiet("Terminal session %d start requested: shell=%s cwd=%s",
-    self.session_id, self.launch_options.shell ~= "" and "custom" or "default",
+    self.log_id, self.launch_options.shell ~= "" and "custom" or "default",
     self.launch_options.cwd)
 
   local native, load_error = terminal_native()
@@ -250,7 +278,7 @@ function TerminalView:new(options)
     self.state = "failed"
     self.running = false
     self.launch_error = tostring(load_error or "The native terminal is unavailable.")
-    core.log_quiet("Terminal session %d start failed: %s", self.session_id, self.launch_error)
+    core.log_quiet("Terminal session %d start failed: %s", self.log_id, self.launch_error)
     return
   end
   local native_options = session_colors()
@@ -258,13 +286,33 @@ function TerminalView:new(options)
   native_options.cell_width, native_options.cell_height = self.native_cell_width, self.cell_height
   native_options.cwd, native_options.shell = self.launch_options.cwd, self.launch_options.shell
   native_options.scrollback_lines = terminal_config.scrollback_lines
-  local session, start_error = native.new(native_options)
+  native_options.project_path = project_path("project")
+  local record, record_error
+  if options.session_id then
+    record, record_error = session_record(options.session_id)
+    if record then
+      native_options.cols, native_options.rows = nil, nil
+      native_options.session_id = record.session_id
+      native_options.host_pid = record.host_pid
+      native_options.host_creation_time = record.host_creation_time
+      native_options.pipe_name = record.pipe_name
+    else
+      core.log_quiet("Terminal Session %s record rejected: %s", tostring(options.session_id), tostring(record_error))
+    end
+  end
+  local session, start_error, transport_error = native.new(native_options)
+  if record and not session and transport_error ~= 231 then -- ERROR_PIPE_BUSY: do not create a second shell.
+    core.log_quiet("Terminal Session %s attach rejected: %s; start a new shell", record.session_id, tostring(start_error))
+    native_options.session_id, native_options.host_pid = nil, nil
+    native_options.host_creation_time, native_options.pipe_name = nil, nil
+    session, start_error = native.new(native_options)
+  end
   if not session then
     self.state = "failed"
     self.running = false
     self.launch_error = tostring(start_error or "Could not start the terminal.")
     self.theme_generation = core.color_theme_generation or 0
-    core.log_quiet("Terminal session %d start failed: %s", self.session_id, self.launch_error)
+    core.log_quiet("Terminal session %d start failed: %s", self.log_id, self.launch_error)
     return
   end
   self.session = session
@@ -276,9 +324,9 @@ function TerminalView:new(options)
   self.state = "running"
   self.running = true
   core.log_quiet("Terminal session %d started: cwd=%s cols=%d rows=%d minimum contrast=%g vividness=%g",
-    self.session_id, self.launch_options.cwd, self.cols, self.rows,
+    self.log_id, self.launch_options.cwd, self.cols, self.rows,
     self.minimum_contrast, self.color_vividness)
-  core.log_quiet("Terminal session %d renders Block Elements from cell geometry", self.session_id)
+  core.log_quiet("Terminal session %d renders Block Elements from cell geometry", self.log_id)
 end
 
 function TerminalView:get_name()
@@ -433,7 +481,7 @@ function TerminalView:get_cwd()
   local reported = self.snapshot and self.snapshot.pwd
   if not validated and reported and reported ~= "" and reported ~= self.invalid_reported_directory then
     self.invalid_reported_directory = reported
-    core.log_quiet("Terminal session %d ignored an unusable reported directory", self.session_id)
+    core.log_quiet("Terminal session %d ignored an unusable reported directory", self.log_id)
   end
   return validated
     or validated_terminal_directory(self.launch_options.cwd)
@@ -445,6 +493,7 @@ function TerminalView:get_state()
   return {
     cwd = self:get_cwd(),
     shell = self.launch_options.shell,
+    session_id = self.session_id,
   }
 end
 
@@ -467,7 +516,7 @@ end
 function TerminalView.from_state(state)
   if type(state) ~= "table" then return nil end
   if state.kind == "text_capture" then return TerminalTextCaptureView(nil, state.capture) end
-  return TerminalView { cwd = state.cwd, shell = state.shell }
+  return TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id }
 end
 
 function TerminalView:can_discard_from_history()
@@ -482,6 +531,7 @@ function TerminalView:create_session()
   native_options.cell_width, native_options.cell_height = self.native_cell_width, self.cell_height
   native_options.cwd, native_options.shell = self.launch_options.cwd, self.launch_options.shell
   native_options.scrollback_lines = terminal_config.scrollback_lines
+  native_options.project_path = project_path("project")
   local session, start_error = native.new(native_options)
   if not session then return false, start_error or "Could not start the terminal." end
   return session
@@ -489,8 +539,11 @@ end
 
 function TerminalView:log_session_attach()
   local stats = self.session:stats()
+  self.session_id = stats.session_id
+  self.attach_count = stats.attach_count
+  if core.request_workspace_save then core.request_workspace_save("terminal attach") end
   core.log_quiet("Terminal session %d attached: host=%d shell=%d replay=%d bytes",
-    self.session_id, stats.host_pid, stats.shell_pid, stats.replay_bytes)
+    self.log_id, stats.host_pid, stats.shell_pid, stats.replay_bytes)
 end
 
 function TerminalView:adopt_session(session)
@@ -524,7 +577,7 @@ function TerminalView:restart()
   if self.state ~= "exited" and self.state ~= "failed" then return false end
   local replacement, err = self:create_session()
   if not replacement then
-    core.log_quiet("Terminal session %d restart failed", self.session_id)
+    core.log_quiet("Terminal session %d restart failed", self.log_id)
     core.error("Could not restart terminal: %s", tostring(err))
     return false
   end
@@ -532,7 +585,7 @@ function TerminalView:restart()
   if self.vt_trace_path then self:stop_vt_trace() end
   self:adopt_session(replacement)
   if previous then previous:close() end
-  core.log_quiet("Terminal session %d restarted", self.session_id)
+  core.log_quiet("Terminal session %d restarted", self.log_id)
   return true
 end
 
@@ -567,7 +620,7 @@ function TerminalView:sync_geometry()
   self.session_cell_width = self.native_cell_width
   self.session_cell_height = self.cell_height
   core.log_quiet("Terminal session %d resized: cols=%d rows=%d",
-    self.session_id, cols, rows)
+    self.log_id, cols, rows)
   self.search_pending = nil
   self.search_state = nil
   self:clear_point_hover()
@@ -629,13 +682,13 @@ function TerminalView:apply_status(status)
   if kind == "exited" then self.exit_code = status.exit_code end
   if status.error and status.error ~= self.reported_error then
     core.log_quiet("Terminal session %d transport failure: %s (Windows error %s)",
-      self.session_id, status.error, tostring(status.transport_error))
+      self.log_id, status.error, tostring(status.transport_error))
     self.reported_error = status.error
     if kind == "failed" then self.launch_error = status.error end
     core.error(status.error)
   end
   core.log_quiet("Terminal session %d state: %s -> %s",
-    self.session_id, tostring(previous), tostring(kind))
+    self.log_id, tostring(previous), tostring(kind))
   return true
 end
 
@@ -645,6 +698,7 @@ function TerminalView:service_session(include_rows)
   local record_perf = include_rows and perf_is_recording()
   local update_started = record_perf and system.get_time()
   local changed, status = self.session:update()
+  if status.kind == "running" and status.attach_count ~= self.attach_count then self:log_session_attach() end
   if record_perf then
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end
@@ -707,7 +761,7 @@ function TerminalView:sync_colors()
       self.color_vividness = style.terminal_color_vividness
       self.snapshot = self.session:snapshot(self.snapshot)
       core.log_quiet("Terminal session %d colors updated: minimum contrast=%g vividness=%g",
-        self.session_id, self.minimum_contrast, self.color_vividness)
+        self.log_id, self.minimum_contrast, self.color_vividness)
       core.redraw = true
       return true
     end
@@ -845,13 +899,13 @@ function TerminalView:handle_events()
     elseif event.type == "clipboard" and event.text ~= nil then
       system.set_clipboard(event.text)
       core.log_quiet(
-        "Terminal session %d wrote %d clipboard bytes", self.session_id, #event.text
+        "Terminal session %d wrote %d clipboard bytes", self.log_id, #event.text
       )
     elseif event.type == "notification" then
       self.notification_count = (self.notification_count or 0) + (event.count or 1)
       core.log_quiet(
         "Terminal session %d received %d notification(s)",
-        self.session_id, event.count or 1
+        self.log_id, event.count or 1
       )
       if system.flash_window and (core.active_view ~= self or
           not system.window_has_focus(core.window)) then
@@ -1317,7 +1371,7 @@ function TerminalView:on_key_pressed(key, event)
   local encoded, reason = self.session:key(key, key_modifiers(event), action, event)
   encoded = encoded == true
   if reason == "queue_full" then
-    core.log_quiet("Terminal session %d input queue is full", self.session_id)
+    core.log_quiet("Terminal session %d input queue is full", self.log_id)
   end
   self.key_owners[key_id] = {
     owner = encoded and "ghostty" or "text",
@@ -1656,6 +1710,20 @@ function TerminalView:can_close(approve)
   approve()
 end
 
+function TerminalView:detach_session()
+  if not self.session then return end
+  if self.vt_trace_path then self:stop_vt_trace() end
+  self.session:detach()
+  self.session = nil
+  self.running, self.state = false, "detached"
+  if core.request_workspace_save then core.request_workspace_save("terminal detach") end
+  core.log_quiet("Terminal session %d detached: id=%s", self.log_id, tostring(self.session_id))
+end
+
+function TerminalView:on_workspace_close()
+  self:detach_session()
+end
+
 function TerminalView:on_close()
   if self.session then
     if self.vt_trace_path then self:stop_vt_trace() end
@@ -1664,7 +1732,7 @@ function TerminalView:on_close()
     self.session = nil
     core.log_quiet(
       "Terminal session %d closed: read=%d parsed=%d queued=%d rejected=%d",
-      self.session_id, stats.output_bytes_read or 0, stats.output_bytes_parsed or 0,
+      self.log_id, stats.output_bytes_read or 0, stats.output_bytes_parsed or 0,
       stats.input_bytes_queued or 0, stats.rejected_writes or 0
     )
   end

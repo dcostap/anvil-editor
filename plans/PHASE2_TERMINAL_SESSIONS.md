@@ -4,7 +4,7 @@ This is the implementation plan for Phase 2 of
 [the multiprocess shell plan](MULTIPROCESS_SHELL_PLAN.md). Read that plan first,
 especially "Terminal Sessions", "Session registry", and "IPC".
 
-Status: Milestone 1 is implemented. Milestones 2 to 4 have not started.
+Status: Milestones 1 and 2 are implemented. Milestones 3 and 4 have not started.
 Phases 0 and 1 are done.
 
 Formatter check: `anvil:terminal-replay` failed with the requested VT extras.
@@ -12,8 +12,8 @@ Primary replay added leading spaces. Alternate replay restored the active screen
 but lost the primary screen and its scrollback. `screen.h` has no separate screen
 formatter. `snapshot.h` has a binary codec, not a separate primary VT formatter.
 Raw replay from byte zero passed the row text, cursor, scrollback, and screen checks.
-Milestone 1 uses a bounded raw prefix. Milestone 2 must replace it with the
-Ghostty snapshot codec. Remove `AnvilTerminalReplay` in that milestone.
+Milestone 1 used a bounded raw prefix. Milestone 2 replaces it with the
+Ghostty snapshot codec. `AnvilTerminalReplay` is removed.
 
 ## Goal
 
@@ -120,17 +120,21 @@ protocol. Use a separate version constant. Bound every payload. Suggested types:
 
 Editor to host:
 
-- `HELLO { session_id, cols, rows, cell_width, cell_height }`: first message.
-  The host checks the session ID.
+- `HELLO { session_id, cols, rows, cell_width, cell_height, client_pid, replay }`: first message.
+  The host checks the session ID and the actual pipe client PID.
+  Zero cols and rows retain the live grid until the restored View gets its layout.
+  Normal clients request replay. Control clients omit replay and send `CLOSE` or `DETACH` after `WELCOME`.
+  Control connections do not resize the model or build a snapshot.
 - `INPUT bytes`
 - `RESIZE { cols, rows, cell_width, cell_height }`
 - `CLOSE`: end the shell and the session. The host deletes its registry record
   and snapshot.
 - `DETACH`: the editor is leaving on purpose; the session keeps running.
+- `CLEAR`: clear the host model and publish the clear sequence as ordered `OUTPUT`.
 
 Host to editor:
 
-- `WELCOME { host_pid, shell_pid, state }`
+- `WELCOME { host_pid, shell_pid, state, size }`: includes the actual live grid and cell size.
 - `REPLAY bytes`: a binary Ghostty snapshot, in bounded chunks, then `REPLAY_END`.
   Sent once after `WELCOME`, before any `OUTPUT`. This replaces Milestone 1's raw replay.
   Change the terminal protocol version when this payload changes.
@@ -149,11 +153,16 @@ It starts parsing queued `OUTPUT` after FINISH validates.
 The host's `EXITED` flag replaces local shell process checks.
 The host drains ConPTY, so the editor's draining only empties its own queue.
 
-A pipe that breaks without `EXITED` means the host died. Move to `failed` with
-"The Terminal Session process ended unexpectedly", until Milestone 4 adds revival.
+A pipe that breaks without `EXITED` starts a background reconnect if the host is still alive.
+The editor keeps the last screen while reconnecting. It does not resend unacknowledged input.
+A dead host moves to `failed` with "The Terminal Session process ended unexpectedly".
+Invalid snapshots or protocol records also fail. Milestone 4 will add revival for dead hosts.
 
-Milestone 1 normal close releases the client transport and closes its host process handle.
+Normal close releases the client transport and closes its host process handle.
 It never waits for the host to exit on the UI thread.
+An independent worker sends `CLOSE` through an authenticated control connection.
+A fresh connection avoids any partial frame left by a cancelled input write.
+Detach uses the same path with `DETACH`. A broken pipe also detaches the host.
 Only the failed path calls `TerminateProcess`. The host's kill job ends the shell.
 
 ## Host internals
@@ -165,8 +174,9 @@ Only the failed path calls `TerminateProcess`. The host's kill job ends the shel
 - The client queue is bounded to 8 MB, including the record being written.
   A full queue blocks the ConPTY reader on a condition variable.
   The writer signals that variable after it sends a record.
-  Disconnect only after about 10 s without writer progress while the queue is full.
-- On attach: apply the client's size to ConPTY and the host model, then build
+  Detach only after about 10 s without writer progress while the queue is full.
+  Clear that client's queue, keep parsing ConPTY output, and accept another client.
+- On attach: apply an explicit client size to ConPTY and the host model, then build
   the replay under the lock, send it, and only then stream new output.
 - When the shell exits, drain ConPTY output (the same quiet and maximum
   timings as `TERMINAL_DRAIN_QUIET_MS` and `TERMINAL_DRAIN_MAX_MS`) and send
@@ -212,8 +222,8 @@ Each milestone ends with focused tests, a commit, and the dev build updated with
 Implemented: the native host owns ConPTY, the shell job, and a replay model.
 The editor uses framed pipe transport. Both models use the shared model options.
 The host checks the client PID and session ID. The editor checks the server PID.
-Every disconnect ends the host and shell. There is no registry or reattach yet.
-An oversized raw prefix becomes unavailable; it never becomes a suffix replay.
+At Milestone 1, every disconnect ended the host and shell. Registry and reattach came in Milestone 2.
+The temporary raw prefix became unavailable on overflow; it never became a suffix replay.
 
 Focused checks on 2026-10-03:
 
@@ -298,6 +308,56 @@ Echo p50 changed by -0.342 ms. The benchmark remains within its budgets.
   hop before going on.
 
 ### Milestone 2: the registry and reattach
+
+Implemented on 2026-10-04:
+
+- Protocol version 2 carries binary snapshots. Host encoding and client collection each have a 128 MiB limit.
+- Both models enable bounded continuation tracking. The decoder accepts at most 65 MiB of continuation data.
+- The reader collects snapshot bytes separately from `OUTPUT`. The UI decoder reads an immutable, complete buffer.
+- One update publishes READY. Later updates restore up to four history pages, with a 2 ms deadline between pages.
+  FINISH must validate before live output is parsed. Trailing snapshot bytes are rejected.
+- Model replacement restores callbacks, options, colors, and render state. Gesture pins leave the old model before release.
+- Reattach keeps the live grid until layout is known. Unchanged grids do not resize ConPTY or trigger an old-screen repaint.
+- Registry files use atomic replacement. Creation times use 16-digit hex strings, without Lua number precision loss.
+- Pipe breaks and writer stalls detach the host, not the shell. Existing views reconnect on an independent native worker.
+- Workspace exit, restart, and same-window Project switch detach after saving state. Tab close still ends the session.
+- Attach and detach request Workspace saves. Records and snapshot paths are removed when the host ends normally.
+- Idle orphan hosts exit after ten minutes without output or a shell child. Failed process probes keep the host alive.
+- Disk snapshots and revival are not implemented. The record reserves the snapshot path for Milestone 4.
+
+Red-green evidence:
+
+- `anvil:terminal-replay` first failed to encode unfinished parser input. It now preserves both screens and primary history.
+  It also checks cursor position, split UTF-8, split CSI input, corruption, and truncation.
+- `ui/terminal_sessions.lua` first failed because Workspace state had no session ID.
+  The 50 MiB `type` test also confirmed that the old writer timeout ended the host.
+  It now holds the UI for 20 s, crosses that timeout, and reattaches to the same host and shell.
+  Marker replay and new input also work after that output exceeds the old 8 MiB replay limit.
+- With reconnect and Workspace detach disabled, `ui/terminal_sessions_lifecycle.lua` failed its recovery and lifecycle checks.
+  Those checks pass with the implementation enabled.
+- The clear regression first restored removed text. Ordered host `CLEAR` handling now keeps that text removed.
+  Isolated verification also found a temporary-grid repaint. Reattach now retains the live grid until layout is known.
+
+The focused checks cover stale creation times, dead hosts, second-client rejection, and Workspace restoration.
+Tests retain process handles and end their own hosts during cleanup. They do not use the daily app.
+
+Focused results: ten new UI checks passed. The codec check also passed.
+Existing terminal checks passed: 68 UI, 14 contrast, and 27 runtime checks.
+One WSL check skipped because no default distribution was available.
+Final verification used separate runner folders because concurrent checks replaced the shared Meson folders and logs.
+
+The before and after benchmarks passed:
+
+| Measurement | Before Milestone 2 | After Milestone 2 |
+| --- | ---: | ---: |
+| Typing echo p50 | 15.665 ms | 15.509 ms |
+| Typing echo p95 | 16.522 ms | 16.083 ms |
+| 20,000 output lines | 5,188.089 ms | 5,591.244 ms |
+| Update p50 / p95 | 0.0056 / 0.0209 ms | 0.0089 / 0.0237 ms |
+| Snapshot p50 / p95 | 0.2582 / 0.4891 ms | 0.3192 / 0.5610 ms |
+| Ten-session update total | 6.323 ms / 2,390 calls | 8.352 ms / 2,300 calls |
+
+Echo p50 changed by -0.156 ms, within the 1 ms budget. Other totals include process scheduling noise.
 
 - Replace raw prefix replay with the snapshot codec described above before adding reattach.
 - The host writes `USERDIR/terminal-sessions/<id>.lua` (or JSON) with atomic

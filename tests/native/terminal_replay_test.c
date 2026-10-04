@@ -4,21 +4,9 @@
 #include <string.h>
 #include "../../src/terminal_model.h"
 
-#define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL: %s\n", #x); return 1; } } while (0)
-
-static GhosttyFormatterTerminalOptions options(void) {
-  return (GhosttyFormatterTerminalOptions) {
-    .size = sizeof(GhosttyFormatterTerminalOptions), .emit = GHOSTTY_FORMATTER_FORMAT_VT,
-    .extra = { .size = sizeof(GhosttyFormatterTerminalExtra),
-      .palette = true, .modes = true, .scrolling_region = true,
-      .tabstops = true, .pwd = true, .keyboard = true,
-      .screen = { .size = sizeof(GhosttyFormatterScreenExtra), .cursor = true,
-        .style = true, .hyperlink = true, .kitty_keyboard = true, .charsets = true } }
-  };
-}
+#define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); return 1; } } while (0)
 
 static int compare(GhosttyTerminal a, GhosttyTerminal b) {
-  bool same = true;
   const GhosttyTerminalData fields[] = { GHOSTTY_TERMINAL_DATA_CURSOR_X,
     GHOSTTY_TERMINAL_DATA_CURSOR_Y, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS,
     GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN };
@@ -26,78 +14,72 @@ static int compare(GhosttyTerminal a, GhosttyTerminal b) {
     size_t av = 0, bv = 0;
     CHECK(ghostty_terminal_get(a, fields[i], &av) == GHOSTTY_SUCCESS);
     CHECK(ghostty_terminal_get(b, fields[i], &bv) == GHOSTTY_SUCCESS);
-    if (av != bv) fprintf(stderr, "field %d: %zu != %zu\n", fields[i], av, bv);
-    if (av != bv) same = false;
+    CHECK(av == bv);
   }
   GhosttyFormatter fa = NULL, fb = NULL;
-  GhosttyFormatterTerminalOptions plain = options();
-  plain.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
+  GhosttyFormatterTerminalOptions plain = {
+    .size = sizeof(plain), .emit = GHOSTTY_FORMATTER_FORMAT_PLAIN,
+  };
   uint8_t *at = NULL, *bt = NULL;
   size_t al = 0, bl = 0;
   CHECK(ghostty_formatter_terminal_new(NULL, &fa, a, plain) == GHOSTTY_SUCCESS);
   CHECK(ghostty_formatter_terminal_new(NULL, &fb, b, plain) == GHOSTTY_SUCCESS);
   CHECK(ghostty_formatter_format_alloc(fa, NULL, &at, &al) == GHOSTTY_SUCCESS);
   CHECK(ghostty_formatter_format_alloc(fb, NULL, &bt, &bl) == GHOSTTY_SUCCESS);
-  if (al != bl || memcmp(at, bt, al) != 0) {
-    fprintf(stderr, "rows A (%zu): [%.*s]\nrows B (%zu): [%.*s]\n", al, (int)al, at, bl, (int)bl, bt);
-  }
-  if (al != bl || memcmp(at, bt, al) != 0) same = false;
+  CHECK(al == bl && memcmp(at, bt, al) == 0);
   ghostty_free(NULL, at, al); ghostty_free(NULL, bt, bl);
   ghostty_formatter_free(fa); ghostty_formatter_free(fb);
-  return same ? 0 : 1;
+  return 0;
+}
+
+static int round_trip(int alternate, int utf8) {
+  GhosttyTerminal a = NULL, b = NULL;
+  size_t lines = 1000;
+  CHECK(anvil_terminal_model_new(&a, 20, 3, 8, 16, &lines));
+  const char *primary = "one\r\ntwo\r\nthree\r\nfour\r\nfive";
+  ghostty_terminal_vt_write(a, (const uint8_t *)primary, strlen(primary));
+  if (alternate) ghostty_terminal_vt_write(a, (const uint8_t *)"\033[?1049hALT\033[2;4H", 18);
+  /* Snapshot between PTY reads, not just at a parser ground boundary. */
+  const char *prefix = utf8 ? "\xe7\x95" : "\033[3";
+  const char *suffix = utf8 ? "\x8c" : "1mred";
+  ghostty_terminal_vt_write(a, (const uint8_t *)prefix, strlen(prefix));
+  uint8_t *bytes = NULL; size_t length = 0;
+  CHECK(ghostty_snapshot_encode_alloc(a, NULL, &bytes, &length) == GHOSTTY_SUCCESS);
+  GhosttySnapshotDecoder decoder = NULL;
+  CHECK(ghostty_snapshot_decoder_new_buf(NULL, &decoder, bytes, length) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_snapshot_decoder_ready(decoder, &b) == GHOSTTY_SUCCESS);
+  GhosttyResult result;
+  do { result = ghostty_snapshot_decoder_next(decoder); } while (result == GHOSTTY_SUCCESS);
+  CHECK(result == GHOSTTY_NO_VALUE);
+  size_t consumed = 0;
+  CHECK(ghostty_snapshot_decoder_get(decoder, GHOSTTY_SNAPSHOT_DECODER_DATA_SOURCE_OFFSET,
+    &consumed) == GHOSTTY_SUCCESS && consumed == length);
+  ghostty_snapshot_decoder_free(decoder);
+  CHECK(compare(a, b) == 0);
+  ghostty_terminal_vt_write(a, (const uint8_t *)suffix, strlen(suffix));
+  ghostty_terminal_vt_write(b, (const uint8_t *)suffix, strlen(suffix));
+  CHECK(compare(a, b) == 0);
+  if (alternate) {
+    ghostty_terminal_vt_write(a, (const uint8_t *)"\033[?1049l", 8);
+    ghostty_terminal_vt_write(b, (const uint8_t *)"\033[?1049l", 8);
+    CHECK(compare(a, b) == 0);
+  }
+  ghostty_terminal_free(b); b = NULL;
+  /* Neither truncated nor corrupt snapshots may publish a complete model. */
+  CHECK(ghostty_snapshot_decoder_new_buf(NULL, &decoder, bytes, length - 1) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_snapshot_decoder_decode(decoder, &b) != GHOSTTY_SUCCESS && !b);
+  ghostty_snapshot_decoder_free(decoder);
+  bytes[length - 1] ^= 1;
+  CHECK(ghostty_snapshot_decoder_new_buf(NULL, &decoder, bytes, length) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_snapshot_decoder_decode(decoder, &b) != GHOSTTY_SUCCESS && !b);
+  ghostty_snapshot_decoder_free(decoder);
+  ghostty_free(NULL, bytes, length); ghostty_terminal_free(a);
+  return 0;
 }
 
 int main(void) {
-  for (int alternate = 0; alternate <= 1; alternate++) {
-    GhosttyTerminal a = NULL, b = NULL;
-    CHECK(ghostty_terminal_new(NULL, &a, 20, 3) == GHOSTTY_SUCCESS);
-    CHECK(ghostty_terminal_new(NULL, &b, 20, 3) == GHOSTTY_SUCCESS);
-    const char *primary = "one\r\ntwo\r\nthree\r\nfour\r\nfive";
-    ghostty_terminal_vt_write(a, (const uint8_t *)primary, strlen(primary));
-    if (alternate) {
-      const char *alt = "\033[?1049hALT\033[2;4H";
-      ghostty_terminal_vt_write(a, (const uint8_t *)alt, strlen(alt));
-    }
-    GhosttyFormatter formatter = NULL;
-    CHECK(ghostty_formatter_terminal_new(NULL, &formatter, a, options()) == GHOSTTY_SUCCESS);
-    uint8_t *vt = NULL; size_t len = 0;
-    CHECK(ghostty_formatter_format_alloc(formatter, NULL, &vt, &len) == GHOSTTY_SUCCESS);
-    ghostty_terminal_vt_write(b, vt, len);
-    printf("formatter %s screen matches: %s\n", alternate ? "alternate" : "primary",
-      compare(a, b) == 0 ? "yes" : "no");
-    if (alternate) {
-      const char *leave = "\033[?1049l";
-      ghostty_terminal_vt_write(a, (const uint8_t *)leave, strlen(leave));
-      ghostty_terminal_vt_write(b, (const uint8_t *)leave, strlen(leave));
-      printf("formatter retained primary after alternate: %s\n", compare(a, b) == 0 ? "yes" : "no");
-    }
-    ghostty_free(NULL, vt, len); ghostty_formatter_free(formatter);
-    ghostty_terminal_free(a); ghostty_terminal_free(b);
-    CHECK(ghostty_terminal_new(NULL, &a, 20, 3) == GHOSTTY_SUCCESS);
-    CHECK(ghostty_terminal_new(NULL, &b, 20, 3) == GHOSTTY_SUCCESS);
-    /* The fallback must start at byte zero, never at a truncated VT prefix. */
-    const char *raw = alternate ? "one\r\ntwo\r\nthree\r\nfour\r\nfive\033[?1049hALT\033[2;4H" : primary;
-    ghostty_terminal_vt_write(a, (const uint8_t *)raw, strlen(raw));
-    AnvilTerminalReplay replay = {0};
-    size_t split = strlen(raw) / 2;
-    anvil_terminal_replay_append(&replay, (const uint8_t *)raw, split);
-    anvil_terminal_replay_append(&replay, (const uint8_t *)raw + split, strlen(raw) - split);
-    CHECK(!replay.overflow);
-    ghostty_terminal_vt_write(b, replay.bytes, replay.length);
-    CHECK(compare(a, b) == 0);
-    if (alternate) {
-      ghostty_terminal_vt_write(a, (const uint8_t *)"\033[?1049l", 8);
-      ghostty_terminal_vt_write(b, (const uint8_t *)"\033[?1049l", 8);
-      CHECK(compare(a, b) == 0);
-    }
-    ghostty_terminal_free(a); ghostty_terminal_free(b);
-    /* An incomplete prefix must not become a suffix replay. */
-    anvil_terminal_replay_append(&replay, (const uint8_t *)raw, ANVIL_TERMINAL_REPLAY_LIMIT);
-    CHECK(replay.overflow && !replay.bytes && replay.length == 0);
-    anvil_terminal_replay_append(&replay, (const uint8_t *)raw, strlen(raw));
-    CHECK(replay.overflow && !replay.bytes && replay.length == 0);
-    anvil_terminal_replay_free(&replay);
-  }
-  puts("raw replay preserves primary scrollback, alternate screen, and cursor");
+  for (int alternate = 0; alternate <= 1; alternate++)
+    for (int utf8 = 0; utf8 <= 1; utf8++) CHECK(round_trip(alternate, utf8) == 0);
+  puts("snapshots preserve both screens, history, cursor, and unfinished VT/UTF-8 input");
   return 0;
 }

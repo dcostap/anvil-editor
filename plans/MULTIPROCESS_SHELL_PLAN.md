@@ -190,7 +190,7 @@ A Project process connects to a Terminal Session over a pipe.
 Terminal rendering in the Project process stays unchanged.
 
 The formatter probe failed to retain primary state during alternate-screen replay.
-Milestone 1 uses a bounded raw prefix. Milestone 2 replaces it with the snapshot codec.
+Milestone 1 used a bounded raw prefix. Milestone 2 now uses the snapshot codec.
 Use that same codec for disk snapshots and revival.
 
 ### Busy detection
@@ -331,6 +331,11 @@ Project's Workspace restores, so startup can not replace good state. A save that
 matches the last write does not touch the disk.
 
 ### Phase 2: Terminal Session processes
+
+Milestones 1 and 2 are implemented. Terminal Sessions publish registry records and survive client disconnects.
+The editor reattaches with binary snapshots, including after a pipe break or writer stall.
+Restart and same-window Project switch detach their views. Tab close still ends the session.
+Busy status, the quit policy, disk snapshots, and revival remain in Milestones 3 and 4.
 
 Move ConPTY ownership into Terminal Session processes.
 Keep the current single-process editor as the client.

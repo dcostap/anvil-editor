@@ -174,6 +174,7 @@ local function fake_native()
       return true, 17
     end
     function session:close() self.closed = true end
+    function session:detach() self.detached = true end
     function session:stats() return { host_pid = 0, shell_pid = 0, replay_bytes = 0 } end
     sessions[#sessions + 1] = session
     return session

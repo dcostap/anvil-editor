@@ -1,4 +1,5 @@
 #include "terminal_model.h"
+#include <stdlib.h>
 #include <string.h>
 
 static void *terminal_alloc(
@@ -55,37 +56,53 @@ const GhosttyAllocator terminal_allocator = {
   .vtable = &terminal_allocator_vtable,
 };
 
+bool anvil_terminal_model_options(GhosttyTerminal model, const size_t *scrollback_lines) {
+  size_t max_bytes = 64u * 1024u * 1024u;
+  if (scrollback_lines && (
+      ghostty_terminal_set(model, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &max_bytes) != GHOSTTY_SUCCESS ||
+      ghostty_terminal_set(model, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, scrollback_lines) != GHOSTTY_SUCCESS)) return false;
+  /* Pi's OSC 133 A marker must not move the cursor during synchronized repaint. */
+  bool fresh_line = false;
+  if (ghostty_terminal_set(model,
+      GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE_IN_SYNCHRONIZED_OUTPUT,
+      &fresh_line) != GHOSTTY_SUCCESS) return false;
+  size_t continuation = ANVIL_TERMINAL_CONTINUATION_LIMIT;
+  return ghostty_terminal_set(model, GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES,
+    &continuation) == GHOSTTY_SUCCESS;
+}
+
 bool anvil_terminal_model_new(GhosttyTerminal *model, uint16_t cols, uint16_t rows,
                               uint32_t cell_width, uint32_t cell_height,
                               const size_t *scrollback_lines) {
-  if (ghostty_terminal_new(&terminal_allocator, model, cols, rows) != GHOSTTY_SUCCESS) return false;
-  size_t max_bytes = 64u * 1024u * 1024u;
-  if (scrollback_lines && (
-      ghostty_terminal_set(*model, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &max_bytes) != GHOSTTY_SUCCESS ||
-      ghostty_terminal_set(*model, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, scrollback_lines) != GHOSTTY_SUCCESS)) return false;
-  /* Pi's OSC 133 A marker must not move the cursor during synchronized repaint. */
-  bool fresh_line = false;
-  if (ghostty_terminal_set(*model,
-      GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE_IN_SYNCHRONIZED_OUTPUT,
-      &fresh_line) != GHOSTTY_SUCCESS) return false;
-  return ghostty_terminal_resize(*model, cols, rows, cell_width, cell_height) == GHOSTTY_SUCCESS;
+  return ghostty_terminal_new(&terminal_allocator, model, cols, rows) == GHOSTTY_SUCCESS &&
+    anvil_terminal_model_options(*model, scrollback_lines) &&
+    ghostty_terminal_resize(*model, cols, rows, cell_width, cell_height) == GHOSTTY_SUCCESS;
 }
 
-void anvil_terminal_replay_free(AnvilTerminalReplay *replay) {
-  if (replay->bytes) HeapFree(GetProcessHeap(), 0, replay->bytes);
-  replay->bytes = NULL;
-  replay->length = 0;
-}
+typedef struct { uint8_t *bytes; size_t length, capacity; } SnapshotBuffer;
 
-void anvil_terminal_replay_append(AnvilTerminalReplay *replay, const uint8_t *bytes, size_t length) {
-  if (replay->overflow) return;
-  if (length > ANVIL_TERMINAL_REPLAY_LIMIT - replay->length) {
-    replay->overflow = true;
-    anvil_terminal_replay_free(replay);
-    return;
+static bool snapshot_write(void *userdata, const uint8_t *bytes, size_t length) {
+  SnapshotBuffer *buffer = userdata;
+  if (length > ANVIL_TERMINAL_SNAPSHOT_LIMIT - buffer->length) return false;
+  size_t required = buffer->length + length;
+  if (required > buffer->capacity) {
+    size_t capacity = buffer->capacity ? buffer->capacity : 65536;
+    while (capacity < required) capacity *= 2;
+    uint8_t *next = realloc(buffer->bytes, capacity);
+    if (!next) return false;
+    buffer->bytes = next; buffer->capacity = capacity;
   }
-  if (!replay->bytes) replay->bytes = HeapAlloc(GetProcessHeap(), 0, ANVIL_TERMINAL_REPLAY_LIMIT);
-  if (!replay->bytes) { replay->overflow = true; return; }
-  memcpy(replay->bytes + replay->length, bytes, length);
-  replay->length += length;
+  memcpy(buffer->bytes + buffer->length, bytes, length);
+  buffer->length += length;
+  return true;
+}
+
+bool anvil_terminal_snapshot_encode(GhosttyTerminal model, uint8_t **bytes, size_t *length) {
+  SnapshotBuffer buffer = {0};
+  *bytes = NULL; *length = 0;
+  if (ghostty_snapshot_encode(model, (GhosttyWriter){ snapshot_write, &buffer }) != GHOSTTY_SUCCESS) {
+    free(buffer.bytes); return false;
+  }
+  *bytes = buffer.bytes; *length = buffer.length;
+  return true;
 }
