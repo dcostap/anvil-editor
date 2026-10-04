@@ -98,6 +98,7 @@ local function new_index(root)
     by_path = {},
     open_buffers = {},
     open_buffer_jobs = {},
+    open_buffer_rejections = {},
     pending_reindex_paths = {},
     pending_reindex_dirs = {},
     watch_running = false,
@@ -124,12 +125,16 @@ local function new_index(root)
   }
 end
 
+local reconcile_open_buffer_overlays
+
 local function index_for_root(root)
   root = normalize_root(root)
   local index = indexes[root]
   if not index then
     index = new_index(root)
     indexes[root] = index
+    -- Buffers parsed before this index existed missed its parse-ready updates.
+    reconcile_open_buffer_overlays(index, "index-created")
   end
   return index
 end
@@ -793,8 +798,12 @@ submit_worker_scan = function(index, generation, opts, phase)
         files[#files + 1] = { path = file.path }
         if i % 128 == 0 then safe_yield(0) end
       end
-      index.header_mode = registry.header_mode(project_files.extensions(index.root))
+      local header_mode = registry.header_mode(project_files.extensions(index.root))
+      local header_mode_changed = index.header_mode ~= header_mode
+      index.header_mode = header_mode
       log_quiet("Tree-sitter Project index: .h mode=%s under %s", index.header_mode, index.root)
+      -- Mixed .h mode decides which header Buffers may replace disk records.
+      if header_mode_changed then reconcile_open_buffer_overlays(index, "header-mode") end
       local run_opts = common.merge(opts, { files = files })
       submit_native_run(index, generation, run_opts, phase)
     end)
@@ -878,9 +887,12 @@ function symbol_index.invalidate(root)
   end
 end
 
-local refresh_open_buffer_overlays
 local overlay_entry_current
-local refresh_current_core_buffers_for_index
+
+local function buffer_path(buffer)
+  local path = buffer and (buffer.abs_filename or buffer.filename)
+  return path and common.normalize_path(path) or nil
+end
 
 local function buffer_should_suppress_disk(buffer)
   if not buffer then return false end
@@ -901,23 +913,31 @@ local function has_pending_open_buffer_overlay(index)
   return index and index.open_buffer_jobs and next(index.open_buffer_jobs) ~= nil
 end
 
+---Return paths whose disk records must not answer queries.
+---The signature also tells published overlays from pending or dirty paths.
 local function overlay_paths(index)
-  local paths = {}
-  for path in pairs(index.open_buffer_jobs or {}) do paths[path] = true end
+  local paths, states = {}, {}
+  for path in pairs(index.open_buffer_jobs or {}) do paths[path], states[path] = true, "pending" end
   for path, entry in pairs(index.open_buffers or {}) do
-    if overlay_entry_current and overlay_entry_current(entry) then paths[path] = true end
+    if overlay_entry_current and overlay_entry_current(entry) then paths[path], states[path] = true, "current" end
   end
+  -- Most Buffers are clean. Check that before normalizing their paths.
   for path, buffer in pairs(open_buffers) do
-    if common.path_belongs_to(path, index.root) and buffer_should_suppress_disk(buffer) then paths[path] = true end
+    if not paths[path] and buffer_should_suppress_disk(buffer) and common.path_belongs_to(path, index.root) then
+      paths[path], states[path] = true, "dirty"
+    end
   end
   for _, buffer in pairs(core.buffers or {}) do
-    local path = buffer and (buffer.abs_filename or buffer.filename)
-    path = path and common.normalize_path(path)
-    if path and common.path_belongs_to(path, index.root) and buffer_should_suppress_disk(buffer) then paths[path] = true end
+    if buffer_should_suppress_disk(buffer) then
+      local path = buffer_path(buffer)
+      if path and not paths[path] and common.path_belongs_to(path, index.root) then
+        paths[path], states[path] = true, "dirty"
+      end
+    end
   end
 
   local ordered = {}
-  for path in pairs(paths) do ordered[#ordered + 1] = path end
+  for path in pairs(paths) do ordered[#ordered + 1] = path .. "\1" .. states[path] end
   table.sort(ordered)
   return paths, table.concat(ordered, "\0")
 end
@@ -929,6 +949,8 @@ overlay_entry_current = function(entry)
   local change_id = buffer.get_change_id and buffer:get_change_id() or 0
   return buffer_can_overlay_project_index(buffer)
     and ts and ts.status == "ready" and entry.change_id == change_id
+    -- Mixed-mode headers use disk records again after their Buffer is saved.
+    and (not entry.requires_dirty or buffer_should_suppress_disk(buffer))
 end
 
 local function partial_snapshot_symbols(index, max_items)
@@ -960,7 +982,6 @@ end
 local function combined_symbols(index, kind, disk_symbols)
   kind = kind or "symbols"
   disk_symbols = disk_symbols or index.symbols or {}
-  if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
   index.combined_symbols_cache = index.combined_symbols_cache or {}
   local project_paths_generation = project_paths_module().generation()
   local paths, paths_signature = overlay_paths(index)
@@ -1003,7 +1024,6 @@ local function combined_symbols(index, kind, disk_symbols)
 end
 
 local function combined_usages_for_name(index, name)
-  if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
   local overlay = index.open_buffers or {}
   local paths = overlay_paths(index)
   local out = {}
@@ -1089,8 +1109,6 @@ local function enclosing_symbol_at(path, line, col, opts, roots, contexts)
       if not index then return nil, "index-unavailable" end
       local context = contexts[root]
       if not context then
-        refresh_current_core_buffers_for_index(index)
-        if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
         context = {}
         contexts[root] = context
       end
@@ -1241,18 +1259,6 @@ local function filtered_symbols(symbols, query, limit, opts)
   return out, #items > #out
 end
 
-refresh_current_core_buffers_for_index = function(index)
-  -- Query paths must not synchronously extract open-buffer overlays. Open
-  -- Buffers are remembered here only so dirty Buffers can suppress stale disk
-  -- entries; overlay records are updated by the Tree-sitter parse-ready hook.
-  if not index then return end
-  for _, buffer in pairs(core.buffers or {}) do
-    local path = buffer and (buffer.abs_filename or buffer.filename)
-    path = path and common.normalize_path(path)
-    if path and common.path_belongs_to(path, index.root) then open_buffers[path] = buffer end
-  end
-end
-
 local function merge_status(current, next_status)
   if current == "pending" or next_status == "pending" then return "pending" end
   if current == "stale" or next_status == "stale" then return "stale" end
@@ -1261,8 +1267,6 @@ local function merge_status(current, next_status)
 end
 
 local function native_query_path_rules(index, snapshot, kind)
-  refresh_current_core_buffers_for_index(index)
-  if refresh_open_buffer_overlays then refresh_open_buffer_overlays(index) end
   local suppressed, signature = overlay_paths(index)
   local generation = project_paths_module().generation()
   index.native_query_filter_cache = index.native_query_filter_cache or {}
@@ -1399,7 +1403,6 @@ function symbol_index.workspace_symbols(query, opts)
       elseif root_status == "stale" then reason = reason or "indexing" end
       any_usable = true
     elseif index.symbol_status == "ready" then
-      refresh_current_core_buffers_for_index(index)
       if has_pending_open_buffer_overlay(index) then
         reason = reason or "overlay-indexing"
       elseif query_text ~= "" and disk_symbol_count > sync_limit and not opts.allow_large_sync_query then
@@ -1576,15 +1579,10 @@ local function native_workspace_symbols_async(query, opts, roots)
         roots = per_root, index = #roots == 1 and index or nil,
       }
     end
-    refresh_current_core_buffers_for_index(index)
     if has_pending_open_buffer_overlay(index) then
       return nil, "overlay-indexing", "pending", { roots = per_root, index = #roots == 1 and index or nil }
     end
     local excluded, included, suppressed = native_query_path_rules(index, snapshot, opts.kind or "symbols")
-    -- Path rules can start an overlay refresh. Do not query without those symbols.
-    if has_pending_open_buffer_overlay(index) then
-      return nil, "overlay-indexing", "pending", { roots = per_root, index = #roots == 1 and index or nil }
-    end
     local overlays, overlay_more = bounded_overlay_symbols(index, suppressed, query, opts, candidate_limit)
     local child = {
       root = root,
@@ -1877,13 +1875,11 @@ function symbol_index.workspace_usages(name, opts)
       elseif root_status == "stale" then reason = reason or "indexing" end
       any_usable = true
     elseif index.usage_status == "ready" then
-      refresh_current_core_buffers_for_index(index)
       if has_pending_open_buffer_overlay(index) then
         reason = reason or "overlay-indexing"
       elseif #((index.usages_by_name or {})[name] or {}) > sync_limit and not opts.allow_large_sync_query then
         reason = reason or "query-too-large"
       else
-        refresh_current_core_buffers_for_index(index)
         local source = combined_usages_for_name(index, name)
         if single_root and #all_usages == 0 then
           all_usages = source
@@ -1952,19 +1948,26 @@ function symbol_index.query_usages_async(name, opts)
   return symbol_index.workspace_usages_async(name, opts)
 end
 
-local function buffer_path(buffer)
-  local path = buffer and (buffer.abs_filename or buffer.filename)
-  return path and common.normalize_path(path) or nil
+-- Buffer lines already include their newline.
+local function buffer_text_within(lines, limit)
+  local size = 0
+  for i = 1, #lines do
+    size = size + #lines[i]
+    if size > limit then return false end
+  end
+  return true
 end
 
-local function buffer_lines(buffer)
-  return buffer and buffer.lines or nil
+local function buffer_change_id(buffer)
+  return buffer.get_change_id and buffer:get_change_id() or 0
 end
 
-local function buffer_text_from_lines(lines)
-  if type(lines) ~= "table" then return nil, "missing-lines" end
-  -- Buffer lines already include their newline.
-  return table.concat(lines)
+local function same_buffer_revision(record, buffer, change_id)
+  return record ~= nil and record.buffer == buffer and record.change_id == change_id
+end
+
+local function header_requires_dirty_buffer(index, path)
+  return index.header_mode == "mixed" and path:lower():match("%.h$") ~= nil
 end
 
 local function cancel_open_buffer_job(index, path)
@@ -1973,39 +1976,35 @@ local function cancel_open_buffer_job(index, path)
   if index and index.open_buffer_jobs then index.open_buffer_jobs[path] = nil end
 end
 
+local function reject_open_buffer_revision(index, buffer, path, change_id, reason)
+  index.open_buffer_rejections[path] = { buffer = buffer, change_id = change_id, reason = reason }
+end
+
 local function submit_open_buffer_overlay(index, buffer, path, reason)
-  if not buffer_can_overlay_project_index(buffer) then return false, "disabled" end
-  if index.header_mode == "mixed" and path:lower():match("%.h$") and not buffer_should_suppress_disk(buffer) then
-    return false, "mixed-header-disk-index"
-  end
-  local ts = buffer and buffer.treesitter
-  if not ts or ts.status ~= "ready" then return false, "not-ready" end
+  local ts = buffer.treesitter
   local language = ts.language
   if not language then return false, "missing-language" end
-  local text, text_err = buffer_text_from_lines(buffer_lines(buffer))
-  if not text then return false, text_err or "missing-lines" end
-  if #text > MAX_FILE_BYTES then return false, "too-large" end
+  local lines = buffer.lines
+  if type(lines) ~= "table" then return false, "missing-lines" end
+  -- Reject oversized revisions before copying their text.
+  if not buffer_text_within(lines, MAX_FILE_BYTES) then return false, "too-large" end
+  local text = table.concat(lines)
 
-  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
+  local change_id = buffer_change_id(buffer)
   local project_paths_generation = index.project_paths_generation or project_paths_module().generation()
   cancel_open_buffer_job(index, path)
-  index.open_buffer_jobs = index.open_buffer_jobs or {}
   local job = {
     buffer = buffer,
     path = path,
     change_id = change_id,
-    generation = index.generation,
     project_paths_generation = project_paths_generation,
   }
   index.open_buffer_jobs[path] = job
 
+  -- Overlay records come from Buffer text alone. Project index refreshes do
+  -- not make them stale.
   local function current()
-    local active = index.open_buffer_jobs and index.open_buffer_jobs[path]
-    local current_change_id = buffer.get_change_id and buffer:get_change_id() or 0
-    return active == job
-       and index.generation == job.generation
-       and current_change_id == change_id
-       and common.path_belongs_to(path, index.root)
+    return index.open_buffer_jobs[path] == job and buffer_change_id(buffer) == change_id
   end
 
   local sources = language.query_sources or {}
@@ -2015,7 +2014,6 @@ local function submit_open_buffer_overlay(index, buffer, path, reason)
     native = true,
     native_kind = "treesitter_index_text",
     priority = "interactive",
-    generation = index.generation,
     project_paths_generation = project_paths_generation,
     phase = "open-buffer-overlay",
     native_payload = {
@@ -2052,6 +2050,7 @@ local function submit_open_buffer_overlay(index, buffer, path, reason)
         usage_count = 0,
         buffer = buffer,
         change_id = change_id,
+        requires_dirty = header_requires_dirty_buffer(index, path),
       }
       local offset = 0
       repeat
@@ -2084,11 +2083,14 @@ local function submit_open_buffer_overlay(index, buffer, path, reason)
     on_error = function(message)
       if current() then
         index.open_buffer_jobs[path] = nil
+        local error_reason = tostring(message and message.error or "overlay-failed")
+        -- Retry after the next edit, not on every parse-ready or reconcile.
+        reject_open_buffer_revision(index, buffer, path, change_id, error_reason)
         if index.open_buffers[path] then
           index.open_buffers[path] = nil
           bump_overlay_generation(index)
         end
-        log_quiet("Tree-sitter Project index: skipped open buffer overlay for %s under %s: %s", tostring(path), tostring(index.root), tostring(message and message.error or "overlay-failed"))
+        log_quiet("Tree-sitter Project index: skipped open buffer overlay for %s under %s: %s", tostring(path), tostring(index.root), error_reason)
       end
     end,
     on_cancelled = function()
@@ -2103,41 +2105,63 @@ local function submit_open_buffer_overlay(index, buffer, path, reason)
   return true, "scheduled"
 end
 
-refresh_open_buffer_overlays = function(index)
-  if not index then return false end
-  local changed = false
-  local seen = {}
+local function remove_open_buffer_overlay(index, path)
+  cancel_open_buffer_job(index, path)
+  if index.open_buffers[path] then
+    index.open_buffers[path] = nil
+    bump_overlay_generation(index)
+  end
+end
+
+---Keep at most one overlay request for each Buffer revision.
+---Buffer and index lifecycle events call this. Queries only read its results.
+local function sync_open_buffer_overlay(index, buffer, path, reason)
+  if not buffer_can_overlay_project_index(buffer) then
+    index.open_buffer_rejections[path] = nil
+    remove_open_buffer_overlay(index, path)
+    return false, "disabled"
+  end
+  if header_requires_dirty_buffer(index, path) and not buffer_should_suppress_disk(buffer) then
+    index.open_buffer_rejections[path] = nil
+    remove_open_buffer_overlay(index, path)
+    return false, "mixed-header-disk-index"
+  end
+  -- The parse-ready hook syncs this Buffer again.
+  local ts = buffer.treesitter
+  if not ts or ts.status ~= "ready" then return false, "not-ready" end
+
+  local change_id = buffer_change_id(buffer)
+  if same_buffer_revision(index.open_buffers[path], buffer, change_id) then return true, "current" end
+  if same_buffer_revision(index.open_buffer_jobs[path], buffer, change_id) then return true, "pending" end
+  local rejected = index.open_buffer_rejections[path]
+  if same_buffer_revision(rejected, buffer, change_id) then return false, rejected.reason end
+  index.open_buffer_rejections[path] = nil
+
+  local scheduled, err = submit_open_buffer_overlay(index, buffer, path, reason)
+  if scheduled then return true, err end
+  if err ~= "submit-failed" then reject_open_buffer_revision(index, buffer, path, change_id, err) end
+  remove_open_buffer_overlay(index, path)
+  return false, err
+end
+
+reconcile_open_buffer_overlays = function(index, reason)
   local buffers = {}
   for path, buffer in pairs(open_buffers) do buffers[path] = buffer end
   for _, buffer in pairs(core.buffers or {}) do
     local path = buffer_path(buffer)
     if path then buffers[path] = buffer end
   end
+  local scheduled = 0
   for path, buffer in pairs(buffers) do
-    if path and common.path_belongs_to(path, index.root) then
-      seen[path] = true
-      local current = index.open_buffers[path]
-      local change_id = buffer.get_change_id and buffer:get_change_id() or 0
-      if not buffer_can_overlay_project_index(buffer)
-        or index.header_mode == "mixed" and path:lower():match("%.h$") and not buffer_should_suppress_disk(buffer) then
-        local job = index.open_buffer_jobs and index.open_buffer_jobs[path]
-        if job then cancel_open_buffer_job(index, path); changed = true end
-        if current then index.open_buffers[path] = nil; changed = true end
-      elseif not current or current.buffer ~= buffer or current.change_id ~= change_id then
-        local scheduled = submit_open_buffer_overlay(index, buffer, path, "refresh")
-        changed = scheduled or changed
-      end
+    if common.path_belongs_to(path, index.root) then
+      local _, state = sync_open_buffer_overlay(index, buffer, path, reason)
+      if state == "scheduled" then scheduled = scheduled + 1 end
     end
   end
-  for path, entry in pairs(index.open_buffers or {}) do
-    if not seen[path] or not entry.buffer then
-      cancel_open_buffer_job(index, path)
-      index.open_buffers[path] = nil
-      changed = true
-    end
+  if scheduled > 0 then
+    log_quiet("Tree-sitter Project index: scheduled %d open buffer overlay(s) under %s (%s)",
+      scheduled, tostring(index.root), tostring(reason))
   end
-  if changed then bump_overlay_generation(index) end
-  return changed
 end
 
 function symbol_index.remember_open_buffer(buffer)
@@ -2152,23 +2176,13 @@ function symbol_index.update_open_buffer(buffer, reason)
   if not path then return false, "no-path" end
   open_buffers[path] = buffer
   local updated = false
-  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
   for _, index in pairs(indexes) do
     if common.path_belongs_to(path, index.root) then
-      local current = index.open_buffers[path]
-      if current and current.buffer == buffer and current.change_id == change_id
-        and not (index.header_mode == "mixed" and path:lower():match("%.h$") and not buffer_should_suppress_disk(buffer)) then
+      local synced, state = sync_open_buffer_overlay(index, buffer, path, reason)
+      if synced then
         updated = true
       else
-        local scheduled, err = submit_open_buffer_overlay(index, buffer, path, reason)
-        if scheduled then
-          updated = true
-        else
-          cancel_open_buffer_job(index, path)
-          if index.open_buffers[path] then bump_overlay_generation(index) end
-          index.open_buffers[path] = nil
-          log_quiet("Tree-sitter Project index: skipped open buffer overlay for %s under %s: %s", tostring(path), tostring(index.root), tostring(err))
-        end
+        log_quiet("Tree-sitter Project index: skipped open buffer overlay for %s under %s: %s", tostring(path), tostring(index.root), tostring(state))
       end
     end
   end
@@ -2204,6 +2218,9 @@ function symbol_index.clear_open_buffer(buffer, reason)
         cancel_open_buffer_job(index, overlay_path)
         cleared = true
       end
+    end
+    for overlay_path, rejected in pairs(index.open_buffer_rejections) do
+      if rejected.buffer == buffer then index.open_buffer_rejections[overlay_path] = nil end
     end
     if index_cleared then bump_overlay_generation(index) end
   end

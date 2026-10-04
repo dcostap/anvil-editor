@@ -96,4 +96,99 @@ test.describe("Project enclosing symbols", function()
     context.buffer = nil
     test.equal(symbol_index.enclosing_symbols(locations)[1].symbol.name, "first")
   end)
+
+  local function count_overlay_submissions(context)
+    local pool = worker_pool.system()
+    local submit = pool.submit
+    context.overlay_submissions = 0
+    pool.submit = function(self, spec)
+      if spec and spec.kind == "treesitter_open_buffer_overlay" then
+        context.overlay_submissions = context.overlay_submissions + 1
+      end
+      return submit(self, spec)
+    end
+    context.restore_submit = function() pool.submit = submit end
+  end
+
+  local function edited_buffer(context)
+    local buffer = Buffer("main.c", context.path)
+    context.buffer = buffer
+    core.buffer_registry:register(buffer, context.path)
+    symbol_index.remember_open_buffer(buffer)
+    buffer:remove(1, 5, 1, 10)
+    buffer:insert(1, 5, "renamed")
+    return buffer
+  end
+
+  -- Wait without yielding, so the main loop cannot publish the overlay job
+  -- that the parse-ready hook submits.
+  local function wait_parsed_without_yield(buffer)
+    local deadline = system.get_time() + 10
+    repeat
+      local _, changed = treesitter.poll_buffer(buffer)
+      if changed and buffer.treesitter.status == "ready" then return end
+      system.sleep(0.005)
+    until system.get_time() >= deadline
+    test.fail("Timed out waiting for the edited Buffer parse")
+  end
+
+  local function wait_for_symbol(buffer, locations, name)
+    local result
+    local deadline = system.get_time() + 10
+    repeat
+      treesitter.poll_buffer(buffer)
+      drain()
+      result = symbol_index.enclosing_symbols(locations)[1]
+      if result.symbol and result.symbol.name == name then break end
+      coroutine.yield(0.02)
+    until system.get_time() >= deadline
+    test.equal(result.symbol and result.symbol.name, name)
+  end
+
+  test.it("prepares an edited Buffer once while its symbols are queried repeatedly", function(context)
+    local locations = { { path = context.path, line = 2, col = 3 } }
+    count_overlay_submissions(context)
+    local ok, err = pcall(function()
+      local buffer = edited_buffer(context)
+      wait_parsed_without_yield(buffer)
+      for _ = 1, 5 do symbol_index.enclosing_symbols(locations) end
+      symbol_index.workspace_symbols("renamed", { root = context.root })
+      symbol_index.workspace_usages("renamed", { root = context.root, allow_stale = true })
+    end)
+    context.restore_submit()
+    test.ok(ok, err)
+    test.equal(context.overlay_submissions, 1)
+    wait_for_symbol(context.buffer, locations, "renamed")
+  end)
+
+  test.it("publishes edited Buffer symbols when the Project index refreshes during preparation", function(context)
+    local locations = { { path = context.path, line = 2, col = 3 } }
+    local buffer = edited_buffer(context)
+    wait_parsed_without_yield(buffer)
+    test.ok(symbol_index.reindex_file(context.path, { reason = "test-save" }))
+    wait_for_symbol(buffer, locations, "renamed")
+    local deadline = system.get_time() + 10
+    repeat
+      drain()
+      coroutine.yield(0.02)
+    until symbol_index.status(context.root).status == "ready" or system.get_time() >= deadline
+  end)
+
+  test.it("uses Buffers opened before their Project index exists", function(context)
+    symbol_index.reset_for_tests()
+    local locations = { { path = context.path, line = 2, col = 3 } }
+    local buffer = edited_buffer(context)
+    local deadline = system.get_time() + 10
+    repeat
+      treesitter.poll_buffer(buffer)
+      coroutine.yield(0.01)
+    until buffer.treesitter.status == "ready" or system.get_time() >= deadline
+    symbol_index.ensure_scan(context.root)
+    deadline = system.get_time() + 10
+    repeat
+      drain()
+      coroutine.yield(0.02)
+    until symbol_index.status(context.root).status == "ready" or system.get_time() >= deadline
+    wait_for_symbol(buffer, locations, "renamed")
+  end)
 end)
