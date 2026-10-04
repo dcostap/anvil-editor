@@ -4538,13 +4538,20 @@ function FSView:update_preview_view()
   elseif ImageView.is_supported(path) then
     key = "image:" .. path
   else
-    local blocked, reason = detect_binary_preview(path)
-    if blocked then
-      key = "blocked:" .. path .. ":" .. tostring(reason)
+    -- Probe each selected path once. Updates run every frame, and the probe
+    -- opens and reads the file.
+    local probe = self.preview_probe
+    if not probe or probe.path ~= path then
+      local blocked, reason = detect_binary_preview(path)
+      probe = { path = path, blocked = blocked, reason = reason or "Unsupported binary file" }
+      self.preview_probe = probe
+    end
+    if probe.blocked then
+      key = "blocked:" .. path .. ":" .. tostring(probe.reason)
       if self.preview_key ~= key then
         self:clear_preview_view()
         self.preview_key = key
-        self.preview_blocked = { reason = reason or "Unsupported binary file", path = path }
+        self.preview_blocked = { reason = probe.reason, path = path }
       end
       return nil
     end
@@ -6823,6 +6830,7 @@ function FSView:start_modifier_search(base, line, col, grep, reset_selection)
   self.path_search_active = path_plan and path_plan.external == true
   self:cancel_deferred_loading_feedback()
   self:clear_preview_view()
+  self.preview_probe = nil
   if reset_selection then self.selected, self.viewport_offset = 1, 1 end
   self.has_more = false
   self.status = self.query_modifiers.error or "Searching files…"

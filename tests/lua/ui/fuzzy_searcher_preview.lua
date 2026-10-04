@@ -427,6 +427,36 @@ test.describe("Fuzzy Searcher preview", function()
     test.equal(updates, 1)
   end)
 
+  test.it("does not reopen an unchanged selected file while its preview remains loaded", function(context)
+    local text_path = temp_file_path("fuzzy-preview-reuse-text-test.txt")
+    local binary_path = temp_file_path("fuzzy-preview-reuse-binary-test.dat")
+    context.files = { text_path, binary_path }
+    write_file(text_path, "preview only\n")
+    write_file(binary_path, "binary\0data")
+
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = text_path, text = text_path },
+      { kind = "file", file = binary_path, text = binary_path },
+    })
+    local picker = core.fuzzy_searcher_active_view
+    for selected, path in ipairs({ text_path, binary_path }) do
+      picker.selected = selected
+      picker:update_preview_view()
+      local opens, open = 0, io.open
+      io.open = function(name, ...)
+        if name == path then opens = opens + 1 end
+        return open(name, ...)
+      end
+      local ok, err = pcall(function()
+        for _ = 1, 5 do picker:update_preview_view() end
+      end)
+      io.open = open
+      test.ok(ok, err)
+      test.equal(opens, 0, path)
+    end
+    test.ok(picker.preview_blocked, "expected the binary file preview to stay blocked")
+  end)
+
   test.it("horizontally reveals off-screen content matches in the TextView preview", function(context)
     config.plugins.linewrapping.enable_by_default = false
 
