@@ -232,7 +232,11 @@ static void push_from_state(lua_State* from, lua_State* to, int index)
 static void copy_global(const char* global, lua_State* from, lua_State* to)
 {
   int index = -1;
-  lua_getglobal(from, global);
+  /* Optional startup globals can be absent under strict global checks. */
+  lua_pushglobaltable(from);
+  lua_pushstring(from, global);
+  lua_rawget(from, -2);
+  lua_remove(from, -2);
 
   switch (lua_type(from, index)) {
     case LUA_TNUMBER:
