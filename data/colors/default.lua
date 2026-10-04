@@ -132,6 +132,7 @@ style.interactive_hover_border = c("b8f5ff")
 style.good = p("string")
 style.warn = p("warning_stripe")
 style.error = c("c56a6a")
+style.tab_file_missing = style.error
 style.modified = p("ctrl_clickable")
 
 -- Integrated terminal colors. Applications can override these per session

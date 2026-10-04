@@ -217,10 +217,17 @@ local function draw_pane_label(number, pane, rect, name_color)
   local path = require("core.file_context").view_file_path(pane.current_view)
   local git = path_tree.git_info_for_file(path)
   name_color = path_tree.git_text_color(git and git.kind) or name_color
+  local buffer = pane.current_view.buffer
+  local missing = buffer and buffer.file_missing
+  if missing then name_color = style.tab_file_missing end
+  local name_y = rect.y + math.floor((rect.h - metrics.name_font:get_height()) / 2)
   renderer.draw_text(
-    metrics.name_font, name, x,
-    rect.y + math.floor((rect.h - metrics.name_font:get_height()) / 2), name_color
+    metrics.name_font, name, x, name_y, name_color
   )
+  if missing and name ~= "" then
+    renderer.draw_rect(x, name_y + math.floor(metrics.name_font:get_height() / 2),
+      metrics.name_font:get_width(name), math.max(1, SCALE), name_color)
+  end
 end
 
 local function preferred_tab_width(number, pane, row_height)

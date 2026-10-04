@@ -11,6 +11,36 @@ test.describe("core.dirwatch", function()
     if context.temp_root then common.rm(context.temp_root, true) end
   end)
 
+  test.it("keeps scanning a deleted file until it returns", function(context)
+    context.temp_root = USERDIR .. PATHSEP .. "dirwatch-restored-file"
+    test.ok(common.mkdirp(context.temp_root))
+    local path = context.temp_root .. PATHSEP .. "file.txt"
+    local function write_file()
+      local file = assert(io.open(path, "wb"))
+      file:write("contents")
+      file:close()
+    end
+    write_file()
+    local watch = DirWatch()
+    watch:scan(path)
+    local changes = {}
+    local function changed(file) changes[#changes + 1] = file end
+    assert(os.remove(path))
+    watch:check(changed)
+    test.same(changes, { path })
+    watch:check(changed)
+    test.same(changes, { path }, "Do not repeat the deletion event")
+    write_file()
+    watch:check(changed)
+    test.same(changes, { path, path }, "Report the file's return")
+    assert(os.remove(path))
+    watch:check(changed)
+    watch:unwatch(path)
+    write_file()
+    watch:check(changed)
+    test.same(changes, { path, path, path }, "Stop scanning after unwatch")
+  end)
+
   test.it("resolves multiple-backend leaf events against their watched directory", function()
     local watch = DirWatch()
     local watched = common.normalize_path(USERDIR .. PATHSEP .. "dirwatch-leaf-root")

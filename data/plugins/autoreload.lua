@@ -35,15 +35,34 @@ config.plugins.autoreload.config_spec = {
 local watch = DirWatch()
 local times = setmetatable({}, { __mode = "k" })
 local changed = setmetatable({}, { __mode = "k" })
+local watched_paths = setmetatable({}, { __mode = "k" })
+
+local function set_file_missing(buffer, missing)
+  if (buffer.file_missing == true) == missing then return end
+  buffer.file_missing = missing
+  core.redraw = true
+  core.log_quiet("Buffer file %s: %s", missing and "missing" or "available", buffer.abs_filename)
+end
 
 local function update_time(buffer)
-  if buffer.abs_filename then
-    local info = system.get_file_info(buffer.abs_filename)
-    times[buffer] = info and { modified = info.modified, size = info.size }
+  local path = buffer.abs_filename
+  if not path then return end
+  local info = system.get_file_info(path)
+  local missing = not info or info.type ~= "file"
+  local old_path = watched_paths[buffer]
+  if old_path ~= path or (buffer.file_missing and not missing) then
+    if old_path then watch:unwatch(old_path) end
+    if missing then watch:scan(path) else watch:watch(path) end
+    watched_paths[buffer] = path
+    changed[buffer] = nil
   end
+  times[buffer] = not missing and { modified = info.modified, size = info.size }
+    or times[buffer] or {}
+  set_file_missing(buffer, missing)
 end
 
 local function reload_buffer(buffer)
+  if buffer.file_missing then return end
   local old_lines
   if reload_diff_flash and reload_diff_flash.clone_lines then
     old_lines = reload_diff_flash.clone_lines(buffer.lines)
@@ -74,6 +93,7 @@ end
 
 local function autoreload_buffer(buffer)
   if changed[buffer] then changed[buffer] = nil end
+  if buffer.file_missing then return end
   if
     not buffer:is_dirty()
     and
@@ -107,11 +127,25 @@ core.add_thread(function()
       for _, buffer in ipairs(core.buffers) do
         if common.path_equals(buffer.abs_filename, file) then
           local info = system.get_file_info(buffer.abs_filename or "")
+          local was_missing = buffer.file_missing
+          if times[buffer] and (not info or info.type ~= "file") then
+            set_file_missing(buffer, true)
+            changed[buffer] = nil
+            buffer.deferred_reload = false
+            -- Native file watches can disappear with their file. Poll the saved
+            -- path until it returns, including when its parent was removed.
+            watch:unwatch(buffer.abs_filename)
+            watch:scan(buffer.abs_filename)
+          elseif info and info.type == "file" and was_missing then
+            set_file_missing(buffer, false)
+            watch:unwatch(buffer.abs_filename)
+            watch:watch(buffer.abs_filename)
+          end
           if
             info and info.type == "file" and times[buffer]
             and
             (
-              times[buffer].modified ~= info.modified
+              was_missing or times[buffer].modified ~= info.modified
               or
               times[buffer].size ~= info.size
             )
@@ -145,7 +179,6 @@ Buffer.load = function(self, ...)
   core.add_thread(function()
     -- apply autoreload only to Buffers loaded in the UI
     if #core.get_views_referencing_buffer(self) > 0 then
-      if not times[self] then watch:watch(self.abs_filename) end
       update_time(self)
     end
   end)
@@ -156,7 +189,6 @@ Buffer.save = function(self, ...)
   local res = save(self, ...)
   -- if starting with an unsaved buffer with a filename.
   if #core.get_views_referencing_buffer(self) > 0 then
-    if not times[self] then watch:watch(self.abs_filename) end
     update_time(self)
   end
   return res
@@ -164,9 +196,6 @@ end
 
 Buffer.on_close = function(self)
   on_close(self)
-  if times[self] then
-    times[self] = nil
-    watch:unwatch(self.abs_filename)
-    if changed[self] then changed[self] = nil end
-  end
+  if watched_paths[self] then watch:unwatch(watched_paths[self]) end
+  watched_paths[self], times[self], changed[self] = nil, nil, nil
 end

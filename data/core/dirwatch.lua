@@ -12,7 +12,7 @@ local Object = require "core.object"
 ---If a file or directory had changed, the callback is called with the corresponding file.
 ---@class core.dirwatch
 ---@overload fun():core.dirwatch
----@field scanned table<string,number> Stores the last modified time of paths.
+---@field scanned table<string,number|false> Stores modified times, or false for missing paths.
 ---@field watched table<string,boolean|number> Stores the paths that are being watched, and their unique fd.
 ---@field reverse_watched table<number,string> Stores the paths mapped by their unique fd.
 ---@field monitor dirmonitor The dirmonitor instance associated with this watcher.
@@ -53,7 +53,8 @@ end
 ---@param  watch? boolean If false, remove this directory from the watch list.
 function DirWatch:scan(path, watch)
   if watch == false then return self:unwatch(path) end
-  self.scanned[path] = system.get_file_info(path).modified
+  local info = system.get_file_info(path)
+  self.scanned[path] = info and info.modified or false
 end
 
 
@@ -71,7 +72,7 @@ function DirWatch:watch(path, watch)
   if watch == false then return self:unwatch(path) end
   local info = system.get_file_info(path)
   if not info then return end
-  if not self.watched[path] and not self.scanned[path] then
+  if not self.watched[path] and self.scanned[path] == nil then
     if self.monitor:mode() == "single" then
       if info.type ~= "dir" then return self:scan(path) end
       if not self.single_watch_top or path:find(self.single_watch_top, 1, true) ~= 1 then
@@ -120,7 +121,7 @@ function DirWatch:unwatch(path)
       end
     end
     self.watched[path] = nil
-  elseif self.scanned[path] then
+  elseif self.scanned[path] ~= nil then
     self.scanned[path] = nil
   end
 end
@@ -195,14 +196,12 @@ function DirWatch:check(change_callback, scan_time, wait_time)
     end
   end
   for directory, old_modified in pairs(self.scanned) do
-    if old_modified then
-      local info = system.get_file_info(directory)
-      local new_modified = info and info.modified
-      if old_modified ~= new_modified then
-        change_callback(directory, directory, false, "unknown")
-        had_change = true
-        self.scanned[directory] = new_modified
-      end
+    local info = system.get_file_info(directory)
+    local new_modified = info and info.modified or false
+    if old_modified ~= new_modified then
+      self.scanned[directory] = new_modified
+      change_callback(directory, directory, false, "unknown")
+      had_change = true
     end
     if system.get_time() - start_time > (scan_time or 0.01) then
       coroutine.yield(wait_time or 0.01)
