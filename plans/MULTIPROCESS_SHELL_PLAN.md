@@ -356,8 +356,8 @@ Add the native shell and the hosted surface backend.
 The shell draws window controls and status overlays without Lua.
 One Project must look and behave like current Anvil.
 
-Review draft: [Phase 3: hosted single Project](PHASE3_HOSTED_PROJECT.md).
-The draft does not authorize Phase 3 implementation.
+Implementation plan: [Phase 3: hosted single Project](PHASE3_HOSTED_PROJECT.md).
+Milestone 1 is authorized. Phase 3 exits immediately on shell loss; Phase 6 adds adoption.
 
 ### Phase 4: several Projects and the Sidebar process
 

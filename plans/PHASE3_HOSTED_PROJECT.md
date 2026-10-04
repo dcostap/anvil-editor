@@ -4,7 +4,7 @@ This plan follows [Phase 2](PHASE2_TERMINAL_SESSIONS.md) and
 [the multiprocess shell plan](MULTIPROCESS_SHELL_PLAN.md).
 Read both before implementation.
 
-Status: draft for review. No Phase 3 implementation is authorized by this document.
+Status: Milestone 1 is authorized. Later milestones remain planned.
 Phase 2 Milestones 1 to 4 are complete.
 
 ## Goal
@@ -33,7 +33,7 @@ Phase 3 delivers:
 Phase 3 does not deliver:
 
 - Several loaded Projects or the Sidebar process: Phase 4.
-- General hang detection, Project restart, or Sidebar recovery: Phase 4.
+- General hang detection and Sidebar recovery: Phase 4.
 - Shared ownership of several Anvil Windows or moving Projects: Phase 5.
 - Shell adoption, window restoration, or a Project registry: Phase 6.
 - Final Project Sidebar presentation: Phase 7.
@@ -41,7 +41,22 @@ Phase 3 does not deliver:
 Existing New Window commands must not open a second visible window inside a Project process.
 For this phase, they start another independent shell with one Project.
 Phase 5 replaces this launch boundary with shared shell ownership.
-This limited behavior needs approval with this plan.
+This limited behavior is approved.
+
+### Two shells opening the same Project
+
+Match current direct-mode behavior, using the existing Lua IPC setting and advertisements.
+With single-instance IPC enabled, a later directory launch raises the advertised instance and exits.
+Its Project must exit intentionally, so its shell closes rather than showing Failed.
+It must not restore or save that Project's Workspace or attach its Terminal Sessions.
+New Window commands use the same advertised-Project check.
+
+Disabled IPC and simultaneous starts before advertisement can allow two instances, as in direct mode.
+They share the existing Workspace storage; the last completed save wins.
+Do not add Workspace merge, ownership locks, or a global Project coordinator in Phase 3.
+Terminal Sessions still permit one client. A second attach fails visibly and never starts a duplicate shell.
+Closing that failed View must not close the first client's Terminal Session.
+Test advertised-instance forwarding and explicit duplicate-instance Workspace/terminal behavior against direct mode.
 
 ## Starting point
 
@@ -97,11 +112,17 @@ Do not introduce general RPC or another process framework.
 
 A Project process must not die merely because the shell's job handle closes.
 Remove kill-on-shell-close ownership for that child.
-On shell loss, preserve Terminal Sessions, wait for the documented bounded recovery period,
-then save the Workspace, detach terminals, and exit without a hidden quit prompt.
-Phase 6 supplies adoption; Phase 3 does not invent a replacement adoption protocol.
+On shell loss, immediately save the Workspace, detach terminals, and exit without a hidden quit prompt.
+There is no recovery wait or adoption attempt in Phase 3.
+A native watchdog enforces a five-second deadline from detected shell loss, including startup and teardown.
 If the Lua loop cannot save, retain the last durable Workspace and report the loss risk.
 Do not extend the native exit deadline while waiting for a stalled Lua loop.
+
+Workspace saves retain layout and file references, not unsaved named-buffer contents.
+Named-buffer edits survive only if the existing save/autosave behavior already wrote them to disk.
+The existing Untitled recovery flush can retain Untitled contents during the immediate save.
+A stalled loop or interrupted flush guarantees only the last complete recovery file, not the latest edits.
+This phase adds no buffer-content journal and never silently writes dirty named Buffers on shell loss.
 
 Same-window Project switch saves and unloads the old Project before launching its replacement.
 Restart launches a replacement Project runtime in the same shell.
@@ -210,12 +231,13 @@ Use a small lifecycle state machine, not an overlay plugin:
 - Closing: a close operation awaits a Project decision or completion.
 - Failed: launch, protocol, process, or surface failure.
 
-Starting and Failed draw native status text and an available Close action.
+Starting draws native status text and an available Close action.
+Failed also offers Restart Project, using the same-window restart launch path.
 Keep the last complete frame when it is safe; otherwise draw a native background.
 Close timeout offers Wait or explicit forced close with an unsaved-data warning.
 A quiet or minimized Project is not a hung Project.
 Do not use missing frames alone as a health signal.
-Phase 4 adds general health probes and restart actions.
+Phase 4 adds general health probes.
 
 Normal Close asks the Project to run its existing unsaved-buffer and terminal policy.
 Report pending, cancelled, and accepted decisions explicitly.
@@ -226,14 +248,16 @@ On acceptance, let Project shutdown drain its existing shared Terminal CLOSE bud
 Never hold the shell event loop while waiting for the process.
 Force closes affect only the Project; Terminal Session processes remain independent.
 
-On shell loss, the Project saves and detaches after its bounded wait.
+Project-initiated quit follows the same accepted-exit path and closes the shell cleanly.
+Only an unexpected exit shows Failed. An intentional nonzero exit status does not imply a crash.
+On shell loss, the Project immediately saves and detaches under the native deadline.
 On Project crash, the shell remains responsive and shows Failed.
 Do not automatically rerun terminal commands or create replacement shells.
 
-GPU loss releases obsolete textures and requests a fresh surface generation.
-Allow a bounded software-publication fallback when the Project's D3D path fails.
-If shell presentation cannot recover, log the failure and close cleanly without killing terminals.
-Do not create an unbounded device-recreation loop.
+GPU loss logs the cause, releases obsolete resources, and enters Failed with Restart Project and Close.
+Do not add automatic software-publication fallback or a device-recreation loop in Phase 3.
+The normal user-selected software renderer remains supported.
+If presentation itself is unavailable, expose the same actions through native OS UI without Lua.
 
 ## Milestones
 
@@ -248,7 +272,8 @@ Run the portable updater after native changes, with advance warning about Termin
 - Remove kill-on-shell-close ownership of the Project.
 - Preserve same-window switch, restart, and the limited independent New Window launch.
 - Test startup errors, authenticated connection, authoritative getters, and hidden-window ownership.
-- Test shell loss followed by bounded Project save/detach and live Terminal Sessions.
+- Test immediate shell-loss save/detach and the hard deadline, including a stalled Lua loop.
+- Test intentional Project quit and duplicate-Project behavior against direct mode.
 
 ### Milestone 2: native controls and placeholder
 
@@ -340,6 +365,9 @@ New controls, dialog, and fault scenarios are planned extensions, not existing c
 - [ ] Native dialogs return current callback results without blocking presentation.
 - [ ] Normal quit, Cancel, remembered terminal policy, restart, and switch remain correct.
 - [ ] Shell loss and forced Project close leave Terminal Sessions live.
+- [ ] Named unsaved contents have no new survival guarantee; Untitled recovery limits are documented.
+- [ ] Project-initiated quit closes the shell; unexpected exit offers Restart Project and Close.
+- [ ] Duplicate Project launches match direct-mode Workspace and terminal behavior.
 - [ ] Malformed/stale frames and failed connections produce bounded failure states.
 - [ ] Both renderer latency comparisons pass; failures and tail changes are reported.
 - [ ] No automatic Project restart, adoption, Sidebar process, or multi-window coordinator enters this phase.
