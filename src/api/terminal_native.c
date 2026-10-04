@@ -64,6 +64,8 @@ typedef struct {
   bool replay_finished;
   bool detached;
   volatile LONG host_exited;
+  volatile LONG busy;
+  LONG reported_busy;
   HANDLE reader_thread;
   HANDLE writer_thread;
   CRITICAL_SECTION read_lock;
@@ -309,6 +311,15 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       session->exit_code_known = true;
       InterlockedExchange(&session->host_exited, 1);
       break;
+    }
+    if (header.type == ANVIL_TERMINAL_STATUS && !replaying && header.size == sizeof(AnvilTerminalStatus)) {
+      AnvilTerminalStatus status; memcpy(&status, buffer, sizeof(status));
+      if (status.busy > 1) {
+        session->read_error = ERROR_INVALID_DATA; InterlockedExchange(&session->read_failed, 1); break;
+      }
+      InterlockedExchange(&session->busy, status.busy);
+      wake_for_terminal_output(session);
+      continue;
     }
     if ((replaying && header.type != ANVIL_TERMINAL_REPLAY) ||
         (!replaying && header.type != ANVIL_TERMINAL_OUTPUT) || !header.size) {
@@ -1218,6 +1229,7 @@ static int f_terminal_new(lua_State *L) {
   memset(session, 0, sizeof(*session));
   session->state = TERMINAL_STATE_NEW;
   session->state_revision = 1;
+  session->busy = session->reported_busy = -1;
   luaL_setmetatable(L, API_TYPE_TERMINAL_SESSION);
   session->has_scrollback_lines = has_scrollback_max_lines;
   session->scrollback_lines = scrollback_max_lines;
@@ -1347,6 +1359,8 @@ static bool output_drained(TerminalSession *session) {
 }
 
 static void push_status(lua_State *L, TerminalSession *session) {
+  LONG busy = InterlockedCompareExchange(&session->busy, 0, 0);
+  if (busy != session->reported_busy) { session->reported_busy = busy; session->state_revision++; }
   bool read_failed = InterlockedCompareExchange(&session->read_failed, 0, 0) != 0;
   bool write_failed = InterlockedCompareExchange(&session->write_failed, 0, 0) != 0;
   lua_createtable(L, 0, 5);
@@ -1358,14 +1372,19 @@ static void push_status(lua_State *L, TerminalSession *session) {
     session->state == TERMINAL_STATE_RECONNECTING ||
     (session->state == TERMINAL_STATE_RUNNING && !session->replay_finished));
   set_boolean_field(L, "replaying", !session->replay_finished);
+  if (busy >= 0) set_boolean_field(L, "busy", busy != 0);
   if (session->state == TERMINAL_STATE_EXITED && session->exit_code_known) {
     lua_pushinteger(L, session->exit_code);
     lua_setfield(L, -2, "exit_code");
   }
   if (session->state == TERMINAL_STATE_FAILED && (read_failed || write_failed)) {
-    lua_pushstring(L, read_failed && session->read_error == ERROR_INVALID_DATA
-      ? "The Terminal Session snapshot or protocol is invalid"
-      : "The Terminal Session process ended unexpectedly");
+    DWORD error = read_failed ? session->read_error : session->write_error;
+    const char *message = "The Terminal Session process ended unexpectedly";
+    if (error == ERROR_INVALID_DATA) message = "The Terminal Session snapshot or protocol is invalid";
+    else if (error == ERROR_PIPE_BUSY) message = "The Terminal Session already has a client";
+    else if (error == ERROR_ACCESS_DENIED) message = "Cannot access the Terminal Session";
+    else if (error == ERROR_TIMEOUT) message = "Terminal Session reconnect timed out";
+    lua_pushstring(L, message);
     lua_setfield(L, -2, "error");
     set_integer_field(L, "transport_error", read_failed ? session->read_error : session->write_error);
   }
@@ -3598,8 +3617,16 @@ static const luaL_Reg terminal_methods[] = {
   { NULL, NULL },
 };
 
+/* Shutdown-only API. Normal view close stays asynchronous. */
+static int f_finish_close_commands(lua_State *L) {
+  anvil_terminal_wait_for_close();
+  lua_pushinteger(L, InterlockedCompareExchange(&pending_close_commands, 0, 0));
+  return 1;
+}
+
 static const luaL_Reg terminal_module[] = {
   { "new", f_terminal_new },
+  { "finish_close_commands", f_finish_close_commands },
   { "_break_transport_for_tests", f_break_transport_for_tests },
   { NULL, NULL },
 };

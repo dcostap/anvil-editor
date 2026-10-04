@@ -1730,10 +1730,12 @@ function TerminalView:detach_session()
 end
 
 function TerminalView:on_workspace_close()
-  self:detach_session()
+  if core.terminal_quit_actions and core.terminal_quit_actions[self] == "close" then self:on_close()
+  else self:detach_session() end
 end
 
 function TerminalView:on_close()
+  self.running, self.state = false, "closed"
   if self.session then
     if self.vt_trace_path then self:stop_vt_trace() end
     local stats = self.session.stats and self.session:stats() or {}
@@ -1964,5 +1966,80 @@ keymap.add({
   ["shift+f3"] = "terminal:search_previous",
   ["ctrl+shift+k"] = "terminal:clear",
 })
+
+-- Pure decision seam. Unknown state is not proof that a shell is idle.
+function M.quit_decision(statuses, answer)
+  local busy = {}
+  local count = 0
+  for i, status in ipairs(statuses) do
+    busy[i] = status.kind == "reconnecting" or (status.kind == "running" and status.busy ~= false)
+    if busy[i] then count = count + 1 end
+  end
+  if count > 0 then
+    if answer == "cancel" then return nil, "cancel", count end
+    if answer ~= "keep" and answer ~= "end" then return nil, "ask", count end
+  end
+  local actions = {}
+  for i in ipairs(statuses) do actions[i] = busy[i] and answer == "keep" and "detach" or "close" end
+  return actions, nil, count
+end
+
+function M.confirm_quit(accept)
+  local views, statuses = {}, {}
+  for _, pane in ipairs(panes.ordered()) do
+    for _, view in ipairs(panes.views(pane)) do
+      if view:is(TerminalView) and view.context == "workspace" and view.session then
+        local _, status = view.session:update()
+        views[#views + 1], statuses[#statuses + 1] = view, status
+      end
+    end
+  end
+  local storage = require "core.storage"
+  local remembered = storage.load("plugins.terminal", "quit_choice")
+  local function apply(answer, remember)
+    for i, view in ipairs(views) do
+      if view.session then local _, status = view.session:update(); statuses[i] = status
+      else statuses[i] = { kind = "closed" } end
+    end
+    local actions, reason = M.quit_decision(statuses, answer)
+    core.log_quiet("Terminal quit decision: answer=%s result=%s sessions=%d", tostring(answer), tostring(reason or "accepted"), #views)
+    if not actions then return end
+    if remember then storage.save("plugins.terminal", "quit_choice", answer) end
+    local by_view = {}
+    for i, view in ipairs(views) do by_view[view] = actions[i] end
+    accept(by_view)
+  end
+  local actions, reason, count = M.quit_decision(statuses, remembered)
+  if actions then apply(remembered); return end
+  local remember = false
+  local toggle = { text = "[ ] Remember my choice" }
+  core.nag_view:show("Running Terminals", string.format("Keep %d running terminals running in the background?", count), {
+    { text = "Keep", action = "keep", default_yes = true },
+    { text = "End", action = "end" },
+    { text = "Cancel", action = "cancel" }, toggle,
+  }, function(item)
+    if item == toggle then
+      remember = not remember
+      toggle.text = remember and "[x] Remember my choice" or "[ ] Remember my choice"
+      core.redraw = true
+      return false
+    end
+    apply(item.action, remember)
+  end)
+end
+
+local quit = core.quit
+function core.quit(force, exit_code)
+  if not force then
+    core.confirm_close_buffers(core.buffers, core.quit, true, exit_code)
+    return
+  end
+  M.confirm_quit(function(actions)
+    core.terminal_quit_actions = actions
+    local ok, err = pcall(quit, true, exit_code)
+    core.terminal_quit_actions = nil
+    if not ok then error(err, 0) end
+  end)
+end
 
 return M

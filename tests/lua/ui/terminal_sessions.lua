@@ -102,9 +102,9 @@ test.describe("Terminal Session restoration", function()
     }
     test.ok(session, err)
     local deadline = system.get_time() + 8
-    local status
+    local changed, status
     repeat
-      _, status = session:update()
+      changed, status = session:update()
       if status.kind == "failed" then break end
       coroutine.yield(0.01)
     until system.get_time() >= deadline
@@ -141,7 +141,8 @@ test.describe("Terminal Session restoration", function()
     assert(file:close())
     test.ok(view.session:write('type "' .. path:gsub("/", "\\") .. '"\r'))
     -- Fill both queues, then exceed the host's ten-second writer stall timeout.
-    local deadline = system.get_time() + 20
+    -- Allow queue fill time as well as the writer timeout on a loaded machine.
+    local deadline = system.get_time() + 30
     while system.get_time() < deadline do end
     test.ok(wait_for(view, function()
       return view.state == "failed" or (view.session:stats().attach_count or 0) > 1

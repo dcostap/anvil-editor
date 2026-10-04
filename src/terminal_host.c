@@ -33,6 +33,7 @@ typedef struct {
   size_t queued;
   volatile LONG attached;
   bool replaying;
+  bool busy, status_pending;
   uint64_t writer_progress;
   volatile LONG backpressured, client_stop;
   volatile LONG stop, reader_stop, reader_done;
@@ -349,6 +350,9 @@ static bool attach_client(TerminalHost *host) {
       offset += count;
     }
     ok = ok && queue_record(host, ANVIL_TERMINAL_REPLAY_END, NULL, 0);
+    AnvilTerminalStatus status = { host->busy };
+    ok = ok && queue_record(host, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
+    host->status_pending = false;
   }
   host->replaying = false;
   WakeAllConditionVariable(&host->space);
@@ -392,7 +396,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
   if (argc != 14 || !anvil_terminal_id_valid(argv[2]) || strlen(argv[4]) > 32000) return 1;
   char expected_pipe[128]; snprintf(expected_pipe, sizeof(expected_pipe), "\\\\.\\pipe\\anvil-terminal-%s", argv[2]);
   if (strcmp(argv[3], expected_pipe) != 0) return 1;
-  TerminalHost host = { .id = argv[2], .pipe_name = argv[3], .shell = argv[5],
+  TerminalHost host = { .busy = true, .id = argv[2], .pipe_name = argv[3], .shell = argv[5],
     .cwd = argv[6], .project = argv[12] };
   InitializeCriticalSection(&host.lock);
   InitializeConditionVariable(&host.ready); InitializeConditionVariable(&host.space);
@@ -485,15 +489,27 @@ int anvil_terminal_host_main(int argc, char **argv) {
     }
     uint64_t sent_at = InterlockedCompareExchange64(&host.exit_sent_ms, 0, 0);
     if (exit_queued && (!host.attached || (sent_at && now - sent_at > 3000))) break;
-    if (!host.attached && !exited_at && now >= busy_probe_at) {
-      busy_probe_at = now + 2000;
-      if (shell_busy(GetProcessId(host.pty.process))) idle_since = 0;
+    if (!exited_at && now >= busy_probe_at) {
+      busy_probe_at = now + (host.attached ? 500 : 2000);
+      bool busy = shell_busy(GetProcessId(host.pty.process));
+      EnterCriticalSection(&host.lock);
+      if (host.busy != busy) { host.busy = busy; host.status_pending = true; }
+      LeaveCriticalSection(&host.lock);
+      if (host.attached || busy) idle_since = 0;
       else if (!idle_since) idle_since = now;
       uint64_t last = InterlockedCompareExchange64(&host.last_output, 0, 0);
       if (idle_since && now - idle_since >= ORPHAN_GRACE_MS && now >= last && now - last >= ORPHAN_GRACE_MS) {
         host_log(&host, "idle orphan grace expired"); break;
       }
     }
+    EnterCriticalSection(&host.lock);
+    /* Never block the monitor on a full client queue. Send the latest status later. */
+    if (host.attached && !host.replaying && !host.client_stop && host.status_pending &&
+        host.queued + sizeof(HostRecord) + sizeof(AnvilTerminalStatus) <= CLIENT_QUEUE_LIMIT) {
+      AnvilTerminalStatus status = { host.busy };
+      if (queue_record(&host, ANVIL_TERMINAL_STATUS, &status, sizeof(status))) host.status_pending = false;
+    }
+    LeaveCriticalSection(&host.lock);
     Sleep(10);
   }
 cleanup:

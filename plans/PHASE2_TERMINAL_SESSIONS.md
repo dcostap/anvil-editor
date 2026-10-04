@@ -4,7 +4,7 @@ This is the implementation plan for Phase 2 of
 [the multiprocess shell plan](MULTIPROCESS_SHELL_PLAN.md). Read that plan first,
 especially "Terminal Sessions", "Session registry", and "IPC".
 
-Status: Milestones 1 and 2 are implemented. Milestones 3 and 4 have not started.
+Status: Milestones 1 to 3 are implemented. Milestone 4 has not started.
 Phases 0 and 1 are done.
 
 Formatter check: `anvil:terminal-replay` failed with the requested VT extras.
@@ -102,7 +102,10 @@ Add the new files to `src/meson.build` next to `api/terminal_native.c`.
   `\\.\pipe\anvil-terminal-<id>`.
 - The host creates the pipe with `FILE_FLAG_FIRST_PIPE_INSTANCE`,
   `PIPE_REJECT_REMOTE_CLIENTS`, and one instance.
-- The editor connects with `WaitNamedPipe` retries up to about 5 s. It opens with
+- Initial launches connect with `WaitNamedPipe` retries up to about 5 s. Restored clients connect on a `ReconnectJob` worker.
+  Record, PID, and creation-time checks stay synchronous. A dead or stale record starts a new shell in the saved cwd.
+  A valid record creates a `reconnecting` view. Pipe busy, access denied, or host loss then fails that view.
+  It opens with
   `SECURITY_IDENTIFICATION` and checks `GetNamedPipeServerProcessId` against the
   PID it started, or the PID in the registry record when it reattaches.
 - Start the host with `CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW` and
@@ -139,7 +142,7 @@ Host to editor:
   Sent once after `WELCOME`, before any `OUTPUT`. This replaces Milestone 1's raw replay.
   Change the terminal protocol version when this payload changes.
 - `OUTPUT bytes`: raw ConPTY output, in order.
-- `STATUS { busy, ... }`: from Milestone 3.
+- `STATUS { busy }`: sent after replay and when the host's child-process state changes.
 - `EXITED { exit_code }`: after the host drained the remaining ConPTY output.
 
 The editor's writer queue holds framed records, so `INPUT` and `RESIZE` stay in
@@ -164,6 +167,10 @@ An independent worker sends `CLOSE` through an authenticated control connection.
 A fresh connection avoids any partial frame left by a cancelled input write.
 Detach uses the same path with `DETACH`. A broken pipe also detaches the host.
 Only the failed path calls `TerminateProcess`. The host's kill job ends the shell.
+Reconnect retries wait 250 ms, then double the delay to a 2 s limit. They fail after about 30 s.
+Connection failures do not terminate a live host. Unknown state does not prove that a shell is idle.
+After Lua teardown, native shutdown waits up to 1 s total for pending CLOSE commands.
+Normal View close never runs this wait. The native `finish_close_commands` API is for shutdown only.
 
 ## Host internals
 
@@ -399,6 +406,51 @@ Echo p50 changed by -0.156 ms, within the 1 ms budget. Other totals include proc
   - A second client can't attach while one is attached.
 
 ### Milestone 3: busy detection and the quit policy
+
+Implemented:
+
+- Protocol version 3 adds `STATUS`. The reader publishes `status.busy` without parsing status bytes as VT output.
+- The host polls shell children every 500 ms while attached and every 2 s while detached.
+  Failed process probes remain busy. Status changes wait for queue space without blocking the host monitor.
+- Normal quit first confirms unsaved buffers. It then asks once for all busy Workspace terminals.
+- Keep detaches busy terminals and closes idle terminals. End closes all terminals. Cancel leaves them attached.
+- The existing Nag View shows Keep, End, Cancel, and a Remember my choice toggle.
+  The toggle uses the existing keep-dialog-open callback, not another dialog implementation.
+- Storage keeps a remembered Keep or End answer under `USERDIR/storage/plugins.terminal/quit_choice`.
+  Cancel is never remembered. Restart and same-window Project switch bypass this policy and keep detaching.
+- `terminal.quit_decision` is the public decision seam. Reconnecting and unknown sessions are not treated as idle.
+- Quiet logs record policy results. Native shutdown logs mark the bounded CLOSE drain.
+
+Red-green checks:
+
+- `ui/terminal_restore_async.lua` first failed because restoring a held pipe blocked for about 5 s.
+  It now returns in less than 0.8 s, fails asynchronously, and leaves the first shell usable.
+- `ui/terminal_quit.lua` first failed because the decision API and child status did not exist.
+  Decision checks and a real `ping` child now pass.
+  In-process dialog commands also check Cancel, remembered Keep, idle close, and busy reattach.
+- `ui/terminal_reconnect_deadline.lua` checks a suspended, test-owned host and a bounded reconnect deadline.
+  The saved Milestone 2 binary still retried at 34 s. The new binary fails at about 30 s without ending the host.
+- `ui/terminal_close_shutdown.lua` checks three closes within one shared shutdown budget and host exit afterward.
+  The saved binary had no shutdown drain API. The new check passes, including exit of all three hosts.
+
+The tests use isolated app data. They do not change the daily app's remembered answer.
+The five policy/status checks, async restore, reconnect deadline, and CLOSE drain pass.
+The six lifecycle checks and four restoration/stall checks also pass.
+The stall check now allows 30 s for queue fill and the timeout. At 20 s, a loaded run had stalled for only 8 s.
+
+Same-workload benchmark, saved Milestone 2 binary versus the new binary:
+
+| Measurement | Saved Milestone 2 | After Milestone 3 |
+| --- | ---: | ---: |
+| Typing echo p50 / p95 | 15.540 / 16.072 ms | 0.081 / 0.130 ms |
+| 20,000 output lines | 6,133.036 ms | 5,715.453 ms |
+| Update p50 / p95 | 0.0104 / 0.0309 ms | 0.0079 / 0.0242 ms |
+| Snapshot p50 / p95 | 0.3668 / 0.6752 ms | 0.2993 / 0.5618 ms |
+| Ten-session update total | 9.060 ms / 2,260 calls | 7.116 ms / 2,170 calls |
+
+All existing benchmark limits pass. Other native work changed during this task.
+Do not attribute the large echo change to the quit policy. The after run also reported dropped test event-queue notifications.
+Transport output and tail checks passed. This test-loop warning remains outside the quit-policy change.
 
 - Busy means the shell process has child processes. Poll in the host every
   500 ms with `CreateToolhelp32Snapshot`, matching parent PID to the shell PID.
