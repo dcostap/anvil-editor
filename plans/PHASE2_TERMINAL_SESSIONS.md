@@ -471,6 +471,21 @@ Transport output and tail checks passed. This test-loop warning remains outside 
 
 ### Milestone 4: snapshots and revival
 
+Preparation follow-ups:
+
+- `terminal:reset_quit_choice` clears user storage and writes a quiet log. The command test passes.
+- The old echo comparison mixed inbox Windows ConPTY and the bundled Microsoft ConPTY runtime from `19f61330`.
+  It also wrote unterminated characters. Inbox output batching affected that workload.
+  Do not use the 15.5 ms to 0.08 ms comparison to measure the quit-policy change.
+- The fixture now sends generated, numbered ACK replies. Local input echo cannot satisfy the measurement.
+  Bundled ConPTY measured 0.178 ms p50 and 0.226 ms p95 after the wake fix.
+  This measures API-to-shell-to-model round-trip time, not rendered input latency.
+- The benchmark reproduced dropped `terminaloutput` notifications before the fix.
+  Model updates cleared pending flags without consuming their queued events.
+  All terminals now share one pending wake. Only event delivery clears it.
+  The same three benchmark checks pass without dropped-event warnings after the fix.
+- Attached busy probes remain at 500 ms. Detached probes remain at 2 s.
+
 - The host writes a Ghostty codec snapshot to `USERDIR/terminal-sessions/<id>.snapshot`
   with atomic replacement, at most every 2 s after output. It also writes one when
   the shell exits and when the host shuts down. Bound it to about 8 MB by trimming

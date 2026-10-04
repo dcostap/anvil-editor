@@ -42,7 +42,8 @@ test.describe("Terminal native benchmark", function()
       for index = 1, 80 do
         local started = system.get_time()
         test.ok(session:write("x"))
-        test.ok(wait_for("ECHO_READY" .. string.rep("x", index), true), "echo did not arrive")
+        -- A generated reply proves a shell round trip, not local input echo.
+        test.ok(wait_for("ACK_" .. index .. "_x", true), "echo did not arrive")
         samples[#samples + 1] = (system.get_time() - started) * 1000
       end
     end)

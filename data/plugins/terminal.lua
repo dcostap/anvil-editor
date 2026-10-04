@@ -1813,6 +1813,10 @@ local function prompt_color_setting(label, key, minimum, maximum)
 end
 
 command.add(nil, {
+  ["terminal:reset_quit_choice"] = function()
+    require("core.storage").clear("plugins.terminal", "quit_choice")
+    core.log_quiet("Terminal remembered quit choice cleared")
+  end,
   ["terminal:set_minimum_text_contrast"] = command.palette(function()
     prompt_color_setting("Terminal Minimum Text Contrast (1-21; 1 = off)", "minimum_contrast", 1, 21)
   end, {

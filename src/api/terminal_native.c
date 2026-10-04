@@ -90,7 +90,6 @@ typedef struct {
   volatile LONG write_failed;
   volatile LONG read_failed;
   volatile LONG reader_done;
-  volatile LONG output_event_pending;
   DWORD read_error;
   DWORD write_error;
   DWORD exit_code;
@@ -272,11 +271,15 @@ static bool terminal_model_available(const TerminalSession *session) {
     session->state != TERMINAL_STATE_CLOSED;
 }
 
+/* A wake belongs to the event queue, not to a model update. All terminals share
+   one wake. Polling a model cannot consume a queued event. */
+static volatile LONG terminal_output_event_pending;
 static void wake_for_terminal_output(TerminalSession *session) {
-  if (InterlockedCompareExchange(&session->output_event_pending, 1, 0) != 0) return;
+  (void)session;
+  if (InterlockedCompareExchange(&terminal_output_event_pending, 1, 0) != 0) return;
   CustomEvent event = {0};
   if (!push_custom_event(TERMINAL_OUTPUT_EVENT, &event)) {
-    InterlockedExchange(&session->output_event_pending, 0);
+    InterlockedExchange(&terminal_output_event_pending, 0);
   }
 }
 
@@ -1458,7 +1461,6 @@ static bool service_transport(TerminalSession *session) {
     InterlockedExchange(&session->read_failed, 0); InterlockedExchange(&session->write_failed, 0);
     InterlockedExchange(&session->reader_done, 0); InterlockedExchange(&session->closing, 0);
     InterlockedExchange64((LONG64 *)&session->replay_bytes, 0);
-    InterlockedExchange(&session->output_event_pending, 0);
     session->transport_released = false;
     if (!anvil_ipc_pipe_init(&session->pipe, handle, ANVIL_TERMINAL_PROTOCOL_VERSION,
                             ANVIL_TERMINAL_MAX_PAYLOAD) || !start_terminal_io(session)) {
@@ -1595,7 +1597,6 @@ static int f_terminal_update(lua_State *L) {
   }
   bool output_remains = false;
   EnterCriticalSection(&session->read_lock);
-  InterlockedExchange(&session->output_event_pending, 0);
   output_remains = session->read_queue_count > 0;
   LeaveCriticalSection(&session->read_lock);
   if (output_remains) wake_for_terminal_output(session);
@@ -3633,6 +3634,7 @@ static const luaL_Reg terminal_module[] = {
 
 static int terminal_output_event_callback(lua_State *L, SDL_Event *event) {
   (void)event;
+  InterlockedExchange(&terminal_output_event_pending, 0);
   lua_pushliteral(L, TERMINAL_OUTPUT_EVENT);
   return 1;
 }
