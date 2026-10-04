@@ -154,15 +154,18 @@ A pipe that breaks without `EXITED` means the host died. Move to `failed` with
   A lock protects the host model and the client queue.
 - Every ConPTY read goes into the host model, then into the client queue if a
   client is attached.
-- The client queue is bounded, for example to 8 MB. If a client falls behind,
-  disconnect it instead of blocking ConPTY reads. A stalled shell is worse. The
-  editor reconnects and gets a replay.
+- The client queue is bounded to 8 MB, including the record being written.
+  A full queue blocks the ConPTY reader on a condition variable.
+  The writer signals that variable after it sends a record.
+  Disconnect only after about 10 s without writer progress while the queue is full.
 - On attach: apply the client's size to ConPTY and the host model, then build
   the replay under the lock, send it, and only then stream new output.
 - When the shell exits, drain ConPTY output (the same quiet and maximum
   timings as `TERMINAL_DRAIN_QUIET_MS` and `TERMINAL_DRAIN_MAX_MS`) and send
-  `EXITED`. Then wait for the client to disconnect, up to a few seconds. Delete the
-  registry record and exit.
+  `EXITED`. Pause the drain deadline while the client applies backpressure.
+  Start the disconnect deadline only after the writer sends `EXITED`.
+  Then wait for the client to disconnect, up to a few seconds.
+  Delete the registry record and exit.
 
 ## Replay with the Ghostty formatter
 
@@ -232,6 +235,16 @@ The echo p50 change is -0.038 ms, within the 1 ms budget.
 Output and multi-session runs include process scheduling noise. They do not prove a speed increase.
 The dev update BAT already ends every Anvil process, including hosts.
 The standalone script uses a separate candidate executable and does not replace the dev executable.
+
+Milestone 1 backpressure correction, 2026-10-04:
+
+- A real Terminal View runs `type` on a 50 MiB file.
+  The test holds the UI thread for 10 s, then resumes updates for 5 s.
+  Before the fix, the full host queue disconnected the client and the view became `failed`.
+  After the fix, the writer resumes and the view continues to receive output.
+  `ui/terminal.lua` passes all 67 tests.
+- Queue waits release the model lock. Replay stays fixed while its records wait.
+  The drain deadline pauses during backpressure. The exit deadline starts after `EXITED` is sent.
 
 - Do the refactors: `ipc_pipe`, `conpty`, `terminal_model`.
 - Build the host, the protocol, and the client transport.

@@ -11,6 +11,7 @@
 #include <stdarg.h>
 
 #define CLIENT_QUEUE_LIMIT (8u * 1024u * 1024u)
+#define CLIENT_STALL_TIMEOUT_MS 10000u
 typedef struct HostRecord {
   struct HostRecord *next;
   uint32_t length;
@@ -25,11 +26,16 @@ typedef struct {
   AnvilTerminalReplay replay;
   CRITICAL_SECTION lock;
   CONDITION_VARIABLE ready;
+  CONDITION_VARIABLE space;
   HostRecord *head, *tail;
   size_t queued;
   bool attached;
+  bool replaying;
+  uint64_t writer_progress;
+  volatile LONG backpressured;
   volatile LONG stop, reader_stop, reader_done;
   volatile LONG64 last_output;
+  volatile LONG64 exit_sent_ms;
   HANDLE reader, writer, client, console_close;
   char log_path[32768];
 } TerminalHost;
@@ -54,17 +60,38 @@ static void stop_host(TerminalHost *host) {
   EnterCriticalSection(&host->lock);
   InterlockedExchange(&host->stop, 1);
   WakeAllConditionVariable(&host->ready);
+  WakeAllConditionVariable(&host->space);
   LeaveCriticalSection(&host->lock);
   anvil_ipc_pipe_cancel(&host->pipe);
 }
 
-/* Caller holds lock. Never let a slow client block ConPTY output. */
+/* Caller holds lock. A full queue pauses ConPTY reads, not the session. */
 static bool queue_record(TerminalHost *host, uint16_t type, const void *bytes, uint32_t length) {
-  if (sizeof(HostRecord) + length > CLIENT_QUEUE_LIMIT - host->queued) {
-    host_log(host, "failure: client queue full; disconnect");
-    stop_host(host);
-    return false;
+  uint64_t progress = host->writer_progress, stalled_since = GetTickCount64();
+  bool waited = false;
+  while (sizeof(HostRecord) + length > CLIENT_QUEUE_LIMIT - host->queued) {
+    if (!waited) {
+      host_log(host, "client queue full; wait for writer progress");
+      waited = true;
+      InterlockedExchange(&host->backpressured, 1);
+    }
+    if (host->writer_progress != progress) {
+      progress = host->writer_progress;
+      stalled_since = GetTickCount64();
+    }
+    if (host->stop || (type == ANVIL_TERMINAL_OUTPUT && host->reader_stop)) break;
+    uint64_t elapsed = GetTickCount64() - stalled_since;
+    if (elapsed >= CLIENT_STALL_TIMEOUT_MS) {
+      host_log(host, "failure: client writer made no progress; disconnect");
+      stop_host(host);
+      break;
+    }
+    SleepConditionVariableCS(&host->space, &host->lock,
+      (DWORD)(CLIENT_STALL_TIMEOUT_MS - elapsed));
   }
+  InterlockedExchange(&host->backpressured, 0);
+  if (host->stop || (type == ANVIL_TERMINAL_OUTPUT && host->reader_stop)) return false;
+  if (waited) host_log(host, "client writer resumed; continue output");
   HostRecord *record = malloc(sizeof(*record) + length);
   if (!record) { stop_host(host); return false; }
   record->next = NULL; record->type = type; record->length = length;
@@ -82,6 +109,10 @@ static DWORD WINAPI host_reader(void *userdata) {
     DWORD read = 0;
     if (!ReadFile(host->pty.output_read, bytes, sizeof(bytes), &read, NULL) || !read) break;
     EnterCriticalSection(&host->lock);
+    /* Replay is one checkpoint. Do not change its source while its queue waits. */
+    while (host->replaying && !host->stop && !host->reader_stop)
+      SleepConditionVariableCS(&host->space, &host->lock, INFINITE);
+    if (host->reader_stop) { LeaveCriticalSection(&host->lock); break; }
     /* No write_pty callback: only the editor answers queries. Detached queries
        go unanswered. ConPTY itself answers cursor-position DSR requests. */
     ghostty_terminal_vt_write(host->model, bytes, read);
@@ -107,11 +138,19 @@ static DWORD WINAPI host_writer(void *userdata) {
     HostRecord *record = host->head;
     if (record) {
       host->head = record->next; if (!host->head) host->tail = NULL;
-      host->queued -= sizeof(*record) + record->length;
     }
     LeaveCriticalSection(&host->lock);
     if (!record) continue;
     bool ok = anvil_ipc_pipe_write(&host->pipe, record->type, record->bytes, record->length, NULL, 0);
+    EnterCriticalSection(&host->lock);
+    host->queued -= sizeof(*record) + record->length;
+    if (ok) {
+      host->writer_progress++;
+      if (record->type == ANVIL_TERMINAL_EXITED)
+        InterlockedExchange64(&host->exit_sent_ms, GetTickCount64());
+      WakeAllConditionVariable(&host->space);
+    }
+    LeaveCriticalSection(&host->lock);
     free(record);
     if (!ok) { stop_host(host); break; }
   }
@@ -161,7 +200,10 @@ static DWORD WINAPI close_console(void *userdata) {
 }
 
 static void join_reader(TerminalHost *host) {
+  EnterCriticalSection(&host->lock);
   InterlockedExchange(&host->reader_stop, 1);
+  WakeAllConditionVariable(&host->space);
+  LeaveCriticalSection(&host->lock);
   if (!host->reader) return;
   /* Repeat cancellation to cover the gap before a synchronous ReadFile starts. */
   do { CancelSynchronousIo(host->reader); }
@@ -186,7 +228,8 @@ static bool connect_client(HANDLE pipe, HANDLE parent) {
 int anvil_terminal_host_main(int argc, char **argv) {
   if (argc != 13 || strlen(argv[2]) != ANVIL_TERMINAL_ID_LENGTH || strlen(argv[4]) > 32000) return 1;
   TerminalHost host = {0};
-  InitializeCriticalSection(&host.lock); InitializeConditionVariable(&host.ready);
+  InitializeCriticalSection(&host.lock);
+  InitializeConditionVariable(&host.ready); InitializeConditionVariable(&host.space);
   char log_dir[32768]; snprintf(log_dir, sizeof(log_dir), "%s/logs", argv[4]);
   wchar_t *log_dir_wide = wide_string(log_dir);
   if (log_dir_wide) CreateDirectoryW(log_dir_wide, NULL);
@@ -227,6 +270,11 @@ int anvil_terminal_host_main(int argc, char **argv) {
   EnterCriticalSection(&host.lock);
   size_t replay_length = host.replay.length;
   bool attached = !host.replay.overflow && apply_size(&host, hello.size);
+  host.replaying = true;
+  if (attached) {
+    host.writer = CreateThread(NULL, 0, host_writer, &host, 0, NULL);
+    attached = host.writer != NULL;
+  }
   if (attached) {
     AnvilTerminalWelcome welcome = { GetCurrentProcessId(), GetProcessId(host.pty.process), 1 };
     attached = queue_record(&host, ANVIL_TERMINAL_WELCOME, &welcome, sizeof(welcome));
@@ -239,18 +287,21 @@ int anvil_terminal_host_main(int argc, char **argv) {
     attached = attached && queue_record(&host, ANVIL_TERMINAL_REPLAY_END, NULL, 0);
     host.attached = attached;
   }
+  host.replaying = false;
+  WakeAllConditionVariable(&host.space);
   LeaveCriticalSection(&host.lock);
   if (!attached) goto cleanup;
   host_log(&host, "attach client=%lu shell=%lu replay=%zu", (unsigned long)client_pid,
     (unsigned long)GetProcessId(host.pty.process), replay_length);
-  host.writer = CreateThread(NULL, 0, host_writer, &host, 0, NULL);
   host.client = CreateThread(NULL, 0, host_client, &host, 0, NULL);
   if (!host.writer || !host.client) goto cleanup;
-  uint64_t exited_at = 0, sent_at = 0;
+  uint64_t exited_at = 0, drain_started = 0;
+  bool exit_queued = false;
   while (!InterlockedCompareExchange(&host.stop, 0, 0)) {
     uint64_t now = GetTickCount64();
     if (!exited_at && WaitForSingleObject(host.pty.process, 10) == WAIT_OBJECT_0) {
       exited_at = now; GetExitCodeProcess(host.pty.process, &exit_code);
+      drain_started = now;
       host.console_close = CreateThread(NULL, 0, close_console, &host, 0, NULL);
       host_log(&host, "shell exit code=%lu; drain", (unsigned long)exit_code);
     }
@@ -258,19 +309,22 @@ int anvil_terminal_host_main(int argc, char **argv) {
       host_log(&host, "failure: ConPTY output ended while shell was running");
       break;
     }
-    if (exited_at && !sent_at) {
+    if (exited_at && !exit_queued) {
       uint64_t last = InterlockedCompareExchange64(&host.last_output, 0, 0);
+      bool backpressured = InterlockedCompareExchange(&host.backpressured, 0, 0) != 0;
+      if (backpressured) drain_started = now;
       if ((now - exited_at >= ANVIL_TERMINAL_DRAIN_QUIET_MS &&
            now - last >= ANVIL_TERMINAL_DRAIN_QUIET_MS && host.reader_done) ||
-          now - exited_at >= ANVIL_TERMINAL_DRAIN_MAX_MS) {
+          (!backpressured && now - drain_started >= ANVIL_TERMINAL_DRAIN_MAX_MS)) {
         /* Stop and join the reader before EXITED. No later OUTPUT is allowed. */
         join_reader(&host);
         AnvilTerminalExited exited = { exit_code };
         EnterCriticalSection(&host.lock); queue_record(&host, ANVIL_TERMINAL_EXITED, &exited, sizeof(exited));
-        LeaveCriticalSection(&host.lock); sent_at = now;
+        LeaveCriticalSection(&host.lock); exit_queued = true;
       }
     }
-    if (sent_at && now - sent_at > 3000) break;
+    uint64_t sent_at = InterlockedCompareExchange64(&host.exit_sent_ms, 0, 0);
+    if (sent_at && GetTickCount64() - sent_at > 3000) break;
     if (WaitForSingleObject(parent, 0) == WAIT_OBJECT_0) break;
     if (exited_at) Sleep(10);
   }
@@ -278,6 +332,7 @@ cleanup:
   if (!host.attached) host_log(&host, "startup or attach failure Windows error=%lu",
     (unsigned long)(error ? error : GetLastError()));
   host_log(&host, "exit");
+  stop_host(&host);
   /* Reader keeps draining while ClosePseudoConsole waits for its output sink. */
   anvil_conpty_kill(&host.pty);
   if (host.pty.pseudoconsole && !host.console_close)

@@ -208,6 +208,12 @@ test.describe("Terminal View", function()
     end
     panes.reset_for_tests()
     if context.activation_path then os.remove(context.activation_path) end
+    if context.backpressure_path then
+      local deadline = system.get_time() + 5
+      while not os.remove(context.backpressure_path) and system.get_time() < deadline do
+        coroutine.yield(0.01)
+      end
+    end
     terminal._set_native_for_tests(nil)
     for font, size in pairs(context.terminal_font_sizes) do font:set_size(size) end
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
@@ -1334,6 +1340,32 @@ test.describe("Terminal View", function()
     view:handle_events()
     test.equal(system.get_clipboard() or "", "")
     test.ok(not prompted)
+  end)
+
+  test.it("keeps a busy terminal live after the UI stops reading output", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local path = USERDIR .. PATHSEP .. "terminal-backpressure.txt"
+    context.backpressure_path = path
+    local file = assert(io.open(path, "wb"))
+    local block = (string.rep("x", 78) .. "\r\n"):rep(1024)
+    for _ = 1, 640 do assert(file:write(block)) end -- 50 MiB
+    assert(file:close())
+    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" }
+    test.ok(view and view.session)
+    test.ok(view.session:write('type "' .. path .. '"\r'))
+    local parsed_before = view.session:stats().output_bytes_parsed
+    local resume_at = system.get_time() + 10
+    while system.get_time() < resume_at do end -- Do not yield or drain the UI.
+    local deadline = system.get_time() + 5
+    repeat
+      view:update()
+      if view.state == "failed" then break end
+      coroutine.yield(0.001)
+    until system.get_time() >= deadline
+    test.not_equal(view.state, "failed", view.launch_error)
+    test.ok(view.session:stats().output_bytes_parsed > parsed_before,
+      "terminal output did not resume")
   end)
 
   test.it("shows a failed terminal when its host process ends", function()
