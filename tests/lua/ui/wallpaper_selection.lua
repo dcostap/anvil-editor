@@ -38,6 +38,13 @@ test.describe("wallpaper selection", function()
       root:draw_wallpaper(true)
       test.equal("image12", root.wallpaper_name)
       test.ok(root.wallpaper)
+      for index = 13, 18 do
+        local name = "image" .. index
+        test.ok(settings.apply_wallpaper(name), name .. " must be selectable")
+        root:draw_wallpaper(true)
+        test.equal(name, root.wallpaper_name)
+        test.ok(root.wallpaper)
+      end
     end)
     renderer.draw_rect, renderer.draw_canvas_scaled = old_rect, old_scaled
     if not ok then error(err, 0) end

@@ -17,6 +17,12 @@ local files = {
   image10 = "wallpaper10.png",
   image11 = "wallpaper11.png",
   image12 = "wallpaper12.png",
+  image13 = "wallpaper13.jpg",
+  image14 = "wallpaper14.jpg",
+  image15 = "wallpaper15.jpg",
+  image16 = "wallpaper16.jpg",
+  image17 = "wallpaper17.jpg",
+  image18 = "wallpaper18.jpg",
 }
 
 function wallpapers.current()
