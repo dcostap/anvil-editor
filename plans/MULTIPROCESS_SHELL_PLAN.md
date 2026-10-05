@@ -357,7 +357,10 @@ The shell draws window controls and status overlays without Lua.
 One Project must look and behave like current Anvil.
 
 Implementation plan: [Phase 3: hosted single Project](PHASE3_HOSTED_PROJECT.md).
-Milestone 1 is complete. Phase 3 exits immediately on shell loss; Phase 6 adds adoption.
+Milestones 1 and 2 are implemented. Hosted mode remains opt-in.
+Native controls and the Sidebar placeholder work without Project Lua.
+Interactive foreground verification remains an open gate.
+Phase 3 exits immediately on shell loss; Phase 6 adds adoption.
 
 ### Phase 4: several Projects and the Sidebar process
 

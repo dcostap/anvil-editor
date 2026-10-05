@@ -22,6 +22,7 @@
 #include "../shutdown_diagnostics.h"
 #include "../win32_single_instance.h"
 #include "../hosted_surface.h"
+#include "../cli_args.h"
 #include "../window_backend.h"
 #ifdef _WIN32
   #include <direct.h>
@@ -1686,6 +1687,35 @@ static int f_set_window_opacity(lua_State *L) {
   RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
   lua_pushboolean(L, anvil_window_opacity(ren, luaL_checknumber(L, 2))); return 1;
 }
+static int f_get_window_process_id(lua_State *L) {
+#ifdef _WIN32
+  lua_pushinteger(L, anvil_hosted_surface_active() ? anvil_hosted_surface_shell_pid() : GetCurrentProcessId());
+#else
+  lua_pushinteger(L, getpid());
+#endif
+  return 1;
+}
+static int f_get_window_controls(lua_State *L) {
+  if (!anvil_hosted_surface_active()) return 0;
+  int x, y, w, h; anvil_hosted_surface_controls(&x, &y, &w, &h);
+  lua_pushinteger(L, x); lua_pushinteger(L, y); lua_pushinteger(L, w); lua_pushinteger(L, h); return 4;
+}
+static int f_get_startup_path_arguments(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  int count = (int)lua_rawlen(L, 1), output = 0;
+  bool option_value = false;
+  lua_newtable(L);
+  int table = lua_gettop(L);
+  for (int i = 2; i <= count; i++) {
+    lua_rawgeti(L, 1, i);
+    const char *arg = luaL_checkstring(L, -1);
+    if (option_value) option_value = false;
+    else if (arg[0] == '-') option_value = anvil_cli_option_value(arg);
+    else { lua_pushvalue(L, -1); lua_rawseti(L, table, ++output); }
+    lua_pop(L, 1);
+  }
+  return 1;
+}
 
 static int f_prepare_project_exit(lua_State *L) {
   const char *path = luaL_optstring(L, 1, NULL);
@@ -2286,6 +2316,9 @@ static const luaL_Reg lib[] = {
   { "get_time",              f_get_time              },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "is_hosted_surface",     f_is_hosted_surface     },
+  { "get_window_process_id", f_get_window_process_id },
+  { "get_window_controls",   f_get_window_controls },
+  { "get_startup_path_arguments", f_get_startup_path_arguments },
   { "prepare_project_exit",  f_prepare_project_exit  },
   { "sleep",                 f_sleep                 },
   { "exec",                  f_exec                  },

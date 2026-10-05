@@ -340,11 +340,114 @@ meson test -C build-windows-x86_64 anvil:lua-ui \
 
 ### Milestone 2: native controls and placeholder
 
-- Draw and handle shell controls without Lua.
-- Reserve their geometry in hosted Title Bar layout.
-- Add the native Project Sidebar placeholder and initial lifecycle overlays.
-- Suspend the owned Project; verify minimize, maximize/restore, drag, and resize still complete.
-- Resume it and verify Tabs and editing still work without duplicate control actions.
+Implemented. Hosted mode remains opt-in. Interactive foreground verification remains an open gate.
+
+The shell draws and handles its caption controls without Lua.
+It uses native fonts and caches its own UI texture.
+It shows the Sidebar placeholder and Starting state before the first Project frame.
+Closing keeps Project confirmation visible. Failed offers Restart Project and Close.
+Failed Restart uses a new Project process in the same shell.
+It retains the last private Project frame behind the failure card when that frame remains safe.
+
+Surface protocol version 4 reports the reserved control rectangle.
+Hosted Title Bar layout leaves that rectangle empty and removes Lua caption targets.
+Direct caption drawing stays unchanged. Native hit regions take priority over Project regions.
+The shell clamps Project client regions and uses its own resize border.
+Native caption actions do not wait for Project frames during resize.
+Frame acquisition uses zero wait. A native timer retries a busy frame without delaying normal input events.
+
+The lifecycle overlays are initial states, not the complete close or failure protocol.
+Milestone 4 still owns explicit cancellation, asynchronous dialogs, and forced-close confirmation.
+Milestone 5 still owns bounded GPU and surface failures.
+
+#### Milestone 1 follow-ups
+
+- A busy Terminal Session with remembered `end` survives shell loss and reattaches with the same host PID and Session ID.
+  This check already passed before implementation changes. No quit-policy change was needed.
+- Project logs distinguish shell process exit, pipe failure, queue overflow, and inbound/outbound allocation failure.
+- Nonexistent file arguments no longer stop the native shell launcher.
+  Initial hosted launch preserves the original CLI arguments instead of inserting another positional Project argument.
+- Direct and hosted startup share one native path filter.
+  It excludes options and their values from Project path selection.
+  Known switches have no value. Other startup options consume one value or use `=value`.
+  The shell does not load plugin flag definitions.
+- IPC records report the visible window owner's PID.
+  The forwarding Project grants foreground permission to that PID before requesting activation.
+  The shell grants permission to its new Project and restores a minimized window before raising it.
+  Older live IPC records can omit the window PID; log that boundary instead of failing startup.
+
+#### Focused verification
+
+`ui/titlebar_hosted.lua` failed with `Tabs cover native controls` before the layout change, then passed.
+The owned-window option-value check failed with `file argument selected the wrong Project` in both modes, then passed.
+The original launcher failed the nonexistent-file check with `nonexistent file prevented Project launch`.
+The corrected launcher passed that check in both modes.
+
+The native control probe suspends only its owned Project.
+It checks minimize, maximize, restore, native drag/resize hit regions, movement, and resize completion.
+After resume, it edits through `core.on_event`, creates a Pane, and changes Tab focus.
+Repeated Close does not kill the suspended Project.
+After an unexpected exit, Failed Restart keeps the shell and replaces the Project PID.
+Run this probe with both Project renderers.
+
+The six focused Terminal lifecycle checks passed.
+The direct Title Bar file passed 24 of 26 checks.
+The same two wheel checks failed with the original Title Bar restored.
+Those unchanged failures are outside this milestone.
+
+The foreground probe uses only owned windows on the private desktop.
+It verifies minimized-window restoration and records foreground permission grants.
+Windows returns no foreground window on that inactive desktop.
+Its result reports `foreground_gate="unavailable"`; it does not prove interactive foreground transfer.
+Do not switch desktops or use the user's windows to complete this gate without permission.
+
+Each probe has isolated app data, process handles, and an IPC shared-memory namespace.
+An earlier run found an older IPC record without the new window PID.
+The new boundary check and namespace isolation replace those startup failures.
+Other fixture failures used the removed `core.docview` module or included a newline beyond `get_text`'s exclusive endpoint.
+The final fixture uses `core.editor` and the correct endpoint.
+
+```sh
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/titlebar_hosted.lua
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/terminal_sessions_lifecycle.lua
+python tools/run_surface_latency_probe.py --no-build --mode shell --mode direct \
+  --project-case arguments --project-case option-arguments --keep
+python tools/run_surface_latency_probe.py --no-build --project-case controls \
+  --project-case end-loss --project-case foreground --keep
+python tools/run_surface_latency_probe.py --no-build --renderer software --project-case controls --keep
+```
+
+#### Milestone 2 latency
+
+Each table row contains three runs of 240 samples. All 720 samples completed.
+Times measure generated input through native Present, not physical scanout or Terminal replies.
+The baseline used the pre-milestone executable and runtime copied into an isolated app.
+
+| Mode / renderer | Before p50 / p90 / p99 / max (ms) | After p50 / p90 / p99 / max (ms) |
+|---|---|---|
+| Direct D3D11 | 7.02 / 15.70 / 19.39 / 39.75 | 7.50 / 17.17 / 36.22 / 80.05 |
+| Hosted D3D11 | 7.46 / 16.51 / 19.67 / 22.79 | 7.81 / 16.62 / 19.79 / 22.06 |
+| Direct software | 18.36 / 27.36 / 31.12 / 36.33 | 20.02 / 29.09 / 38.61 / 63.20 |
+| Hosted software | 10.98 / 19.52 / 22.73 / 25.55 | 11.85 / 20.35 / 24.64 / 26.72 |
+
+Hosted D3D11's median exceeds direct D3D11 by 0.31 ms, within the added-latency target.
+Some runs overlapped lifecycle checks. Small changes and isolated maxima do not prove a causal gain or regression.
+
+The first implementation changed shell event scheduling to 60 Hz.
+That run produced hosted medians of 26.14 ms for D3D11 and 26.90 ms for software.
+Restore event-driven scheduling; use the timer only to retry a busy frame.
+The final table retains the corrected run, not the slower trial.
+
+Evidence folders under `%LOCALAPPDATA%\Temp`:
+
+- Baseline: `anvil-surface-latency-u6_98et2`.
+- Slower trial: `anvil-surface-latency-1zlj5z9f`.
+- Corrected run: `anvil-surface-latency-08af71lc`.
+- CLI red: `anvil-surface-latency-76ofiimm`.
+- CLI green: `anvil-surface-latency-oomt7lxx`.
+- Final native controls and foreground gate: `anvil-surface-latency-rj4y0jwn`.
+- Software controls: `anvil-surface-latency-yrwk3ed9`.
+- Direct/hosted duplicate and conflict checks: `anvil-surface-latency-tupkmxbt`.
 
 ### Milestone 3: input, IME, focus, and DPI
 

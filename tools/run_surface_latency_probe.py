@@ -103,7 +103,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
-    parser.add_argument("--project-case", action="append", choices=["launch", "invalid", "quit", "quit-error", "shell-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "conflict"],
+    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)
@@ -135,9 +135,12 @@ def main() -> int:
                         (case_dir / name).mkdir(parents=True)
                     (case_dir / "Project/edited.txt").write_bytes(b"on disk\n")
                     (case_dir / "Project/second.txt").write_bytes(b"second instance\n")
-                    if action == "conflict":
-                        (case_dir / "user/init.lua").write_text(
-                            'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n', encoding="utf-8")
+                    namespace = "anvil-test-" + work.name.rsplit("-", 1)[-1] + "-" + action
+                    init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
+                            f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
+                    if action in ("conflict", "arguments", "option-arguments", "controls"):
+                        init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
+                    (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     result = case_dir / "result.lua"
                     config = {
                         "exe": native_path(exe), "working_directory": native_path(case_dir / "driver"),

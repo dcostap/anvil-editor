@@ -94,6 +94,8 @@ config.plugins.ipc.config_spec = {
 ---@class plugins.ipc.instance
 ---Process id of the instance.
 ---@field id string
+---Process ID of the visible window owner.
+---@field window_pid integer?
 ---The position in which the instance was launched.
 ---@field position integer
 ---Flag that indicates if this instance was the first started.
@@ -202,6 +204,7 @@ function IPC:update_status()
     .. "return " .. common.serialize(
     {
       id = self.id,
+      window_pid = system.get_window_process_id(),
       primary = self.primary,
       position = self.position,
       last_update = os.time(),
@@ -894,6 +897,20 @@ end
 -- core.run_step calls system.get_time before core.open_file and core.change_directory.
 --------------------------------------------------------------------------------
 local system_get_time = system.get_time
+local function grant_window_foreground(id)
+  if PLATFORM ~= "Windows" then return end
+  for _, instance in ipairs(ipc:get_instances()) do
+    if instance.id == id then
+      if type(instance.window_pid) ~= "number" then
+        core.log_quiet("IPC foreground grant unavailable: instance %s has no window process ID", id)
+        return
+      end
+      local allowed = system.allow_process_foreground(instance.window_pid)
+      core.log_quiet("IPC foreground grant: window_pid=%s allowed=%s", tostring(instance.window_pid), tostring(allowed))
+      return
+    end
+  end
+end
 
 system.get_time = function()
   if settings_found and settings and not settings.ready then
@@ -921,6 +938,7 @@ system.get_time = function()
           if path_info then
             if path_info.type == "file" then
               if primary_instance then
+                grant_window_foreground(primary_instance)
                 ipc:call_async(primary_instance, "core.open_file", nil, path)
               else
                 open_directory = true
@@ -932,10 +950,13 @@ system.get_time = function()
                   "IPC: Project %q is already open in instance %s; raising instead of opening a duplicate",
                   path, project_instance
                 )
+                grant_window_foreground(project_instance)
                 ipc:call_async(project_instance, "core.raise_window", nil)
               elseif primary_instance and config.plugins.ipc.dirs_instance == "add" then
+                grant_window_foreground(primary_instance)
                 ipc:call_async(primary_instance, "core.open_directory", nil, path)
               elseif primary_instance and config.plugins.ipc.dirs_instance == "change" then
+                grant_window_foreground(primary_instance)
                 ipc:call_async(primary_instance, "core.change_directory", nil, path)
               else
                 if #cli.unhandled_arguments > 1 and not common.path_equals(path, core.root_project().path) then
@@ -980,6 +1001,7 @@ function core.open_project_in_new_window(project, ...)
         "IPC: Project %q is already open in instance %s; raising instead of opening a duplicate",
         project_path, project_instance
       )
+      grant_window_foreground(project_instance)
       ipc:call_async(project_instance, "core.raise_window", nil)
       return true
     end

@@ -41,6 +41,7 @@ static struct {
   HANDLE shell_process, loss_signal, exit_sent;
   Uint32 loss_event;
   SDL_AtomicInt intentional_exit;
+  SDL_AtomicInt loss_cause;
   SDL_Mutex *queue_lock;
   SDL_Condition *queue_condition;
   HostedMessage *head, *tail;
@@ -72,6 +73,8 @@ static struct {
 
 bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
   bool project = *argc > 1 && !strcmp(argv[1], ANVIL_PROJECT_ARG);
+  bool original_arguments = false;
+  for (int i = 1; i < *argc; i++) if (!strcmp(argv[i], ANVIL_PROJECT_ARGUMENTS_ARG)) original_arguments = true;
   if (project) {
     if (*argc < 3 || argv[2][0] == '-') { hosted.valid = false; return false; }
     int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[2], -1, NULL, 0);
@@ -80,11 +83,16 @@ bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
     if (path && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[2], -1, path, count)) attrs = GetFileAttributesW(path);
     free(path);
     if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) hosted.valid = false;
-    for (int j = 1; j < *argc - 1; j++) argv[j] = argv[j + 1];
-    argv[--(*argc)] = NULL;
+    int removed = original_arguments ? 2 : 1;
+    for (int j = 1; j < *argc - removed; j++) argv[j] = argv[j + removed];
+    *argc -= removed; argv[*argc] = NULL;
   }
   size_t prefix_len = strlen(ANVIL_SURFACE_PIPE_ARG);
   for (int i = 1; i < *argc; i++) {
+    if (!strcmp(argv[i], ANVIL_PROJECT_ARGUMENTS_ARG)) {
+      for (int j = i; j < *argc - 1; j++) argv[j] = argv[j + 1];
+      argv[--(*argc)] = NULL; i--; continue;
+    }
     if (!strcmp(argv[i], ANVIL_PROJECT_RESTART_ARG)) {
       hosted.restarted = true;
       for (int j = i; j < *argc - 1; j++) argv[j] = argv[j + 1];
@@ -103,7 +111,7 @@ bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
     argv[*argc] = NULL;
     i--;
   }
-  if (project != hosted.active || (hosted.restarted && !project)) hosted.valid = false;
+  if (project != hosted.active || ((hosted.restarted || original_arguments) && !project)) hosted.valid = false;
   return hosted.active;
 }
 
@@ -114,8 +122,9 @@ bool anvil_hosted_surface_loss_event(Uint32 type) { return hosted.active && type
 static int SDLCALL loss_watchdog(void *data) {
   (void)data;
   HANDLE signals[] = { hosted.shell_process, hosted.loss_signal };
-  WaitForMultipleObjects(2, signals, FALSE, INFINITE);
+  DWORD reason = WaitForMultipleObjects(2, signals, FALSE, INFINITE);
   if (SDL_GetAtomicInt(&hosted.intentional_exit)) return 0;
+  if (reason == WAIT_OBJECT_0) SDL_Log("Project shell loss cause: shell process exit pid=%lu", (unsigned long)hosted.shell_pid);
   SDL_Log("Project shell connection lost; save and detach now; native deadline=%u ms", SHELL_LOSS_DEADLINE_MS);
   anvil_ipc_pipe_cancel(&hosted.pipe);
   SDL_Event event = {0}; event.type = hosted.loss_event; SDL_PushEvent(&event);
@@ -126,13 +135,25 @@ static int SDLCALL loss_watchdog(void *data) {
   return 0;
 }
 
+static void signal_loss(const char *cause, uint16_t type, size_t bytes) {
+  if (SDL_GetAtomicInt(&hosted.intentional_exit)) return;
+  if (SDL_CompareAndSwapAtomicInt(&hosted.loss_cause, 0, 1))
+    SDL_Log("Project shell loss cause: %s message=%u bytes=%llu error=%lu", cause, type, (unsigned long long)bytes, (unsigned long)GetLastError());
+  SetEvent(hosted.loss_signal);
+}
+
 bool anvil_hosted_surface_active(void) {
   return hosted.active;
+}
+uint32_t anvil_hosted_surface_shell_pid(void) { return hosted.shell_pid; }
+void anvil_hosted_surface_controls(int *x, int *y, int *w, int *h) {
+  *x = hosted.config.controls_x; *y = hosted.config.controls_y;
+  *w = hosted.config.controls_w; *h = hosted.config.controls_h;
 }
 
 static const char *own_text(const char *text, uint32_t len) {
   char *copy = malloc((size_t)len + 1);
-  if (!copy) return "";
+  if (!copy) { signal_loss("input text allocation failed", ANVIL_SURFACE_MSG_INPUT, len); return ""; }
   memcpy(copy, text, len);
   copy[len] = '\0';
   unsigned slot = hosted.text_ring_next++ % TEXT_RING_SIZE;
@@ -246,13 +267,16 @@ static void store_configure(const AnvilSurfaceConfigure *config) {
 static bool valid_configure(const AnvilSurfaceConfigure *config) {
   return config->pixel_w > 0 && config->pixel_h > 0 && config->pixel_w <= 32768 && config->pixel_h <= 32768 &&
     config->window_w > 0 && config->window_h > 0 && config->window_mode >= 0 && config->window_mode <= ANVIL_SURFACE_WINDOW_FULLSCREEN &&
-    config->display_scale > 0 && config->display_scale <= 16 && config->refresh_hz >= 0 && config->refresh_hz <= 1000;
+    config->display_scale > 0 && config->display_scale <= 16 && config->refresh_hz >= 0 && config->refresh_hz <= 1000 &&
+    config->controls_x >= 0 && config->controls_y >= 0 && config->controls_w >= 0 && config->controls_h >= 0 &&
+    config->controls_x <= config->pixel_w && config->controls_w <= config->pixel_w - config->controls_x &&
+    config->controls_y <= config->pixel_h && config->controls_h <= config->pixel_h - config->controls_y;
 }
 
 static int SDLCALL reader_thread(void *data) {
   (void)data;
   uint8_t *payload = malloc(ANVIL_SURFACE_MAX_PAYLOAD);
-  if (!payload) return 1;
+  if (!payload) { signal_loss("inbound allocation failed", 0, ANVIL_SURFACE_MAX_PAYLOAD); return 1; }
   AnvilIPCHeader header;
   while (anvil_ipc_pipe_read(&hosted.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
     switch (header.type) {
@@ -284,7 +308,7 @@ static int SDLCALL reader_thread(void *data) {
   }
 failed:
   free(payload);
-  if (!SDL_GetAtomicInt(&hosted.intentional_exit)) SetEvent(hosted.loss_signal);
+  signal_loss("pipe EOF or invalid packet", 0, 0);
   return 0;
 }
 
@@ -302,14 +326,14 @@ static int SDLCALL writer_thread(void *data) {
     bool final = message->type == ANVIL_SURFACE_MSG_EXIT_INTENT || message->type == ANVIL_SURFACE_MSG_RESTART;
     free(message);
     if (final) SetEvent(hosted.exit_sent);
-    if (!ok) { if (!SDL_GetAtomicInt(&hosted.intentional_exit)) SetEvent(hosted.loss_signal); return 1; }
+    if (!ok) { signal_loss("pipe write failed", 0, 0); return 1; }
   }
 }
 
 static void send_message(uint16_t type, const void *payload, uint32_t size) {
   if (!hosted.active || !hosted.queue_lock || size > ANVIL_SURFACE_MAX_PAYLOAD) return;
   HostedMessage *message = malloc(sizeof(*message) + size);
-  if (!message) { SetEvent(hosted.loss_signal); return; }
+  if (!message) { signal_loss("outbound allocation failed", type, sizeof(*message) + size); return; }
   message->next = NULL; message->type = type; message->size = size;
   if (size) memcpy(message->payload, payload, size);
   SDL_LockMutex(hosted.queue_lock);
@@ -318,7 +342,8 @@ static void send_message(uint16_t type, const void *payload, uint32_t size) {
     SDL_UnlockMutex(hosted.queue_lock); free(message); return;
   }
   if (hosted.queued + sizeof(*message) + size > HOSTED_QUEUE_LIMIT) {
-    SDL_UnlockMutex(hosted.queue_lock); free(message); SetEvent(hosted.loss_signal); return;
+    size_t queued = hosted.queued;
+    SDL_UnlockMutex(hosted.queue_lock); free(message); signal_loss("outbound queue overflow", type, queued + sizeof(*message) + size); return;
   }
   if (hosted.tail) hosted.tail->next = message; else hosted.head = message;
   hosted.tail = message; hosted.queued += sizeof(*message) + size;
@@ -608,6 +633,8 @@ bool anvil_hosted_surface_frame_metrics(int *button, int *title, int *border) {
 bool anvil_hosted_surface_parse_args(int *argc, char **argv) { (void)argc; (void)argv; return false; }
 bool anvil_hosted_surface_connect(void) { return false; }
 bool anvil_hosted_surface_active(void) { return false; }
+uint32_t anvil_hosted_surface_shell_pid(void) { return 0; }
+void anvil_hosted_surface_controls(int *x, int *y, int *w, int *h) { *x = *y = *w = *h = 0; }
 bool anvil_hosted_surface_parse_valid(void) { return true; }
 bool anvil_hosted_surface_restarted(void) { return false; }
 bool anvil_hosted_surface_loss_event(Uint32 type) { (void)type; return false; }

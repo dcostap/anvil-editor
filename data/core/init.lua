@@ -602,32 +602,30 @@ function core.init()
   local project_dir_explicit = false
   local files = {}
   startup_measure("parse_startup_arguments", function()
-    if not RESTARTED then
+    if not RESTARTED or system.is_hosted_surface() then
       for i = 2, #ARGS do
         if ARGS[i] == "--new-window" then
           core.empty_window_request = true
+        end
+      end
+      for _, argument in ipairs(system.get_startup_path_arguments(ARGS)) do
+        local arg_filename = strip_trailing_slash(argument)
+        local info = system.get_file_info(arg_filename) or {}
+        if info.type == "dir" then
+          project_dir = arg_filename
+          project_dir_explicit = true
         else
-          local arg_filename = strip_trailing_slash(ARGS[i])
-          local info = system.get_file_info(arg_filename) or {}
-          if info.type == "dir" then
-            project_dir = arg_filename
-            project_dir_explicit = true
+          local filename = common.normalize_path(arg_filename)
+          local abs_filename = system.absolute_path(filename or "")
+          local file_abs
+          if common.path_equals(filename, abs_filename) then
+            file_abs = abs_filename
           else
-            -- on macOS we can get an argument like "-psn_0_52353" that we just ignore.
-            if not ARGS[i]:match("^-psn") then
-              local filename = common.normalize_path(arg_filename)
-              local abs_filename = system.absolute_path(filename or "")
-              local file_abs
-              if common.path_equals(filename, abs_filename) then
-                file_abs = abs_filename
-              else
-                file_abs = system.absolute_path(".") .. PATHSEP .. filename
-              end
-              if file_abs then
-                table.insert(files, file_abs)
-                project_dir = file_abs:match("^(.+)[/\\].+$")
-              end
-            end
+            file_abs = system.absolute_path(".") .. PATHSEP .. filename
+          end
+          if file_abs then
+            table.insert(files, file_abs)
+            project_dir = file_abs:match("^(.+)[/\\].+$")
           end
         end
       end

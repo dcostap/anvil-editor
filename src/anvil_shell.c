@@ -4,6 +4,7 @@
 
 #include "surface_protocol.h"
 #include "input_latency_probe.h"
+#include "cli_args.h"
 #include "win32_frame_hwnd.h"
 
 #include <windowsx.h>
@@ -23,7 +24,7 @@
 #define SHELL_CONNECT_TIMEOUT_MS 30000
 #define SHELL_EXIT_WAIT_MS 10000
 #define SHELL_WRITE_QUEUE_LIMIT (8u * 1024u * 1024u)
-#define SHELL_SYNC_TIMEOUT_MS 100
+#define SHELL_SYNC_TIMEOUT_MS 0
 #define SHELL_PIPE_BUFFER (64u * 1024u)
 /* How long one resize step waits for a surface frame of the new size. */
 #define SHELL_RESIZE_WAIT_MS 50
@@ -42,6 +43,8 @@ enum {
   SHELL_EVENT_FRAME,
   SHELL_EVENT_EXITED,
 };
+
+typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED } ShellState;
 
 typedef struct {
   SDL_Window *window;
@@ -78,7 +81,6 @@ typedef struct {
   bool intentional_exit;
   bool failed_close;
   char *restart_path, *project_path;
-  int project_arg;
   AnvilIPCPipe pipe;
   bool connected;
 
@@ -107,10 +109,50 @@ typedef struct {
   SDL_Cursor *cursors[ANVIL_SURFACE_CURSOR_COUNT];
   Uint64 close_requested_ns;
   bool shown;
+  ShellState state;
+  ID3D11Texture2D *ui;
+  int ui_w, ui_h;
+  bool ui_dirty;
+  bool frame_busy;
+  SDL_AtomicInt retry_frame;
+  SDL_TimerID retry_timer;
+  int hovered_control, pressed_control;
+  RECT controls, restart_button, close_button;
+  RECT failure_card;
 } Shell;
 
 static Shell shell;
 static bool start_project(int argc, char **argv);
+static void composite_and_present(void);
+static void request_close(void);
+static Uint32 SDLCALL retry_frame(void *data, SDL_TimerID timer, Uint32 interval) {
+  (void)data; (void)timer;
+  if (SDL_GetAtomicInt(&shell.retry_frame)) {
+    SDL_Event event = {0}; event.type = shell.event_type; event.user.code = SHELL_EVENT_FRAME; SDL_PushEvent(&event);
+  }
+  return interval;
+}
+
+static void set_state(ShellState state) {
+  if (shell.state == state) return;
+  shell.state = state; shell.ui_dirty = true;
+  if (state == SHELL_STARTING || state == SHELL_FAILED) {
+    SDL_SetAtomicInt(&shell.retry_frame,0); shell.frame_busy = false;
+  }
+  static const char *names[] = {"Starting", "Ready", "Closing", "Failed"};
+  SDL_Log("Shell state: %s", names[state]);
+}
+
+static void controls_geometry(void) {
+  int width = SDL_min(SDL_max(1, shell.buffer_w - shell.sidebar_w), (int)(138 * shell.scale));
+  int height = SDL_min(shell.buffer_h, SDL_max((int)(32 * shell.scale), SDL_min((int)(96 * shell.scale), shell.hit.title_height)));
+  RECT rect = {shell.buffer_w - width, 0, shell.buffer_w, height};
+  if (memcmp(&rect, &shell.controls, sizeof(rect))) {
+    shell.controls = rect; shell.ui_dirty = true;
+    SDL_Log("Shell controls: x=%ld y=%ld w=%ld h=%ld sidebar=%d", rect.left, rect.top,
+      rect.right - rect.left, rect.bottom - rect.top, shell.sidebar_w);
+  }
+}
 
 /* ------------------------------------------------------------------------ */
 /* Child process                                                            */
@@ -158,8 +200,8 @@ static wchar_t *build_child_command_line(const wchar_t *exe, const char *pipe_ar
     line[n++] = ' ';
     n += append_quoted_arg(line + n, pipe_arg);
     if (shell.restart_path) { line[n++] = ' '; n += append_quoted_arg(line + n, ANVIL_PROJECT_RESTART_ARG); }
+    if (argc > 2) { line[n++] = ' '; n += append_quoted_arg(line + n, ANVIL_PROJECT_ARGUMENTS_ARG); }
     for (int i = 2; i < argc; i++) {
-      if (i == shell.project_arg) continue;
       line[n++] = ' ';
       n += append_quoted_arg(line + n, argv[i]);
     }
@@ -190,6 +232,8 @@ static bool launch_child(int argc, char **argv, const char *pipe_name) {
                                 NULL, NULL, &startup, &shell.process);
   free(command_line);
   if (!created) return false;
+  SDL_Log("Shell foreground grant to Project pid=%lu allowed=%d", (unsigned long)shell.process.dwProcessId,
+    AllowSetForegroundWindow(shell.process.dwProcessId) != 0);
   ResumeThread(shell.process.hThread);
   SDL_Log("Shell started Project pid=%lu path=%s", (unsigned long)shell.process.dwProcessId, shell.project_path);
   return true;
@@ -400,6 +444,10 @@ static void send_configure(void) {
   config.title_height = metric ? metric(SM_CYSIZE, dpi) : GetSystemMetrics(SM_CYSIZE);
   config.resize_border = metric ? metric(SM_CXSIZEFRAME, dpi) + metric(SM_CXPADDEDBORDER, dpi)
     : GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+  controls_geometry();
+  config.controls_x = SDL_max(0, shell.controls.left - shell.sidebar_w);
+  config.controls_y = 0; config.controls_w = shell.controls.right - shell.controls.left;
+  config.controls_h = shell.controls.bottom;
   if (memcmp(&config, &shell.last_config, sizeof(config)) == 0 && shell.last_config.pixel_w) return;
   shell.last_config = config;
   shell_send(ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0);
@@ -537,6 +585,7 @@ static bool load_d3d11_frame(const AnvilSurfaceFrame *frame) {
   shell.shared->lpVtbl->GetDesc(shell.shared, &desc);
   if (!ensure_surface_texture((int)desc.Width, (int)desc.Height)) return false;
   if (shell.shared_mutex->lpVtbl->AcquireSync(shell.shared_mutex, 0, SHELL_SYNC_TIMEOUT_MS) != S_OK) {
+    shell.frame_busy = true;
     return false;
   }
   shell.context->lpVtbl->CopyResource(shell.context, (ID3D11Resource *)shell.surface,
@@ -577,7 +626,7 @@ static bool load_memory_frame(const AnvilSurfaceFrame *frame) {
     SDL_strlcpy(shell.memory_name, frame->name, sizeof(shell.memory_name));
   }
   DWORD wait = WaitForSingleObject(shell.memory_mutex, SHELL_SYNC_TIMEOUT_MS);
-  if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) return false;
+  if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) { shell.frame_busy = true; return false; }
   const AnvilSurfaceMemoryHeader *header = (const AnvilSurfaceMemoryHeader *)shell.memory_view;
   bool ok = header->width > 0 && header->height > 0 && header->stride >= header->width * 4 &&
             sizeof(*header) + (size_t)header->stride * (size_t)header->height <= shell.memory_size &&
@@ -588,6 +637,81 @@ static bool load_memory_frame(const AnvilSurfaceFrame *frame) {
   }
   ReleaseMutex(shell.memory_mutex);
   return ok;
+}
+
+static void ui_fill(HDC dc, RECT rect, COLORREF color) {
+  HBRUSH brush = CreateSolidBrush(color); FillRect(dc, &rect, brush); DeleteObject(brush);
+}
+
+static void update_ui(void) {
+  controls_geometry();
+  if (!shell.ui_dirty && shell.ui && shell.ui_w == shell.buffer_w && shell.ui_h == shell.buffer_h) return;
+  if (shell.buffer_w <= 0 || shell.buffer_h <= 0) return;
+  BITMAPINFO info = {0}; info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  info.bmiHeader.biWidth = shell.buffer_w; info.bmiHeader.biHeight = -shell.buffer_h;
+  info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32; info.bmiHeader.biCompression = BI_RGB;
+  void *pixels = NULL; HDC dc = CreateCompatibleDC(NULL);
+  if (!dc) return;
+  HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, NULL, 0);
+  if (!bitmap) { DeleteDC(dc); return; }
+  HGDIOBJ old_bitmap = SelectObject(dc, bitmap);
+  RECT all = {0, 0, shell.buffer_w, shell.buffer_h}; ui_fill(dc, all, RGB(23,23,28));
+  HFONT font = CreateFontW(-(int)(13 * shell.scale), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+  HGDIOBJ old_font = SelectObject(dc, font); SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(220,220,225));
+  RECT logo = {0, 0, shell.sidebar_w, (LONG)(48 * shell.scale)};
+  DrawTextW(dc, L"A", 1, &logo, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  static const wchar_t *states[] = {L"Starting Project...", L"Ready", L"Closing Project...", L"Project failed"};
+  RECT status = {0, shell.buffer_h - (LONG)(40 * shell.scale), shell.sidebar_w, shell.buffer_h};
+  DrawTextW(dc, shell.state == SHELL_FAILED ? L"!" : shell.state == SHELL_CLOSING ? L"..." : L"\x2022", -1,
+    &status, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  int bw = (shell.controls.right - shell.controls.left) / 3;
+  HPEN pen = CreatePen(PS_SOLID, SDL_max(1, (int)shell.scale), RGB(220,220,225));
+  HGDIOBJ old_pen = SelectObject(dc, pen);
+  for (int i = 0; i < 3; i++) {
+    RECT rect = {shell.controls.left + i*bw, 0, i == 2 ? shell.controls.right : shell.controls.left + (i+1)*bw, shell.controls.bottom};
+    if (shell.hovered_control == i || shell.pressed_control == i) ui_fill(dc, rect, i == 2 ? RGB(190,45,45) : RGB(55,55,62));
+    int x = (rect.left + rect.right)/2, y = rect.bottom/2, r = SDL_max(3, (int)(5*shell.scale));
+    if (i == 0) { MoveToEx(dc, x-r,y+2,NULL); LineTo(dc,x+r,y+2); }
+    else if (i == 1) {
+      HGDIOBJ brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+      if (current_window_mode() == ANVIL_SURFACE_WINDOW_MAXIMIZED) Rectangle(dc, x-r+2,y-r-2,x+r+2,y+r-2);
+      Rectangle(dc, x-r,y-r,x+r,y+r); SelectObject(dc,brush);
+    } else { MoveToEx(dc,x-r,y-r,NULL); LineTo(dc,x+r,y+r); MoveToEx(dc,x+r,y-r,NULL); LineTo(dc,x-r,y+r); }
+  }
+  SelectObject(dc, old_pen); DeleteObject(pen);
+  shell.restart_button = (RECT){0}; shell.close_button = (RECT){0};
+  if (shell.state == SHELL_STARTING || shell.state == SHELL_FAILED) {
+    RECT area = {shell.sidebar_w, shell.controls.bottom, shell.buffer_w, shell.buffer_h};
+    DrawTextW(dc, states[shell.state], -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (shell.state == SHELL_FAILED) {
+      int x = (area.left+area.right)/2, y = (area.top+area.bottom)/2 + (int)(30*shell.scale);
+      shell.failure_card = (RECT){SDL_max(area.left,x-(int)(180*shell.scale)), SDL_max(area.top,y-(int)(90*shell.scale)),
+        SDL_min(area.right,x+(int)(180*shell.scale)), SDL_min(area.bottom,y+(int)(50*shell.scale))};
+      int w = (int)(140*shell.scale), h = (int)(32*shell.scale), gap = (int)(8*shell.scale);
+      shell.restart_button = (RECT){x-w-gap,y,x-gap,y+h}; shell.close_button = (RECT){x+gap,y,x+w+gap,y+h};
+      ui_fill(dc,shell.restart_button,RGB(55,55,62)); ui_fill(dc,shell.close_button,RGB(55,55,62));
+      DrawTextW(dc,L"Restart Project",-1,&shell.restart_button,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+      DrawTextW(dc,L"Close",-1,&shell.close_button,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+    }
+  }
+  GdiFlush();
+  if (!shell.ui || shell.ui_w != shell.buffer_w || shell.ui_h != shell.buffer_h) {
+    SAFE_RELEASE(shell.ui); D3D11_TEXTURE2D_DESC desc = {0};
+    desc.Width = shell.buffer_w; desc.Height = shell.buffer_h; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; desc.Usage = D3D11_USAGE_DEFAULT;
+    shell.device->lpVtbl->CreateTexture2D(shell.device,&desc,NULL,&shell.ui);
+    shell.ui_w = shell.buffer_w; shell.ui_h = shell.buffer_h;
+  }
+  if (shell.ui) shell.context->lpVtbl->UpdateSubresource(shell.context,(ID3D11Resource *)shell.ui,0,NULL,pixels,shell.buffer_w*4,0);
+  SelectObject(dc,old_font); DeleteObject(font); SelectObject(dc,old_bitmap); DeleteObject(bitmap); DeleteDC(dc);
+  shell.ui_dirty = false;
+}
+
+static void copy_ui(RECT rect) {
+  if (!shell.ui || rect.right <= rect.left || rect.bottom <= rect.top) return;
+  D3D11_BOX box = {rect.left, rect.top, 0, rect.right, rect.bottom, 1};
+  shell.context->lpVtbl->CopySubresourceRegion(shell.context,(ID3D11Resource *)shell.backbuffer,0,rect.left,rect.top,0,(ID3D11Resource *)shell.ui,0,&box);
 }
 
 static void composite_and_present(void) {
@@ -604,6 +728,12 @@ static void composite_and_present(void) {
                                                    (ID3D11Resource *)shell.surface, 0, &box);
     }
   }
+  update_ui();
+  copy_ui((RECT){0,0,shell.sidebar_w,shell.buffer_h});
+  copy_ui(shell.controls);
+  if (shell.state == SHELL_STARTING || (shell.state == SHELL_FAILED && !shell.have_surface))
+    copy_ui((RECT){shell.sidebar_w,shell.controls.bottom,shell.buffer_w,shell.buffer_h});
+  else if (shell.state == SHELL_FAILED) copy_ui(shell.failure_card);
   HRESULT hr = shell.swapchain->lpVtbl->Present(shell.swapchain, 1, 0);
   if (FAILED(hr)) SDL_Log("Anvil shell present failed: 0x%08lx", (unsigned long)hr);
 }
@@ -621,11 +751,20 @@ static bool load_pending_frame(AnvilSurfaceFrame *frame) {
   shell.frame_pending = false;
   SDL_UnlockMutex(shell.lock);
   if (!pending) return false;
-
+  shell.frame_busy = false;
   bool loaded = frame->kind == ANVIL_SURFACE_FRAME_D3D11 ? load_d3d11_frame(frame)
               : frame->kind == ANVIL_SURFACE_FRAME_SHARED_MEMORY ? load_memory_frame(frame)
               : false;
-  if (!loaded) return false;
+  if (!loaded) {
+    SDL_SetAtomicInt(&shell.retry_frame, shell.frame_busy);
+    if (shell.frame_busy) {
+      SDL_LockMutex(shell.lock);
+      if (shell.latest_frame.generation == frame->generation) shell.frame_pending = true;
+      SDL_UnlockMutex(shell.lock);
+    }
+    return false;
+  }
+  SDL_SetAtomicInt(&shell.retry_frame, 0);
   shell.have_surface = true;
   if (shell.surface_w == shell.buffer_w - shell.sidebar_w && shell.surface_h == shell.buffer_h) {
     shell.resize_wait_disabled = false;
@@ -672,6 +811,7 @@ static void resize_step(void) {
 static void handle_frame(void) {
   AnvilSurfaceFrame frame;
   if (!load_pending_frame(&frame)) return;
+  if (shell.state == SHELL_STARTING) set_state(SHELL_READY);
   composite_and_present();
   if (!shell.shown) {
     SDL_Log("Anvil shell showing its first %s frame %dx%d",
@@ -682,6 +822,7 @@ static void handle_frame(void) {
     anvil_latency_probe_start(shell.window, finish_latency_probe);
   }
   anvil_latency_probe_presented(frame.input_seq);
+  if (shell.state == SHELL_READY && !shell.close_requested_ns) anvil_latency_probe_start(shell.window, finish_latency_probe);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -766,10 +907,24 @@ static void handle_message(ShellMessage *message) {
       break;
     }
     case ANVIL_SURFACE_MSG_HIT_TEST:
-      if (message->size == sizeof(AnvilSurfaceHitTest)) memcpy(&shell.hit, payload, sizeof(shell.hit));
+      if (message->size == sizeof(AnvilSurfaceHitTest)) {
+        memcpy(&shell.hit, payload, sizeof(shell.hit));
+        shell.hit.title_height = SDL_clamp(shell.hit.title_height,0,(int)(96*shell.scale));
+        controls_geometry();
+        int available = SDL_max(0,shell.controls.left-shell.sidebar_w);
+        shell.hit.client_x = SDL_clamp(shell.hit.client_x,0,available);
+        shell.hit.client_width = SDL_clamp(shell.hit.client_width,0,available-shell.hit.client_x);
+        shell.hit.client2_x = SDL_clamp(shell.hit.client2_x,0,available);
+        shell.hit.client2_width = SDL_clamp(shell.hit.client2_width,0,available-shell.hit.client2_x);
+        send_configure();
+      }
       break;
     case ANVIL_SURFACE_MSG_RAISE:
-      if (shell.shown) SDL_RaiseWindow(shell.window);
+      if (shell.shown) {
+        if (current_window_mode() == ANVIL_SURFACE_WINDOW_MINIMIZED) SDL_RestoreWindow(shell.window);
+        SDL_RaiseWindow(shell.window);
+        SDL_Log("Shell forwarded raise: foreground=%d", GetForegroundWindow() == shell.hwnd);
+      }
       break;
     case ANVIL_SURFACE_MSG_FLASH:
       SDL_FlashWindow(shell.window, (SDL_FlashOperation)value);
@@ -818,7 +973,43 @@ static void leave_surface(void) {
   apply_cursor(ANVIL_SURFACE_CURSOR_ARROW);
 }
 
+static int control_at(float x, float y) {
+  POINT point = {(LONG)x,(LONG)y};
+  if (PtInRect(&shell.controls, point)) {
+    int width = SDL_max(1, (shell.controls.right-shell.controls.left)/3);
+    return SDL_min(2, ((int)x-shell.controls.left)/width);
+  }
+  if (shell.state == SHELL_FAILED) {
+    if (PtInRect(&shell.restart_button,point)) return 3;
+    if (PtInRect(&shell.close_button,point)) return 4;
+  }
+  return -1;
+}
+
+static void perform_control(int control) {
+  SDL_Log("Shell native control: %d state=%d", control, shell.state);
+  shell.resize_wait_disabled = true;
+  if (control == 0) SDL_MinimizeWindow(shell.window);
+  else if (control == 1) {
+    if (current_window_mode() == ANVIL_SURFACE_WINDOW_MAXIMIZED) SDL_RestoreWindow(shell.window);
+    else SDL_MaximizeWindow(shell.window);
+  } else if (control == 3) {
+    if (!shell.project_path) { SDL_Log("Shell Restart unavailable: no Project path"); return; }
+    if (shell.process.hProcess && WaitForSingleObject(shell.process.hProcess,0) != WAIT_OBJECT_0) {
+      SDL_Log("Shell Restart refused: previous Project has not exited"); return;
+    }
+    shell.restart_path = _strdup(shell.project_path);
+    if (!shell.restart_path || !start_project(0,NULL)) { free(shell.restart_path); shell.restart_path = NULL; set_state(SHELL_FAILED); }
+    else { free(shell.restart_path); shell.restart_path = NULL; composite_and_present(); }
+  } else request_close();
+}
+
 static void route_motion(SDL_Event *event) {
+  int control = control_at(event->motion.x,event->motion.y);
+  if (shell.hovered_control != control) { shell.hovered_control = control; shell.ui_dirty = true; composite_and_present(); }
+  if (!shell.surface_buttons && (control >= 0 || shell.pressed_control >= 0 || shell.state == SHELL_STARTING || shell.state == SHELL_FAILED)) {
+    leave_surface(); return;
+  }
   if (shell.surface_buttons || event->motion.x >= shell.sidebar_w) {
     if (!shell.pointer_in_surface) {
       shell.pointer_in_surface = true;
@@ -834,6 +1025,17 @@ static void route_motion(SDL_Event *event) {
 static void route_button(SDL_Event *event) {
   Uint32 mask = SDL_BUTTON_MASK(event->button.button);
   bool down = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+  int control = control_at(event->button.x,event->button.y);
+  if (!shell.surface_buttons && (control >= 0 || shell.pressed_control >= 0)) {
+    if (event->button.button != SDL_BUTTON_LEFT) return;
+    if (down) { shell.pressed_control = control; SetCapture(shell.hwnd); }
+    else {
+      int pressed = shell.pressed_control; shell.pressed_control = -1; ReleaseCapture();
+      if (control >= 0 && pressed == control) perform_control(control);
+    }
+    shell.ui_dirty = true; composite_and_present(); return;
+  }
+  if (shell.state == SHELL_STARTING || shell.state == SHELL_FAILED) return;
   if (down) {
     if (!shell.surface_buttons && event->button.x < shell.sidebar_w) return;
     shell.surface_buttons |= mask;
@@ -846,15 +1048,16 @@ static void route_button(SDL_Event *event) {
 }
 
 static void request_close(void) {
-  if (shell.process.hProcess && WaitForSingleObject(shell.process.hProcess, 0) == WAIT_OBJECT_0) {
+  if (!shell.process.hProcess || WaitForSingleObject(shell.process.hProcess, 0) == WAIT_OBJECT_0) {
     shell.failed_close = true; return;
   }
   Uint64 now = SDL_GetTicksNS();
   if (!shell.close_requested_ns) shell.close_requested_ns = now;
   if (!shell.connected) {
-    shell.failed_close = true;
+    set_state(SHELL_CLOSING); composite_and_present();
     return;
   }
+  set_state(SHELL_CLOSING); composite_and_present();
   shell_send(ANVIL_SURFACE_MSG_CLOSE, NULL, 0, NULL, 0);
 }
 
@@ -865,6 +1068,7 @@ static void handle_connected(void) {
   bool focused = anvil_latency_probe_enabled() ||
                  (SDL_GetWindowFlags(shell.window) & SDL_WINDOW_INPUT_FOCUS) != 0;
   shell_send_int(ANVIL_SURFACE_MSG_FOCUS, focused ? 1 : 0);
+  if (shell.close_requested_ns) shell_send(ANVIL_SURFACE_MSG_CLOSE,NULL,0,NULL,0);
 }
 
 SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
@@ -886,11 +1090,12 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
           return SDL_APP_CONTINUE;
         }
         if (shell.intentional_exit) return SDL_APP_SUCCESS;
-        /* Native overlay actions arrive in Milestone 2. Retain the failed window now. */
+        set_state(SHELL_FAILED);
         shell.connected = false;
         SDL_Log("Project failed unexpectedly; retain shell for recovery");
         SDL_SetWindowTitle(shell.window, "Anvil - Project failed");
         SDL_ShowWindow(shell.window); shell.shown = true;
+        composite_and_present();
         return SDL_APP_CONTINUE;
     }
     return SDL_APP_CONTINUE;
@@ -914,6 +1119,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     case SDL_EVENT_WINDOW_MINIMIZED:
     case SDL_EVENT_WINDOW_MAXIMIZED:
     case SDL_EVENT_WINDOW_RESTORED:
+      shell.ui_dirty = true;
       send_configure();
       break;
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
@@ -923,17 +1129,18 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       }
       break;
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+      shell.hovered_control = -1; shell.ui_dirty = true; composite_and_present();
       if (!shell.surface_buttons) leave_surface();
       break;
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
-      forward_event(event, NULL);
+      if (shell.state == SHELL_READY || shell.state == SHELL_CLOSING) forward_event(event, NULL);
       break;
     case SDL_EVENT_TEXT_INPUT:
-      forward_event(event, event->text.text);
+      if (shell.state == SHELL_READY || shell.state == SHELL_CLOSING) forward_event(event, event->text.text);
       break;
     case SDL_EVENT_TEXT_EDITING:
-      forward_event(event, event->edit.text);
+      if (shell.state == SHELL_READY || shell.state == SHELL_CLOSING) forward_event(event, event->edit.text);
       break;
     case SDL_EVENT_MOUSE_MOTION:
       route_motion(event);
@@ -943,16 +1150,26 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       route_button(event);
       break;
     case SDL_EVENT_MOUSE_WHEEL:
-      if (event->wheel.mouse_x >= shell.sidebar_w) {
+      if (event->wheel.mouse_x >= shell.sidebar_w && control_at(event->wheel.mouse_x,event->wheel.mouse_y) < 0 &&
+          (shell.state == SHELL_READY || shell.state == SHELL_CLOSING)) {
         event->wheel.mouse_x -= shell.sidebar_w;
         forward_event(event, NULL);
       }
       break;
     case SDL_EVENT_DROP_BEGIN:
-    case SDL_EVENT_DROP_POSITION:
     case SDL_EVENT_DROP_COMPLETE:
+      if (shell.state == SHELL_READY || shell.state == SHELL_CLOSING) forward_event(event, NULL);
+      break;
+    case SDL_EVENT_DROP_POSITION:
     case SDL_EVENT_DROP_FILE:
     case SDL_EVENT_DROP_TEXT:
+      if (event->drop.x < shell.sidebar_w || control_at(event->drop.x,event->drop.y) >= 0 ||
+          shell.state == SHELL_STARTING || shell.state == SHELL_FAILED) {
+        if (event->type == SDL_EVENT_DROP_POSITION && shell.connected) {
+          event->drop.x = event->drop.y = -1; forward_event(event, NULL);
+        }
+        break;
+      }
       event->drop.x -= shell.sidebar_w;
       forward_event(event, event->drop.data);
       break;
@@ -981,14 +1198,20 @@ static void push_window_event(SDL_EventType type, float x, float y) {
 
 static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
   switch (msg) {
+    case WM_CAPTURECHANGED:
+      if ((HWND)lparam != hwnd && shell.pressed_control >= 0) {
+        shell.pressed_control = -1; shell.ui_dirty = true;
+        if (shell.shown) composite_and_present();
+      }
+      break;
     case WM_NCCALCSIZE:
       return win32_frame_hwnd_nccalcsize(hwnd, wparam, lparam);
 
     case WM_NCHITTEST: {
       Win32FrameHitTest hit = {
-        .title_height = shell.hit.title_height,
-        .controls_width = shell.hit.controls_width,
-        .resize_border = shell.hit.resize_border,
+        .title_height = shell.controls.bottom,
+        .controls_width = shell.controls.right-shell.controls.left,
+        .resize_border = shell.last_config.resize_border > 0 ? shell.last_config.resize_border : (int)(8 * shell.scale),
         .client_x = shell.hit.client_x,
         .client_width = shell.hit.client_width,
         .client2_x = shell.hit.client2_x,
@@ -1067,6 +1290,7 @@ static bool install_native_frame(void) {
   shell.hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(shell.window),
                                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
   if (!shell.hwnd) return false;
+  SDL_Log("Shell window hwnd=%p", (void *)shell.hwnd);
   shell.sdl_wndproc = (WNDPROC)GetWindowLongPtrW(shell.hwnd, GWLP_WNDPROC);
   SetWindowLongPtrW(shell.hwnd, GWLP_WNDPROC, (LONG_PTR)shell_wndproc);
   win32_frame_hwnd_apply_style(shell.hwnd, false);
@@ -1104,25 +1328,29 @@ static bool choose_project(int argc, char **argv) {
   char *cwd = SDL_GetCurrentDirectory();
   if (!cwd) return false;
   shell.project_path = _strdup(cwd); SDL_free(cwd);
-  shell.project_arg = -1;
+  bool option_value = false;
   for (int i = 2; i < argc; i++) {
-    if (argv[i][0] == '-') continue;
+    if (option_value) { option_value = false; continue; }
+    if (argv[i][0] == '-') {
+      option_value = anvil_cli_option_value(argv[i]);
+      continue;
+    }
     int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[i], -1, NULL, 0);
     wchar_t *path = count > 0 ? malloc(count * sizeof(wchar_t)) : NULL;
     wchar_t full[32768];
     if (!path || !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[i], -1, path, count)) { free(path); return false; }
     DWORD n = GetFullPathNameW(path, SDL_arraysize(full), full, NULL); free(path);
     DWORD attrs = n && n < SDL_arraysize(full) ? GetFileAttributesW(full) : INVALID_FILE_ATTRIBUTES;
-    if (attrs == INVALID_FILE_ATTRIBUTES) return false;
-    if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+    if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
       wchar_t *slash = wcsrchr(full, L'\\'); if (!slash) return false;
       if (slash == full + 2) slash[1] = 0; else *slash = 0;
-    } else shell.project_arg = i;
+      DWORD parent_attrs = GetFileAttributesW(full);
+      if (parent_attrs == INVALID_FILE_ATTRIBUTES || !(parent_attrs & FILE_ATTRIBUTE_DIRECTORY)) continue;
+    }
     int bytes = WideCharToMultiByte(CP_UTF8, 0, full, -1, NULL, 0, NULL, NULL);
     free(shell.project_path); shell.project_path = bytes > 0 ? malloc(bytes) : NULL;
     if (!shell.project_path) return false;
     WideCharToMultiByte(CP_UTF8, 0, full, -1, shell.project_path, bytes, NULL, NULL);
-    break;
   }
   return shell.project_path != NULL;
 }
@@ -1145,6 +1373,8 @@ static bool start_project(int argc, char **argv) {
     SDL_ClearComposition(shell.window); SDL_CaptureMouse(false);
   }
   shell.intentional_exit = false;
+  set_state(SHELL_STARTING); shell.ui_dirty = true; shell.failed_close = false;
+  shell.hovered_control = shell.pressed_control = -1;
   char pipe_name[128];
   if (!create_pipe(pipe_name, sizeof(pipe_name)) || !launch_child(argc, argv, pipe_name)) return false;
   shell.reader = SDL_CreateThread(reader_thread, "anvil-shell-reader", NULL);
@@ -1179,6 +1409,8 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   shell.queue_cond = SDL_CreateCondition();
   shell.frame_cond = SDL_CreateCondition();
   if (!shell.event_type || !shell.lock || !shell.queue_cond || !shell.frame_cond) return SDL_APP_FAILURE;
+  shell.retry_timer = SDL_AddTimer(16, retry_frame, NULL);
+  if (!shell.retry_timer) return SDL_APP_FAILURE;
 
   const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
   int width = mode ? (int)(mode->w * 0.8) : 1280;
@@ -1199,14 +1431,17 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
 
   if (!choose_project(argc, argv) || !start_project(argc, argv)) {
     SDL_Log("Anvil shell could not start its surface process: %lu", (unsigned long)GetLastError());
-    return SDL_APP_FAILURE;
+    set_state(SHELL_FAILED);
   }
+  composite_and_present(); SDL_ShowWindow(shell.window); shell.shown = true;
+  if (shell.state == SHELL_STARTING) SDL_Log("Shell state: Starting");
   return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult anvil_shell_iterate(void *appstate) {
   (void)appstate;
-  return SDL_APP_CONTINUE;
+  if (shell.frame_busy) handle_frame();
+  return shell.failed_close ? SDL_APP_SUCCESS : SDL_APP_CONTINUE;
 }
 
 void anvil_shell_quit(void *appstate, SDL_AppResult result) {
@@ -1214,6 +1449,7 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   (void)result;
   /* Project loss detection owns save/detach and its deadline. Never kill it with a shell job. */
   if (shell.pipe.handle) anvil_ipc_pipe_cancel(&shell.pipe);
+  if (shell.retry_timer) SDL_RemoveTimer(shell.retry_timer);
 }
 
 #else
