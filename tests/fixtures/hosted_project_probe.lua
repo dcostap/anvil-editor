@@ -167,6 +167,10 @@ if project:find("/driver$", 1) then
           local point = math.floor(x) + math.floor(y)*65536
           assert(user32.PostMessageW(window,0x200,0,point) ~= 0)
           assert(user32.PostMessageW(window,0x201,1,point) ~= 0)
+          -- Keep press and release in separate event drains, like a physical click.
+          coroutine.yield(.1)
+          assert(user32.PostMessageW(window,0x200,1,point) ~= 0)
+          coroutine.yield(.05)
           assert(user32.PostMessageW(window,0x202,0,point) ~= 0)
         end
         local function caption(index)
@@ -215,8 +219,8 @@ if project:find("/driver$", 1) then
         assert(wait_for(function() return load(root .. "/replacement.lua") end, 15), "Failed Restart did not launch a replacement")
         local replacement = load(root .. "/replacement.lua")
         assert(replacement.pid ~= state.pid and replacement.shell_pid == state.shell_pid, "Failed Restart replaced the shell")
-        save(root .. "/continue.lua", {continue = true})
-        assert(wait_for(function() return not subject:running() end, 10), "replacement did not quit")
+        caption(2)
+        assert(wait_for(function() return not subject:running() end, 10), "native Close did not close the replacement Project")
       elseif action == "duplicate" or action == "foreground" then
         -- Wait until IPC advertises the first instance. The same wait applies to direct mode.
         coroutine.yield(1.5)

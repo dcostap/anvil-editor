@@ -340,7 +340,9 @@ meson test -C build-windows-x86_64 anvil:lua-ui \
 
 ### Milestone 2: native controls and placeholder
 
-Implemented. Hosted mode remains opt-in. Interactive foreground verification remains an open gate.
+Implemented. Hosted mode remains opt-in.
+The user checked foreground transfer by launching `anvil --shell` from two terminals.
+The existing window came to the front and changed position.
 
 The shell draws and handles its caption controls without Lua.
 It uses native fonts and caches its own UI texture.
@@ -395,10 +397,58 @@ The direct Title Bar file passed 24 of 26 checks.
 The same two wheel checks failed with the original Title Bar restored.
 Those unchanged failures are outside this milestone.
 
+#### Native caption click correction
+
+The user found that native Close and Minimize did not work on the interactive desktop.
+The original probe posted press and release together. It missed normal mouse-capture ordering.
+The corrected probe drains press, held motion, and release separately.
+Before the fix, it failed with `native Minimize waited for the suspended Project`.
+
+SDL released automatic capture before the shell consumed its queued button-up event.
+The capture-change handler then cleared the pressed control without performing its action.
+The shell now handles native control presses, held motion, and releases in its window procedure.
+It does not also queue those control events through SDL.
+Actual capture loss still cancels a pressed control.
+Project input keeps its SDL path.
+
+The probe now closes the replacement Project through the native Close button.
+It no longer substitutes a Lua quit command for that check.
+Minimize, Maximize, Restore, suspended-Project Close, Failed Restart, and accepted Close pass with both renderers.
+
+The isolated direct D3D11 rerun completed 720 samples before this correction:
+`6.91 / 16.48 / 20.35 / 57.64 ms` for p50 / p90 / p99 / maximum.
+The earlier p99 of 36.22 ms did not repeat. One maximum does not establish a causal regression.
+Evidence: `anvil-surface-latency-emm8v103`.
+The initial caption red is `anvil-surface-latency-4iquf7dl`.
+The final fixture also fails on the saved old executable in `anvil-surface-latency-2pd82i_2`.
+It reports the same Minimize failure.
+Final control checks with held motion pass in `anvil-surface-latency-yrmxpcx7` for D3D11
+and `anvil-surface-latency-f697kkks` for software.
+
+The final isolated latency matrix used the rebuilt executable after the held-motion correction.
+No build or correctness check overlapped these measurements. Each row completed three runs of 240 samples.
+The clock stops at Present, not physical scanout.
+
+| Mode / renderer | p50 / p90 / p99 / maximum (ms) |
+|---|---|
+| Direct D3D11 | 7.20 / 16.45 / 19.76 / 46.21 |
+| Hosted D3D11 | 6.53 / 15.64 / 19.27 / 21.57 |
+| Direct software | 18.50 / 27.55 / 31.77 / 36.80 |
+| Hosted software | 10.24 / 19.24 / 23.44 / 25.59 |
+
+Evidence: `anvil-surface-latency-570cw0p1`.
+An earlier isolated matrix after the initial correction is `anvil-surface-latency-zwg__tl7`.
+Its direct D3D11 p99 / maximum were 19.17 / 39.20 ms.
+The prior p99 increase did not repeat, so these results do not justify a causal bisect.
+
+Milestone 4 must restore Closing to Ready after cancelled close and clear `close_requested_ns`.
+This correction does not implement the Milestone 4 close protocol.
+
 The foreground probe uses only owned windows on the private desktop.
 It verifies minimized-window restoration and records foreground permission grants.
 Windows returns no foreground window on that inactive desktop.
 Its result reports `foreground_gate="unavailable"`; it does not prove interactive foreground transfer.
+The user's subsequent two-terminal check supplies the interactive foreground result.
 Do not switch desktops or use the user's windows to complete this gate without permission.
 
 Each probe has isolated app data, process handles, and an IPC shared-memory namespace.

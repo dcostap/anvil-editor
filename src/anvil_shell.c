@@ -1028,9 +1028,14 @@ static void route_button(SDL_Event *event) {
   int control = control_at(event->button.x,event->button.y);
   if (!shell.surface_buttons && (control >= 0 || shell.pressed_control >= 0)) {
     if (event->button.button != SDL_BUTTON_LEFT) return;
-    if (down) { shell.pressed_control = control; SetCapture(shell.hwnd); }
+    if (down) {
+      shell.pressed_control = control;
+      SetCapture(shell.hwnd);
+    }
     else {
-      int pressed = shell.pressed_control; shell.pressed_control = -1; ReleaseCapture();
+      int pressed = shell.pressed_control;
+      shell.pressed_control = -1;
+      ReleaseCapture();
       if (control >= 0 && pressed == control) perform_control(control);
     }
     shell.ui_dirty = true; composite_and_present(); return;
@@ -1198,9 +1203,41 @@ static void push_window_event(SDL_EventType type, float x, float y) {
 
 static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
   switch (msg) {
+    case WM_MOUSEMOVE:
+      if (shell.pressed_control >= 0) {
+        SDL_Event event = {0};
+        event.type = SDL_EVENT_MOUSE_MOTION;
+        event.motion.x = (float)GET_X_LPARAM(lparam);
+        event.motion.y = (float)GET_Y_LPARAM(lparam);
+        route_motion(&event);
+        return 0;
+      }
+      break;
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
+    case WM_LBUTTONUP: {
+      float x = (float)GET_X_LPARAM(lparam);
+      float y = (float)GET_Y_LPARAM(lparam);
+      bool down = msg != WM_LBUTTONUP;
+      if (!shell.surface_buttons &&
+          (shell.pressed_control >= 0 || (down && control_at(x, y) >= 0))) {
+        /* Handle native controls before SDL releases automatic capture.
+         * Do not also queue this click through SDL. */
+        SDL_Event event = {0};
+        event.type = msg == WM_LBUTTONUP ? SDL_EVENT_MOUSE_BUTTON_UP : SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = x;
+        event.button.y = y;
+        route_button(&event);
+        return 0;
+      }
+      break;
+    }
     case WM_CAPTURECHANGED:
       if ((HWND)lparam != hwnd && shell.pressed_control >= 0) {
-        shell.pressed_control = -1; shell.ui_dirty = true;
+        SDL_Log("Shell native control cancelled: capture changed");
+        shell.pressed_control = -1;
+        shell.ui_dirty = true;
         if (shell.shown) composite_and_present();
       }
       break;

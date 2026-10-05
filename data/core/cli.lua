@@ -614,6 +614,7 @@ function cli.parse(args)
 end
 
 -- Register default command
+-- Add new value-less flags to the native switch list in src/cli_args.h.
 cli.set_default {
   flags = {
     {
