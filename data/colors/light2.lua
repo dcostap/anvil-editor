@@ -225,7 +225,7 @@ style.diffview_plain_text = c("080808")
 style.git_change_addition = c("3f7c50")
 style.git_change_modification = c("426b9a")
 style.git_change_deletion = c("b64f5c")
-style.diff_inline_marker_delete = { common.color "rgba(182, 79, 92, 0.85)" }
+style.diff_inline_marker_delete = { common.color "rgba(182, 79, 92, 0.70)" }
 style.gitdiff_width = common.round(2 * SCALE)
 style.git_graph_colors = {
   c("426b9a"), c("3f7c50"), c("795b9b"), c("926f35"), c("b64f5c"), c("397e7c"),
