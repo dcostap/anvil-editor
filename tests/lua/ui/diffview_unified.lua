@@ -159,4 +159,24 @@ test.describe("Unified Diff View", function()
     test.ok(not copied:find("\n-last old\n", 1, true))
     test.ok(not copied:find("\n+last new\n", 1, true))
   end)
+
+  test.it("scrolls the visible unified text when the mouse wheel moves", function(context)
+    local text = string.rep("context line\n", 200)
+    local view, surface = open(context, "removed\n" .. text, "added\n" .. text)
+    core.set_active_view(surface)
+    surface.scroll.y, surface.scroll.to.y = 0, 0
+    local _, initial_y = surface:get_content_offset()
+    test.ok(view:on_mouse_wheel(-1, 0), "the Diff View must consume the wheel event")
+    local deadline = system.get_time() + 2
+    repeat
+      coroutine.yield(0.01)
+      view:update()
+      test.ok(system.get_time() < deadline, "the wheel did not move the visible text")
+    until surface.scroll.y > 0
+    local _, scrolled_y = surface:get_content_offset()
+    test.ok(scrolled_y < initial_y, "scrolling down must move the visible text upward")
+    local target_y = surface.scroll.to.y
+    test.ok(view:on_mouse_wheel(1, 0))
+    test.ok(surface.scroll.to.y < target_y, "scrolling up must reduce the scroll target")
+  end)
 end)

@@ -937,12 +937,20 @@ function DiffView:on_mouse_left()
 end
 
 function DiffView:on_mouse_wheel(y, x)
-  if self.unified then
-    return call_textview_method(self.unified_view, self.unified_view.on_mouse_wheel, y, x)
-  end
   if keymap.modkeys["shift"] then
     x = y
     y = 0
+  end
+  if self.unified then
+    local target = self.unified_view.scroll.to
+    target.y = target.y + (y or 0) * -config.mouse_wheel_scroll
+    target.x = target.x + (x or 0) * -config.mouse_wheel_scroll
+    local handled = (y and y ~= 0) or (x and x ~= 0) or false
+    if handled then
+      core.log_quiet("Unified Diff wheel: x=%g y=%g target_x=%.1f target_y=%.1f",
+        x or 0, y or 0, target.x, target.y)
+    end
+    return handled
   end
   if y and y ~= 0 then
     self.buffer_view_a.scroll.to.y = self.buffer_view_a.scroll.to.y + y * -config.mouse_wheel_scroll
