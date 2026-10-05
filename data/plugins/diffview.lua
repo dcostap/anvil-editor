@@ -1907,6 +1907,7 @@ function DiffView:diff_points_of_interest(is_a)
 end
 
 local function diff_decoration_provider(parent, is_a)
+  local side_tag = is_a and "delete" or "insert"
   local function background_color(tag)
     local color = diff_color(tag, true)
     if config.plugins.diffview.plain_text then color = alpha_color(color, 128) end
@@ -1942,8 +1943,8 @@ local function diff_decoration_provider(parent, is_a)
         added_width = math.max(0, font:get_width(indent) - font:get_width(other_indent))
       end
       return {
-        color = background_color("modify"),
-        left_color = added_width > 0 and background_color(is_a and "delete" or "insert") or nil,
+        color = background_color(side_tag),
+        left_color = added_width > 0 and style["diff_" .. side_tag .. "_inline"] or nil,
         -- Keep the changed indentation band on continuation rows too.
         -- The text origin includes the gutter; the background does not.
         x_offset = added_width - view:get_gutter_width(),
@@ -1954,8 +1955,7 @@ local function diff_decoration_provider(parent, is_a)
       local change = changes[line]
       if not change or change.tag ~= "modify" or not change.inline_ranges then return nil end
       local ranges = {}
-      local color = style.diff_modify_inline
-      if config.plugins.diffview.plain_text then color = style.diff_modify end
+      local color = style["diff_" .. side_tag .. "_inline"]
       for _, range in ipairs(change.inline_ranges) do
         ranges[#ranges + 1] = { col1 = range.col1, col2 = range.col2, color = color }
       end

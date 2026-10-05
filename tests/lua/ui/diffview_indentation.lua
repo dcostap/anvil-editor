@@ -30,7 +30,7 @@ local function backgrounds(side, line)
   renderer.draw_text_known_bounds = function() end
   renderer.draw_rect = function(x, y, w, h, color)
     if color == style.diff_insert_background or color == style.diff_delete_background
-      or color == style.diff_modify_background then
+      or color == style.diff_insert_inline or color == style.diff_delete_inline then
       rects[#rects + 1] = { x = x, y = y, w = w, h = h, color = color }
     end
   end
@@ -62,6 +62,8 @@ test.describe("Diff View indentation backgrounds", function()
     context.active_view = core.active_view
     context.plain_text = config.plugins.diffview.plain_text
     context.whitespace_mode = config.plugins.diffview.whitespace_mode
+    context.unified_width_threshold = config.plugins.diffview.unified_width_threshold
+    config.plugins.diffview.unified_width_threshold = 0
     config.plugins.diffview.plain_text = false
     config.plugins.diffview.whitespace_mode = "none"
   end)
@@ -69,6 +71,7 @@ test.describe("Diff View indentation backgrounds", function()
   test.after_each(function(context)
     config.plugins.diffview.plain_text = context.plain_text
     config.plugins.diffview.whitespace_mode = context.whitespace_mode
+    config.plugins.diffview.unified_width_threshold = context.unified_width_threshold
     core.active_view = context.active_view
     for _, view in ipairs(context.views) do view:on_close() end
   end)
@@ -84,7 +87,9 @@ test.describe("Diff View indentation backgrounds", function()
           local view = open_diff(context, before, after, wrapped)
           local side = reverse and view.buffer_view_a or view.buffer_view_b
           local other = reverse and view.buffer_view_b or view.buffer_view_a
-          local changed_color = reverse and style.diff_delete_background or style.diff_insert_background
+          local changed_color = reverse and style.diff_delete_inline or style.diff_insert_inline
+          local line_color = reverse and style.diff_delete_background or style.diff_insert_background
+          local other_color = reverse and style.diff_insert_background or style.diff_delete_background
           local font = side:get_font()
           local _, indent_size = side.buffer:get_indent_info()
           font:set_tab_size(indent_size)
@@ -96,11 +101,11 @@ test.describe("Diff View indentation backgrounds", function()
             local col = side:get_visual_row_bounds_for_line(2, row)
             local _, y = side:get_line_screen_position(2, col)
             test.same(color_at(side.position.x + added_width / 2, y + 1), changed_color)
-            test.same(color_at(side.position.x + added_width + 1, y + 1), style.diff_modify_background)
+            test.same(color_at(side.position.x + added_width + 1, y + 1), line_color)
           end
           local other_color_at = backgrounds(other, 2)
           local _, y = other:get_line_screen_position(2)
-          test.same(other_color_at(other.position.x + 1, y + 1), style.diff_modify_background)
+          test.same(other_color_at(other.position.x + 1, y + 1), other_color)
         end
       end
     end
@@ -114,12 +119,12 @@ test.describe("Diff View indentation backgrounds", function()
     side.scroll.x = width / 2
     local color_at = backgrounds(side, 1)
     local _, y = side:get_line_screen_position(1)
-    test.same(color_at(side.position.x + width / 4, y + 1), style.diff_insert_background)
-    test.same(color_at(side.position.x + width, y + 1), style.diff_modify_background)
+    test.same(color_at(side.position.x + width / 4, y + 1), style.diff_insert_inline)
+    test.same(color_at(side.position.x + width, y + 1), style.diff_insert_background)
 
     side.scroll.x = width * 2
     color_at = backgrounds(side, 1)
-    test.same(color_at(side.position.x + 1, y + 1), style.diff_modify_background)
-    test.same(color_at(side.position.x + side.size.x - 1, y + 1), style.diff_modify_background)
+    test.same(color_at(side.position.x + 1, y + 1), style.diff_insert_background)
+    test.same(color_at(side.position.x + side.size.x - 1, y + 1), style.diff_insert_background)
   end)
 end)

@@ -198,7 +198,6 @@ style.diff_insert_background = style.diff_insert
 style.diff_modify_background = style.diff_modify
 style.diff_delete_inline = c("673740")
 style.diff_insert_inline = c("285941")
-style.diff_modify_inline = c("314c5b")
 style.diff_marker_delete = { common.color "rgba(228, 97, 104, 0.74)" }
 style.diff_marker_insert = { common.color "rgba(67, 184, 110, 0.72)" }
 style.diff_marker_modify = { common.color "rgba(75, 159, 226, 0.72)" }
