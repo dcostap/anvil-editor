@@ -31,6 +31,28 @@ test.describe("Diff whitespace comparison", function()
     test.same(new_ranges, {})
   end)
 
+  test.it("does not highlight retained spaces when a declaration joins onto one line", function()
+    local before = {
+      "    RGE_Random_Map_Module(RGE_Map* in_map, RGE_Random_Map_Module* parent_module,\n",
+      "        uchar resources_needed);\n",
+    }
+    local after = {
+      "    RGE_Random_Map_Module(RGE_Map* in_map, RGE_Random_Map_Module* parent_module, uchar resources_needed);\n",
+    }
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      for _, sides in ipairs { { before, after }, { after, before } } do
+        local m = model.compute(sides[1], sides[2], { whitespace_mode = mode })
+        test.not_nil(m:next_hunk("a", 1), "the changed line break must remain visible")
+        for index, side in ipairs { "a", "b" } do
+          for line = 1, #sides[index] do
+            test.same(m:inline_ranges(side, line), {})
+            test.same(m:inline_markers(side, line), {})
+          end
+        end
+      end
+    end
+  end)
+
   test.it("keeps internal whitespace visible throughout a long modified block", function()
     local before, after = {}, {}
     for line = 1, 200 do

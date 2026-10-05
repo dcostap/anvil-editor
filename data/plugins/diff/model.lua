@@ -138,6 +138,7 @@ end
 
 local function changed_target_spans(from, target)
   local spans, gaps, source_index, target_index = {}, {}, 1, 1
+  local pairs = {}
   local first, last, source_first, source_last
   local function flush()
     if first then
@@ -154,6 +155,7 @@ local function changed_target_spans(from, target)
   for edit in diff.diff_iter(from, target) do
     if edit.tag == "equal" or edit.tag == "modify" then
       flush()
+      pairs[#pairs + 1] = { a = source_index, b = target_index }
       if edit.tag == "modify" then
         spans[#spans + 1] = {
           first = target_index, last = target_index, tag = "modify",
@@ -170,7 +172,7 @@ local function changed_target_spans(from, target)
     if edit.b then target_index = target_index + 1 end
   end
   flush()
-  return spans, gaps
+  return spans, gaps, pairs
 end
 
 local function uncovered_markers(markers, ranges)
@@ -217,38 +219,6 @@ local function has_changed_token(changed, first, last)
   return false
 end
 
----Use word alignment so repeated letters cannot make partially replaced words
----look unchanged. Modified, inserted, and deleted text is emphasized only at
----whole-word granularity, matching IntelliJ's restrained inline presentation.
-local function token_inline_ranges(from, target, ignore_whitespace)
-  local from_segments, from_values = token_segments(from)
-  local target_segments, target_values = token_segments(target)
-  local from_changed, target_changed
-  if ignore_whitespace then
-    -- Use character matches to ignore spacing-only changes. Words select colors and marker positions.
-    from_changed, target_changed = changed_token_contents(from_segments, target_segments)
-  end
-
-  local ranges, markers = {}, {}
-  local spans, gaps = changed_target_spans(from_values, target_values)
-  for _, span in ipairs(spans) do
-    local source_changed = from_changed and has_changed_token(from_changed, span.source_first, span.source_last)
-    for index = span.first, span.last do
-      if not ignore_whitespace or source_changed or target_changed[index] then
-        local col1, col2 = content_range(target_segments[index])
-        append_token_range(ranges, target, col1, col2, span.tag)
-      end
-    end
-  end
-  for _, gap in ipairs(gaps) do
-    if not ignore_whitespace or has_changed_token(from_changed, gap.source_first, gap.source_last) then
-      local segment = target_segments[gap.index]
-      markers[#markers + 1] = { col = segment and segment.col1 or line_end_column(target) }
-    end
-  end
-  return ranges, uncovered_markers(markers, ranges)
-end
-
 local function is_trim_space(byte)
   return byte == 32 or byte == 9
 end
@@ -288,34 +258,71 @@ local function merge_inline_ranges(ranges)
   return merged
 end
 
-local function trim_whitespace_inline_ranges(from, target, ranges, markers)
-  local first, last = trim_content_bounds(target)
-  local target_col = 1
-  for _, edit in ipairs(diff.inline_diff(from, target) or {}) do
-    local value = edit.val or ""
-    if edit.tag ~= "delete" then
-      if edit.tag ~= "equal" then
-        for offset = 0, #value - 1 do
-          local col = target_col + offset
-          if col >= first and col <= last and is_trim_space(target:byte(col)) then
-            append_inline_range(ranges, col)
+local function trim_spacing_ranges(from, target, from_segments, target_segments, pairs)
+  local ranges = {}
+  for index = 2, #pairs do
+    local previous, current = pairs[index - 1], pairs[index]
+    if current.a == previous.a + 1 and current.b == previous.b + 1 then
+      local source_start = from_segments[previous.a].col2
+      local target_start = target_segments[previous.b].col2
+      local source_gap = from:sub(source_start, from_segments[current.a].col1 - 1)
+      local target_gap = target:sub(target_start, target_segments[current.b].col1 - 1)
+      -- Compare spacing only between corresponding neighbors on the same line.
+      -- A line break on either side is reflow, not an added internal space.
+      if source_gap ~= target_gap and not source_gap:find("[\r\n]") and not target_gap:find("[\r\n]") then
+        local col = target_start
+        for _, edit in ipairs(diff.inline_diff(source_gap, target_gap) or {}) do
+          if edit.tag ~= "delete" then
+            local value = edit.val or ""
+            if edit.tag ~= "equal" then
+              for offset = 0, #value - 1 do append_inline_range(ranges, col + offset) end
+            end
+            col = col + #value
           end
         end
       end
-      target_col = target_col + #value
     end
   end
-  ranges = merge_inline_ranges(ranges)
-  return ranges, uncovered_markers(markers, ranges)
+  return ranges
 end
 
-local function inline_change(from, to, whitespace_mode)
-  from, to = from or "", to or ""
-  if from == to then return {}, {} end
-  if whitespace_mode == "ignore" then
-    return token_inline_ranges(from, to, true)
+---Use word alignment so repeated letters cannot make partially replaced words
+---look unchanged. Emphasize changed text at whole-word boundaries.
+local function inline_change(from, target, whitespace_mode)
+  if from == target then return {}, {} end
+  local from_segments, from_values = token_segments(from)
+  local target_segments, target_values = token_segments(target)
+  local ignore_whitespace = whitespace_mode == "ignore"
+  local from_changed, target_changed
+  if ignore_whitespace then
+    -- Use character matches to ignore spacing-only changes. Words select colors and marker positions.
+    from_changed, target_changed = changed_token_contents(from_segments, target_segments)
   end
-  return token_inline_ranges(from, to)
+
+  local ranges, markers = {}, {}
+  local spans, gaps, pairs = changed_target_spans(from_values, target_values)
+  for _, span in ipairs(spans) do
+    local source_changed = from_changed and has_changed_token(from_changed, span.source_first, span.source_last)
+    for index = span.first, span.last do
+      if not ignore_whitespace or source_changed or target_changed[index] then
+        local col1, col2 = content_range(target_segments[index])
+        append_token_range(ranges, target, col1, col2, span.tag)
+      end
+    end
+  end
+  for _, gap in ipairs(gaps) do
+    if not ignore_whitespace or has_changed_token(from_changed, gap.source_first, gap.source_last) then
+      local segment = target_segments[gap.index]
+      markers[#markers + 1] = { col = segment and segment.col1 or line_end_column(target) }
+    end
+  end
+  if whitespace_mode == "trim" then
+    for _, range in ipairs(trim_spacing_ranges(from, target, from_segments, target_segments, pairs)) do
+      ranges[#ranges + 1] = range
+    end
+    ranges = merge_inline_ranges(ranges)
+  end
+  return ranges, uncovered_markers(markers, ranges)
 end
 
 local function block_text(lines, first, last)
@@ -328,7 +335,7 @@ local function block_text(lines, first, last)
   return table.concat(text)
 end
 
-local function apply_block_inline(changes, lines, other_lines, mapping, first, last, ranges, markers, opts)
+local function apply_block_inline(changes, lines, first, last, ranges, markers, opts)
   local offset, range_index, marker_index = 0, 1, 1
   for line = first, last do
     local text = lines[line]
@@ -357,11 +364,6 @@ local function apply_block_inline(changes, lines, other_lines, mapping, first, l
       local marker = markers[marker_index]
       change.inline_markers[#change.inline_markers + 1] = { col = math.min(end_col, marker.col - offset) }
       marker_index = marker_index + 1
-    end
-    if opts.whitespace_mode == "trim" and change.tag == "modify" then
-      -- Keep character work per line. A large block can exceed the inline diff budget.
-      change.inline_ranges, change.inline_markers = trim_whitespace_inline_ranges(
-        other_lines[mapping[line]], text, change.inline_ranges, change.inline_markers)
     end
     offset = offset + length
     if opts.should_yield and opts.should_yield() then coroutine.yield() end
@@ -477,8 +479,8 @@ function M.compute(a_lines, b_lines, opts)
       local b_text = block_text(b_lines, change_start_b, bi - 1)
       local a_ranges, a_markers = inline_change(b_text, a_text, whitespace_mode)
       local b_ranges, b_markers = inline_change(a_text, b_text, whitespace_mode)
-      apply_block_inline(a_changes, a_lines, b_lines, a_to_b, change_start_a, ai - 1, a_ranges, a_markers, opts)
-      apply_block_inline(b_changes, b_lines, a_lines, b_to_a, change_start_b, bi - 1, b_ranges, b_markers, opts)
+      apply_block_inline(a_changes, a_lines, change_start_a, ai - 1, a_ranges, a_markers, opts)
+      apply_block_inline(b_changes, b_lines, change_start_b, bi - 1, b_ranges, b_markers, opts)
     end
     change_start_a, change_start_b = nil, nil
   end
