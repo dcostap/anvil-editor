@@ -3223,6 +3223,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
   local continuation_indent
   local current_list_marker = list_marker_for_line(view, line) ~= nil
   local continuation_parent
+  local leading = line_text:match("^[\t ]*") or ""
   for _, candidate in ipairs(semantic_nodes) do
     local candidate_marker = candidate.attributes and candidate.attributes.list
     if candidate.type == "list_item" and not candidate_marker then
@@ -3231,6 +3232,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
     if candidate.type == "list_item"
       and candidate_marker and candidate_marker.line1 < line
       and candidate.source.line1 < line and candidate.source.line2 >= line
+      -- A list range can end after the next block's leading spaces.
+      -- Those spaces do not make that block a list continuation.
+      and (candidate.source.line2 > line or candidate.source.col2 > #leading + 1)
       and (not continuation_parent
         or candidate_marker.line1 > continuation_parent.marker.line1)
     then
@@ -3250,7 +3254,6 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
     end
     if target_x then
       local body_font = markdown_live_body_font(view)
-      local leading = line_text:match("^[\t ]*") or ""
       local source_leading_width = body_font:get_width(
         string.rep(" ", markdown_visual_indent_width(markdown_indent_width(leading)))
       )
