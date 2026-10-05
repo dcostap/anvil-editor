@@ -10,6 +10,21 @@ local function wait_until(predicate, timeout)
 end
 
 test.describe("core scheduler threads", function()
+  test.it("preserves a requested delay after slow thread work", function()
+    local delayed_at, resumed_at
+    core.add_thread(function()
+      -- A blocking external call must not turn a long delay into rapid polling.
+      system.sleep(0.03)
+      delayed_at = system.get_time()
+      coroutine.yield(0.3)
+      resumed_at = system.get_time()
+    end)
+    test.ok(wait_until(function() return resumed_at ~= nil end, 2),
+      "delayed thread did not resume")
+    test.ok(resumed_at - delayed_at >= 0.3,
+      "slow work shortened the requested delay")
+  end)
+
   test.it("wakes a sleeping thread immediately by its stable key", function()
     local key = {}
     local runs = 0

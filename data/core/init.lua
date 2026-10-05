@@ -3099,11 +3099,10 @@ local run_threads = coroutine.wrap(function()
                 and thread.time / thread.calls
                 or thread.avg_time
             end
-            -- penalize slow coroutines by setting their wait time to the
-            -- same time it took to execute them.
+            -- Slow work can extend a delay, but must not shorten a caller's delay.
             if not wait or wait < 0 then
               wait = math.max(end_time, 0.002)
-            elseif end_time > wait or end_time > core.co_max_time then
+            elseif end_time > wait then
               wait = end_time
             end
             thread.wake = system.get_time() + wait
