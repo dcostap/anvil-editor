@@ -307,3 +307,55 @@ The final checks used isolated Meson apps. They did not replace or restart the d
 - `aa263c44`: repeatable scroll targets and reference captions.
 - `66f93ed9`: metric snapshot invalidation after row-map changes.
 - `8d650507`: saved render-baseline runtime path.
+
+## Diff wheel follow-up
+
+The full gate now includes wrapped and unwrapped Diff wheel scenes.
+Each scene sends 30 downward ticks and 10 upward ticks, then saves the Workspace.
+The scene verifies actual text movement and waits for both Diff Sides to settle.
+It captures four action checkpoints and three stable final images.
+Normal gate commands enforce the 6.06 ms frame budget. Report-only diagnosis stays separate.
+Frame work includes background tasks and scripted input dispatch, but excludes pacing sleep.
+
+Three targeted regressions failed before their fixes:
+
+- `runtime/core_threads.lua`: slow work shortened a requested coroutine delay.
+- `ui/perf_diff_workload.lua`: the generic scroll command did not move both Diff Sides.
+- `ui/diffview_line_packets.lua`: unchanged Diff text did not use cached drawing.
+
+These regressions pass after their fixes. The cache test also checks text after a Diff Side edit.
+The focused Python harness and diagnostic tests pass 39 checks.
+Lua syntax checks pass. No full correctness suite ran for these focused changes.
+
+The valid original reference is `20261006_002636_47200`.
+Earlier attempts lacked action captures or actual wheel movement. They do not support performance claims.
+The scheduler-only comparison is `20261006_002958_38120`.
+Its unwrapped pixels match the original reference exactly. It still exceeds the frame budget.
+
+The cache comparison at `20261006_003232_19276` replays the scheduler-only app beside each candidate run.
+It uses three throughput runs and two metrics runs. Diagnostics run separately and do not affect scores.
+
+| Unwrapped Diff wheel scene | Paired scheduler-only reference | Cached drawing |
+|---|---:|---:|
+| Active FPS | 128.74 | 173.70 |
+| Frame median | 6.124 ms | 4.146 ms |
+| Frame p95 | 12.899 ms | 7.040 ms |
+| Draw median | 5.019 ms | 3.031 ms |
+
+All unwrapped action checkpoints and final pixels match exactly.
+The wrapped check at `20261006_003723_49088` also matches every checkpoint and final pixel.
+That check uses one paired repetition. It establishes correctness, not a repeatable wrapped timing improvement.
+
+The strict gate remains **FAIL**. Unwrapped p95 exceeds 6.06 ms, despite the higher average throughput.
+Wrapped p95 also exceeds the budget. No accepted baseline or golden changed to hide these failures.
+The diagnostic scopes identify overview, divider, and line-background work as remaining drawing costs.
+They do not provide native call stacks or prove the cause of every slow frame.
+
+Workspace saves now log discovery, recovery, snapshot, serialization, and write costs separately.
+The small isolated Workspace has no persistent Diff View state.
+Its during-use writes cost about 2 ms; forced writes cost about 4–5 ms.
+These results do not explain the original 18.2 ms Workspace stall in a larger user session.
+Workspace writes remain synchronous. Use the new phase logs before changing persistence ownership.
+
+The report folders remain private, Git-ignored artifacts under `tools/perf-results/render-gate`.
+The original app snapshot remains unchanged for later paired comparisons.

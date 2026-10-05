@@ -291,6 +291,7 @@ local function save_workspace(during_use)
   local project = core.root_project and core.root_project()
   if not (project and project.path) then return end
 
+  local save_started = system.get_time()
   local project_dir = project.path
   local key = loaded_key_for(project_dir)
   if not (during_use and key) then
@@ -300,10 +301,12 @@ local function save_workspace(during_use)
     end
     clear_duplicate_workspace_entries(entries, key)
   end
+  local discovery_ended = system.get_time()
 
   -- Untitled recovery flushes changed buffers on its own schedule. A save
   -- during use only needs the pending ones.
   untitled_recovery.flush_all("workspace save", not during_use)
+  local recovery_ended = system.get_time()
   local pane_state = panes.save_workspace_state(save_view)
   local workspace = {
     version = 1,
@@ -314,9 +317,12 @@ local function save_workspace(during_use)
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
     zoom = scale.save_workspace_state(),
   }
+  local snapshot_ended = system.get_time()
   local text = common.serialize(workspace, { sort = true })
+  local serialization_ended = system.get_time()
   if during_use and key == last_saved_key and text == last_saved_text then return end
   storage.save(STORAGE_MODULE, key, workspace)
+  local write_ended = system.get_time()
   last_saved_key, last_saved_text = key, text
   loaded_workspace_key = key
   loaded_workspace_path = project_dir
@@ -327,6 +333,14 @@ local function save_workspace(during_use)
       project_dir,
       count_saved_views(pane_state),
       during_use and " during use" or ""
+    )
+    core.log_quiet(
+      "Workspace save timings: discovery=%.3fms recovery=%.3fms snapshot=%.3fms serialize=%.3fms write=%.3fms",
+      (discovery_ended - save_started) * 1000,
+      (recovery_ended - discovery_ended) * 1000,
+      (snapshot_ended - recovery_ended) * 1000,
+      (serialization_ended - snapshot_ended) * 1000,
+      (write_ended - serialization_ended) * 1000
     )
   end
 end
