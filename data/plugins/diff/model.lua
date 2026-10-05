@@ -57,6 +57,12 @@ function DiffModel:inline_ranges(side, line)
   return change and change.inline_ranges or nil
 end
 
+function DiffModel:inline_markers(side, line)
+  local changes = side_changes(self, side)
+  local change = changes and changes[line]
+  return change and change.inline_markers or {}
+end
+
 local function token_segments(text)
   local segments, values = {}, {}
   local cursor = 1
@@ -124,12 +130,14 @@ local function append_token_range(ranges, target, col1, col2, tag)
 end
 
 local function changed_target_spans(from, target)
-  local spans, target_index = {}, 1
+  local spans, gaps, target_index = {}, {}, 1
   local first, last, has_source
   local function flush()
     if first then
       -- A changed span with source and target text is a replacement.
       spans[#spans + 1] = { first = first, last = last, tag = has_source and "modify" or nil }
+    elseif has_source then
+      gaps[#gaps + 1] = target_index
     end
     first, last, has_source = nil, nil, nil
   end
@@ -145,7 +153,18 @@ local function changed_target_spans(from, target)
     if edit.b then target_index = target_index + 1 end
   end
   flush()
-  return spans
+  return spans, gaps
+end
+
+local function uncovered_markers(markers, ranges)
+  local result, index = {}, 1
+  for _, marker in ipairs(markers) do
+    while ranges[index] and ranges[index].col2 <= marker.col do index = index + 1 end
+    if not ranges[index] or marker.col < ranges[index].col1 then
+      result[#result + 1] = marker
+    end
+  end
+  return result
 end
 
 ---Use word alignment so repeated letters cannot make partially replaced words
@@ -155,15 +174,21 @@ local function token_inline_ranges(from, target)
   local _, from_values = token_segments(from)
   local target_segments, target_values = token_segments(target)
 
-  local ranges = {}
-  for _, span in ipairs(changed_target_spans(from_values, target_values)) do
+  local ranges, markers = {}, {}
+  local spans, gaps = changed_target_spans(from_values, target_values)
+  for _, span in ipairs(spans) do
     for index = span.first, span.last do
       local target_segment = target_segments[index]
       local col1, col2 = content_range(target_segment)
       append_token_range(ranges, target, col1, col2, span.tag)
     end
   end
-  return ranges
+  local last = target_segments[#target_segments]
+  for _, index in ipairs(gaps) do
+    local segment = target_segments[index]
+    markers[#markers + 1] = { col = segment and segment.col1 or (last and last.col2 or 1) }
+  end
+  return ranges, uncovered_markers(markers, ranges)
 end
 
 local function is_trim_space(byte)
@@ -224,7 +249,7 @@ local function merge_inline_ranges(ranges)
 end
 
 local function trim_whitespace_inline_ranges(from, target)
-  local ranges = token_inline_ranges(from, target)
+  local ranges, markers = token_inline_ranges(from, target)
   local target_col = 1
   for _, edit in ipairs(diff.inline_diff(from, target) or {}) do
     local value = edit.val or ""
@@ -240,7 +265,8 @@ local function trim_whitespace_inline_ranges(from, target)
       target_col = target_col + #value
     end
   end
-  return merge_inline_ranges(ranges)
+  ranges = merge_inline_ranges(ranges)
+  return ranges, uncovered_markers(markers, ranges)
 end
 
 local function whitespace_inline_ranges(from, target)
@@ -254,11 +280,16 @@ local function whitespace_inline_ranges(from, target)
     end
   end
 
-  local changed_columns = {}
-  for _, span in ipairs(changed_target_spans(from_values, target_values)) do
+  local changed_columns, markers = {}, {}
+  local spans, gaps = changed_target_spans(from_values, target_values)
+  for _, span in ipairs(spans) do
     for index = span.first, span.last do
       changed_columns[#changed_columns + 1] = { col = source_columns[index], tag = span.tag }
     end
+  end
+
+  for _, index in ipairs(gaps) do
+    markers[#markers + 1] = { col = source_columns[index] or ((source_columns[#source_columns] or 0) + 1) }
   end
 
   -- Match without whitespace, then expand changes to the original word boundaries.
@@ -279,12 +310,12 @@ local function whitespace_inline_ranges(from, target)
       append_token_range(ranges, target, segment.col1, segment.col2, tag)
     end
   end
-  return ranges
+  return ranges, uncovered_markers(markers, ranges)
 end
 
 local function inline_change(from, to, whitespace_mode)
   from, to = from or "", to or ""
-  if from == to then return nil, {} end
+  if from == to then return nil, {}, {} end
   if whitespace_mode == "ignore" then
     return nil, whitespace_inline_ranges(from, to)
   end
@@ -441,27 +472,29 @@ function M.compute(a_lines, b_lines, opts)
         b_to_a[bi] = ai
       end
       if edit.a then
-        local changes, inline_ranges = nil, {}
+        local changes, inline_ranges, inline_markers = nil, {}
         if edit.tag ~= "equal" then
-          changes, inline_ranges = inline_change(edit.b, edit.a, whitespace_mode)
+          changes, inline_ranges, inline_markers = inline_change(edit.b, edit.a, whitespace_mode)
         end
         a_changes[#a_changes + 1] = {
           tag = edit.tag,
           changes = changes,
           inline_ranges = inline_ranges,
+          inline_markers = inline_markers,
         }
         ai = ai + 1
         a_offset = 0
       end
       if edit.b then
-        local changes, inline_ranges = nil, {}
+        local changes, inline_ranges, inline_markers = nil, {}
         if edit.tag ~= "equal" then
-          changes, inline_ranges = inline_change(edit.a, edit.b, whitespace_mode)
+          changes, inline_ranges, inline_markers = inline_change(edit.a, edit.b, whitespace_mode)
         end
         b_changes[#b_changes + 1] = {
           tag = edit.tag,
           changes = changes,
           inline_ranges = inline_ranges,
+          inline_markers = inline_markers,
         }
         bi = bi + 1
         b_offset = 0

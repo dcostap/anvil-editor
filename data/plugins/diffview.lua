@@ -1962,6 +1962,10 @@ local function diff_decoration_provider(parent, is_a)
           color = range.tag == "modify" and style.diff_modify_inline or color,
         }
       end
+      local marker_color = is_a and style.diff_insert_inline or style.diff_delete_inline
+      for _, marker in ipairs(change.inline_markers or {}) do
+        ranges[#ranges + 1] = { col1 = marker.col, col2 = marker.col, marker = true, color = marker_color }
+      end
       return ranges
     end,
     text_color = function(_, view, line)

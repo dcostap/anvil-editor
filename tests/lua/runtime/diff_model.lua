@@ -113,6 +113,35 @@ test.describe("DiffModel", function()
       test.equal(old.tag, "modify")
       test.equal(new.tag, "modify")
       test.ok(addition.tag ~= "modify", "added text is not a replacement")
+      local markers = m:inline_markers("a", 2)
+      test.ok(#markers > 0, "the retained separator must show an insertion marker")
+      local first = before[2]:find("➜", 1, true)
+      local last = before[2]:find("${vehiculos.last()}", 1, true)
+      for _, marker in ipairs(markers) do
+        test.ok(marker.col >= first and marker.col <= last, "the marker must stay at the separator")
+        local byte = before[2]:byte(marker.col)
+        test.ok(byte < 128 or byte >= 192, "the marker must not split a UTF-8 character")
+      end
+    end
+  end)
+
+  test.it("marks inline additions on the unchanged side without adding text", function()
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      for _, example in ipairs {
+        { "head tail", "head extra tail", 6 },
+        { "head", "extra head", 1 },
+        { "head", "head extra", 5 },
+      } do
+        local before, after, col = example[1], example[2], example[3]
+        local m = model.compute({ before }, { after }, { whitespace_mode = mode })
+        test.same(m:inline_markers("a", 1), { { col = col } })
+        test.same(m:inline_ranges("a", 1), {})
+        local reversed = model.compute({ after }, { before }, { whitespace_mode = mode })
+        test.same(reversed:inline_markers("b", 1), { { col = col } })
+        local replaced = model.compute({ "head old tail" }, { "head new tail" }, { whitespace_mode = mode })
+        test.same(replaced:inline_markers("a", 1), {})
+        test.same(replaced:inline_markers("b", 1), {})
+      end
     end
   end)
 

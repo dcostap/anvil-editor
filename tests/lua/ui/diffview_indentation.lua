@@ -164,6 +164,14 @@ test.describe("Diff View change backgrounds", function()
       local x, y = surface:get_line_screen_position(line, col)
       test.same(color_at(x + 1, y + 1), expected)
     end
+    local function check_markers(surface, line, markers)
+      test.ok(#markers > 0, "the retained arrow must show the insertion position")
+      local color_at = backgrounds(surface, line)
+      for _, marker in ipairs(markers) do
+        local x, y = surface:get_line_screen_position(line, marker.col)
+        test.same(color_at(x + style.caret_width / 2, y + 1), style.diff_insert_inline)
+      end
+    end
     for _, mode in ipairs { "none", "trim", "ignore" } do
       config.plugins.diffview.whitespace_mode = mode
       config.plugins.diffview.unified_width_threshold = 0
@@ -171,12 +179,45 @@ test.describe("Diff View change backgrounds", function()
       check(view.buffer_view_a, 1, ",", style.diff_modify_inline)
       check(view.buffer_view_b, 1, "➜", style.diff_modify_inline)
       check(view.buffer_view_b, 2, "(...)", style.diff_insert_inline)
+      local markers = view.diff_model:inline_markers("a", 2)
+      check_markers(view.buffer_view_a, 2, markers)
       config.plugins.diffview.unified_width_threshold = 10000
       view:update()
       local unified = view:get_focus_view()
       check(unified, 1, ",", style.diff_modify_inline)
       check(unified, 3, "➜", style.diff_modify_inline)
       check(unified, 4, "(...)", style.diff_insert_inline)
+      check_markers(unified, 2, markers)
+    end
+  end)
+
+  test.it("shows an inline addition or deletion marker on the unchanged side in both layouts", function(context)
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      for _, wrapped in ipairs { false, true } do
+        for _, reverse in ipairs { false, true } do
+          config.plugins.diffview.whitespace_mode = mode
+          config.plugins.diffview.unified_width_threshold = 0
+          local prefix = wrapped and string.rep("keep ", 20) or ""
+          local short, expanded = prefix .. "head tail", prefix .. "head extra tail"
+          local before, after = short, expanded
+          if reverse then before, after = after, before end
+          local view = open_diff(context, before, after, wrapped)
+          local side = reverse and view.buffer_view_b or view.buffer_view_a
+          local col = #prefix + 6
+          local expected = reverse and style.diff_delete_inline or style.diff_insert_inline
+          local function check(surface, line)
+            local color_at = backgrounds(surface, line)
+            local x, y = surface:get_line_screen_position(line, col)
+            test.same(color_at(x + style.caret_width / 2, y + 1), expected)
+          end
+          if wrapped then test.ok(side:get_visual_row_count_for_line(1) > 1, "fixture must wrap") end
+          test.equal(table.concat(side.buffer.lines), short .. "\n")
+          check(side, 1)
+          config.plugins.diffview.unified_width_threshold = 10000
+          view:update()
+          check(view:get_focus_view(), reverse and 2 or 1)
+        end
+      end
     end
   end)
 
@@ -191,7 +232,8 @@ test.describe("Diff View change backgrounds", function()
     end
     check(view.buffer_view_a, 2, 5, style.diff_delete_inline)
     check(view.buffer_view_b, 4, 9, style.diff_insert_inline)
-    check(view.buffer_view_b, 3, 9, style.diff_modify_background)
+    check(view.buffer_view_b, 3, 9, style.diff_delete_inline)
+    check(view.buffer_view_b, 3, 12, style.diff_modify_background)
     -- Text emphasis ends with the content, not at the edge of the surface.
     check(view.buffer_view_b, 4, #view.buffer_view_b.buffer.lines[4], style.diff_modify_background)
 

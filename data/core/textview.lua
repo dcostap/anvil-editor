@@ -8065,7 +8065,16 @@ local function draw_decoration_inline_ranges(view, line, x, y, method)
       local col2 = math.max(col1, math.floor(tonumber(range.col2 or range[2]) or col1))
       local color = range.color or range[3]
       if color then
-        if render_line and not view.wrapped_settings
+        if range.marker then
+          -- Position markers have no text width and do not act as editing carets.
+          local base_x, base_y = view:get_line_screen_position(line)
+          local marker_x, marker_y = view:get_line_screen_position(line, col1)
+          renderer.draw_rect(
+            x + marker_x - base_x, y + marker_y - base_y,
+            math.max(1, common.round(style.caret_width)),
+            view:get_position_visual_row_height(line, col1), color
+          )
+        elseif render_line and not view.wrapped_settings
         and not (type(render_line.position_rows) == "table"
           and #render_line.position_rows > 0)
         then
