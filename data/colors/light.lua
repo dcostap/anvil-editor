@@ -138,12 +138,12 @@ style.terminal_palette = {
 }
 
 -- Diff/search/selection-like colors
-style.diff_delete = c("ffe5e5")
-style.diff_insert = c("e3f7e7")
-style.diff_modify = c("edf3ff")
-style.diff_delete_background = { common.color "rgba(255, 229, 229, 0.80)" }
-style.diff_insert_background = c("e3f7e7")
-style.diff_modify_background = c("edf3ff")
+style.diff_delete = c("ffd9d9")
+style.diff_insert = c("d3eed9")
+style.diff_modify = c("dbe7fb")
+style.diff_delete_background = style.diff_delete
+style.diff_insert_background = style.diff_insert
+style.diff_modify_background = style.diff_modify
 style.diff_delete_inline = { common.color "rgba(255, 193, 193, 0.65)" }
 style.diff_insert_inline = { common.color "rgba(184, 231, 194, 0.65)" }
 style.diff_modify_inline = { common.color "rgba(191, 216, 248, 0.65)" }
