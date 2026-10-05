@@ -63,7 +63,7 @@ function UnifiedView:new(parent)
       local change = changes[row.b or row.a]
       local ranges = {}
       for _, range in ipairs(change and change.inline_ranges or {}) do
-        ranges[#ranges + 1] = { col1 = range.col1, col2 = range.col2, color = style.diff_modify_inline }
+        ranges[#ranges + 1] = { col1 = range.col1, col2 = range.col2, color = style["diff_" .. row.tag .. "_inline"] }
       end
       return ranges
     end,

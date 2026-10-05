@@ -83,7 +83,7 @@ local function draw_row(view, row, x, y, width, height)
     for _, range in ipairs(row.inline_ranges or {}) do
       local left = font:get_width(row.text:sub(1, range.col1 - 1))
       local right = font:get_width(row.text:sub(1, range.col2 - 1))
-      renderer.draw_rect(x + left, y, right - left, height, style.diff_modify_inline)
+      renderer.draw_rect(x + left, y, right - left, height, style.diff_delete_inline)
     end
     -- Provider rows already receive the scrolled text origin. Keep code
     -- previews aligned with the source line instead of adding another offset.
@@ -183,7 +183,7 @@ function M.show(view, point, title, lines, options)
         local ranges = {}
         for _, range in ipairs(change.inline_ranges) do
           ranges[#ranges + 1] = {
-            col1 = range.col1, col2 = range.col2, color = style.diff_modify_inline,
+            col1 = range.col1, col2 = range.col2, color = style.diff_insert_inline,
           }
         end
         return ranges
