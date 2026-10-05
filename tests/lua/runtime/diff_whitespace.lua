@@ -31,6 +31,23 @@ test.describe("Diff whitespace comparison", function()
     test.same(new_ranges, {})
   end)
 
+  test.it("keeps internal whitespace visible throughout a long modified block", function()
+    local before, after = {}, {}
+    for line = 1, 200 do
+      before[line] = string.format("label_%d = value_%d\n", line, line)
+      after[line] = string.format("label_%d=value_%d\n", line, line)
+    end
+    local m = model.compute(before, after, { whitespace_mode = "trim" })
+    for line, text in ipairs(before) do
+      local highlighted = {}
+      for _, range in ipairs(m:inline_ranges("a", line) or {}) do
+        highlighted[#highlighted + 1] = text:sub(range.col1, range.col2 - 1)
+      end
+      test.same(highlighted, { " ", " " })
+      test.same(m:inline_ranges("b", line), {})
+    end
+  end)
+
   test.it("ignores whitespace throughout a line without changing the source text", function()
     local before = { '\t label = "a b" \t\n', "    loading = false\n" }
     local after = { 'label="ab"\n', "        loading=false  \n" }

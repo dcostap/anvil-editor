@@ -288,16 +288,8 @@ local function merge_inline_ranges(ranges)
   return merged
 end
 
-local function trim_whitespace_inline_ranges(from, target)
-  local ranges, markers = token_inline_ranges(from, target)
-  local internal_spaces, offset = {}, 0
-  for line in (target .. "\n"):gmatch("(.-\n)") do
-    local first, last = trim_content_bounds(line)
-    for col = first, last do
-      if is_trim_space(line:byte(col)) then internal_spaces[offset + col] = true end
-    end
-    offset = offset + #line
-  end
+local function trim_whitespace_inline_ranges(from, target, ranges, markers)
+  local first, last = trim_content_bounds(target)
   local target_col = 1
   for _, edit in ipairs(diff.inline_diff(from, target) or {}) do
     local value = edit.val or ""
@@ -305,7 +297,7 @@ local function trim_whitespace_inline_ranges(from, target)
       if edit.tag ~= "equal" then
         for offset = 0, #value - 1 do
           local col = target_col + offset
-          if internal_spaces[col] then
+          if col >= first and col <= last and is_trim_space(target:byte(col)) then
             append_inline_range(ranges, col)
           end
         end
@@ -323,9 +315,6 @@ local function inline_change(from, to, whitespace_mode)
   if whitespace_mode == "ignore" then
     return token_inline_ranges(from, to, true)
   end
-  if whitespace_mode == "trim" then
-    return trim_whitespace_inline_ranges(from, to)
-  end
   return token_inline_ranges(from, to)
 end
 
@@ -339,7 +328,7 @@ local function block_text(lines, first, last)
   return table.concat(text)
 end
 
-local function apply_block_inline(changes, lines, first, last, ranges, markers, opts)
+local function apply_block_inline(changes, lines, other_lines, mapping, first, last, ranges, markers, opts)
   local offset, range_index, marker_index = 0, 1, 1
   for line = first, last do
     local text = lines[line]
@@ -368,6 +357,11 @@ local function apply_block_inline(changes, lines, first, last, ranges, markers, 
       local marker = markers[marker_index]
       change.inline_markers[#change.inline_markers + 1] = { col = math.min(end_col, marker.col - offset) }
       marker_index = marker_index + 1
+    end
+    if opts.whitespace_mode == "trim" and change.tag == "modify" then
+      -- Keep character work per line. A large block can exceed the inline diff budget.
+      change.inline_ranges, change.inline_markers = trim_whitespace_inline_ranges(
+        other_lines[mapping[line]], text, change.inline_ranges, change.inline_markers)
     end
     offset = offset + length
     if opts.should_yield and opts.should_yield() then coroutine.yield() end
@@ -483,8 +477,8 @@ function M.compute(a_lines, b_lines, opts)
       local b_text = block_text(b_lines, change_start_b, bi - 1)
       local a_ranges, a_markers = inline_change(b_text, a_text, whitespace_mode)
       local b_ranges, b_markers = inline_change(a_text, b_text, whitespace_mode)
-      apply_block_inline(a_changes, a_lines, change_start_a, ai - 1, a_ranges, a_markers, opts)
-      apply_block_inline(b_changes, b_lines, change_start_b, bi - 1, b_ranges, b_markers, opts)
+      apply_block_inline(a_changes, a_lines, b_lines, a_to_b, change_start_a, ai - 1, a_ranges, a_markers, opts)
+      apply_block_inline(b_changes, b_lines, a_lines, b_to_a, change_start_b, bi - 1, b_ranges, b_markers, opts)
     end
     change_start_a, change_start_b = nil, nil
   end
