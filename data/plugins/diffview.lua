@@ -1943,7 +1943,7 @@ local function diff_decoration_provider(parent, is_a)
         added_width = math.max(0, font:get_width(indent) - font:get_width(other_indent))
       end
       return {
-        color = background_color(side_tag),
+        color = background_color("modify"),
         left_color = added_width > 0 and style["diff_" .. side_tag .. "_inline"] or nil,
         -- Keep the changed indentation band on continuation rows too.
         -- The text origin includes the gutter; the background does not.

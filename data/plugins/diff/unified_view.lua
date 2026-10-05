@@ -54,7 +54,10 @@ function UnifiedView:new(parent)
   self:add_decoration_provider("diff-view", {
     line_background = function(_, _, line)
       local row = self.rows[line]
-      if row and row.tag ~= "equal" then return style["diff_" .. row.tag .. "_background"] end
+      if not row or row.tag == "equal" then return end
+      local changes = row.b and parent.b_changes or parent.a_changes
+      local change = changes[row.b or row.a]
+      if change then return style["diff_" .. change.tag .. "_background"] end
     end,
     inline_ranges = function(_, _, line)
       local row = self.rows[line]
