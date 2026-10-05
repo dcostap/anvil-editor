@@ -61,6 +61,7 @@ static Uint32 event_window_id(const SDL_Event *e) {
     case SDL_EVENT_WINDOW_MAXIMIZED:
     case SDL_EVENT_WINDOW_RESTORED:
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+    case SDL_EVENT_WINDOW_MOUSE_ENTER:
     case SDL_EVENT_WINDOW_FOCUS_LOST:
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
@@ -231,6 +232,7 @@ static int f_poll_event(lua_State *L) {
   SDL_Event e;
 
 top:
+  anvil_hosted_surface_poll();
   last_event_window_id = 0;
   if ( !system_event_pop(&e) ) {
     return 0;
@@ -291,6 +293,9 @@ top:
 
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
       lua_pushstring(L, "mouseleft");
+      return 1;
+    case SDL_EVENT_WINDOW_MOUSE_ENTER:
+      lua_pushstring(L, "mouseentered");
       return 1;
 
     case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -530,6 +535,9 @@ top:
       // Custom event types are higher than SDL_EVENT_USER
       if (anvil_hosted_surface_loss_event(e.type)) {
         lua_pushliteral(L, "shelllost"); return 1;
+      }
+      if (anvil_hosted_surface_configuration_event(e.type)) {
+        lua_pushliteral(L, "windowconfiguration"); return 1;
       }
       if (e.type >= SDL_EVENT_USER) {
         CustomEventCallback cec = get_custom_event_callback_by_type(e.type);

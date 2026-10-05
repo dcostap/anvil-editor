@@ -163,3 +163,49 @@ void anvil_latency_probe_start(SDL_Window *window, void (*finish)(void)) {
   probe.thread = SDL_CreateThread(generator_thread, "anvil-latency-probe", NULL);
   if (probe.thread) SDL_DetachThread(probe.thread);
 }
+
+bool anvil_routing_probe_message(SDL_Window *window, uint32_t message, uintptr_t action, intptr_t point) {
+  if (message != ANVIL_ROUTING_PROBE_MESSAGE || action > 6) return false;
+  const char *enabled = SDL_getenv("ANVIL_INPUT_ROUTING_PROBE");
+  if (!enabled || strcmp(enabled, "1")) return false;
+  SDL_Event event = {0};
+  float x = (int16_t)(point & 0xffff);
+  float y = (int16_t)((point >> 16) & 0xffff);
+  if (action == 0) {
+    event.type = SDL_EVENT_MOUSE_MOTION;
+    event.motion.windowID = SDL_GetWindowID(window);
+    event.motion.x = x;
+    event.motion.y = y;
+  } else if (action == 3) {
+    event.type = SDL_EVENT_MOUSE_WHEEL;
+    event.wheel.windowID = SDL_GetWindowID(window);
+    event.wheel.mouse_x = x;
+    event.wheel.mouse_y = y;
+    event.wheel.y = -1;
+  } else if (action >= 4) {
+    event.type = action == 4 ? SDL_EVENT_DROP_BEGIN : action == 5 ? SDL_EVENT_DROP_TEXT : SDL_EVENT_DROP_COMPLETE;
+    event.drop.windowID = SDL_GetWindowID(window);
+    event.drop.x = x;
+    event.drop.y = y;
+    if (action == 5) {
+      /* Fixed owned fixture: exceed the old half-packet truncation bound. */
+      static char text[40001];
+      memset(text, 'z', 40000);
+      const char prefix[] = "DROP_λ中\n\n";
+      memcpy(text, prefix, sizeof(prefix) - 1);
+      text[39998] = text[39999] = '\n';
+      text[40000] = 0;
+      event.drop.data = text;
+    }
+  } else {
+    event.type = action == 1 ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+    event.button.windowID = SDL_GetWindowID(window);
+    event.button.button = SDL_BUTTON_LEFT;
+    event.button.down = action == 1;
+    event.button.clicks = 1;
+    event.button.x = x;
+    event.button.y = y;
+  }
+  SDL_PushEvent(&event);
+  return true;
+}

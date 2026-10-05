@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 4u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 5u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -73,6 +73,8 @@ typedef enum {
 } AnvilSurfaceCursor;
 
 typedef struct {
+  uint64_t configuration;
+  int32_t origin_x, origin_y;        /* physical client pixels */
   int32_t pixel_w, pixel_h;          /* surface size */
   int32_t window_x, window_y;        /* shell window bounds, for saved app state */
   int32_t window_w, window_h;
@@ -85,6 +87,7 @@ typedef struct {
 } AnvilSurfaceConfigure;
 
 typedef struct {
+  uint64_t configuration;
   SDL_Event event;     /* window IDs and text pointers are rewritten by the receiver */
   uint32_t text_len;   /* UTF-8 bytes that follow, for text, editing, and drop events */
 } AnvilSurfaceInput;
@@ -96,6 +99,7 @@ typedef struct { uint32_t pid; } AnvilSurfaceHello;
 typedef struct {
   uint32_t kind;         /* AnvilSurfaceFrameKind */
   uint32_t generation;   /* increments for every published frame */
+  uint64_t configuration;
   int32_t width, height;
   uint64_t input_seq;    /* highest latency-probe input consumed before this frame */
   char name[ANVIL_SURFACE_NAME_MAX];
@@ -107,19 +111,26 @@ typedef struct {
 typedef struct {
   int32_t width, height, stride;
   uint32_t generation;
+  uint64_t configuration;
 } AnvilSurfaceMemoryHeader;
 
 typedef struct {
   int32_t active;      /* 1 starts text input, 0 stops it, -1 only moves the area */
   int32_t x, y, w, h;  /* IME area in surface coordinates */
   int32_t cursor;
+  uint64_t configuration;
 } AnvilSurfaceTextInput;
 
 /* Title Bar layout in surface coordinates. All zero disables the Title Bar. */
 typedef struct {
   int32_t title_height, controls_width, resize_border;
   int32_t client_x, client_width, client2_x, client2_width;
+  uint64_t configuration;
 } AnvilSurfaceHitTest;
+
+bool anvil_surface_frame_matches(const AnvilSurfaceConfigure *config, const AnvilSurfaceFrame *frame);
+bool anvil_surface_text_area(const AnvilSurfaceConfigure *config, const AnvilSurfaceTextInput *input, SDL_Rect *area, int *cursor);
+void anvil_surface_translate_input(const AnvilSurfaceConfigure *config, SDL_Event *event);
 
 typedef struct {
   int32_t x, y, w, h;

@@ -96,6 +96,16 @@ static void trace_input_event(const SDL_Event *event, const char *stage, int dep
 static SDL_Event system_event_queue[SYSTEM_EVENT_QUEUE_SIZE];
 static int       system_event_queue_read  = 0;
 static int       system_event_queue_count = 0;
+static char *system_event_text[SYSTEM_EVENT_QUEUE_SIZE];
+/* A popped payload stays valid until the next pop, like SDL event payloads. */
+static char *system_popped_text;
+
+static const char *event_text(const SDL_Event *event) {
+  if (event->type == SDL_EVENT_TEXT_INPUT) return event->text.text;
+  if (event->type == SDL_EVENT_TEXT_EDITING) return event->edit.text;
+  if (event->type == SDL_EVENT_DROP_FILE || event->type == SDL_EVENT_DROP_TEXT) return event->drop.data;
+  return NULL;
+}
 
 /* Keep this in sync with the switch in f_poll_event() (src/api/system.c).
  * Only types listed here are allowed into the ring buffer; everything else
@@ -114,6 +124,7 @@ static bool system_event_is_handled(uint32_t type) {
     case SDL_EVENT_WINDOW_MAXIMIZED:
     case SDL_EVENT_WINDOW_RESTORED:
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+    case SDL_EVENT_WINDOW_MOUSE_ENTER:
     case SDL_EVENT_WINDOW_FOCUS_LOST:
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -202,10 +213,10 @@ static uint32_t system_event_window_id(const SDL_Event *event) {
   }
 }
 
-void system_push_event(const SDL_Event *event) {
+bool system_push_event(const SDL_Event *event) {
   /* Discard event types that f_poll_event() never consumes */
   if (!system_event_is_handled(event->type))
-    return;
+    return true;
 
   int queue_depth_before = system_event_queue_count;
   uint32_t event_window_id = system_event_window_id(event);
@@ -225,6 +236,7 @@ void system_push_event(const SDL_Event *event) {
                              event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
       bool queued_resize_or_pixel = system_event_queue[idx].type == SDL_EVENT_WINDOW_RESIZED ||
                                     system_event_queue[idx].type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
+      if (!same_window || !(same_type || (resize_or_pixel && queued_resize_or_pixel))) break;
       if (same_window && (same_type || (resize_or_pixel && queued_resize_or_pixel))) {
         const char *detail = same_type ? "same_type_resize" : "resize_pixel_pair";
         if (system_event_queue[idx].type == SDL_EVENT_WINDOW_RESIZED &&
@@ -239,7 +251,7 @@ void system_push_event(const SDL_Event *event) {
             .count_a = queue_depth_before,
             .detail = detail
           });
-          return;
+          return true;
         }
         system_event_queue[idx] = *event;
         anvil_resize_diag_log(&(AnvilResizeDiagEvent){
@@ -252,7 +264,7 @@ void system_push_event(const SDL_Event *event) {
           .count_a = queue_depth_before,
           .detail = detail
         });
-        return;
+        return true;
       }
     }
   /* Coalesce consecutive mouse-motion events for the same window */
@@ -265,8 +277,9 @@ void system_push_event(const SDL_Event *event) {
         system_event_queue[idx].motion.y    = event->motion.y;
         system_event_queue[idx].motion.xrel += event->motion.xrel;
         system_event_queue[idx].motion.yrel += event->motion.yrel;
-        return;
+        return true;
       }
+      break;
     }
   /* A drop position has no payload. Keep only the latest consecutive position. */
   } else if (event->type == SDL_EVENT_DROP_POSITION && system_event_queue_count > 0) {
@@ -274,7 +287,7 @@ void system_push_event(const SDL_Event *event) {
     if (system_event_queue[idx].type == SDL_EVENT_DROP_POSITION &&
         system_event_queue[idx].drop.windowID == event->drop.windowID) {
       system_event_queue[idx] = *event;
-      return;
+      return true;
     }
   /* Coalesce consecutive finger-motion events for the same finger */
   } else if (event->type == SDL_EVENT_FINGER_MOTION) {
@@ -286,8 +299,9 @@ void system_push_event(const SDL_Event *event) {
         system_event_queue[idx].tfinger.y  = event->tfinger.y;
         system_event_queue[idx].tfinger.dx += event->tfinger.dx;
         system_event_queue[idx].tfinger.dy += event->tfinger.dy;
-        return;
+        return true;
       }
+      break;
     }
   }
 
@@ -295,6 +309,19 @@ void system_push_event(const SDL_Event *event) {
     int write_idx = (system_event_queue_read + system_event_queue_count)
                     % SYSTEM_EVENT_QUEUE_SIZE;
     system_event_queue[write_idx] = *event;
+    const char *text = event_text(event);
+    char *copy = text ? SDL_strdup(text) : NULL;
+    if (text && !copy) {
+      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Cannot retain queued input text");
+      return false;
+    }
+    system_event_text[write_idx] = copy;
+    if (event->type == SDL_EVENT_TEXT_INPUT) system_event_queue[write_idx].text.text = copy;
+    if (event->type == SDL_EVENT_TEXT_EDITING) system_event_queue[write_idx].edit.text = copy;
+    if (event->type == SDL_EVENT_DROP_FILE || event->type == SDL_EVENT_DROP_TEXT) {
+      system_event_queue[write_idx].drop.data = copy;
+      system_event_queue[write_idx].drop.source = NULL;
+    }
     system_event_queue_count++;
     trace_input_event(event, "queued", system_event_queue_count);
     anvil_resize_diag_log(&(AnvilResizeDiagEvent){
@@ -319,7 +346,9 @@ void system_push_event(const SDL_Event *event) {
     });
     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                 "system event queue full; dropping event type 0x%x", event->type);
+    return false;
   }
+  return true;
 }
 
 void system_flush_events(uint32_t type) {
@@ -329,10 +358,15 @@ void system_flush_events(uint32_t type) {
     int src = (system_event_queue_read + i) % SYSTEM_EVENT_QUEUE_SIZE;
     if (system_event_queue[src].type != type) {
       int dst = (new_read + new_count) % SYSTEM_EVENT_QUEUE_SIZE;
-      if (src != dst)
+      if (src != dst) {
         system_event_queue[dst] = system_event_queue[src];
+        system_event_text[dst] = system_event_text[src];
+        system_event_text[src] = NULL;
+      }
       new_count++;
     } else {
+      SDL_free(system_event_text[src]);
+      system_event_text[src] = NULL;
       trace_input_event(&system_event_queue[src], "flushed", system_event_queue_count);
     }
   }
@@ -349,8 +383,12 @@ int system_pending_event_count(void) {
 }
 
 bool system_event_pop(SDL_Event *event) {
+  SDL_free(system_popped_text);
+  system_popped_text = NULL;
   if (system_event_queue_count == 0) return false;
   *event = system_event_queue[system_event_queue_read];
+  system_popped_text = system_event_text[system_event_queue_read];
+  system_event_text[system_event_queue_read] = NULL;
   system_event_queue_read  = (system_event_queue_read + 1) % SYSTEM_EVENT_QUEUE_SIZE;
   system_event_queue_count--;
   trace_input_event(event, "polled", system_event_queue_count);

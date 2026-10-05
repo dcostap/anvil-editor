@@ -624,6 +624,7 @@ end
 function RootPanel:on_mouse_left()
   local view = self.overlapping_view
   self.overlapping_view = nil
+  if core.title_bar and core.title_bar ~= view then core.title_bar:on_mouse_left() end
   return call_view(view, "on_mouse_left")
 end
 

@@ -9,7 +9,7 @@
  * Called from SDL_AppEvent so that system.poll_event can consume events
  * even when using the SDL3 main-callbacks API (SDL_MAIN_USE_CALLBACKS).
  * Motion events (mouse/touch) are coalesced automatically. */
-void system_push_event(const SDL_Event *event);
+bool system_push_event(const SDL_Event *event);
 
 /* Remove all queued events with the given type from the internal queue.
  * Should be called alongside SDL_FlushEvent() for the same type. */
@@ -23,7 +23,8 @@ bool system_has_pending_events(void);
 int system_pending_event_count(void);
 
 /* Pop the next event from the internal queue into *event.
- * Returns true if an event was available, false if the queue was empty. */
+ * Returns true if an event was available, false if the queue was empty.
+ * Text remains valid until the next pop. */
 bool system_event_pop(SDL_Event *event);
 
 /* Keep native input records in memory until Lua writes the session log. */

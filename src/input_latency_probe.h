@@ -20,4 +20,8 @@ void anvil_latency_probe_note_event(const SDL_Event *event);
 uint64_t anvil_latency_probe_consumed_seq(void);
 void anvil_latency_probe_presented(uint64_t consumed_seq);
 
+/* Owned-window actions for the private-desktop routing scenario. */
+#define ANVIL_ROUTING_PROBE_MESSAGE 0x804au
+bool anvil_routing_probe_message(SDL_Window *window, uint32_t message, uintptr_t action, intptr_t point);
+
 #endif

@@ -4,7 +4,8 @@ This plan follows [Phase 2](PHASE2_TERMINAL_SESSIONS.md) and
 [the multiprocess shell plan](MULTIPROCESS_SHELL_PLAN.md).
 Read both before implementation.
 
-Status: Milestone 1 is complete. Later milestones remain planned.
+Status: Milestones 1 to 3 are implemented. Real IME and mixed-DPI checks remain open.
+Milestones 4 and 5 remain planned. Hosted mode remains opt-in.
 Phase 2 Milestones 1 to 4 are complete.
 
 ## Goal
@@ -508,6 +509,100 @@ Evidence folders under `%LOCALAPPDATA%\Temp`:
 - Complete real IME candidate and mixed-DPI verification, or report the unavailable gate explicitly.
 - Compare direct and hosted presented-input latency on both renderers.
 
+Implemented:
+
+- Surface protocol 5 identifies the configuration used by input, frames, IME areas, and Title Bar regions.
+- The shell reports the physical surface origin. Pointer routing and presentation use that rectangle.
+- SDL points convert to physical client pixels once. Display scale does not multiply packet coordinates.
+- The shell owns capture until button release. Sidebar crossings do not change a pressed target.
+- Focus loss, capture loss, and connection loss release pressed state. Focus loss also cancels composition.
+- Replacement clears composition and capture. Connection IDs reject old queued shell notifications.
+- Text and drop payloads have owned storage. Queue text remains valid until the next pop.
+- The Project applies configuration, focus, and input in caller-visible order, not on the reader thread.
+- Motion and resize coalescing never crosses an intervening event.
+- Frame checks cover configuration, dimensions, resource owner, stride, and mapped storage.
+- IME clipping adds both origin coordinates and retains the cursor offset within the clipped area.
+- Configuration changes invalidate composition, IME placement, and Title Bar regions.
+- Required-message queue failure ends the connection visibly. It does not silently lose one key.
+
+The busy-frame timer now exists only during a failed acquisition. A successful load removes it.
+Hover redraw uses cached GDI resources and native UI rectangles, not a full texture upload.
+Milestone 2 UI statements now use separate lines.
+
+#### Focused red-green evidence
+
+- `drop-events` failed when queued UTF-8 text retained borrowed storage.
+- It also failed when motion replaced an event before an intervening button event.
+- `hosted-routing` failed when the reader changed focus before the UI consumed its packet.
+- It rejected a same-size frame only after the configuration check was added.
+- The configuration-order check failed when scale changed ahead of earlier queued text.
+- The cursor check failed when clipping changed the candidate offset incorrectly.
+- Captured Sidebar crossings failed to emit leave and enter events while retaining capture.
+- `ui/titlebar_hosted.lua` failed because Project leave retained Title Bar hover.
+- `ui/textview_ime.lua` failed with `composition survived focus loss` without the focus-loss change.
+- Restoring the old truncation rule failed the private-desktop 40 KB text drop.
+  The result reported `hosted text drop lost complete UTF-8 or trailing lines`.
+
+The native routing and event-queue checks now pass.
+Private-desktop routing passes with D3D11 and software Project renderers.
+It checks native capture, selection across the Sidebar, release, wheel, focus loss, and complete text drops.
+The drop retains UTF-8, blank lines, and trailing lines. It opens a new Pane instead of replacing work.
+Native controls and Project restart also pass after the routing changes.
+
+The routing fixture uses internal SDL input actions on the owned inactive desktop.
+Posted Win32 button messages alone trigger SDL's real-button release checks and cannot prove a held drag there.
+Native capture checks use the owned thread's GUI state. Focus cancellation uses its native focus-loss notification.
+These checks do not prove physical mouse input, real IME candidate placement, or mixed-DPI monitor moves.
+Those interactive IME and mixed-DPI gates remain unavailable in this session.
+No user window or desktop was used for verification.
+
+Evidence:
+
+- Large-drop red: `anvil-surface-latency-n6plfm0r`.
+- D3D11 routing, controls, restart, switch, and shell loss: `anvil-surface-latency-bzm8i3f8`.
+- Software routing, controls, and restart: `anvil-surface-latency-a2dseswj`.
+- Captured-hover red: `anvil-surface-latency-9xeuute0` and `phase3-m3-hover-red`.
+- Captured-hover green: `anvil-surface-latency-ca6qikgy`, `anvil-surface-latency-gzukabnn`, and `phase3-m3-hover-green`.
+- Meson logs: `phase3-m3-cache-order-red`, `phase3-m3-cache-order-green`, and `phase3-m3-cursor-red`.
+- IME logs: `phase3-m3-ime-red` and `phase3-m3-ime-green`.
+
+```sh
+meson test -C build-windows-x86_64 anvil:hosted-routing anvil:drop-events
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/textview_ime.lua
+python tools/run_surface_latency_probe.py --no-build --project-case routing \
+  --project-case controls --project-case restart --keep
+python tools/run_surface_latency_probe.py --no-build --renderer software \
+  --project-case routing --project-case controls --keep
+```
+
+#### Milestone 3 latency and final checks
+
+Final syntax, native build, event-queue, routing, IME, and Title Bar checks pass.
+Final controls and routing pass with both Project renderers after the last formatting change.
+Their evidence folders are `anvil-surface-latency-smtbgy1v` and `anvil-surface-latency-u4hhxjhk`.
+The final Meson logs use the `phase3-m3-checked-` prefix.
+
+Both latency matrices ran after correctness checks, without overlapping builds or tests.
+The before matrix uses the saved caption-fix executable with the same current copied app data.
+Each row completes three runs of 240 samples. No samples failed.
+The clock stops at native Present, not physical scanout or Terminal replies.
+
+| Mode / renderer | Before p50 / p90 / p99 / max (ms) | After p50 / p90 / p99 / max (ms) |
+|---|---|---|
+| Direct D3D11 | 6.30 / 15.65 / 19.05 / 45.48 | 6.75 / 15.30 / 18.50 / 55.76 |
+| Hosted D3D11 | 6.71 / 15.89 / 19.26 / 22.46 | 6.97 / 15.81 / 19.11 / 23.45 |
+| Direct software | 10.53 / 19.70 / 23.04 / 24.48 | 10.96 / 19.32 / 23.23 / 25.08 |
+| Hosted software | 10.55 / 19.54 / 23.22 / 24.17 | 10.10 / 17.98 / 22.57 / 26.31 |
+
+Hosted D3D11 adds 0.22 ms to the direct median, within the under-1-ms target.
+Direct D3D11 p99 decreases; its single larger maximum does not establish a regression.
+The fresh software baseline differs from older records for both executables.
+Do not attribute that difference to this milestone or claim a causal performance gain.
+
+Before evidence: `anvil-surface-latency-3skpgo2d`.
+After evidence: `anvil-surface-latency-9tok8p6e`.
+Real IME and mixed-DPI checks remain open. Hosted mode remains opt-in.
+
 ### Milestone 4: dialogs and accepted close
 
 - Parent native dialogs to the shell and return asynchronous results.
@@ -568,7 +663,7 @@ python tools/run_surface_latency_probe.py --no-build --samples 240 --runs 3 --ke
 ```
 
 Use `--no-build` only with current binaries.
-New controls, dialog, and fault scenarios are planned extensions, not existing command options.
+Controls, routing, and lifecycle actions are available. Dialog and GPU failure actions remain planned.
 
 ## Acceptance checklist
 

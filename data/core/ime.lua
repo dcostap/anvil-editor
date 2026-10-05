@@ -101,6 +101,7 @@ function ime.set_location(x, y, w, h)
      ime.last_location.h ~= h
   then
     perf_frame_add("ime_set_location_changed", 1)
+    ime.last_location = ime.last_location or {}
     ime.last_location.x, ime.last_location.y, ime.last_location.w, ime.last_location.h = x, y, w, h
     local system_start = perf_active and system.get_time()
     system.set_text_input_rect(input_window(), x, y, w, h)

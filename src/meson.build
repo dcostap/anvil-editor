@@ -275,6 +275,17 @@ drop_events_test = executable('drop_events_test',
 )
 test('drop-events', drop_events_test, env: anvil_test_env)
 
+if host_machine.system() == 'windows'
+    hosted_routing_test = executable('hosted_routing_test',
+        ['../tests/native/hosted_routing_test.c', 'hosted_surface.c', 'surface_protocol.c',
+         'ipc_pipe.c', 'system_events.c', 'resize_diagnostics.c', 'input_latency_probe.c'],
+        include_directories: anvil_includes,
+        dependencies: [sdl_dep],
+        c_args: anvil_cargs,
+    )
+    test('hosted-routing', hosted_routing_test, env: anvil_test_env, suite: 'anvil')
+endif
+
 git_status_index_test = executable('git_status_index_test',
     ['../tests/native/git_status_index_test.c', 'git_status_index.c'],
     include_directories: anvil_includes,

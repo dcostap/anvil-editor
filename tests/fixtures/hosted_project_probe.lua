@@ -28,6 +28,9 @@ ffi.cdef [[
   struct RECT { long left, top, right, bottom; };
   int __stdcall GetClientRect(void *window, struct RECT *rect);
   int __stdcall GetWindowRect(void *window, struct RECT *rect);
+  int __stdcall GetClientRect(void *window, struct RECT *rect);
+  typedef struct { unsigned long size, flags; void *active, *focus, *capture, *menu, *moving, *caret; struct RECT rect; } ProbeGuiThreadInfo;
+  int __stdcall GetGUIThreadInfo(unsigned long thread, ProbeGuiThreadInfo *info);
   int __stdcall SetWindowPos(void *window, void *after, int x, int y, int w, int h, unsigned int flags);
   intptr_t __stdcall SendMessageW(void *window, unsigned int message, uintptr_t wparam, intptr_t lparam);
   long __stdcall NtSuspendProcess(void *process);
@@ -160,6 +163,67 @@ if project:find("/driver$", 1) then
         assert(state.hidden, "Project window became visible")
         assert(state.bounds and state.scale > 0, "backend did not return window configuration")
         save(root .. "/continue.lua", { continue = true })
+      elseif action == "routing" then
+        local window = assert(shell_window(state.shell_pid))
+        local client = ffi.new("struct RECT")
+        assert(user32.GetClientRect(window, client) ~= 0)
+        local origin_x = tonumber(client.right - client.left) - state.surface_w
+        local owner = ffi.new("unsigned long[1]")
+        local thread = user32.GetWindowThreadProcessId(window, owner)
+        assert(tonumber(owner[0]) == state.shell_pid)
+        local function captured()
+          local info = ffi.new("ProbeGuiThreadInfo", {size = ffi.sizeof("ProbeGuiThreadInfo")})
+          assert(user32.GetGUIThreadInfo(thread, info) ~= 0)
+          return info.capture == window
+        end
+        local function point(x, y) return math.floor(x) % 65536 + (math.floor(y) % 65536) * 65536 end
+        local function post(message, buttons, x, y)
+          local probe_action = ({[0x200] = 0, [0x201] = 1, [0x202] = 2, [0x20a] = 3})[message]
+          -- SDL checks real asynchronous button state for posted Win32 input.
+          -- Use the existing native probe for held input on an inactive desktop.
+          assert(user32.PostMessageW(window, probe_action and 0x804a or message,
+            probe_action or buttons, point(x, y)) ~= 0)
+          coroutine.yield(.1)
+        end
+        local x, y = state.x + origin_x, state.y
+        post(0x200, 0, x, y)
+        post(0x201, 1, x, y)
+        assert(captured(), "Project drag did not capture the native window")
+        post(0x200, 1, x + 20, y)
+        post(0x200, 1, -5, y)
+        assert(captured(), "Project drag lost capture over the Sidebar")
+        post(0x200, 1, x + 20, y)
+        post(0x200, 1, -5, y)
+        post(0x202, 0, -5, y)
+        assert(not captured(), "Project release retained native capture")
+        save(root .. "/selection-check.lua", {continue = true})
+        assert(wait_for(function() return load(root .. "/selection.lua") end, 5), "selection did not cross the Sidebar boundary")
+        local selection = load(root .. "/selection.lua")
+        assert(selection.text == "0", "captured selection used the wrong surface origin")
+        assert(selection.left and selection.entered, "captured pointer did not clear and restore Project hover")
+        post(0x200, 0, x, y)
+        post(0x20a, 0xff880000, x, y)
+        save(root .. "/wheel-check.lua", {continue = true})
+        assert(wait_for(function() return load(root .. "/wheel.lua") end, 5), "wheel did not reach the Project")
+        assert(load(root .. "/wheel.lua").scrolled, "wheel did not scroll the Editor")
+        post(0x201, 1, x, y)
+        assert(captured())
+        post(0x8, 0, 0, 0)
+        assert(not captured(), "native focus loss retained Project capture")
+        save(root .. "/compose.lua", {continue = true})
+        assert(wait_for(function() return load(root .. "/composing.lua") end, 5), "composition did not start")
+        post(0x8, 0, 0, 0)
+        assert(wait_for(function() return load(root .. "/focus.lua") end, 5), "native focus loss did not cancel composition")
+        assert(load(root .. "/focus.lua").unchanged, "focus loss committed composition")
+        for probe_action = 4, 6 do
+          assert(user32.PostMessageW(window, 0x804a, probe_action, point(origin_x + 10, 16)) ~= 0)
+          coroutine.yield(.1)
+        end
+        assert(wait_for(function() return load(root .. "/drop.lua") end, 10), "complete text drop did not open an Editor")
+        local drop = load(root .. "/drop.lua")
+        assert(drop.bytes == 40000 and drop.prefix and drop.tail, "hosted text drop lost complete UTF-8 or trailing lines")
+        assert(drop.new_pane, "Title Bar text drop replaced the existing Pane")
+        save(root .. "/continue.lua", {continue = true})
       elseif action == "controls" then
         local window = assert(shell_window(state.shell_pid))
         local process_handle = own_handle(state.pid, 0x101801); handles[#handles + 1] = process_handle
@@ -366,6 +430,26 @@ else
       quit(); return
     end
     local state = { pid = pid, shell_pid = shell_pid, started = system.get_time(), hosted = system.is_hosted_surface(), path = project }
+    local routing_view, drag_events
+    if action == "routing" then
+      local on_event = core.on_event
+      local dragging, left, entered = false, false, false
+      core.on_event = function(kind, ...)
+        if kind == "mousepressed" and (...) == "left" then dragging = true end
+        if kind == "mousereleased" and (...) == "left" then dragging = false end
+        if kind == "mouseleft" and dragging then left = true end
+        if kind == "mouseentered" and dragging and left then entered = true end
+        return on_event(kind, ...)
+      end
+      routing_view = core.open_file(project .. "/edited.txt")
+      core.set_active_view(routing_view)
+      assert(wait_for(function() return routing_view.size.x > 0 and routing_view.size.y > 0 end, 5))
+      coroutine.yield(.2)
+      state.x, state.y = routing_view:get_line_screen_position(1, 2)
+      state.y = state.y + routing_view:get_line_height() / 2
+      state.surface_w = core.root_panel.size.x
+      drag_events = function() return left, entered end
+    end
     if action == "controls" then
       local _, _, w, h = system.get_window_controls()
       state.controls_w, state.controls_h = w,h
@@ -395,6 +479,25 @@ else
       end
     end
     save(root .. "/subject.lua", state)
+    if action == "routing" then
+      assert(wait_for(function() return load(root .. "/selection-check.lua") end, 10))
+      local l1, c1, l2, c2 = routing_view.buffer:get_selection(true)
+      local left, entered = drag_events()
+      save(root .. "/selection.lua", {text = routing_view.buffer:get_text(l1, c1, l2, c2), left = left, entered = entered})
+      assert(wait_for(function() return load(root .. "/wheel-check.lua") end, 10))
+      save(root .. "/wheel.lua", {scrolled = routing_view.scroll.to.y > 0})
+      assert(wait_for(function() return load(root .. "/compose.lua") end, 10))
+      routing_view.buffer:set_selection(1, 2)
+      core.on_event("textediting", "λ中", 0, 2)
+      save(root .. "/composing.lua", {continue = true})
+      assert(wait_for(function() return not require("core.ime").editing end, 10))
+      save(root .. "/focus.lua", {unchanged = routing_view.buffer.lines[1] == "0123456789\n"})
+      local pane_count = require("core.panes").count()
+      assert(wait_for(function() return core.active_view.buffer and core.active_view.buffer ~= routing_view.buffer end, 10))
+      local text = core.active_view.buffer:get_text(1, 1, math.huge, math.huge)
+      save(root .. "/drop.lua", {bytes = #text, prefix = text:sub(1, #"DROP_λ中\n\n") == "DROP_λ中\n\n",
+        tail = text:sub(-2) == "\n\n", new_pane = require("core.panes").count() == pane_count + 1})
+    end
     if action == "controls" then
       assert(wait_for(function() return load(root .. "/edit.lua") end, 15))
       local panes = require "core.panes"

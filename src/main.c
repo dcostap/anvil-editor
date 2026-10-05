@@ -703,6 +703,7 @@ static bool event_wants_immediate_resize_frame(const SDL_Event *event) {
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
   if (shell_mode) return anvil_shell_event(appstate, event);
+  if (anvil_hosted_surface_dispatch(event)) return SDL_APP_CONTINUE;
   AppState *app = (AppState *)appstate;
   system_push_event(event);
 

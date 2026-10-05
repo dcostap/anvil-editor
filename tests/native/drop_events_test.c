@@ -53,6 +53,47 @@ int main(void) {
   CHECK(!system_event_pop(&result));
   puts("PASS drop lifecycle, coordinates, payloads, and hover backlog");
 
+  /* Producers can release UTF-8 payloads before Lua drains its queue. */
+  const Uint32 payload_types[] = {SDL_EVENT_TEXT_INPUT, SDL_EVENT_TEXT_EDITING, SDL_EVENT_DROP_TEXT};
+  for (unsigned i = 0; i < SDL_arraysize(payload_types); i++) {
+    char text[] = "first\r\n\r\nlast\r\n";
+    SDL_zero(event);
+    event.type = payload_types[i];
+    if (event.type == SDL_EVENT_TEXT_INPUT) event.text.text = text;
+    else if (event.type == SDL_EVENT_TEXT_EDITING) event.edit.text = text;
+    else event.drop.data = text;
+    system_push_event(&event);
+    text[0] = 'X';
+    CHECK(system_event_pop(&result));
+    const char *saved = result.type == SDL_EVENT_TEXT_INPUT ? result.text.text
+                      : result.type == SDL_EVENT_TEXT_EDITING ? result.edit.text : result.drop.data;
+    CHECK(SDL_strcmp(saved, "first\r\n\r\nlast\r\n") == 0);
+    CHECK(!system_event_pop(&result));
+  }
+  puts("PASS queued UTF-8 payload ownership");
+
+  /* A drag must retain motion on both sides of the press boundary. */
+  SDL_zero(event);
+  event.type = SDL_EVENT_MOUSE_MOTION;
+  event.motion.windowID = 17;
+  event.motion.x = 10;
+  system_push_event(&event);
+  event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+  event.button.windowID = 17;
+  system_push_event(&event);
+  event.type = SDL_EVENT_MOUSE_MOTION;
+  event.motion.windowID = 17;
+  event.motion.x = 80;
+  system_push_event(&event);
+  CHECK(system_event_pop(&result));
+  CHECK(result.type == SDL_EVENT_MOUSE_MOTION && result.motion.x == 10);
+  CHECK(system_event_pop(&result));
+  CHECK(result.type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+  CHECK(system_event_pop(&result));
+  CHECK(result.type == SDL_EVENT_MOUSE_MOTION && result.motion.x == 80);
+  CHECK(!system_event_pop(&result));
+  puts("PASS motion ordering across a drag press");
+
   /* A focus flush must leave a record even though Lua never receives the key. */
   SDL_zero(event);
   event.type = SDL_EVENT_KEY_DOWN;

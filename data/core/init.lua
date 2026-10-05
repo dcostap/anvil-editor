@@ -2403,12 +2403,19 @@ function core.on_event(type, ...)
     core.log_quiet("Focus diagnostics: reset caret blink on focusgained")
     core.request_window_reactivation_repaint("focusgained")
   elseif type == "focuslost" then
+    ime.stop()
     record_input_window_focus(false, "focuslost", true)
     core.log_quiet(
       "Focus diagnostics: received focuslost event active=%s window_has_focus=%s",
       tostring(core.active_view), tostring(core.window and system.window_has_focus(core.window))
     )
     core.root_panel:on_focus_lost(...)
+  elseif type == "windowconfiguration" then
+    core.log_quiet("Hosted window configuration changed: reset composition and Title Bar regions")
+    ime.stop()
+    ime.last_location = nil
+    core.title_bar.hit_test_signature = nil
+    core.redraw = true
   elseif type == "windowclose" then
     core.quit()
   elseif type == "quit" then

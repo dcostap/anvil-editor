@@ -103,7 +103,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
-    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls"],
+    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls", "routing"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)
@@ -134,11 +134,13 @@ def main() -> int:
                     for name in ("driver", "Project", "Replacement", "user"):
                         (case_dir / name).mkdir(parents=True)
                     (case_dir / "Project/edited.txt").write_bytes(b"on disk\n")
+                    if action == "routing":
+                        (case_dir / "Project/edited.txt").write_text("0123456789\n" * 200, encoding="utf-8")
                     (case_dir / "Project/second.txt").write_bytes(b"second instance\n")
                     namespace = "anvil-test-" + work.name.rsplit("-", 1)[-1] + "-" + action
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
-                    if action in ("conflict", "arguments", "option-arguments", "controls"):
+                    if action in ("conflict", "arguments", "option-arguments", "controls", "routing"):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     result = case_dir / "result.lua"
@@ -149,6 +151,7 @@ def main() -> int:
                             "ANVIL_USERDIR": native_path(case_dir / "user"),
                             "USERPROFILE": native_path(case_dir / "user"), "HOME": native_path(case_dir / "user"),
                             "ANVIL_PROJECT_PROBE": action, "ANVIL_PROJECT_PROBE_MODE": mode,
+                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action == "routing" else "",
                             "ANVIL_PROJECT_PROBE_ROOT": native_path(case_dir).replace("\\", "/"),
                             "ANVIL_PROJECT_PROBE_RESULT": native_path(result),
                             "ANVIL_TEST_DISABLE_PLUGINS": "autorestart,autoreload,autosave_fast,autosaveonfocuslost",

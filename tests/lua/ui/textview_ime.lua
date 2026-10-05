@@ -33,6 +33,7 @@ test.describe("Text View IME geometry", function()
   end)
 
   test.after_each(function(context)
+    ime.stop()
     core.active_view = context.active_view
     local wrapping = config.plugins.linewrapping
     if context.wrapping then
@@ -60,6 +61,18 @@ test.describe("Text View IME geometry", function()
     local expected_x2 = select(1, view:get_line_screen_position(1, 7))
     test.equal(rects[1].x, expected_x)
     test.equal(rects[1].w, expected_x2 - expected_x)
+  end)
+
+  test.it("cancels composition on window focus loss without committing its text", function()
+    local view, buffer = make_view("base")
+    core.set_active_view(view)
+    buffer:set_selection(1, 5)
+    core.on_event("textediting", "λ中", 0, 2)
+    test.ok(ime.editing, "composition did not start")
+    core.on_event("focuslost")
+    test.ok(not ime.editing, "composition survived focus loss")
+    test.equal(buffer.lines[1], "base\n")
+    test.same({buffer:get_selection()}, {1, 5, 1, 5})
   end)
 
   test.it("anchors the system IME rectangle to a wrapped continuation row", function(context)
