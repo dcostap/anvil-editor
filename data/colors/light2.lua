@@ -147,6 +147,7 @@ style.diff_modify_background = style.diff_modify
 style.diff_delete_inline = { common.color "rgba(215, 143, 150, 0.55)" }
 style.diff_insert_inline = { common.color "rgba(150, 192, 154, 0.55)" }
 style.diff_modify_inline = { common.color "rgba(142, 175, 214, 0.55)" }
+style.diff_inline_marker_insert = { common.color "rgba(150, 192, 154, 0.70)" }
 style.diff_marker_delete = { common.color "rgba(182, 79, 92, 0.72)" }
 style.diff_marker_insert = { common.color "rgba(63, 124, 80, 0.72)" }
 style.diff_marker_modify = { common.color "rgba(66, 107, 154, 0.72)" }

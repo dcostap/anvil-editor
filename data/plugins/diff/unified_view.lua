@@ -69,7 +69,7 @@ function UnifiedView:new(parent)
           color = style["diff_" .. row.tag .. "_inline"],
         }
       end
-      local marker_color = row.b and style.diff_inline_marker_delete or style.diff_insert_inline
+      local marker_color = row.b and style.diff_inline_marker_delete or style.diff_inline_marker_insert
       for _, marker in ipairs(change and change.inline_markers or {}) do
         ranges[#ranges + 1] = { col1 = marker.col, col2 = marker.col, marker = true, color = marker_color }
       end
