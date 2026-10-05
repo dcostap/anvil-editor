@@ -100,6 +100,13 @@ class PerformanceBaselinePolicyTests(unittest.TestCase):
         self.assertTrue(gate.uses_performance_baseline("d3d11"))
         self.assertFalse(gate.uses_performance_baseline("software"))
 
+    def test_full_suite_checks_wheel_scrolling_in_both_diff_presentations(self):
+        scenes = [gate.SCENARIOS[name] for name in gate.SUITES["full"]]
+        wheel_diffs = [scene for scene in scenes
+                       if scene.get("kind") == "diff" and scene.get("action") == "wheel"]
+        self.assertEqual({False, True}, {scene["wrap"] for scene in wheel_diffs})
+        self.assertTrue(all(scene.get("save_workspace") for scene in wheel_diffs))
+
     def test_reference_notes_do_not_change_the_performance_workload(self):
         old = {"frames": 600, "fixture_sha256": "stored-in-manifest",
                "directwrite_reference": {"first_stable_stroke_ppem": 15}}

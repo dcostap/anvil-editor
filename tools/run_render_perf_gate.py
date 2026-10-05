@@ -42,6 +42,7 @@ RESULTS_ROOT = ROOT / "tools" / "perf-results" / "render-gate"
 BASELINE_PATH = ROOT / "tools" / "baselines" / "render_perf_windows.json"
 GOLDEN_ROOT = ROOT / "tools" / "baselines" / "render"
 EDITOR_BASELINE_ROOT = RESULTS_ROOT / "editor-baseline"
+DIFF_BASELINE_ROOT = RESULTS_ROOT / "diff-baseline"
 HIDDEN_LAUNCHER = ROOT / "tools" / "run_anvil_hidden_desktop.ps1"
 IMAGE_COMPARATOR = ROOT / "tools" / "compare_anvil_screenshot.ps1"
 MARKDOWN_LONG_LINK_PAYLOAD_REPETITIONS = 4950
@@ -241,7 +242,7 @@ SCENARIOS.update(perf_workloads.SCENARIOS)
 
 SUITES = {
     "quick": ["wrapped-document-steady", "wrapped-document-scroll", "tab-heavy-titlebar"],
-    "full": list(STANDARD_SCENARIOS),
+    "full": list(STANDARD_SCENARIOS) + list(perf_workloads.DIFF_WHEEL_SCENARIOS),
     "visual": [name for name in STANDARD_SCENARIOS if SCENARIOS[name]["visual"]],
     "specimen": list(SPECIMEN_SCENARIOS),
     "stress": [name for name in perf_workloads.SCENARIOS
@@ -629,6 +630,9 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         rows = list(csv.DictReader(stream))
     if not rows:
         raise RuntimeError(f"metrics file has no rows: {path}")
+    if "total_ms" in rows[0] and "sleep_actual_ms" in rows[0]:
+        for row in rows:
+            row["work_ms"] = max(0, float(row["total_ms"]) - float(row["sleep_actual_ms"]))
 
     def numbers(key: str) -> list[float]:
         return [float(row.get(key) or 0) for row in rows]
@@ -636,7 +640,7 @@ def summarize_metrics(path: Path) -> dict[str, float]:
     result: dict[str, float] = {"frames": float(len(rows))}
     for key in (
         "action_ms", "update_ms", "draw_emit_ms", "renderer_end_ms", "frame_ms",
-        "present_ms", "core_step_ms", "total_ms", "draw_calls", "quad_instances",
+        "present_ms", "core_step_ms", "total_ms", "work_ms", "draw_calls", "quad_instances",
         "texture_batch_breaks", "quad_batches", "unique_batch_srvs",
         "repeated_batch_srvs", "texture_uploads", "texture_upload_bytes", "text_render_hb_shapes",
         "rencache_commands", "rencache_text_commands",
@@ -652,7 +656,7 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         "run_threads_ms", "gc_ms", "text_width_calls", "text_width_bytes",
         "text_render_shaped_cache_hits", "text_render_shaped_cache_misses",
     ):
-        if key in ("texture_upload_bytes", "text_render_hb_shapes") and key not in rows[0]:
+        if key in ("texture_upload_bytes", "text_render_hb_shapes", "work_ms") and key not in rows[0]:
             continue
         vals = numbers(key)
         result[f"{key}_avg"] = statistics.fmean(vals)
@@ -1577,11 +1581,13 @@ def main() -> int:
                         help="report costs and budget flags without requiring a local baseline")
     parser.add_argument("--actions", type=int, help="measured actions per stress workload (first-open stays one)")
     parser.add_argument("--action-timeout-seconds", type=int, default=30)
-    parser.add_argument("--frame-budget-ms", type=float, default=16.67)
+    parser.add_argument("--frame-budget-ms", type=float, default=6.06)
     parser.add_argument("--action-budget-ms", type=float, default=100)
     parser.add_argument("--fail-on-budget", action="store_true",
                         help="return failure when an absolute action or frame budget is exceeded")
     args = parser.parse_args()
+    # Acceptance checks enforce budgets. Report-only runs keep their explicit opt-in.
+    args.fail_on_budget = args.fail_on_budget or not args.report_only
 
     if os.name != "nt":
         raise RuntimeError("the isolated D3D11 gate requires Windows")
@@ -1651,7 +1657,9 @@ def main() -> int:
     if editor_names and len(editor_names) != len(selected_scenarios):
         parser.error("editor regression scenes cannot run with other scenarios")
     editor_selected = bool(editor_names)
-    default_root = local_specimen_root or (EDITOR_BASELINE_ROOT if editor_selected else None)
+    diff_selected = all(SCENARIOS[name].get("kind") == "diff" for name in selected_scenarios)
+    default_root = local_specimen_root or (EDITOR_BASELINE_ROOT if editor_selected else
+                                          DIFF_BASELINE_ROOT if diff_selected else None)
     args.baseline = args.baseline or (
         default_root / "render_perf.json" if default_root else BASELINE_PATH
     )
@@ -1673,7 +1681,8 @@ def main() -> int:
             parser.error("baseline executable changed; establish a fresh baseline")
     baseline_scenario_names = set(
         SPECIMEN_SCENARIOS if specimen_selected else
-        perf_workloads.EDITOR_SCENARIOS if editor_selected else STANDARD_SCENARIOS
+        perf_workloads.EDITOR_SCENARIOS if editor_selected else
+        SUITES["diff"] if diff_selected else SUITES["full"]
     )
     partial_baseline_update = set(selected_scenarios) != baseline_scenario_names
     if args.update_baseline and partial_baseline_update and not baseline:

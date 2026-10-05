@@ -53,6 +53,15 @@ class DiagnosticReportTests(unittest.TestCase):
         self.assertTrue(any(item.get("action") == "query" for item in findings))
         self.assertTrue(all(item["evidence"] == "measured" for item in findings))
 
+    def test_budget_includes_background_work_but_not_frame_pacing_sleep(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "metrics.csv"
+            self.write_csv(path, [dict(frame_ms=4, total_ms=12, sleep_actual_ms=3)])
+            summary = gate.summarize_metrics(path)
+            findings = diagnostics.red_flags({"metrics": summary}, 6, 100)
+            self.assertTrue(any(item["metric"] == "work_ms_max" and item["value"] == 9
+                                for item in findings))
+
     def test_keeps_setup_and_interactive_scope_costs_separate(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

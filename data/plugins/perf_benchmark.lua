@@ -83,7 +83,7 @@ local benchmark = {
 local metric_fields = {
   "completion_ms", "action_id", "action_age_ms", "action_ms", "event_ms", "update_ms", "pre_draw_ms",
   "draw_emit_ms", "renderer_end_ms", "frame_ms", "present_ms", "core_step_ms",
-  "total_ms", "draw_calls", "quad_instances", "texture_batch_breaks",
+  "total_ms", "sleep_actual_ms", "draw_calls", "quad_instances", "texture_batch_breaks",
   "quad_batches", "unique_batch_srvs", "repeated_batch_srvs", "texture_uploads", "texture_upload_bytes",
   "rencache_commands", "rencache_text_commands", "rencache_command_bytes",
   "display_packet_replays", "display_packet_commands_replayed",
@@ -893,7 +893,7 @@ local function metric_row(snapshot)
   benchmark.pending_action_ms = 0
   for _, key in ipairs({
     "event_ms", "update_ms", "pre_draw_ms", "draw_emit_ms", "renderer_end_ms",
-    "frame_ms", "present_ms", "core_step_ms", "total_ms", "draw_calls",
+    "frame_ms", "present_ms", "core_step_ms", "total_ms", "sleep_actual_ms", "draw_calls",
     "quad_instances", "run_threads_ms", "gc_ms",
     "textview_line_packet_builds", "textview_line_packet_build_ms",
     "textview_line_packet_hits", "textview_line_packet_misses",

@@ -94,6 +94,11 @@ Use `--suite interactive` for search, file switching, file opens, and edits.
 Use `--suite diff` for the Diff View size variants.
 Use `--scenario NAME` for one workload. Repeat it to run several.
 
+The full suite also checks wrapped and unwrapped Diff wheel scrolling.
+Each wheel scene sends 40 ticks, waits for both sides to settle, then saves the Workspace.
+File watches and normal background services remain active.
+Action checkpoints check the scrolled text and the final saved presentation.
+
 For a short verification run:
 
 ```sh
@@ -115,8 +120,9 @@ The report contains:
 - backbuffer or software-surface checkpoints;
 - links to full profiler counters, slow frames, and sampled stacks.
 
-The default budgets are 16.67 ms per frame and 100 ms per action.
-For a 165 Hz target, use `--frame-budget-ms 6.06`.
+The default budgets are 6.06 ms per frame and 100 ms per action.
+The frame budget matches a 165 Hz display.
+Budget checks include run-loop work before and after drawing. They exclude frame-pacing sleep.
 Set another action limit with `--action-budget-ms`.
 Flags report measured costs, not proven causes. Compare size variants before
 you conclude that cost grows with file size or change count.
@@ -127,6 +133,8 @@ the worst recorded value across repetitions.
 on crashes, missing results, timeouts, unstable state, or unstable captures.
 A passing run can contain budget flags. Add `--fail-on-budget` to make those
 flags fail the command.
+Normal comparison and baseline commands enforce the budgets without this flag.
+Use report-only mode for diagnosis, not acceptance.
 
 You can pass a previous `report.json` as `--baseline PATH` for a relative comparison.
 Use the same workload settings and frame counts. Use `--no-visual` when you
@@ -141,6 +149,8 @@ for that comparison. Action p50 and p95 regress when both 10% and 2 ms limits ar
 | `diff-scroll-large` | 40,000 source lines, the same change density and traversal |
 | `diff-steady-large` | Repeated redraws of the large Diff View |
 | `diff-navigate-large` | Commands that move to successive changes |
+| `diff-wheel-wrapped` | Wrapped wheel scrolling, 40 ticks, then a Workspace save |
+| `diff-wheel-unwrapped` | The same actions with wrapping off |
 | `fuzzy-files-medium` | Real Project File Search over 1,000 generated files |
 | `fuzzy-files-large` | The same search over 10,000 files |
 | `fuzzy-text-large` | Exact text queries over 10,000 files |
@@ -187,6 +197,7 @@ results before you replace a baseline.
 `--frames N` controls the existing frame-driven scenes, not asynchronous action counts.
 New action workloads warm up by redrawing without sending actions.
 The stress suites default to 20 warmup frames and 12 actions.
+The Diff wheel scenes default to 41 actions, including the final Workspace save.
 
 Action timeouts are independent of heartbeat activity. A picker that keeps
 redrawing without producing its result still fails. Use
@@ -492,6 +503,11 @@ The tracked performance baseline is:
 ```text
 tools/baselines/render_perf_windows.json
 ```
+
+Diff-only runs use `tools/perf-results/render-gate/diff-baseline/render_perf.json`.
+Their goldens stay beside that local baseline.
+The full suite now includes Diff wheel scenes. An older full baseline needs an explicit update.
+Do not replace a failed baseline merely because it exceeds the current budget.
 
 Only D3D11 runs compare results with this performance baseline. Software runs
 still report timing, image stability, and seam results. Their performance

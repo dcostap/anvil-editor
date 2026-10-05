@@ -68,7 +68,7 @@ def red_flags(case: dict[str, Any], frame_budget_ms: float, action_budget_ms: fl
         if value > budget:
             findings.append(dict(metric=metric, value=value, budget=budget,
                                  ratio=value / budget, action=action, evidence="measured"))
-    for metric in ("frame_ms_p95", "frame_ms_max"):
+    for metric in ("frame_ms_p95", "frame_ms_max", "work_ms_p95", "work_ms_max"):
         check(metric, case.get("metrics", {}).get(metric, 0), frame_budget_ms)
     for name, values in case.get("actions", {}).items():
         for metric in ("latency_ms_p95", "latency_ms_max"):

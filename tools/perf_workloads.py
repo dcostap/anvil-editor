@@ -22,10 +22,10 @@ SCENARIOS = {
         repeats=12, marker_alpha=7), window_height=480),
     "find-overview-alpha-reference": dict(scenario("find", lines=6000, wrap=False,
         repeats=12, marker_alpha=7, reference_overview=True), window_height=480),
-    "diff-scroll-medium": scenario("diff", lines=4000, change_every=8, action="scroll"),
-    "diff-scroll-large": scenario("diff", lines=40000, change_every=8, action="scroll"),
-    "diff-steady-large": scenario("diff", lines=40000, change_every=8, action="redraw"),
-    "diff-navigate-large": scenario("diff", lines=40000, change_every=8, action="navigate"),
+    "diff-scroll-medium": scenario("diff", lines=4000, change_every=8, action="scroll", wrap=True),
+    "diff-scroll-large": scenario("diff", lines=40000, change_every=8, action="scroll", wrap=True),
+    "diff-steady-large": scenario("diff", lines=40000, change_every=8, action="redraw", wrap=True),
+    "diff-navigate-large": scenario("diff", lines=40000, change_every=8, action="navigate", wrap=True),
     "fuzzy-files-medium": scenario("fuzzy", files=1000, action="file-query"),
     "fuzzy-files-large": scenario("fuzzy", files=10000, action="file-query"),
     "fuzzy-text-large": scenario("fuzzy", files=10000, action="text-query"),
@@ -35,6 +35,17 @@ SCENARIOS = {
     "long-line-edit": scenario("edit", lines=32, line_bytes=65536, carets=1),
     "multi-caret-edit": scenario("edit", lines=4000, line_bytes=100, carets=1024),
 }
+
+DIFF_WHEEL_SCENARIOS = {
+    f"diff-wheel-{mode}": dict(
+        scenario("diff", lines=4000, change_every=8, action="wheel", wrap=wrap,
+                 save_workspace=True, capture_actions=True,
+                 capture_checkpoints=[10, 30, 40, 41]),
+        actions=41, code_scale=1, window_width=2560,
+    )
+    for mode, wrap in (("wrapped", True), ("unwrapped", False))
+}
+SCENARIOS.update(DIFF_WHEEL_SCENARIOS)
 
 
 def editor_scene(content: str, lines: int, wrap: bool = False,

@@ -92,8 +92,8 @@ function Workload:setup()
     self.view = self.diff.buffer_view_b
     core.set_active_view(self.view)
     for _, side in ipairs(self.diff:get_surface_focus_targets()) do
-      side:set_wrapping_enabled(true)
-      linewrapping.update_textview_breaks(side)
+      side:set_wrapping_enabled(settings.wrap)
+      if settings.wrap then linewrapping.update_textview_breaks(side) end
     end
   elseif settings.kind == "fuzzy" then
     local root = self:path("project")
@@ -176,7 +176,10 @@ function Workload:action_name(index)
   if settings.kind == "fuzzy" then
     return index == 1 and ("first-" .. settings.action) or settings.action
   end
-  if settings.kind == "diff" then return "diff-" .. settings.action end
+  if settings.kind == "diff" then
+    if settings.save_workspace and index == settings.actions then return "workspace-save" end
+    return "diff-" .. settings.action
+  end
   if settings.kind == "edit" then return index % 2 == 1 and "insert" or "undo" end
   if settings.kind == "editor" and settings.action == "type" then return "type-char" end
   if settings.kind == "editor" and settings.action == "scroll" then
@@ -204,7 +207,13 @@ function Workload:dispatch(index)
     self.target_line = editor_target(settings, index)
     position(self.view, self.target_line)
   elseif settings.kind == "diff" then
-    if settings.action == "scroll" then
+    if settings.save_workspace and index == settings.actions then
+      core.save_workspace()
+    elseif settings.action == "wheel" then
+      assert(command.perform("core:scroll", index <= SCROLL_DOWN_TICKS and -1 or 1),
+        "Diff Side did not accept the wheel scroll")
+      core.request_workspace_save("Diff wheel benchmark")
+    elseif settings.action == "scroll" then
       local span = math.max(1, #self.view.buffer.lines - 100)
       local line = 1 + math.floor((index - 1) * span / math.max(1, settings.actions - 1))
       position(self.view, line)
@@ -307,6 +316,12 @@ function Workload:action_ready()
   if self.diff then
     assert(#self.diff.a_changes > 0 and #self.diff.b_changes > 0, "Diff fixture has no changes")
     assert(self.view.size.x > 0 and self.view.size.y > 0, "Diff Side is not visible")
+    for _, side in ipairs(self.diff:get_surface_focus_targets()) do
+      assert(side:is_wrapping_enabled() == self.settings.wrap, "Diff wrapping mode changed")
+      if self.settings.action == "wheel" and math.abs(side.scroll.y - side.scroll.to.y) >= 0.5 then
+        return false
+      end
+    end
   end
   local line, col = self.view:with_selection_state(function() return self.view.buffer:get_selection() end)
   self.result = string.format("%s:%d:%d:%d", self.target_name or self.settings.kind,
@@ -343,6 +358,7 @@ function Workload:state()
     workload_actions = self.completed,
     diff_left_changes = self.diff and #self.diff.a_changes or 0,
     diff_right_changes = self.diff and #self.diff.b_changes or 0,
+    diff_wrapped = self.diff and self.view:is_wrapping_enabled() or false,
     code_scale = require("plugins.scale").get_code(),
     editor_wrapped = self.settings.kind == "editor" and self.view:is_wrapping_enabled() or false,
     editor_markdown_live = self.settings.kind == "editor"
