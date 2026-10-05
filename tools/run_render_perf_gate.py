@@ -152,7 +152,7 @@ SCENARIOS["titlebar-file-drop"] = {
     "visual": True,
     "paced": False,
 }
-for wallpaper_theme in ("light", "light2", "dark2"):
+for wallpaper_theme in ("light", "light2", "dark3"):
     SCENARIOS[f"wallpaper-{wallpaper_theme}"] = {
         "start_line": 1700,
         "window_width": 1400,

@@ -138,21 +138,21 @@ style.terminal_palette = {
 }
 
 -- Diff/search/selection-like colors
-style.diff_delete = c("e7cfc0")
-style.diff_insert = c("dde1c4")
-style.diff_modify = c("d6dddc")
+style.diff_delete = c("e7c4c5")
+style.diff_insert = c("ceddce")
+style.diff_modify = c("cbd8e6")
 style.diff_delete_background = style.diff_delete
 style.diff_insert_background = style.diff_insert
 style.diff_modify_background = style.diff_modify
-style.diff_delete_inline = { common.color "rgba(210, 163, 148, 0.65)" }
-style.diff_insert_inline = { common.color "rgba(177, 193, 142, 0.65)" }
-style.diff_modify_inline = { common.color "rgba(164, 185, 188, 0.65)" }
-style.diff_marker_delete = { common.color "rgba(196, 52, 67, 0.72)" }
-style.diff_marker_insert = { common.color "rgba(22, 129, 44, 0.72)" }
-style.diff_marker_modify = { common.color "rgba(34, 102, 187, 0.72)" }
-style.diff_overview_delete = { common.color "rgba(196, 52, 67, 0.54)" }
-style.diff_overview_insert = { common.color "rgba(22, 129, 44, 0.54)" }
-style.diff_overview_modify = { common.color "rgba(34, 102, 187, 0.54)" }
+style.diff_delete_inline = { common.color "rgba(207, 151, 156, 0.65)" }
+style.diff_insert_inline = { common.color "rgba(155, 187, 157, 0.65)" }
+style.diff_modify_inline = { common.color "rgba(150, 175, 206, 0.65)" }
+style.diff_marker_delete = { common.color "rgba(182, 79, 92, 0.72)" }
+style.diff_marker_insert = { common.color "rgba(63, 124, 80, 0.72)" }
+style.diff_marker_modify = { common.color "rgba(66, 107, 154, 0.72)" }
+style.diff_overview_delete = { common.color "rgba(182, 79, 92, 0.54)" }
+style.diff_overview_insert = { common.color "rgba(63, 124, 80, 0.54)" }
+style.diff_overview_modify = { common.color "rgba(66, 107, 154, 0.54)" }
 style.search_selection = c("f0e3dc")
 style.search_selection_text = p("text_fg")
 style.search_selection_outline = style.accent
@@ -222,25 +222,25 @@ style.filetree_folder_row_background = { common.color "rgba(0, 0, 0, 0.035)" }
 style.diffview_plain_text = c("080808")
 
 -- Git changed-line colors
-style.git_change_addition = c("16812c")
-style.git_change_modification = c("2266bb")
-style.git_change_deletion = c("c43443")
+style.git_change_addition = c("3f7c50")
+style.git_change_modification = c("426b9a")
+style.git_change_deletion = c("b64f5c")
 style.gitdiff_width = common.round(2 * SCALE)
 style.git_graph_colors = {
-  c("0053ff"), c("08a91f"), c("7c3aed"), c("b66a00"), c("d82f55"), c("008c86"),
+  c("426b9a"), c("3f7c50"), c("795b9b"), c("926f35"), c("b64f5c"), c("397e7c"),
 }
-style.git_ref_head = c("087b19")
-style.git_ref_branch = c("0053ff")
-style.git_ref_remote = c("7c3aed")
-style.git_ref_tag = c("9a5700")
+style.git_ref_head = style.git_change_addition
+style.git_ref_branch = style.git_change_modification
+style.git_ref_remote = c("795b9b")
+style.git_ref_tag = c("926f35")
 
 -- File tree Git status and line-count colors
-style.filetree_git_status_ignored = c("bd6b00")
-style.filetree_git_status_untracked = c("db3b4b")
+style.filetree_git_status_ignored = c("8b8377")
+style.filetree_git_status_untracked = c("655f58")
 style.filetree_git_status_added = style.git_change_addition
 style.filetree_git_status_modified = style.git_change_modification
 style.filetree_git_status_deleted = style.git_change_deletion
-style.filetree_git_status_unmerged = style.error
+style.filetree_git_status_unmerged = style.git_change_deletion
 style.filetree_git_line_additions = style.git_change_addition
 style.filetree_git_line_deletions = style.git_change_deletion
 style.filetree_folder = p("ignored")

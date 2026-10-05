@@ -17,7 +17,7 @@ test.describe("theme editor", function()
     local root = RootPanel()
     root.size.x, root.size.y = 1200, 750
     core.root_panel = root
-    local editor = theme_editor.open("dark2")
+    local editor = theme_editor.open("dark3")
     editor:update()
     local window = renwindow.create("theme-editor-wallpaper", 1200, 750)
     local x, y = math.floor(editor.position.x + 4), math.floor(editor.position.y + 4)
@@ -48,7 +48,7 @@ test.describe("theme editor", function()
   end)
 
   test.it("previews named color edits and drops them on reload", function()
-    local editor = theme_editor.open("dark2")
+    local editor = theme_editor.open("dark3")
     local original = {table.unpack(style.theme_palette.text_bg)}
     editor:set_palette("text_bg", {8, 9, 10, 255})
     test.same({8, 9, 10, 255}, style.background)
@@ -57,7 +57,7 @@ test.describe("theme editor", function()
   end)
 
   test.it("keeps a disabled child rule while using the parent color", function()
-    local editor = theme_editor.open("dark2")
+    local editor = theme_editor.open("dark3")
     local original = {table.unpack(style.syntax["function.call"])}
     editor:set_rule("syntax.function.call", {enabled = false, color = {11, 12, 13, 255}})
     test.same(style.syntax["function"], style.syntax["function.call"])
@@ -67,8 +67,8 @@ test.describe("theme editor", function()
   end)
 
   test.it("saves a theme for a later reload", function()
-    local path = USERDIR .. "/colors/edits/dark2.lua"
-    local editor = theme_editor.open("dark2")
+    local path = USERDIR .. "/colors/edits/dark3.lua"
+    local editor = theme_editor.open("dark3")
     editor:set_palette("text_bg", {18, 19, 20, 255})
     editor:save(false)
     editor:reload()
@@ -88,7 +88,7 @@ test.describe("theme editor", function()
   end)
 
   test.it("drops a new unsaved syntax rule on reload", function()
-    local editor = theme_editor.open("dark2")
+    local editor = theme_editor.open("dark3")
     editor:set_rule("syntax.anvil_temporary.child", {enabled = true, color = {11, 12, 13, 255}})
     test.same({11, 12, 13, 255}, style.syntax["anvil_temporary.child"])
     editor:reload()
@@ -96,12 +96,12 @@ test.describe("theme editor", function()
   end)
 
   test.it("keeps a disabled child override after saving and reopening", function()
-    local path = USERDIR .. "/colors/edits/dark2.lua"
-    local editor = theme_editor.open("dark2")
+    local path = USERDIR .. "/colors/edits/dark3.lua"
+    local editor = theme_editor.open("dark3")
     editor:set_rule("syntax.function.call", {enabled = false, color = {4, 5, 6, 255}})
     editor:save(false)
     theme_editor.close()
-    editor = theme_editor.open("dark2")
+    editor = theme_editor.open("dark3")
     test.same({4, 5, 6, 255}, editor.draft.rules["syntax.function.call"].color)
     test.same(style.syntax["function"], style.syntax["function.call"])
     os.remove(path)

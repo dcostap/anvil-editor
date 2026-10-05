@@ -50,7 +50,7 @@ test.describe("theme color edits", function()
     system.mkdir(root)
     local previous = USERDIR
     USERDIR = root
-    local path, err = themes.save("dark2", {palette = {}, rules = {}}, false)
+    local path, err = themes.save("dark3", {palette = {}, rules = {}}, false)
     USERDIR = previous
     test.not_nil(path, err)
     test.not_nil(system.get_file_info(path))

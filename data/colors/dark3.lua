@@ -190,21 +190,21 @@ style.markdown_live_table_separator = style.divider
 style.markdown_live_hidden_syntax = style.dim
 
 -- Diff/search/selection-like colors
-style.diff_delete = p("deleted_bg")
-style.diff_insert = c("25382d")
-style.diff_modify = c("27354b")
-style.diff_delete_background = { common.color "rgba(61, 41, 40, 0.85)" }
-style.diff_insert_background = { common.color "rgba(37, 56, 45, 0.85)" }
-style.diff_modify_background = { common.color "rgba(39, 53, 75, 0.85)" }
-style.diff_delete_inline = { common.color "rgba(117, 64, 59, 0.65)" }
-style.diff_insert_inline = { common.color "rgba(66, 96, 68, 0.65)" }
-style.diff_modify_inline = { common.color "rgba(64, 86, 118, 0.65)" }
-style.diff_marker_delete = { common.color "rgba(228, 97, 104, 0.74)" }
-style.diff_marker_insert = { common.color "rgba(67, 184, 110, 0.72)" }
-style.diff_marker_modify = { common.color "rgba(75, 159, 226, 0.72)" }
-style.diff_overview_delete = { common.color "rgba(228, 97, 104, 0.58)" }
-style.diff_overview_insert = { common.color "rgba(67, 184, 110, 0.54)" }
-style.diff_overview_modify = { common.color "rgba(75, 159, 226, 0.54)" }
+style.diff_delete = c("422d30")
+style.diff_insert = c("293f33")
+style.diff_modify = c("2b3b50")
+style.diff_delete_background = { common.color "rgba(66, 45, 48, 0.85)" }
+style.diff_insert_background = { common.color "rgba(41, 63, 51, 0.85)" }
+style.diff_modify_background = { common.color "rgba(43, 59, 80, 0.85)" }
+style.diff_delete_inline = { common.color "rgba(131, 71, 79, 0.65)" }
+style.diff_insert_inline = { common.color "rgba(69, 125, 89, 0.65)" }
+style.diff_modify_inline = { common.color "rgba(73, 111, 157, 0.65)" }
+style.diff_marker_delete = { common.color "rgba(229, 138, 144, 0.74)" }
+style.diff_marker_insert = { common.color "rgba(126, 198, 148, 0.72)" }
+style.diff_marker_modify = { common.color "rgba(128, 179, 223, 0.72)" }
+style.diff_overview_delete = { common.color "rgba(229, 138, 144, 0.58)" }
+style.diff_overview_insert = { common.color "rgba(126, 198, 148, 0.54)" }
+style.diff_overview_modify = { common.color "rgba(128, 179, 223, 0.54)" }
 style.search_selection = c("5c4932")
 style.search_selection_text = nil
 style.search_selection_outline = c("dfbb7e")
@@ -287,25 +287,25 @@ style.project_path_separator = style.dim
 style.diffview_plain_text = p("text_fg")
 
 -- Git changed-line colors
-style.git_change_addition = c("43b86e")
-style.git_change_modification = c("4b9fe2")
-style.git_change_deletion = c("e46168")
+style.git_change_addition = c("7ec694")
+style.git_change_modification = c("80b3df")
+style.git_change_deletion = c("e58a90")
 style.gitdiff_width = common.round(2 * SCALE)
 style.git_graph_colors = {
-  c("d2a36b"), c("aeb65f"), c("c99baa"), c("a2b0a9"), c("d5766e"), c("d9b767"),
+  c("80b3df"), c("7ec694"), c("b59bd4"), c("d8b974"), c("e58a90"), c("76bdb6"),
 }
-style.git_ref_head = p("string")
-style.git_ref_branch = style.accent
-style.git_ref_remote = p("constant")
-style.git_ref_tag = p("warning_stripe")
+style.git_ref_head = style.git_change_addition
+style.git_ref_branch = style.git_change_modification
+style.git_ref_remote = c("b59bd4")
+style.git_ref_tag = c("d8b974")
 
 -- File tree Git status and line-count colors
-style.filetree_git_status_ignored = p("not_used")
-style.filetree_git_status_untracked = c("c3847e")
+style.filetree_git_status_ignored = c("8e9299")
+style.filetree_git_status_untracked = c("afbcc9")
 style.filetree_git_status_added = style.git_change_addition
 style.filetree_git_status_modified = style.git_change_modification
 style.filetree_git_status_deleted = style.git_change_deletion
-style.filetree_git_status_unmerged = style.error
+style.filetree_git_status_unmerged = style.git_change_deletion
 style.filetree_git_line_additions = style.git_change_addition
 style.filetree_git_line_deletions = style.git_change_deletion
 style.filetree_folder = style.dim

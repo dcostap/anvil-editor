@@ -96,16 +96,17 @@ test.describe("Window wallpaper", function()
     renderer.draw_canvas_scaled = function() end
     renderer.set_clip_rect = function() end
     local ok, failure = pcall(function()
-      local function visibility(theme)
+      local function visibility(theme, background)
         core.reload_module("colors." .. theme)
+        if background then style.background = background end
         test.ok(style.line_highlight[4] < 255, "the Color Theme must let the current line show the image")
         root:draw()
         return (1 - backdrop[4] / 255) * (1 - style.wallpaper_surface_opacity)
       end
       local ordinary = visibility("default")
-      local near_black = visibility("dark2")
+      local near_black = visibility("default", { 12, 14, 20, 255 })
       local bright = visibility("light")
-      test.ok(near_black > ordinary, "Dark2 needs more visible image detail")
+      test.ok(near_black > ordinary, "a near-black background needs more visible image detail")
       test.ok(bright > ordinary, "a light theme needs more visible image detail")
     end)
     core.reload_module("colors." .. (previous == "dark" and "default" or previous))
