@@ -263,18 +263,6 @@ local function trim_content_bounds(text)
   return first, last
 end
 
-local function full_content_ranges(text)
-  local first, last = trim_content_bounds(text)
-  if last < first then return {} end
-  return { { col1 = first, col2 = last + 1 } }
-end
-
-local function is_trim_edge_column(text, col)
-  if not is_trim_space(text:byte(col)) then return false end
-  local first, last = trim_content_bounds(text)
-  return col < first or col > last
-end
-
 local function append_inline_range(ranges, col)
   local previous = ranges[#ranges]
   if previous and not previous.tag and col >= previous.col1 and col <= previous.col2 then
@@ -302,6 +290,14 @@ end
 
 local function trim_whitespace_inline_ranges(from, target)
   local ranges, markers = token_inline_ranges(from, target)
+  local internal_spaces, offset = {}, 0
+  for line in (target .. "\n"):gmatch("(.-\n)") do
+    local first, last = trim_content_bounds(line)
+    for col = first, last do
+      if is_trim_space(line:byte(col)) then internal_spaces[offset + col] = true end
+    end
+    offset = offset + #line
+  end
   local target_col = 1
   for _, edit in ipairs(diff.inline_diff(from, target) or {}) do
     local value = edit.val or ""
@@ -309,7 +305,7 @@ local function trim_whitespace_inline_ranges(from, target)
       if edit.tag ~= "equal" then
         for offset = 0, #value - 1 do
           local col = target_col + offset
-          if is_trim_space(target:byte(col)) and not is_trim_edge_column(target, col) then
+          if internal_spaces[col] then
             append_inline_range(ranges, col)
           end
         end
@@ -323,14 +319,59 @@ end
 
 local function inline_change(from, to, whitespace_mode)
   from, to = from or "", to or ""
-  if from == to then return nil, {}, {} end
+  if from == to then return {}, {} end
   if whitespace_mode == "ignore" then
-    return nil, token_inline_ranges(from, to, true)
+    return token_inline_ranges(from, to, true)
   end
   if whitespace_mode == "trim" then
-    return nil, trim_whitespace_inline_ranges(from, to)
+    return trim_whitespace_inline_ranges(from, to)
   end
-  return nil, token_inline_ranges(from, to)
+  return token_inline_ranges(from, to)
+end
+
+local function block_text(lines, first, last)
+  local text = {}
+  for line = first, last do
+    local value = lines[line]
+    -- Keep token boundaries even when callers omit line endings.
+    text[#text + 1] = value:sub(-1) == "\n" and value or value .. "\n"
+  end
+  return table.concat(text)
+end
+
+local function apply_block_inline(changes, lines, first, last, ranges, markers, opts)
+  local offset, range_index, marker_index = 0, 1, 1
+  for line = first, last do
+    local text = lines[line]
+    local length = #text + (text:sub(-1) == "\n" and 0 or 1)
+    local end_col = line_end_column(text)
+    local content_first, content_last = trim_content_bounds(text)
+    local change = changes[line]
+    change.inline_ranges, change.inline_markers = {}, {}
+    while ranges[range_index] and ranges[range_index].col2 <= offset + 1 do
+      range_index = range_index + 1
+    end
+    local index = range_index
+    while ranges[index] and ranges[index].col1 < offset + end_col do
+      local range = ranges[index]
+      local col1 = math.max(1, range.col1 - offset)
+      local col2 = math.min(end_col, range.col2 - offset)
+      -- A span can cross lines. Do not emphasize the indentation between its tokens.
+      if range.col1 <= offset then col1 = math.max(col1, content_first) end
+      if range.col2 > offset + end_col then col2 = math.min(col2, content_last + 1) end
+      if col2 > col1 then
+        change.inline_ranges[#change.inline_ranges + 1] = { col1 = col1, col2 = col2, tag = range.tag }
+      end
+      index = index + 1
+    end
+    while markers[marker_index] and markers[marker_index].col <= offset + length do
+      local marker = markers[marker_index]
+      change.inline_markers[#change.inline_markers + 1] = { col = math.min(end_col, marker.col - offset) }
+      marker_index = marker_index + 1
+    end
+    offset = offset + length
+    if opts.should_yield and opts.should_yield() then coroutine.yield() end
+  end
 end
 
 function DiffModel:hunk_at(side, line)
@@ -421,13 +462,11 @@ function M.compute(a_lines, b_lines, opts)
   local equal_block, seen_change = nil, false
   local change_start_a, change_start_b
 
-  local function finish_changed_side(changes, source, first, last, block_tag)
+  local function finish_changed_side(changes, first, last, block_tag)
     for line = first, last do
       local change = changes[line]
       change.block_tag = block_tag
-      if change.tag ~= "modify" then
-        change.inline_ranges = block_tag == "modify" and full_content_ranges(source[line]) or {}
-      end
+      change.inline_ranges, change.inline_markers = {}, {}
       if opts.should_yield and opts.should_yield() then coroutine.yield() end
     end
   end
@@ -436,8 +475,17 @@ function M.compute(a_lines, b_lines, opts)
     if not change_start_a then return end
     -- Unchanged lines separate blocks. A block with text on both sides is mixed.
     local tag = ai > change_start_a and (bi > change_start_b and "modify" or "delete") or "insert"
-    finish_changed_side(a_changes, a_lines, change_start_a, ai - 1, tag)
-    finish_changed_side(b_changes, b_lines, change_start_b, bi - 1, tag)
+    finish_changed_side(a_changes, change_start_a, ai - 1, tag)
+    finish_changed_side(b_changes, change_start_b, bi - 1, tag)
+    if tag == "modify" then
+      -- Align tokens across the block so line breaks do not look like removed or added words.
+      local a_text = block_text(a_lines, change_start_a, ai - 1)
+      local b_text = block_text(b_lines, change_start_b, bi - 1)
+      local a_ranges, a_markers = inline_change(b_text, a_text, whitespace_mode)
+      local b_ranges, b_markers = inline_change(a_text, b_text, whitespace_mode)
+      apply_block_inline(a_changes, a_lines, change_start_a, ai - 1, a_ranges, a_markers, opts)
+      apply_block_inline(b_changes, b_lines, change_start_b, bi - 1, b_ranges, b_markers, opts)
+    end
     change_start_a, change_start_b = nil, nil
   end
 
@@ -480,29 +528,19 @@ function M.compute(a_lines, b_lines, opts)
         b_to_a[bi] = ai
       end
       if edit.a then
-        local changes, inline_ranges, inline_markers = nil, {}
-        if edit.tag ~= "equal" then
-          changes, inline_ranges, inline_markers = inline_change(edit.b, edit.a, whitespace_mode)
-        end
         a_changes[#a_changes + 1] = {
           tag = edit.tag,
-          changes = changes,
-          inline_ranges = inline_ranges,
-          inline_markers = inline_markers,
+          inline_ranges = {},
+          inline_markers = {},
         }
         ai = ai + 1
         a_offset = 0
       end
       if edit.b then
-        local changes, inline_ranges, inline_markers = nil, {}
-        if edit.tag ~= "equal" then
-          changes, inline_ranges, inline_markers = inline_change(edit.a, edit.b, whitespace_mode)
-        end
         b_changes[#b_changes + 1] = {
           tag = edit.tag,
-          changes = changes,
-          inline_ranges = inline_ranges,
-          inline_markers = inline_markers,
+          inline_ranges = {},
+          inline_markers = {},
         }
         bi = bi + 1
         b_offset = 0

@@ -18,6 +18,58 @@ local function highlighted_text(m, side, text)
 end
 
 test.describe("DiffModel", function()
+  test.it("keeps reflowed parameters free of addition and deletion emphasis", function()
+    local before = {
+      "void share_resources(uchar** search_map_pointer, uchar*** search_map_rows_pointer,\n",
+      "    Map_Stack** stack_array_pointer, Map_Stack*** stack_offsets_pointer);\n",
+    }
+    local after = {
+      "void share_resources(\n",
+      "    uchar** search_map_pointer, uchar*** search_map_rows_pointer, Map_Stack** stack_array_pointer,\n",
+      "    Map_Stack*** stack_offsets_pointer\n",
+      ");\n",
+    }
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      for _, sides in ipairs { { before, after }, { after, before } } do
+        local m = model.compute(sides[1], sides[2], { whitespace_mode = mode })
+        test.not_nil(m:next_hunk("a", 1), "line breaks must remain visible changes")
+        for index, side in ipairs { "a", "b" } do
+          for line, text in ipairs(sides[index]) do
+            for _, range in ipairs(m:inline_ranges(side, line) or {}) do
+              test.ok(text:sub(range.col1, range.col2 - 1):match("^%s*$"),
+                "retained parameters and delimiters must not receive inline emphasis")
+            end
+            test.same(m:inline_markers(side, line), {})
+          end
+        end
+      end
+    end
+  end)
+
+  test.it("highlights a renamed parameter without emphasizing the surrounding reflow", function()
+    local before = { "void call(first,\r\n", "    oldValue);\r\n" }
+    local after = { "void call(\r\n", "    first,\r\n", "    newValue\r\n", ");\r\n" }
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      for _, sides in ipairs { { before, after, "oldValue", "newValue" }, { after, before, "newValue", "oldValue" } } do
+        local m = model.compute(sides[1], sides[2], { whitespace_mode = mode })
+        for index, side in ipairs { "a", "b" } do
+          local highlighted = {}
+          for line, text in ipairs(sides[index]) do
+            for _, range in ipairs(m:inline_ranges(side, line) or {}) do
+              test.ok(range.col1 >= 1 and range.col2 <= #text - 1, "ranges must stay within line content")
+              local content = text:sub(range.col1, range.col2 - 1)
+              if not content:match("^%s*$") then
+                highlighted[#highlighted + 1] = { text = content, tag = range.tag }
+              end
+            end
+            test.same(m:inline_markers(side, line), {})
+          end
+          test.same(highlighted, { { text = sides[index + 2], tag = "modify" } })
+        end
+      end
+    end
+  end)
+
   test.it("separates added wrappers from reindented code", function()
     local before = lines(table.concat({
       "LaunchedEffect(reloadNonce) {",

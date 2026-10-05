@@ -284,7 +284,7 @@ test.describe("Diff View change backgrounds", function()
     end
     check(view.buffer_view_a, 2, 5, style.diff_delete_inline)
     check(view.buffer_view_b, 4, 9, style.diff_insert_inline)
-    check(view.buffer_view_b, 3, 9, style.diff_inline_marker_delete)
+    check(view.buffer_view_b, 3, 9, style.diff_modify_background)
     check(view.buffer_view_b, 3, 12, style.diff_modify_background)
     -- Text emphasis ends with the content, not at the edge of the surface.
     check(view.buffer_view_b, 4, #view.buffer_view_b.buffer.lines[4], style.diff_modify_background)
