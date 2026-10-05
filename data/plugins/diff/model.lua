@@ -163,6 +163,12 @@ local function trim_content_bounds(text)
   return first, last
 end
 
+local function full_content_ranges(text)
+  local first, last = trim_content_bounds(text)
+  if last < first then return {} end
+  return { { col1 = first, col2 = last + 1 } }
+end
+
 local function is_trim_edge_column(text, col)
   if not is_trim_space(text:byte(col)) then return false end
   local first, last = trim_content_bounds(text)
@@ -411,7 +417,7 @@ function M.compute(a_lines, b_lines, opts)
       seen_change = true
       if edit.a then
         a_gaps[ai] = { a_offset, a_offset_total }
-        a_changes[#a_changes + 1] = { tag = "delete" }
+        a_changes[#a_changes + 1] = { tag = "delete", inline_ranges = full_content_ranges(edit.a) }
         a_to_b[ai] = clamp_line(bi, b_len)
         ai = ai + 1
         b_offset = b_offset + 1
@@ -422,7 +428,7 @@ function M.compute(a_lines, b_lines, opts)
       seen_change = true
       if edit.b then
         b_gaps[bi] = { b_offset, b_offset_total }
-        b_changes[#b_changes + 1] = { tag = "insert" }
+        b_changes[#b_changes + 1] = { tag = "insert", inline_ranges = full_content_ranges(edit.b) }
         b_to_a[bi] = clamp_line(ai, a_len)
         bi = bi + 1
         a_offset = a_offset + 1

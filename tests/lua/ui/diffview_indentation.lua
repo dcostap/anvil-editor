@@ -56,7 +56,7 @@ local function backgrounds(side, line)
   end
 end
 
-test.describe("Diff View indentation backgrounds", function()
+test.describe("Diff View change backgrounds", function()
   test.before_each(function(context)
     context.views = {}
     context.active_view = core.active_view
@@ -126,5 +126,56 @@ test.describe("Diff View indentation backgrounds", function()
     color_at = backgrounds(side, 1)
     test.same(color_at(side.position.x + 1, y + 1), style.diff_insert_background)
     test.same(color_at(side.position.x + side.size.x - 1, y + 1), style.diff_insert_background)
+  end)
+
+  test.it("emphasizes deleted comments and added expressions without emphasizing retained code", function(context)
+    local before = "OUTER APPLY (\n    -- removed explanation\n    SELECT ISNULL(SUM(m.Unidades), 0) AS UnidadesServidas\nFROM stock"
+    local after = "OUTER APPLY (\n    SELECT\n        ISNULL(SUM(m.Unidades), 0) AS UnidadesServidas,\n        MAX(m.Fecha) AS FechaUltimoServicio\nFROM stock"
+    local view = open_diff(context, before, after, false)
+    local function check(surface, line, col, expected)
+      local color_at = backgrounds(surface, line)
+      local x, y = surface:get_line_screen_position(line, col)
+      test.same(color_at(x + 1, y + 1), expected)
+    end
+    check(view.buffer_view_a, 2, 5, style.diff_delete_inline)
+    check(view.buffer_view_b, 4, 9, style.diff_insert_inline)
+    check(view.buffer_view_b, 3, 9, style.diff_insert_background)
+    -- Text emphasis ends with the content, not at the edge of the surface.
+    check(view.buffer_view_b, 4, #view.buffer_view_b.buffer.lines[4], style.diff_insert_background)
+
+    config.plugins.diffview.unified_width_threshold = 10000
+    view:update()
+    local unified = view:get_focus_view()
+    test.ok(unified ~= view.buffer_view_a and unified ~= view.buffer_view_b)
+    local found_comment, found_expression = false, false
+    for line, text in ipairs(unified.buffer.lines) do
+      if text:find("-- removed explanation", 1, true) then
+        found_comment = true
+        check(unified, line, 5, style.diff_delete_inline)
+      elseif text:find("MAX(m.Fecha)", 1, true) then
+        found_expression = true
+        check(unified, line, 9, style.diff_insert_inline)
+      end
+    end
+    test.ok(found_comment and found_expression, "Unified Diff must show both changed lines")
+  end)
+
+  test.it("keeps full-line text emphasis across wrapped rows", function(context)
+    local text = "top\n    -- " .. string.rep("removed explanation ", 12) .. "\nbottom"
+    for _, reverse in ipairs { false, true } do
+      local before, after = text, "top\nbottom"
+      if reverse then before, after = after, before end
+      local view = open_diff(context, before, after, true)
+      local side = reverse and view.buffer_view_b or view.buffer_view_a
+      local color = reverse and style.diff_insert_inline or style.diff_delete_inline
+      local rows = side:get_visual_row_count_for_line(2)
+      test.ok(rows > 1, "fixture must wrap")
+      local color_at = backgrounds(side, 2)
+      for row = 1, rows do
+        local col = side:get_visual_row_bounds_for_line(2, row)
+        local x, y = side:get_line_screen_position(2, math.max(5, col))
+        test.same(color_at(x + 1, y + 1), color)
+      end
+    end
   end)
 end)

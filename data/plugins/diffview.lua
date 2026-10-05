@@ -1953,7 +1953,7 @@ local function diff_decoration_provider(parent, is_a)
     inline_ranges = function(_, view, line)
       local changes = is_a and parent.a_changes or parent.b_changes
       local change = changes[line]
-      if not change or change.tag ~= "modify" or not change.inline_ranges then return nil end
+      if not change or not change.inline_ranges then return nil end
       local ranges = {}
       local color = style["diff_" .. side_tag .. "_inline"]
       for _, range in ipairs(change.inline_ranges) do
