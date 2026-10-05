@@ -164,7 +164,7 @@ test.describe("Diff View change backgrounds", function()
     check(view.buffer_view_b, 4, 9, style.diff_insert_inline)
     check(view.buffer_view_b, 3, 9, style.diff_modify_background)
     -- Text emphasis ends with the content, not at the edge of the surface.
-    check(view.buffer_view_b, 4, #view.buffer_view_b.buffer.lines[4], style.diff_insert_background)
+    check(view.buffer_view_b, 4, #view.buffer_view_b.buffer.lines[4], style.diff_modify_background)
 
     config.plugins.diffview.unified_width_threshold = 10000
     view:update()
@@ -183,10 +183,10 @@ test.describe("Diff View change backgrounds", function()
     test.ok(found_comment and found_expression, "Unified Diff must show both changed lines")
   end)
 
-  test.it("keeps full-line text emphasis across wrapped rows", function(context)
-    local text = "top\n    -- " .. string.rep("removed explanation ", 12) .. "\nbottom"
+  test.it("keeps mixed-block text emphasis across wrapped rows", function(context)
+    local text = "top\n    -- " .. string.rep("removed explanation ", 12) .. "\nvalue = 1\nbottom"
     for _, reverse in ipairs { false, true } do
-      local before, after = text, "top\nbottom"
+      local before, after = text, "top\nvalue = 2\nbottom"
       if reverse then before, after = after, before end
       local view = open_diff(context, before, after, true)
       local side = reverse and view.buffer_view_b or view.buffer_view_a
@@ -198,6 +198,35 @@ test.describe("Diff View change backgrounds", function()
         local col = side:get_visual_row_bounds_for_line(2, row)
         local x, y = side:get_line_screen_position(2, math.max(5, col))
         test.same(color_at(x + 1, y + 1), color)
+      end
+    end
+  end)
+
+  test.it("fills fully added and deleted blocks uniformly in both layouts", function(context)
+    local text = "top\n    added code\n\n    more code\nbottom"
+    for _, reverse in ipairs { false, true } do
+      for _, wrapped in ipairs { false, true } do
+        config.plugins.diffview.unified_width_threshold = 0
+        local before, after = text, "top\nbottom"
+        if reverse then before, after = after, before end
+        local view = open_diff(context, before, after, wrapped)
+        local side = reverse and view.buffer_view_b or view.buffer_view_a
+        local expected = reverse and style.diff_insert_background or style.diff_delete_background
+        local function check(surface)
+          for line = 2, 4 do
+            local color_at = backgrounds(surface, line)
+            for _, col in ipairs { 1, 5, #surface.buffer.lines[line] } do
+              local x, y = surface:get_line_screen_position(line, col)
+              test.same(color_at(x + 1, y + 1), expected)
+            end
+          end
+        end
+        check(side)
+        config.plugins.diffview.unified_width_threshold = 10000
+        view:update()
+        local unified = view:get_focus_view()
+        test.equal(unified.buffer.lines[2], "    added code\n")
+        check(unified)
       end
     end
   end)

@@ -90,15 +90,29 @@ test.describe("DiffModel", function()
     test.equal(m:next_hunk("a", 1, 1).tag, "modify")
   end)
 
-  test.it("marks all content in fully added and removed lines", function()
-    local before = { "top\n", "\t-- removed comment  \r\n", " \t\n", "bottom\n" }
-    local after = { "top\n", "bottom\n" }
+  test.it("marks all added and removed content within a mixed change block", function()
+    local before = { "top\n", "\t-- removed comment  \r\n", " \t\n", "value = 1\n", "bottom\n" }
+    local after = { "top\n", "value = 2\n", "bottom\n" }
     for _, sides in ipairs { { before, after, "a", "delete" }, { after, before, "b", "insert" } } do
       local m = model.compute(sides[1], sides[2])
       test.equal(m:line_state(sides[3], 2), sides[4])
       test.same(m:inline_ranges(sides[3], 2), { { col1 = 2, col2 = 20 } })
       test.same(m:inline_ranges(sides[3], 3), {})
       test.same(m:inline_ranges(sides[3], 1), {})
+    end
+  end)
+
+  test.it("leaves fully added and removed blocks without separate text emphasis", function()
+    for _, tail in ipairs { "\nbottom", "" } do
+      local text = lines("top\n    added code\n\nmore code" .. tail)
+      local context = lines("top" .. tail)
+      for _, sides in ipairs { { text, context, "a", "delete" }, { context, text, "b", "insert" } } do
+        local m = model.compute(sides[1], sides[2])
+        for line = 2, 4 do
+          test.equal(m:line_state(sides[3], line), sides[4])
+          test.same(m:inline_ranges(sides[3], line), {})
+        end
+      end
     end
   end)
 

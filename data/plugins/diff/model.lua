@@ -352,6 +352,27 @@ function M.compute(a_lines, b_lines, opts)
   local alignment = {}
   local equal_blocks = {}
   local equal_block, seen_change = nil, false
+  local change_start_a, change_start_b
+
+  local function finish_changed_side(changes, source, first, last, block_tag)
+    for line = first, last do
+      local change = changes[line]
+      change.block_tag = block_tag
+      if change.tag ~= "modify" then
+        change.inline_ranges = block_tag == "modify" and full_content_ranges(source[line]) or {}
+      end
+      if opts.should_yield and opts.should_yield() then coroutine.yield() end
+    end
+  end
+
+  local function flush_change_block()
+    if not change_start_a then return end
+    -- Unchanged lines separate blocks. A block with text on both sides is mixed.
+    local tag = ai > change_start_a and (bi > change_start_b and "modify" or "delete") or "insert"
+    finish_changed_side(a_changes, a_lines, change_start_a, ai - 1, tag)
+    finish_changed_side(b_changes, b_lines, change_start_b, bi - 1, tag)
+    change_start_a, change_start_b = nil, nil
+  end
 
   local function flush_equal_block(has_next_change)
     if equal_block and equal_block.count > 0 then
@@ -365,6 +386,11 @@ function M.compute(a_lines, b_lines, opts)
     -- Compare normalized keys, but keep source columns and source text intact.
     edit.a = edit.a and a_lines[ai] or nil
     edit.b = edit.b and b_lines[bi] or nil
+    if edit.tag == "equal" then
+      flush_change_block()
+    elseif not change_start_a then
+      change_start_a, change_start_b = ai, bi
+    end
     alignment[#alignment + 1] = {
       tag = edit.tag,
       a = edit.a and ai or nil,
@@ -417,7 +443,7 @@ function M.compute(a_lines, b_lines, opts)
       seen_change = true
       if edit.a then
         a_gaps[ai] = { a_offset, a_offset_total }
-        a_changes[#a_changes + 1] = { tag = "delete", inline_ranges = full_content_ranges(edit.a) }
+        a_changes[#a_changes + 1] = { tag = "delete" }
         a_to_b[ai] = clamp_line(bi, b_len)
         ai = ai + 1
         b_offset = b_offset + 1
@@ -428,7 +454,7 @@ function M.compute(a_lines, b_lines, opts)
       seen_change = true
       if edit.b then
         b_gaps[bi] = { b_offset, b_offset_total }
-        b_changes[#b_changes + 1] = { tag = "insert", inline_ranges = full_content_ranges(edit.b) }
+        b_changes[#b_changes + 1] = { tag = "insert" }
         b_to_a[bi] = clamp_line(ai, a_len)
         bi = bi + 1
         a_offset = a_offset + 1
@@ -439,6 +465,7 @@ function M.compute(a_lines, b_lines, opts)
     if opts.should_yield and opts.should_yield() then coroutine.yield() end
   end
 
+  flush_change_block()
   flush_equal_block(false)
 
   while ai <= a_len do

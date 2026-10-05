@@ -1920,7 +1920,7 @@ local function diff_decoration_provider(parent, is_a)
       local changes = is_a and parent.a_changes or parent.b_changes
       local change = changes[line]
       if change and (change.tag == "delete" or change.tag == "insert") then
-        return background_color(change.tag)
+        return background_color(change.block_tag)
       end
     end,
     line_background_descriptor = function(_, view, line)

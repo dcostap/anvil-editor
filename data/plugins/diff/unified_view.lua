@@ -57,7 +57,7 @@ function UnifiedView:new(parent)
       if not row or row.tag == "equal" then return end
       local changes = row.b and parent.b_changes or parent.a_changes
       local change = changes[row.b or row.a]
-      if change then return style["diff_" .. change.tag .. "_background"] end
+      if change then return style["diff_" .. change.block_tag .. "_background"] end
     end,
     inline_ranges = function(_, _, line)
       local row = self.rows[line]
