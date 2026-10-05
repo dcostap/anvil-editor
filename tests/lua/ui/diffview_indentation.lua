@@ -33,7 +33,7 @@ local function backgrounds(side, line)
       or color == style.diff_modify_background
       or color == style.diff_modify_inline
       or color == style.diff_insert_inline or color == style.diff_delete_inline
-      or color == style.git_change_deletion then
+      or color == style.diff_inline_marker_delete then
       rects[#rects + 1] = { x = x, y = y, w = w, h = h, color = color }
     end
   end
@@ -210,7 +210,7 @@ test.describe("Diff View change backgrounds", function()
           local view = open_diff(context, before, after, wrapped)
           local side = reverse and view.buffer_view_b or view.buffer_view_a
           local col = #prefix + 6
-          local expected = reverse and style.git_change_deletion or style.diff_insert_inline
+          local expected = reverse and style.diff_inline_marker_delete or style.diff_insert_inline
           local function check(surface, line)
             local color_at = backgrounds(surface, line)
             local x, y = surface:get_line_screen_position(line, col)
@@ -251,7 +251,7 @@ test.describe("Diff View change backgrounds", function()
           local short = reverse and view.buffer_view_b or view.buffer_view_a
           local expanded = reverse and view.buffer_view_a or view.buffer_view_b
           local change_color = reverse and style.diff_delete_inline or style.diff_insert_inline
-          local marker_color = reverse and style.git_change_deletion or style.diff_insert_inline
+          local marker_color = reverse and style.diff_inline_marker_delete or style.diff_insert_inline
           local function check_layout(short_surface, short_line, expanded_surface, expanded_line,
                                       short_word_color, expanded_word_color)
             if case.replacement_col then
@@ -283,7 +283,7 @@ test.describe("Diff View change backgrounds", function()
     end
     check(view.buffer_view_a, 2, 5, style.diff_delete_inline)
     check(view.buffer_view_b, 4, 9, style.diff_insert_inline)
-    check(view.buffer_view_b, 3, 9, style.git_change_deletion)
+    check(view.buffer_view_b, 3, 9, style.diff_inline_marker_delete)
     check(view.buffer_view_b, 3, 12, style.diff_modify_background)
     -- Text emphasis ends with the content, not at the edge of the surface.
     check(view.buffer_view_b, 4, #view.buffer_view_b.buffer.lines[4], style.diff_modify_background)

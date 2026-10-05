@@ -305,6 +305,7 @@ style.diffview_plain_text = c("ffffff")
 style.git_change_addition = c("587c0c")
 style.git_change_modification = c("0c7d9d")
 style.git_change_deletion = c("94151b")
+style.diff_inline_marker_delete = { common.color "rgba(148, 21, 27, 0.85)" }
 style.gitdiff_width = common.round(2 * SCALE)
 style.git_graph_colors = {
   c("59a0fa"), c("6aab73"), c("c77dff"), c("d6a84b"), c("dc6b86"), c("54b8b0"),
