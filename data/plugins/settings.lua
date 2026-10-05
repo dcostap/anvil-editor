@@ -2756,6 +2756,7 @@ local theme_commands = {
     local preview = original
     core.global_prompt_bar:enter("Wallpaper", {
       overlay = false,
+      max_visible_suggestions = 4,
       suggest = function(text)
         local suggestions = {}
         local needle = (text or ""):lower()

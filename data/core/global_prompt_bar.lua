@@ -73,6 +73,7 @@ local noop = function() end
 ---@field draw_text? fun(item: table, font: renderer.font, color: renderer.color, x: number, y: number, w: number, h: number) Custom suggestion renderer
 ---@field select_text boolean Whether to select initial text
 ---@field show_suggestions boolean Whether to show suggestions box
+---@field max_visible_suggestions? integer Maximum number of visible suggestion rows
 ---@field overlay boolean Whether to dim the editor behind the prompt
 ---@field typeahead boolean Whether to enable typeahead completion
 ---@field wrap boolean Whether suggestion cycling wraps around
@@ -90,6 +91,11 @@ local default_state = {
   typeahead = true,
   wrap = true,
 }
+
+
+local function get_max_visible_suggestions(self)
+  return self.state.max_visible_suggestions or config.max_visible_commands
+end
 
 
 ---Constructor - initializes the Global Prompt Bar.
@@ -464,12 +470,14 @@ function GlobalPromptBar:update()
 
   -- update suggestions box height
   local lh = self:get_suggestion_line_height()
+  local max_visible_suggestions = get_max_visible_suggestions(self)
   local dest = self.state.show_suggestions and not self.covered_by_app_overlay
-    and math.min(#self.suggestions, config.max_visible_commands) * lh or 0
+    and math.min(#self.suggestions, max_visible_suggestions) * lh or 0
   self:move_towards("suggestions_height", dest, nil, "global_prompt_bar")
 
   -- update suggestion cursor offset
-  local dest = math.min(self.suggestion_idx, config.max_visible_commands) * self:get_suggestion_line_height()
+  local dest = math.min(self.suggestion_idx, max_visible_suggestions)
+    * self:get_suggestion_line_height()
   self:move_towards("selection_offset", dest, nil, "global_prompt_bar")
 
   -- update size based on whether this is the active_view
@@ -539,12 +547,13 @@ local function draw_suggestions_box(self)
 
     -- draw suggestion text
     local current = self.suggestion_idx
-    local offset = math.max(current - config.max_visible_commands, 0)
+    local max_visible_suggestions = get_max_visible_suggestions(self)
+    local offset = math.max(current - max_visible_suggestions, 0)
     if self.suggestions_first-1 == current then
       offset = math.max(self.suggestions_first - 2, 0)
     end
     local first = 1 + offset
-    local last = math.min(offset + config.max_visible_commands, #self.suggestions)
+    local last = math.min(offset + max_visible_suggestions, #self.suggestions)
     if
       current < self.suggestions_first
       or

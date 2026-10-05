@@ -16,6 +16,26 @@ test.describe("wallpaper selection", function()
     if settings.apply_wallpaper then settings.apply_wallpaper(original) end
   end)
 
+  test.it("limits the wallpaper picker to four visible rows", function()
+    local bar = core.global_prompt_bar
+    local config = require "core.config"
+    local old_transitions = config.transitions
+    local old_max_visible_commands = config.max_visible_commands
+    local visible_rows
+    config.transitions = false
+    config.max_visible_commands = 20
+    local ok, err = pcall(function()
+      test.ok(command.perform("core:select_wallpaper"))
+      bar:update()
+      visible_rows = bar.suggestions_height / bar:get_suggestion_line_height()
+    end)
+    bar:exit(true)
+    config.transitions = old_transitions
+    config.max_visible_commands = old_max_visible_commands
+    if not ok then error(err, 0) end
+    test.equal(visible_rows, 4)
+  end)
+
   test.it("previews images and None, then restores the saved choice on cancel", function()
     test.ok(command.perform("core:select_wallpaper"))
     local bar = core.global_prompt_bar
