@@ -21,6 +21,7 @@ end
 ---Build a unified patch from current Buffer lines, independent of display filters.
 -- A scope selects complete change blocks on one side, before adding context.
 -- Its intervals are inclusive line ranges in that side's current Buffer.
+-- An interval can select its own side when a unified selection spans both sources.
 function M.build(before, after, before_name, after_name, scope)
   local rows, ranges = {}, {}
   local old_line, new_line = 1, 1
@@ -39,8 +40,6 @@ function M.build(before, after, before_name, after_name, scope)
   end
   if scope then
     local filtered = {}
-    local side = scope.side == "left" and "old" or "new"
-    local count = scope.side == "left" and #before or #after
     local i = 1
     while i <= #rows do
       if rows[i].prefix == " " then
@@ -49,13 +48,15 @@ function M.build(before, after, before_name, after_name, scope)
       else
         local last = i
         while rows[last + 1] and rows[last + 1].prefix ~= " " do last = last + 1 end
-        local first_line = math.min(count, rows[i][side])
-        local next_line = rows[last][side]
-        local consumes = side == "old" and rows[last].prefix ~= "+"
-          or side == "new" and rows[last].prefix ~= "-"
-        local last_line = math.min(count, math.max(first_line, next_line - (consumes and 0 or 1)))
         local selected = false
         for _, interval in ipairs(scope.intervals) do
+          local left = (interval.side or scope.side) == "left"
+          local side, count = left and "old" or "new", left and #before or #after
+          local first_line = math.min(count, rows[i][side])
+          local next_line = rows[last][side]
+          local consumes = side == "old" and rows[last].prefix ~= "+"
+            or side == "new" and rows[last].prefix ~= "-"
+          local last_line = math.min(count, math.max(first_line, next_line - (consumes and 0 or 1)))
           if first_line <= interval[2] and last_line >= interval[1] then selected = true; break end
         end
         for index = i, last do

@@ -135,6 +135,7 @@ plugin_defaults("terminal", {
   scrollback_lines = 10000,
 })
 plugin_defaults("diffview", {
+  unified_width_threshold = 1300,
   whitespace_mode = "trim",
   log_times = false,
   plain_text = false,

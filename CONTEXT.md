@@ -650,15 +650,20 @@ A read-only Buffer containing file text from a past Git revision.
 _Avoid_: Historical Document, snapshot buffer
 
 **Diff View**:
-A visual comparison of two text sources, presented through two Diff Sides.
+A visual comparison of two text sources, shown side by side or through a read-only Unified Diff.
 _Avoid_: diffviewer
+
+**Unified Diff**:
+A single text surface showing unchanged lines once, with removed lines before added lines in each change block.
+It shows line numbers from both sources and permits selection and copying, but not editing.
 
 **Image Comparison View**:
 A visual before-and-after comparison of two image revisions. It presents images directly instead of treating their bytes as text.
 _Avoid_: image diff, binary Diff View
 
 **Diff Side**:
-One text surface in a Diff View, representing one of the compared sources. A file-backed Diff Side presents the same Buffer as that file's Editors.
+One of the compared text sources in a Diff View. Side-by-side mode gives each Diff Side its own text surface.
+A file-backed Diff Side uses the same Buffer as that file's Editors.
 _Avoid_: diff pane, side view
 
 **Diff Gap Row**:

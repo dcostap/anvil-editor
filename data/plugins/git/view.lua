@@ -2186,6 +2186,7 @@ function GitView:ensure_history_diff_view(tab)
     local old_focused = core.active_view == old_view
       or core.active_view == old_view.buffer_view_a
       or core.active_view == old_view.buffer_view_b
+      or core.active_view == old_view.unified_view
     -- Pane layout runs before this update. Copy the old View geometry so the
     -- replacement can render in the same frame instead of waiting for the
     -- next layout pass with a zero-sized View.
@@ -2276,6 +2277,7 @@ function GitView:ensure_history_diff_view(tab)
   attach_text_capture_owner(view, self)
   attach_text_capture_owner(view.buffer_view_a, self)
   attach_text_capture_owner(view.buffer_view_b, self)
+  attach_text_capture_owner(view.unified_view, self)
   if old_view and panes.pane_for_view(old_view) then
     tab.history_diff_view_pending = view
     tab.history_diff_view_pending_generation = target_generation
@@ -2374,6 +2376,10 @@ function GitView:focus_diff_pane(side)
     focus = self.focused_diff_buffer_view or view and view.get_focus_view and view:get_focus_view()
   end
   if not focus then return false end
+  if view.unified then
+    if focus == view.buffer_view_a or focus == view.buffer_view_b then view.unified_view:select_source(focus) end
+    focus = view:get_focus_view()
+  end
   self.focused_pane_name = nil
   self.focus_pane = "diff"
   self.focused_diff_buffer_view = focus

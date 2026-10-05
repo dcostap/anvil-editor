@@ -161,9 +161,12 @@ function Workload:setup_ready()
   end
   if self.diff then
     assert(not self.diff.comparison_message, self.diff.comparison_message)
-    return self.diff.diff_model ~= nil and not self.diff.updater_idx
-      and not self.diff.pending_first_change_reveal
-      and ready_editor(self.diff.buffer_view_a) and ready_editor(self.diff.buffer_view_b)
+    self.view = self.diff:get_focus_view()
+    if not self.diff.diff_model or self.diff.updater_idx or self.diff.pending_first_change_reveal then return false end
+    for _, surface in ipairs(self.diff:get_surface_focus_targets()) do
+      if not ready_editor(surface) then return false end
+    end
+    return true
   end
   return ready_editor(self.view)
 end

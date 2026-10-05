@@ -61,6 +61,7 @@ function M.attach(view, source, tab, point_source, selected_path)
   view.open_text_capture = capture
   if view.buffer_view_a then
     view.buffer_view_a.open_text_capture, view.buffer_view_b.open_text_capture = capture, capture
+    view.unified_view.open_text_capture = capture
     local poi = require "core.poi"
     local project = core.root_project()
     local function continue_navigation(_, direction)
@@ -90,6 +91,7 @@ function M.attach(view, source, tab, point_source, selected_path)
     end
     view.buffer_view_a.continue_point_of_interest = continue_navigation
     view.buffer_view_b.continue_point_of_interest = continue_navigation
+    view.unified_view.continue_point_of_interest = continue_navigation
   end
   return view
 end
