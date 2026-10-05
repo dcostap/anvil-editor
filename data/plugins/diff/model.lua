@@ -1,3 +1,4 @@
+local common = require "core.common"
 local M = {}
 
 local function max_line(lines)
@@ -129,27 +130,43 @@ local function append_token_range(ranges, target, col1, col2, tag)
   end
 end
 
+local function line_end_column(text)
+  if text:sub(-2) == "\r\n" then return #text - 1 end
+  if text:sub(-1) == "\n" then return #text end
+  return #text + 1
+end
+
 local function changed_target_spans(from, target)
-  local spans, gaps, target_index = {}, {}, 1
-  local first, last, has_source
+  local spans, gaps, source_index, target_index = {}, {}, 1, 1
+  local first, last, source_first, source_last
   local function flush()
     if first then
       -- A changed span with source and target text is a replacement.
-      spans[#spans + 1] = { first = first, last = last, tag = has_source and "modify" or nil }
-    elseif has_source then
-      gaps[#gaps + 1] = target_index
+      spans[#spans + 1] = {
+        first = first, last = last, tag = source_first and "modify" or nil,
+        source_first = source_first, source_last = source_last,
+      }
+    elseif source_first then
+      gaps[#gaps + 1] = { index = target_index, source_first = source_first, source_last = source_last }
     end
-    first, last, has_source = nil, nil, nil
+    first, last, source_first, source_last = nil, nil, nil, nil
   end
   for edit in diff.diff_iter(from, target) do
-    if edit.tag == "equal" then
+    if edit.tag == "equal" or edit.tag == "modify" then
       flush()
+      if edit.tag == "modify" then
+        spans[#spans + 1] = {
+          first = target_index, last = target_index, tag = "modify",
+          source_first = source_index, source_last = source_index,
+        }
+      end
     else
-      if edit.a then has_source = true end
+      if edit.a then source_first, source_last = source_first or source_index, source_index end
       if edit.b then
         first, last = first or target_index, target_index
       end
     end
+    if edit.a then source_index = source_index + 1 end
     if edit.b then target_index = target_index + 1 end
   end
   flush()
@@ -160,33 +177,74 @@ local function uncovered_markers(markers, ranges)
   local result, index = {}, 1
   for _, marker in ipairs(markers) do
     while ranges[index] and ranges[index].col2 <= marker.col do index = index + 1 end
-    if not ranges[index] or marker.col < ranges[index].col1 then
+    -- Keep markers at range boundaries, not inside highlighted text.
+    if not ranges[index] or marker.col <= ranges[index].col1 then
       result[#result + 1] = marker
     end
   end
   return result
 end
 
+local function changed_token_contents(from_segments, target_segments)
+  local function characters(segments)
+    local values, owners = {}, {}
+    for index, segment in ipairs(segments) do
+      for char in common.utf8_chars(segment.text) do
+        values[#values + 1], owners[#owners + 1] = char, index
+      end
+    end
+    return values, owners
+  end
+  local from_values, from_owners = characters(from_segments)
+  local target_values, target_owners = characters(target_segments)
+  local from_changed, target_changed, ai, bi = {}, {}, 1, 1
+  for edit in diff.diff_iter(from_values, target_values) do
+    if edit.tag ~= "equal" then
+      if edit.a then from_changed[from_owners[ai]] = true end
+      if edit.b then target_changed[target_owners[bi]] = true end
+    end
+    if edit.a then ai = ai + 1 end
+    if edit.b then bi = bi + 1 end
+  end
+  return from_changed, target_changed
+end
+
+local function has_changed_token(changed, first, last)
+  if not first then return false end
+  for index = first, last do
+    if changed[index] then return true end
+  end
+  return false
+end
+
 ---Use word alignment so repeated letters cannot make partially replaced words
 ---look unchanged. Modified, inserted, and deleted text is emphasized only at
 ---whole-word granularity, matching IntelliJ's restrained inline presentation.
-local function token_inline_ranges(from, target)
-  local _, from_values = token_segments(from)
+local function token_inline_ranges(from, target, ignore_whitespace)
+  local from_segments, from_values = token_segments(from)
   local target_segments, target_values = token_segments(target)
+  local from_changed, target_changed
+  if ignore_whitespace then
+    -- Use character matches to ignore spacing-only changes. Words select colors and marker positions.
+    from_changed, target_changed = changed_token_contents(from_segments, target_segments)
+  end
 
   local ranges, markers = {}, {}
   local spans, gaps = changed_target_spans(from_values, target_values)
   for _, span in ipairs(spans) do
+    local source_changed = from_changed and has_changed_token(from_changed, span.source_first, span.source_last)
     for index = span.first, span.last do
-      local target_segment = target_segments[index]
-      local col1, col2 = content_range(target_segment)
-      append_token_range(ranges, target, col1, col2, span.tag)
+      if not ignore_whitespace or source_changed or target_changed[index] then
+        local col1, col2 = content_range(target_segments[index])
+        append_token_range(ranges, target, col1, col2, span.tag)
+      end
     end
   end
-  local last = target_segments[#target_segments]
-  for _, index in ipairs(gaps) do
-    local segment = target_segments[index]
-    markers[#markers + 1] = { col = segment and segment.col1 or (last and last.col2 or 1) }
+  for _, gap in ipairs(gaps) do
+    if not ignore_whitespace or has_changed_token(from_changed, gap.source_first, gap.source_last) then
+      local segment = target_segments[gap.index]
+      markers[#markers + 1] = { col = segment and segment.col1 or line_end_column(target) }
+    end
   end
   return ranges, uncovered_markers(markers, ranges)
 end
@@ -196,13 +254,7 @@ local function is_trim_space(byte)
 end
 
 local function trim_content_bounds(text)
-  local end_col = #text
-  if text:sub(-1) == "\n" then
-    end_col = end_col - 1
-    if end_col > 0 and text:sub(end_col, end_col) == "\r" then
-      end_col = end_col - 1
-    end
-  end
+  local end_col = line_end_column(text) - 1
 
   local first = 1
   while first <= end_col and is_trim_space(text:byte(first)) do first = first + 1 end
@@ -269,55 +321,11 @@ local function trim_whitespace_inline_ranges(from, target)
   return ranges, uncovered_markers(markers, ranges)
 end
 
-local function whitespace_inline_ranges(from, target)
-  local from_values = diff.split(from:gsub("%s", ""), "char")
-  local target_values, source_columns = {}, {}
-  for col = 1, #target do
-    local byte = target:sub(col, col)
-    if not byte:match("%s") then
-      target_values[#target_values + 1] = byte
-      source_columns[#source_columns + 1] = col
-    end
-  end
-
-  local changed_columns, markers = {}, {}
-  local spans, gaps = changed_target_spans(from_values, target_values)
-  for _, span in ipairs(spans) do
-    for index = span.first, span.last do
-      changed_columns[#changed_columns + 1] = { col = source_columns[index], tag = span.tag }
-    end
-  end
-
-  for _, index in ipairs(gaps) do
-    markers[#markers + 1] = { col = source_columns[index] or ((source_columns[#source_columns] or 0) + 1) }
-  end
-
-  -- Match without whitespace, then expand changes to the original word boundaries.
-  -- Removing spaces must not join an unchanged keyword to a renamed identifier.
-  local segments = token_segments(target)
-  local ranges, changed_index = {}, 1
-  for _, segment in ipairs(segments) do
-    while changed_columns[changed_index] and changed_columns[changed_index].col < segment.col1 do
-      changed_index = changed_index + 1
-    end
-    local changed, tag = false, nil
-    while changed_columns[changed_index] and changed_columns[changed_index].col < segment.col2 do
-      changed = true
-      tag = tag or changed_columns[changed_index].tag
-      changed_index = changed_index + 1
-    end
-    if changed then
-      append_token_range(ranges, target, segment.col1, segment.col2, tag)
-    end
-  end
-  return ranges, uncovered_markers(markers, ranges)
-end
-
 local function inline_change(from, to, whitespace_mode)
   from, to = from or "", to or ""
   if from == to then return nil, {}, {} end
   if whitespace_mode == "ignore" then
-    return nil, whitespace_inline_ranges(from, to)
+    return nil, token_inline_ranges(from, to, true)
   end
   if whitespace_mode == "trim" then
     return nil, trim_whitespace_inline_ranges(from, to)

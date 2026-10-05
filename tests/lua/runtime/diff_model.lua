@@ -8,6 +8,15 @@ local function lines(text)
   return out
 end
 
+local function highlighted_text(m, side, text)
+  local result = {}
+  for _, range in ipairs(m:inline_ranges(side, 1) or {}) do
+    local content = text:sub(range.col1, range.col2 - 1):gsub("^%s+", ""):gsub("%s+$", "")
+    if content ~= "" then result[#result + 1] = { text = content, tag = range.tag } end
+  end
+  return result
+end
+
 test.describe("DiffModel", function()
   test.it("separates added wrappers from reindented code", function()
     local before = lines(table.concat({
@@ -141,6 +150,68 @@ test.describe("DiffModel", function()
         local replaced = model.compute({ "head old tail" }, { "head new tail" }, { whitespace_mode = mode })
         test.same(replaced:inline_markers("a", 1), {})
         test.same(replaced:inline_markers("b", 1), {})
+      end
+    end
+  end)
+
+  test.it("keeps a replacement separate from the added word beside it", function()
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      local m = model.compute({ "head oldName tail" }, { "head newName extra tail" }, { whitespace_mode = mode })
+      test.same(m:inline_ranges("a", 1), { { col1 = 6, col2 = 13, tag = "modify" } })
+      test.same(highlighted_text(m, "b", "head newName extra tail"), {
+        { text = "newName", tag = "modify" }, { text = "extra" },
+      })
+      test.same(m:inline_markers("a", 1), { { col = 14 } })
+    end
+  end)
+
+  test.it("treats a word extension as a replacement in every whitespace mode", function()
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      local m = model.compute({ "head foo tail" }, { "head foobar tail" }, { whitespace_mode = mode })
+      test.same(m:inline_ranges("a", 1), { { col1 = 6, col2 = 9, tag = "modify" } })
+      test.same(m:inline_ranges("b", 1), { { col1 = 6, col2 = 12, tag = "modify" } })
+      test.same(m:inline_markers("a", 1), {})
+      test.same(m:inline_markers("b", 1), {})
+    end
+  end)
+
+  test.it("keeps an insertion marker at the start of a replacement", function()
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      local m = model.compute({ "head oldName tail" }, { "head extra newName tail" }, { whitespace_mode = mode })
+      test.same(m:inline_markers("a", 1), { { col = 6 } })
+      test.same(m:inline_ranges("a", 1), { { col1 = 6, col2 = 13, tag = "modify" } })
+      test.same(highlighted_text(m, "b", "head extra newName tail"), {
+        { text = "extra" }, { text = "newName", tag = "modify" },
+      })
+      local reversed = model.compute({ "head extra newName tail" }, { "head oldName tail" }, { whitespace_mode = mode })
+      test.same(reversed:inline_markers("b", 1), { { col = 6 } })
+    end
+  end)
+
+  test.it("does not match UTF-8 fragments inside a replaced word", function()
+    local before, after = "head é tail", "head è© tail"
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      local m = model.compute({ before }, { after }, { whitespace_mode = mode })
+      for _, marker in ipairs(m:inline_markers("a", 1)) do
+        local byte = before:byte(marker.col)
+        test.ok(not byte or byte < 128 or byte >= 192, "markers must use character boundaries")
+      end
+      test.same(m:inline_ranges("a", 1), { { col1 = 6, col2 = 8, tag = "modify" } })
+      test.same(m:inline_ranges("b", 1), { { col1 = 6, col2 = 10, tag = "modify" } })
+      test.same(m:inline_markers("a", 1), {})
+      test.same(m:inline_markers("b", 1), {})
+    end
+  end)
+
+  test.it("places a suffix insertion marker after existing trailing whitespace", function()
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      for _, ending in ipairs { "", "\n", "\r\n" } do
+        local before, after = "head " .. ending, "head extra" .. ending
+        local m = model.compute({ before }, { after }, { whitespace_mode = mode })
+        test.same(m:inline_markers("a", 1), { { col = 6 } })
+        test.same(m:inline_ranges("a", 1), {})
+        local reversed = model.compute({ after }, { before }, { whitespace_mode = mode })
+        test.same(reversed:inline_markers("b", 1), { { col = 6 } })
       end
     end
   end)

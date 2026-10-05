@@ -221,6 +221,48 @@ test.describe("Diff View change backgrounds", function()
     end
   end)
 
+  test.it("keeps corrected word colors and insertion boundaries in both layouts", function(context)
+    local cases = {
+      { before = "head oldName tail", after = "head newName extra tail", blue_col = 8, extra_col = 16, marker_col = 14 },
+      { before = "head oldName tail", after = "head extra newName tail", blue_col = 8, new_blue_col = 14, extra_col = 8, marker_col = 6 },
+      { before = "head foo tail", after = "head foobar tail", blue_col = 7 },
+      { before = "head é tail", after = "head è© tail", blue_col = 6 },
+      { before = "head ", after = "head extra", extra_col = 7, marker_col = 6 },
+    }
+    local function check(surface, line, col, expected)
+      local color_at = backgrounds(surface, line)
+      local x, y = surface:get_line_screen_position(line, col)
+      test.same(color_at(x + style.caret_width / 2, y + 1), expected)
+    end
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      for _, reverse in ipairs { false, true } do
+        for _, case in ipairs(cases) do
+          config.plugins.diffview.whitespace_mode = mode
+          config.plugins.diffview.unified_width_threshold = 0
+          local before, after = case.before, case.after
+          if reverse then before, after = after, before end
+          local view = open_diff(context, before, after, false)
+          local short = reverse and view.buffer_view_b or view.buffer_view_a
+          local expanded = reverse and view.buffer_view_a or view.buffer_view_b
+          local change_color = reverse and style.diff_delete_inline or style.diff_insert_inline
+          local function check_layout(short_surface, short_line, expanded_surface, expanded_line)
+            if case.blue_col then
+              check(short_surface, short_line, case.blue_col, style.diff_modify_inline)
+              check(expanded_surface, expanded_line, case.new_blue_col or case.blue_col, style.diff_modify_inline)
+            end
+            if case.extra_col then check(expanded_surface, expanded_line, case.extra_col, change_color) end
+            if case.marker_col then check(short_surface, short_line, case.marker_col, change_color) end
+          end
+          check_layout(short, 1, expanded, 1)
+          config.plugins.diffview.unified_width_threshold = 10000
+          view:update()
+          local unified = view:get_focus_view()
+          check_layout(unified, reverse and 2 or 1, unified, reverse and 1 or 2)
+        end
+      end
+    end
+  end)
+
   test.it("emphasizes deleted comments and added expressions without emphasizing retained code", function(context)
     local before = "OUTER APPLY (\n    -- removed explanation\n    SELECT ISNULL(SUM(m.Unidades), 0) AS UnidadesServidas\nFROM stock"
     local after = "OUTER APPLY (\n    SELECT\n        ISNULL(SUM(m.Unidades), 0) AS UnidadesServidas,\n        MAX(m.Fecha) AS FechaUltimoServicio\nFROM stock"
