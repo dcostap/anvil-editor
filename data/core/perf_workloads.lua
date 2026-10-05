@@ -210,8 +210,10 @@ function Workload:dispatch(index)
     if settings.save_workspace and index == settings.actions then
       core.save_workspace()
     elseif settings.action == "wheel" then
-      assert(command.perform("core:scroll", index <= SCROLL_DOWN_TICKS and -1 or 1),
-        "Diff Side did not accept the wheel scroll")
+      self.wheel_start_y = self.view.scroll.y
+      self.wheel_direction = index <= SCROLL_DOWN_TICKS and 1 or -1
+      assert(self.diff:on_mouse_wheel(-self.wheel_direction, 0),
+        "Diff View did not accept the wheel scroll")
       core.request_workspace_save("Diff wheel benchmark")
     elseif settings.action == "scroll" then
       local span = math.max(1, #self.view.buffer.lines - 100)
@@ -322,6 +324,11 @@ function Workload:action_ready()
         return false
       end
     end
+    if self.wheel_start_y then
+      assert((self.view.scroll.y - self.wheel_start_y) * self.wheel_direction > 0,
+        "Diff wheel action did not move the visible text")
+      self.wheel_start_y = nil
+    end
   end
   local line, col = self.view:with_selection_state(function() return self.view.buffer:get_selection() end)
   self.result = string.format("%s:%d:%d:%d", self.target_name or self.settings.kind,
@@ -359,6 +366,7 @@ function Workload:state()
     diff_left_changes = self.diff and #self.diff.a_changes or 0,
     diff_right_changes = self.diff and #self.diff.b_changes or 0,
     diff_wrapped = self.diff and self.view:is_wrapping_enabled() or false,
+    diff_scroll_y = self.diff and self.view.scroll.to.y or 0,
     code_scale = require("plugins.scale").get_code(),
     editor_wrapped = self.settings.kind == "editor" and self.view:is_wrapping_enabled() or false,
     editor_markdown_live = self.settings.kind == "editor"

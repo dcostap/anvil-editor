@@ -632,7 +632,9 @@ def summarize_metrics(path: Path) -> dict[str, float]:
         raise RuntimeError(f"metrics file has no rows: {path}")
     if "total_ms" in rows[0] and "sleep_actual_ms" in rows[0]:
         for row in rows:
-            row["work_ms"] = max(0, float(row["total_ms"]) - float(row["sleep_actual_ms"]))
+            # Scripted actions run between loop snapshots, not inside event dispatch.
+            row["work_ms"] = (max(0, float(row["total_ms"]) - float(row["sleep_actual_ms"]))
+                              + float(row.get("action_ms") or 0))
 
     def numbers(key: str) -> list[float]:
         return [float(row.get(key) or 0) for row in rows]

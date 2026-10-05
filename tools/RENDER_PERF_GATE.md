@@ -123,6 +123,7 @@ The report contains:
 The default budgets are 6.06 ms per frame and 100 ms per action.
 The frame budget matches a 165 Hz display.
 Budget checks include run-loop work before and after drawing. They exclude frame-pacing sleep.
+They also include scripted action dispatch, which runs between loop snapshots.
 Set another action limit with `--action-budget-ms`.
 Flags report measured costs, not proven causes. Compare size variants before
 you conclude that cost grows with file size or change count.
