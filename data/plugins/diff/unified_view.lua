@@ -55,9 +55,7 @@ function UnifiedView:new(parent)
     line_background = function(_, _, line)
       local row = self.rows[line]
       if not row or row.tag == "equal" then return end
-      local changes = row.b and parent.b_changes or parent.a_changes
-      local change = changes[row.b or row.a]
-      if change then return style["diff_" .. change.block_tag .. "_background"] end
+      return style["diff_" .. row.tag .. "_background"]
     end,
     inline_ranges = function(_, _, line)
       local row = self.rows[line]
@@ -68,7 +66,7 @@ function UnifiedView:new(parent)
       for _, range in ipairs(change and change.inline_ranges or {}) do
         ranges[#ranges + 1] = {
           col1 = range.col1, col2 = range.col2,
-          color = range.tag == "modify" and style.diff_modify_inline or style["diff_" .. row.tag .. "_inline"],
+          color = style["diff_" .. row.tag .. "_inline"],
         }
       end
       local marker_color = row.b and style.diff_delete_inline or style.diff_insert_inline

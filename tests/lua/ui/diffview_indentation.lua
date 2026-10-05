@@ -130,26 +130,31 @@ test.describe("Diff View change backgrounds", function()
     test.same(color_at(side.position.x + side.size.x - 1, y + 1), style.diff_modify_background)
   end)
 
-  test.it("distinguishes modified lines from their replaced words in both layouts", function(context)
+  test.it("uses layout-specific colors for changed rows and replaced words", function(context)
     local view = open_diff(context, "top\nprivate const val LIMIT = 2_000\nbottom",
       "top\nprivate const val LIMIT = 1_500\nbottom", false)
-    local function check(surface, line, word_color)
+    local function check(surface, line, line_color, word_color)
       local color_at = backgrounds(surface, line)
       local x, y = surface:get_line_screen_position(line, 1)
-      test.same(color_at(x + 1, y + 1), style.diff_modify_background)
+      test.same(color_at(x + 1, y + 1), line_color)
       x, y = surface:get_line_screen_position(line, 27)
       test.same(color_at(x + 1, y + 1), word_color)
     end
-    check(view.buffer_view_a, 2, style.diff_modify_inline)
-    check(view.buffer_view_b, 2, style.diff_modify_inline)
+    check(view.buffer_view_a, 2, style.diff_modify_background, style.diff_modify_inline)
+    check(view.buffer_view_b, 2, style.diff_modify_background, style.diff_modify_inline)
 
     config.plugins.diffview.unified_width_threshold = 10000
     view:update()
     local unified = view:get_focus_view()
     test.equal(unified.buffer.lines[2], "private const val LIMIT = 2_000\n")
     test.equal(unified.buffer.lines[3], "private const val LIMIT = 1_500\n")
-    check(unified, 2, style.diff_modify_inline)
-    check(unified, 3, style.diff_modify_inline)
+    check(unified, 2, style.diff_delete_background, style.diff_delete_inline)
+    check(unified, 3, style.diff_insert_background, style.diff_insert_inline)
+
+    config.plugins.diffview.unified_width_threshold = 0
+    view:update()
+    check(view.buffer_view_a, 2, style.diff_modify_background, style.diff_modify_inline)
+    check(view.buffer_view_b, 2, style.diff_modify_background, style.diff_modify_inline)
   end)
 
   test.it("uses replacement colors for a comma changed to an arrow without recoloring pure additions", function(context)
@@ -184,8 +189,8 @@ test.describe("Diff View change backgrounds", function()
       config.plugins.diffview.unified_width_threshold = 10000
       view:update()
       local unified = view:get_focus_view()
-      check(unified, 1, ",", style.diff_modify_inline)
-      check(unified, 3, "➜", style.diff_modify_inline)
+      check(unified, 1, ",", style.diff_delete_inline)
+      check(unified, 3, "➜", style.diff_insert_inline)
       check(unified, 4, "(...)", style.diff_insert_inline)
       check_markers(unified, 2, markers)
     end
@@ -221,12 +226,12 @@ test.describe("Diff View change backgrounds", function()
     end
   end)
 
-  test.it("keeps corrected word colors and insertion boundaries in both layouts", function(context)
+  test.it("keeps layout-specific replacement colors and insertion boundaries", function(context)
     local cases = {
-      { before = "head oldName tail", after = "head newName extra tail", blue_col = 8, extra_col = 16, marker_col = 14 },
-      { before = "head oldName tail", after = "head extra newName tail", blue_col = 8, new_blue_col = 14, extra_col = 8, marker_col = 6 },
-      { before = "head foo tail", after = "head foobar tail", blue_col = 7 },
-      { before = "head é tail", after = "head è© tail", blue_col = 6 },
+      { before = "head oldName tail", after = "head newName extra tail", replacement_col = 8, extra_col = 16, marker_col = 14 },
+      { before = "head oldName tail", after = "head extra newName tail", replacement_col = 8, new_replacement_col = 14, extra_col = 8, marker_col = 6 },
+      { before = "head foo tail", after = "head foobar tail", replacement_col = 7 },
+      { before = "head é tail", after = "head è© tail", replacement_col = 6 },
       { before = "head ", after = "head extra", extra_col = 7, marker_col = 6 },
     }
     local function check(surface, line, col, expected)
@@ -245,19 +250,21 @@ test.describe("Diff View change backgrounds", function()
           local short = reverse and view.buffer_view_b or view.buffer_view_a
           local expanded = reverse and view.buffer_view_a or view.buffer_view_b
           local change_color = reverse and style.diff_delete_inline or style.diff_insert_inline
-          local function check_layout(short_surface, short_line, expanded_surface, expanded_line)
-            if case.blue_col then
-              check(short_surface, short_line, case.blue_col, style.diff_modify_inline)
-              check(expanded_surface, expanded_line, case.new_blue_col or case.blue_col, style.diff_modify_inline)
+          local function check_layout(short_surface, short_line, expanded_surface, expanded_line,
+                                      short_word_color, expanded_word_color)
+            if case.replacement_col then
+              check(short_surface, short_line, case.replacement_col, short_word_color)
+              check(expanded_surface, expanded_line, case.new_replacement_col or case.replacement_col, expanded_word_color)
             end
             if case.extra_col then check(expanded_surface, expanded_line, case.extra_col, change_color) end
             if case.marker_col then check(short_surface, short_line, case.marker_col, change_color) end
           end
-          check_layout(short, 1, expanded, 1)
+          check_layout(short, 1, expanded, 1, style.diff_modify_inline, style.diff_modify_inline)
           config.plugins.diffview.unified_width_threshold = 10000
           view:update()
           local unified = view:get_focus_view()
-          check_layout(unified, reverse and 2 or 1, unified, reverse and 1 or 2)
+          local short_word_color = reverse and style.diff_insert_inline or style.diff_delete_inline
+          check_layout(unified, reverse and 2 or 1, unified, reverse and 1 or 2, short_word_color, change_color)
         end
       end
     end
