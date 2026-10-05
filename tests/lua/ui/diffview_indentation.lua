@@ -31,6 +31,7 @@ local function backgrounds(side, line)
   renderer.draw_rect = function(x, y, w, h, color)
     if color == style.diff_insert_background or color == style.diff_delete_background
       or color == style.diff_modify_background
+      or color == style.diff_modify_inline
       or color == style.diff_insert_inline or color == style.diff_delete_inline then
       rects[#rects + 1] = { x = x, y = y, w = w, h = h, color = color }
     end
@@ -129,7 +130,7 @@ test.describe("Diff View change backgrounds", function()
     test.same(color_at(side.position.x + side.size.x - 1, y + 1), style.diff_modify_background)
   end)
 
-  test.it("distinguishes modified lines from their removed and added words in both layouts", function(context)
+  test.it("distinguishes modified lines from their replaced words in both layouts", function(context)
     local view = open_diff(context, "top\nprivate const val LIMIT = 2_000\nbottom",
       "top\nprivate const val LIMIT = 1_500\nbottom", false)
     local function check(surface, line, word_color)
@@ -139,16 +140,44 @@ test.describe("Diff View change backgrounds", function()
       x, y = surface:get_line_screen_position(line, 27)
       test.same(color_at(x + 1, y + 1), word_color)
     end
-    check(view.buffer_view_a, 2, style.diff_delete_inline)
-    check(view.buffer_view_b, 2, style.diff_insert_inline)
+    check(view.buffer_view_a, 2, style.diff_modify_inline)
+    check(view.buffer_view_b, 2, style.diff_modify_inline)
 
     config.plugins.diffview.unified_width_threshold = 10000
     view:update()
     local unified = view:get_focus_view()
     test.equal(unified.buffer.lines[2], "private const val LIMIT = 2_000\n")
     test.equal(unified.buffer.lines[3], "private const val LIMIT = 1_500\n")
-    check(unified, 2, style.diff_delete_inline)
-    check(unified, 3, style.diff_insert_inline)
+    check(unified, 2, style.diff_modify_inline)
+    check(unified, 3, style.diff_modify_inline)
+  end)
+
+  test.it("uses replacement colors for a comma changed to an arrow without recoloring pure additions", function(context)
+    local before = '2 -> "${vehiculos.first()}, ${vehiculos.last()}"\n'
+      .. 'else -> "${vehiculos.first()} ➜ ${vehiculos.last()} (${vehiculos.size})"'
+    local after = '2 -> "${vehiculos.first()} ➜ ${vehiculos.last()}"\n'
+      .. 'else -> "${vehiculos.first()} ➜ (...) ➜ ${vehiculos.last()} (${vehiculos.size})"'
+    local function check(surface, line, text, expected)
+      local col = surface.buffer.lines[line]:find(text, 1, true)
+      test.ok(col, "fixture must contain the changed separator")
+      local color_at = backgrounds(surface, line)
+      local x, y = surface:get_line_screen_position(line, col)
+      test.same(color_at(x + 1, y + 1), expected)
+    end
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      config.plugins.diffview.whitespace_mode = mode
+      config.plugins.diffview.unified_width_threshold = 0
+      local view = open_diff(context, before, after, false)
+      check(view.buffer_view_a, 1, ",", style.diff_modify_inline)
+      check(view.buffer_view_b, 1, "➜", style.diff_modify_inline)
+      check(view.buffer_view_b, 2, "(...)", style.diff_insert_inline)
+      config.plugins.diffview.unified_width_threshold = 10000
+      view:update()
+      local unified = view:get_focus_view()
+      check(unified, 1, ",", style.diff_modify_inline)
+      check(unified, 3, "➜", style.diff_modify_inline)
+      check(unified, 4, "(...)", style.diff_insert_inline)
+    end
   end)
 
   test.it("emphasizes deleted comments and added expressions without emphasizing retained code", function(context)

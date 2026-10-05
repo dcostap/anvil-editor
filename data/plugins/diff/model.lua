@@ -113,14 +113,39 @@ local function content_range(segment)
   return col1, col2
 end
 
-local function append_token_range(ranges, target, col1, col2)
+local function append_token_range(ranges, target, col1, col2, tag)
   if col2 <= col1 then return end
   local previous = ranges[#ranges]
-  if previous and target:sub(previous.col2, col1 - 1):match("^%s*$") then
+  if previous and previous.tag == tag and target:sub(previous.col2, col1 - 1):match("^%s*$") then
     previous.col2 = math.max(previous.col2, col2)
   else
-    ranges[#ranges + 1] = { col1 = col1, col2 = col2 }
+    ranges[#ranges + 1] = { col1 = col1, col2 = col2, tag = tag }
   end
+end
+
+local function changed_target_spans(from, target)
+  local spans, target_index = {}, 1
+  local first, last, has_source
+  local function flush()
+    if first then
+      -- A changed span with source and target text is a replacement.
+      spans[#spans + 1] = { first = first, last = last, tag = has_source and "modify" or nil }
+    end
+    first, last, has_source = nil, nil, nil
+  end
+  for edit in diff.diff_iter(from, target) do
+    if edit.tag == "equal" then
+      flush()
+    else
+      if edit.a then has_source = true end
+      if edit.b then
+        first, last = first or target_index, target_index
+      end
+    end
+    if edit.b then target_index = target_index + 1 end
+  end
+  flush()
+  return spans
 end
 
 ---Use word alignment so repeated letters cannot make partially replaced words
@@ -131,14 +156,12 @@ local function token_inline_ranges(from, target)
   local target_segments, target_values = token_segments(target)
 
   local ranges = {}
-  local target_index = 1
-  for edit in diff.diff_iter(from_values, target_values) do
-    local target_segment = edit.b and target_segments[target_index] or nil
-    if (edit.tag == "modify" or edit.tag == "insert") and target_segment then
+  for _, span in ipairs(changed_target_spans(from_values, target_values)) do
+    for index = span.first, span.last do
+      local target_segment = target_segments[index]
       local col1, col2 = content_range(target_segment)
-      append_token_range(ranges, target, col1, col2)
+      append_token_range(ranges, target, col1, col2, span.tag)
     end
-    if edit.b then target_index = target_index + 1 end
   end
   return ranges
 end
@@ -177,7 +200,7 @@ end
 
 local function append_inline_range(ranges, col)
   local previous = ranges[#ranges]
-  if previous and col <= previous.col2 then
+  if previous and not previous.tag and col >= previous.col1 and col <= previous.col2 then
     previous.col2 = math.max(previous.col2, col + 1)
   else
     ranges[#ranges + 1] = { col1 = col, col2 = col + 1 }
@@ -189,10 +212,12 @@ local function merge_inline_ranges(ranges)
   local merged = {}
   for _, range in ipairs(ranges) do
     local previous = merged[#merged]
-    if previous and range.col1 <= previous.col2 then
+    if previous and range.col1 <= previous.col2
+      and (previous.tag == range.tag or range.col1 < previous.col2) then
       previous.col2 = math.max(previous.col2, range.col2)
+      previous.tag = previous.tag or range.tag
     else
-      merged[#merged + 1] = { col1 = range.col1, col2 = range.col2 }
+      merged[#merged + 1] = { col1 = range.col1, col2 = range.col2, tag = range.tag }
     end
   end
   return merged
@@ -229,13 +254,10 @@ local function whitespace_inline_ranges(from, target)
     end
   end
 
-  local changed_columns, target_index = {}, 1
-  for edit in diff.diff_iter(from_values, target_values) do
-    if edit.b then
-      if edit.tag ~= "equal" then
-        changed_columns[#changed_columns + 1] = source_columns[target_index]
-      end
-      target_index = target_index + 1
+  local changed_columns = {}
+  for _, span in ipairs(changed_target_spans(from_values, target_values)) do
+    for index = span.first, span.last do
+      changed_columns[#changed_columns + 1] = { col = source_columns[index], tag = span.tag }
     end
   end
 
@@ -244,11 +266,17 @@ local function whitespace_inline_ranges(from, target)
   local segments = token_segments(target)
   local ranges, changed_index = {}, 1
   for _, segment in ipairs(segments) do
-    while changed_columns[changed_index] and changed_columns[changed_index] < segment.col1 do
+    while changed_columns[changed_index] and changed_columns[changed_index].col < segment.col1 do
       changed_index = changed_index + 1
     end
-    if changed_columns[changed_index] and changed_columns[changed_index] < segment.col2 then
-      append_token_range(ranges, target, segment.col1, segment.col2)
+    local changed, tag = false, nil
+    while changed_columns[changed_index] and changed_columns[changed_index].col < segment.col2 do
+      changed = true
+      tag = tag or changed_columns[changed_index].tag
+      changed_index = changed_index + 1
+    end
+    if changed then
+      append_token_range(ranges, target, segment.col1, segment.col2, tag)
     end
   end
   return ranges

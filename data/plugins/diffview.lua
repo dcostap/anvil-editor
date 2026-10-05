@@ -1957,7 +1957,10 @@ local function diff_decoration_provider(parent, is_a)
       local ranges = {}
       local color = style["diff_" .. side_tag .. "_inline"]
       for _, range in ipairs(change.inline_ranges) do
-        ranges[#ranges + 1] = { col1 = range.col1, col2 = range.col2, color = color }
+        ranges[#ranges + 1] = {
+          col1 = range.col1, col2 = range.col2,
+          color = range.tag == "modify" and style.diff_modify_inline or color,
+        }
       end
       return ranges
     end,

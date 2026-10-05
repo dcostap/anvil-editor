@@ -86,8 +86,34 @@ test.describe("DiffModel", function()
     test.equal(m:line_state("a", 1), "modify")
     local ranges = m:inline_ranges("a", 1)
     test.ok(type(ranges) == "table" and #ranges > 0, "expected inline ranges")
-    test.same(ranges, { { col1 = 1, col2 = 4 } })
+    test.same(ranges, { { col1 = 1, col2 = 4, tag = "modify" } })
     test.equal(m:next_hunk("a", 1, 1).tag, "modify")
+  end)
+
+  test.it("distinguishes a replaced separator from text added beside a retained separator", function()
+    local before = {
+      '2 -> "${vehiculos.first()}, ${vehiculos.last()}"',
+      'else -> "${vehiculos.first()} ➜ ${vehiculos.last()} (${vehiculos.size})"',
+    }
+    local after = {
+      '2 -> "${vehiculos.first()} ➜ ${vehiculos.last()}"',
+      'else -> "${vehiculos.first()} ➜ (...) ➜ ${vehiculos.last()} (${vehiculos.size})"',
+    }
+    local function range_at(ranges, col)
+      for _, range in ipairs(ranges) do
+        if range.col1 <= col and range.col2 > col then return range end
+      end
+    end
+    for _, mode in ipairs { "none", "trim", "ignore" } do
+      local m = model.compute(before, after, { whitespace_mode = mode })
+      local old = range_at(m:inline_ranges("a", 1), before[1]:find(",", 1, true))
+      local new = range_at(m:inline_ranges("b", 1), after[1]:find("➜", 1, true))
+      local addition = range_at(m:inline_ranges("b", 2), after[2]:find("(...)", 1, true))
+      test.ok(old and new and addition, "all changed separators must have highlights")
+      test.equal(old.tag, "modify")
+      test.equal(new.tag, "modify")
+      test.ok(addition.tag ~= "modify", "added text is not a replacement")
+    end
   end)
 
   test.it("marks all added and removed content within a mixed change block", function()
