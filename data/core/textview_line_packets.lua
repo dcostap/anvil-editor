@@ -210,9 +210,12 @@ local function markdown_live_mode(view)
     and live_render.is_live_mode(view)
 end
 
-local function standard_textview(view)
+local function source_textview(view)
+  -- Diff Sides use TextView directly. Specialized subclasses keep their own draw path.
+  local TextView = package.loaded["core.textview"]
   local Editor = package.loaded["core.editor"]
-  return type(Editor) ~= "table" or getmetatable(view) == Editor
+  local class = getmetatable(view)
+  return class == TextView or class == Editor
 end
 
 local function eligible(view, line)
@@ -227,7 +230,7 @@ local function eligible(view, line)
     end
     return false, "native_api_missing"
   end
-  if not standard_textview(view) then return false, "nonstandard_textview" end
+  if not source_textview(view) then return false, "nonstandard_textview" end
   if not (view.buffer and view.buffer.lines[line]) then return false, "missing_line" end
   if not view.wrapped_settings
   and #view.buffer.lines[line] > MAX_UNWRAPPED_PACKET_BYTES then
