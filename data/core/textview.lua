@@ -76,10 +76,11 @@ end
 
 local function capture_wrap_viewport_anchor(view, new_width)
   local settings = view.wrapped_settings
-  if not settings or settings.width == new_width or not view.scroll then return end
-  if view.wrapped_buffer_line_count ~= #view.buffer.lines
+  if not view.scroll then return end
+  if new_width ~= nil and (not settings or settings.width == new_width) then return end
+  if settings and (view.wrapped_buffer_line_count ~= #view.buffer.lines
     or view.wrapped_text_revision ~= (view.buffer.text_revision or 0)
-  then
+  ) then
     return
   end
 
@@ -96,11 +97,9 @@ local function capture_wrap_viewport_anchor(view, new_width)
 end
 
 local function restore_wrap_viewport_anchor(view, anchor, expected_width)
-  if not anchor or not view.wrapped_settings
-    or view.wrapped_settings.width ~= expected_width
-  then
-    return
-  end
+  if not anchor then return end
+  if expected_width ~= nil and (not view.wrapped_settings
+    or view.wrapped_settings.width ~= expected_width) then return end
 
   local row = view:get_visual_row(anchor.line, anchor.col)
   local anchored_y = style.padding.y + view:get_visual_row_y_offset(row) + anchor.row_offset
@@ -110,6 +109,7 @@ local function restore_wrap_viewport_anchor(view, anchor, expected_width)
   if delta ~= 0 then
     view.scroll.y = (view.scroll.y or 0) + delta
     view.scroll.to.y = (view.scroll.to.y or 0) + delta
+    view.scroll.move_data_y = nil
   end
 end
 
@@ -122,16 +122,26 @@ function TextView:update_wrap_cache()
 end
 
 function TextView:set_wrapping_enabled(enabled)
+  enabled = not not enabled
+  local anchor
+  if enabled ~= self:is_wrapping_enabled() and self.size.x > 0 then
+    anchor = capture_wrap_viewport_anchor(self)
+  end
   if self.__wrapping_initialized then
     self.__wrapping_user_override = true
   end
-  self.wrapping_enabled = not not enabled
+  self.wrapping_enabled = enabled
   if self.wrapping_enabled then
     self:cancel_horizontal_extent_scan()
     if self.size and self.size.x > 0 then self:update_wrap_cache() end
   else
     self:clear_wrap_cache()
     line_packets.clear(self)
+  end
+  restore_wrap_viewport_anchor(self, anchor)
+  if anchor then
+    core.log_quiet("Line wrapping %s at %s:%d:%d; viewport restored",
+      enabled and "enabled" or "disabled", self.buffer:get_name(), anchor.line, anchor.col)
   end
 end
 
