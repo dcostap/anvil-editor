@@ -237,15 +237,16 @@ end
 if core.fuzzy_searcher_install_global_keymaps then
   core.fuzzy_searcher_install_global_keymaps()
 end
-local default_monospace_font_path = DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf"
+local default_monospace_font_path = DATADIR .. "/fonts/JetBrainsMono-Regular.ttf"
+local view_text_font_path = DATADIR .. "/fonts/FiraSans-Regular.ttf"
 local prose_font_path = DATADIR .. "/fonts/CrimsonPro-Regular.ttf"
 local prose_strong_font_path = DATADIR .. "/fonts/CrimsonPro-Bold.ttf"
 local prose_emphasis_font_path = DATADIR .. "/fonts/CrimsonPro-Italic.ttf"
 local prose_strong_emphasis_font_path = DATADIR .. "/fonts/CrimsonPro-SemiBoldItalic.ttf"
 local prose_heading_font_path = DATADIR
-  .. "/fonts/CormorantGaramond-Medium.ttf"
+  .. "/fonts/Merriweather_24pt-SemiBold.ttf"
 local prose_heading_emphasis_font_path = DATADIR
-  .. "/fonts/CormorantGaramond-MediumItalic.ttf"
+  .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf"
 local font_size = 14 * SCALE
 local max_default_font_group = 10 -- native renderer FONT_FALLBACK_MAX
 
@@ -349,7 +350,7 @@ end)
 -- View text and Live Preview prose have independent font choices.
 startup_measure("font_typography_construction", function()
   style.big_font = load_text_font(prose_heading_font_path, nil, interface_fallbacks, 46 * SCALE)
-  style.view_text_font = load_text_font(prose_font_path, nil, interface_fallbacks)
+  style.view_text_font = load_text_font(view_text_font_path, nil, interface_fallbacks)
   style.markdown_body_font = load_text_font(
     prose_font_path, nil, interface_fallbacks, 15 * SCALE
   )
@@ -374,8 +375,9 @@ startup_measure("font_typography_construction", function()
     prose_heading_emphasis_font_path, nil, interface_fallbacks
   )
   local font_categories = require "core.font_categories"
-  font_categories.apply("view_text", "crimson_pro")
+  font_categories.apply("view_text", "fira_sans")
   font_categories.apply("prose", "crimson_pro")
+  font_categories.apply("headings", "merriweather")
 end)
 -- Keep scrollbars visible in a small/contracted form instead of expanding/fading.
 -- Set this before constructing Views such as the File Tree.
