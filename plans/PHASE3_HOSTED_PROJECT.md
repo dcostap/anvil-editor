@@ -603,6 +603,27 @@ Before evidence: `anvil-surface-latency-3skpgo2d`.
 After evidence: `anvil-surface-latency-9tok8p6e`.
 Real IME and mixed-DPI checks remain open. Hosted mode remains opt-in.
 
+#### Input follow-up before Milestone 4
+
+Consecutive inbound mouse motions now share one queue entry when their configuration matches.
+The queue retains the last position and adds relative motion. Other events remain barriers.
+Receive notifications occur only when the queue changes from empty to nonempty.
+The stalled-UI test sends 100,001 motions. Before the fix, inbound overflow ended the connection.
+After the fix, every packet completes and the final position and text barrier reach the caller.
+Evidence: `phase3-m4-motion-red` and `phase3-m4-pre-green`.
+
+Only coordinate and layout changes advance the configuration epoch.
+Window position, refresh rate, mode, and move-loop status retain the current epoch.
+The Project still applies those ordered metadata changes.
+Same-epoch layout changes fail the connection instead of changing input coordinates silently.
+Moving the owned window now retains composition, Title Bar client regions, and matching frames.
+The red reported `window move cancelled composition` in `anvil-surface-latency-in7iyylq`.
+D3D11 and software pass in `anvil-surface-latency-gdckuvnw` and `anvil-surface-latency-emy4uj41`.
+The native epoch check also passes in `phase3-m4-pre-green`.
+
+The Title Bar owns its configuration reset method. The redundant resize condition is removed.
+The user has not supplied actual IME or mixed-DPI manual results. Both manual gates remain open.
+
 ### Milestone 4: dialogs and accepted close
 
 - Parent native dialogs to the shell and return asynchronous results.

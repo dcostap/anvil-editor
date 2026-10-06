@@ -528,9 +528,11 @@ static void send_configure(void) {
   config.controls_h = shell.controls.bottom;
   if (memcmp(&config, &shell.last_config, sizeof(config)) == 0 && shell.last_config.pixel_w)
     return;
-  config.configuration++;
-  SDL_ClearComposition(shell.window);
-  shell.hit = (AnvilSurfaceHitTest){0};
+  if (!config.configuration || anvil_surface_layout_changed(&shell.last_config, &config)) {
+    config.configuration++;
+    SDL_ClearComposition(shell.window);
+    shell.hit = (AnvilSurfaceHitTest){0};
+  }
   shell.last_config = config;
   shell_send(ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0);
 }

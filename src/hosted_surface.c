@@ -219,7 +219,8 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
   bool had_config = hosted.config_applied;
   hosted.config = *config;
   hosted.config_applied = true;
-  if (had_config) push_window_event(hosted.geometry_event);
+  bool layout_changed = !had_config || previous.configuration != config->configuration;
+  if (had_config && layout_changed) push_window_event(hosted.geometry_event);
 
   /* The shell waits for a frame of each new size while it live-resizes, so
    * resize frames must render immediately instead of at the refresh rate. */
@@ -236,7 +237,7 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
     event.window.data2 = config->pixel_h;
     system_push_event(&event);
   }
-  anvil_hosted_surface_set_text_input(hosted.text_active);
+  if (layout_changed) anvil_hosted_surface_set_text_input(hosted.text_active);
   if (had_config && previous.live_resize && !live_resize) {
     anvil_request_resize_frame_for_window(hosted.window, "exit_sizemove");
   }
@@ -267,8 +268,14 @@ static bool valid_configure(const AnvilSurfaceConfigure *config) {
 static void dispatch_message(HostedMessage *message) {
   switch (message->type) {
     case ANVIL_SURFACE_MSG_CONFIGURE:
-      if (((AnvilSurfaceConfigure *)message->payload)->configuration > hosted.config.configuration)
-        apply_configure((AnvilSurfaceConfigure *)message->payload);
+      if (((AnvilSurfaceConfigure *)message->payload)->configuration >= hosted.config.configuration) {
+        if (((AnvilSurfaceConfigure *)message->payload)->configuration == hosted.config.configuration &&
+            anvil_surface_layout_changed(&hosted.config, (AnvilSurfaceConfigure *)message->payload)) {
+          signal_loss("layout changed without configuration epoch", message->type, message->size);
+        } else {
+          apply_configure((AnvilSurfaceConfigure *)message->payload);
+        }
+      }
       break;
     case ANVIL_SURFACE_MSG_INPUT:
       if (((AnvilSurfaceInput *)message->payload)->configuration == hosted.config.configuration)
@@ -338,12 +345,29 @@ static int SDLCALL reader_thread(void *data) {
         continue;
     }
     size_t bytes = sizeof(HostedMessage) + header.size + 1;
+    SDL_LockMutex(hosted.queue_lock);
+    HostedMessage *tail = hosted.inbound_tail;
+    if (header.type == ANVIL_SURFACE_MSG_INPUT && header.size == sizeof(AnvilSurfaceInput) &&
+        tail && tail->type == header.type && tail->size == header.size) {
+      AnvilSurfaceInput *next = (AnvilSurfaceInput *)payload;
+      AnvilSurfaceInput *previous = (AnvilSurfaceInput *)tail->payload;
+      if (next->event.type == SDL_EVENT_MOUSE_MOTION && previous->event.type == SDL_EVENT_MOUSE_MOTION &&
+          next->configuration == previous->configuration) {
+        next->event.motion.xrel += previous->event.motion.xrel;
+        next->event.motion.yrel += previous->event.motion.yrel;
+        memcpy(tail->payload, payload, header.size);
+        SDL_UnlockMutex(hosted.queue_lock);
+        continue;
+      }
+    }
     if ((size_t)SDL_AddAtomicInt(&hosted.inbound_bytes, (int)bytes) + bytes > HOSTED_QUEUE_LIMIT) {
+      SDL_UnlockMutex(hosted.queue_lock);
       cause = "inbound queue overflow";
       goto failed;
     }
     HostedMessage *message = malloc(bytes);
     if (!message) {
+      SDL_UnlockMutex(hosted.queue_lock);
       cause = "inbound allocation failed";
       goto failed;
     }
@@ -352,14 +376,14 @@ static int SDLCALL reader_thread(void *data) {
     message->size = header.size;
     memcpy(message->payload, payload, header.size);
     message->payload[header.size] = 0;
-    SDL_LockMutex(hosted.queue_lock);
+    bool wake = hosted.inbound_head == NULL;
     if (hosted.inbound_tail) hosted.inbound_tail->next = message;
     else hosted.inbound_head = message;
     hosted.inbound_tail = message;
     SDL_UnlockMutex(hosted.queue_lock);
     SDL_Event event = {0};
     event.type = hosted.receive_event;
-    if (!SDL_PushEvent(&event)) {
+    if (wake && !SDL_PushEvent(&event)) {
       cause = "inbound notification failed";
       goto failed;
     }

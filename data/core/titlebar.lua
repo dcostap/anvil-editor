@@ -653,9 +653,13 @@ function TitleBar:on_focus_lost()
   if self.pressed_pane then self:clear_pane_drag("cancelled") end
 end
 
+function TitleBar:on_window_configuration()
+  self.hit_test_signature = nil
+end
+
 function TitleBar:on_scale_change()
   caption_font, caption_font_size = nil, nil
-  self.hit_test_signature = nil
+  self:on_window_configuration()
 end
 
 function TitleBar:scroll_tabs(distance)

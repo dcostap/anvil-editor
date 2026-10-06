@@ -6,6 +6,15 @@
 
 static char log_role[16];
 
+bool anvil_surface_layout_changed(const AnvilSurfaceConfigure *previous, const AnvilSurfaceConfigure *next) {
+  return previous->origin_x != next->origin_x || previous->origin_y != next->origin_y ||
+    previous->pixel_w != next->pixel_w || previous->pixel_h != next->pixel_h ||
+    previous->display_scale != next->display_scale || previous->button_width != next->button_width ||
+    previous->title_height != next->title_height || previous->resize_border != next->resize_border ||
+    previous->controls_x != next->controls_x || previous->controls_y != next->controls_y ||
+    previous->controls_w != next->controls_w || previous->controls_h != next->controls_h;
+}
+
 bool anvil_surface_frame_matches(const AnvilSurfaceConfigure *config, const AnvilSurfaceFrame *frame) {
   return frame->configuration == config->configuration && frame->width == config->pixel_w && frame->height == config->pixel_h &&
     (frame->kind == ANVIL_SURFACE_FRAME_D3D11 || frame->kind == ANVIL_SURFACE_FRAME_SHARED_MEMORY) &&

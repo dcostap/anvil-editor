@@ -2414,7 +2414,7 @@ function core.on_event(type, ...)
     core.log_quiet("Hosted window configuration changed: reset composition and Title Bar regions")
     ime.stop()
     ime.last_location = nil
-    core.title_bar.hit_test_signature = nil
+    core.title_bar:on_window_configuration()
     core.redraw = true
   elseif type == "windowclose" then
     core.quit()

@@ -129,6 +129,7 @@ typedef struct {
 } AnvilSurfaceHitTest;
 
 bool anvil_surface_frame_matches(const AnvilSurfaceConfigure *config, const AnvilSurfaceFrame *frame);
+bool anvil_surface_layout_changed(const AnvilSurfaceConfigure *previous, const AnvilSurfaceConfigure *next);
 bool anvil_surface_text_area(const AnvilSurfaceConfigure *config, const AnvilSurfaceTextInput *input, SDL_Rect *area, int *cursor);
 void anvil_surface_translate_input(const AnvilSurfaceConfigure *config, SDL_Event *event);
 

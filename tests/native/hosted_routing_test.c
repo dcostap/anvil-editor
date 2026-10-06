@@ -13,6 +13,8 @@ static HANDLE ready, sent, finish;
 static AnvilIPCPipe pipe;
 static AnvilSurfaceConfigure config;
 static SDL_AtomicInt frame_checked;
+static SDL_AtomicInt motions_written;
+static bool motion_stall;
 
 static int SDLCALL server(void *data) {
   (void)data;
@@ -32,6 +34,23 @@ static int SDLCALL server(void *data) {
   WaitForSingleObject(ready, 5000);
   AnvilSurfaceInt focus = {1};
   anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_FOCUS, &focus, sizeof(focus), NULL, 0);
+  if (motion_stall) {
+    AnvilSurfaceInput motion = {.configuration = config.configuration};
+    motion.event.type = SDL_EVENT_MOUSE_MOTION;
+    motion.event.motion.xrel = 1;
+    for (int i = 1; i <= 100001; i++) {
+      motion.event.motion.x = (float)i;
+      motion.event.motion.y = (float)-i;
+      if (!anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_INPUT, &motion, sizeof(motion), NULL, 0)) break;
+      SDL_SetAtomicInt(&motions_written, i);
+    }
+    motion.event.type = SDL_EVENT_TEXT_INPUT;
+    motion.text_len = 4;
+    anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_INPUT, &motion, sizeof(motion), "done", 4);
+    SetEvent(sent);
+    WaitForSingleObject(finish, 5000);
+    return 0;
+  }
   const Uint32 types[] = {SDL_EVENT_TEXT_EDITING, SDL_EVENT_TEXT_INPUT, SDL_EVENT_DROP_TEXT};
   for (unsigned i = 0; i < SDL_arraysize(types); i++) {
     AnvilSurfaceInput input = {0};
@@ -70,9 +89,18 @@ static int SDLCALL server(void *data) {
   return 0;
 }
 
-int main(void) {
+int main(int test_argc, char **test_argv) {
+  motion_stall = test_argc > 1 && !strcmp(test_argv[1], "motion");
   AnvilSurfaceConfigure geometry = {.configuration = 7, .origin_x = 48, .origin_y = 24,
     .pixel_w = 320, .pixel_h = 240, .display_scale = 1.25f};
+  AnvilSurfaceConfigure moved = geometry;
+  moved.window_x = 180;
+  moved.window_y = -70;
+  moved.refresh_hz = 144;
+  moved.window_mode = ANVIL_SURFACE_WINDOW_MAXIMIZED;
+  CHECK(!anvil_surface_layout_changed(&geometry, &moved));
+  moved.pixel_w++;
+  CHECK(anvil_surface_layout_changed(&geometry, &moved));
   AnvilSurfaceFrame frame = {.configuration = 6, .kind = ANVIL_SURFACE_FRAME_D3D11,
     .width = 320, .height = 240, .name = "owned-surface"};
   CHECK(!anvil_surface_frame_matches(&geometry, &frame));
@@ -130,6 +158,30 @@ int main(void) {
   SetEvent(ready);
   CHECK(WaitForSingleObject(sent, 5000) == WAIT_OBJECT_0);
   SDL_Delay(50);
+  if (motion_stall) {
+    CHECK(SDL_GetAtomicInt(&motions_written) == 100001);
+    bool final_position = false, barrier = false;
+    Uint64 deadline = SDL_GetTicks() + 2000;
+    while (!barrier && SDL_GetTicks() < deadline) {
+      while (SDL_PollEvent(&event)) {
+        CHECK(!anvil_hosted_surface_loss_event(event.type));
+        if (!anvil_hosted_surface_dispatch(&event)) system_push_event(&event);
+      }
+      anvil_hosted_surface_poll();
+      if (system_event_pop(&event)) {
+        if (event.type == SDL_EVENT_MOUSE_MOTION) {
+          final_position = event.motion.x == 100001 && event.motion.y == -100001 && event.motion.xrel == 100001;
+        }
+        if (event.type == SDL_EVENT_TEXT_INPUT) barrier = !strcmp(event.text.text, "done");
+      } else SDL_Delay(1);
+    }
+    CHECK(final_position && barrier);
+    anvil_hosted_surface_exit_intent(NULL);
+    SetEvent(finish);
+    SDL_WaitThread(thread, NULL);
+    puts("PASS stalled UI retains 100001 motion packets and the final position");
+    return 0;
+  }
   /* Worker receipt must not change the UI state ahead of queued events. */
   CHECK(!anvil_hosted_surface_has_focus());
   while (SDL_PollEvent(&event)) {

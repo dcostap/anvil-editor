@@ -237,23 +237,9 @@ bool system_push_event(const SDL_Event *event) {
       bool queued_resize_or_pixel = system_event_queue[idx].type == SDL_EVENT_WINDOW_RESIZED ||
                                     system_event_queue[idx].type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
       if (!same_window || !(same_type || (resize_or_pixel && queued_resize_or_pixel))) break;
-      if (same_window && (same_type || (resize_or_pixel && queued_resize_or_pixel))) {
-        const char *detail = same_type ? "same_type_resize" : "resize_pixel_pair";
-        if (system_event_queue[idx].type == SDL_EVENT_WINDOW_RESIZED &&
-            event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-          anvil_resize_diag_log(&(AnvilResizeDiagEvent){
-            .category = "event_queue",
-            .name = "coalesce",
-            .reason = anvil_resize_diag_event_reason(event->type),
-            .window_id = event->window.windowID,
-            .live_resize = anvil_resize_diag_live_resize(),
-            .queue_depth = system_event_queue_count,
-            .count_a = queue_depth_before,
-            .detail = detail
-          });
-          return true;
-        }
-        system_event_queue[idx] = *event;
+      const char *detail = same_type ? "same_type_resize" : "resize_pixel_pair";
+      if (system_event_queue[idx].type == SDL_EVENT_WINDOW_RESIZED &&
+          event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
         anvil_resize_diag_log(&(AnvilResizeDiagEvent){
           .category = "event_queue",
           .name = "coalesce",
@@ -266,6 +252,18 @@ bool system_push_event(const SDL_Event *event) {
         });
         return true;
       }
+      system_event_queue[idx] = *event;
+      anvil_resize_diag_log(&(AnvilResizeDiagEvent){
+        .category = "event_queue",
+        .name = "coalesce",
+        .reason = anvil_resize_diag_event_reason(event->type),
+        .window_id = event->window.windowID,
+        .live_resize = anvil_resize_diag_live_resize(),
+        .queue_depth = system_event_queue_count,
+        .count_a = queue_depth_before,
+        .detail = detail
+      });
+      return true;
     }
   /* Coalesce consecutive mouse-motion events for the same window */
   } else if (event->type == SDL_EVENT_MOUSE_MOTION) {

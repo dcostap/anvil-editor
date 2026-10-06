@@ -361,6 +361,9 @@ Milestones 1 to 3 are implemented. Hosted mode remains opt-in.
 Native controls and the Sidebar placeholder work without Project Lua.
 Input payloads have owned storage. Configuration, focus, and input retain their UI order.
 Frames, IME areas, and Title Bar regions identify their configuration.
+Consecutive inbound motions coalesce without crossing another event or configuration.
+Receive wakes occur only on empty-to-nonempty queue changes.
+Window moves and refresh/mode metadata no longer invalidate composition or matching frames.
 Capture, selection across the Sidebar, wheel, focus loss, and complete text drops pass isolated checks.
 Real IME candidate placement and mixed-DPI monitor moves remain open manual checks.
 The user verified foreground transfer by launching the shell from two terminals.

@@ -224,6 +224,35 @@ if project:find("/driver$", 1) then
         assert(drop.bytes == 40000 and drop.prefix and drop.tail, "hosted text drop lost complete UTF-8 or trailing lines")
         assert(drop.new_pane, "Title Bar text drop replaced the existing Pane")
         save(root .. "/continue.lua", {continue = true})
+      elseif action == "move" then
+        local window = assert(shell_window(state.shell_pid))
+        local rect = ffi.new("struct RECT")
+        assert(user32.GetWindowRect(window, rect) ~= 0)
+        local client = ffi.new("struct RECT")
+        assert(user32.GetClientRect(window, client) ~= 0)
+        local origin_x = tonumber(client.right) - state.surface_w
+        local function discarded()
+          local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+          local text = file:read("*a"); file:close()
+          local _, count = text:gsub("Shell discarded stale frame", "")
+          return count
+        end
+        local function hit()
+          assert(user32.GetWindowRect(window, rect) ~= 0)
+          local x = tonumber(rect.left) + origin_x + state.hit_x
+          local y = tonumber(rect.top) + state.hit_y
+          return tonumber(user32.SendMessageW(window, 0x84, 0, x % 65536 + (y % 65536) * 65536))
+        end
+        assert(hit() == 1, "Title Bar client region was not installed")
+        local previous_discarded = discarded()
+        assert(user32.SetWindowPos(window, nil, rect.left + 10, rect.top + 10, 0, 0, 0x15) ~= 0)
+        coroutine.yield(.25)
+        assert(hit() == 1, "window move cleared Title Bar client regions")
+        save(root .. "/move-check.lua", {continue = true})
+        assert(wait_for(function() return load(root .. "/move.lua") end, 5))
+        assert(load(root .. "/move.lua").composing, "window move cancelled composition")
+        assert(discarded() == previous_discarded, "window move discarded matching frames")
+        save(root .. "/continue.lua", {continue = true})
       elseif action == "controls" then
         local window = assert(shell_window(state.shell_pid))
         local process_handle = own_handle(state.pid, 0x101801); handles[#handles + 1] = process_handle
@@ -431,6 +460,18 @@ else
     end
     local state = { pid = pid, shell_pid = shell_pid, started = system.get_time(), hosted = system.is_hosted_surface(), path = project }
     local routing_view, drag_events
+    if action == "move" then
+      routing_view = core.open_file(project .. "/edited.txt")
+      core.set_active_view(routing_view)
+      coroutine.yield(.3)
+      local entry = assert(core.title_bar.entries[1])
+      state.hit_x = math.floor(entry.x + entry.w / 2)
+      state.hit_y = math.floor(entry.y + entry.h / 2)
+      state.surface_w = core.root_panel.size.x
+      routing_view.buffer:set_selection(1, 1)
+      core.on_event("textediting", "λ中", 0, 2)
+      coroutine.yield(.1)
+    end
     if action == "routing" then
       local on_event = core.on_event
       local dragging, left, entered = false, false, false
@@ -479,6 +520,10 @@ else
       end
     end
     save(root .. "/subject.lua", state)
+    if action == "move" then
+      assert(wait_for(function() return load(root .. "/move-check.lua") end, 5))
+      save(root .. "/move.lua", {composing = require("core.ime").editing})
+    end
     if action == "routing" then
       assert(wait_for(function() return load(root .. "/selection-check.lua") end, 10))
       local l1, c1, l2, c2 = routing_view.buffer:get_selection(true)
