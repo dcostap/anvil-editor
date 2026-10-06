@@ -529,6 +529,19 @@ Title Bar drops open files, images, folders, and text in new Panes.
 Folders open File Trees, not Projects. Native window controls are not drop targets.
 Run `anvil:drop-events` and `ui/external_drop.lua` for focused checks.
 
+SDL3 virtual-file drop patch:
+
+- `subprojects/packagefiles/sdl3-virtual-file-drop.patch`
+- listed by `diff_files` in `subprojects/sdl3.wrap`
+- reads the `FileGroupDescriptorW` and `FileContents` formats on Windows
+- writes each virtual file to `%TEMP%\AnvilDrop-*` and reports a normal file drop
+- Outlook attachments and browser download drags use these formats
+- virtual files have no file system path, so these drops did nothing before this patch
+
+The materialized copy stays on disk for the session. An edit writes to that copy.
+Use Save As to keep a separate version. Keep this patch when updating SDL3 unless
+upstream materializes virtual files itself.
+
 Current Anvil Ghostty patch:
 
 - `subprojects/packagefiles/ghostty-semantic-prompt-fresh-line-option.patch`

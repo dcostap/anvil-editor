@@ -1,0 +1,216 @@
+diff --git a/src/video/windows/SDL_windowswindow.c b/src/video/windows/SDL_windowswindow.c
+index 506fdc1..11c6bae 100644
+--- a/src/video/windows/SDL_windowswindow.c
++++ b/src/video/windows/SDL_windowswindow.c
+@@ -1812,6 +1812,132 @@ static STDMETHODIMP SDLDropTarget_DragLeave(SDLDropTarget *target)
+     return S_OK;
+ }
+ 
++/* Anvil: virtual-file drops carry a shell file group descriptor and one
++ * "FileContents" stream per file, with no file system path. Materialize each
++ * stream into a private temporary directory so the drop is a normal file drop.
++ * The files stay on disk for the session, as other toolkits do. */
++#define ANVIL_DROP_PATH_MAX 1024
++
++typedef struct
++{
++    DWORD dwFlags;
++    CLSID clsid;
++    SIZEL sizel;
++    POINTL pointl;
++    DWORD dwFileAttributes;
++    FILETIME ftCreationTime;
++    FILETIME ftLastAccessTime;
++    FILETIME ftLastWriteTime;
++    DWORD nFileSizeHigh;
++    DWORD nFileSizeLow;
++    WCHAR cFileName[MAX_PATH];
++} ANVIL_FILEDESCRIPTORW;
++
++typedef struct
++{
++    UINT cItems;
++    ANVIL_FILEDESCRIPTORW fgd[1];
++} ANVIL_FILEGROUPDESCRIPTORW;
++
++static void WIN_VirtualDropFileName(const WCHAR *source, char *name, size_t namelen)
++{
++    size_t out = 0;
++    const char *utf8 = source ? WIN_StringToUTF8W(source) : NULL;
++    if (utf8) {
++        for (const char *p = utf8; *p && (out + 1) < namelen; ++p) {
++            const unsigned char c = (unsigned char)*p;
++            if (c < 0x20 || c == '\\' || c == '/' || c == ':' || c == '*' ||
++                c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
++                name[out++] = '_';
++            } else {
++                name[out++] = (char)c;
++            }
++        }
++        SDL_free((void *)utf8);
++    }
++    while (out > 0 && (name[out - 1] == ' ' || name[out - 1] == '.')) {
++        --out;
++    }
++    if (out == 0) {
++        SDL_strlcpy(name, "dropped-file", namelen);
++        return;
++    }
++    name[out] = '\0';
++}
++
++static char *WIN_VirtualDropDirectory(void)
++{
++    static Uint32 serial = 0;
++    WCHAR wtemp[MAX_PATH + 1];
++    const DWORD length = GetTempPathW(SDL_arraysize(wtemp), wtemp);
++    if (length == 0 || length >= SDL_arraysize(wtemp)) {
++        return NULL;
++    }
++    const char *temp = WIN_StringToUTF8W(wtemp);
++    if (!temp) {
++        return NULL;
++    }
++    char *dir = NULL;
++    for (int attempt = 0; attempt < 16 && !dir; ++attempt) {
++        char candidate[ANVIL_DROP_PATH_MAX];
++        SDL_snprintf(candidate, sizeof(candidate), "%sAnvilDrop-%lu-%llu-%lu", temp,
++                     (unsigned long)GetCurrentProcessId(),
++                     (unsigned long long)SDL_GetTicks(),
++                     (unsigned long)++serial);
++        if (SDL_CreateDirectory(candidate)) {
++            dir = SDL_strdup(candidate);
++        }
++    }
++    SDL_free((void *)temp);
++    return dir;
++}
++
++static bool WIN_VirtualDropFileWritten(IDataObject *pDataObject, UINT contents_format, LONG index, const char *path)
++{
++    FORMATETC fetc;
++    SDL_zero(fetc);
++    fetc.cfFormat = contents_format;
++    fetc.dwAspect = DVASPECT_CONTENT;
++    fetc.lindex = index;
++    fetc.tymed = TYMED_ISTREAM | TYMED_HGLOBAL;
++
++    STGMEDIUM med;
++    SDL_zero(med);
++    if (FAILED(pDataObject->lpVtbl->GetData(pDataObject, &fetc, &med))) {
++        return false;
++    }
++
++    bool written = false;
++    SDL_IOStream *io = SDL_IOFromFile(path, "wb");
++    if (io) {
++        if (med.tymed == TYMED_ISTREAM && med.pstm) {
++            written = true;
++            for (;;) {
++                char buffer[16 * 1024];
++                ULONG read = 0;
++                const HRESULT hres = med.pstm->lpVtbl->Read(med.pstm, buffer, sizeof(buffer), &read);
++                if (read > 0 && SDL_WriteIO(io, buffer, read) != read) {
++                    written = false;
++                    break;
++                }
++                if (read == 0 || FAILED(hres)) {
++                    break;
++                }
++            }
++        } else if (med.tymed == TYMED_HGLOBAL && med.hGlobal) {
++            const void *data = GlobalLock(med.hGlobal);
++            if (data) {
++                const size_t size = (size_t)GlobalSize(med.hGlobal);
++                written = SDL_WriteIO(io, data, size) == size;
++                GlobalUnlock(med.hGlobal);
++            }
++        }
++        SDL_CloseIO(io);
++    }
++    ReleaseStgMedium(&med);
++    return written;
++}
++
+ static STDMETHODIMP SDLDropTarget_Drop(SDLDropTarget *target,
+                                        IDataObject *pDataObject, DWORD grfKeyState,
+                                        POINTL pt, DWORD *pdwEffect)
+@@ -2090,6 +2216,54 @@ static STDMETHODIMP SDLDropTarget_Drop(SDLDropTarget *target,
+         }
+     }
+ 
++    // Anvil: materialize virtual files, which carry no file system path.
++    {
++        FORMATETC fetc;
++        SDL_zero(fetc);
++        fetc.cfFormat = target->format_filedescriptor;
++        fetc.dwAspect = DVASPECT_CONTENT;
++        fetc.lindex = -1;
++        fetc.tymed = TYMED_HGLOBAL;
++        if (SUCCEEDED(pDataObject->lpVtbl->QueryGetData(pDataObject, &fetc))) {
++            STGMEDIUM med;
++            SDL_zero(med);
++            if (SUCCEEDED(pDataObject->lpVtbl->GetData(pDataObject, &fetc, &med))) {
++                const ANVIL_FILEGROUPDESCRIPTORW *group = (const ANVIL_FILEGROUPDESCRIPTORW *)GlobalLock(med.hGlobal);
++                const size_t available = (size_t)GlobalSize(med.hGlobal);
++                if (group && available > sizeof(UINT)) {
++                    char *dir = WIN_VirtualDropDirectory();
++                    const size_t limit = (available - sizeof(UINT)) / sizeof(ANVIL_FILEDESCRIPTORW);
++                    UINT count = group->cItems;
++                    if ((size_t)count > limit) {
++                        count = (UINT)limit;
++                    }
++                    if (dir) {
++                        for (UINT i = 0; i < count; ++i) {
++                            WCHAR wide[MAX_PATH + 1];
++                            char name[MAX_PATH];
++                            char path[ANVIL_DROP_PATH_MAX];
++                            SDL_memcpy(wide, group->fgd[i].cFileName, sizeof(WCHAR) * MAX_PATH);
++                            wide[MAX_PATH] = 0;
++                            WIN_VirtualDropFileName(wide, name, sizeof(name));
++                            SDL_snprintf(path, sizeof(path), "%s\\%s", dir, name);
++                            if (WIN_VirtualDropFileWritten(pDataObject, target->format_filecontents, (LONG)i, path)) {
++                                SDL_LogTrace(SDL_LOG_CATEGORY_INPUT,
++                                             ". In Drop File, virtual file (%u of %u) '%s'",
++                                             i + 1, count, path);
++                                SDL_SendDropFile(target->window, NULL, path);
++                            }
++                        }
++                        SDL_free(dir);
++                    }
++                    GlobalUnlock(med.hGlobal);
++                }
++                ReleaseStgMedium(&med);
++                SDL_SendDropComplete(target->window);
++                return S_OK;
++            }
++        }
++    }
++
+     SDL_SendDropComplete(target->window);
+     return S_OK;
+ }
+@@ -2116,6 +2290,9 @@ void WIN_AcceptDragAndDrop(SDL_Window *window, bool accept)
+                 drop_target->hwnd = data->hwnd;
+                 drop_target->format_file = RegisterClipboardFormatW(L"text/uri-list");
+                 drop_target->format_text = RegisterClipboardFormatW(L"text/plain;charset=utf-8");
++                // Anvil: accept virtual files, such as dragged Outlook attachments.
++                drop_target->format_filedescriptor = RegisterClipboardFormatW(L"FileGroupDescriptorW");
++                drop_target->format_filecontents = RegisterClipboardFormatW(L"FileContents");
+                 data->drop_target = drop_target;
+                 SDLDropTarget_AddRef(drop_target);
+                 RegisterDragDrop(data->hwnd, (LPDROPTARGET)drop_target);
+diff --git a/src/video/windows/SDL_windowswindow.h b/src/video/windows/SDL_windowswindow.h
+index 38d64f4..5749700 100644
+--- a/src/video/windows/SDL_windowswindow.h
++++ b/src/video/windows/SDL_windowswindow.h
+@@ -57,6 +57,9 @@ typedef struct
+     HWND hwnd;
+     UINT format_text;
+     UINT format_file;
++    // Anvil: virtual files (Outlook attachments, browser download drags).
++    UINT format_filedescriptor;
++    UINT format_filecontents;
+ } SDLDropTarget;
+ 
+ struct SDL_WindowData
