@@ -285,6 +285,7 @@ if host_machine.system() == 'windows'
     )
     test('hosted-routing', hosted_routing_test, env: anvil_test_env, suite: 'anvil')
     test('hosted-motion-stall', hosted_routing_test, args: ['motion'], env: anvil_test_env, suite: 'anvil')
+    test('hosted-dialogs', hosted_routing_test, args: ['dialogs'], env: anvil_test_env, suite: 'anvil')
 endif
 
 git_status_index_test = executable('git_status_index_test',

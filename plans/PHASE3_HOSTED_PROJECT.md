@@ -632,6 +632,88 @@ The user has not supplied actual IME or mixed-DPI manual results. Both manual ga
 - Test dialog success/cancel/failure, cancelled quit followed by another quit, and explicit forced close.
 - Test that Project restart/switch still detaches terminals without asking the normal-quit question.
 
+#### Dialog and close implementation
+
+Surface protocol 6 adds owned dialog requests, dialog results, and explicit close decisions.
+The shell starts asynchronous SDL dialogs with its visible window as parent.
+Direct mode keeps its visible editor window as parent.
+Callbacks retain complete paths, cancellation or error status, and the selected filter.
+Requests retain options and filters until completion. Results retain their connection ID.
+Late results release their storage without reaching a replacement Project.
+Eight active dialogs, 64 filters, 256 paths, and the existing packet limit bound storage.
+Malformed UTF-8 and incomplete packets fail validation. Oversized results return an error, not truncated paths.
+
+Close now distinguishes pending work, waiting for a user, cancellation, and accepted shutdown.
+Waiting for confirmation stops the native timeout. Repeated Close does not bypass confirmation.
+Cancellation restores Ready and clears the request, timer, and warning identity.
+The next Close starts a new deadline and confirmation.
+Accepted shutdown starts only after the existing recovery checks permit exit.
+Failed Untitled recovery cancels Close and retains the buffer.
+Terminal Keep, End, and Cancel keep their existing behavior.
+
+A stalled Project gets a native warning after five seconds.
+Wait keeps the owned Project running and starts another deadline.
+Only explicit Force close terminates the owned Project.
+The warning states that unsaved files and recent Workspace changes can be lost.
+Terminal Session hosts remain independent and running.
+Restart and Project switch still use detach, not the normal quit policy.
+
+#### Focused evidence
+
+The initial dialog check failed because the dialog did not use the visible shell parent.
+Corrected suspended-process checks failed because Close offered no Wait or Force close action.
+The malformed UTF-8 native check failed before strict validation.
+Disabling only cancellation delivery reproduced both Terminal Cancel failure and a blocked second Close.
+The recovery check exposed acceptance before failed Untitled recovery blocked exit.
+The fixes pass 33 recovery checks, five Terminal quit checks, and four focused native targets.
+
+Private-desktop D3D11 and software checks pass open, save, folder, cancel, and dialog-error cases.
+Both renderers pass late-result rejection, exit with a pending dialog, cancelled Close, Wait, and Force close.
+D3D11 restart and Project switch also pass.
+Evidence folders are `anvil-surface-latency-gt4aak63` and `anvil-surface-latency-kyhtl6wy` under the OS temp directory.
+Native logs use `phase3-m4-native-final`; Lua logs use `phase3-m4-recovery-final` and `phase3-m4-terminal-final`.
+Final native checks also pass with log prefix `phase3-m4-native-checked`.
+The cancellation red uses `phase3-m4-cancel-red` and `anvil-surface-latency-qmcqam_1`.
+The recovery red uses `phase3-m4-recovery-close-red`.
+
+One earlier recovery run hit a transient file lock. The next red and green runs did not reproduce it.
+An earlier reused test directory also remained briefly locked after a Terminal check.
+Direct-mode fixture checks must expect in-process restart and SDL's nonzero failure exit code.
+They must not require hosted trace files or hosted process replacement.
+Corrected direct dialog, failure, restart, switch, and nonzero quit checks pass in `anvil-surface-latency-tzl87o1j`.
+Shell-loss, remembered-End bypass, native deadline, and control checks pass in `anvil-surface-latency-y_jviry8`.
+Software control checks pass in `anvil-surface-latency-k47ed29v`.
+
+Failed result notifications now log an error and end the current hosted connection.
+A late notification failure cannot replace a current connection's recorded failure.
+Allocation and event-queue fault injection remain part of Milestone 5 acceptance, not these dialog success checks.
+
+#### Milestone 4 latency
+
+Each isolated matrix used three runs and 720 valid samples per row, with no failed samples.
+Correctness checks and builds finished before measurement. Rows ran sequentially.
+Before evidence is `anvil-surface-latency-to64aqxr`; after evidence is `anvil-surface-latency-anbk0kua`.
+All values below are input-to-Present milliseconds, not physical scanout.
+
+| Mode / renderer | p50 before → after | p90 before → after | p99 before → after | Max before → after | Mean before → after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Direct D3D11 | 7.03 → 7.13 | 15.38 → 15.86 | 19.00 → 18.88 | 50.83 → 44.80 | 8.25 → 8.44 |
+| Hosted D3D11 | 7.58 → 7.48 | 16.51 → 16.30 | 19.20 → 19.26 | 23.06 → 23.38 | 8.82 → 8.88 |
+| Direct software | 18.71 → 18.94 | 27.17 → 28.17 | 31.22 → 33.43 | 32.54 → 38.91 | 19.51 → 19.97 |
+| Hosted software | 10.85 → 10.95 | 19.68 → 19.56 | 22.61 → 22.82 | 24.23 → 26.14 | 12.23 → 12.44 |
+
+Hosted D3D11 adds 0.35 ms to the direct median in the after matrix.
+Small differences and isolated maxima do not establish a cause.
+The direct-software tail increase received a separate saved-before/current repeat, with 720 valid samples each.
+Saved-before values were 18.70 / 27.71 / 32.68 / 51.18 / 19.61 ms for p50 / p90 / p99 / max / mean.
+Current values were 19.47 / 27.78 / 32.80 / 63.66 / 20.25 ms.
+The p99 difference fell from 2.21 ms to 0.12 ms. That tail increase did not persist.
+Maxima varied on both executables. The repeat does not establish a cause for the maximum or median difference.
+Repeat evidence is `anvil-surface-latency-fonyow44` and `anvil-surface-latency-gvg4ohn9`.
+
+The user has not supplied real IME or mixed-DPI results. Those manual gates remain open.
+Hosted mode remains opt-in. Milestone 5 has not started.
+
 ### Milestone 5: failure handling and acceptance
 
 - Complete bounded startup, transport, frame, device, and close failure handling.
@@ -684,7 +766,7 @@ python tools/run_surface_latency_probe.py --no-build --samples 240 --runs 3 --ke
 ```
 
 Use `--no-build` only with current binaries.
-Controls, routing, and lifecycle actions are available. Dialog and GPU failure actions remain planned.
+Controls, routing, lifecycle, dialog, and close actions are available. GPU failure actions remain planned.
 
 ## Acceptance checklist
 

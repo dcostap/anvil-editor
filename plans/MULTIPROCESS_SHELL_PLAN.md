@@ -357,7 +357,7 @@ The shell draws window controls and status overlays without Lua.
 One Project must look and behave like current Anvil.
 
 Implementation plan: [Phase 3: hosted single Project](PHASE3_HOSTED_PROJECT.md).
-Milestones 1 to 3 are implemented. Hosted mode remains opt-in.
+Milestones 1 to 4 are implemented. Hosted mode remains opt-in.
 Native controls and the Sidebar placeholder work without Project Lua.
 Input payloads have owned storage. Configuration, focus, and input retain their UI order.
 Frames, IME areas, and Title Bar regions identify their configuration.
@@ -367,6 +367,19 @@ Window moves and refresh/mode metadata no longer invalidate composition or match
 Capture, selection across the Sidebar, wheel, focus loss, and complete text drops pass isolated checks.
 Real IME candidate placement and mixed-DPI monitor moves remain open manual checks.
 The user verified foreground transfer by launching the shell from two terminals.
+Native dialogs use the visible shell parent and return owned asynchronous results.
+Late dialog results cannot reach a replacement Project.
+Cancelled Close restores Ready and clears its request and deadline.
+Confirmation waits stop the native timeout. Repeated Close never bypasses confirmation.
+Accepted shutdown follows recovery validation. Failed Untitled recovery cancels Close.
+A stalled Project offers Wait or explicit Force close with an unsaved-data warning.
+Force close leaves Terminal Session hosts running.
+Dialog and close checks pass on both renderers. Focused recovery and Terminal quit checks pass.
+The isolated Milestone 4 matrix has 720 valid samples per row and no failed samples.
+After D3D11 medians are 7.13 ms direct and 7.48 ms hosted.
+After software medians are 18.94 ms direct and 10.95 ms hosted.
+The Phase 3 plan records all percentiles, maxima, and the direct-software tail investigation.
+Milestone 5 failure handling and final acceptance remain open.
 Phase 3 exits immediately on shell loss; Phase 6 adds adoption.
 
 ### Phase 4: several Projects and the Sidebar process

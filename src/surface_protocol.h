@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 5u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 6u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -27,6 +27,7 @@ typedef enum {
   ANVIL_SURFACE_MSG_INPUT = 2,
   ANVIL_SURFACE_MSG_FOCUS = 3,
   ANVIL_SURFACE_MSG_CLOSE = 4,
+  ANVIL_SURFACE_MSG_DIALOG_RESULT = 5,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -45,6 +46,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_OPACITY = 77,
   ANVIL_SURFACE_MSG_EXIT_INTENT = 78,
   ANVIL_SURFACE_MSG_RESTART = 79,
+  ANVIL_SURFACE_MSG_DIALOG = 80,
+  ANVIL_SURFACE_MSG_CLOSE_DECISION = 81,
 } AnvilSurfaceMessageType;
 
 typedef enum {
@@ -93,6 +96,27 @@ typedef struct {
 } AnvilSurfaceInput;
 
 typedef struct { int32_t value; } AnvilSurfaceInt;
+
+typedef enum {
+  ANVIL_SURFACE_CLOSE_PENDING,
+  ANVIL_SURFACE_CLOSE_WAITING,
+  ANVIL_SURFACE_CLOSE_CANCELLED,
+  ANVIL_SURFACE_CLOSE_ACCEPTED,
+} AnvilSurfaceCloseDecision;
+
+#define ANVIL_SURFACE_DIALOG_LIMIT 8
+#define ANVIL_SURFACE_DIALOG_FILTER_LIMIT 64
+#define ANVIL_SURFACE_DIALOG_PATH_LIMIT 256
+/* Four NUL-terminated option strings precede name/pattern pairs. */
+typedef struct { uint32_t id, type, filters, many; } AnvilSurfaceDialog;
+typedef enum { ANVIL_SURFACE_DIALOG_ACCEPT, ANVIL_SURFACE_DIALOG_CANCEL, ANVIL_SURFACE_DIALOG_ERROR } AnvilSurfaceDialogStatus;
+/* Accept contains a double-NUL path list; error contains one NUL-terminated string. */
+typedef struct { uint32_t id; int32_t status, filter; } AnvilSurfaceDialogResult;
+
+void *anvil_surface_dialog_encode(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, uint32_t *size);
+SDL_PropertiesID anvil_surface_dialog_decode(const void *packet, uint32_t size, SDL_DialogFileFilter filters[ANVIL_SURFACE_DIALOG_FILTER_LIMIT]);
+void *anvil_surface_dialog_result(uint32_t id, const char *const *paths, int filter, uint32_t *size);
+bool anvil_surface_dialog_result_valid(const void *packet, uint32_t size);
 
 typedef struct { uint32_t pid; } AnvilSurfaceHello;
 

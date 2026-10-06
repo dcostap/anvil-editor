@@ -2080,7 +2080,7 @@ function M.quit_decision(statuses, answer)
   return actions, nil, count
 end
 
-function M.confirm_quit(accept)
+function M.confirm_quit(accept, cancel)
   local views, statuses = {}, {}
   for _, pane in ipairs(panes.ordered()) do
     for _, view in ipairs(panes.views(pane)) do
@@ -2099,7 +2099,10 @@ function M.confirm_quit(accept)
     end
     local actions, reason = M.quit_decision(statuses, answer)
     core.log_quiet("Terminal quit decision: answer=%s result=%s sessions=%d", tostring(answer), tostring(reason or "accepted"), #views)
-    if not actions then return end
+    if not actions then
+      if cancel then cancel() end
+      return
+    end
     if remember then storage.save("plugins.terminal", "quit_choice", answer) end
     local by_view = {}
     for i, view in ipairs(views) do by_view[view] = actions[i] end
@@ -2108,6 +2111,7 @@ function M.confirm_quit(accept)
   local actions, reason, count = M.quit_decision(statuses, remembered)
   if actions then apply(remembered); return end
   local remember = false
+  core.wait_for_quit_choice()
   local toggle = { text = "[ ] Remember my choice" }
   core.nag_view:show("Running Terminals", string.format("Keep %d running terminals running in the background?", count), {
     { text = "Keep", action = "keep", default_yes = true },
@@ -2127,15 +2131,20 @@ end
 local quit = core.quit
 function core.quit(force, exit_code)
   if not force then
-    core.confirm_close_buffers(core.buffers, core.quit, true, exit_code)
+    if not core.begin_quit() then return end
+    core.confirm_close_buffers(core.buffers, core.quit, core.cancel_quit, true, exit_code)
     return
   end
+  if not core.quit_pending then core.begin_quit() end
   M.confirm_quit(function(actions)
     core.terminal_quit_actions = actions
     local ok, err = pcall(quit, true, exit_code)
     core.terminal_quit_actions = nil
-    if not ok then error(err, 0) end
-  end)
+    if not ok then
+      core.cancel_quit()
+      error(err, 0)
+    end
+  end, core.cancel_quit)
 end
 
 M.cleanup_records()

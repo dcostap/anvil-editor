@@ -8,6 +8,7 @@
 #include "win32_frame_hwnd.h"
 
 #include <windowsx.h>
+#include <commctrl.h>
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <stdio.h>
@@ -28,6 +29,7 @@
 #define SHELL_PIPE_BUFFER (64u * 1024u)
 /* How long one resize step waits for a surface frame of the new size. */
 #define SHELL_RESIZE_WAIT_MS 50
+#define SHELL_CLOSE_TIMEOUT_MS 5000
 
 typedef struct ShellMessage {
   struct ShellMessage *next;
@@ -43,6 +45,9 @@ enum {
   SHELL_EVENT_FRAME,
   SHELL_EVENT_EXITED,
   SHELL_EVENT_DISCONNECTED,
+  SHELL_EVENT_DIALOG_RESULT,
+  SHELL_EVENT_CLOSE_TIMEOUT,
+  SHELL_EVENT_FORCE_RESULT,
 };
 
 typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED } ShellState;
@@ -112,6 +117,12 @@ typedef struct {
   int child_cursor;
   SDL_Cursor *cursors[ANVIL_SURFACE_CURSOR_COUNT];
   Uint64 close_requested_ns;
+  SDL_TimerID close_timer;
+  Uint32 close_serial;
+  bool close_prompt;
+  bool close_waiting;
+  uint32_t dialogs[ANVIL_SURFACE_DIALOG_LIMIT];
+  SDL_AtomicInt dialog_failure;
   bool shown;
   ShellState state;
   ID3D11Texture2D *ui;
@@ -136,9 +147,33 @@ static void composite_and_present(void);
 static void request_close(void);
 static void cancel_input(void);
 static void set_state(ShellState state);
+static void stop_close_timer(void) {
+  if (shell.close_timer)
+    SDL_RemoveTimer(shell.close_timer);
+  shell.close_timer = 0;
+}
+static Uint32 SDLCALL close_timeout(void *data, SDL_TimerID timer, Uint32 interval) {
+  (void)timer;
+  (void)interval;
+  uintptr_t tag = (uintptr_t)data;
+  SDL_Event event = {0};
+  event.type = shell.event_type;
+  event.user.code = SHELL_EVENT_CLOSE_TIMEOUT;
+  event.user.windowID = (Uint32)tag;
+  event.user.data2 = (void *)(tag >> 32);
+  SDL_PushEvent(&event);
+  return 0;
+}
+static void arm_close_timer(void) {
+  stop_close_timer();
+  shell.close_waiting = false;
+  uintptr_t tag = ((uintptr_t)shell.close_serial << 32) | shell.connection;
+  shell.close_timer = SDL_AddTimer(SHELL_CLOSE_TIMEOUT_MS, close_timeout, (void *)tag);
+}
 static void fail_connection(const char *cause) {
   SDL_Log("Shell connection failed: %s", cause);
   shell.connected = false;
+  stop_close_timer();
   cancel_input();
   anvil_ipc_pipe_cancel(&shell.pipe);
   set_state(SHELL_FAILED);
@@ -1060,11 +1095,251 @@ static void apply_window_mode(int mode) {
   }
 }
 
+typedef struct {
+  Uint32 connection, event_type;
+  uint32_t size;
+  void *result;
+  SDL_DialogFileFilter filters[ANVIL_SURFACE_DIALOG_FILTER_LIMIT];
+  uint8_t packet[];
+} ShellDialog;
+
+static void fail_dialog_notification(Uint32 connection) {
+  int previous = SDL_GetAtomicInt(&shell.dialog_failure);
+  while (connection > (Uint32)previous) {
+    if (SDL_CompareAndSwapAtomicInt(&shell.dialog_failure, previous, (int)connection))
+      return;
+    previous = SDL_GetAtomicInt(&shell.dialog_failure);
+  }
+}
+
+static void SDLCALL dialog_finished(void *userdata, const char *const *paths, int filter) {
+  ShellDialog *dialog = userdata;
+  dialog->result = anvil_surface_dialog_result(((AnvilSurfaceDialog *)dialog->packet)->id, paths,
+                                               filter, &dialog->size);
+  SDL_Event event = {0};
+  event.type = dialog->event_type;
+  event.user.code = SHELL_EVENT_DIALOG_RESULT;
+  event.user.windowID = dialog->connection;
+  event.user.data1 = dialog;
+  if (!dialog->result || !SDL_PushEvent(&event)) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Shell could not retain a file dialog result");
+    fail_dialog_notification(dialog->connection);
+    free(dialog->result);
+    free(dialog);
+  }
+}
+
+static void show_dialog(const ShellMessage *message) {
+  if (message->size < sizeof(AnvilSurfaceDialog)) {
+    fail_connection("invalid file dialog request");
+    return;
+  }
+  const AnvilSurfaceDialog *request = (const AnvilSurfaceDialog *)message->payload;
+  size_t slot = SDL_arraysize(shell.dialogs);
+  for (size_t i = 0; i < SDL_arraysize(shell.dialogs); i++) {
+    if (shell.dialogs[i] == request->id) {
+      fail_connection("duplicate file dialog ID");
+      return;
+    }
+    if (!shell.dialogs[i])
+      slot = i;
+  }
+  if (slot == SDL_arraysize(shell.dialogs)) {
+    fail_connection("file dialog request limit");
+    return;
+  }
+  ShellDialog *dialog = calloc(1, sizeof(*dialog) + message->size);
+  if (!dialog) {
+    fail_connection("file dialog allocation failed");
+    return;
+  }
+  dialog->connection = shell.connection;
+  dialog->event_type = shell.event_type;
+  memcpy(dialog->packet, message->payload, message->size);
+  SDL_PropertiesID props =
+      anvil_surface_dialog_decode(dialog->packet, message->size, dialog->filters);
+  if (!props) {
+    free(dialog);
+    fail_connection("invalid file dialog options");
+    return;
+  }
+  if (!SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, shell.window)) {
+    SDL_DestroyProperties(props);
+    free(dialog);
+    fail_connection("file dialog parent allocation failed");
+    return;
+  }
+  shell.dialogs[slot] = request->id;
+  SDL_Log("Shell file dialog started: id=%u type=%u connection=%u", request->id, request->type,
+          shell.connection);
+  cancel_input();
+  SDL_ClearComposition(shell.window);
+  SDL_ShowFileDialogWithProperties(request->type, dialog_finished, dialog, props);
+  SDL_DestroyProperties(props);
+}
+
+static void finish_dialog(ShellDialog *dialog) {
+  AnvilSurfaceDialogResult *result = dialog->result;
+  size_t slot = 0;
+  while (slot < SDL_arraysize(shell.dialogs) && shell.dialogs[slot] != result->id)
+    slot++;
+  if (slot < SDL_arraysize(shell.dialogs)) {
+    shell.dialogs[slot] = 0;
+    if (shell.connected) {
+      SDL_Log("Shell file dialog finished: id=%u status=%d filter=%d", result->id, result->status,
+              result->filter);
+      shell_send(ANVIL_SURFACE_MSG_DIALOG_RESULT, result, dialog->size, NULL, 0);
+      if (shell.text_active)
+        SDL_StartTextInput(shell.window);
+    }
+  }
+  free(dialog->result);
+  free(dialog);
+}
+
+typedef struct {
+  HWND parent;
+  HANDLE process;
+  Uint32 connection, serial, event_type;
+  bool force;
+} ForceCloseDialog;
+
+static int SDLCALL force_close_dialog(void *userdata) {
+  ForceCloseDialog *dialog = userdata;
+  const wchar_t *warning =
+      L"Force close can lose unsaved files and the latest Workspace changes. "
+      L"Terminal Sessions will keep running. Choose Wait to keep this Project running.";
+  int answer = IDNO;
+  HMODULE controls = LoadLibraryW(L"comctl32.dll");
+  typedef HRESULT(WINAPI * TaskDialogFn)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
+  TaskDialogFn task_dialog =
+      controls ? (TaskDialogFn)GetProcAddress(controls, "TaskDialogIndirect") : NULL;
+  TASKDIALOG_BUTTON buttons[] = {{IDNO, L"Wait"}, {IDYES, L"Force close"}};
+  TASKDIALOGCONFIG config = {0};
+  config.cbSize = sizeof(config);
+  config.hwndParent = dialog->parent;
+  config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+  config.pszWindowTitle = L"Anvil - Project not responding";
+  config.pszMainInstruction = L"The Project has not completed Close.";
+  config.pszContent = warning;
+  config.pszMainIcon = TD_WARNING_ICON;
+  config.cButtons = SDL_arraysize(buttons);
+  config.pButtons = buttons;
+  config.nDefaultButton = IDNO;
+  if (!task_dialog || FAILED(task_dialog(&config, &answer, NULL, NULL))) {
+    answer = MessageBoxW(dialog->parent,
+                         L"The Project has not completed Close.\n\nForce close can lose unsaved "
+                         L"files and the latest Workspace changes. "
+                         L"Terminal Sessions will keep running.\n\nYes: Force close\nNo: Wait",
+                         config.pszWindowTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+  }
+  if (controls)
+    FreeLibrary(controls);
+  dialog->force = answer == IDYES;
+  SDL_Event event = {0};
+  event.type = dialog->event_type;
+  event.user.code = SHELL_EVENT_FORCE_RESULT;
+  event.user.windowID = dialog->connection;
+  event.user.data1 = dialog;
+  if (!SDL_PushEvent(&event)) {
+    fail_dialog_notification(dialog->connection);
+    CloseHandle(dialog->process);
+    free(dialog);
+  }
+  return 0;
+}
+
+static void offer_force_close(void) {
+  if (shell.close_prompt || !shell.process.hProcess ||
+      WaitForSingleObject(shell.process.hProcess, 0) != WAIT_TIMEOUT)
+    return;
+  ForceCloseDialog *dialog = calloc(1, sizeof(*dialog));
+  if (!dialog) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Unable to allocate close warning");
+    return;
+  }
+  if (!DuplicateHandle(GetCurrentProcess(), shell.process.hProcess, GetCurrentProcess(),
+                       &dialog->process, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+    free(dialog);
+    return;
+  }
+  dialog->parent = shell.hwnd;
+  dialog->connection = shell.connection;
+  dialog->serial = shell.close_serial;
+  dialog->event_type = shell.event_type;
+  SDL_Thread *thread = SDL_CreateThread(force_close_dialog, "AnvilCloseWarning", dialog);
+  if (!thread) {
+    CloseHandle(dialog->process);
+    free(dialog);
+    return;
+  }
+  shell.close_prompt = true;
+  SDL_DetachThread(thread);
+}
+
+static BOOL CALLBACK dismiss_close_warning(HWND window, LPARAM parent) {
+  DWORD pid = 0;
+  GetWindowThreadProcessId(window, &pid);
+  if (pid == GetCurrentProcessId() && GetWindow(window, GW_OWNER) == (HWND)parent) {
+    wchar_t title[96];
+    GetWindowTextW(window, title, SDL_arraysize(title));
+    if (!wcscmp(title, L"Anvil - Project not responding"))
+      PostMessageW(window, WM_CLOSE, 0, 0);
+  }
+  return TRUE;
+}
+
+static void close_decision(int decision) {
+  if (decision < ANVIL_SURFACE_CLOSE_PENDING || decision > ANVIL_SURFACE_CLOSE_ACCEPTED) {
+    fail_connection("invalid close decision");
+    return;
+  }
+  if (decision == ANVIL_SURFACE_CLOSE_CANCELLED) {
+    if (shell.intentional_exit)
+      return;
+    stop_close_timer();
+    shell.close_requested_ns = 0;
+    shell.close_serial++;
+    shell.close_prompt = false;
+    shell.close_waiting = false;
+    EnumWindows(dismiss_close_warning, (LPARAM)shell.hwnd);
+    set_state(SHELL_READY);
+    SDL_Log("Shell close decision: cancelled; Ready; request reset");
+  } else {
+    if (!shell.close_requested_ns) {
+      shell.close_requested_ns = SDL_GetTicksNS();
+      shell.close_serial++;
+    }
+    set_state(SHELL_CLOSING);
+    if (decision == ANVIL_SURFACE_CLOSE_WAITING) {
+      stop_close_timer();
+      shell.close_waiting = true;
+      shell.close_serial++;
+      shell.close_prompt = false;
+      EnumWindows(dismiss_close_warning, (LPARAM)shell.hwnd);
+    } else
+      arm_close_timer();
+    if (decision == ANVIL_SURFACE_CLOSE_ACCEPTED)
+      shell.intentional_exit = true;
+    SDL_Log("Shell close decision: %s", decision == ANVIL_SURFACE_CLOSE_WAITING ? "waiting for user"
+                                        : decision == ANVIL_SURFACE_CLOSE_ACCEPTED ? "accepted"
+                                                                                   : "pending");
+  }
+  composite_and_present();
+}
+
 static void handle_message(ShellMessage *message) {
   const void *payload = message->payload;
   int value =
       message->size == sizeof(AnvilSurfaceInt) ? ((const AnvilSurfaceInt *)payload)->value : 0;
   switch (message->type) {
+  case ANVIL_SURFACE_MSG_DIALOG:
+    show_dialog(message);
+    break;
+  case ANVIL_SURFACE_MSG_CLOSE_DECISION:
+    if (message->size != sizeof(AnvilSurfaceInt)) fail_connection("invalid close decision size");
+    else close_decision(value);
+    break;
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
     if (!message->size) {
       shell.intentional_exit = true;
@@ -1396,9 +1671,13 @@ static void request_close(void) {
     shell.failed_close = true;
     return;
   }
-  Uint64 now = SDL_GetTicksNS();
-  if (!shell.close_requested_ns)
-    shell.close_requested_ns = now;
+  if (shell.close_requested_ns) {
+    SDL_Log("Shell ignored repeated Close while a decision is pending");
+    return;
+  }
+  shell.close_requested_ns = SDL_GetTicksNS();
+  shell.close_serial++;
+  arm_close_timer();
   if (!shell.connected) {
     set_state(SHELL_CLOSING);
     composite_and_present();
@@ -1426,6 +1705,16 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     if (event->user.windowID != shell.connection) {
       if (event->user.code == SHELL_EVENT_MESSAGE)
         free(event->user.data1);
+      else if (event->user.code == SHELL_EVENT_DIALOG_RESULT) {
+        ShellDialog *dialog = event->user.data1;
+        free(dialog->result);
+        free(dialog);
+        SDL_Log("Shell discarded a late file dialog result for an old connection");
+      } else if (event->user.code == SHELL_EVENT_FORCE_RESULT) {
+        ForceCloseDialog *dialog = event->user.data1;
+        CloseHandle(dialog->process);
+        free(dialog);
+      }
       return SDL_APP_CONTINUE;
     }
     switch (event->user.code) {
@@ -1443,7 +1732,43 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       handle_message(event->user.data1);
       free(event->user.data1);
       break;
+    case SHELL_EVENT_DIALOG_RESULT:
+      finish_dialog(event->user.data1);
+      break;
+    case SHELL_EVENT_CLOSE_TIMEOUT:
+      if ((Uint32)(uintptr_t)event->user.data2 == shell.close_serial && shell.close_requested_ns &&
+          !shell.close_waiting) {
+        shell.close_timer = 0;
+        offer_force_close();
+      }
+      break;
+    case SHELL_EVENT_FORCE_RESULT: {
+      ForceCloseDialog *dialog = event->user.data1;
+      if (dialog->serial == shell.close_serial && shell.close_requested_ns) {
+        shell.close_prompt = false;
+        if (dialog->force) {
+          if (WaitForSingleObject(dialog->process, 0) != WAIT_TIMEOUT ||
+              TerminateProcess(dialog->process, 125)) {
+            shell.intentional_exit = true;
+            stop_close_timer();
+            SDL_Log("Shell explicitly forced Project close; Terminal Sessions remain independent");
+          } else {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Project forced close failed: %lu",
+                         (unsigned long)GetLastError());
+            arm_close_timer();
+          }
+        } else {
+          shell.close_requested_ns = SDL_GetTicksNS();
+          arm_close_timer();
+          SDL_Log("Shell close timeout: Wait selected");
+        }
+      }
+      CloseHandle(dialog->process);
+      free(dialog);
+      break;
+    }
     case SHELL_EVENT_EXITED:
+      stop_close_timer();
       SDL_Log("Anvil shell surface process exited with code %d", (int)(intptr_t)event->user.data2);
       if (shell.restart_path) {
         free(shell.project_path);
@@ -1840,6 +2165,10 @@ static bool start_project(int argc, char **argv) {
     shell.frame_pending = false;
     shell.have_surface = false;
     shell.close_requested_ns = 0;
+    stop_close_timer();
+    shell.close_serial++;
+    shell.close_prompt = false;
+    memset(shell.dialogs, 0, sizeof(shell.dialogs));
     shell.last_config = (AnvilSurfaceConfigure){0};
     shell.surface_buttons = 0;
     shell.pointer_in_surface = false;
@@ -1923,11 +2252,14 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
 
 SDL_AppResult anvil_shell_iterate(void *appstate) {
   (void)appstate;
+  if ((Uint32)SDL_GetAtomicInt(&shell.dialog_failure) == shell.connection && shell.connected)
+    fail_connection("native dialog result notification failed");
   if (shell.frame_busy) handle_frame();
   return shell.failed_close ? SDL_APP_SUCCESS : SDL_APP_CONTINUE;
 }
 
 void anvil_shell_quit(void *appstate, SDL_AppResult result) {
+  stop_close_timer();
   (void)appstate;
   (void)result;
   /* Project loss detection owns save/detach and its deadline. Never kill it with a shell job. */

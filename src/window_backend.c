@@ -23,9 +23,11 @@ SDL_Window *anvil_window_create(const char *title, float width, float height) {
   return window;
 }
 
-SDL_Window *anvil_window_dialog_parent(RenWindow *ren) {
-  /* Milestone 4 supplies the shell parent and asynchronous dialog results. Never use the hidden render window. */
-  return anvil_window_hosted(ren) ? NULL : ren->cache.window;
+bool anvil_window_show_dialog(RenWindow *ren, uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata) {
+  if (anvil_window_hosted(ren)) return anvil_hosted_surface_show_dialog(id, type, props, callback, userdata);
+  if (!SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, ren->cache.window)) return false;
+  SDL_ShowFileDialogWithProperties(type, callback, userdata, props);
+  return true;
 }
 float anvil_window_display_scale(RenWindow *ren) {
   return anvil_window_hosted(ren) ? anvil_hosted_surface_display_scale() : SDL_GetWindowDisplayScale(ren->cache.window);

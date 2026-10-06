@@ -41,6 +41,12 @@ test.describe("Terminal quit confirmation", function()
     local busy_state = busy:get_state()
     local busy_id = busy.session:stats().host_pid
     local previous_quit = core.quit_request
+    local previous_close_decision = system.project_close_decision
+    local decisions = {}
+    system.project_close_decision = function(decision)
+      decisions[#decisions + 1] = decision
+      previous_close_decision(decision)
+    end
     local function select(text)
       for i, option in ipairs(core.nag_view.options) do
         if option.text == text then
@@ -63,13 +69,16 @@ test.describe("Terminal quit confirmation", function()
       until system.get_time() >= deadline
       core.quit(true)
       test.ok(core.nag_view.visible)
+      test.equal(decisions[#decisions], "waiting", "busy confirmation did not suspend the native close timeout")
       select("Cancel")
+      test.equal(decisions[#decisions], "cancelled", "Terminal Cancel did not cancel the native close")
       test.equal(core.quit_request, previous_quit)
       test.ok(idle.session and busy.session)
       core.quit(true)
       select("[ ] Remember my choice")
       test.ok(core.nag_view.visible)
       select("Keep")
+      test.equal(decisions[#decisions], "accepted", "Terminal Keep did not accept the native close")
       local accepted = core.quit_request
       core.quit_request = previous_quit
       test.ok(accepted)
@@ -98,6 +107,7 @@ test.describe("Terminal quit confirmation", function()
       test.equal(restored.state, "detached")
     end)
     core.quit_request = previous_quit
+    system.project_close_decision = previous_close_decision
     -- Detach leaves ownership in the host. Attach once more to close this test's shell.
     local cleanup = terminal.from_state(busy_state)
     local deadline = system.get_time() + 8

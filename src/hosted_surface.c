@@ -60,6 +60,11 @@ static struct {
   AnvilSurfaceConfigure config;
   bool config_applied;
   bool text_active;
+  struct {
+    uint32_t id;
+    SDL_DialogFileCallback callback;
+    void *userdata;
+  } dialogs[ANVIL_SURFACE_DIALOG_LIMIT];
 
   SDL_AtomicInt focused;
   int last_cursor;
@@ -289,6 +294,31 @@ static void dispatch_message(HostedMessage *message) {
     case ANVIL_SURFACE_MSG_CLOSE:
       push_window_event(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
       break;
+    case ANVIL_SURFACE_MSG_DIALOG_RESULT: {
+      AnvilSurfaceDialogResult *result = (AnvilSurfaceDialogResult *)message->payload;
+      size_t index = 0;
+      while (index < SDL_arraysize(hosted.dialogs) && hosted.dialogs[index].id != result->id) index++;
+      if (index == SDL_arraysize(hosted.dialogs)) {
+        signal_loss("unknown file dialog result ID", message->type, message->size);
+        break;
+      }
+      SDL_DialogFileCallback callback = hosted.dialogs[index].callback;
+      void *userdata = hosted.dialogs[index].userdata;
+      hosted.dialogs[index].id = 0;
+      const char *paths[ANVIL_SURFACE_DIALOG_PATH_LIMIT + 1] = {NULL};
+      const char *cursor = (const char *)(result + 1);
+      if (result->status == ANVIL_SURFACE_DIALOG_ERROR) {
+        SDL_SetError("%s", cursor);
+        callback(userdata, NULL, result->filter);
+      } else {
+        if (result->status == ANVIL_SURFACE_DIALOG_ACCEPT) {
+          size_t count = 0;
+          while (*cursor) { paths[count++] = cursor; cursor += strlen(cursor) + 1; }
+        }
+        callback(userdata, paths, result->filter);
+      }
+      break;
+    }
   }
   SDL_AddAtomicInt(&hosted.inbound_bytes, -(int)(sizeof(*message) + message->size + 1));
   free(message);
@@ -340,6 +370,9 @@ static int SDLCALL reader_thread(void *data) {
         break;
       case ANVIL_SURFACE_MSG_CLOSE:
         if (header.size) goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_DIALOG_RESULT:
+        if (!anvil_surface_dialog_result_valid(payload, header.size)) goto failed;
         break;
       default:
         continue;
@@ -430,6 +463,33 @@ static void send_message(uint16_t type, const void *payload, uint32_t size) {
   if (hosted.tail) hosted.tail->next = message; else hosted.head = message;
   hosted.tail = message; hosted.queued += sizeof(*message) + size;
   SDL_SignalCondition(hosted.queue_condition); SDL_UnlockMutex(hosted.queue_lock);
+}
+
+void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) {
+  AnvilSurfaceInt message = {decision};
+  send_message(ANVIL_SURFACE_MSG_CLOSE_DECISION, &message, sizeof(message));
+}
+
+void anvil_hosted_surface_dialog_result_failed(void) {
+  if (hosted.active) signal_loss("UI file dialog result queue failed", ANVIL_SURFACE_MSG_DIALOG_RESULT, 0);
+}
+
+bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata) {
+  size_t index = SDL_arraysize(hosted.dialogs);
+  for (size_t i = 0; i < SDL_arraysize(hosted.dialogs); i++) {
+    if (hosted.dialogs[i].id == id) return SDL_SetError("The file dialog ID is already active");
+    if (!hosted.dialogs[i].id) index = i;
+  }
+  if (index == SDL_arraysize(hosted.dialogs)) return SDL_SetError("Too many file dialogs are active");
+  uint32_t size;
+  void *packet = anvil_surface_dialog_encode(id, type, props, &size);
+  if (!packet) return SDL_SetError("The file dialog request is invalid or exceeds its limit");
+  hosted.dialogs[index].id = id;
+  hosted.dialogs[index].callback = callback;
+  hosted.dialogs[index].userdata = userdata;
+  send_message(ANVIL_SURFACE_MSG_DIALOG, packet, size);
+  free(packet);
+  return true;
 }
 
 void anvil_hosted_surface_exit_intent(const char *restart_path) {
@@ -733,6 +793,11 @@ bool anvil_hosted_surface_parse_valid(void) { return true; }
 bool anvil_hosted_surface_restarted(void) { return false; }
 bool anvil_hosted_surface_loss_event(Uint32 type) { (void)type; return false; }
 void anvil_hosted_surface_exit_intent(const char *path) { (void)path; }
+void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) { (void)decision; }
+void anvil_hosted_surface_dialog_result_failed(void) {}
+bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata) {
+  (void)id; (void)type; (void)props; (void)callback; (void)userdata; return false;
+}
 void anvil_hosted_surface_register_window(SDL_Window *window) { (void)window; }
 bool anvil_hosted_surface_is_window(SDL_Window *window) { (void)window; return false; }
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height) {

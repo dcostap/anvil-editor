@@ -813,14 +813,17 @@ TextView.close_approval_handler = function(view, approve)
 end
 
 local core_confirm_close_buffers = core.confirm_close_buffers
-function core.confirm_close_buffers(buffers, close_fn, ...)
+function core.confirm_close_buffers(buffers, close_fn, cancel_fn, ...)
   for _, buffer in ipairs(buffers or core.buffers or {}) do
     if buffer and buffer.is_dirty and buffer:is_dirty() then
       local saved, handled = autosave_fast.save_before_close(buffer, "close")
-      if handled and not saved then return end
+      if handled and not saved then
+        if cancel_fn then cancel_fn() end
+        return
+      end
     end
   end
-  return core_confirm_close_buffers(buffers, close_fn, ...)
+  return core_confirm_close_buffers(buffers, close_fn, cancel_fn, ...)
 end
 
 for _, buffer in ipairs(core.buffers or {}) do

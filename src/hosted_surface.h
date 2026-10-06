@@ -27,6 +27,9 @@ bool anvil_hosted_surface_restarted(void);
 bool anvil_hosted_surface_parse_valid(void);
 bool anvil_hosted_surface_loss_event(Uint32 type);
 void anvil_hosted_surface_exit_intent(const char *restart_path);
+void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision);
+void anvil_hosted_surface_dialog_result_failed(void);
+bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata);
 
 /* The first window created in hosted mode becomes the hosted surface. */
 void anvil_hosted_surface_register_window(SDL_Window *window);

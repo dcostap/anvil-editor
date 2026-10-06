@@ -211,7 +211,7 @@ local function change_project_directory()
     if common.path_equals(abs_path[1], core.root_project().path) then return end
     core.confirm_close_buffers(core.buffers, function(dirpath)
       core.open_project_in_same_window(dirpath)
-    end, abs_path[1])
+    end, nil, abs_path[1])
   end)
 end
 
@@ -220,7 +220,7 @@ local function change_project_directory_with_system_file_picker()
     if common.path_equals(abs_path[1], core.root_project().path) then return end
     core.confirm_close_buffers(core.buffers, function(dirpath)
       core.open_project_in_same_window(dirpath)
-    end, abs_path[1])
+    end, nil, abs_path[1])
   end)
 end
 

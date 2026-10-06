@@ -285,7 +285,7 @@ if not core.__untitled_tabs_patched then
   end
 
   local core_confirm_close_buffers = core.confirm_close_buffers
-  function core.confirm_close_buffers(buffers, close_fn, ...)
+  function core.confirm_close_buffers(buffers, close_fn, cancel_fn, ...)
     local filtered, dirty_untitled, explicit_untitled = {}, {}, {}
     local explicit_bulk_close = core.root_panel and close_fn == core.root_panel.close_all_views
     for _, buffer in ipairs(buffers or core.buffers) do
@@ -330,14 +330,16 @@ if not core.__untitled_tabs_patched then
         },
         function(item)
           if item.text == "Close" then
-            core_confirm_close_buffers(filtered, discard_explicit_untitled_then_close, table.unpack(args))
+            core_confirm_close_buffers(filtered, discard_explicit_untitled_then_close, cancel_fn, table.unpack(args))
+          elseif cancel_fn then
+            cancel_fn()
           end
         end
       )
       return
     end
 
-    return core_confirm_close_buffers(filtered, discard_explicit_untitled_then_close, ...)
+    return core_confirm_close_buffers(filtered, discard_explicit_untitled_then_close, cancel_fn, ...)
   end
 
   local editor_can_close = Editor.can_close

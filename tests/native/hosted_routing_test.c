@@ -15,6 +15,18 @@ static AnvilSurfaceConfigure config;
 static SDL_AtomicInt frame_checked;
 static SDL_AtomicInt motions_written;
 static bool motion_stall;
+static bool dialogs;
+static SDL_AtomicInt dialogs_checked;
+static struct { int status, filter, count; char paths[2][128]; } dialog_results[3];
+static void SDLCALL dialog_result(void *userdata, const char *const *paths, int filter) {
+  int index = (int)(intptr_t)userdata;
+  dialog_results[index].status = !paths ? 3 : !*paths ? 2 : 1;
+  dialog_results[index].filter = filter;
+  if (paths) for (int i = 0; paths[i] && i < 2; i++) {
+    SDL_strlcpy(dialog_results[index].paths[i], paths[i], sizeof(dialog_results[index].paths[i]));
+    dialog_results[index].count++;
+  }
+}
 
 static int SDLCALL server(void *data) {
   (void)data;
@@ -34,6 +46,33 @@ static int SDLCALL server(void *data) {
   WaitForSingleObject(ready, 5000);
   AnvilSurfaceInt focus = {1};
   anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_FOCUS, &focus, sizeof(focus), NULL, 0);
+  if (dialogs) {
+    for (int i = 0; i < 3; i++) {
+      do {
+        if (!anvil_ipc_pipe_read(&pipe, &header, bytes, sizeof(bytes))) return 1;
+      } while (header.type != ANVIL_SURFACE_MSG_DIALOG);
+      SDL_DialogFileFilter filters[ANVIL_SURFACE_DIALOG_FILTER_LIMIT];
+      SDL_PropertiesID props = anvil_surface_dialog_decode(bytes, header.size, filters);
+      if (!props || ((AnvilSurfaceDialog *)bytes)->id != (uint32_t)(41 + i) ||
+          ((AnvilSurfaceDialog *)bytes)->type != (uint32_t)i ||
+          strcmp(SDL_GetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, ""), "选择 files") ||
+          strcmp(filters[1].pattern, "lua") || !SDL_GetBooleanProperty(props, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, false)) return 1;
+      SDL_DestroyProperties(props);
+      const char *accepted[] = {"C:/中/a.txt", "C:/b λ.lua", NULL};
+      const char *cancelled[] = {NULL};
+      uint32_t size;
+      SDL_SetError("Owned native dialog failed");
+      void *result = anvil_surface_dialog_result(41 + i, i == 0 ? accepted : i == 1 ? cancelled : NULL, i == 0 ? 1 : -1, &size);
+      if (!result || !anvil_surface_dialog_result_valid(result, size)) return 1;
+      if (i == 0 && anvil_surface_dialog_result_valid(result, size - 1)) return 1;
+      if (!anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_DIALOG_RESULT, result, size, NULL, 0)) return 1;
+      free(result);
+    }
+    SDL_SetAtomicInt(&dialogs_checked, 1);
+    SetEvent(sent);
+    WaitForSingleObject(finish, 5000);
+    return 0;
+  }
   if (motion_stall) {
     AnvilSurfaceInput motion = {.configuration = config.configuration};
     motion.event.type = SDL_EVENT_MOUSE_MOTION;
@@ -91,6 +130,7 @@ static int SDLCALL server(void *data) {
 
 int main(int test_argc, char **test_argv) {
   motion_stall = test_argc > 1 && !strcmp(test_argv[1], "motion");
+  dialogs = test_argc > 1 && !strcmp(test_argv[1], "dialogs");
   AnvilSurfaceConfigure geometry = {.configuration = 7, .origin_x = 48, .origin_y = 24,
     .pixel_w = 320, .pixel_h = 240, .display_scale = 1.25f};
   AnvilSurfaceConfigure moved = geometry;
@@ -131,6 +171,21 @@ int main(int test_argc, char **test_argv) {
     CHECK(x == 30.5f && y == 40.25f);
   }
   CHECK(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS));
+  if (dialogs) {
+    SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, "title");
+    uint32_t size;
+    void *packet = anvil_surface_dialog_encode(1, SDL_FILEDIALOG_OPENFILE, props, &size);
+    CHECK(packet);
+    SDL_DialogFileFilter filters[ANVIL_SURFACE_DIALOG_FILTER_LIMIT];
+    CHECK(!anvil_surface_dialog_decode(packet, size - 1, filters));
+    ((char *)packet)[sizeof(AnvilSurfaceDialog)] = (char)0xff;
+    CHECK(!anvil_surface_dialog_decode(packet, size, filters));
+    free(packet);
+    SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, ANVIL_SURFACE_DIALOG_FILTER_LIMIT + 1);
+    CHECK(!anvil_surface_dialog_encode(1, SDL_FILEDIALOG_OPENFILE, props, &size));
+    SDL_DestroyProperties(props);
+  }
   ready = CreateEventW(NULL, TRUE, FALSE, NULL);
   sent = CreateEventW(NULL, TRUE, FALSE, NULL);
   finish = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -155,9 +210,42 @@ int main(int test_argc, char **test_argv) {
   anvil_hosted_surface_register_window(window);
   SDL_Event event;
   while (SDL_PollEvent(&event)) {}
+  if (dialogs) {
+    SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_DialogFileFilter filters[] = {{"Text files", "txt"}, {"Lua files", "lua"}};
+    SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, filters);
+    SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, 2);
+    SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, "选择 files");
+    SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, "C:/中");
+    SDL_SetBooleanProperty(props, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, true);
+    for (int i = 0; i < 3; i++) CHECK(anvil_hosted_surface_show_dialog(41 + i, i, props, dialog_result, (void *)(intptr_t)i));
+    SDL_DestroyProperties(props);
+  }
   SetEvent(ready);
   CHECK(WaitForSingleObject(sent, 5000) == WAIT_OBJECT_0);
   SDL_Delay(50);
+  if (dialogs) {
+    CHECK(SDL_GetAtomicInt(&dialogs_checked) == 1);
+    Uint64 deadline = SDL_GetTicks() + 2000;
+    while (!dialog_results[2].status && SDL_GetTicks() < deadline) {
+      while (SDL_PollEvent(&event)) {
+        CHECK(!anvil_hosted_surface_loss_event(event.type));
+        if (!anvil_hosted_surface_dispatch(&event)) system_push_event(&event);
+      }
+      anvil_hosted_surface_poll();
+      system_event_pop(&event);
+    }
+    CHECK(dialog_results[0].status == 1 && dialog_results[0].filter == 1 && dialog_results[0].count == 2);
+    CHECK(!strcmp(dialog_results[0].paths[0], "C:/中/a.txt") && !strcmp(dialog_results[0].paths[1], "C:/b λ.lua"));
+    CHECK(dialog_results[1].status == 2 && dialog_results[1].count == 0);
+    CHECK(dialog_results[2].status == 3);
+    CHECK(!strcmp(SDL_GetError(), "Owned native dialog failed"));
+    anvil_hosted_surface_exit_intent(NULL);
+    SetEvent(finish);
+    SDL_WaitThread(thread, NULL);
+    puts("PASS asynchronous native dialog requests, complete paths, filter, cancel, and failure");
+    return 0;
+  }
   if (motion_stall) {
     CHECK(SDL_GetAtomicInt(&motions_written) == 100001);
     bool final_position = false, barrier = false;

@@ -1037,7 +1037,7 @@ ipc:register_method("core.change_directory", function(directory)
     if common.path_equals(directory, core.root_project().path) then return end
     core.confirm_close_buffers(core.buffers, function(dirpath)
       core.open_project_in_same_window(dirpath)
-    end, directory)
+    end, nil, directory)
   end
 end, {{name = "directory", type = "string"}})
 

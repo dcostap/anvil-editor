@@ -33,6 +33,11 @@ ffi.cdef [[
   int __stdcall GetGUIThreadInfo(unsigned long thread, ProbeGuiThreadInfo *info);
   int __stdcall SetWindowPos(void *window, void *after, int x, int y, int w, int h, unsigned int flags);
   intptr_t __stdcall SendMessageW(void *window, unsigned int message, uintptr_t wparam, intptr_t lparam);
+  int __stdcall EnumWindows(int (__stdcall *callback)(void *, intptr_t), intptr_t data);
+  int __stdcall GetWindowTextW(void *window, wchar_t *text, int count);
+  void * __stdcall GetWindow(void *window, unsigned int kind);
+  void * __stdcall GetDlgItem(void *window, int id);
+  int __stdcall IsWindowVisible(void *window);
   long __stdcall NtSuspendProcess(void *process);
   long __stdcall NtResumeProcess(void *process);
   long __stdcall NtQueryInformationProcess(void *process, unsigned long kind, void *buffer, unsigned long capacity, unsigned long *needed);
@@ -111,11 +116,44 @@ local function shell_window(pid)
   assert(tonumber(owner[0]) == pid, "test window has the wrong owner")
   return window
 end
+local function owned_dialog(state, title)
+  local found
+  local callback = ffi.cast("int (__stdcall *)(void *, intptr_t)", function(window)
+    local pid = ffi.new("unsigned long[1]")
+    user32.GetWindowThreadProcessId(window, pid)
+    if user32.IsWindowVisible(window) ~= 0 and (tonumber(pid[0]) == state.shell_pid or tonumber(pid[0]) == state.pid) then
+      local text = ffi.new("wchar_t[256]")
+      local length = user32.GetWindowTextW(window, text, 256)
+      local name = {}
+      for i = 0, length - 1 do name[#name + 1] = string.char(tonumber(text[i]) < 128 and tonumber(text[i]) or 63) end
+      if table.concat(name) == title then found = window; return 0 end
+    end
+    return 1
+  end)
+  user32.EnumWindows(callback, 0)
+  callback:free()
+  return found
+end
+local function owned_visible_window(pid)
+  local found
+  local callback = ffi.cast("int (__stdcall *)(void *, intptr_t)", function(window)
+    local owner = ffi.new("unsigned long[1]")
+    user32.GetWindowThreadProcessId(window, owner)
+    if tonumber(owner[0]) == pid and user32.IsWindowVisible(window) ~= 0 and user32.GetWindow(window, 4) == nil then
+      found = window; return 0
+    end
+    return 1
+  end)
+  user32.EnumWindows(callback, 0)
+  callback:free()
+  return found
+end
 local project = core.root_project().path:gsub("\\", "/")
 if project:find("/driver$", 1) then
   core.add_background_thread(function()
     local handles, processes = {}, {}
     local foreground_gate
+    local force_host_handle
     local ok, err = pcall(function()
       local process = require "core.process"
       local function start(mode, directory)
@@ -223,6 +261,98 @@ if project:find("/driver$", 1) then
         local drop = load(root .. "/drop.lua")
         assert(drop.bytes == 40000 and drop.prefix and drop.tail, "hosted text drop lost complete UTF-8 or trailing lines")
         assert(drop.new_pane, "Title Bar text drop replaced the existing Pane")
+        save(root .. "/continue.lua", {continue = true})
+      elseif action == "dialog-late" or action == "dialog-close" then
+        local window = assert(shell_window(state.shell_pid))
+        local dialog
+        assert(wait_for(function() dialog = owned_dialog(state, "Anvil old dialog"); return dialog end, 8))
+        assert(user32.GetWindow(dialog, 4) == window, "pending dialog has the wrong parent")
+        save(root .. "/dialog-transition.lua", {continue = true})
+        if action == "dialog-late" then
+          assert(wait_for(function() return load(root .. "/replacement.lua") end, 12), "pending dialog stopped Project restart")
+          local replacement = load(root .. "/replacement.lua")
+          assert(replacement.pid ~= state.pid and replacement.shell_pid == state.shell_pid)
+          user32.PostMessageW(dialog, 0x10, 0, 0)
+          assert(wait_for(function()
+            local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+            local text = file:read("*a"); file:close()
+            return text:find("discarded a late file dialog result", 1, true)
+          end, 5), "old dialog result reached the replacement connection")
+          save(root .. "/dialog-new.lua", {continue = true})
+          assert(wait_for(function() dialog = owned_dialog(replacement, "Anvil new dialog"); return dialog end, 8))
+          user32.PostMessageW(dialog, 0x10, 0, 0)
+          assert(wait_for(function() return load(root .. "/dialog-new-result.lua") end, 5))
+          assert(load(root .. "/dialog-new-result.lua").status == "cancel")
+          save(root .. "/continue.lua", {continue = true})
+        end
+      elseif action == "close" or action == "force-close" then
+        local window = assert(shell_window(state.shell_pid))
+        local process = own_handle(state.pid, 0x1F0FFF)
+        if action == "force-close" then force_host_handle = own_handle(state.host_pid) end
+        local function close() assert(user32.PostMessageW(window, 0x10, 0, 0) ~= 0) end
+        if action == "close" then
+          close()
+          assert(wait_for(function() return load(root .. "/close-pending.lua") end, 5))
+          close(); close()
+          coroutine.yield(5.5)
+          assert(not owned_dialog(state, "Anvil - Project not responding"), "user confirmation was treated as close failure")
+          assert(kernel.WaitForSingleObject(process, 0) == 258, "repeated Close bypassed confirmation")
+          save(root .. "/close-cancel.lua", {continue = true})
+          assert(wait_for(function() return load(root .. "/close-cancelled.lua") end, 5))
+          assert(load(root .. "/close-cancelled.lua").text == "on diskx", "cancelled close did not retain usable editing")
+        end
+        assert(ntdll.NtSuspendProcess(process) >= 0)
+        close()
+        coroutine.yield(.5)
+        assert(not owned_dialog(state, "Anvil - Project not responding"), "cancelled close retained its old deadline")
+        local dialog
+        assert(wait_for(function() dialog = owned_dialog(state, "Anvil - Project not responding"); return dialog end, 7), "close timeout did not offer Wait or Force close")
+        assert(user32.GetWindow(dialog, 4) == window, "close warning did not use the shell parent")
+        local choice = action == "force-close" and 6 or 7
+        user32.PostMessageW(dialog, 0x466, choice, 0) -- TaskDialog button action
+        user32.PostMessageW(dialog, 0x111, choice, 0) -- MessageBox fallback
+        if action == "close" then
+          coroutine.yield(.1)
+          assert(kernel.WaitForSingleObject(process, 0) == 258, "Wait terminated the Project")
+          assert(ntdll.NtResumeProcess(process) >= 0)
+          assert(wait_for(function() return load(root .. "/close-again.lua") end, 5), "cancelled close prevented another confirmation")
+          save(root .. "/close-accept.lua", {continue = true})
+        end
+        assert(wait_for(function() return kernel.WaitForSingleObject(process, 0) == 0 end, 8), "accepted close did not end the Project")
+        kernel.CloseHandle(process)
+        if action == "force-close" then
+          assert(kernel.WaitForSingleObject(force_host_handle, 0) == 258, "forced Project close ended its Terminal Session")
+        end
+      elseif action == "dialogs" then
+        local window = assert(mode == "shell" and shell_window(state.shell_pid) or owned_visible_window(state.pid))
+        for _, stage in ipairs({"cancel", "open", "save", "folder"}) do
+          assert(wait_for(function() return load(root .. "/dialog-" .. stage .. "-pending.lua") end, 5))
+          local dialog
+          assert(wait_for(function() dialog = owned_dialog(state, "Anvil dialog probe"); return dialog end, 8), "native dialog did not open")
+          local correct_owner = user32.GetWindow(dialog, 4) == window
+          assert(load(root .. "/dialog-" .. stage .. "-pending.lua").returned, "native dialog blocked the Project loop")
+          if stage == "cancel" then
+            user32.PostMessageW(dialog, 0x10, 0, 0)
+          else
+            local button = user32.GetDlgItem(dialog, 1)
+            assert(button ~= nil, "native file dialog has no accept button")
+            user32.PostMessageW(button, 0xf5, 0, 0)
+          end
+          assert(wait_for(function() return load(root .. "/dialog-" .. stage .. "-result.lua") end, 8), "native dialog did not return its result")
+          assert(correct_owner, "native dialog did not use the visible shell parent")
+          local result = load(root .. "/dialog-" .. stage .. "-result.lua")
+          assert(result.status == (stage == "cancel" and "cancel" or "accept"), "native dialog returned the wrong status")
+          if stage ~= "cancel" then
+            local expected = root .. "/Project" .. (stage == "folder" and "" or stage == "save" and "/new-save.txt" or "/edited.txt")
+            assert(result.result[1]:gsub("\\", "/") == expected, "native dialog returned the wrong path")
+          end
+          save(root .. "/dialog-" .. stage .. "-continue.lua", {continue = true})
+        end
+        save(root .. "/continue.lua", {continue = true})
+      elseif action == "dialog-error" then
+        assert(wait_for(function() return load(root .. "/dialog-error-result.lua") end, 5))
+        local result = load(root .. "/dialog-error-result.lua")
+        assert(result.status == "error" and type(result.result) == "string", "native dialog did not report its failure")
         save(root .. "/continue.lua", {continue = true})
       elseif action == "move" then
         local window = assert(shell_window(state.shell_pid))
@@ -358,7 +488,11 @@ if project:find("/driver$", 1) then
       elseif action == "restart" or action == "switch" or action == "new-window" then
         assert(wait_for(function() return load(root .. "/replacement.lua") end, 15), "Project replacement did not start")
         local replacement = load(root .. "/replacement.lua")
-        assert(replacement.pid ~= state.pid, "hosted restart reused the old Project process")
+        if mode == "shell" or action == "new-window" then
+          assert(replacement.pid ~= state.pid, "hosted restart reused the old Project process")
+        else
+          assert(replacement.pid == state.pid, "direct restart replaced its process")
+        end
         if action == "new-window" then
           assert(replacement.shell_pid ~= state.shell_pid, "New Window reused the original shell")
         else
@@ -402,7 +536,10 @@ if project:find("/driver$", 1) then
         kernel.TerminateProcess(terminal_handle, 0)
       end
       assert(wait_for(function() return not subject:running() end, 15), "shell did not close after an intentional Project quit")
-      if action == "quit" or action == "quit-error" then assert(subject:returncode() == 0, "intentional Project quit became a shell failure") end
+      if action == "quit" or action == "quit-error" then
+        local expected = mode == "direct" and action == "quit-error" and 1 or 0
+        assert(subject:returncode() == expected, "intentional Project quit returned the wrong exit code")
+      end
       if action == "conflict" then
         assert(not workspace_text():find("second.txt", 1, true), "last completed first-Project Workspace save did not win")
       end
@@ -410,6 +547,7 @@ if project:find("/driver$", 1) then
       save(result_path, { ok = true, action = action, mode = mode, foreground_gate = foreground_gate })
     end)
     for _, handle in ipairs(handles) do kernel.CloseHandle(handle) end
+    if force_host_handle then kernel.TerminateProcess(force_host_handle, 0); kernel.CloseHandle(force_host_handle) end
     for _, process in ipairs(processes) do if process:running() then process:terminate() end end
     if not ok then save(result_path, { ok = false, error = tostring(err), action = action }) end
     quit()
@@ -423,6 +561,17 @@ else
     if old and action == "controls" then
       save(root .. "/replacement.lua", {pid = pid, shell_pid = shell_pid})
       assert(wait_for(function() return load(root .. "/continue.lua") end, 15)); quit(); return
+    end
+    if old and action == "dialog-late" then
+      local state = {pid = pid, shell_pid = shell_pid}
+      save(root .. "/replacement.lua", state)
+      assert(wait_for(function() return load(root .. "/dialog-new.lua") end, 8))
+      local result
+      core.open_file_dialog(core.window, function(status) result = {status = status} end, {title = "Anvil new dialog", default_location = (project .. "/"):gsub("/", "\\")})
+      assert(wait_for(function() return result end, 10))
+      save(root .. "/dialog-new-result.lua", result)
+      assert(wait_for(function() return load(root .. "/continue.lua") end, 8))
+      quit(); return
     end
     if old and action == "end-loss" then
       local terminal = require "plugins.terminal"
@@ -460,6 +609,14 @@ else
     end
     local state = { pid = pid, shell_pid = shell_pid, started = system.get_time(), hosted = system.is_hosted_surface(), path = project }
     local routing_view, drag_events
+    if action == "close" then
+      routing_view = core.open_file(project .. "/edited.txt")
+      routing_view.buffer:insert(1, 8, "x")
+    elseif action == "force-close" then
+      local view = require("plugins.terminal").open {cwd = project, shell = "cmd.exe /D /Q"}
+      assert(wait_for(function() return view.session and (tonumber(view.session:stats().host_pid) or 0) > 0 end, 8))
+      state.host_pid = view.session:stats().host_pid
+    end
     if action == "move" then
       routing_view = core.open_file(project .. "/edited.txt")
       core.set_active_view(routing_view)
@@ -520,6 +677,41 @@ else
       end
     end
     save(root .. "/subject.lua", state)
+    if action == "dialog-late" or action == "dialog-close" then
+      core.open_file_dialog(core.window, function(status) save(root .. "/old-result.lua", {status = status}) end, {title = "Anvil old dialog", default_location = (project .. "/"):gsub("/", "\\")})
+      assert(wait_for(function() return load(root .. "/dialog-transition.lua") end, 10))
+      if action == "dialog-late" then core.restart() else quit() end
+      return
+    end
+    if action == "close" then
+      assert(wait_for(function() return core.nag_view:get_title() == "Unsaved Changes" end, 8))
+      save(root .. "/close-pending.lua", {continue = true})
+      assert(wait_for(function() return load(root .. "/close-cancel.lua") end, 8))
+      command.perform("core:select_dialog_no")
+      core.set_active_view(routing_view)
+      save(root .. "/close-cancelled.lua", {text = routing_view.buffer:get_text(1, 1, 1, 9)})
+      assert(wait_for(function() return core.nag_view:get_title() == "Unsaved Changes" and core.nag_view.visible end, 12))
+      save(root .. "/close-again.lua", {continue = true})
+      assert(wait_for(function() return load(root .. "/close-accept.lua") end, 8))
+      command.perform("core:select_dialog_yes")
+    end
+    if action == "dialogs" or action == "dialog-error" then
+      local stages = action == "dialogs" and {"cancel", "open", "save", "folder"} or {"error"}
+      for _, stage in ipairs(stages) do
+        local result
+        local fn = stage == "save" and core.save_file_dialog or stage == "folder" and core.open_directory_dialog or core.open_file_dialog
+        local location = stage == "folder" and project or project .. (stage == "save" and "/new-save.txt" or "/edited.txt")
+        location = location:gsub("/", "\\") .. (stage == "folder" and "\\" or "")
+        fn(core.window, function(status, paths, filter) result = {status = status, result = paths, filter = filter} end, {
+          title = "Anvil dialog probe", default_location = location,
+          filters = stage ~= "folder" and {{name = "Text files", pattern = "txt"}} or nil,
+        })
+        save(root .. "/dialog-" .. stage .. "-pending.lua", {returned = true})
+        assert(wait_for(function() return result end, 15), "dialog callback did not run")
+        save(root .. "/dialog-" .. stage .. "-result.lua", result)
+        if stage ~= "error" then assert(wait_for(function() return load(root .. "/dialog-" .. stage .. "-continue.lua") end, 5)) end
+      end
+    end
     if action == "move" then
       assert(wait_for(function() return load(root .. "/move-check.lua") end, 5))
       save(root .. "/move.lua", {composing = require("core.ime").editing})

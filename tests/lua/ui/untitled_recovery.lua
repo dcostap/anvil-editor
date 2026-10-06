@@ -172,10 +172,21 @@ test.describe("untitled recovery integration", function()
     local quit_called = false
 
     core.exit(function() quit_called = true end, true)
+    local previous_quit = core.quit_request
+    local previous_decision = system.project_close_decision
+    local decision
+    system.project_close_decision = function(value)
+      decision = value
+      previous_decision(value)
+    end
+    core.quit(true)
+    system.project_close_decision = previous_decision
     recovery.safe_replace_bytes = old_replace
     core.error = old_error
 
     test.not_ok(quit_called, "application exit must not discard memory-only text")
+    test.equal(core.quit_request, previous_quit)
+    test.equal(decision, "cancelled", "failed recovery accepted a native close")
     test.ok(buffer.intellij_untitled_backing_dirty)
     test.ok(message:find("Untitled-Exit", 1, true), message)
     test.ok(message:find("simulated recovery failure", 1, true), message)
@@ -670,7 +681,7 @@ test.describe("untitled recovery integration", function()
     test.not_nil(system.get_file_info(backing))
     test.not_nil(system.get_file_info(backing .. ".bak"))
 
-    core.confirm_close_buffers({ buffer }, core.root_panel.close_all_views, core.root_panel)
+    core.confirm_close_buffers({ buffer }, core.root_panel.close_all_views, nil, core.root_panel)
     test.equal(system.get_file_info(backing), nil)
     test.equal(system.get_file_info(backing .. ".bak"), nil)
     recovery.flush_all("after discard regression")

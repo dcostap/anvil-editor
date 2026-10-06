@@ -6,6 +6,173 @@
 
 static char log_role[16];
 
+static const char *dialog_option_keys[] = {
+    SDL_PROP_FILE_DIALOG_TITLE_STRING,
+    SDL_PROP_FILE_DIALOG_LOCATION_STRING,
+    SDL_PROP_FILE_DIALOG_ACCEPT_STRING,
+    SDL_PROP_FILE_DIALOG_CANCEL_STRING,
+};
+
+static bool append_dialog_string(char *packet, uint32_t *size, const char *value) {
+  if (!value)
+    value = "";
+  size_t length = SDL_strnlen(value, ANVIL_SURFACE_MAX_PAYLOAD);
+  if (length >= ANVIL_SURFACE_MAX_PAYLOAD - *size)
+    return false;
+#ifdef _WIN32
+  if (length && !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, (int)length, NULL, 0))
+    return false;
+#endif
+  memcpy(packet + *size, value, length + 1);
+  *size += (uint32_t)length + 1;
+  return true;
+}
+
+static const char *read_dialog_string(const char **cursor, const char *end) {
+  const char *text = *cursor;
+  const char *terminator = memchr(text, 0, (size_t)(end - text));
+  if (!terminator)
+    return NULL;
+#ifdef _WIN32
+  if (terminator != text &&
+      !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, (int)(terminator - text), NULL, 0))
+    return NULL;
+#endif
+  *cursor = terminator + 1;
+  return text;
+}
+
+void *anvil_surface_dialog_encode(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props,
+                                  uint32_t *size) {
+  Sint64 count = SDL_GetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, 0);
+  SDL_DialogFileFilter *filters =
+      SDL_GetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, NULL);
+  if (!id || id > INT32_MAX || type < SDL_FILEDIALOG_OPENFILE || type > SDL_FILEDIALOG_OPENFOLDER ||
+      count < 0 || count > ANVIL_SURFACE_DIALOG_FILTER_LIMIT || (count && !filters))
+    return NULL;
+  char *packet = malloc(ANVIL_SURFACE_MAX_PAYLOAD);
+  if (!packet)
+    return NULL;
+  *(AnvilSurfaceDialog *)packet =
+      (AnvilSurfaceDialog){id, type, (uint32_t)count,
+                           SDL_GetBooleanProperty(props, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, false)};
+  *size = sizeof(AnvilSurfaceDialog);
+  for (size_t i = 0; i < SDL_arraysize(dialog_option_keys); i++) {
+    if (!append_dialog_string(packet, size,
+                              SDL_GetStringProperty(props, dialog_option_keys[i], NULL)))
+      goto invalid;
+  }
+  for (Sint64 i = 0; i < count; i++) {
+    if (!filters[i].name || !filters[i].pattern ||
+        !append_dialog_string(packet, size, filters[i].name) ||
+        !append_dialog_string(packet, size, filters[i].pattern))
+      goto invalid;
+  }
+  return packet;
+invalid:
+  free(packet);
+  return NULL;
+}
+
+SDL_PropertiesID
+anvil_surface_dialog_decode(const void *packet, uint32_t size,
+                            SDL_DialogFileFilter filters[ANVIL_SURFACE_DIALOG_FILTER_LIMIT]) {
+  if (size < sizeof(AnvilSurfaceDialog) || size > ANVIL_SURFACE_MAX_PAYLOAD)
+    return 0;
+  const AnvilSurfaceDialog *request = packet;
+  if (!request->id || request->id > INT32_MAX || request->type > SDL_FILEDIALOG_OPENFOLDER ||
+      request->filters > ANVIL_SURFACE_DIALOG_FILTER_LIMIT || request->many > 1)
+    return 0;
+  const char *cursor = (const char *)packet + sizeof(*request), *end = (const char *)packet + size;
+  const char *options[4];
+  for (size_t i = 0; i < SDL_arraysize(options); i++) {
+    if (!(options[i] = read_dialog_string(&cursor, end)))
+      return 0;
+  }
+  for (uint32_t i = 0; i < request->filters; i++) {
+    filters[i].name = read_dialog_string(&cursor, end);
+    filters[i].pattern = read_dialog_string(&cursor, end);
+    if (!filters[i].name || !filters[i].pattern || !*filters[i].pattern)
+      return 0;
+  }
+  if (cursor != end)
+    return 0;
+  SDL_PropertiesID props = SDL_CreateProperties();
+  if (!props)
+    return 0;
+  bool ok = SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER,
+                                   request->filters ? filters : NULL) &&
+            SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, request->filters) &&
+            SDL_SetBooleanProperty(props, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, request->many != 0);
+  for (size_t i = 0; i < SDL_arraysize(options); i++) {
+    if (*options[i])
+      ok = SDL_SetStringProperty(props, dialog_option_keys[i], options[i]) && ok;
+  }
+  if (ok)
+    return props;
+  SDL_DestroyProperties(props);
+  return 0;
+}
+
+void *anvil_surface_dialog_result(uint32_t id, const char *const *paths, int filter,
+                                  uint32_t *size) {
+  char *packet = malloc(ANVIL_SURFACE_MAX_PAYLOAD);
+  if (!packet)
+    return NULL;
+  AnvilSurfaceDialogResult *result = (AnvilSurfaceDialogResult *)packet;
+  *result = (AnvilSurfaceDialogResult){
+      id,
+      paths ? (*paths ? ANVIL_SURFACE_DIALOG_ACCEPT : ANVIL_SURFACE_DIALOG_CANCEL)
+            : ANVIL_SURFACE_DIALOG_ERROR,
+      filter};
+  *size = sizeof(*result);
+  if (!paths) {
+    if (!append_dialog_string(packet, size, SDL_GetError()))
+      goto oversized;
+  } else if (*paths) {
+    size_t count = 0;
+    while (*paths) {
+      if (++count > ANVIL_SURFACE_DIALOG_PATH_LIMIT || !**paths ||
+          !append_dialog_string(packet, size, *paths++))
+        goto oversized;
+    }
+    if (!append_dialog_string(packet, size, ""))
+      goto oversized;
+  }
+  return packet;
+oversized:
+  result->status = ANVIL_SURFACE_DIALOG_ERROR;
+  result->filter = -1;
+  *size = sizeof(*result);
+  append_dialog_string(packet, size, "The file dialog result exceeds its limit");
+  return packet;
+}
+
+bool anvil_surface_dialog_result_valid(const void *packet, uint32_t size) {
+  if (size < sizeof(AnvilSurfaceDialogResult) || size > ANVIL_SURFACE_MAX_PAYLOAD)
+    return false;
+  const AnvilSurfaceDialogResult *result = packet;
+  if (!result->id || result->id > INT32_MAX || result->filter < -1 ||
+      result->filter >= ANVIL_SURFACE_DIALOG_FILTER_LIMIT)
+    return false;
+  const char *cursor = (const char *)packet + sizeof(*result), *end = (const char *)packet + size;
+  if (result->status == ANVIL_SURFACE_DIALOG_CANCEL)
+    return cursor == end;
+  if (result->status == ANVIL_SURFACE_DIALOG_ERROR)
+    return read_dialog_string(&cursor, end) && cursor == end;
+  if (result->status != ANVIL_SURFACE_DIALOG_ACCEPT)
+    return false;
+  size_t count = 0;
+  const char *path;
+  while ((path = read_dialog_string(&cursor, end))) {
+    if (!*path)
+      return count > 0 && cursor == end;
+    if (++count > ANVIL_SURFACE_DIALOG_PATH_LIMIT)
+      return false;
+  }
+  return false;
+}
+
 bool anvil_surface_layout_changed(const AnvilSurfaceConfigure *previous, const AnvilSurfaceConfigure *next) {
   return previous->origin_x != next->origin_x || previous->origin_y != next->origin_y ||
     previous->pixel_w != next->pixel_w || previous->pixel_h != next->pixel_h ||

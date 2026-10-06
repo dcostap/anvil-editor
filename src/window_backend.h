@@ -5,7 +5,7 @@ typedef struct RenWindow RenWindow;
 
 bool anvil_window_hosted(RenWindow *ren);
 SDL_Window *anvil_window_create(const char *title, float width, float height);
-SDL_Window *anvil_window_dialog_parent(RenWindow *ren);
+bool anvil_window_show_dialog(RenWindow *ren, uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata);
 float anvil_window_scale(RenWindow *ren);
 float anvil_window_display_scale(RenWindow *ren);
 void anvil_window_initial_display(float *scale, float *refresh);

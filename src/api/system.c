@@ -97,12 +97,6 @@ static Uint32 event_window_id(const SDL_Event *e) {
   }
 }
 
-typedef enum {
-  DIALOG_OK,
-  DIALOG_CANCEL,
-  DIALOG_ERROR,
-} DialogState;
-
 static const char* button_name(int button) {
   switch (button) {
     case SDL_BUTTON_LEFT   : return "left";
@@ -1732,6 +1726,13 @@ static int f_prepare_project_exit(lua_State *L) {
   return 0;
 }
 
+static int f_project_close_decision(lua_State *L) {
+  static const char *const names[] = {"pending", "waiting", "cancelled", "accepted", NULL};
+  int decision = luaL_checkoption(L, 1, NULL, names);
+  if (anvil_hosted_surface_active()) anvil_hosted_surface_close_decision(decision);
+  return 0;
+}
+
 
 typedef void (*fptr)(void);
 
@@ -1942,9 +1943,6 @@ static void free_dialog_filters(SDL_DialogFileFilter *filters, size_t n_filters)
 }
 
 static void dialog_callback(void *userdata, const char * const *filelist, int filter) {
-  // TODO: support getting the selected filter?
-  //       as of SDL 3.2.10 only the windows backend supports that,
-  //       the others just return -1
   CustomEvent event;
   SDL_zero(event);
   DialogData *dd = userdata;
@@ -1957,35 +1955,22 @@ static void dialog_callback(void *userdata, const char * const *filelist, int fi
   SDL_free(dd->filters);
   SDL_free(dd);
 
-  if (filelist == NULL) {
-    event.code = DIALOG_ERROR;
-    event.data2 = SDL_strdup(SDL_GetError());
-  } else if (*filelist == NULL) {
-    event.code = DIALOG_CANCEL;
-  } else {
-    event.code = DIALOG_OK;
-
-    // Calculate total size needed for every entry
-    size_t bytes = 0;
-    for (size_t i = 0; filelist[i] != NULL; i++) {
-      bytes += SDL_strlen(filelist[i]) + 1;
+  uint32_t size;
+  event.data2 = anvil_surface_dialog_result((uint32_t)(uintptr_t)event.data1, filelist, filter, &size);
+  if (!event.data2) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Unable to retain the file dialog result");
+    event.code = ANVIL_SURFACE_DIALOG_ERROR;
+    if (!push_custom_event(dialogfinished_event_name, &event)) {
+      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Unable to queue the file dialog result");
+      anvil_hosted_surface_dialog_result_failed();
     }
-
-    char *dataptr = event.data2 = SDL_malloc(bytes + 1); // +1 for NULL last entry
-    if (event.data2 == NULL) {
-      event.code = DIALOG_ERROR;
-    } else {
-      for (size_t i = 0; filelist[i] != NULL; i++) {
-        size_t len = SDL_strlen(filelist[i]) + 1;
-        SDL_memcpy(dataptr, filelist[i], len);
-        dataptr += len;
-      }
-      *dataptr = '\0'; // NULL last entry
-    }
+    return;
   }
+  event.code = ((AnvilSurfaceDialogResult *)event.data2)->status;
   if (!push_custom_event(dialogfinished_event_name, &event)) {
-    // TODO: panic?
-    SDL_free(event.data2);
+    free(event.data2);
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Unable to queue the file dialog result");
+    anvil_hosted_surface_dialog_result_failed();
   }
 }
 
@@ -2000,6 +1985,7 @@ static SDL_DialogFileFilter *get_dialog_filters(lua_State* L, int index, lxl_are
   }
 
   size_t n = luaL_len(L, index);
+  luaL_argcheck(L, n <= ANVIL_SURFACE_DIALOG_FILTER_LIMIT, index, "too many file dialog filters");
   if (n == 0) {
     return NULL;
   }
@@ -2089,7 +2075,8 @@ static void get_dialog_options(lua_State* L, int index, SDL_FileDialogType type,
 
 static int open_dialog(lua_State* L, SDL_FileDialogType type) {
   RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  uintptr_t id = luaL_checkinteger(L, 2);
+  lua_Integer id = luaL_checkinteger(L, 2);
+  luaL_argcheck(L, id > 0 && id <= INT32_MAX, 2, "file dialog ID exceeds its limit");
   DialogOptions options;
   SDL_zero(options);
   SDL_DialogFileFilter *arena_filters = NULL;
@@ -2110,14 +2097,16 @@ static int open_dialog(lua_State* L, SDL_FileDialogType type) {
 
   DialogData *dd = SDL_calloc(1, sizeof(DialogData));
   if (dd == NULL) {
+    SDL_DestroyProperties(props);
     return luaL_error(L, "Unable to allocate DialogData memory");
   }
   dd->id = id;
   dd->n_filters = n_filters;
-  dd->filters = SDL_malloc(n_filters * sizeof(SDL_DialogFileFilter));
+  dd->filters = n_filters ? SDL_calloc(n_filters, sizeof(SDL_DialogFileFilter)) : NULL;
 
-  if (dd->filters == NULL) {
+  if (n_filters && dd->filters == NULL) {
     SDL_free(dd);
+    SDL_DestroyProperties(props);
     return luaL_error(L, "Unable to allocate SDL_DialogFileFilter memory");
   }
 
@@ -2127,23 +2116,24 @@ static int open_dialog(lua_State* L, SDL_FileDialogType type) {
     dd->filters[i].name = SDL_strdup(arena_filters[i].name);
     dd->filters[i].pattern = SDL_strdup(arena_filters[i].pattern);
     if (dd->filters[i].name == NULL || dd->filters[i].pattern == NULL) {
-      free_dialog_filters(dd->filters, i);
+      free_dialog_filters(dd->filters, i + 1);
       SDL_free(dd->filters);
       SDL_free(dd);
+      SDL_DestroyProperties(props);
       return luaL_error(L, "Unable to allocate memory for SDL_DialogFileFilter values");
     }
   }
 
   SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, dd->filters);
   SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, n_filters);
-  SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, anvil_window_dialog_parent(window_renderer));
   SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, options.default_location);
   SDL_SetBooleanProperty(props, SDL_PROP_FILE_DIALOG_MANY_BOOLEAN, options.allow_many);
   SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, options.title);
   SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_ACCEPT_STRING, options.accept_label);
   SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_CANCEL_STRING, options.cancel_label);
 
-  SDL_ShowFileDialogWithProperties(type, dialog_callback, dd, props);
+  if (!anvil_window_show_dialog(window_renderer, (uint32_t)id, type, props, dialog_callback, dd))
+    dialog_callback(dd, NULL, -1);
 
   SDL_DestroyProperties(props);
   return 0;
@@ -2153,10 +2143,16 @@ static int dialogfinished_callback(lua_State *L, SDL_Event *e) {
   lua_pushstring(L, "dialogfinished");
   lua_pushinteger(L, (uintptr_t)e->user.data1); // ID
 
-  switch ((DialogState)e->user.code) {
-    case DIALOG_OK:
+  AnvilSurfaceDialogResult *result = e->user.data2;
+  if (!result) {
+    lua_pushstring(L, "error");
+    lua_pushstring(L, "Unable to retain the file dialog result");
+    return 4;
+  }
+  switch (result->status) {
+    case ANVIL_SURFACE_DIALOG_ACCEPT:
       lua_pushstring(L, "accept");
-      char *dataptr = e->user.data2;
+      char *dataptr = (char *)(result + 1);
       lua_newtable(L);
       for (size_t i = 1; *dataptr != '\0'; i++) {
         lua_pushstring(L, dataptr);
@@ -2164,18 +2160,21 @@ static int dialogfinished_callback(lua_State *L, SDL_Event *e) {
         lua_rawseti(L, -2, i);
         dataptr += len;
       }
-      SDL_free(e->user.data2);
-      return 4;
-    case DIALOG_CANCEL:
+      lua_pushinteger(L, result->filter);
+      free(result);
+      return 5;
+    case ANVIL_SURFACE_DIALOG_CANCEL:
       lua_pushstring(L, "cancel");
+      free(result);
       return 3;
-    case DIALOG_ERROR:
+    case ANVIL_SURFACE_DIALOG_ERROR:
       lua_pushstring(L, "error");
-      lua_pushstring(L, e->user.data2);
-      SDL_free(e->user.data2);
+      lua_pushstring(L, (char *)(result + 1));
+      free(result);
       return 4;
     default:
       lua_pushstring(L, "unknown");
+      free(result);
       return 3;
   }
 }
@@ -2328,6 +2327,7 @@ static const luaL_Reg lib[] = {
   { "get_window_controls",   f_get_window_controls },
   { "get_startup_path_arguments", f_get_startup_path_arguments },
   { "prepare_project_exit",  f_prepare_project_exit  },
+  { "project_close_decision", f_project_close_decision },
   { "sleep",                 f_sleep                 },
   { "exec",                  f_exec                  },
 #ifdef _WIN32

@@ -868,7 +868,28 @@ function core.init()
 end
 
 
-function core.confirm_close_buffers(buffers, close_fn, ...)
+function core.begin_quit()
+  if core.quit_pending then return false end
+  core.quit_pending = true
+  system.project_close_decision("pending")
+  core.log_quiet("Project close decision: pending")
+  return true
+end
+
+function core.cancel_quit()
+  if not core.quit_pending then return end
+  core.quit_pending = false
+  system.project_close_decision("cancelled")
+  core.log_quiet("Project close decision: cancelled")
+end
+
+function core.wait_for_quit_choice()
+  if not core.quit_pending then return end
+  system.project_close_decision("waiting")
+  core.log_quiet("Project close decision: waiting for user")
+end
+
+function core.confirm_close_buffers(buffers, close_fn, cancel_fn, ...)
   local dirty_count = 0
   local dirty_name
   for _, buffer in ipairs(buffers or core.buffers) do
@@ -878,6 +899,7 @@ function core.confirm_close_buffers(buffers, close_fn, ...)
     end
   end
   if dirty_count > 0 then
+    core.wait_for_quit_choice()
     local text
     if dirty_count == 1 then
       text = string.format("\"%s\" has unsaved changes. Quit anyway?", dirty_name)
@@ -890,7 +912,8 @@ function core.confirm_close_buffers(buffers, close_fn, ...)
       { text = "No", default_no = true }
     }
     core.nag_view:show("Unsaved Changes", text, opt, function(item)
-      if item.text == "Yes" then close_fn(table.unpack(args)) end
+      if item.text == "Yes" then close_fn(table.unpack(args))
+      elseif cancel_fn then cancel_fn() end
     end)
   else
     close_fn(...)
@@ -933,6 +956,11 @@ end
 
 function core.exit(quit_fn, force)
   if force then
+    if core.quit_pending then
+      core.quit_pending = false
+      system.project_close_decision("accepted")
+      core.log_quiet("Project close decision: accepted")
+    end
     core.begin_shutdown_diagnostics()
     system.log_shutdown("temporary file cleanup begin")
     core.delete_temp_files()
@@ -944,18 +972,24 @@ function core.exit(quit_fn, force)
     quit_fn()
     system.log_shutdown("exit callback end")
   else
-    core.confirm_close_buffers(core.buffers, core.exit, quit_fn, true)
+    core.confirm_close_buffers(core.buffers, core.exit, nil, quit_fn, true)
   end
 end
 
 
 function core.quit(force, exit_code)
+  if not force then
+    if not core.begin_quit() then return end
+    core.confirm_close_buffers(core.buffers, core.quit, core.cancel_quit, true, exit_code)
+    return
+  end
   core.log_quiet("Shutdown requested: quit force=%s time=%.6f", tostring(force), system.get_time())
   if core.session_log then core.session_log:flush() end
   if type(exit_code) == "number" then
     core.exit_status = exit_code
   end
   core.exit(function() core.quit_request = true end, force)
+  core.cancel_quit()
 end
 
 
@@ -2359,13 +2393,13 @@ function core.on_event(type, ...)
       core.open_file(filename)
     end
   elseif type == "dialogfinished" then
-    local id, status, result = ...
+    local id, status, result, filter = ...
     local callback = core.active_file_dialogs[id]
     if not callback then
       core.error("Invalid dialog id %d", id)
     else
       core.active_file_dialogs[id] = nil
-      callback(status, result)
+      callback(status, result, filter)
     end
   elseif type == "focusgained" then
     record_input_window_focus(true, "focusgained", true)
@@ -4127,6 +4161,7 @@ local function open_dialog(type, window, callback, options)
   assert(dialog_fn, "Invalid dialog type")
 
   last_file_dialog_tag = last_file_dialog_tag + 1
+  core.wait_for_quit_choice()
   core.active_file_dialogs[last_file_dialog_tag] = callback
   dialog_fn(window, last_file_dialog_tag, options)
 end
@@ -4137,7 +4172,7 @@ end
 ---The callback will be called with the result.
 ---
 ---@param window renwindow
----@param callback fun(status: "accept"|"cancel"|"error"|"unknown", result: string[]|string|nil)
+---@param callback fun(status: "accept"|"cancel"|"error"|"unknown", result: string[]|string|nil, filter?: integer)
 ---@param options? system.dialogoptions.openfile
 function core.open_file_dialog(window, callback, options)
   return open_dialog("openfile", window, callback, options)
@@ -4149,7 +4184,7 @@ end
 ---The callback will be called with the result.
 ---
 ---@param window renwindow
----@param callback fun(status: "accept"|"cancel"|"error"|"unknown", result: string[]|string|nil)
+---@param callback fun(status: "accept"|"cancel"|"error"|"unknown", result: string[]|string|nil, filter?: integer)
 ---@param options? system.dialogoptions.opendirectory
 function core.open_directory_dialog(window, callback, options)
   return open_dialog("opendirectory", window, callback, options)
@@ -4161,7 +4196,7 @@ end
 ---The callback will be called with the result.
 ---
 ---@param window renwindow
----@param callback fun(status: "accept"|"cancel"|"error"|"unknown", result: string[]|string|nil)
+---@param callback fun(status: "accept"|"cancel"|"error"|"unknown", result: string[]|string|nil, filter?: integer)
 ---@param options? system.dialogoptions.savefile
 function core.save_file_dialog(window, callback, options)
   return open_dialog("savefile", window, callback, options)
