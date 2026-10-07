@@ -77,13 +77,15 @@ function comment_todo.apply(highlighter, idx, tokens, raw_tokens_at)
     local first, last = idx, idx
     while joins(info(first - 1), info(first)) do first = first - 1 end
     while joins(info(last), info(last + 1)) do last = last + 1 end
-    group = { first = first, last = last, todo = false }
+    group = { first = first, last = last }
     for line = first, last do
-      group.todo = group.todo or info(line).todo
+      if not group.todo_start and info(line).todo then
+        group.todo_start = line
+      end
       cache.groups[line] = group
     end
   end
-  if not group.todo then return tokens end
+  if not group.todo_start or idx < group.todo_start then return tokens end
 
   local colored = {}
   for _, type_name, part in tokenizer.each_token(tokens) do

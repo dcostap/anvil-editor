@@ -41,9 +41,10 @@ local function drawn_colors(view, line)
 end
 
 test.describe("TODO comment highlighting", function()
-  test.it("colors comment runs for TODO and todo: without coloring code", function()
+  test.it("colors comments from the TODO line downward without coloring earlier comments or code", function()
     local buffer = make_buffer(table.concat({
       'const char *literal = "TODO: keep plain";',
+      '//',
       '// first line',
       '// todo: finish this',
       '// last line',
@@ -56,16 +57,18 @@ test.describe("TODO comment highlighting", function()
     local view = TextView(buffer)
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 1000, 1000
-    for _, line in ipairs({ 2, 3, 4 }) do
+    -- Draw a continuation first to check that draw order does not affect colors.
+    for _, line in ipairs({ 5, 4 }) do
       local colors = drawn_colors(view, line)
       for word, color in pairs(colors) do
         test.equal(color, style.syntax.todo, word .. " on line " .. line)
       end
     end
     test.not_equal(drawn_colors(view, 1).TODO, style.syntax.todo)
-    test.not_equal(drawn_colors(view, 5).unrelated, style.syntax.todo)
-    test.equal(drawn_colors(view, 6).TODO, style.syntax.todo)
-    test.not_equal(drawn_colors(view, 8).separate, style.syntax.todo)
+    test.not_equal(drawn_colors(view, 3).first, style.syntax.todo)
+    test.not_equal(drawn_colors(view, 6).unrelated, style.syntax.todo)
+    test.equal(drawn_colors(view, 7).TODO, style.syntax.todo)
+    test.not_equal(drawn_colors(view, 9).separate, style.syntax.todo)
     buffer:on_close()
   end)
 
@@ -93,6 +96,18 @@ test.describe("TODO comment highlighting", function()
     buffer:on_close()
   end)
 
+  test.it("leaves block comment lines above a TODO unchanged", function()
+    local buffer = make_buffer("/* first\n * TODO: start\n * continue\n */", "comment_todo_late_block.cpp")
+    test.ok(wait_ready(buffer))
+    local view = TextView(buffer)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 1000, 1000
+    test.equal(drawn_colors(view, 3).continue, style.syntax.todo)
+    test.not_equal(drawn_colors(view, 1).first, style.syntax.todo)
+    test.equal(drawn_colors(view, 2).start, style.syntax.todo)
+    buffer:on_close()
+  end)
+
   test.it("updates cached comment lines when the TODO marker changes", function()
     local buffer = make_buffer("-- first\n-- TODO: middle\n-- last", "comment_todo_packets.lua")
     local view = Editor(buffer)
@@ -106,18 +121,20 @@ test.describe("TODO comment highlighting", function()
       local ok, err = pcall(line_packets.draw_content, view, line, 0, y)
       test.ok(ok, tostring(err))
       for _, item in ipairs(line_packets.inspect_line(view, line) or {}) do
-        if item.type == "text" and item.text:find("first", 1, true) then
+        if item.type == "text" then
           return table.concat(item.color, ",")
         end
       end
     end
 
     local todo = table.concat(style.syntax.todo, ",")
-    test.equal(color_on(1), todo)
-    buffer:remove(2, 4, 2, 9)
     test.not_equal(color_on(1), todo)
+    test.equal(color_on(3), todo)
+    buffer:remove(2, 4, 2, 9)
+    test.not_equal(color_on(3), todo)
     buffer:insert(2, 4, "TODO:")
-    test.equal(color_on(1), todo)
+    test.equal(color_on(3), todo)
+    test.not_equal(color_on(1), todo)
     buffer:on_close()
   end)
 end)
