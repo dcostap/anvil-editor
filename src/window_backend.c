@@ -60,6 +60,9 @@ bool anvil_window_focus(RenWindow *ren) {
 #endif
   return (SDL_GetWindowFlags(ren->cache.window) & SDL_WINDOW_INPUT_FOCUS) != 0;
 }
+bool anvil_window_should_render(RenWindow *ren) {
+  return !anvil_window_hosted(ren) || anvil_hosted_surface_should_render();
+}
 AnvilSurfaceWindowMode anvil_window_mode(RenWindow *ren) {
   if (anvil_window_hosted(ren)) return anvil_hosted_surface_window_mode();
   SDL_WindowFlags flags = SDL_GetWindowFlags(ren->cache.window);

@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 6u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 7u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -83,6 +83,7 @@ typedef struct {
   int32_t window_w, window_h;
   int32_t window_mode;               /* AnvilSurfaceWindowMode */
   int32_t live_resize;               /* the shell is in a Win32 move/size loop */
+  int32_t render_enabled;            /* background work continues when this is zero */
   float display_scale;
   float refresh_hz;
   int32_t button_width, title_height, resize_border;

@@ -641,6 +641,12 @@ function RootPanel:update()
   perf_end("rootpanel_update", started, scope)
 end
 
+function RootPanel:update_suspended()
+  for view in pairs(panes().suspended_services) do
+    call_view(view, "update_suspended")
+  end
+end
+
 function RootPanel:grab_mouse(button, view)
   self.grab = { button = button, view = view }
 end

@@ -2876,13 +2876,18 @@ function core.step(next_frame_time, options)
   local uncapped = stats_config == "uncapped" or core.perf_cadence_uncapped
   local priority_event = event_received and event_received ~= "mousemoved"
   local resizing = options.live_resize or (core.window_resizing_until and core.window_resizing_until > system.get_time())
+  local render_enabled = system.window_should_render(core.window)
   core.root_panel.size.x, core.root_panel.size.y = width, height
   if uncapped or resizing or priority_event or options.immediate or next_frame_time < system.get_time() then
     core.ui_snapshot_id = core.ui_snapshot_id + 1
     local stats = core.perf_frame_stats
     local perf = stats and package.loaded["core.perf"]
     local phase_start = stats and system.get_time()
-    core.root_panel:update()
+    if render_enabled then
+      core.root_panel:update()
+    else
+      core.root_panel:update_suspended()
+    end
     if stats then
       local elapsed = (system.get_time() - phase_start) * 1000
       if perf and perf.frame_add then perf.frame_add("core_root_panel_update_ms", elapsed)
@@ -2890,6 +2895,14 @@ function core.step(next_frame_time, options)
     end
   end
   step_stats.update_ms = (system.get_time() - update_start_time) * 1000
+
+  if not render_enabled then
+    if core.startup_trace_active and startup then
+      startup.stage_end(startup_update_stage, "ok", "rendering disabled")
+    end
+    core.ui_snapshot_active = false
+    return false
+  end
 
   -- Skip drawing if there is time left before next frame, unless, an event is
   -- received or benchmarking. Skipping helps keep FPS near to the value set on
@@ -3534,6 +3547,8 @@ function core.run_step(options)
   -- run all coroutine tasks. Immediate resize frames are inside the Win32
   -- modal sizing loop, so skip background coroutine work and draw the latest
   -- layout without adding scheduler latency.
+  local render_enabled = system.window_should_render(core.window)
+  if not render_enabled then run_threads_mode = "all" end
   local threads_start = system.get_time()
   local time_to_wake = 0
   local threads_end_time = 0
@@ -3603,12 +3618,12 @@ function core.run_step(options)
     run_burst_events  = now + 3
   end
 
-  active_present_paced = rad_pacing and present_paced and (
+  active_present_paced = render_enabled and rad_pacing and present_paced and (
     immediate or pending_events_at_start or core.redraw or run_burst_events > now
   )
 
   -- set the run mode
-  if immediate then
+  if immediate or not render_enabled then
     run_threads_mode = "all"
   elseif
     not run_has_focus

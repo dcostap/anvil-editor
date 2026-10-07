@@ -43,6 +43,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
                                            const SDL_Rect *rects, int count);
 
 bool anvil_hosted_surface_has_focus(void);
+bool anvil_hosted_surface_should_render(void);
 float anvil_hosted_surface_display_scale(void);
 float anvil_hosted_surface_refresh_rate(void);
 AnvilSurfaceWindowMode anvil_hosted_surface_window_mode(void);

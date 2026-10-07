@@ -227,6 +227,11 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
   bool had_config = hosted.config_applied;
   hosted.config = *config;
   hosted.config_applied = true;
+  if (had_config && previous.render_enabled != config->render_enabled) {
+    SDL_Log("Project rendering %s; background work continues",
+            config->render_enabled ? "enabled" : "disabled");
+    if (config->render_enabled) push_window_event(SDL_EVENT_WINDOW_EXPOSED);
+  }
   bool layout_changed = !had_config || previous.configuration != config->configuration;
   if (had_config && layout_changed) push_window_event(hosted.geometry_event);
 
@@ -267,6 +272,7 @@ static bool valid_configure(const AnvilSurfaceConfigure *config) {
     config->origin_y >= 0 && config->origin_y <= 32768 &&
     config->pixel_w > 0 && config->pixel_h > 0 && config->pixel_w <= 32768 && config->pixel_h <= 32768 &&
     config->window_w > 0 && config->window_h > 0 && config->window_mode >= 0 && config->window_mode <= ANVIL_SURFACE_WINDOW_FULLSCREEN &&
+    (config->render_enabled == 0 || config->render_enabled == 1) &&
     config->display_scale > 0 && config->display_scale <= 16 && config->refresh_hz >= 0 && config->refresh_hz <= 1000 &&
     config->controls_x >= 0 && config->controls_y >= 0 && config->controls_w >= 0 && config->controls_h >= 0 &&
     config->controls_x <= config->pixel_w && config->controls_w <= config->pixel_w - config->controls_x &&
@@ -609,6 +615,7 @@ bool anvil_hosted_surface_is_window(SDL_Window *window) {
 }
 
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height) {
+  if (!anvil_hosted_surface_should_render()) return;
   if (SDL_getenv("ANVIL_SURFACE_FAULT_PROBE") && SDL_getenv("ANVIL_SURFACE_FAULT_NO_FRAME")) return;
   if (!anvil_hosted_surface_is_window(window) || !name) return;
   AnvilSurfaceFrame frame;
@@ -662,6 +669,7 @@ static bool ensure_memory_frame(size_t needed) {
 bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surface,
                                            const SDL_Rect *rects, int count) {
   if (!anvil_hosted_surface_is_window(window) || !surface) return false;
+  if (!anvil_hosted_surface_should_render()) return true;
   if (SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   if (SDL_getenv("ANVIL_SURFACE_FAULT_PROBE") && SDL_getenv("ANVIL_SURFACE_FAULT_NO_FRAME")) return true;
   if (SDL_BYTESPERPIXEL(surface->format) != 4) return false;
@@ -722,6 +730,10 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
 
 bool anvil_hosted_surface_has_focus(void) {
   return SDL_GetAtomicInt(&hosted.focused) != 0;
+}
+
+bool anvil_hosted_surface_should_render(void) {
+  return !hosted.active || hosted.config.render_enabled != 0;
 }
 
 float anvil_hosted_surface_display_scale(void) {
@@ -846,6 +858,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   return false;
 }
 bool anvil_hosted_surface_has_focus(void) { return false; }
+bool anvil_hosted_surface_should_render(void) { return true; }
 float anvil_hosted_surface_display_scale(void) { return 1.0f; }
 float anvil_hosted_surface_refresh_rate(void) { return 0.0f; }
 AnvilSurfaceWindowMode anvil_hosted_surface_window_mode(void) { return ANVIL_SURFACE_WINDOW_NORMAL; }

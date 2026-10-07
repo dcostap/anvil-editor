@@ -725,6 +725,11 @@ static int f_window_has_focus(lua_State *L) {
   lua_pushboolean(L, anvil_window_focus(ren)); return 1;
 }
 
+static int f_window_should_render(lua_State *L) {
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  lua_pushboolean(L, anvil_window_should_render(ren)); return 1;
+}
+
 
 
 static int f_window_focus_diagnostics(lua_State *L) {
@@ -2324,6 +2329,7 @@ static const luaL_Reg lib[] = {
   { "flash_window",         f_flash_window          },
   { "clear_ime",             f_clear_ime             },
   { "window_has_focus",      f_window_has_focus      },
+  { "window_should_render",  f_window_should_render  },
   { "window_focus_diagnostics", f_window_focus_diagnostics },
   { "raise_window",          f_raise_window          },
   { "allow_process_foreground", f_allow_process_foreground },

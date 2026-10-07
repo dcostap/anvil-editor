@@ -398,10 +398,22 @@ Matched review latency pairs use one fixed app-data copy and 360 valid samples p
 The corrected D3D11 medians are 7.23 ms direct and 7.29 ms hosted.
 Software medians are 19.44 ms direct and 11.07 ms hosted. No failed samples occurred.
 The Phase 3 plan records tails, maxima, and comparison limits.
-Final acceptance still needs review, real IME candidates, and mixed-DPI monitor moves.
+Code review is complete. Physical input, real IME candidates, and mixed-DPI checks remain open.
+The user deferred those checks and approved continued Phase 4 work. Hosted mode remains opt-in.
 Phase 3 exits immediately on shell loss; Phase 6 adds adoption.
 
 ### Phase 4: several Projects and the Sidebar process
+
+Implementation plan: [Phase 4: several Projects and the Sidebar process](PHASE4_PROJECTS_AND_SIDEBAR.md).
+Milestone 1 adds shell-owned rendering permission without changing layout identity.
+Hidden Projects retain pending redraws and keep events, coroutine tasks, workers, Workspace saves, and Terminal output active.
+Showing or restoring requests the latest frame. Hidden startup does not fail its first-frame deadline.
+Close restores the Window when it needs a user choice. Cancel keeps unsaved edits.
+Three focused Lua checks and four owned-window cases pass on both renderers.
+The isolated comparison has 360 valid samples per row and no failures.
+D3D11 medians are 6.95 ms direct and 6.94 ms hosted.
+The Phase 4 plan records software changes, tails, maxima, and evidence limits.
+Several loaded Projects remain Milestone 2 work.
 
 Add Dormant and loaded Projects, Project switching, hidden rendering suppression,
 Project crash restart, and hang detection.

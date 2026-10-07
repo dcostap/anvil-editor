@@ -648,6 +648,7 @@ static void send_configure(void) {
   AnvilSurfaceConfigure config = shell.last_config;
   config.window_mode = current_window_mode();
   config.live_resize = shell.live_resize;
+  config.render_enabled = IsWindowVisible(shell.hwnd) && !IsIconic(shell.hwnd);
   if (config.window_mode != ANVIL_SURFACE_WINDOW_MINIMIZED) {
     /* A minimized window keeps the last surface size. */
     int pixel_w = 0, pixel_h = 0;
@@ -690,6 +691,7 @@ static void send_configure(void) {
     shell.hit = (AnvilSurfaceHitTest){0};
   }
   shell.last_config = config;
+  if (!config.render_enabled) set_frame_busy(false);
   shell_send(ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0);
 }
 
@@ -1205,7 +1207,8 @@ static bool load_pending_frame(AnvilSurfaceFrame *frame) {
   *frame = shell.latest_frame;
   shell.frame_pending = false;
   SDL_UnlockMutex(shell.lock);
-  if (shell.render_failed || shell.state == SHELL_FAILED) return false;
+  if (shell.render_failed || shell.state == SHELL_FAILED || !shell.last_config.render_enabled)
+    return false;
   if (!pending) return false;
   if (!anvil_surface_frame_matches(&shell.last_config, frame)) {
     set_frame_busy(false);
@@ -1290,16 +1293,12 @@ static void resize_step(void) {
 static void handle_frame(void) {
   AnvilSurfaceFrame frame;
   if (!load_pending_frame(&frame)) return;
-  if (shell.state == SHELL_STARTING) set_state(SHELL_READY);
-  composite_and_present();
-  if (!shell.shown) {
+  if (shell.state == SHELL_STARTING) {
     SDL_Log("Anvil shell showing its first %s frame %dx%d",
             frame.kind == ANVIL_SURFACE_FRAME_D3D11 ? "d3d11" : "memory", shell.surface_w, shell.surface_h);
-    SDL_ShowWindow(shell.window);
-    SDL_RaiseWindow(shell.window);
-    shell.shown = true;
-    anvil_latency_probe_start(shell.window, finish_latency_probe);
+    set_state(SHELL_READY);
   }
+  composite_and_present();
   anvil_latency_probe_presented(frame.input_seq);
   if (shell.state == SHELL_READY && !shell.close_requested_ns) anvil_latency_probe_start(shell.window, finish_latency_probe);
 }
@@ -1562,6 +1561,14 @@ static void close_decision(int decision) {
       shell.close_serial++;
       shell.close_prompt = false;
       EnumWindows(dismiss_close_warning, (LPARAM)shell.hwnd);
+      if (!IsWindowVisible(shell.hwnd) || IsIconic(shell.hwnd)) {
+        if (IsIconic(shell.hwnd)) SDL_RestoreWindow(shell.window);
+        else SDL_ShowWindow(shell.window);
+        shell.shown = true;
+        send_configure();
+        SDL_RaiseWindow(shell.window);
+        SDL_Log("Shell restored its Window for the pending Close choice");
+      }
     } else
       arm_close_timer();
     if (decision == ANVIL_SURFACE_CLOSE_ACCEPTED)
@@ -1602,13 +1609,14 @@ static void handle_message(ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_VISIBLE:
     if (message->size == sizeof(AnvilSurfaceInt)) {
-      if (value && shell.have_surface) {
+      if (value) {
         SDL_ShowWindow(shell.window);
         shell.shown = true;
       } else if (!value) {
         SDL_HideWindow(shell.window);
         shell.shown = false;
       }
+      send_configure();
     }
     break;
   case ANVIL_SURFACE_MSG_OPACITY:
@@ -1979,7 +1987,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     }
     switch (event->user.code) {
     case SHELL_EVENT_START_TIMEOUT:
-      if (shell.state == SHELL_STARTING)
+      if (shell.state == SHELL_STARTING && IsWindowVisible(shell.hwnd) && !IsIconic(shell.hwnd))
         fail_connection("startup deadline expired before the first frame");
       break;
     case SHELL_EVENT_CONNECTED:
@@ -2122,6 +2130,12 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   case SDL_EVENT_WINDOW_MAXIMIZED:
   case SDL_EVENT_WINDOW_RESTORED:
     shell.ui_dirty = true;
+    send_configure();
+    break;
+  case SDL_EVENT_WINDOW_SHOWN:
+  case SDL_EVENT_WINDOW_HIDDEN:
+    shell.shown = event->type == SDL_EVENT_WINDOW_SHOWN;
+    if (!shell.shown) cancel_input();
     send_configure();
     break;
   case SDL_EVENT_WINDOW_FOCUS_GAINED:

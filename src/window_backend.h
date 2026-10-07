@@ -11,6 +11,7 @@ float anvil_window_display_scale(RenWindow *ren);
 void anvil_window_initial_display(float *scale, float *refresh);
 float anvil_window_refresh_rate(RenWindow *ren);
 bool anvil_window_focus(RenWindow *ren);
+bool anvil_window_should_render(RenWindow *ren);
 AnvilSurfaceWindowMode anvil_window_mode(RenWindow *ren);
 void anvil_window_bounds(RenWindow *ren, int *x, int *y, int *w, int *h);
 void anvil_window_set_bounds(RenWindow *ren, int x, int y, int w, int h);

@@ -692,6 +692,8 @@ end
 
 function TerminalView:sync_geometry()
   if not self.session then return false end
+  -- Keep the current native grid until this View has a real layout.
+  if self.size.x <= 0 or self.size.y <= 0 then return false end
   self:refresh_cell_metrics()
   local cols, rows = self:cell_geometry()
   if cols == self.cols and rows == self.rows

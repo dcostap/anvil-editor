@@ -4,7 +4,8 @@ This plan follows [Phase 2](PHASE2_TERMINAL_SESSIONS.md) and
 [the multiprocess shell plan](MULTIPROCESS_SHELL_PLAN.md).
 Read both before implementation.
 
-Status: Milestones 1 to 5 are implemented. Review and real IME and mixed-DPI checks remain open.
+Status: Milestones 1 to 5 and code review are complete. Physical input, IME, and mixed-DPI checks remain open.
+The user deferred the manual checks and approved Phase 4 work. Hosted mode remains opt-in.
 Hosted mode remains opt-in.
 Phase 2 Milestones 1 to 4 are complete.
 
@@ -971,4 +972,4 @@ Controls, routing, lifecycle, dialog, close, and gated failure actions are avail
 - [x] Both renderer latency comparisons pass; failures and tail changes are reported.
 - [x] No automatic Project restart, adoption, Sidebar process, or multi-window coordinator enters this phase.
 
-After acceptance, update the main plan and propose Phase 4 separately.
+The user approved Phase 4 while manual checks remain open. Keep hosted mode opt-in until manual acceptance.

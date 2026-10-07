@@ -346,6 +346,69 @@ if project:find("/driver$", 1) then
           "failed replacement prevented explicit Restart")
         assert(load(root .. "/replacement.lua").shell_pid == state.shell_pid)
         save(root .. "/continue.lua", {continue = true})
+      elseif action == "hidden-render" then
+        local window = assert(shell_window(state.shell_pid))
+        assert(wait_for(function()
+          local file = io.open(root .. "/surface.log", "rb")
+          if not file then return false end
+          local text = file:read("*a"); file:close()
+          return text:find("Shell state: Ready", 1, true) ~= nil
+        end, 8), "Project never became Ready before the idle hide")
+        save(root .. "/visibility-idle-go.lua", {continue = true})
+        assert(wait_for(function() return load(root .. "/visibility-idle-state.lua") end, 12))
+        local idle = assert(load(root .. "/visibility-idle-state.lua"))
+        assert(idle.timer_progress, "idle hidden Project stopped ordinary coroutine tasks")
+        user32.ShowWindow(window, 9)
+        save(root .. "/visibility-idle-restore.lua", {continue = true})
+        assert(wait_for(function() return load(root .. "/visibility-idle-restored.lua") end, 5))
+        for _, stage in ipairs {"minimized", "hidden"} do
+          if stage == "minimized" then user32.ShowWindow(window, 6) end
+          save(root .. "/visibility-" .. stage .. "-go.lua", {continue = true})
+          assert(wait_for(function()
+            return stage == "minimized" and user32.IsIconic(window) ~= 0
+              or stage == "hidden" and user32.IsWindowVisible(window) == 0
+          end, 3), "owned Window did not hide")
+          assert(wait_for(function() return load(root .. "/visibility-" .. stage .. "-state.lua") end, 12))
+          local result = load(root .. "/visibility-" .. stage .. "-state.lua")
+          assert(not result.drew, "hidden Project kept drawing")
+          assert(result.timer_progress, "hidden Project stopped its coroutine tasks")
+          assert(result.worker_result == stage, "hidden Project stopped worker results")
+          assert(result.terminal_output, "hidden Project stopped Terminal output")
+          assert(result.workspace_saved, "hidden Project did not save its Workspace")
+          user32.ShowWindow(window, 9)
+          save(root .. "/visibility-" .. stage .. "-restore.lua", {continue = true})
+          assert(wait_for(function() return load(root .. "/visibility-" .. stage .. "-restored.lua") end, 8))
+          local restored = load(root .. "/visibility-" .. stage .. "-restored.lua")
+          assert(restored.drew and restored.text == "latest " .. stage, "restore did not draw the latest state")
+          assert(restored.pid == state.pid, "restore replaced the loaded Project")
+        end
+        save(root .. "/continue.lua", {continue = true})
+      elseif action == "hidden-close-cancel" then
+        local window = assert(shell_window(state.shell_pid))
+        for _, stage in ipairs {"minimized", "hidden"} do
+          user32.ShowWindow(window, stage == "minimized" and 6 or 0)
+          user32.PostMessageW(window, 0x10, 0, 0)
+          assert(wait_for(function() return load(root .. "/hidden-choice-" .. stage .. "-waiting.lua") end, 8))
+          assert(wait_for(function() return user32.IsWindowVisible(window) ~= 0 and user32.IsIconic(window) == 0 end, 3),
+            "hidden Close left its confirmation invisible")
+          save(root .. "/hidden-choice-" .. stage .. "-cancel.lua", {continue = true})
+          assert(wait_for(function() return load(root .. "/hidden-choice-" .. stage .. "-cancelled.lua") end, 5))
+          assert(kernel.WaitForSingleObject(handle, 0) == 258, "cancelled hidden Close ended the Project")
+        end
+        save(root .. "/continue.lua", {continue = true})
+      elseif action == "hidden-close" then
+        local window = assert(shell_window(state.shell_pid))
+        user32.ShowWindow(window, 0)
+        assert(wait_for(function() return user32.IsWindowVisible(window) == 0 end, 3))
+        user32.PostMessageW(window, 0x10, 0, 0)
+      elseif action == "hidden-startup" then
+        local window = assert(shell_window(state.shell_pid))
+        user32.ShowWindow(window, 0)
+        assert(wait_for(function() return user32.IsWindowVisible(window) == 0 end, 3))
+        coroutine.yield(33)
+        assert(kernel.WaitForSingleObject(handle, 0) == 258, "hidden startup failed before presentation was requested")
+        assert(subject:running(), "hidden startup closed the shell")
+        user32.PostMessageW(window, 0x10, 0, 0)
       elseif action == "launch" then
         assert(state.hosted, "Project did not use a hosted backend")
         assert(state.command_line:find("--project", 1, true), "shell did not launch explicit Project mode")
@@ -837,7 +900,91 @@ else
         assert(wait_for(function() local _, status = view.session:update(); return status.busy == true end, 5), "Terminal command did not become busy")
       end
     end
+    local hidden_close_editor
+    if action == "hidden-close-cancel" then
+      hidden_close_editor = core.open_file(project .. "/edited.txt")
+      hidden_close_editor.buffer:insert(1, 1, "unsaved ")
+    end
     save(root .. "/subject.lua", state)
+    if action == "hidden-close-cancel" then
+      for _, stage in ipairs {"minimized", "hidden"} do
+        assert(wait_for(function() return core.nag_view.visible and core.nag_view:get_title() == "Unsaved Changes" end, 10))
+        save(root .. "/hidden-choice-" .. stage .. "-waiting.lua", {continue = true})
+        assert(wait_for(function() return load(root .. "/hidden-choice-" .. stage .. "-cancel.lua") end, 8))
+        command.perform("core:select_dialog_no")
+        save(root .. "/hidden-choice-" .. stage .. "-cancelled.lua", {continue = true})
+      end
+      assert(wait_for(function() return load(root .. "/continue.lua") end, 10))
+      assert(hidden_close_editor.buffer:is_dirty(), "cancelled Close discarded the unsaved edit")
+      hidden_close_editor.buffer:clean()
+      quit(); return
+    end
+    if action == "hidden-startup" then
+      assert(wait_for(function() return load(root .. "/continue.lua") end, 45))
+      quit(); return
+    end
+    if action == "hidden-render" then
+      assert(wait_for(function() return load(root .. "/visibility-idle-go.lua") end, 10))
+      system.set_window_visible(core.window, false)
+      assert(wait_for(function() return not system.window_should_render(core.window) end, 3))
+      local idle_progress = false
+      core.add_thread(function() coroutine.yield(7); idle_progress = true end)
+      local idle_until = system.get_time() + 8
+      while system.get_time() < idle_until do
+        core.redraw = false
+        coroutine.yield(0.1)
+      end
+      save(root .. "/visibility-idle-state.lua", {timer_progress = idle_progress})
+      assert(wait_for(function() return load(root .. "/visibility-idle-restore.lua") end, 5))
+      system.set_window_visible(core.window, true)
+      assert(wait_for(function() return system.window_should_render(core.window) end, 3))
+      save(root .. "/visibility-idle-restored.lua", {continue = true})
+      local ticks, stopped = 0, false
+      core.add_thread(function()
+        while not stopped do ticks = ticks + 1; coroutine.yield(.05) end
+      end)
+      local terminal = require("plugins.terminal").open {cwd = project, shell = "cmd.exe /D /Q"}
+      assert(wait_for(function() return terminal.session and (terminal.session:stats().host_pid or 0) > 0 end, 10))
+      terminal.session:write("set _ANVIL_VISIBILITY=OUTPUT\r")
+      for _, stage in ipairs {"minimized", "hidden"} do
+        assert(wait_for(function() return load(root .. "/visibility-" .. stage .. "-go.lua") end, 10))
+        if stage == "hidden" then system.set_window_visible(core.window, false) end
+        local worker_result
+        require("core.worker_pool").named("visibility-probe"):submit {
+          kind = "worker_pool_test", payload = {op = "echo", value = stage},
+          on_result = function(message)
+            if message.type == "result" then worker_result = message.payload.value end
+          end,
+        }
+        local editor = core.open_file(project .. "/edited.txt")
+        editor.buffer:remove(1, 1, math.huge, math.huge)
+        editor.buffer:insert(1, 1, "latest " .. stage)
+        terminal.session:write("echo VIS_" .. stage .. "_%_ANVIL_VISIBILITY%\r")
+        core.save_workspace()
+        local started, late_ticks, drew = system.get_time(), nil, false
+        while system.get_time() - started < 7 do
+          if system.get_time() - started > .3 then
+            drew = drew or (core.performance_snapshot and core.performance_snapshot.did_redraw) or false
+          end
+          if system.get_time() - started >= 6 and not late_ticks then late_ticks = ticks end
+          coroutine.yield(.01)
+        end
+        local capture = terminal.session:text_capture()
+        save(root .. "/visibility-" .. stage .. "-state.lua", {
+          drew = drew, timer_progress = late_ticks and ticks > late_ticks, worker_result = worker_result,
+          terminal_output = capture and capture.text:find("VIS_" .. stage .. "_OUTPUT", 1, true) ~= nil,
+          workspace_saved = workspace_text():find("edited.txt", 1, true) ~= nil,
+        })
+        assert(wait_for(function() return load(root .. "/visibility-" .. stage .. "-restore.lua") end, 10))
+        assert(wait_for(function() return core.performance_snapshot and core.performance_snapshot.did_redraw end, 5))
+        save(root .. "/visibility-" .. stage .. "-restored.lua", {
+          drew = true, pid = pid, text = editor.buffer:get_text(1, 1, math.huge, math.huge),
+        })
+        editor.buffer:clean()
+      end
+      stopped = true
+      terminal:on_close()
+    end
     if action == "restart-startup-timer" then
       assert(wait_for(function() return load(root .. "/restart-go.lua") end, 10))
       core.restart(); return
