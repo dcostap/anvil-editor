@@ -8,7 +8,7 @@ local symbol_index = require "core.treesitter.symbol_index"
 local treesitter = require "core.treesitter"
 
 require "core.commands.language"
-require "plugins.fuzzy_searcher"
+local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
 test.describe("Symbol activation", function()
   local function open_cpp(context, text, line, col)
@@ -31,6 +31,7 @@ test.describe("Symbol activation", function()
   end
 
   test.before_each(function(context)
+    fuzzy_searcher._test.clear_prompt_history()
     context.active = core.active_view
     context.buffer = Buffer()
     context.buffer:insert(1, 1, "object.render()")
@@ -77,6 +78,20 @@ test.describe("Symbol activation", function()
       test.equal(picker.case_sensitive, true)
       test.equal(picker.source_view, context.view)
       test.equal(picker.static_mode, false)
+      test.same({ context.buffer:get_selection() }, { 1, 10, 1, 10 })
+    end)
+
+    test.it("keeps the saved Project Symbol Search scope for " .. action, function(context)
+      fuzzy_searcher.open("data/core/ $old symbol")
+      core.fuzzy_searcher_active_view:close()
+      core.set_active_view(context.view)
+
+      test.ok(command.perform(action))
+
+      local picker = test.not_nil(core.fuzzy_searcher_active_view)
+      test.equal(picker.input:get_text(), "data/core/ $render")
+      test.equal(picker.case_sensitive, true)
+      test.equal(picker.source_view, context.view)
       test.same({ context.buffer:get_selection() }, { 1, 10, 1, 10 })
     end)
   end

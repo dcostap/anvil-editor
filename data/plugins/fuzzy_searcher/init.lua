@@ -8384,6 +8384,17 @@ local function quote_exact_query(text)
   return '"' .. text:gsub('"', '""') .. '"'
 end
 
+function fuzzy_searcher.prompt_with_search_query(mode, query, before)
+  if mode == "#" or mode == "$" then
+    if before == nil then
+      before = fuzzy_searcher.split_prompt_mode_marker(fuzzy_searcher.restored_prompt_text(mode))
+    end
+  else
+    before = ""
+  end
+  return before .. mode .. query
+end
+
 local function switch_picker_prefix(view, prefix)
   prefix = prefix or ""
   if view.file_picker then
@@ -8391,27 +8402,34 @@ local function switch_picker_prefix(view, prefix)
     return false
   end
   local old_text = view.input and view.input:get_text() or ""
-  local _, query = split_mode_prefix(old_text)
+  local before, old_mode, query = fuzzy_searcher.split_prompt_mode_marker(old_text)
+  if old_mode == "" then
+    before, query = "", old_text
+  elseif old_mode ~= "#" and old_mode ~= "$" then
+    before = ""
+  end
   if prefix == "" then
     fuzzy_searcher.record_prompt_history_text(old_text)
     fuzzy_searcher.apply_prompt_history_text(view, "", false)
     ensure_input_focus(view, "switch-prefix-files-empty")
     return
   end
-  if fuzzy_searcher.prompt_mode(old_text) == prefix then
+  if old_mode == prefix then
     ensure_input_focus(view, "switch-prefix-same-mode")
     return
   end
   fuzzy_searcher.record_prompt_history_text(old_text)
 
   local new_text, select_query
-  if query == "" then
+  if query == "" and before == "" then
     new_text, select_query = fuzzy_searcher.restored_prompt_text(prefix)
   else
-    new_text = prefix .. query
+    new_text = fuzzy_searcher.prompt_with_search_query(prefix, query, before ~= "" and before or nil)
     select_query = true
   end
 
+  core.log_quiet("Fuzzy Searcher: switched mode %s to %s; query starts at %d",
+    old_mode, prefix, fuzzy_searcher.prompt_query_start(new_text))
   fuzzy_searcher.apply_prompt_history_text(view, new_text, select_query)
   ensure_input_focus(view, "switch-prefix")
 end
@@ -8470,11 +8488,10 @@ function open(prefix, opts)
   if prefix == "#" then
     local selection = selected_text_for_search()
     if selection ~= "" then
-      local saved_text = fuzzy_searcher.restored_prompt_text(prefix)
-      local before = fuzzy_searcher.split_prompt_mode_marker(saved_text)
-      prefix = before .. "#" .. quote_exact_query(selection)
+      prefix = fuzzy_searcher.prompt_with_search_query(prefix, quote_exact_query(selection))
       select_seeded_query = true
-      core.log_quiet("Text Search: seeded selected text; saved scope bytes=%d", #before)
+      core.log_quiet("Text Search: seeded selected text; query starts at %d",
+        fuzzy_searcher.prompt_query_start(prefix))
     end
   end
   local initial_text, select_restored_query
@@ -8501,7 +8518,10 @@ function fuzzy_searcher.open_project_symbols(symbol, opts)
   opts = opts or {}
   local view = current_picker()
   if view then view:close("replaced") end
-  active_view = FSView("$" .. tostring(symbol or ""), {
+  local prompt = fuzzy_searcher.prompt_with_search_query("$", tostring(symbol or ""))
+  core.log_quiet("Project Symbol Search: opened code symbol; query starts at %d",
+    fuzzy_searcher.prompt_query_start(prompt))
+  active_view = FSView(prompt, {
     source_view = opts.source_view,
     source_pane = opts.source_pane,
     case_sensitive = opts.case_sensitive == true,

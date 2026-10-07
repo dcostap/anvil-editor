@@ -269,6 +269,34 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.equal(picker_text(), ">plain query")
   end)
 
+  test.it("keeps the saved Text Search scope when switching from Path Search", function()
+    fuzzy_searcher.open("data/core/ #old query")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("@new query")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(command.perform("fuzzy:open_grep"))
+
+    test.equal(picker_text(), "data/core/ #new query")
+    picker:on_text_input("replacement")
+    test.equal(picker_text(), "data/core/ #replacement")
+  end)
+
+  test.it("keeps the current file scope when switching between Text Search and Project Symbol Search", function()
+    fuzzy_searcher.open("data/plugins/ $saved symbol")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("data/core/ #new query")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(command.perform("fuzzy:open_symbols"))
+    test.equal(picker_text(), "data/core/ $new query")
+
+    picker:on_text_input("replacement")
+    test.equal(picker_text(), "data/core/ $replacement")
+    test.ok(command.perform("fuzzy:open_grep"))
+    test.equal(picker_text(), "data/core/ #replacement")
+  end)
+
   test.it("reopens file search with an empty prompt instead of its previous query", function()
     fuzzy_searcher.open("")
     core.fuzzy_searcher_active_view.input:set_text("data/core/init.lua")
