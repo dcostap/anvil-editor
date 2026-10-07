@@ -65,7 +65,8 @@ function contrast.visibility(low, high, middle_tone, background, reference, refe
     local separation = math.abs(background_tone - middle_tone.brightness)
     visibility = math.max(visibility, light_fraction * LIGHT_TONE_SEPARATION / math.max(1, separation))
   end
-  return math.min(MAX_VISIBILITY, visibility)
+  -- Reduce image visibility as the theme background gets lighter.
+  return math.min(MAX_VISIBILITY, visibility) * (1 - 0.25 * light_fraction)
 end
 
 return contrast
