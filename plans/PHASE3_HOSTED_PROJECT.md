@@ -4,8 +4,8 @@ This plan follows [Phase 2](PHASE2_TERMINAL_SESSIONS.md) and
 [the multiprocess shell plan](MULTIPROCESS_SHELL_PLAN.md).
 Read both before implementation.
 
-Status: Milestones 1 to 3 are implemented. Real IME and mixed-DPI checks remain open.
-Milestones 4 and 5 remain planned. Hosted mode remains opt-in.
+Status: Milestones 1 to 5 are implemented. Review and real IME and mixed-DPI checks remain open.
+Hosted mode remains opt-in.
 Phase 2 Milestones 1 to 4 are complete.
 
 ## Goal
@@ -712,7 +712,7 @@ Maxima varied on both executables. The repeat does not establish a cause for the
 Repeat evidence is `anvil-surface-latency-fonyow44` and `anvil-surface-latency-gvg4ohn9`.
 
 The user has not supplied real IME or mixed-DPI results. Those manual gates remain open.
-Hosted mode remains opt-in. Milestone 5 has not started.
+Hosted mode remains opt-in. Milestone 5 results follow.
 
 ### Milestone 5: failure handling and acceptance
 
@@ -722,6 +722,112 @@ Hosted mode remains opt-in. Milestone 5 has not started.
 - Test shutdown with pending dialog work and blocked transport workers.
 - Run the focused acceptance matrix; report every skipped or manual gate.
 - Keep `--shell` opt-in until review accepts the result.
+
+#### Milestone 5 implementation
+
+The shell now bounds startup through the first frame, not only through pipe connection.
+The deadline is thirty seconds. A pending native file dialog pauses the failure decision.
+Cancellation wakes connection, read, write, and process-exit waits.
+Transport cleanup shares one second. A cleanup timeout exits the shell only, not its Project or Terminal hosts.
+
+Broken pipes now enter Failed and disconnect the client.
+The old ten-second implicit Project termination is removed.
+Only explicit Force close can terminate an unresponsive Project.
+Allocation, notification, inbound overflow, and malformed packet failures end the connection visibly.
+Message shapes and frame names retain their bounded validation.
+
+A busy frame lock keeps the last safe frame. Acquisition never waits on the shell UI thread.
+Stale configurations are discarded before resource access.
+Failed resource access or an abandoned/failed mutex enters Failed.
+
+Shell GPU failure releases invalid presentation resources and draws native OS failure actions.
+Pending frames cannot touch released GPU resources.
+Cleanup runs in the main callback, not a nested native paint or resize callback.
+The shell does not switch renderers or recreate its device automatically.
+Explicit Restart creates presentation once, then starts a replacement Project in the same shell.
+Project GPU failure uses the existing save/detach deadline. It cannot publish a software fallback afterward.
+Direct-mode device recovery remains unchanged.
+
+The existing isolated runner now supports gated allocation, notification, resource, mutex, write, resize, and presentation faults.
+Its packet cases submit malformed and stale frames through the authenticated Project pipe.
+Its pending-dialog case blocks the owned writer until cancellation, then checks accepted shutdown.
+These checks use owned windows and handles. They do not prove physical input or real hardware device removal.
+
+Concurrent surface logs now use one append-only Windows write per record.
+The earlier logger could overwrite another process's diagnostic line during failure handling.
+
+#### Milestone 5 red-green evidence
+
+The initial fault checks failed because allocation, notification, frame access, and GPU failures did not enter Failed.
+The broken-pipe check reported `pipe failure implicitly terminated the Project`.
+Evidence: `anvil-surface-latency-mbjm1y5o`.
+
+The first-frame and Project GPU checks also failed before their fixes.
+Evidence: `anvil-surface-latency-ojx40q0t`.
+The resize check then exposed pending-frame access after GPU cleanup.
+It failed with `Failed Minimize did not work`; the owned shell remained live but unresponsive.
+Rejecting frames after failure fixed that case on both renderers.
+Evidence: `anvil-surface-latency-tqceg6x4` and `anvil-surface-latency-9so4z_ns`.
+
+The fixture now forces a document change after arming publication faults.
+An unchanged render cache does not guarantee another publication.
+The fixture checks the visible Failed title, native Minimize, and same-shell Restart.
+It does not depend on concurrent trace line ordering.
+
+Final review found an unchecked keyed-mutex release result in both GPU processes.
+The added release fault failed with `surface failure did not enter Failed` before the fix.
+Evidence: `anvil-surface-latency-qxyhjoxn`.
+Both GPU processes now report release failures instead of publishing another frame.
+The same release check passes after the fix: `anvil-surface-latency-30kifr9d`.
+Project GPU and resize regressions pass there too.
+Software resize and blocked-dialog shutdown pass in `anvil-surface-latency-4b24fykb`.
+
+#### Milestone 5 automated acceptance
+
+The final four native targets pass: dialogs, routing, stalled motion, and drop events.
+Meson logs use the prefix `phase3-m5-native-final`.
+Focused Untitled recovery and Terminal quit checks pass.
+Their logs use `phase3-m5-recovery-final` and `phase3-m5-terminal-final`.
+
+D3D11 fault, control, routing, dialog, Close, restart, switch, and shell-loss checks pass.
+Evidence: `anvil-surface-latency-91l2mrt1`, with the stalled-exit exception below.
+The corresponding software matrix passes: `anvil-surface-latency-zwxh8498`.
+Direct dialog, error, quit, nonzero quit, restart, and switch checks pass: `anvil-surface-latency-6ownr8j5`.
+
+One stalled-exit check failed because Windows denied the detached Terminal host's registry update with error 5.
+The host log confirmed detach and a live shell. The old registry still reported attached.
+Three separate current-build repeats passed, as did one saved-before repeat.
+Current evidence: `anvil-surface-latency-w53juizm`, `anvil-surface-latency-j9a6vrzf`, and `anvil-surface-latency-2gy6yr6g`.
+Saved-before evidence: `anvil-surface-latency-jcpoq7g6`.
+The failure did not persist. Its cause remains unproven; no Terminal registry change enters this milestone.
+
+#### Milestone 5 isolated latency
+
+The before and after matrices each contain 720 valid samples per row and no failed samples.
+No build or correctness test overlapped either measurement.
+Values below are p50 / p90 / p99 / maximum / mean, in milliseconds:
+
+| Mode / renderer | Before | After |
+| --- | --- | --- |
+| Direct D3D11 | 6.79 / 16.23 / 19.70 / 49.32 / 8.36 | 6.20 / 15.46 / 19.28 / 37.41 / 7.91 |
+| Hosted D3D11 | 7.08 / 15.93 / 19.99 / 467.03 / 10.17 | 6.39 / 15.62 / 18.99 / 21.65 / 8.21 |
+| Direct software | 18.23 / 26.65 / 30.54 / 36.93 / 19.21 | 11.35 / 20.75 / 24.37 / 25.91 / 12.78 |
+| Hosted software | 10.99 / 19.45 / 23.53 / 27.32 / 12.30 | 10.31 / 19.26 / 22.17 / 24.25 / 11.59 |
+
+Hosted D3D11 adds 0.19 ms to the after median. This meets the under-1-ms target.
+The isolated before maximum and software baseline shift do not establish a cause or a performance gain.
+The failure-path changes do not explain the direct-software shift.
+Evidence: `anvil-surface-latency-h_ujwb2m` before; `anvil-surface-latency-rmw13j2j` after.
+The after matrix uses the final executable, including mutex-release handling.
+An earlier after matrix also passed: `anvil-surface-latency-2264vhny`.
+Its D3D11 medians were 7.06 ms direct and 7.30 ms hosted.
+Its software medians were 10.85 ms direct and 10.31 ms hosted.
+The direct-software baseline shift persisted between these after runs, but no cause is established.
+
+Real IME candidates, physical pointer behavior, and mixed-DPI monitor moves remain manual checks.
+WSL remains unavailable without an installed default distribution.
+The two original direct Title Bar wheel failures remain outside this change.
+Hosted mode stays opt-in until review accepts the evidence and manual results.
 
 ## Tests and measurement
 
@@ -766,24 +872,24 @@ python tools/run_surface_latency_probe.py --no-build --samples 240 --runs 3 --ke
 ```
 
 Use `--no-build` only with current binaries.
-Controls, routing, lifecycle, dialog, and close actions are available. GPU failure actions remain planned.
+Controls, routing, lifecycle, dialog, close, and gated failure actions are available.
 
 ## Acceptance checklist
 
-- [ ] One visible shell window; no visible Project window or hidden-window dialogs.
-- [ ] Shell starts and handles controls without Lua, plugins, or user configuration.
-- [ ] Hosted and direct editor commands retain their public behavior.
-- [ ] Native controls work while the owned Project is suspended or has exited.
-- [ ] Input, capture, focus, drops, IME, resize, and scale checks pass.
+- [x] One visible shell window; no visible Project window or hidden-window dialogs.
+- [x] Shell starts and handles controls without Lua, plugins, or user configuration.
+- [x] Hosted and direct editor commands retain their tested public behavior.
+- [x] Native controls work while the owned Project is suspended or has exited.
+- [x] Synthetic input, capture, focus, drops, IME, resize, and scale checks pass.
 - [ ] Real IME candidate placement and mixed-DPI evidence is recorded separately from synthetic tests.
-- [ ] Native dialogs return current callback results without blocking presentation.
-- [ ] Normal quit, Cancel, remembered terminal policy, restart, and switch remain correct.
-- [ ] Shell loss and forced Project close leave Terminal Sessions live.
-- [ ] Named unsaved contents have no new survival guarantee; Untitled recovery limits are documented.
-- [ ] Project-initiated quit closes the shell; unexpected exit offers Restart Project and Close.
-- [ ] Duplicate Project launches match direct-mode Workspace and terminal behavior.
-- [ ] Malformed/stale frames and failed connections produce bounded failure states.
-- [ ] Both renderer latency comparisons pass; failures and tail changes are reported.
-- [ ] No automatic Project restart, adoption, Sidebar process, or multi-window coordinator enters this phase.
+- [x] Native dialogs return current callback results without blocking presentation.
+- [x] Normal quit, Cancel, remembered terminal policy, restart, and switch remain correct.
+- [x] Shell loss and forced Project close leave Terminal Sessions live; registry-write exception is recorded.
+- [x] Named unsaved contents have no new survival guarantee; Untitled recovery limits are documented.
+- [x] Project-initiated quit closes the shell; unexpected exit offers Restart Project and Close.
+- [x] Duplicate Project launches match direct-mode Workspace and terminal behavior.
+- [x] Malformed frames fail visibly; stale frames remain safe; failed connections reach bounded failure states.
+- [x] Both renderer latency comparisons pass; failures and tail changes are reported.
+- [x] No automatic Project restart, adoption, Sidebar process, or multi-window coordinator enters this phase.
 
 After acceptance, update the main plan and propose Phase 4 separately.

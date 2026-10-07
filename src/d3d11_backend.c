@@ -498,6 +498,10 @@ static bool d3d11_device_lost(HRESULT hr) {
 }
 
 static void d3d11_reset_device(void) {
+  if (anvil_hosted_surface_active()) {
+    anvil_hosted_surface_render_failed("Project GPU device failed; no automatic renderer recovery");
+    return;
+  }
   anvil_d3d11_shutdown();
   g_d3d11.attempted_init = false;
 }
@@ -895,7 +899,7 @@ static bool d3d11_create_hosted_buffers(D3D11Window *w, int width, int height) {
   SAFE_RELEASE(resource);
   if (FAILED(hr)) {
     d3d11_release_window_buffers(w);
-    if (d3d11_device_lost(hr)) d3d11_reset_device();
+    anvil_hosted_surface_render_failed("Project shared GPU texture creation failed");
     return false;
   }
   w->width = width;
@@ -2040,17 +2044,29 @@ static void d3d11_reset_frame_state(void) {
   g_d3d11.quad_texture_runs = 0;
 }
 
+static SDL_AtomicInt test_sync_failure;
+void anvil_d3d11_test_sync_failure(void) {
+  if (SDL_getenv("ANVIL_SURFACE_FAULT_PROBE")) SDL_SetAtomicInt(&test_sync_failure, 1);
+}
 static bool d3d11_publish_hosted_frame(D3D11Window *w) {
   LARGE_INTEGER copy_start, copy_end;
   QueryPerformanceCounter(&copy_start);
   /* AcquireSync reports a timeout as a success code, so require S_OK. */
   HRESULT hr = w->shared_mutex->lpVtbl->AcquireSync(w->shared_mutex, 0, D3D11_HOSTED_SYNC_TIMEOUT_MS);
+  if (SDL_CompareAndSwapAtomicInt(&test_sync_failure, 1, 0)) {
+    if (hr == S_OK) w->shared_mutex->lpVtbl->ReleaseSync(w->shared_mutex, 0);
+    hr = DXGI_ERROR_DEVICE_REMOVED;
+  }
   bool acquired = hr == S_OK;
   if (acquired) {
     g_d3d11.context->lpVtbl->CopyResource(g_d3d11.context,
                                           (ID3D11Resource *)w->shared_texture,
                                           (ID3D11Resource *)w->backbuffer);
-    w->shared_mutex->lpVtbl->ReleaseSync(w->shared_mutex, 0);
+    hr = w->shared_mutex->lpVtbl->ReleaseSync(w->shared_mutex, 0);
+    if (hr != S_OK) {
+      acquired = false;
+      anvil_hosted_surface_render_failed("Project shared GPU mutex release failed");
+    }
     g_d3d11.context->lpVtbl->Flush(g_d3d11.context);
   }
   QueryPerformanceCounter(&copy_end);
@@ -2061,7 +2077,8 @@ static bool d3d11_publish_hosted_frame(D3D11Window *w) {
   if (!acquired) {
     g_d3d11.stats.frame.fail_reason = "hosted_sync";
     d3d11_stats_end(false, FAILED(hr) ? hr : E_ABORT);
-    if (d3d11_device_lost(hr)) d3d11_reset_device();
+    if (hr != WAIT_TIMEOUT && hr != DXGI_ERROR_WAIT_TIMEOUT)
+      anvil_hosted_surface_render_failed("Project shared GPU mutex failed");
     return false;
   }
   if (d3d11_should_clear_state_after_present()) {

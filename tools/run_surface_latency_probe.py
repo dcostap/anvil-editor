@@ -103,7 +103,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
-    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close"],
+    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close", "fault-alloc", "fault-event", "fault-open", "fault-acquire", "fault-present", "fault-resize", "fault-write", "fault-pipe", "fault-busy", "fault-stale", "fault-malformed", "fault-device", "fault-startup", "fault-release"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)
@@ -140,7 +140,7 @@ def main() -> int:
                     namespace = "anvil-test-" + work.name.rsplit("-", 1)[-1] + "-" + action
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
-                    if action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close"):
+                    if action == "dialog-blocked-close" or action.startswith("fault-") or action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close"):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     result = case_dir / "result.lua"
@@ -161,6 +161,10 @@ def main() -> int:
                     }
                     if action == "dialog-error":
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"
+                    if action.startswith("fault-") or action == "dialog-blocked-close":
+                        config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
+                    if action == "fault-startup":
+                        config["environment"]["ANVIL_SURFACE_FAULT_NO_FRAME"] = "1"
                     config_path = case_dir / "launch.json"
                     config_path.write_text(json.dumps(config), encoding="utf-8")
                     launcher = invoke_hidden(config_path, 60)

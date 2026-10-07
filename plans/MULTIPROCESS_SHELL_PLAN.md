@@ -357,7 +357,7 @@ The shell draws window controls and status overlays without Lua.
 One Project must look and behave like current Anvil.
 
 Implementation plan: [Phase 3: hosted single Project](PHASE3_HOSTED_PROJECT.md).
-Milestones 1 to 4 are implemented. Hosted mode remains opt-in.
+Milestones 1 to 5 are implemented. Hosted mode remains opt-in until review and manual acceptance.
 Native controls and the Sidebar placeholder work without Project Lua.
 Input payloads have owned storage. Configuration, focus, and input retain their UI order.
 Frames, IME areas, and Title Bar regions identify their configuration.
@@ -375,11 +375,20 @@ Accepted shutdown follows recovery validation. Failed Untitled recovery cancels 
 A stalled Project offers Wait or explicit Force close with an unsaved-data warning.
 Force close leaves Terminal Session hosts running.
 Dialog and close checks pass on both renderers. Focused recovery and Terminal quit checks pass.
-The isolated Milestone 4 matrix has 720 valid samples per row and no failed samples.
-After D3D11 medians are 7.13 ms direct and 7.48 ms hosted.
-After software medians are 18.94 ms direct and 10.95 ms hosted.
-The Phase 3 plan records all percentiles, maxima, and the direct-software tail investigation.
-Milestone 5 failure handling and final acceptance remain open.
+The isolated Milestone 5 matrix has 720 valid samples per row and no failed samples.
+After D3D11 medians are 6.20 ms direct and 6.39 ms hosted.
+After software medians are 11.35 ms direct and 10.31 ms hosted.
+The Phase 3 plan records all percentiles, maxima, and the unexplained direct-software baseline shift.
+Milestone 5 bounds first-frame startup and transport cleanup.
+Broken pipes no longer cause implicit Project termination.
+Allocation, event, packet, resource, and GPU failures enter visible Failed states.
+Native OS actions remain usable after GPU loss. Only explicit Restart initializes presentation again.
+Project GPU loss saves/detaches through the native deadline without software publication fallback.
+The focused failure cases include pending-dialog shutdown with a blocked writer.
+Four native targets, 39 focused Lua checks, and the isolated renderer failure matrices pass.
+One detached Terminal registry update failed with Windows error 5; the host stayed live.
+Separate current and saved-before repeats passed. The Phase 3 plan records this exception.
+Final acceptance still needs review, real IME candidates, and mixed-DPI monitor moves.
 Phase 3 exits immediately on shell loss; Phase 6 adds adoption.
 
 ### Phase 4: several Projects and the Sidebar process

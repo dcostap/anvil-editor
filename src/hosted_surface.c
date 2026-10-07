@@ -148,6 +148,9 @@ static void signal_loss(const char *cause, uint16_t type, size_t bytes) {
 bool anvil_hosted_surface_active(void) {
   return hosted.active;
 }
+void anvil_hosted_surface_render_failed(const char *cause) {
+  signal_loss(cause, ANVIL_SURFACE_MSG_FRAME, 0);
+}
 uint32_t anvil_hosted_surface_shell_pid(void) { return hosted.shell_pid; }
 void anvil_hosted_surface_controls(int *x, int *y, int *w, int *h) {
   *x = hosted.config.controls_x; *y = hosted.config.controls_y;
@@ -473,6 +476,20 @@ void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) {
 void anvil_hosted_surface_dialog_result_failed(void) {
   if (hosted.active) signal_loss("UI file dialog result queue failed", ANVIL_SURFACE_MSG_DIALOG_RESULT, 0);
 }
+void anvil_hosted_surface_test_packet(bool stale) {
+  if (!hosted.active || !SDL_getenv("ANVIL_SURFACE_FAULT_PROBE")) return;
+  if (stale) {
+    AnvilSurfaceFrame frame = {0};
+    frame.configuration = hosted.config.configuration + 1;
+    frame.generation = 1;
+    frame.kind = ANVIL_SURFACE_FRAME_SHARED_MEMORY;
+    frame.width = hosted.config.pixel_w; frame.height = hosted.config.pixel_h;
+    SDL_snprintf(frame.name, sizeof(frame.name), "Local\\AnvilSurfaceMemory-%lu-999999", (unsigned long)GetCurrentProcessId());
+    send_message(ANVIL_SURFACE_MSG_FRAME, &frame, sizeof(frame));
+  } else {
+    send_message(ANVIL_SURFACE_MSG_FRAME, "x", 1);
+  }
+}
 
 bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata) {
   size_t index = SDL_arraysize(hosted.dialogs);
@@ -586,6 +603,7 @@ bool anvil_hosted_surface_is_window(SDL_Window *window) {
 }
 
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height) {
+  if (SDL_getenv("ANVIL_SURFACE_FAULT_PROBE") && SDL_getenv("ANVIL_SURFACE_FAULT_NO_FRAME")) return;
   if (!anvil_hosted_surface_is_window(window) || !name) return;
   AnvilSurfaceFrame frame;
   memset(&frame, 0, sizeof(frame));
@@ -638,6 +656,8 @@ static bool ensure_memory_frame(size_t needed) {
 bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surface,
                                            const SDL_Rect *rects, int count) {
   if (!anvil_hosted_surface_is_window(window) || !surface) return false;
+  if (SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  if (SDL_getenv("ANVIL_SURFACE_FAULT_PROBE") && SDL_getenv("ANVIL_SURFACE_FAULT_NO_FRAME")) return true;
   if (SDL_BYTESPERPIXEL(surface->format) != 4) return false;
   int stride = surface->w * 4;
   size_t needed = sizeof(AnvilSurfaceMemoryHeader) + (size_t)stride * (size_t)surface->h;
@@ -795,6 +815,8 @@ bool anvil_hosted_surface_loss_event(Uint32 type) { (void)type; return false; }
 void anvil_hosted_surface_exit_intent(const char *path) { (void)path; }
 void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) { (void)decision; }
 void anvil_hosted_surface_dialog_result_failed(void) {}
+void anvil_hosted_surface_render_failed(const char *cause) { (void)cause; }
+void anvil_hosted_surface_test_packet(bool stale) { (void)stale; }
 bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata) {
   (void)id; (void)type; (void)props; (void)callback; (void)userdata; return false;
 }

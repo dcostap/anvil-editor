@@ -23,13 +23,30 @@
  * exercises the offset path for input, hit testing, IME, and compositing. */
 #define SHELL_SIDEBAR_POINTS 48
 #define SHELL_CONNECT_TIMEOUT_MS 30000
-#define SHELL_EXIT_WAIT_MS 10000
 #define SHELL_WRITE_QUEUE_LIMIT (8u * 1024u * 1024u)
 #define SHELL_SYNC_TIMEOUT_MS 0
 #define SHELL_PIPE_BUFFER (64u * 1024u)
 /* How long one resize step waits for a surface frame of the new size. */
 #define SHELL_RESIZE_WAIT_MS 50
 #define SHELL_CLOSE_TIMEOUT_MS 5000
+
+/* Owned-window fault actions. These require the isolated test environment. */
+#define SHELL_FAULT_MESSAGE (WM_APP + 0x4b)
+enum {
+  FAULT_ALLOC = 1,
+  FAULT_EVENT,
+  FAULT_OPEN,
+  FAULT_ACQUIRE,
+  FAULT_PRESENT,
+  FAULT_RESIZE,
+  FAULT_WRITE,
+  FAULT_PIPE,
+  FAULT_BUSY,
+  FAULT_BLOCK_WRITE,
+  FAULT_RELEASE
+};
+static SDL_AtomicInt probe_fault;
+static bool take_fault(int point) { return SDL_CompareAndSwapAtomicInt(&probe_fault, point, 0); }
 
 typedef struct ShellMessage {
   struct ShellMessage *next;
@@ -48,6 +65,7 @@ enum {
   SHELL_EVENT_DIALOG_RESULT,
   SHELL_EVENT_CLOSE_TIMEOUT,
   SHELL_EVENT_FORCE_RESULT,
+  SHELL_EVENT_START_TIMEOUT,
 };
 
 typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED } ShellState;
@@ -64,6 +82,9 @@ typedef struct {
   IDXGISwapChain1 *swapchain;
   ID3D11Texture2D *backbuffer;
   ID3D11RenderTargetView *rtv;
+  bool render_failed;
+  const char *gpu_failure;
+  UINT_PTR startup_timer;
   int buffer_w, buffer_h;
 
   /* Private copy of the newest surface frame. */
@@ -123,6 +144,7 @@ typedef struct {
   bool close_waiting;
   uint32_t dialogs[ANVIL_SURFACE_DIALOG_LIMIT];
   SDL_AtomicInt dialog_failure;
+  SDL_AtomicInt transport_failure, inbound_bytes, reader_done, writer_done;
   bool shown;
   ShellState state;
   ID3D11Texture2D *ui;
@@ -147,6 +169,18 @@ static void composite_and_present(void);
 static void request_close(void);
 static void cancel_input(void);
 static void set_state(ShellState state);
+static void check_transport_failure(void);
+static void check_gpu_failure(void);
+static void close_memory_frame(void);
+enum { FAILURE_ALLOC = 1, FAILURE_EVENT, FAILURE_PACKET, FAILURE_OVERFLOW };
+static void report_transport_failure(int reason) {
+  SDL_CompareAndSwapAtomicInt(&shell.transport_failure, 0, reason);
+  SDL_Event event = {0};
+  event.type = shell.event_type;
+  event.user.code = SHELL_EVENT_FRAME;
+  event.user.windowID = shell.connection;
+  SDL_PushEvent(&event);
+}
 static void stop_close_timer(void) {
   if (shell.close_timer)
     SDL_RemoveTimer(shell.close_timer);
@@ -176,8 +210,18 @@ static void fail_connection(const char *cause) {
   stop_close_timer();
   cancel_input();
   anvil_ipc_pipe_cancel(&shell.pipe);
+  if (shell.pipe.handle) DisconnectNamedPipe(shell.pipe.handle);
   set_state(SHELL_FAILED);
+  SDL_SetWindowTitle(shell.window, "Anvil - Project failed");
   composite_and_present();
+}
+static void check_transport_failure(void) {
+  int reason = SDL_GetAtomicInt(&shell.transport_failure);
+  if (!reason || shell.state == SHELL_FAILED)
+    return;
+  static const char *causes[] = {"", "inbound allocation failed", "inbound notification failed",
+                                 "invalid surface packet", "inbound queue overflow"};
+  fail_connection(causes[reason]);
 }
 static Uint32 SDLCALL retry_frame(void *data, SDL_TimerID timer, Uint32 interval) {
   (void)timer;
@@ -208,6 +252,10 @@ static void set_state(ShellState state) {
   if (shell.state == state)
     return;
   shell.state = state;
+  if (state != SHELL_STARTING && shell.startup_timer) {
+    KillTimer(shell.hwnd, shell.startup_timer);
+    shell.startup_timer = 0;
+  }
   shell.ui_dirty = true;
   if (state == SHELL_STARTING || state == SHELL_FAILED) {
     set_frame_busy(false);
@@ -316,7 +364,7 @@ static bool launch_child(int argc, char **argv, const char *pipe_name) {
 /* ------------------------------------------------------------------------ */
 /* Pipe threads                                                             */
 
-static void push_shell_event(int code, void *data, int value) {
+static bool push_shell_event(int code, void *data, int value) {
   SDL_Event event;
   SDL_zero(event);
   event.type = shell.event_type;
@@ -324,7 +372,59 @@ static void push_shell_event(int code, void *data, int value) {
   event.user.data1 = data;
   event.user.data2 = (void *)(intptr_t)value;
   event.user.windowID = shell.connection;
-  SDL_PushEvent(&event);
+  if (!take_fault(FAULT_EVENT) && SDL_PushEvent(&event))
+    return true;
+  if (code == SHELL_EVENT_MESSAGE) {
+    ShellMessage *message = data;
+    SDL_AddAtomicInt(&shell.inbound_bytes, -(int)(sizeof(*message) + message->size));
+    free(message);
+  }
+  report_transport_failure(FAILURE_EVENT);
+  return false;
+}
+
+static bool valid_project_message(uint16_t type, const void *payload, uint32_t size) {
+  switch (type) {
+  case ANVIL_SURFACE_MSG_FRAME: {
+    if (size != sizeof(AnvilSurfaceFrame))
+      return false;
+    const AnvilSurfaceFrame *frame = payload;
+    return frame->generation && frame->configuration && frame->width > 0 && frame->height > 0 &&
+           frame->width <= 32768 && frame->height <= 32768 && frame->name[0] &&
+           memchr(frame->name, 0, sizeof(frame->name)) &&
+           (frame->kind == ANVIL_SURFACE_FRAME_D3D11 ||
+            frame->kind == ANVIL_SURFACE_FRAME_SHARED_MEMORY);
+  }
+  case ANVIL_SURFACE_MSG_CURSOR:
+  case ANVIL_SURFACE_MSG_WINDOW_MODE:
+  case ANVIL_SURFACE_MSG_BORDERED:
+  case ANVIL_SURFACE_MSG_VISIBLE:
+  case ANVIL_SURFACE_MSG_FLASH:
+  case ANVIL_SURFACE_MSG_CLOSE_DECISION:
+    return size == sizeof(AnvilSurfaceInt);
+  case ANVIL_SURFACE_MSG_TEXT_INPUT:
+    return size == sizeof(AnvilSurfaceTextInput);
+  case ANVIL_SURFACE_MSG_CLEAR_IME:
+    return size == sizeof(uint64_t);
+  case ANVIL_SURFACE_MSG_HIT_TEST:
+    return size == sizeof(AnvilSurfaceHitTest);
+  case ANVIL_SURFACE_MSG_SET_BOUNDS:
+    return size == sizeof(AnvilSurfaceBounds);
+  case ANVIL_SURFACE_MSG_OPACITY:
+    return size == sizeof(float);
+  case ANVIL_SURFACE_MSG_RAISE:
+  case ANVIL_SURFACE_MSG_EXIT_INTENT:
+    return size == 0;
+  case ANVIL_SURFACE_MSG_TITLE:
+    return !memchr(payload, 0, size);
+  case ANVIL_SURFACE_MSG_RESTART:
+    return size > 1 && size < 32768 && ((const char *)payload)[size - 1] == 0 &&
+           !memchr(payload, 0, size - 1);
+  case ANVIL_SURFACE_MSG_DIALOG:
+    return size >= sizeof(AnvilSurfaceDialog);
+  default:
+    return false;
+  }
 }
 
 static bool wait_for_child_connection(void) {
@@ -338,9 +438,9 @@ static bool wait_for_child_connection(void) {
     ResetEvent(connect_event);
     DWORD error = ConnectNamedPipe(shell.pipe.handle, &overlapped) ? ERROR_PIPE_CONNECTED : GetLastError();
     if (error == ERROR_IO_PENDING) {
-      HANDLE waits[2] = { connect_event, shell.process.hProcess };
+      HANDLE waits[3] = { connect_event, shell.process.hProcess, shell.pipe.stop_event };
       DWORD done = 0;
-      if (WaitForMultipleObjects(2, waits, FALSE, SHELL_CONNECT_TIMEOUT_MS) != WAIT_OBJECT_0) {
+      if (WaitForMultipleObjects(3, waits, FALSE, SHELL_CONNECT_TIMEOUT_MS) != WAIT_OBJECT_0) {
         CancelIoEx(shell.pipe.handle, &overlapped);
         GetOverlappedResult(shell.pipe.handle, &overlapped, &done, TRUE);
         break;
@@ -373,11 +473,13 @@ static int SDLCALL reader_thread(void *data) {
       ((AnvilSurfaceHello *)payload)->pid == shell.process.dwProcessId) {
     push_shell_event(SHELL_EVENT_CONNECTED, NULL, 0);
     while (anvil_ipc_pipe_read(&shell.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
+      if (!valid_project_message(header.type, payload, header.size)) {
+        report_transport_failure(FAILURE_PACKET);
+        break;
+      }
       if (header.type == ANVIL_SURFACE_MSG_FRAME) {
-        if (header.size != sizeof(AnvilSurfaceFrame)) continue;
         SDL_LockMutex(shell.lock);
         memcpy(&shell.latest_frame, payload, sizeof(AnvilSurfaceFrame));
-        shell.latest_frame.name[ANVIL_SURFACE_NAME_MAX - 1] = '\0';
         bool notify = !shell.frame_pending;
         shell.frame_pending = true;
         SDL_BroadcastCondition(shell.frame_cond);
@@ -385,24 +487,38 @@ static int SDLCALL reader_thread(void *data) {
         if (notify) push_shell_event(SHELL_EVENT_FRAME, NULL, 0);
         continue;
       }
-      ShellMessage *message = malloc(sizeof(ShellMessage) + header.size);
-      if (!message) continue;
+      ShellMessage *message =
+          take_fault(FAULT_ALLOC) ? NULL : malloc(sizeof(ShellMessage) + header.size);
+      if (!message) {
+        report_transport_failure(FAILURE_ALLOC);
+        break;
+      }
       message->next = NULL;
       message->type = header.type;
       message->size = header.size;
       memcpy(message->payload, payload, header.size);
-      push_shell_event(SHELL_EVENT_MESSAGE, message, 0);
+      int bytes = (int)(sizeof(*message) + header.size);
+      if ((size_t)SDL_AddAtomicInt(&shell.inbound_bytes, bytes) + bytes > SHELL_WRITE_QUEUE_LIMIT) {
+        SDL_AddAtomicInt(&shell.inbound_bytes, -bytes);
+        free(message);
+        report_transport_failure(FAILURE_OVERFLOW);
+        break;
+      }
+      if (!push_shell_event(SHELL_EVENT_MESSAGE, message, 0))
+        break;
     }
-  }
+  } else if (!payload) report_transport_failure(FAILURE_ALLOC);
   free(payload);
 
-  DWORD exit_code = 1;
-  if (WaitForSingleObject(shell.process.hProcess, SHELL_EXIT_WAIT_MS) != WAIT_OBJECT_0) {
-    TerminateProcess(shell.process.hProcess, 1);
-    WaitForSingleObject(shell.process.hProcess, 1000);
+  push_shell_event(SHELL_EVENT_DISCONNECTED, NULL, 0);
+  HANDLE waits[] = {shell.process.hProcess, shell.pipe.stop_event};
+  WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+  if (WaitForSingleObject(shell.process.hProcess, 0) == WAIT_OBJECT_0) {
+    DWORD exit_code = 1;
+    GetExitCodeProcess(shell.process.hProcess, &exit_code);
+    push_shell_event(SHELL_EVENT_EXITED, NULL, (int)exit_code);
   }
-  GetExitCodeProcess(shell.process.hProcess, &exit_code);
-  push_shell_event(SHELL_EVENT_EXITED, NULL, (int)exit_code);
+  SDL_SetAtomicInt(&shell.reader_done, 1);
   return 0;
 }
 
@@ -411,16 +527,21 @@ static int SDLCALL writer_thread(void *data) {
   for (;;) {
     SDL_LockMutex(shell.lock);
     while (!shell.queue_head && !shell.writer_stop) SDL_WaitCondition(shell.queue_cond, shell.lock);
-    if (shell.writer_stop) { SDL_UnlockMutex(shell.lock); return 0; }
+    if (shell.writer_stop) { SDL_UnlockMutex(shell.lock); SDL_SetAtomicInt(&shell.writer_done, 1); return 0; }
     ShellMessage *message = shell.queue_head;
     shell.queue_head = message->next;
     if (!shell.queue_head) shell.queue_tail = NULL;
     shell.queue_bytes -= sizeof(*message) + message->size;
     SDL_UnlockMutex(shell.lock);
-    bool written = anvil_ipc_pipe_write(&shell.pipe, message->type, message->payload, message->size, NULL, 0);
+    if (take_fault(FAULT_BLOCK_WRITE))
+      WaitForSingleObject(shell.pipe.stop_event, INFINITE);
+    bool written =
+        !take_fault(FAULT_WRITE) &&
+        anvil_ipc_pipe_write(&shell.pipe, message->type, message->payload, message->size, NULL, 0);
     free(message);
     if (!written) {
       push_shell_event(SHELL_EVENT_DISCONNECTED, NULL, 0);
+      SDL_SetAtomicInt(&shell.writer_done, 1);
       return 1;
     }
   }
@@ -641,18 +762,65 @@ static bool init_d3d11(void) {
   return SUCCEEDED(hr) && create_backbuffer_view();
 }
 
+static void release_d3d11(void) {
+  if (shell.context)
+    shell.context->lpVtbl->ClearState(shell.context);
+  SAFE_RELEASE(shell.shared_mutex);
+  SAFE_RELEASE(shell.shared);
+  SAFE_RELEASE(shell.surface);
+  SAFE_RELEASE(shell.ui);
+  SAFE_RELEASE(shell.rtv);
+  SAFE_RELEASE(shell.backbuffer);
+  SAFE_RELEASE(shell.swapchain);
+  SAFE_RELEASE(shell.context);
+  SAFE_RELEASE(shell.device1);
+  SAFE_RELEASE(shell.device);
+  close_memory_frame();
+  shell.have_surface = false;
+  shell.shared_name[0] = 0;
+}
+
+static void fail_gpu(const char *operation, HRESULT error) {
+  if (shell.render_failed)
+    return;
+  shell.render_failed = true;
+  SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+               "Shell GPU failure: %s HRESULT=0x%08lx; native OS actions remain available",
+               operation, (unsigned long)error);
+  /* Native paint and resize can run inside SDL's event pump. Finish SDL
+   * cleanup in the main callback, not inside a nested window procedure. */
+  shell.gpu_failure = operation;
+  SDL_Event event = {0};
+  event.type = shell.event_type;
+  event.user.code = SHELL_EVENT_FRAME;
+  event.user.windowID = shell.connection;
+  SDL_PushEvent(&event);
+  InvalidateRect(shell.hwnd, NULL, FALSE);
+}
+
+static void check_gpu_failure(void) {
+  if (!shell.gpu_failure)
+    return;
+  const char *cause = shell.gpu_failure;
+  shell.gpu_failure = NULL;
+  release_d3d11();
+  fail_connection(cause);
+}
+
 static void resize_buffers(void) {
   int pixel_w = 0, pixel_h = 0;
   client_pixel_size(&pixel_w, &pixel_h);
   if (pixel_w <= 0 || pixel_h <= 0) return;
   if (pixel_w == shell.buffer_w && pixel_h == shell.buffer_h) return;
+  if (shell.render_failed) { shell.buffer_w = pixel_w; shell.buffer_h = pixel_h; return; }
   shell.context->lpVtbl->OMSetRenderTargets(shell.context, 0, NULL, NULL);
   SAFE_RELEASE(shell.rtv);
   SAFE_RELEASE(shell.backbuffer);
   HRESULT hr = shell.swapchain->lpVtbl->ResizeBuffers(shell.swapchain, 0, (UINT)pixel_w, (UINT)pixel_h,
                                                       DXGI_FORMAT_UNKNOWN, 0);
+  if (take_fault(FAULT_RESIZE)) hr = DXGI_ERROR_DEVICE_REMOVED;
   if (FAILED(hr) || !create_backbuffer_view()) {
-    SDL_Log("Anvil shell could not resize its swapchain: 0x%08lx", (unsigned long)hr);
+    fail_gpu("swapchain resize failed", FAILED(hr) ? hr : E_FAIL);
     return;
   }
   shell.buffer_w = pixel_w;
@@ -673,7 +841,11 @@ static bool ensure_surface_texture(int width, int height) {
   desc.SampleDesc.Count = 1;
   desc.Usage = D3D11_USAGE_DEFAULT;
   desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-  if (FAILED(shell.device->lpVtbl->CreateTexture2D(shell.device, &desc, NULL, &shell.surface))) return false;
+  HRESULT hr = shell.device->lpVtbl->CreateTexture2D(shell.device, &desc, NULL, &shell.surface);
+  if (FAILED(hr)) {
+    SDL_Log("Shell private surface creation failed: 0x%08lx", (unsigned long)hr);
+    return false;
+  }
   shell.surface_w = width;
   shell.surface_h = height;
   return true;
@@ -686,7 +858,7 @@ static bool load_d3d11_frame(const AnvilSurfaceFrame *frame) {
     shell.shared_name[0] = '\0';
     wchar_t name[ANVIL_SURFACE_NAME_MAX];
     MultiByteToWideChar(CP_UTF8, 0, frame->name, -1, name, ANVIL_SURFACE_NAME_MAX);
-    HRESULT hr = shell.device1->lpVtbl->OpenSharedResourceByName(
+    HRESULT hr = take_fault(FAULT_OPEN) ? E_ACCESSDENIED : shell.device1->lpVtbl->OpenSharedResourceByName(
       shell.device1, name, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
       &IID_ID3D11Texture2D, (void **)&shell.shared);
     if (SUCCEEDED(hr)) {
@@ -705,13 +877,28 @@ static bool load_d3d11_frame(const AnvilSurfaceFrame *frame) {
   if (desc.Width != (UINT)frame->width || desc.Height != (UINT)frame->height ||
       desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) return false;
   if (!ensure_surface_texture((int)desc.Width, (int)desc.Height)) return false;
-  if (shell.shared_mutex->lpVtbl->AcquireSync(shell.shared_mutex, 0, SHELL_SYNC_TIMEOUT_MS) != S_OK) {
-    shell.frame_busy = true;
+  HRESULT acquired =
+      take_fault(FAULT_ACQUIRE) ? WAIT_ABANDONED
+      : SDL_GetAtomicInt(&probe_fault) == FAULT_BUSY
+          ? WAIT_TIMEOUT
+          : shell.shared_mutex->lpVtbl->AcquireSync(shell.shared_mutex, 0, SHELL_SYNC_TIMEOUT_MS);
+  if (acquired != S_OK) {
+    if (acquired == WAIT_TIMEOUT || acquired == DXGI_ERROR_WAIT_TIMEOUT)
+      shell.frame_busy = true;
+    else {
+      SDL_Log("Shell shared mutex failed: 0x%08lx", (unsigned long)acquired);
+      fail_connection("shared surface mutex failed");
+    }
     return false;
   }
   shell.context->lpVtbl->CopyResource(shell.context, (ID3D11Resource *)shell.surface,
                                       (ID3D11Resource *)shell.shared);
-  shell.shared_mutex->lpVtbl->ReleaseSync(shell.shared_mutex, 0);
+  HRESULT released = shell.shared_mutex->lpVtbl->ReleaseSync(shell.shared_mutex, 0);
+  if (take_fault(FAULT_RELEASE)) released = E_FAIL;
+  if (released != S_OK) {
+    fail_gpu("surface mutex release failed", released);
+    return false;
+  }
   return true;
 }
 
@@ -731,7 +918,7 @@ static bool load_memory_frame(const AnvilSurfaceFrame *frame) {
     close_memory_frame();
     char lock_name[ANVIL_SURFACE_NAME_MAX + 8];
     snprintf(lock_name, sizeof(lock_name), "%s%s", frame->name, ANVIL_SURFACE_LOCK_SUFFIX);
-    shell.memory_mapping = OpenFileMappingA(FILE_MAP_READ, FALSE, frame->name);
+    shell.memory_mapping = take_fault(FAULT_OPEN) ? NULL : OpenFileMappingA(FILE_MAP_READ, FALSE, frame->name);
     shell.memory_mutex = OpenMutexA(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, lock_name);
     if (shell.memory_mapping) {
       shell.memory_view = MapViewOfFile(shell.memory_mapping, FILE_MAP_READ, 0, 0, 0);
@@ -746,8 +933,20 @@ static bool load_memory_frame(const AnvilSurfaceFrame *frame) {
     shell.memory_size = info.RegionSize;
     SDL_strlcpy(shell.memory_name, frame->name, sizeof(shell.memory_name));
   }
-  DWORD wait = WaitForSingleObject(shell.memory_mutex, SHELL_SYNC_TIMEOUT_MS);
-  if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) { shell.frame_busy = true; return false; }
+  DWORD wait = take_fault(FAULT_ACQUIRE) ? WAIT_FAILED
+               : SDL_GetAtomicInt(&probe_fault) == FAULT_BUSY
+                   ? WAIT_TIMEOUT
+                   : WaitForSingleObject(shell.memory_mutex, SHELL_SYNC_TIMEOUT_MS);
+  if (wait != WAIT_OBJECT_0) {
+    if (wait == WAIT_TIMEOUT)
+      shell.frame_busy = true;
+    else {
+      if (wait == WAIT_ABANDONED)
+        ReleaseMutex(shell.memory_mutex);
+      fail_connection("shared memory mutex failed");
+    }
+    return false;
+  }
   const AnvilSurfaceMemoryHeader *header = (const AnvilSurfaceMemoryHeader *)shell.memory_view;
   bool ok = header->width == frame->width && header->height == frame->height &&
             header->configuration == frame->configuration && header->generation >= frame->generation &&
@@ -766,6 +965,51 @@ static void ui_fill(HDC dc, RECT rect, COLORREF color) {
   HBRUSH brush = CreateSolidBrush(color);
   FillRect(dc, &rect, brush);
   DeleteObject(brush);
+}
+
+static void draw_lifecycle(HDC dc) {
+  shell.restart_button = (RECT){0};
+  shell.close_button = (RECT){0};
+  if (shell.state != SHELL_STARTING && shell.state != SHELL_FAILED)
+    return;
+  RECT area = {shell.sidebar_w, shell.controls.bottom, shell.buffer_w, shell.buffer_h};
+  DrawTextW(dc, shell.state == SHELL_STARTING ? L"Starting Project..." : L"Project failed", -1,
+            &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  if (shell.state != SHELL_FAILED)
+    return;
+  int x = (area.left + area.right) / 2, y = (area.top + area.bottom) / 2 + (int)(30 * shell.scale);
+  shell.failure_card = (RECT){SDL_max(area.left, x - (int)(180 * shell.scale)),
+                              SDL_max(area.top, y - (int)(90 * shell.scale)),
+                              SDL_min(area.right, x + (int)(180 * shell.scale)),
+                              SDL_min(area.bottom, y + (int)(50 * shell.scale))};
+  int w = (int)(140 * shell.scale), h = (int)(32 * shell.scale), gap = (int)(8 * shell.scale);
+  shell.restart_button = (RECT){x - w - gap, y, x - gap, y + h};
+  shell.close_button = (RECT){x + gap, y, x + w + gap, y + h};
+  ui_fill(dc, shell.restart_button, RGB(55, 55, 62));
+  ui_fill(dc, shell.close_button, RGB(55, 55, 62));
+  DrawTextW(dc, L"Restart Project", -1, &shell.restart_button,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  DrawTextW(dc, L"Close", -1, &shell.close_button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paint_failed_window(HDC dc) {
+  client_pixel_size(&shell.buffer_w, &shell.buffer_h);
+  controls_geometry();
+  RECT client = {0, 0, shell.buffer_w, shell.buffer_h};
+  ui_fill(dc, client, RGB(23, 23, 28));
+  SetBkMode(dc, TRANSPARENT);
+  SetTextColor(dc, RGB(220, 220, 225));
+  HGDIOBJ old = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+  draw_lifecycle(dc);
+  const wchar_t *labels[] = {L"−", L"□", L"×"};
+  int width = (shell.controls.right - shell.controls.left) / 3;
+  for (int i = 0; i < 3; i++) {
+    RECT button = {shell.controls.left + i * width, 0,
+                   i == 2 ? shell.controls.right : shell.controls.left + (i + 1) * width,
+                   shell.controls.bottom};
+    DrawTextW(dc, labels[i], -1, &button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  }
+  SelectObject(dc, old);
 }
 
 static void update_ui(void) {
@@ -803,8 +1047,11 @@ static void update_ui(void) {
     desc.SampleDesc.Count = 1;
     desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     desc.Usage = D3D11_USAGE_DEFAULT;
-    if (FAILED(shell.device->lpVtbl->CreateTexture2D(shell.device, &desc, NULL, &shell.ui)))
+    HRESULT hr = shell.device->lpVtbl->CreateTexture2D(shell.device, &desc, NULL, &shell.ui);
+    if (FAILED(hr)) {
+      fail_gpu("native UI texture creation failed", hr);
       return;
+    }
     shell.ui_w = shell.buffer_w;
     shell.ui_h = shell.buffer_h;
     shell.ui_dirty = true;
@@ -833,8 +1080,6 @@ static void update_ui(void) {
   SetTextColor(dc, RGB(220, 220, 225));
   RECT logo = {0, 0, shell.sidebar_w, (LONG)(48 * shell.scale)};
   DrawTextW(dc, L"A", 1, &logo, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-  static const wchar_t *states[] = {L"Starting Project...", L"Ready", L"Closing Project...",
-                                    L"Project failed"};
   RECT status = {0, shell.buffer_h - (LONG)(40 * shell.scale), shell.sidebar_w, shell.buffer_h};
   DrawTextW(dc,
             shell.state == SHELL_FAILED    ? L"!"
@@ -870,28 +1115,7 @@ static void update_ui(void) {
   }
   SelectObject(dc, old_pen);
   DeleteObject(pen);
-  shell.restart_button = (RECT){0};
-  shell.close_button = (RECT){0};
-  if (shell.state == SHELL_STARTING || shell.state == SHELL_FAILED) {
-    RECT area = {shell.sidebar_w, shell.controls.bottom, shell.buffer_w, shell.buffer_h};
-    DrawTextW(dc, states[shell.state], -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    if (shell.state == SHELL_FAILED) {
-      int x = (area.left + area.right) / 2,
-          y = (area.top + area.bottom) / 2 + (int)(30 * shell.scale);
-      shell.failure_card = (RECT){SDL_max(area.left, x - (int)(180 * shell.scale)),
-                                  SDL_max(area.top, y - (int)(90 * shell.scale)),
-                                  SDL_min(area.right, x + (int)(180 * shell.scale)),
-                                  SDL_min(area.bottom, y + (int)(50 * shell.scale))};
-      int w = (int)(140 * shell.scale), h = (int)(32 * shell.scale), gap = (int)(8 * shell.scale);
-      shell.restart_button = (RECT){x - w - gap, y, x - gap, y + h};
-      shell.close_button = (RECT){x + gap, y, x + w + gap, y + h};
-      ui_fill(dc, shell.restart_button, RGB(55, 55, 62));
-      ui_fill(dc, shell.close_button, RGB(55, 55, 62));
-      DrawTextW(dc, L"Restart Project", -1, &shell.restart_button,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-      DrawTextW(dc, L"Close", -1, &shell.close_button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
-  }
+  draw_lifecycle(dc);
   GdiFlush();
   if (full) {
     shell.context->lpVtbl->UpdateSubresource(shell.context, (ID3D11Resource *)shell.ui, 0, NULL,
@@ -927,6 +1151,7 @@ static void copy_ui(RECT rect) {
 }
 
 static void composite_and_present(void) {
+  if (shell.render_failed) { InvalidateRect(shell.hwnd, NULL, FALSE); return; }
   if (!shell.rtv)
     return;
   const FLOAT sidebar[4] = {0.09f, 0.09f, 0.11f, 1.0f};
@@ -953,8 +1178,10 @@ static void composite_and_present(void) {
   else if (shell.state == SHELL_FAILED)
     copy_ui(shell.failure_card);
   HRESULT hr = shell.swapchain->lpVtbl->Present(shell.swapchain, 1, 0);
+  if (take_fault(FAULT_PRESENT))
+    hr = DXGI_ERROR_DEVICE_REMOVED;
   if (FAILED(hr))
-    SDL_Log("Anvil shell present failed: 0x%08lx", (unsigned long)hr);
+    fail_gpu("presentation failed", hr);
 }
 
 static void finish_latency_probe(void) {
@@ -969,6 +1196,7 @@ static bool load_pending_frame(AnvilSurfaceFrame *frame) {
   *frame = shell.latest_frame;
   shell.frame_pending = false;
   SDL_UnlockMutex(shell.lock);
+  if (shell.render_failed || shell.state == SHELL_FAILED) return false;
   if (!pending) return false;
   if (!anvil_surface_frame_matches(&shell.last_config, frame)) {
     set_frame_busy(false);
@@ -995,6 +1223,12 @@ static bool load_pending_frame(AnvilSurfaceFrame *frame) {
       SDL_LockMutex(shell.lock);
       if (shell.latest_frame.generation == frame->generation) shell.frame_pending = true;
       SDL_UnlockMutex(shell.lock);
+    } else if (shell.state != SHELL_FAILED) {
+      HRESULT removed = shell.device->lpVtbl->GetDeviceRemovedReason(shell.device);
+      if (FAILED(removed))
+        fail_gpu("surface device failed", removed);
+      else
+        fail_connection("surface resource unavailable or invalid");
     }
     return false;
   }
@@ -1329,6 +1563,7 @@ static void close_decision(int decision) {
 }
 
 static void handle_message(ShellMessage *message) {
+  if (shell.state == SHELL_FAILED) return;
   const void *payload = message->payload;
   int value =
       message->size == sizeof(AnvilSurfaceInt) ? ((const AnvilSurfaceInt *)payload)->value : 0;
@@ -1568,6 +1803,15 @@ static void perform_control(int control) {
       SDL_Log("Shell Restart refused: previous Project has not exited");
       return;
     }
+    if (shell.render_failed) {
+      SDL_Log("Shell explicit Restart: initialize presentation once");
+      if (!init_d3d11()) {
+        release_d3d11();
+        InvalidateRect(shell.hwnd, NULL, FALSE);
+        return;
+      }
+      shell.render_failed = false;
+    }
     shell.restart_path = _strdup(shell.project_path);
     if (!shell.restart_path || !start_project(0, NULL)) {
       free(shell.restart_path);
@@ -1701,11 +1945,15 @@ static void handle_connected(void) {
 
 SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   (void)appstate;
+  check_gpu_failure();
+  check_transport_failure();
   if (event->type == shell.event_type) {
     if (event->user.windowID != shell.connection) {
-      if (event->user.code == SHELL_EVENT_MESSAGE)
+      if (event->user.code == SHELL_EVENT_MESSAGE) {
+        ShellMessage *message = event->user.data1;
+        SDL_AddAtomicInt(&shell.inbound_bytes, -(int)(sizeof(*message) + message->size));
         free(event->user.data1);
-      else if (event->user.code == SHELL_EVENT_DIALOG_RESULT) {
+      } else if (event->user.code == SHELL_EVENT_DIALOG_RESULT) {
         ShellDialog *dialog = event->user.data1;
         free(dialog->result);
         free(dialog);
@@ -1718,6 +1966,10 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       return SDL_APP_CONTINUE;
     }
     switch (event->user.code) {
+    case SHELL_EVENT_START_TIMEOUT:
+      if (shell.state == SHELL_STARTING)
+        fail_connection("startup deadline expired before the first frame");
+      break;
     case SHELL_EVENT_CONNECTED:
       handle_connected();
       break;
@@ -1726,9 +1978,10 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       break;
     case SHELL_EVENT_DISCONNECTED:
       if (!shell.intentional_exit)
-        fail_connection("pipe write failed");
+        fail_connection("pipe connection ended");
       break;
     case SHELL_EVENT_MESSAGE:
+      SDL_AddAtomicInt(&shell.inbound_bytes, -(int)(sizeof(ShellMessage) + ((ShellMessage *)event->user.data1)->size));
       handle_message(event->user.data1);
       free(event->user.data1);
       break;
@@ -1739,6 +1992,11 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       if ((Uint32)(uintptr_t)event->user.data2 == shell.close_serial && shell.close_requested_ns &&
           !shell.close_waiting) {
         shell.close_timer = 0;
+        if (shell.process.hProcess &&
+            WaitForSingleObject(shell.process.hProcess, 0) == WAIT_OBJECT_0) {
+          shell.failed_close = true;
+          break;
+        }
         offer_force_close();
       }
       break;
@@ -1932,6 +2190,36 @@ static void push_window_event(SDL_EventType type, float x, float y) {
 }
 
 static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+  if (msg == WM_TIMER && shell.startup_timer && wparam == shell.startup_timer) {
+    bool waiting = false;
+    for (size_t i = 0; i < SDL_arraysize(shell.dialogs); i++)
+      waiting |= shell.dialogs[i] != 0;
+    if (!waiting) {
+      SDL_Event event = {0};
+      event.type = shell.event_type;
+      event.user.code = SHELL_EVENT_START_TIMEOUT;
+      event.user.windowID = shell.connection;
+      if (!SDL_PushEvent(&event))
+        report_transport_failure(FAILURE_EVENT);
+    }
+    return 0;
+  }
+  if (msg == SHELL_FAULT_MESSAGE && SDL_getenv("ANVIL_SURFACE_FAULT_PROBE")) {
+    SDL_Log("Shell fault probe armed: %u", (unsigned)wparam);
+    if (wparam == FAULT_PIPE)
+      fail_connection("owned probe broke the pipe");
+    else {
+      SDL_SetAtomicInt(&probe_fault, (int)wparam);
+      if (wparam == FAULT_OPEN) {
+        SAFE_RELEASE(shell.shared_mutex);
+        SAFE_RELEASE(shell.shared);
+        close_memory_frame();
+      }
+      if (wparam == FAULT_PRESENT)
+        composite_and_present();
+    }
+    return 0;
+  }
   if (anvil_routing_probe_message(shell.window, msg, wparam, lparam)) return 0;
   switch (msg) {
     case WM_KILLFOCUS:
@@ -2021,10 +2309,18 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     case WM_SIZE: {
       LRESULT result = CallWindowProcW(shell.sdl_wndproc, hwnd, msg, wparam, lparam);
       if (wparam != SIZE_MINIMIZED && shell.swapchain) resize_step();
+      else if (shell.render_failed) InvalidateRect(hwnd, NULL, FALSE);
       return result;
     }
 
     case WM_PAINT: {
+      if (shell.render_failed) {
+        PAINTSTRUCT paint;
+        HDC dc = BeginPaint(hwnd, &paint);
+        paint_failed_window(dc);
+        EndPaint(hwnd, &paint);
+        return 0;
+      }
       LRESULT result = CallWindowProcW(shell.sdl_wndproc, hwnd, msg, wparam, lparam);
       if (shell.shown) composite_and_present();
       return result;
@@ -2130,6 +2426,30 @@ static bool choose_project(int argc, char **argv) {
   return shell.project_path != NULL;
 }
 
+static bool stop_transport(void) {
+  if (shell.pipe.handle)
+    anvil_ipc_pipe_cancel(&shell.pipe);
+  if (shell.lock) {
+    SDL_LockMutex(shell.lock);
+    shell.writer_stop = true;
+    SDL_BroadcastCondition(shell.queue_cond);
+    SDL_UnlockMutex(shell.lock);
+  }
+  Uint64 deadline = SDL_GetTicks() + 1000;
+  while ((shell.reader && !SDL_GetAtomicInt(&shell.reader_done)) ||
+         (shell.writer && !SDL_GetAtomicInt(&shell.writer_done))) {
+    if (SDL_GetTicks() >= deadline)
+      return false;
+    SDL_Delay(1);
+  }
+  if (shell.writer)
+    SDL_WaitThread(shell.writer, NULL);
+  if (shell.reader)
+    SDL_WaitThread(shell.reader, NULL);
+  shell.reader = shell.writer = NULL;
+  return true;
+}
+
 static bool start_project(int argc, char **argv) {
   /* Replacement starts only after the old process exited. Join cancelled transport users first. */
   if (shell.reader || shell.writer) {
@@ -2137,16 +2457,7 @@ static bool start_project(int argc, char **argv) {
     SDL_StopTextInput(shell.window);
     shell.text_active = false;
     shell.connected = false;
-    anvil_ipc_pipe_cancel(&shell.pipe);
-    SDL_LockMutex(shell.lock);
-    shell.writer_stop = true;
-    SDL_BroadcastCondition(shell.queue_cond);
-    SDL_UnlockMutex(shell.lock);
-    if (shell.writer)
-      SDL_WaitThread(shell.writer, NULL);
-    if (shell.reader)
-      SDL_WaitThread(shell.reader, NULL);
-    shell.reader = shell.writer = NULL;
+    if (!stop_transport()) { SDL_Log("Shell transport cleanup exceeded its deadline"); return false; }
     anvil_ipc_pipe_close(&shell.pipe);
     SAFE_RELEASE(shell.shared_mutex);
     SAFE_RELEASE(shell.shared);
@@ -2176,6 +2487,9 @@ static bool start_project(int argc, char **argv) {
     SDL_CaptureMouse(false);
   }
   shell.intentional_exit = false;
+  SDL_SetAtomicInt(&shell.transport_failure, 0);
+  SDL_SetAtomicInt(&shell.reader_done, 0);
+  SDL_SetAtomicInt(&shell.writer_done, 0);
   shell.connection++;
   set_state(SHELL_STARTING);
   shell.ui_dirty = true;
@@ -2186,6 +2500,10 @@ static bool start_project(int argc, char **argv) {
     return false;
   shell.reader = SDL_CreateThread(reader_thread, "anvil-shell-reader", NULL);
   shell.writer = SDL_CreateThread(writer_thread, "anvil-shell-writer", NULL);
+  shell.startup_timer =
+      SetTimer(shell.hwnd, 0x10000u + shell.connection, SHELL_CONNECT_TIMEOUT_MS, NULL);
+  if (!shell.startup_timer)
+    return false;
   return shell.reader && shell.writer;
 }
 
@@ -2233,12 +2551,10 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   update_scale();
   SDL_SetWindowMinimumSize(shell.window, 240 + shell.sidebar_w, 180);
   set_window_icon();
-  if (!init_d3d11()) {
-    SDL_Log("Anvil shell could not initialize Direct3D 11.");
-    return SDL_APP_FAILURE;
-  }
-
-  if (!choose_project(argc, argv) || !start_project(argc, argv)) {
+  bool chosen = choose_project(argc, argv);
+  if (!init_d3d11())
+    fail_gpu("initial presentation creation failed", E_FAIL);
+  else if (!chosen || !start_project(argc, argv)) {
     SDL_Log("Anvil shell could not start its surface process: %lu", (unsigned long)GetLastError());
     set_state(SHELL_FAILED);
   }
@@ -2252,6 +2568,8 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
 
 SDL_AppResult anvil_shell_iterate(void *appstate) {
   (void)appstate;
+  check_gpu_failure();
+  check_transport_failure();
   if ((Uint32)SDL_GetAtomicInt(&shell.dialog_failure) == shell.connection && shell.connected)
     fail_connection("native dialog result notification failed");
   if (shell.frame_busy) handle_frame();
@@ -2260,10 +2578,14 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
 
 void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   stop_close_timer();
+  if (shell.startup_timer) KillTimer(shell.hwnd, shell.startup_timer);
   (void)appstate;
   (void)result;
   /* Project loss detection owns save/detach and its deadline. Never kill it with a shell job. */
-  if (shell.pipe.handle) anvil_ipc_pipe_cancel(&shell.pipe);
+  if (!stop_transport()) {
+    SDL_Log("Shell transport shutdown deadline expired; exit this shell only");
+    _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+  }
   if (shell.retry_timer) SDL_RemoveTimer(shell.retry_timer);
 }
 

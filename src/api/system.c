@@ -22,6 +22,7 @@
 #include "../shutdown_diagnostics.h"
 #include "../win32_single_instance.h"
 #include "../hosted_surface.h"
+#include "../d3d11_backend.h"
 #include "../cli_args.h"
 #include "../window_backend.h"
 #ifdef _WIN32
@@ -1734,6 +1735,15 @@ static int f_project_close_decision(lua_State *L) {
   if (anvil_hosted_surface_active()) anvil_hosted_surface_close_decision(decision);
   return 0;
 }
+static int f_test_surface_failure(lua_State *L) {
+  const char *enabled = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
+  luaL_argcheck(L, enabled && !strcmp(enabled, "1") && anvil_hosted_surface_active(), 1, "isolated hosted surface probe is disabled");
+  const char *fault = luaL_checkstring(L, 1);
+  luaL_argcheck(L, !strcmp(fault, "device") || !strcmp(fault, "stale") || !strcmp(fault, "malformed"), 1, "unknown surface fault");
+  if (!strcmp(fault, "device")) anvil_d3d11_test_sync_failure();
+  else anvil_hosted_surface_test_packet(!strcmp(fault, "stale"));
+  return 0;
+}
 
 
 typedef void (*fptr)(void);
@@ -2330,6 +2340,7 @@ static const luaL_Reg lib[] = {
   { "get_startup_path_arguments", f_get_startup_path_arguments },
   { "prepare_project_exit",  f_prepare_project_exit  },
   { "project_close_decision", f_project_close_decision },
+  { "test_surface_failure", f_test_surface_failure },
   { "sleep",                 f_sleep                 },
   { "exec",                  f_exec                  },
 #ifdef _WIN32

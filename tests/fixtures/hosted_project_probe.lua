@@ -195,7 +195,70 @@ if project:find("/driver$", 1) then
       local state = load(root .. "/subject.lua")
       core.log_quiet("Hosted Project probe: subject ready action=%s pid=%d", action, state.pid)
       local handle = own_handle(state.pid); handles[#handles + 1] = handle
-      if action == "launch" then
+      if action:match("^fault%-") then
+        local window = assert(shell_window(state.shell_pid))
+        local points = {alloc=1, event=2, open=3, acquire=4, present=5, resize=6, write=7, pipe=8, busy=9, release=11}
+        local fault = action:sub(7)
+        local process_handle = own_handle(state.pid, 0x1F0FFF); handles[#handles + 1] = process_handle
+        local function trace()
+          local file = io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb")
+          if not file then return "" end
+          local text = file:read("*a"); file:close(); return text
+        end
+        if fault == "pipe" then assert(ntdll.NtSuspendProcess(process_handle) >= 0) end
+        if points[fault] then user32.SendMessageW(window, 0x804b, points[fault], 0) end
+        if fault == "resize" or fault == "write" then
+          local bounds = ffi.new("struct RECT[1]"); user32.GetWindowRect(window, bounds)
+          user32.SetWindowPos(window, nil, bounds[0].left, bounds[0].top,
+            bounds[0].right - bounds[0].left + 40, bounds[0].bottom - bounds[0].top + 30, 0x14)
+        end
+        save(root .. "/fault-go.lua", {continue = true})
+        if fault == "stale" or fault == "busy" then
+          assert(wait_for(function() return load(root .. "/fault-sent.lua") end, 5))
+          coroutine.yield(1)
+          assert(not trace():find("Shell state: Failed", 1, true), "stale or busy frame failed a usable Project")
+          user32.ShowWindow(window, 6)
+          assert(wait_for(function() return user32.IsIconic(window) ~= 0 end, 2))
+          user32.ShowWindow(window, 9)
+          user32.SendMessageW(window, 0x804b, 0, 0)
+          save(root .. "/continue.lua", {continue = true})
+        else
+          assert(wait_for(function() return owned_dialog(state, "Anvil - Project failed") end, fault == "startup" and 35 or 3),
+            "surface failure did not enter Failed")
+          local bounds = ffi.new("struct RECT[1]"); user32.GetClientRect(window, bounds)
+          local point = math.floor(tonumber(bounds[0].right) - state.controls_w * 5 / 6)
+            + math.floor(state.controls_h / 2) * 65536
+          user32.PostMessageW(window, 0x201, 1, point); coroutine.yield(.1)
+          user32.PostMessageW(window, 0x202, 0, point)
+          assert(wait_for(function() return user32.IsIconic(window) ~= 0 end, 2),
+            "Failed Minimize did not work; shell exit=" .. tostring((subject:returncode())))
+          user32.ShowWindow(window, 9)
+          if fault == "pipe" then
+            coroutine.yield(11)
+            assert(kernel.WaitForSingleObject(process_handle, 0) == 258, "pipe failure implicitly terminated the Project")
+            assert(ntdll.NtResumeProcess(process_handle) >= 0)
+          end
+          assert(wait_for(function() return kernel.WaitForSingleObject(process_handle, 0) == 0 end, 8), "failed transport left the Project running")
+          if fault == "startup" then
+            user32.PostMessageW(window, 0x10, 0, 0)
+            assert(wait_for(function() return not subject:running() end, 5), "startup failure blocked Close")
+            save(result_path, {ok = true, action = action, mode = mode})
+            return
+          end
+          local rect = ffi.new("struct RECT[1]"); user32.GetClientRect(window, rect)
+          local scale = state.controls_w / 138
+          local x = (48 * scale + tonumber(rect[0].right)) / 2
+          local y = (state.controls_h + tonumber(rect[0].bottom)) / 2 + 46 * scale
+          local point = math.floor(x - 78 * scale) + math.floor(y) * 65536
+          user32.PostMessageW(window, 0x201, 1, point)
+          coroutine.yield(.1)
+          user32.PostMessageW(window, 0x202, 0, point)
+          assert(wait_for(function() return load(root .. "/replacement.lua") end, 12), "Failed Restart did not recover the owned Project")
+          local replacement = load(root .. "/replacement.lua")
+          assert(replacement.pid ~= state.pid and replacement.shell_pid == state.shell_pid)
+          save(root .. "/continue.lua", {continue = true})
+        end
+      elseif action == "launch" then
         assert(state.hosted, "Project did not use a hosted backend")
         assert(state.command_line:find("--project", 1, true), "shell did not launch explicit Project mode")
         assert(state.hidden, "Project window became visible")
@@ -262,11 +325,17 @@ if project:find("/driver$", 1) then
         assert(drop.bytes == 40000 and drop.prefix and drop.tail, "hosted text drop lost complete UTF-8 or trailing lines")
         assert(drop.new_pane, "Title Bar text drop replaced the existing Pane")
         save(root .. "/continue.lua", {continue = true})
-      elseif action == "dialog-late" or action == "dialog-close" then
+      elseif action == "dialog-late" or action == "dialog-close" or action == "dialog-blocked-close" then
         local window = assert(shell_window(state.shell_pid))
         local dialog
         assert(wait_for(function() dialog = owned_dialog(state, "Anvil old dialog"); return dialog end, 8))
         assert(user32.GetWindow(dialog, 4) == window, "pending dialog has the wrong parent")
+        if action == "dialog-blocked-close" then
+          user32.SendMessageW(window, 0x804b, 10, 0)
+          local bounds = ffi.new("struct RECT[1]"); user32.GetWindowRect(window, bounds)
+          user32.SetWindowPos(window, nil, bounds[0].left, bounds[0].top,
+            bounds[0].right - bounds[0].left + 30, bounds[0].bottom - bounds[0].top + 20, 0x14)
+        end
         save(root .. "/dialog-transition.lua", {continue = true})
         if action == "dialog-late" then
           assert(wait_for(function() return load(root .. "/replacement.lua") end, 12), "pending dialog stopped Project restart")
@@ -584,7 +653,7 @@ else
       end, 12), "saved live Terminal did not attach")
       assert(wait_for(function() return load(root .. "/continue.lua") end, 15)); quit(); return
     end
-    if old and (action == "restart" or action == "switch" or action == "new-window") then
+    if old and (action:match("^fault%-") or action == "restart" or action == "switch" or action == "new-window") then
       save(root .. "/replacement.lua", { pid = pid, shell_pid = shell_pid })
       assert(wait_for(function() return load(root .. "/continue.lua") end, 15))
       quit(); return
@@ -608,6 +677,10 @@ else
       quit(); return
     end
     local state = { pid = pid, shell_pid = shell_pid, started = system.get_time(), hosted = system.is_hosted_surface(), path = project }
+    if action:match("^fault%-") then
+      local _, _, width, height = system.get_window_controls(core.window)
+      state.controls_w, state.controls_h = width, height
+    end
     local routing_view, drag_events
     if action == "close" then
       routing_view = core.open_file(project .. "/edited.txt")
@@ -677,7 +750,26 @@ else
       end
     end
     save(root .. "/subject.lua", state)
-    if action == "dialog-late" or action == "dialog-close" then
+    if action:match("^fault%-") then
+      assert(wait_for(function() return load(root .. "/fault-go.lua") end, 10))
+      local fault = action:sub(7)
+      if fault == "malformed" or fault == "stale" then
+        system.test_surface_failure(fault)
+      elseif fault == "device" then
+        system.test_surface_failure("device")
+        local view = core.open_file(project .. "/edited.txt")
+        view.buffer:insert(1, 1, "fault")
+      else
+        system.set_window_title(core.window, "Owned fault probe")
+        local view = core.open_file(project .. "/edited.txt")
+        view.buffer:insert(1, 1, "fault")
+        core.redraw = true
+      end
+      save(root .. "/fault-sent.lua", {continue = true})
+      assert(wait_for(function() return load(root .. "/continue.lua") end, fault == "startup" and 45 or 25))
+      quit(); return
+    end
+    if action == "dialog-late" or action == "dialog-close" or action == "dialog-blocked-close" then
       core.open_file_dialog(core.window, function(status) save(root .. "/old-result.lua", {status = status}) end, {title = "Anvil old dialog", default_location = (project .. "/"):gsub("/", "\\")})
       assert(wait_for(function() return load(root .. "/dialog-transition.lua") end, 10))
       if action == "dialog-late" then core.restart() else quit() end

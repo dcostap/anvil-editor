@@ -232,6 +232,24 @@ static void SDLCALL write_surface_log(void *userdata, int category, SDL_LogPrior
                                       const char *message) {
   (void)category;
   (void)priority;
+#ifdef _WIN32
+  const char *path = userdata;
+  int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+  wchar_t *wide = count > 0 ? malloc(count * sizeof(*wide)) : NULL;
+  if (!wide) return;
+  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, count);
+  HANDLE file = CreateFileW(wide, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  free(wide);
+  if (file == INVALID_HANDLE_VALUE) return;
+  char line[4096];
+  int length = SDL_snprintf(line, sizeof(line), "%10.3f %s[%lu] %s\n", (double)SDL_GetTicksNS() / 1e9,
+    log_role, (unsigned long)GetCurrentProcessId(), message);
+  DWORD written;
+  /* One append-only write keeps concurrent process diagnostics separate. */
+  WriteFile(file, line, (DWORD)SDL_min(length, (int)sizeof(line) - 1), &written, NULL);
+  CloseHandle(file);
+#else
   FILE *file = fopen((const char *)userdata, "ab");
   if (!file) return;
   fprintf(file, "%10.3f %s[%lu] %s\n", (double)SDL_GetTicksNS() / 1e9, log_role,
@@ -242,6 +260,7 @@ static void SDLCALL write_surface_log(void *userdata, int category, SDL_LogPrior
 #endif
           message);
   fclose(file);
+#endif
 }
 
 void anvil_surface_log_init(const char *role) {
