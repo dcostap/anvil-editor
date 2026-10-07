@@ -289,6 +289,11 @@ _Avoid_: Line highlighting, active line highlight
 A short animated movement between the previous visible content position and a requested scroll position.
 _Avoid_: smooth scroll, View displacement
 
+**Middle-click Autoscroll**:
+A scrolling mode started by middle-clicking a scrollable View. The click sets an anchor point.
+Moving above or below the anchor scrolls up or down. Greater distance produces faster scrolling.
+A small area around the anchor does not scroll. A click or key press stops the mode.
+
 **Wrapped Visual Row**:
 A visual row produced when one Buffer line wraps; it is not a separate Buffer line.
 _Avoid_: Fake line, wrapped file line

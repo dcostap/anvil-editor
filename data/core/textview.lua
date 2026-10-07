@@ -6310,6 +6310,12 @@ function TextView:on_mouse_released(...)
   self:end_line_render_interaction("mouse-release")
 end
 
+function TextView:autoscroll(dy)
+  TextView.super.autoscroll(self, dy)
+  self:notify_scroll_listeners("autoscroll")
+  return 0
+end
+
 
 ---Handle text input from keyboard.
 ---@param text string Input text

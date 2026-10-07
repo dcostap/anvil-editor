@@ -727,6 +727,15 @@ function TerminalView:get_scrollable_size()
     or self.size.y
 end
 
+function TerminalView:autoscroll(dy)
+  if not self.session then return 0 end
+  local rows = dy / self.cell_height
+  rows = rows < 0 and math.ceil(rows) or math.floor(rows)
+  if rows == 0 then return dy end
+  if self.session:scroll("delta", rows) then self:refresh_snapshot() end
+  return dy - rows * self.cell_height
+end
+
 function TerminalView:on_touch_moved(x, y, dx, dy)
   if not self.session or dy == 0 then return false end
   local rows = math.max(1, math.floor(math.abs(dy) / self.cell_height + 0.5))

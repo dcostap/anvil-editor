@@ -118,6 +118,30 @@ function View:get_surface_focus_targets()
   return nil
 end
 
+---Return the scrollable surface under the pointer.
+function View:get_autoscroll_target(x, y)
+  local targets = self:get_surface_focus_targets()
+  if targets and #targets > 0 then
+    for _, target in ipairs(targets) do
+      if target ~= self and x >= target.position.x and y >= target.position.y
+        and x < target.position.x + target.size.x
+        and y < target.position.y + target.size.y then
+        return target:get_autoscroll_target(x, y)
+      end
+    end
+  end
+  if self.scrollable then return self end
+end
+
+---Scroll immediately by a vertical pixel distance. Return unused fractional pixels.
+function View:autoscroll(dy)
+  self.scroll.to.y = self.scroll.y + dy
+  self:clamp_scroll_position()
+  self.scroll.y = self.scroll.to.y
+  self.scroll.move_data_y = nil
+  return 0
+end
+
 ---Focus one target returned by get_surface_focus_targets().
 ---@param target core.view
 ---@return boolean focused

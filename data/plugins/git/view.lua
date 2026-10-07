@@ -756,6 +756,10 @@ function GitView:mouse_surface_at(x, y)
   return point_in_view(details, x, y) and details or nil
 end
 
+function GitView:get_autoscroll_target(x, y)
+  return self:mouse_surface_at(x, y)
+end
+
 function GitView:on_mouse_wheel(y, x)
   local tab = self:model_tab()
   local has_pointer = self.mouse_router:has_pointer()

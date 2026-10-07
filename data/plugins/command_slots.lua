@@ -863,6 +863,12 @@ function QuickCommandOutputView:get_focus_view()
   return self:active_output_view()
 end
 
+function QuickCommandOutputView:get_autoscroll_target(x, y)
+  if self:get_tab_bar():is_in_tab_area(x, y) then return end
+  local view = self:active_output_view()
+  return view and view:get_autoscroll_target(x, y)
+end
+
 function QuickCommandOutputView:get_surface_focus_targets()
   return self:sync_slot_views()
 end

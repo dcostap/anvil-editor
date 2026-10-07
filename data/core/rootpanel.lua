@@ -144,6 +144,7 @@ end
 ---Place one input owner above all normal UI targets.
 function RootPanel:push_modal_input(owner, options)
   assert(owner ~= nil, "Modal Input Owner is required")
+  self:stop_autoscroll("new modal input")
   options = options or {}
   local index = modal_input_index(self, owner)
   if index then table.remove(self.modal_inputs, index) end
@@ -178,6 +179,11 @@ end
 function RootPanel:dispatch_modal_input(event, ...)
   local entry = self.modal_inputs[#self.modal_inputs]
   if not entry then return false end
+  if event == "mouse_pressed" and entry.owner.get_autoscroll_target then
+    local button, x, y = ...
+    local target = button == "middle" and entry.owner:get_autoscroll_target(x, y)
+    if target and self:start_autoscroll(target, x, y, entry.owner) then return true end
+  end
   local handler = entry.handlers and entry.handlers[event]
   local result
   if handler then
@@ -517,12 +523,98 @@ local function request_view_cursor(view, x, y)
   core.request_cursor((dragging or scrollbar_owns_point(view, x, y)) and "arrow" or view.cursor)
 end
 
+---Keep input and scrolling on the surface selected by middle-click.
+function RootPanel:start_autoscroll(view, x, y, host)
+  if not view or not view.scrollable then return false end
+  self:stop_autoscroll("restart")
+  host = host or self:view_at(x, y)
+  if not self:modal_input_owner() and host then
+    if host == view then core.set_active_view(view)
+    else host:focus_surface_target(view) end
+  end
+  self:ungrab_mouse()
+  local state = {
+    view = view, host = host, x = x, y = y, mouse_y = y,
+    last_time = system.get_time(), remainder = 0,
+    modal_host = self:modal_input_owner() == host,
+  }
+  self:push_modal_input(state, {
+    label = "Middle-click autoscroll",
+    handlers = {
+      mouse_moved = function(mx, my)
+        self.mouse.x, self.mouse.y = mx, my
+        state.mouse_y = my
+        core.request_cursor("sizev")
+        core.redraw = true
+      end,
+      mouse_pressed = function() self:stop_autoscroll("click") end,
+      key_pressed = function() self:stop_autoscroll("key") end,
+      mouse_wheel = function() self:stop_autoscroll("wheel") end,
+      mouse_left = function() self:stop_autoscroll("pointer left window") end,
+    },
+  })
+  self.autoscroll_state = state
+  self.mouse.x, self.mouse.y = x, y
+  core.request_cursor("sizev")
+  core.redraw = true
+  core.log_quiet("Autoscroll: started view=%s anchor=%.1f,%.1f", tostring(view), x, y)
+  return true
+end
+
+function RootPanel:stop_autoscroll(reason)
+  local state = self.autoscroll_state
+  if not state then return end
+  self.autoscroll_state = nil
+  self:pop_modal_input(state)
+  core.request_cursor("arrow")
+  core.redraw = true
+  core.log_quiet("Autoscroll: stopped reason=%s", reason)
+end
+
+function RootPanel:update_autoscroll()
+  local state = self.autoscroll_state
+  if not state then return end
+  local host_visible = state.modal_host and modal_input_index(self, state.host)
+    or self:view_at(state.x, state.y) == state.host
+  local target = state.host and state.host.get_autoscroll_target
+    and state.host:get_autoscroll_target(state.x, state.y)
+  if not host_visible or target ~= state.view or self:modal_input_owner() ~= state then
+    self:stop_autoscroll("surface no longer visible")
+    return
+  end
+  local now = system.get_time()
+  local dt = common.clamp(now - state.last_time, 0, 0.05)
+  state.last_time = now
+  local distance = (state.mouse_y - state.y) / SCALE
+  local outside = math.max(0, math.abs(distance) - 12)
+  if outside == 0 then state.remainder = 0; return end
+  local speed = outside * (4 + outside / 8) * SCALE
+  local dy = (distance < 0 and -speed or speed) * dt
+  state.remainder = call_view(state.view, "autoscroll", dy + state.remainder) or 0
+  core.request_cursor("sizev")
+  core.redraw = true
+end
+
+function RootPanel:draw_autoscroll()
+  local state = self.autoscroll_state
+  if not state then return end
+  local x, y, s = state.x, state.y, SCALE
+  renderer.draw_rounded_rect(x - 12 * s, y - 16 * s, 24 * s, 32 * s, 12 * s, style.background2)
+  renderer.draw_rect(x - s, y - s, 2 * s, 2 * s, style.text)
+  for i = 0, 4 do
+    local width = (1 + i * 2) * s
+    renderer.draw_rect(x - width / 2, y - (11 - i) * s, width, s, style.text)
+    renderer.draw_rect(x - width / 2, y + (10 - i) * s, width, s, style.text)
+  end
+end
+
 function RootPanel:update()
   local started, scope = perf_begin("rootpanel_update")
   self:update_app_overlay()
   local layout_started, layout_scope = perf_begin("rootpanel_initial_layout")
   self:update_layout()
   perf_end("rootpanel_initial_layout", layout_started, layout_scope)
+  self:update_autoscroll()
   local current = {}
   for _, view in ipairs(self:pane_views()) do
     current[view] = true
@@ -533,7 +625,7 @@ function RootPanel:update()
       call_view(view, "update_suspended")
     end
   end
-  if not self.grab and not self.dragged_divider then
+  if not self.autoscroll_state and not self.grab and not self.dragged_divider then
     local hovered = self:view_at(self.mouse.x, self.mouse.y)
     if hovered ~= self.overlapping_view then
       if self.overlapping_view then call_view(self.overlapping_view, "on_mouse_left") end
@@ -570,6 +662,10 @@ function RootPanel:on_mouse_pressed(button, x, y, clicks)
   self.overlapping_view = view
   local pane = panes().pane_for_view(view)
   if pane then panes().focus(pane) end
+  if button == "middle" and view and view.get_autoscroll_target then
+    local target = view:get_autoscroll_target(x, y)
+    if target and self:start_autoscroll(target, x, y, view) then return true end
+  end
   if view then self:grab_mouse(button, view) end
   return call_view(view, "on_mouse_pressed", button, x, y, clicks)
 end
@@ -657,6 +753,7 @@ function RootPanel:on_ime_text_editing(...)
 end
 
 function RootPanel:on_focus_lost(...)
+  self:stop_autoscroll("window focus lost")
   core.redraw = true
   local target = self:keyboard_target()
   local grabbed = self.grab and self.grab.view or nil
@@ -971,6 +1068,7 @@ function RootPanel:draw()
   end
   perf_end("rootpanel_deferred_draw", deferred_started, deferred_scope)
   self:draw_keyboard_caret()
+  self:draw_autoscroll()
   if core.cursor_change_req then
     system.set_cursor(core.cursor_change_req)
     core.cursor_change_req = nil
