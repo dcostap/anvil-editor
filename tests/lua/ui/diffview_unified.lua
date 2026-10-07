@@ -3,6 +3,7 @@ local command = require "core.command"
 local config = require "core.config"
 local diffview = require "plugins.diffview"
 local test = require "core.test"
+local style = require "core.style"
 
 local function ready(view)
   local deadline = system.get_time() + 3
@@ -205,5 +206,34 @@ test.describe("Unified Diff View", function()
     local target_y = surface.scroll.to.y
     test.ok(view:on_mouse_wheel(1, 0))
     test.ok(surface.scroll.to.y < target_y, "scrolling up must reduce the scroll target")
+  end)
+
+  test.it("shows all change types inside the unified scrollbar track", function(context)
+    local text = string.rep("context line\n", 100)
+    local _, surface = open(context, "removed\n" .. text .. "old\n" .. text,
+      text .. "new\n" .. text .. "added\n")
+    local markers = {}
+    local draw_rect = renderer.draw_rect
+    renderer.begin_frame(core.window)
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.diff_overview_delete or color == style.diff_overview_insert
+        or color == style.diff_overview_modify then
+        markers[color] = { x = x, y = y, w = w, h = h }
+      end
+    end
+    local ok, err = pcall(surface.draw_scrollbar, surface)
+    renderer.draw_rect = draw_rect
+    renderer.end_frame()
+    if not ok then error(err, 0) end
+    local removed = test.not_nil(markers[style.diff_overview_delete], "removed lines need an overview mark")
+    local modified = test.not_nil(markers[style.diff_overview_modify], "replaced lines need an overview mark")
+    local added = test.not_nil(markers[style.diff_overview_insert], "added lines need an overview mark")
+    test.ok(removed.y < modified.y and modified.y < added.y,
+      "overview marks must follow their positions in the Unified Diff")
+    local x, y, w, h = surface.v_scrollbar:get_track_rect()
+    for _, marker in pairs(markers) do
+      test.ok(marker.x >= x and marker.x + marker.w <= x + w)
+      test.ok(marker.y >= y and marker.y + marker.h <= y + h)
+    end
   end)
 end)

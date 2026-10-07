@@ -10,10 +10,20 @@ local UnifiedView = TextView:extend()
 -- Keep source text unchanged. Source line numbers belong to the gutter.
 function UnifiedView.project(model, before, after, opts)
   local rows, text, a_rows, b_rows, points = {}, {}, {}, {}, {}
+  local change_blocks = {}
   local function append(pair, tag)
     local a = tag ~= "insert" and pair.a or nil
     local b = tag ~= "delete" and pair.b or nil
     rows[#rows + 1] = { a = a, b = b, tag = tag }
+    if tag ~= "equal" then
+      local block = change_blocks[#change_blocks]
+      if block and block.end_line == #rows - 1 then
+        block.end_line = #rows
+        if block.tag ~= tag then block.tag = "modify" end
+      else
+        change_blocks[#change_blocks + 1] = { start_line = #rows, end_line = #rows, tag = tag }
+      end
+    end
     text[#text + 1] = b and after[b] or before[a]
     if a then a_rows[a] = #rows end
     if b then b_rows[b] = #rows end
@@ -38,13 +48,15 @@ function UnifiedView.project(model, before, after, opts)
       i = last + 1
     end
   end
-  return { rows = rows, text = table.concat(text), a_rows = a_rows, b_rows = b_rows, points = points }
+  return { rows = rows, text = table.concat(text), a_rows = a_rows, b_rows = b_rows,
+    points = points, change_blocks = change_blocks }
 end
 
 function UnifiedView:new(parent)
   UnifiedView.super.new(self, Buffer())
   self.diff_view_parent = parent
   self.rows, self.a_rows, self.b_rows, self.points = {}, {}, {}, {}
+  self.change_blocks = {}
   self.show_line_numbers = false
   self.show_current_line_highlight = false
   self.suppress_gitdiff_gutter = true
@@ -116,6 +128,8 @@ function UnifiedView:set_projection(projection)
   local selection = self:get_selection_state().selections
   local side, line, col = self:source_position(selection[1], selection[2])
   self.rows, self.a_rows, self.b_rows, self.points = projection.rows, projection.a_rows, projection.b_rows, projection.points
+  self.change_blocks = projection.change_blocks
+  self.__overview_geometry = nil
   self.buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = #self.buffer.lines, col2 = math.huge,
     text = projection.text:gsub("\n$", "") } }, { record_undo = false, type = "unified-diff" })
   self.buffer:clean()
@@ -213,6 +227,37 @@ function UnifiedView:draw_line_gutter(line, x, y, width)
   x = x + number_width + font:get_width(" ")
   common.draw_text(font, style.line_number, row.b or "", "right", x, y, number_width, row_height)
   return height
+end
+
+local function overview_geometry(view)
+  local signature = view:get_visual_metric_signature()
+  local full_h = math.max(1, view:get_scrollable_size())
+  local cache = view.__overview_geometry
+  if cache and cache.signature == signature and cache.full_h == full_h then return cache.entries end
+  local entries = {}
+  for _, block in ipairs(view.change_blocks) do
+    local start_row = view:get_visual_row(block.start_line, 1, false)
+    local end_row = view:get_visual_row(block.end_line, 1, false)
+      + view:get_visual_row_count_for_line(block.end_line)
+    local first = common.clamp(view:get_visual_row_y_offset(start_row) / full_h, 0, 1)
+    entries[#entries + 1] = { tag = block.tag, first = first,
+      last = common.clamp(view:get_visual_row_y_offset(end_row) / full_h, first, 1) }
+  end
+  view.__overview_geometry = { signature = signature, full_h = full_h, entries = entries }
+  return entries
+end
+
+function UnifiedView:draw_scrollbar()
+  UnifiedView.super.draw_scrollbar(self)
+  local scrollbar = self.v_scrollbar
+  for _, marker in ipairs(overview_geometry(self)) do
+    local x, y, w, h = scrollbar:get_overview_marker_rect(marker.first, marker.last)
+    if x then
+      local marker_w = math.min(w, math.max(1, common.round(5 * SCALE)))
+      renderer.draw_rect(x + w - marker_w, y, marker_w, h, style["diff_overview_" .. marker.tag])
+    end
+  end
+  scrollbar:draw_thumb()
 end
 
 return UnifiedView
