@@ -796,6 +796,16 @@ function backend.build_changed_file_stats_args(left, right, opts)
   return build_diff_range_args({ "diff", "--numstat", "-z" }, left, right, opts)
 end
 
+function backend.diff_patch(repo, left, right, opts, callback)
+  local args = build_diff_range_args({
+    "diff", "--patch", "--binary", "--full-index", "--no-color",
+    "--no-ext-diff", "--no-textconv", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/",
+  }, left, right, opts)
+  return backend.run_git(repo, args, opts, function(result, err)
+    if callback then callback(result and result.stdout or nil, err) end
+  end)
+end
+
 function backend.changed_file_stats(repo, left, right, opts, callback)
   opts = opts or {}
   return backend.run_git(repo, backend.build_changed_file_stats_args(left, right, opts), opts, function(result, err)

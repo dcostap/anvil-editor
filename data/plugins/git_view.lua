@@ -598,6 +598,32 @@ command.add(nil, {
 
 command.add(function()
   local view = focused_git_view()
+  return view and view.tab_id == "log" and view.model.repo
+    and #view:pane_view("log-list"):get_selected_rows() > 1, view
+end, {
+  ["git:copy_range_patch"] = command.palette(function(view)
+    local revision, selection_err = view:sync_log_selection()
+    if not (revision and revision.kind == "commit_range") then
+      core.warn("Git View: Cannot copy a range patch: %s",
+        selection_err and selection_err.message or "Select a commit range")
+      return
+    end
+    local repo, count = view.model.repo, revision.count
+    core.log_quiet("Git View copying range patch: %d commits, %s → %s",
+      count, revision.left, revision.right)
+    view.model.backend.diff_patch(repo, revision.left, revision.right, {}, function(patch, err)
+      if err then
+        core.warn("Git View: Cannot copy a range patch: %s", err.message or err.kind)
+        return
+      end
+      system.set_clipboard(patch)
+      core.log("Git View: Copied range patch (%d commits, %d bytes)", count, #patch)
+    end)
+  end),
+})
+
+command.add(function()
+  local view = focused_git_view()
   if view then return true, view end
   return false
 end, {
