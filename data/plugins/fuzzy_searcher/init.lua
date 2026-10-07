@@ -5532,6 +5532,9 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
         end
       end
       table.sort(candidates, function(a, b)
+        if (a.recent_index == 1) ~= (b.recent_index == 1) then
+          return a.recent_index == 1
+        end
         if a.count ~= b.count then return a.count > b.count end
         if a.opens_view ~= b.opens_view then return a.opens_view end
         if a.recent_index ~= b.recent_index then return a.recent_index < b.recent_index end

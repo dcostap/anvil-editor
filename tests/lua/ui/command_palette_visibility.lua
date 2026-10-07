@@ -149,18 +149,22 @@ test.describe("Command Palette visibility", function()
     test.equal((storage.load("fuzzy_searcher", "command_usage") or {})[name], before + 1)
   end)
 
-  test.it("ranks frequent Palette commands above newer ones with equal text matches", function(context)
+  test.it("puts the last Palette command first only when the query is empty", function(context)
     local suffix = tostring(math.floor(system.get_time() * 1000000))
     local frequent = "test_palette:bravo_rank_" .. suffix
+    local less_frequent = "test_palette:charlie_rank_" .. suffix
     local newer = "test_palette:alpha_rank_" .. suffix
     context.names.frequent = frequent
+    context.names.less_frequent = less_frequent
     context.names.newer = newer
     command.add(nil, {
       [frequent] = command.palette(function() end),
+      [less_frequent] = command.palette(function() end),
       [newer] = command.palette(function() end),
     })
 
     for _ = 1, 3 do run_from_palette(frequent) end
+    for _ = 1, 2 do run_from_palette(less_frequent) end
     run_from_palette(newer)
 
     fuzzy_searcher.open(">")
@@ -173,7 +177,9 @@ test.describe("Command Palette visibility", function()
       "missing frequent command for " .. picker.input:get_text())
     local newer_position = test.not_nil(palette_position(picker, newer),
       "missing newer command for " .. picker.input:get_text())
-    test.ok(frequent_position < newer_position)
+    local less_frequent_position = test.not_nil(palette_position(picker, less_frequent))
+    test.equal(newer_position, 1)
+    test.ok(frequent_position < less_frequent_position)
     picker:close()
 
     fuzzy_searcher.open(">test_palette:")
@@ -182,7 +188,9 @@ test.describe("Command Palette visibility", function()
       "missing frequent command for " .. picker.input:get_text())
     newer_position = test.not_nil(palette_position(picker, newer),
       "missing newer command for " .. picker.input:get_text())
-    test.ok(frequent_position < newer_position)
+    less_frequent_position = test.not_nil(palette_position(picker, less_frequent))
+    test.ok(frequent_position < less_frequent_position)
+    test.ok(less_frequent_position < newer_position)
   end)
 
   test.it("hides keymap primitives while retaining useful editor actions", function()
