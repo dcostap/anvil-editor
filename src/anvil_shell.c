@@ -240,7 +240,7 @@ static void set_frame_busy(bool busy) {
   SDL_SetAtomicInt(&shell.retry_frame, busy);
   if (busy && !shell.retry_timer) {
     shell.retry_timer = SDL_AddTimer(16, retry_frame, (void *)(uintptr_t)shell.connection);
-    SDL_Log("Shell frame retry started");
+    SDL_Log("Shell frame retry started; last safe frame=%s", shell.have_surface ? "retained" : "none");
   } else if (!busy && shell.retry_timer) {
     SDL_RemoveTimer(shell.retry_timer);
     shell.retry_timer = 0;
@@ -957,7 +957,16 @@ static bool load_memory_frame(const AnvilSurfaceFrame *frame) {
     shell.context->lpVtbl->UpdateSubresource(shell.context, (ID3D11Resource *)shell.surface, 0, NULL,
                                              shell.memory_view + sizeof(*header), (UINT)header->stride, 0);
   }
-  ReleaseMutex(shell.memory_mutex);
+  BOOL released = ReleaseMutex(shell.memory_mutex);
+  if (take_fault(FAULT_RELEASE)) {
+    released = FALSE;
+    SetLastError(ERROR_NOT_OWNER);
+  }
+  if (!released) {
+    SDL_Log("Shell memory mutex release failed: %lu", (unsigned long)GetLastError());
+    fail_connection("shared memory mutex release failed");
+    return false;
+  }
   return ok;
 }
 
@@ -1200,8 +1209,10 @@ static bool load_pending_frame(AnvilSurfaceFrame *frame) {
   if (!pending) return false;
   if (!anvil_surface_frame_matches(&shell.last_config, frame)) {
     set_frame_busy(false);
-    SDL_Log("Shell discarded stale frame: configuration=%llu current=%llu",
-      (unsigned long long)frame->configuration, (unsigned long long)shell.last_config.configuration);
+    SDL_Log("Shell discarded stale frame: configuration=%llu current=%llu; last safe frame=%s",
+            (unsigned long long)frame->configuration,
+            (unsigned long long)shell.last_config.configuration,
+            shell.have_surface ? "retained" : "none");
     return false;
   }
   char prefix[80];
@@ -1933,6 +1944,7 @@ static void request_close(void) {
 }
 
 static void handle_connected(void) {
+  if (shell.state == SHELL_FAILED) return;
   SDL_Log("Anvil shell connected to surface process %lu", (unsigned long)shell.process.dwProcessId);
   shell.connected = true;
   send_configure();
@@ -2008,6 +2020,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
           if (WaitForSingleObject(dialog->process, 0) != WAIT_TIMEOUT ||
               TerminateProcess(dialog->process, 125)) {
             shell.intentional_exit = true;
+            shell.failed_close = true;
             stop_close_timer();
             SDL_Log("Shell explicitly forced Project close; Terminal Sessions remain independent");
           } else {
@@ -2029,12 +2042,19 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       stop_close_timer();
       SDL_Log("Anvil shell surface process exited with code %d", (int)(intptr_t)event->user.data2);
       if (shell.restart_path) {
-        free(shell.project_path);
-        shell.project_path = _strdup(shell.restart_path);
-        if (!start_project(0, NULL))
-          return SDL_APP_FAILURE;
+        char *path = _strdup(shell.restart_path);
+        bool started = false;
+        if (path) {
+          free(shell.project_path);
+          shell.project_path = path;
+          started = start_project(0, NULL);
+        }
         free(shell.restart_path);
         shell.restart_path = NULL;
+        if (!started) {
+          shell.intentional_exit = false;
+          fail_connection("Project replacement startup failed");
+        }
         return SDL_APP_CONTINUE;
       }
       if (shell.intentional_exit)
@@ -2450,9 +2470,18 @@ static bool stop_transport(void) {
   return true;
 }
 
+static bool startup_fault(const char *phase) {
+  const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
+  const char *fault = SDL_getenv("ANVIL_SURFACE_FAULT_STARTUP");
+  if (!probe || strcmp(probe, "1") || !fault) return false;
+  bool replacement = !strncmp(fault, "replacement-", 12);
+  if (replacement) fault += 12;
+  return shell.connection == (replacement ? 2u : 1u) && !strcmp(fault, phase);
+}
+
 static bool start_project(int argc, char **argv) {
   /* Replacement starts only after the old process exited. Join cancelled transport users first. */
-  if (shell.reader || shell.writer) {
+  if (shell.process.hProcess || shell.reader || shell.writer || shell.pipe.handle) {
     cancel_input();
     SDL_StopTextInput(shell.window);
     shell.text_active = false;
@@ -2465,6 +2494,7 @@ static bool start_project(int argc, char **argv) {
     close_memory_frame();
     CloseHandle(shell.process.hThread);
     CloseHandle(shell.process.hProcess);
+    shell.process = (PROCESS_INFORMATION){0};
     while (shell.queue_head) {
       ShellMessage *next = shell.queue_head->next;
       free(shell.queue_head);
@@ -2498,13 +2528,22 @@ static bool start_project(int argc, char **argv) {
   char pipe_name[128];
   if (!create_pipe(pipe_name, sizeof(pipe_name)) || !launch_child(argc, argv, pipe_name))
     return false;
-  shell.reader = SDL_CreateThread(reader_thread, "anvil-shell-reader", NULL);
-  shell.writer = SDL_CreateThread(writer_thread, "anvil-shell-writer", NULL);
-  shell.startup_timer =
-      SetTimer(shell.hwnd, 0x10000u + shell.connection, SHELL_CONNECT_TIMEOUT_MS, NULL);
-  if (!shell.startup_timer)
+  shell.reader =
+      startup_fault("reader") ? NULL : SDL_CreateThread(reader_thread, "anvil-shell-reader", NULL);
+  shell.writer =
+      startup_fault("writer") ? NULL : SDL_CreateThread(writer_thread, "anvil-shell-writer", NULL);
+  shell.startup_timer = startup_fault("timer") ? 0
+                                               : SetTimer(shell.hwnd, 0x10000u + shell.connection,
+                                                          SHELL_CONNECT_TIMEOUT_MS, NULL);
+  if (!shell.reader || !shell.writer || !shell.startup_timer) {
+    fail_connection("Project transport setup failed");
+    if (stop_transport())
+      anvil_ipc_pipe_close(&shell.pipe);
+    else
+      SDL_Log("Shell partial startup cleanup exceeded its deadline");
     return false;
-  return shell.reader && shell.writer;
+  }
+  return true;
 }
 
 SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {

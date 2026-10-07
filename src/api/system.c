@@ -1739,9 +1739,19 @@ static int f_test_surface_failure(lua_State *L) {
   const char *enabled = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
   luaL_argcheck(L, enabled && !strcmp(enabled, "1") && anvil_hosted_surface_active(), 1, "isolated hosted surface probe is disabled");
   const char *fault = luaL_checkstring(L, 1);
-  luaL_argcheck(L, !strcmp(fault, "device") || !strcmp(fault, "stale") || !strcmp(fault, "malformed"), 1, "unknown surface fault");
-  if (!strcmp(fault, "device")) anvil_d3d11_test_sync_failure();
-  else anvil_hosted_surface_test_packet(!strcmp(fault, "stale"));
+  luaL_argcheck(L,
+                !strcmp(fault, "device") || !strcmp(fault, "stale") ||
+                    !strcmp(fault, "malformed") || !strcmp(fault, "project-release"),
+                1, "unknown surface fault");
+  if (!strcmp(fault, "device"))
+    anvil_d3d11_test_sync_failure(false);
+  else if (!strcmp(fault, "project-release")) {
+    if (anvil_d3d11_enabled())
+      anvil_d3d11_test_sync_failure(true);
+    else
+      anvil_hosted_surface_test_memory_release_failure();
+  } else
+    anvil_hosted_surface_test_packet(!strcmp(fault, "stale"));
   return 0;
 }
 

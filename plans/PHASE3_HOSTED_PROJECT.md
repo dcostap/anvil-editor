@@ -778,7 +778,8 @@ Final review found an unchecked keyed-mutex release result in both GPU processes
 The added release fault failed with `surface failure did not enter Failed` before the fix.
 Evidence: `anvil-surface-latency-qxyhjoxn`.
 Both GPU processes now report release failures instead of publishing another frame.
-The same release check passes after the fix: `anvil-surface-latency-30kifr9d`.
+The original release test covered the shell GPU path, not the Project GPU path.
+That shell release check passes after the fix: `anvil-surface-latency-30kifr9d`.
 Project GPU and resize regressions pass there too.
 Software resize and blocked-dialog shutdown pass in `anvil-surface-latency-4b24fykb`.
 
@@ -823,6 +824,84 @@ An earlier after matrix also passed: `anvil-surface-latency-2264vhny`.
 Its D3D11 medians were 7.06 ms direct and 7.30 ms hosted.
 Its software medians were 10.85 ms direct and 10.31 ms hosted.
 The direct-software baseline shift persisted between these after runs, but no cause is established.
+
+#### Milestone 5 independent review follow-up
+
+The user requested three concurrent read-only reviews with `openai-codex/gpt-6-luna` at `xhigh`.
+All three reports found changes worth making. No broader refactor was needed.
+
+The transport review found that Force close could leave a failed shell open after reader cancellation.
+Explicit Force close now completes the shell's pending Close directly.
+It does not depend on a reader that already stopped after pipe failure.
+`fault-pipe-force-close` failed with `Force close left the failed shell open` before this fix.
+It passes afterward. Normal Force close still leaves Terminal hosts live.
+Red evidence: `anvil-surface-latency-bybn8cwk`; green evidence: `anvil-surface-latency-o8wuqu_j`.
+
+The transport and acceptance reviews found missing cleanup after worker or startup-timer creation failure.
+Partial startup now cancels the connection and stops its workers within the shared cleanup deadline.
+It closes transport only after workers stop. It keeps the owned process handle until replacement or shell exit.
+The Project follows connection-loss handling; the shell does not terminate it implicitly.
+Late CONNECTED events cannot restore a failed connection.
+`startup-timer` failed with `partial startup left a live Project behind` before cleanup.
+Reader, writer, and timer fault cases pass after cleanup, including same-shell Restart.
+Reader and writer cases already passed through their existing bootstrap failure deadlines before this fix.
+Red evidence: `anvil-surface-latency-hs_m5zx0`; green evidence: `anvil-surface-latency-uok1jsro`.
+
+The GPU review found unchecked software mutex releases in both processes.
+Both releases now fail visibly before accepting or publishing a frame.
+Software shell and Project release checks failed before their guards, then passed.
+The acceptance review also found missing coverage for the Project GPU release guard.
+The new Project release hook failed with that existing guard temporarily disabled, then passed after restoration.
+Red evidence: `anvil-surface-latency-jybu2b81` and `anvil-surface-latency-pvxq06lp`.
+Green evidence: `anvil-surface-latency-huzybko5` and `anvil-surface-latency-w5ckweek`.
+
+The acceptance review found that the runner ignored the driver's exit code.
+The runner now requires both a successful result and exit code zero.
+`probe-exit-error` writes success, then exits nonzero. The old runner incorrectly reported PASS.
+The new runner rejects it. This negative case should return failure.
+Evidence: `anvil-surface-latency-r40b4cm8` before; `anvil-surface-latency-kvp7qk6c` after.
+
+Stale and busy checks now require shell diagnostics after fault submission, not only a Project-side send marker.
+They verify that the render model retains its last safe surface.
+Both checks fail when their owned fault hooks are disabled.
+Evidence: `anvil-surface-latency-siaptbis`.
+These checks still do not verify rendered pixels or physical input.
+
+The follow-up transport review found that failed Project-requested replacement startup exited the shell.
+That path now retains Failed controls and permits explicit Restart.
+Path allocation failure preserves the prior Project path.
+`restart-startup-timer` failed with `failed replacement closed the shell`, then passed on both renderers.
+Red evidence: `anvil-surface-latency-48e_52by`.
+Green evidence: `anvil-surface-latency-0nibaf5b` and `anvil-surface-latency-8ououwd1`.
+
+All three reviewers inspected the fixes read-only. They reported no remaining concrete findings after the final correction.
+They did not run tests or independently verify the reported test results.
+The final focused native targets pass: `phase3-m5-review-native`.
+The stronger D3D11 cases pass in `anvil-surface-latency-2zgrdxxs`.
+The stronger software cases pass in `anvil-surface-latency-5qqf70tm`.
+Direct quit, nonzero quit, and restart pass in `anvil-surface-latency-un781z8p`.
+The runner correctly rejects its negative exit probe in `anvil-surface-latency-a1_nn986`.
+
+Unrelated Lua changes appeared during the review. They remain outside this change.
+
+The review latency comparison uses one fixed copied app-data tree for both native builds.
+It uses the existing latency probe and private-desktop launcher, without capture.
+Pairs alternate the saved `b30dba7e` executable and the corrected executable.
+Each row has three runs and 360 valid samples per build, with no failures.
+No scheduled build or correctness test overlaps this comparison.
+Values are p50 / p90 / p99 / maximum / mean, in milliseconds:
+
+| Mode / renderer | Before review fixes | After review fixes |
+| --- | --- | --- |
+| Direct D3D11 | 8.12 / 16.76 / 19.81 / 44.31 / 9.17 | 7.23 / 16.37 / 20.06 / 54.88 / 8.80 |
+| Hosted D3D11 | 7.33 / 16.37 / 19.68 / 20.98 / 8.80 | 7.29 / 16.84 / 20.03 / 22.23 / 8.86 |
+| Direct software | 19.02 / 28.20 / 32.81 / 41.46 / 19.98 | 19.44 / 27.50 / 32.29 / 35.88 / 20.00 |
+| Hosted software | 11.16 / 19.13 / 23.42 / 25.60 / 12.45 | 11.07 / 20.29 / 23.14 / 27.05 / 12.70 |
+
+After hosted D3D11 adds approximately 0.06 ms to the direct median.
+Its p99 increased by 0.35 ms. Direct D3D11 p99 increased by 0.25 ms; maxima varied.
+This result does not establish a cause for these small changes or a performance gain.
+Evidence: `anvil-review-latency-xwxk7gip/results.json`.
 
 Real IME candidates, physical pointer behavior, and mixed-DPI monitor moves remain manual checks.
 WSL remains unavailable without an installed default distribution.

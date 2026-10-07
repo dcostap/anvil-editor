@@ -14,6 +14,7 @@ ffi.cdef [[
   int __stdcall Process32FirstW(void *snapshot, ProbeProcessEntry *entry);
   int __stdcall Process32NextW(void *snapshot, ProbeProcessEntry *entry);
   unsigned long __stdcall GetCurrentProcessId(void);
+  unsigned long __stdcall GetLastError(void);
   void * __stdcall OpenProcess(unsigned long access, int inherit, unsigned long pid);
   int __stdcall TerminateProcess(void *process, unsigned int code);
   unsigned long __stdcall WaitForSingleObject(void *handle, unsigned long timeout);
@@ -28,6 +29,7 @@ ffi.cdef [[
   struct RECT { long left, top, right, bottom; };
   int __stdcall GetClientRect(void *window, struct RECT *rect);
   int __stdcall GetWindowRect(void *window, struct RECT *rect);
+  unsigned int __stdcall GetDpiForWindow(void *window);
   int __stdcall GetClientRect(void *window, struct RECT *rect);
   typedef struct { unsigned long size, flags; void *active, *focus, *capture, *menu, *moving, *caret; struct RECT rect; } ProbeGuiThreadInfo;
   int __stdcall GetGUIThreadInfo(unsigned long thread, ProbeGuiThreadInfo *info);
@@ -166,6 +168,11 @@ if project:find("/driver$", 1) then
         return proc
       end
       local mode = os.getenv("ANVIL_PROJECT_PROBE_MODE") or "shell"
+      if action == "probe-exit-error" then
+        save(result_path, {ok = true, action = action})
+        core.quit(true, 7)
+        return
+      end
       if action == "arguments" or action == "option-arguments" then
         local args = {root .. "/Project/new-file.txt"}
         if action == "option-arguments" then args[#args+1] = "--probe-project"; args[#args+1] = root .. "/Replacement" end
@@ -191,6 +198,42 @@ if project:find("/driver$", 1) then
         save(result_path, { ok = true, action = action, mode = mode }); return
       end
       local subject = start(mode, root .. "/Project")
+      if action:match("^startup%-") then
+        local shell_pid = subject:pid()
+        local child_pid
+        assert(wait_for(function()
+          local file = io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb")
+          if not file then return false end
+          local text = file:read("*a"); file:close()
+          child_pid = tonumber(text:match("Shell started Project pid=(%d+)"))
+          return child_pid and text:find("Shell state: Failed", 1, true)
+        end, 5), "startup fault did not show Failed")
+        local handle = kernel.OpenProcess(0x100000, 0, child_pid)
+        if handle ~= nil then
+          handles[#handles + 1] = handle
+          assert(wait_for(function() return kernel.WaitForSingleObject(handle, 0) == 0 end, 8),
+            "partial startup left a live Project behind")
+        else
+          assert(kernel.GetLastError() == 87, "cannot check the failed startup Project")
+        end
+        local window = assert(shell_window(shell_pid))
+        local rect = ffi.new("struct RECT[1]"); user32.GetClientRect(window, rect)
+        local scale = user32.GetDpiForWindow(window) / 96
+        local x = (48 * scale + tonumber(rect[0].right)) / 2 - 78 * scale
+        local y = (32 * scale + tonumber(rect[0].bottom)) / 2 + 46 * scale
+        local point = math.floor(x) + math.floor(y) * 65536
+        user32.PostMessageW(window, 0x201, 1, point); coroutine.yield(.1)
+        user32.PostMessageW(window, 0x202, 0, point)
+        assert(wait_for(function()
+          local next_state = load(root .. "/replacement.lua") or load(root .. "/subject.lua")
+          return next_state and next_state.pid ~= child_pid and next_state.shell_pid == shell_pid
+        end, 12), "partial startup prevented same-shell Restart")
+        save(root .. "/continue.lua", {continue = true})
+        assert(wait_for(function() return not subject:running() end, 10))
+        assert(subject:returncode() == 0)
+        save(result_path, {ok = true, action = action, mode = mode})
+        return
+      end
       assert(wait_for(function() return load(root .. "/subject.lua") end, 20), "subject did not start")
       local state = load(root .. "/subject.lua")
       core.log_quiet("Hosted Project probe: subject ready action=%s pid=%d", action, state.pid)
@@ -205,7 +248,11 @@ if project:find("/driver$", 1) then
           if not file then return "" end
           local text = file:read("*a"); file:close(); return text
         end
-        if fault == "pipe" then assert(ntdll.NtSuspendProcess(process_handle) >= 0) end
+        local trace_start = #trace()
+        if fault == "pipe" or fault == "pipe-force-close" then
+          assert(ntdll.NtSuspendProcess(process_handle) >= 0)
+        end
+        if fault == "pipe-force-close" then user32.SendMessageW(window, 0x804b, points.pipe, 0) end
         if points[fault] then user32.SendMessageW(window, 0x804b, points[fault], 0) end
         if fault == "resize" or fault == "write" then
           local bounds = ffi.new("struct RECT[1]"); user32.GetWindowRect(window, bounds)
@@ -215,7 +262,11 @@ if project:find("/driver$", 1) then
         save(root .. "/fault-go.lua", {continue = true})
         if fault == "stale" or fault == "busy" then
           assert(wait_for(function() return load(root .. "/fault-sent.lua") end, 5))
-          coroutine.yield(1)
+          local acknowledgement = fault == "stale" and "Shell discarded stale frame:" or "Shell frame retry started;"
+          assert(wait_for(function() return trace():sub(trace_start + 1):find(acknowledgement, 1, true) end, 3),
+            "shell did not consume the " .. fault .. " frame")
+          local record = assert(trace():sub(trace_start + 1):match(acknowledgement:gsub("([^%w])", "%%%1") .. "[^\n]*"))
+          assert(record:find("last safe frame=retained", 1, true), "frame rejection discarded the last safe surface")
           assert(not trace():find("Shell state: Failed", 1, true), "stale or busy frame failed a usable Project")
           user32.ShowWindow(window, 6)
           assert(wait_for(function() return user32.IsIconic(window) ~= 0 end, 2))
@@ -233,6 +284,22 @@ if project:find("/driver$", 1) then
           assert(wait_for(function() return user32.IsIconic(window) ~= 0 end, 2),
             "Failed Minimize did not work; shell exit=" .. tostring((subject:returncode())))
           user32.ShowWindow(window, 9)
+          if fault == "pipe-force-close" then
+            assert(user32.PostMessageW(window, 0x10, 0, 0) ~= 0)
+            local dialog
+            assert(wait_for(function()
+              dialog = owned_dialog(state, "Anvil - Project not responding")
+              return dialog
+            end, 7), "failed pipe Close did not offer Force close")
+            user32.PostMessageW(dialog, 0x466, 6, 0)
+            user32.PostMessageW(dialog, 0x111, 6, 0)
+            assert(wait_for(function() return kernel.WaitForSingleObject(process_handle, 0) == 0 end, 3),
+              "Force close did not end the failed Project")
+            assert(wait_for(function() return not subject:running() end, 3),
+              "Force close left the failed shell open")
+            save(result_path, {ok = true, action = action, mode = mode})
+            return
+          end
           if fault == "pipe" then
             coroutine.yield(11)
             assert(kernel.WaitForSingleObject(process_handle, 0) == 258, "pipe failure implicitly terminated the Project")
@@ -258,6 +325,27 @@ if project:find("/driver$", 1) then
           assert(replacement.pid ~= state.pid and replacement.shell_pid == state.shell_pid)
           save(root .. "/continue.lua", {continue = true})
         end
+      elseif action == "restart-startup-timer" then
+        save(root .. "/restart-go.lua", {continue = true})
+        assert(wait_for(function() return kernel.WaitForSingleObject(handle, 0) == 0 end, 10))
+        coroutine.yield(.5)
+        assert(subject:running(), "failed replacement closed the shell")
+        assert(wait_for(function() return owned_dialog(state, "Anvil - Project failed") end, 5),
+          "failed replacement did not retain native recovery")
+        local window = assert(shell_window(state.shell_pid))
+        local rect = ffi.new("struct RECT[1]"); user32.GetClientRect(window, rect)
+        local scale = user32.GetDpiForWindow(window) / 96
+        local x = (48 * scale + tonumber(rect[0].right)) / 2 - 78 * scale
+        local y = (32 * scale + tonumber(rect[0].bottom)) / 2 + 46 * scale
+        local point = math.floor(x) + math.floor(y) * 65536
+        -- Failed startup still owns its Project until connection-loss cleanup ends it.
+        coroutine.yield(5.5)
+        user32.PostMessageW(window, 0x201, 1, point); coroutine.yield(.1)
+        user32.PostMessageW(window, 0x202, 0, point)
+        assert(wait_for(function() return load(root .. "/replacement.lua") end, 12),
+          "failed replacement prevented explicit Restart")
+        assert(load(root .. "/replacement.lua").shell_pid == state.shell_pid)
+        save(root .. "/continue.lua", {continue = true})
       elseif action == "launch" then
         assert(state.hosted, "Project did not use a hosted backend")
         assert(state.command_line:find("--project", 1, true), "shell did not launch explicit Project mode")
@@ -653,7 +741,7 @@ else
       end, 12), "saved live Terminal did not attach")
       assert(wait_for(function() return load(root .. "/continue.lua") end, 15)); quit(); return
     end
-    if old and (action:match("^fault%-") or action == "restart" or action == "switch" or action == "new-window") then
+    if old and (action:match("^fault%-") or action:match("^startup%-") or action == "restart-startup-timer" or action == "restart" or action == "switch" or action == "new-window") then
       save(root .. "/replacement.lua", { pid = pid, shell_pid = shell_pid })
       assert(wait_for(function() return load(root .. "/continue.lua") end, 15))
       quit(); return
@@ -750,13 +838,21 @@ else
       end
     end
     save(root .. "/subject.lua", state)
+    if action == "restart-startup-timer" then
+      assert(wait_for(function() return load(root .. "/restart-go.lua") end, 10))
+      core.restart(); return
+    end
+    if action:match("^startup%-") then
+      assert(wait_for(function() return load(root .. "/continue.lua") end, 15))
+      quit(); return
+    end
     if action:match("^fault%-") then
       assert(wait_for(function() return load(root .. "/fault-go.lua") end, 10))
       local fault = action:sub(7)
       if fault == "malformed" or fault == "stale" then
         system.test_surface_failure(fault)
-      elseif fault == "device" then
-        system.test_surface_failure("device")
+      elseif fault == "device" or fault == "project-release" then
+        system.test_surface_failure(fault)
         local view = core.open_file(project .. "/edited.txt")
         view.buffer:insert(1, 1, "fault")
       else

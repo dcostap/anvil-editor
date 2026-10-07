@@ -2045,8 +2045,9 @@ static void d3d11_reset_frame_state(void) {
 }
 
 static SDL_AtomicInt test_sync_failure;
-void anvil_d3d11_test_sync_failure(void) {
-  if (SDL_getenv("ANVIL_SURFACE_FAULT_PROBE")) SDL_SetAtomicInt(&test_sync_failure, 1);
+void anvil_d3d11_test_sync_failure(bool release) {
+  if (SDL_getenv("ANVIL_SURFACE_FAULT_PROBE"))
+    SDL_SetAtomicInt(&test_sync_failure, release ? 2 : 1);
 }
 static bool d3d11_publish_hosted_frame(D3D11Window *w) {
   LARGE_INTEGER copy_start, copy_end;
@@ -2063,6 +2064,7 @@ static bool d3d11_publish_hosted_frame(D3D11Window *w) {
                                           (ID3D11Resource *)w->shared_texture,
                                           (ID3D11Resource *)w->backbuffer);
     hr = w->shared_mutex->lpVtbl->ReleaseSync(w->shared_mutex, 0);
+    if (SDL_CompareAndSwapAtomicInt(&test_sync_failure, 2, 0)) hr = E_FAIL;
     if (hr != S_OK) {
       acquired = false;
       anvil_hosted_surface_render_failed("Project shared GPU mutex release failed");

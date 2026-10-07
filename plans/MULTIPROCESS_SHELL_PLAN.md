@@ -388,6 +388,16 @@ The focused failure cases include pending-dialog shutdown with a blocked writer.
 Four native targets, 39 focused Lua checks, and the isolated renderer failure matrices pass.
 One detached Terminal registry update failed with Windows error 5; the host stayed live.
 Separate current and saved-before repeats passed. The Phase 3 plan records this exception.
+Three independent read-only reviews found lifecycle defects and failure-test gaps.
+Review follow-up completes Force close after reader cancellation and cleans partial transport startup.
+Failed replacement startup retains the shell's Failed controls and permits explicit Restart.
+Both software processes now check mutex release. Project GPU release has its own fault check.
+The runner rejects nonzero driver exits. Stale and busy checks require shell acknowledgement and safe-surface retention.
+All three reviewers inspected the fixes read-only and reported no remaining concrete findings.
+Matched review latency pairs use one fixed app-data copy and 360 valid samples per row per build.
+The corrected D3D11 medians are 7.23 ms direct and 7.29 ms hosted.
+Software medians are 19.44 ms direct and 11.07 ms hosted. No failed samples occurred.
+The Phase 3 plan records tails, maxima, and comparison limits.
 Final acceptance still needs review, real IME candidates, and mixed-DPI monitor moves.
 Phase 3 exits immediately on shell loss; Phase 6 adds adoption.
 

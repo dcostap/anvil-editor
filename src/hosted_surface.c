@@ -491,6 +491,12 @@ void anvil_hosted_surface_test_packet(bool stale) {
   }
 }
 
+static SDL_AtomicInt test_memory_release_failure;
+void anvil_hosted_surface_test_memory_release_failure(void) {
+  if (hosted.active && SDL_getenv("ANVIL_SURFACE_FAULT_PROBE"))
+    SDL_SetAtomicInt(&test_memory_release_failure, 1);
+}
+
 bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata) {
   size_t index = SDL_arraysize(hosted.dialogs);
   for (size_t i = 0; i < SDL_arraysize(hosted.dialogs); i++) {
@@ -691,7 +697,15 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   header->stride = stride;
   header->generation = ++hosted.frame_generation;
   header->configuration = hosted.config.configuration;
-  ReleaseMutex(hosted.memory.mutex);
+  BOOL released = ReleaseMutex(hosted.memory.mutex);
+  if (SDL_CompareAndSwapAtomicInt(&test_memory_release_failure, 1, 0)) {
+    released = FALSE;
+    SetLastError(ERROR_NOT_OWNER);
+  }
+  if (!released) {
+    signal_loss("Project shared memory mutex release failed", ANVIL_SURFACE_MSG_FRAME, 0);
+    return false;
+  }
 
   AnvilSurfaceFrame frame;
   memset(&frame, 0, sizeof(frame));
@@ -817,6 +831,7 @@ void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) { (
 void anvil_hosted_surface_dialog_result_failed(void) {}
 void anvil_hosted_surface_render_failed(const char *cause) { (void)cause; }
 void anvil_hosted_surface_test_packet(bool stale) { (void)stale; }
+void anvil_hosted_surface_test_memory_release_failure(void) {}
 bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_PropertiesID props, SDL_DialogFileCallback callback, void *userdata) {
   (void)id; (void)type; (void)props; (void)callback; (void)userdata; return false;
 }
