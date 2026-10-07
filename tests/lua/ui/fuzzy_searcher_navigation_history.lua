@@ -51,6 +51,35 @@ local function editor_pane(context)
   return pane, editor, buffer
 end
 
+local function drawn_result_text(picker)
+  picker.position.x, picker.position.y = 0, 0
+  picker:set_size(1600, 500)
+  picker.open_transition_complete = true
+  picker.update_selected_preview = function() end
+  picker:update()
+  picker:ensure_selection_visible()
+  local metrics = picker:list_metrics()
+  picker.list_scroll.y = (picker.viewport_offset - 1) * metrics.lh
+  picker.list_scroll.move_data_y = nil
+  local saved, drawn = {}, {}
+  for _, name in ipairs { "draw_rect", "draw_rounded_rect", "draw_text_known_bounds",
+    "set_clip_rect", "draw_canvas", "draw_text" } do
+    saved[name] = renderer[name]
+    renderer[name] = function() end
+  end
+  renderer.draw_text = function(font, text, x, y)
+    if y >= metrics.results_top and y < metrics.bottom_indicator_y
+      and x < metrics.x + metrics.list_w then
+      drawn[#drawn + 1] = text
+    end
+    return x + font:get_width(text)
+  end
+  local ok, err = pcall(function() picker:draw_open_content() end)
+  for name, method in pairs(saved) do renderer[name] = method end
+  if not ok then error(err, 0) end
+  return drawn
+end
+
 test.describe("Fuzzy Searcher Navigation History Search", function()
   test.before_each(function(context)
     context.editors = {}
@@ -123,6 +152,38 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     test.same(editor:get_selection_state().selections, { 20, 3, 20, 7 })
     panes.forward(pane)
     test.same(editor:get_selection_state().selections, { 70, 5, 70, 5 })
+  end)
+
+  test.it("shows a repeated file once while keeping each location and the current marker", function(context)
+    editor_pane(context)
+    local picker = fuzzy_searcher.open("^")
+    local filenames, locations, current = 0, {}, false
+    for _, text in ipairs(drawn_result_text(picker)) do
+      if text == "navigation-search.txt" then filenames = filenames + 1 end
+      if text:sub(1, 1) == ":" then locations[text] = true end
+      if text == "● " then current = true end
+    end
+    test.equal(filenames, 1, "consecutive locations must not repeat the file name")
+    test.ok(locations[":70:5"] and locations[":20:3"] and locations[":1:1"],
+      "each location must keep its line and column")
+    test.ok(current, "a continuation row must keep the current-place marker")
+  end)
+
+  test.it("keeps repeated filenames hidden when scrolling inside a history group", function(context)
+    local pane, editor = editor_pane(context)
+    for line = 2, 60 do
+      editor:set_selection_state { selections = { line, 1, line, 1 }, last_selection = 1 }
+      panes.record_location(pane, { no_merge = true })
+    end
+    local picker = fuzzy_searcher.open("^")
+    picker:select_result(20)
+    picker.viewport_offset = 20
+    local drawn = drawn_result_text(picker)
+    test.ok(#drawn > 0, "expected visible history rows")
+    for _, text in ipairs(drawn) do
+      test.ok(not text:find("navigation-search.txt", 1, true),
+        "a continuation row must not repeat the filename at the viewport top")
+    end
   end)
 
   test.it("opens the selected checkpoint in a new Pane Group and keeps the picker focused", function(context)

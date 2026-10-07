@@ -2731,6 +2731,9 @@ function fuzzy_searcher.draw_grouped_file_location(
 
   local line_x = collapsed_line_x
   if collapse_file then
+    if result.kind == "navigation_place" then
+      renderer.draw_text(font, prefix, x, y, style.dim)
+    end
     line_x = common.clamp(line_x or x, x, x + file_width)
     renderer.draw_text(
       font, truncate_text(font, line_suffix, math.max(0, x + file_width - line_x)),
@@ -8059,7 +8062,8 @@ function FSView:draw_open_content()
   if first > 1 then
     local first_result = self.results[first]
     local before = self.results[first - 1]
-    local kind = first_result and (first_result.kind == "grep" or first_result.kind == "symbol") and first_result.kind
+    local kind = first_result and (first_result.kind == "grep" or first_result.kind == "symbol"
+      or first_result.kind == "navigation_place" and first_result.buffer) and first_result.kind
     local file = kind and tostring(first_result.file or "") or ""
     if file ~= "" and before and before.kind == kind
         and tostring(before.file or "") == file then
@@ -8076,10 +8080,11 @@ function FSView:draw_open_content()
       -- first visible continuation row redraws the file path until it moves
       -- below the viewport top.
       local seed_y = m.top - lh + row_padding
-      if kind == "grep" then
+      if kind ~= "symbol" then
         previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
           font, self.results[group_start], x + pad, seed_y, row_text_w,
-          false, nil, nil, grep_file_column_width, grep_edit_metadata_width)
+          false, nil, nil, grep_file_column_width,
+          kind == "navigation_place" and 0 or grep_edit_metadata_width)
       else
         previous_rendered_line_x = fuzzy_searcher.draw_symbol_result_row(
           font, self.results[group_start], x + pad, seed_y, row_text_w, lh, false
@@ -8133,33 +8138,28 @@ function FSView:draw_open_content()
           )
         end
       end
-      if r.kind == "navigation_place" then
-        reset_rendered_file_group()
-        if r.buffer then
-          draw_grep_result_row(font, r, x + pad, row_y, row_text_w, false,
-            nil, nil, grep_file_column_width, 0)
-        else
-          local cx = x + pad
-          local prefix = r.current and "● " or "^ "
-          cx = renderer.draw_text(font, prefix, cx, row_y, style.dim)
-          local icon = view_icons.for_view(r.view)
-          local icon_width = view_icons.draw(icon, cx, row_y, font:get_height())
-          if icon_width > 0 then cx = cx + icon_width + style.padding.x end
-          local path_w, gap, text_w = grep_row_columns(math.max(0, x + pad + row_text_w - cx))
-          draw_highlighted_text(style.view_text_font, r.label, cx, row_y, path_w, style.text, r.match_spans)
-          draw_highlighted_text(style.get_small_font(font), r.text, cx + path_w + gap,
-            row_y, text_w, style.dim, r.content_spans)
-        end
-      elseif r.kind == "grep" then
+      if r.kind == "grep" or r.kind == "navigation_place" and r.buffer then
         local file = tostring(r.file or "")
-        local collapse_file = file ~= "" and previous_rendered_file_kind == "grep"
+        local collapse_file = file ~= "" and previous_rendered_file_kind == r.kind
           and file == previous_rendered_file
         previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(
           font, r, x + pad, row_y, row_text_w, collapse_file,
           previous_rendered_line_x, previous_rendered_context_x,
-          grep_file_column_width, grep_edit_metadata_width)
-        previous_rendered_file_kind = "grep"
+          grep_file_column_width, r.kind == "navigation_place" and 0 or grep_edit_metadata_width)
+        previous_rendered_file_kind = r.kind
         previous_rendered_file = file
+      elseif r.kind == "navigation_place" then
+        reset_rendered_file_group()
+        local cx = x + pad
+        local prefix = r.current and "● " or "^ "
+        cx = renderer.draw_text(font, prefix, cx, row_y, style.dim)
+        local icon = view_icons.for_view(r.view)
+        local icon_width = view_icons.draw(icon, cx, row_y, font:get_height())
+        if icon_width > 0 then cx = cx + icon_width + style.padding.x end
+        local path_w, gap, text_w = grep_row_columns(math.max(0, x + pad + row_text_w - cx))
+        draw_highlighted_text(style.view_text_font, r.label, cx, row_y, path_w, style.text, r.match_spans)
+        draw_highlighted_text(style.get_small_font(font), r.text, cx + path_w + gap,
+          row_y, text_w, style.dim, r.content_spans)
       elseif r.kind == "file" then
         reset_rendered_file_group()
         local file_text_w = fuzzy_searcher.draw_file_metadata(
