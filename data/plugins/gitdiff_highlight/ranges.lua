@@ -49,47 +49,15 @@ local function make_range(base_start, base_end, current_start, current_end)
   }
 end
 
-local function can_merge_same_type(a, b)
-  if a.type ~= b.type then return false end
-  return a.current_end == b.current_start and a.base_end == b.base_start
-end
-
-local function can_merge_replacement(a, b)
-  -- Diff iterators commonly report a replace as delete(s) followed by insert(s)
-  -- at the same current anchor.  Be permissive and also accept the opposite
-  -- order if a future diff backend emits it.
-  if a.type == "deletion" and b.type == "addition" then
-    return a.current_start == b.current_start and a.base_end == b.base_start
-  end
-  if a.type == "addition" and b.type == "deletion" then
-    return a.current_end == b.current_start and a.base_start == b.base_start
-  end
-  return false
-end
-
-local function merge_replacement(a, b)
-  return {
-    type = "modification",
-    current_start = math.min(a.current_start, b.current_start),
-    current_end = math.max(a.current_end, b.current_end),
-    base_start = math.min(a.base_start, b.base_start),
-    base_end = math.max(a.base_end, b.base_end),
-  }
-end
-
 local function append_range(out, r)
   if not r then return end
   local last = out[#out]
-  if last then
-    if can_merge_same_type(last, r) then
-      last.current_end = r.current_end
-      last.base_end = r.base_end
-      return
-    end
-    if can_merge_replacement(last, r) then
-      out[#out] = merge_replacement(last, r)
-      return
-    end
+  -- One change includes all adjacent edits, even when the iterator mixes
+  -- modifications with extra removed or added lines. An unchanged line
+  -- advances both positions and keeps separate changes apart.
+  if last and last.current_end == r.current_start and last.base_end == r.base_start then
+    out[#out] = make_range(last.base_start, r.base_end, last.current_start, r.current_end)
+    return
   end
   out[#out + 1] = r
 end

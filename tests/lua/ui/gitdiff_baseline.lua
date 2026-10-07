@@ -97,9 +97,42 @@ test.describe("Git Editor baseline", function()
 
   test.after_each(function(context)
     core.active_view = context.active_view
+    if context.view then context.view:on_close() end
     if context.buffer then context.buffer:on_close() end
     if context.root then remove_tree(context.root) end
     core.redraw = true
+  end)
+
+  test.test("previews the complete unstaged replacement from either navigation direction", function(context)
+    local root, root_arg = make_repo(context, "replacement-preview")
+    local name = "replacement.kt"
+    local path = join(root, name)
+    local old_lines = {
+      "working = group.indexedBlocks.any { it.second.pending } ||\n",
+      "    (nextBlock == null && conversationStatus.isBusyForUi()),\n",
+    }
+    write_file(path, "group = group,\n" .. table.concat(old_lines)
+      .. "showCompletion = showTimelineCompletion,\nold final\n")
+    commit_file(root_arg, name, "baseline")
+    write_file(path, "group = group,\n"
+      .. "liveStatus = conversationStatus.takeIf { nextBlock == null && it.isBusyForUi() },\n"
+      .. "showCompletion = showTimelineCompletion,\nnew final\n")
+
+    local buffer, view = open_editor(context, path)
+    core.active_view = view
+    wait_until(function() return file_changes.is_settled(buffer) end, 8,
+      "unstaged change markers did not settle")
+    local preview = require "core.poi_preview"
+
+    view:set_selection_state { 1, 1, 1, 1 }
+    test.ok(command.perform("core:next_point_of_interest"))
+    test.equal(view:get_selection_state().selections[1], 2)
+    test.same(preview.for_view(view).lines, old_lines)
+
+    view:set_selection_state { 3, 1, 3, 1 }
+    test.ok(command.perform("core:previous_point_of_interest"))
+    test.equal(view:get_selection_state().selections[1], 2)
+    test.same(preview.for_view(view).lines, old_lines)
   end)
 
   test.test("keeps a clean UTF-8 pathname clean", function(context)
