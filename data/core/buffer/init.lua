@@ -1415,6 +1415,7 @@ local function push_batch_undo(undo_stack, time, transaction, before_selections,
     after_selections = after_selections,
     after_last_selection = after_last_selection,
     edits = transaction.inverse_edits,
+    observer_state = transaction.observer_state,
     merge_undo = transaction.merge_undo,
   }
   undo_stack[undo_stack.idx - config.max_undos] = nil
@@ -1439,10 +1440,10 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
   -- handle command
   if cmd.type == "insert" then
     local line, col, text = table.unpack(cmd)
-    self:raw_insert(line, col, text, redo_stack, cmd.time)
+    self:raw_insert(line, col, text, redo_stack, cmd.time, cmd.observer_state)
   elseif cmd.type == "remove" then
     local line1, col1, line2, col2 = table.unpack(cmd)
-    self:raw_remove(line1, col1, line2, col2, redo_stack, cmd.time)
+    self:raw_remove(line1, col1, line2, col2, redo_stack, cmd.time, cmd.observer_state)
   elseif cmd.type == "batch" then
     local is_redo = undo_stack == self.redo_stack
     local current_selections = copy_undo_array(self.selections)
@@ -1459,6 +1460,7 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
       last_selection = last_selection,
       merge_cursors = false,
       owner_id = cmd.selection_owner_id,
+      restore_observer_state = cmd.observer_state,
     })
     if tx and tx.applied and tx.changed then
       local before_selections, before_last_selection, after_selections, after_last_selection
@@ -1792,6 +1794,10 @@ function Buffer:apply_edits(edits, opts)
     new_last_selection = old_last_selection,
     selection_owner_id = owner_id,
     merge_undo = opts.merge_undo,
+    -- Text observers can retain their own reversible location state.
+    observer_state = {},
+    restore_observer_state = opts.restore_observer_state,
+    line_mapping = opts.line_mapping,
   }
 
   if type(edits) ~= "table" then
@@ -1999,8 +2005,11 @@ function Buffer:apply_edits(edits, opts)
 end
 
 
-function Buffer:raw_insert(line, col, text, undo_stack, time)
-  self:notify_text_change_listeners("before", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
+function Buffer:raw_insert(line, col, text, undo_stack, time, restore_observer_state)
+  local observer_state = {}
+  local observer_transaction = { observer_state = observer_state, restore_observer_state = restore_observer_state }
+  observer_transaction.edits = { { line1 = line, col1 = col, line2 = line, col2 = col, text = text } }
+  self:notify_text_change_listeners("before", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text, transaction = observer_transaction })
   local start_offset = position_to_offset(line_offsets_for(self.lines), line, col)
   -- split text into lines and merge with line at insertion point
   local lines = split_lines(text)
@@ -2030,7 +2039,7 @@ function Buffer:raw_insert(line, col, text, undo_stack, time)
   -- push undo
   local line2, col2 = self:position_offset(line, col, #text)
   push_selection_undo(self, undo_stack, time)
-  push_undo(undo_stack, time, "remove", line, col, line2, col2)
+  push_undo(undo_stack, time, "remove", line, col, line2, col2).observer_state = observer_state
 
   -- update highlighter and assure selection is in bounds
   self.highlighter:insert_notify(line, #lines - 1)
@@ -2041,6 +2050,8 @@ function Buffer:raw_insert(line, col, text, undo_stack, time)
     applied = true,
     changed = true,
     type = "raw_insert",
+    observer_state = observer_state,
+    restore_observer_state = restore_observer_state,
     edits = {
       {
         line1 = line, col1 = col, line2 = line, col2 = col,
@@ -2057,20 +2068,23 @@ function Buffer:raw_insert(line, col, text, undo_stack, time)
       },
     },
   })
-  self:notify_text_change_listeners("after", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text })
+  self:notify_text_change_listeners("after", { type = "raw_insert", kind = "raw_insert", line = line, col = col, text = text, transaction = observer_transaction })
   if self.abs_filename and core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
 end
 
 
-function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time)
-  self:notify_text_change_listeners("before", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2 })
+function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time, restore_observer_state)
+  local observer_state = {}
+  local observer_transaction = { observer_state = observer_state, restore_observer_state = restore_observer_state }
+  observer_transaction.edits = { { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = "" } }
+  self:notify_text_change_listeners("before", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2, transaction = observer_transaction })
   -- push undo
   local text = self:get_text(line1, col1, line2, col2)
   local old_index = line_offsets_for(self.lines)
   local start_offset = position_to_offset(old_index, line1, col1)
   local end_offset = position_to_offset(old_index, line2, col2)
   push_selection_undo(self, undo_stack, time)
-  push_undo(undo_stack, time, "insert", line1, col1, text)
+  push_undo(undo_stack, time, "insert", line1, col1, text).observer_state = observer_state
 
   -- get line content before/after removed text
   local before = self.lines[line1]:sub(1, col1 - 1)
@@ -2106,6 +2120,8 @@ function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time)
     applied = true,
     changed = true,
     type = "raw_remove",
+    observer_state = observer_state,
+    restore_observer_state = restore_observer_state,
     edits = {
       {
         line1 = line1, col1 = col1, line2 = line2, col2 = col2,
@@ -2122,7 +2138,7 @@ function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time)
       },
     },
   })
-  self:notify_text_change_listeners("after", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2 })
+  self:notify_text_change_listeners("after", { type = "raw_remove", kind = "raw_remove", line1 = line1, col1 = col1, line2 = line2, col2 = col2, transaction = observer_transaction })
   if self.abs_filename and core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
 end
 

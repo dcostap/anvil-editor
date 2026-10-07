@@ -107,6 +107,7 @@ style.text = p("text_fg")
 style.caret = c("ffffff")
 style.caret_trail = { common.color "rgba(143, 199, 255, 0.35)" }
 style.navigation_history_feedback = { common.color "rgba(87, 196, 127, 0.10)" }
+style.bookmark = p("ctrl_clickable")
 style.accent = p("ctrl_clickable")
 style.dim = p("ignored")
 style.divider = p("tearline")

@@ -1136,7 +1136,7 @@ load_recent_commands()
 local function parse_query(s)
   local modifiers = fuzzy_searcher.modifiers.parse(s)
   s = modifiers.text
-  if modifiers.mode == "!" or modifiers.mode == ">" or modifiers.mode == "^" then return s end
+  if modifiers.mode == "!" or modifiers.mode == ">" or modifiers.mode == "^" or modifiers.mode == "º" then return s end
   local before, grep, symbol = s, nil, nil
   local marker = fuzzy_searcher.modifiers.parse(s)
   local grep_pos = marker.mode == "#" and marker.marker_first
@@ -1175,6 +1175,7 @@ fuzzy_searcher.mode_prefixes = {
   ["#"] = true, ["@"] = true, [">"] = true, ["!"] = true,
   ["$"] = true, ["$$"] = true,
   ["^"] = true,
+  ["º"] = true,
 }
 fuzzy_searcher.prompt_history_loaded = false
 fuzzy_searcher.prompt_history = {}
@@ -1183,6 +1184,7 @@ local function split_mode_prefix(text)
   text = tostring(text or "")
   local two = text:sub(1, 2)
   if two == "$$" then return two, text:sub(3) end
+  if two == "º" then return two, text:sub(3) end
   local prefix = text:sub(1, 1)
   if fuzzy_searcher.mode_prefixes[prefix] then return prefix, text:sub(2) end
   return "", text
@@ -1287,6 +1289,7 @@ function fuzzy_searcher.restored_prompt_text(text)
   if mode == "@" then return "@", false end
   if mode == "!" then return "!", false end
   if mode == "^" then return "^", false end
+  if mode == "º" then return "º", false end
   local latest = fuzzy_searcher.prompt_history_for_mode(mode)[1]
   if latest ~= nil then return latest, true end
   return text, false
@@ -2976,6 +2979,7 @@ grep_row_columns = function(width, ratio)
 end
 
 function fuzzy_searcher.line_result_location(result)
+  if result.kind == "bookmark" then return "º ", ":" .. tostring(result.line) end
   local line = tonumber(result.line) or 1
   if result.kind == "navigation_place" then
     return result.current and "● " or "^ ", string.format(":%d:%d", line, result.col or 1)
@@ -3028,7 +3032,7 @@ local function draw_grep_result_row(
   collapsed_context_x, file_column_width, edit_metadata_width
 )
   local path_w, gap, text_w = grep_row_columns(width)
-  local history = result.kind == "navigation_place"
+  local history = result.kind == "navigation_place" or result.kind == "bookmark"
   local symbol = result.enclosing_symbol
   local context_gap = math.max(8 * (SCALE or 1), style.padding.x * 2)
   local prefix, line_suffix = fuzzy_searcher.line_result_location(result)
@@ -3863,12 +3867,17 @@ function FSView:is_deep_code_mode()
     return r and (r.kind == "grep" or r.kind == "symbol")
   end
   local mode = fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "")
-  return mode == "#" or mode == "$" or mode == "$$" or mode == "^"
+  return mode == "#" or mode == "$" or mode == "$$" or mode == "^" or mode == "º"
 end
 
 function FSView:is_navigation_history_mode()
   return not self.static_mode and not self.file_picker
     and fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "") == "^"
+end
+
+function FSView:is_bookmark_mode()
+  return not self.static_mode and not self.file_picker
+    and fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "") == "º"
 end
 
 function FSView:is_full_width_mode()
@@ -4035,6 +4044,7 @@ function FSView:can_mark_result(index)
   return not self.file_picker and result and not result.header
     and (result.file or result.buffer and result.line) and not result.is_folder
     and result.kind ~= "create_path" and result.kind ~= "navigation_place"
+    and result.kind ~= "bookmark"
 end
 
 function FSView:get_selected_result_indices()
@@ -4490,11 +4500,17 @@ end
 function FSView:update_preview_view()
   local r = self:selected_result()
   if not r or not r.file or r.is_folder then self:clear_preview_view(); return nil end
+  if r.kind == "bookmark" and r.bookmark.status ~= "ready" then
+    self:clear_preview_view()
+    self.preview_blocked = { reason = r.bookmark.status == "file_missing" and "File missing"
+      or r.bookmark.status == "checking" and "Checking Bookmark location…" or "Bookmark location missing", path = r.file }
+    return nil
+  end
 
   local path = r.revision and r.revision_path or fullpath(r)
   local key = path
   local view
-  if r.kind == "navigation_place" and r.buffer then
+  if (r.kind == "navigation_place" or r.kind == "bookmark") and r.buffer then
     key = table.concat({ "navigation", r.abs_path or "", tostring(r.buffer.text_revision),
       tostring(r.buffer.syntax) }, ":")
     if self.preview_key ~= key or self.preview_source_buffer ~= r.buffer then
@@ -4869,6 +4885,12 @@ function FSView:on_mouse_pressed(button, x, y, clicks)
   end
 
   local hit = self:result_at_point(x, y)
+  if button == "right" and type(hit) == "number" and self.results[hit].kind == "bookmark" then
+    local mark, source = self.results[hit].bookmark, self.source_view
+    self:close()
+    require("plugins.bookmarks").actions(mark, source)
+    return true
+  end
   if hit == "scroll-up" then
     self:scroll_results(-self:list_metrics().result_rows)
   elseif hit == "scroll-down" then
@@ -7040,7 +7062,48 @@ function FSView:refresh_navigation_history(text, reset_selection)
   end
 end
 
+function FSView:refresh_bookmarks(text, reset_selection)
+  local bookmarks = require "core.bookmarks"
+  local query = select(3, fuzzy_searcher.split_prompt_mode_marker(text))
+  local selected = not reset_selection and self:selected_result()
+  local now = system.get_time()
+  if now >= (self.next_bookmark_probe or 0) then
+    bookmarks.refresh()
+    self.next_bookmark_probe = now + 1
+  end
+  local rows = {}
+  local statuses = { file_missing = " [File missing]", location_missing = " [Location missing]", checking = " [Checking location]" }
+  for _, mark in ipairs(bookmarks.list()) do
+    local file = project_paths.display_path(mark.path, { kind = "files" }).text
+    local content = (mark.name ~= "" and mark.name .. " — " or "") .. (mark.text or "") .. (statuses[mark.status] or "")
+    local score = fuzzy_match(query, mark.name .. " " .. file .. " " .. (mark.text or ""), self.case_sensitive)
+    if score then
+      local _, file_spans = fuzzy_match(query, file, self.case_sensitive)
+      local _, content_spans = fuzzy_match(query, content, self.case_sensitive)
+      rows[#rows + 1] = {
+        kind = "bookmark", bookmark = mark, file = file, abs_path = mark.path,
+        line = mark.line, col = 1, buffer = mark.buffer, text = content, label = mark.name,
+        file_spans = file_spans, content_spans = content_spans, score = score,
+      }
+    end
+  end
+  table.sort(rows, function(a, b)
+    if a.score ~= b.score then return a.score > b.score end
+    return a.bookmark.id > b.bookmark.id
+  end)
+  self.results, self.has_more, self.selected = rows, false, 1
+  if selected then
+    for index, row in ipairs(rows) do
+      if row.bookmark == selected.bookmark then self.selected = index; break end
+    end
+  end
+  self.status = string.format("%d Bookmarks — Selected Project — right-click for actions", #rows)
+  self.bookmark_generation = bookmarks.generation()
+  self:ensure_selection_visible()
+end
+
 function FSView:refresh(text)
+  local bookmarks = require "core.bookmarks"
   if self.static_mode then
     self:refresh_static()
     self.dirty = false
@@ -7065,6 +7128,11 @@ function FSView:refresh(text)
     self.dirty = true
     self.next_navigation_refresh = system.get_time() + 0.25
   end
+  if self:is_bookmark_mode() and (self.bookmark_generation ~= bookmarks.generation()
+      or system.get_time() >= (self.next_bookmark_refresh or 0)) then
+    self.dirty = true
+    self.next_bookmark_refresh = system.get_time() + 1
+  end
 
   if query_changed then
     if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
@@ -7080,7 +7148,7 @@ function FSView:refresh(text)
   self.last_files_generation = fuzzy_searcher.files_generation
   self.last_files_scope_generation = fuzzy_searcher.files_scope_generation
 
-  if self:is_navigation_history_mode() then
+  if self:is_navigation_history_mode() or self:is_bookmark_mode() then
     if self.modifier_job then self.modifier_job:cancel(); self.modifier_job = nil end
     self.path_search_active = false
     if self.path_search_query_key then self:clear_path_search_results(true) end
@@ -7089,7 +7157,8 @@ function FSView:refresh(text)
     kill_grep()
     kill_fuzzy_grep_jobs()
     self:cancel_deferred_loading_feedback()
-    self:refresh_navigation_history(text, query_changed)
+    if self:is_bookmark_mode() then self:refresh_bookmarks(text, query_changed)
+    else self:refresh_navigation_history(text, query_changed) end
   elseif self.query_modifiers.active then
     if files_changed or files_scope_changed then self.modifier_metadata = nil end
     if query_changed or force_refresh or files_changed or files_scope_changed then
@@ -7475,7 +7544,7 @@ function FSView:open_file_result(r, new_group, restore, done)
 end
 
 function FSView:open_focused_preview(new_group)
-  if self:is_navigation_history_mode() then return self:confirm() end
+  if self:is_navigation_history_mode() or self:is_bookmark_mode() then return self:confirm() end
   local preview = self.preview_view
   local result = self:selected_result()
   if not (preview and preview:extends(TextView) and result and result.file) then return false end
@@ -7663,6 +7732,15 @@ function FSView:activate_selected_result(new_group)
     tostring(self.selected), #self.results, tostring(r and r.kind),
     tostring(r and (r.file or r.abs_path or r.path)), tostring(r and r.line), tostring(new_group))
   if not r then return end
+  if r.kind == "bookmark" then
+    local target, reason = require("core.bookmarks").navigation_target(r.bookmark)
+    if not target then
+      self.status = reason
+      self:schedule_update(true)
+      return false
+    end
+    r.buffer, r.abs_path, r.line = target.buffer, target.path, target.line
+  end
   if r.kind == "navigation_place" then
     local pane = panes.find(self.source_pane)
     local view, err, destination
@@ -8030,7 +8108,7 @@ function FSView:draw_open_content()
   local has_visible_split = false
   for idx = first, last do
     local r = self.results[idx]
-    if r and (r.kind == "grep" or r.kind == "navigation_place" and r.buffer) then
+    if r and (r.kind == "grep" or r.kind == "bookmark" or r.kind == "navigation_place" and r.buffer) then
       has_visible_split = true; break
     end
   end
@@ -8138,7 +8216,10 @@ function FSView:draw_open_content()
           )
         end
       end
-      if r.kind == "grep" or r.kind == "navigation_place" and r.buffer then
+      if r.kind == "bookmark" then
+        reset_rendered_file_group()
+        draw_grep_result_row(font, r, x + pad, row_y, row_text_w, false, nil, nil, nil, 0)
+      elseif r.kind == "grep" or r.kind == "navigation_place" and r.buffer then
         local file = tostring(r.file or "")
         local collapse_file = file ~= "" and previous_rendered_file_kind == r.kind
           and file == previous_rendered_file
@@ -8607,6 +8688,10 @@ command.add(nil, {
     local context = command.get_invocation_context() or {}
     return open("^", { source_view = context.source_view, source_pane = context.source_pane })
   end, { opens_view = true, keywords = { "navigation history", "checkpoint", "back", "forward" } }),
+  ["fuzzy:open_bookmarks"] = command.palette(function()
+    local context = command.get_invocation_context() or {}
+    return open("º", { source_view = context.source_view, source_pane = context.source_pane })
+  end, { opens_view = true, keywords = { "bookmark", "saved location" } }),
   ["fuzzy:open_commands"] = {
     perform = function() open(">") end,
     metadata = { record_last = false },

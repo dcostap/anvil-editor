@@ -42,6 +42,7 @@ end
 local function mode_marker(text)
   local first = text:find("%S") or 1
   local prefix = text:sub(first, first)
+  if text:sub(first, first + #"º" - 1) == "º" then return first, first + #"º" - 1, "º" end
   if prefix == "!" or prefix == ">" or prefix == "@" or prefix == "^" then
     return first, first, prefix
   end
@@ -58,7 +59,7 @@ function modifiers.parse(text)
   text = tostring(text or "")
   local result = { text = text, tokens = {}, active = false }
   -- These modes search literal text, not file metadata.
-  if text:match("^%s*[!>^]") then
+  if text:match("^%s*[!>^]") or text:match("^%s*º") then
     result.marker_first, result.marker_last, result.mode = mode_marker(text)
     return result
   end

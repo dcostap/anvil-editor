@@ -23,6 +23,7 @@ local function plugin_defaults(name, defaults)
 end
 
 local core_plugins = {
+  bookmarks = true,
   centered_editor = true,
   custom_nagview = true,
   custom_welcome = true,
@@ -386,6 +387,7 @@ end)
 config.force_scrollbar_status = "contracted"
 -- First-party editable file tree.
 require_core_plugin "custom_nagview"
+require_core_plugin "bookmarks"
 require_core_plugin "filetree"
 require_core_plugin "project_paths_view"
 require_core_plugin "terminal"

@@ -1,4 +1,7 @@
 local core = require "core"
+local common = require "core.common"
+local bookmarks = require "core.bookmarks"
+local style = require "core.style"
 local editor_file_pois = require "core.editor_file_pois"
 local language_mode = require "core.language_mode"
 local navigation_history = require "core.navigation_history"
@@ -23,6 +26,37 @@ function Editor:new(buffer)
   self.remote_poi_source_capable = true
   self:add_poi_provider("core.editor-file-location", editor_file_pois, { priority = 0 })
   if core.buffer_registry then core.buffer_registry:retain(buffer, self) end
+  bookmarks.attach(buffer)
+end
+
+function Editor:bookmark_gutter_width()
+  if not self.buffer.abs_filename or self.buffer.git_historical_key then return 0 end
+  return self:get_font():get_height() * 0.6 + style.padding.x
+end
+
+function Editor:get_gutter_width()
+  local width, padding = Editor.super.get_gutter_width(self)
+  return width + self:bookmark_gutter_width(), padding
+end
+
+function Editor:draw_line_gutter(line, x, y, width)
+  local lane = self:bookmark_gutter_width()
+  local height = Editor.super.draw_line_gutter(self, line, x + lane, y, width - lane)
+  if lane > 0 and bookmarks.at(self.buffer, line) then
+    local row_height = self:get_position_visual_row_height(line, 1)
+    local icon_height = common.round(math.min(row_height, self:get_font():get_height()) * 0.7)
+    local icon_width = common.round(icon_height * 0.65)
+    local left = x + (lane - icon_width) / 2
+    local top = y + (row_height - icon_height) / 2
+    local notch = math.max(1, common.round(icon_height * 0.3))
+    renderer.draw_rect(left, top, icon_width, icon_height - notch, style.bookmark)
+    for row = 0, notch - 1 do
+      local leg = math.max(1, common.round(icon_width * (1 - row / notch) / 2))
+      renderer.draw_rect(left, top + icon_height - notch + row, leg, 1, style.bookmark)
+      renderer.draw_rect(left + icon_width - leg, top + icon_height - notch + row, leg, 1, style.bookmark)
+    end
+  end
+  return height
 end
 
 function Editor:draw_line_body(line, x, y)

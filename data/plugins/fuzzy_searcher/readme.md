@@ -1,3 +1,34 @@
+# Bookmark Search
+
+Use `º` or run `fuzzy:open_bookmarks` from the Command Palette.
+This mode shows Bookmarks from the Selected Project, across all Panes.
+
+```text
+ºparser
+ºreturn value
+```
+
+Search matches Bookmark names, file paths, and line text.
+Search Modifiers and other mode markers remain literal text after `º`.
+Enter opens the selected location in the source Pane.
+
+Use Ctrl+B in an Editor to add a Bookmark at the caret line.
+The Global Prompt Bar accepts an optional name. Blank Enter creates an unnamed Bookmark. Escape cancels.
+Ctrl+B on a bookmarked line asks for removal confirmation.
+Use `bookmark:rename` to change or clear its name.
+A gutter icon marks the line beside its number.
+
+Missing files and locations remain visible and searchable.
+Enter does not create a missing file or choose an uncertain location.
+Right-click a result to rename, remove, or attach it to the source Editor's caret.
+Open Bookmark Search from the desired Editor before using that attachment action.
+
+Bookmarks follow ordinary edits, Move Lines, undo, and redo.
+Anvil updates paths after its own file and directory moves.
+Reload recovery uses saved line text and nearby context. It does not choose between equally plausible matches.
+Closed-file recovery reads files up to 8 MiB. Larger files retain their Bookmark records without automatic disk recovery.
+External renames can appear as missing files. Use the attachment action to repair their Bookmarks.
+
 # Navigation History Search
 
 Use `^` or run `fuzzy:open_navigation_history` from the Command Palette.

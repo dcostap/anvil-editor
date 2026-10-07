@@ -2193,11 +2193,13 @@ local commands = {
       end
     end
 
-    local edits = {}
+    local edits, line_mapping = {}, {}
     local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
       local delta = block.line1 > 1 and -1 or 0
       if delta ~= 0 then
+        line_mapping[block.line1 - 1] = block.line2
+        for line = block.line1, block.line2 do line_mapping[line] = line - 1 end
         local parts = {}
         for line = block.line1, block.line2 do parts[#parts + 1] = dv.buffer.lines[line] end
         local replacement = table.concat(parts) .. dv.buffer.lines[block.line1 - 1]
@@ -2223,7 +2225,7 @@ local commands = {
       end
     end
     if #edits > 0 then
-      dv.buffer:apply_edits(edits, { type = "batch", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
+      dv.buffer:apply_edits(edits, { type = "batch", line_mapping = line_mapping, selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end
@@ -2249,10 +2251,12 @@ local commands = {
       end
     end
 
-    local edits = {}
+    local edits, line_mapping = {}, {}
     local selections = { table.unpack(dv.buffer.selections) }
     for _, block in ipairs(blocks) do
       local delta = 1
+      for line = block.line1, block.line2 do line_mapping[line] = line + 1 end
+      if block.line2 < #dv.buffer.lines then line_mapping[block.line2 + 1] = block.line1 end
       if block.line2 == #dv.buffer.lines then
         edits[#edits + 1] = {
           line1 = block.line1, col1 = 1, line2 = block.line1, col2 = 1,
@@ -2284,7 +2288,7 @@ local commands = {
       end
     end
     if #edits > 0 then
-      dv.buffer:apply_edits(edits, { type = "batch", selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
+      dv.buffer:apply_edits(edits, { type = "batch", line_mapping = line_mapping, selections = selections, last_selection = dv.buffer.last_selection, merge_cursors = false })
     else
       dv.buffer:set_selection_list(selections, dv.buffer.last_selection)
     end

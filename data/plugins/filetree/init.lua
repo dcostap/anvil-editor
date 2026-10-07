@@ -3240,6 +3240,7 @@ function FileTreeView:apply_plan(plan)
     selection_path_map[path_key(op.from)] = op.to
     selection_path_map.__moves[#selection_path_map.__moves + 1] = { from = op.from, to = op.to }
     update_open_buffers_after_rename(op.from, op.to, op.type)
+    require("core.bookmarks").move_path(op.from, op.to, op.type)
     core.log("File Tree: moved %s -> %s", op.from, op.to)
     changed = true
   end
