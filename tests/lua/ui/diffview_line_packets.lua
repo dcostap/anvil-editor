@@ -33,13 +33,15 @@ test.describe("Diff Side cached drawing", function()
   test.before_each(function(context)
     context.active = core.active_view
     context.plain_text = config.plugins.diffview.plain_text
+    context.layout = config.plugins.diffview.layout
     config.plugins.diffview.plain_text = false
     context.view = diffview.string_to_string(
       "local value = 1\nretained line\n", "local value = 2\nretained line\n",
       "Before", "After", true)
     wait_for_diff(context.view)
+    config.plugins.diffview.layout = "side-by-side"
     context.view.position.x, context.view.position.y = 0, 0
-    context.view.size.x, context.view.size.y = config.plugins.diffview.unified_width_threshold * 2, 400
+    context.view.size.x, context.view.size.y = 2400, 400
     for _, side in ipairs(context.view:get_surface_focus_targets()) do
       side:set_wrapping_enabled(false)
       side.__test_force_line_packets = true
@@ -50,6 +52,7 @@ test.describe("Diff Side cached drawing", function()
   test.after_each(function(context)
     context.view:on_close()
     config.plugins.diffview.plain_text = context.plain_text
+    config.plugins.diffview.layout = context.layout
     core.active_view = context.active
   end)
 

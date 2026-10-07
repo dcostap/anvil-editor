@@ -7,6 +7,7 @@ local project_paths = require "core.project_paths"
 local language_mode = require "core.language_mode"
 local panes = require "core.panes"
 local scale = require "plugins.scale"
+local diffview = require "plugins.diffview"
 local untitled_recovery = require "plugins.untitled_recovery"
 
 local STORAGE_MODULE = "ws"
@@ -316,6 +317,7 @@ local function save_workspace(during_use)
     language_modes = language_mode.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
     zoom = scale.save_workspace_state(),
+    diff_layout = diffview.save_workspace_state(),
   }
   local snapshot_ended = system.get_time()
   local text = common.serialize(workspace, { sort = true })
@@ -395,6 +397,7 @@ local function load_workspace()
       if empty_window_requested() then
         core.visited_files = {}
         scale.load_workspace_state(nil)
+        diffview.load_workspace_state(nil)
         language_mode.load_workspace_state(nil)
         project_paths.load_workspace_state(nil)
         ensure_initial_filetree_pane()
@@ -404,6 +407,7 @@ local function load_workspace()
 
       local workspace = consume_workspace(core.root_project().path)
       scale.load_workspace_state(workspace and workspace.zoom)
+      diffview.load_workspace_state(workspace and workspace.diff_layout)
       language_mode.load_workspace_state(workspace and workspace.language_modes)
       local _, project_paths_changed = project_paths.load_workspace_state(
         workspace and workspace.project_paths,
@@ -528,6 +532,8 @@ function core.run(...)
   else
     -- Files opened at startup replace the saved Workspace; the exit save
     -- already treats this session as the current state.
+    local workspace = not empty_window_requested() and consume_workspace(core.root_project().path)
+    diffview.load_workspace_state(workspace and workspace.diff_layout)
     workspace_restored = true
   end
   core.run = run

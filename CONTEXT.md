@@ -651,6 +651,7 @@ _Avoid_: Historical Document, snapshot buffer
 
 **Diff View**:
 A visual comparison of two text sources, shown side by side or through a read-only Unified Diff.
+Unified Diff is the default. Each Project retains its choice of layout for all Diff Views, independent of View width.
 _Avoid_: diffviewer
 
 **Unified Diff**:

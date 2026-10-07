@@ -18,8 +18,8 @@ local UnifiedView = require "plugins.diff.unified_view"
 
 ---Configuration options for `diffview` plugin.
 ---@class config.plugins.diffview
----View width below which comparisons use a read-only unified surface.
----@field unified_width_threshold number
+---The Project's comparison layout, independent of View width.
+---@field layout "unified"|"side-by-side"
 ---Logs the amount of time taken to recompute differences.
 ---@field log_times boolean
 ---The whitespace comparison policy used by the Diff View.
@@ -36,13 +36,6 @@ local UnifiedView = require "plugins.diff.unified_view"
 ---@field fold_min_lines integer
 config.plugins.diffview.config_spec = {
     name = "Differences Viewer",
-    {
-      label = "Unified Width Threshold",
-      description = "Show a read-only unified comparison below this View width in pixels.",
-      path = "unified_width_threshold",
-      type = "number",
-      default = config.plugins.diffview.unified_width_threshold,
-    },
     {
       label = "Whitespace Comparison",
       description = "Choose whether the Diff View compares line-edge or all whitespace. Added or removed blank lines still count as changes.",
@@ -98,6 +91,8 @@ config.plugins.diffview.config_spec = {
       default = config.plugins.diffview.fold_min_lines
     }
   }
+
+local default_layout = config.plugins.diffview.layout
 
 ---@type string?
 local element_a = nil
@@ -2388,10 +2383,10 @@ function DiffView:update()
   local unified = self.unified_view
   unified.position.x, unified.position.y = self.position.x, self.position.y + header_height
   unified.size.x, unified.size.y = self.size.x, math.max(0, self.size.y - header_height)
-  local narrow = self.size.x > 0 and self.size.x < config.plugins.diffview.unified_width_threshold
-  if narrow ~= (self.unified == true) then
+  local use_unified = config.plugins.diffview.layout == "unified"
+  if use_unified ~= (self.unified == true) then
     local active = core.active_view
-    if narrow then
+    if use_unified then
       local source = active == self.buffer_view_a and self.buffer_view_a
         or active == self.buffer_view_b and self.buffer_view_b
         or self.navigation_focus_side == "left" and self.buffer_view_a or self.buffer_view_b
@@ -2401,13 +2396,13 @@ function DiffView:update()
       local source = unified:select_side()
       if source then self.navigation_focus_side = source == self.buffer_view_a and "left" or "right" end
     end
-    self.unified = narrow
+    self.unified = use_unified
     self.mouse_router.captured = nil
     self.mouse_router:leave()
     if active == unified or active == self.buffer_view_a or active == self.buffer_view_b or active == self then
       core.set_active_view(self:get_focus_view())
     end
-    core.log_quiet("Diff View layout: %s at %.0fpx", narrow and "unified" or "side-by-side", self.size.x)
+    core.log_quiet("Diff View layout: %s at %.0fpx", config.plugins.diffview.layout, self.size.x)
     core.redraw = true
   end
 
@@ -2778,6 +2773,14 @@ command.add(function()
   if view and view.is and view:is(DiffView) then return true, view end
   return false
 end, {
+  ["diff:toggle_layout"] = command.palette(function()
+    config.plugins.diffview.layout = config.plugins.diffview.layout == "unified" and "side-by-side" or "unified"
+    core.log_quiet("Project Diff layout: %s", config.plugins.diffview.layout)
+    core.redraw = true
+    core.request_workspace_save("diff layout", 0)
+  end, {
+    keywords = { "unified", "side-by-side", "one-side", "comparison" },
+  }),
   ["diff:cycle_whitespace_mode"] = command.palette(function()
     local current = config.plugins.diffview.whitespace_mode
     local next_mode = current == "none" and "trim"
@@ -2788,6 +2791,10 @@ end, {
     keywords = { "compare", "spaces", "indentation", "formatting" },
   }),
 })
+
+command.set_status("diff:toggle_layout", function()
+  return config.plugins.diffview.layout == "unified" and "Unified Diff" or "Side by Side"
+end)
 
 command.set_status("diff:cycle_whitespace_mode", function()
   return whitespace_mode_labels[config.plugins.diffview.whitespace_mode] or "Trim Whitespace"
@@ -3260,6 +3267,15 @@ diffview.content.empty = content_empty
 
 diffview.normalize_request = normalize_request
 diffview.validate_request = validate_request
+
+function diffview.save_workspace_state()
+  return config.plugins.diffview.layout
+end
+
+function diffview.load_workspace_state(layout)
+  config.plugins.diffview.layout = (layout == "unified" or layout == "side-by-side") and layout or default_layout
+  core.log_quiet("Project Diff layout: restored %s", config.plugins.diffview.layout)
+end
 
 function diffview.open(request, noshow)
   local normalized, err = validate_request(request)

@@ -1,4 +1,5 @@
 local core = require "core"
+local config = require "core.config"
 local common = require "core.common"
 local Project = require "core.project"
 local BufferRegistry = require "core.buffer_registry"
@@ -112,6 +113,8 @@ end
 
 test.describe("Workspace persistence", function()
   test.before_each(function(context)
+    context.original_diff_layout = config.plugins.diffview.layout
+    config.plugins.diffview.layout = "unified"
     context.original_projects = core.projects
     context.original_recent_projects = core.recent_projects
     context.original_buffers = core.buffers
@@ -171,6 +174,7 @@ test.describe("Workspace persistence", function()
   end)
 
   test.after_each(function(context)
+    config.plugins.diffview.layout = context.original_diff_layout
     core.projects = context.original_projects
     core.recent_projects = context.original_recent_projects
     core.buffers = context.original_buffers
@@ -339,6 +343,30 @@ test.describe("Workspace persistence", function()
 
     local saved = test.not_nil(storage.load("ws", "test_project-10"))
     test.equal(saved.pane_state.panes[1].view.state.label, "saved")
+  end)
+
+  test.test("stores the Diff layout per Project and restores it", function(context)
+    local source_path = join_path(context.temp_root, "source_project")
+    local project_path = join_path(context.temp_root, "test_project")
+    local panel, view = make_fake_pane_host("source")
+    core.projects = { Project(source_path) }
+    core.recent_projects = {}
+    replace_buffers()
+    core.visited_files = {}
+    core.root_panel = panel
+    core.active_view = view
+
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+    config.plugins.diffview.layout = "side-by-side"
+    core.set_project(source_path)
+    run_last_captured_thread(context)
+    test.equal(config.plugins.diffview.layout, "unified")
+    local key = test.not_nil(workspace_keys_for_path(project_path)[1])
+    test.equal(storage.load("ws", key).diff_layout, "side-by-side")
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+    test.equal(config.plugins.diffview.layout, "side-by-side")
   end)
 
   test.test("stores only an explicit Project Zoom and restores it", function(context)

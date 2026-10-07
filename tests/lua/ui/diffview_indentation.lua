@@ -62,12 +62,14 @@ end
 
 test.describe("Diff View change backgrounds", function()
   test.before_each(function(context)
+    -- Let the startup Workspace restore before choosing the test layout.
+    coroutine.yield(0.01)
     context.views = {}
     context.active_view = core.active_view
     context.plain_text = config.plugins.diffview.plain_text
     context.whitespace_mode = config.plugins.diffview.whitespace_mode
-    context.unified_width_threshold = config.plugins.diffview.unified_width_threshold
-    config.plugins.diffview.unified_width_threshold = 0
+    context.layout = config.plugins.diffview.layout
+    config.plugins.diffview.layout = "side-by-side"
     config.plugins.diffview.plain_text = false
     config.plugins.diffview.whitespace_mode = "none"
   end)
@@ -75,7 +77,7 @@ test.describe("Diff View change backgrounds", function()
   test.after_each(function(context)
     config.plugins.diffview.plain_text = context.plain_text
     config.plugins.diffview.whitespace_mode = context.whitespace_mode
-    config.plugins.diffview.unified_width_threshold = context.unified_width_threshold
+    config.plugins.diffview.layout = context.layout
     core.active_view = context.active_view
     for _, view in ipairs(context.views) do view:on_close() end
   end)
@@ -145,7 +147,7 @@ test.describe("Diff View change backgrounds", function()
     check(view.buffer_view_a, 2, style.diff_modify_background, style.diff_modify_inline)
     check(view.buffer_view_b, 2, style.diff_modify_background, style.diff_modify_inline)
 
-    config.plugins.diffview.unified_width_threshold = 10000
+    config.plugins.diffview.layout = "unified"
     view:update()
     local unified = view:get_focus_view()
     test.equal(unified.buffer.lines[2], "private const val LIMIT = 2_000\n")
@@ -153,7 +155,7 @@ test.describe("Diff View change backgrounds", function()
     check(unified, 2, style.diff_delete_background, style.diff_delete_inline)
     check(unified, 3, style.diff_insert_background, style.diff_insert_inline)
 
-    config.plugins.diffview.unified_width_threshold = 0
+    config.plugins.diffview.layout = "side-by-side"
     view:update()
     check(view.buffer_view_a, 2, style.diff_modify_background, style.diff_modify_inline)
     check(view.buffer_view_b, 2, style.diff_modify_background, style.diff_modify_inline)
@@ -181,14 +183,14 @@ test.describe("Diff View change backgrounds", function()
     end
     for _, mode in ipairs { "none", "trim", "ignore" } do
       config.plugins.diffview.whitespace_mode = mode
-      config.plugins.diffview.unified_width_threshold = 0
+      config.plugins.diffview.layout = "side-by-side"
       local view = open_diff(context, before, after, false)
       check(view.buffer_view_a, 1, ",", style.diff_modify_inline)
       check(view.buffer_view_b, 1, "➜", style.diff_modify_inline)
       check(view.buffer_view_b, 2, "(...)", style.diff_insert_inline)
       local markers = view.diff_model:inline_markers("a", 2)
       check_markers(view.buffer_view_a, 2, markers)
-      config.plugins.diffview.unified_width_threshold = 10000
+      config.plugins.diffview.layout = "unified"
       view:update()
       local unified = view:get_focus_view()
       check(unified, 1, ",", style.diff_delete_inline)
@@ -203,7 +205,7 @@ test.describe("Diff View change backgrounds", function()
       for _, wrapped in ipairs { false, true } do
         for _, reverse in ipairs { false, true } do
           config.plugins.diffview.whitespace_mode = mode
-          config.plugins.diffview.unified_width_threshold = 0
+          config.plugins.diffview.layout = "side-by-side"
           local prefix = wrapped and string.rep("keep ", 20) or ""
           local short, expanded = prefix .. "head tail", prefix .. "head extra tail"
           local before, after = short, expanded
@@ -220,7 +222,7 @@ test.describe("Diff View change backgrounds", function()
           if wrapped then test.ok(side:get_visual_row_count_for_line(1) > 1, "fixture must wrap") end
           test.equal(table.concat(side.buffer.lines), short .. "\n")
           check(side, 1)
-          config.plugins.diffview.unified_width_threshold = 10000
+          config.plugins.diffview.layout = "unified"
           view:update()
           check(view:get_focus_view(), reverse and 2 or 1)
         end
@@ -245,7 +247,7 @@ test.describe("Diff View change backgrounds", function()
       for _, reverse in ipairs { false, true } do
         for _, case in ipairs(cases) do
           config.plugins.diffview.whitespace_mode = mode
-          config.plugins.diffview.unified_width_threshold = 0
+          config.plugins.diffview.layout = "side-by-side"
           local before, after = case.before, case.after
           if reverse then before, after = after, before end
           local view = open_diff(context, before, after, false)
@@ -263,7 +265,7 @@ test.describe("Diff View change backgrounds", function()
             if case.marker_col then check(short_surface, short_line, case.marker_col, marker_color) end
           end
           check_layout(short, 1, expanded, 1, style.diff_modify_inline, style.diff_modify_inline)
-          config.plugins.diffview.unified_width_threshold = 10000
+          config.plugins.diffview.layout = "unified"
           view:update()
           local unified = view:get_focus_view()
           local short_word_color = reverse and style.diff_insert_inline or style.diff_delete_inline
@@ -289,7 +291,7 @@ test.describe("Diff View change backgrounds", function()
     -- Text emphasis ends with the content, not at the edge of the surface.
     check(view.buffer_view_b, 4, #view.buffer_view_b.buffer.lines[4], style.diff_modify_background)
 
-    config.plugins.diffview.unified_width_threshold = 10000
+    config.plugins.diffview.layout = "unified"
     view:update()
     local unified = view:get_focus_view()
     test.ok(unified ~= view.buffer_view_a and unified ~= view.buffer_view_b)
@@ -329,7 +331,7 @@ test.describe("Diff View change backgrounds", function()
     local text = "top\n    added code\n\n    more code\nbottom"
     for _, reverse in ipairs { false, true } do
       for _, wrapped in ipairs { false, true } do
-        config.plugins.diffview.unified_width_threshold = 0
+        config.plugins.diffview.layout = "side-by-side"
         local before, after = text, "top\nbottom"
         if reverse then before, after = after, before end
         local view = open_diff(context, before, after, wrapped)
@@ -345,7 +347,7 @@ test.describe("Diff View change backgrounds", function()
           end
         end
         check(side)
-        config.plugins.diffview.unified_width_threshold = 10000
+        config.plugins.diffview.layout = "unified"
         view:update()
         local unified = view:get_focus_view()
         test.equal(unified.buffer.lines[2], "    added code\n")
