@@ -187,6 +187,20 @@ local function uncovered_markers(markers, ranges)
   return result
 end
 
+local function gap_repeats_replacement(gap, segments, replacements)
+  local first, last = gap.source_first, gap.source_last
+  local before = replacements[first - 1]
+    and segments[first - 1].col2 == segments[first].col1
+  local after = replacements[last + 1]
+    and segments[last].col2 == segments[last + 1].col1
+  if not before and not after then return false end
+  -- Joined tokens form one expression. Keep separate word additions and deletions.
+  for index = first + 1, last do
+    if segments[index - 1].col2 ~= segments[index].col1 then return false end
+  end
+  return true
+end
+
 local function changed_token_contents(from_segments, target_segments)
   local function characters(segments)
     local values, owners = {}, {}
@@ -299,19 +313,27 @@ local function inline_change(from, target, whitespace_mode)
     from_changed, target_changed = changed_token_contents(from_segments, target_segments)
   end
 
-  local ranges, markers = {}, {}
+  local ranges, markers, replacements = {}, {}, {}
   local spans, gaps, pairs = changed_target_spans(from_values, target_values)
   for _, span in ipairs(spans) do
     local source_changed = from_changed and has_changed_token(from_changed, span.source_first, span.source_last)
+    local highlighted = false
     for index = span.first, span.last do
       if not ignore_whitespace or source_changed or target_changed[index] then
         local col1, col2 = content_range(target_segments[index])
         append_token_range(ranges, target, col1, col2, span.tag)
+        highlighted = true
+      end
+    end
+    if highlighted and span.tag == "modify" then
+      for index = span.source_first, span.source_last do
+        if not ignore_whitespace or from_changed[index] then replacements[index] = true end
       end
     end
   end
   for _, gap in ipairs(gaps) do
-    if not ignore_whitespace or has_changed_token(from_changed, gap.source_first, gap.source_last) then
+    if (not ignore_whitespace or has_changed_token(from_changed, gap.source_first, gap.source_last))
+      and not gap_repeats_replacement(gap, from_segments, replacements) then
       local segment = target_segments[gap.index]
       markers[#markers + 1] = { col = segment and segment.col1 or line_end_column(target) }
     end
