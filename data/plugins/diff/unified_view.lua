@@ -7,7 +7,7 @@ local TextView = require "core.textview"
 
 local UnifiedView = TextView:extend()
 
--- Keep source text unchanged. Signs and source line numbers belong to the gutter.
+-- Keep source text unchanged. Source line numbers belong to the gutter.
 function UnifiedView.project(model, before, after, opts)
   local rows, text, a_rows, b_rows, points = {}, {}, {}, {}, {}
   local function append(pair, tag)
@@ -194,7 +194,7 @@ function UnifiedView:get_gutter_width()
   local parent = self.diff_view_parent
   local font = self:get_font()
   local width = font:get_width(tostring(math.max(#parent.buffer_view_a.buffer.lines, #parent.buffer_view_b.buffer.lines)))
-  return width * 2 + font:get_width("  +  ") + style.padding.x * 2, style.padding.x
+  return width * 2 + font:get_width(" ") + style.padding.x * 2, style.padding.x
 end
 
 function UnifiedView:draw_line_gutter(line, x, y, width)
@@ -202,15 +202,16 @@ function UnifiedView:draw_line_gutter(line, x, y, width)
   local row = self.rows[line]
   if not row then return height end
   local font = self:get_font()
-  local number_width = (width - font:get_width("  +  ") - style.padding.x * 2) / 2
+  local gutter_width = self:get_gutter_width()
+  if row.tag ~= "equal" then
+    renderer.draw_rect(x, y, gutter_width, height, style["diff_" .. row.tag .. "_background"])
+  end
+  local number_width = (gutter_width - font:get_width(" ") - style.padding.x * 2) / 2
   x = x + style.padding.x
   local row_height = self:get_position_visual_row_height(line, 1)
   common.draw_text(font, style.line_number, row.a or "", "right", x, y, number_width, row_height)
   x = x + number_width + font:get_width(" ")
   common.draw_text(font, style.line_number, row.b or "", "right", x, y, number_width, row_height)
-  x = x + number_width + font:get_width("  ")
-  local sign = row.tag == "delete" and "−" or row.tag == "insert" and "+" or ""
-  common.draw_text(font, style.text, sign, "left", x, y, font:get_width("+"), row_height)
   return height
 end
 

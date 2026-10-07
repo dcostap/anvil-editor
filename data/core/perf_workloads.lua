@@ -89,7 +89,8 @@ function Workload:setup()
   elseif settings.kind == "diff" then
     self.diff = assert(require("plugins.diffview").file_to_file(
       self:path("left.lua"), self:path("right.lua")))
-    self.view = self.diff.buffer_view_b
+    self.diff:update()
+    self.view = self.diff:get_focus_view()
     core.set_active_view(self.view)
     for _, side in ipairs(self.diff:get_surface_focus_targets()) do
       side:set_wrapping_enabled(settings.wrap)
