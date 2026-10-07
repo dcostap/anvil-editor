@@ -357,8 +357,14 @@ M._text_to_lines = text_to_lines
 
 local function load_text_into_buffer(buffer, text, crlf)
   local lines, detected_crlf = text_to_lines(text)
-  buffer.lines = lines
   buffer.crlf = crlf ~= nil and crlf or detected_crlf
+  -- Use a text transaction so pending parsers cannot publish the empty Buffer.
+  -- The Buffer keeps the last newline outside its editable text.
+  buffer:apply_edits({ {
+    line1 = 1, col1 = 1,
+    line2 = #buffer.lines, col2 = #buffer.lines[#buffer.lines],
+    text = table.concat(lines):sub(1, -2),
+  } }, { type = "load", record_undo = false, notify = false })
   buffer.intellij_untitled_estimated_bytes = nil
   estimate_buffer_bytes(buffer)
   buffer:reset_syntax()

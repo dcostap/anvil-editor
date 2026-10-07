@@ -7,6 +7,8 @@ local command = require "core.command"
 local storage = require "core.storage"
 local recovery = require "plugins.untitled_recovery"
 local file_changes = require "plugins.gitdiff_highlight"
+local markdown = require "core.markdown"
+local worker_pool = require "core.worker_pool"
 require "plugins.untitled_tabs"
 local test = require "core.test"
 
@@ -86,6 +88,10 @@ test.describe("untitled recovery integration", function()
   end)
 
   test.after_each(function(context)
+    if context.markdown_view then
+      context.markdown_view:on_close()
+      markdown.model.close(context.markdown_view.buffer, "test")
+    end
     core.projects = context.original_projects
     core.buffers = context.original_buffers
     core.buffer_registry = context.original_buffer_registry
@@ -414,6 +420,45 @@ test.describe("untitled recovery integration", function()
     test.equal(view2.buffer:get_text(1, 1, math.huge, math.huge), "shared text")
     test.equal(view2.selection_state.selections[1], 1)
     test.equal(view2.selection_state.selections[2], 3)
+  end)
+
+  test.test("restored Untitled Markdown renders inline code without a text edit", function(context)
+    local paths = recovery.project_paths(context.project_dir)
+    test.ok(common.mkdirp(paths.buffers))
+    local source = "before `InsucarProcesos.kt` after\n- `InsucarData.kt` for SQL\nplain\n"
+    write_file(join_path(paths.buffers, "markdown-restore.txt"), source)
+    test.ok(recovery.save_manifest(context.project_dir, {
+      buffers = { {
+        id = "markdown-restore", name = "Untitled-Markdown",
+        backing = "buffers" .. PATHSEP .. "markdown-restore.txt",
+        inferred_language_mode = "Markdown", crlf = false,
+      } },
+    }))
+    local restored = test.not_nil(Editor.from_state {
+      intellij_untitled = true,
+      intellij_untitled_id = "markdown-restore",
+      intellij_untitled_name = "Untitled-Markdown",
+      intellij_untitled_backing_current = true,
+      inferred_language_mode = "Markdown",
+      selection_state = { selections = { 3, 1, 3, 1 }, last_selection = 1 },
+    })
+    context.markdown_view = restored
+    restored.size.x, restored.size.y = 960, 400
+    test.equal(restored.buffer:get_text(1, 1, math.huge, math.huge), source:sub(1, -2))
+    local instance = test.not_nil(markdown.model.peek(restored.buffer))
+    local deadline = system.get_time() + 5
+    while instance.status ~= "ready" and system.get_time() < deadline do
+      local pool = worker_pool.current_system()
+      if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+      if instance.status ~= "ready" then system.sleep(0.001) end
+    end
+    test.equal(instance.status, "ready", instance.reason)
+    local parts = {}
+    for _, fragment in ipairs(restored:iter_line_render_fragments(restored:get_line_render(1))) do
+      if not fragment.hidden then parts[#parts + 1] = fragment.text or "" end
+    end
+    test.equal(table.concat(parts), "before InsucarProcesos.kt after",
+      "restored inline code must render without editing a backtick")
   end)
 
   test.test("Editor.from_state restores backed untitled text", function()
