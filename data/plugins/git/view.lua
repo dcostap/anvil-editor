@@ -338,15 +338,19 @@ function GitView:pane_view(name)
   self.pane_views = self.pane_views or {}
   local view = self.pane_views[name]
   if not view then
+    local commit_list = name == "log-list" or name == "history-list"
     local ViewType = (name == "file-list" or name == "details") and path_tree.View
-      or name == "log-list" and RowTextView or TextView
+      or commit_list and RowTextView or TextView
     view = ViewType(make_pane_buffer("Git " .. name))
     view.font = "view_text_font"
     view:set_wrapping_enabled(false)
     view.git_owner_view = self
     view.git_pane = name
-    if name == "log-list" then
-      view.get_row_count = function() return #self.model:log_tab().commits end
+    if commit_list then
+      view.get_row_count = function()
+        local tab = name == "log-list" and self.model:log_tab() or self:model_tab()
+        return tab and #(tab.commits or {}) or 0
+      end
     elseif name == "details" then
       view:set_row_selection_mode(true)
     end
@@ -869,17 +873,6 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
         pane.git_pressed_action_line = action_line
         pane.git_pressed_action_clicks = clicks or 1
       end
-    elseif action_line and pane.row_selection_mode == nil then
-      local text = pane.buffer.lines[action_line] or ""
-      pane.buffer:clear_search_selections()
-      pane.buffer:set_selection(action_line, 1, action_line, #text)
-      pane.mouse_selecting = nil
-      -- The clicked row is visible. Do not apply keyboard caret scroll context.
-      pane.last_line1, pane.last_col1, pane.last_line2, pane.last_col2 =
-        pane.buffer:get_selection()
-      pane.git_pressed_action_line = action_line
-      pane.git_pressed_action_clicks = clicks or 1
-      core.blink_reset()
     elseif button == "left" and pane.buffer and pane.resolve_screen_position then
       local cmd = clicks == 2 and "core:set_cursor_word" or clicks and clicks >= 3 and "core:set_cursor_line" or "core:set_cursor"
       if pane.row_selection_mode == false then
@@ -1698,7 +1691,7 @@ local function same_pane_buffer_state(a, b)
   return true
 end
 
-local function remap_log_selection(list, commits, focus)
+local function remap_commit_selection(list, commits, focus)
   local ids, indices = {}, {}
   for i, commit in ipairs(commits) do
     local id = commit.hash or commit.local_scope or commit
@@ -1717,7 +1710,7 @@ local function remap_log_selection(list, commits, focus)
     local s = state.selections
     local head, anchor = indices[old_ids[s[i]]], indices[old_ids[s[i + 2]]]
     if not head or not anchor then
-      core.log_quiet("Git Log selection cleared: a selected row is no longer available")
+      core.log_quiet("Git commit list selection cleared: a selected row is no longer available")
       return fallback
     end
     if math.abs(head - anchor) == math.abs(s[i] - s[i + 2]) then
@@ -1732,6 +1725,17 @@ local function remap_log_selection(list, commits, focus)
     end
   end
   return { selections = mapped, last_selection = state.last_selection }
+end
+
+local function set_commit_list_lines(view, name, tab, lines, line_meta)
+  local list = view:pane_view(name)
+  local selection = remap_commit_selection(list, tab.commits or {}, tab.selected_commit or 1)
+  view:set_pane_lines(name, lines)
+  list.git_commit_line_meta = line_meta
+  if selection then list:set_selection_state(selection)
+  else sync_inactive_pane_line(list, tab.selected_commit) end
+  if list.row_selection_mode then list:normalize_row_selection() end
+  return list
 end
 
 function GitView:update_pane_buffers(force)
@@ -1773,15 +1777,13 @@ function GitView:update_pane_buffers(force)
         line_meta[#lines] = { role = "message", text = lines[#lines] }
       end
     end
-    local list_view = self:set_pane_lines("history-list", lines)
-    list_view.git_commit_line_meta = line_meta
+    local list_view = set_commit_list_lines(self, "history-list", tab, lines, line_meta)
     if tab.restored_scroll ~= nil then
       list_view.scroll.y = tab.restored_scroll
       list_view.scroll.to.y = tab.restored_scroll
       tab.restored_scroll = nil
     end
     tab.scroll = list_view.scroll.to.y
-    sync_inactive_pane_line(list_view, tab.selected_commit)
   elseif tab.kind == "commit_diff" then
     local lines = {}
     local cache
@@ -1846,14 +1848,8 @@ function GitView:update_pane_buffers(force)
         line_meta[#lines] = { role = "message", text = lines[#lines] }
       end
     end
-    local list_view = self:pane_view("log-list")
-    local selection = remap_log_selection(list_view, log_tab.commits, log_tab.selected_commit)
-    self:set_pane_lines("log-list", lines)
-    if selection then list_view:set_selection_state(selection) end
-    list_view.git_commit_line_meta = line_meta
+    local list_view = set_commit_list_lines(self, "log-list", log_tab, lines, line_meta)
     list_view.git_graph_rows = graph_rows
-    if not selection then sync_inactive_pane_line(list_view, log_tab.selected_commit) end
-    if list_view.row_selection_mode then list_view:normalize_row_selection() end
     self:sync_log_selection()
     local details = self:pane_view("details")
     local detail_lines, detail_meta, detail_tree, detail_tree_offset = commit_details_lines(
