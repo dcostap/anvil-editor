@@ -154,7 +154,7 @@ style.terminal_palette = {
 style.markdown_live_heading_marker = style.dim
 style.markdown_live_link = p("ctrl_clickable")
 style.markdown_live_link_error = style.error
-style.markdown_live_inline_code_bg = style.background2
+style.markdown_live_inline_code_bg = { common.color "rgba(255, 255, 255, 0.10)" }
 style.markdown_live_code_background = style.background2
 style.markdown_live_code_header = style.dim
 -- Keep this background separate from the brighter warning text color.
