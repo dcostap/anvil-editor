@@ -147,7 +147,9 @@ static const char *get_key_name(const SDL_Event *e, char *buf) {
 }
 
 static void push_key_event_info(lua_State *L, const SDL_KeyboardEvent *event) {
-  lua_createtable(L, 0, 14);
+  lua_createtable(L, 0, 15);
+  lua_pushinteger(L, event->raw);
+  lua_setfield(L, -2, "raw_scancode");
   lua_pushinteger(L, event->key);
   lua_setfield(L, -2, "keycode");
   lua_pushinteger(L, event->scancode);

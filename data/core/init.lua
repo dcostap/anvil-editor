@@ -2250,6 +2250,16 @@ function core.on_event(type, ...)
     local key, event = ...
     trace_keyboard_input("received", type, key, event)
   end
+  -- Diagnostic owners read keyboard events before keymap and IME processing.
+  local owner = core.root_panel and core.root_panel:modal_input_owner()
+  if owner and owner.on_raw_keyboard_event and
+      (type == "keypressed" or type == "keyreleased"
+        or type == "textinput" or type == "textediting") then
+    owner:on_raw_keyboard_event(type, ...)
+    core.current_event_context = nil
+    -- Do not discard the separate SDL textinput event after a captured key.
+    return false
+  end
   if type == "textinput" then
     if fuzzy_input_debug then
       local text = (...)
@@ -2451,7 +2461,9 @@ function core.on_event(type, ...)
     core.title_bar:on_window_configuration()
     core.redraw = true
   elseif type == "windowclose" then
-    core.quit()
+    if not (owner and owner.on_window_close and owner:on_window_close()) then
+      core.quit()
+    end
   elseif type == "quit" then
     core.quit()
   end
@@ -2812,6 +2824,11 @@ function core.step(next_frame_time, options)
     step_stats.event_count = step_stats.event_count + 1
     local event_window_id = system.get_last_event_window_id and system.get_last_event_window_id()
     local main_window_id = core.window and system.get_window_id and system.get_window_id(core.window)
+    local owner = core.root_panel:modal_input_owner()
+    if owner and owner.on_raw_keyboard_event then
+      -- A diagnostic owner must also see text after a handled mouse or command event.
+      did_keymap = false
+    end
     if type == "textinput" and did_keymap then
       did_keymap = false
     elseif type == "mousemoved" then

@@ -142,6 +142,8 @@ local function modal_input_index(root, owner)
 end
 
 ---Place one input owner above all normal UI targets.
+---An owner with on_raw_keyboard_event receives keys, text, and IME events before normal routing.
+---An owner can return true from on_window_close to block a native close request.
 function RootPanel:push_modal_input(owner, options)
   assert(owner ~= nil, "Modal Input Owner is required")
   self:stop_autoscroll("new modal input")

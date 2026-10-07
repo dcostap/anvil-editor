@@ -3,6 +3,7 @@ local command = require "core.command"
 local keymap = require "core.keymap"
 local NagView = require "core.nagview"
 local RootPanel = require "core.rootpanel"
+local ime = require "core.ime"
 local test = require "core.test"
 
 test.describe("Modal input routing", function()
@@ -76,6 +77,37 @@ test.describe("Modal input routing", function()
     test.equal(background_calls, 0)
 
     root:pop_modal_input(first)
+    core.on_event("keypressed", "f24", {})
+    test.equal(background_calls, 1)
+  end)
+
+  test.it("lets a raw keyboard owner capture keys and composition without running commands", function()
+    local received = {}
+    local owner = {
+      on_raw_keyboard_event = function(_, ...)
+        received[#received + 1] = { ... }
+      end,
+    }
+    local event = { scancode = 115, keycode = 1073741939, ctrl = true }
+    root:push_modal_input(owner, { label = "raw keyboard" })
+    -- False keeps the event loop from discarding the following SDL text event.
+    test.not_ok(core.on_event("keypressed", "f24", event))
+    core.on_event("keyreleased", "f24", event)
+    core.on_event("textinput", "é")
+    core.on_event("textediting", "あ", 0, 1)
+    local editing = ime.editing
+    ime.editing = true
+    core.on_event("keypressed", "return", {})
+    ime.editing = editing
+    test.same(received, {
+      { "keypressed", "f24", event },
+      { "keyreleased", "f24", event },
+      { "textinput", "é" },
+      { "textediting", "あ", 0, 1 },
+      { "keypressed", "return", {} },
+    })
+    test.equal(background_calls, 0)
+    root:pop_modal_input(owner)
     core.on_event("keypressed", "f24", {})
     test.equal(background_calls, 1)
   end)

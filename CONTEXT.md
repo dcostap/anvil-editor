@@ -322,6 +322,10 @@ _Avoid_: App shell, main panel
 The top interaction that receives all user input until it closes. Owners form a stack when one interaction covers another.
 _Avoid_: priority interaction, modal popup, input-stealing View
 
+**Keyboard Input Checker**:
+A dialog that captures received keyboard input and shows key events, modifiers, and text without running editor commands.
+The operating system can reserve combinations that do not reach the dialog.
+
 **Mouse-Complete Interaction**:
 An interaction rule where visible keyboard-selectable or activatable items also provide mouse hover, press, selection, and activation feedback.
 _Avoid_: mouse-friendly UI, basic mouse support

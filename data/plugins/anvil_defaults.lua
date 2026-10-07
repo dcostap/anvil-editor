@@ -32,6 +32,7 @@ local core_plugins = {
   global_prompt_bar_sanitize = true,
   intellij_actions = true,
   intellij_find = true,
+  keyboard_input_checker = true,
   anvil_language_json = true,
   anvil_language_rust = true,
   scale_debug_log = true,
@@ -219,6 +220,7 @@ require_core_plugin "tabular_data_preview"
 require_core_plugin "centered_editor"
 require_core_plugin "custom_welcome"
 require_core_plugin "theme_editor"
+require_core_plugin "keyboard_input_checker"
 if core.intellij_actions_disable_conflict_shortcuts then
   core.intellij_actions_disable_conflict_shortcuts()
 end
