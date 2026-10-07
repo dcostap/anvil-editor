@@ -8470,8 +8470,11 @@ function open(prefix, opts)
   if prefix == "#" then
     local selection = selected_text_for_search()
     if selection ~= "" then
-      prefix = "#" .. quote_exact_query(selection)
+      local saved_text = fuzzy_searcher.restored_prompt_text(prefix)
+      local before = fuzzy_searcher.split_prompt_mode_marker(saved_text)
+      prefix = before .. "#" .. quote_exact_query(selection)
       select_seeded_query = true
+      core.log_quiet("Text Search: seeded selected text; saved scope bytes=%d", #before)
     end
   end
   local initial_text, select_restored_query
@@ -8483,9 +8486,10 @@ function open(prefix, opts)
   active_view = FSView(initial_text, opts)
   core.fuzzy_searcher_active_view = active_view
   if select_seeded_query then
-    -- Keep the grep mode marker in place.  Put the caret after the quotes so
-    -- typing replaces the selected exact-query text.
-    active_view.input.textview.buffer:set_selection(1, #initial_text + 1, 1, 2)
+    -- Keep the saved file scope and marker outside the selected search text.
+    active_view.input.textview.buffer:set_selection(
+      1, #initial_text + 1, 1, fuzzy_searcher.prompt_query_start(initial_text)
+    )
   end
   if select_restored_query then
     fuzzy_searcher.apply_prompt_history_text(active_view, initial_text, true)

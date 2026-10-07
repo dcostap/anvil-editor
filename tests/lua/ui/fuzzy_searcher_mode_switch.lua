@@ -426,6 +426,49 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.equal(picker_text(), '#"selected grep text"')
   end)
 
+  test.it("keeps the saved file scope when selected text starts a new Text Search", function(context)
+    fuzzy_searcher.open("#")
+    core.fuzzy_searcher_active_view.input:set_text("data/core/ #old query")
+    core.fuzzy_searcher_active_view:close()
+
+    local view, buffer = open_editor(context, 'new "text"\n')
+    buffer:set_selection(1, 1, 1, #'new "text"' + 1)
+    core.set_active_view(view)
+
+    test.ok(command.perform("fuzzy:open_grep"))
+
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.equal(picker_text(), 'data/core/ #"new ""text"""')
+    local input_buffer = picker.input.textview.buffer
+    local line1, col1, line2, col2 = input_buffer:get_selection(true)
+    test.equal(input_buffer:get_text(line1, col1, line2, col2), '"new ""text"""')
+
+    picker:on_text_input("replacement")
+    test.equal(picker_text(), "data/core/ #replacement")
+    picker:close()
+    buffer:set_selection(1, 1, 1, 1)
+    core.set_active_view(view)
+    test.ok(command.perform("fuzzy:open_grep"))
+    test.equal(picker_text(), "data/core/ #replacement")
+  end)
+
+  test.it("does not restore a file scope after the user removes it from Text Search", function(context)
+    fuzzy_searcher.open("#")
+    core.fuzzy_searcher_active_view.input:set_text("data/core/ #old query")
+    core.fuzzy_searcher_active_view:close()
+
+    fuzzy_searcher.open("#")
+    core.fuzzy_searcher_active_view.input:set_text("#old query")
+    core.fuzzy_searcher_active_view:close()
+
+    local view, buffer = open_editor(context, "new text\n")
+    buffer:set_selection(1, 1, 1, #"new text" + 1)
+    core.set_active_view(view)
+
+    test.ok(command.perform("fuzzy:open_grep"))
+    test.equal(picker_text(), '#"new text"')
+  end)
+
   test.it("cycles current mode prompt history without wrapping and keeps current text", function()
     fuzzy_searcher.open(">")
     core.fuzzy_searcher_active_view.input:set_text(">first")
