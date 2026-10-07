@@ -169,7 +169,6 @@ local function save_conflict_copy_and_reload(buffer)
     crlf = buffer.crlf,
     encoding = buffer.encoding,
     bom = buffer.bom,
-    binary = buffer.binary,
   }
 
   local copy_name, copy_abs = conflict_copy_path(buffer)
@@ -179,15 +178,10 @@ local function save_conflict_copy_and_reload(buffer)
   end
 
   local copy_buffer = core.open_buffer(copy_name)
-  copy_buffer:reset()
   copy_buffer:set_filename(copy_name, copy_abs)
-  copy_buffer.lines = clone_lines(snapshot.lines)
-  copy_buffer.crlf = snapshot.crlf
   copy_buffer.encoding = snapshot.encoding
   copy_buffer.bom = snapshot.bom
-  copy_buffer.binary = snapshot.binary or false
-  copy_buffer:reset_syntax()
-  copy_buffer:clear_undo_redo()
+  copy_buffer:replace_snapshot(table.concat(snapshot.lines), { crlf = snapshot.crlf })
   copy_buffer:set_selection(table.unpack(selection))
 
   local saved, save_err = pcall(copy_buffer.save, copy_buffer)

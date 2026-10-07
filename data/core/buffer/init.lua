@@ -217,15 +217,80 @@ end
 
 local copy_file, prompt_stale_backup
 
-function Buffer:load(filename)
+---Replace loaded UTF-8 source without adding an undo step.
+---Source loaders must use this method, not assign lines directly.
+---Keep selection positions and clamp them to the replacement text.
+---Publish one full text transaction after all Buffer state is current.
+---@param text string
+---@param opts? { crlf?: boolean }
+---@return table transaction
+function Buffer:replace_snapshot(text, opts)
+  opts = opts or {}
+  local lines, clean_lines, highlights, crlf, binary = encoding.split_lines(text)
+  if #lines == 0 then lines[1] = "\n" end
+  local old_text = table.concat(self.lines)
+  local old_line_count = #self.lines
+  local selection_snapshots = snapshot_registered_selection_states(self)
+  local old_metadata = metadata_snapshot(self)
+  local transaction = {
+    applied = true,
+    changed = true,
+    type = "load",
+    full_snapshot = true,
+    content_changed = old_text ~= table.concat(lines),
+    edits = {}, -- A snapshot requires a full parser refresh.
+    changed_ranges = {
+      {
+        old_line1 = 1, old_line2 = old_line_count,
+        new_line1 = 1, new_line2 = #lines,
+        old_line_count = old_line_count, new_line_count = #lines,
+        line_delta = #lines - old_line_count,
+      },
+    },
+  }
   cancel_pending_save(self)
+  self:notify_text_change_listeners("before", { kind = "load", transaction = transaction })
+  self.lines, self.clean_lines = lines, clean_lines
+  self.crlf = opts.crlf
+  if self.crlf == nil then self.crlf = crlf end
+  self.binary = binary
+  self.text_revision = (self.text_revision or 0) + 1
+  self.search_selections = {}
+  self.overwrite = false
+  self:clear_undo_redo()
+  for _, cache in pairs(self.cache) do
+    for key in pairs(cache) do cache[key] = nil end
+  end
+  self.highlighter:reset()
+  self.highlighter.lines = highlights
+  self:sanitize_selection()
+  restore_registered_selection_states(self, selection_snapshots)
+  local syntax_stage = file_open_stage_begin("buffer_syntax_detection")
+  local syntax_changed = self:reset_syntax({ notify = false })
+  file_open_stage_end(syntax_stage)
+  if syntax_changed then
+    self:notify_metadata_listeners({
+      kind = "metadata", reason = "replace-snapshot",
+      filename_changed = false, syntax_changed = true,
+      old = old_metadata, new = metadata_snapshot(self),
+    })
+  end
+  local transaction_stage = file_open_stage_begin("buffer_load_transaction")
+  self:on_text_transaction(transaction)
+  self:notify_text_change_listeners("after", { kind = "load", transaction = transaction })
+  file_open_stage_end(transaction_stage)
+  core.redraw = true
+  core.log_quiet("Buffer snapshot replaced: revision=%d lines=%d changed=%s path=%s",
+    self.text_revision, #lines, tostring(transaction.content_changed), self:get_name())
+  return transaction
+end
+
+
+function Buffer:load(filename)
   local load_stage = file_open_stage_begin("buffer_load_contents")
   if prompt_stale_backup then prompt_stale_backup(filename) end
   local file_info = system.get_file_info(filename)
   self.loaded_file_size = file_info and file_info.size or nil
-  local old_text = table.concat(self.lines or {})
-  local old_line_count = #(self.lines or {})
-  local selection_snapshots = snapshot_registered_selection_states(self)
   if not self.encoding then
     local errmsg
     local encoding_stage = file_open_stage_begin("buffer_encoding_detection")
@@ -242,74 +307,20 @@ function Buffer:load(filename)
   local open_stage = file_open_stage_begin("buffer_file_open")
   local fp = assert( io.open(filename, "rb") )
   file_open_stage_end(open_stage)
-  self:notify_text_change_listeners("before", {
-    kind = "load",
-    transaction = { type = "load", full_snapshot = true },
-  })
-  local reset_stage = file_open_stage_begin("buffer_reset_after_open")
-  self:reset()
-  file_open_stage_end(reset_stage)
   local read_stage = file_open_stage_begin("buffer_file_read")
-  self.lines = {}
-  self.clean_lines = {}
-  local i = 1
+  local text = fp:read("*a")
+  fp:close()
+  assert(text, "could not read file text")
   if convert then
-    local content = fp:read("*a");
-    content = assert(encoding.convert("UTF-8", self.encoding, content, {
+    text = assert(encoding.convert("UTF-8", self.encoding, text, {
       strict = false,
       handle_from_bom = true
     }))
-    for line in content:gmatch("([^\n]*)\n?") do
-      if line:byte(-1) == 13 then
-        line = line:sub(1, -2)
-        self.crlf = true
-      end
-      table.insert(self.lines, line .. "\n")
-      self.highlighter.lines[i] = false
-      i = i + 1
-    end
-    content = nil
   else
-    local text = assert(fp:read("*a"))
     text = encoding.strip_bom(text, "UTF-8")
-    local crlf, binary
-    self.lines, self.clean_lines, self.highlighter.lines, crlf, binary = encoding.split_lines(text)
-    if crlf then self.crlf = true end
-    if binary then self.binary = true end
   end
-  if #self.lines == 0 then
-    table.insert(self.lines, "\n")
-  end
-  fp:close()
   file_open_stage_end(read_stage)
-  local syntax_stage = file_open_stage_begin("buffer_syntax_detection")
-  self:reset_syntax()
-  file_open_stage_end(syntax_stage)
-  local transaction_stage = file_open_stage_begin("buffer_load_transaction")
-  restore_registered_selection_states(self, selection_snapshots)
-  local content_changed = old_text ~= table.concat(self.lines)
-  local transaction = {
-    applied = true,
-    changed = true,
-    type = "load",
-    full_snapshot = true,
-    content_changed = content_changed,
-    edits = {}, -- A load replaces the snapshot and requires a full parser refresh.
-    changed_ranges = {
-      {
-        old_line1 = 1, old_line2 = math.max(1, old_line_count),
-        new_line1 = 1, new_line2 = #self.lines,
-        old_line_count = math.max(1, old_line_count), new_line_count = #self.lines,
-        line_delta = #self.lines - math.max(1, old_line_count),
-      },
-    },
-  }
-  self:on_text_transaction(transaction)
-  self:notify_text_change_listeners("after", {
-    kind = "load",
-    transaction = transaction,
-  })
-  file_open_stage_end(transaction_stage)
+  self:replace_snapshot(text)
   file_open_stage_end(load_stage)
 end
 

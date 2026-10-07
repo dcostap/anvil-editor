@@ -29,24 +29,6 @@ local function reject_edit(buffer)
   return false
 end
 
-local function set_buffer_text(buffer, text)
-  text = tostring(text or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
-  local lines, start = {}, 1
-  while start <= #text do
-    local nl = text:find("\n", start, true)
-    if nl then
-      lines[#lines + 1] = text:sub(start, nl)
-      start = nl + 1
-    else
-      lines[#lines + 1] = text:sub(start) .. "\n"
-      break
-    end
-  end
-  if #lines == 0 then lines[1] = "\n" end
-  buffer.lines = lines
-  buffer:set_selection(1, 1, 1, 1)
-end
-
 local function normalize_historical_text(text)
   text = tostring(text or "")
   local charset, _, detect_err = encoding.detect_string(text)
@@ -120,10 +102,7 @@ function historical.create_preview_buffer(repo, rev, relpath, text, opts)
   buffer.filename = relpath
   buffer.disable_language_services = opts.disable_language_services == true
   buffer.disable_treesitter = opts.disable_treesitter == true
-  set_buffer_text(buffer, normalized)
-  buffer:reset_syntax()
-  buffer:clear_undo_redo()
-  buffer:clean()
+  buffer:replace_snapshot(normalized, { crlf = buffer.crlf })
   buffer.git_historical_key = key
   buffer.git_historical_repo = type(repo) == "table" and repo.root or repo
   buffer.git_historical_rev = rev

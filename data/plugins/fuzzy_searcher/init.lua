@@ -4517,8 +4517,7 @@ function FSView:update_preview_view()
       buffer.disable_language_services = true
       buffer.disable_treesitter = true
       buffer.disable_gitdiff_highlight = true
-      buffer.lines = lines
-      buffer.crlf = r.buffer.crlf
+      buffer:replace_snapshot(table.concat(lines), { crlf = r.buffer.crlf })
       if r.abs_path then buffer:set_filename(r.buffer.filename, r.abs_path) end
       buffer:set_syntax(r.buffer.syntax, "navigation-preview", { notify = false })
       buffer.read_only = true

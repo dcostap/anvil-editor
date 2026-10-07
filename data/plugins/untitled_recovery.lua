@@ -337,38 +337,12 @@ local function update_estimated_bytes_from_transaction(buffer, transaction)
   buffer.intellij_untitled_estimated_bytes = math.max(0, total)
 end
 
-local function text_to_lines(text)
-  text = tostring(text or "")
-  local crlf = text:find("\r\n", 1, true) ~= nil
-  text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
-  local lines = {}
-  if text == "" then
-    lines[1] = "\n"
-  else
-    for line in (text .. "\n"):gmatch("(.-\n)") do
-      lines[#lines + 1] = line
-    end
-    if #lines > 1 and lines[#lines] == "\n" then lines[#lines] = nil end
-    if #lines == 0 then lines[1] = "\n" end
-  end
-  return lines, crlf
-end
-M._text_to_lines = text_to_lines
-
 local function load_text_into_buffer(buffer, text, crlf)
-  local lines, detected_crlf = text_to_lines(text)
-  buffer.crlf = crlf ~= nil and crlf or detected_crlf
-  -- Use a text transaction so pending parsers cannot publish the empty Buffer.
-  -- The Buffer keeps the last newline outside its editable text.
-  buffer:apply_edits({ {
-    line1 = 1, col1 = 1,
-    line2 = #buffer.lines, col2 = #buffer.lines[#buffer.lines],
-    text = table.concat(lines):sub(1, -2),
-  } }, { type = "load", record_undo = false, notify = false })
+  text = tostring(text or "")
+  if crlf == nil then crlf = text:find("\r\n", 1, true) ~= nil end
+  buffer:replace_snapshot(text:gsub("\r\n", "\n"):gsub("\r", "\n"), { crlf = crlf })
   buffer.intellij_untitled_estimated_bytes = nil
   estimate_buffer_bytes(buffer)
-  buffer:reset_syntax()
-  buffer:clear_undo_redo()
   local file_changes = package.loaded["plugins.gitdiff_highlight"]
   if file_changes and file_changes.initialize_buffer then
     file_changes.initialize_buffer(buffer)
