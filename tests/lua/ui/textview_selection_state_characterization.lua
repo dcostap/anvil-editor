@@ -133,6 +133,29 @@ test.describe("Text View Selection State edit characterization", function()
     test.same(selection(main), { 1, 2, 1, 2 })
   end)
 
+  test.it("copy separates cursor selections with newlines and preserves per-cursor paste", function(context)
+    local buffer, main = new_shared_views(context, "foo gap bar")
+    core.set_active_view(main)
+    set_view_selections(main, {
+      1, 1, 1, 4,
+      1, 9, 1, 12,
+    }, 2)
+
+    test.ok(command.perform("core:copy"))
+    test.equal(system.get_clipboard(), "foo\nbar")
+    test.equal(text(buffer), "foo gap bar\n")
+
+    local target, destination = new_shared_views(context, "--\n--")
+    core.set_active_view(destination)
+    set_view_selections(destination, {
+      1, 2, 1, 2,
+      2, 2, 2, 2,
+    }, 2)
+
+    test.ok(command.perform("core:paste"))
+    test.equal(text(target), "-foo-\n-bar-\n")
+  end)
+
   test.it("paste inserts one external clipboard payload at each collapsed caret", function(context)
     local buffer, main = new_shared_views(context, "ab\ncd")
     core.set_active_view(main)

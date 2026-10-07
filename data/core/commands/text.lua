@@ -213,7 +213,7 @@ local function cut_or_copy(dv, delete)
   for idx, line1, col1, line2, col2 in target_buffer:get_selections(true, true) do
     if line1 ~= line2 or col1 ~= col2 then
       text = target_buffer:get_text(line1, col1, line2, col2)
-      full_text = full_text == "" and text or (text .. " " .. full_text)
+      full_text = full_text == "" and text or (text .. "\n" .. full_text)
       core.cursor_clipboard_whole_line[idx] = false
       copied_ranges[#copied_ranges + 1] = { line1, col1, line2, col2 }
     else -- Cut/copy whole line
