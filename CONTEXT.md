@@ -483,6 +483,14 @@ A Fuzzy Searcher mode for finding Navigation Places in its source Pane's Navigat
 Activating a result restores that exact Navigation Place, including its View state.
 _Avoid_: checkpoint search, bookmark search
 
+**Bookmark**:
+A retained file location in one Project, with an optional name. It remains available when its file or location is missing.
+_Avoid_: checkpoint, Navigation Place
+
+**Bookmark Search**:
+A Fuzzy Searcher mode for finding Bookmarks in the Selected Project, including missing locations.
+_Avoid_: bookmark history, Navigation History Search
+
 **Passive File Preview**:
 A read-only Fuzzy Searcher file view with no caret or Current Line Highlight. Search matches can remain highlighted.
 _Avoid_: Generic preview, inactive Editor
