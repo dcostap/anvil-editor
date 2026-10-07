@@ -45,8 +45,8 @@ end
 keymap.add {
   ["alt+left"] = "core:navigate_back",
   ["alt+right"] = "core:navigate_forward",
-  ["alt+shift+left"] = "core:navigate_back_file",
-  ["alt+shift+right"] = "core:navigate_forward_file",
+  ["ctrl+alt+shift+left"] = "core:navigate_back_file",
+  ["ctrl+alt+shift+right"] = "core:navigate_forward_file",
   ["xclick"] = function(...) return navigate_mouse("x", ...) end,
   ["yclick"] = function(...) return navigate_mouse("y", ...) end,
   ["shift+xclick"] = "core:navigate_back_file",
