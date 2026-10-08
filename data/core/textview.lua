@@ -1868,6 +1868,8 @@ end
 local metric_tree_add
 local metric_tree_row_at_y
 local metric_tree_build
+-- Marks a row whose height no provider measured from a render plan.
+local UNMEASURED_ROW = {}
 local compute_visual_row_height
 
 local function invalidate_visual_metric_rows(view, cache, row1, row2)
@@ -1948,6 +1950,7 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
       local default_height = self:get_line_height()
       local providers = self:visual_metric_provider_entries()
       local inserted = {}
+      local inserted_plans = {}
       local inserted_height = 0
       local line_metrics_cache = {}
       -- Measure the replacement slice before publishing the new metric tree.
@@ -1955,14 +1958,16 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
       -- map the old scroll offset to the wrong anchor row, causing the later
       -- dirty pass to apply the same height change as a viewport correction.
       for offset = 0, insert_count - 1 do
-        local height = compute_visual_row_height(
+        local height, plan = compute_visual_row_height(
           self, new_row1 + offset, providers, default_height,
           nil, false, line_metrics_cache
         )
         inserted[offset + 1] = height
+        inserted_plans[offset + 1] = plan == nil and UNMEASURED_ROW or plan
         inserted_height = inserted_height + height
       end
       common.splice(cache.heights, old_row1, remove_count, inserted)
+      common.splice(cache.row_plans, old_row1, remove_count, inserted_plans)
 
       local shifted_dirty = {}
       local row_delta = insert_count - remove_count
@@ -3782,6 +3787,9 @@ local function prepare_sparse_visual_metrics(view, providers, default_height, ro
   return prepared, default_height
 end
 
+---Return a row height and the line's render plan that produced it. The plan
+---is nil when no provider measured the row; reconciliation then treats the
+---row as unmeasured.
 compute_visual_row_height = function(
   view, row, providers, default_height, sparse_metrics, force, line_metrics_cache
 )
@@ -3789,12 +3797,14 @@ compute_visual_row_height = function(
     view.render_cache_diagnostics.metric_recomputations + 1
   local entry = view:get_metric_row_entry(row)
   local height = default_height
+  local measured = false
   for _, provider_entry in ipairs(providers) do
     local provider = provider_entry.provider
     local sparse = sparse_metrics and sparse_metrics[provider_entry.id]
     local should_query = force or not sparse
       or (sparse.rows and sparse.rows[row])
       or (sparse.lines and sparse.lines[entry.line])
+    if should_query and entry.row_in_line then measured = true end
     if should_query and provider and provider.line_metrics and entry.row_in_line then
       local provider_cache = line_metrics_cache and line_metrics_cache[provider_entry.id]
       if not provider_cache and line_metrics_cache then
@@ -3853,7 +3863,11 @@ compute_visual_row_height = function(
         view.render_cache_diagnostics.metric_sparse_skips + 1
     end
   end
-  return height
+  local plan
+  if measured and entry.line and view:has_line_render_providers() then
+    plan = view:peek_line_render(entry.line)
+  end
+  return height, plan
 end
 
 function TextView:get_visual_row_metric_cache()
@@ -3900,10 +3914,11 @@ function TextView:get_visual_row_metric_cache()
       local anchor_delta = 0
       local line_metrics_cache = {}
       for row in pairs(cache.dirty_rows) do
-        local height = compute_visual_row_height(
+        local height, plan = compute_visual_row_height(
           self, row, providers, cache.default_height or default_height,
           cache.sparse_metrics, true, line_metrics_cache
         )
+        cache.row_plans[row] = plan == nil and UNMEASURED_ROW or plan
         local delta = height - cache.heights[row]
         if delta ~= 0 then
           cache.heights[row] = height
@@ -3953,14 +3968,16 @@ function TextView:get_visual_row_metric_cache()
   perf_frame_add("textview_visual_metric_full_rebuilds", 1)
   perf_frame_add("textview_visual_metric_full_rebuild_rows", row_count)
   local heights = {}
+  local row_plans = {}
   local line_metrics_cache = {}
   local total = 0
   for row = 1, row_count do
-    local height = compute_visual_row_height(
+    local height, plan = compute_visual_row_height(
       self, row, providers, default_height, sparse_metrics, false,
       line_metrics_cache
     )
     heights[row] = height
+    row_plans[row] = plan == nil and UNMEASURED_ROW or plan
     total = total + height
   end
   local height_tree = metric_tree_build(heights, row_count)
@@ -3969,6 +3986,7 @@ function TextView:get_visual_row_metric_cache()
     wrap_layout_generation = self.__wrap_layout_generation or 0,
     text_revision = self.buffer.text_revision or 0,
     heights = heights,
+    row_plans = row_plans,
     height_tree = height_tree,
     total_height = total,
     row_count = row_count,
@@ -4544,6 +4562,24 @@ function TextView:get_visible_line_range()
 end
 
 
+---A cached plan stays valid while its source and signature match, unless the
+---provider that produced it reports it as outdated. Providers implement
+---`line_render_current(view, line, result)` when a plan depends on state
+---that the signature does not capture.
+local function line_render_entry_current(view, line, cached)
+  local results = cached.provider_results
+  if not results then return true end
+  for _, entry in ipairs(view:line_render_provider_entries()) do
+    local result = results[entry.id]
+    local provider = entry.provider
+    if result and provider and provider.line_render_current then
+      local ok, current = pcall(provider.line_render_current, provider, view, line, result)
+      if not ok or current == false then return false end
+    end
+  end
+  return true
+end
+
 local function line_render_signature(view, line, snapshot_provider_generations)
   local parts = {
     tostring(view.__line_render_generation or 0),
@@ -4582,6 +4618,127 @@ function TextView:get_line_render(line)
     return committed.render_line or nil
   end
   return self:resolve_line_render(line)
+end
+
+---Return the plan get_line_render would return without resolving provider
+---state: the committed wrapped plan, or the cached plan for the current
+---source. Return nil when no plan is known. `false` means "no render plan".
+function TextView:peek_line_render(line)
+  local source_line = self.buffer.lines[line]
+  local committed = not self.__resolving_line_render and self.__async_wrap_reconstruction
+    and self.wrapped_presentations and self.wrapped_presentations[line]
+  if committed and committed.source_line == source_line then
+    return committed.render_line or false
+  end
+  local cache = self.__line_render_cache
+  local cached = cache and cache.generation == (self.__line_render_generation or 0)
+    and cache.lines[line]
+  if cached and cached.source_line == source_line then
+    return cached.render_line or false
+  end
+  return nil
+end
+
+local function each_visible_metric_row(view, fn)
+  local cache = view:get_visual_row_metric_cache()
+  if not cache then return end
+  local _, y, _, y2 = view:get_content_bounds()
+  local first_row = view:get_visual_row_at_y(math.max(0, y - style.padding.y))
+  local last_row = view:get_visual_row_at_y(math.max(0, y2 - style.padding.y))
+  first_row, last_row = overscan_metric_rows(cache, first_row, last_row, cache.row_count)
+  for row = first_row, last_row do
+    local entry = view:get_metric_row_entry(row)
+    if entry and entry.line and entry.row_in_line then
+      fn(row, entry.line, cache.row_plans and cache.row_plans[row])
+    end
+  end
+end
+
+local function each_line_range(lines, fn)
+  local sorted = {}
+  for line in pairs(lines) do sorted[#sorted + 1] = line end
+  table.sort(sorted)
+  local index = 1
+  while sorted[index] do
+    local line1 = sorted[index]
+    local line2 = line1
+    while sorted[index + 1] == line2 + 1 do
+      index = index + 1
+      line2 = sorted[index]
+    end
+    fn(line1, line2)
+    index = index + 1
+  end
+end
+
+---Keep every visible line's wrapped rows and row heights derived from the
+---render plan that drawing uses. Wrapping and row metrics record the plan
+---they measured. Provider state, such as a Markdown parse publication, can
+---replace a line's plan without a text edit. Remeasure each visible line
+---whose recorded plan differs before the frame draws it.
+function TextView:reconcile_visible_line_layout()
+  if self.__reconciling_line_layout or self.__presentation_reload_frozen
+    or not self:has_line_render_providers()
+    or not self:has_visual_metric_providers()
+    or self.size.x <= 0 or self.size.y <= 0
+  then
+    return
+  end
+  self.__reconciling_line_layout = true
+  local ok, err = pcall(function()
+    for _ = 1, 4 do
+      local wrap_lines, metric_lines = {}, {}
+      local found = false
+      -- A sliced rebuild publishes its plans and rows together.
+      local check_wrap = self.wrapped_settings and self.wrapped_presentations
+        and not self.__async_wrap_reconstruction
+      if check_wrap then
+        local first, last = self:get_visible_line_range()
+        for line = first, last do
+          local plan = self:get_line_render(line) or false
+          local measured = self.wrapped_presentations[line]
+          if not measured or measured.render_line ~= plan
+            or measured.source_line ~= self.buffer.lines[line]
+          then
+            wrap_lines[line] = true
+            found = true
+          end
+        end
+      end
+      each_visible_metric_row(self, function(_, line, measured)
+        if not wrap_lines[line]
+          and measured ~= (self:get_line_render(line) or false)
+        then
+          metric_lines[line] = true
+          found = true
+        end
+      end)
+      if not found then break end
+      local wrap_count, metric_count = 0, 0
+      each_line_range(wrap_lines, function(line1, line2)
+        wrap_count = wrap_count + line2 - line1 + 1
+        linewrapping.update_breaks(self, line1, line2, 0)
+        self:invalidate_visual_metrics("layout-reconcile", line1, line2)
+      end)
+      each_line_range(metric_lines, function(line1, line2)
+        metric_count = metric_count + line2 - line1 + 1
+        self:invalidate_visual_metrics("layout-reconcile", line1, line2)
+      end)
+      self.render_cache_diagnostics.layout_reconciled_lines =
+        (self.render_cache_diagnostics.layout_reconciled_lines or 0) + wrap_count + metric_count
+      perf_frame_add("textview_layout_reconcile_wrap_lines", wrap_count)
+      perf_frame_add("textview_layout_reconcile_metric_lines", metric_count)
+      core.log_quiet(
+        "Text View remeasured lines with a changed render plan: wrap=%d metrics=%d revision=%d path=%s",
+        wrap_count, metric_count, self.buffer.text_revision or 0, self.buffer:get_name()
+      )
+    end
+  end)
+  self.__reconciling_line_layout = nil
+  if not ok then
+    core.log_quiet("Text View layout reconciliation failed for %s: %s",
+      self.buffer:get_name(), tostring(err))
+  end
 end
 
 ---Resolve current provider output for layout preparation. Display consumers
@@ -4625,7 +4782,9 @@ function TextView:resolve_line_render(line)
     self, line, snapshot_id and self.__line_render_snapshot_provider_generations or nil
   )
   local cached = cache.lines[line]
-  if cached and cached.source_line == source_line and cached.signature == signature then
+  if cached and cached.source_line == source_line and cached.signature == signature
+    and line_render_entry_current(self, line, cached)
+  then
     cache.hits = cache.hits + 1
     self.render_cache_diagnostics.line_hits = self.render_cache_diagnostics.line_hits + 1
     perf_frame_add("textview_line_render_cache_hits", 1)
@@ -4649,6 +4808,7 @@ function TextView:resolve_line_render(line)
   local source_text = source_line:sub(-1) == "\n" and source_line:sub(1, -2) or source_line
   local context = { source_text = source_text, line = line }
   local resolved
+  local results
   for _, entry in ipairs(self:line_render_provider_entries()) do
     local provider = entry.provider
     if provider and provider.render_line then
@@ -4658,6 +4818,11 @@ function TextView:resolve_line_render(line)
       self.__resolving_line_render = true
       local ok, render_line = pcall(provider.render_line, provider, self, line, context)
       self.__resolving_line_render = resolving
+      if ok and render_line and provider.line_render_current then
+        -- Keep a passthrough result too: it can depend on provider state.
+        results = results or {}
+        results[entry.id] = render_line
+      end
       if ok and render_line and not render_line.raw_passthrough then
         render_line.source_text = render_line.source_text or source_text
         resolved = render_line
@@ -4671,6 +4836,7 @@ function TextView:resolve_line_render(line)
     source_line = source_line,
     signature = signature,
     render_line = resolved or false,
+    provider_results = results,
   }
   perf_elapsed("textview_line_render_build_ms", build_start)
   perf_elapsed("textview_line_render_cache_lookup_ms", lookup_start)
@@ -6507,6 +6673,9 @@ function TextView:update()
     self:update_wrap_cache()
     perf_elapsed("textview_update_wrap_cache_ms", wrap_start)
   end
+  local reconcile_start = perf_active and system.get_time()
+  self:reconcile_visible_line_layout()
+  perf_elapsed("textview_update_layout_reconcile_ms", reconcile_start)
 
   local zoom_center = self.__pending_viewport_center
   self.__pending_viewport_center = nil
@@ -9048,6 +9217,7 @@ local function draw_textview(self)
       self:update_wrap_cache()
     end
   end
+  self:reconcile_visible_line_layout()
 
   if self:has_composed_visual_rows() then
     if self.wrapped_settings then

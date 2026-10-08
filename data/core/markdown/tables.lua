@@ -234,6 +234,26 @@ local function source_line_in_fence_or_frontmatter(buffer, target)
   return marker ~= nil
 end
 
+---Record the complete source rows a cached table result was built from.
+function tables.source_record(buffer, line1, line2)
+  local texts = {}
+  for line = line1, line2 do texts[line] = line_text(buffer, line) end
+  return { line1 = line1, line2 = line2, texts = texts, revision = buffer.text_revision }
+end
+
+---Return whether a source record still describes rows line1..line2. Text
+---revisions only increase, so a matching revision skips the row comparison.
+function tables.source_record_current(buffer, record, line1, line2)
+  if not record or record.line1 ~= line1 or record.line2 ~= line2 then return false end
+  local revision = buffer.text_revision
+  if record.revision == revision then return true end
+  for line = line1, line2 do
+    if record.texts[line] ~= line_text(buffer, line) then return false end
+  end
+  record.revision = revision
+  return true
+end
+
 function tables.source_bounds(view, line)
   if not (view and view.buffer and line) then return nil end
   return source_table_bounds(view.buffer, line)

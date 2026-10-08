@@ -2328,7 +2328,7 @@ local function table_layout(view, table_node, allow_pending)
   if not bucket then
     bucket = {
       font = font, font_size = font:get_size(), available_width = available_width,
-      layouts = {},
+      layouts = {}, sources = {},
     }
     cache.buckets[geometry_key] = bucket
   end
@@ -2342,28 +2342,34 @@ local function table_layout(view, table_node, allow_pending)
     perf_frame_add("markdown_live_table_geometry_bucket_evictions", 1)
   end
   cache.layouts = bucket.layouts
-  local layouts = bucket.layouts
-  if layouts[table_node.id] ~= nil then
-    return layouts[table_node.id] or nil
+  local layouts, sources = bucket.layouts, bucket.sources
+  local id = table_node.id
+  -- A parse can stay pending across edits without a new semantic generation,
+  -- so every cached result, including a raw fallback, must still match the
+  -- complete source rows that produced it.
+  if layouts[id] ~= nil then
+    if markdown_tables.source_record_current(view.buffer, sources[id], line1, line2) then
+      return layouts[id] or nil
+    end
+    perf_frame_add("markdown_live_table_layout_source_misses", 1)
+    layouts[id], sources[id] = nil, nil
   end
 
   -- A semantic publication does not change every table. Reuse a layout only
   -- when its identity, geometry, source range and complete source still match.
   local previous_bucket = cache.previous_buckets and cache.previous_buckets[geometry_key]
-  local previous = previous_bucket and previous_bucket.layouts[table_node.id]
-  if previous and previous.line1 == line1 and previous.line2 == line2 then
-    local unchanged = true
-    for line = line1, line2 do
-      if previous.rows[line].text ~= (view.buffer.lines[line] or ""):gsub("\n$", "") then
-        unchanged = false
-        break
-      end
-    end
-    if unchanged then
-      layouts[table_node.id] = previous
-      perf_frame_add("markdown_live_table_layout_reuses", 1)
-      return previous
-    end
+  local previous = previous_bucket and previous_bucket.layouts[id]
+  if previous and markdown_tables.source_record_current(
+    view.buffer, previous_bucket.sources[id], line1, line2
+  ) then
+    layouts[id], sources[id] = previous, previous_bucket.sources[id]
+    perf_frame_add("markdown_live_table_layout_reuses", 1)
+    return previous
+  end
+
+  local function store(layout)
+    layouts[id], sources[id] = layout, markdown_tables.source_record(view.buffer, line1, line2)
+    return layout or nil
   end
 
   local rows, columns, canonical = {}, nil, true
@@ -2371,17 +2377,15 @@ local function table_layout(view, table_node, allow_pending)
     local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
     local row = table_source_row(text)
     if not row or #row.cells == 0 or #row.cells > TABLE_MAX_PRESENTATION_COLUMNS then
-      layouts[table_node.id] = false
       core.log_quiet("Markdown table presentation fell back to source at %s:%d",
         view.buffer:get_name(), line)
-      return nil
+      return store(false)
     end
     columns = columns or #row.cells
     if #row.cells ~= columns then
-      layouts[table_node.id] = false
       core.log_quiet("Markdown table presentation found inconsistent columns at %s:%d",
         view.buffer:get_name(), line)
-      return nil
+      return store(false)
     end
     row.line, row.text = line, text
     canonical = canonical and row.canonical
@@ -2514,8 +2518,7 @@ local function table_layout(view, table_node, allow_pending)
     separator_width = separator_width, total_width = total_width,
     canonical = canonical,
   }
-  layouts[table_node.id] = layout
-  return layout
+  return store(layout)
 end
 
 local function cached_table_horizontal_extent(view)
@@ -7081,7 +7084,14 @@ end
 
 function provider:render_line(view, line, context)
   local render_line = build_render_line(view, line, context)
-  if not render_line or render_line.raw_passthrough then return render_line end
+  if not render_line then return render_line end
+  -- Record the publication this plan came from. A plan built before the
+  -- current revision published uses projected semantics.
+  local published = markdown_model.peek(view.buffer)
+  render_line.markdown_projected = not view_in_source_mode(view)
+    and current_semantic_model(view) == nil
+  render_line.markdown_semantic_revision = published and published.published_revision or nil
+  if render_line.raw_passthrough then return render_line end
   render_line.markdown_typography_generation = provider_generation_state(view).typography_generation
 
   local revision = view.buffer.text_revision or 0
@@ -7143,6 +7153,7 @@ function provider:render_line(view, line, context)
     safe.markdown_provenance = "unavailable"
     safe.markdown_buffer_revision = revision
     safe.markdown_semantic_revision = render_line.markdown_semantic_revision
+    safe.markdown_projected = render_line.markdown_projected
     return safe
   end
   -- Spacing belongs to the render plan too. Do not query newer semantics
@@ -7155,6 +7166,17 @@ function provider:render_line(view, line, context)
     render_line = copy
   end
   return render_line
+end
+
+---A projected plan is valid only until its publication is replaced.
+---Publication invalidates the lines the parser changed. A projected plan
+---elsewhere can still differ from the published semantics, so rebuild it.
+function provider:line_render_current(view, _line, render_line)
+  if not render_line.markdown_projected then return true end
+  if current_semantic_model(view) then return false end
+  local published = markdown_model.peek(view.buffer)
+  return published ~= nil
+    and published.published_revision == render_line.markdown_semantic_revision
 end
 
 function live.image_at_position(view, x, y)
