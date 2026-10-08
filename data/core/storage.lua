@@ -1,5 +1,11 @@
-local core = require "core"
 local common = require "core.common"
+
+-- Workers use the same replacement rules without loading editor or UI state.
+-- Worker callers report returned errors on the UI thread.
+local function log(level, ...)
+  local core = package.loaded.core
+  if type(core) == "table" and core[level] then core[level](...) end
+end
 
 local function module_key_to_path(module, key)
   local path = USERDIR .. PATHSEP .. "storage"
@@ -49,9 +55,9 @@ function storage.load(module, key)
     if backup then
       local restored, err = os.rename(backup, path)
       if restored then
-        core.log("restored storage backup %s", backup)
+        log("log", "restored storage backup %s", backup)
       else
-        core.error("error restoring storage backup %s: %s", backup, err)
+        log("error", "error restoring storage backup %s: %s", backup, err)
       end
     end
   end
@@ -60,7 +66,7 @@ function storage.load(module, key)
     if func then
       return func()
     else
-      core.error("error loading storage file for %s[%s]: %s", module, key, err)
+      log("error", "error loading storage file for %s[%s]: %s", module, key, err)
     end
   end
   return nil
@@ -80,7 +86,7 @@ function storage.save(module, key, value)
   if not system.get_file_info(dir) then
     local status, err = common.mkdirp(dir)
     if not status then
-      core.error("error creating storage directory for %s at %s: %s", module, dir, err)
+      log("error", "error creating storage directory for %s at %s: %s", module, dir, err)
       return false, err
     end
   end
@@ -105,7 +111,7 @@ function storage.save(module, key, value)
           renamed, rename_err = os.rename(tmp, path)
           if renamed then
             local removed, remove_err = os.remove(backup)
-            if not removed then core.error("error deleting storage backup %s: %s", backup, remove_err) end
+            if not removed then log("error", "error deleting storage backup %s: %s", backup, remove_err) end
           else
             pcall(os.rename, backup, path)
           end
@@ -115,18 +121,18 @@ function storage.save(module, key, value)
       end
       if not renamed then
         os.remove(tmp)
-        core.error("error replacing storage file %s: %s", path, rename_err)
+        log("error", "error replacing storage file %s: %s", path, rename_err)
         return false, rename_err
       end
       return true
     else
       pcall(function() f:close() end)
       os.remove(tmp)
-      core.error("error writing storage file %s: %s", path, write_err)
+      log("error", "error writing storage file %s: %s", path, write_err)
       return false, write_err
     end
   else
-    core.error("error opening storage file %s for writing: %s", tmp, err)
+    log("error", "error opening storage file %s for writing: %s", tmp, err)
     return false, err
   end
 end

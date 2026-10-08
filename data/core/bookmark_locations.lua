@@ -1,6 +1,6 @@
 -- Resolve saved locations without choosing between equally plausible lines.
 local diff = require "diff"
-local locations = { recovery_limit = 8 * 1024 * 1024 }
+local locations = { recovery_limit = 8 * 1024 * 1024, recovery_line_limit = 200000 }
 
 local function text(line)
   return (line or ""):gsub("[\r\n]+$", "")
@@ -33,10 +33,25 @@ function locations.snapshot(lines)
   local copy, size = {}, 0
   for index, line in ipairs(lines) do
     size = size + #line
-    if size > locations.recovery_limit then return nil end
+    if size > locations.recovery_limit or index > locations.recovery_line_limit then return nil end
     copy[index] = line
   end
   return { lines = copy }
+end
+
+-- Check the line budget before the native splitter allocates its line tables.
+function locations.parse(value, cancelled)
+  if #value > locations.recovery_limit then return nil end
+  local from, count = 1, 0
+  while from <= #value do
+    if cancelled and cancelled() then return nil end
+    count = count + 1
+    if count > locations.recovery_line_limit then return nil end
+    local newline = value:find("\n", from, true)
+    if not newline then break end
+    from = newline + 1
+  end
+  return locations.snapshot(encoding.split_lines(value))
 end
 
 local function line_index(lines, cancelled)
@@ -166,8 +181,11 @@ function locations.resolve(lines, records, cancelled, snapshots)
   local results = {}
   for _, record in ipairs(records) do
     if cancelled and cancelled() then return nil end
-    local best, tied = nil, false
-    if not record.location_deleted and not record.recovery_unavailable then
+    local best, tied, snapshot_changed = nil, false, not record.snapshot
+    if record.live then
+      -- This line belongs to the verified Buffer revision supplied by the UI.
+      if lines[record.line] and text(lines[record.line]) == record.text then best = record.line end
+    elseif not record.location_deleted and not record.recovery_unavailable then
       if record.snapshot then
         local snapshot = snapshots and snapshots[record.snapshot]
         if snapshot then
@@ -177,6 +195,7 @@ function locations.resolve(lines, records, cancelled, snapshots)
             if not source then return nil end
             sources[record.snapshot] = source
           end
+          snapshot_changed = not source.equal
           if not source.equal and not current_index then
             current_index = line_index(lines, cancelled)
             if not current_index then return nil end
@@ -221,7 +240,28 @@ function locations.resolve(lines, records, cancelled, snapshots)
       id = record.id, line = ready and best or nil,
       status = ready and "ready" or "location_missing",
       text = record.text, before = before, after = after,
+      live = record.live, snapshot_changed = ready and not record.live and snapshot_changed or nil,
     }
+  end
+  local destinations = {}
+  for _, record in ipairs(results) do
+    if record.line then
+      local group = destinations[record.line] or {}
+      group[#group + 1] = record
+      destinations[record.line] = group
+    end
+  end
+  for _, group in pairs(destinations) do
+    if #group > 1 then
+      local live = false
+      for _, record in ipairs(group) do live = live or record.live end
+      for _, record in ipairs(group) do
+        if not live or not record.live then
+          record.conflict_line, record.line = record.line, nil
+          record.status, record.before, record.after = "location_missing", nil, nil
+        end
+      end
+    end
   end
   return results
 end

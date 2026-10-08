@@ -20,6 +20,12 @@ local function buffer_snapshot(buffer)
   return cached.value
 end
 
+local function retain_snapshot(mark, buffer)
+  mark.snapshot = buffer_snapshot(buffer)
+  -- A new record without a retained source must not use legacy context guesses.
+  mark.recovery_unavailable = not mark.snapshot or nil
+end
+
 local function positive_integer(value)
   return type(value) == "number" and value >= 1 and value <= 9007199254740990 and value == math.floor(value)
 end
@@ -50,8 +56,8 @@ local function load_records(key)
   if saved.version == 3 and type(saved.snapshots) == "table" then
     for index, value in ipairs(saved.snapshots) do
       if type(value) == "string" and #value > 0 and #value <= locations.recovery_limit then
-        local lines = encoding.split_lines(value)
-        if table.concat(lines) == value then snapshots[index] = { lines = lines } end
+        local snapshot = locations.parse(value)
+        if snapshot and table.concat(snapshot.lines) == value then snapshots[index] = snapshot end
       end
     end
   end
@@ -74,7 +80,7 @@ local function load_records(key)
           or snapshot.lines[record.line]:gsub("[\r\n]+$", "") ~= record.text) then
         snapshot, unavailable = nil, true
       end
-      if unavailable then core.log_quiet("Bookmarks: retained record with unavailable text version id=%d path=%s", record.id, record.path) end
+      if unavailable then core.log_quiet("Bookmarks: automatic recovery unavailable id=%d path=%s", record.id, record.path) end
       marks[#marks + 1] = {
         id = record.id, path = record.path, line = record.line, text = record.text, name = record.name or "",
         before = before, after = after, fingerprint = fingerprint,
@@ -120,11 +126,11 @@ local function line_text(buffer, line)
   return (buffer.lines[line] or ""):gsub("[\r\n]+$", "")
 end
 
-local function save(store)
+local function saved_data(store)
   local records, snapshots, snapshot_ids = {}, {}, {}
   for _, mark in ipairs(store.marks) do
     if mark.buffer and mark.location_status == "ready" and not mark.needs_recovery then
-      mark.snapshot = buffer_snapshot(mark.buffer)
+      retain_snapshot(mark, mark.buffer)
     end
     local snapshot_id
     if mark.snapshot then
@@ -132,7 +138,7 @@ local function save(store)
       if not snapshot_id then
         snapshot_id = #snapshots + 1
         snapshot_ids[mark.snapshot] = snapshot_id
-        snapshots[snapshot_id] = table.concat(mark.snapshot.lines)
+        snapshots[snapshot_id] = mark.snapshot.lines
       end
     end
     records[#records + 1] = {
@@ -144,9 +150,43 @@ local function save(store)
       snapshot = snapshot_id, recovery_unavailable = mark.recovery_unavailable,
     }
   end
-  local ok = storage.save("bookmarks", store.key, { version = 3, next_id = store.next_id, marks = records, snapshots = snapshots })
+  return { version = 3, next_id = store.next_id, marks = records, snapshots = snapshots }
+end
+
+local function save(store)
+  local ok = require("core.workers.bookmarks_save").write(store.key, saved_data(store))
   store.dirty = not ok
   return ok
+end
+
+local function start_save(store)
+  local revision, result = store.revision, nil
+  local function finished(success, error_message)
+    store.save_job = nil
+    store.save_failed = not success
+    if projects[store.key] ~= store then return end
+    store.dirty = not success or store.revision ~= revision
+    if not success then
+      core.error("Cannot save Bookmarks for %s: %s", store.key, tostring(error_message))
+      core.log_quiet("Bookmarks: save failed for %s; retry pending", store.key)
+    end
+  end
+  store.save_job = worker_pool.named("bookmarks", { worker_count = 1 }):submit {
+    kind = "bookmarks_save", priority = "background",
+    payload = { userdir = USERDIR, key = store.key, saved = saved_data(store) },
+    on_result = function(message) if message.type == "result" then result = message.payload end end,
+    on_complete = function() finished(result and result.success, result and result.error or "No save result") end,
+    on_error = function(message) finished(false, message.error) end,
+    on_cancelled = function() finished(false, "Save cancelled") end,
+  }
+end
+
+local function wait_for_save(store)
+  -- Only explicit flush and Project close wait here. Periodic saves yield instead.
+  while store.save_job do
+    worker_pool.named("bookmarks"):drain { budget_ms = 10, max_messages = 100 }
+    if store.save_job then system.sleep(0.001) end
+  end
 end
 
 local function changed(store)
@@ -159,9 +199,9 @@ local function changed(store)
   core.add_thread(function()
     coroutine.yield(0.25)
     while projects[store.key] == store and store.dirty do
-      if save(store) then break end
-      core.log_quiet("Bookmarks: save failed for %s; retry pending", store.key)
-      coroutine.yield(5)
+      if not store.save_job then start_save(store) end
+      while store.save_job do coroutine.yield(0.01) end
+      if store.dirty then coroutine.yield(store.save_failed and 5 or 0.25) end
     end
     store.save_pending = false
   end)
@@ -218,7 +258,7 @@ function bookmarks.attach(buffer)
         for _, project_store in pairs(projects) do
           for _, mark in ipairs(project_store.marks) do
             if mark.buffer == buffer and mark.location_status == "ready" and not mark.needs_recovery then
-              mark.snapshot = buffer_snapshot(buffer)
+              retain_snapshot(mark, buffer)
             end
           end
         end
@@ -234,7 +274,7 @@ function bookmarks.attach(buffer)
             if mark.location_status == "ready" and not mark.needs_recovery then
               for _, edit in ipairs(transaction.edits or {}) do
                 if edit.line1 <= mark.line and edit.line2 >= mark.line and edit.line1 < edit.line2 then
-                  mark.snapshot = buffer_snapshot(buffer)
+                  retain_snapshot(mark, buffer)
                   break
                 end
               end
@@ -243,7 +283,9 @@ function bookmarks.attach(buffer)
               line = mark.line, status = mark.location_status or mark.status, text = mark.text,
               before = mark.before, after = mark.after, location_version = mark.location_version,
               fingerprint = mark.fingerprint,
-              snapshot = mark.snapshot, recovery_unavailable = mark.recovery_unavailable,
+              -- Undo restores verified coordinates without retaining another full text version.
+              snapshot = (mark.needs_recovery or mark.location_status ~= "ready") and mark.snapshot or nil,
+              recovery_unavailable = mark.recovery_unavailable,
               location_deleted = mark.location_deleted,
               needs_recovery = mark.needs_recovery,
             }
@@ -335,7 +377,7 @@ function bookmarks.attach(buffer)
             local range = mark.marker and mark.marker:range()
             if range then
               capture(mark, buffer, range.line1)
-              mark.snapshot = buffer_snapshot(buffer)
+              retain_snapshot(mark, buffer)
             end
             detach(mark)
             mark.needs_recovery, mark.status = true, "checking"
@@ -509,17 +551,26 @@ function bookmarks.refresh(root)
       text = mark.text, before = mark.before, after = mark.after, fingerprint = mark.fingerprint,
       location_deleted = mark.location_deleted,
       snapshot = snapshot_id, recovery_unavailable = mark.recovery_unavailable,
+      live = mark.buffer and not mark.needs_recovery and mark.location_status == "ready"
+        and mark.marker and mark.marker:is_valid() or nil,
     }
     if mark.buffer then
       file.live = true
       buffers[key] = { buffer = mark.buffer, revision = mark.buffer.text_revision }
-      if mark.needs_recovery and not file.lines then
-        file.lines = {}
-        for index, line in ipairs(mark.buffer.lines) do file.lines[index] = line end
+      if mark.needs_recovery then
+        file.recovering = true
+        if not file.lines then
+          local snapshot = buffer_snapshot(mark.buffer)
+          if snapshot then file.lines = snapshot.lines end
+        end
       end
     end
   end
-  for _, file in ipairs(files) do file.snapshot_ids = nil end
+  for _, file in ipairs(files) do
+    file.snapshot_ids = nil
+    -- Verified live markers need only the file probe, not another text transfer.
+    if file.live and not file.recovering then file.records, file.snapshots = nil, nil end
+  end
   if #files == 0 then return end
   local revision = store.revision
   local results = {}
@@ -546,17 +597,27 @@ function bookmarks.refresh(root)
           for _, mark in ipairs(store.marks) do
             if common.path_equals(mark.path, result.path) then
               local old_status, old_location, old_line, old_fingerprint = mark.status, mark.location_status, mark.line, mark.fingerprint
+              local old_unavailable = mark.recovery_unavailable
               local was_recovering = mark.needs_recovery
               mark.disk_missing = result.missing
               local record = recovered[mark.id]
               if record then
                 mark.needs_recovery = nil
-                if record.line and mark.buffer then bind(mark, mark.buffer, record.line)
+                if record.line and mark.buffer then
+                  if not record.live then bind(mark, mark.buffer, record.line) end
                 elseif record.line then
                   mark.line, mark.location_status = record.line, "ready"
                   mark.text, mark.before, mark.after, mark.fingerprint = record.text, record.before, record.after, record.fingerprint
-                else mark.location_status = "location_missing" end
-                if record.line then
+                else
+                  if mark.marker then range_marker.remove(mark.marker); mark.marker = nil end
+                  mark.location_status = "location_missing"
+                  if record.conflict_line then
+                    mark.recovery_unavailable = true
+                    core.log_quiet("Bookmarks: recovery conflict id=%d path=%s candidate_line=%d; manual attachment required",
+                      mark.id, mark.path, record.conflict_line)
+                  end
+                end
+                if record.line and not record.live then
                   mark.snapshot = result.snapshot
                   if mark.buffer then
                     snapshot_cache[mark.buffer] = { revision = mark.buffer.text_revision, value = result.snapshot }
@@ -570,6 +631,7 @@ function bookmarks.refresh(root)
               end
               touched = touched or mark.status ~= old_status or mark.location_status ~= old_location or mark.line ~= old_line
                 or mark.fingerprint ~= old_fingerprint or was_recovering and not mark.needs_recovery
+                or mark.recovery_unavailable ~= old_unavailable or (record ~= nil and record.snapshot_changed == true)
             end
           end
           if result.error then core.log_quiet("Bookmarks: %s: %s", result.path, result.error) end
@@ -579,9 +641,9 @@ function bookmarks.refresh(root)
       end
       if touched then changed(store) end
     end,
-    on_error = function(err)
+    on_error = function(message)
       store.job = nil
-      core.log_quiet("Bookmarks: recovery failed: %s", tostring(err))
+      core.log_quiet("Bookmarks: recovery failed: %s", tostring(message.error))
     end,
   }
 end
@@ -609,7 +671,6 @@ function bookmarks.retarget(mark, buffer, line)
   mark.location_version = (mark.location_version or 1) + 1
   mark.disk_missing = nil
   bind(mark, buffer, line)
-  bookmarks.attach(buffer)
   changed(store)
   core.log_quiet("Bookmarks: attached id=%d path=%s line=%d", mark.id, mark.path, line)
   return true
@@ -637,9 +698,12 @@ function bookmarks.move_path(old_path, new_path, entry_type)
 end
 
 function bookmarks.flush()
+  local success = true
   for _, store in pairs(projects) do
-    if store.dirty then save(store) end
+    wait_for_save(store)
+    if store.dirty and not save(store) then success = false end
   end
+  return success
 end
 
 function bookmarks.remove(mark)
@@ -661,6 +725,7 @@ function bookmarks.close_project(root)
   local key = project_key(root)
   local store = projects[key]
   if not store then return end
+  wait_for_save(store)
   if store.job then worker_pool.system():cancel(store.job); store.job = nil end
   bookmarks.list(root)
   if not save(store) then

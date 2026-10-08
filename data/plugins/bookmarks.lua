@@ -49,6 +49,8 @@ function plugin.actions(mark, source_view)
       if not option then return end
       if option.text == "Rename" then plugin.rename(mark)
       elseif option.text == "Remove" then plugin.remove(mark)
+      elseif source_view.textview_closed or not core.buffer_registry:identity(source_view.buffer) then
+        core.warn("Bookmark source Editor no longer exists")
       else
         local ok, reason = bookmarks.retarget(mark, source_view.buffer, caret(source_view))
         if not ok then core.warn("%s", reason) end
@@ -82,6 +84,8 @@ end, {
         range_marker.remove(target)
         if not common.path_equals(root, core.root_project().path) then
           core.warn("Selected Project changed. Add the Bookmark again.")
+        elseif not core.buffer_registry:identity(buffer) then
+          core.warn("Bookmark source Buffer no longer exists")
         elseif not range then core.warn("Bookmark target no longer exists")
         else
           local mark, reason = bookmarks.add(buffer, range.line1, name)

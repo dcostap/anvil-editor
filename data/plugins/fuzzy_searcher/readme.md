@@ -26,8 +26,10 @@ Open Bookmark Search from the desired Editor before using that attachment action
 Bookmarks follow ordinary edits, Move Lines, undo, and redo.
 Anvil updates paths after its own file and directory moves.
 Recovery compares retained file text with current text in a worker.
-Bookmarks share retained text versions. Missing locations keep their last verified text version.
+Bookmarks share retained text versions. Within the recovery budget, missing locations keep their last verified text version.
 Unique surrounding content lines bound each comparison. Conflicting or repeated evidence leaves the location missing.
+If saved locations select the same line, recovery keeps them missing until manual attachment resolves the conflict.
+Verified live markers take priority over recovered locations on their lines.
 Recovery uses only exact unchanged text. It does not treat replacement lines as surviving locations.
 Older saved Bookmarks use nearby context until Anvil can retain their file text.
 Blank lines and lines such as `}` do not identify a location on their own.
@@ -36,8 +38,11 @@ Creation and attachment wait until other file locations finish checking. This pr
 Navigation checks the opened Buffer before changing the source Pane. One confirmation waits for that check.
 Closing the picker or changing its query cancels pending navigation.
 Failed Bookmark saves remain pending and retry while Anvil is open.
+Periodic saves serialize and write retained text in a worker. Flush and Project close wait for pending writes.
 Locations deleted in an Editor stay missing after reopening or restarting. Undo or manual attachment can restore them.
-Closed-file recovery reads files up to 8 MiB. Larger files retain their Bookmark records without automatic disk recovery.
+Automatic recovery limits file size and decoded text to 8 MiB. It also limits each file to 200,000 lines.
+Files above either limit retain their Bookmark records without automatic recovery.
+Live markers still track Bookmarks in larger open Buffers.
 External renames can appear as missing files. Use the attachment action to repair their Bookmarks.
 
 # Navigation History Search
