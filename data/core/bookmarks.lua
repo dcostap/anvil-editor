@@ -161,20 +161,19 @@ function bookmarks.attach(buffer)
               local previous = transaction.observer_state and transaction.observer_state.bookmarks
               previous = previous and previous[key] and previous[key][mark.id]
               local mapped = previous and transaction.line_mapping and transaction.line_mapping[previous.line]
-              local deleted, edited_line, shift = false, nil, 0
+              local deleted, edited_line = false, nil
               if previous and previous.status == "ready" then
-                for _, edit in ipairs(transaction.edits or {}) do
+                for index, edit in ipairs(transaction.edits or {}) do
                   if edit.text == "" and edit.line1 < edit.line2
                       and previous.line >= edit.line1 and previous.line < edit.line2
                       and (previous.line > edit.line1 or edit.col1 == 1) then
                     deleted = true
                   elseif edit.line1 == edit.line2 and previous.line == edit.line1
                       and not edit.text:find("\n", 1, true) then
-                    edited_line = previous.line + shift
-                  end
-                  if edit.line2 < previous.line then
-                    local _, added = edit.text:gsub("\n", "")
-                    shift = shift + added - (edit.line2 - edit.line1)
+                    -- Batch ranges already include all earlier edits, even on this line.
+                    -- Raw edits contain one change and use its original line.
+                    local changed_range = transaction.changed_ranges and transaction.changed_ranges[index]
+                    edited_line = changed_range and changed_range.new_line1 or edit.line1
                   end
                 end
               end
@@ -186,8 +185,8 @@ function bookmarks.attach(buffer)
                 mark.location_status = "location_missing"
                 mark.status = mark.disk_missing and "file_missing" or "location_missing"
                 core.log_quiet("Bookmarks: location deleted id=%d path=%s line=%d", mark.id, mark.path, mark.line)
-              elseif edited_line then bind(mark, buffer, edited_line)
               elseif range then capture(mark, buffer, range.line1)
+              elseif edited_line then bind(mark, buffer, edited_line)
               elseif transaction.full_snapshot and transaction.content_changed then
                 mark.needs_recovery, mark.status = true, "checking"
               else

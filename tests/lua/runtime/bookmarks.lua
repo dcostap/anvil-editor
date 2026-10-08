@@ -237,4 +237,33 @@ test.describe("Bookmarks", function()
     test.equal(mark.status, "ready")
     test.equal(mark.line, 2)
   end)
+
+  for _, replacement in ipairs {
+    { name = "part", col = 2, text = "ARGET", expected = "tARGET" },
+    { name = "all", col = 1, text = "changed", expected = "changed" },
+  } do
+    test.it("follows a line when a batch inserts a prefix and replaces " .. replacement.name .. " of its text", function(context)
+      local mark = bookmarks.add(context.buffer, 2, "Target")
+      local transaction = context.buffer:apply_edits({
+        { line1 = 2, col1 = 1, line2 = 2, col2 = 1, text = "new\n" },
+        { line1 = 2, col1 = replacement.col, line2 = 2, col2 = 7, text = replacement.text },
+      }, { merge_undo = false })
+      test.ok(transaction.applied)
+      test.equal(context.buffer.lines[3], replacement.expected .. "\n")
+      test.equal(mark.status, "ready")
+      test.equal(mark.line, 3)
+      test.equal(mark.text, replacement.expected)
+      test.equal(bookmarks.at(context.buffer, 3), mark)
+      test.equal(bookmarks.at(context.buffer, 2), nil)
+
+      context.buffer:undo()
+      test.equal(mark.status, "ready")
+      test.equal(mark.line, 2)
+      test.equal(mark.text, "target")
+      context.buffer:redo()
+      test.equal(mark.status, "ready")
+      test.equal(mark.line, 3)
+      test.equal(mark.text, replacement.expected)
+    end)
+  end
 end)
