@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local locations = require "core.bookmark_locations"
 local range_marker = require "core.range_marker"
 local storage = require "core.storage"
 local worker_pool = require "core.worker_pool"
@@ -8,6 +9,63 @@ local bookmarks = {}
 local projects = {}
 local generation = 0
 local gutter_cache = setmetatable({}, { __mode = "k" })
+local fingerprint_cache = setmetatable({}, { __mode = "k" })
+
+local function positive_integer(value)
+  return type(value) == "number" and value >= 1 and value <= 9007199254740990 and value == math.floor(value)
+end
+
+local function saved_context(value, version)
+  if value == nil then return {} end
+  if version == 1 and type(value) == "string" then return { value } end
+  if type(value) ~= "table" or #value > 3 then return nil end
+  local context, count = {}, 0
+  for index, line in pairs(value) do
+    if not positive_integer(index) or index > #value or type(line) ~= "string" then return nil end
+    context[index] = line
+    count = count + 1
+  end
+  if count ~= #value then return nil end
+  return context
+end
+
+local function load_records(key)
+  local ok, saved = pcall(storage.load, "bookmarks", key)
+  if not ok then core.log_quiet("Bookmarks: storage load failed for %s: %s", key, tostring(saved)) end
+  if not ok or saved == nil then return {}, 1 end
+  if type(saved) ~= "table" or (saved.version ~= 1 and saved.version ~= 2) or type(saved.marks) ~= "table" then
+    core.log_quiet("Bookmarks: ignored invalid storage for %s", key)
+    return {}, 1
+  end
+  local marks, ids, next_id = {}, {}, 1
+  for _, record in ipairs(saved.marks) do
+    local before = type(record) == "table" and saved_context(record.before, saved.version)
+    local after = type(record) == "table" and saved_context(record.after, saved.version)
+    if type(record) == "table" and positive_integer(record.id) and not ids[record.id]
+        and positive_integer(record.line) and type(record.path) == "string" and common.is_absolute_path(record.path)
+        and type(record.text) == "string" and (record.name == nil or type(record.name) == "string")
+        and (record.location_version == nil or positive_integer(record.location_version))
+        and (record.location_deleted == nil or type(record.location_deleted) == "boolean")
+        and (record.status == "ready" or record.status == "location_missing" or record.status == "checking" or record.status == "file_missing")
+        and before and after then
+      local fingerprint = record.fingerprint
+      if type(fingerprint) ~= "string" or not fingerprint:match("^%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x:%d+:%d+$") then fingerprint = nil end
+      marks[#marks + 1] = {
+        id = record.id, path = record.path, line = record.line, text = record.text, name = record.name or "",
+        before = before, after = after, fingerprint = fingerprint,
+        location_version = record.location_version or 1, location_deleted = record.location_deleted,
+        location_status = record.location_deleted and "location_missing" or record.status,
+        needs_recovery = true, status = "checking",
+      }
+      ids[record.id] = true
+      next_id = math.max(next_id, record.id + 1)
+    else
+      core.log_quiet("Bookmarks: ignored invalid record for %s", key)
+    end
+  end
+  if positive_integer(saved.next_id) then next_id = math.max(next_id, saved.next_id) end
+  return marks, next_id
+end
 
 local function project_key(root)
   return common.path_compare_key(root or core.root_project().path)
@@ -16,13 +74,8 @@ end
 local function store_for(root)
   local key = project_key(root)
   if not projects[key] then
-    local saved = storage.load("bookmarks", key) or {}
-    projects[key] = { key = key, marks = saved.marks or {}, next_id = saved.next_id or 1, revision = 0, signatures = {} }
-    for _, mark in ipairs(projects[key].marks) do
-      mark.location_status = mark.status
-      mark.needs_recovery = true
-      mark.status = "checking"
-    end
+    local marks, next_id = load_records(key)
+    projects[key] = { key = key, marks = marks, next_id = next_id, revision = 0, signatures = {} }
     core.log_quiet("Bookmarks: loaded %d records for %s", #projects[key].marks, key)
     generation = generation + 1
   end
@@ -49,9 +102,10 @@ local function save(store)
       text = mark.text, before = mark.before, after = mark.after, status = mark.location_status or mark.status,
       location_version = mark.location_version,
       location_deleted = mark.location_deleted,
+      fingerprint = mark.fingerprint,
     }
   end
-  local ok = storage.save("bookmarks", store.key, { version = 1, next_id = store.next_id, marks = records })
+  local ok = storage.save("bookmarks", store.key, { version = 2, next_id = store.next_id, marks = records })
   store.dirty = not ok
   return ok
 end
@@ -82,8 +136,13 @@ end
 local function capture(mark, buffer, line)
   mark.line = line
   mark.text = line_text(buffer, line)
-  mark.before = line > 1 and line_text(buffer, line - 1) or nil
-  mark.after = line < #buffer.lines and line_text(buffer, line + 1) or nil
+  mark.before, mark.after = locations.capture(buffer.lines, line)
+  local cached = fingerprint_cache[buffer]
+  if not cached or cached.revision ~= buffer.text_revision then
+    cached = { revision = buffer.text_revision, value = encoding.fingerprint_lines(buffer.lines, locations.recovery_limit) }
+    fingerprint_cache[buffer] = cached
+  end
+  mark.fingerprint = cached.value
   mark.location_status = "ready"
   mark.buffer_revision = buffer.text_revision
   mark.status = mark.disk_missing and "file_missing" or "ready"
@@ -109,13 +168,7 @@ function bookmarks.attach(buffer)
   for _, mark in ipairs(store.marks) do
     if not mark.buffer and common.path_equals(mark.path, buffer.abs_filename) then
       attached = true
-      if not mark.location_deleted and mark.line >= 1 and mark.line <= #buffer.lines and mark.text == line_text(buffer, mark.line)
-          and (mark.before == nil or mark.before == line_text(buffer, mark.line - 1))
-          and (mark.after == nil or mark.after == line_text(buffer, mark.line + 1)) then
-        bind(mark, buffer, mark.line)
-      else
-        mark.buffer, mark.needs_recovery, mark.status = buffer, true, "checking"
-      end
+      mark.buffer, mark.needs_recovery, mark.status = buffer, true, "checking"
     end
   end
   if attached then changed(store); bookmarks.refresh(store.key) end
@@ -135,6 +188,7 @@ function bookmarks.attach(buffer)
             positions[mark.id] = {
               line = mark.line, status = mark.location_status or mark.status, text = mark.text,
               before = mark.before, after = mark.after, location_version = mark.location_version,
+              fingerprint = mark.fingerprint,
               location_deleted = mark.location_deleted,
               needs_recovery = mark.needs_recovery,
             }
@@ -164,6 +218,7 @@ function bookmarks.attach(buffer)
                 mark.needs_recovery = state.needs_recovery
                 mark.status = mark.disk_missing and "file_missing" or mark.needs_recovery and "checking" or state.status
                 mark.text, mark.before, mark.after = state.text, state.before, state.after
+                mark.fingerprint = state.fingerprint
               end
             elseif mark.needs_recovery or transaction.full_snapshot and transaction.content_changed then
               -- Saved coordinates cannot track edits until recovery finds the target.
@@ -326,11 +381,12 @@ function bookmarks.refresh(root)
     local key = common.path_compare_key(mark.path)
     local file = by_path[key]
     if not file then
-      file = { path = mark.path, records = {}, signature = store.signatures[key] }
+      file = { path = mark.path, records = {} }
       by_path[key], files[#files + 1] = file, file
     end
     file.records[#file.records + 1] = {
-      id = mark.id, text = mark.text, before = mark.before, after = mark.after,
+      id = mark.id, line = mark.line, status = mark.location_status,
+      text = mark.text, before = mark.before, after = mark.after, fingerprint = mark.fingerprint,
       location_deleted = mark.location_deleted,
     }
     if mark.buffer then
@@ -341,7 +397,6 @@ function bookmarks.refresh(root)
         for index, line in ipairs(mark.buffer.lines) do file.lines[index] = line end
       end
     end
-    if mark.needs_recovery then file.checking = true end
   end
   if #files == 0 then return end
   local revision = store.revision
@@ -369,7 +424,8 @@ function bookmarks.refresh(root)
           for _, record in ipairs(result.records or {}) do recovered[record.id] = record end
           for _, mark in ipairs(store.marks) do
             if common.path_equals(mark.path, result.path) then
-              local old_status, old_location, old_line = mark.status, mark.location_status, mark.line
+              local old_status, old_location, old_line, old_fingerprint = mark.status, mark.location_status, mark.line, mark.fingerprint
+              local was_recovering = mark.needs_recovery
               mark.disk_missing = result.missing
               local record = recovered[mark.id]
               if record then
@@ -377,11 +433,16 @@ function bookmarks.refresh(root)
                 if record.line and mark.buffer then bind(mark, mark.buffer, record.line)
                 elseif record.line then
                   mark.line, mark.location_status = record.line, "ready"
+                  mark.text, mark.before, mark.after, mark.fingerprint = record.text, record.before, record.after, record.fingerprint
                 else mark.location_status = "location_missing" end
               end
               mark.status = result.missing and "file_missing" or mark.needs_recovery and "checking"
                 or mark.location_status or "location_missing"
+              if mark.status ~= old_status then
+                core.log_quiet("Bookmarks: checked id=%d path=%s line=%d status=%s", mark.id, mark.path, mark.line, mark.status)
+              end
               touched = touched or mark.status ~= old_status or mark.location_status ~= old_location or mark.line ~= old_line
+                or mark.fingerprint ~= old_fingerprint or was_recovering and not mark.needs_recovery
             end
           end
           if result.error then core.log_quiet("Bookmarks: %s: %s", result.path, result.error) end

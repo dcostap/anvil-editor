@@ -64,6 +64,108 @@ test.describe("Bookmarks", function()
     test.equal(rows[1].status, "ready")
   end)
 
+  for _, fixture in ipairs {
+    { name = "punctuation-only neighbors", text = "{\nwork();\n}\n", line = 2 },
+    { name = "repeated blocks", text = "first\ntarget\nlast\nfirst\ntarget\nlast\n", line = 2 },
+  } do
+    test.it("retains an unchanged saved location with " .. fixture.name, function(context)
+      write_file(context.path, fixture.text)
+      context.buffer:replace_snapshot(fixture.text)
+      bookmarks.add(context.buffer, fixture.line, "Retained target")
+      context.buffer:on_close()
+      context.buffer = nil
+      test.ok(bookmarks.close_project(context.root))
+      refresh()
+      local mark = bookmarks.list()[1]
+      test.equal(mark.status, "ready")
+      test.equal(mark.line, fixture.line)
+      test.equal(mark.name, "Retained target")
+    end)
+  end
+
+  for _, reopen in ipairs { false, true } do
+    test.it("rejects a remaining block with only a common neighbor" .. (reopen and " in a reopened Buffer" or " on disk"), function(context)
+      local original = "original owner\ntarget\nreturn nil\nother owner\ntarget\nreturn nil\n"
+      write_file(context.path, original)
+      context.buffer:replace_snapshot(original)
+      bookmarks.add(context.buffer, 2, "Original target")
+      context.buffer:on_close()
+      context.buffer = nil
+      test.ok(bookmarks.close_project(context.root))
+      write_file(context.path, "other owner\ntarget\nreturn nil\n")
+      if reopen then
+        context.buffer = Buffer(context.path, context.path)
+        bookmarks.attach(context.buffer)
+        wait_for_refresh()
+      else
+        refresh()
+      end
+      local mark = bookmarks.list()[1]
+      test.equal(mark.status, "location_missing")
+      test.equal(bookmarks.navigation_target(mark), nil)
+      test.equal(mark.name, "Original target")
+    end)
+  end
+
+  test.it("uses wider context to distinguish displaced lines inside repeated braces", function(context)
+    local original = "owner A\n{\ntarget\n}\nend A\nowner B\n{\ntarget\n}\nend B\n"
+    write_file(context.path, original)
+    context.buffer:replace_snapshot(original)
+    bookmarks.add(context.buffer, 3, "Owner A target")
+    context.buffer:on_close()
+    context.buffer = nil
+    test.ok(bookmarks.close_project(context.root))
+    write_file(context.path, "prefix\n" .. original)
+    refresh()
+    local mark = bookmarks.list()[1]
+    test.equal(mark.status, "ready")
+    test.equal(mark.line, 4)
+  end)
+
+  test.it("retains valid stored Bookmarks and ignores malformed records and counters", function(context)
+    bookmarks.list()
+    test.ok(bookmarks.close_project(context.root))
+    test.ok(storage.save("bookmarks", common.path_compare_key(context.root), {
+      version = 1, next_id = "invalid",
+      marks = {
+        { id = "invalid", path = context.path, line = 2, text = "target", name = "Broken" },
+        { id = 7, path = context.path, line = 2, text = "target", name = "Retained", before = "first", after = "last", status = "ready" },
+      },
+    }))
+    refresh()
+    local rows = bookmarks.list()
+    test.equal(#rows, 1)
+    test.equal(rows[1].name, "Retained")
+    test.equal(rows[1].status, "ready")
+    local added = test.not_nil(bookmarks.add(context.buffer, 1, "New target"))
+    test.ok(added.id > rows[1].id)
+  end)
+
+  test.it("checks closed-file content even when file metadata remains unchanged", function(context)
+    -- The worker's file result is the seam. Fix metadata at the file system boundary.
+    local info = test.not_nil(system.get_file_info(context.path))
+    local signature = tostring(info.modified) .. ":" .. tostring(info.size)
+    write_file(context.path, "first\nchange\nlast\n")
+    local get_file_info, messages = system.get_file_info, {}
+    system.get_file_info = function(path)
+      if common.path_equals(path, context.path) then return info end
+      return get_file_info(path)
+    end
+    local ok, err = pcall(require("core.workers.bookmarks").run, {
+      files = { {
+        path = context.path, signature = signature,
+        records = { { id = 1, line = 2, text = "target", before = { "first" }, after = { "last" }, status = "ready" } },
+      } },
+    }, {
+      cancelled = function() return false end,
+      send = function(message) messages[#messages + 1] = message; return true end,
+    })
+    system.get_file_info = get_file_info
+    test.ok(ok, tostring(err))
+    local records = test.not_nil(messages[1].payload.records, "Closed-file content was not checked")
+    test.equal(records[1].status, "location_missing")
+  end)
+
   test.it("retries a failed save without requiring another Bookmark change", function(context)
     local key = common.path_compare_key(context.root)
     local storage_dir = USERDIR .. PATHSEP .. "storage" .. PATHSEP .. "bookmarks" .. PATHSEP
@@ -195,26 +297,27 @@ test.describe("Bookmarks", function()
     test.equal(mark.name, "Target")
   end)
 
-  test.it("keeps the original target when another line changes during reload recovery", function(context)
+  test.it("keeps an uncertain target missing when its context changes during reload recovery", function(context)
     local mark = bookmarks.add(context.buffer, 2, "Target")
     context.buffer:replace_snapshot("new\nfirst\ntarget\nlast\n")
     context.buffer:apply_edits({
       { line1 = 2, col1 = 1, line2 = 2, col2 = 6, text = "changed first" },
     }, { merge_undo = false })
     wait_for_refresh()
-    test.equal(mark.status, "ready")
+    test.equal(mark.status, "location_missing")
     test.equal(mark.text, "target")
-    test.equal(mark.line, 3)
     test.equal(bookmarks.at(context.buffer, 2), nil)
+    test.equal(bookmarks.navigation_target(mark), nil)
 
     context.buffer:undo()
     wait_for_refresh()
+    test.equal(mark.status, "ready")
     test.equal(mark.text, "target")
     test.equal(mark.line, 3)
     context.buffer:redo()
     wait_for_refresh()
+    test.equal(mark.status, "location_missing")
     test.equal(mark.text, "target")
-    test.equal(mark.line, 3)
   end)
 
   test.it("does not mark the target deleted when its old line is removed during reload recovery", function(context)
@@ -222,9 +325,14 @@ test.describe("Bookmarks", function()
     context.buffer:replace_snapshot("new\nfirst\ntarget\nlast\n")
     context.buffer:remove(2, 1, 3, 1)
     wait_for_refresh()
+    test.equal(mark.status, "location_missing")
+    test.equal(mark.text, "target")
+    test.equal(bookmarks.at(context.buffer, 2), nil)
+    context.buffer:undo()
+    wait_for_refresh()
     test.equal(mark.status, "ready")
     test.equal(mark.text, "target")
-    test.equal(mark.line, 2)
+    test.equal(mark.line, 3)
   end)
 
   test.it("keeps each Project's bookmarks separate", function(context)

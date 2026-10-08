@@ -8,15 +8,16 @@ function worker.run(payload, context)
     local result = { path = file.path, missing = not info or info.type ~= "file" }
     if not result.missing then
       result.signature = tostring(info.modified) .. ":" .. tostring(info.size)
-      if file.lines or not file.live and (file.signature ~= result.signature or file.checking) then
+      -- Equal size and modification time do not prove equal contents.
+      if file.lines or not file.live then
         local lines = file.lines
-        if not lines and info.size <= 8 * 1024 * 1024 then
+        if not lines and info.size <= locations.recovery_limit then
           local fp = io.open(file.path, "rb")
           if fp then
-            local text = fp:read(8 * 1024 * 1024 + 1)
+            local text = fp:read(locations.recovery_limit + 1)
             fp:close()
             if context.cancelled() then return end
-            if text and #text <= 8 * 1024 * 1024 then
+            if text and #text <= locations.recovery_limit then
               local charset = encoding.detect(file.path) or "UTF-8"
               if charset ~= "UTF-8" then
                 text = encoding.convert("UTF-8", charset, text, { strict = false, handle_from_bom = true })

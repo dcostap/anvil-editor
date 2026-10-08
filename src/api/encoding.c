@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <limits.h>
+#include <inttypes.h>
 #include <uchardet.h>
 
 int api_utf8_isvalid(const char *text, size_t len);
@@ -660,7 +661,37 @@ static int f_split_lines(lua_State *L) {
   return 5;
 }
 
+/* FNV-1a identifies normalized Buffer text; this is not a security hash.
+ * Bound the scan and avoid a second full text allocation. */
+static int f_fingerprint_lines(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  lua_Integer limit = luaL_checkinteger(L, 2);
+  luaL_argcheck(L, limit >= 0, 2, "limit must not be negative");
+  uint64_t hash = UINT64_C(14695981039346656037);
+  size_t total = 0, count = 0;
+  for (int line = 1; ; line++) {
+    lua_rawgeti(L, 1, line);
+    if (lua_isnil(L, -1)) { lua_pop(L, 1); break; }
+    size_t len;
+    const unsigned char *value = (const unsigned char *) luaL_checklstring(L, -1, &len);
+    if (len > (size_t) limit - total) { lua_pop(L, 1); lua_pushnil(L); return 1; }
+    for (size_t i = 0; i < len; i++) {
+      hash ^= value[i];
+      hash *= UINT64_C(1099511628211);
+    }
+    total += len;
+    count++;
+    lua_pop(L, 1);
+  }
+  char result[80];
+  SDL_snprintf(result, sizeof(result), "%016" PRIx64 ":%" PRIu64 ":%" PRIu64,
+    hash, (uint64_t) total, (uint64_t) count);
+  lua_pushstring(L, result);
+  return 1;
+}
+
 static const luaL_Reg lib[] = {
+  { "fingerprint_lines", f_fingerprint_lines },
   { "split_lines",     f_split_lines    },
   { "detect",          f_detect          },
   { "detect_string",   f_detect_string   },
