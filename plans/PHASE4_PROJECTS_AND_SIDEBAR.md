@@ -54,6 +54,8 @@ Old frames, dialogs, input, and worker results must not reach another Project.
 Keep one Project instance per path. Do not introduce several Anvil Windows yet.
 Window Close checks each loaded Project in turn with its normal unsaved-data and Terminal policies.
 Cancel stops further Close requests. Earlier accepted closes remain complete.
+Quit inside a Project also closes the Window and checks its remaining loaded Projects in turn.
+Per-Project Close will use explicit unload in Milestone 3. Do not change Quit into unload.
 
 ### 3. Dormant Projects and independent recovery
 
@@ -257,3 +259,65 @@ Milestone 2 is complete. The warned portable update rebuilt, installed, restored
 Fresh logs contain no errors, warnings, or startup failures:
 `anvil-20261008-200827-p30188.log` and `anvil-startup-20261008-200827-p30188-m288554.log`.
 Hosted mode remains opt-in. Physical input, real IME, and mixed-DPI acceptance remain unavailable.
+
+### Milestone 3 preparation: Project identity and selection rules
+
+First launch and later selection now use one handle-based Project identity function.
+It opens the directory and resolves its name with `GetFinalPathNameByHandleW`.
+The cached identity uses Unicode ordinal case-insensitive comparison and removes trailing separators except at roots.
+Junction and 8.3 aliases resolve to the same directory identity.
+
+All identity file system I/O runs on resolve workers, including initial command-line path selection.
+Workers receive copied paths and arguments. The native UI matches or creates Projects after completion.
+The pending queue is bounded. A temporary native timer drains results when event delivery fails.
+Selection allocation failure logs the rejection and leaves the current connection alive.
+Selection sends keyboard focus only when the Window has input focus, with the existing latency-probe exception.
+
+Targeted red-green evidence:
+
+- `identity-trailing` and `identity-cwd` failed before the identity change with a second Project process.
+  Evidence: `anvil-surface-latency-23t9l4ff`.
+  An earlier fixture run left IPC forwarding enabled and did not establish the required red.
+- The junction-first alias case fails with the saved `229d0618` executable.
+  Evidence: `anvil-surface-latency-2kc0gti9`.
+- `loaded-focus` failed with unconditional focus: selection gave focus to a minimized Window.
+  Evidence: `anvil-surface-latency-nup23cc6`.
+- Injected identity allocation failure reproduced the previous Failed-connection behavior and the Project stopped answering.
+  The log confirms the consumed allocation fault. The corrected case retains the same live Project.
+  Evidence: `anvil-surface-latency-nup23cc6`.
+- Temporarily waiting for the identity worker on the native UI thread blocked Minimize.
+  Evidence: `anvil-surface-latency-808fblm6`.
+  The asynchronous case keeps native Minimize and Restore responsive during the owned seven-second identity delay.
+
+Seven targeted cases pass on both renderers, including case, trailing-path, junction, and available 8.3 aliases.
+Evidence: `anvil-surface-latency-p9m0yrp7` and `anvil-surface-latency-tle95y2z`.
+The fixture obtained a real 8.3 alias on this file system.
+Final cleanup and copied-input checks pass in `anvil-surface-latency-avotor7w`.
+Three focused native targets pass in `phase4-identity-native.txt`.
+Loaded Restart and both startup-timer recovery cases pass in `anvil-surface-latency-vemxxflo`.
+Direct Quit, Restart, and Project switch pass in `anvil-surface-latency-sc5sjmgy`.
+
+`loaded-quit` tests the current Quit rule with two loaded Projects.
+A accepts Quit. The Window then asks about B's dirty Buffer.
+Cancel keeps B and its Buffer alive, without restoring A. Later Window Close completes normally.
+Unload remains separate Milestone 3 work.
+
+Isolated latency after these fixes used three runs of 120 valid samples per row.
+No build or correctness check overlapped the measurement.
+Values are p50 / p90 / p99 / maximum / mean, in milliseconds.
+
+| Mode | After identity and selection fixes |
+| --- | --- |
+| Direct D3D11 | 7.99 / 16.92 / 19.34 / 48.38 / 9.10 |
+| Hosted D3D11 | 8.01 / 17.61 / 19.71 / 27.61 / 9.63 |
+| Direct software | 12.17 / 21.60 / 25.47 / 42.76 / 13.72 |
+| Hosted software | 11.61 / 19.62 / 23.52 / 25.29 / 12.67 |
+
+Evidence: `anvil-surface-latency-8j2fapye`.
+The prior matched `229d0618` measurements remain above. These later runs are not a matched comparison.
+Software timing changed across runs. No performance gain or cause is established.
+The measurement ends at Present, not physical scanout. Physical-input, IME, and mixed-DPI gates remain open.
+
+The warned portable update rebuilt, installed, restored data junctions, and restarted Anvil.
+Fresh session and startup logs contain no errors, warnings, or startup failures:
+`anvil-20261008-211500-p1956.log` and `anvil-startup-20261008-211500-p1956-m839853.log`.

@@ -13,8 +13,10 @@ the hosted render, the frame handoff, and the shell composite.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import shutil
+import subprocess
 import statistics
 import tempfile
 from pathlib import Path
@@ -103,7 +105,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
-    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close", "fault-alloc", "fault-event", "fault-open", "fault-acquire", "fault-present", "fault-resize", "fault-write", "fault-pipe", "fault-busy", "fault-stale", "fault-malformed", "fault-device", "fault-startup", "fault-release", "fault-project-release", "fault-pipe-force-close", "probe-exit-error", "startup-reader", "startup-writer", "startup-timer", "restart-startup-timer", "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel", "loaded-switch", "loaded-launch", "loaded-restart"],
+    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close", "fault-alloc", "fault-event", "fault-open", "fault-acquire", "fault-present", "fault-resize", "fault-write", "fault-pipe", "fault-busy", "fault-stale", "fault-malformed", "fault-device", "fault-startup", "fault-release", "fault-project-release", "fault-pipe-force-close", "probe-exit-error", "startup-reader", "startup-writer", "startup-timer", "restart-startup-timer", "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel", "loaded-switch", "loaded-launch", "loaded-restart", "identity-trailing", "identity-cwd", "identity-alias", "loaded-focus", "loaded-quit", "loaded-resolve", "identity-allocation"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)
@@ -134,6 +136,11 @@ def main() -> int:
                     for name in ("driver", "Project", "Replacement", "user"):
                         (case_dir / name).mkdir(parents=True)
                     fixture = "loaded_projects_probe.lua" if action.startswith("loaded-") else "hosted_project_probe.lua"
+                    if action.startswith("identity-"):
+                        fixture = "project_identity_probe.lua"
+                    if action == "identity-alias":
+                        subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", native_path(case_dir / "alias"),
+                                        native_path(case_dir / "Project")], check=True, capture_output=True)
                     shutil.copy2(ROOT / "tests/fixtures" / fixture, work / "app/share/anvil/plugins/hosted_project_probe.lua")
                     (case_dir / "Replacement/edited.txt").write_bytes(b"on disk\n")
                     (case_dir / "Project/edited.txt").write_bytes(b"on disk\n")
@@ -143,7 +150,7 @@ def main() -> int:
                     namespace = "anvil-test-" + work.name.rsplit("-", 1)[-1] + "-" + action
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
-                    if action == "dialog-blocked-close" or action.startswith(("fault-", "startup-")) or action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
+                    if action == "dialog-blocked-close" or action.startswith(("fault-", "startup-", "identity-")) or action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     result = case_dir / "result.lua"
@@ -166,6 +173,17 @@ def main() -> int:
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"
                     if action.startswith(("fault-", "startup-", "loaded-")) or action in ("dialog-blocked-close", "hidden-startup"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
+                    if action.startswith("identity-"):
+                        config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
+                    if action == "identity-alias":
+                        short_path = ctypes.create_unicode_buffer(32768)
+                        get_short_path = ctypes.windll.kernel32.GetShortPathNameW
+                        get_short_path.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+                        length = get_short_path(native_path(case_dir / "Project"), short_path, len(short_path))
+                        if length and short_path.value.casefold() != native_path(case_dir / "Project").casefold():
+                            config["environment"]["ANVIL_PROJECT_SHORT_PATH"] = short_path.value
+                    if action == "loaded-resolve":
+                        config["environment"]["ANVIL_SURFACE_FAULT_IDENTITY_DELAY"] = "1"
                     if action == "loaded-launch":
                         config["environment"]["ANVIL_SURFACE_FAULT_STARTUP"] = "selection-launch"
                     if action.startswith("startup-"):

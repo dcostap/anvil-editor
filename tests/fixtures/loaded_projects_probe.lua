@@ -66,11 +66,12 @@ if path():find("/driver$", 1) then
       save("select-b", {continue = true})
       local requested = wait_for(function() return load("a-selected-b") end, 10)
       assert(requested.path == root .. "/Project", "Project selection changed A's directory")
-      if action == "loaded-launch" then
+      if action == "loaded-launch" or action == "loaded-resolve" then
         wait_for(function()
           local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
           local text = file:read("*a"); file:close()
-          return text:find("Shell paused the owned Project launch worker", 1, true)
+          return text:find(action == "loaded-resolve" and "Shell paused the owned Project identity worker"
+            or "Shell paused the owned Project launch worker", 1, true)
         end, 3)
         local window = assert(shell_window(a.shell_pid))
         user32.PostMessageW(window, 0x112, 0xf020, 0)
@@ -112,7 +113,16 @@ if path():find("/driver$", 1) then
         b_handle = kernel.OpenProcess(0x100000, 0, restarted.pid)
         assert(b_handle ~= nil); handles[#handles + 1] = b_handle
       end
+      if action == "loaded-focus" then
+        user32.PostMessageW(window, 0x112, 0xf020, 0)
+        wait_for(function() return user32.IsIconic(window) ~= 0 end, 1)
+      end
       save("select-a", {continue = true})
+      if action == "loaded-focus" then
+        local focus = wait_for(function() return load("a-focus") end, 5)
+        assert(not focus.focused, "selection gave keyboard focus to a minimized Window")
+        user32.PostMessageW(window, 0x112, 0xf120, 0)
+      end
       local restored = wait_for(function() return load("a-restored") end, 15,
         "cancelled Window Close blocked later Project selection")
       assert(restored.pid == a.pid, "selecting A again created another process")
@@ -123,7 +133,20 @@ if path():find("/driver$", 1) then
       save("finish", {continue = true})
       wait_for(function() return load("a-clean") and load("b-clean") end, 5)
       local window = wait_for(function() return shell_window(a.shell_pid) end, 3)
-      user32.PostMessageW(window, 0x10, 0, 0)
+      if action == "loaded-quit" then save("quit-a", {continue = true})
+      else user32.PostMessageW(window, 0x10, 0, 0) end
+      if action == "loaded-quit" then
+        wait_for(function() return load("b-quit-waiting") end, 5,
+          "Quit inside A did not check B's unsaved Buffer")
+        save("cancel-b-quit", {continue = true})
+        wait_for(function() return load("b-quit-cancelled") end, 5)
+        assert(subject:running() and kernel.WaitForSingleObject(b_handle, 0) == 258,
+          "Cancel after Project Quit closed the remaining Project")
+        assert(kernel.WaitForSingleObject(a_handle, 5000) == 0, "Quit kept A alive")
+        save("clean-b-quit", {continue = true})
+        wait_for(function() return load("b-quit-clean") end, 5)
+        user32.PostMessageW(window, 0x10, 0, 0)
+      end
       wait_for(function() return not subject:running() end, 15, "Window Close left loaded Projects alive")
       assert(kernel.WaitForSingleObject(a_handle, 5000) == 0, "Window Close left A alive")
       assert(kernel.WaitForSingleObject(b_handle, 5000) == 0, "Window Close left B alive")
@@ -179,6 +202,11 @@ else
         worker_result = worker_result, terminal_output = capture and capture.text:find("LIVE_A_BACKGROUND", 1, true) ~= nil,
         session_id = stats.session_id, host_pid = stats.host_pid, attach_count = stats.attach_count,
       })
+      if action == "loaded-focus" then
+        wait_for(function() return load("b-selected-a") end, 20)
+        coroutine.yield(1)
+        save("a-focus", {focused = system.window_has_focus(core.window)})
+      end
       wait_for(function() return system.window_should_render(core.window) end, 20)
       save("a-restored", {
         pid = tonumber(kernel.GetCurrentProcessId()), text = editor.buffer:get_text(1, 1, math.huge, math.huge),
@@ -188,6 +216,10 @@ else
       wait_for(function() return load("finish") end, 10)
       editor.buffer:clean()
       save("a-clean", {continue = true})
+      if action == "loaded-quit" then
+        wait_for(function() return load("quit-a") end, 5)
+        assert(require("core.command").perform("core:quit"))
+      end
     else
       if load("b-restarting") then
         assert(editor.buffer:get_text(1, 1, math.huge, math.huge) == "on disk", "Restart loaded another Project's file")
@@ -219,7 +251,21 @@ else
       end
       wait_for(function() return load("select-a") end, 10)
       assert(core.open_project_in_same_window(root .. "/Project"))
+      save("b-selected-a", {continue = true})
       wait_for(function() return load("finish") end, 15)
+      if action == "loaded-quit" then
+        save("b-clean", {ready = true})
+        wait_for(function() return core.nag_view.visible and core.nag_view:get_title() == "Unsaved Changes" end, 8)
+        save("b-quit-waiting", {continue = true})
+        wait_for(function() return load("cancel-b-quit") end, 5)
+        assert(require("core.command").perform("core:select_dialog_no"))
+        assert(editor.buffer:is_dirty(), "Cancel lost B's dirty Buffer")
+        save("b-quit-cancelled", {continue = true})
+        wait_for(function() return load("clean-b-quit") end, 5)
+        editor.buffer:clean()
+        save("b-quit-clean", {continue = true})
+        return
+      end
       editor.buffer:clean()
       save("b-clean", {continue = true})
     end

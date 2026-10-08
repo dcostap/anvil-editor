@@ -43,7 +43,8 @@ enum {
   FAULT_PIPE,
   FAULT_BUSY,
   FAULT_BLOCK_WRITE,
-  FAULT_RELEASE
+  FAULT_RELEASE,
+  FAULT_SELECT_ALLOC
 };
 static SDL_AtomicInt probe_fault;
 static bool take_fault(int point) { return SDL_CompareAndSwapAtomicInt(&probe_fault, point, 0); }
@@ -73,6 +74,7 @@ enum {
 typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED } ShellState;
 typedef struct ShellDialog ShellDialog;
 typedef struct ProjectLaunch ProjectLaunch;
+typedef struct ProjectResolve ProjectResolve;
 
 typedef struct ShellProject {
   struct ShellProject *next;
@@ -88,6 +90,8 @@ typedef struct ShellProject {
   bool intentional_exit;
   bool failed_close;
   char *restart_path, *project_path;
+  wchar_t *identity;
+  bool resolving;
   AnvilIPCPipe pipe;
   bool connected;
   Uint32 connection;
@@ -118,6 +122,9 @@ typedef struct {
   ShellProject *projects, *selected;
   Uint32 next_connection, next_project;
   bool closing;
+  ProjectResolve *resolvers;
+  unsigned resolve_revision;
+  UINT_PTR resolve_timer;
   SDL_Window *window;
   HWND hwnd;
   WNDPROC sdl_wndproc;
@@ -193,6 +200,7 @@ static bool select_project_path(const char *path);
 static void select_project(ShellProject *project);
 static void present_deferred_dialogs(ShellProject *project);
 static void finish_launch(ShellProject *project);
+static void finish_resolutions(void);
 static ShellProject *project_for_connection(Uint32 connection) {
   for (ShellProject *project = shell.projects; project; project = project->next)
     if (project->connection == connection)
@@ -2160,6 +2168,10 @@ static void route_button(SDL_Event *event) {
 static void request_close(ShellProject *project) {
   if (project == shell.selected)
     shell.closing = true;
+  if (project->resolving) {
+    project->failed_close = true;
+    return;
+  }
   if (project->launch && !project->launch->taken) {
     if (!project->close_requested_ns) {
       project->close_requested_ns = SDL_GetTicksNS();
@@ -2491,6 +2503,10 @@ static void push_window_event(SDL_EventType type, float x, float y) {
 static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
   ShellProject *project = shell.selected;
   if (msg == WM_TIMER) {
+    if (shell.resolve_timer && wparam == shell.resolve_timer) {
+      finish_resolutions();
+      return 0;
+    }
     ShellProject *timed = NULL;
     for (ShellProject *item = shell.projects; item; item = item->next)
       if (item->startup_timer && wparam == item->startup_timer) {
@@ -2707,38 +2723,232 @@ static bool create_pipe(ShellProject *project, char *name, size_t name_size) {
   return true;
 }
 
-static bool choose_project(ShellProject *project, int argc, char **argv) {
-  char *cwd = SDL_GetCurrentDirectory();
-  if (!cwd) return false;
-  project->project_path = _strdup(cwd);
-  SDL_free(cwd);
+/* Called only by the resolve worker. Opening a directory can wait for a remote server. */
+static wchar_t *canonical_project_identity(const char *path) {
+  wchar_t *wide =
+      (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", path, strlen(path) + 1);
+  if (!wide) {
+    SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    return NULL;
+  }
+  HANDLE directory =
+      CreateFileW(wide, FILE_READ_ATTRIBUTES,
+                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                  OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  SDL_free(wide);
+  if (directory == INVALID_HANDLE_VALUE)
+    return NULL;
+  BY_HANDLE_FILE_INFORMATION info;
+  if (!GetFileInformationByHandle(directory, &info) ||
+      !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    CloseHandle(directory);
+    SetLastError(ERROR_DIRECTORY);
+    return NULL;
+  }
+  DWORD size = GetFinalPathNameByHandleW(
+      directory, NULL, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  wchar_t *final =
+      size && size < 32768 ? malloc((size + 1) * sizeof(*final)) : NULL;
+  DWORD written =
+      final ? GetFinalPathNameByHandleW(directory, final, size + 1,
+                                        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS)
+            : 0;
+  DWORD error = final ? GetLastError() : ERROR_NOT_ENOUGH_MEMORY;
+  CloseHandle(directory);
+  if (!written || written > size) {
+    free(final);
+    SetLastError(error);
+    return NULL;
+  }
+  if (!wcsncmp(final, L"\\\\?\\UNC\\", 8)) {
+    memmove(final + 2, final + 8, (wcslen(final + 8) + 1) * sizeof(*final));
+    final[0] = final[1] = L'\\';
+  } else if (!wcsncmp(final, L"\\\\?\\", 4)) {
+    memmove(final, final + 4, (wcslen(final + 4) + 1) * sizeof(*final));
+  }
+  size_t length = wcslen(final), root = 0;
+  if (length >= 3 && final[1] == L':' && final[2] == L'\\')
+    root = 3;
+  else if (length >= 2 && final[0] == L'\\' && final[1] == L'\\') {
+    wchar_t *server = wcschr(final + 2, L'\\');
+    wchar_t *share = server ? wcschr(server + 1, L'\\') : NULL;
+    root = share ? (size_t)(share - final) + 1 : length;
+  }
+  while (length > root &&
+         (final[length - 1] == L'\\' || final[length - 1] == L'/'))
+    final[--length] = 0;
+  return final;
+}
+
+typedef struct {
+  char *path;
+  wchar_t *identity;
+} ProjectIdentity;
+
+static bool choose_project(ProjectIdentity *project, int argc, char **argv) {
   bool option_value = false;
   for (int i = 2; i < argc; i++) {
-    if (option_value) { option_value = false; continue; }
+    if (option_value) {
+      option_value = false;
+      continue;
+    }
     if (argv[i][0] == '-') {
       option_value = anvil_cli_option_value(argv[i]);
       continue;
     }
-    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[i], -1, NULL, 0);
+    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[i], -1,
+                                    NULL, 0);
     wchar_t *path = count > 0 ? malloc(count * sizeof(wchar_t)) : NULL;
     wchar_t full[32768];
-    if (!path || !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[i], -1, path, count)) { free(path); return false; }
-    DWORD n = GetFullPathNameW(path, SDL_arraysize(full), full, NULL); free(path);
-    DWORD attrs = n && n < SDL_arraysize(full) ? GetFileAttributesW(full) : INVALID_FILE_ATTRIBUTES;
-    if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-      wchar_t *slash = wcsrchr(full, L'\\'); if (!slash) return false;
-      if (slash == full + 2) slash[1] = 0; else *slash = 0;
+    if (!path || !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[i],
+                                      -1, path, count)) {
+      free(path);
+      return false;
+    }
+    DWORD n = GetFullPathNameW(path, SDL_arraysize(full), full, NULL);
+    free(path);
+    if (!n || n >= SDL_arraysize(full))
+      return false;
+    DWORD attrs = GetFileAttributesW(full);
+    if (attrs == INVALID_FILE_ATTRIBUTES ||
+        !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+      wchar_t *slash = wcsrchr(full, L'\\');
+      if (!slash)
+        return false;
+      if (slash == full + 2)
+        slash[1] = 0;
+      else
+        *slash = 0;
       DWORD parent_attrs = GetFileAttributesW(full);
-      if (parent_attrs == INVALID_FILE_ATTRIBUTES || !(parent_attrs & FILE_ATTRIBUTE_DIRECTORY)) continue;
+      if (parent_attrs == INVALID_FILE_ATTRIBUTES ||
+          !(parent_attrs & FILE_ATTRIBUTE_DIRECTORY))
+        continue;
     }
     int bytes = WideCharToMultiByte(CP_UTF8, 0, full, -1, NULL, 0, NULL, NULL);
-    free(project->project_path);
-    project->project_path = bytes > 0 ? malloc(bytes) : NULL;
-    if (!project->project_path)
+    free(project->path);
+    project->path = bytes > 0 ? malloc(bytes) : NULL;
+    if (!project->path)
       return false;
-    WideCharToMultiByte(CP_UTF8, 0, full, -1, project->project_path, bytes, NULL, NULL);
+    WideCharToMultiByte(CP_UTF8, 0, full, -1, project->path, bytes, NULL, NULL);
   }
-  return project->project_path != NULL;
+  if (!project->path)
+    return false;
+  project->identity = canonical_project_identity(project->path);
+  if (!project->identity)
+    return false;
+  char *normalized =
+      SDL_iconv_string("UTF-8", "UTF-16LE", (const char *)project->identity,
+                       (wcslen(project->identity) + 1) * sizeof(wchar_t));
+  if (!normalized)
+    return false;
+  char *path = _strdup(normalized);
+  SDL_free(normalized);
+  if (!path)
+    return false;
+  free(project->path);
+  project->path = path;
+  return true;
+}
+
+struct ProjectResolve {
+  ProjectResolve *next;
+  SDL_Thread *thread;
+  SDL_AtomicInt done;
+  unsigned revision;
+  bool initial, success;
+  int argc;
+  char **argv;
+  char *path;
+  wchar_t *identity;
+  DWORD error;
+};
+
+static void free_resolution(ProjectResolve *job) {
+  for (int i = 0; i < job->argc; i++)
+    free(job->argv[i]);
+  free(job->argv);
+  free(job->path);
+  free(job->identity);
+  free(job);
+}
+
+static int SDLCALL resolve_project_thread(void *data) {
+  ProjectResolve *job = data;
+  const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
+  const char *delay = SDL_getenv("ANVIL_SURFACE_FAULT_IDENTITY_DELAY");
+  if (!job->initial && probe && !strcmp(probe, "1") && delay &&
+      !strcmp(delay, "1")) {
+    SDL_Log("Shell paused the owned Project identity worker");
+    SDL_Delay(7000);
+  }
+  ProjectIdentity result = {.path = job->path};
+  job->success = choose_project(&result, job->argc, job->argv);
+  job->path = result.path;
+  job->identity = result.identity;
+  job->error = job->success ? 0 : GetLastError();
+  SDL_SetAtomicInt(&job->done, 1);
+  /* The temporary native timer also drains completion if this notification
+   * fails. */
+  SDL_Event event = {.type = shell.event_type};
+  event.user.code = SHELL_EVENT_FRAME;
+  SDL_PushEvent(&event);
+  return 0;
+}
+
+static bool queue_resolution(const char *path, int argc, char **argv,
+                             bool initial) {
+  unsigned pending = 0;
+  for (ProjectResolve *item = shell.resolvers; item; item = item->next)
+    pending++;
+  if (pending >= 8) {
+    SDL_Log("Shell rejected Project selection: identity queue full");
+    return false;
+  }
+  ProjectResolve *job =
+      take_fault(FAULT_SELECT_ALLOC) ? NULL : calloc(1, sizeof(*job));
+  if (!job) {
+    SDL_Log("Shell rejected Project selection: identity allocation failed");
+    return false;
+  }
+  job->initial = initial;
+  job->argc = argc;
+  job->argv = argc ? calloc(argc, sizeof(*job->argv)) : NULL;
+  char *cwd = path ? NULL : SDL_GetCurrentDirectory();
+  job->path = _strdup(path ? path : cwd ? cwd : "");
+  SDL_free(cwd);
+  if (!job->path || (argc && !job->argv)) {
+    job->argc = 0;
+    free_resolution(job);
+    SDL_Log("Shell rejected Project selection: identity allocation failed");
+    return false;
+  }
+  for (int i = 0; i < argc; i++) {
+    job->argv[i] = _strdup(argv[i]);
+    if (!job->argv[i]) {
+      free_resolution(job);
+      SDL_Log("Shell rejected Project selection: argument allocation failed");
+      return false;
+    }
+  }
+  if (!shell.resolve_timer)
+    shell.resolve_timer = SetTimer(shell.hwnd, 0x8000, 100, NULL);
+  if (!shell.resolve_timer) {
+    free_resolution(job);
+    SDL_Log("Shell rejected Project selection: identity timer failed");
+    return false;
+  }
+  job->revision = shell.resolve_revision + 1;
+  job->thread =
+      SDL_CreateThread(resolve_project_thread, "anvil-project-identity", job);
+  if (!job->thread) {
+    free_resolution(job);
+    SDL_Log("Shell rejected Project selection: identity worker failed");
+    return false;
+  }
+  shell.resolve_revision = job->revision;
+  job->next = shell.resolvers;
+  shell.resolvers = job;
+  return true;
 }
 
 static bool stop_transport(ShellProject *project, Uint64 deadline) {
@@ -2915,7 +3125,8 @@ static void select_project(ShellProject *project) {
   send_configure(previous);
   send_configure(project);
   if (project->connected)
-    shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS, 1);
+    shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS,
+        anvil_latency_probe_enabled() || (SDL_GetWindowFlags(shell.window) & SDL_WINDOW_INPUT_FOCUS) != 0);
   if (project->text_active)
     SDL_StartTextInput(shell.window);
   apply_cursor(project->child_cursor);
@@ -2928,54 +3139,71 @@ static void select_project(ShellProject *project) {
 static bool select_project_path(const char *path) {
   if (shell.closing || !path || !*path)
     return false;
-  int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
-  wchar_t *wide = count > 0 ? malloc(count * sizeof(*wide)) : NULL;
-  if (!wide)
-    return false;
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, count);
-  DWORD attrs = GetFileAttributesW(wide);
-  free(wide);
-  if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY))
-    return false;
-  ShellProject canonical = {0};
-  char *arguments[] = {"anvil", "--shell", (char *)path};
-  if (!choose_project(&canonical, 3, arguments))
-    return false;
-  for (ShellProject *project = shell.projects; project; project = project->next) {
-    wchar_t *left = (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", project->project_path,
-                                                strlen(project->project_path) + 1);
-    wchar_t *right = (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", canonical.project_path,
-                                                 strlen(canonical.project_path) + 1);
-    bool equal = left && right && CompareStringOrdinal(left, -1, right, -1, TRUE) == CSTR_EQUAL;
-    bool allocated = left && right;
-    SDL_free(left);
-    SDL_free(right);
-    if (!allocated) {
-      free(canonical.project_path);
-      fail_connection(shell.selected, "Project identity allocation failed");
-      return false;
+  return queue_resolution(path, 0, NULL, false);
+}
+
+static void finish_resolutions(void) {
+  ProjectResolve **link = &shell.resolvers;
+  while (*link) {
+    ProjectResolve *job = *link;
+    if (!SDL_GetAtomicInt(&job->done)) {
+      link = &job->next;
+      continue;
     }
-    if (equal) {
-      free(canonical.project_path);
-      select_project(project);
-      if (project->failed_close && project->process.hProcess &&
-          WaitForSingleObject(project->process.hProcess, 0) == WAIT_OBJECT_0 &&
-          !start_project(project, 0, NULL))
-        fail_connection(project, "Closed Project selection startup failed");
-      return true;
+    if (job->thread)
+      SDL_WaitThread(job->thread, NULL);
+    *link = job->next;
+    ShellProject *project = job->initial ? shell.selected : NULL;
+    if (job->initial)
+      project->resolving = false;
+    if (job->initial && shell.closing) {
+      project->failed_close = true;
+    } else if (!job->success) {
+      SDL_Log("Shell rejected Project identity: Windows error=%lu",
+              (unsigned long)job->error);
+      if (job->initial)
+        fail_connection(project, "Initial Project identity resolution failed");
+    } else if (job->initial ||
+               (job->revision == shell.resolve_revision && !shell.closing)) {
+      if (!job->initial) {
+        for (ShellProject *item = shell.projects; item; item = item->next)
+          if (item->identity &&
+              CompareStringOrdinal(item->identity, -1, job->identity, -1,
+                                   TRUE) == CSTR_EQUAL) {
+            project = item;
+            break;
+          }
+      }
+      bool created = job->initial || !project;
+      if (!project)
+        project = new_project();
+      if (!project)
+        SDL_Log("Shell rejected Project selection: Project allocation failed");
+      else {
+        if (created) {
+          free(project->project_path);
+          free(project->identity);
+          project->project_path = job->path;
+          job->path = NULL;
+          project->identity = job->identity;
+          job->identity = NULL;
+        }
+        select_project(project);
+        if (created || (project->failed_close && project->process.hProcess &&
+                        WaitForSingleObject(project->process.hProcess, 0) ==
+                            WAIT_OBJECT_0)) {
+          if (!start_project(project, job->initial ? job->argc : 0,
+                             job->initial ? job->argv : NULL))
+            fail_connection(project, "Project selection startup failed");
+        }
+      }
     }
+    free_resolution(job);
   }
-  ShellProject *project = new_project();
-  if (!project) {
-    free(canonical.project_path);
-    fail_connection(shell.selected, "Project selection allocation failed");
-    return false;
+  if (!shell.resolvers && shell.resolve_timer) {
+    KillTimer(shell.hwnd, shell.resolve_timer);
+    shell.resolve_timer = 0;
   }
-  project->project_path = canonical.project_path;
-  select_project(project);
-  if (!start_project(project, 0, NULL))
-    fail_connection(project, "Project selection startup failed");
-  return true;
 }
 
 SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
@@ -3023,13 +3251,12 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   update_scale();
   SDL_SetWindowMinimumSize(shell.window, 240 + shell.sidebar_w, 180);
   set_window_icon();
-  bool chosen = choose_project(project, argc, argv);
   if (!init_d3d11())
     fail_gpu("initial presentation creation failed", E_FAIL);
-  else if (!chosen || !start_project(project, argc, argv)) {
+  else if (!queue_resolution(NULL, argc, argv, true)) {
     SDL_Log("Anvil shell could not start its surface process: %lu", (unsigned long)GetLastError());
     set_state(project, SHELL_FAILED);
-  }
+  } else project->resolving = true;
   composite_and_present();
   SDL_ShowWindow(shell.window);
   shell.shown = true;
@@ -3042,6 +3269,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
   ShellProject *project = shell.selected;
   (void)appstate;
   check_gpu_failure();
+  finish_resolutions();
   for (ShellProject *item = shell.projects; item; item = item->next) {
     finish_launch(item);
     check_transport_failure(item);
@@ -3074,6 +3302,16 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   (void)result;
   /* Project loss detection owns save/detach and its deadline. Never kill it with a shell job. */
   Uint64 deadline = SDL_GetTicks() + 1000;
+  for (ProjectResolve *job = shell.resolvers; job; job = job->next) {
+    while (!SDL_GetAtomicInt(&job->done)) {
+      if (SDL_GetTicks() >= deadline) {
+        SDL_Log("Shell identity shutdown deadline expired; exit this shell only");
+        _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+      }
+      SDL_Delay(1);
+    }
+    SDL_WaitThread(job->thread, NULL);
+  }
   for (ShellProject *project = shell.projects; project; project = project->next) {
     stop_close_timer(project);
     if (project->startup_timer)
