@@ -26,6 +26,8 @@ Open Bookmark Search from the desired Editor before using that attachment action
 Bookmarks follow ordinary edits, Move Lines, undo, and redo.
 Anvil updates paths after its own file and directory moves.
 Reload recovery uses saved line text and nearby context. It does not choose between equally plausible matches.
+When saved neighboring lines exist, recovery requires at least one to match.
+Locations deleted in an Editor stay missing after reopening or restarting. Undo or manual attachment can restore them.
 Closed-file recovery reads files up to 8 MiB. Larger files retain their Bookmark records without automatic disk recovery.
 External renames can appear as missing files. Use the attachment action to repair their Bookmarks.
 

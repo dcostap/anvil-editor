@@ -48,6 +48,7 @@ local function save(store)
       id = mark.id, path = mark.path, line = mark.line, name = mark.name,
       text = mark.text, before = mark.before, after = mark.after, status = mark.location_status or mark.status,
       location_version = mark.location_version,
+      location_deleted = mark.location_deleted,
     }
   end
   storage.save("bookmarks", store.key, { version = 1, next_id = store.next_id, marks = records })
@@ -87,6 +88,7 @@ local function bind(mark, buffer, line)
   detach(mark)
   mark.buffer = buffer
   mark.needs_recovery = nil
+  mark.location_deleted = nil
   capture(mark, buffer, line)
   mark.marker = range_marker.new(buffer, {
     line1 = line, col1 = 1, line2 = line, col2 = #buffer.lines[line],
@@ -102,7 +104,7 @@ function bookmarks.attach(buffer)
   for _, mark in ipairs(store.marks) do
     if not mark.buffer and common.path_equals(mark.path, buffer.abs_filename) then
       attached = true
-      if mark.line >= 1 and mark.line <= #buffer.lines and mark.text == line_text(buffer, mark.line)
+      if not mark.location_deleted and mark.line >= 1 and mark.line <= #buffer.lines and mark.text == line_text(buffer, mark.line)
           and (mark.before == nil or mark.before == line_text(buffer, mark.line - 1))
           and (mark.after == nil or mark.after == line_text(buffer, mark.line + 1)) then
         bind(mark, buffer, mark.line)
@@ -128,6 +130,7 @@ function bookmarks.attach(buffer)
             positions[mark.id] = {
               line = mark.line, status = mark.location_status or mark.status, text = mark.text,
               before = mark.before, after = mark.after, location_version = mark.location_version,
+              location_deleted = mark.location_deleted,
             }
           end
         end
@@ -151,6 +154,7 @@ function bookmarks.attach(buffer)
                 if mark.marker then range_marker.remove(mark.marker); mark.marker = nil end
                 mark.line, mark.status = state.line, state.status
                 mark.location_status = state.status
+                mark.location_deleted = state.location_deleted
                 mark.text, mark.before, mark.after = state.text, state.before, state.after
               end
             else
@@ -178,8 +182,10 @@ function bookmarks.attach(buffer)
               if mapped and previous.status == "ready" then bind(mark, buffer, mapped)
               elseif deleted then
                 if mark.marker then range_marker.remove(mark.marker); mark.marker = nil end
+                mark.location_deleted = true
                 mark.location_status = "location_missing"
                 mark.status = mark.disk_missing and "file_missing" or "location_missing"
+                core.log_quiet("Bookmarks: location deleted id=%d path=%s line=%d", mark.id, mark.path, mark.line)
               elseif edited_line then bind(mark, buffer, edited_line)
               elseif range then capture(mark, buffer, range.line1)
               elseif transaction.full_snapshot and transaction.content_changed then
@@ -315,6 +321,7 @@ function bookmarks.refresh(root)
     end
     file.records[#file.records + 1] = {
       id = mark.id, text = mark.text, before = mark.before, after = mark.after,
+      location_deleted = mark.location_deleted,
     }
     if mark.buffer then
       file.live = true
