@@ -131,6 +131,7 @@ function bookmarks.attach(buffer)
               line = mark.line, status = mark.location_status or mark.status, text = mark.text,
               before = mark.before, after = mark.after, location_version = mark.location_version,
               location_deleted = mark.location_deleted,
+              needs_recovery = mark.needs_recovery,
             }
           end
         end
@@ -142,21 +143,27 @@ function bookmarks.attach(buffer)
       local transaction = event.transaction or {}
       local restored = transaction.restore_observer_state and transaction.restore_observer_state.bookmarks
       for key, store in pairs(projects) do
-        local touched = false
+        local touched, pending_recovery = false, false
         for _, mark in ipairs(store.marks) do
           if mark.buffer == buffer then
             touched = true
             local state = restored and restored[key] and restored[key][mark.id]
             if state and state.location_version == mark.location_version then
-              if state.status == "ready" then
+              if state.status == "ready" and not state.needs_recovery then
                 bind(mark, buffer, state.line)
               else
                 if mark.marker then range_marker.remove(mark.marker); mark.marker = nil end
                 mark.line, mark.status = state.line, state.status
                 mark.location_status = state.status
                 mark.location_deleted = state.location_deleted
+                mark.needs_recovery = state.needs_recovery
+                mark.status = mark.disk_missing and "file_missing" or mark.needs_recovery and "checking" or state.status
                 mark.text, mark.before, mark.after = state.text, state.before, state.after
               end
+            elseif mark.needs_recovery or transaction.full_snapshot and transaction.content_changed then
+              -- Saved coordinates cannot track edits until recovery finds the target.
+              if mark.marker then range_marker.remove(mark.marker); mark.marker = nil end
+              mark.needs_recovery, mark.status = true, "checking"
             else
               local previous = transaction.observer_state and transaction.observer_state.bookmarks
               previous = previous and previous[key] and previous[key][mark.id]
@@ -187,18 +194,17 @@ function bookmarks.attach(buffer)
                 core.log_quiet("Bookmarks: location deleted id=%d path=%s line=%d", mark.id, mark.path, mark.line)
               elseif range then capture(mark, buffer, range.line1)
               elseif edited_line then bind(mark, buffer, edited_line)
-              elseif transaction.full_snapshot and transaction.content_changed then
-                mark.needs_recovery, mark.status = true, "checking"
               else
                 mark.location_status = "location_missing"
                 mark.status = mark.disk_missing and "file_missing" or "location_missing"
               end
             end
+            pending_recovery = pending_recovery or mark.needs_recovery
           end
         end
         if touched then
           changed(store)
-          if transaction.full_snapshot and transaction.content_changed then bookmarks.refresh(key) end
+          if pending_recovery then bookmarks.refresh(key) end
         end
       end
     end,

@@ -130,6 +130,38 @@ test.describe("Bookmarks", function()
     test.equal(mark.name, "Target")
   end)
 
+  test.it("keeps the original target when another line changes during reload recovery", function(context)
+    local mark = bookmarks.add(context.buffer, 2, "Target")
+    context.buffer:replace_snapshot("new\nfirst\ntarget\nlast\n")
+    context.buffer:apply_edits({
+      { line1 = 2, col1 = 1, line2 = 2, col2 = 6, text = "changed first" },
+    }, { merge_undo = false })
+    wait_for_refresh()
+    test.equal(mark.status, "ready")
+    test.equal(mark.text, "target")
+    test.equal(mark.line, 3)
+    test.equal(bookmarks.at(context.buffer, 2), nil)
+
+    context.buffer:undo()
+    wait_for_refresh()
+    test.equal(mark.text, "target")
+    test.equal(mark.line, 3)
+    context.buffer:redo()
+    wait_for_refresh()
+    test.equal(mark.text, "target")
+    test.equal(mark.line, 3)
+  end)
+
+  test.it("does not mark the target deleted when its old line is removed during reload recovery", function(context)
+    local mark = bookmarks.add(context.buffer, 2, "Target")
+    context.buffer:replace_snapshot("new\nfirst\ntarget\nlast\n")
+    context.buffer:remove(2, 1, 3, 1)
+    wait_for_refresh()
+    test.equal(mark.status, "ready")
+    test.equal(mark.text, "target")
+    test.equal(mark.line, 2)
+  end)
+
   test.it("keeps each Project's bookmarks separate", function(context)
     local mark = bookmarks.add(context.buffer, 2, "Target")
     local other = context.root .. "-other"
