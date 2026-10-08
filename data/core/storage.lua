@@ -72,6 +72,8 @@ end
 ---@param module string The module under which the data is stored.
 ---@param key string The key under which the data is stored.
 ---@param value table|string|number The value to store.
+---@return boolean success
+---@return string? error
 function storage.save(module, key, value)
   local path = module_key_to_path(module, key)
   local dir = common.dirname(path)
@@ -79,6 +81,7 @@ function storage.save(module, key, value)
     local status, err = common.mkdirp(dir)
     if not status then
       core.error("error creating storage directory for %s at %s: %s", module, dir, err)
+      return false, err
     end
   end
   local function check_io(ok, err)
@@ -113,14 +116,18 @@ function storage.save(module, key, value)
       if not renamed then
         os.remove(tmp)
         core.error("error replacing storage file %s: %s", path, rename_err)
+        return false, rename_err
       end
+      return true
     else
       pcall(function() f:close() end)
       os.remove(tmp)
       core.error("error writing storage file %s: %s", path, write_err)
+      return false, write_err
     end
   else
     core.error("error opening storage file %s for writing: %s", tmp, err)
+    return false, err
   end
 end
 

@@ -51,8 +51,9 @@ local function save(store)
       location_deleted = mark.location_deleted,
     }
   end
-  storage.save("bookmarks", store.key, { version = 1, next_id = store.next_id, marks = records })
-  store.dirty = false
+  local ok = storage.save("bookmarks", store.key, { version = 1, next_id = store.next_id, marks = records })
+  store.dirty = not ok
+  return ok
 end
 
 local function changed(store)
@@ -64,8 +65,12 @@ local function changed(store)
   store.save_pending = true
   core.add_thread(function()
     coroutine.yield(0.25)
+    while projects[store.key] == store and store.dirty do
+      if save(store) then break end
+      core.log_quiet("Bookmarks: save failed for %s; retry pending", store.key)
+      coroutine.yield(5)
+    end
     store.save_pending = false
-    if projects[store.key] == store and store.dirty then save(store) end
   end)
 end
 
@@ -467,10 +472,15 @@ function bookmarks.close_project(root)
   if not store then return end
   if store.job then worker_pool.system():cancel(store.job); store.job = nil end
   bookmarks.list(root)
-  save(store)
+  if not save(store) then
+    changed(store)
+    core.log_quiet("Bookmarks: retained unsaved records for %s", key)
+    return false
+  end
   for _, mark in ipairs(store.marks) do detach(mark) end
   projects[key] = nil
   generation = generation + 1
+  return true
 end
 
 return bookmarks

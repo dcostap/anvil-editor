@@ -44,6 +44,7 @@ test.describe("Bookmarks", function()
   end)
 
   test.after_each(function(context)
+    if context.io_open then io.open = context.io_open end
     if context.buffer then context.buffer:on_close() end
     if bookmarks then bookmarks.close_project(context.root) end
     storage.clear("bookmarks", common.path_compare_key(context.root))
@@ -61,6 +62,70 @@ test.describe("Bookmarks", function()
     test.equal(rows[1].line, 3)
     test.equal(rows[1].text, "target")
     test.equal(rows[1].status, "ready")
+  end)
+
+  test.it("retries a failed save without requiring another Bookmark change", function(context)
+    local key = common.path_compare_key(context.root)
+    local storage_dir = USERDIR .. PATHSEP .. "storage" .. PATHSEP .. "bookmarks" .. PATHSEP
+    context.io_open = io.open
+    local blocked, failed = true, false
+    io.open = function(path, mode)
+      if blocked and mode == "wb" and path:sub(1, #storage_dir) == storage_dir then
+        failed = true
+        return nil, "Bookmark test: storage unavailable"
+      end
+      return context.io_open(path, mode)
+    end
+    bookmarks.add(context.buffer, 2, "Retained target")
+    local deadline = system.get_time() + 10
+    while not failed do
+      test.ok(system.get_time() < deadline, "Save did not reach the file system")
+      coroutine.yield(0.01)
+    end
+    test.equal(storage.load("bookmarks", key), nil)
+    blocked = false
+    local saved
+    repeat
+      saved = storage.load("bookmarks", key)
+      test.ok(system.get_time() < deadline, "Failed Bookmark save was not retried")
+      if not saved then coroutine.yield(0.01) end
+    until saved
+    test.equal(saved.marks[1].name, "Retained target")
+    test.equal(saved.marks[1].line, 2)
+  end)
+
+  test.it("keeps a failed save available for an explicit flush", function(context)
+    local storage_dir = USERDIR .. PATHSEP .. "storage" .. PATHSEP .. "bookmarks" .. PATHSEP
+    context.io_open = io.open
+    io.open = function(path, mode)
+      if mode == "wb" and path:sub(1, #storage_dir) == storage_dir then
+        return nil, "Bookmark test: storage unavailable"
+      end
+      return context.io_open(path, mode)
+    end
+    bookmarks.add(context.buffer, 2, "Retained target")
+    bookmarks.flush()
+    io.open = context.io_open
+    bookmarks.flush()
+    local saved = test.not_nil(storage.load("bookmarks", common.path_compare_key(context.root)))
+    test.equal(saved.marks[1].name, "Retained target")
+  end)
+
+  test.it("retains unsaved Bookmarks when closing the Project cannot write storage", function(context)
+    local storage_dir = USERDIR .. PATHSEP .. "storage" .. PATHSEP .. "bookmarks" .. PATHSEP
+    bookmarks.add(context.buffer, 2, "Retained target")
+    context.io_open = io.open
+    io.open = function(path, mode)
+      if mode == "wb" and path:sub(1, #storage_dir) == storage_dir then
+        return nil, "Bookmark test: storage unavailable"
+      end
+      return context.io_open(path, mode)
+    end
+    bookmarks.close_project(context.root)
+    io.open = context.io_open
+    bookmarks.flush()
+    local saved = test.not_nil(storage.load("bookmarks", common.path_compare_key(context.root)))
+    test.equal(saved.marks[1].name, "Retained target")
   end)
 
   test.it("keeps a deleted location and restores its attachment through undo and redo", function(context)
