@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 8u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 9u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -49,6 +49,7 @@ typedef enum {
   ANVIL_SURFACE_MSG_DIALOG = 80,
   ANVIL_SURFACE_MSG_CLOSE_DECISION = 81,
   ANVIL_SURFACE_MSG_SELECT_PROJECT = 82,
+  ANVIL_SURFACE_MSG_UNLOAD_PROJECT = 83,
 } AnvilSurfaceMessageType;
 
 typedef enum {

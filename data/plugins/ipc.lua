@@ -402,8 +402,8 @@ end
 
 ---Retrieve the id of the primary instance if found.
 ---@return string | nil
-function IPC:get_primary_instance()
-  local instances = self:get_instances()
+function IPC:get_primary_instance(instances)
+  instances = instances or self:get_instances()
   for _, instance in ipairs(instances) do
     if instance.primary then
       return instance.id
@@ -416,8 +416,8 @@ end
 ---@param project_path string
 ---@return string? instance_id
 ---@return plugins.ipc.instance? instance
-function IPC:find_instance_with_project(project_path)
-  for _, instance in ipairs(self:get_instances()) do
+function IPC:find_instance_with_project(project_path, instances)
+  for _, instance in ipairs(instances or self:get_instances()) do
     if instance_has_project(instance, project_path) then
       return instance.id, instance
     end
@@ -920,8 +920,16 @@ system.get_time = function()
   if config.plugins.ipc.single_instance then
     system.get_time = system_get_time
 
-    local primary_instance = ipc:get_primary_instance()
-    local has_other_instances = primary_instance ~= nil or #ipc:get_instances() > 0
+    local instances = ipc:get_instances()
+    if system.is_hosted_surface() then
+      local window_pid = system.get_window_process_id()
+      for i = #instances, 1, -1 do
+        if instances[i].window_pid == window_pid then table.remove(instances, i) end
+      end
+      core.log_quiet("IPC startup: the shell owns same-Window Project selection; check %d other Window instance(s)", #instances)
+    end
+    local primary_instance = ipc:get_primary_instance(instances)
+    local has_other_instances = primary_instance ~= nil or #instances > 0
     if
       has_other_instances
       and
@@ -944,7 +952,7 @@ system.get_time = function()
                 open_directory = true
               end
             elseif path_info.type == "dir" then
-              local project_instance = ipc:find_instance_with_project(path)
+              local project_instance = ipc:find_instance_with_project(path, instances)
               if project_instance then
                 core.log_quiet(
                   "IPC: Project %q is already open in instance %s; raising instead of opening a duplicate",

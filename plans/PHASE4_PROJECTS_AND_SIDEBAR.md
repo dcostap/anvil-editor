@@ -5,7 +5,9 @@
 The user approved continued work while the Phase 3 physical-input, IME, and mixed-DPI checks remain open.
 Hosted mode stays opt-in. The Phase 3 code reviews are complete.
 Do not treat synthetic tests as manual acceptance.
-Milestones 1 and 2 are implemented. Explicit unload and independent recovery remain Milestone 3 work.
+Milestones 1, 2, and 3 are implemented and deployed.
+Milestone 3 adds unload, Dormant Projects, safe runtime retirement, and local recovery.
+The Sidebar model and process remain later milestones.
 
 ## Scope
 
@@ -321,3 +323,119 @@ The measurement ends at Present, not physical scanout. Physical-input, IME, and 
 The warned portable update rebuilt, installed, restored data junctions, and restarted Anvil.
 Fresh session and startup logs contain no errors, warnings, or startup failures:
 `anvil-20261008-211500-p1956.log` and `anvil-startup-20261008-211500-p1956-m839853.log`.
+
+### Milestone 3: unload, Dormant Projects, and local recovery
+
+Surface protocol 9 adds an explicit unload request.
+The hosted `core:unload_project` command uses the normal unsaved-data and Terminal choices.
+Cancel keeps the Project loaded and permits a later unload.
+Accepted unload waits for that Project to exit. It does not end another Project or the Window.
+The shell retains a separate Dormant record with the Project identity, path, title, and ID.
+Selecting it starts a new Project process and loads its saved Workspace.
+Unloading the last Project retains the Window with native Load Project and Close Window actions.
+Selecting a Failed Project does not start it. Native Restart remains explicit and local.
+Quit from either a selected or background Project closes the Window and checks the other loaded Projects.
+
+Runtime ownership:
+
+- The loaded registry owns one runtime reference.
+- Inbound packets, launch jobs, reader and writer workers, file dialogs, and Force dialogs retain their runtime.
+- Outbound packets belong to their writer queue. They do not retain that same runtime.
+- Retirement cancels transport and polls completed workers without waiting for their exit on the native UI thread.
+- A native timer continues retirement when no Project supplies events.
+- The shell drops the registry reference only after it joins transport workers and drains owned packets.
+- Late callbacks retain their storage but cannot deliver into a new connection.
+- Loading clears the empty-Window record's borrowed path before it frees the Dormant record.
+- Launch setup failure releases its copied arguments and runtime reference before returning.
+
+The launch setup and borrowed-path fixes came from inspection.
+No allocator-failure reproduction established a red for those lifetime paths.
+The pending-dialog case checks ordinary unload, reload, late callback disposal, and continued native control use.
+It is not allocator-failure or memory-instrumentation acceptance.
+
+Targeted red-green evidence:
+
+- The first `dormant-unload` run failed because the unload command was unavailable: `anvil-surface-latency-hss0aeuq`.
+  It now checks B's process exit, unchanged A and Window, a new B process, saved text, and restored selection.
+- A pending-launch guard reproduced retained B: `anvil-surface-latency-d8kkzhte`.
+  The earlier `luzs4qqg` pass did not enable the launch fault gate. It is not pending-launch evidence.
+- The actual pending-launch run then exposed a transport setup error: `anvil-surface-latency-gga9dy_w`.
+  Close had removed the startup timer before launch completion. The transport now accepts that pending Close state.
+  The green checks the armed seven-second delay and native Minimize and Restore during unload.
+- Disabling only the unload cancellation reset made a later unload retain B: `anvil-surface-latency-2zvbo33v`.
+  Restoring it passes Cancel, retained unsaved text, unchanged process identity, and a later successful unload.
+- Immediate Restart after B's crash forwarded to B's stale IPC record: `anvil-surface-latency-ow4xu3xd`.
+  Startup now ignores same-Window records because the shell owns that Window's Project selection.
+  Other-Window duplicate forwarding and direct behavior remain separate checks.
+- Background Project Quit did not check B: `anvil-surface-latency-zaiv4aae`.
+  The accepted background exit now starts the same sequential Window Close policy.
+
+The Terminal fixture initially searched only the active Pane for B's Editor.
+It now searches restored Pane views. This fixture correction is not a Workspace fix.
+The hang fixture also needed enough time for two real five-second Close decisions.
+That timeout correction is not a runtime fix.
+The initial empty-Window Close check passed. It did not establish a red.
+
+Owned-window checks:
+
+- `dormant-dialog`: unload B with its owned native file dialog pending; load B; then complete the old callback.
+- `dormant-last` and `dormant-last-close`: retain an empty Window, load the saved Workspace, and accept native Close.
+- `dormant-terminal`: Keep retains the host, Session ID, and one attachment after load. The command marker remains single.
+- `dormant-terminal-end`: End stops the owned Terminal shell while A and the Window survive.
+- `dormant-terminal-cancel`: Cancel retains B and its attached Terminal; a later Keep and unload succeeds.
+- `dormant-crash`: B's crash leaves A live; selection does not restart B; explicit native Restart replaces only B.
+- `dormant-hang`: suspend only B; select A; choose Wait; use native controls; explicitly Force close B and load it.
+- `dormant-background-quit`: A quits while hidden; B's unsaved confirmation appears; Cancel retains B and its text.
+
+These checks reuse the private-desktop runner and owned process handles.
+The native control probe drives the existing control actions only with the isolated fault gate enabled.
+The fixture resumes its owned suspended process during failure cleanup.
+It ends only its owned retained Terminal host after verification.
+No check captures pixels or uses user windows.
+
+Green evidence under `%LOCALAPPDATA%/Temp`:
+
+- Pending launch, pending dialog, and last-Project load: `anvil-surface-latency-3h50o24z`.
+- Live Terminal reattachment: `anvil-surface-latency-ow4xu3xd`.
+- Local crash and hang recovery: `anvil-surface-latency-6uqg2rr8`.
+- Seven software unload and recovery cases: `anvil-surface-latency-afh6hq7o`.
+- Cancel, Terminal End and Cancel, and empty-Window Close: `anvil-surface-latency-kgsgtfuw`.
+- Background Quit, loaded Quit, late dialog, loaded Restart, and affected unload cases: `anvil-surface-latency-tnopvwq4`.
+- Remaining software cases: `anvil-surface-latency-27ct8dpc`.
+- Final current-build D3D11 matrix, all twelve cases: `anvil-surface-latency-an3ma_jp`.
+- Final affected software cases: `anvil-surface-latency-o6g2rrfl`.
+
+Three native targets pass: hosted dialogs, hosted routing, and stalled hosted motion.
+Focused Workspace and Terminal quit suites pass.
+Logs: `phase4-m3-native.txt`, `phase4-m3-workspace.txt`, and `phase4-m3-terminal-quit.txt`.
+Other-Window duplicate and conflict checks pass in `anvil-surface-latency-3bouqip5`.
+Direct Quit, Restart, and Project switch pass in `anvil-surface-latency-bmsx5qvk`.
+Lua syntax, Python compilation, the native build, scoped formatting, and `git diff --check` pass.
+
+#### Isolated matched typing latency
+
+The comparison alternated the saved prerequisite executable and current executable over one fixed app-data copy.
+Each row has three runs and 360 valid samples per build. All 24 runs completed without sample loss.
+No build, correctness check, or other latency run overlapped this comparison.
+Values are p50 / p90 / p99 / maximum / mean, in milliseconds.
+
+| Mode | Saved prerequisite | Milestone 3 |
+| --- | --- | --- |
+| Direct D3D11 | 7.48 / 16.64 / 20.54 / 55.21 / 8.96 | 8.06 / 17.19 / 21.49 / 28.13 / 9.58 |
+| Hosted D3D11 | 7.25 / 16.66 / 19.85 / 43.72 / 9.04 | 7.35 / 17.36 / 19.75 / 21.93 / 9.25 |
+| Direct software | 16.83 / 25.81 / 31.94 / 340.35 / 19.27 | 17.50 / 26.57 / 30.82 / 34.28 / 18.58 |
+| Hosted software | 11.85 / 20.93 / 24.32 / 25.91 / 13.20 | 11.99 / 21.42 / 23.90 / 27.62 / 13.56 |
+
+Evidence: `anvil-m3-review-latency-u4_9e8vv/results.json`.
+Hosted medians increased by about 0.10 ms on D3D11 and 0.14 ms on software.
+Direct medians increased by about 0.58 ms and 0.67 ms.
+The baseline software maximum was 340.35 ms. Its cause is unproved.
+These samples do not establish a cause or a performance gain. Maximum values remain variable.
+The measurement ends at Present, not physical scanout.
+
+Milestone 3 is complete. The warned portable update rebuilt, installed, restored data junctions, and restarted Anvil.
+Fresh logs contain no errors, warnings, or startup failures:
+`anvil-20261009-000534-p20712.log` and `anvil-startup-20261009-000534-p20712-m891518.log`.
+
+Physical input, real IME, and mixed-DPI acceptance remain unavailable. Hosted mode remains opt-in.
+The Sidebar model and process remain later milestones. Multiple Windows and adoption remain later phases.

@@ -418,7 +418,16 @@ Project switch preserves live Buffers, text selections, workers, and Terminal cl
 Launch work runs off the native UI thread. Restart changes only its Project.
 Window Close checks each Project in turn. Cancel stops further requests, without undoing accepted closes.
 Focused owned-window cases pass on both renderers. Direct lifecycle checks remain unchanged.
-Explicit unload, Dormant Projects, and independent recovery remain Milestone 3 work.
+Milestone 3 adds explicit unload, Dormant records, safe runtime retirement, and local recovery.
+Unload uses the normal unsaved-data and Terminal choices. Cancel retains the Project.
+Load restores Workspace state and reattaches a kept Terminal Session without replaying its command.
+Pending launch and dialog checks pass. Native Wait, Force close, and Restart stay local to their Project.
+Quit from a background Project also checks the remaining loaded Projects before closing the Window.
+Twelve targeted cases pass on D3D11. The software cases, focused native and Lua checks, and direct checks pass.
+The matched four-row latency comparison completed all 24 runs with 360 valid samples per row and build.
+The Phase 4 plan records failures, fixture corrections, lifetime test limits, and all timing statistics.
+The warned portable update completed. Fresh session and startup logs contain no errors or warnings.
+Milestone 3 is complete. Hosted mode remains opt-in, with the deferred manual checks still unavailable.
 
 Add Dormant and loaded Projects, Project switching, hidden rendering suppression,
 Project crash restart, and hang detection.

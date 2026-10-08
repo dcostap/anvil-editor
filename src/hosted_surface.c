@@ -537,6 +537,12 @@ bool anvil_hosted_surface_select_project(const char *path) {
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
+bool anvil_hosted_surface_unload_project(const char *path) {
+  if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  send_message(ANVIL_SURFACE_MSG_UNLOAD_PROJECT, path, (uint32_t)strlen(path) + 1);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
 static void send_int(uint16_t type, int value) {
   AnvilSurfaceInt message = { value };
   send_message(type, &message, sizeof(message));
@@ -866,6 +872,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
 bool anvil_hosted_surface_has_focus(void) { return false; }
 bool anvil_hosted_surface_should_render(void) { return true; }
 bool anvil_hosted_surface_select_project(const char *path) { (void)path; return false; }
+bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
 float anvil_hosted_surface_display_scale(void) { return 1.0f; }
 float anvil_hosted_surface_refresh_rate(void) { return 0.0f; }
 AnvilSurfaceWindowMode anvil_hosted_surface_window_mode(void) { return ANVIL_SURFACE_WINDOW_NORMAL; }

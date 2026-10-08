@@ -105,7 +105,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
-    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close", "fault-alloc", "fault-event", "fault-open", "fault-acquire", "fault-present", "fault-resize", "fault-write", "fault-pipe", "fault-busy", "fault-stale", "fault-malformed", "fault-device", "fault-startup", "fault-release", "fault-project-release", "fault-pipe-force-close", "probe-exit-error", "startup-reader", "startup-writer", "startup-timer", "restart-startup-timer", "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel", "loaded-switch", "loaded-launch", "loaded-restart", "identity-trailing", "identity-cwd", "identity-alias", "loaded-focus", "loaded-quit", "loaded-resolve", "identity-allocation"],
+    parser.add_argument("--project-case", action="append", choices=[
+        "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window",
+        "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
+        "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
+        "fault-alloc", "fault-event", "fault-open", "fault-acquire", "fault-present", "fault-resize",
+        "fault-write", "fault-pipe", "fault-busy", "fault-stale", "fault-malformed", "fault-device",
+        "fault-startup", "fault-release", "fault-project-release", "fault-pipe-force-close",
+        "probe-exit-error", "startup-reader", "startup-writer", "startup-timer", "restart-startup-timer",
+        "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel",
+        "loaded-switch", "loaded-launch", "loaded-restart", "identity-trailing", "identity-cwd",
+        "identity-alias", "loaded-focus", "loaded-quit", "loaded-resolve", "identity-allocation",
+        "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)
@@ -138,6 +150,8 @@ def main() -> int:
                     fixture = "loaded_projects_probe.lua" if action.startswith("loaded-") else "hosted_project_probe.lua"
                     if action.startswith("identity-"):
                         fixture = "project_identity_probe.lua"
+                    if action.startswith("dormant-"):
+                        fixture = "dormant_projects_probe.lua"
                     if action == "identity-alias":
                         subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", native_path(case_dir / "alias"),
                                         native_path(case_dir / "Project")], check=True, capture_output=True)
@@ -171,7 +185,7 @@ def main() -> int:
                     }
                     if action == "dialog-error":
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"
-                    if action.startswith(("fault-", "startup-", "loaded-")) or action in ("dialog-blocked-close", "hidden-startup"):
+                    if action.startswith(("fault-", "startup-", "loaded-", "dormant-")) or action in ("dialog-blocked-close", "hidden-startup"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
                     if action.startswith("identity-"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
@@ -184,7 +198,7 @@ def main() -> int:
                             config["environment"]["ANVIL_PROJECT_SHORT_PATH"] = short_path.value
                     if action == "loaded-resolve":
                         config["environment"]["ANVIL_SURFACE_FAULT_IDENTITY_DELAY"] = "1"
-                    if action == "loaded-launch":
+                    if action in ("loaded-launch", "dormant-launch"):
                         config["environment"]["ANVIL_SURFACE_FAULT_STARTUP"] = "selection-launch"
                     if action.startswith("startup-"):
                         config["environment"]["ANVIL_SURFACE_FAULT_STARTUP"] = action.removeprefix("startup-")

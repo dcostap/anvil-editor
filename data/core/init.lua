@@ -214,6 +214,15 @@ function core.open_project_in_same_window(project)
   return true
 end
 
+function core.unload_project(project)
+  if not system.is_hosted_surface() then return false end
+  local path = project or core.root_project().path
+  if type(path) == "table" then path = path.path end
+  if type(path) ~= "string" or path == "" then return false end
+  core.log_quiet("Request Project unload with the normal Close policy: %s", path)
+  return system.unload_project(path)
+end
+
 local function launch_anvil_window(arguments, description)
   local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
   local process_ok, process = pcall(require, "core.process")

@@ -262,6 +262,10 @@ local function add_project_directory_with_system_file_picker()
   end)
 end
 
+command.add(function() return system.is_hosted_surface() end, {
+  ["core:unload_project"] = command.palette(function() return core.unload_project() end),
+})
+
 command.add(nil, {
   ["core:repeat_last_command"] = command.palette(function()
     command.repeat_last()
