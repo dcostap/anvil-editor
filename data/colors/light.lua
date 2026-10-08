@@ -14,7 +14,7 @@ local C = {
   -- editor/UI colors from IntelliJ Light / ExpUI Light
   text_fg = "080808",
   text_bg = "ffffff",
-  caret_row = "f5f8fe",
+  caret_row = "eaf1fc",
   gutter_bg = "ffffff",
   ignored = "5a5d6b",
   scrollbar_thumb = "c9ccd6",
