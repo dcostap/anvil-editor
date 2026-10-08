@@ -83,7 +83,10 @@ end, {
         if not common.path_equals(root, core.root_project().path) then
           core.warn("Selected Project changed. Add the Bookmark again.")
         elseif not range then core.warn("Bookmark target no longer exists")
-        else bookmarks.add(buffer, range.line1, name) end
+        else
+          local mark, reason = bookmarks.add(buffer, range.line1, name)
+          if not mark then core.warn("%s", reason) end
+        end
       end,
     }
     core.global_prompt_bar:enter("Bookmark name — optional", options)

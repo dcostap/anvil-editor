@@ -37,6 +37,7 @@ test.describe("Bookmark commands", function()
     panes.reset_for_tests()
     if context.editor then context.editor:on_close() end
     core.buffer_registry:remove(context.buffer, true)
+    if context.opened_buffer then core.buffer_registry:remove(context.opened_buffer, true) end
     bookmarks.close_project(context.root)
     storage.clear("bookmarks", common.path_compare_key(context.root))
     core.projects, core.active_view = context.projects, context.active_view
@@ -109,6 +110,42 @@ test.describe("Bookmark commands", function()
     core.global_prompt_bar:set_text("Still useful")
     core.global_prompt_bar:submit()
     test.equal(mark.name, "Still useful")
+  end)
+
+  test.it("validates newly opened text before one confirmation navigates a closed Bookmark", function(context)
+    local path = context.buffer.abs_filename
+    local mark = bookmarks.add(context.buffer, 2, "Target")
+    panes.reset_for_tests()
+    core.buffer_registry:remove(context.buffer, true)
+    bookmarks.refresh()
+    local deadline = system.get_time() + 10
+    while bookmarks.is_refreshing() do
+      require("core.worker_pool").system():drain { budget_ms = 10, max_messages = 100 }
+      test.ok(system.get_time() < deadline)
+      coroutine.yield(0.01)
+    end
+    local file = test.not_nil(io.open(path, "wb"))
+    file:write("new\nfirst\ntarget\nlast\n")
+    file:close()
+    local source_path = context.root .. PATHSEP .. "other.txt"
+    file = test.not_nil(io.open(source_path, "wb"))
+    file:write("source\n")
+    file:close()
+    context.buffer = Buffer(source_path, source_path)
+    context.editor = Editor(context.buffer)
+    context.pane = panes.create { factory = function() return context.editor end }
+    panes.focus(context.pane)
+    local picker = fuzzy_searcher.open("ºTarget")
+    picker:confirm()
+    while core.fuzzy_searcher_active_view == picker do
+      require("core.worker_pool").system():drain { budget_ms = 10, max_messages = 100 }
+      test.ok(system.get_time() < deadline, "Bookmark activation did not finish")
+      coroutine.yield(0.01)
+    end
+    context.opened_buffer = context.pane.current_view.buffer
+    test.ok(common.path_equals(context.opened_buffer.abs_filename, path))
+    test.equal(context.pane.current_view:get_selection_state().selections[1], 3)
+    test.equal(mark.line, 3)
   end)
 
   test.it("keeps mode markers and modifier-like bookmark names literal", function(context)

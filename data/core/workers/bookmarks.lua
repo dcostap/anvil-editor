@@ -7,7 +7,6 @@ function worker.run(payload, context)
     local info = system.get_file_info(file.path)
     local result = { path = file.path, missing = not info or info.type ~= "file" }
     if not result.missing then
-      result.signature = tostring(info.modified) .. ":" .. tostring(info.size)
       -- Equal size and modification time do not prove equal contents.
       if file.lines or not file.live then
         local lines = file.lines
@@ -26,7 +25,12 @@ function worker.run(payload, context)
             end
           end
         end
-        result.records = lines and locations.resolve(lines, file.records, context.cancelled()) or {}
+        result.records = lines and locations.resolve(lines, file.records, context.cancelled, file.snapshots) or {}
+        if lines then
+          for _, record in ipairs(result.records or {}) do
+            if record.line then result.snapshot = locations.snapshot(lines); break end
+          end
+        end
         if not lines then
           for _, record in ipairs(file.records) do
             result.records[#result.records + 1] = { id = record.id, status = "location_missing" }

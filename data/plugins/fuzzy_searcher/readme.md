@@ -25,10 +25,16 @@ Open Bookmark Search from the desired Editor before using that attachment action
 
 Bookmarks follow ordinary edits, Move Lines, undo, and redo.
 Anvil updates paths after its own file and directory moves.
-Reload recovery uses saved line text and nearby context. It does not choose between equally plausible matches.
-When saved neighboring lines exist, recovery requires at least one content line to match.
-Blank lines and lines such as `}` do not provide sufficient context.
+Recovery compares retained file text with current text in a worker.
+Bookmarks share retained text versions. Missing locations keep their last verified text version.
+Unique surrounding content lines bound each comparison. Conflicting or repeated evidence leaves the location missing.
+Recovery uses only exact unchanged text. It does not treat replacement lines as surviving locations.
+Older saved Bookmarks use nearby context until Anvil can retain their file text.
+Blank lines and lines such as `}` do not identify a location on their own.
 During reload recovery, edits and undo do not use the old line number as a target.
+Creation and attachment wait until other file locations finish checking. This prevents duplicate Bookmarks.
+Navigation checks the opened Buffer before changing the source Pane. One confirmation waits for that check.
+Closing the picker or changing its query cancels pending navigation.
 Failed Bookmark saves remain pending and retry while Anvil is open.
 Locations deleted in an Editor stay missing after reopening or restarting. Undo or manual attachment can restore them.
 Closed-file recovery reads files up to 8 MiB. Larger files retain their Bookmark records without automatic disk recovery.

@@ -122,6 +122,129 @@ test.describe("Bookmarks", function()
     test.equal(mark.line, 4)
   end)
 
+  test.it("does not recover another block when the saved block was removed externally", function(context)
+    local original = "owner A\ncommon before\ntarget\ncommon after\nend A\nowner B\ncommon before\ntarget\ncommon after\nend B\n"
+    write_file(context.path, original)
+    context.buffer:replace_snapshot(original)
+    local mark = bookmarks.add(context.buffer, 3, "Owner A")
+    context.buffer:on_close()
+    context.buffer = nil
+    write_file(context.path, "owner B\ncommon before\ntarget\ncommon after\nend B\n")
+    refresh()
+    test.equal(mark.status, "location_missing")
+    test.equal(bookmarks.navigation_target(mark), nil)
+    test.equal(mark.name, "Owner A")
+  end)
+
+  test.it("maps a saved location through an insertion between its neighboring lines", function(context)
+    bookmarks.add(context.buffer, 2, "Target")
+    context.buffer:on_close()
+    context.buffer = nil
+    test.ok(bookmarks.close_project(context.root))
+    write_file(context.path, "first\ninserted\ntarget\nlast\n")
+    refresh()
+    local mark = bookmarks.list()[1]
+    test.equal(mark.status, "ready")
+    test.equal(mark.line, 3)
+    test.equal(mark.text, "target")
+  end)
+
+  test.it("uses retained file text to distinguish repeated blocks beyond nearby context", function(context)
+    local body = "{\nshared before\n{\nshared before\ntarget\nshared after\n}\nshared after\n}\n"
+    local original = "owner A\n" .. body .. "end A\nowner B\n" .. body .. "end B\n"
+    write_file(context.path, original)
+    context.buffer:replace_snapshot(original)
+    bookmarks.add(context.buffer, 6, "Owner A")
+    context.buffer:on_close()
+    context.buffer = nil
+    test.ok(bookmarks.close_project(context.root))
+    write_file(context.path, "prefix\n" .. original)
+    refresh()
+    local mark = bookmarks.list()[1]
+    test.equal(mark.status, "ready")
+    test.equal(mark.line, 7)
+  end)
+
+  test.it("keeps repeated locations uncertain when one copy disappears between retained anchors", function(context)
+    local original = "header\nfirst\ntarget\nlast\nfirst\ntarget\nlast\nfooter\n"
+    write_file(context.path, original)
+    context.buffer:replace_snapshot(original)
+    bookmarks.add(context.buffer, 3, "First copy")
+    bookmarks.add(context.buffer, 6, "Second copy")
+    context.buffer:on_close()
+    context.buffer = nil
+    write_file(context.path, "header\nfirst\ntarget\nlast\nfooter\n")
+    refresh()
+    for _, mark in ipairs(bookmarks.list()) do test.equal(mark.status, "location_missing") end
+  end)
+
+  test.it("retains each missing location's text version when another location recovers", function(context)
+    local original = "owner A\nfirst\ntarget\nlast\nend A\nowner B\nsecond target\nend B\n"
+    write_file(context.path, original)
+    context.buffer:replace_snapshot(original)
+    bookmarks.add(context.buffer, 3, "A")
+    bookmarks.add(context.buffer, 7, "B")
+    context.buffer:on_close()
+    context.buffer = nil
+    write_file(context.path, "owner B\nsecond target\nend B\n")
+    refresh()
+    test.equal(bookmarks.list()[1].status, "location_missing")
+    test.equal(bookmarks.list()[2].status, "ready")
+    test.equal(bookmarks.list()[2].line, 2)
+    test.ok(bookmarks.close_project(context.root))
+    write_file(context.path, "prefix\n" .. original)
+    refresh()
+    local marks = bookmarks.list()
+    test.equal(marks[1].status, "ready")
+    test.equal(marks[1].line, 4)
+    test.equal(marks[2].status, "ready")
+    test.equal(marks[2].line, 8)
+  end)
+
+  test.it("blocks creation until existing file locations finish recovery", function(context)
+    bookmarks.add(context.buffer, 2, "Original")
+    test.ok(bookmarks.close_project(context.root))
+    bookmarks.attach(context.buffer)
+    local duplicate, reason = bookmarks.add(context.buffer, 2, "Duplicate")
+    test.equal(duplicate, nil)
+    test.ok(type(reason) == "string")
+    wait_for_refresh()
+    test.equal(#bookmarks.list(), 1)
+    test.equal(bookmarks.add(context.buffer, 2, "Duplicate"), bookmarks.list()[1])
+  end)
+
+  test.it("blocks attachment until other target file locations finish recovery", function(context)
+    local first = bookmarks.add(context.buffer, 1, "First")
+    bookmarks.add(context.buffer, 2, "Second")
+    test.ok(bookmarks.close_project(context.root))
+    bookmarks.attach(context.buffer)
+    first = bookmarks.list()[1]
+    local attached, reason = bookmarks.retarget(first, context.buffer, 2)
+    test.equal(attached, nil)
+    test.ok(type(reason) == "string")
+    wait_for_refresh()
+    test.equal(first.line, 1)
+    test.equal(bookmarks.retarget(first, context.buffer, 2), nil)
+  end)
+
+  test.it("requires opened text before returning a closed-file navigation target", function(context)
+    local mark = bookmarks.add(context.buffer, 2, "Target")
+    context.buffer:on_close()
+    context.buffer = nil
+    refresh()
+    local info = test.not_nil(system.get_file_info(context.path))
+    write_file(context.path, "first\nchange\nlast\n")
+    local get_file_info = system.get_file_info
+    system.get_file_info = function(path)
+      if common.path_equals(path, context.path) then return info end
+      return get_file_info(path)
+    end
+    local ok, target = pcall(bookmarks.navigation_target, mark)
+    system.get_file_info = get_file_info
+    test.ok(ok)
+    test.equal(target, nil)
+  end)
+
   test.it("retains valid stored Bookmarks and ignores malformed records and counters", function(context)
     bookmarks.list()
     test.ok(bookmarks.close_project(context.root))
@@ -137,6 +260,8 @@ test.describe("Bookmarks", function()
     test.equal(#rows, 1)
     test.equal(rows[1].name, "Retained")
     test.equal(rows[1].status, "ready")
+    bookmarks.attach(context.buffer)
+    wait_for_refresh()
     local added = test.not_nil(bookmarks.add(context.buffer, 1, "New target"))
     test.ok(added.id > rows[1].id)
   end)
@@ -144,7 +269,6 @@ test.describe("Bookmarks", function()
   test.it("checks closed-file content even when file metadata remains unchanged", function(context)
     -- The worker's file result is the seam. Fix metadata at the file system boundary.
     local info = test.not_nil(system.get_file_info(context.path))
-    local signature = tostring(info.modified) .. ":" .. tostring(info.size)
     write_file(context.path, "first\nchange\nlast\n")
     local get_file_info, messages = system.get_file_info, {}
     system.get_file_info = function(path)
@@ -153,7 +277,7 @@ test.describe("Bookmarks", function()
     end
     local ok, err = pcall(require("core.workers.bookmarks").run, {
       files = { {
-        path = context.path, signature = signature,
+        path = context.path,
         records = { { id = 1, line = 2, text = "target", before = { "first" }, after = { "last" }, status = "ready" } },
       } },
     }, {

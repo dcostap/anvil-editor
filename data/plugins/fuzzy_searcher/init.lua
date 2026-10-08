@@ -7135,6 +7135,8 @@ function FSView:refresh(text)
   end
 
   if query_changed then
+    if self.bookmark_open_cancel then self.bookmark_open_cancel(); self.bookmark_open_cancel = nil end
+    self.bookmark_activation = nil
     if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
     self.revision_open_token = nil
     self.current_query_key = query_key
@@ -7279,6 +7281,8 @@ function FSView:close(reason)
   if self.modifier_job then self.modifier_job:cancel(); self.modifier_job = nil end
   if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
   self.revision_open_token = nil
+  if self.bookmark_open_cancel then self.bookmark_open_cancel(); self.bookmark_open_cancel = nil end
+  self.bookmark_activation = nil
   kill_file_search()
   kill_grep()
   kill_fuzzy_grep_jobs()
@@ -7473,6 +7477,28 @@ function FSView:open_historical_result(result, new_group, restore, done)
     end
   )
   return opened_view
+end
+
+function FSView:open_buffer_result(r, new_group)
+  local buffer = r.buffer
+  local source_pane = self.source_pane
+  local file_open = fuzzy_searcher._perf_file_open_begin(
+    buffer.abs_filename or buffer.filename, "fuzzy_searcher"
+  )
+  local close_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_close_picker")
+  if not new_group then self:close() end
+  fuzzy_searcher._perf_file_open_stage_end(close_stage)
+  fuzzy_searcher._perf_file_open_mark("open_buffer_requested", string.format("line=%d col=%d", r.line, r.col or 1))
+  local view = core.root_panel:open_buffer(buffer, {
+    pane = source_pane,
+    placement = new_group and "new" or "current",
+    focus = true,
+    line = r.line, col = r.col, line2 = r.line2, col2 = r.col2,
+  })
+  fuzzy_searcher._perf_file_open_attach_view(view)
+  fuzzy_searcher._perf_file_open_mark("open_buffer_state_restored")
+  if file_open and not view then fuzzy_searcher._perf_file_open_fail("no_view") end
+  return view
 end
 
 function FSView:open_file_result(r, new_group, restore, done)
@@ -7732,14 +7758,30 @@ function FSView:activate_selected_result(new_group)
     tostring(self.selected), #self.results, tostring(r and r.kind),
     tostring(r and (r.file or r.abs_path or r.path)), tostring(r and r.line), tostring(new_group))
   if not r then return end
+  if self.bookmark_open_cancel then self.bookmark_open_cancel(); self.bookmark_open_cancel = nil end
+  self.bookmark_activation = nil
   if r.kind == "bookmark" then
-    local target, reason = require("core.bookmarks").navigation_target(r.bookmark)
-    if not target then
-      self.status = reason
-      self:schedule_update(true)
-      return false
-    end
-    r.buffer, r.abs_path, r.line = target.buffer, target.path, target.line
+    local token, completed = {}, false
+    local query = self.input:get_text()
+    self.bookmark_activation = token
+    self.status = "Checking Bookmark location…"
+    local cancel = require("core.bookmarks").open_target(r.bookmark, function(target, reason)
+      completed = true
+      if self.closed or self.closing or self.bookmark_activation ~= token then return end
+      self.bookmark_activation, self.bookmark_open_cancel = nil, nil
+      if self.input:get_text() ~= query or not panes.contains(self.source_pane) then return end
+      local selected = self:selected_result()
+      if not selected or selected.bookmark ~= r.bookmark then return end
+      if not target then
+        self.status = reason
+        self:schedule_update(true)
+        return
+      end
+      self:open_buffer_result({ buffer = target.buffer, line = target.line, col = 1 }, new_group)
+      self:restore_activation_focus(new_group)
+    end)
+    if not completed then self.bookmark_open_cancel = cancel end
+    return true
   end
   if r.kind == "navigation_place" then
     local pane = panes.find(self.source_pane)
@@ -7832,25 +7874,7 @@ function FSView:activate_selected_result(new_group)
     return self:confirm_folder_open(r, new_group)
   end
   if r.buffer and r.line then
-    local buffer = r.buffer
-    local source_pane = self.source_pane
-    local file_open = fuzzy_searcher._perf_file_open_begin(
-      buffer.abs_filename or buffer.filename, "fuzzy_searcher"
-    )
-    local close_stage = fuzzy_searcher._perf_file_open_stage_begin("fuzzy_close_picker")
-    if not new_group then self:close() end
-    fuzzy_searcher._perf_file_open_stage_end(close_stage)
-    fuzzy_searcher._perf_file_open_mark("open_buffer_requested", string.format("line=%d col=%d", r.line, r.col or 1))
-    local view = core.root_panel:open_buffer(buffer, {
-      pane = source_pane,
-      placement = new_group and "new" or "current",
-      focus = true,
-      line = r.line, col = r.col, line2 = r.line2, col2 = r.col2,
-    })
-    fuzzy_searcher._perf_file_open_attach_view(view)
-    fuzzy_searcher._perf_file_open_mark("open_buffer_state_restored")
-    if file_open and not view then fuzzy_searcher._perf_file_open_fail("no_view") end
-    return
+    return self:open_buffer_result(r, new_group)
   end
   if r.file then
     return self:open_file_result(r, new_group)
