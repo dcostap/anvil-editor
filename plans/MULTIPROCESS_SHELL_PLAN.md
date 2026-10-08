@@ -413,7 +413,12 @@ Three focused Lua checks and four owned-window cases pass on both renderers.
 The isolated comparison has 360 valid samples per row and no failures.
 D3D11 medians are 6.95 ms direct and 6.94 ms hosted.
 The Phase 4 plan records software changes, tails, maxima, and evidence limits.
-Several loaded Projects remain Milestone 2 work.
+Milestone 2 keeps several Projects loaded in one Window, with owned connections and shell-controlled selection.
+Project switch preserves live Buffers, text selections, workers, and Terminal clients.
+Launch work runs off the native UI thread. Restart changes only its Project.
+Window Close checks each Project in turn. Cancel stops further requests, without undoing accepted closes.
+Focused owned-window cases pass on both renderers. Direct lifecycle checks remain unchanged.
+Explicit unload, Dormant Projects, and independent recovery remain Milestone 3 work.
 
 Add Dormant and loaded Projects, Project switching, hidden rendering suppression,
 Project crash restart, and hang detection.

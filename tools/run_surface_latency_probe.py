@@ -103,7 +103,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
-    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close", "fault-alloc", "fault-event", "fault-open", "fault-acquire", "fault-present", "fault-resize", "fault-write", "fault-pipe", "fault-busy", "fault-stale", "fault-malformed", "fault-device", "fault-startup", "fault-release", "fault-project-release", "fault-pipe-force-close", "probe-exit-error", "startup-reader", "startup-writer", "startup-timer", "restart-startup-timer", "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel"],
+    parser.add_argument("--project-case", action="append", choices=["launch", "arguments", "option-arguments", "invalid", "quit", "quit-error", "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close", "fault-alloc", "fault-event", "fault-open", "fault-acquire", "fault-present", "fault-resize", "fault-write", "fault-pipe", "fault-busy", "fault-stale", "fault-malformed", "fault-device", "fault-startup", "fault-release", "fault-project-release", "fault-pipe-force-close", "probe-exit-error", "startup-reader", "startup-writer", "startup-timer", "restart-startup-timer", "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel", "loaded-switch", "loaded-launch", "loaded-restart"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)
@@ -133,6 +133,9 @@ def main() -> int:
                     case_dir = work / f"project-{mode}-{action}"
                     for name in ("driver", "Project", "Replacement", "user"):
                         (case_dir / name).mkdir(parents=True)
+                    fixture = "loaded_projects_probe.lua" if action.startswith("loaded-") else "hosted_project_probe.lua"
+                    shutil.copy2(ROOT / "tests/fixtures" / fixture, work / "app/share/anvil/plugins/hosted_project_probe.lua")
+                    (case_dir / "Replacement/edited.txt").write_bytes(b"on disk\n")
                     (case_dir / "Project/edited.txt").write_bytes(b"on disk\n")
                     if action == "routing":
                         (case_dir / "Project/edited.txt").write_text("0123456789\n" * 200, encoding="utf-8")
@@ -140,7 +143,7 @@ def main() -> int:
                     namespace = "anvil-test-" + work.name.rsplit("-", 1)[-1] + "-" + action
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
-                    if action == "dialog-blocked-close" or action.startswith(("fault-", "startup-")) or action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close"):
+                    if action == "dialog-blocked-close" or action.startswith(("fault-", "startup-")) or action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     result = case_dir / "result.lua"
@@ -161,8 +164,10 @@ def main() -> int:
                     }
                     if action == "dialog-error":
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"
-                    if action.startswith(("fault-", "startup-")) or action in ("dialog-blocked-close", "hidden-startup"):
+                    if action.startswith(("fault-", "startup-", "loaded-")) or action in ("dialog-blocked-close", "hidden-startup"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
+                    if action == "loaded-launch":
+                        config["environment"]["ANVIL_SURFACE_FAULT_STARTUP"] = "selection-launch"
                     if action.startswith("startup-"):
                         config["environment"]["ANVIL_SURFACE_FAULT_STARTUP"] = action.removeprefix("startup-")
                     if action == "restart-startup-timer":

@@ -198,6 +198,14 @@ end
 
 
 function core.open_project_in_same_window(project)
+  if system.is_hosted_surface() then
+    local path = type(project) == "table" and project.path or project
+    path = type(path) == "string" and system.absolute_path(path)
+    local info = path and system.get_file_info(path)
+    if not info or info.type ~= "dir" then return false end
+    core.log_quiet("Request Project selection without closing this Workspace: %s", path)
+    return system.select_project(path)
+  end
   local project = core.set_project(project)
   if not project then return false end
   core.root_panel:close_all_textviews()

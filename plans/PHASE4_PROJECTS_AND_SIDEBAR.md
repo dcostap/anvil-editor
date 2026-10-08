@@ -5,6 +5,7 @@
 The user approved continued work while the Phase 3 physical-input, IME, and mixed-DPI checks remain open.
 Hosted mode stays opt-in. The Phase 3 code reviews are complete.
 Do not treat synthetic tests as manual acceptance.
+Milestones 1 and 2 are implemented. Explicit unload and independent recovery remain Milestone 3 work.
 
 ## Scope
 
@@ -51,6 +52,8 @@ Keep A loaded while selecting B. Selecting A again must use the same Project pro
 Configure, focus, and rendering permission must follow selection in one ordered stream.
 Old frames, dialogs, input, and worker results must not reach another Project.
 Keep one Project instance per path. Do not introduce several Anvil Windows yet.
+Window Close checks each loaded Project in turn with its normal unsaved-data and Terminal policies.
+Cancel stops further Close requests. Earlier accepted closes remain complete.
 
 ### 3. Dormant Projects and independent recovery
 
@@ -149,3 +152,108 @@ Before evidence: `anvil-surface-latency-abhxr76a`. After evidence: `anvil-surfac
 Milestone 1 is complete. The warned dev portable update rebuilt, installed, and restarted Anvil.
 The fresh session and startup logs contain no errors, warnings, or startup failures.
 Phase 3 physical-input, IME, and mixed-DPI checks remain open. Hosted mode remains opt-in.
+
+### Milestone 2: several loaded Projects
+
+Each Project now owns its process, pipe, workers, queues, configuration, dialogs, and Close state.
+The Window owns one compositor and selects one Project for presentation and input.
+Project records stay alive until shell exit. Queued packets retain their owner and connection tag.
+Every connection gets a unique shell-wide tag. Late packets cannot enter a replacement connection.
+
+The hosted Project selection request no longer changes the caller's directory or closes its Workspace.
+The shell compares normalized Windows paths with Unicode ordinal case-insensitive comparison before loading another Project.
+Selecting a loaded Project retains its process, Editors, text selections, workers, and Terminal clients.
+Selection cancels capture and composition, changes focus, and sends rendering permission through each owned stream.
+The shell releases the previous shared frame before presenting another Project.
+It discards unselected frames before opening their resources.
+Unselected window geometry requests do not change the Window. Dialog requests wait until their Project is selected.
+Explicit Raise can select its owning Project, including a Project reached through IPC.
+
+Project launch runs on a native worker. It cannot hold the native Window event loop during process creation.
+Restart replaces only its Project. Native GPU recovery remains explicit, without automatic fallback.
+Window Close checks Projects in turn. Cancel stops further requests and permits later Project selection.
+An accepted Close remains complete. Force close still targets only its owned Project handle.
+Shell shutdown shares one transport cleanup deadline across all Projects.
+
+#### Targeted red-green evidence
+
+- `loaded-switch` failed before the change: `Project selection changed A's directory`.
+  Evidence: `anvil-surface-latency-r6ayeqo2`.
+  The final case checks A–B–A process identity, live text, Editor identity, text selection, and Terminal attachment.
+  It also checks hidden coroutine progress, worker results, Terminal output, Close cancellation, and final Window Close.
+- With launch work temporarily moved onto the native UI thread, `loaded-launch` failed.
+  Failure: `native Minimize waited for Project launch`.
+  Evidence: `anvil-surface-latency-kraupin7`.
+  The restored worker path passes native Minimize and Restore while the owned launch worker waits.
+- The ownership change exposed the existing suspended Force-close regression again.
+  Failure: `Force close left the failed shell open`.
+  The Close flow waited for process exit after Force had completed.
+  The accepted Force result now advances Close directly. D3D11 and software checks pass.
+
+The worker submission and Buffer text expectations needed fixture corrections during development.
+Those failures do not establish runtime defects.
+The native routing fixture also needed explicit rendering permission after Milestone 1's protocol change.
+Its publication check passes with that required configuration field set.
+
+Review also found a dialog lifetime error when a synchronous callback cannot retain its result.
+The callback can free the dialog before the show function returns.
+The show function now retains the property handle locally and does not access the dialog after that call.
+This fix came from inspection. No reproducible allocation-failure red test was available.
+Ordinary dialog error, late-result, Close, and loaded-switch cases check the affected path on both renderers.
+Final lifetime-fix evidence: `anvil-surface-latency-rru1iljx` and `anvil-surface-latency-nriv4xoc`.
+
+#### Focused verification
+
+The three new owned-window cases pass on D3D11 and software:
+`loaded-switch`, `loaded-launch`, and `loaded-restart`.
+Final D3D11 evidence: `anvil-surface-latency-jzowco2l`.
+Software evidence: `anvil-surface-latency-y9g1xv3i`.
+
+Affected startup, transport cleanup, Force close, dialogs, input routing, motion, and resource failures pass.
+D3D11 evidence includes `anvil-surface-latency-wcbtlpu0` and `anvil-surface-latency-74z1nu3j`.
+The software matrix uses `anvil-surface-latency-y9g1xv3i`.
+Direct Quit, nonzero Quit, Restart, Project switch, and New Window pass in `anvil-surface-latency-5djmzeoa`.
+Direct `launch` and `close` were invalid fixture invocations, not runtime acceptance checks.
+
+Three native targets pass: hosted dialogs, hosted routing, and stalled hosted motion.
+Focused Lua checks pass: 16 Workspace tests, five Terminal quit tests, and 34 untitled recovery tests.
+Logs: `phase4-m2-native-final`, `phase4-m2-workspace`, `phase4-m2-quit`, and `phase4-m2-recovery`.
+Lua syntax, Python compilation, the native build, and the scoped whitespace check pass.
+No test captures pixels, uses user windows, or establishes physical-input, real IME, or mixed-DPI acceptance.
+
+#### Isolated latency evidence
+
+The initial comparison used three runs of 120 valid samples per row, without overlapping builds or correctness checks.
+Values below are p50 / p90 / p99 / maximum / mean, in milliseconds.
+
+| Mode | Before | After |
+| --- | --- | --- |
+| Direct D3D11 | 7.32 / 15.67 / 19.14 / 43.80 / 8.61 | 7.36 / 17.07 / 19.52 / 50.94 / 8.88 |
+| Hosted D3D11 | 7.03 / 16.38 / 18.72 / 19.00 / 8.84 | 7.20 / 16.55 / 27.29 / 129.90 / 9.77 |
+| Direct software | 18.35 / 27.11 / 31.46 / 33.72 / 19.48 | 16.10 / 24.43 / 29.96 / 32.18 / 16.79 |
+| Hosted software | 10.67 / 19.56 / 23.51 / 25.78 / 12.16 | 12.07 / 20.59 / 23.90 / 96.39 / 13.49 |
+
+Before evidence: `anvil-surface-latency-3co2jsj0`. After evidence: `anvil-surface-latency-xj98umm_`.
+The hosted D3D11 p99 and maximum increased. That result required another comparison before deployment.
+
+The matched comparison used the saved baseline executable and current executable with one fixed app-data copy.
+Each row alternated builds for three runs of 120 valid samples per build.
+No build, correctness check, or other latency run overlapped this comparison.
+
+| Mode | Saved baseline | Current |
+| --- | --- | --- |
+| Direct D3D11 | 7.68 / 17.24 / 19.91 / 54.57 / 9.22 | 7.63 / 16.84 / 19.57 / 21.00 / 8.99 |
+| Hosted D3D11 | 6.89 / 16.57 / 19.88 / 22.17 / 8.75 | 6.94 / 17.25 / 20.06 / 27.40 / 9.02 |
+| Direct software | 16.68 / 25.87 / 29.72 / 30.37 / 17.67 | 17.65 / 25.40 / 29.32 / 32.13 / 18.01 |
+| Hosted software | 11.27 / 20.84 / 24.01 / 25.74 / 13.14 | 10.85 / 19.70 / 23.52 / 26.96 / 12.58 |
+
+Matched evidence: `anvil-m2-review-latency-gvbjqvl4/results.json`.
+The initial hosted tail increase did not repeat at that size in the matched comparison.
+The hosted D3D11 median increased by 0.05 ms and p99 by 0.18 ms.
+Direct software's median increased by 0.97 ms. Maximum values remain variable across both comparisons.
+These runs do not establish a cause or a performance gain. The measurement ends at Present, not physical scanout.
+
+Milestone 2 is complete. The warned portable update rebuilt, installed, restored data junctions, and restarted Anvil.
+Fresh logs contain no errors, warnings, or startup failures:
+`anvil-20261008-200827-p30188.log` and `anvil-startup-20261008-200827-p30188-m288554.log`.
+Hosted mode remains opt-in. Physical input, real IME, and mixed-DPI acceptance remain unavailable.

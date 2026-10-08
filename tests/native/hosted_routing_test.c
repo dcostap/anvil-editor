@@ -196,7 +196,7 @@ int main(int test_argc, char **test_argv) {
   CHECK(handle != INVALID_HANDLE_VALUE);
   CHECK(anvil_ipc_pipe_init(&pipe, handle, ANVIL_SURFACE_PROTOCOL_VERSION, ANVIL_SURFACE_MAX_PAYLOAD));
   config = (AnvilSurfaceConfigure){.configuration = 7, .pixel_w = 320, .pixel_h = 240, .window_w = 400, .window_h = 300,
-    .display_scale = 1.25f, .controls_x = 182, .controls_w = 138, .controls_h = 32};
+    .render_enabled = 1, .display_scale = 1.25f, .controls_x = 182, .controls_w = 138, .controls_h = 32};
   SDL_Thread *thread = SDL_CreateThread(server, "test-shell", NULL);
   CHECK(thread);
   char argument[256];

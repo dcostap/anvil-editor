@@ -468,6 +468,7 @@ if not core.__workspace_hooks_installed then
 
   local open_project_in_same_window = core.open_project_in_same_window
   function core.open_project_in_same_window(project, ...)
+    if system.is_hosted_surface() then return open_project_in_same_window(project, ...) end
     local flush = untitled_recovery.flush_all("same-window Project switch", true)
     if not flush.all_safe then return false end
     suppress_next_exit_workspace_save = true

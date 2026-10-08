@@ -1740,6 +1740,14 @@ static int f_project_close_decision(lua_State *L) {
   if (anvil_hosted_surface_active()) anvil_hosted_surface_close_decision(decision);
   return 0;
 }
+
+static int f_select_project(lua_State *L) {
+  size_t size = 0;
+  const char *path = luaL_checklstring(L, 1, &size);
+  luaL_argcheck(L, size > 0 && size < 32768 && !memchr(path, 0, size), 1, "invalid Project path");
+  lua_pushboolean(L, anvil_hosted_surface_select_project(path));
+  return 1;
+}
 static int f_test_surface_failure(lua_State *L) {
   const char *enabled = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
   luaL_argcheck(L, enabled && !strcmp(enabled, "1") && anvil_hosted_surface_active(), 1, "isolated hosted surface probe is disabled");
@@ -2351,6 +2359,7 @@ static const luaL_Reg lib[] = {
   { "get_time",              f_get_time              },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "is_hosted_surface",     f_is_hosted_surface     },
+  { "select_project",        f_select_project        },
   { "get_window_process_id", f_get_window_process_id },
   { "get_window_controls",   f_get_window_controls },
   { "get_startup_path_arguments", f_get_startup_path_arguments },
