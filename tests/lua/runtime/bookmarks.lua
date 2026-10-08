@@ -324,6 +324,29 @@ test.describe("Bookmarks", function()
     test.equal(mark.line, 3)
   end)
 
+  for _, neighbor in ipairs {
+    { name = "a closing brace", text = "}" },
+    { name = "a blank line", text = "" },
+  } do
+    test.it("does not recover an unrelated line when only " .. neighbor.name .. " matches", function(context)
+      context.buffer:replace_snapshot("old owner\ntarget\n" .. neighbor.text .. "\n")
+      local mark = bookmarks.add(context.buffer, 2, "Target")
+      context.buffer:on_close()
+      context.buffer = nil
+      write_file(context.path, "new owner\ntarget\n" .. neighbor.text .. "\n")
+      refresh()
+      test.equal(mark.status, "location_missing")
+      test.equal(bookmarks.navigation_target(mark), nil)
+      test.equal(mark.name, "Target")
+
+      -- One matching content line remains sufficient when the other neighbor changes.
+      write_file(context.path, "new\nold owner\ntarget\nchanged neighbor\n")
+      refresh()
+      test.equal(mark.status, "ready")
+      test.equal(mark.line, 3)
+    end)
+  end
+
   test.it("recovers a unique line when its original file had no neighboring lines", function(context)
     context.buffer:replace_snapshot("target")
     local mark = bookmarks.add(context.buffer, 1, "Target")
