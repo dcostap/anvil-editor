@@ -72,6 +72,20 @@ Use recent Projects as the list source. Keep order stable, with new Projects fir
 Include Project lifecycle and bounded asynchronous Terminal Session status.
 Do not poll Terminal hosts or read registry files on the native UI thread.
 
+#### Unload crash prerequisite
+
+An unexpected exit clears the unload request and its reserved Dormant record.
+Restart also clears this state. Close acceptance alone does not announce a normal nonzero exit.
+An explicit exit announcement or Force close still permits an intentional nonzero exit.
+The duplicate retirement declaration is removed.
+
+Two owned-window cases hold B after Close acceptance, then crash only B.
+One unloads Failed B into Dormant state and keeps A unchanged.
+The other restarts B, then checks that Quit closes the Window and A.
+Both failed before the fix in `anvil-surface-latency-cw_acj7a`.
+Both pass on D3D11 in `anvil-surface-latency-johzfd4a` and software in `anvil-surface-latency-r2ss0a4_`.
+The pending-launch unload case also passes. These checks use no user windows or pixels.
+
 ### 5. Minimal Sidebar process
 
 Use the existing renderer, surface transport, theme, and input boundaries.

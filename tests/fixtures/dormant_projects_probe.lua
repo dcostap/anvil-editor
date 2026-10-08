@@ -3,6 +3,7 @@
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if not action or not action:match("^dormant%-") then return end
 local with_terminal = action:find("^dormant%-terminal") ~= nil
+local crash_unload = action == "dormant-unload-crash" or action == "dormant-unload-restart"
 local core = require "core"
 local common = require "core.common"
 local ffi = require "ffi"
@@ -119,7 +120,48 @@ if directory:match("/driver$") then
       end
       local b = wait_for(function() return read(action == "dormant-launch" and "b-started" or "b-ready") or read("b-error") end, 15)
       assert(not read("b-error"), b.error)
-      local bh = kernel.OpenProcess(action == "dormant-hang" and 0x100801 or action == "dormant-crash" and 0x100001 or 0x100000, 0, b.pid); assert(bh ~= nil); handles[#handles + 1] = bh
+      local bh = kernel.OpenProcess(action == "dormant-hang" and 0x100801 or (action == "dormant-crash" or crash_unload) and 0x100001 or 0x100000, 0, b.pid); assert(bh ~= nil); handles[#handles + 1] = bh
+      if crash_unload then
+        save("unload-b", {continue = true})
+        wait_for(function() return read("b-close-held") end, 8)
+        wait_for(function()
+          local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+          local text = file:read("*a"); file:close()
+          return text:find("Shell close decision: accepted", 1, true)
+        end, 5, "B's Close was not accepted")
+        assert(kernel.TerminateProcess(bh, 126) ~= 0)
+        wait_for(function() return kernel.WaitForSingleObject(bh, 0) == 0 end, 5)
+        wait_for(function()
+          local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+          local text = file:read("*a"); file:close()
+          return text:find("Project failed unexpectedly", 1, true)
+        end, 5, "Crash after accepted unload did not leave B Failed")
+        save("switch-a-after-crash", {continue = true})
+        local resumed = wait_for(function() return read("a-resumed") end, 10)
+        assert(resumed.pid == a.pid and kernel.WaitForSingleObject(ah, 0) == 258 and subject:running(),
+          "Crash during unload changed A or the Window")
+        if action == "dormant-unload-crash" then
+          save("unload-failed-b", {continue = true})
+          wait_for(function()
+            local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+            local text = file:read("*a"); file:close()
+            return text:find("Shell Project is Dormant: id=2", 1, true)
+          end, 5, "Unload did not make Failed B Dormant")
+          assert(kernel.WaitForSingleObject(ah, 0) == 258 and subject:running(), "Unloading Failed B ended A")
+          save("finish", {continue = true})
+          user32.PostMessageW(assert(shell_window(a.shell_pid)), 0x10, 0, 0)
+        else
+          save("load-b", {continue = true})
+          wait_for(function() return read("a-selected-b-failure") end, 10)
+          user32.PostMessageW(assert(shell_window(a.shell_pid)), 0x804c, 3, 0)
+          local restored = wait_for(function() return read("b-restored") end, 15)
+          assert(restored.pid ~= b.pid and restored.shell_pid == a.shell_pid, "Restart changed the Window")
+          save("finish", {continue = true})
+        end
+        wait_for(function() return not subject:running() end, 15, "Restart then Quit did not close the Window")
+        wait_for(function() return kernel.WaitForSingleObject(ah, 0) == 0 end, 5, "Window Quit retained A")
+        return
+      end
       if action == "dormant-background-quit" then
         save("quit-a", {continue = true})
         wait_for(function() return kernel.WaitForSingleObject(ah, 0) == 0 end, 8)
@@ -302,22 +344,32 @@ else
         assert(core.unload_project(root .. "/Replacement"))
         save("a-unload-requested", {continue = true})
       end
-      if action == "dormant-crash" or action == "dormant-hang" then
+      if action == "dormant-crash" or action == "dormant-hang" or crash_unload then
         wait_for(function() return read("switch-a-after-crash") end, 20)
         assert(core.open_project_in_same_window(directory))
       end
       wait_for(function() return system.window_should_render(core.window) end, 20)
       save("a-resumed", state())
+      if action == "dormant-unload-crash" then
+        wait_for(function() return read("unload-failed-b") end, 10)
+        assert(core.unload_project(root .. "/Replacement"))
+        return
+      end
       if action == "dormant-hang" then
         wait_for(function() return read("unload-hung-b") end, 10)
         assert(core.unload_project(root .. "/Replacement"))
       end
       wait_for(function() return read("load-b") end, action == "dormant-hang" and 20 or 10)
       assert(core.open_project_in_same_window(root .. "/Replacement"))
-      if action == "dormant-crash" then
+      if action == "dormant-crash" or action == "dormant-unload-restart" then
         wait_for(function() return not system.window_should_render(core.window) end, 10)
         save("a-selected-b-failure", {continue = true})
       end
+    elseif action == "dormant-unload-restart" and read("b-close-held") then
+      local restored = state()
+      save("b-restored", restored)
+      wait_for(function() return read("finish") end, 10)
+      assert(require("core.command").perform("core:quit"))
     elseif (action == "dormant-crash" or action == "dormant-hang") and read("b-crashed") then
       local editor = core.open_file(directory .. "/edited.txt")
       local restored = state()
@@ -393,6 +445,14 @@ else
           return
         end
         wait_for(function() return read("unload-b") end, 10)
+        if crash_unload then
+          -- Hold the accepted exit callback at the process boundary. The driver
+          -- crashes this owned process after the shell receives acceptance.
+          local exit = core.exit
+          core.exit = function(callback, force)
+            return exit(function() save("b-close-held", {continue = true}) end, force)
+          end
+        end
         assert(require("core.command").perform("core:unload_project"), "Project unload command is unavailable")
         save("b-unload-requested", {continue = true})
         if action == "dormant-cancel" then

@@ -95,6 +95,7 @@ typedef struct ShellProject {
   unsigned launch_attempt;
   bool writer_stop;
   bool intentional_exit;
+  bool exit_announced;
   bool failed_close;
   bool unloading;
   DormantProject *dormant;
@@ -217,7 +218,11 @@ static void finish_resolutions(void);
 static bool unload_project_path(const char *path);
 static void begin_unload(ShellProject *project);
 static void drain_retired_projects(void);
-static void drain_retired_projects(void);
+static void reset_unload(ShellProject *project) {
+  project->unloading = false;
+  free(project->dormant);
+  project->dormant = NULL;
+}
 static ShellProject *project_for_connection(Uint32 connection) {
   for (ShellProject *project = shell.projects; project; project = project->next)
     if (project->connection == connection)
@@ -1919,7 +1924,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
     if (!message->size) {
-      project->intentional_exit = true;
+      project->intentional_exit = project->exit_announced = true;
       SDL_Log("Project exit accepted by shell");
     }
     break;
@@ -2412,7 +2417,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         if (dialog->force) {
           if (WaitForSingleObject(dialog->process, 0) != WAIT_TIMEOUT ||
               TerminateProcess(dialog->process, 125)) {
-            project->intentional_exit = true;
+            project->intentional_exit = project->exit_announced = true;
             project->failed_close = true;
             stop_close_timer(project);
             SDL_Log("Shell explicitly forced Project close; Terminal Sessions remain independent");
@@ -2449,7 +2454,8 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         }
         return SDL_APP_CONTINUE;
       }
-      if (project->intentional_exit) {
+      if (project->intentional_exit &&
+          (project->exit_announced || (int)(intptr_t)event->user.data2 == 0)) {
         project->connected = false;
         project->failed_close = true;
         if (!project->unloading) {
@@ -2459,6 +2465,9 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         }
         return SDL_APP_CONTINUE;
       }
+      reset_unload(project);
+      project->intentional_exit = false;
+      project->failed_close = false;
       set_state(project, SHELL_FAILED);
       project->connected = false;
       if (project != shell.selected)
@@ -3128,6 +3137,8 @@ static bool startup_fault(ShellProject *project, const char *phase) {
 }
 
 static bool start_project(ShellProject *project, int argc, char **argv) {
+  reset_unload(project);
+  project->exit_announced = false;
   /* Replacement starts only after the old process exited. Join cancelled transport users first. */
   if (project->process.hProcess || project->launcher || project->launch || project->reader ||
       project->writer || project->pipe.handle) {
