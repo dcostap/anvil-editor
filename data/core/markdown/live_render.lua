@@ -7,12 +7,14 @@ local callouts = require "core.markdown.callouts"
 local images = require "core.markdown.images"
 local fence_highlight = require "core.markdown.fence_highlight"
 local link_completion = require "core.markdown.completion"
+local live_fonts = require "core.markdown.live_fonts"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
 local markdown_model = require "core.markdown.model"
 local edit_projection = require "core.markdown.edit_projection"
 local markdown_tables = require "core.markdown.tables"
 local presentation_snapshot = require "core.markdown.presentation_snapshot"
+local table_presentation = require "core.markdown.table_presentation"
 local tokenizer = require "core.tokenizer"
 local vault_index = require "core.markdown.vault_index"
 local style = require "core.style"
@@ -577,111 +579,6 @@ local function semantic_formatting_spans(view, line_text, line)
   return spans
 end
 
-local function markdown_live_scaled_font(view, source, size)
-  size = size or view:get_font():get_size()
-  if source:get_size() == size then return source end
-  local cache = view.__markdown_live_scaled_fonts or {}
-  view.__markdown_live_scaled_fonts = cache
-  local fonts = cache[source]
-  if not fonts then
-    fonts = {}
-    cache[source] = fonts
-  end
-  if not fonts[size] then
-    fonts[size] = source:copy(size)
-    view.__markdown_live_font_measurements = view.__markdown_live_font_measurements or {}
-    view.__markdown_live_font_measurements[fonts[size]] = {
-      source = source, anchor = "scale", factor = size / SCALE,
-    }
-  end
-  return fonts[size]
-end
-
-local function markdown_live_body_font(view)
-  return markdown_live_scaled_font(
-    view, style.markdown_body_font, style.markdown_body_font:get_size()
-  )
-end
-
-local function markdown_live_body_line_height(view)
-  return math.floor(markdown_live_body_font(view):get_height() * config.line_height)
-end
-
-local function heading_font(view, level)
-  local size = level == 1 and 32
-    or level == 2 and 24
-    or level == 3 and 20
-    or level == 4 and 18
-    or level == 5 and 16
-    or 15
-  return markdown_live_scaled_font(
-    view, style.prose_heading_font,
-    math.max(1, math.floor(size * SCALE + 0.5))
-  )
-end
-
-local function heading_italic_font(view, level)
-  return markdown_live_scaled_font(
-    view, style.prose_heading_emphasis_font,
-    heading_font(view, level):get_size()
-  )
-end
-
-local function heading_text_row_height(view, level)
-  local font_height = heading_font(view, level):get_height()
-  return math.max(
-    font_height,
-    math.floor(font_height * config.markdown_live_heading_line_height + 0.5)
-  )
-end
-
-local function markdown_block_gap(view)
-  return math.max(1, math.floor(markdown_live_body_font(view):get_height() * 0.7))
-end
-
-local function inline_style_font(
-  view, span_type, base_font, base_bold, base_italic_font
-)
-  view.__markdown_live_inline_fonts = view.__markdown_live_inline_fonts or {}
-  local cache = view.__markdown_live_inline_fonts
-  local font
-  if span_type == "code" then
-    font = style.code_font
-  elseif base_bold and (span_type == "emphasis" or span_type == "strong_emphasis")
-    and base_italic_font
-  then
-    font = base_italic_font
-  elseif base_bold and span_type == "strong" and base_font then
-    font = base_font
-  elseif span_type == "strong_emphasis" or base_bold and span_type == "emphasis" then
-    font = style.prose_strong_emphasis_font
-  elseif span_type == "strong" then
-    font = style.prose_strong_font
-  elseif span_type == "emphasis" then
-    font = style.prose_emphasis_font
-  else
-    font = base_font or style.markdown_body_font
-  end
-  local size = base_font and base_font:get_size()
-    or span_type == "code" and view:get_font():get_size()
-    or markdown_live_body_font(view):get_size()
-  local key = tostring(font) .. ":" .. tostring(size) .. ":" .. tostring(span_type)
-  if not cache[key] then
-    cache[key] = font:copy(size)
-    view.__markdown_live_font_measurements = view.__markdown_live_font_measurements or {}
-    local base_measurement = view.__markdown_live_font_measurements[base_font]
-    local anchor = base_measurement and base_measurement.anchor == "scale" and "scale"
-      or span_type == "code" and not base_font and "code" or "body"
-    local anchor_size = anchor == "scale" and SCALE
-      or anchor == "code" and view:get_font():get_size()
-      or markdown_live_body_font(view):get_size()
-    view.__markdown_live_font_measurements[cache[key]] = {
-      source = font, anchor = anchor, factor = size / anchor_size,
-    }
-  end
-  return cache[key]
-end
-
 local function normal_text_color()
   return style.text or style.syntax.normal
 end
@@ -835,11 +732,11 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
         return {
           source_col1 = col1, source_col2 = col2,
           text = line_text:sub(col1, col2 - 1),
-          font = code and inline_style_font(
+          font = code and live_fonts.inline_style(
             view, "code", opts.base_font, opts.base_bold, opts.base_italic_font
           )
             or font_type ~= "normal"
-              and inline_style_font(
+              and live_fonts.inline_style(
                 view, font_type, opts.base_font, opts.base_bold,
                 opts.base_italic_font
               )
@@ -1336,7 +1233,7 @@ end
 local revealed_link_fragments
 
 local function image_only_render_line(view, text, line, span, active)
-  local body_font = markdown_live_body_font(view)
+  local body_font = live_fonts.body(view)
   local leading_width = span.col1 > 1
     and body_font:get_width(text:sub(1, span.col1 - 1)) or 0
   local image = image_fragment(view, span, {
@@ -1355,8 +1252,8 @@ local function image_only_render_line(view, text, line, span, active)
       image.source_col1 = #text + 1
       image.source_col2 = #text + 1
       image.draw_x_offset = leading_width - body_font:get_width(text)
-      image.draw_y_offset = markdown_live_body_line_height(view) + image_vertical_padding()
-      image.widget.height = image.widget.height + markdown_live_body_line_height(view)
+      image.draw_y_offset = live_fonts.body_line_height(view) + image_vertical_padding()
+      image.widget.height = image.widget.height + live_fonts.body_line_height(view)
       -- The revealed source and the image are separate visual rows.  Keep the
       -- widget attached to the image block rather than letting the zero-width
       -- source anchor participate in ordinary selection geometry.
@@ -1369,12 +1266,12 @@ local function image_only_render_line(view, text, line, span, active)
     end
     return {
       source_text = text,
-      caret_height = markdown_live_body_line_height(view),
+      caret_height = live_fonts.body_line_height(view),
       fragments = fragments,
     }
   end
   if image.widget and span.col1 > 1 then
-    image.draw_x_offset = markdown_live_body_font(view):get_width(text:sub(1, span.col1 - 1))
+    image.draw_x_offset = live_fonts.body(view):get_width(text:sub(1, span.col1 - 1))
   end
   if image.widget then
     local link = live._image_attachment_link(view, line, span, { base_font = body_font })
@@ -1454,11 +1351,11 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
   end
   local font_type = bold and italic and "strong_emphasis"
     or bold and "strong" or italic and "emphasis" or "normal"
-  fragment.font = code and inline_style_font(
+  fragment.font = code and live_fonts.inline_style(
     view, "code", opts.base_font, opts.base_bold, opts.base_italic_font
   )
     or font_type ~= "normal"
-      and inline_style_font(
+      and live_fonts.inline_style(
         view, font_type, opts.base_font, opts.base_bold, opts.base_italic_font
       )
     or opts.base_font or fragment.font
@@ -1538,8 +1435,8 @@ local function embed_preview_fragment(view, line_text, span)
   local resolution = resolve_live_link(view, link)
   local preview = embed_preview_for_resolution(resolution)
   if not preview or #preview == 0 then return nil end
-  local body_font = markdown_live_body_font(view)
-  local line_height = markdown_live_body_line_height(view)
+  local body_font = live_fonts.body(view)
+  local line_height = live_fonts.body_line_height(view)
   local padding = math.max(2, math.floor(4 * SCALE))
   return {
     source_col1 = #line_text + 1, source_col2 = #line_text + 1,
@@ -1779,7 +1676,7 @@ function callout_runtime.for_line(view, line)
 end
 
 function callout_runtime.content_inset(view, callout, control_text)
-  local body_font = markdown_live_body_font(view)
+  local body_font = live_fonts.body(view)
   local card_offset = math.floor((8 + (callout.nesting_depth - 1) * 16) * SCALE)
   local rail_width = math.max(2, math.floor(3 * SCALE))
   local padding = math.max(4, math.floor(9 * SCALE))
@@ -2023,227 +1920,17 @@ local function table_for_line(view, line)
   return table_node
 end
 
-local TABLE_MAX_PRESENTATION_ROWS = markdown_tables.MAX_PRESENTATION_ROWS
-local TABLE_MAX_PRESENTATION_COLUMNS = markdown_tables.MAX_PRESENTATION_COLUMNS
-local TABLE_MAX_CELL_PRESENTATION_BYTES = 4096
-local TABLE_LAYOUT_GEOMETRY_CACHE_LIMIT = 4
-
-local table_source_row = markdown_tables.source_row
-
-local function table_cell_content(text, cell)
-  local raw = text:sub(cell.col1, cell.col2 - 1)
-  local leading = #(raw:match("^%s*") or "")
-  local trailing = #(raw:match("%s*$") or "")
-  local source_col1, source_col2 = cell.col1 + leading, cell.col2 - trailing
-  if source_col1 > source_col2 then
-    local empty_col = common.clamp(
-      cell.col1 + math.floor(#raw / 2), cell.col1, cell.col2
-    )
-    return "", empty_col, empty_col
-  end
-  return raw:sub(leading + 1, #raw - trailing), source_col1, source_col2
-end
-
-local function table_cell_text(text, cell)
-  return (table_cell_content(text, cell))
-end
-
-local function table_cell_presentation(view, text, source_col1, source_col2, header)
-  local image_alt = text:match("^!%[([^%]]*)%]%(%s*data:image/[%w%+%.%-]+[;,]")
-  if image_alt or #text > TABLE_MAX_CELL_PRESENTATION_BYTES then
-    local display
-    if image_alt then
-      display = image_alt ~= "" and ("[Embedded image: " .. image_alt .. "]")
-        or "[Embedded image]"
-    else
-      local parts, bytes = {}, 0
-      for char in common.utf8_chars(text) do
-        if bytes + #char > TABLE_MAX_CELL_PRESENTATION_BYTES then break end
-        parts[#parts + 1] = char
-        bytes = bytes + #char
-      end
-      display = table.concat(parts) .. "… [cell content truncated]"
-    end
-    perf_frame_add("markdown_live_table_cell_elisions", 1)
-    return {
-      text = display,
-      source_col1 = source_col1,
-      source_col2 = source_col2,
-      font = header and inline_style_font(view, "strong") or markdown_live_body_font(view),
-      color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
-      nowrap = true,
-      source_elided = true,
-    }
-  end
-  if not header then
-    local ticks = text:match("^(`+)")
-    if ticks and #text >= #ticks * 2 and text:sub(-#ticks) == ticks then
-      return {
-        text = text:sub(#ticks + 1, -#ticks - 1),
-        source_col1 = source_col1 + #ticks,
-        source_col2 = source_col2 - #ticks,
-        font = inline_style_font(view, "code"),
-        color = style.markdown_live_table_cell,
-        background = style.markdown_live_inline_code_bg,
-        literal_breaks = true,
-      }
-    end
-  end
-  return {
-    text = text,
-    source_col1 = source_col1,
-    source_col2 = source_col2,
-    font = header and inline_style_font(view, "strong") or markdown_live_body_font(view),
-    color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
-  }
-end
-
-local function table_wrap_text(font, text, width)
-  if text == "" then return { { text = "", col1 = 1, col2 = 1 } } end
-  width = math.max(1, width)
-  if font.text_layout then
-    local layout = font:text_layout(text)
-    local starts = layout:wrap(width, "word")
-    local lines = {}
-    for index, zero_start in ipairs(starts) do
-      local col1 = zero_start + 1
-      local col2 = (starts[index + 1] or #text) + 1
-      while col1 < col2 and text:sub(col1, col1):match("%s") do col1 = col1 + 1 end
-      while col2 > col1 and text:sub(col2 - 1, col2 - 1):match("%s") do col2 = col2 - 1 end
-      lines[#lines + 1] = {
-        text = text:sub(col1, col2 - 1),
-        col1 = col1,
-        col2 = col2,
-      }
-    end
-    if #lines == 0 then lines[1] = { text = "", col1 = 1, col2 = 1 } end
-    return lines
-  end
-  local lines = {}
-  local line_start, line_end
-  local function push_line()
-    if line_start then
-      lines[#lines + 1] = {
-        text = text:sub(line_start, line_end),
-        col1 = line_start,
-        col2 = line_end + 1,
-      }
-      line_start, line_end = nil, nil
-    end
-  end
-
-  local search = 1
-  while true do
-    local word_start, word_end = text:find("%S+", search)
-    if not word_start then break end
-    if line_start and font:get_width(text:sub(line_start, word_end)) <= width then
-      line_end = word_end
-    else
-      push_line()
-      local word = text:sub(word_start, word_end)
-      if font:get_width(word) <= width then
-        line_start, line_end = word_start, word_end
-      else
-        local chunk_start, chunk_end = word_start, word_start - 1
-        local chunk = ""
-        for char in common.utf8_chars(word) do
-          if chunk ~= "" and font:get_width(chunk .. char) > width then
-            lines[#lines + 1] = {
-              text = chunk, col1 = chunk_start, col2 = chunk_end + 1,
-            }
-            chunk_start, chunk = chunk_end + 1, ""
-          end
-          chunk = chunk .. char
-          chunk_end = chunk_end + #char
-        end
-        if chunk ~= "" then
-          line_start, line_end = chunk_start, chunk_end
-        end
-      end
-    end
-    search = word_end + 1
-  end
-  push_line()
-  if #lines == 0 then lines[1] = { text = "", col1 = 1, col2 = 1 } end
-  return lines
-end
-
-local TABLE_BREAK_PATTERN = "<[bB][rR]%s*/?%s*>"
-
-local function next_table_break(text, start)
-  local escaped, ticks = false, 0
-  local col = 1
-  while col <= #text do
-    local char = text:sub(col, col)
-    if escaped then
-      escaped = false
-    elseif char == "\\" then
-      escaped = true
-    elseif char == "`" then
-      local finish = col
-      while text:sub(finish + 1, finish + 1) == "`" do finish = finish + 1 end
-      local count = finish - col + 1
-      if ticks == 0 then ticks = count elseif ticks == count then ticks = 0 end
-      col = finish
-    elseif ticks == 0 and col >= start and char == "<" then
-      local col1, col2 = text:find(TABLE_BREAK_PATTERN, col)
-      if col1 == col then return col1, col2 end
-    end
-    col = col + 1
-  end
-end
-
-local function table_wrap_cell_text(font, text, width, literal_breaks)
-  if literal_breaks then return table_wrap_text(font, text, width) end
-  local lines = {}
-  local start = 1
-  while true do
-    local break_col1, break_col2 = next_table_break(text, start)
-    local finish = break_col1 or (#text + 1)
-    local segment = text:sub(start, finish - 1)
-    local wrapped = table_wrap_text(font, segment, width)
-    for _, visual in ipairs(wrapped) do
-      lines[#lines + 1] = {
-        text = visual.text,
-        col1 = start + (visual.col1 or 1) - 1,
-        col2 = start + (visual.col2 or 1) - 1,
-      }
-    end
-    if not break_col1 then break end
-    start = break_col2 + 1
-    if start > #text then
-      lines[#lines + 1] = { text = "", col1 = start, col2 = start }
-      break
-    end
-  end
-  if #lines == 0 then lines[1] = { text = "", col1 = 1, col2 = 1 } end
-  return lines
-end
-
-local function table_cell_natural_width(font, text, literal_breaks)
-  if literal_breaks then return font:get_width(text) end
-  local width, start = 0, 1
-  while true do
-    local break_col1, break_col2 = next_table_break(text, start)
-    local finish = break_col1 or (#text + 1)
-    width = math.max(width, font:get_width(text:sub(start, finish - 1)))
-    if not break_col1 then return width end
-    start = break_col2 + 1
-  end
-end
-
-local function table_available_width(view)
-  -- Tables may use the full editor viewport even when prose has a narrower
-  -- configured wrap column. This matches reading-mode table layout and avoids
-  -- wrapping an otherwise fitting grid merely because of the prose guide.
-  local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-  local width = view:get_presentation_viewport_width()
-    - view:get_gutter_width() - scrollbar_width - style.padding.x
-  return math.max(math.floor(SCALE * 160), width)
+local function table_row_fragments(view, table_node, line, allow_pending)
+  local instance = render_semantic_model(view, table_node.source.line1)
+  if not instance and allow_pending then instance = markdown_model.peek(view.buffer) end
+  if not instance then return nil end
+  return table_presentation.row_fragments(
+    view, table_node, line, instance, current_selection_state(view)
+  )
 end
 
 function live.thematic_break_fragment(view, col1, col2, semantic_id)
-  local width = table_available_width(view)
+  local width = table_presentation.available_width(view)
   return {
     source_col1 = col1, source_col2 = col2,
     text = "", width = width,
@@ -2263,7 +1950,7 @@ end
 
 function live.quote_prefix_fragment(view, col1, col2, semantic_id)
   local width = math.max(
-    math.floor(8 * SCALE), markdown_live_body_font(view):get_width("  ")
+    math.floor(8 * SCALE), live_fonts.body(view):get_width("  ")
   )
   return {
     source_col1 = col1, source_col2 = col2,
@@ -2283,559 +1970,6 @@ function live.quote_prefix_fragment(view, col1, col2, semantic_id)
     semantic_id = semantic_id,
     quote_prefix = true,
   }
-end
-
-local function table_geometry_key(font, available_width)
-  return table.concat({
-    tostring(font), tostring(font:get_size()), tostring(available_width),
-  }, ":")
-end
-
-local function table_layout(view, table_node, allow_pending)
-  local instance = render_semantic_model(view, table_node.source.line1)
-  if not instance and allow_pending then instance = markdown_model.peek(view.buffer) end
-  if not instance then return nil end
-  local font = markdown_live_body_font(view)
-  local available_width = table_available_width(view)
-  local line2 = table_node.source.line2
-  if table_node.source.col2 == 1 and line2 > table_node.source.line1 then line2 = line2 - 1 end
-  local line1 = table_node.source.line1
-  if line2 - line1 + 1 > TABLE_MAX_PRESENTATION_ROWS then
-    core.log_quiet("Markdown table presentation kept raw beyond %d rows at %s:%d",
-      TABLE_MAX_PRESENTATION_ROWS, view.buffer:get_name(), line1)
-    return nil
-  end
-  local theme_generation = core.color_theme_generation or 0
-  local cache = view.__markdown_live_table_layout_cache
-  -- Table presentations retain resolved style colors, so do not reuse the
-  -- semantic geometry cache across a theme reload.
-  if not cache or cache.generation ~= instance.generation
-    or cache.theme_generation ~= theme_generation
-  then
-    local previous_buckets = cache and cache.theme_generation == theme_generation
-      and cache.buckets or nil
-    cache = {
-      generation = instance.generation,
-      theme_generation = theme_generation,
-      buckets = {},
-      bucket_order = {},
-      previous_buckets = previous_buckets,
-    }
-    view.__markdown_live_table_layout_cache = cache
-  end
-  local geometry_key = table_geometry_key(font, available_width)
-  local bucket = cache.buckets[geometry_key]
-  if not bucket then
-    bucket = {
-      font = font, font_size = font:get_size(), available_width = available_width,
-      layouts = {}, sources = {},
-    }
-    cache.buckets[geometry_key] = bucket
-  end
-  for index = #cache.bucket_order, 1, -1 do
-    if cache.bucket_order[index] == geometry_key then table.remove(cache.bucket_order, index) end
-  end
-  cache.bucket_order[#cache.bucket_order + 1] = geometry_key
-  while #cache.bucket_order > TABLE_LAYOUT_GEOMETRY_CACHE_LIMIT do
-    local evicted = table.remove(cache.bucket_order, 1)
-    cache.buckets[evicted] = nil
-    perf_frame_add("markdown_live_table_geometry_bucket_evictions", 1)
-  end
-  cache.layouts = bucket.layouts
-  local layouts, sources = bucket.layouts, bucket.sources
-  local id = table_node.id
-  -- A parse can stay pending across edits without a new semantic generation,
-  -- so every cached result, including a raw fallback, must still match the
-  -- complete source rows that produced it.
-  if layouts[id] ~= nil then
-    if markdown_tables.source_record_current(view.buffer, sources[id], line1, line2) then
-      return layouts[id] or nil
-    end
-    perf_frame_add("markdown_live_table_layout_source_misses", 1)
-    layouts[id], sources[id] = nil, nil
-  end
-
-  -- A semantic publication does not change every table. Reuse a layout only
-  -- when its identity, geometry, source range and complete source still match.
-  local previous_bucket = cache.previous_buckets and cache.previous_buckets[geometry_key]
-  local previous = previous_bucket and previous_bucket.layouts[id]
-  if previous and markdown_tables.source_record_current(
-    view.buffer, previous_bucket.sources[id], line1, line2
-  ) then
-    layouts[id], sources[id] = previous, previous_bucket.sources[id]
-    perf_frame_add("markdown_live_table_layout_reuses", 1)
-    return previous
-  end
-
-  local function store(layout)
-    layouts[id], sources[id] = layout, markdown_tables.source_record(view.buffer, line1, line2)
-    return layout or nil
-  end
-
-  local rows, columns, canonical = {}, nil, true
-  for line = line1, line2 do
-    local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
-    local row = table_source_row(text)
-    if not row or #row.cells == 0 or #row.cells > TABLE_MAX_PRESENTATION_COLUMNS then
-      core.log_quiet("Markdown table presentation fell back to source at %s:%d",
-        view.buffer:get_name(), line)
-      return store(false)
-    end
-    columns = columns or #row.cells
-    if #row.cells ~= columns then
-      core.log_quiet("Markdown table presentation found inconsistent columns at %s:%d",
-        view.buffer:get_name(), line)
-      return store(false)
-    end
-    row.line, row.text = line, text
-    canonical = canonical and row.canonical
-    rows[line] = row
-  end
-
-  local pad = math.max(font:get_width(" ") * 1.5, SCALE * 6)
-  local vertical_pad = math.max(math.floor(SCALE * 5), 2)
-  local widths, presentations, active_presentations = {}, {}, {}
-  local minimums = {}
-  local selection_stable_layout = true
-  for column = 1, columns do widths[column] = pad * 4 end
-  for line = line1, line2 do
-    if line ~= line1 + 1 then
-      local row = rows[line]
-      presentations[line] = {}
-      active_presentations[line] = {}
-      for column, cell in ipairs(row.cells) do
-        local text, source_col1, source_col2 = table_cell_content(row.text, cell)
-        local presentation = table_cell_presentation(
-          view, text, source_col1, source_col2, line == line1
-        )
-        presentations[line][column] = presentation
-        if presentation.source_elided then
-          selection_stable_layout = false
-        else
-          active_presentations[line][column] = {
-            text = text,
-            source_col1 = source_col1,
-            source_col2 = source_col2,
-            font = line == line1 and inline_style_font(view, "strong") or font,
-          }
-        end
-        widths[column] = math.max(
-          widths[column], table_cell_natural_width(
-            presentation.font, presentation.text, presentation.literal_breaks
-          ) + pad * 2
-        )
-        local active = active_presentations[line][column]
-        if active then
-          widths[column] = math.max(
-            widths[column],
-            table_cell_natural_width(active.font, active.text) + pad * 2
-          )
-        end
-      end
-    end
-  end
-  for column = 1, columns do
-    local header_text = table_cell_text(rows[line1].text, rows[line1].cells[column])
-    minimums[column] = math.max(
-      pad * 2 + inline_style_font(view, "strong"):get_width(header_text),
-      -- Below this floor dense grids become columns of individually wrapped
-      -- glyphs. Keep a readable cell width and let Text View expose the
-      -- table's horizontal overflow instead of crushing every column.
-      pad * 2 + font:get_width("MMMMMMMM")
-    )
-    for row_line = line1, line2 do
-      local presentation = presentations[row_line] and presentations[row_line][column]
-      if presentation and presentation.nowrap then
-        minimums[column] = math.max(
-          minimums[column], presentation.font:get_width(presentation.text) + pad * 2
-        )
-      end
-    end
-    widths[column] = math.max(widths[column], minimums[column])
-  end
-  local alignments = {}
-  for column, cell in ipairs(rows[line1 + 1].cells) do
-    local marker = table_cell_text(rows[line1 + 1].text, cell)
-    local left, right = marker:sub(1, 1) == ":", marker:sub(-1) == ":"
-    alignments[column] = left and right and "center" or right and "right" or "left"
-  end
-  local separator_width = math.max(font:get_width(" "), math.max(1, SCALE * 3))
-  local chrome_width = separator_width * (columns + 1)
-  local content_budget = math.max(1, available_width - chrome_width)
-  local natural_content_width, minimum_content_width = 0, 0
-  for column, width in ipairs(widths) do
-    natural_content_width = natural_content_width + width
-    minimum_content_width = minimum_content_width + minimums[column]
-  end
-  if natural_content_width > content_budget then
-    local target = math.max(content_budget, minimum_content_width)
-    local flexible = math.max(1, natural_content_width - minimum_content_width)
-    local shrink = natural_content_width - target
-    for column, width in ipairs(widths) do
-      local share = (width - minimums[column]) / flexible
-      widths[column] = math.max(minimums[column], width - shrink * share)
-    end
-  end
-  local total_width = chrome_width
-  for _, width in ipairs(widths) do total_width = total_width + width end
-  local row_heights, wrapped_cells = {}, {}
-  local text_line_height = markdown_live_body_line_height(view)
-  for row_line = line1, line2 do
-    if row_line ~= line1 + 1 then
-      wrapped_cells[row_line] = {}
-      local row = rows[row_line]
-      local max_lines = 1
-      for column, cell in ipairs(row.cells) do
-        local presentation = presentations[row_line][column]
-        local wrapped = table_wrap_cell_text(
-          presentation.font, presentation.text, widths[column] - pad * 2,
-          presentation.literal_breaks
-        )
-        wrapped_cells[row_line][column] = wrapped
-        max_lines = math.max(max_lines, #wrapped)
-        local active = active_presentations[row_line][column]
-        if active then
-          max_lines = math.max(
-            max_lines,
-            #table_wrap_cell_text(
-              active.font, active.text, widths[column] - pad * 2
-            )
-          )
-        end
-      end
-      row_heights[row_line] = max_lines * text_line_height + vertical_pad * 2
-    end
-  end
-  local layout = {
-    id = table_node.id, line1 = line1, line2 = line2,
-    delimiter_line = line1 + 1, rows = rows, columns = columns,
-    widths = widths, alignments = alignments, padding = pad,
-    vertical_padding = vertical_pad, text_line_height = text_line_height,
-    row_heights = row_heights, wrapped_cells = wrapped_cells,
-    presentations = presentations,
-    active_presentations = active_presentations,
-    selection_stable_layout = selection_stable_layout,
-    separator_width = separator_width, total_width = total_width,
-    canonical = canonical,
-  }
-  return store(layout)
-end
-
-local function cached_table_horizontal_extent(view)
-  local cache = view.__markdown_live_table_layout_cache
-  if not cache then return 0 end
-  local font = markdown_live_body_font(view)
-  local bucket = cache.buckets[table_geometry_key(font, table_available_width(view))]
-  local width = 0
-  for _, layout in pairs(bucket and bucket.layouts or {}) do
-    if layout then width = math.max(width, tonumber(layout.total_width) or 0) end
-  end
-  return width
-end
-
-local function table_row_fragments(view, table_node, line, allow_pending)
-  local layout = table_layout(view, table_node, allow_pending)
-  if not layout then return nil end
-  local row = layout.rows[line]
-  if not row then return nil end
-  if line == layout.delimiter_line then
-    local thickness = math.max(1, math.floor(SCALE))
-    return {
-      {
-        source_col1 = 1, source_col2 = #row.text + 1,
-        width = layout.total_width,
-        semantic_id = table_node.id .. ":delimiter",
-        table_separator = true,
-        widget = {
-          width = layout.total_width,
-          height = thickness,
-          draw = function(_, _, x, y)
-            renderer.draw_rect(x, y, layout.total_width, thickness,
-              style.markdown_live_table_separator)
-          end,
-        },
-      },
-    }, layout
-  end
-
-  local fragments = {}
-  local header = line == layout.line1
-  local row_height = layout.row_heights[line] or markdown_live_body_line_height(view)
-  local row_presentations, row_wrapped = {}, {}
-  local selection_state = current_selection_state(view)
-  local function cell_active(cell)
-    for index = 1, #(selection_state and selection_state.selections or {}), 4 do
-      local line1, col1 = selection_state.selections[index], selection_state.selections[index + 1]
-      local line2, col2 = selection_state.selections[index + 2], selection_state.selections[index + 3]
-      if line1 == line and col1 >= cell.col1 and col1 <= cell.col2 then return true end
-      if line2 == line and col2 >= cell.col1 and col2 <= cell.col2 then return true end
-    end
-    return false
-  end
-  local max_lines = 1
-  for column, cell in ipairs(row.cells) do
-    local presentation = layout.presentations[line][column]
-    local wrapped = layout.wrapped_cells[line][column]
-    if cell_active(cell) then
-      local text, source_col1, source_col2 = table_cell_content(row.text, cell)
-      presentation = {
-        text = text,
-        source_col1 = source_col1,
-        source_col2 = source_col2,
-        font = header and inline_style_font(view, "strong") or markdown_live_body_font(view),
-        color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
-      }
-      wrapped = table_wrap_cell_text(
-        presentation.font, text, layout.widths[column] - layout.padding * 2,
-        presentation.literal_breaks
-      )
-    end
-    row_presentations[column], row_wrapped[column] = presentation, wrapped
-    max_lines = math.max(max_lines, #wrapped)
-  end
-  row_height = math.max(
-    row_height,
-    max_lines * layout.text_line_height + layout.vertical_padding * 2
-  )
-  local function border_fragment(separator, id, first)
-    local line_width = math.max(1, math.floor(SCALE))
-    return {
-      source_col1 = separator.col1, source_col2 = separator.col2,
-      text = "", width = layout.separator_width,
-      semantic_id = id,
-      table_border = true,
-      widget = {
-        width = layout.separator_width,
-        height = row_height,
-        draw = function(_, _, x, y, row_height)
-          renderer.draw_rect(x, y, layout.separator_width, row_height,
-            style.markdown_live_table_background)
-          renderer.draw_rect(
-            x + math.floor((layout.separator_width - line_width) / 2), y,
-            line_width, row_height, style.markdown_live_table_separator
-          )
-          if header then
-            renderer.draw_rect(
-              x, y, first and layout.total_width or layout.separator_width, line_width,
-              style.markdown_live_table_separator
-            )
-          end
-          if not header then
-            renderer.draw_rect(
-              x, y + row_height - line_width, layout.separator_width, line_width,
-              style.markdown_live_table_separator
-            )
-          end
-        end,
-      },
-    }
-  end
-  for column, cell in ipairs(row.cells) do
-    local presentation = row_presentations[column]
-    local cell_font = presentation.font
-    local alignment = layout.alignments[column]
-    local text_lines = {}
-    for _, wrapped in ipairs(row_wrapped[column]) do
-      local wrapped_text = wrapped.text or ""
-      local text_width = cell_font:get_width(wrapped_text)
-      local offset = alignment == "right"
-        and math.max(layout.padding, layout.widths[column] - text_width - layout.padding)
-        or alignment == "center"
-        and math.max(layout.padding, (layout.widths[column] - text_width) / 2)
-        or layout.padding
-      text_lines[#text_lines + 1] = {
-        text = wrapped_text,
-        x_offset = offset,
-        source_col1 = presentation.source_col1 + (wrapped.col1 or 1) - 1,
-        source_col2 = presentation.source_col1 + (wrapped.col2 or 1) - 1,
-      }
-    end
-    local separator = row.separators[column]
-    fragments[#fragments + 1] = border_fragment(
-      separator, table_node.id .. ":pipe:" .. line .. ":" .. column, column == 1
-    )
-    fragments[#fragments + 1] = {
-      source_col1 = cell.col1, source_col2 = cell.col2,
-      text = presentation.text,
-      width = layout.widths[column],
-      text_x_offset = text_lines[1] and text_lines[1].x_offset or layout.padding,
-      text_source_col1 = presentation.source_col1,
-      text_source_col2 = presentation.source_col2,
-      text_lines = text_lines,
-      text_line_height = layout.text_line_height,
-      text_y_padding = layout.vertical_padding,
-      text_line_background = presentation.background,
-      text_line_background_padding = presentation.background and math.max(1, SCALE * 2) or nil,
-      table_alignment = alignment,
-      font = cell_font,
-      color = presentation.color,
-      background = style.markdown_live_table_background,
-      background_under_selection = true,
-      background_full_height = true,
-      background_border_top = header and style.markdown_live_table_separator or nil,
-      background_border_bottom = not header and style.markdown_live_table_separator or nil,
-      semantic_id = table_node.id .. ":cell:" .. line .. ":" .. column,
-      table_cell = true, table_header = header, table_column = column,
-    }
-  end
-  local separator = row.separators[#row.cells + 1]
-  fragments[#fragments + 1] = border_fragment(
-    separator, table_node.id .. ":pipe:" .. line .. ":end"
-  )
-  local position_rows = {}
-  local fragment_x = 0
-  local cell_x = {}
-  for _, fragment in ipairs(fragments) do
-    -- A table row is one shared grid. Source-position mappings describe caret
-    -- placement inside cells, but must never reposition the border/cell
-    -- fragments themselves; empty and differently wrapped rows would then
-    -- draw each column at different x coordinates.
-    fragment.layout_x = fragment_x
-    if fragment.table_cell then
-      cell_x[fragment.table_column] = {
-        x1 = fragment_x,
-        x2 = fragment_x + (fragment.width or 0),
-      }
-      for visual_index, text_line in ipairs(fragment.text_lines or {}) do
-        position_rows[#position_rows + 1] = {
-          source_col1 = text_line.source_col1,
-          source_col2 = text_line.source_col2,
-          end_inclusive = true,
-          x_offset = fragment_x + (text_line.x_offset or 0),
-          hit_x1 = fragment_x,
-          hit_x2 = fragment_x + (fragment.width or 0),
-          y_offset = (fragment.text_y_padding or 0)
-            + (visual_index - 1) * (fragment.text_line_height or layout.text_line_height),
-          height = fragment.text_line_height or layout.text_line_height,
-          navigation_group = fragment.table_column,
-          navigation_index = visual_index,
-          table_cell = fragment.table_column,
-          cell_source_col1 = fragment.text_source_col1,
-          cell_source_col2 = fragment.text_source_col2,
-          selection_full_cell = visual_index == 1,
-          selection_empty_cell = visual_index == 1
-            and fragment.text_source_col1 == fragment.text_source_col2,
-          selection_x1 = fragment_x,
-          selection_x2 = fragment_x + (fragment.width or 0),
-          selection_y = 0,
-          selection_height = row_height,
-          selection_outline = style.caret,
-        }
-      end
-    end
-    fragment_x = fragment_x + (fragment.width or 0)
-  end
-
-  local control_size = math.max(
-    math.floor(SCALE * 6),
-    math.floor(layout.text_line_height * 0.72 + 0.5)
-  )
-  local control_hit_padding = math.max(
-    math.floor(SCALE * 2), math.floor(control_size * 0.18 + 0.5)
-  )
-  local control_hit_size = control_size + control_hit_padding * 2
-  local control_proximity_radius = math.max(
-    layout.text_line_height * 1.6, control_size * 2
-  )
-  local function insertion_control(kind, after, source_col, x, y_offset, action)
-    local icon_thickness = math.max(1, math.floor(control_size * 0.11 + 0.5))
-    local icon_length = math.max(icon_thickness * 3, math.floor(control_size * 0.44))
-    fragments[#fragments + 1] = {
-      source_col1 = source_col,
-      source_col2 = source_col,
-      text = "",
-      width = 0,
-      hit_width = control_hit_size,
-      layout_x = x - control_hit_padding,
-      draw_y_offset = y_offset - control_hit_padding,
-      control_size = control_size,
-      semantic_id = table_node.id .. ":insert:" .. kind .. ":" .. tostring(after),
-      table_insert_control = kind,
-      table_insert_after = after,
-      widget = {
-        width = control_hit_size,
-        height = control_hit_size,
-        proximity_radius = control_proximity_radius,
-        suppress_hover_overlay = true,
-        cursor = "hand",
-        draw = function(_, fragment, draw_x, draw_y)
-          local visibility = fragment.hovered and 1 or fragment.proximity or 0
-          if visibility <= 0.01 then return end
-          visibility = visibility * visibility * (3 - 2 * visibility)
-          local button_x = draw_x + control_hit_padding
-          local button_y = draw_y + (fragment.draw_y_offset or 0)
-            + control_hit_padding
-          local accent = { table.unpack(style.accent) }
-          accent[4] = (accent[4] or 255) * visibility * (0.35 + visibility * 0.4)
-          renderer.draw_rounded_rect(
-            button_x, button_y, control_size, control_size, control_size / 2,
-            accent
-          )
-          local center_x = button_x + control_size / 2
-          local center_y = button_y + control_size / 2
-          local foreground = { table.unpack(style.background) }
-          foreground[4] = (foreground[4] or 255) * visibility
-          renderer.draw_rect(
-            center_x - icon_length / 2, center_y - icon_thickness / 2,
-            icon_length, icon_thickness, foreground
-          )
-          renderer.draw_rect(
-            center_x - icon_thickness / 2, center_y - icon_length / 2,
-            icon_thickness, icon_length, foreground
-          )
-        end,
-        on_mouse_pressed = function(_, owner, _, button)
-          if button ~= "left" then return false end
-          core.log_quiet(
-            "Markdown table Hover Insertion Control: insert %s after %s at %s:%d",
-            kind, tostring(after), owner.buffer:get_name(), line
-          )
-          return action(owner)
-        end,
-      },
-    }
-  end
-  if header and layout.canonical then
-    for column, bounds in ipairs(cell_x) do
-      local target_column = column
-      local cell = row.cells[column]
-      insertion_control(
-        "column", column, cell.col2,
-        bounds.x2 - control_size / 2,
-        math.max(0, (row_height - control_size) / 2),
-        function(owner)
-          owner.buffer:set_selection(
-            line, row_presentations[target_column].source_col1
-          )
-          return markdown_tables.insert_column(owner, "right")
-        end
-      )
-    end
-  end
-  local first_bounds = cell_x[1]
-  local first_presentation = row_presentations[1]
-  if layout.canonical and first_bounds and first_presentation then
-    insertion_control(
-      "row", line, first_presentation.source_col1,
-      (first_bounds.x1 + first_bounds.x2 - control_size) / 2,
-      math.max(0, row_height - control_size - math.max(1, SCALE * 2)),
-      function(owner)
-        owner.buffer:set_selection(line, first_presentation.source_col1)
-        return markdown_tables.insert_row(owner, "below")
-      end
-    )
-  end
-  return fragments, layout, position_rows, row_height
-end
-
-local function table_geometry_signature(view)
-  local font = markdown_live_body_font(view)
-  return table.concat({
-    tostring(table_available_width(view)),
-    tostring(style.markdown_body_font),
-    tostring(font:get_size()),
-    tostring(core.color_theme_generation or 0),
-  }, ":")
 end
 
 local function frontmatter_for_line(view, line)
@@ -2888,7 +2022,7 @@ local function semantic_math_fragments(view, line_text, line, reveal_units)
         fragments[#fragments + 1] = {
           source_col1 = col1, source_col2 = col2,
           text = line_text:sub(col1, col2 - 1),
-          font = inline_style_font(view, "code"),
+          font = live_fonts.inline_style(view, "code"),
           color = style.markdown_live_math,
           background = style.markdown_live_math_background,
           semantic_id = node.id, math_source = true,
@@ -3118,7 +2252,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
   local semantic_nodes = semantic_line(view, line) or {}
   if callout and callout.current_line_ranges then
     local ranges = callout.current_line_ranges
-    local body_font = markdown_live_body_font(view)
+    local body_font = live_fonts.body(view)
     if whole_line_reveal then
       local accent = callout.palette and callout.palette.accent or style.accent
       local prefix = {
@@ -3147,7 +2281,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
           text = line_text:sub(
             callout.marker_range.col1, callout.marker_range.col2 - 1
           ),
-          font = inline_style_font(view, "strong", body_font),
+          font = live_fonts.inline_style(view, "strong", body_font),
           color = accent,
           semantic_id = callout.semantic_id .. ":revealed-marker",
           callout_source_marker = true,
@@ -3157,7 +2291,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
             source_col1 = callout.fold_range.col1,
             source_col2 = callout.fold_range.col2,
             text = callout.fold,
-            font = inline_style_font(view, "strong", body_font),
+            font = live_fonts.inline_style(view, "strong", body_font),
             color = accent,
             semantic_id = callout.semantic_id .. ":revealed-fold",
             callout_source_fold = true,
@@ -3214,7 +2348,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       fragments[#fragments + 1] = {
         source_col1 = callout.col2, source_col2 = callout.col2,
         text = callout.display_type,
-        font = inline_style_font(view, "strong", body_font),
+        font = live_fonts.inline_style(view, "strong", body_font),
         color = normal_text_color(),
         semantic_id = callout.semantic_id .. ":default-title",
         callout_default_title = true,
@@ -3256,7 +2390,7 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       end
     end
     if target_x then
-      local body_font = markdown_live_body_font(view)
+      local body_font = live_fonts.body(view)
       local source_leading_width = body_font:get_width(
         string.rep(" ", markdown_visual_indent_width(markdown_indent_width(leading)))
       )
@@ -3315,12 +2449,12 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       if not task then
         task, source_checked = source_task_marker(line_text, marker)
       end
-      local body_font = markdown_live_body_font(view)
-      local checkmark_font = markdown_live_scaled_font(
+      local body_font = live_fonts.body(view)
+      local checkmark_font = live_fonts.scaled(
         view, style.prose_strong_font,
         math.max(1, math.floor(body_font:get_size() * 0.80))
       )
-      local row_height = markdown_live_body_line_height(view)
+      local row_height = live_fonts.body_line_height(view)
       local checked = task and attributes.task_checked ~= nil
       if source_checked ~= nil then checked = source_checked end
       local task_semantic_id = task and (node.id .. ":task")
@@ -3586,7 +2720,7 @@ local function inline_fragments(line_text, line, view, reveal_units)
 end
 
 local function prose_render_line(view, line_text, render_line)
-  local font = markdown_live_body_font(view)
+  local font = live_fonts.body(view)
   render_line.markdown_typography_generation = render_line.markdown_typography_generation
     or provider_generation_state(view).typography_generation
   for _, fragment in ipairs(render_line.fragments or {}) do
@@ -3596,7 +2730,7 @@ local function prose_render_line(view, line_text, render_line)
     end
   end
   render_line.text_row_height = render_line.text_row_height
-    or markdown_live_body_line_height(view)
+    or live_fonts.body_line_height(view)
   render_line.caret_height = render_line.caret_height or render_line.text_row_height
   local fragments, cursor = {}, 1
   local source_fragments = render_line.fragments or {}
@@ -3721,7 +2855,7 @@ local function prose_render_line(view, line_text, render_line)
       render_line.x_offset = source_x_offset
     end
     if render_line.callout_title_col1 then
-      local title_font = inline_style_font(view, "strong", font)
+      local title_font = live_fonts.inline_style(view, "strong", font)
       for _, fragment in ipairs(fragments) do
         if not fragment.widget and not fragment.callout_type
           and (fragment.source_col2 or 1) > render_line.callout_title_col1
@@ -3813,7 +2947,7 @@ local function layout_inline_image_rows(view, line_text, render_line)
     return (a.image_block_col1 or 1) < (b.image_block_col1 or 1)
   end)
 
-  local body_height = markdown_live_body_line_height(view)
+  local body_height = live_fonts.body_line_height(view)
   local wrap_width = image_available_width(view)
   local wrap_mode = config.plugins.linewrapping.mode
   local rows, y, segment_start = {}, 0, 1
@@ -3939,7 +3073,7 @@ end
 
 local function render_line_metric_height(view, render_line)
   local height = render_line and render_line.text_row_height
-    or markdown_live_body_line_height(view)
+    or live_fonts.body_line_height(view)
   for _, fragment in ipairs(render_line and render_line.fragments or {}) do
     if not render_line.text_row_height and fragment.font then
       height = math.max(
@@ -4226,8 +3360,8 @@ function edit_visual_projection.pending_list_render(
     return nil
   end
 
-  local body_font = markdown_live_body_font(view)
-  local row_height = markdown_live_body_line_height(view)
+  local body_font = live_fonts.body(view)
+  local row_height = live_fonts.body_line_height(view)
   local indent_width = body_font:get_width(string.rep(
     " ", markdown_visual_indent_width(markdown_indent_width(parsed.indent))
   ))
@@ -4328,7 +3462,7 @@ function edit_visual_projection.pending_list_render(
       local box_area_x = parsed.ordered and 0 or indent_width
       local box_area_width = parsed.ordered
         and checkbox_width - list_extra_gap or marker_control_width
-      local checkmark_font = markdown_live_scaled_font(
+      local checkmark_font = live_fonts.scaled(
         view, style.prose_strong_font,
         math.max(1, math.floor(body_font:get_size() * 0.80))
       )
@@ -4422,7 +3556,7 @@ raw_pending_source_render = function(view, render_line, current_text, code)
   if code then
     font = style.syntax_fonts.normal or font
   else
-    font = font or markdown_live_body_font(view)
+    font = font or live_fonts.body(view)
   end
   local replacement = { source_text = current_text }
   local source_needs_semantics = not code
@@ -4470,7 +3604,7 @@ local function publish_pending_table_row(view, line, render_line)
     revision = view.buffer.text_revision,
     source_text = current,
     render_line = render_line,
-    table_geometry = table_geometry_signature(view),
+    table_geometry = table_presentation.geometry_signature(view),
   })
   return true
 end
@@ -5213,7 +4347,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
           table.insert(render.fragments, 1, {
             source_col1 = 1, source_col2 = first.source_col1,
             text = previous_list.indent, width = indent_width,
-            font = first.font or markdown_live_body_font(view),
+            font = first.font or live_fonts.body(view),
           })
           render.continuation_indent_col = first.source_col1
         end
@@ -5233,7 +4367,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       local fragments = { {
         source_col1 = 1, source_col2 = current_list.content_col,
         text = source:sub(1, current_list.content_col - 1),
-        font = markdown_live_body_font(view),
+        font = live_fonts.body(view),
       } }
       for _, fragment in ipairs(render.fragments or {}) do
         if not edit_visual_projection.is_list_prefix_fragment(fragment) then
@@ -5603,7 +4737,7 @@ local function pending_render(view, line)
   local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
   if entry and entry.revision == view.buffer.text_revision and entry.source_text == text then
     if entry.render_line and entry.render_line.table_row
-    and entry.table_geometry ~= table_geometry_signature(view)
+    and entry.table_geometry ~= table_presentation.geometry_signature(view)
     then
       local table_node = entry.render_line.markdown_table_node
       local rebuilt = table_node and interactive_table_render_line(
@@ -6204,8 +5338,8 @@ local function provider_metric_generation(view)
     perf_frame_add("markdown_live_provider_generation_cache_hits", 1)
     return state.metric_generation
   end
-  local font = markdown_live_body_font(view)
-  local table_width = table_available_width(view)
+  local font = live_fonts.body(view)
+  local table_width = table_presentation.available_width(view)
   local image_width = image_available_width(view)
   local geometry_context = view.__centered_editor_in_geometry and "centered" or "host"
   perf_frame_add("markdown_live_provider_generation_calls", 1)
@@ -6222,7 +5356,7 @@ local function provider_metric_generation(view)
     math.floor(tonumber(table_width) or 0),
     math.floor(tonumber(image_width) or 0)
   ), 1)
-  -- `markdown_live_body_font()` may return a fresh size-adjusted copy. Keying
+  -- `live_fonts.body()` may return a fresh size-adjusted copy. Keying
   -- by that temporary object's identity makes an unchanged layout look new
   -- whenever wrapping is locally refreshed.
   state.metric_generation = state.typography_generation .. ":" .. tostring(font:get_size())
@@ -6255,7 +5389,7 @@ function provider:horizontal_extent(view)
     return 0
   end
   local instance = current_semantic_model(view)
-  if not instance then return cached_table_horizontal_extent(view) end
+  if not instance then return table_presentation.cached_horizontal_extent(view) end
   local owner = view.__markdown_live_owner
   local key = table.concat({
     tostring(instance.generation), tostring(view.buffer.text_revision),
@@ -6264,7 +5398,7 @@ function provider:horizontal_extent(view)
   local cached = owner and owner.table_horizontal_extent
   if cached and cached.key == key then
     if not cached.complete then
-      cached.width = math.max(cached.width, cached_table_horizontal_extent(view))
+      cached.width = math.max(cached.width, table_presentation.cached_horizontal_extent(view))
     end
     return cached.width
   end
@@ -6288,12 +5422,12 @@ function provider:horizontal_extent(view)
       if source_line1 ~= node.source.line1 or (source_line2 or 0) > semantic_line2 then
         table_node = markdown_tables.extend_semantic_table(view, node.source.line1, node)
       end
-      local layout = table_layout(view, table_node, false)
+      local layout = table_presentation.layout(view, table_node, instance)
       if layout then width = math.max(width, layout.total_width or 0) end
     end
   end
   if reason == "limit" then
-    width = math.max(width, cached_table_horizontal_extent(view))
+    width = math.max(width, table_presentation.cached_horizontal_extent(view))
     core.log_quiet(
       "Markdown table horizontal extent used partial semantic results for %s",
       view.buffer:get_name()
@@ -6561,7 +5695,7 @@ end
 
 local function heading_content_fragments(view, text, heading, font, reveal_units)
   local fragments, occupied = {}, {}
-  local italic_font = heading_italic_font(view, heading.level)
+  local italic_font = live_fonts.heading_italic(view, heading.level)
   for _, fragment in ipairs(semantic_link_fragments(view, text, heading.line, reveal_units, {
     base_font = font,
     base_bold = true,
@@ -6628,10 +5762,10 @@ local function heading_fragments(view, text, heading, font, reveal_units, reveal
 end
 
 heading_render_line = function(view, text, heading, reveal_units)
-  local font = heading_font(view, heading.level)
+  local font = live_fonts.heading(view, heading.level)
   local text_row_height = math.max(
-    markdown_live_body_line_height(view),
-    heading_text_row_height(view, heading.level)
+    live_fonts.body_line_height(view),
+    live_fonts.heading_text_row_height(view, heading.level)
   )
   local heading_revealed = reveal_unit_matches(
     reveal_units, heading.semantic_id, heading.source_col1, heading.source_col2
@@ -6640,7 +5774,7 @@ heading_render_line = function(view, text, heading, reveal_units)
     source_text = text,
     markdown_heading_level = heading.level,
     text_row_height = text_row_height,
-    first_row_content_y_offset = markdown_block_gap(view),
+    first_row_content_y_offset = live_fonts.block_gap(view),
     highlight_height = text_row_height,
     caret_height = text_row_height,
     semantic_id = heading.semantic_id,
@@ -6659,7 +5793,7 @@ local function block_spacing_after(view, line)
   if table_node then
     local next_table = table_for_line(view, line + 1)
     if not next_table or next_table.id ~= table_node.id then
-      return markdown_block_gap(view)
+      return live_fonts.block_gap(view)
     end
   end
   return 0
@@ -6694,7 +5828,7 @@ local function compute_line_height(view, line, entry)
   if not render_line then return view:get_line_height() end
   if render_line.metric_height then return render_line.metric_height end
   local body_height = render_line.text_row_height
-    or markdown_live_body_line_height(view)
+    or live_fonts.body_line_height(view)
   if wrapped then
     local final_row = entry and entry.row_in_line
       and entry.row_in_line == view:get_visual_row_count_for_line(line)
@@ -6768,7 +5902,7 @@ function provider:sparse_line_metrics(view)
       end
       return {
         complete = true,
-        default_height = markdown_live_body_line_height(view),
+        default_height = live_fonts.body_line_height(view),
         lines = snapshot.sparse_lines,
       }
     end
@@ -6804,7 +5938,7 @@ function provider:sparse_line_metrics(view)
         if snapshot then snapshot.sparse_lines = lines end
         return {
           complete = true,
-          default_height = markdown_live_body_line_height(view),
+          default_height = live_fonts.body_line_height(view),
           lines = lines,
         }
       end
@@ -6825,7 +5959,7 @@ function provider:sparse_line_metrics(view)
   end
   return {
     complete = true,
-    default_height = markdown_live_body_line_height(view),
+    default_height = live_fonts.body_line_height(view),
     lines = lines,
   }
 end
@@ -6867,11 +6001,11 @@ local function remeasure_projected_line(view, line, entry)
     if not measurement then return font end
     local anchor_size = measurement.anchor == "scale" and SCALE
       or measurement.anchor == "code" and view:get_font():get_size()
-      or markdown_live_body_font(view):get_size()
+      or live_fonts.body(view):get_size()
     local size = render.markdown_heading_level
-      and heading_font(view, render.markdown_heading_level):get_size()
+      and live_fonts.heading(view, render.markdown_heading_level):get_size()
       or measurement.factor * anchor_size
-    local current = markdown_live_scaled_font(view, measurement.source, size)
+    local current = live_fonts.scaled(view, measurement.source, size)
     if current ~= measurement.source then
       view.__markdown_live_font_measurements[current] = measurement
     end
@@ -6895,12 +6029,12 @@ local function remeasure_projected_line(view, line, entry)
   end
   if render.markdown_heading_level then
     render.text_row_height = math.max(
-      markdown_live_body_line_height(view),
-      heading_text_row_height(view, render.markdown_heading_level)
+      live_fonts.body_line_height(view),
+      live_fonts.heading_text_row_height(view, render.markdown_heading_level)
     )
     render.caret_height = render.text_row_height
     render.highlight_height = render.text_row_height
-    render.first_row_content_y_offset = markdown_block_gap(view)
+    render.first_row_content_y_offset = live_fonts.block_gap(view)
   end
   render = prose_render_line(view, text, render)
   if edit_visual_projection.has_list_prefix(render) then
