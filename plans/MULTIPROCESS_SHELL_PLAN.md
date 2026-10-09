@@ -456,6 +456,11 @@ Add the Sidebar process with a minimal list UI, plus its crash restart.
 
 ### Phase 5: several Anvil Windows
 
+Draft for review: [Phase 5: several Anvil Windows](PHASE5_SEVERAL_WINDOWS.md).
+Do not implement it before approval. Phase 4 closeout comes first.
+The latency probe remains under investigation. Treat differences below about 2 ms as noise.
+Do not gate changes on latency until that probe is reliable.
+
 Add new windows, moving a Project between windows, and bringing the owning window
 to the front.
 

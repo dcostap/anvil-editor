@@ -5,10 +5,126 @@
 The user approved continued work while the Phase 3 physical-input, IME, and mixed-DPI checks remain open.
 Hosted mode stays opt-in. The Phase 3 code reviews are complete.
 Do not treat synthetic tests as manual acceptance.
-Milestones 1, 2, and 3 are implemented and deployed.
-Milestone 3 adds unload, Dormant Projects, safe runtime retirement, and local recovery.
-Milestone 4 is implemented and deployed. Its focused checks and two isolated latency comparisons are complete.
-The Sidebar process remains a later milestone.
+Milestones 1–5 are implemented and deployed through `9ea92aeb`.
+The functional closeout is verified and deployed. The timing investigation remains open. Phase 5 implementation has not started.
+Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
+Do not gate changes on latency while the probe remains under investigation.
+Treat differences below about 2 ms as noise.
+
+### Closeout evidence
+
+The public probe runner accepted a completion flag without checking matched inputs, exit status, or timeout.
+`tests/tools/test_surface_latency_probe.py` reproduced the false success with 23 of 120 matched inputs.
+The test failed before the runner fix and passes afterward.
+Native incomplete runs now mark failure and exit nonzero. Sequence gaps no longer advance the input watermark.
+Probe-only QPC timestamps identify generation, queued input, Lua steps, rendering, publication, and presentation.
+These diagnostics can affect timings. They do not establish historical tail causes.
+Retain the historical 23-input case and all timing tails. No historical cause is proved yet.
+
+Recent changes now use `core.set_recent_projects()`. They publish without a half-second polling thread.
+`phase4-closeout-source-red` failed because this public function did not exist.
+The Sidebar now requires its explicit Unload button. Right-click does not unload.
+`phase4-closeout-action-red` failed with `Right-click unloaded the Project`.
+The action still uses the normal Project Close policy.
+Both focused Lua checks passed in `phase4-closeout-source-green` and `phase4-closeout-action-green`.
+
+Sidebar quiet messages now use its normal persistent session log.
+`sidebar-log` failed before this change in `anvil-surface-latency-t7pauoey`.
+A later timeout came from its Project waiting for an unrelated input marker. That was a fixture correction.
+The corrected logging case passed in `anvil-surface-latency-ra2d6i9z`.
+
+The Sidebar launches with its authenticated pipe and internal role, without a Project path.
+`phase4-closeout-arguments-confirmed-red` failed with only the parser fix disabled.
+The first attempted red compiled during an edit and passed. It is not red evidence.
+The confirmed argument test passes in `phase4-closeout-event-native`.
+The unrelated `init_code` formatting change is undone.
+
+Unexpected Sidebar exits request automatic replacement with backoff and a finite attempt limit.
+Manual Restart resets that limit. A live hung frontend does not trigger automatic replacement.
+The recovery case failed without automatic replacement in `anvil-surface-latency-81x98v45`.
+The first green in `anvil-surface-latency-ra2d6i9z` checked replacement, but did not prove the attempt limit.
+A stopped replacement could result from a missed process-exit event. The stronger case rejects that false success.
+It fails against the saved first-green binary in `anvil-surface-latency-h3q97_ig`.
+A failure-only timer checks process exit when reader cancellation prevented the exit event.
+An intermediate timer fix restarted without enforcing the limit (`anvil-surface-latency-mr5tc1et`).
+Separate exit-check and restart states preserve backoff and the limit.
+The final case passes on D3D11 in `anvil-surface-latency-gtg1kt9j` and software in `anvil-surface-latency-0g20lgve`.
+It also verifies explicit Restart while the old frontend remains suspended, and later manual recovery after the limit.
+Projects retain their original process. Native controls remain usable during a suspended Sidebar.
+
+The frontend requests snapshots after model changes, not once per second.
+Its idle wait returns to SDL's blocking callback loop. Only an incomplete snapshot uses a timed retry.
+Unchanged queries do not start status scans. Changed sources, registry notifications, or explicit Refresh request scans.
+An owned worker watches Terminal registry changes. It performs file system setup and waits off the native UI thread.
+`sidebar-idle` failed with unrequested status refresh in `anvil-surface-latency-fbfzd4ob`.
+The unchanged-source check passes in `anvil-surface-latency-ra2d6i9z`.
+The registry notification regression failed with only the watcher disabled in `anvil-surface-latency-pps9nvdo`.
+An earlier fixture compared `record.id` instead of `record.session_id`.
+Its failure in `anvil-surface-latency-jrzhv093` was a fixture error: the recorded model already contained the new cwd.
+Initial revision delivery failed because its custom event was not registered (`anvil-surface-latency-iti837ce`).
+Registering that event passes idle, recovery, and logging checks. Notification failure still reports transport loss.
+The corrected registry check passes on D3D11 in `anvil-surface-latency-9liz50h8`.
+It also passes on software in `anvil-surface-latency-hl1272jt`, with bounded crash recovery.
+Snapshot/source and explicit-action checks pass in `phase4-closeout-source-final` and `phase4-closeout-action-final`.
+
+The Phase 5 draft is `plans/PHASE5_SEVERAL_WINDOWS.md`. It awaits review. No Phase 5 code is implemented.
+
+`phase4-closeout-watermark-red` failed because tag 3 advanced the watermark past missing tag 2.
+The contiguous-tag fix passes in `phase4-closeout-commit-native`, with argument, routing, and page-drop checks.
+Loaded switching and last-Project unload pass in `anvil-surface-latency-2h4b26lt`.
+Direct Quit, Restart, and switch pass in `anvil-surface-latency-r16itdej`.
+
+Final focused checks pass in `phase4-closeout-verified-native`, `phase4-closeout-verified-source`, and `phase4-closeout-verified-view`.
+The public runner regression, Lua syntax, Python compilation, and `git diff --check` also pass.
+
+### Closeout probe findings
+
+Artifacts are under `%TEMP%/anvil-closeout-diagnostics-or29czzx`.
+The native missing-input fault completes one of four inputs and exits 1. The result remains retained.
+All four diagnostic rows complete 120 inputs each. Maxima are 184.548, 169.829, 353.017, and 362.778 ms.
+These rows are direct D3D11, direct software, hosted D3D11, and hosted software, respectively.
+They are diagnostic runs, not matched historical performance comparisons.
+
+For hosted D3D11 input 99, generation-to-shell-queue takes 164.355 ms.
+Shell-queue-to-Project-queue takes 9.780 ms. Project-queue-to-publication takes 2.855 ms.
+Publication-to-Present takes 176.026 ms. Total latency is 353.017 ms.
+The longest software inputs show a similar split. This locates delays but does not establish their cause.
+QPC timestamps share a clock. Per-process log timestamps do not share an origin.
+
+The logging control is `%TEMP%/anvil-closeout-log-control-cxpofpjy`.
+Logging off/on/off completes 120 inputs per case. Hosted software medians are 217.916/177.387/192.098 ms.
+Maxima are 360.637/357.647/369.632 ms. Disabling diagnostic logging does not remove this current timing shift.
+
+The watermark control is `%TEMP%/anvil-closeout-watermark-control-h_qz2h_6`.
+Temporarily restoring the original maximum-tag rule also leaves large delays.
+Direct D3D11 completes 120 inputs, with median 133.885 ms and maximum 186.964 ms.
+Hosted software completes 120 inputs, with median 202.101 ms and maximum 354.928 ms.
+The contiguous watermark is restored and passes the final native test.
+
+The saved M5 control is `%TEMP%/anvil-closeout-saved-control-zrhbpyn9`.
+It produces no frame and times out. It is a failed control, not a valid baseline or performance result.
+Its original binary hash is `c6d5163043047a75185e41a36148a67576e7880a775800690a512355ff9c5724`.
+The saved app data may no longer provide a runnable baseline. No cause is assigned from this failure.
+
+Historical 761 ms–9 s tails remain unexplained. Current traces do not prove their cause or show a performance gain.
+Latency remains nongating. Differences below approximately 2 ms remain noise until the probe is reliable.
+
+The final direct trace is `%TEMP%/anvil-closeout-direct-trace-drfeiq9g`.
+It completes 120 inputs, with median 134.254 ms and maximum 187.522 ms.
+Direct input 100 takes 31.414 ms to reach the input queue, then approximately 92 ms to reach Present.
+The direct logger was previously absent. Diagnostic mode now installs it when a surface-log path is supplied.
+The requested frame-pacing CSV did not appear, so no CSV findings are claimed.
+These observations do not distinguish driver waits, callback scheduling, and other rendering costs.
+
+### Closeout deployment
+
+The warned dev updater completes on 2026-10-09. It restores source-data junctions and restarts the portable app.
+Final build SHA-256: `7415d02b1a51e78f13351cce81691cf970a6f755e4bb241651212bccec86b8a6`.
+Portable SHA-256: `269d970986cf172b57cb73491b1c37612e79dbca7d3bb4eb84a51926f92387db`.
+An independent strip of the build matches the portable executable after PE timestamp/checksum normalization.
+The fresh session is `anvil-20261009-135419-p28712.log`.
+Its startup trace is `startup/anvil-startup-20261009-135419-p28712-m327588.log`.
+Both logs are under the portable `user/logs` directory. They contain no warning, error, or failure entries at verification.
 
 ## Scope
 
@@ -229,6 +345,8 @@ A Sidebar crash or hang must not stop Project input or native controls.
 Restart only the Sidebar after its failure.
 
 #### Milestone 5 implementation
+
+This section records `9ea92aeb`. The closeout section above replaces its polling and right-click behavior.
 
 The shell owns the model. The internal Sidebar frontend has no Project, Workspace, or Terminal client.
 It uses the existing hosted transport, renderer, input packets, base theme, and font APIs.

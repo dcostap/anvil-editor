@@ -48,7 +48,7 @@ bool anvil_hosted_surface_should_render(void);
 bool anvil_hosted_surface_select_project(const char *path);
 bool anvil_hosted_surface_unload_project(const char *path);
 bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recents);
-bool anvil_hosted_surface_sidebar_query(int offset);
+bool anvil_hosted_surface_sidebar_query(int offset, bool refresh);
 float anvil_hosted_surface_display_scale(void);
 float anvil_hosted_surface_refresh_rate(void);
 AnvilSurfaceWindowMode anvil_hosted_surface_window_mode(void);

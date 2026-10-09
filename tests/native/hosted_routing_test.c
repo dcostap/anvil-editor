@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include "hosted_surface.h"
 #include "system_events.h"
+#include "input_latency_probe.h"
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -134,6 +135,31 @@ static int SDLCALL server(void *data) {
 }
 
 int main(int test_argc, char **test_argv) {
+  if (test_argc > 1 && !strcmp(test_argv[1], "probe-gap")) {
+    SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "ANVIL_INPUT_LATENCY_PROBE", "4", true);
+    anvil_latency_probe_init("test");
+    SDL_Event input = {0};
+    input.type = SDL_EVENT_KEY_DOWN;
+    input.key.which = 0x5a000001;
+    anvil_latency_probe_note_event(&input);
+    input.key.which = 0x5a000003;
+    anvil_latency_probe_note_event(&input);
+    CHECK(anvil_latency_probe_consumed_seq() == 1);
+    input.key.which = 0x5a000002;
+    anvil_latency_probe_note_event(&input);
+    CHECK(anvil_latency_probe_consumed_seq() == 3);
+    return 0;
+  }
+  if (test_argc > 1 && !strcmp(test_argv[1], "sidebar-arguments")) {
+    char *arguments[] = {"anvil.exe", "--internal-sidebar",
+      "--anvil-hosted-pipe=\\\\.\\pipe\\anvil-surface-123-1", NULL};
+    int count = 3;
+    CHECK(anvil_hosted_surface_parse_args(&count, arguments));
+    CHECK(anvil_hosted_surface_parse_valid());
+    CHECK(anvil_hosted_surface_sidebar());
+    CHECK(count == 1);
+    return 0;
+  }
   sidebar_drop = test_argc > 1 && !strcmp(test_argv[1], "sidebar-drop");
   motion_stall = test_argc > 1 && !strcmp(test_argv[1], "motion");
   dialogs = test_argc > 1 && !strcmp(test_argv[1], "dialogs");

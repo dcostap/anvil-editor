@@ -11,6 +11,8 @@
 static struct {
   bool enabled;
   bool started;
+  bool succeeded;
+  bool diagnostics;
   char role[16];
   int count;
   int warmup_ms;
@@ -22,9 +24,12 @@ static struct {
   SDL_AtomicInt last_sent;
   SDL_AtomicInt last_done;
   uint64_t consumed_seq;
+  bool received[PROBE_MAX_SAMPLES + 1];
 } probe;
 
 void anvil_latency_probe_init(const char *role) {
+  const char *diagnostics = SDL_getenv("ANVIL_INPUT_LATENCY_DIAGNOSTICS");
+  probe.diagnostics = diagnostics && !strcmp(diagnostics, "1");
   const char *value = SDL_getenv("ANVIL_INPUT_LATENCY_PROBE");
   int count = value ? atoi(value) : 0;
   if (count <= 0) return;
@@ -39,12 +44,22 @@ void anvil_latency_probe_init(const char *role) {
 bool anvil_latency_probe_enabled(void) {
   return probe.enabled;
 }
+bool anvil_latency_probe_succeeded(void) { return probe.succeeded; }
+void anvil_latency_probe_stage(const char *stage) {
+  if (probe.enabled && probe.diagnostics)
+    SDL_Log("Latency stage: role=%s stage=%s seq=%llu qpc=%llu frequency=%llu", probe.role, stage,
+            (unsigned long long)probe.consumed_seq, (unsigned long long)SDL_GetPerformanceCounter(),
+            (unsigned long long)SDL_GetPerformanceFrequency());
+}
 
 void anvil_latency_probe_note_event(const SDL_Event *event) {
   if (!probe.enabled || event->type != SDL_EVENT_KEY_DOWN) return;
   if ((event->key.which & PROBE_TAG_MASK) != PROBE_TAG) return;
   uint64_t seq = event->key.which & ~PROBE_TAG_MASK;
-  if (seq > probe.consumed_seq) probe.consumed_seq = seq;
+  if (seq <= PROBE_MAX_SAMPLES) probe.received[seq] = true;
+  while (probe.consumed_seq < PROBE_MAX_SAMPLES && probe.received[probe.consumed_seq + 1])
+    probe.consumed_seq++;
+  anvil_latency_probe_stage("input-queued");
 }
 
 uint64_t anvil_latency_probe_consumed_seq(void) {
@@ -60,6 +75,9 @@ void anvil_latency_probe_presented(uint64_t consumed_seq) {
   Uint64 now = SDL_GetTicksNS();
   for (int seq = done + 1; seq <= limit; seq++) probe.done_ns[seq] = now;
   SDL_SetAtomicInt(&probe.last_done, limit);
+  if (probe.diagnostics)
+    SDL_Log("Latency presentation: role=%s seq=%d qpc=%llu", probe.role, limit,
+            (unsigned long long)SDL_GetPerformanceCounter());
 }
 
 static void push_key(Uint32 window_id, Uint32 type, Uint32 seq) {
@@ -114,7 +132,8 @@ static void write_results(void) {
             n ? latencies[0] : 0.0, percentile(latencies, n, 0.50),
             percentile(latencies, n, 0.90), percentile(latencies, n, 0.99),
             n ? latencies[n - 1] : 0.0, n ? sum / n : 0.0);
-    fprintf(file, "done=1\n");
+    probe.succeeded = n == probe.count;
+    fprintf(file, "done=%d\nunmatched=%d\n", probe.succeeded ? 1 : 0, probe.count - n);
     fclose(file);
   }
   free(latencies);
@@ -128,6 +147,12 @@ static int SDLCALL generator_thread(void *data) {
   for (int seq = 1; seq <= probe.count; seq++) {
     probe.sent_ns[seq] = SDL_GetTicksNS();
     SDL_SetAtomicInt(&probe.last_sent, seq);
+    if (probe.diagnostics)
+      SDL_Log("Latency generated: role=%s seq=%d qpc=%llu", probe.role, seq,
+              (unsigned long long)SDL_GetPerformanceCounter());
+    const char *gate = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
+    const char *skip = SDL_getenv("ANVIL_INPUT_LATENCY_SKIP_AFTER");
+    if (gate && !strcmp(gate, "1") && skip && seq > SDL_atoi(skip)) continue;
     push_key(window_id, SDL_EVENT_KEY_DOWN, (Uint32)seq);
 
     SDL_Event text;

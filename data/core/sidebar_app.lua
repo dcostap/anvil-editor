@@ -1,10 +1,15 @@
 -- Internal hosted frontend. It has no Project, Workspace, or Terminal client.
 local core = require "core"
 local saved_event = core.on_event
-local view, last_query, revision
+local view, revision, query_needed
 function core.init()
   core.log_items = {}
-  core.log_quiet = function(...) system.log_shutdown(string.format(...)) end
+  core.session_log = require("core.session_log").start(USERDIR .. PATHSEP .. "logs")
+  core.log_quiet = function(...)
+    if core.session_log then core.session_log:write("INFO", string.format(...), "Sidebar") end
+  end
+  core.log_quiet("Sidebar frontend started")
+  if core.session_log then core.session_log:flush() end
   core.window = renwindow.create("Sidebar", 240, 600, 0, 0)
   core.active_window = core.window
   SCALE = system.get_scale(core.window)
@@ -19,13 +24,19 @@ function core.init()
       end
     end
   end)
-  core.redraw, last_query = true, -math.huge
+  core.redraw, query_needed = true, true
 end
 function core.run() end
 function core.on_event(name, ...)
   if name == "quit" or name == "shelllost" then core.quit_request = true
+  elseif name == "projectsidebarchanged" then
+    core.project_sidebar_request = nil
+    query_needed = true
   elseif name == "projectsidebar" then saved_event(name, ...)
-  elseif name == "mousepressed" then view:on_mouse_pressed(...); core.redraw = true
+  elseif name == "mousepressed" then
+    local button, x, y = ...
+    local width = renwindow.get_size(core.window)
+    view:on_mouse_pressed(button, x, y, width); core.redraw = true
   elseif name == "mousewheel" then
     local _, height = renwindow.get_size(core.window)
     view:on_mouse_wheel((...), height); core.redraw = true
@@ -37,7 +48,10 @@ function core.run_step()
     if not event[1] then break end
     core.on_event(table.unpack(event, 1, event.n))
   end
-  if core.quit_request then return false end
+  if core.quit_request then
+    if core.session_log then core.session_log:close(); core.session_log = nil end
+    return false
+  end
   local current_scale = system.get_scale(core.window)
   if current_scale ~= SCALE then
     local factor = current_scale / SCALE
@@ -48,8 +62,13 @@ function core.run_step()
   end
   local visible = system.window_should_render(core.window)
   local now = system.get_time()
-  if visible and now - last_query >= 1 then
-    core.request_project_sidebar(); last_query = now
+  if core.project_sidebar_request and now - core.project_sidebar_request.started >= 5 then
+    core.project_sidebar_request = nil
+    query_needed = true
+    core.log_quiet("Sidebar snapshot timed out; request the complete model again")
+  end
+  if visible and query_needed then
+    if core.request_project_sidebar() then query_needed = false end
   end
   if core.project_sidebar and revision ~= core.project_sidebar.revision then
     revision = core.project_sidebar.revision
@@ -62,7 +81,8 @@ function core.run_step()
     renderer.end_frame()
     core.redraw = false
   end
-  system.wait_event(.05)
+  if core.project_sidebar_request then system.wait_event(.01)
+  else system.wait_event() end
   return true
 end
 return core

@@ -49,6 +49,7 @@ anvil_sources = [
     'anvil_shell.c',
     'project_sidebar.c',
     'project_sidebar_scan.c',
+    'sidebar_registry_watch.c',
     'resize_diagnostics.c',
     'renderer.c',
     'display_packet.c',
@@ -298,6 +299,8 @@ if host_machine.system() == 'windows'
     test('hosted-motion-stall', hosted_routing_test, args: ['motion'], env: anvil_test_env, suite: 'anvil')
     test('hosted-dialogs', hosted_routing_test, args: ['dialogs'], env: anvil_test_env, suite: 'anvil')
     test('sidebar-page-drop', hosted_routing_test, args: ['sidebar-drop'], env: anvil_test_env, suite: 'anvil')
+    test('sidebar-arguments', hosted_routing_test, args: ['sidebar-arguments'], env: anvil_test_env, suite: 'anvil')
+    test('latency-watermark', hosted_routing_test, args: ['probe-gap'], env: anvil_test_env, suite: 'anvil')
 endif
 
 git_status_index_test = executable('git_status_index_test',

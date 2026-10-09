@@ -1,7 +1,7 @@
 local test = require "core.test"
 
 test.describe("Sidebar list actions", function()
-  test.it("selects or unloads the clicked Project by stable row identity", function()
+  test.it("selects Projects and requires the explicit Unload button", function()
     local SidebarView = require "core.sidebar_view"
     local actions = {}
     local view = SidebarView(function(action, row) actions[#actions + 1] = {action, row} end)
@@ -10,6 +10,8 @@ test.describe("Sidebar list actions", function()
     view:on_mouse_pressed("left", 20, view:row_y(2))
     test.same(actions[1], {"select", 9})
     view:on_mouse_pressed("right", 20, view:row_y(1))
+    test.equal(#actions, 1, "Right-click unloaded the Project")
+    view:on_mouse_pressed("left", 230, view:row_y(1), 240)
     test.same(actions[2], {"unload", 7})
     view:set_model({{row_id=9,path="C:/A",state="starting",terminals={}},
                     {row_id=7,path="C:/B",state="dormant",terminals={}}})

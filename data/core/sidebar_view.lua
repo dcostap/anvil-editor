@@ -17,12 +17,17 @@ function SidebarView:set_model(projects)
 end
 function SidebarView:row_height() return style.font:get_height() * 3 end
 function SidebarView:row_y(index) return 40 * SCALE + (index - 1) * self:row_height() - self.scroll + 1 end
-function SidebarView:on_mouse_pressed(button, x, y)
+function SidebarView:on_mouse_pressed(button, x, y, width)
   local index = math.floor((y - 40 * SCALE + self.scroll) / self:row_height()) + 1
   local row = y >= 40 * SCALE and self.rows[index]
   if not row or row.terminal then return end
-  if button == "left" then self.action("select", row.project.row_id)
-  elseif button == "right" and row.project.state ~= "dormant" then self.action("unload", row.project.row_id) end
+  if button ~= "left" then return end
+  local unload_width = style.font:get_width("Unload") + 16 * SCALE
+  if width and x >= width - unload_width and row.project.state ~= "dormant" then
+    self.action("unload", row.project.row_id)
+  else
+    self.action("select", row.project.row_id)
+  end
 end
 function SidebarView:on_mouse_wheel(amount, height)
   self.scroll = math.max(0, math.min(self.scroll - amount * self:row_height(),
@@ -49,10 +54,18 @@ function SidebarView:draw(width, height)
         if not project.exists and project.state == "dormant" then state = state .. " / unavailable" end
       end
       local x = terminal and 20 * SCALE or 8 * SCALE
+      local unload_width = not terminal and project.state ~= "dormant"
+        and style.font:get_width("Unload") + 16 * SCALE or 0
+      renderer.set_clip_rect(0, math.max(40 * SCALE, y), width - unload_width, self:row_height())
       renderer.draw_text(style.font, title, x, y, style.text)
       renderer.draw_text(style.font, state, x, y + h, style.dim)
       if terminal and terminal.cwd ~= "" then
         renderer.draw_text(style.font, terminal.cwd, x, y + 2 * h, style.dim)
+      end
+      renderer.set_clip_rect(0, 40 * SCALE, width, math.max(0, height - 40 * SCALE))
+      if unload_width > 0 then
+        renderer.draw_rect(width - unload_width, y, unload_width, self:row_height(), style.background3)
+        renderer.draw_text(style.font, "Unload", width - unload_width + 8 * SCALE, y + h, style.text)
       end
     end
   end

@@ -137,7 +137,7 @@ end
 local function update_recents_project(action, dir_path_abs)
   local dirname = normalize_project_path(dir_path_abs)
   if not dirname then return end
-  local recents = core.recent_projects
+  local recents = {table.unpack(core.recent_projects)}
   for i = #recents, 1, -1 do
     if common.path_equals(dirname, recents[i]) then
       table.remove(recents, i)
@@ -146,7 +146,7 @@ local function update_recents_project(action, dir_path_abs)
   if action == "add" then
     table.insert(recents, 1, dirname)
   end
-  if core.window then core.publish_project_sidebar() end
+  core.set_recent_projects(recents)
 end
 
 
@@ -585,7 +585,7 @@ function core.init()
   end)
 
   local app_state = startup_measure("load_app_state", load_app_state)
-  core.recent_projects = app_state.recents or {}
+  core.set_recent_projects(app_state.recents or {})
   core.previous_find = app_state.previous_find or {}
   core.previous_replace = app_state.previous_replace or {}
   if not sane_window_bounds(app_state.window) then
@@ -614,7 +614,7 @@ function core.init()
     end
     return projects
   end)
-  core.recent_projects = recent_projects
+  core.set_recent_projects(recent_projects)
 
   local project_dir = core.recent_projects[1] or "."
   local project_dir_explicit = false
@@ -886,16 +886,14 @@ function core.init()
   if system.is_hosted_surface() then
     local ok = core.publish_project_sidebar()
     core.log_quiet("Project Sidebar recent source submitted: %s", tostring(ok))
-    core.add_background_thread(function()
-      while true do
-        core.publish_project_sidebar()
-        coroutine.yield(.5)
-      end
-    end)
   end
 end
 
 local published_sidebar_recents
+function core.set_recent_projects(paths)
+  core.recent_projects = {table.unpack(paths)}
+  if core.window then core.publish_project_sidebar() end
+end
 function core.publish_project_sidebar()
   if not system.is_hosted_surface() then return false end
   local source = {}
@@ -911,13 +909,13 @@ function core.publish_project_sidebar()
 end
 
 
-function core.request_project_sidebar()
+function core.request_project_sidebar(refresh)
   if not system.is_hosted_surface() then return false end
   if core.project_sidebar_request and system.get_time() - core.project_sidebar_request.started < 5 then
     return false
   end
   core.project_sidebar_request = {items = {}, started = system.get_time(), offset = 0}
-  if system.request_project_sidebar(0) then return true end
+  if system.request_project_sidebar(0, refresh == true) then return true end
   core.project_sidebar_request = nil
   return false
 end

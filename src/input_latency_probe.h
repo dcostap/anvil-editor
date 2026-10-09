@@ -9,12 +9,14 @@
  *
  * ANVIL_INPUT_LATENCY_PROBE=<count> enables it. The process that owns the
  * native window generates tagged keystrokes for that window. The process that
- * runs Lua records the highest tag it consumed. The window owner measures
+ * runs Lua records contiguous consumed tags. The window owner measures
  * from generation until the first presented frame that includes that tag,
  * writes ANVIL_INPUT_LATENCY_FILE, and calls the finish callback. */
 
 void anvil_latency_probe_init(const char *role);
 bool anvil_latency_probe_enabled(void);
+bool anvil_latency_probe_succeeded(void);
+void anvil_latency_probe_stage(const char *stage);
 void anvil_latency_probe_start(SDL_Window *window, void (*finish)(void));
 void anvil_latency_probe_note_event(const SDL_Event *event);
 uint64_t anvil_latency_probe_consumed_seq(void);

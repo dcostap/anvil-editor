@@ -43,7 +43,7 @@ end
 local function snapshot()
   assert(type(core.request_project_sidebar) == "function", "Project Sidebar snapshot API is unavailable")
   local previous = core.project_sidebar
-  assert(core.request_project_sidebar())
+  assert(core.request_project_sidebar(true))
   return wait(function() return core.project_sidebar ~= previous and core.project_sidebar end, 5)
 end
 local function row(model, name)
@@ -81,15 +81,47 @@ core.add_background_thread(function()
       handles[1] = kernel.OpenProcess(0x100000, 0, a.pid)
       assert(handles[1] ~= nil, "Cannot retain owned A process")
       local hwnd = window(a.shell_pid)
-      if action == "sidebar-process" then
+      if action == "sidebar-idle" then
+        wait(function() return read("idle-ready") end, 15)
+        coroutine.yield(2)
+        assert(os.rename(root .. "/Recent", root .. "/RecentMoved"))
+        coroutine.yield(6)
+        user32.PostMessageW(hwnd, 0x804d, 0, 0)
+        local page = wait(function() return read("sidebar-0") end, 3)
+        local recent
+        for _, item in ipairs(page.items) do
+          if item.kind == "project" and item.path:gsub("\\", "/") == root .. "/Recent" then recent = item end
+        end
+        assert(recent and recent.exists, "Idle Sidebar refreshed unchanged sources without a registry change")
+        assert(os.rename(root .. "/RecentMoved", root .. "/Recent"))
+        local record_path = USERDIR .. "/terminal-sessions/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.lua"
+        local file = assert(io.open(record_path, "rb"))
+        local record = assert(loadstring(file:read("*a")))(); file:close()
+        record.cwd = "REGISTRY_NOTIFICATION_CWD"
+        file = assert(io.open(record_path, "wb"))
+        file:write("return ", common.serialize(record)); file:close()
+        wait(function()
+          os.remove(root .. "/sidebar-0.lua")
+          user32.PostMessageW(hwnd, 0x804d, 0, 0)
+          coroutine.yield(.05)
+          local updated = read("sidebar-0")
+          for _, item in ipairs(updated and updated.items or {}) do
+            if item.kind == "terminal" and item.id == record.session_id and item.cwd == record.cwd then return true end
+          end
+        end, 10, "Terminal registry change did not refresh the idle Sidebar")
+        save("idle-finish", true)
+        wait(function() return not subject:running() end, 15)
+        return
+      end
+      if action == "sidebar-process" or action == "sidebar-log" or action == "sidebar-recovery" then
         local function sidebar_pid(old)
           local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
           local text = file:read("*a"); file:close()
           local found
           for value in text:gmatch("Shell Sidebar connected: pid=(%d+)") do
-            if tonumber(value) ~= old then found = tonumber(value) end
+            found = tonumber(value)
           end
-          return found
+          if found ~= old then return found end
         end
         local first = wait(function() return sidebar_pid() end, 15, "Sidebar process did not connect")
         local function ready(pid)
@@ -100,6 +132,20 @@ core.add_background_thread(function()
         end
         wait(function() return ready(first) end, 10, "Sidebar did not publish its first frame")
         assert(first ~= a.pid and first ~= a.shell_pid, "Sidebar shares a Project or shell process")
+        if action == "sidebar-log" then
+          wait(function()
+            for _, name in ipairs(system.list_dir(USERDIR .. "/logs") or {}) do
+              if name:match("%-p" .. first .. "%.log$") then
+                local file = assert(io.open(USERDIR .. "/logs/" .. name, "rb"))
+                local text = file:read("*a"); file:close()
+                if text:find("Sidebar frontend started", 1, true) then return true end
+              end
+            end
+          end, 5, "Sidebar quiet logs did not enter its normal session log")
+          save("sidebar-process-finish", true)
+          wait(function() return not subject:running() end, 15)
+          return
+        end
         local handle = kernel.OpenProcess(0x1fffff, 0, first)
         handles[#handles + 1] = handle; assert(handle ~= nil)
         assert(ntdll.NtSuspendProcess(handle) == 0)
@@ -109,13 +155,51 @@ core.add_background_thread(function()
         wait(function() return user32.IsIconic(hwnd) == 0 end, 1, "Sidebar hang blocked native Restore")
         save("sidebar-project-input", true)
         wait(function() return read("sidebar-project-input-ok") end, 5, "Sidebar hang blocked Project input")
-        assert(ntdll.NtResumeProcess(handle) == 0)
-        assert(kernel.TerminateProcess(handle, 107))
-        wait(function() return kernel.WaitForSingleObject(handle, 0) == 0 end, 5)
-        user32.PostMessageW(hwnd, 0x804c, 5, 0)
+        if action == "sidebar-recovery" then
+          user32.PostMessageW(hwnd, 0x804c, 5, 0)
+          wait(function() return kernel.WaitForSingleObject(handle, 0) == 0 end, 3,
+            "Manual Sidebar Restart retained its hung frontend")
+        else
+          assert(ntdll.NtResumeProcess(handle) == 0)
+          assert(kernel.TerminateProcess(handle, 107))
+          wait(function() return kernel.WaitForSingleObject(handle, 0) == 0 end, 5)
+          user32.PostMessageW(hwnd, 0x804c, 5, 0)
+        end
         local second = wait(function() return sidebar_pid(first) end, 15, "Sidebar Restart did not connect")
         wait(function() return ready(second) end, 10, "Restarted Sidebar did not publish a frame")
         assert(second ~= first and kernel.WaitForSingleObject(handles[1], 0) ~= 0, "Sidebar Restart replaced A")
+        if action == "sidebar-recovery" then
+          -- Repeated crashes must eventually stop automatic replacement.
+          local last, stopped = second, false
+          for _ = 1, 12 do
+            local child = kernel.OpenProcess(0x1fffff, 0, last)
+            assert(child ~= nil); handles[#handles + 1] = child
+            assert(kernel.TerminateProcess(child, 107))
+            local deadline = system.get_time() + 6
+            local next_pid
+            repeat
+              local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+              local text = file:read("*a"); file:close()
+              local newest
+              for value in text:gmatch("Shell Sidebar connected: pid=(%d+)") do newest = tonumber(value) end
+              if newest ~= last then next_pid = newest end
+              if not next_pid then coroutine.yield(.05) end
+            until next_pid or system.get_time() >= deadline
+            if not next_pid then
+              local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+              local text = file:read("*a"); file:close()
+              assert(text:find("automatic restart limit reached", 1, true), "Sidebar stopped before its restart limit")
+              stopped = true; break
+            end
+            last = next_pid
+            wait(function() return ready(last) end, 10)
+          end
+          assert(stopped, "Sidebar crash loop has no attempt limit")
+          user32.PostMessageW(hwnd, 0x804c, 5, 0)
+          local manual = wait(function() return sidebar_pid(last) end, 15)
+          wait(function() return ready(manual) end, 10)
+          assert(kernel.WaitForSingleObject(handles[1], 0) ~= 0, "Sidebar recovery ended A")
+        end
         save("sidebar-process-finish", true)
         wait(function() return not subject:running() end, 15)
         return
@@ -218,7 +302,18 @@ core.add_background_thread(function()
       assert(initial[1].path:gsub("\\", "/") == directory and initial[2].path:gsub("\\", "/") == root .. "/Recent",
         "Recent source order changed")
       assert(row(initial, "Recent").exists, "Worker did not check recent paths")
-      if action == "sidebar-process" then
+      if action == "sidebar-idle" then
+        save("idle-ready", true)
+        wait(function() return read("idle-finish") end, 30)
+        quit()
+        return
+      end
+      if action == "sidebar-log" then
+        wait(function() return read("sidebar-process-finish") end, 30)
+        quit()
+        return
+      end
+      if action == "sidebar-process" or action == "sidebar-log" or action == "sidebar-recovery" then
         wait(function() return read("sidebar-project-input") end, 30)
         local editor = core.open_file(directory .. "/edited.txt")
         core.set_active_view(editor)
@@ -236,7 +331,9 @@ core.add_background_thread(function()
         wait(function() return read("demand-query") end, 15)
         system.set_window_visible(core.window, true)
         model_until(function(model) return not row(model, "Recent").exists end, "Stale query did not refresh status")
-        core.recent_projects[#core.recent_projects + 1] = root .. "/Other"
+        local recents = {table.unpack(core.recent_projects)}
+        recents[#recents + 1] = root .. "/Other"
+        core.set_recent_projects(recents)
         model_until(function(model) return row(model, "Other") end, "Changed recent source did not reach the shell")
         save("demand-fresh", true)
         wait(function() return read("demand-finish") end, 10)

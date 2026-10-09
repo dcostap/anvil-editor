@@ -8,6 +8,7 @@
 #include "win32_frame_hwnd.h"
 #include "project_sidebar.h"
 #include "project_sidebar_scan.h"
+#include "sidebar_registry_watch.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -159,7 +160,13 @@ typedef struct {
   AnvilSidebarScan *sidebar_scan;
   char *sidebar_userdir, *sidebar_recents;
   UINT_PTR sidebar_timer;
-  Uint64 sidebar_last_scan;
+  AnvilSidebarWatch *sidebar_watch;
+  uint64_t sidebar_notified_revision;
+  UINT_PTR sidebar_restart_timer;
+  unsigned sidebar_restart_attempts;
+  bool sidebar_restart_limited;
+  Uint64 sidebar_failure_since;
+  bool sidebar_waiting_exit;
   unsigned sidebar_source_revision, sidebar_scan_revision, sidebar_jobs;
   bool sidebar_seeded, sidebar_scan_requested;
   ShellProject *sidebar_process;
@@ -230,11 +237,13 @@ static bool unload_project_path(const char *path);
 static void begin_unload(ShellProject *project);
 static void drain_retired_projects(void);
 static void service_sidebar(void);
+static void notify_sidebar_changes(void);
 static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size);
 static void sync_sidebar_model(void);
 static AnvilSidebarProject *sidebar_project(const char *path);
 static void probe_sidebar_model(WPARAM action, LPARAM value);
 static void start_sidebar(void);
+static void schedule_sidebar_restart(void);
 static void reset_unload(ShellProject *project) {
   project->unloading = false;
   free(project->dormant);
@@ -463,7 +472,8 @@ static wchar_t *build_child_command_line(ShellProject *project, const wchar_t *e
                                          const char *pipe_arg, int argc, char **argv) {
   int exe_len = WideCharToMultiByte(CP_UTF8, 0, exe, -1, NULL, 0, NULL, NULL);
   size_t capacity =
-      (size_t)exe_len * 2 + strlen(pipe_arg) * 2 + strlen(project->project_path) * 2 + 128;
+      (size_t)exe_len * 2 + strlen(pipe_arg) * 2 +
+      (project->project_path ? strlen(project->project_path) * 2 : 0) + 128;
   for (int i = 2; i < argc; i++) capacity += strlen(argv[i]) * 2 + 4;
   char *exe_utf8 = malloc((size_t)exe_len);
   char *line = malloc(capacity);
@@ -471,9 +481,11 @@ static wchar_t *build_child_command_line(ShellProject *project, const wchar_t *e
   if (exe_utf8 && line) {
     WideCharToMultiByte(CP_UTF8, 0, exe, -1, exe_utf8, exe_len, NULL, NULL);
     size_t n = append_quoted_arg(line, exe_utf8);
-    line[n++] = ' '; n += append_quoted_arg(line + n, ANVIL_PROJECT_ARG);
-    line[n++] = ' ';
-    n += append_quoted_arg(line + n, project->project_path);
+    if (!project->sidebar) {
+      line[n++] = ' '; n += append_quoted_arg(line + n, ANVIL_PROJECT_ARG);
+      line[n++] = ' ';
+      n += append_quoted_arg(line + n, project->project_path);
+    }
     line[n++] = ' ';
     n += append_quoted_arg(line + n, pipe_arg);
     if (project->sidebar) {
@@ -530,7 +542,7 @@ static int SDLCALL launch_thread(void *data) {
             AllowSetForegroundWindow(launch->process.dwProcessId) != 0);
     ResumeThread(launch->process.hThread);
     SDL_Log("Shell started Project pid=%lu path=%s", (unsigned long)launch->process.dwProcessId,
-            project->project_path);
+            project->project_path ? project->project_path : "Sidebar (no Project)");
   }
   SDL_SetAtomicInt(&launch->done, 1);
   SDL_Event event = {0};
@@ -635,6 +647,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_OPACITY:
     return size == sizeof(float);
   case ANVIL_SURFACE_MSG_RAISE:
+  case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
     return size == 0;
   case ANVIL_SURFACE_MSG_TITLE:
@@ -1507,7 +1520,9 @@ static void composite_and_present(void) {
     copy_ui((RECT){shell.sidebar_w, shell.controls.bottom, shell.buffer_w, shell.buffer_h});
   else if (project->state == SHELL_FAILED)
     copy_ui(shell.failure_card);
+  anvil_latency_probe_stage("present-begin");
   HRESULT hr = shell.swapchain->lpVtbl->Present(shell.swapchain, 1, 0);
+  anvil_latency_probe_stage("present-end");
   if (take_fault(FAULT_PRESENT))
     hr = DXGI_ERROR_DEVICE_REMOVED;
   if (FAILED(hr))
@@ -1520,7 +1535,7 @@ static void finish_latency_probe(void) {
     TerminateProcess(project->process.hProcess, 0);
   if (shell.sidebar_process && shell.sidebar_process->process.hProcess)
     TerminateProcess(shell.sidebar_process->process.hProcess, 0);
-  _Exit(0);
+  _Exit(anvil_latency_probe_succeeded() ? 0 : 1);
 }
 
 /* Copies the newest published frame into the private surface texture. */
@@ -2000,6 +2015,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   int value =
       message->size == sizeof(AnvilSurfaceInt) ? ((const AnvilSurfaceInt *)payload)->value : 0;
   if (project->sidebar && message->type != ANVIL_SURFACE_MSG_SIDEBAR_QUERY &&
+      message->type != ANVIL_SURFACE_MSG_SIDEBAR_REFRESH &&
       message->type != ANVIL_SURFACE_MSG_SELECT_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_EXIT_INTENT && message->type != ANVIL_SURFACE_MSG_CURSOR &&
@@ -2026,10 +2042,6 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     sidebar_source(payload, message->size);
     break;
   case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: {
-    if (!value && !shell.sidebar_scan && SDL_GetTicks() - shell.sidebar_last_scan >= 3000) {
-      shell.sidebar_scan_requested = true;
-      service_sidebar();
-    }
     sync_sidebar_model();
     char *snapshot = anvil_sidebar_snapshot(&shell.sidebar, (size_t)value);
     const char *reply =
@@ -2041,6 +2053,10 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     free(snapshot);
     break;
   }
+  case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
+    shell.sidebar_scan_requested = true;
+    service_sidebar();
+    break;
   case ANVIL_SURFACE_MSG_SELECT_PROJECT:
     if (!shell.closing)
       select_project_path(payload);
@@ -2290,6 +2306,12 @@ static void perform_control(int control) {
   SDL_Log("Shell native control: %d state=%d", control, project->state);
   shell.resize_wait_disabled = true;
   if (control == 5) {
+    if (shell.sidebar_restart_timer) KillTimer(shell.hwnd, shell.sidebar_restart_timer);
+    shell.sidebar_restart_timer = 0;
+    shell.sidebar_restart_attempts = 0;
+    shell.sidebar_restart_limited = false;
+    shell.sidebar_failure_since = 0;
+    shell.sidebar_waiting_exit = false;
     ShellProject *sidebar = shell.sidebar_process;
     if (sidebar && sidebar->process.hProcess &&
         WaitForSingleObject(sidebar->process.hProcess, 0) == WAIT_TIMEOUT)
@@ -2624,6 +2646,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         stop_close_timer(project);
         set_state(project, SHELL_FAILED);
         SDL_Log("Shell Sidebar exited; Project and native controls remain available");
+        schedule_sidebar_restart();
         break;
       }
       stop_close_timer(project);
@@ -2748,6 +2771,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     break;
   case SDL_EVENT_KEY_DOWN:
   case SDL_EVENT_KEY_UP:
+    anvil_latency_probe_note_event(event);
     if (project->state == SHELL_READY || project->state == SHELL_CLOSING)
       forward_event(event, NULL);
     break;
@@ -2818,8 +2842,26 @@ static void push_window_event(SDL_EventType type, float x, float y) {
 }
 
 static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+  if (msg == WM_APP + 0x4e) {
+    shell.sidebar_scan_requested = true;
+    service_sidebar();
+    return 0;
+  }
   ShellProject *project = shell.selected;
   if (msg == WM_TIMER) {
+    if (shell.sidebar_restart_timer && wparam == shell.sidebar_restart_timer) {
+      KillTimer(shell.hwnd, shell.sidebar_restart_timer);
+      shell.sidebar_restart_timer = 0;
+      if (shell.sidebar_waiting_exit) {
+        shell.sidebar_waiting_exit = false;
+        schedule_sidebar_restart();
+      } else {
+        shell.sidebar_restart_attempts++;
+        shell.sidebar_failure_since = 0;
+        start_sidebar();
+      }
+      return 0;
+    }
     if (shell.sidebar_timer && wparam == shell.sidebar_timer) {
       service_sidebar();
       return 0;
@@ -3739,13 +3781,41 @@ static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t siz
   shell.sidebar_userdir = directory_copy;
   shell.sidebar_recents = source_copy;
   shell.sidebar_source_revision++;
+  if (!shell.sidebar_watch) {
+    shell.sidebar_watch = anvil_sidebar_watch_start(directory_copy, shell.hwnd, WM_APP + 0x4e);
+    if (!shell.sidebar_watch) SDL_Log("Sidebar registry watcher unavailable; use explicit Refresh");
+  }
   shell.sidebar_scan_requested = true;
   service_sidebar();
   if (!shell.sidebar_process)
     start_sidebar();
 }
+static void schedule_sidebar_restart(void) {
+  ShellProject *project = shell.sidebar_process;
+  if (shell.closing || shell.sidebar_restart_timer || !project || project->state != SHELL_FAILED ||
+      (project->launch && !project->launch->taken))
+    return;
+  if (project->process.hProcess && WaitForSingleObject(project->process.hProcess, 0) != WAIT_OBJECT_0) {
+    if (!shell.sidebar_failure_since) shell.sidebar_failure_since = SDL_GetTicks();
+    if (SDL_GetTicks() - shell.sidebar_failure_since < SHELL_CONNECT_TIMEOUT_MS) {
+      shell.sidebar_waiting_exit = true;
+      shell.sidebar_restart_timer = SetTimer(shell.hwnd, 0x8003, 100, NULL);
+    }
+    return;
+  }
+  const unsigned delays[] = {100, 500, 2000};
+  if (shell.sidebar_restart_attempts >= SDL_arraysize(delays)) {
+    if (!shell.sidebar_restart_limited)
+      SDL_Log("Shell Sidebar automatic restart limit reached; use Restart Sidebar");
+    shell.sidebar_restart_limited = true;
+    return;
+  }
+  shell.sidebar_restart_timer = SetTimer(shell.hwnd, 0x8003, delays[shell.sidebar_restart_attempts], NULL);
+  shell.sidebar_waiting_exit = false;
+  SDL_Log("Shell Sidebar automatic restart scheduled: attempt=%u", shell.sidebar_restart_attempts + 1);
+}
 static void start_sidebar(void) {
-  if (shell.closing || !shell.sidebar_userdir || !shell.selected->project_path)
+  if (shell.closing || !shell.sidebar_userdir)
     return;
   ShellProject *old = shell.sidebar_process;
   if (old) {
@@ -3780,8 +3850,8 @@ static void start_sidebar(void) {
     return;
   }
   project->sidebar = true;
-  project->project_path = _strdup(shell.selected->project_path);
-  if (!project->project_path || !start_project(project, 0, NULL)) {
+  shell.sidebar_notified_revision = UINT64_MAX;
+  if (!start_project(project, 0, NULL)) {
     set_state(project, SHELL_FAILED);
     SDL_Log("Shell Sidebar startup failed; Project remains available");
   }
@@ -3838,7 +3908,7 @@ static void service_sidebar(void) {
     sync_sidebar_model();
   }
   const char *disabled = SDL_getenv("ANVIL_SIDEBAR_SCAN_DISABLED");
-  if (!shell.sidebar_scan && shell.sidebar_userdir && shell.sidebar_scan_requested &&
+  if (!shell.closing && !shell.sidebar_scan && shell.sidebar_userdir && shell.sidebar_scan_requested &&
       IsWindowVisible(shell.hwnd) && !IsIconic(shell.hwnd) &&
       (!shell.sidebar_process || shell.sidebar_process->last_config.render_enabled) &&
       !(disabled && !strcmp(disabled, "1"))) {
@@ -3853,7 +3923,6 @@ static void service_sidebar(void) {
     shell.sidebar_scan_revision = shell.sidebar_source_revision;
     shell.sidebar_jobs++;
     shell.sidebar_scan_requested = false;
-    shell.sidebar_last_scan = SDL_GetTicks();
     SDL_Log("Shell Sidebar status scan started: source=%u", shell.sidebar_scan_revision);
     if (shell.sidebar_scan && !shell.sidebar_timer)
       shell.sidebar_timer = SetTimer(shell.hwnd, 0x8002, 100, NULL);
@@ -3863,6 +3932,15 @@ static void service_sidebar(void) {
   if (!shell.sidebar_scan && shell.sidebar_timer) {
     KillTimer(shell.hwnd, shell.sidebar_timer);
     shell.sidebar_timer = 0;
+  }
+  notify_sidebar_changes();
+}
+static void notify_sidebar_changes(void) {
+  sync_sidebar_model();
+  if (shell.sidebar_process && shell.sidebar_process->connected &&
+      shell.sidebar_notified_revision != shell.sidebar.revision) {
+    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_SIDEBAR_CHANGED, NULL, 0, NULL, 0);
+    shell.sidebar_notified_revision = shell.sidebar.revision;
   }
 }
 
@@ -3970,6 +4048,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
     finish_launch(shell.sidebar_process);
     check_transport_failure(shell.sidebar_process);
     handle_sidebar_frame();
+    schedule_sidebar_restart();
   }
   for (ShellProject *item = shell.projects; item; item = item->next) {
     finish_launch(item);
@@ -3986,6 +4065,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
       complete_unload(item);
   }
   drain_retired_projects();
+  notify_sidebar_changes();
   project = shell.selected;
   if (shell.frame_busy) handle_frame();
   if (shell.closing && project->failed_close) {
@@ -4013,6 +4093,13 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   (void)result;
   /* Project loss detection owns save/detach and its deadline. Never kill it with a shell job. */
   Uint64 deadline = SDL_GetTicks() + 1000;
+  if (!anvil_sidebar_watch_stop(shell.sidebar_watch, deadline)) {
+    SDL_Log("Sidebar registry watcher shutdown deadline expired; exit this shell only");
+    _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+  }
+  shell.sidebar_watch = NULL;
+  if (shell.sidebar_restart_timer) KillTimer(shell.hwnd, shell.sidebar_restart_timer);
+  shell.sidebar_restart_timer = 0;
   if (shell.sidebar_process) {
     ShellProject *project = shell.sidebar_process;
     if (project->connected)

@@ -122,8 +122,9 @@ bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
     argv[*argc] = NULL;
     i--;
   }
-  if (project != hosted.active ||
-      ((hosted.restarted || original_arguments || hosted.sidebar) && !project))
+  if ((project || hosted.sidebar) != hosted.active || (project && hosted.sidebar) ||
+      ((hosted.restarted || original_arguments) && !project) ||
+      (hosted.sidebar && *argc != 1))
     hosted.valid = false;
   return hosted.active;
 }
@@ -293,6 +294,12 @@ static bool valid_configure(const AnvilSurfaceConfigure *config) {
 
 static void dispatch_message(HostedMessage *message) {
   switch (message->type) {
+  case ANVIL_SURFACE_MSG_SIDEBAR_CHANGED: {
+    CustomEvent event = {0};
+    if (!push_custom_event("projectsidebarchanged", &event))
+      signal_loss("Sidebar revision notification failed", message->type, message->size);
+    break;
+  }
   case ANVIL_SURFACE_MSG_SIDEBAR_MODEL: {
     CustomEvent event = {0};
     event.data1 = _strdup((const char *)message->payload);
@@ -399,6 +406,7 @@ static int SDLCALL reader_thread(void *data) {
         if (header.size != sizeof(AnvilSurfaceInt)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_CLOSE:
+      case ANVIL_SURFACE_MSG_SIDEBAR_CHANGED:
         if (header.size) goto failed;
         break;
       case ANVIL_SURFACE_MSG_DIALOG_RESULT:
@@ -585,10 +593,11 @@ bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recent
   free(message);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
-bool anvil_hosted_surface_sidebar_query(int offset) {
+bool anvil_hosted_surface_sidebar_query(int offset, bool refresh) {
   if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause))
     return false;
   AnvilSurfaceInt message = {offset};
+  if (refresh && !offset) send_message(ANVIL_SURFACE_MSG_SIDEBAR_REFRESH, NULL, 0);
   send_message(ANVIL_SURFACE_MSG_SIDEBAR_QUERY, &message, sizeof(message));
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
@@ -688,6 +697,7 @@ void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, in
   frame.width = width;
   frame.height = height;
   frame.input_seq = anvil_latency_probe_consumed_seq();
+  anvil_latency_probe_stage("frame-published");
   SDL_strlcpy(frame.name, name, sizeof(frame.name));
   send_message(ANVIL_SURFACE_MSG_FRAME, &frame, sizeof(frame));
 }
@@ -785,6 +795,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   frame.width = surface->w;
   frame.height = surface->h;
   frame.input_seq = anvil_latency_probe_consumed_seq();
+  anvil_latency_probe_stage("frame-published");
   SDL_strlcpy(frame.name, hosted.memory.name, sizeof(frame.name));
   send_message(ANVIL_SURFACE_MSG_FRAME, &frame, sizeof(frame));
   return true;
@@ -929,7 +940,8 @@ bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recent
   (void)recents;
   return false;
 }
-bool anvil_hosted_surface_sidebar_query(int offset) {
+bool anvil_hosted_surface_sidebar_query(int offset, bool refresh) {
+  (void)refresh;
   (void)offset;
   return false;
 }

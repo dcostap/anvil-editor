@@ -579,6 +579,20 @@ static int f_wait_event(lua_State *L) {
     return 1;
   }
 
+  if (anvil_hosted_surface_sidebar()) {
+    /* Return to SDL. Its callback loop owns the blocking event wait. */
+    char rate[32];
+    if (nargs && !lua_isnil(L, 1)) {
+      double timeout = luaL_checknumber(L, 1);
+      SDL_snprintf(rate, sizeof(rate), "%d", (int)fmin(1000, fmax(1, ceil(1 / fmax(.001, timeout)))));
+      SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, rate);
+    } else {
+      SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "waitevent");
+    }
+    lua_pushboolean(L, false);
+    return 1;
+  }
+
   /* In SDL3 callback mode SDL_WaitEvent / SDL_WaitEventTimeout must not be
    * called from SDL_AppIterate.  Use SDL_Delay as a non-blocking substitute
    * so that the callback loop can still deliver events on the next iteration.
@@ -1772,7 +1786,7 @@ static int f_publish_project_sidebar(lua_State *L) {
 static int f_request_project_sidebar(lua_State *L) {
   lua_Integer offset = luaL_optinteger(L, 1, 0);
   luaL_argcheck(L, offset >= 0 && offset <= 256 * 33, 1, "invalid Sidebar offset");
-  lua_pushboolean(L, anvil_hosted_surface_sidebar_query((int)offset));
+  lua_pushboolean(L, anvil_hosted_surface_sidebar_query((int)offset, lua_toboolean(L, 2)));
   return 1;
 }
 static int projectsidebar_callback(lua_State *L, SDL_Event *event) {
@@ -1780,6 +1794,11 @@ static int projectsidebar_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, event->user.data1);
   free(event->user.data1);
   return 2;
+}
+static int projectsidebarchanged_callback(lua_State *L, SDL_Event *event) {
+  (void)event;
+  lua_pushstring(L, "projectsidebarchanged");
+  return 1;
 }
 static int f_test_surface_failure(lua_State *L) {
   const char *enabled = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
@@ -2435,6 +2454,8 @@ int luaopen_system(lua_State *L) {
   }
   if (!register_custom_event("projectsidebar", projectsidebar_callback))
     return luaL_error(L, "Unable to register the Project Sidebar event: %s", SDL_GetError());
+  if (!register_custom_event("projectsidebarchanged", projectsidebarchanged_callback))
+    return luaL_error(L, "Unable to register the Sidebar revision event: %s", SDL_GetError());
   luaL_newmetatable(L, API_TYPE_NATIVE_PLUGIN);
   lua_pushcfunction(L, f_library_gc);
   lua_setfield(L, -2, "__gc");

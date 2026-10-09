@@ -75,7 +75,7 @@ static void rencache_activate_window(SDL_Window *window) {
 #endif
 
 static void rencache_finish_latency_probe(void) {
-  _Exit(0);
+  _Exit(anvil_latency_probe_succeeded() ? 0 : 1);
 }
 
 /* In direct mode this process owns the visible window, so it generates the
@@ -638,6 +638,7 @@ void rencache_invalidate(RenCache *ren_cache) {
 
 
 void rencache_begin_frame(RenCache *ren_cache) {
+  anvil_latency_probe_stage("render-begin");
   if (!ren_cache) return;
   if (ren_cache->frame_active && ren_cache->window) {
     rencache_abandon_frame(ren_cache);
