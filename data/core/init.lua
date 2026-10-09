@@ -882,8 +882,23 @@ function core.init()
     startup.mark("core_init_complete", "files=" .. tostring(#files))
     startup.stage_end(core_init_stage, "ok", "files=" .. tostring(#files))
   end
+  if system.is_hosted_surface() then
+    local ok = system.publish_project_sidebar(USERDIR, common.serialize(core.recent_projects))
+    core.log_quiet("Project Sidebar recent source submitted: %s", tostring(ok))
+  end
 end
 
+
+function core.request_project_sidebar()
+  if not system.is_hosted_surface() then return false end
+  if core.project_sidebar_request and system.get_time() - core.project_sidebar_request.started < 5 then
+    return false
+  end
+  core.project_sidebar_request = {items = {}, started = system.get_time(), offset = 0}
+  if system.request_project_sidebar(0) then return true end
+  core.project_sidebar_request = nil
+  return false
+end
 
 function core.begin_quit()
   if core.quit_pending then return false end
@@ -2418,6 +2433,42 @@ function core.on_event(type, ...)
     if filename and system.get_file_info(filename) then
       system.raise_window(core.window)
       core.open_file(filename)
+    end
+  elseif type == "projectsidebar" then
+    local request = core.project_sidebar_request
+    if not request then return end
+    local chunk, err = load(..., "=Project Sidebar", "t", {})
+    local ok, page = pcall(chunk or function() error(err) end)
+    if not ok or _G.type(page) ~= "table" or page.error then
+      core.log_quiet("Project Sidebar snapshot rejected: %s", tostring(ok and page.error or page))
+      core.project_sidebar_request = nil
+      return
+    end
+    if request.revision and request.revision ~= page.revision then
+      if system.get_time() - request.started >= 5 then core.project_sidebar_request = nil; return end
+      request.items, request.offset, request.revision = {}, 0, nil
+      system.request_project_sidebar(0)
+      return
+    end
+    if page.offset ~= request.offset then return end
+    request.revision = page.revision
+    for _, item in ipairs(page.items) do request.items[#request.items + 1] = item end
+    if page.next < page.total then
+      request.offset = page.next
+      if not system.request_project_sidebar(page.next) then core.project_sidebar_request = nil end
+    else
+      local projects, by_id = {}, {}
+      for _, item in ipairs(request.items) do
+        if item.kind == "project" then
+          item.terminals = {}
+          projects[#projects + 1], by_id[item.row_id] = item, item
+        elseif item.kind == "terminal" and by_id[item.row_id] then
+          local terminals = by_id[item.row_id].terminals
+          terminals[#terminals + 1] = item
+        end
+      end
+      projects.status_limited, projects.revision = page.status_limited, page.revision
+      core.project_sidebar, core.project_sidebar_request = projects, nil
     end
   elseif type == "dialogfinished" then
     local id, status, result, filter = ...

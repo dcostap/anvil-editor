@@ -7,7 +7,8 @@ Hosted mode stays opt-in. The Phase 3 code reviews are complete.
 Do not treat synthetic tests as manual acceptance.
 Milestones 1, 2, and 3 are implemented and deployed.
 Milestone 3 adds unload, Dormant Projects, safe runtime retirement, and local recovery.
-The Sidebar model and process remain later milestones.
+Milestone 4 is implemented and deployed. Its focused checks and two isolated latency comparisons are complete.
+The Sidebar process remains a later milestone.
 
 ## Scope
 
@@ -85,6 +86,140 @@ The other restarts B, then checks that Quit closes the Window and A.
 Both failed before the fix in `anvil-surface-latency-cw_acj7a`.
 Both pass on D3D11 in `anvil-surface-latency-johzfd4a` and software in `anvil-surface-latency-r2ss0a4_`.
 The pending-launch unload case also passes. These checks use no user windows or pixels.
+
+#### Milestone 4 model and data boundary
+
+The shell owns the list. The first recent source supplies its order.
+Later sources add new paths first, in source order. Existing paths never move when selected, loaded, or unloaded.
+Canonical directory identity merges aliases. The identity and status workers perform all directory checks.
+Every Dormant record remains listed, including earlier records when the Window has no loaded Project.
+Selection reserves a list entry before creating another runtime. A full list rejects a new selection without closing its connection.
+
+Each Project supplies its recent source and user directory through the authenticated connection.
+`core.request_project_sidebar()` requests a snapshot. `core.project_sidebar` receives the completed Project array.
+Each Project includes its path, stable row ID, runtime ID, PID, lifecycle, selection, and path availability.
+Separate flags report a deferred file dialog and a pending Close choice.
+Each Project includes its Terminal records. They report ID, host PID, shell label, cwd, attachment, and running/exited/lost state.
+Busy state uses `1`, `0`, or `-1` for unknown. Old records without busy state remain unknown.
+The host saves busy changes in its existing atomic record. No Terminal command is replayed.
+The label uses the shell string, not a live OSC title. Bell state remains unknown.
+
+One asynchronous job owns copied inputs. The native UI thread does not read registry files or query Terminal hosts.
+The worker checks directory paths, record bounds, PID creation identity, and Terminal state.
+The worker continues when the Window has no loaded Project. It does not hold Project runtime references.
+The job queue holds one scan. Scans run about every two seconds, with cancellation between operations.
+One scan accepts 256 Project paths, 32 Sessions per Project, and 512 registry entries.
+Each record accepts at most 1 MiB. A scan reads at most 8 MiB of record data.
+The private Lua state has no libraries or globals. It disables JIT and limits memory and instruction execution.
+Incomplete scans retain missing previous records and report `status_limited`. They do not claim removal from incomplete evidence.
+These bounds do not promise a wall-clock deadline for file system calls. The bounded shutdown still exits only the shell.
+
+Surface protocol 10 adds source, query, and model messages. Snapshots use complete records in bounded pages.
+The receiver waits for all pages and rejects mixed revisions. Required transport failures retain the existing failure rules.
+The owned-window model probe reads this same snapshot API and selects its stable row ID.
+Its file output and action messages require the exact isolated fault gate. They do not run in normal use.
+No Sidebar drawing or Sidebar process is added here.
+
+#### Milestone 4 red-green evidence
+
+- Native order red: `phase4-m4-order-red.txt`, then `phase4-m4-order-green.txt`.
+  The empty model failed with `Recent Projects did not initialize the list`.
+- Lifecycle red: `phase4-m4-lifecycle-red.txt`, then `phase4-m4-lifecycle-green.txt`.
+  The model omitted selection and pending-choice state. The test also keeps several Dormant records and stable order after load.
+- Terminal status red: `phase4-m4-status-red.txt`, then `phase4-m4-status-green.txt`.
+  The model did not accept Terminal status. The green checks owned copies, detach updates, and removal.
+- Owned model red: `anvil-surface-latency-3mnp93e3` lacked the snapshot API.
+  The green checks recent order, new-first order, deferred dialogs, Close choice/Cancel, multiple unloads, and empty-Window selection.
+- Native controls red: `anvil-surface-latency-jxu993kh` ran the delayed worker synchronously.
+  It failed with `Path checks blocked native Minimize`. The asynchronous worker passes the same case.
+- Real Terminal red: `anvil-surface-latency-7r58qkyl` reported busy `-1` for the kept busy Session.
+  The host now records busy state. The green checks the same host, Session ID, detached state, cwd, and one command execution.
+- Native page red: `phase4-m4-native-pages-red.txt` disabled snapshot publication.
+  The green reconstructs complete pages and preserves record order, cwd, and quoted UTF-8 text.
+- Lua page red: `phase4-m4-pages-red.txt` lost `status_limited` while combining pages.
+  The green also rejects mixed model revisions through the public request/event boundary.
+
+Fixture corrections do not count as runtime fixes. The driver now retains process handles before unload.
+It waits for Dormant model state, not merely an exited process signal, before checking the empty Window.
+The initial event handler also needed `_G.type` because its event name parameter already uses `type`.
+
+Focused final checks pass: four native targets, two snapshot cases, five Terminal quit cases, and sixteen Workspace cases.
+Native logs use `phase4-m4-native-final`; Lua logs use `phase4-m4-pages-final`, `phase4-m4-quit-final`, and `phase4-m4-workspace-final`.
+D3D11 owned cases pass in `anvil-surface-latency-5p90szjz`; software cases pass in `anvil-surface-latency-4re1q3zd`.
+Both sets include the two unload crash cases. D3D11 also checks loaded Restart and late dialogs.
+Direct Quit, Restart, and switch pass in `anvil-surface-latency-ytqttt9g`.
+Both renderer model checks also passed in `anvil-surface-latency-akdt83r8` and `anvil-surface-latency-aleiafqj`.
+The final worker checks pass in `anvil-surface-latency-hwg_lwse` and `anvil-surface-latency-v42ar8s6`.
+These checks follow inspection fixes for finite PIDs, exact ASCII record IDs, and the bounded interpreter.
+Syntax, scoped formatting, Python compilation, and `git diff --check` pass.
+Allocator-failure and memory-instrumentation acceptance remain open. Synthetic checks do not establish physical input or scanout.
+
+The matched latency check alternates the prerequisite, Milestone 3, and Milestone 4 binaries.
+It uses one fixed isolated data copy. A startup-only check skips the new source API in older binaries.
+This check exists only in the benchmark copy, not production code. It leaves the Milestone 4 source update enabled.
+No build, correctness case, or other latency run overlaps this measurement.
+
+#### Milestone 4 isolated latency
+
+The first comparison completed all 36 runs. Each row and binary has three runs and 360 valid samples.
+Every run completed 120/120 samples, exited with code zero, and avoided the runner timeout.
+Artifact: `anvil-m4-review-latency-20261009/results.json` under the machine's temporary directory.
+The table gives p50 / p90 / p99 / maximum / mean, in milliseconds.
+
+| Row | Prerequisite `35e5e426` | Milestone 3 `e751f6f9` | Milestone 4 |
+| --- | --- | --- | --- |
+| Direct D3D11 | 8.02 / 27.45 / 3816.58 / 4233.86 / 213.15 | 8.02 / 18.16 / 227.23 / 532.47 / 14.91 | 6.96 / 16.78 / 19.48 / 23.37 / 8.83 |
+| Hosted D3D11 | 7.82 / 16.49 / 20.02 / 21.21 / 9.28 | 8.03 / 16.85 / 21.19 / 32.50 / 9.43 | 7.70 / 16.81 / 19.65 / 23.96 / 9.18 |
+| Direct software | 19.10 / 3828.64 / 7978.96 / 8528.06 / 822.19 | 16.22 / 25.15 / 29.82 / 32.64 / 17.26 | 16.86 / 26.23 / 31.86 / 41.14 / 17.97 |
+| Hosted software | 11.85 / 20.92 / 24.47 / 52.64 / 13.35 | 11.73 / 20.96 / 24.91 / 41.05 / 13.34 | 13.48 / 1544.88 / 5675.21 / 6215.12 / 440.39 |
+
+The M3 direct median increase over the prerequisite did not repeat in this comparison.
+M4 direct software increased by 0.64 ms over M3. Direct D3D11 decreased by 1.06 ms.
+The first comparison also has multi-second tails. M4 hosted software has a 6215.12 ms maximum.
+The prerequisite has 4233.86 ms and 8528.06 ms maxima. M3 direct D3D11 has a 532.47 ms maximum.
+These completed runs remain evidence. Their causes are unproved; do not remove them or claim a performance gain.
+A second isolated M3/M4 comparison completed all 24 runs with the same binaries and fixed data.
+Every run completed 120/120 samples and exited with code zero. Each row and binary has 360 valid samples.
+Artifact: `anvil-m4-repeat-latency-20261009/results.json` under the machine's temporary directory.
+
+| Row | Milestone 3 | Milestone 4 |
+| --- | --- | --- |
+| Direct D3D11 | 7.00 / 17.44 / 20.61 / 27.76 / 9.03 | 8.21 / 17.12 / 20.23 / 23.41 / 9.40 |
+| Hosted D3D11 | 8.06 / 18.79 / 955.24 / 1498.42 / 35.06 | 8.58 / 18.88 / 58.92 / 132.86 / 11.42 |
+| Direct software | 18.89 / 1756.99 / 6075.94 / 6605.48 / 475.02 | 16.98 / 25.80 / 30.47 / 31.96 / 18.04 |
+| Hosted software | 12.46 / 21.88 / 25.29 / 36.35 / 13.80 | 15.29 / 32.64 / 87.50 / 105.66 / 19.84 |
+
+The direct software increase of 0.64 ms did not repeat. The second comparison decreased by 1.91 ms.
+Direct D3D11 instead increased by 1.21 ms. These direct changes are not stable across the two comparisons.
+Hosted software increased in both comparisons: 1.74 ms, then 2.84 ms. Report this repeated median increase explicitly.
+Its multi-second M4 tail did not repeat, but its second p99 remains higher than M3.
+M3 now has multi-second tails on hosted D3D11 and direct software. Their causes remain unproved.
+The results do not establish a performance gain or its cause. Preserve both comparisons, including their tails.
+The API registration table received whitespace cleanup after measurement. The measured functional code stayed unchanged.
+The subsequent compile, four native checks, two snapshot cases, syntax checks, and diff checks pass.
+Their logs use `phase4-m4-commit-native` and `phase4-m4-commit-pages`.
+The measurement ends at Present, not scanout. It does not establish physical keyboard latency.
+
+#### Milestone 4 deployment
+
+The user received the save warning before the portable update. The warning explicitly included Terminal Session and command termination.
+The updater exited with code zero. It installed the current build, restored source-data junctions, and restarted Anvil.
+Fresh logs contain no errors or warnings:
+
+- `anvil-20261009-020515-p31312.log`
+- `startup/anvil-startup-20261009-020515-p31312-m501679.log`
+
+SHA-256 values:
+
+- Current build: `5183f9d27c76b7f1d662b12a728f38f157c17d5caff5faf3cd0a1ef0a80f36df`
+- Portable executable: `8d21844452b332f8730e5ffc040769fad31f546790db8f769c3a57a173d56473`
+- Measured M4 executable: `534fc7b39b2aece59f5a5eb2b01d680402f9c14fd476a31bbb0a3426e6279b9d`
+- Saved M3 portable reference: `1d122fb5c437c35f9274d6938c072152cbd6a8e7dee89a795e0419e384bb44f6`
+
+Stripping a build copy matches the portable executable except its PE timestamp and checksum.
+The independent strip changed those header fields. The remaining bytes match after clearing only those fields in memory.
+The measured build precedes the API table's whitespace cleanup. No functional source change followed its measurements.
+Physical-input, IME, mixed-DPI, allocator-failure, and memory-instrumentation acceptance remain open. Hosted mode remains opt-in.
 
 ### 5. Minimal Sidebar process
 

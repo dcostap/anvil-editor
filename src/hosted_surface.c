@@ -1,4 +1,5 @@
 #include "hosted_surface.h"
+#include "custom_events.h"
 #include "input_latency_probe.h"
 #include "system_events.h"
 
@@ -281,6 +282,15 @@ static bool valid_configure(const AnvilSurfaceConfigure *config) {
 
 static void dispatch_message(HostedMessage *message) {
   switch (message->type) {
+  case ANVIL_SURFACE_MSG_SIDEBAR_MODEL: {
+    CustomEvent event = {0};
+    event.data1 = _strdup((const char *)message->payload);
+    if (!event.data1 || !push_custom_event("projectsidebar", &event)) {
+      free(event.data1);
+      signal_loss("Sidebar snapshot event failed", message->type, message->size);
+    }
+    break;
+  }
     case ANVIL_SURFACE_MSG_CONFIGURE:
       if (((AnvilSurfaceConfigure *)message->payload)->configuration >= hosted.config.configuration) {
         if (((AnvilSurfaceConfigure *)message->payload)->configuration == hosted.config.configuration &&
@@ -382,6 +392,10 @@ static int SDLCALL reader_thread(void *data) {
         break;
       case ANVIL_SURFACE_MSG_DIALOG_RESULT:
         if (!anvil_surface_dialog_result_valid(payload, header.size)) goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_SIDEBAR_MODEL:
+        if (header.size < 2 || payload[header.size - 1] || memchr(payload, 0, header.size - 1))
+          goto failed;
         break;
       default:
         continue;
@@ -540,6 +554,31 @@ bool anvil_hosted_surface_select_project(const char *path) {
 bool anvil_hosted_surface_unload_project(const char *path) {
   if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_UNLOAD_PROJECT, path, (uint32_t)strlen(path) + 1);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recents) {
+  if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause))
+    return false;
+  size_t directory_size = strlen(userdir) + 1, recents_size = strlen(recents) + 1;
+  size_t size = sizeof(AnvilSurfaceSidebarSource) + directory_size + recents_size;
+  if (size > ANVIL_SURFACE_MAX_PAYLOAD)
+    return false;
+  AnvilSurfaceSidebarSource *message = malloc(size);
+  if (!message)
+    return false;
+  message->userdir_size = (uint32_t)directory_size;
+  memcpy(message + 1, userdir, directory_size);
+  memcpy((char *)(message + 1) + directory_size, recents, recents_size);
+  send_message(ANVIL_SURFACE_MSG_SIDEBAR_SOURCE, message, (uint32_t)size);
+  free(message);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+bool anvil_hosted_surface_sidebar_query(int offset) {
+  if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause))
+    return false;
+  AnvilSurfaceInt message = {offset};
+  send_message(ANVIL_SURFACE_MSG_SIDEBAR_QUERY, &message, sizeof(message));
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -873,6 +912,15 @@ bool anvil_hosted_surface_has_focus(void) { return false; }
 bool anvil_hosted_surface_should_render(void) { return true; }
 bool anvil_hosted_surface_select_project(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
+bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recents) {
+  (void)userdir;
+  (void)recents;
+  return false;
+}
+bool anvil_hosted_surface_sidebar_query(int offset) {
+  (void)offset;
+  return false;
+}
 float anvil_hosted_surface_display_scale(void) { return 1.0f; }
 float anvil_hosted_surface_refresh_rate(void) { return 0.0f; }
 AnvilSurfaceWindowMode anvil_hosted_surface_window_mode(void) { return ANVIL_SURFACE_WINDOW_NORMAL; }

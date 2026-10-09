@@ -1,7 +1,7 @@
 #ifndef CUSTOM_EVENTS_H
 #define CUSTOM_EVENTS_H
 
-#include <lua.h>
+typedef struct lua_State lua_State;
 #include <SDL3/SDL_events.h>
 #include <stdbool.h>
 #include <stdint.h>

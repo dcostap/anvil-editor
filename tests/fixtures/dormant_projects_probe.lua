@@ -262,6 +262,10 @@ if directory:match("/driver$") then
       end
       local resumed = wait_for(function() return read("a-resumed") end, 8, "Unload did not resume the remaining Project")
       assert(resumed.pid == a.pid, "Unload replaced A")
+      if action == "dormant-terminal-sidebar" then
+        wait_for(function() return read("a-sidebar-kept") end, 12,
+          "Dormant B's busy detached Terminal is missing from the Sidebar model")
+      end
       if action == "dormant-launch" then
         local window = assert(shell_window(a.shell_pid))
         user32.PostMessageW(window, 0x10, 0, 0)
@@ -350,6 +354,25 @@ else
       end
       wait_for(function() return system.window_should_render(core.window) end, 20)
       save("a-resumed", state())
+      if action == "dormant-terminal-sidebar" then
+        local b = assert(read("b-ready"))
+        wait_for(function()
+          if core.project_sidebar_request then return end
+          assert(core.request_project_sidebar())
+          wait_for(function() return not core.project_sidebar_request end, 5)
+          save("a-sidebar-status", core.project_sidebar)
+          for _, project in ipairs(core.project_sidebar or {}) do
+            if project.path:gsub("\\", "/") == root .. "/Replacement" and project.state == "dormant" then
+              for _, terminal in ipairs(project.terminals) do
+                if terminal.id == b.session_id and terminal.host_pid == b.host_pid and terminal.state == "running" and
+                    terminal.busy == 1 and not terminal.attached and terminal.cwd:gsub("\\", "/") == root .. "/Replacement" then
+                  save("a-sidebar-kept", {continue = true}); return true
+                end
+              end
+            end
+          end
+        end, 10, "Dormant B's busy detached Terminal is missing from the Sidebar model")
+      end
       if action == "dormant-unload-crash" then
         wait_for(function() return read("unload-failed-b") end, 10)
         assert(core.unload_project(root .. "/Replacement"))

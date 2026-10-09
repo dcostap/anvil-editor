@@ -428,6 +428,17 @@ The matched four-row latency comparison completed all 24 runs with 360 valid sam
 The Phase 4 plan records failures, fixture corrections, lifetime test limits, and all timing statistics.
 The warned portable update completed. Fresh session and startup logs contain no errors or warnings.
 Milestone 3 is complete. Hosted mode remains opt-in, with the deferred manual checks still unavailable.
+The unload crash prerequisite clears reserved unload state after unexpected exit and Restart.
+Milestone 4 adds the shell-owned Project Sidebar model, with stable recent order and new Projects first.
+The model retains every Dormant record and reports selection, lifecycle, deferred dialogs, and pending Close choices.
+A bounded worker checks recent paths and reads Terminal status. The native UI thread does not poll hosts or registry files.
+Focused native, snapshot, owned-window, Terminal, Workspace, and direct checks pass.
+Two isolated four-row comparisons completed 60 runs. Direct median changes do not remain stable across those comparisons.
+Hosted software medians increased in both comparisons. Multi-second tails occur in several baseline and current rows.
+The Phase 4 plan retains all timing values. Their causes remain unproved; no performance gain is claimed.
+The warned portable update completed. Fresh session and startup logs contain no errors or warnings.
+The Phase 4 plan records build and portable hashes. Milestone 4 is implemented and deployed; hosted mode remains opt-in.
+The Sidebar process and its drawing remain Milestone 5. Physical-input, IME, and mixed-DPI acceptance remain open.
 
 Add Dormant and loaded Projects, Project switching, hidden rendering suppression,
 Project crash restart, and hang detection.

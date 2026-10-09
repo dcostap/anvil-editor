@@ -1755,6 +1755,32 @@ static int f_unload_project(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_unload_project(path));
   return 1;
 }
+static int f_publish_project_sidebar(lua_State *L) {
+  size_t directory_size, source_size;
+  const char *directory = luaL_checklstring(L, 1, &directory_size);
+  const char *source = luaL_checklstring(L, 2, &source_size);
+  luaL_argcheck(
+      L, directory_size > 0 && directory_size < 32768 && !memchr(directory, 0, directory_size), 1,
+      "invalid user directory");
+  luaL_argcheck(L,
+                source_size > 0 && source_size < ANVIL_SURFACE_MAX_PAYLOAD &&
+                    !memchr(source, 0, source_size),
+                2, "invalid recent source");
+  lua_pushboolean(L, anvil_hosted_surface_sidebar_source(directory, source));
+  return 1;
+}
+static int f_request_project_sidebar(lua_State *L) {
+  lua_Integer offset = luaL_optinteger(L, 1, 0);
+  luaL_argcheck(L, offset >= 0 && offset <= 256 * 33, 1, "invalid Sidebar offset");
+  lua_pushboolean(L, anvil_hosted_surface_sidebar_query((int)offset));
+  return 1;
+}
+static int projectsidebar_callback(lua_State *L, SDL_Event *event) {
+  lua_pushstring(L, "projectsidebar");
+  lua_pushstring(L, event->user.data1);
+  free(event->user.data1);
+  return 2;
+}
 static int f_test_surface_failure(lua_State *L) {
   const char *enabled = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
   luaL_argcheck(L, enabled && !strcmp(enabled, "1") && anvil_hosted_surface_active(), 1, "isolated hosted surface probe is disabled");
@@ -2368,6 +2394,8 @@ static const luaL_Reg lib[] = {
   { "is_hosted_surface",     f_is_hosted_surface     },
   { "select_project",        f_select_project        },
   { "unload_project",        f_unload_project        },
+  { "publish_project_sidebar", f_publish_project_sidebar },
+  { "request_project_sidebar", f_request_project_sidebar },
   { "get_window_process_id", f_get_window_process_id },
   { "get_window_controls",   f_get_window_controls },
   { "get_startup_path_arguments", f_get_startup_path_arguments },
@@ -2400,6 +2428,8 @@ int luaopen_system(lua_State *L) {
   if (!register_custom_event(dialogfinished_event_name, dialogfinished_callback)) {
     return luaL_error(L, "Unable to register custom dialogfinished event: %s", SDL_GetError());
   }
+  if (!register_custom_event("projectsidebar", projectsidebar_callback))
+    return luaL_error(L, "Unable to register the Project Sidebar event: %s", SDL_GetError());
   luaL_newmetatable(L, API_TYPE_NATIVE_PLUGIN);
   lua_pushcfunction(L, f_library_gc);
   lua_setfield(L, -2, "__gc");

@@ -47,6 +47,8 @@ anvil_sources = [
     'window_backend.c',
     'input_latency_probe.c',
     'anvil_shell.c',
+    'project_sidebar.c',
+    'project_sidebar_scan.c',
     'resize_diagnostics.c',
     'renderer.c',
     'display_packet.c',
@@ -260,6 +262,11 @@ if host_machine.system() == 'windows'
 endif
 test('fuzzy', fuzzy_test, env: anvil_test_env)
 
+project_sidebar_test = executable('project_sidebar_test',
+    ['../tests/native/project_sidebar_test.c', 'project_sidebar.c'],
+    include_directories: include_directories('.'), dependencies: [lua_dep])
+test('project-sidebar', project_sidebar_test, env: anvil_test_env, suite: 'anvil')
+
 font_raster_test = executable('font_raster_test',
     ['../tests/native/font_raster_test.c'],
     include_directories: anvil_includes,
@@ -278,7 +285,7 @@ test('drop-events', drop_events_test, env: anvil_test_env)
 if host_machine.system() == 'windows'
     hosted_routing_test = executable('hosted_routing_test',
         ['../tests/native/hosted_routing_test.c', 'hosted_surface.c', 'surface_protocol.c',
-         'ipc_pipe.c', 'system_events.c', 'resize_diagnostics.c', 'input_latency_probe.c'],
+         'ipc_pipe.c', 'system_events.c', 'custom_events.c', 'resize_diagnostics.c', 'input_latency_probe.c'],
         include_directories: anvil_includes,
         dependencies: [sdl_dep],
         c_args: anvil_cargs,

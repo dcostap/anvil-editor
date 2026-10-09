@@ -117,7 +117,7 @@ def main() -> int:
         "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel",
         "loaded-switch", "loaded-launch", "loaded-restart", "identity-trailing", "identity-cwd",
         "identity-alias", "loaded-focus", "loaded-quit", "loaded-resolve", "identity-allocation",
-        "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart"],
+        "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart", "sidebar-model", "sidebar-worker", "dormant-terminal-sidebar"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)
@@ -152,6 +152,13 @@ def main() -> int:
                         fixture = "project_identity_probe.lua"
                     if action.startswith("dormant-"):
                         fixture = "dormant_projects_probe.lua"
+                    if action.startswith("sidebar-"):
+                        fixture = "project_sidebar_probe.lua"
+                        for name in ("Recent", "Other"):
+                            (case_dir / name).mkdir()
+                        (case_dir / "user/appstate.lua").write_text(
+                            'return {recents={' + ','.join(json.dumps(str(case_dir / name).replace("\\", "/"))
+                                for name in ("Project", "Recent", "Replacement")) + '}}', encoding="utf-8")
                     if action == "identity-alias":
                         subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", native_path(case_dir / "alias"),
                                         native_path(case_dir / "Project")], check=True, capture_output=True)
@@ -185,7 +192,7 @@ def main() -> int:
                     }
                     if action == "dialog-error":
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"
-                    if action.startswith(("fault-", "startup-", "loaded-", "dormant-")) or action in ("dialog-blocked-close", "hidden-startup"):
+                    if action.startswith(("fault-", "startup-", "loaded-", "dormant-", "sidebar-")) or action in ("dialog-blocked-close", "hidden-startup"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
                     if action.startswith("identity-"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
@@ -198,6 +205,8 @@ def main() -> int:
                             config["environment"]["ANVIL_PROJECT_SHORT_PATH"] = short_path.value
                     if action == "loaded-resolve":
                         config["environment"]["ANVIL_SURFACE_FAULT_IDENTITY_DELAY"] = "1"
+                    if action == "sidebar-worker":
+                        config["environment"]["ANVIL_SIDEBAR_SCAN_DELAY"] = "1"
                     if action in ("loaded-launch", "dormant-launch"):
                         config["environment"]["ANVIL_SURFACE_FAULT_STARTUP"] = "selection-launch"
                     if action.startswith("startup-"):

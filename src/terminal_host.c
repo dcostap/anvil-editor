@@ -140,6 +140,7 @@ static bool write_registry(TerminalHost *host) {
   if (ok) {
     fprintf(file, "return {\n  version = 1,\n  host_pid = %lu,\n  attached = %s,\n",
       (unsigned long)GetCurrentProcessId(), host->attached ? "true" : "false");
+    fprintf(file, "  busy = %s,\n", host->busy ? "true" : "false");
     registry_string(file, "session_id", host->id);
     registry_string(file, "host_creation_time", created);
     registry_string(file, "pipe_name", host->pipe_name);
@@ -673,9 +674,14 @@ int anvil_terminal_host_main(int argc, char **argv) {
       bool command_changed = strcmp(command, host.interrupted_command) != 0;
       if (command_changed) strcpy(host.interrupted_command, command);
       EnterCriticalSection(&host.lock);
-      if (host.busy != busy) { host.busy = busy; host.status_pending = true; }
+      bool busy_changed = host.busy != busy;
+      if (busy_changed) {
+        host.busy = busy;
+        host.status_pending = true;
+      }
       LeaveCriticalSection(&host.lock);
-      if (command_changed) write_registry(&host);
+      if (command_changed || busy_changed)
+        write_registry(&host);
       if (host.attached || busy) idle_since = 0;
       else if (!idle_since) idle_since = now;
       uint64_t last = InterlockedCompareExchange64(&host.last_output, 0, 0);

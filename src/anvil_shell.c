@@ -6,6 +6,8 @@
 #include "input_latency_probe.h"
 #include "cli_args.h"
 #include "win32_frame_hwnd.h"
+#include "project_sidebar.h"
+#include "project_sidebar_scan.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -33,6 +35,7 @@
 /* Owned-window fault actions. These require the isolated test environment. */
 #define SHELL_FAULT_MESSAGE (WM_APP + 0x4b)
 #define SHELL_CONTROL_MESSAGE (WM_APP + 0x4c)
+#define SHELL_MODEL_MESSAGE (WM_APP + 0x4d)
 enum {
   FAULT_ALLOC = 1,
   FAULT_EVENT,
@@ -139,6 +142,13 @@ typedef struct {
   unsigned resolve_revision;
   UINT_PTR resolve_timer;
   UINT_PTR retire_timer;
+  AnvilSidebarModel sidebar;
+  AnvilSidebarScan *sidebar_scan;
+  char *sidebar_userdir, *sidebar_recents;
+  UINT_PTR sidebar_timer;
+  Uint64 sidebar_next_scan;
+  unsigned sidebar_source_revision, sidebar_scan_revision, sidebar_jobs;
+  bool sidebar_seeded;
   SDL_Window *window;
   HWND hwnd;
   WNDPROC sdl_wndproc;
@@ -218,6 +228,11 @@ static void finish_resolutions(void);
 static bool unload_project_path(const char *path);
 static void begin_unload(ShellProject *project);
 static void drain_retired_projects(void);
+static void service_sidebar(void);
+static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size);
+static void sync_sidebar_model(void);
+static AnvilSidebarProject *sidebar_project(const char *path);
+static void probe_sidebar_model(WPARAM action, LPARAM value);
 static void reset_unload(ShellProject *project) {
   project->unloading = false;
   free(project->dormant);
@@ -578,6 +593,20 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_FLASH:
   case ANVIL_SURFACE_MSG_CLOSE_DECISION:
     return size == sizeof(AnvilSurfaceInt);
+  case ANVIL_SURFACE_MSG_SIDEBAR_QUERY:
+    return size == sizeof(AnvilSurfaceInt) && ((const AnvilSurfaceInt *)payload)->value >= 0 &&
+           ((const AnvilSurfaceInt *)payload)->value <=
+               ANVIL_SIDEBAR_PROJECT_LIMIT * (ANVIL_SIDEBAR_TERMINAL_LIMIT + 1);
+  case ANVIL_SURFACE_MSG_SIDEBAR_SOURCE: {
+    if (size < sizeof(AnvilSurfaceSidebarSource) + 4)
+      return false;
+    uint32_t directory_size = ((const AnvilSurfaceSidebarSource *)payload)->userdir_size;
+    const char *text = (const char *)payload + sizeof(AnvilSurfaceSidebarSource);
+    uint32_t bytes = size - sizeof(AnvilSurfaceSidebarSource);
+    return directory_size > 1 && directory_size < 32768 && directory_size < bytes - 1 &&
+           !text[directory_size - 1] && !memchr(text, 0, directory_size - 1) && !text[bytes - 1] &&
+           !memchr(text + directory_size, 0, bytes - directory_size - 1);
+  }
   case ANVIL_SURFACE_MSG_TEXT_INPUT:
     return size == sizeof(AnvilSurfaceTextInput);
   case ANVIL_SURFACE_MSG_CLEAR_IME:
@@ -1905,6 +1934,21 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     }
   }
   switch (message->type) {
+  case ANVIL_SURFACE_MSG_SIDEBAR_SOURCE:
+    sidebar_source(payload, message->size);
+    break;
+  case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: {
+    sync_sidebar_model();
+    char *snapshot = anvil_sidebar_snapshot(&shell.sidebar, (size_t)value);
+    const char *reply =
+        snapshot
+            ? snapshot
+            : "return {error=\"Project Sidebar snapshot exceeds its bound or allocation failed\"}";
+    shell_send(project, ANVIL_SURFACE_MSG_SIDEBAR_MODEL, reply, (uint32_t)strlen(reply) + 1, NULL,
+               0);
+    free(snapshot);
+    break;
+  }
   case ANVIL_SURFACE_MSG_SELECT_PROJECT:
     if (!shell.closing)
       select_project_path(payload);
@@ -2630,6 +2674,10 @@ static void push_window_event(SDL_EventType type, float x, float y) {
 static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
   ShellProject *project = shell.selected;
   if (msg == WM_TIMER) {
+    if (shell.sidebar_timer && wparam == shell.sidebar_timer) {
+      service_sidebar();
+      return 0;
+    }
     if (shell.retire_timer && wparam == shell.retire_timer) {
       drain_retired_projects();
       return 0;
@@ -2681,6 +2729,12 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
     if (probe && !strcmp(probe, "1") && wparam <= 4)
       perform_control((int)wparam);
+    return 0;
+  }
+  if (msg == SHELL_MODEL_MESSAGE) {
+    const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
+    if (probe && !strcmp(probe, "1"))
+      probe_sidebar_model(wparam, lparam);
     return 0;
   }
   if (anvil_routing_probe_message(shell.window, msg, wparam, lparam)) return 0;
@@ -3354,6 +3408,14 @@ static void finish_resolutions(void) {
         dormant_link = &(*dormant_link)->next;
       DormantProject *dormant = *dormant_link;
       bool created = job->initial || !project;
+      /* Reserve a list entry before creating another runtime. Every runtime
+       * can then become Dormant without dropping another Dormant record. */
+      if (!project && !sidebar_project(job->path)) {
+        SDL_Log(
+            "Shell rejected Project selection: Project Sidebar list is full or allocation failed");
+        free_resolution(job);
+        continue;
+      }
       if (!project)
         project = new_project();
       if (!project)
@@ -3461,6 +3523,169 @@ static void drain_retired_projects(void) {
   }
 }
 
+static AnvilSidebarProject *sidebar_project(const char *path) {
+  AnvilSidebarProject *row = anvil_sidebar_find(&shell.sidebar, path);
+  if (!row) {
+    if (!anvil_sidebar_merge_recents(&shell.sidebar, &path, 1)) {
+      SDL_Log("Shell Project Sidebar rejected a path: list bound or allocation failure");
+      return NULL;
+    }
+    row = anvil_sidebar_find(&shell.sidebar, path);
+  }
+  return row;
+}
+static void sync_sidebar_model(void) {
+  for (ShellProject *project = shell.projects; project; project = project->next) {
+    if (!project->project_path)
+      continue;
+    AnvilSidebarProject *row = sidebar_project(project->project_path);
+    if (!row)
+      continue;
+    bool live = project->process.hProcess &&
+                WaitForSingleObject(project->process.hProcess, 0) == WAIT_TIMEOUT;
+    bool deferred = false;
+    for (size_t i = 0; i < SDL_arraysize(project->deferred_dialogs); i++)
+      deferred |= project->deferred_dialogs[i] != NULL;
+    const AnvilSidebarState states[] = {ANVIL_SIDEBAR_STARTING, ANVIL_SIDEBAR_READY,
+                                        ANVIL_SIDEBAR_CLOSING, ANVIL_SIDEBAR_FAILED,
+                                        ANVIL_SIDEBAR_DORMANT};
+    AnvilSidebarState state = states[project->state];
+    if (project->failed_close && !live && !project->unloading)
+      state = ANVIL_SIDEBAR_DORMANT;
+    anvil_sidebar_set_runtime(&shell.sidebar, row, project->id,
+                              live ? project->process.dwProcessId : 0, state,
+                              project == shell.selected && state != ANVIL_SIDEBAR_DORMANT, deferred,
+                              live && (project->close_waiting || project->close_prompt));
+  }
+  for (DormantProject *project = shell.dormants; project; project = project->next) {
+    AnvilSidebarProject *row = sidebar_project(project->path);
+    if (row)
+      anvil_sidebar_set_runtime(&shell.sidebar, row, project->id, 0, ANVIL_SIDEBAR_DORMANT, false,
+                                false, false);
+  }
+}
+static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size) {
+  (void)size; /* The reader checked both complete strings. */
+  const char *directory = (const char *)(source + 1), *recents = directory + source->userdir_size;
+  if (shell.sidebar_userdir && strcmp(shell.sidebar_userdir, directory)) {
+    SDL_Log("Shell rejected a Project Sidebar source from another user directory");
+    return;
+  }
+  char *directory_copy = _strdup(directory), *source_copy = _strdup(recents);
+  if (!directory_copy || !source_copy) {
+    free(directory_copy);
+    free(source_copy);
+    SDL_Log("Shell rejected Project Sidebar source: allocation failed");
+    return;
+  }
+  free(shell.sidebar_userdir);
+  free(shell.sidebar_recents);
+  shell.sidebar_userdir = directory_copy;
+  shell.sidebar_recents = source_copy;
+  shell.sidebar_source_revision++;
+  shell.sidebar_next_scan = 0;
+  if (!shell.sidebar_timer)
+    shell.sidebar_timer = SetTimer(shell.hwnd, 0x8002, 100, NULL);
+  if (!shell.sidebar_timer)
+    SDL_Log("Shell Project Sidebar timer failed");
+  service_sidebar();
+}
+static void service_sidebar(void) {
+  if (shell.sidebar_scan && anvil_sidebar_scan_done(shell.sidebar_scan)) {
+    bool limited = false;
+    const AnvilSidebarModel *result = anvil_sidebar_scan_result(shell.sidebar_scan, &limited);
+    if (result && shell.sidebar_scan_revision == shell.sidebar_source_revision) {
+      const char *paths[ANVIL_SIDEBAR_PROJECT_LIMIT];
+      for (size_t i = 0; i < result->count; i++)
+        paths[i] = result->projects[i]->path;
+      if (!shell.sidebar_seeded)
+        shell.sidebar.seeded = false;
+      if (anvil_sidebar_merge_recents(&shell.sidebar, paths, result->count)) {
+        shell.sidebar_seeded = true;
+        for (size_t i = 0; i < result->count; i++) {
+          const AnvilSidebarProject *source = result->projects[i];
+          AnvilSidebarProject *row = anvil_sidebar_find(&shell.sidebar, source->path);
+          if (row->exists != source->exists) {
+            row->exists = source->exists;
+            shell.sidebar.revision++;
+          }
+          AnvilSidebarTerminal sessions[ANVIL_SIDEBAR_TERMINAL_LIMIT];
+          size_t count = source->terminal_count;
+          if (count)
+            memcpy(sessions, source->terminals, count * sizeof(*sessions));
+          /* An incomplete scan cannot prove that an old Session was removed. */
+          if (limited)
+            for (size_t j = 0; j < row->terminal_count && count < SDL_arraysize(sessions); j++) {
+              bool found = false;
+              for (size_t k = 0; k < count; k++)
+                found |= !strcmp(sessions[k].id, row->terminals[j].id);
+              if (!found)
+                sessions[count++] = row->terminals[j];
+            }
+          if (!anvil_sidebar_set_terminals(&shell.sidebar, row, sessions, count))
+            limited = true;
+        }
+      } else
+        limited = true;
+    } else if (!result) {
+      limited = true;
+      SDL_Log("Shell Project Sidebar source scan failed; retain the previous model");
+    }
+    if (shell.sidebar_scan_revision == shell.sidebar_source_revision &&
+        shell.sidebar.status_limited != limited) {
+      shell.sidebar.status_limited = limited;
+      shell.sidebar.revision++;
+    }
+    anvil_sidebar_scan_free(shell.sidebar_scan);
+    shell.sidebar_scan = NULL;
+    sync_sidebar_model();
+  }
+  if (!shell.sidebar_scan && shell.sidebar_userdir && SDL_GetTicks() >= shell.sidebar_next_scan) {
+    const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE"),
+               *delay = SDL_getenv("ANVIL_SIDEBAR_SCAN_DELAY");
+    bool pause =
+        shell.sidebar_jobs == 0 && probe && !strcmp(probe, "1") && delay && !strcmp(delay, "1");
+    shell.sidebar_scan =
+        anvil_sidebar_scan_start(shell.sidebar_userdir, shell.sidebar_recents, &shell.sidebar,
+                                 canonical_project_identity, pause);
+    shell.sidebar_scan_revision = shell.sidebar_source_revision;
+    shell.sidebar_jobs++;
+    shell.sidebar_next_scan = SDL_GetTicks() + 2000;
+    if (!shell.sidebar_scan)
+      SDL_Log("Shell Project Sidebar worker failed; retain the previous model");
+  }
+}
+
+static void probe_sidebar_model(WPARAM action, LPARAM value) {
+  sync_sidebar_model();
+  if (action == 1) {
+    for (size_t i = 0; i < shell.sidebar.count; i++)
+      if (shell.sidebar.projects[i]->row_id == (uint32_t)value) {
+        select_project_path(shell.sidebar.projects[i]->path);
+        return;
+      }
+  } else if (action == 0 && value >= 0) {
+    const char *root = SDL_getenv("ANVIL_PROJECT_PROBE_ROOT");
+    if (!root)
+      return;
+    char *snapshot = anvil_sidebar_snapshot(&shell.sidebar, (size_t)value);
+    if (!snapshot)
+      return;
+    char path[32768];
+    int length = snprintf(path, sizeof(path), "%s/sidebar-%zu.lua", root, (size_t)value);
+    wchar_t *wide = length > 0 && length < (int)sizeof(path)
+                        ? (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", path, strlen(path) + 1)
+                        : NULL;
+    FILE *file = wide ? _wfopen(wide, L"wb") : NULL;
+    if (file) {
+      fputs(snapshot, file);
+      fclose(file);
+    }
+    SDL_free(wide);
+    free(snapshot);
+  }
+}
+
 SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   ShellProject *project = new_project();
   if (!project)
@@ -3530,6 +3755,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
   (void)appstate;
   check_gpu_failure();
   finish_resolutions();
+  service_sidebar();
   for (ShellProject *item = shell.projects; item; item = item->next) {
     finish_launch(item);
     check_transport_failure(item);
@@ -3572,6 +3798,17 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   (void)result;
   /* Project loss detection owns save/detach and its deadline. Never kill it with a shell job. */
   Uint64 deadline = SDL_GetTicks() + 1000;
+  if (shell.sidebar_timer)
+    KillTimer(shell.hwnd, shell.sidebar_timer);
+  if (shell.sidebar_scan && !anvil_sidebar_scan_stop(shell.sidebar_scan, deadline)) {
+    SDL_Log("Shell Sidebar worker shutdown deadline expired; exit this shell only");
+    _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+  }
+  if (shell.sidebar_scan)
+    anvil_sidebar_scan_free(shell.sidebar_scan);
+  anvil_sidebar_destroy(&shell.sidebar);
+  free(shell.sidebar_userdir);
+  free(shell.sidebar_recents);
   for (ProjectResolve *job = shell.resolvers; job; job = job->next) {
     while (!SDL_GetAtomicInt(&job->done)) {
       if (SDL_GetTicks() >= deadline) {
