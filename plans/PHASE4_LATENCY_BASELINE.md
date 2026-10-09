@@ -7,12 +7,17 @@ Both freshly built revisions show the large slowdown in the locked, display-off 
 This is not a candidate-only regression. A candidate bisect is not justified by these results.
 The cause of the environment or harness effect remains unproved.
 An unlocked, display-on repeat remains necessary before accepting the baseline.
+The user accepted the evidence: no candidate regression; the shift tracks Present pacing in the locked, display-off session.
+Wait for the user's unlocked/display-on confirmation before the same matched, non-diagnostic repeat.
+Close the milestone-2 entry gate only if medians return to the historical range.
+Otherwise report the results and stop. Do not operate the user's Windows.
 Do not switch Windows desktops or operate the user's Windows to obtain that control.
 
 Hosted mode stays opt-in. Differences below about 2 ms remain noise.
 The probe measures generated input to Present, not physical input or scanout.
 The historical 761 ms to 9 s tails remain unexplained.
 These comparisons do not measure the subsequent Sidebar follow-up commit.
+The locked/display-off cases remain diagnostic evidence, not an eligible baseline or performance gate.
 
 ## Fresh build method
 
@@ -119,3 +124,28 @@ It does not establish the cause of software or historical multi-second delays.
 An earlier statistics attempt failed while reading a partially written console-state JSON file.
 Its native 120-input result and CSV remain in `%TEMP%/anvil-baseline-present-stats-3xprnkux`.
 The script now retries metadata reads. The linked rerun does not replace the original artifact.
+
+## Runner environment validity
+
+The runner now reads console state directly before and after each typing case.
+`tools/windows_console_state.py` uses WTS lock flags and the initial console-display power notification.
+It does not create an Anvil Window, change a desktop, unlock Windows, or change display power.
+There is no persistent observer process or temporary state-file dependency.
+
+Locked or display-off state at either boundary marks `environment_invalid=true` and `baseline_eligible=false`.
+Unavailable state also excludes the case. Native completeness remains a separate `ok` result.
+All raw samples and both state snapshots remain in the public JSON result.
+Baseline summaries include only complete, environment-valid cases.
+CLI exit 1 indicates failed or incomplete execution. Exit 2 indicates an invalid environment without execution failure.
+Lifecycle correctness cases do not use the typing baseline gate.
+
+Red-green seam: the public CLI and JSON result, with fakes only at the external launcher and console-state boundaries.
+Before the fix, locked/off cases at either boundary returned success: `0 != 2: Invalid environment passed the public CLI`.
+After the fix, all four focused tests pass, including normal state, unknown state, and the existing incomplete-probe check.
+Command: `python -m unittest discover -s tests/tools -p test_surface_latency_probe.py`.
+Python compilation and the diff check also pass.
+An observation-only native read reports console session 2 locked and the display off.
+No new latency run started. The matched repeat still waits for the user's confirmation.
+
+The matched-repeat script now uses the runner's direct boundary snapshots and eligibility fields.
+It does not read or overwrite results with the stopped temporary observer's state file.

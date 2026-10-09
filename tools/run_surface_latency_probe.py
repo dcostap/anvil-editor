@@ -6,6 +6,9 @@ latency probe injects tagged key presses into the window that receives real
 input (the Anvil window, or the shell window), and records the time until a
 presented frame contains the edit. Hosted cases therefore include the pipe hop,
 the hosted render, the frame handoff, and the shell composite.
+Locked, display-off, or unavailable console state invalidates a typing baseline.
+Raw samples remain in the case result. Invalid cases do not enter its summary.
+Exit 1 means incomplete/failed execution. Exit 2 means environment-invalid execution.
 
     python tools/run_surface_latency_probe.py --no-build
 """
@@ -25,6 +28,7 @@ from typing import Any
 from run_render_perf_gate import (
     ROOT, build_anvil, copy_app_tree, invoke_hidden, native_path, read_key_values,
 )
+from windows_console_state import read_console_state
 
 DISABLED_PLUGINS = "ipc,autorestart,autoreload,autosave_fast,autosaveonfocuslost"
 
@@ -65,7 +69,9 @@ def run_case(exe: Path, work: Path, mode: str, renderer: str, samples: int,
     config_path = run_dir / "launch.json"
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     timeout = int(warmup_ms / 1000 + samples * 0.2 + 45)
+    console_before = read_console_state()
     launcher = invoke_hidden(config_path, timeout)
+    console_after = read_console_state()
     values = read_key_values(result_file)
     case = {
         "mode": mode, "renderer": renderer, "run": run_index,
@@ -74,6 +80,7 @@ def run_case(exe: Path, work: Path, mode: str, renderer: str, samples: int,
         "requested": int(values.get("requested", 0) or 0),
         "completed": int(values.get("completed", 0) or 0),
         "run_dir": str(run_dir),
+        "console_before": console_before, "console_after": console_after,
     }
     for key in ("min_ms", "p50_ms", "p90_ms", "p99_ms", "max_ms", "mean_ms"):
         if key in values:
@@ -83,11 +90,25 @@ def run_case(exe: Path, work: Path, mode: str, renderer: str, samples: int,
     case["ok"] = (case["done"] and case["requested"] == samples
                   and case["completed"] == samples and len(case["samples_ms"]) == samples
                   and case["exit_code"] == 0 and not case["timed_out"])
+    reasons = []
+    for boundary, state in (("before", console_before), ("after", console_after)):
+        if state.get("locked") is True:
+            reasons.append(f"{boundary}: console locked")
+        elif state.get("locked") is not False:
+            reasons.append(f"{boundary}: console lock state unavailable")
+        if state.get("display_state") == "off":
+            reasons.append(f"{boundary}: display off")
+        elif state.get("display_state") not in ("on", "dimmed") or "display_error" in state:
+            reasons.append(f"{boundary}: display state unavailable")
+    case["environment_invalid"] = bool(reasons)
+    case["environment_invalid_reasons"] = reasons
+    case["baseline_eligible"] = case["ok"] and not reasons
     return case
 
 
 def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
-    samples = sorted(value for case in cases for value in case["samples_ms"])
+    eligible = [case for case in cases if case["baseline_eligible"]]
+    samples = sorted(value for case in eligible for value in case["samples_ms"])
 
     def pick(quantile: float) -> float:
         if not samples:
@@ -97,6 +118,8 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "runs": len(cases),
         "ok_runs": sum(1 for case in cases if case.get("ok", False)),
+        "eligible_runs": len(eligible),
+        "environment_invalid_runs": sum(1 for case in cases if case["environment_invalid"]),
         "samples": len(samples),
         "p50_ms": pick(0.50), "p90_ms": pick(0.90), "p99_ms": pick(0.99),
         "max_ms": samples[-1] if samples else 0.0,
@@ -237,26 +260,29 @@ def main() -> int:
                     case = run_case(exe, work, mode, renderer, args.samples, args.warmup_ms, run_index)
                     cases.append(case)
                     status = "ok" if case["ok"] else f"failed exit={case['exit_code']}"
+                    if case["environment_invalid"]:
+                        status += " environment-invalid (" + "; ".join(case["environment_invalid_reasons"]) + ")"
                     print(f"{mode:7} {renderer:8} run {run_index}: {status} "
                           f"{case['completed']}/{case['requested']} p50={case.get('p50_ms', 0):.2f}ms",
                           flush=True)
 
         summary = {}
         print()
-        print(f"{'mode':7} {'renderer':8} {'runs':>5} {'samples':>8} {'p50':>8} {'p90':>8} "
+        print("Baseline summary excludes incomplete and environment-invalid runs.")
+        print(f"{'mode':7} {'renderer':8} {'valid':>5} {'samples':>8} {'p50':>8} {'p90':>8} "
               f"{'p99':>8} {'max':>8} {'mean':>8}")
         for renderer in renderers:
             for mode in modes:
                 group = [case for case in cases if case["mode"] == mode and case["renderer"] == renderer]
                 result = summarize(group)
                 summary[f"{mode}-{renderer}"] = result
-                print(f"{mode:7} {renderer:8} {result['ok_runs']}/{result['runs']:<3} {result['samples']:>8} "
+                print(f"{mode:7} {renderer:8} {result['eligible_runs']}/{result['runs']:<3} {result['samples']:>8} "
                       f"{result['p50_ms']:>8.2f} {result['p90_ms']:>8.2f} {result['p99_ms']:>8.2f} "
                       f"{result['max_ms']:>8.2f} {result['mean_ms']:>8.2f}")
         if args.json:
             args.json.write_text(json.dumps({"summary": summary, "cases": cases}, indent=2), encoding="utf-8")
         failed = any(not case["ok"] for case in cases)
-        return 1 if failed else 0
+        return 1 if failed else 2 if any(case["environment_invalid"] for case in cases) else 0
     finally:
         if args.keep:
             print(f"work directory: {work}")
