@@ -12,9 +12,14 @@ ffi.cdef [[
   int __stdcall CloseHandle(void *handle);
   int __stdcall PostMessageW(void *window, unsigned int message, uintptr_t wparam, intptr_t lparam);
   int __stdcall IsIconic(void *window);
+  int __stdcall IsWindowVisible(void *window);
+  int __stdcall TerminateProcess(void *handle, unsigned int code);
+  long __stdcall NtSuspendProcess(void *handle);
+  long __stdcall NtResumeProcess(void *handle);
   unsigned long __stdcall GetWindowThreadProcessId(void *window, unsigned long *pid);
 ]]
 local kernel, user32 = ffi.load("kernel32"), ffi.load("user32")
+local ntdll = ffi.load("ntdll")
 local root = assert(os.getenv("ANVIL_PROJECT_PROBE_ROOT"))
 local function save(name, value)
   local file = assert(io.open(root .. "/" .. name .. ".lua", "wb"))
@@ -76,6 +81,66 @@ core.add_background_thread(function()
       handles[1] = kernel.OpenProcess(0x100000, 0, a.pid)
       assert(handles[1] ~= nil, "Cannot retain owned A process")
       local hwnd = window(a.shell_pid)
+      if action == "sidebar-process" then
+        local function sidebar_pid(old)
+          local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+          local text = file:read("*a"); file:close()
+          local found
+          for value in text:gmatch("Shell Sidebar connected: pid=(%d+)") do
+            if tonumber(value) ~= old then found = tonumber(value) end
+          end
+          return found
+        end
+        local first = wait(function() return sidebar_pid() end, 15, "Sidebar process did not connect")
+        local function ready(pid)
+          local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+          local text = file:read("*a"); file:close()
+          local connection = text:match("Shell Sidebar connected: pid=" .. pid .. " connection=(%d+)")
+          return connection and text:find("Shell state: Ready Project=0 connection=" .. connection, 1, true)
+        end
+        wait(function() return ready(first) end, 10, "Sidebar did not publish its first frame")
+        assert(first ~= a.pid and first ~= a.shell_pid, "Sidebar shares a Project or shell process")
+        local handle = kernel.OpenProcess(0x1fffff, 0, first)
+        handles[#handles + 1] = handle; assert(handle ~= nil)
+        assert(ntdll.NtSuspendProcess(handle) == 0)
+        user32.PostMessageW(hwnd, 0x112, 0xF020, 0)
+        wait(function() return user32.IsIconic(hwnd) ~= 0 end, 1, "Sidebar hang blocked native Minimize")
+        user32.PostMessageW(hwnd, 0x112, 0xF120, 0)
+        wait(function() return user32.IsIconic(hwnd) == 0 end, 1, "Sidebar hang blocked native Restore")
+        save("sidebar-project-input", true)
+        wait(function() return read("sidebar-project-input-ok") end, 5, "Sidebar hang blocked Project input")
+        assert(ntdll.NtResumeProcess(handle) == 0)
+        assert(kernel.TerminateProcess(handle, 107))
+        wait(function() return kernel.WaitForSingleObject(handle, 0) == 0 end, 5)
+        user32.PostMessageW(hwnd, 0x804c, 5, 0)
+        local second = wait(function() return sidebar_pid(first) end, 15, "Sidebar Restart did not connect")
+        wait(function() return ready(second) end, 10, "Restarted Sidebar did not publish a frame")
+        assert(second ~= first and kernel.WaitForSingleObject(handles[1], 0) ~= 0, "Sidebar Restart replaced A")
+        save("sidebar-process-finish", true)
+        wait(function() return not subject:running() end, 15)
+        return
+      end
+      if action == "sidebar-demand" then
+        wait(function() return read("demand-ready") end, 15)
+        save("demand-hide", true)
+        wait(function() return user32.IsWindowVisible(hwnd) == 0 end, 5, "Owned Window did not become hidden")
+        system.sleep(2)
+        assert(os.rename(root .. "/Recent", root .. "/RecentMoved"))
+        coroutine.yield(7)
+        user32.PostMessageW(hwnd, 0x804d, 0, 0)
+        local page = wait(function() return read("sidebar-0") end, 3)
+        local recent
+        for _, item in ipairs(page.items) do
+          if item.kind == "project" and item.path:gsub("\\", "/") == root .. "/Recent" then recent = item end
+        end
+        assert(recent and recent.exists, "Unrequested status scans changed the idle model")
+        save("demand-query", true)
+        wait(function() return read("demand-fresh") end, 10)
+        assert(os.rename(root .. "/RecentMoved", root .. "/Recent"))
+        save("demand-finish", true)
+        wait(function() return not subject:running() end, 15)
+        return
+      end
       if action == "sidebar-worker" then
         wait(function()
           local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
@@ -153,6 +218,31 @@ core.add_background_thread(function()
       assert(initial[1].path:gsub("\\", "/") == directory and initial[2].path:gsub("\\", "/") == root .. "/Recent",
         "Recent source order changed")
       assert(row(initial, "Recent").exists, "Worker did not check recent paths")
+      if action == "sidebar-process" then
+        wait(function() return read("sidebar-project-input") end, 30)
+        local editor = core.open_file(directory .. "/edited.txt")
+        core.set_active_view(editor)
+        core.on_event("textinput", "SIDEBAR_HANG_INPUT")
+        assert(editor.buffer:get_text(1, 1, 1, 19):find("SIDEBAR_HANG_INPUT", 1, true))
+        save("sidebar-project-input-ok", true)
+        wait(function() return read("sidebar-process-finish") end, 30)
+        quit()
+        return
+      end
+      if action == "sidebar-demand" then
+        save("demand-ready", true)
+        wait(function() return read("demand-hide") end, 15)
+        system.set_window_visible(core.window, false)
+        wait(function() return read("demand-query") end, 15)
+        system.set_window_visible(core.window, true)
+        model_until(function(model) return not row(model, "Recent").exists end, "Stale query did not refresh status")
+        core.recent_projects[#core.recent_projects + 1] = root .. "/Other"
+        model_until(function(model) return row(model, "Other") end, "Changed recent source did not reach the shell")
+        save("demand-fresh", true)
+        wait(function() return read("demand-finish") end, 10)
+        quit()
+        return
+      end
       local terminals = row(initial, "Recent").terminals
       assert(terminals[1].id == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" and terminals[1].state == "exited" and
         terminals[2].id == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" and terminals[2].state == "lost" and terminals[2].busy == -1,

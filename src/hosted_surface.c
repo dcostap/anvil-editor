@@ -37,7 +37,7 @@ typedef struct {
 
 static struct {
   bool active;
-  bool valid, restarted;
+  bool valid, restarted, sidebar;
   DWORD shell_pid;
   HANDLE shell_process, loss_signal, exit_sent;
   Uint32 loss_event;
@@ -92,6 +92,14 @@ bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
   }
   size_t prefix_len = strlen(ANVIL_SURFACE_PIPE_ARG);
   for (int i = 1; i < *argc; i++) {
+    if (!strcmp(argv[i], "--internal-sidebar")) {
+      hosted.sidebar = true;
+      for (int j = i; j < *argc - 1; j++)
+        argv[j] = argv[j + 1];
+      argv[--(*argc)] = NULL;
+      i--;
+      continue;
+    }
     if (!strcmp(argv[i], ANVIL_PROJECT_ARGUMENTS_ARG)) {
       for (int j = i; j < *argc - 1; j++) argv[j] = argv[j + 1];
       argv[--(*argc)] = NULL; i--; continue;
@@ -114,7 +122,9 @@ bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
     argv[*argc] = NULL;
     i--;
   }
-  if (project != hosted.active || ((hosted.restarted || original_arguments) && !project)) hosted.valid = false;
+  if (project != hosted.active ||
+      ((hosted.restarted || original_arguments || hosted.sidebar) && !project))
+    hosted.valid = false;
   return hosted.active;
 }
 
@@ -149,6 +159,7 @@ static void signal_loss(const char *cause, uint16_t type, size_t bytes) {
 bool anvil_hosted_surface_active(void) {
   return hosted.active;
 }
+bool anvil_hosted_surface_sidebar(void) { return hosted.active && hosted.sidebar; }
 void anvil_hosted_surface_render_failed(const char *cause) {
   signal_loss(cause, ANVIL_SURFACE_MSG_FRAME, 0);
 }
@@ -287,7 +298,7 @@ static void dispatch_message(HostedMessage *message) {
     event.data1 = _strdup((const char *)message->payload);
     if (!event.data1 || !push_custom_event("projectsidebar", &event)) {
       free(event.data1);
-      signal_loss("Sidebar snapshot event failed", message->type, message->size);
+      SDL_Log("Sidebar snapshot page dropped: copy or event delivery failed; request can retry");
     }
     break;
   }
@@ -877,6 +888,7 @@ bool anvil_hosted_surface_frame_metrics(int *button, int *title, int *border) {
 }
 
 #else
+bool anvil_hosted_surface_sidebar(void) { return false; }
 
 bool anvil_hosted_surface_parse_args(int *argc, char **argv) { (void)argc; (void)argv; return false; }
 bool anvil_hosted_surface_connect(void) { return false; }

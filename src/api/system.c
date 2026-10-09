@@ -1800,6 +1800,10 @@ static int f_test_surface_failure(lua_State *L) {
     anvil_hosted_surface_test_packet(!strcmp(fault, "stale"));
   return 0;
 }
+static int f_is_sidebar_surface(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_sidebar());
+  return 1;
+}
 
 
 typedef void (*fptr)(void);
@@ -2395,6 +2399,7 @@ static const luaL_Reg lib[] = {
   { "select_project",        f_select_project        },
   { "unload_project",        f_unload_project        },
   { "publish_project_sidebar", f_publish_project_sidebar },
+  { "is_sidebar_surface", f_is_sidebar_surface },
   { "request_project_sidebar", f_request_project_sidebar },
   { "get_window_process_id", f_get_window_process_id },
   { "get_window_controls",   f_get_window_controls },

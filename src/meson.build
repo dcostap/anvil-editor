@@ -283,6 +283,10 @@ drop_events_test = executable('drop_events_test',
 test('drop-events', drop_events_test, env: anvil_test_env)
 
 if host_machine.system() == 'windows'
+    sidebar_scan_test = executable('sidebar_scan_test',
+        ['../tests/native/project_sidebar_scan_test.c', 'project_sidebar.c', 'project_sidebar_scan.c'],
+        include_directories: anvil_includes, dependencies: [sdl_dep, lua_dep], c_args: anvil_cargs)
+    test('sidebar-scan', sidebar_scan_test, env: anvil_test_env, suite: 'anvil')
     hosted_routing_test = executable('hosted_routing_test',
         ['../tests/native/hosted_routing_test.c', 'hosted_surface.c', 'surface_protocol.c',
          'ipc_pipe.c', 'system_events.c', 'custom_events.c', 'resize_diagnostics.c', 'input_latency_probe.c'],
@@ -293,6 +297,7 @@ if host_machine.system() == 'windows'
     test('hosted-routing', hosted_routing_test, env: anvil_test_env, suite: 'anvil')
     test('hosted-motion-stall', hosted_routing_test, args: ['motion'], env: anvil_test_env, suite: 'anvil')
     test('hosted-dialogs', hosted_routing_test, args: ['dialogs'], env: anvil_test_env, suite: 'anvil')
+    test('sidebar-page-drop', hosted_routing_test, args: ['sidebar-drop'], env: anvil_test_env, suite: 'anvil')
 endif
 
 git_status_index_test = executable('git_status_index_test',

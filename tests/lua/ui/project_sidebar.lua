@@ -52,4 +52,22 @@ test.describe("Project Sidebar snapshots", function()
     test.equal(#core.project_sidebar, 1)
     test.equal(core.project_sidebar[1].path, "C:/new")
   end)
+  test.it("publishes changed recent Projects but not an unchanged source", function()
+    local recents, publish = core.recent_projects, system.publish_project_sidebar
+    local sources = {}
+    system.publish_project_sidebar = function(_, text) sources[#sources + 1] = assert(loadstring("return " .. text))(); return true end
+    local ok, err = pcall(function()
+      core.recent_projects = {"C:/Newest", "C:/Older"}
+      test.ok(core.publish_project_sidebar())
+      test.equal(sources[#sources][1], "C:/Newest")
+      local count = #sources
+      core.publish_project_sidebar()
+      test.equal(#sources, count)
+      core.recent_projects[2] = "C:/Changed"
+      core.publish_project_sidebar()
+      test.equal(sources[#sources][2], "C:/Changed")
+    end)
+    core.recent_projects, system.publish_project_sidebar = recents, publish
+    if not ok then error(err) end
+  end)
 end)

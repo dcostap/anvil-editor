@@ -312,14 +312,7 @@ if project:find("/driver$", 1) then
             save(result_path, {ok = true, action = action, mode = mode})
             return
           end
-          local rect = ffi.new("struct RECT[1]"); user32.GetClientRect(window, rect)
-          local scale = state.controls_w / 138
-          local x = (48 * scale + tonumber(rect[0].right)) / 2
-          local y = (state.controls_h + tonumber(rect[0].bottom)) / 2 + 46 * scale
-          local point = math.floor(x - 78 * scale) + math.floor(y) * 65536
-          user32.PostMessageW(window, 0x201, 1, point)
-          coroutine.yield(.1)
-          user32.PostMessageW(window, 0x202, 0, point)
+          user32.PostMessageW(window, 0x804c, 3, 0)
           assert(wait_for(function() return load(root .. "/replacement.lua") end, 12), "Failed Restart did not recover the owned Project")
           local replacement = load(root .. "/replacement.lua")
           assert(replacement.pid ~= state.pid and replacement.shell_pid == state.shell_pid)

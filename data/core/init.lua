@@ -146,6 +146,7 @@ local function update_recents_project(action, dir_path_abs)
   if action == "add" then
     table.insert(recents, 1, dirname)
   end
+  if core.window then core.publish_project_sidebar() end
 end
 
 
@@ -883,9 +884,30 @@ function core.init()
     startup.stage_end(core_init_stage, "ok", "files=" .. tostring(#files))
   end
   if system.is_hosted_surface() then
-    local ok = system.publish_project_sidebar(USERDIR, common.serialize(core.recent_projects))
+    local ok = core.publish_project_sidebar()
     core.log_quiet("Project Sidebar recent source submitted: %s", tostring(ok))
+    core.add_background_thread(function()
+      while true do
+        core.publish_project_sidebar()
+        coroutine.yield(.5)
+      end
+    end)
   end
+end
+
+local published_sidebar_recents
+function core.publish_project_sidebar()
+  if not system.is_hosted_surface() then return false end
+  local source = {}
+  for i = 1, math.min(#core.recent_projects, 256) do source[i] = core.recent_projects[i] end
+  local unchanged = published_sidebar_recents and #source == #published_sidebar_recents
+  for i = 1, #source do
+    if not unchanged or source[i] ~= published_sidebar_recents[i] then unchanged = false; break end
+  end
+  if unchanged then return true end
+  if not system.publish_project_sidebar(USERDIR, common.serialize(source)) then return false end
+  published_sidebar_recents = source
+  return true
 end
 
 

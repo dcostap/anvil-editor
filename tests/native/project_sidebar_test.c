@@ -58,6 +58,28 @@ static void lifecycle(void) {
         "Load changed identity or list order");
   anvil_sidebar_destroy(&model);
 }
+static void capacity(void) {
+  AnvilSidebarModel model = {0};
+  char names[260][32];
+  const char *paths[260];
+  for (size_t i = 0; i < 260; i++) {
+    snprintf(names[i], sizeof(names[i]), "C:/Recent-%zu", i);
+    paths[i] = names[i];
+  }
+  CHECK(anvil_sidebar_merge_recents(&model, paths, 260), "Large recent source was rejected");
+  CHECK(model.count == 256 && anvil_sidebar_find(&model, paths[0]) &&
+            anvil_sidebar_find(&model, paths[255]) && !anvil_sidebar_find(&model, paths[256]),
+        "Large source did not keep its newest entries");
+  AnvilSidebarProject *live = anvil_sidebar_find(&model, paths[255]);
+  anvil_sidebar_set_runtime(&model, live, 7, 0, ANVIL_SIDEBAR_STARTING, false, false, false);
+  const char *next = "C:/New";
+  CHECK(anvil_sidebar_merge_recents(&model, &next, 1), "Full list refused a new Project");
+  CHECK(anvil_sidebar_at(&model, 0) == anvil_sidebar_find(&model, next) &&
+            anvil_sidebar_find(&model, paths[255]) == live &&
+            !anvil_sidebar_find(&model, paths[254]) && model.count == 256,
+        "Eviction lost a runtime or retained the oldest Dormant row");
+  anvil_sidebar_destroy(&model);
+}
 static void terminals(void) {
   AnvilSidebarModel model = {0};
   const char *paths[] = {"C:/B"};
@@ -155,6 +177,7 @@ static void pages(void) {
 }
 int main(void) {
   order();
+  capacity();
   lifecycle();
   terminals();
   pages();

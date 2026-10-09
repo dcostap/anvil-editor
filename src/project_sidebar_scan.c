@@ -64,6 +64,7 @@ static void instruction_limit(lua_State *L, lua_Debug *debug) {
 }
 static bool decode(lua_State *L, const char *text, size_t size) {
   lua_settop(L, 0);
+  lua_gc(L, LUA_GCCOLLECT, 0);
   lua_sethook(L, instruction_limit, LUA_MASKCOUNT, 10000);
   if (luaL_loadbuffer(L, text, size, "=Sidebar source"))
     return false;
@@ -105,8 +106,7 @@ static bool recent_paths(AnvilSidebarScan *job, lua_State *L) {
   if (!decoded)
     return false;
   size_t count = lua_rawlen(L, 1);
-  if (count > ANVIL_SIDEBAR_PROJECT_LIMIT)
-    return false;
+  count = SDL_min(count, ANVIL_SIDEBAR_PROJECT_LIMIT);
   char *paths[ANVIL_SIDEBAR_PROJECT_LIMIT] = {0};
   bool ok = true;
   for (size_t i = 0; i < count; i++) {
@@ -130,21 +130,19 @@ static bool recent_paths(AnvilSidebarScan *job, lua_State *L) {
   if (ok) {
     bool seeded = job->result.seeded;
     job->result.seeded = false;
-    const char *all[ANVIL_SIDEBAR_PROJECT_LIMIT];
-    size_t total = job->result.count;
-    for (size_t i = 0; i < total; i++)
-      all[i] = job->result.projects[i]->path;
     for (size_t i = 0; i < job->known_count; i++) {
-      if (anvil_sidebar_find(&job->result, job->known[i]))
+      AnvilSidebarProject *known_row = anvil_sidebar_find(&job->result, job->known[i]);
+      if (known_row) {
+        known_row->state = ANVIL_SIDEBAR_STARTING;
         continue;
-      if (total == ANVIL_SIDEBAR_PROJECT_LIMIT) {
+      }
+      const char *path = job->known[i];
+      if (!anvil_sidebar_merge_recents(&job->result, &path, 1)) {
         ok = false;
         break;
       }
-      all[total++] = job->known[i];
+      anvil_sidebar_find(&job->result, path)->state = ANVIL_SIDEBAR_STARTING;
     }
-    if (ok)
-      ok = anvil_sidebar_merge_recents(&job->result, all, total);
     job->result.seeded = seeded;
   }
   for (size_t i = 0; ok && i < job->result.count; i++) {
@@ -377,6 +375,8 @@ AnvilSidebarScan *anvil_sidebar_scan_start(const char *userdir, const char *rece
   if (!job->userdir || !job->recents)
     goto failed;
   for (size_t i = 0; i < known->count; i++) {
+    if (known->projects[i]->state == ANVIL_SIDEBAR_DORMANT)
+      continue;
     job->known[job->known_count] = strdup(known->projects[i]->path);
     if (!job->known[job->known_count++])
       goto failed;

@@ -117,7 +117,7 @@ def main() -> int:
         "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel",
         "loaded-switch", "loaded-launch", "loaded-restart", "identity-trailing", "identity-cwd",
         "identity-alias", "loaded-focus", "loaded-quit", "loaded-resolve", "identity-allocation",
-        "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart", "sidebar-model", "sidebar-worker", "dormant-terminal-sidebar"],
+        "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart", "sidebar-model", "sidebar-worker", "sidebar-demand", "sidebar-process", "dormant-terminal-sidebar"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)

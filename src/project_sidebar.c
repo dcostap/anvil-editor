@@ -63,18 +63,39 @@ static void free_project(AnvilSidebarProject *project) {
 }
 bool anvil_sidebar_merge_recents(AnvilSidebarModel *model, const char *const *paths, size_t count) {
   if (count > ANVIL_SIDEBAR_PROJECT_LIMIT)
-    return false;
-  size_t old_count = model->count;
+    count = ANVIL_SIDEBAR_PROJECT_LIMIT;
+  AnvilSidebarModel pending = *model;
+  AnvilSidebarProject *created_rows[ANVIL_SIDEBAR_PROJECT_LIMIT];
+  AnvilSidebarProject *removed[ANVIL_SIDEBAR_PROJECT_LIMIT];
+  size_t created_count = 0, removed_count = 0;
   AnvilSidebarProject *front[ANVIL_SIDEBAR_PROJECT_LIMIT];
   size_t front_count = 0;
   for (size_t i = 0; i < count; i++) {
     if (!paths[i] || !*paths[i] || strlen(paths[i]) >= 32768)
       goto failed;
-    AnvilSidebarProject *row = anvil_sidebar_find(model, paths[i]);
+    AnvilSidebarProject *row = anvil_sidebar_find(&pending, paths[i]);
     bool created = !row;
     if (created) {
-      if (model->count == ANVIL_SIDEBAR_PROJECT_LIMIT)
-        goto failed;
+      if (pending.count == ANVIL_SIDEBAR_PROJECT_LIMIT) {
+        size_t victim = pending.count;
+        while (victim) {
+          AnvilSidebarProject *old = pending.projects[--victim];
+          bool in_source = false;
+          for (size_t j = 0; j < front_count; j++)
+            in_source |= front[j] == old;
+          if (old->state == ANVIL_SIDEBAR_DORMANT && !old->pid && !old->selected && !in_source)
+            break;
+        }
+        AnvilSidebarProject *old = pending.projects[victim];
+        bool protected = old->state != ANVIL_SIDEBAR_DORMANT || old->pid || old->selected;
+        for (size_t j = 0; j < front_count; j++)
+          protected |= front[j] == old;
+        if (protected)
+          goto failed;
+        removed[removed_count++] = old;
+        memmove(pending.projects + victim, pending.projects + victim + 1,
+                (--pending.count - victim) * sizeof(*pending.projects));
+      }
       row = calloc(1, sizeof(*row));
       if (!row)
         goto failed;
@@ -85,8 +106,9 @@ bool anvil_sidebar_merge_recents(AnvilSidebarModel *model, const char *const *pa
         goto failed;
       }
       row->state = ANVIL_SIDEBAR_DORMANT;
-      row->row_id = ++model->next_row;
-      model->projects[model->count++] = row;
+      row->row_id = ++pending.next_row;
+      pending.projects[pending.count++] = row;
+      created_rows[created_count++] = row;
     }
     bool included = false;
     for (size_t j = 0; j < front_count; j++)
@@ -94,21 +116,24 @@ bool anvil_sidebar_merge_recents(AnvilSidebarModel *model, const char *const *pa
     if (!included && (!model->seeded || created))
       front[front_count++] = row;
   }
-  for (size_t i = 0; i < model->count; i++) {
+  for (size_t i = 0; i < pending.count; i++) {
     bool included = false;
     for (size_t j = 0; j < front_count; j++)
-      included |= front[j] == model->projects[i];
+      included |= front[j] == pending.projects[i];
     if (!included)
-      front[front_count++] = model->projects[i];
+      front[front_count++] = pending.projects[i];
   }
-  if (old_count != model->count || memcmp(model->projects, front, front_count * sizeof(*front)))
-    model->revision++;
-  memcpy(model->projects, front, front_count * sizeof(*front));
-  model->seeded = true;
+  if (model->count != pending.count || memcmp(model->projects, front, front_count * sizeof(*front)))
+    pending.revision++;
+  memcpy(pending.projects, front, front_count * sizeof(*front));
+  pending.seeded = true;
+  *model = pending;
+  for (size_t i = 0; i < removed_count; i++)
+    free_project(removed[i]);
   return true;
 failed:
-  while (model->count > old_count)
-    free_project(model->projects[--model->count]);
+  for (size_t i = 0; i < created_count; i++)
+    free_project(created_rows[i]);
   return false;
 }
 void anvil_sidebar_set_runtime(AnvilSidebarModel *model, AnvilSidebarProject *project, uint32_t id,

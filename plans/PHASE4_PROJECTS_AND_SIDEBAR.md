@@ -228,6 +228,144 @@ Keep the first list UI small. Defer final presentation design to Phase 7.
 A Sidebar crash or hang must not stop Project input or native controls.
 Restart only the Sidebar after its failure.
 
+#### Milestone 5 implementation
+
+The shell owns the model. The internal Sidebar frontend has no Project, Workspace, or Terminal client.
+It uses the existing hosted transport, renderer, input packets, base theme, and font APIs.
+The shell retains separate Project and Sidebar surfaces, including separate busy state.
+Left-click selects a Project. Right-click unloads a loaded Project through the normal Close policy.
+Terminal rows show shell labels, cwd, state, and busy or unknown status. They do not perform Project actions.
+The native Restart Sidebar control replaces only the Sidebar frontend. It does not restart a Project.
+Window shutdown can end the disposable frontend. Project and Terminal Session shutdown rules do not change.
+Several Windows, shell adoption, and final presentation remain later phases.
+
+Status scans now follow changed sources or stale queries. Identical sources do not start scans.
+The visible Sidebar queries once per second. A query requests a scan after the cache becomes stale.
+Only one scan runs. Hidden or minimized Windows defer new scans. An existing scan can finish.
+The native worker timer runs only while a scan runs. There is no idle two-second scan loop.
+`ANVIL_SIDEBAR_SCAN_DISABLED=1` disables the worker for isolated comparisons.
+Core republishes changed recent Projects, including direct array changes checked every half second.
+Publication sends the newest 256 entries. A full model can evict its oldest Dormant row without a runtime.
+Runtime and selected rows remain protected. Selection does not fail permanently because old recent rows fill the list.
+Failed snapshot copy or event delivery logs and drops the page. It does not report shell loss.
+The receiver can retry a missing page. Other required transport failure rules remain unchanged.
+The record decoder clears its stack and performs full GC before each record.
+
+#### Milestone 5 red-green evidence
+
+- `phase4-m5-capacity-red` rejected a large recent source. The native capacity test now passes.
+- `phase4-m5-page-drop-red` reported loss and rejected the next software frame. The page-drop test now passes.
+- `phase4-m5-source-red` lacked the changed-source publication API. The source test now passes.
+- Saved M4 failed `sidebar-demand`: unrequested scans changed the idle model (`anvil-surface-latency-yj9wjpvg`).
+  The prerequisite binary passed demand, model, and worker checks (`anvil-surface-latency-rhgaa2t_`).
+- `phase4-m5-view-red` lacked the Sidebar view. Both public view/action tests now pass.
+- `sidebar-process` failed because no independent Sidebar connected (`anvil-surface-latency-twi8opby`).
+  It now checks separate PIDs, accepted frames, suspended-Sidebar native controls, Project work, and local Restart.
+- The 32-record garbage fixture passed even without full GC. It does not establish a reproduced GC failure.
+  The GC change is preventive. Allocator-failure acceptance remains open.
+
+Fixture corrections are not runtime fixes.
+Raw `ShowWindow` did not update SDL visibility state. The demand fixture now uses the public visibility API.
+The old Failed Restart click used the placeholder Sidebar width. It now uses the existing native control seam.
+Frame-busy separation and frontend cleanup received code inspection and focused checks, not instrumented lifetime acceptance.
+
+#### Milestone 5 focused checks
+
+`phase4-m5-commit-native` passed six targets: model, scanner, page-drop, routing, dialogs, and stalled motion.
+`phase4-m5-commit-source` passed the Sidebar snapshot and changed-source checks.
+`phase4-m5-commit-view` passed both view/action checks.
+Current-source demand and process checks passed in `anvil-surface-latency-811accqf`.
+Both renderer process and demand checks passed in `anvil-surface-latency-vu15y99b` and `anvil-surface-latency-tquyx_mg`.
+Software model, worker, and kept-Terminal checks passed in `anvil-surface-latency-erjv71jh`.
+D3D11 model, worker, and kept-Terminal checks passed in `anvil-surface-latency-1ryi_a_a`.
+Loaded switching and last unload passed in `anvil-surface-latency-ak5hx9fz`.
+Fault-open and busy-frame recovery passed after fixture correction in `anvil-surface-latency-vu15y99b`.
+Direct Quit, Restart, and switch passed in `anvil-surface-latency-a01ddayk`.
+Lua syntax, Python compilation, scoped C formatting, and `git diff --check` passed.
+These checks use isolated data and owned process handles. They do not inspect user windows or capture pixels.
+
+#### Milestone 5 scan-cause comparison
+
+The saved M4 binary ran six isolated hosted-software cases with fixed data and alternating scan on/off order.
+Each case completed 120 samples, exited zero, and had no timeout: 360 samples per variant.
+No builds, correctness checks, or other latency runs overlapped.
+The off variant skipped source publication, so M4 never started its scan worker.
+Artifact: `%TEMP%/anvil-m5-scan-cause-20261009/results.json`.
+
+| M4 hosted software | p50 | p90 | p99 | maximum | mean |
+|---|---:|---:|---:|---:|---:|
+| Scan on | 10.251 | 19.682 | 23.560 | 50.682 | 11.963 |
+| Scan off | 13.034 | 4266.377 | 8537.947 | 9129.181 | 886.160 |
+
+Values are milliseconds from synthetic input to Present, not scanout or physical input.
+This comparison does not confirm scanning as the cause of the earlier hosted-software increase.
+The disabled variant had a large tail. Its cause remains unproved. Both variants remain in the evidence.
+
+#### Milestone 5 four-row comparison
+
+One fixed app-data tree served M4, the retained prerequisite binary, and M5.
+The prerequisite binary contains the model fixes and no Sidebar frontend.
+This four-row comparison ran after frontend work. Only the M4 scan-control comparison ran before that work.
+Build order rotated across three iterations. No builds, correctness checks, or other latency runs overlapped.
+The main run requested 39 cases. One M4 hosted-D3D11 case matched only 23 of 120 requested inputs.
+It exited zero without timeout. It remains in `cases` and `incomplete_cases`, including its 97 unmatched inputs.
+A separate rerun supplied 120 matched inputs. The table uses three complete cases per row and variant.
+The 23-sample case remains evidence; it is not treated as a complete comparison case.
+Artifact: `%TEMP%/anvil-m5-review-latency-20261009/results-with-reruns.json`.
+The original `results.json` and all case files remain unchanged.
+Each table entry gives p50 / p90 / p99 / maximum / mean in milliseconds, with 360 matched samples.
+
+| Row | M4 | Prerequisite fixes | M5 |
+|---|---|---|---|
+| Direct D3D11 | 7.801 / 16.460 / 20.962 / 38.196 / 9.164 | 7.079 / 15.789 / 19.055 / 22.666 / 8.267 | 6.870 / 16.113 / 19.463 / 20.703 / 8.470 |
+| Hosted D3D11 | 8.443 / 17.464 / 20.058 / 21.379 / 9.713 | 7.577 / 17.631 / 304.991 / 761.520 / 18.015 | 6.685 / 15.633 / 19.286 / 21.229 / 8.490 |
+| Direct software | 16.377 / 24.140 / 29.398 / 30.727 / 17.181 | 16.250 / 24.436 / 28.943 / 31.311 / 17.104 | 17.041 / 24.566 / 28.445 / 30.908 / 17.224 |
+| Hosted software | 11.414 / 19.310 / 23.115 / 24.668 / 12.492 | 11.479 / 19.434 / 23.505 / 24.951 / 12.521 | 10.526 / 19.506 / 23.587 / 26.950 / 12.236 |
+
+M5 hosted software with scanning disabled: 11.207 / 20.467 / 23.733 / 25.098 / 12.815.
+Those three cases used the same M5 binary and data, with alternating scan on/off order.
+Disabling scans did not improve the median in either control comparison. This does not establish a cause.
+The prerequisite hosted-D3D11 maximum was 761.520 ms. Its cause remains unproved.
+M5 uses a wider Sidebar, which also changes the Project surface width.
+These results do not establish a performance gain.
+Direct software increased by 0.664 ms from M4 to M5, and by 0.791 ms from the prerequisite binary.
+The direct-software repeat used the same binaries and data, with alternating order and no overlapping work.
+All six cases completed 120 matched samples, exited zero, and had no timeout.
+Artifact: `%TEMP%/anvil-m5-review-latency-20261009/direct-repeat/results.json`.
+
+| Direct software repeat | p50 | p90 | p99 | maximum | mean |
+|---|---:|---:|---:|---:|---:|
+| M4 | 16.159 | 25.307 | 29.880 | 31.922 | 17.169 |
+| M5 | 16.335 | 25.646 | 29.225 | 36.854 | 17.418 |
+
+The first 0.664 ms median increase did not repeat. The repeat increase was 0.176 ms.
+All comparisons retain their tails and maxima. No performance gain or cause is claimed.
+Across these measurements, 51 cases completed 120 matched samples. One case matched only 23 samples and remains retained.
+
+Measured SHA-256 values:
+
+- M4: `8d21844452b332f8730e5ffc040769fad31f546790db8f769c3a57a173d56473`.
+- Prerequisite: `393f04174220e415b3821ea378176e32df190630f384a8c255c09b5a0a568983`.
+- M5: `c6d5163043047a75185e41a36148a67576e7880a775800690a512355ff9c5724`.
+
+Physical-input, real IME, mixed-DPI, allocator-failure, and instrumented lifetime acceptance remain open.
+Hosted mode remains opt-in.
+
+#### Milestone 5 deployment
+
+The user received the save-files and Terminal Session warning before the portable update.
+The updater completed with exit zero, restored source-data junctions, and restarted Anvil.
+Updater output: `%TEMP%/pi-bash-bg-0c462d361d8c5b15.log`.
+Fresh logs contained no error or warning matches:
+
+- `user/logs/anvil-20261009-035004-p21528.log`.
+- `user/logs/startup/anvil-startup-20261009-035004-p21528-m800965.log`.
+
+The build hash still matches the measured M5 binary.
+Portable SHA-256: `f7e41b14083efbe8a989c1bce3e3098630253e225a94d77d9e52cef2d891f436`.
+An independent stripped copy matched the portable bytes except the PE timestamp and checksum.
+Milestone 5 is implemented and deployed. Manual and instrumented acceptance gates remain open.
+
 ## Deferred work
 
 Phase 5 owns several Anvil Windows and moving Projects between them.

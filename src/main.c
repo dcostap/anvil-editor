@@ -229,43 +229,47 @@ static void set_pending_resize_frame(AppState *app, SDL_Window *window, const ch
  * (it only sets up the run-loop state); SDL_AppIterate drives the loop by
  * calling core.run_step() on every frame. */
 static const char *init_code =
-  "core = false\n"
-  "local os_exit = os.exit\n"
-  "os.exit = function(code, close)\n"
-  "  os_exit(code, close == nil and true or close)\n"
-  "end\n"
-  "xpcall(function()\n"
-  "  local match = require('utf8extra').match\n"
-  "  HOME = os.getenv('" ANVIL_OS_HOME "')\n"
-  "  LUAJIT = " ANVIL_LUAJIT "\n"
-  "  local exedir = match(EXEFILE, '^(.*)" ANVIL_PATHSEP_PATTERN ANVIL_NONPATHSEP_PATTERN "$')\n"
-  "  local prefix = os.getenv('ANVIL_PREFIX') or match(exedir, '^(.*)" ANVIL_PATHSEP_PATTERN "bin$')\n"
-  "  dofile((EMBEDDED_DATADIR or MACOS_RESOURCES or (prefix and prefix .. '/share/anvil' or exedir .. '/data')) .. '/core/start.lua')\n"
-  "  core = require(os.getenv('ANVIL_RUNTIME') or 'core')\n"
-  "  core.init()\n"
-  "  core.run()\n"
-  "end, function(err)\n"
-  "  local error_path = 'error.txt'\n"
-  "  io.stdout:write('Error: '..tostring(err)..'\\n')\n"
-  "  io.stdout:write(debug.traceback('', 2)..'\\n')\n"
-  "  if core and core.on_error then\n"
-  "    error_path = USERDIR .. PATHSEP .. error_path\n"
-  "    pcall(core.on_error, err)\n"
-  "  else\n"
-  "    local fp = io.open(error_path, 'wb')\n"
-  "    fp:write('Error: ' .. tostring(err) .. '\\n')\n"
-  "    fp:write(debug.traceback('', 2)..'\\n')\n"
-  "    fp:close()\n"
-  "    error_path = system.absolute_path(error_path)\n"
-  "  end\n"
-  "  if not RUNNING_LUA_TESTS and not os.getenv('ANVIL_HEADLESS_TEST') then\n"
-  "    system.show_fatal_error('Anvil internal error',\n"
-  "      'An internal error occurred in a critical part of the application.\\n\\n'..\n"
-  "      'Error: '..tostring(err)..'\\n\\n'..\n"
-  "      'Details can be found in \\\"'..error_path..'\\\"')\n"
-  "  end\n"
-  "  os.exit(1)\n"
-  "end)\n";
+    "core = false\n"
+    "local os_exit = os.exit\n"
+    "os.exit = function(code, close)\n"
+    "  os_exit(code, close == nil and true or close)\n"
+    "end\n"
+    "xpcall(function()\n"
+    "  local match = require('utf8extra').match\n"
+    "  HOME = os.getenv('" ANVIL_OS_HOME "')\n"
+    "  LUAJIT = " ANVIL_LUAJIT "\n"
+    "  local exedir = match(EXEFILE, '^(.*)" ANVIL_PATHSEP_PATTERN ANVIL_NONPATHSEP_PATTERN "$')\n"
+    "  local prefix = os.getenv('ANVIL_PREFIX') or match(exedir, '^(.*)" ANVIL_PATHSEP_PATTERN
+    "bin$')\n"
+    "  dofile((EMBEDDED_DATADIR or MACOS_RESOURCES or (prefix and prefix .. '/share/anvil' or "
+    "exedir .. '/data')) .. '/core/start.lua')\n"
+    "  core = require(system.is_sidebar_surface() and 'core.sidebar_app' or "
+    "os.getenv('ANVIL_RUNTIME') or 'core')\n"
+    "  core.init()\n"
+    "  core.run()\n"
+    "end, function(err)\n"
+    "  local error_path = 'error.txt'\n"
+    "  io.stdout:write('Error: '..tostring(err)..'\\n')\n"
+    "  io.stdout:write(debug.traceback('', 2)..'\\n')\n"
+    "  if core and core.on_error then\n"
+    "    error_path = USERDIR .. PATHSEP .. error_path\n"
+    "    pcall(core.on_error, err)\n"
+    "  else\n"
+    "    local fp = io.open(error_path, 'wb')\n"
+    "    fp:write('Error: ' .. tostring(err) .. '\\n')\n"
+    "    fp:write(debug.traceback('', 2)..'\\n')\n"
+    "    fp:close()\n"
+    "    error_path = system.absolute_path(error_path)\n"
+    "  end\n"
+    "  if not RUNNING_LUA_TESTS and not os.getenv('ANVIL_HEADLESS_TEST') and not "
+    "system.is_sidebar_surface() then\n"
+    "    system.show_fatal_error('Anvil internal error',\n"
+    "      'An internal error occurred in a critical part of the application.\\n\\n'..\n"
+    "      'Error: '..tostring(err)..'\\n\\n'..\n"
+    "      'Details can be found in \\\"'..error_path..'\\\"')\n"
+    "  end\n"
+    "  os.exit(1)\n"
+    "end)\n";
 
 static int lua_error_traceback(lua_State *L) {
   const char *message = lua_tostring(L, 1);
@@ -540,7 +544,8 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
     fprintf(stderr, "Error in core.run_step: %s\n", errmsg);
     report_run_step_error(app->L, errmsg);
 
-    if (!app->running_lua_tests && !SDL_getenv("ANVIL_HEADLESS_TEST")) {
+    if (!app->running_lua_tests && !SDL_getenv("ANVIL_HEADLESS_TEST") &&
+        !anvil_hosted_surface_sidebar()) {
       lua_getglobal(app->L, "system");
       lua_getfield(app->L, -1, "show_fatal_error");
       lua_remove(app->L, -2); /* remove 'system' table */
