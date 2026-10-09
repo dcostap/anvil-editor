@@ -440,7 +440,7 @@ The warned portable update completed. Fresh session and startup logs contain no 
 The Phase 4 plan records build and portable hashes. Milestone 4 is implemented and deployed; hosted mode remains opt-in.
 Milestone 5 adds the separate Sidebar frontend and its local native Restart control.
 The shell retains ownership of the model, lifecycle, and selection. Sidebar failure leaves Projects and native controls usable.
-Changed sources and stale visible queries replace the idle status-scan loop.
+Model revisions and Terminal registry notifications replace idle status polling.
 Recent sources truncate to 256 entries. New Projects can evict old Dormant rows without a runtime.
 Failed snapshot delivery drops a page without reporting shell loss. Record decoding performs full GC between records.
 Focused model, page, source, view, both-renderer process, fault, and direct checks pass.
@@ -448,6 +448,8 @@ The scan-disabled comparisons did not confirm scanning as the cause of earlier l
 The direct-software median increased 0.664 ms in the first comparison, but only 0.176 ms in its repeat.
 The Phase 4 plan retains the partial baseline run, completed rerun, all tails, hashes, and measurement limits.
 Physical-input, IME, mixed-DPI, allocator-failure, and instrumented lifetime acceptance remain open. Hosted mode remains opt-in.
+The [Sidebar follow-up](PHASE4_SIDEBAR_FOLLOWUP.md) adds Refresh, a narrow watch, and a recovery-budget reset after stable connection.
+Dropped Sidebar change events request a model query without reporting transport loss.
 
 Add Dormant and loaded Projects, Project switching, hidden rendering suppression,
 Project crash restart, and hang detection.
@@ -459,7 +461,9 @@ Add the Sidebar process with a minimal list UI, plus its crash restart.
 Draft for review: [Phase 5: several Anvil Windows](PHASE5_SEVERAL_WINDOWS.md).
 Do not implement it before approval. Phase 4 closeout comes first.
 The latency probe remains under investigation. Treat differences below about 2 ms as noise.
-Do not gate changes on latency until that probe is reliable.
+The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) remains blocking before Phase 5 milestone 2.
+Both fresh revisions are slow while the console is locked and the display is off.
+Require an explained, reproducible baseline before that milestone. Do not accept performance gains from unreliable comparisons.
 
 Add new windows, moving a Project between windows, and bringing the owning window
 to the front.

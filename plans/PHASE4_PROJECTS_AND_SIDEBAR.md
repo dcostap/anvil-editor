@@ -11,6 +11,7 @@ Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acc
 Do not gate changes on latency while the probe remains under investigation.
 Treat differences below about 2 ms as noise.
 The user now requires a reproducible latency baseline before Phase 5 milestone 2.
+See [the fresh baseline investigation](PHASE4_LATENCY_BASELINE.md). Its entry gate remains open.
 See [the Sidebar follow-up](PHASE4_SIDEBAR_FOLLOWUP.md) for subsequent changes, checks, and deployment evidence.
 
 ### Closeout evidence
