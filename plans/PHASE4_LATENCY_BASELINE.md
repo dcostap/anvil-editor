@@ -149,3 +149,24 @@ No new latency run started. The matched repeat still waits for the user's confir
 
 The matched-repeat script now uses the runner's direct boundary snapshots and eligibility fields.
 It does not read or overwrite results with the stopped temporary observer's state file.
+
+### Tooling update verification
+
+The user received the save-files/process-stop warning before the portable updater.
+The updater completed and restored the editable data junctions. Native runtime code did not change in this slice.
+
+SHA-256:
+
+- Build: `9ce94e93844494de6bbabd50e0032479e8535e60cf21e4434760f86c9363eb41`.
+- Portable: `df4257676a5b50ecf0f76e437c155522535c531bc2b612050a7ad26f751f919c`.
+
+An independently stripped build matches the portable after PE timestamp/checksum normalization.
+Fresh logs under the portable directory contain no warning/error/failure entries:
+
+- `user/logs/anvil-20261009-160417-p3100.log`.
+- `user/logs/startup/anvil-startup-20261009-160417-p3100-m345596.log`.
+- `user/logs/anvil-20261009-160417-p3100-shutdown.log`.
+
+The session records an accepted forced Quit about five seconds after startup. It does not establish a running daily Window.
+No Window was reopened for verification.
+Hosted mode remains opt-in. Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.

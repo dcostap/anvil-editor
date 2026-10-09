@@ -59,8 +59,38 @@ Entry gate: latency baseline re-established through matched, alternating runs of
 Record console lock and display power state. Explain any shared environment or harness slowdown before accepting the baseline.
 
 Add an explicit hosted New Window request.
-Expose it through the existing command system as `core:new_window`, without prescribing a keyboard shortcut.
+Reuse `core:new_anvil_window` and `core.open_new_window()`. Route them to the shell in hosted mode.
+Do not add `core:new_window` or a duplicate command. Do not prescribe a keyboard shortcut.
 Create an empty Window without loading another copy of the current Project.
+The shell draws a simple empty state in its main area, not a blank Project surface.
+Show "No Project selected" with instructions to open a Project or select one in the Sidebar.
+This state requires no Project process. Phase 7 owns its final design.
+
+Each Window exposes New Window and Open Project through a native Title Bar menu.
+New Window sends the same shell action as `core:new_anvil_window`. It is not a second command.
+Open Project opens a shell-owned native folder picker, with the requesting Window as its parent.
+In an empty Window, it selects or loads the chosen Project there. It does not create another empty Window.
+In a Window with a Selected Project, it uses the new-Window Project policy below.
+The existing Sidebar list also selects or loads Projects for the receiving Window.
+If a Project is loaded elsewhere, these selection actions raise and select it in its owning Window.
+The requesting empty Window stays empty in that case.
+The native menu remains usable without a Project process and while the shared Sidebar is unavailable.
+Window Close invalidates an outstanding picker result. A late result must not load a Project into a removed Window.
+
+Define the existing new-Window Project API separately from selection in an empty Window:
+
+- Hosted `core.open_project_in_new_window(project)` sends the path and requesting Window ID to the shell.
+- Resolve identity through the existing worker boundary before creating a Window.
+- For an already loaded Project, raise and select its owning Window. Do not create a duplicate Window or runtime.
+- For an unloaded or Dormant Project, create a Window and load it there through the normal launch path.
+- Keep the new Window usable if loading fails. Report the failure through the existing Project status and recovery rules.
+- Keep direct and non-Windows behavior unchanged.
+
+The existing Open Project actions use this API, including `core:open_project_folder` and its system-file-picker variant.
+In hosted mode, let shell identity rules handle an already loaded path instead of rejecting it in the Project frontend.
+Update the hosted IPC wrapper and other in-repo callers to delegate to the shell, not spawn another shell.
+Do not add alternative Open Project commands.
+
 Let the one Sidebar frontend render each Window at its own size and scale.
 Use bounded surface records and reject stale Window IDs or configuration generations.
 Each snapshot includes Selected Project IDs per Window and the owning Window ID for every loaded Project.
@@ -68,6 +98,9 @@ Show each Project's owning Window in the Sidebar. Selection highlighting uses th
 This is a minimal working presentation. Phase 7 owns the final design.
 
 Tests must prove two owned native Windows, one shell, and one Sidebar process.
+Invoke `core:new_anvil_window` and the existing Open Project actions through their public command seams.
+Verify an empty Window's state and native New Window/Open Project actions without a Project process.
+Verify load, duplicate selection, cancellation, and a late picker result after the requesting Window closes.
 Select different Projects and verify independent input, resize, minimize, and native controls.
 Suspend the Sidebar. Both Windows and their Projects must remain usable.
 The shared-process boundary means every Sidebar surface stalls together. Projects and native controls keep working.
