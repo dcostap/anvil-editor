@@ -259,6 +259,10 @@ fuzzy_test = executable('fuzzy_test',
     c_args: anvil_cargs,
 )
 if host_machine.system() == 'windows'
+    sidebar_watch_test = executable('sidebar_watch_test',
+        ['../tests/native/sidebar_registry_watch_test.c', 'sidebar_registry_watch.c'],
+        include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
+    test('sidebar-watch', sidebar_watch_test, env: anvil_test_env, suite: 'anvil')
     test('terminal-replay', terminal_replay_test, env: anvil_test_env, suite: 'anvil')
 endif
 test('fuzzy', fuzzy_test, env: anvil_test_env)
@@ -299,6 +303,7 @@ if host_machine.system() == 'windows'
     test('hosted-motion-stall', hosted_routing_test, args: ['motion'], env: anvil_test_env, suite: 'anvil')
     test('hosted-dialogs', hosted_routing_test, args: ['dialogs'], env: anvil_test_env, suite: 'anvil')
     test('sidebar-page-drop', hosted_routing_test, args: ['sidebar-drop'], env: anvil_test_env, suite: 'anvil')
+    test('sidebar-change-drop', hosted_routing_test, args: ['sidebar-change-drop'], env: anvil_test_env, suite: 'anvil')
     test('sidebar-arguments', hosted_routing_test, args: ['sidebar-arguments'], env: anvil_test_env, suite: 'anvil')
     test('latency-watermark', hosted_routing_test, args: ['probe-gap'], env: anvil_test_env, suite: 'anvil')
 endif

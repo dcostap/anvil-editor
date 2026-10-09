@@ -1,7 +1,7 @@
 -- Internal hosted frontend. It has no Project, Workspace, or Terminal client.
 local core = require "core"
 local saved_event = core.on_event
-local view, revision, query_needed
+local view, revision, query_needed, refresh_needed
 function core.init()
   core.log_items = {}
   core.session_log = require("core.session_log").start(USERDIR .. PATHSEP .. "logs")
@@ -16,6 +16,12 @@ function core.init()
   require "colors.default"
   local SidebarView = require "core.sidebar_view"
   view = SidebarView(function(action, id)
+    if action == "refresh" then
+      core.project_sidebar_request = nil
+      query_needed, refresh_needed = true, true
+      core.log_quiet("Sidebar Refresh requested")
+      return
+    end
     for _, project in ipairs(core.project_sidebar or {}) do
       if project.row_id == id then
         if action == "select" then system.select_project(project.path)
@@ -24,7 +30,7 @@ function core.init()
       end
     end
   end)
-  core.redraw, query_needed = true, true
+  core.redraw, query_needed, refresh_needed = true, true, false
 end
 function core.run() end
 function core.on_event(name, ...)
@@ -68,7 +74,7 @@ function core.run_step()
     core.log_quiet("Sidebar snapshot timed out; request the complete model again")
   end
   if visible and query_needed then
-    if core.request_project_sidebar() then query_needed = false end
+    if core.request_project_sidebar(refresh_needed) then query_needed, refresh_needed = false, false end
   end
   if core.project_sidebar and revision ~= core.project_sidebar.revision then
     revision = core.project_sidebar.revision

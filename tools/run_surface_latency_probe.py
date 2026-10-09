@@ -120,7 +120,7 @@ def main() -> int:
         "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel",
         "loaded-switch", "loaded-launch", "loaded-restart", "identity-trailing", "identity-cwd",
         "identity-alias", "loaded-focus", "loaded-quit", "loaded-resolve", "identity-allocation",
-        "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart", "sidebar-model", "sidebar-worker", "sidebar-demand", "sidebar-process", "sidebar-log", "sidebar-recovery", "sidebar-idle", "dormant-terminal-sidebar"],
+        "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart", "sidebar-model", "sidebar-worker", "sidebar-demand", "sidebar-process", "sidebar-log", "sidebar-recovery", "sidebar-recovery-reset", "sidebar-idle", "dormant-terminal-sidebar"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--runs", type=int, default=2)
@@ -221,7 +221,7 @@ def main() -> int:
                         config["environment"]["ANVIL_SURFACE_FAULT_NO_FRAME"] = "1"
                     config_path = case_dir / "launch.json"
                     config_path.write_text(json.dumps(config), encoding="utf-8")
-                    launcher = invoke_hidden(config_path, 60)
+                    launcher = invoke_hidden(config_path, 150 if action == "sidebar-recovery-reset" else 60)
                     text = result.read_text(encoding="utf-8") if result.exists() else "missing result"
                     ok = ('["ok"]=true' in text and not launcher.get("timed_out")
                           and launcher.get("exit_code") == 0)

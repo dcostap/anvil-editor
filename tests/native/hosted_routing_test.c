@@ -18,6 +18,7 @@ static SDL_AtomicInt motions_written;
 static bool motion_stall;
 static bool dialogs;
 static bool sidebar_drop;
+static bool sidebar_change_drop;
 static SDL_AtomicInt dialogs_checked;
 static struct { int status, filter, count; char paths[2][128]; } dialog_results[3];
 static void SDLCALL dialog_result(void *userdata, const char *const *paths, int filter) {
@@ -47,6 +48,8 @@ static int SDLCALL server(void *data) {
   if (!anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0)) return 1;
   WaitForSingleObject(ready, 5000);
   AnvilSurfaceInt focus = {1};
+  if (sidebar_change_drop)
+    anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_SIDEBAR_CHANGED, NULL, 0, NULL, 0);
   if (sidebar_drop) {
     const char page[] = "return {revision=1,offset=0,next=0,total=0,items={}}";
     anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_SIDEBAR_MODEL, page, sizeof(page), NULL, 0);
@@ -161,6 +164,7 @@ int main(int test_argc, char **test_argv) {
     return 0;
   }
   sidebar_drop = test_argc > 1 && !strcmp(test_argv[1], "sidebar-drop");
+  sidebar_change_drop = test_argc > 1 && !strcmp(test_argv[1], "sidebar-change-drop");
   motion_stall = test_argc > 1 && !strcmp(test_argv[1], "motion");
   dialogs = test_argc > 1 && !strcmp(test_argv[1], "dialogs");
   AnvilSurfaceConfigure geometry = {.configuration = 7, .origin_x = 48, .origin_y = 24,
@@ -305,9 +309,14 @@ int main(int test_argc, char **test_argv) {
   /* Worker receipt must not change the UI state ahead of queued events. */
   CHECK(!anvil_hosted_surface_has_focus());
   while (SDL_PollEvent(&event)) {
+    CHECK(!anvil_hosted_surface_loss_event(event.type));
     if (!anvil_hosted_surface_dispatch(&event)) system_push_event(&event);
   }
   CHECK(anvil_hosted_surface_has_focus());
+  if (sidebar_change_drop) {
+    CHECK(anvil_hosted_surface_take_sidebar_query_needed());
+    CHECK(!anvil_hosted_surface_take_sidebar_query_needed());
+  }
   CHECK(anvil_hosted_surface_display_scale() == 1.25f);
   unsigned text_count = 0;
   for (;;) {

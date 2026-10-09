@@ -1,6 +1,15 @@
 local test = require "core.test"
 
 test.describe("Sidebar list actions", function()
+  test.it("offers Refresh without a Project or Terminal action", function()
+    local SidebarView = require "core.sidebar_view"
+    local style = require "core.style"
+    local actions = {}
+    local view = SidebarView(function(action, row) actions[#actions + 1] = {action, row} end)
+    view:set_model({})
+    view:on_mouse_pressed("left", 20, view:row_y(1) - style.font:get_height(), 240)
+    test.same(actions, {{"refresh"}})
+  end)
   test.it("selects Projects and requires the explicit Unload button", function()
     local SidebarView = require "core.sidebar_view"
     local actions = {}

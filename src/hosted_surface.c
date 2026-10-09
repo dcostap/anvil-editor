@@ -37,7 +37,7 @@ typedef struct {
 
 static struct {
   bool active;
-  bool valid, restarted, sidebar;
+  bool valid, restarted, sidebar, sidebar_query_needed;
   DWORD shell_pid;
   HANDLE shell_process, loss_signal, exit_sent;
   Uint32 loss_event;
@@ -296,8 +296,10 @@ static void dispatch_message(HostedMessage *message) {
   switch (message->type) {
   case ANVIL_SURFACE_MSG_SIDEBAR_CHANGED: {
     CustomEvent event = {0};
-    if (!push_custom_event("projectsidebarchanged", &event))
-      signal_loss("Sidebar revision notification failed", message->type, message->size);
+    if (!push_custom_event("projectsidebarchanged", &event)) {
+      hosted.sidebar_query_needed = true;
+      SDL_Log("Sidebar revision event dropped; query the current model on the next poll");
+    }
     break;
   }
   case ANVIL_SURFACE_MSG_SIDEBAR_MODEL: {
@@ -361,6 +363,11 @@ static void dispatch_message(HostedMessage *message) {
   free(message);
 }
 
+bool anvil_hosted_surface_take_sidebar_query_needed(void) {
+  bool needed = hosted.sidebar_query_needed;
+  hosted.sidebar_query_needed = false;
+  return needed;
+}
 void anvil_hosted_surface_poll(void) {
   if (!hosted.active || !hosted.window_id || !hosted.queue_lock) return;
   /* Configuration, focus, and input share one caller-visible order. */
@@ -906,6 +913,7 @@ bool anvil_hosted_surface_connect(void) { return false; }
 bool anvil_hosted_surface_active(void) { return false; }
 bool anvil_hosted_surface_dispatch(const SDL_Event *event) { (void)event; return false; }
 void anvil_hosted_surface_poll(void) {}
+bool anvil_hosted_surface_take_sidebar_query_needed(void) { return false; }
 bool anvil_hosted_surface_configuration_event(Uint32 type) { (void)type; return false; }
 uint32_t anvil_hosted_surface_shell_pid(void) { return 0; }
 void anvil_hosted_surface_controls(int *x, int *y, int *w, int *h) { *x = *y = *w = *h = 0; }

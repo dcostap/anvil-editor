@@ -231,6 +231,10 @@ static int f_poll_event(lua_State *L) {
 top:
   anvil_hosted_surface_poll();
   last_event_window_id = 0;
+  if (anvil_hosted_surface_take_sidebar_query_needed()) {
+    lua_pushstring(L, "projectsidebarchanged");
+    return 1;
+  }
   if ( !system_event_pop(&e) ) {
     return 0;
   }

@@ -10,6 +10,8 @@ The functional closeout is verified and deployed. The timing investigation remai
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
 Do not gate changes on latency while the probe remains under investigation.
 Treat differences below about 2 ms as noise.
+The user now requires a reproducible latency baseline before Phase 5 milestone 2.
+See [the Sidebar follow-up](PHASE4_SIDEBAR_FOLLOWUP.md) for subsequent changes, checks, and deployment evidence.
 
 ### Closeout evidence
 

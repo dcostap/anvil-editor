@@ -113,7 +113,7 @@ core.add_background_thread(function()
         wait(function() return not subject:running() end, 15)
         return
       end
-      if action == "sidebar-process" or action == "sidebar-log" or action == "sidebar-recovery" then
+      if action == "sidebar-process" or action == "sidebar-log" or action == "sidebar-recovery" or action == "sidebar-recovery-reset" then
         local function sidebar_pid(old)
           local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
           local text = file:read("*a"); file:close()
@@ -132,6 +132,28 @@ core.add_background_thread(function()
         end
         wait(function() return ready(first) end, 10, "Sidebar did not publish its first frame")
         assert(first ~= a.pid and first ~= a.shell_pid, "Sidebar shares a Project or shell process")
+        if action == "sidebar-recovery-reset" then
+          local last = first
+          for _ = 1, 3 do
+            local child = kernel.OpenProcess(0x1fffff, 0, last)
+            assert(child ~= nil); handles[#handles + 1] = child
+            assert(kernel.TerminateProcess(child, 107))
+            last = wait(function() return sidebar_pid(last) end, 15)
+            wait(function() return ready(last) end, 10)
+          end
+          -- A healthy connection restores a fresh recovery budget.
+          coroutine.yield(61)
+          local child = kernel.OpenProcess(0x1fffff, 0, last)
+          assert(child ~= nil); handles[#handles + 1] = child
+          assert(kernel.TerminateProcess(child, 107))
+          local replacement = wait(function() return sidebar_pid(last) end, 15,
+            "A stable Sidebar did not restore its automatic recovery budget")
+          wait(function() return ready(replacement) end, 10)
+          assert(kernel.WaitForSingleObject(handles[1], 0) ~= 0, "Sidebar budget reset ended A")
+          save("sidebar-process-finish", true)
+          wait(function() return not subject:running() end, 15)
+          return
+        end
         if action == "sidebar-log" then
           wait(function()
             for _, name in ipairs(system.list_dir(USERDIR .. "/logs") or {}) do
@@ -310,6 +332,11 @@ core.add_background_thread(function()
       end
       if action == "sidebar-log" then
         wait(function() return read("sidebar-process-finish") end, 30)
+        quit()
+        return
+      end
+      if action == "sidebar-recovery-reset" then
+        wait(function() return read("sidebar-process-finish") end, 120)
         quit()
         return
       end

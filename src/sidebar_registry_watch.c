@@ -6,7 +6,7 @@
 #include <wchar.h>
 
 struct AnvilSidebarWatch {
-  char *userdir;
+  char *path;
   HWND window;
   UINT message;
   HANDLE stop;
@@ -15,17 +15,21 @@ struct AnvilSidebarWatch {
 };
 
 static bool registry_record(const WCHAR *name, DWORD length) {
-  const WCHAR prefix[] = L"terminal-sessions\\";
-  size_t count = length / sizeof(WCHAR), front = SDL_arraysize(prefix) - 1;
-  return count > front + 4 &&
-         CompareStringOrdinal(name, (int)front, prefix, (int)front, TRUE) == CSTR_EQUAL &&
+  size_t count = length / sizeof(WCHAR);
+  return count > 4 &&
          CompareStringOrdinal(name + count - 4, 4, L".lua", 4, TRUE) == CSTR_EQUAL;
 }
 
 static int SDLCALL watch_worker(void *data) {
   AnvilSidebarWatch *watch = data;
   wchar_t *path =
-      (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", watch->userdir, strlen(watch->userdir) + 1);
+      (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", watch->path, strlen(watch->path) + 1);
+  if (path && !CreateDirectoryW(path, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+    SDL_free(path);
+    SDL_Log("Sidebar registry directory unavailable; use explicit Refresh");
+    SDL_SetAtomicInt(&watch->done, 1);
+    return 0;
+  }
   HANDLE directory =
       path ? CreateFileW(path, FILE_LIST_DIRECTORY,
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
@@ -41,7 +45,7 @@ static int SDLCALL watch_worker(void *data) {
   HANDLE events[] = {watch->stop, operation.hEvent};
   for (;;) {
     ResetEvent(operation.hEvent);
-    if (!ReadDirectoryChangesW(directory, buffer, sizeof(buffer), TRUE,
+    if (!ReadDirectoryChangesW(directory, buffer, sizeof(buffer), FALSE,
                                FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE |
                                    FILE_NOTIFY_CHANGE_SIZE,
                                NULL, &operation, NULL))
@@ -96,16 +100,16 @@ AnvilSidebarWatch *anvil_sidebar_watch_start(const char *userdir, HWND window, U
   AnvilSidebarWatch *watch = calloc(1, sizeof(*watch));
   if (!watch)
     return NULL;
-  watch->userdir = _strdup(userdir);
+  SDL_asprintf(&watch->path, "%s/terminal-sessions", userdir);
   watch->window = window;
   watch->message = message;
   watch->stop = CreateEventW(NULL, TRUE, FALSE, NULL);
-  if (watch->userdir && watch->stop)
+  if (watch->path && watch->stop)
     watch->thread = SDL_CreateThread(watch_worker, "sidebar-registry", watch);
   if (!watch->thread) {
     if (watch->stop)
       CloseHandle(watch->stop);
-    free(watch->userdir);
+    SDL_free(watch->path);
     free(watch);
     return NULL;
   }
@@ -121,7 +125,7 @@ bool anvil_sidebar_watch_stop(AnvilSidebarWatch *watch, uint64_t deadline) {
     return false;
   SDL_WaitThread(watch->thread, NULL);
   CloseHandle(watch->stop);
-  free(watch->userdir);
+  SDL_free(watch->path);
   free(watch);
   return true;
 }

@@ -26,6 +26,7 @@
  * exercises the offset path for input, hit testing, IME, and compositing. */
 #define SHELL_SIDEBAR_POINTS 240
 #define SHELL_CONNECT_TIMEOUT_MS 30000
+#define SHELL_SIDEBAR_HEALTHY_MS 60000
 #define SHELL_WRITE_QUEUE_LIMIT (8u * 1024u * 1024u)
 #define SHELL_SYNC_TIMEOUT_MS 0
 #define SHELL_PIPE_BUFFER (64u * 1024u)
@@ -167,6 +168,9 @@ typedef struct {
   bool sidebar_restart_limited;
   Uint64 sidebar_failure_since;
   bool sidebar_waiting_exit;
+  UINT_PTR sidebar_healthy_timer;
+  Uint64 sidebar_healthy_since;
+  Uint32 sidebar_healthy_connection;
   unsigned sidebar_source_revision, sidebar_scan_revision, sidebar_jobs;
   bool sidebar_seeded, sidebar_scan_requested;
   ShellProject *sidebar_process;
@@ -1663,8 +1667,16 @@ static void handle_sidebar_frame(void) {
     return;
   AnvilSurfaceFrame frame;
   if (load_pending_frame(project, &shell.sidebar_presentation, &frame)) {
-    if (project->state == SHELL_STARTING)
+    if (project->state == SHELL_STARTING) {
       set_state(project, SHELL_READY);
+      if (shell.sidebar_restart_attempts) {
+        shell.sidebar_healthy_since = SDL_GetTicks();
+        shell.sidebar_healthy_connection = project->connection;
+        shell.sidebar_healthy_timer = SetTimer(shell.hwnd, 0x8004, SHELL_SIDEBAR_HEALTHY_MS, NULL);
+        if (!shell.sidebar_healthy_timer)
+          SDL_Log("Shell Sidebar recovery-budget timer failed; manual Restart remains available");
+      }
+    }
     if (shell.shown)
       composite_and_present();
   }
@@ -2849,6 +2861,26 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   }
   ShellProject *project = shell.selected;
   if (msg == WM_TIMER) {
+    if (shell.sidebar_healthy_timer && wparam == shell.sidebar_healthy_timer) {
+      KillTimer(shell.hwnd, shell.sidebar_healthy_timer);
+      shell.sidebar_healthy_timer = 0;
+      ShellProject *sidebar = shell.sidebar_process;
+      if (sidebar && sidebar->connected && sidebar->state == SHELL_READY &&
+          sidebar->connection == shell.sidebar_healthy_connection) {
+        Uint64 elapsed = SDL_GetTicks() - shell.sidebar_healthy_since;
+        if (elapsed < SHELL_SIDEBAR_HEALTHY_MS) {
+          SDL_Log("Shell Sidebar recovery-budget timer arrived early: connection age=%llu ms",
+                  (unsigned long long)elapsed);
+          shell.sidebar_healthy_timer = SetTimer(shell.hwnd, 0x8004,
+            (UINT)(SHELL_SIDEBAR_HEALTHY_MS - elapsed), NULL);
+        } else {
+          shell.sidebar_restart_attempts = 0;
+          shell.sidebar_restart_limited = false;
+          SDL_Log("Shell Sidebar stable connection restored its automatic recovery budget");
+        }
+      }
+      return 0;
+    }
     if (shell.sidebar_restart_timer && wparam == shell.sidebar_restart_timer) {
       KillTimer(shell.hwnd, shell.sidebar_restart_timer);
       shell.sidebar_restart_timer = 0;
@@ -3795,6 +3827,8 @@ static void schedule_sidebar_restart(void) {
   if (shell.closing || shell.sidebar_restart_timer || !project || project->state != SHELL_FAILED ||
       (project->launch && !project->launch->taken))
     return;
+  if (shell.sidebar_healthy_timer) KillTimer(shell.hwnd, shell.sidebar_healthy_timer);
+  shell.sidebar_healthy_timer = 0;
   if (project->process.hProcess && WaitForSingleObject(project->process.hProcess, 0) != WAIT_OBJECT_0) {
     if (!shell.sidebar_failure_since) shell.sidebar_failure_since = SDL_GetTicks();
     if (SDL_GetTicks() - shell.sidebar_failure_since < SHELL_CONNECT_TIMEOUT_MS) {
@@ -3815,6 +3849,8 @@ static void schedule_sidebar_restart(void) {
   SDL_Log("Shell Sidebar automatic restart scheduled: attempt=%u", shell.sidebar_restart_attempts + 1);
 }
 static void start_sidebar(void) {
+  if (shell.sidebar_healthy_timer) KillTimer(shell.hwnd, shell.sidebar_healthy_timer);
+  shell.sidebar_healthy_timer = 0;
   if (shell.closing || !shell.sidebar_userdir)
     return;
   ShellProject *old = shell.sidebar_process;
@@ -4100,6 +4136,8 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   shell.sidebar_watch = NULL;
   if (shell.sidebar_restart_timer) KillTimer(shell.hwnd, shell.sidebar_restart_timer);
   shell.sidebar_restart_timer = 0;
+  if (shell.sidebar_healthy_timer) KillTimer(shell.hwnd, shell.sidebar_healthy_timer);
+  shell.sidebar_healthy_timer = 0;
   if (shell.sidebar_process) {
     ShellProject *project = shell.sidebar_process;
     if (project->connected)
