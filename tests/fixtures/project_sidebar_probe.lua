@@ -17,6 +17,9 @@ ffi.cdef [[
   long __stdcall NtSuspendProcess(void *handle);
   long __stdcall NtResumeProcess(void *handle);
   unsigned long __stdcall GetWindowThreadProcessId(void *window, unsigned long *pid);
+  unsigned long __stdcall GetProcessId(void *process);
+  int __stdcall GetExitCodeProcess(void *process, unsigned long *code);
+  long __stdcall NtQuerySystemInformation(int kind, void *buffer, unsigned long size, unsigned long *needed);
 ]]
 local kernel, user32 = ffi.load("kernel32"), ffi.load("user32")
 local ntdll = ffi.load("ntdll")
@@ -31,14 +34,66 @@ local function read(name)
   local text = file:read("*a"); file:close()
   return assert(loadstring(text))()
 end
+-- Diagnostics: time from each Sidebar termination request until its process object is signaled.
+local exits = {}
+local function track_exit(handle, label)
+  exits[#exits + 1] = {handle = handle, label = label, start = system.get_time()}
+end
+-- Thread states and wait reasons of a process that has not finished terminating.
+local function thread_states(pid)
+  local size = 4 * 1024 * 1024
+  local buffer, needed = ffi.new("uint8_t[?]", size), ffi.new("unsigned long[1]")
+  if ntdll.NtQuerySystemInformation(5, buffer, size, needed) ~= 0 then return "query failed" end
+  local offset = 0
+  repeat
+    local entry = buffer + offset
+    if tonumber(ffi.cast("uintptr_t *", entry + 0x50)[0]) == pid then
+      local count, states = ffi.cast("uint32_t *", entry + 4)[0], {}
+      for i = 0, count - 1 do
+        local thread = entry + 0x100 + i * 0x50
+        local u = ffi.cast("int32_t *", thread)
+        states[#states + 1] = u[0x44 / 4] .. ":" .. u[0x48 / 4] .. ":" .. u[0x38 / 4] .. "/" .. u[0x3c / 4]
+      end
+      return count .. " threads (state:wait_reason:priority/base) " .. table.concat(states, " ")
+    end
+    local next_offset = ffi.cast("uint32_t *", entry)[0]
+    offset = offset + next_offset
+  until next_offset == 0
+  return "not listed"
+end
+local function poll_exits()
+  for _, item in ipairs(exits) do
+    if not item.ms and kernel.WaitForSingleObject(item.handle, 0) == 0 then
+      item.ms = math.floor((system.get_time() - item.start) * 1000 + .5)
+    elseif not item.ms and not item.threads and system.get_time() - item.start > 1 then
+      local code = ffi.new("unsigned long[1]"); kernel.GetExitCodeProcess(item.handle, code)
+      item.threads = "exit_code=" .. tonumber(code[0]) .. " " .. thread_states(tonumber(kernel.GetProcessId(item.handle)))
+    end
+  end
+end
+local function save_exits()
+  local list = {}
+  for _, item in ipairs(exits) do list[#list + 1] = {label = item.label, ms = item.ms or -1, threads = item.threads} end
+  save("sidebar-exit-times", list)
+end
 local function wait(fn, seconds, message)
   local deadline = system.get_time() + seconds
   repeat
+    poll_exits()
     if read("model-error") then error(read("model-error").error) end
     local value = fn(); if value then return value end
     coroutine.yield(.01)
   until system.get_time() > deadline
   error(message or "Sidebar model probe timed out")
+end
+-- Waits for the driver's finish signal. Each driver step, not the whole sequence, must finish within `seconds`.
+local function wait_finish(seconds)
+  local last
+  repeat
+    last = read("sidebar-progress")
+    wait(function() return read("sidebar-process-finish") or read("sidebar-progress") ~= last end, seconds,
+      "Sidebar driver made no progress")
+  until read("sidebar-process-finish")
 end
 local function snapshot()
   assert(type(core.request_project_sidebar) == "function", "Project Sidebar snapshot API is unavailable")
@@ -123,6 +178,16 @@ core.add_background_thread(function()
           end
           if found ~= old then return found end
         end
+        -- The shell restarts a crashed Sidebar only after its process exits. Restart deadlines start there.
+        -- On a saturated CPU, idle-priority GPU driver threads can delay that exit for seconds.
+        -- 30 seconds matches the shell's own exit wait.
+        local progress = 0
+        local function wait_exit(child)
+          wait(function() return kernel.WaitForSingleObject(child, 0) == 0 end, 30,
+            "Killed Sidebar did not finish exiting within the shell's exit wait")
+          progress = progress + 1
+          save("sidebar-progress", progress)
+        end
         local first = wait(function() return sidebar_pid() end, 15, "Sidebar process did not connect")
         local function ready(pid)
           local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
@@ -138,6 +203,7 @@ core.add_background_thread(function()
             local child = kernel.OpenProcess(0x1fffff, 0, last)
             assert(child ~= nil); handles[#handles + 1] = child
             assert(kernel.TerminateProcess(child, 107))
+            wait_exit(child)
             last = wait(function() return sidebar_pid(last) end, 15)
             wait(function() return ready(last) end, 10)
           end
@@ -146,6 +212,7 @@ core.add_background_thread(function()
           local child = kernel.OpenProcess(0x1fffff, 0, last)
           assert(child ~= nil); handles[#handles + 1] = child
           assert(kernel.TerminateProcess(child, 107))
+          wait_exit(child)
           local replacement = wait(function() return sidebar_pid(last) end, 15,
             "A stable Sidebar did not restore its automatic recovery budget")
           wait(function() return ready(replacement) end, 10)
@@ -179,8 +246,13 @@ core.add_background_thread(function()
         wait(function() return read("sidebar-project-input-ok") end, 5, "Sidebar hang blocked Project input")
         if action == "sidebar-recovery" then
           user32.PostMessageW(hwnd, 0x804c, 5, 0)
-          wait(function() return kernel.WaitForSingleObject(handle, 0) == 0 end, 3,
-            "Manual Sidebar Restart retained its hung frontend")
+          track_exit(handle, "manual-restart-hung")
+          -- The shell terminates with code 125. Windows reports that code as soon as termination starts.
+          -- Completion can wait seconds on a saturated CPU for idle-priority GPU driver threads.
+          wait(function()
+            local code = ffi.new("unsigned long[1]")
+            return kernel.GetExitCodeProcess(handle, code) ~= 0 and code[0] == 125
+          end, 3, "Manual Sidebar Restart retained its hung frontend")
         else
           assert(ntdll.NtResumeProcess(handle) == 0)
           assert(kernel.TerminateProcess(handle, 107))
@@ -197,6 +269,8 @@ core.add_background_thread(function()
             local child = kernel.OpenProcess(0x1fffff, 0, last)
             assert(child ~= nil); handles[#handles + 1] = child
             assert(kernel.TerminateProcess(child, 107))
+            track_exit(child, "crash-loop")
+            wait_exit(child)
             local deadline = system.get_time() + 6
             local next_pid
             repeat
@@ -205,6 +279,7 @@ core.add_background_thread(function()
               local newest
               for value in text:gmatch("Shell Sidebar connected: pid=(%d+)") do newest = tonumber(value) end
               if newest ~= last then next_pid = newest end
+              poll_exits()
               if not next_pid then coroutine.yield(.05) end
             until next_pid or system.get_time() >= deadline
             if not next_pid then
@@ -295,6 +370,15 @@ core.add_background_thread(function()
       save("finish", {continue = true})
       wait(function() return not subject:running() end, 15)
     end)
+    if not ok and #exits > 0 then
+      -- Record the actual exit time of a slow termination. This does not change the result.
+      local deadline = system.get_time() + 30
+      repeat poll_exits(); coroutine.yield(.05)
+        local pending = false
+        for _, item in ipairs(exits) do pending = pending or not item.ms end
+      until not pending or system.get_time() > deadline
+    end
+    if #exits > 0 then poll_exits(); save_exits() end
     save("result", {ok = ok, error = ok and nil or tostring(err), action = action})
     if subject and subject:running() then subject:terminate(); subject:wait(1) end
     for _, handle in ipairs(handles) do kernel.CloseHandle(handle) end
@@ -336,7 +420,7 @@ core.add_background_thread(function()
         return
       end
       if action == "sidebar-recovery-reset" then
-        wait(function() return read("sidebar-process-finish") end, 120)
+        wait_finish(120)
         quit()
         return
       end
@@ -347,7 +431,7 @@ core.add_background_thread(function()
         core.on_event("textinput", "SIDEBAR_HANG_INPUT")
         assert(editor.buffer:get_text(1, 1, 1, 19):find("SIDEBAR_HANG_INPUT", 1, true))
         save("sidebar-project-input-ok", true)
-        wait(function() return read("sidebar-process-finish") end, 30)
+        wait_finish(30)
         quit()
         return
       end

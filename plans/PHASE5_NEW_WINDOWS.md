@@ -87,7 +87,7 @@ The same control check passes in `anvil-surface-latency-tj1cwlys`.
 The first artifact also retains `Manual Sidebar Restart retained its hung frontend`.
 Its log records a replacement Sidebar, but the old process missed the fixture's exit deadline.
 The unchanged Sidebar Restart check passes in `anvil-surface-latency-tj1cwlys`.
-Its cause remains unproved. No timeout was widened and no failed evidence was removed.
+The [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) later identified its cause. No timeout was widened and no failed evidence was removed.
 
 The extended Open Project check also verifies wheel input in both Windows through native event routing.
 Scrolling B changes B's Editor, not A's Editor. Scrolling A changes A's Editor.

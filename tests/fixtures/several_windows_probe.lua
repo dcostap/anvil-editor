@@ -159,7 +159,12 @@ if path:find("/driver$", 1) then
             ntdll.NtResumeProcess(frontend)
             if not resumed then kernel.CloseHandle(frontend); error(suspend_error) end
             assert(kernel.TerminateProcess(frontend, 125) ~= 0)
+            -- The shell restarts a crashed Sidebar only after its process exits. The recreate deadline starts there.
+            -- On a saturated CPU, idle-priority GPU driver threads can delay that exit for seconds.
+            -- 30 seconds matches the shell's own exit wait.
+            local exited = pcall(wait_for, function() return kernel.WaitForSingleObject(frontend, 0) == 0 end, 30)
             kernel.CloseHandle(frontend)
+            assert(exited, "Killed Sidebar did not finish exiting within the shell's exit wait")
             wait_for(function()
               local next_pid, connection
               for value, generation in trace():gmatch("Shell Sidebar connected: pid=(%d+) connection=(%d+)") do

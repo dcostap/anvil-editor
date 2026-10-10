@@ -65,7 +65,7 @@ The focused View check draws two Views from one snapshot and requires different 
 `anvil-surface-latency-78ao9u5m` retains `Sidebar stopped before its restart limit`.
 The candidate repeat, `anvil-surface-latency-h1fnf5co`, reports a hung frontend surviving the fixture's Restart deadline.
 The saved `f565e01c` reference also fails that deadline in `anvil-surface-latency-dvd39mol`.
-These failures remain unexplained. Do not classify them as fixed by the new diagnostic labels.
+The [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) explains these failures. Do not classify them as fixed by the new diagnostic labels.
 No timeout was increased. No failed artifact was removed.
 The unchanged recovery check later passes on D3D11 in `anvil-surface-latency-xev_20x1`.
 It passes on software in `anvil-surface-latency-4z5nat2m`.

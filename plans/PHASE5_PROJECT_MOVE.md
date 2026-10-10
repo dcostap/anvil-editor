@@ -261,8 +261,7 @@ Normal fields such as `last_error=0` are not failures.
 
 ## Review and open gates
 
-Before milestone 4, identify the retained Sidebar Restart deadline failure's cause.
-A separate investigation commit is allowed. Do not increase its timeout.
+The Sidebar Restart [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) satisfies the milestone-4 entry gate.
 Physical input, real IME, mixed DPI, allocator-failure, and instrumented lifetime gates remain open.
 
 ### Review follow-up: Move choices across Sidebar revisions

@@ -10,7 +10,8 @@ The user approved 2a and the separate selection fix, `f565e01c`, then authorized
 Milestone 2b is implemented. Its [verification record](PHASE5_SHARED_SIDEBARS.md) retains checks and deployment evidence.
 The user approved `f565e01c` and `ec0e91a3`, then authorized milestone 3.
 Milestone 3 is implemented. Its [verification record](PHASE5_PROJECT_MOVE.md) retains checks, failures, and matched latency.
-Commit and stop for review after milestone 3. Do not start milestone 4.
+The user approved `f2742110`. Review follow-up `48b33622` keeps Move choices across Sidebar revisions.
+The Sidebar Restart [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) satisfies the milestone-4 entry gate. Stop for review. Do not start milestone 4.
 Phase 4 closeout precedes this work.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
@@ -158,7 +159,8 @@ Physical IME acceptance remains separate from synthetic checks.
 ### 4. Per-Window Close and local failure
 
 Entry gate: identify the cause of the retained Sidebar Restart deadline failure.
-A separate investigation commit is allowed. Do not increase the timeout.
+The [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) identifies it: idle-priority GPU driver threads delay process exit on a saturated CPU.
+Milestone 4 still requires the user's go-ahead.
 
 Window Close checks only Projects assigned to that Window, using the normal Close policies.
 Unload each assigned Project through the normal Close policy. Terminal Sessions follow the Phase 4 unload rules.
