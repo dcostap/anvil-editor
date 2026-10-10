@@ -2,22 +2,53 @@
 
 ## Status
 
-The latency baseline gate remains open. Do not start Phase 5 milestone 2.
-Both freshly built revisions show the large slowdown in the locked, display-off session.
-This is not a candidate-only regression. A candidate bisect is not justified by these results.
-The cause of the environment or harness effect remains unproved.
-An unlocked, display-on repeat remains necessary before accepting the baseline.
-The user accepted the evidence: no candidate regression; the shift tracks Present pacing in the locked, display-off session.
-Wait for the user's unlocked/display-on confirmation before the same matched, non-diagnostic repeat.
-Close the milestone-2 entry gate only if medians return to the historical range.
-Otherwise report the results and stop. Do not operate the user's Windows.
-Do not switch Windows desktops or operate the user's Windows to obtain that control.
+The milestone-2 latency entry gate is closed (satisfied) on 2026-10-10.
+The user confirmed Windows was unlocked with the display on. The runner confirmed both states.
+The same fresh revisions completed the matched, alternating, non-diagnostic repeat with historical-range medians.
+Both revisions showed the large slowdown in the earlier locked, display-off session, not a candidate-only regression.
+The large shift did not repeat under normal console conditions. The exact environment mechanism remains unproved.
+Phase 5 still awaits plan review. Do not start its implementation without approval.
+Do not operate the user's Windows or switch desktops to obtain environment controls.
 
 Hosted mode stays opt-in. Differences below about 2 ms remain noise.
 The probe measures generated input to Present, not physical input or scanout.
 The historical 761 ms to 9 s tails remain unexplained.
 These comparisons do not measure the subsequent Sidebar follow-up commit.
 The locked/display-off cases remain diagnostic evidence, not an eligible baseline or performance gate.
+
+## Accepted unlocked/display-on baseline
+
+Artifact: `%TEMP%/anvil-fresh-matched-unlocked-display-on-9yvhy_i6/results.json`.
+The repeat uses the same fresh executables, matching hashes below, and each revision's own data.
+Order, five-second warmup, 120-input case size, normal harness scheduling, and diagnostic-disabled settings remain unchanged.
+No builds, correctness checks, or other latency runs overlap the repeat.
+The private-desktop runner uses only isolated data and owned process handles. It does not operate the user's Windows.
+
+All 24 cases pass strict completeness and environment validity checks: 2,880 inputs in total.
+Each row contains three complete cases and 360 inputs per revision.
+All 48 boundary snapshots report console session 1 unlocked and the display on.
+Original samples, per-case results, launch files, tails, and maxima remain in the artifact.
+
+Values are p50 / p90 / p99 / maximum / mean, in ms:
+
+| Row | `9ea92aeb` | `81bccdaf` |
+|---|---|---|
+| Direct D3D11 | 6.717 / 16.360 / 19.484 / 50.694 / 8.561 | 7.476 / 16.973 / 20.660 / 39.378 / 9.090 |
+| Hosted D3D11 | 7.090 / 16.074 / 19.934 / 22.171 / 8.797 | 7.412 / 16.759 / 19.665 / 21.365 / 9.090 |
+| Direct software | 15.767 / 24.810 / 28.906 / 37.510 / 17.026 | 15.350 / 24.446 / 27.959 / 29.951 / 16.458 |
+| Hosted software | 10.772 / 21.227 / 23.234 / 25.126 / 12.832 | 11.596 / 20.925 / 22.979 / 25.015 / 12.959 |
+
+These medians return to the historical range in the Phase 4 four-row comparisons.
+Candidate median differences are +0.759, +0.322, -0.417, and +0.824 ms respectively.
+All are below the approximately 2 ms noise threshold. Do not claim a performance gain or regression from them.
+The direct-D3D11 maxima of 50.694 and 39.378 ms remain retained. This result does not remove all tails.
+
+The prior locked comparison used console session 2; this repeat uses session 1.
+The results do not isolate lock state from display power or other session changes.
+The Present-pacing controls locate the earlier direct delay, but do not explain the historical multi-second tails.
+Those older causes remain open and separate from the satisfied baseline entry gate.
+
+Only evidence and plan status changed in this slice. No runtime change, build, portable update, or Phase 5 implementation occurred.
 
 ## Fresh build method
 
@@ -145,7 +176,7 @@ After the fix, all four focused tests pass, including normal state, unknown stat
 Command: `python -m unittest discover -s tests/tools -p test_surface_latency_probe.py`.
 Python compilation and the diff check also pass.
 An observation-only native read reports console session 2 locked and the display off.
-No new latency run started. The matched repeat still waits for the user's confirmation.
+At the tooling milestone, no new latency run started. The repeat awaited the user's confirmation.
 
 The matched-repeat script now uses the runner's direct boundary snapshots and eligibility fields.
 It does not read or overwrite results with the stopped temporary observer's state file.

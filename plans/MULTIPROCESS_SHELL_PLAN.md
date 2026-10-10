@@ -461,9 +461,10 @@ Add the Sidebar process with a minimal list UI, plus its crash restart.
 Draft for review: [Phase 5: several Anvil Windows](PHASE5_SEVERAL_WINDOWS.md).
 Do not implement it before approval. Phase 4 closeout comes first.
 The latency probe remains under investigation. Treat differences below about 2 ms as noise.
-The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) remains blocking before Phase 5 milestone 2.
-Both fresh revisions are slow while the console is locked and the display is off.
-Require an explained, reproducible baseline before that milestone. Do not accept performance gains from unreliable comparisons.
+The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) satisfies the milestone-2 entry gate on 2026-10-10.
+Both fresh revisions return to historical-range medians in the unlocked, display-on matched repeat.
+All 24 cases are complete and environment-valid. Plan review still blocks implementation.
+Exclude locked/display-off or unavailable states from baselines. Do not accept performance gains from unreliable comparisons.
 
 Add new windows, moving a Project between windows, and bringing the owning window
 to the front.

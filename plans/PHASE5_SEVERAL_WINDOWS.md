@@ -6,8 +6,8 @@ Draft for review. Do not implement this plan before approval.
 Phase 4 closeout precedes this work.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
-Re-establish a reproducible latency baseline before milestone 2. This entry gate is blocking.
-The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) records current evidence and the remaining environment control.
+The milestone-2 latency entry gate is satisfied on 2026-10-10. Plan review still blocks implementation.
+The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) records the accepted unlocked/display-on matched repeat.
 Do not use unreliable latency results to accept a performance change.
 Treat differences below about 2 ms as noise.
 
@@ -56,7 +56,8 @@ Commit after focused checks pass.
 ### 2. New Window and shared Sidebar surfaces
 
 Entry gate: latency baseline re-established through matched, alternating runs of freshly built reference and candidate revisions.
-Record console lock and display power state. Explain any shared environment or harness slowdown before accepting the baseline.
+This gate is satisfied by the 2026-10-10 repeat. All 24 runs are complete and environment-valid, with historical-range medians.
+Keep recording console lock and display power state. Exclude invalid environments from future baselines and performance gates.
 
 Add an explicit hosted New Window request.
 Reuse `core:new_anvil_window` and `core.open_new_window()`. Route them to the shell in hosted mode.
