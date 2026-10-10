@@ -133,7 +133,7 @@ def main() -> int:
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
     parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
-        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -178,9 +178,11 @@ def main() -> int:
                     case_dir = work / f"project-{mode}-{action}"
                     for name in ("driver", "Project", "Replacement", "user"):
                         (case_dir / name).mkdir(parents=True)
+                    if action.startswith("windows-move"):
+                        (case_dir / "Other").mkdir()
                     fixture = "loaded_projects_probe.lua" if action.startswith("loaded-") else "hosted_project_probe.lua"
                     if action.startswith("windows-"):
-                        fixture = "several_windows_probe.lua"
+                        fixture = "windows_move_probe.lua" if action.startswith("windows-move") else "several_windows_probe.lua"
                     if action.startswith("identity-"):
                         fixture = "project_identity_probe.lua"
                     if action.startswith("dormant-"):
@@ -217,7 +219,7 @@ def main() -> int:
                             "ANVIL_USERDIR": native_path(case_dir / "user"),
                             "USERPROFILE": native_path(case_dir / "user"), "HOME": native_path(case_dir / "user"),
                             "ANVIL_PROJECT_PROBE": action, "ANVIL_PROJECT_PROBE_MODE": mode,
-                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("routing", "windows-open") else "",
+                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("routing", "windows-open") or action.startswith("windows-move") else "",
                             "ANVIL_PROJECT_PROBE_ROOT": native_path(case_dir).replace("\\", "/"),
                             "ANVIL_PROJECT_PROBE_RESULT": native_path(result),
                             "ANVIL_TEST_DISABLE_PLUGINS": "autorestart,autoreload,autosave_fast,autosaveonfocuslost",

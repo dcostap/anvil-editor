@@ -1796,6 +1796,13 @@ static int f_activate_sidebar_surface(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_sidebar_activate((uint32_t)luaL_checkinteger(L, 1)));
   return 1;
 }
+static int f_move_project(lua_State *L) {
+  lua_Integer project = luaL_checkinteger(L, 1), target = luaL_checkinteger(L, 2);
+  luaL_argcheck(L, project > 0 && project <= UINT32_MAX, 1, "invalid Project ID");
+  luaL_argcheck(L, target > 0 && target <= UINT32_MAX, 2, "invalid target Window ID");
+  lua_pushboolean(L, anvil_hosted_surface_move_project((uint32_t)project, (uint32_t)target));
+  return 1;
+}
 static int f_open_project_window(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
   lua_pushboolean(L, anvil_hosted_surface_open_project_window(path));
@@ -2463,6 +2470,7 @@ static const luaL_Reg lib[] = {
   { "get_anvil_window_id",   f_get_anvil_window_id   },
   { "sidebar_surfaces", f_sidebar_surfaces },
   { "activate_sidebar_surface", f_activate_sidebar_surface },
+  { "move_project", f_move_project },
   { "open_project_window",  f_open_project_window  },
   { "open_project_picker",  f_open_project_picker  },
   { "unload_project",        f_unload_project        },

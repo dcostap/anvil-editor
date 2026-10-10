@@ -3,6 +3,7 @@ local core = require "core"
 local saved_event = core.on_event
 local surfaces, current = {}, nil
 local SidebarView, font, base_font_size
+local fonts, style = {}, nil
 
 local function save()
   if not current then return end
@@ -23,13 +24,24 @@ local function activate(id)
     surface.scale, core.redraw = scale, true
   end
   SCALE = scale
-  if font and font:get_size() ~= base_font_size * scale then font:set_size(base_font_size * scale) end
+  if font then
+    if not fonts[scale] then
+      fonts[scale] = font:copy(base_font_size * scale)
+      core.log_quiet("Sidebar font created: scale=%g", scale)
+    end
+    style.font = fonts[scale]
+  end
   return true
 end
 local function add_surface(id, window)
   local surface = {id = id, window = window, native_id = system.get_window_id(window), scale = system.get_scale(window),
     redraw = true, query_needed = true, refresh_needed = false}
-  surface.view = SidebarView(function(action, row_id)
+  surface.view = SidebarView(function(action, row_id, target)
+    if action == "move" then
+      core.log_quiet("Sidebar Move: Window=%d Project=%d target=%d", id, row_id, target)
+      if not system.move_project(row_id, target) then core.log_quiet("Sidebar Move request rejected: Project=%d target=%d", row_id, target) end
+      return
+    end
     if action == "refresh" then
       core.project_sidebar_request = nil
       surface.query_needed, surface.refresh_needed = true, true
@@ -38,7 +50,9 @@ local function add_surface(id, window)
     end
     for _, project in ipairs(core.project_sidebar or {}) do
       if project.row_id == row_id then
-        if action == "select" then system.select_project(project.path)
+        if action == "select" then
+          core.log_quiet("Sidebar selection: Window=%d Project=%d owner=%d", id, project.id, project.window_id)
+          system.select_project(project.path)
         elseif action == "unload" then system.unload_project(project.path) end
         return
       end
@@ -78,8 +92,10 @@ function core.init()
   SCALE = system.get_scale(window)
   require "colors.default"
   SidebarView = require "core.sidebar_view"
-  font = require("core.style").font
+  style = require "core.style"
+  font = style.font
   base_font_size = font:get_size() / SCALE
+  fonts[SCALE] = font
   local id = system.get_anvil_window_id()
   add_surface(id, window)
   activate(id)
@@ -152,6 +168,10 @@ function core.run_step()
       save()
     end
   end
+  -- Keep fonts only for scales still used by a live surface. Activation never resizes them.
+  local used = {}
+  for _, surface in pairs(surfaces) do used[surface.scale] = true end
+  for scale in pairs(fonts) do if not used[scale] then fonts[scale] = nil end end
   if pending then system.wait_event(.01) else system.wait_event() end
   return true
 end

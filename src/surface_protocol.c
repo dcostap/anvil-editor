@@ -174,7 +174,8 @@ bool anvil_surface_dialog_result_valid(const void *packet, uint32_t size) {
 }
 
 bool anvil_surface_layout_changed(const AnvilSurfaceConfigure *previous, const AnvilSurfaceConfigure *next) {
-  return previous->origin_x != next->origin_x || previous->origin_y != next->origin_y ||
+  return previous->window_id != next->window_id || previous->origin_x != next->origin_x ||
+    previous->origin_y != next->origin_y ||
     previous->pixel_w != next->pixel_w || previous->pixel_h != next->pixel_h ||
     previous->display_scale != next->display_scale || previous->button_width != next->button_width ||
     previous->title_height != next->title_height || previous->resize_border != next->resize_border ||

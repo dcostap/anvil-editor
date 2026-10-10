@@ -261,6 +261,7 @@ static void check_gpu_failure(ShellWindow *window);
 static void close_memory_frame(ShellPresentation *surface);
 static bool select_project_path(ShellWindow *window, const char *path);
 static void select_project(ShellProject *project);
+static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id);
 static void present_deferred_dialogs(ShellProject *project);
 static void finish_launch(ShellProject *project);
 static void finish_resolutions(void);
@@ -682,6 +683,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     switch (packet->type) {
     case ANVIL_SURFACE_MSG_FRAME: case ANVIL_SURFACE_MSG_CURSOR: case ANVIL_SURFACE_MSG_HIT_TEST:
     case ANVIL_SURFACE_MSG_SELECT_PROJECT: case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
+    case ANVIL_SURFACE_MSG_MOVE_PROJECT:
     case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
     case ANVIL_SURFACE_MSG_TEXT_INPUT: case ANVIL_SURFACE_MSG_TITLE:
     case ANVIL_SURFACE_MSG_VISIBLE: case ANVIL_SURFACE_MSG_SET_BOUNDS: case ANVIL_SURFACE_MSG_BORDERED:
@@ -709,6 +711,9 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_NEW_WINDOW:
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER:
     return size == sizeof(uint32_t) && *(const uint32_t *)payload != 0;
+  case ANVIL_SURFACE_MSG_MOVE_PROJECT:
+    return size == sizeof(AnvilSurfaceMoveProject) && ((const AnvilSurfaceMoveProject *)payload)->project_id &&
+           ((const AnvilSurfaceMoveProject *)payload)->target_window_id;
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
     return size > sizeof(uint32_t) + 1 && size < 32768 && *(const uint32_t *)payload &&
            ((const char *)payload)[size - 1] == 0 &&
@@ -1043,6 +1048,10 @@ static void send_configure(ShellProject *project) {
       config.window_w = rect.right - rect.left;
       config.window_h = rect.bottom - rect.top;
     }
+  } else if (project->last_config.window_id != window->id) {
+    /* A newly assigned surface has no prior geometry in this minimized Window. */
+    config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_w : window->buffer_w - window->sidebar_w);
+    config.pixel_h = SDL_max(1, window->buffer_h);
   }
   config.display_scale = window->scale;
   config.origin_x = project->sidebar ? 0 : window->sidebar_w;
@@ -2282,7 +2291,9 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   if (message->type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
     AnvilSidebarSurfacePacket packet = *(AnvilSidebarSurfacePacket *)message->payload;
     ShellWindow *target = window_for_id(packet.window_id);
-    if (!target || target->closing || !target->sidebar_client || project != shell.sidebar_process) {
+    /* A live Close choice rejects Move with status. Other closing-surface requests stay discarded. */
+    if (!target || target->removing || !target->sidebar_client || project != shell.sidebar_process ||
+        (target->closing && packet.type != ANVIL_SURFACE_MSG_MOVE_PROJECT)) {
       SDL_Log("Shell ignored stale Sidebar surface request: Window=%u type=%u", packet.window_id, packet.type);
       return;
     }
@@ -2311,6 +2322,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       message->type != ANVIL_SURFACE_MSG_SIDEBAR_REFRESH &&
       message->type != ANVIL_SURFACE_MSG_SELECT_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
+      message->type != ANVIL_SURFACE_MSG_MOVE_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_FRAME &&
       message->type != ANVIL_SURFACE_MSG_EXIT_INTENT && message->type != ANVIL_SURFACE_MSG_CURSOR &&
       message->type != ANVIL_SURFACE_MSG_HIT_TEST)
@@ -2332,6 +2344,11 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     }
   }
   switch (message->type) {
+  case ANVIL_SURFACE_MSG_MOVE_PROJECT: {
+    const AnvilSurfaceMoveProject *request = payload;
+    move_project(window, request->project_id, request->target_window_id);
+    break;
+  }
   case ANVIL_SURFACE_MSG_FRAME:
     memcpy(&project->latest_frame, payload, sizeof(project->latest_frame));
     project->frame_pending = true;
@@ -3926,6 +3943,7 @@ static void select_project(ShellProject *project) {
   cancel_input(window);
   if (previous->connected)
     shell_send_int(previous, ANVIL_SURFACE_MSG_FOCUS, 0);
+  SDL_ClearComposition(window->window);
   SDL_StopTextInput(window->window);
   set_surface_busy(window, &window->project_presentation, false);
   SAFE_RELEASE(window->project_presentation.shared_mutex);
@@ -3937,13 +3955,16 @@ static void select_project(ShellProject *project) {
   window->resize_wait_disabled = false;
   window->ui_dirty = true;
   window->hovered_control = window->pressed_control = -1;
-  SDL_SetWindowTitle(window->window, project->title ? project->title : "Anvil - Starting Project");
+  SDL_SetWindowTitle(window->window, project->title ? project->title :
+                     project->id ? "Anvil - Starting Project" : "Anvil - No Project selected");
   send_configure(previous);
   send_configure(project);
   if (project->connected)
     shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS,
-        anvil_latency_probe_enabled() || (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS) != 0);
-  if (project->text_active)
+        !IsIconic(window->hwnd) &&
+        (anvil_latency_probe_enabled() || (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS) != 0));
+  if (project->text_active && !IsIconic(window->hwnd) &&
+      (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS))
     SDL_StartTextInput(window->window);
   apply_cursor(project->child_cursor);
   present_deferred_dialogs(project);
@@ -3952,6 +3973,63 @@ static void select_project(ShellProject *project) {
   composite_and_present(window);
 }
 
+static bool project_has_dialog(const ShellProject *project) {
+  for (size_t i = 0; i < SDL_arraysize(project->dialogs); i++)
+    if (project->dialogs[i] || project->deferred_dialogs[i]) return true;
+  return false;
+}
+static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id) {
+  ShellProject *project = NULL;
+  for (ShellProject *item = shell.projects; item; item = item->next)
+    if (item->id == project_id) { project = item; break; }
+  ShellWindow *source = project ? window_for_id(project->window_id) : NULL;
+  ShellWindow *target = window_for_id(target_id);
+  if (!source || !target || source->removing || target->removing) {
+    window_notice(requester, "Cannot move Project: Project or target Window is unavailable.");
+    return;
+  }
+  if (requester->closing || source->closing || target->closing || project->close_requested_ns || project->close_waiting ||
+      project->close_prompt || project->unloading || target->selected->close_requested_ns ||
+      target->selected->close_waiting || target->selected->close_prompt) {
+    window_notice(requester, "Cannot move Project during a pending Close choice.");
+    return;
+  }
+  if (project_has_dialog(project) || project_has_dialog(target->selected) ||
+      source->picker_pending || target->picker_pending) {
+    window_notice(requester, "Cannot move Project while a native file dialog is open.");
+    return;
+  }
+  if (!project->connected || project->state != SHELL_READY || project->resolving ||
+      (project->launch && !project->launch->taken)) {
+    window_notice(requester, "Cannot move Project until it is Ready.");
+    return;
+  }
+  if (source == target) return;
+  retain_project(project);
+  /* Revoke the old surface before changing ownership. Keep the Project retained during native callbacks. */
+  if (source->selected == project) {
+    ShellProject *replacement = source->empty;
+    for (ShellProject *item = shell.projects; item; item = item->next)
+      if (item != project && item->window_id == source->id && !item->unloading && !item->failed_close) {
+        replacement = item; break;
+      }
+    select_project(replacement);
+  } else {
+    shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS, 0);
+    send_configure(project);
+  }
+  project->window_id = target->id;
+  /* Window identity is part of layout identity, even for equal-sized targets. */
+  select_project(project);
+  requester->notice[0] = 0;
+  requester->ui_dirty = true;
+  sync_sidebar_model();
+  notify_sidebar_changes();
+  SDL_Log("Shell moved Project: id=%u pid=%lu source=%u target=%u configuration=%llu", project->id,
+          (unsigned long)project->process.dwProcessId, source->id, target->id,
+          (unsigned long long)project->last_config.configuration);
+  release_project(project);
+}
 static bool select_project_path(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path)
     return false;

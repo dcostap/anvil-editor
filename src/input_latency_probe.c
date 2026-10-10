@@ -190,7 +190,7 @@ void anvil_latency_probe_start(SDL_Window *window, void (*finish)(void)) {
 }
 
 bool anvil_routing_probe_message(SDL_Window *window, uint32_t message, uintptr_t action, intptr_t point) {
-  if (message != ANVIL_ROUTING_PROBE_MESSAGE || action > 6) return false;
+  if (message != ANVIL_ROUTING_PROBE_MESSAGE || action > 8) return false;
   const char *enabled = SDL_getenv("ANVIL_INPUT_ROUTING_PROBE");
   if (!enabled || strcmp(enabled, "1")) return false;
   SDL_Event event = {0};
@@ -207,7 +207,7 @@ bool anvil_routing_probe_message(SDL_Window *window, uint32_t message, uintptr_t
     event.wheel.mouse_x = x;
     event.wheel.mouse_y = y;
     event.wheel.y = -1;
-  } else if (action >= 4) {
+  } else if (action >= 4 && action <= 6) {
     event.type = action == 4 ? SDL_EVENT_DROP_BEGIN : action == 5 ? SDL_EVENT_DROP_TEXT : SDL_EVENT_DROP_COMPLETE;
     event.drop.windowID = SDL_GetWindowID(window);
     event.drop.x = x;
@@ -223,10 +223,11 @@ bool anvil_routing_probe_message(SDL_Window *window, uint32_t message, uintptr_t
       event.drop.data = text;
     }
   } else {
-    event.type = action == 1 ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+    bool down = action == 1 || action == 7;
+    event.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
     event.button.windowID = SDL_GetWindowID(window);
-    event.button.button = SDL_BUTTON_LEFT;
-    event.button.down = action == 1;
+    event.button.button = action >= 7 ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
+    event.button.down = down;
     event.button.clicks = 1;
     event.button.x = x;
     event.button.y = y;

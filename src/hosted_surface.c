@@ -670,6 +670,12 @@ bool anvil_hosted_surface_new_window(void) {
   send_message(ANVIL_SURFACE_MSG_NEW_WINDOW, &view->config.window_id, sizeof(uint32_t));
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
+bool anvil_hosted_surface_move_project(uint32_t project_id, uint32_t target_window_id) {
+  if (!hosted.active || !project_id || !target_window_id || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  AnvilSurfaceMoveProject request = {project_id, target_window_id};
+  send_message(ANVIL_SURFACE_MSG_MOVE_PROJECT, &request, sizeof(request));
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
 
 uint32_t anvil_hosted_surface_window_id(void) { return view->config.window_id; }
 bool anvil_hosted_surface_open_project_window(const char *path) {
@@ -1041,6 +1047,9 @@ bool anvil_hosted_surface_frame_metrics(int *button, int *title, int *border) {
 }
 
 #else
+bool anvil_hosted_surface_move_project(uint32_t project_id, uint32_t target_window_id) {
+  (void)project_id; (void)target_window_id; return false;
+}
 void anvil_hosted_surface_unregister_window(SDL_Window *window) { (void)window; }
 size_t anvil_hosted_surface_sidebar_views(uint32_t *ids, bool *removed, size_t capacity) {
   (void)ids; (void)removed; (void)capacity; return 0;

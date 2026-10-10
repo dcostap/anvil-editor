@@ -1,6 +1,20 @@
 local test = require "core.test"
 
 test.describe("Sidebar list actions", function()
+  test.it("offers explicit target Windows for a loaded Project Move", function()
+    local SidebarView = require "core.sidebar_view"
+    local actions = {}
+    local view = SidebarView(function(...) actions[#actions + 1] = {...} end)
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={}},
+      windows={{id=5,selected_project=31},{id=8,selected_project=0},{id=9,selected_project=44}}}, 8)
+    -- Right-click opens Move choices. It does not move or unload the Project.
+    view:on_mouse_pressed("right", 20, view:row_y(1), 240)
+    test.equal(#actions, 0)
+    test.equal(#view.rows, 3)
+    view:on_mouse_pressed("left", 20, view:row_y(3), 240)
+    test.same(actions, {{"move", 31, 9}})
+    test.equal(#view.rows, 1)
+  end)
   test.it("highlights each Window's Selected Project and shows its owning Window", function()
     -- Seam: public model input and renderer output. Both Views share one snapshot.
     local SidebarView = require "core.sidebar_view"

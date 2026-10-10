@@ -8,7 +8,9 @@ The user approved milestone 1. Its [verification record](PHASE5_WINDOW_STATE.md)
 Milestone 2a is implemented and deployed. Its [verification record](PHASE5_NEW_WINDOWS.md) retains red-green checks and matched latency.
 The user approved 2a and the separate selection fix, `f565e01c`, then authorized 2b.
 Milestone 2b is implemented. Its [verification record](PHASE5_SHARED_SIDEBARS.md) retains checks and deployment evidence.
-Stop for milestone-2b review before starting milestone 3.
+The user approved `f565e01c` and `ec0e91a3`, then authorized milestone 3.
+Milestone 3 is implemented. Its [verification record](PHASE5_PROJECT_MOVE.md) retains checks, failures, and matched latency.
+Commit and stop for review after milestone 3. Do not start milestone 4.
 Phase 4 closeout precedes this work.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
@@ -154,6 +156,9 @@ Old frames, input, IME areas, and dialog results must not enter the target confi
 Physical IME acceptance remains separate from synthetic checks.
 
 ### 4. Per-Window Close and local failure
+
+Entry gate: identify the cause of the retained Sidebar Restart deadline failure.
+A separate investigation commit is allowed. Do not increase the timeout.
 
 Window Close checks only Projects assigned to that Window, using the normal Close policies.
 Unload each assigned Project through the normal Close policy. Terminal Sessions follow the Phase 4 unload rules.

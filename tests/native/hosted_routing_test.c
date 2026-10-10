@@ -138,6 +138,9 @@ static int SDLCALL server(void *data) {
 }
 
 int main(int test_argc, char **test_argv) {
+  /* Equal-sized Windows still require a new input/frame/IME configuration. */
+  AnvilSurfaceConfigure source_window = {.window_id = 7}, target_window = {.window_id = 9};
+  CHECK(anvil_surface_layout_changed(&source_window, &target_window));
   if (test_argc > 1 && !strcmp(test_argv[1], "probe-gap")) {
     SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "ANVIL_INPUT_LATENCY_PROBE", "4", true);
     anvil_latency_probe_init("test");
