@@ -2,6 +2,7 @@
 #include "custom_events.h"
 #include "input_latency_probe.h"
 #include "system_events.h"
+#include "process_exit.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -151,7 +152,7 @@ static int SDLCALL loss_watchdog(void *data) {
   Sleep(SHELL_LOSS_DEADLINE_MS);
   SDL_Log("Project shell-loss deadline expired; retain the last durable Workspace; unsaved edits may be lost");
   /* A stalled thread can hold DLL teardown locks. Do not run DLL detach here. */
-  TerminateProcess(GetCurrentProcess(), 124);
+  anvil_process_terminate(GetCurrentProcess(), 124);
   return 0;
 }
 

@@ -14,6 +14,9 @@
 #include "win32_single_instance.h"
 #include "anvil_shell.h"
 #include "terminal_host.h"
+#ifdef _WIN32
+#include "process_exit.h"
+#endif
 #include "api/terminal_native.h"
 #include "hosted_surface.h"
 #include "input_latency_probe.h"
@@ -359,6 +362,8 @@ static bool shell_mode = false;
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 #ifdef _WIN32
+  /* ExitProcess ends every other thread first. GPU driver threads at idle priority starve on a busy CPU. */
+  atexit(anvil_process_prepare_exit);
   if (argc > 1 && strcmp(argv[1], "--terminal-session") == 0) {
     /* No Lua, single-instance forwarding, window, or SDL initialization. */
     exit(anvil_terminal_host_main(argc, argv));

@@ -9,6 +9,7 @@
 #include "project_sidebar.h"
 #include "project_sidebar_scan.h"
 #include "sidebar_registry_watch.h"
+#include "process_exit.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -246,6 +247,11 @@ typedef struct {
 static Shell shell;
 _Static_assert(sizeof(uintptr_t) == 8, "Shell timer tags require 64-bit uintptr_t");
 /* Window lookup runs only on the native UI thread. Async users carry IDs. */
+/* `_Exit` skips atexit hooks. The shell's own D3D11 device also owns idle-priority driver threads. */
+static _Noreturn void shell_exit(int code) {
+  anvil_process_prepare_exit();
+  _Exit(code);
+}
 static ShellWindow *window_for_id(Uint32 id) {
   for (ShellWindow *window = shell.windows; window; window = window->next)
     if (window->id == id) return window;
@@ -1667,10 +1673,10 @@ static void composite_and_present(ShellWindow *window) {
 
 static void finish_latency_probe(void) {
   for (ShellProject *project = shell.projects; project; project = project->next)
-    if (project->process.hProcess) TerminateProcess(project->process.hProcess, 0);
+    if (project->process.hProcess) anvil_process_terminate(project->process.hProcess, 0);
   if (shell.sidebar_process && shell.sidebar_process->process.hProcess)
-    TerminateProcess(shell.sidebar_process->process.hProcess, 0);
-  _Exit(anvil_latency_probe_succeeded() ? 0 : 1);
+    anvil_process_terminate(shell.sidebar_process->process.hProcess, 0);
+  shell_exit(anvil_latency_probe_succeeded() ? 0 : 1);
 }
 
 /* Copies the newest published frame into the private surface texture. */
@@ -2643,7 +2649,7 @@ static void perform_control(ShellWindow *window, int control) {
     ShellProject *sidebar = shell.sidebar_process;
     if (sidebar && sidebar->process.hProcess &&
         WaitForSingleObject(sidebar->process.hProcess, 0) == WAIT_TIMEOUT)
-      TerminateProcess(sidebar->process.hProcess, 125);
+      anvil_process_terminate(sidebar->process.hProcess, 125);
     start_sidebar();
     return;
   }
@@ -2969,7 +2975,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         project->close_prompt = false;
         if (dialog->force) {
           if (WaitForSingleObject(dialog->process, 0) != WAIT_TIMEOUT ||
-              TerminateProcess(dialog->process, 125)) {
+              anvil_process_terminate(dialog->process, 125)) {
             project->intentional_exit = project->exit_announced = true;
             project->failed_close = true;
             stop_close_timer(project);
@@ -4815,7 +4821,7 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   Uint64 deadline = SDL_GetTicks() + 1000;
   if (!anvil_sidebar_watch_stop(shell.sidebar_watch, deadline)) {
     SDL_Log("Sidebar registry watcher shutdown deadline expired; exit this shell only");
-    _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+    shell_exit(result == SDL_APP_FAILURE ? 1 : 0);
   }
   shell.sidebar_watch = NULL;
   if (shell.sidebar_restart_timer) KillTimer(shell.service_hwnd, shell.sidebar_restart_timer);
@@ -4830,13 +4836,13 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
         WaitForSingleObject(project->process.hProcess, 0) == WAIT_TIMEOUT) {
       SDL_Log("Shell ends its disposable Sidebar frontend; Projects and Terminal Sessions stay "
               "independent");
-      TerminateProcess(project->process.hProcess, 0);
+      anvil_process_terminate(project->process.hProcess, 0);
     }
     if (project->startup_timer)
       KillTimer(shell.service_hwnd, project->startup_timer);
     if (!stop_transport(project, deadline)) {
       SDL_Log("Shell Sidebar shutdown deadline expired; exit this shell only");
-      _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+      shell_exit(result == SDL_APP_FAILURE ? 1 : 0);
     }
     release_project(project);
     shell.sidebar_process = NULL;
@@ -4845,7 +4851,7 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
     KillTimer(shell.service_hwnd, shell.sidebar_timer);
   if (shell.sidebar_scan && !anvil_sidebar_scan_stop(shell.sidebar_scan, deadline)) {
     SDL_Log("Shell Sidebar worker shutdown deadline expired; exit this shell only");
-    _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+    shell_exit(result == SDL_APP_FAILURE ? 1 : 0);
   }
   if (shell.sidebar_scan)
     anvil_sidebar_scan_free(shell.sidebar_scan);
@@ -4856,7 +4862,7 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
     while (!SDL_GetAtomicInt(&job->done)) {
       if (SDL_GetTicks() >= deadline) {
         SDL_Log("Shell identity shutdown deadline expired; exit this shell only");
-        _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+        shell_exit(result == SDL_APP_FAILURE ? 1 : 0);
       }
       SDL_Delay(1);
     }
@@ -4869,29 +4875,29 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
       KillTimer(window->hwnd, project->startup_timer);
     if (!stop_transport(project, deadline)) {
       SDL_Log("Shell transport shutdown deadline expired; exit this shell only");
-      _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+      shell_exit(result == SDL_APP_FAILURE ? 1 : 0);
     }
   }
   for (ShellProject *project = shell.retiring; project; project = project->next) {
     if (!stop_transport(project, deadline)) {
       SDL_Log("Shell retired transport shutdown deadline expired; exit this shell only");
-      _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+      shell_exit(result == SDL_APP_FAILURE ? 1 : 0);
     }
   }
   for (ShellPicker *picker = shell.pickers; picker; picker = picker->next)
     if (!picker->probe) {
       SDL_Log("Shell exits with a cancelled native picker; retain its callback storage until process exit");
-      _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+      shell_exit(result == SDL_APP_FAILURE ? 1 : 0);
     }
   for (ShellProject *project = shell.retiring; project; project = project->next)
     if (SDL_GetAtomicInt(&project->references) > 1) {
       SDL_Log("Shell exits with retained native callback storage; do not free its SDL_Window");
-      _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+      shell_exit(result == SDL_APP_FAILURE ? 1 : 0);
     }
   for (ShellProject *project = shell.projects; project; project = project->next)
     if (SDL_GetAtomicInt(&project->references) > 1) {
       SDL_Log("Shell exits with retained native callback storage; do not free its SDL_Window");
-      _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+      shell_exit(result == SDL_APP_FAILURE ? 1 : 0);
     }
   while (shell.windows) destroy_window(shell.windows);
   if (shell.service_hwnd) DestroyWindow(shell.service_hwnd);

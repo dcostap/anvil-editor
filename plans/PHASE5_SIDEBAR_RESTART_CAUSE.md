@@ -84,5 +84,5 @@ Project exit checks elsewhere, such as Restart refusing while the previous Proje
 Other fixture deadlines that include Project termination (3–10 s in `hosted_project_probe.lua`) can fail under the same load.
 They have not failed in retained evidence and are unchanged.
 
-Raising the dying process's driver threads to normal priority before termination would remove the delay.
-That requires enumerating and adjusting child threads. It is not implemented; it is a product decision for later.
+Milestone 4 step 1 raises the dying process's idle-priority threads before Anvil ends it.
+See [its record](PHASE5_WINDOW_CLOSE.md). Crashes and the fixture's own kills are not covered.

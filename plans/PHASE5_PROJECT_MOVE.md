@@ -3,7 +3,7 @@
 ## Status
 
 Implemented and deployed. The user approved milestone 3 after `f565e01c` and `ec0e91a3`.
-Do not start milestone 4. Hosted mode remains opt-in.
+The user has since authorized milestone 4. Hosted mode remains opt-in.
 Commit this milestone and stop for review. This record retains the failed runs and open acceptance gates.
 
 Focused checks pass in `phase5-m3-final-native.txt`, `phase5-m3-final-view.txt`, and `phase5-m3-final-direct.txt`.

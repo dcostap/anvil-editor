@@ -50,6 +50,7 @@ anvil_sources = [
     'project_sidebar.c',
     'project_sidebar_scan.c',
     'sidebar_registry_watch.c',
+    'process_exit.c',
     'resize_diagnostics.c',
     'renderer.c',
     'display_packet.c',
@@ -263,6 +264,10 @@ if host_machine.system() == 'windows'
         ['../tests/native/sidebar_registry_watch_test.c', 'sidebar_registry_watch.c'],
         include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
     test('sidebar-watch', sidebar_watch_test, env: anvil_test_env, suite: 'anvil')
+    process_exit_test = executable('process_exit_test',
+        ['../tests/native/process_exit_test.c', 'process_exit.c'],
+        include_directories: anvil_includes, c_args: anvil_cargs)
+    test('process-exit', process_exit_test, env: anvil_test_env, suite: 'anvil', is_parallel: false)
     test('terminal-replay', terminal_replay_test, env: anvil_test_env, suite: 'anvil')
 endif
 test('fuzzy', fuzzy_test, env: anvil_test_env)
@@ -293,7 +298,7 @@ if host_machine.system() == 'windows'
         include_directories: anvil_includes, dependencies: [sdl_dep, lua_dep], c_args: anvil_cargs)
     test('sidebar-scan', sidebar_scan_test, env: anvil_test_env, suite: 'anvil')
     hosted_routing_test = executable('hosted_routing_test',
-        ['../tests/native/hosted_routing_test.c', 'hosted_surface.c', 'surface_protocol.c',
+        ['../tests/native/hosted_routing_test.c', 'hosted_surface.c', 'surface_protocol.c', 'process_exit.c',
          'ipc_pipe.c', 'system_events.c', 'custom_events.c', 'resize_diagnostics.c', 'input_latency_probe.c'],
         include_directories: anvil_includes,
         dependencies: [sdl_dep],

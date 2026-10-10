@@ -472,7 +472,7 @@ Milestone 3 adds explicit Project Move and verifies owning-Window selection from
 Its [verification record](PHASE5_PROJECT_MOVE.md) retains checks, memory investigation, latency, and deployment evidence.
 The user approved milestone 3. Review follow-up `48b33622` keeps Sidebar Move choices across revisions.
 The Sidebar Restart [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) satisfies the milestone-4 entry gate. No timeout changed.
-Stop for review before starting milestone 4. Hosted mode stays opt-in.
+The user authorized milestone 4; its [record](PHASE5_WINDOW_CLOSE.md) tracks progress. Hosted mode stays opt-in.
 The latency probe remains under investigation. Treat differences below about 2 ms as noise.
 The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) satisfies the milestone-2 entry gate on 2026-10-10.
 Both fresh revisions return to historical-range medians in the unlocked, display-on matched repeat.

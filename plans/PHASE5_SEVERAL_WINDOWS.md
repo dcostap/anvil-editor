@@ -11,7 +11,8 @@ Milestone 2b is implemented. Its [verification record](PHASE5_SHARED_SIDEBARS.md
 The user approved `f565e01c` and `ec0e91a3`, then authorized milestone 3.
 Milestone 3 is implemented. Its [verification record](PHASE5_PROJECT_MOVE.md) retains checks, failures, and matched latency.
 The user approved `f2742110`. Review follow-up `48b33622` keeps Move choices across Sidebar revisions.
-The Sidebar Restart [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) satisfies the milestone-4 entry gate. Stop for review. Do not start milestone 4.
+The Sidebar Restart [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) satisfies the milestone-4 entry gate.
+The user authorized milestone 4. Its [verification record](PHASE5_WINDOW_CLOSE.md) starts with the process-exit priority fix.
 Phase 4 closeout precedes this work.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
@@ -160,7 +161,7 @@ Physical IME acceptance remains separate from synthetic checks.
 
 Entry gate: identify the cause of the retained Sidebar Restart deadline failure.
 The [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) identifies it: idle-priority GPU driver threads delay process exit on a saturated CPU.
-Milestone 4 still requires the user's go-ahead.
+The user authorized milestone 4. Step 1 raises those threads before Anvil ends a process.
 
 Window Close checks only Projects assigned to that Window, using the normal Close policies.
 Unload each assigned Project through the normal Close policy. Terminal Sessions follow the Phase 4 unload rules.
