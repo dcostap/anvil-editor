@@ -228,7 +228,6 @@ local function launch_anvil_window(arguments, description)
   local exe = EXEFILE or (EXEDIR and (EXEDIR .. PATHSEP .. "anvil.exe")) or "anvil"
   local process_ok, process = pcall(require, "core.process")
   local command_args = { exe }
-  if PLATFORM == "Windows" and system.is_hosted_surface() then command_args[#command_args + 1] = "--shell" end
   for _, argument in ipairs(arguments) do command_args[#command_args + 1] = argument end
 
   -- Launch directly instead of going through system.exec's legacy
@@ -284,10 +283,21 @@ local function launch_anvil_window(arguments, description)
 end
 
 function core.open_new_window()
+  if system.is_hosted_surface() then
+    core.log_quiet("Request an empty Window from the native shell")
+    return system.new_anvil_window()
+  end
   return launch_anvil_window({ "--new-window" }, "empty window")
 end
 
 function core.open_project_in_new_window(project)
+  if system.is_hosted_surface() then
+    local path = type(project) == "table" and project.path or project
+    if type(path) ~= "string" or path == "" then return false end
+    path = system.absolute_path(path) or path
+    core.log_quiet("Request Project in a Window through shell identity rules: %s", path)
+    return system.open_project_window(path)
+  end
   local existing_project = find_open_project(project)
   if existing_project then
     core.log_quiet(

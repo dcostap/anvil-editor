@@ -1,5 +1,8 @@
 # Phase 5 milestone 1: per-Window native state
 
+This is the historical milestone-1 record. The user approved `6b1b8227` before authorizing milestone 2a.
+See the [milestone-2a record](PHASE5_NEW_WINDOWS.md) for removable Windows, explicit service targets, and current verification.
+
 ## Scope
 
 This milestone moves native state into one `ShellWindow` record. It adds no several-Window behavior.

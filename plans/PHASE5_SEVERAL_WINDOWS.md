@@ -4,8 +4,9 @@
 
 Approved for staged implementation. Commit and stop for review after each milestone.
 Implement milestone 1 first, then 2a, then 2b after their separate reviews.
-Milestone 1 is implemented and deployed. Its [verification record](PHASE5_WINDOW_STATE.md) retains checks, latency, and deployment evidence.
-Stop for milestone-1 review before starting 2a.
+The user approved milestone 1. Its [verification record](PHASE5_WINDOW_STATE.md) retains checks, latency, and deployment evidence.
+Milestone 2a is implemented and deployed. Its [verification record](PHASE5_NEW_WINDOWS.md) retains red-green checks and matched latency.
+Stop for milestone-2a review before starting 2b.
 Phase 4 closeout precedes this work.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
@@ -13,6 +14,7 @@ The milestone-2 latency entry gate is satisfied on 2026-10-10.
 The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) records the accepted unlocked/display-on matched repeat.
 Do not use unreliable latency results to accept a performance change.
 Treat differences below about 2 ms as noise.
+Use direct latency rows as machine-noise controls. Act on hosted-software shifts only when they clearly exceed matched direct shifts.
 
 Read [the main plan](MULTIPROCESS_SHELL_PLAN.md) and [Phase 4](PHASE4_PROJECTS_AND_SIDEBAR.md) first.
 Use the terms in `CONTEXT.md`. This plan does not rename them.

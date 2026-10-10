@@ -132,7 +132,7 @@ def main() -> int:
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
     parser.add_argument("--project-case", action="append", choices=[
-        "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -174,6 +174,8 @@ def main() -> int:
                     for name in ("driver", "Project", "Replacement", "user"):
                         (case_dir / name).mkdir(parents=True)
                     fixture = "loaded_projects_probe.lua" if action.startswith("loaded-") else "hosted_project_probe.lua"
+                    if action.startswith("windows-"):
+                        fixture = "several_windows_probe.lua"
                     if action.startswith("identity-"):
                         fixture = "project_identity_probe.lua"
                     if action.startswith("dormant-"):
@@ -191,13 +193,15 @@ def main() -> int:
                     shutil.copy2(ROOT / "tests/fixtures" / fixture, work / "app/share/anvil/plugins/hosted_project_probe.lua")
                     (case_dir / "Replacement/edited.txt").write_bytes(b"on disk\n")
                     (case_dir / "Project/edited.txt").write_bytes(b"on disk\n")
-                    if action == "routing":
+                    if action in ("routing", "windows-open"):
                         (case_dir / "Project/edited.txt").write_text("0123456789\n" * 200, encoding="utf-8")
+                    if action == "windows-open":
+                        (case_dir / "Replacement/edited.txt").write_text("0123456789\n" * 200, encoding="utf-8")
                     (case_dir / "Project/second.txt").write_bytes(b"second instance\n")
                     namespace = "anvil-test-" + work.name.rsplit("-", 1)[-1] + "-" + action
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
-                    if action == "dialog-blocked-close" or action.startswith(("fault-", "startup-", "identity-")) or action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
+                    if action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-")) or action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     result = case_dir / "result.lua"
@@ -208,7 +212,7 @@ def main() -> int:
                             "ANVIL_USERDIR": native_path(case_dir / "user"),
                             "USERPROFILE": native_path(case_dir / "user"), "HOME": native_path(case_dir / "user"),
                             "ANVIL_PROJECT_PROBE": action, "ANVIL_PROJECT_PROBE_MODE": mode,
-                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action == "routing" else "",
+                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("routing", "windows-open") else "",
                             "ANVIL_PROJECT_PROBE_ROOT": native_path(case_dir).replace("\\", "/"),
                             "ANVIL_PROJECT_PROBE_RESULT": native_path(result),
                             "ANVIL_TEST_DISABLE_PLUGINS": "autorestart,autoreload,autosave_fast,autosaveonfocuslost",
@@ -218,7 +222,9 @@ def main() -> int:
                     }
                     if action == "dialog-error":
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"
-                    if action.startswith(("fault-", "startup-", "loaded-", "dormant-", "sidebar-")) or action in ("dialog-blocked-close", "hidden-startup"):
+                    if action in ("windows-picker", "windows-picker-command", "windows-picker-late"):
+                        config["environment"]["ANVIL_SHELL_PICKER_PROBE"] = "1"
+                    if action.startswith(("windows-", "fault-", "startup-", "loaded-", "dormant-", "sidebar-")) or action in ("dialog-blocked-close", "hidden-startup"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
                     if action.startswith("identity-"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"

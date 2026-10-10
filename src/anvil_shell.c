@@ -37,6 +37,9 @@
 #define SHELL_FAULT_MESSAGE (WM_APP + 0x4b)
 #define SHELL_CONTROL_MESSAGE (WM_APP + 0x4c)
 #define SHELL_MODEL_MESSAGE (WM_APP + 0x4d)
+#define SHELL_PICKER_MESSAGE (WM_APP + 0x50)
+#define SHELL_MENU_NEW_WINDOW 0xe010
+#define SHELL_MENU_OPEN_PROJECT 0xe020
 enum {
   FAULT_ALLOC = 1,
   FAULT_EVENT,
@@ -74,6 +77,7 @@ enum {
   SHELL_EVENT_FORCE_RESULT,
   SHELL_EVENT_START_TIMEOUT,
   SHELL_EVENT_LAUNCHED,
+  SHELL_EVENT_PICKER_RESULT,
 };
 
 typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED, SHELL_DORMANT } ShellState;
@@ -87,9 +91,10 @@ typedef struct ShellWindow ShellWindow;
 typedef struct ShellDialog ShellDialog;
 typedef struct ProjectLaunch ProjectLaunch;
 typedef struct ProjectResolve ProjectResolve;
+typedef struct ShellPicker ShellPicker;
 
 typedef struct ShellProject {
-  ShellWindow *owner;
+  Uint32 window_id;
   struct ShellProject *next;
   Uint32 id;
   char *title;
@@ -149,10 +154,16 @@ typedef struct {
 } ShellPresentation;
 
 struct ShellWindow {
+  ShellWindow *next;
+  bool sidebar;
   Uint32 id;
   ShellProject *selected, *empty;
   bool closing;
+  bool removing;
+  bool picker_pending;
+  char notice[256];
   unsigned resolve_revision;
+  uint64_t close_generation;
   ShellPresentation project_presentation, sidebar_presentation;
   SDL_Window *window;
   HWND hwnd;
@@ -191,7 +202,6 @@ struct ShellWindow {
   HGDIOBJ ui_old_bitmap;
   void *ui_pixels;
   bool frame_busy;
-  SDL_AtomicInt retry_frame;
   SDL_TimerID retry_timer;
   int hovered_control, pressed_control;
   RECT controls, restart_button, close_button;
@@ -223,15 +233,22 @@ typedef struct {
   unsigned sidebar_source_revision, sidebar_scan_revision, sidebar_jobs;
   bool sidebar_seeded, sidebar_scan_requested;
   ShellProject *sidebar_process;
-  ShellWindow main_window;
+  ShellWindow *windows;
+  Uint32 next_window, sidebar_window_id;
+  HWND service_hwnd;
+  bool shutting_down;
+  ShellPicker *pickers;
   Uint32 event_type;
   SDL_Cursor *cursors[ANVIL_SURFACE_CURSOR_COUNT];
 } Shell;
 
 static Shell shell;
-/* This milestone keeps one Window. Its record outlives asynchronous Project users. */
+_Static_assert(sizeof(uintptr_t) == 8, "Shell timer tags require 64-bit uintptr_t");
+/* Window lookup runs only on the native UI thread. Async users carry IDs. */
 static ShellWindow *window_for_id(Uint32 id) {
-  return id == shell.main_window.id ? &shell.main_window : NULL;
+  for (ShellWindow *window = shell.windows; window; window = window->next)
+    if (window->id == id) return window;
+  return NULL;
 }
 static bool start_project(ShellProject *project, int argc, char **argv);
 static void composite_and_present(ShellWindow *window);
@@ -257,6 +274,26 @@ static AnvilSidebarProject *sidebar_project(const char *path);
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value);
 static void start_sidebar(void);
 static void schedule_sidebar_restart(void);
+static ShellWindow *create_window(bool sidebar);
+static bool destroy_window(ShellWindow *window);
+static bool open_project_window(ShellWindow *window, const char *path);
+static void show_project_picker(ShellWindow *window);
+static void finish_project_picker(ShellPicker *picker);
+static void probe_project_picker(WPARAM action, LPARAM window_id);
+static void check_picker_failures(void);
+static void window_notice(ShellWindow *window, const char *text) {
+  SDL_strlcpy(window->notice, text, sizeof(window->notice));
+  window->ui_dirty = true;
+  SDL_Log("Shell Window status: id=%u %s", window->id, text);
+  if (window->shown) composite_and_present(window);
+}
+static void begin_window_close(ShellWindow *window) {
+  if (!window->closing) {
+    window->closing = true;
+    window->close_generation++;
+    window->resolve_revision++;
+  }
+}
 static void reset_unload(ShellProject *project) {
   project->unloading = false;
   free(project->dormant);
@@ -284,7 +321,7 @@ static ShellProject *allocate_project(ShellWindow *window) {
     free(project);
     return NULL;
   }
-  project->owner = window;
+  project->window_id = window->id;
   SDL_SetAtomicInt(&project->references, 1);
   project->child_cursor = ANVIL_SURFACE_CURSOR_ARROW;
   return project;
@@ -364,7 +401,8 @@ static void arm_close_timer(ShellProject *project) {
   project->close_timer = SDL_AddTimer(SHELL_CLOSE_TIMEOUT_MS, close_timeout, (void *)tag);
 }
 static void fail_connection(ShellProject *project, const char *cause) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   SDL_Log("Shell connection failed: %s; Project=%u connection=%u", cause, project->id,
           project->connection);
   project->connected = false;
@@ -391,20 +429,17 @@ static void check_transport_failure(ShellProject *project) {
 static Uint32 SDLCALL retry_frame(void *data, SDL_TimerID timer, Uint32 interval) {
   (void)timer;
   uintptr_t tag = (uintptr_t)data;
-  ShellWindow *window = window_for_id((Uint32)(tag >> 32));
-  if (!window || !SDL_GetAtomicInt(&window->retry_frame))
-    return 0;
   SDL_Event event = {0};
   event.type = shell.event_type;
   event.user.code = SHELL_EVENT_FRAME;
   event.user.windowID = (Uint32)tag;
+  event.user.data2 = (void *)(tag >> 32);
   SDL_PushEvent(&event);
   return interval;
 }
 
 static void set_frame_busy(ShellWindow *window, bool busy) {
   window->frame_busy = busy;
-  SDL_SetAtomicInt(&window->retry_frame, busy);
   if (busy && !window->retry_timer) {
     uintptr_t tag = ((uintptr_t)window->id << 32) | window->selected->connection;
     window->retry_timer = SDL_AddTimer(16, retry_frame, (void *)tag);
@@ -422,7 +457,8 @@ static void set_surface_busy(ShellWindow *window, ShellPresentation *surface, bo
 }
 
 static void set_state(ShellProject *project, ShellState state) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (project->state == state)
     return;
   project->state = state;
@@ -640,6 +676,13 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_FLASH:
   case ANVIL_SURFACE_MSG_CLOSE_DECISION:
     return size == sizeof(AnvilSurfaceInt);
+  case ANVIL_SURFACE_MSG_NEW_WINDOW:
+  case ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER:
+    return size == sizeof(uint32_t) && *(const uint32_t *)payload != 0;
+  case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
+    return size > sizeof(uint32_t) + 1 && size < 32768 && *(const uint32_t *)payload &&
+           ((const char *)payload)[size - 1] == 0 &&
+           !memchr((const char *)payload + sizeof(uint32_t), 0, size - sizeof(uint32_t) - 1);
   case ANVIL_SURFACE_MSG_SIDEBAR_QUERY:
     return size == sizeof(AnvilSurfaceInt) && ((const AnvilSurfaceInt *)payload)->value >= 0 &&
            ((const AnvilSurfaceInt *)payload)->value <=
@@ -907,7 +950,7 @@ static void shell_send_int(ShellProject *project, uint16_t type, int value) {
 static void update_scale(ShellWindow *window) {
   float scale = SDL_GetWindowDisplayScale(window->window);
   window->scale = scale > 0 ? scale : 1.0f;
-  window->sidebar_w = (int)(SHELL_SIDEBAR_POINTS * window->scale + 0.5f);
+  window->sidebar_w = window->sidebar ? (int)(SHELL_SIDEBAR_POINTS * window->scale + 0.5f) : 0;
 }
 
 static AnvilSurfaceWindowMode current_window_mode(ShellWindow *window) {
@@ -935,12 +978,14 @@ static void client_pixel_size(ShellWindow *window, int *width, int *height) {
 }
 
 static void send_configure(ShellProject *project) {
-  ShellWindow *window = project->owner;
-  if (project == window->selected && shell.sidebar_process)
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
+  if (window->sidebar && project == window->selected && shell.sidebar_process)
     send_configure(shell.sidebar_process);
   if (!project->connected)
     return;
   AnvilSurfaceConfigure config = project->last_config;
+  config.window_id = window->id;
   config.window_mode = current_window_mode(window);
   config.live_resize = window->live_resize;
   config.render_enabled = (project == window->selected || project->sidebar) &&
@@ -1169,7 +1214,8 @@ static bool ensure_surface_texture(ShellWindow *window, ShellPresentation *surfa
 
 static bool load_d3d11_frame(ShellProject *project, ShellPresentation *surface,
                              const AnvilSurfaceFrame *frame) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return false;
   if (strcmp(frame->name, surface->shared_name) != 0 || !surface->shared) {
     SAFE_RELEASE(surface->shared_mutex);
     SAFE_RELEASE(surface->shared);
@@ -1240,7 +1286,8 @@ static void close_memory_frame(ShellPresentation *surface) {
 
 static bool load_memory_frame(ShellProject *project, ShellPresentation *surface,
                               const AnvilSurfaceFrame *frame) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return false;
   if (strcmp(frame->name, surface->memory_name) != 0 || !surface->memory_view) {
     close_memory_frame(surface);
     char lock_name[ANVIL_SURFACE_NAME_MAX + 8];
@@ -1310,6 +1357,22 @@ static void draw_lifecycle(ShellWindow *window, HDC dc) {
   ShellProject *project = window->selected;
   window->restart_button = (RECT){0};
   window->close_button = (RECT){0};
+  if (window->notice[0]) {
+    RECT notice = {window->sidebar_w, window->controls.bottom, window->buffer_w,
+                   window->controls.bottom + (LONG)(48 * window->scale)};
+    DrawTextA(dc, window->notice, -1, &notice, DT_CENTER | DT_TOP | DT_WORDBREAK);
+  }
+  if (!project->id && !project->project_path) {
+    RECT area = {window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h};
+    DrawTextW(dc, L"No Project selected", -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    area.top = (area.top + area.bottom) / 2 + (int)(24 * window->scale);
+    DrawTextW(dc, window->sidebar
+                  ? L"Right-click the Title Bar to open a Project or create a Window.\n"
+                    L"You can also select a Project in the Sidebar."
+                  : L"Right-click the Title Bar to open a Project or create a Window.", -1,
+              &area, DT_CENTER | DT_TOP | DT_WORDBREAK);
+    return;
+  }
   if (project->state != SHELL_STARTING && project->state != SHELL_FAILED &&
       project->state != SHELL_DORMANT)
     return;
@@ -1541,6 +1604,9 @@ static void composite_and_present(ShellWindow *window) {
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h});
   else if (project->state == SHELL_FAILED)
     copy_ui(window, window->failure_card);
+  if (window->notice[0])
+    copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w,
+                           SDL_min(window->buffer_h, window->controls.bottom + (LONG)(48 * window->scale))});
   anvil_latency_probe_stage("present-begin");
   HRESULT hr = window->swapchain->lpVtbl->Present(window->swapchain, 1, 0);
   anvil_latency_probe_stage("present-end");
@@ -1551,10 +1617,8 @@ static void composite_and_present(ShellWindow *window) {
 }
 
 static void finish_latency_probe(void) {
-  ShellWindow *window = &shell.main_window;
-  ShellProject *project = window->selected;
-  if (project->process.hProcess)
-    TerminateProcess(project->process.hProcess, 0);
+  for (ShellProject *project = shell.projects; project; project = project->next)
+    if (project->process.hProcess) TerminateProcess(project->process.hProcess, 0);
   if (shell.sidebar_process && shell.sidebar_process->process.hProcess)
     TerminateProcess(shell.sidebar_process->process.hProcess, 0);
   _Exit(anvil_latency_probe_succeeded() ? 0 : 1);
@@ -1563,7 +1627,8 @@ static void finish_latency_probe(void) {
 /* Copies the newest published frame into the private surface texture. */
 static bool load_pending_frame(ShellProject *project, ShellPresentation *surface,
                                AnvilSurfaceFrame *frame) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return false;
   SDL_LockMutex(project->lock);
   bool pending = project->frame_pending;
   *frame = project->latest_frame;
@@ -1648,7 +1713,7 @@ static void resize_step(ShellWindow *window) {
   ShellProject *project = window->selected;
   resize_buffers(window);
   send_configure(project);
-  if (shell.sidebar_process)
+  if (window->sidebar && shell.sidebar_process)
     send_configure(shell.sidebar_process);
   int width = window->buffer_w - window->sidebar_w, height = window->buffer_h;
   bool stale = !window->project_presentation.have_surface ||
@@ -1691,7 +1756,7 @@ static void handle_sidebar_frame(ShellWindow *window) {
       if (shell.sidebar_restart_attempts) {
         shell.sidebar_healthy_since = SDL_GetTicks();
         shell.sidebar_healthy_connection = project->connection;
-        shell.sidebar_healthy_timer = SetTimer(window->hwnd, 0x8004, SHELL_SIDEBAR_HEALTHY_MS, NULL);
+        shell.sidebar_healthy_timer = SetTimer(shell.service_hwnd, 0x8004, SHELL_SIDEBAR_HEALTHY_MS, NULL);
         if (!shell.sidebar_healthy_timer)
           SDL_Log("Shell Sidebar recovery-budget timer failed; manual Restart remains available");
       }
@@ -1747,6 +1812,126 @@ struct ShellDialog {
   uint8_t packet[];
 };
 
+/* Native picker callbacks hold copied results and IDs, never Window pointers. */
+struct ShellPicker {
+  ShellPicker *next;
+  Uint32 window_id, event_type;
+  uint64_t close_generation;
+  uint32_t size;
+  void *result;
+  bool probe;
+  SDL_AtomicInt notification_failed;
+};
+
+static void free_picker(ShellPicker *picker) {
+  ShellPicker **link = &shell.pickers;
+  while (*link != picker) link = &(*link)->next;
+  *link = picker->next;
+  free(picker->result);
+  free(picker);
+}
+
+static void SDLCALL project_picker_finished(void *userdata, const char *const *paths, int filter) {
+  ShellPicker *picker = userdata;
+  picker->result = anvil_surface_dialog_result(picker->window_id, paths, filter, &picker->size);
+  SDL_Event event = {.type = picker->event_type};
+  event.user.code = SHELL_EVENT_PICKER_RESULT;
+  event.user.windowID = picker->window_id;
+  event.user.data1 = picker;
+  if (!picker->result || !SDL_PushEvent(&event)) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Shell Open Project picker result notification failed");
+    SDL_SetAtomicInt(&picker->notification_failed, 1);
+    PostMessageW(shell.service_hwnd, WM_APP + 0x51, 0, 0);
+  }
+}
+
+static void show_project_picker(ShellWindow *window) {
+  if (window->closing || window->picker_pending) return;
+  unsigned pending = 0;
+  for (ShellPicker *item = shell.pickers; item; item = item->next) pending++;
+  if (pending >= 64) { window_notice(window, "Too many Project folder pickers are pending."); return; }
+  ShellPicker *picker = calloc(1, sizeof(*picker));
+  SDL_PropertiesID props = SDL_CreateProperties();
+  if (!picker || !props ||
+      !SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_WINDOW_POINTER, window->window) ||
+      !SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, "Open Project")) {
+    free(picker);
+    if (props) SDL_DestroyProperties(props);
+    window_notice(window, "Cannot open the Project folder picker.");
+    return;
+  }
+  picker->window_id = window->id;
+  picker->close_generation = window->close_generation;
+  picker->event_type = shell.event_type;
+  picker->next = shell.pickers;
+  shell.pickers = picker;
+  window->picker_pending = true;
+  cancel_input(window);
+  const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
+  const char *picker_probe = SDL_getenv("ANVIL_SHELL_PICKER_PROBE");
+  picker->probe = probe && !strcmp(probe, "1") && picker_probe && !strcmp(picker_probe, "1");
+  SDL_Log("Shell Open Project picker started: Window=%u parent=%p probe=%d", window->id,
+          (void *)window->hwnd, picker->probe);
+  if (!picker->probe)
+    SDL_ShowFileDialogWithProperties(SDL_FILEDIALOG_OPENFOLDER, project_picker_finished, picker, props);
+  SDL_DestroyProperties(props);
+}
+
+static void finish_project_picker(ShellPicker *picker) {
+  ShellWindow *window = window_for_id(picker->window_id);
+  if (window) window->picker_pending = false;
+  if (!window || window->closing || picker->close_generation != window->close_generation) {
+    SDL_Log("Shell discarded an Open Project picker result for removed or closing Window=%u", picker->window_id);
+  } else if (!picker->result || !anvil_surface_dialog_result_valid(picker->result, picker->size)) {
+    window_notice(window, "Cannot read the Project folder picker result.");
+  } else {
+    const AnvilSurfaceDialogResult *result = picker->result;
+    if (result->status == ANVIL_SURFACE_DIALOG_ACCEPT) {
+      const char *path = (const char *)(result + 1);
+      bool accepted = window->selected->id ? open_project_window(window, path)
+                                           : select_project_path(window, path);
+      if (!accepted) window_notice(window, "Cannot submit the Open Project request.");
+    } else if (result->status == ANVIL_SURFACE_DIALOG_ERROR)
+      window_notice(window, "The Project folder picker failed.");
+    else SDL_Log("Shell Open Project picker cancelled: Window=%u", window->id);
+  }
+  free_picker(picker);
+}
+
+static void check_picker_failures(void) {
+  for (ShellPicker *picker = shell.pickers, *next; picker; picker = next) {
+    next = picker->next;
+    if (!SDL_GetAtomicInt(&picker->notification_failed)) continue;
+    ShellWindow *window = window_for_id(picker->window_id);
+    if (window) {
+      window->picker_pending = false;
+      window_notice(window, "The Project folder picker result could not be delivered.");
+    }
+    free_picker(picker);
+  }
+}
+
+/* Only the owned test process can replace this nondeterministic platform boundary. */
+static void probe_project_picker(WPARAM action, LPARAM window_id) {
+  const char *enabled = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
+  if (!enabled || strcmp(enabled, "1")) return;
+  for (ShellPicker *picker = shell.pickers; picker; picker = picker->next) {
+    if (!picker->probe || picker->window_id != (Uint32)window_id || picker->result) continue;
+    if (action == 3) {
+      const char *paths[] = {NULL};
+      project_picker_finished(picker, paths, 0);
+    } else if (action == 1 || action == 2) {
+      const char *root = SDL_getenv("ANVIL_PROJECT_PROBE_ROOT");
+      char path[32768];
+      if (!root || SDL_snprintf(path, sizeof(path), "%s/%s", root,
+                                action == 1 ? "Replacement" : "Project") >= sizeof(path)) return;
+      const char *paths[] = {path, NULL};
+      project_picker_finished(picker, paths, 0);
+    }
+    return;
+  }
+}
+
 static void free_dialog(ShellDialog *dialog) {
   if (dialog->props)
     SDL_DestroyProperties(dialog->props);
@@ -1782,7 +1967,8 @@ static void SDLCALL dialog_finished(void *userdata, const char *const *paths, in
 }
 
 static void present_dialog(ShellDialog *dialog) {
-  ShellWindow *window = dialog->project->owner;
+  ShellWindow *window = window_for_id(dialog->project->window_id);
+  if (!window) { free_dialog(dialog); return; }
   ShellProject *project = dialog->project;
   const AnvilSurfaceDialog *request = (const AnvilSurfaceDialog *)dialog->packet;
   SDL_Log("Shell file dialog started: id=%u type=%u connection=%u", request->id, request->type,
@@ -1815,7 +2001,8 @@ static void discard_deferred_dialogs(ShellProject *project) {
   }
 }
 static void show_dialog(ShellProject *project, const ShellMessage *message) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (message->size < sizeof(AnvilSurfaceDialog)) {
     fail_connection(project, "invalid file dialog request");
     return;
@@ -1869,7 +2056,8 @@ static void show_dialog(ShellProject *project, const ShellMessage *message) {
 }
 
 static void finish_dialog(ShellProject *project, ShellDialog *dialog) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   AnvilSurfaceDialogResult *result = dialog->result;
   size_t slot = 0;
   while (slot < SDL_arraysize(project->dialogs) && project->dialogs[slot] != result->id)
@@ -1947,7 +2135,8 @@ static int SDLCALL force_close_dialog(void *userdata) {
 }
 
 static void offer_force_close(ShellProject *project) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (project->close_prompt || !project->process.hProcess ||
       WaitForSingleObject(project->process.hProcess, 0) != WAIT_TIMEOUT)
     return;
@@ -1988,7 +2177,8 @@ static BOOL CALLBACK dismiss_close_warning(HWND window, LPARAM parent) {
 }
 
 static void close_decision(ShellProject *project, int decision) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (decision < ANVIL_SURFACE_CLOSE_PENDING || decision > ANVIL_SURFACE_CLOSE_ACCEPTED) {
     fail_connection(project, "invalid close decision");
     return;
@@ -2011,7 +2201,7 @@ static void close_decision(ShellProject *project, int decision) {
     SDL_Log("Shell close decision: cancelled; Ready; request reset");
   } else {
     if (project == window->selected && !project->unloading)
-      window->closing = true;
+      begin_window_close(window);
     if (!project->close_requested_ns) {
       project->close_requested_ns = SDL_GetTicksNS();
       project->close_serial++;
@@ -2045,7 +2235,8 @@ static void close_decision(ShellProject *project, int decision) {
 }
 
 static void handle_message(ShellProject *project, ShellMessage *message) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (project->state == SHELL_FAILED)
     return;
   const void *payload = message->payload;
@@ -2075,6 +2266,18 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     }
   }
   switch (message->type) {
+  case ANVIL_SURFACE_MSG_NEW_WINDOW:
+    if (*(const uint32_t *)payload == window->id && !window->closing)
+      if (!create_window(false)) window_notice(window, "Cannot create a Window.");
+    break;
+  case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
+    if (*(const uint32_t *)payload == window->id && !window->closing)
+      open_project_window(window, (const char *)payload + sizeof(uint32_t));
+    break;
+  case ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER:
+    if (*(const uint32_t *)payload == window->id && !window->closing)
+      show_project_picker(window);
+    break;
   case ANVIL_SURFACE_MSG_SIDEBAR_SOURCE:
     sidebar_source(payload, message->size);
     break;
@@ -2291,7 +2494,7 @@ static void cancel_input(ShellWindow *window) {
   window->pointer_in_surface = false;
   window->hovered_control = -1;
   window->ui_hover_dirty = true;
-  ReleaseCapture();
+  if (GetCapture() == window->hwnd) ReleaseCapture();
   for (int button = 1; button <= 5; button++) {
     if (!(buttons & SDL_BUTTON_MASK(button))) continue;
     SDL_Event event = {0};
@@ -2343,7 +2546,7 @@ static void perform_control(ShellWindow *window, int control) {
   SDL_Log("Shell native control: %d state=%d", control, project->state);
   window->resize_wait_disabled = true;
   if (control == 5) {
-    if (shell.sidebar_restart_timer) KillTimer(window->hwnd, shell.sidebar_restart_timer);
+    if (shell.sidebar_restart_timer) KillTimer(shell.service_hwnd, shell.sidebar_restart_timer);
     shell.sidebar_restart_timer = 0;
     shell.sidebar_restart_attempts = 0;
     shell.sidebar_restart_limited = false;
@@ -2387,6 +2590,7 @@ static void perform_control(ShellWindow *window, int control) {
       window->render_failed = false;
     }
     project->restart_path = _strdup(project->project_path);
+    window->closing = false;
     if (!project->restart_path || !start_project(project, 0, NULL)) {
       free(project->restart_path);
       project->restart_path = NULL;
@@ -2399,7 +2603,7 @@ static void perform_control(ShellWindow *window, int control) {
   } else if (control == 4 && project->state != SHELL_DORMANT) {
     begin_unload(project);
   } else {
-    window->closing = true;
+    begin_window_close(window);
     request_close(project);
   }
 }
@@ -2512,9 +2716,10 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
 }
 
 static void request_close(ShellProject *project) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (project == window->selected && !project->unloading)
-    window->closing = true;
+    begin_window_close(window);
   if (project->resolving) {
     project->failed_close = true;
     return;
@@ -2551,7 +2756,8 @@ static void request_close(ShellProject *project) {
 }
 
 static void handle_connected(ShellProject *project) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (project->sidebar) {
     project->connected = true;
     send_configure(project);
@@ -2574,34 +2780,21 @@ static void handle_connected(ShellProject *project) {
 }
 
 SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
-  ShellWindow *window = &shell.main_window;
-  SDL_Window *native = event->type == shell.event_type ? NULL : SDL_GetWindowFromEvent(event);
-  if (native) {
-    HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(native),
-                                            SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
-    window = (ShellWindow *)GetPropW(hwnd, L"AnvilShellWindow");
-    if (!window)
-      return SDL_APP_CONTINUE;
-  }
-  ShellProject *project = window->selected;
+  ShellWindow *window = NULL;
+  ShellProject *project = NULL;
   (void)appstate;
-  check_gpu_failure(window);
-  if (event->type == SDL_EVENT_MOUSE_WHEEL && !window->surface_buttons && event->wheel.mouse_x >= 0 &&
-      event->wheel.mouse_x < window->sidebar_w && shell.sidebar_process &&
-      shell.sidebar_process->connected) {
-    AnvilSurfaceInput input = {.event = *event,
-                               .configuration = shell.sidebar_process->last_config.configuration};
-    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
-    return SDL_APP_CONTINUE;
-  }
-  check_transport_failure(project);
   if (event->type == shell.event_type) {
+    if (event->user.code == SHELL_EVENT_PICKER_RESULT) {
+      finish_project_picker(event->user.data1);
+      return SDL_APP_CONTINUE;
+    }
     if (event->user.code == SHELL_EVENT_MESSAGE) {
       ShellMessage *message = event->user.data1;
       SDL_AddAtomicInt(&message->owner->inbound_bytes, -(int)(sizeof(*message) + message->size));
     }
     project = project_for_connection(event->user.windowID);
-    if (!project) {
+    window = project ? window_for_id(project->window_id) : NULL;
+    if (!project || !window) {
       if (event->user.code == SHELL_EVENT_MESSAGE) {
         free_message(event->user.data1);
       } else if (event->user.code == SHELL_EVENT_DIALOG_RESULT) {
@@ -2614,7 +2807,9 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       }
       return SDL_APP_CONTINUE;
     }
-    window = project->owner;
+    if (event->user.code == SHELL_EVENT_FRAME && event->user.data2 &&
+        (Uint32)(uintptr_t)event->user.data2 != window->id) return SDL_APP_CONTINUE;
+    check_gpu_failure(window);
     switch (event->user.code) {
     case SHELL_EVENT_LAUNCHED:
       finish_launch(project);
@@ -2721,7 +2916,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         project->connected = false;
         project->failed_close = true;
         if (!project->unloading) {
-          window->closing = true;
+          begin_window_close(window);
           if (project != window->selected)
             request_close(window->selected);
         }
@@ -2745,6 +2940,22 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     return SDL_APP_CONTINUE;
   }
 
+  if (event->type == SDL_EVENT_QUIT) {
+    for (ShellWindow *item = shell.windows; item; item = item->next) {
+      begin_window_close(item);
+      request_close(item->selected);
+    }
+    return SDL_APP_CONTINUE;
+  }
+  SDL_Window *native = SDL_GetWindowFromEvent(event);
+  if (!native) return SDL_APP_CONTINUE;
+  HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(native),
+                                          SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+  window = (ShellWindow *)GetPropW(hwnd, L"AnvilShellWindow");
+  if (!window) return SDL_APP_CONTINUE;
+  project = window->selected;
+  check_gpu_failure(window);
+  check_transport_failure(project);
   /* SDL points become physical client pixels only at this boundary. */
   int point_w, point_h;
   SDL_GetWindowSize(window->window, &point_w, &point_h);
@@ -2776,9 +2987,8 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     break;
   }
   switch (event->type) {
-  case SDL_EVENT_QUIT:
   case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-    window->closing = true;
+    begin_window_close(window);
     request_close(project);
     break;
   case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
@@ -2840,7 +3050,13 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     route_button(window, event);
     break;
   case SDL_EVENT_MOUSE_WHEEL:
-    if (surface_contains(window, event->wheel.mouse_x, event->wheel.mouse_y) &&
+    if (!window->surface_buttons && event->wheel.mouse_x >= 0 &&
+        event->wheel.mouse_x < window->sidebar_w && shell.sidebar_process &&
+        shell.sidebar_process->connected) {
+      AnvilSurfaceInput input = {.event = *event,
+                                 .configuration = shell.sidebar_process->last_config.configuration};
+      shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+    } else if (surface_contains(window, event->wheel.mouse_x, event->wheel.mouse_y) &&
         control_at(window, event->wheel.mouse_x, event->wheel.mouse_y) < 0 &&
         (project->state == SHELL_READY || project->state == SHELL_CLOSING)) {
       anvil_surface_translate_input(&project->last_config, event);
@@ -2890,19 +3106,20 @@ static void push_window_event(ShellWindow *window, SDL_EventType type, float x, 
   SDL_PushEvent(&event);
 }
 
-static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
-  ShellWindow *window = (ShellWindow *)GetPropW(hwnd, L"AnvilShellWindow");
-  if (!window)
-    return DefWindowProcW(hwnd, msg, wparam, lparam);
+static LRESULT CALLBACK shell_service_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+  if (msg == WM_APP + 0x51) { check_picker_failures(); return 0; }
+  if (msg == SHELL_PICKER_MESSAGE) {
+    probe_project_picker(wparam, lparam);
+    return 0;
+  }
   if (msg == WM_APP + 0x4e) {
     shell.sidebar_scan_requested = true;
     service_sidebar();
     return 0;
   }
-  ShellProject *project = window->selected;
   if (msg == WM_TIMER) {
     if (shell.sidebar_healthy_timer && wparam == shell.sidebar_healthy_timer) {
-      KillTimer(window->hwnd, shell.sidebar_healthy_timer);
+      KillTimer(shell.service_hwnd, shell.sidebar_healthy_timer);
       shell.sidebar_healthy_timer = 0;
       ShellProject *sidebar = shell.sidebar_process;
       if (sidebar && sidebar->connected && sidebar->state == SHELL_READY &&
@@ -2911,7 +3128,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
         if (elapsed < SHELL_SIDEBAR_HEALTHY_MS) {
           SDL_Log("Shell Sidebar recovery-budget timer arrived early: connection age=%llu ms",
                   (unsigned long long)elapsed);
-          shell.sidebar_healthy_timer = SetTimer(window->hwnd, 0x8004,
+          shell.sidebar_healthy_timer = SetTimer(shell.service_hwnd, 0x8004,
             (UINT)(SHELL_SIDEBAR_HEALTHY_MS - elapsed), NULL);
         } else {
           shell.sidebar_restart_attempts = 0;
@@ -2922,7 +3139,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       return 0;
     }
     if (shell.sidebar_restart_timer && wparam == shell.sidebar_restart_timer) {
-      KillTimer(window->hwnd, shell.sidebar_restart_timer);
+      KillTimer(shell.service_hwnd, shell.sidebar_restart_timer);
       shell.sidebar_restart_timer = 0;
       if (shell.sidebar_waiting_exit) {
         shell.sidebar_waiting_exit = false;
@@ -2946,11 +3163,22 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       finish_resolutions();
       return 0;
     }
+  }
+  return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+  ShellWindow *window = (ShellWindow *)GetPropW(hwnd, L"AnvilShellWindow");
+  if (!window)
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
+  ShellProject *project = window->selected;
+  if (msg == WM_TIMER) {
     ShellProject *timed = NULL;
-    if (shell.sidebar_process && shell.sidebar_process->startup_timer == wparam)
+    if (shell.sidebar_process && shell.sidebar_process->window_id == window->id &&
+        shell.sidebar_process->startup_timer == wparam)
       timed = shell.sidebar_process;
     for (ShellProject *item = shell.projects; item; item = item->next)
-      if (item->startup_timer && wparam == item->startup_timer) {
+      if (item->window_id == window->id && item->startup_timer && wparam == item->startup_timer) {
         timed = item;
         break;
       }
@@ -3001,6 +3229,19 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   }
   if (anvil_routing_probe_message(window->window, msg, wparam, lparam)) return 0;
   switch (msg) {
+    case WM_NCDESTROY:
+      RemovePropW(hwnd, L"AnvilShellWindow");
+      break;
+    case WM_SYSCOMMAND:
+      if ((wparam & 0xfff0) == SHELL_MENU_NEW_WINDOW) {
+        if (!window->closing && !create_window(false)) window_notice(window, "Cannot create a Window.");
+        return 0;
+      }
+      if ((wparam & 0xfff0) == SHELL_MENU_OPEN_PROJECT) {
+        show_project_picker(window);
+        return 0;
+      }
+      break;
     case WM_KILLFOCUS:
       cancel_input(window);
       shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS, 0);
@@ -3148,11 +3389,17 @@ static bool install_native_frame(ShellWindow *window) {
                                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
   if (!window->hwnd) return false;
   SDL_Log("Shell window hwnd=%p", (void *)window->hwnd);
-  SDL_Log("Shell Window record: id=%u SDL=%u", window->id, SDL_GetWindowID(window->window));
+  SDL_Log("Shell Window record: id=%u SDL=%u hwnd=%p", window->id,
+          SDL_GetWindowID(window->window), (void *)window->hwnd);
   window->sdl_wndproc = (WNDPROC)GetWindowLongPtrW(window->hwnd, GWLP_WNDPROC);
   if (!SetPropW(window->hwnd, L"AnvilShellWindow", window))
     return false;
   SetWindowLongPtrW(window->hwnd, GWLP_WNDPROC, (LONG_PTR)shell_wndproc);
+  HMENU menu = GetSystemMenu(window->hwnd, FALSE);
+  if (!menu || !AppendMenuW(menu, MF_SEPARATOR, 0, NULL) ||
+      !AppendMenuW(menu, MF_STRING, SHELL_MENU_NEW_WINDOW, L"New Window") ||
+      !AppendMenuW(menu, MF_STRING, SHELL_MENU_OPEN_PROJECT, L"Open Project..."))
+    return false;
   win32_frame_hwnd_apply_style(window->hwnd, false);
   return true;
 }
@@ -3314,11 +3561,12 @@ static bool choose_project(ProjectIdentity *project, int argc, char **argv) {
 
 struct ProjectResolve {
   ProjectResolve *next;
-  ShellWindow *owner;
+  Uint32 window_id;
   SDL_Thread *thread;
   SDL_AtomicInt done;
   unsigned revision;
-  bool initial, success, unload;
+  uint64_t close_generation;
+  bool initial, success, unload, new_window;
   int argc;
   char **argv;
   char *path;
@@ -3358,7 +3606,8 @@ static int SDLCALL resolve_project_thread(void *data) {
   return 0;
 }
 
-static bool queue_resolution(ShellWindow *window, const char *path, int argc, char **argv, bool initial, bool unload) {
+static bool queue_resolution(ShellWindow *window, const char *path, int argc, char **argv,
+                             bool initial, bool unload, bool new_window) {
   unsigned pending = 0;
   for (ProjectResolve *item = shell.resolvers; item; item = item->next)
     pending++;
@@ -3373,8 +3622,10 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
     return false;
   }
   job->initial = initial;
-  job->owner = window;
+  job->window_id = window->id;
+  job->close_generation = window->close_generation;
   job->unload = unload;
+  job->new_window = new_window;
   job->argc = argc;
   job->argv = argc ? calloc(argc, sizeof(*job->argv)) : NULL;
   char *cwd = path ? NULL : SDL_GetCurrentDirectory();
@@ -3395,7 +3646,7 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
     }
   }
   if (!shell.resolve_timer)
-    shell.resolve_timer = SetTimer(window->hwnd, 0x8000, 100, NULL);
+    shell.resolve_timer = SetTimer(shell.service_hwnd, 0x8000, 100, NULL);
   if (!shell.resolve_timer) {
     free_resolution(job);
     SDL_Log("Shell rejected Project selection: identity timer failed");
@@ -3463,7 +3714,8 @@ static bool startup_fault(ShellProject *project, const char *phase) {
 }
 
 static bool start_project(ShellProject *project, int argc, char **argv) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return false;
   reset_unload(project);
   project->exit_announced = false;
   /* Replacement starts only after the old process exited. Join cancelled transport users first. */
@@ -3539,7 +3791,8 @@ static bool start_project(ShellProject *project, int argc, char **argv) {
 }
 
 static void finish_launch(ShellProject *project) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (!project->launch || project->launch->taken || !SDL_GetAtomicInt(&project->launch->done))
     return;
   project->launch->taken = true;
@@ -3574,7 +3827,8 @@ static void finish_launch(ShellProject *project) {
 }
 
 static void select_project(ShellProject *project) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (project == window->selected)
     return;
   ShellProject *previous = window->selected;
@@ -3610,21 +3864,32 @@ static void select_project(ShellProject *project) {
 static bool select_project_path(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path)
     return false;
-  return queue_resolution(window, path, 0, NULL, false, false);
+  return queue_resolution(window, path, 0, NULL, false, false, false);
 }
 
 static bool unload_project_path(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path)
     return false;
-  return queue_resolution(window, path, 0, NULL, false, true);
+  return queue_resolution(window, path, 0, NULL, false, true, false);
+}
+static bool open_project_window(ShellWindow *window, const char *path) {
+  if (window->closing || !path || !*path) return false;
+  if (!queue_resolution(window, path, 0, NULL, false, false, true)) {
+    window_notice(window, "Cannot submit the Open Project request.");
+    return false;
+  }
+  window->notice[0] = 0;
+  window->ui_dirty = true;
+  return true;
 }
 
 static void begin_unload(ShellProject *project) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   if (project->unloading)
     return;
   if (!project->identity || !project->project_path) {
-    window->closing = true;
+    begin_window_close(window);
     request_close(project);
     return;
   }
@@ -3651,19 +3916,26 @@ static void finish_resolutions(void) {
     if (job->thread)
       SDL_WaitThread(job->thread, NULL);
     *link = job->next;
-    ShellWindow *window = job->owner;
+    ShellWindow *window = window_for_id(job->window_id);
+    if (!window) {
+      free_resolution(job);
+      continue;
+    }
     ShellProject *project = job->initial ? window->selected : NULL;
     if (job->initial)
       project->resolving = false;
     if (job->initial && window->closing) {
       project->failed_close = true;
+    } else if (!job->initial && (window->closing || job->close_generation != window->close_generation)) {
+      SDL_Log("Shell discarded Project identity result after its requesting Window began Close: Window=%u", job->window_id);
     } else if (!job->success) {
       SDL_Log("Shell rejected Project identity: Windows error=%lu",
               (unsigned long)job->error);
       if (job->initial)
         fail_connection(project, "Initial Project identity resolution failed");
+      else window_notice(window, "Cannot open Project. Check the directory path.");
     } else if (job->initial ||
-               (!window->closing && (job->unload || job->revision == window->resolve_revision))) {
+               (!window->closing && (job->new_window || job->unload || job->revision == window->resolve_revision))) {
       if (!job->initial) {
         for (ShellProject *item = shell.projects; item; item = item->next)
           if (item->identity &&
@@ -3679,6 +3951,14 @@ static void finish_resolutions(void) {
         free_resolution(job);
         continue;
       }
+      if (project && !job->initial) {
+        ShellWindow *owner = window_for_id(project->window_id);
+        if (!owner || owner->closing) {
+          window_notice(window, "That Project's Window is closing. Wait for its Close decision.");
+          free_resolution(job);
+          continue;
+        }
+      }
       DormantProject **dormant_link = &shell.dormants;
       while (*dormant_link && CompareStringOrdinal((*dormant_link)->identity, -1, job->identity, -1,
                                                    TRUE) != CSTR_EQUAL)
@@ -3693,10 +3973,19 @@ static void finish_resolutions(void) {
         free_resolution(job);
         continue;
       }
+      if (!project && job->new_window) {
+        window = create_window(false);
+        if (!window) {
+          ShellWindow *requester = window_for_id(job->window_id);
+          if (requester) window_notice(requester, "Cannot create the Project's Window.");
+          free_resolution(job);
+          continue;
+        }
+      }
       if (!project)
         project = new_project(window);
       if (!project)
-        SDL_Log("Shell rejected Project selection: Project allocation failed");
+        window_notice(window, "Cannot load Project: runtime allocation failed.");
       else {
         if (created) {
           free(project->project_path);
@@ -3708,8 +3997,6 @@ static void finish_resolutions(void) {
           if (dormant) {
             project->id = dormant->id;
             *dormant_link = dormant->next;
-            if (window->empty->project_path == dormant->path)
-              window->empty->project_path = NULL;
             free(dormant->path);
             free(dormant->identity);
             free(dormant->title);
@@ -3717,6 +4004,16 @@ static void finish_resolutions(void) {
           }
         }
         select_project(project);
+        if (!job->initial) {
+          ShellWindow *owner = window_for_id(project->window_id);
+          if (owner && !owner->closing) {
+            SDL_ShowWindow(owner->window);
+            SDL_RestoreWindow(owner->window);
+            owner->shown = true;
+            send_configure(project);
+            SDL_RaiseWindow(owner->window);
+          }
+        }
         if (created || (project->failed_close && project->process.hProcess &&
                         WaitForSingleObject(project->process.hProcess, 0) ==
                             WAIT_OBJECT_0)) {
@@ -3729,13 +4026,14 @@ static void finish_resolutions(void) {
     free_resolution(job);
   }
   if (!shell.resolvers && shell.resolve_timer) {
-    KillTimer(shell.main_window.hwnd, shell.resolve_timer);
+    KillTimer(shell.service_hwnd, shell.resolve_timer);
     shell.resolve_timer = 0;
   }
 }
 
 static void complete_unload(ShellProject *project) {
-  ShellWindow *window = project->owner;
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window) return;
   DormantProject *dormant = project->dormant;
   project->dormant = NULL;
   dormant->id = project->id;
@@ -3752,10 +4050,14 @@ static void complete_unload(ShellProject *project) {
     link = &(*link)->next;
   *link = project->next;
   if (window->selected == project) {
-    if (shell.projects)
-      select_project(shell.projects);
+    ShellProject *next = NULL;
+    for (ShellProject *item = shell.projects; item; item = item->next)
+      if (item->window_id == window->id) { next = item; break; }
+    if (next)
+      select_project(next);
     else {
-      window->empty->project_path = dormant->path;
+      free(window->empty->project_path);
+      window->empty->project_path = _strdup(dormant->path);
       select_project(window->empty);
       SDL_SetWindowTitle(window->window, "Anvil - Dormant Project");
     }
@@ -3775,12 +4077,31 @@ static void complete_unload(ShellProject *project) {
   project->next = shell.retiring;
   shell.retiring = project;
   if (!shell.retire_timer)
-    shell.retire_timer = SetTimer(window->hwnd, 0x8001, 100, NULL);
+    shell.retire_timer = SetTimer(shell.service_hwnd, 0x8001, 100, NULL);
   SDL_Log("Shell Project is Dormant: id=%u path=%s", dormant->id, dormant->path);
 }
 
+static void retire_failed_placeholder(ShellProject *project) {
+  ShellWindow *window = window_for_id(project->window_id);
+  if (window && window->selected == project) select_project(window->empty);
+  ShellProject **link = &shell.projects;
+  while (*link != project) link = &(*link)->next;
+  *link = project->next;
+  stop_close_timer(project);
+  if (window && project->startup_timer) KillTimer(window->hwnd, project->startup_timer);
+  project->startup_timer = 0;
+  discard_deferred_dialogs(project);
+  anvil_ipc_pipe_cancel(&project->pipe);
+  SDL_LockMutex(project->lock);
+  project->writer_stop = true;
+  SDL_BroadcastCondition(project->queue_cond);
+  SDL_UnlockMutex(project->lock);
+  project->next = shell.retiring;
+  shell.retiring = project;
+  if (!shell.retire_timer) shell.retire_timer = SetTimer(shell.service_hwnd, 0x8001, 100, NULL);
+}
+
 static void drain_retired_projects(void) {
-  ShellWindow *window = &shell.main_window;
   ShellProject **link = &shell.retiring;
   while (*link) {
     ShellProject *project = *link;
@@ -3793,11 +4114,15 @@ static void drain_retired_projects(void) {
       project->queue_head = message->next;
       free_message(message);
     }
+    if (SDL_GetAtomicInt(&project->references) != 1) {
+      link = &project->next;
+      continue;
+    }
     *link = project->next;
     release_project(project);
   }
   if (!shell.retiring && shell.retire_timer) {
-    KillTimer(window->hwnd, shell.retire_timer);
+    KillTimer(shell.service_hwnd, shell.retire_timer);
     shell.retire_timer = 0;
   }
 }
@@ -3833,7 +4158,9 @@ static void sync_sidebar_model(void) {
       state = ANVIL_SIDEBAR_DORMANT;
     anvil_sidebar_set_runtime(&shell.sidebar, row, project->id,
                               live ? project->process.dwProcessId : 0, state,
-                              project == project->owner->selected && state != ANVIL_SIDEBAR_DORMANT, deferred,
+                              project->window_id == shell.sidebar_window_id &&
+                              window_for_id(project->window_id) && project == window_for_id(project->window_id)->selected &&
+                              state != ANVIL_SIDEBAR_DORMANT, deferred,
                               live && (project->close_waiting || project->close_prompt));
   }
   for (DormantProject *project = shell.dormants; project; project = project->next) {
@@ -3844,7 +4171,6 @@ static void sync_sidebar_model(void) {
   }
 }
 static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size) {
-  ShellWindow *window = &shell.main_window;
   (void)size; /* The reader checked both complete strings. */
   const char *directory = (const char *)(source + 1), *recents = directory + source->userdir_size;
   if (shell.sidebar_recents && !strcmp(shell.sidebar_recents, recents) && shell.sidebar_userdir &&
@@ -3867,7 +4193,7 @@ static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t siz
   shell.sidebar_recents = source_copy;
   shell.sidebar_source_revision++;
   if (!shell.sidebar_watch) {
-    shell.sidebar_watch = anvil_sidebar_watch_start(directory_copy, window->hwnd, WM_APP + 0x4e);
+    shell.sidebar_watch = anvil_sidebar_watch_start(directory_copy, shell.service_hwnd, WM_APP + 0x4e);
     if (!shell.sidebar_watch) SDL_Log("Sidebar registry watcher unavailable; use explicit Refresh");
   }
   shell.sidebar_scan_requested = true;
@@ -3876,18 +4202,18 @@ static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t siz
     start_sidebar();
 }
 static void schedule_sidebar_restart(void) {
-  ShellWindow *window = &shell.main_window;
+  ShellWindow *window = window_for_id(shell.sidebar_window_id);
   ShellProject *project = shell.sidebar_process;
-  if (window->closing || shell.sidebar_restart_timer || !project || project->state != SHELL_FAILED ||
+  if (!window || window->closing || shell.shutting_down || shell.sidebar_restart_timer || !project || project->state != SHELL_FAILED ||
       (project->launch && !project->launch->taken))
     return;
-  if (shell.sidebar_healthy_timer) KillTimer(window->hwnd, shell.sidebar_healthy_timer);
+  if (shell.sidebar_healthy_timer) KillTimer(shell.service_hwnd, shell.sidebar_healthy_timer);
   shell.sidebar_healthy_timer = 0;
   if (project->process.hProcess && WaitForSingleObject(project->process.hProcess, 0) != WAIT_OBJECT_0) {
     if (!shell.sidebar_failure_since) shell.sidebar_failure_since = SDL_GetTicks();
     if (SDL_GetTicks() - shell.sidebar_failure_since < SHELL_CONNECT_TIMEOUT_MS) {
       shell.sidebar_waiting_exit = true;
-      shell.sidebar_restart_timer = SetTimer(window->hwnd, 0x8003, 100, NULL);
+      shell.sidebar_restart_timer = SetTimer(shell.service_hwnd, 0x8003, 100, NULL);
     }
     return;
   }
@@ -3898,15 +4224,15 @@ static void schedule_sidebar_restart(void) {
     shell.sidebar_restart_limited = true;
     return;
   }
-  shell.sidebar_restart_timer = SetTimer(window->hwnd, 0x8003, delays[shell.sidebar_restart_attempts], NULL);
+  shell.sidebar_restart_timer = SetTimer(shell.service_hwnd, 0x8003, delays[shell.sidebar_restart_attempts], NULL);
   shell.sidebar_waiting_exit = false;
   SDL_Log("Shell Sidebar automatic restart scheduled: attempt=%u", shell.sidebar_restart_attempts + 1);
 }
 static void start_sidebar(void) {
-  ShellWindow *window = &shell.main_window;
-  if (shell.sidebar_healthy_timer) KillTimer(window->hwnd, shell.sidebar_healthy_timer);
+  ShellWindow *window = window_for_id(shell.sidebar_window_id);
+  if (shell.sidebar_healthy_timer) KillTimer(shell.service_hwnd, shell.sidebar_healthy_timer);
   shell.sidebar_healthy_timer = 0;
-  if (window->closing || !shell.sidebar_userdir)
+  if (!window || window->closing || shell.shutting_down || !shell.sidebar_userdir)
     return;
   ShellProject *old = shell.sidebar_process;
   if (old) {
@@ -3926,7 +4252,7 @@ static void start_sidebar(void) {
     old->next = shell.retiring;
     shell.retiring = old;
     if (!shell.retire_timer)
-      shell.retire_timer = SetTimer(window->hwnd, 0x8001, 100, NULL);
+      shell.retire_timer = SetTimer(shell.service_hwnd, 0x8001, 100, NULL);
   }
   SAFE_RELEASE(window->sidebar_presentation.shared_mutex);
   SAFE_RELEASE(window->sidebar_presentation.shared);
@@ -3948,7 +4274,7 @@ static void start_sidebar(void) {
   }
 }
 static void service_sidebar(void) {
-  ShellWindow *window = &shell.main_window;
+  ShellWindow *window = window_for_id(shell.sidebar_window_id);
   if (shell.sidebar_scan && anvil_sidebar_scan_done(shell.sidebar_scan)) {
     bool limited = false;
     const AnvilSidebarModel *result = anvil_sidebar_scan_result(shell.sidebar_scan, &limited);
@@ -4000,7 +4326,7 @@ static void service_sidebar(void) {
     sync_sidebar_model();
   }
   const char *disabled = SDL_getenv("ANVIL_SIDEBAR_SCAN_DISABLED");
-  if (!window->closing && !shell.sidebar_scan && shell.sidebar_userdir && shell.sidebar_scan_requested &&
+  if (window && !window->closing && !shell.shutting_down && !shell.sidebar_scan && shell.sidebar_userdir && shell.sidebar_scan_requested &&
       IsWindowVisible(window->hwnd) && !IsIconic(window->hwnd) &&
       (!shell.sidebar_process || shell.sidebar_process->last_config.render_enabled) &&
       !(disabled && !strcmp(disabled, "1"))) {
@@ -4017,12 +4343,12 @@ static void service_sidebar(void) {
     shell.sidebar_scan_requested = false;
     SDL_Log("Shell Sidebar status scan started: source=%u", shell.sidebar_scan_revision);
     if (shell.sidebar_scan && !shell.sidebar_timer)
-      shell.sidebar_timer = SetTimer(window->hwnd, 0x8002, 100, NULL);
+      shell.sidebar_timer = SetTimer(shell.service_hwnd, 0x8002, 100, NULL);
     if (!shell.sidebar_scan)
       SDL_Log("Shell Project Sidebar worker failed; retain the previous model");
   }
   if (!shell.sidebar_scan && shell.sidebar_timer) {
-    KillTimer(window->hwnd, shell.sidebar_timer);
+    KillTimer(shell.service_hwnd, shell.sidebar_timer);
     shell.sidebar_timer = 0;
   }
   notify_sidebar_changes();
@@ -4066,19 +4392,99 @@ static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value
   }
 }
 
-SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
-  ShellWindow *window = &shell.main_window;
-  window->id = 1;
-  ShellProject *project = new_project(window);
-  if (!project)
-    return SDL_APP_FAILURE;
-  window->selected = project;
+static ShellWindow *create_window(bool sidebar) {
+  unsigned count = 0;
+  for (ShellWindow *item = shell.windows; item; item = item->next) count++;
+  if (count >= 64 || shell.next_window == UINT32_MAX || shell.shutting_down) {
+    SDL_Log("Shell rejected New Window: Window bound or shutdown");
+    return NULL;
+  }
+  ShellWindow *window = calloc(1, sizeof(*window));
+  if (!window) return NULL;
+  window->id = ++shell.next_window;
+  window->sidebar = sidebar;
+  if (sidebar) shell.sidebar_window_id = window->id;
   window->empty = allocate_project(window);
-  if (!window->empty)
-    return SDL_APP_FAILURE;
+  if (!window->empty) { free(window); return NULL; }
   window->empty->state = SHELL_DORMANT;
+  window->selected = window->empty;
+  window->hovered_control = window->pressed_control = -1;
+  window->next = shell.windows;
+  shell.windows = window;
+  const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+  int width = mode ? (int)(mode->w * 0.8) : 1280;
+  int height = mode ? (int)(mode->h * 0.8) : 800;
+  window->window =
+      SDL_CreateWindow("Anvil - No Project selected", width, height,
+                       SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
+  if (!window->window || !install_native_frame(window)) {
+    SDL_Log("Anvil shell could not create its window: %s", SDL_GetError());
+    destroy_window(window);
+    return NULL;
+  }
+  update_scale(window);
+  SDL_SetWindowMinimumSize(window->window, 240 + window->sidebar_w, 180);
+  set_window_icon(window);
+  if (!init_d3d11(window)) fail_gpu(window, "initial presentation creation failed", E_FAIL);
+  composite_and_present(window);
+  SDL_ShowWindow(window->window);
+  window->shown = true;
+  SDL_Log("Shell empty Window ready: id=%u", window->id);
+  return window;
+}
+
+static BOOL CALLBACK cancel_owned_dialog(HWND hwnd, LPARAM parent) {
+  DWORD pid = 0;
+  GetWindowThreadProcessId(hwnd, &pid);
+  if (pid == GetCurrentProcessId() && GetWindow(hwnd, GW_OWNER) == (HWND)parent)
+    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+  return TRUE;
+}
+
+static bool destroy_window(ShellWindow *window) {
+  if (!window->removing) {
+    window->removing = true;
+    begin_window_close(window);
+    if (window->window) SDL_HideWindow(window->window);
+    window->shown = false;
+  }
+  /* SDL dialogs read their SDL_Window on their own thread. Cancel their native
+   * UI, then retain the SDL_Window until their callbacks no longer need it. */
+  if (!shell.shutting_down) {
+    bool pending = false;
+    for (ShellPicker *picker = shell.pickers; picker; picker = picker->next)
+      pending |= picker->window_id == window->id && !picker->probe;
+    for (ShellProject *project = shell.retiring; project; project = project->next)
+      pending |= project->window_id == window->id;
+    if (pending) {
+      EnumWindows(cancel_owned_dialog, (LPARAM)window->hwnd);
+      if (!shell.retire_timer) shell.retire_timer = SetTimer(shell.service_hwnd, 0x8001, 100, NULL);
+      return false;
+    }
+  }
+  SDL_Log("Shell removes Window: id=%u", window->id);
+  cancel_input(window);
+  release_d3d11(window);
+  if (window->ui_dc) {
+    SelectObject(window->ui_dc, window->ui_old_bitmap);
+    DeleteObject(window->ui_bitmap);
+    DeleteDC(window->ui_dc);
+  }
+  if (window->hwnd && GetPropW(window->hwnd, L"AnvilShellWindow") == window) {
+    RemovePropW(window->hwnd, L"AnvilShellWindow");
+    if (window->sdl_wndproc) SetWindowLongPtrW(window->hwnd, GWLP_WNDPROC, (LONG_PTR)window->sdl_wndproc);
+  }
+  if (window->window) SDL_DestroyWindow(window->window);
+  ShellWindow **link = &shell.windows;
+  while (*link != window) link = &(*link)->next;
+  *link = window->next;
+  release_project(window->empty);
+  free(window);
+  return true;
+}
+
+SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   *appstate = &shell;
-  project->child_cursor = ANVIL_SURFACE_CURSOR_ARROW;
   anvil_surface_log_init("shell");
   anvil_latency_probe_init("shell");
 
@@ -4101,48 +4507,39 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   SDL_SetEventEnabled(SDL_EVENT_DROP_COMPLETE, true);
 
   shell.event_type = SDL_RegisterEvents(1);
-  if (!shell.event_type || !project->lock || !project->queue_cond || !project->frame_cond)
+  if (!shell.event_type)
     return SDL_APP_FAILURE;
 
-  const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
-  int width = mode ? (int)(mode->w * 0.8) : 1280;
-  int height = mode ? (int)(mode->h * 0.8) : 800;
-  window->window =
-      SDL_CreateWindow("Anvil", width, height,
-                       SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
-  if (!window->window || !install_native_frame(window)) {
-    SDL_Log("Anvil shell could not create its window: %s", SDL_GetError());
-    return SDL_APP_FAILURE;
-  }
-  update_scale(window);
-  SDL_SetWindowMinimumSize(window->window, 240 + window->sidebar_w, 180);
-  set_window_icon(window);
-  if (!init_d3d11(window))
-    fail_gpu(window, "initial presentation creation failed", E_FAIL);
-  else if (!queue_resolution(window, NULL, argc, argv, true, false)) {
-    SDL_Log("Anvil shell could not start its surface process: %lu", (unsigned long)GetLastError());
+  WNDCLASSW services = {.lpfnWndProc = shell_service_wndproc,
+                         .hInstance = GetModuleHandleW(NULL), .lpszClassName = L"AnvilShellServices"};
+  if (!RegisterClassW(&services)) return SDL_APP_FAILURE;
+  shell.service_hwnd = CreateWindowExW(0, services.lpszClassName, L"", 0, 0, 0, 0, 0,
+                                      HWND_MESSAGE, NULL, services.hInstance, NULL);
+  if (!shell.service_hwnd) return SDL_APP_FAILURE;
+  SDL_Log("Shell service notifications hwnd=%p", (void *)shell.service_hwnd);
+  ShellWindow *window = create_window(true);
+  if (!window) return SDL_APP_FAILURE;
+  ShellProject *project = new_project(window);
+  if (!project) return SDL_APP_FAILURE;
+  select_project(project);
+  if (!queue_resolution(window, NULL, argc, argv, true, false, false)) {
+    SDL_Log("Anvil shell could not resolve its initial Project");
     set_state(project, SHELL_FAILED);
-  } else
-    project->resolving = true;
-  composite_and_present(window);
-  SDL_ShowWindow(window->window);
-  window->shown = true;
-  if (project->state == SHELL_STARTING)
-    SDL_Log("Shell state: Starting");
+  } else project->resolving = true;
   return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult anvil_shell_iterate(void *appstate) {
-  ShellWindow *window = &shell.main_window;
-  ShellProject *project = window->selected;
   (void)appstate;
-  check_gpu_failure(window);
+  check_picker_failures();
+  for (ShellWindow *window = shell.windows; window; window = window->next) check_gpu_failure(window);
   finish_resolutions();
   service_sidebar();
   if (shell.sidebar_process) {
     finish_launch(shell.sidebar_process);
     check_transport_failure(shell.sidebar_process);
-    handle_sidebar_frame(window);
+    ShellWindow *window = window_for_id(shell.sidebar_window_id);
+    if (window) handle_sidebar_frame(window);
     schedule_sidebar_restart();
   }
   for (ShellProject *item = shell.projects; item; item = item->next) {
@@ -4153,38 +4550,75 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
   }
   for (ShellProject *item = shell.projects, *next; item; item = next) {
     next = item->next;
-    if (item->unloading && item->failed_close && !item->resolving &&
+    ShellWindow *owner = window_for_id(item->window_id);
+    if ((item->unloading || (owner && owner->closing)) && item->failed_close && !item->resolving &&
         (!item->launch || item->launch->taken) &&
         (!item->process.hProcess ||
-         WaitForSingleObject(item->process.hProcess, 0) == WAIT_OBJECT_0))
-      complete_unload(item);
+         WaitForSingleObject(item->process.hProcess, 0) == WAIT_OBJECT_0)) {
+      if (!item->identity || !item->project_path) {
+        retire_failed_placeholder(item);
+        continue;
+      }
+      if (!item->unloading) begin_unload(item);
+      if (item->unloading) complete_unload(item);
+    }
   }
   drain_retired_projects();
   notify_sidebar_changes();
-  project = window->selected;
-  if (window->frame_busy) handle_frame(window);
-  if (window->closing && project->failed_close) {
-    if (project->launch && !project->launch->taken)
-      return SDL_APP_CONTINUE;
+  for (ShellWindow *window = shell.windows, *following; window; window = following) {
+    following = window->next;
+    ShellProject *project = window->selected;
+    if (window->frame_busy) handle_frame(window);
+    if (!window->closing) continue;
+    if (!project->id) project->failed_close = true;
+    if (!project->failed_close) {
+      if (!project->close_requested_ns) request_close(project);
+      continue;
+    }
+    if (project->resolving || (project->launch && !project->launch->taken)) continue;
     ShellProject *next = NULL;
     for (ShellProject *item = shell.projects; item; item = item->next)
-      if (item != project && !item->failed_close &&
-          ((item->launch && !item->launch->taken) ||
-           (item->process.hProcess &&
-            WaitForSingleObject(item->process.hProcess, 0) == WAIT_TIMEOUT))) {
-        next = item;
-        break;
+      if (item->window_id == window->id && item != project && !item->failed_close &&
+          ((item->launch && !item->launch->taken) || (item->process.hProcess &&
+           WaitForSingleObject(item->process.hProcess, 0) == WAIT_TIMEOUT))) {
+        next = item; break;
       }
-    if (!next)
-      return SDL_APP_SUCCESS;
-    select_project(next);
-    request_close(next);
+    if (next) { select_project(next); request_close(next); continue; }
+    bool assigned = false;
+    for (ShellProject *item = shell.projects; item; item = item->next)
+      assigned |= item->window_id == window->id;
+    if (assigned) continue;
+    if (window->sidebar && shell.sidebar_process) {
+      ShellProject *sidebar = shell.sidebar_process;
+      if (sidebar->launch && !sidebar->launch->taken) continue;
+      if (sidebar->process.hProcess && WaitForSingleObject(sidebar->process.hProcess, 0) == WAIT_TIMEOUT) {
+        SDL_Log("Shell closes the first Window's disposable Sidebar; other Windows keep running");
+        TerminateProcess(sidebar->process.hProcess, 0);
+      }
+      sidebar->connected = false;
+      if (sidebar->startup_timer) KillTimer(window->hwnd, sidebar->startup_timer);
+      sidebar->startup_timer = 0;
+      anvil_ipc_pipe_cancel(&sidebar->pipe);
+      SDL_LockMutex(sidebar->lock);
+      sidebar->writer_stop = true;
+      SDL_BroadcastCondition(sidebar->queue_cond);
+      SDL_UnlockMutex(sidebar->lock);
+      sidebar->next = shell.retiring;
+      shell.retiring = sidebar;
+      shell.sidebar_process = NULL;
+      shell.sidebar_window_id = 0;
+      if (shell.sidebar_restart_timer) KillTimer(shell.service_hwnd, shell.sidebar_restart_timer);
+      shell.sidebar_restart_timer = 0;
+      if (shell.sidebar_healthy_timer) KillTimer(shell.service_hwnd, shell.sidebar_healthy_timer);
+      shell.sidebar_healthy_timer = 0;
+    }
+    destroy_window(window);
   }
-  return SDL_APP_CONTINUE;
+  return shell.windows ? SDL_APP_CONTINUE : SDL_APP_SUCCESS;
 }
 
 void anvil_shell_quit(void *appstate, SDL_AppResult result) {
-  ShellWindow *window = &shell.main_window;
+  shell.shutting_down = true;
   (void)appstate;
   (void)result;
   /* Project loss detection owns save/detach and its deadline. Never kill it with a shell job. */
@@ -4194,12 +4628,13 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
     _Exit(result == SDL_APP_FAILURE ? 1 : 0);
   }
   shell.sidebar_watch = NULL;
-  if (shell.sidebar_restart_timer) KillTimer(window->hwnd, shell.sidebar_restart_timer);
+  if (shell.sidebar_restart_timer) KillTimer(shell.service_hwnd, shell.sidebar_restart_timer);
   shell.sidebar_restart_timer = 0;
-  if (shell.sidebar_healthy_timer) KillTimer(window->hwnd, shell.sidebar_healthy_timer);
+  if (shell.sidebar_healthy_timer) KillTimer(shell.service_hwnd, shell.sidebar_healthy_timer);
   shell.sidebar_healthy_timer = 0;
   if (shell.sidebar_process) {
     ShellProject *project = shell.sidebar_process;
+    ShellWindow *window = window_for_id(project->window_id);
     if (project->connected)
       shell_send(project, ANVIL_SURFACE_MSG_CLOSE, NULL, 0, NULL, 0);
     if (project->process.hProcess &&
@@ -4208,7 +4643,7 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
               "independent");
       TerminateProcess(project->process.hProcess, 0);
     }
-    if (project->startup_timer)
+    if (project->startup_timer && window)
       KillTimer(window->hwnd, project->startup_timer);
     if (!stop_transport(project, deadline)) {
       SDL_Log("Shell Sidebar shutdown deadline expired; exit this shell only");
@@ -4218,7 +4653,7 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
     shell.sidebar_process = NULL;
   }
   if (shell.sidebar_timer)
-    KillTimer(window->hwnd, shell.sidebar_timer);
+    KillTimer(shell.service_hwnd, shell.sidebar_timer);
   if (shell.sidebar_scan && !anvil_sidebar_scan_stop(shell.sidebar_scan, deadline)) {
     SDL_Log("Shell Sidebar worker shutdown deadline expired; exit this shell only");
     _Exit(result == SDL_APP_FAILURE ? 1 : 0);
@@ -4240,7 +4675,8 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   }
   for (ShellProject *project = shell.projects; project; project = project->next) {
     stop_close_timer(project);
-    if (project->startup_timer)
+    ShellWindow *window = window_for_id(project->window_id);
+    if (project->startup_timer && window)
       KillTimer(window->hwnd, project->startup_timer);
     if (!stop_transport(project, deadline)) {
       SDL_Log("Shell transport shutdown deadline expired; exit this shell only");
@@ -4253,7 +4689,23 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
       _Exit(result == SDL_APP_FAILURE ? 1 : 0);
     }
   }
-  if (window->retry_timer) SDL_RemoveTimer(window->retry_timer);
+  for (ShellPicker *picker = shell.pickers; picker; picker = picker->next)
+    if (!picker->probe) {
+      SDL_Log("Shell exits with a cancelled native picker; retain its callback storage until process exit");
+      _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+    }
+  for (ShellProject *project = shell.retiring; project; project = project->next)
+    if (SDL_GetAtomicInt(&project->references) > 1) {
+      SDL_Log("Shell exits with retained native callback storage; do not free its SDL_Window");
+      _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+    }
+  for (ShellProject *project = shell.projects; project; project = project->next)
+    if (SDL_GetAtomicInt(&project->references) > 1) {
+      SDL_Log("Shell exits with retained native callback storage; do not free its SDL_Window");
+      _Exit(result == SDL_APP_FAILURE ? 1 : 0);
+    }
+  while (shell.windows) destroy_window(shell.windows);
+  if (shell.service_hwnd) DestroyWindow(shell.service_hwnd);
 }
 
 #else

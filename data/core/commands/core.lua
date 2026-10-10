@@ -173,12 +173,12 @@ local function directory_system_picker_default_location()
   return common.dirname(core.root_project().path)
 end
 
-local function open_directory(label, allow_many, callback, select_text)
+local function open_directory(label, allow_many, callback, select_text, resolve_in_shell)
   core.global_prompt_bar:enter(label, {
     text = directory_prompt_default_text(),
     submit = function(text)
       local path = common.home_expand(common.sanitize_prompt_path(text))
-      local abs_path = check_directory_path(path)
+      local abs_path = resolve_in_shell and path or check_directory_path(path)
       if not abs_path then
         core.error("Cannot open directory %q", path)
         return
@@ -226,15 +226,19 @@ end
 
 local function open_project_directory()
   open_directory("Open Project", false, function(abs_path)
-    if common.path_equals(abs_path[1], core.root_project().path) then
+    if not system.is_hosted_surface() and common.path_equals(abs_path[1], core.root_project().path) then
       core.error("Directory %q is currently opened", abs_path[1])
       return
     end
     core.open_project_in_new_window(abs_path[1])
-  end, true)
+  end, true, system.is_hosted_surface())
 end
 
 local function open_project_directory_with_system_file_picker()
+  if system.is_hosted_surface() then
+    core.log_quiet("Request shell-owned Open Project folder picker")
+    return system.open_project_picker()
+  end
   open_directory_with_system_file_picker("Open Project", false, function(abs_path)
     if common.path_equals(abs_path[1], core.root_project().path) then
       core.error("Directory %q is currently opened", abs_path[1])

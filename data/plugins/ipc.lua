@@ -1000,6 +1000,9 @@ end
 --------------------------------------------------------------------------------
 local core_open_project_in_new_window = core.open_project_in_new_window
 function core.open_project_in_new_window(project, ...)
+  if system.is_hosted_surface() then
+    return core_open_project_in_new_window(project, ...)
+  end
   if config.plugins.ipc.single_instance then
     local project_path = type(project) == "table" and project.path or project
     project_path = type(project_path) == "string" and (system.absolute_path(project_path) or project_path) or nil

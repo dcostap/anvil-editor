@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 11u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 12u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -55,6 +55,9 @@ typedef enum {
   ANVIL_SURFACE_MSG_SIDEBAR_SOURCE = 84,
   ANVIL_SURFACE_MSG_SIDEBAR_QUERY = 85,
   ANVIL_SURFACE_MSG_SIDEBAR_REFRESH = 86,
+  ANVIL_SURFACE_MSG_NEW_WINDOW = 87,
+  ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW = 88,
+  ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER = 89,
 } AnvilSurfaceMessageType;
 
 typedef struct {
@@ -88,6 +91,7 @@ typedef enum {
 
 typedef struct {
   uint64_t configuration;
+  uint32_t window_id;                /* stable shell identity, not an SDL ID */
   int32_t origin_x, origin_y;        /* physical client pixels */
   int32_t pixel_w, pixel_h;          /* surface size */
   int32_t window_x, window_y;        /* shell window bounds, for saved app state */

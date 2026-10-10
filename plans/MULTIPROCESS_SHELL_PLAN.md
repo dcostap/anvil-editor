@@ -462,7 +462,9 @@ Approved for staged implementation: [Phase 5: several Anvil Windows](PHASE5_SEVE
 Commit milestone 1, then 2a, then 2b. Stop for review after each milestone.
 Milestone 1 moves native state into an owned Window record without adding several-Window behavior.
 Its [verification record](PHASE5_WINDOW_STATE.md) retains both-renderer checks, valid latency runs, and the warned deployment.
-Milestone 1 is ready for review. Milestones 2a and 2b have not started.
+The user approved milestone 1. Milestone 2a adds New Window, native menu/picker actions, and hosted command routing.
+Its [verification record](PHASE5_NEW_WINDOWS.md) retains focused red-green checks, matched latency, and deployment hashes.
+Milestone 2a is ready for review. Milestone 2b has not started. The Sidebar stays in the first Window.
 The latency probe remains under investigation. Treat differences below about 2 ms as noise.
 The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) satisfies the milestone-2 entry gate on 2026-10-10.
 Both fresh revisions return to historical-range medians in the unlocked, display-on matched repeat.

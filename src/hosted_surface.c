@@ -577,6 +577,31 @@ bool anvil_hosted_surface_select_project(const char *path) {
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
+bool anvil_hosted_surface_new_window(void) {
+  if (!hosted.active || !hosted.config.window_id) return false;
+  send_message(ANVIL_SURFACE_MSG_NEW_WINDOW, &hosted.config.window_id, sizeof(uint32_t));
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+uint32_t anvil_hosted_surface_window_id(void) { return hosted.config.window_id; }
+bool anvil_hosted_surface_open_project_window(const char *path) {
+  if (!hosted.active || !hosted.config.window_id || !path || !*path) return false;
+  size_t size = sizeof(uint32_t) + strlen(path) + 1;
+  if (size >= 32768) return false;
+  uint8_t *request = malloc(size);
+  if (!request) { signal_loss("Open Project request allocation failed", ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW, size); return false; }
+  memcpy(request, &hosted.config.window_id, sizeof(uint32_t));
+  memcpy(request + sizeof(uint32_t), path, strlen(path) + 1);
+  send_message(ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW, request, (uint32_t)size);
+  free(request);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+bool anvil_hosted_surface_open_project_picker(void) {
+  if (!hosted.active || !hosted.config.window_id) return false;
+  send_message(ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER, &hosted.config.window_id, sizeof(uint32_t));
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
 bool anvil_hosted_surface_unload_project(const char *path) {
   if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_UNLOAD_PROJECT, path, (uint32_t)strlen(path) + 1);
@@ -942,6 +967,10 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
 bool anvil_hosted_surface_has_focus(void) { return false; }
 bool anvil_hosted_surface_should_render(void) { return true; }
 bool anvil_hosted_surface_select_project(const char *path) { (void)path; return false; }
+bool anvil_hosted_surface_new_window(void) { return false; }
+uint32_t anvil_hosted_surface_window_id(void) { return 0; }
+bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; return false; }
+bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recents) {
   (void)userdir;

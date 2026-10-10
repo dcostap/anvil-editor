@@ -1766,6 +1766,25 @@ static int f_select_project(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_select_project(path));
   return 1;
 }
+
+static int f_new_anvil_window(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_new_window());
+  return 1;
+}
+
+static int f_get_anvil_window_id(lua_State *L) {
+  lua_pushinteger(L, anvil_hosted_surface_window_id());
+  return 1;
+}
+static int f_open_project_window(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+  lua_pushboolean(L, anvil_hosted_surface_open_project_window(path));
+  return 1;
+}
+static int f_open_project_picker(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_open_project_picker());
+  return 1;
+}
 static int f_unload_project(lua_State *L) {
   size_t size = 0;
   const char *path = luaL_checklstring(L, 1, &size);
@@ -2420,6 +2439,10 @@ static const luaL_Reg lib[] = {
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "is_hosted_surface",     f_is_hosted_surface     },
   { "select_project",        f_select_project        },
+  { "new_anvil_window",      f_new_anvil_window      },
+  { "get_anvil_window_id",   f_get_anvil_window_id   },
+  { "open_project_window",  f_open_project_window  },
+  { "open_project_picker",  f_open_project_picker  },
   { "unload_project",        f_unload_project        },
   { "publish_project_sidebar", f_publish_project_sidebar },
   { "is_sidebar_surface", f_is_sidebar_surface },
