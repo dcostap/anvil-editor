@@ -15,6 +15,32 @@ test.describe("Sidebar list actions", function()
     test.same(actions, {{"move", 31, 9}})
     test.equal(#view.rows, 1)
   end)
+  test.it("keeps Move choices across Sidebar updates while the Project keeps its owner", function()
+    local SidebarView = require "core.sidebar_view"
+    local actions = {}
+    local view = SidebarView(function(...) actions[#actions + 1] = {...} end)
+    local function model(busy, owner, state)
+      return {{row_id=7,id=31,path="C:/A",state=state or "ready",window_id=owner,
+        terminals={{id="session",title="shell",cwd="C:/A",busy=busy,state="running"}}},
+        windows={{id=5,selected_project=31},{id=9,selected_project=0}}}
+    end
+    view:set_model(model(0, 5), 9)
+    view:on_mouse_pressed("right", 20, view:row_y(1), 240)
+    -- A Terminal busy change is a new revision. The open choices must stay under the cursor.
+    view:set_model(model(1, 5), 9)
+    test.equal(#view.rows, 3)
+    view:on_mouse_pressed("left", 20, view:row_y(3), 240)
+    test.same(actions, {{"move", 31, 9}})
+    -- A changed owner or an unloaded Project invalidates the choices.
+    view:on_mouse_pressed("right", 20, view:row_y(1), 240)
+    view:set_model(model(1, 9), 9)
+    test.equal(#view.rows, 2)
+    view:set_model(model(1, 9), 9)
+    test.equal(#view.rows, 2, "Choices reopened after the owner changed")
+    view:on_mouse_pressed("right", 20, view:row_y(1), 240)
+    view:set_model(model(1, 0, "dormant"), 9)
+    test.equal(#view.rows, 2)
+  end)
   test.it("highlights each Window's Selected Project and shows its owning Window", function()
     -- Seam: public model input and renderer output. Both Views share one snapshot.
     local SidebarView = require "core.sidebar_view"

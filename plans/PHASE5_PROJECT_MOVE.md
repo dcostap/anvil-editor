@@ -264,3 +264,18 @@ Normal fields such as `last_error=0` are not failures.
 Before milestone 4, identify the retained Sidebar Restart deadline failure's cause.
 A separate investigation commit is allowed. Do not increase its timeout.
 Physical input, real IME, mixed DPI, allocator-failure, and instrumented lifetime gates remain open.
+
+### Review follow-up: Move choices across Sidebar revisions
+
+Review of `f2742110` found that every Sidebar revision closed open Move choices.
+Revisions also arrive for Terminal state and registry changes.
+A click meant for a Move target could then land on the next Project row and select it.
+
+Red: `ui/sidebar_view.lua` "keeps Move choices across Sidebar updates while the Project keeps its owner"
+failed with `expected 3 but got 2` after a Terminal busy-state revision.
+Green: the same file passes all six tests after the change.
+The View now keeps Move choices while the Project exists, stays loaded, and keeps the same owning Window.
+An owner change or unload clears them.
+
+Trust boundary: the shell accepts `MOVE_PROJECT` from any authenticated hosted Project, not only the Sidebar.
+This matches `SELECT_PROJECT` and `UNLOAD_PROJECT`. Restrict all three together if hosted Projects become less trusted.

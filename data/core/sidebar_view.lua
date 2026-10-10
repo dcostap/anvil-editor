@@ -7,7 +7,14 @@ function SidebarView:new(action)
   self.action, self.rows, self.scroll = action, {}, 0
 end
 function SidebarView:set_model(projects, window_id)
-  self.projects, self.window_id, self.move_project = projects, window_id, nil
+  -- Revisions arrive for unrelated changes, such as Terminal state. Keep open Move choices while still valid.
+  local move_project = nil
+  for _, project in ipairs(projects) do
+    if project.id == self.move_project and project.window_id == self.move_owner and project.state ~= "dormant" then
+      move_project = project.id
+    end
+  end
+  self.projects, self.window_id, self.move_project = projects, window_id, move_project
   self:rebuild_rows()
 end
 function SidebarView:rebuild_rows()
@@ -47,6 +54,7 @@ function SidebarView:on_mouse_pressed(button, x, y, width)
   if button == "right" then
     if row.project.id and row.project.window_id and row.project.window_id ~= 0 then
       self.move_project = self.move_project ~= row.project.id and row.project.id or nil
+      self.move_owner = row.project.window_id
       self:rebuild_rows()
     end
     return
