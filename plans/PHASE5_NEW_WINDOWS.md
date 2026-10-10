@@ -176,3 +176,34 @@ Stop for review after this milestone's commit. Shared Sidebar surfaces remain un
 Physical input, real IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
 Generated input-to-Present measures neither physical input nor scanout.
 Historical multi-second timing tails remain unexplained.
+
+## Approved milestone-2a follow-up: maximized Window selection
+
+The user approved `cebffbf1` with a required selection fix before milestone 2b.
+`finish_resolutions()` now restores a Window only when `IsIconic()` reports Minimize.
+Loaded Project selection preserves Maximize through both hosted Open Project and the native Sidebar model action.
+The existing Minimize-restore check remains in the same fixture.
+
+Red: `%TEMP%/anvil-surface-latency-2rhoom2s` reports hosted Open Project removing maximization.
+The extended red in `anvil-surface-latency-bxvpk1b6` reports both paths:
+`Maximized Window lost its state: hosted Open Project=false Sidebar selection=false`.
+Both renderer greens include the same selection check and the hosted picker command:
+
+- D3D11: `%TEMP%/anvil-surface-latency-x1nwghpm`.
+- Software: `%TEMP%/anvil-surface-latency-ddfckcwi`.
+
+Quiet native logs now report stale Window IDs on New Window, Open Project, and picker requests.
+The hosted picker command reports a rejected request instead of silently ignoring `false`.
+Deferred Window destruction still enumerates owned dialogs on each pass while a native picker remains pending.
+This is known repeated work, not a new safety or performance claim.
+
+The fix changes selection-time Window state, not frame compositing or input transport.
+Milestone 2b will retain this fix in its matched latency candidate.
+Manual and instrumented acceptance gates remain open.
+
+The warned updater restored source-data junctions and restarted the direct-mode portable app.
+Independent stripped/normalized PE comparison matches.
+Build SHA-256: `3ee83aaf4ee02249417445b96ff65a33c20ceeaf788658045f6e306853d8d7eb`.
+Portable SHA-256: `16bfc6bd15b3b79f7782b09f36dc16303877f7e25002f36227479068d75870c7`.
+Fresh session and startup logs show no warning/error/failure diagnostics at verification:
+`anvil-20261010-104549-p41852.log` and `startup/anvil-startup-20261010-104548-p41852-m996291.log`.

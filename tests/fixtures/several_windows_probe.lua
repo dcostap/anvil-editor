@@ -16,6 +16,7 @@ ffi.cdef [[
   unsigned long __stdcall GetMenuState(void *, unsigned int, unsigned int);
   void * __stdcall GetSystemMenu(void *, int);
   int __stdcall IsIconic(void *);
+  int __stdcall IsZoomed(void *);
   int __stdcall GetWindowTextW(void *, wchar_t *, int);
   void * __stdcall GetPropW(void *, const wchar_t *);
   void * __stdcall OpenProcess(unsigned long, int, unsigned long);
@@ -173,6 +174,29 @@ if path:find("/driver$", 1) then
         save("same-project", {continue = true})
         wait_for(function() return user32.IsIconic(original) == 0 end, 5,
           "Open Project command rejected the requesting Window's loaded Project")
+        user32.PostMessageW(original, 0x112, 0xf030, 0)
+        wait_for(function() return user32.IsZoomed(original) ~= 0 end, 3)
+        save("maximized-project", {continue = true})
+        wait_for(function() return load("maximized-requested") end, 5)
+        coroutine.yield(.3)
+        local open_preserved = user32.IsZoomed(original) ~= 0
+        if not open_preserved then
+          user32.PostMessageW(original, 0x112, 0xf030, 0)
+          wait_for(function() return user32.IsZoomed(original) ~= 0 end, 3)
+        end
+        os.remove(root .. "/sidebar-0.lua")
+        user32.PostMessageW(original, 0x804d, 0, 0)
+        local page = wait_for(function() return load("sidebar-0") end, 3)
+        local row
+        for _, item in ipairs(page.items) do
+          if item.kind == "project" and item.path:gsub("\\", "/") == root .. "/Project" then row = item.row_id end
+        end
+        user32.PostMessageW(original, 0x804d, 1, assert(row))
+        coroutine.yield(.3)
+        local sidebar_preserved = user32.IsZoomed(original) ~= 0
+        assert(open_preserved and sidebar_preserved,
+          "Maximized Window lost its state: hosted Open Project=" .. tostring(open_preserved)
+            .. " Sidebar selection=" .. tostring(sidebar_preserved))
         save("finish", {continue = true})
         wait_for(function() return not subject:running() end, 10)
         assert(subject:returncode() == 0)
@@ -314,6 +338,9 @@ else
       assert(command.perform("core:open_project_folder"))
       core.global_prompt_bar:set_text(root .. "/Project")
       core.global_prompt_bar:submit()
+      wait_for(function() return load("maximized-project") end, 25)
+      assert(core.open_project_in_new_window(root .. "/Project"))
+      save("maximized-requested", {continue = true})
       wait_for(function() return load("finish") end, 25)
       quit(); return
     end

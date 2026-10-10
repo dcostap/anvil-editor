@@ -237,7 +237,11 @@ end
 local function open_project_directory_with_system_file_picker()
   if system.is_hosted_surface() then
     core.log_quiet("Request shell-owned Open Project folder picker")
-    return system.open_project_picker()
+    if not system.open_project_picker() then
+      core.error("Cannot request the Open Project folder picker")
+      return false
+    end
+    return true
   end
   open_directory_with_system_file_picker("Open Project", false, function(abs_path)
     if common.path_equals(abs_path[1], core.root_project().path) then

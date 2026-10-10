@@ -2240,6 +2240,14 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   if (project->state == SHELL_FAILED)
     return;
   const void *payload = message->payload;
+  if ((message->type == ANVIL_SURFACE_MSG_NEW_WINDOW ||
+       message->type == ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW ||
+       message->type == ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER) &&
+      *(const uint32_t *)payload != window->id) {
+    SDL_Log("Shell ignored stale Window request: type=%u requested=%u connection_Window=%u connection=%u",
+            message->type, *(const uint32_t *)payload, window->id, project->connection);
+    return;
+  }
   int value =
       message->size == sizeof(AnvilSurfaceInt) ? ((const AnvilSurfaceInt *)payload)->value : 0;
   if (project->sidebar && message->type != ANVIL_SURFACE_MSG_SIDEBAR_QUERY &&
@@ -4008,7 +4016,7 @@ static void finish_resolutions(void) {
           ShellWindow *owner = window_for_id(project->window_id);
           if (owner && !owner->closing) {
             SDL_ShowWindow(owner->window);
-            SDL_RestoreWindow(owner->window);
+            if (IsIconic(owner->hwnd)) SDL_RestoreWindow(owner->window);
             owner->shown = true;
             send_configure(project);
             SDL_RaiseWindow(owner->window);
