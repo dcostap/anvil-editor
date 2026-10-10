@@ -133,7 +133,7 @@ def main() -> int:
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
     parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
-        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -178,11 +178,14 @@ def main() -> int:
                     case_dir = work / f"project-{mode}-{action}"
                     for name in ("driver", "Project", "Replacement", "user"):
                         (case_dir / name).mkdir(parents=True)
-                    if action.startswith("windows-move"):
+                    if action.startswith(("windows-move", "windows-close")):
                         (case_dir / "Other").mkdir()
                     fixture = "loaded_projects_probe.lua" if action.startswith("loaded-") else "hosted_project_probe.lua"
                     if action.startswith("windows-"):
                         fixture = "windows_move_probe.lua" if action.startswith("windows-move") else "several_windows_probe.lua"
+                        if action.startswith("windows-close"):
+                            fixture = "windows_close_probe.lua"
+                            (case_dir / "Other/edited.txt").write_bytes(b"on disk\n")
                     if action.startswith("identity-"):
                         fixture = "project_identity_probe.lua"
                     if action.startswith("dormant-"):
@@ -246,7 +249,7 @@ def main() -> int:
                         config["environment"]["ANVIL_SURFACE_FAULT_IDENTITY_DELAY"] = "1"
                     if action == "sidebar-worker":
                         config["environment"]["ANVIL_SIDEBAR_SCAN_DELAY"] = "1"
-                    if action in ("loaded-launch", "dormant-launch"):
+                    if action in ("loaded-launch", "dormant-launch", "windows-close-launch"):
                         config["environment"]["ANVIL_SURFACE_FAULT_STARTUP"] = "selection-launch"
                     if action.startswith("startup-"):
                         config["environment"]["ANVIL_SURFACE_FAULT_STARTUP"] = action.removeprefix("startup-")

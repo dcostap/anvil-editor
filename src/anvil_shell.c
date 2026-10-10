@@ -3766,7 +3766,8 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
     SDL_Log("Shell rejected Project selection: identity timer failed");
     return false;
   }
-  job->revision = window->resolve_revision + (unload ? 0 : 1);
+  /* Only a selection replaces the Window's earlier pending selection. Unload and New Window requests do not. */
+  job->revision = window->resolve_revision + (unload || new_window ? 0 : 1);
   job->thread =
       SDL_CreateThread(resolve_project_thread, "anvil-project-identity", job);
   if (!job->thread) {
