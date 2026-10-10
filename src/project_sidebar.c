@@ -137,16 +137,17 @@ failed:
   return false;
 }
 void anvil_sidebar_set_runtime(AnvilSidebarModel *model, AnvilSidebarProject *project, uint32_t id,
-                               uint32_t pid, AnvilSidebarState state, bool selected,
+                               uint32_t pid, uint32_t window_id, AnvilSidebarState state, bool selected,
                                bool deferred_dialog, bool close_choice) {
   if (project->id != id || project->pid != pid || project->state != state ||
-      project->selected != selected || project->deferred_dialog != deferred_dialog ||
+      project->selected != selected || project->window_id != window_id || project->deferred_dialog != deferred_dialog ||
       project->close_choice != close_choice)
     model->revision++;
   project->id = id;
   project->pid = pid;
   project->state = state;
   project->selected = selected;
+  project->window_id = window_id;
   project->deferred_dialog = deferred_dialog;
   project->close_choice = close_choice;
 }
@@ -217,6 +218,15 @@ static void quoted(SidebarText *text, const char *value) {
   }
   append(text, "\"");
 }
+bool anvil_sidebar_set_windows(AnvilSidebarModel *model, const AnvilSidebarWindow *windows, size_t count) {
+  if (count > ANVIL_SIDEBAR_WINDOW_LIMIT) return false;
+  if (model->window_count != count || memcmp(model->windows, windows, count * sizeof(*windows))) {
+    memcpy(model->windows, windows, count * sizeof(*windows));
+    model->window_count = count;
+    model->revision++;
+  }
+  return true;
+}
 char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
   const char *states[] = {"dormant", "starting", "ready", "closing", "failed"};
   const char *terminal_states[] = {"running", "exited", "lost"};
@@ -242,9 +252,9 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
       item.failed = false;
       if (!j) {
         append(&item,
-               "{kind=\"project\",row_id=%u,id=%u,pid=%u,state=\"%s\",selected=%s,exists=%s,"
+               "{kind=\"project\",row_id=%u,id=%u,pid=%u,window_id=%u,state=\"%s\",selected=%s,exists=%s,"
                "deferred_dialog=%s,close_choice=%s,path=",
-               row->row_id, row->id, row->pid, states[row->state], row->selected ? "true" : "false",
+               row->row_id, row->id, row->pid, row->window_id, states[row->state], row->selected ? "true" : "false",
                row->exists ? "true" : "false", row->deferred_dialog ? "true" : "false",
                row->close_choice ? "true" : "false");
         quoted(&item, row->path);
@@ -264,7 +274,7 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
       if (item.failed)
         goto failed;
       /* Leave room for the page header and terminator. Never split a record. */
-      if (body.used + item.used + 256 >= SIDEBAR_PAGE_BYTES)
+      if (body.used + item.used + 4096 >= SIDEBAR_PAGE_BYTES)
         goto finished;
       append(&body, "%s", item.text);
       next = index + 1;
@@ -273,12 +283,17 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
 finished:
   if (next == offset && offset < total)
     goto failed;
-  char *result = malloc(body.used + 256);
+  item.used = 0;
+  append(&item, "{");
+  for (size_t i = 0; i < model->window_count; i++)
+    append(&item, "{id=%u,selected_project=%u},", model->windows[i].id, model->windows[i].selected_project);
+  append(&item, "}");
+  char *result = malloc(body.used + item.used + 256);
   if (result)
-    snprintf(result, body.used + 256,
-             "return {revision=%u,offset=%zu,next=%zu,total=%zu,status_limited=%s,items={%s}}",
+    snprintf(result, body.used + item.used + 256,
+             "return {revision=%u,offset=%zu,next=%zu,total=%zu,status_limited=%s,windows=%s,items={%s}}",
              model->revision, offset, next, total, model->status_limited ? "true" : "false",
-             body.text);
+             item.text, body.text);
   free(body.text);
   free(item.text);
   return result;

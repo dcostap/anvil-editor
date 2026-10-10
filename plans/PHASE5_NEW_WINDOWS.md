@@ -207,3 +207,6 @@ Build SHA-256: `3ee83aaf4ee02249417445b96ff65a33c20ceeaf788658045f6e306853d8d7eb
 Portable SHA-256: `16bfc6bd15b3b79f7782b09f36dc16303877f7e25002f36227479068d75870c7`.
 Fresh session and startup logs show no warning/error/failure diagnostics at verification:
 `anvil-20261010-104549-p41852.log` and `startup/anvil-startup-20261010-104548-p41852-m996291.log`.
+
+The user then approved milestone 2b. See [shared Sidebar surfaces](PHASE5_SHARED_SIDEBARS.md) for its separate verification record.
+That milestone replaces the first-Window-only Sidebar lifetime described in this historical 2a record.

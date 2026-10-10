@@ -35,6 +35,23 @@ typedef struct {
   char name[ANVIL_SURFACE_NAME_MAX];
 } SharedMemoryFrame;
 
+/* UI-thread state. Reader and writer threads use owned, Window-tagged packets. */
+typedef struct HostedView {
+  struct HostedView *next;
+  SDL_Window *window;
+  Uint32 window_id;
+  AnvilSurfaceConfigure config;
+  bool config_applied, text_active, removed;
+  SDL_AtomicInt focused;
+  int last_cursor;
+  uint32_t frame_generation;
+  SharedMemoryFrame memory;
+} HostedView;
+static HostedView first_view = {.last_cursor = -1};
+static HostedView *view = &first_view, *views = &first_view;
+static void release_memory_frame(SharedMemoryFrame *memory);
+static void remove_view(HostedView *item);
+
 static struct {
   bool active;
   bool valid, restarted, sidebar, sidebar_query_needed;
@@ -54,25 +71,13 @@ static struct {
   char pipe_name[256];
   AnvilIPCPipe pipe;
   SDL_Thread *reader;
-  SDL_Window *window;
-  Uint32 window_id;
-
-  /* Main-thread state. */
-  AnvilSurfaceConfigure config;
-  bool config_applied;
-  bool text_active;
   struct {
     uint32_t id;
     SDL_DialogFileCallback callback;
     void *userdata;
   } dialogs[ANVIL_SURFACE_DIALOG_LIMIT];
 
-  SDL_AtomicInt focused;
-  int last_cursor;
-  uint32_t frame_generation;
-  SharedMemoryFrame memory;
-
-} hosted = { .last_cursor = -1, .valid = true };
+} hosted = { .valid = true };
 
 bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
   bool project = *argc > 1 && !strcmp(argv[1], ANVIL_PROJECT_ARG);
@@ -166,57 +171,57 @@ void anvil_hosted_surface_render_failed(const char *cause) {
 }
 uint32_t anvil_hosted_surface_shell_pid(void) { return hosted.shell_pid; }
 void anvil_hosted_surface_controls(int *x, int *y, int *w, int *h) {
-  *x = hosted.config.controls_x; *y = hosted.config.controls_y;
-  *w = hosted.config.controls_w; *h = hosted.config.controls_h;
+  *x = view->config.controls_x; *y = view->config.controls_y;
+  *w = view->config.controls_w; *h = view->config.controls_h;
 }
 
 static void push_window_event(Uint32 type) {
-  if (!hosted.window_id) return;
+  if (!view->window_id) return;
   SDL_Event event;
   SDL_zero(event);
   event.type = type;
-  event.window.windowID = hosted.window_id;
+  event.window.windowID = view->window_id;
   if (!system_push_event(&event)) signal_loss("UI event queue overflow", 0, 0);
 }
 
 static void push_input(const AnvilSurfaceInput *input, const char *text) {
-  if (!hosted.window_id) return;
+  if (!view->window_id) return;
   SDL_Event event = input->event;
   event.common.timestamp = SDL_GetTicksNS();
   switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
-      event.key.windowID = hosted.window_id;
+      event.key.windowID = view->window_id;
       break;
     case SDL_EVENT_TEXT_INPUT:
-      event.text.windowID = hosted.window_id;
+      event.text.windowID = view->window_id;
       event.text.text = text;
       break;
     case SDL_EVENT_TEXT_EDITING:
-      event.edit.windowID = hosted.window_id;
+      event.edit.windowID = view->window_id;
       event.edit.text = text;
       break;
     case SDL_EVENT_MOUSE_MOTION:
-      event.motion.windowID = hosted.window_id;
+      event.motion.windowID = view->window_id;
       break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
-      event.button.windowID = hosted.window_id;
+      event.button.windowID = view->window_id;
       break;
     case SDL_EVENT_MOUSE_WHEEL:
-      event.wheel.windowID = hosted.window_id;
+      event.wheel.windowID = view->window_id;
       break;
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
     case SDL_EVENT_WINDOW_MOUSE_ENTER:
     case SDL_EVENT_WINDOW_EXPOSED:
-      event.window.windowID = hosted.window_id;
+      event.window.windowID = view->window_id;
       break;
     case SDL_EVENT_DROP_BEGIN:
     case SDL_EVENT_DROP_POSITION:
     case SDL_EVENT_DROP_COMPLETE:
     case SDL_EVENT_DROP_FILE:
     case SDL_EVENT_DROP_TEXT:
-      event.drop.windowID = hosted.window_id;
+      event.drop.windowID = view->window_id;
       event.drop.source = NULL;
       event.drop.data = input->text_len ? text : NULL;
       break;
@@ -227,19 +232,19 @@ static void push_input(const AnvilSurfaceInput *input, const char *text) {
 }
 
 static void apply_window_size(void) {
-  if (!hosted.window || hosted.config.pixel_w <= 0 || hosted.config.pixel_h <= 0) return;
+  if (!view->window || view->config.pixel_w <= 0 || view->config.pixel_h <= 0) return;
   int w = 0, h = 0;
-  SDL_GetWindowSizeInPixels(hosted.window, &w, &h);
-  if (w != hosted.config.pixel_w || h != hosted.config.pixel_h) {
-    SDL_SetWindowSize(hosted.window, hosted.config.pixel_w, hosted.config.pixel_h);
+  SDL_GetWindowSizeInPixels(view->window, &w, &h);
+  if (w != view->config.pixel_w || h != view->config.pixel_h) {
+    SDL_SetWindowSize(view->window, view->config.pixel_w, view->config.pixel_h);
   }
 }
 
 static void apply_configure(const AnvilSurfaceConfigure *config) {
-  AnvilSurfaceConfigure previous = hosted.config;
-  bool had_config = hosted.config_applied;
-  hosted.config = *config;
-  hosted.config_applied = true;
+  AnvilSurfaceConfigure previous = view->config;
+  bool had_config = view->config_applied;
+  view->config = *config;
+  view->config_applied = true;
   if (had_config && previous.render_enabled != config->render_enabled) {
     SDL_Log("Project rendering %s; background work continues",
             config->render_enabled ? "enabled" : "disabled");
@@ -250,7 +255,7 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
 
   /* The shell waits for a frame of each new size while it live-resizes, so
    * resize frames must render immediately instead of at the refresh rate. */
-  bool live_resize = hosted.config.live_resize != 0;
+  bool live_resize = view->config.live_resize != 0;
   if (live_resize != (previous.live_resize != 0)) {
     anvil_set_live_resize(live_resize);
   }
@@ -258,21 +263,21 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
   if (had_config && (previous.pixel_w != config->pixel_w || previous.pixel_h != config->pixel_h)) {
     SDL_Event event = {0};
     event.type = SDL_EVENT_WINDOW_RESIZED;
-    event.window.windowID = hosted.window_id;
+    event.window.windowID = view->window_id;
     event.window.data1 = config->pixel_w;
     event.window.data2 = config->pixel_h;
     system_push_event(&event);
   }
-  if (layout_changed) anvil_hosted_surface_set_text_input(hosted.text_active);
+  if (layout_changed) anvil_hosted_surface_set_text_input(view->text_active);
   if (had_config && previous.live_resize && !live_resize) {
-    anvil_request_resize_frame_for_window(hosted.window, "exit_sizemove");
+    anvil_request_resize_frame_for_window(view->window, "exit_sizemove");
   }
   if (!had_config) return;
-  if (previous.display_scale != hosted.config.display_scale) {
+  if (previous.display_scale != view->config.display_scale) {
     push_window_event(SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED);
   }
-  if (previous.window_mode != hosted.config.window_mode) {
-    switch (hosted.config.window_mode) {
+  if (previous.window_mode != view->config.window_mode) {
+    switch (view->config.window_mode) {
       case ANVIL_SURFACE_WINDOW_MINIMIZED: push_window_event(SDL_EVENT_WINDOW_MINIMIZED); break;
       case ANVIL_SURFACE_WINDOW_MAXIMIZED: push_window_event(SDL_EVENT_WINDOW_MAXIMIZED); break;
       default: push_window_event(SDL_EVENT_WINDOW_RESTORED); break;
@@ -292,10 +297,70 @@ static bool valid_configure(const AnvilSurfaceConfigure *config) {
     config->controls_y <= config->pixel_h && config->controls_h <= config->pixel_h - config->controls_y;
 }
 
+static HostedView *sidebar_view(uint32_t id, bool create) {
+  size_t count = 0, total = 0;
+  for (HostedView *item = views; item; item = item->next) {
+    if (item->config.window_id == id) return item;
+    total++;
+    if (!item->removed) count++;
+  }
+  if (!create) return NULL;
+  if (count >= 64 || total >= 128) { signal_loss("Sidebar surface bound exceeded", ANVIL_SURFACE_MSG_CONFIGURE, total); return NULL; }
+  HostedView *item = calloc(1, sizeof(*item));
+  if (!item) { signal_loss("Sidebar surface allocation failed", ANVIL_SURFACE_MSG_CONFIGURE, sizeof(*item)); return NULL; }
+  item->config.window_id = id;
+  item->last_cursor = -1;
+  item->next = views;
+  views = item;
+  return item;
+}
+
+size_t anvil_hosted_surface_sidebar_views(uint32_t *ids, bool *removed, size_t capacity) {
+  if (!hosted.sidebar) return 0;
+  size_t count = 0;
+  /* Drain removed surfaces first. A full live list must not hide their cleanup. */
+  for (int pass = 0; pass < 2; pass++)
+    for (HostedView *item = views; item && count < capacity; item = item->next) {
+      if (!item->config.window_id || item->removed != (pass == 0)) continue;
+      ids[count] = item->config.window_id;
+      removed[count++] = item->removed;
+    }
+  return count;
+}
+bool anvil_hosted_surface_sidebar_activate(uint32_t id) {
+  HostedView *item = hosted.sidebar ? sidebar_view(id, false) : NULL;
+  if (!item || item->removed) return false;
+  view = item;
+  return true;
+}
+
 static void dispatch_message(HostedMessage *message) {
-  switch (message->type) {
+  uint16_t type = message->type;
+  uint8_t *payload = message->payload;
+  if (type == ANVIL_SURFACE_MSG_SIDEBAR_REMOVE) {
+    HostedView *item = sidebar_view(*(uint32_t *)payload, false);
+    if (item) {
+      item->removed = true;
+      if (!item->window) remove_view(item);
+    }
+    goto complete;
+  }
+  if (type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
+    const AnvilSidebarSurfacePacket *packet = (const void *)payload;
+    type = packet->type;
+    HostedView *item = sidebar_view(packet->window_id, type == ANVIL_SURFACE_MSG_CONFIGURE);
+    if (!item || item->removed) goto complete;
+    view = item;
+    payload += sizeof(*packet);
+    if (type == ANVIL_SURFACE_MSG_CONFIGURE &&
+        ((AnvilSurfaceConfigure *)payload)->window_id != packet->window_id) {
+      signal_loss("Sidebar configuration Window identity mismatch", type, message->size);
+      goto complete;
+    }
+  }
+  switch (type) {
   case ANVIL_SURFACE_MSG_SIDEBAR_CHANGED: {
-    CustomEvent event = {0};
+    CustomEvent event = {.windowID = view->window_id};
     if (!push_custom_event("projectsidebarchanged", &event)) {
       hosted.sidebar_query_needed = true;
       SDL_Log("Sidebar revision event dropped; query the current model on the next poll");
@@ -303,8 +368,8 @@ static void dispatch_message(HostedMessage *message) {
     break;
   }
   case ANVIL_SURFACE_MSG_SIDEBAR_MODEL: {
-    CustomEvent event = {0};
-    event.data1 = _strdup((const char *)message->payload);
+    CustomEvent event = {.windowID = view->window_id};
+    event.data1 = _strdup((const char *)payload);
     if (!event.data1 || !push_custom_event("projectsidebar", &event)) {
       free(event.data1);
       SDL_Log("Sidebar snapshot page dropped: copy or event delivery failed; request can retry");
@@ -312,29 +377,29 @@ static void dispatch_message(HostedMessage *message) {
     break;
   }
     case ANVIL_SURFACE_MSG_CONFIGURE:
-      if (((AnvilSurfaceConfigure *)message->payload)->configuration >= hosted.config.configuration) {
-        if (((AnvilSurfaceConfigure *)message->payload)->configuration == hosted.config.configuration &&
-            anvil_surface_layout_changed(&hosted.config, (AnvilSurfaceConfigure *)message->payload)) {
+      if (((AnvilSurfaceConfigure *)payload)->configuration >= view->config.configuration) {
+        if (view->config_applied && ((AnvilSurfaceConfigure *)payload)->configuration == view->config.configuration &&
+            anvil_surface_layout_changed(&view->config, (AnvilSurfaceConfigure *)payload)) {
           signal_loss("layout changed without configuration epoch", message->type, message->size);
         } else {
-          apply_configure((AnvilSurfaceConfigure *)message->payload);
+          apply_configure((AnvilSurfaceConfigure *)payload);
         }
       }
       break;
     case ANVIL_SURFACE_MSG_INPUT:
-      if (((AnvilSurfaceInput *)message->payload)->configuration == hosted.config.configuration)
-        push_input((AnvilSurfaceInput *)message->payload, (char *)message->payload + sizeof(AnvilSurfaceInput));
+      if (((AnvilSurfaceInput *)payload)->configuration == view->config.configuration)
+        push_input((AnvilSurfaceInput *)payload, (char *)payload + sizeof(AnvilSurfaceInput));
       break;
     case ANVIL_SURFACE_MSG_FOCUS:
-      SDL_SetAtomicInt(&hosted.focused, ((AnvilSurfaceInt *)message->payload)->value != 0);
-      push_window_event(((AnvilSurfaceInt *)message->payload)->value
+      SDL_SetAtomicInt(&view->focused, ((AnvilSurfaceInt *)payload)->value != 0);
+      push_window_event(((AnvilSurfaceInt *)payload)->value
         ? SDL_EVENT_WINDOW_FOCUS_GAINED : SDL_EVENT_WINDOW_FOCUS_LOST);
       break;
     case ANVIL_SURFACE_MSG_CLOSE:
       push_window_event(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
       break;
     case ANVIL_SURFACE_MSG_DIALOG_RESULT: {
-      AnvilSurfaceDialogResult *result = (AnvilSurfaceDialogResult *)message->payload;
+      AnvilSurfaceDialogResult *result = (AnvilSurfaceDialogResult *)payload;
       size_t index = 0;
       while (index < SDL_arraysize(hosted.dialogs) && hosted.dialogs[index].id != result->id) index++;
       if (index == SDL_arraysize(hosted.dialogs)) {
@@ -359,6 +424,7 @@ static void dispatch_message(HostedMessage *message) {
       break;
     }
   }
+complete:
   SDL_AddAtomicInt(&hosted.inbound_bytes, -(int)(sizeof(*message) + message->size + 1));
   free(message);
 }
@@ -369,7 +435,7 @@ bool anvil_hosted_surface_take_sidebar_query_needed(void) {
   return needed;
 }
 void anvil_hosted_surface_poll(void) {
-  if (!hosted.active || !hosted.window_id || !hosted.queue_lock) return;
+  if (!hosted.active || !hosted.queue_lock) return;
   /* Configuration, focus, and input share one caller-visible order. */
   while (!system_has_pending_events()) {
     SDL_LockMutex(hosted.queue_lock);
@@ -397,31 +463,46 @@ static int SDLCALL reader_thread(void *data) {
   AnvilIPCHeader header = {0};
   const char *cause = "pipe EOF or invalid packet";
   while (anvil_ipc_pipe_read(&hosted.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
-    switch (header.type) {
+    uint16_t type = header.type;
+    uint32_t size = header.size;
+    uint8_t *body = payload;
+    if (type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
+      if (!hosted.sidebar || size < sizeof(AnvilSidebarSurfacePacket)) goto failed;
+      AnvilSidebarSurfacePacket packet;
+      memcpy(&packet, body, sizeof(packet));
+      if (!packet.window_id || (packet.type != ANVIL_SURFACE_MSG_CONFIGURE && packet.type != ANVIL_SURFACE_MSG_INPUT &&
+          packet.type != ANVIL_SURFACE_MSG_FOCUS && packet.type != ANVIL_SURFACE_MSG_SIDEBAR_MODEL &&
+          packet.type != ANVIL_SURFACE_MSG_SIDEBAR_CHANGED)) goto failed;
+      type = packet.type; size -= sizeof(packet); body += sizeof(packet);
+    }
+    switch (type) {
       case ANVIL_SURFACE_MSG_CONFIGURE:
-        if (header.size != sizeof(AnvilSurfaceConfigure) || !valid_configure((const AnvilSurfaceConfigure *)payload)) goto failed;
+        if (size != sizeof(AnvilSurfaceConfigure) || !valid_configure((const AnvilSurfaceConfigure *)body)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_INPUT: {
-        if (header.size < sizeof(AnvilSurfaceInput)) goto failed;
+        if (size < sizeof(AnvilSurfaceInput)) goto failed;
         AnvilSurfaceInput input;
-        memcpy(&input, payload, sizeof(input));
-        if (input.text_len != header.size - sizeof(AnvilSurfaceInput)) goto failed;
-        if (memchr(payload + sizeof(input), 0, input.text_len)) goto failed;
+        memcpy(&input, body, sizeof(input));
+        if (input.text_len != size - sizeof(AnvilSurfaceInput)) goto failed;
+        if (memchr(body + sizeof(input), 0, input.text_len)) goto failed;
         break;
       }
       case ANVIL_SURFACE_MSG_FOCUS:
-        if (header.size != sizeof(AnvilSurfaceInt)) goto failed;
+        if (size != sizeof(AnvilSurfaceInt)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_CLOSE:
       case ANVIL_SURFACE_MSG_SIDEBAR_CHANGED:
-        if (header.size) goto failed;
+        if (size) goto failed;
         break;
       case ANVIL_SURFACE_MSG_DIALOG_RESULT:
-        if (!anvil_surface_dialog_result_valid(payload, header.size)) goto failed;
+        if (!anvil_surface_dialog_result_valid(body, size)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_SIDEBAR_MODEL:
-        if (header.size < 2 || payload[header.size - 1] || memchr(payload, 0, header.size - 1))
+        if (size < 2 || body[size - 1] || memchr(body, 0, size - 1))
           goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_SIDEBAR_REMOVE:
+        if (!hosted.sidebar || size != sizeof(uint32_t) || !*(uint32_t *)body) goto failed;
         break;
       default:
         continue;
@@ -496,13 +577,20 @@ static int SDLCALL writer_thread(void *data) {
 
 static void send_message(uint16_t type, const void *payload, uint32_t size) {
   if (!hosted.active || !hosted.queue_lock || size > ANVIL_SURFACE_MAX_PAYLOAD) return;
-  HostedMessage *message = malloc(sizeof(*message) + size);
+  bool wrapped = hosted.sidebar && type != ANVIL_SURFACE_MSG_EXIT_INTENT && type != ANVIL_SURFACE_MSG_RESTART;
+  uint32_t prefix = wrapped ? sizeof(AnvilSidebarSurfacePacket) : 0;
+  if (size > ANVIL_SURFACE_MAX_PAYLOAD - prefix) { signal_loss("Sidebar outbound packet overflow", type, size); return; }
+  HostedMessage *message = malloc(sizeof(*message) + size + prefix);
   if (!message) { signal_loss("outbound allocation failed", type, sizeof(*message) + size); return; }
-  message->next = NULL; message->type = type; message->size = size;
-  if (size) memcpy(message->payload, payload, size);
+  message->next = NULL; message->type = wrapped ? ANVIL_SURFACE_MSG_SIDEBAR_SURFACE : type;
+  message->size = size + prefix;
+  if (wrapped) *(AnvilSidebarSurfacePacket *)message->payload = (AnvilSidebarSurfacePacket){view->config.window_id, type};
+  if (size) memcpy(message->payload + prefix, payload, size);
+  size += prefix;
   SDL_LockMutex(hosted.queue_lock);
-  if (type == ANVIL_SURFACE_MSG_FRAME && hosted.tail && hosted.tail->type == type && hosted.tail->size == size) {
-    memcpy(hosted.tail->payload, payload, size);
+  if (type == ANVIL_SURFACE_MSG_FRAME && hosted.tail && hosted.tail->type == message->type && hosted.tail->size == size &&
+      (!wrapped || ((AnvilSidebarSurfacePacket *)hosted.tail->payload)->window_id == view->config.window_id)) {
+    memcpy(hosted.tail->payload, message->payload, size);
     SDL_UnlockMutex(hosted.queue_lock); free(message); return;
   }
   if (hosted.queued + sizeof(*message) + size > HOSTED_QUEUE_LIMIT) {
@@ -526,10 +614,10 @@ void anvil_hosted_surface_test_packet(bool stale) {
   if (!hosted.active || !SDL_getenv("ANVIL_SURFACE_FAULT_PROBE")) return;
   if (stale) {
     AnvilSurfaceFrame frame = {0};
-    frame.configuration = hosted.config.configuration + 1;
+    frame.configuration = view->config.configuration + 1;
     frame.generation = 1;
     frame.kind = ANVIL_SURFACE_FRAME_SHARED_MEMORY;
-    frame.width = hosted.config.pixel_w; frame.height = hosted.config.pixel_h;
+    frame.width = view->config.pixel_w; frame.height = view->config.pixel_h;
     SDL_snprintf(frame.name, sizeof(frame.name), "Local\\AnvilSurfaceMemory-%lu-999999", (unsigned long)GetCurrentProcessId());
     send_message(ANVIL_SURFACE_MSG_FRAME, &frame, sizeof(frame));
   } else {
@@ -578,27 +666,27 @@ bool anvil_hosted_surface_select_project(const char *path) {
 }
 
 bool anvil_hosted_surface_new_window(void) {
-  if (!hosted.active || !hosted.config.window_id) return false;
-  send_message(ANVIL_SURFACE_MSG_NEW_WINDOW, &hosted.config.window_id, sizeof(uint32_t));
+  if (!hosted.active || !view->config.window_id) return false;
+  send_message(ANVIL_SURFACE_MSG_NEW_WINDOW, &view->config.window_id, sizeof(uint32_t));
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
-uint32_t anvil_hosted_surface_window_id(void) { return hosted.config.window_id; }
+uint32_t anvil_hosted_surface_window_id(void) { return view->config.window_id; }
 bool anvil_hosted_surface_open_project_window(const char *path) {
-  if (!hosted.active || !hosted.config.window_id || !path || !*path) return false;
+  if (!hosted.active || !view->config.window_id || !path || !*path) return false;
   size_t size = sizeof(uint32_t) + strlen(path) + 1;
   if (size >= 32768) return false;
   uint8_t *request = malloc(size);
   if (!request) { signal_loss("Open Project request allocation failed", ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW, size); return false; }
-  memcpy(request, &hosted.config.window_id, sizeof(uint32_t));
+  memcpy(request, &view->config.window_id, sizeof(uint32_t));
   memcpy(request + sizeof(uint32_t), path, strlen(path) + 1);
   send_message(ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW, request, (uint32_t)size);
   free(request);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 bool anvil_hosted_surface_open_project_picker(void) {
-  if (!hosted.active || !hosted.config.window_id) return false;
-  send_message(ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER, &hosted.config.window_id, sizeof(uint32_t));
+  if (!hosted.active || !view->config.window_id) return false;
+  send_message(ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER, &view->config.window_id, sizeof(uint32_t));
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -683,8 +771,8 @@ bool anvil_hosted_surface_connect(void) {
             read, (unsigned)header.type, (unsigned)header.size, (unsigned long)GetLastError());
     return false;
   }
-  hosted.config = config;
-  hosted.config_applied = true;
+  view->config = config;
+  view->config_applied = true;
 
   hosted.pipe.timeout_ms = INFINITE;
   hosted.queue_lock = SDL_CreateMutex(); hosted.queue_condition = SDL_CreateCondition();
@@ -707,14 +795,34 @@ bool anvil_hosted_surface_connect(void) {
 }
 
 void anvil_hosted_surface_register_window(SDL_Window *window) {
-  if (!hosted.active || hosted.window || !window) return;
-  hosted.window = window;
-  hosted.window_id = SDL_GetWindowID(window);
+  if (!hosted.active || view->window || !window) return;
+  view->window = window;
+  view->window_id = SDL_GetWindowID(window);
   apply_window_size();
 }
 
 bool anvil_hosted_surface_is_window(SDL_Window *window) {
-  return hosted.active && window && window == hosted.window;
+  if (!hosted.active || !window) return false;
+  for (HostedView *item = views; item; item = item->next)
+    if (item->window == window) { view = item; return true; }
+  return false;
+}
+static void remove_view(HostedView *item) {
+  HostedView **link = &views;
+  while (*link && *link != item) link = &(*link)->next;
+  if (!*link) return;
+  item->window = NULL; item->window_id = 0;
+  release_memory_frame(&item->memory);
+  if (item != &first_view) {
+    *link = item->next;
+    if (view == item) view = &first_view;
+    free(item);
+  } else item->config.window_id = 0;
+}
+void anvil_hosted_surface_unregister_window(SDL_Window *window) {
+  for (HostedView *item = views; item; item = item->next) {
+    if (item->window == window) { remove_view(item); return; }
+  }
 }
 
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height) {
@@ -724,8 +832,8 @@ void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, in
   AnvilSurfaceFrame frame;
   memset(&frame, 0, sizeof(frame));
   frame.kind = ANVIL_SURFACE_FRAME_D3D11;
-  frame.generation = ++hosted.frame_generation;
-  frame.configuration = hosted.config.configuration;
+  frame.generation = ++view->frame_generation;
+  frame.configuration = view->config.configuration;
   frame.width = width;
   frame.height = height;
   frame.input_seq = anvil_latency_probe_consumed_seq();
@@ -745,14 +853,16 @@ static void release_memory_frame(SharedMemoryFrame *memory) {
 }
 
 static bool ensure_memory_frame(size_t needed) {
-  SharedMemoryFrame *memory = &hosted.memory;
+  static uint32_t serial;
+  SharedMemoryFrame *memory = &view->memory;
   if (memory->view && memory->capacity >= needed) return true;
   release_memory_frame(memory);
   /* Grow with slack so a live resize does not replace the mapping each frame. */
   size_t capacity = needed + needed / 4;
   memory->generation++;
+  if (serial == UINT32_MAX) return false;
   snprintf(memory->name, sizeof(memory->name), "Local\\AnvilSurfaceMemory-%lu-%u",
-           (unsigned long)GetCurrentProcessId(), memory->generation);
+           (unsigned long)GetCurrentProcessId(), ++serial);
   char lock_name[ANVIL_SURFACE_NAME_MAX + 8];
   snprintf(lock_name, sizeof(lock_name), "%s%s", memory->name, ANVIL_SURFACE_LOCK_SUFFIX);
   memory->mapping = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
@@ -779,15 +889,15 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   if (SDL_BYTESPERPIXEL(surface->format) != 4) return false;
   int stride = surface->w * 4;
   size_t needed = sizeof(AnvilSurfaceMemoryHeader) + (size_t)stride * (size_t)surface->h;
-  uint32_t old_generation = hosted.memory.generation;
+  uint32_t old_generation = view->memory.generation;
   if (!ensure_memory_frame(needed)) return false;
-  bool full = hosted.memory.generation != old_generation;
+  bool full = view->memory.generation != old_generation;
 
-  DWORD wait = WaitForSingleObject(hosted.memory.mutex, MEMORY_LOCK_TIMEOUT_MS);
+  DWORD wait = WaitForSingleObject(view->memory.mutex, MEMORY_LOCK_TIMEOUT_MS);
   if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) return false;
-  AnvilSurfaceMemoryHeader *header = (AnvilSurfaceMemoryHeader *)hosted.memory.view;
+  AnvilSurfaceMemoryHeader *header = (AnvilSurfaceMemoryHeader *)view->memory.view;
   if (header->width != surface->w || header->height != surface->h) full = true;
-  uint8_t *pixels = hosted.memory.view + sizeof(AnvilSurfaceMemoryHeader);
+  uint8_t *pixels = view->memory.view + sizeof(AnvilSurfaceMemoryHeader);
   const uint8_t *source = surface->pixels;
   if (full || !rects || count <= 0) {
     for (int y = 0; y < surface->h; y++) {
@@ -807,9 +917,9 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   header->width = surface->w;
   header->height = surface->h;
   header->stride = stride;
-  header->generation = ++hosted.frame_generation;
-  header->configuration = hosted.config.configuration;
-  BOOL released = ReleaseMutex(hosted.memory.mutex);
+  header->generation = ++view->frame_generation;
+  header->configuration = view->config.configuration;
+  BOOL released = ReleaseMutex(view->memory.mutex);
   if (SDL_CompareAndSwapAtomicInt(&test_memory_release_failure, 1, 0)) {
     released = FALSE;
     SetLastError(ERROR_NOT_OWNER);
@@ -828,60 +938,60 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   frame.height = surface->h;
   frame.input_seq = anvil_latency_probe_consumed_seq();
   anvil_latency_probe_stage("frame-published");
-  SDL_strlcpy(frame.name, hosted.memory.name, sizeof(frame.name));
+  SDL_strlcpy(frame.name, view->memory.name, sizeof(frame.name));
   send_message(ANVIL_SURFACE_MSG_FRAME, &frame, sizeof(frame));
   return true;
 }
 
 bool anvil_hosted_surface_has_focus(void) {
-  return SDL_GetAtomicInt(&hosted.focused) != 0;
+  return SDL_GetAtomicInt(&view->focused) != 0;
 }
 
 bool anvil_hosted_surface_should_render(void) {
-  return !hosted.active || hosted.config.render_enabled != 0;
+  return !hosted.active || view->config.render_enabled != 0;
 }
 
 float anvil_hosted_surface_display_scale(void) {
-  return hosted.config.display_scale > 0 ? hosted.config.display_scale : 1.0f;
+  return view->config.display_scale > 0 ? view->config.display_scale : 1.0f;
 }
 
 float anvil_hosted_surface_refresh_rate(void) {
-  return hosted.config.refresh_hz;
+  return view->config.refresh_hz;
 }
 
 AnvilSurfaceWindowMode anvil_hosted_surface_window_mode(void) {
-  return (AnvilSurfaceWindowMode)hosted.config.window_mode;
+  return (AnvilSurfaceWindowMode)view->config.window_mode;
 }
 
 void anvil_hosted_surface_window_bounds(int *x, int *y, int *w, int *h) {
-  if (x) *x = hosted.config.window_x;
-  if (y) *y = hosted.config.window_y;
-  if (w) *w = hosted.config.window_w;
-  if (h) *h = hosted.config.window_h;
+  if (x) *x = view->config.window_x;
+  if (y) *y = view->config.window_y;
+  if (w) *w = view->config.window_w;
+  if (h) *h = view->config.window_h;
 }
 
 void anvil_hosted_surface_set_cursor(AnvilSurfaceCursor cursor) {
-  if ((int)cursor == hosted.last_cursor) return;
-  hosted.last_cursor = (int)cursor;
+  if ((int)cursor == view->last_cursor) return;
+  view->last_cursor = (int)cursor;
   send_int(ANVIL_SURFACE_MSG_CURSOR, (int)cursor);
 }
 
 void anvil_hosted_surface_set_text_input(bool active) {
-  hosted.text_active = active;
+  view->text_active = active;
   AnvilSurfaceTextInput message = { .active = active ? 1 : 0, .cursor = -1 };
-  message.configuration = hosted.config.configuration;
+  message.configuration = view->config.configuration;
   send_message(ANVIL_SURFACE_MSG_TEXT_INPUT, &message, sizeof(message));
 }
 
 void anvil_hosted_surface_set_text_input_area(const SDL_Rect *rect, int cursor) {
   if (!rect) return;
   AnvilSurfaceTextInput message = { -1, rect->x, rect->y, rect->w, rect->h, cursor };
-  message.configuration = hosted.config.configuration;
+  message.configuration = view->config.configuration;
   send_message(ANVIL_SURFACE_MSG_TEXT_INPUT, &message, sizeof(message));
 }
 
 void anvil_hosted_surface_clear_ime(void) {
-  send_message(ANVIL_SURFACE_MSG_CLEAR_IME, &hosted.config.configuration, sizeof(uint64_t));
+  send_message(ANVIL_SURFACE_MSG_CLEAR_IME, &view->config.configuration, sizeof(uint64_t));
 }
 
 void anvil_hosted_surface_set_window_mode(AnvilSurfaceWindowMode mode) {
@@ -898,7 +1008,7 @@ void anvil_hosted_surface_set_title(const char *title) {
 void anvil_hosted_surface_set_hit_test(const AnvilSurfaceHitTest *hit_test) {
   if (!hit_test) return;
   AnvilSurfaceHitTest message = *hit_test;
-  message.configuration = hosted.config.configuration;
+  message.configuration = view->config.configuration;
   send_message(ANVIL_SURFACE_MSG_HIT_TEST, &message, sizeof(message));
 }
 
@@ -925,12 +1035,17 @@ bool anvil_hosted_surface_set_opacity(float opacity) {
   send_message(ANVIL_SURFACE_MSG_OPACITY, &opacity, sizeof(opacity)); return true;
 }
 bool anvil_hosted_surface_frame_metrics(int *button, int *title, int *border) {
-  if (!hosted.config_applied) return false;
-  *button = hosted.config.button_width; *title = hosted.config.title_height; *border = hosted.config.resize_border;
+  if (!view->config_applied) return false;
+  *button = view->config.button_width; *title = view->config.title_height; *border = view->config.resize_border;
   return true;
 }
 
 #else
+void anvil_hosted_surface_unregister_window(SDL_Window *window) { (void)window; }
+size_t anvil_hosted_surface_sidebar_views(uint32_t *ids, bool *removed, size_t capacity) {
+  (void)ids; (void)removed; (void)capacity; return 0;
+}
+bool anvil_hosted_surface_sidebar_activate(uint32_t id) { (void)id; return false; }
 bool anvil_hosted_surface_sidebar(void) { return false; }
 
 bool anvil_hosted_surface_parse_args(int *argc, char **argv) { (void)argc; (void)argv; return false; }

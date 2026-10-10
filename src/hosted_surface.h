@@ -38,6 +38,9 @@ bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_
 
 /* The first window created in hosted mode becomes the hosted surface. */
 void anvil_hosted_surface_register_window(SDL_Window *window);
+void anvil_hosted_surface_unregister_window(SDL_Window *window);
+size_t anvil_hosted_surface_sidebar_views(uint32_t *ids, bool *removed, size_t capacity);
+bool anvil_hosted_surface_sidebar_activate(uint32_t id);
 bool anvil_hosted_surface_is_window(SDL_Window *window);
 
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height);

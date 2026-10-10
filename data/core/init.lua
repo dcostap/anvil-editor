@@ -2482,6 +2482,7 @@ function core.on_event(type, ...)
     end
     if page.offset ~= request.offset then return end
     request.revision = page.revision
+    request.windows = page.windows
     for _, item in ipairs(page.items) do request.items[#request.items + 1] = item end
     if page.next < page.total then
       request.offset = page.next
@@ -2498,6 +2499,7 @@ function core.on_event(type, ...)
         end
       end
       projects.status_limited, projects.revision = page.status_limited, page.revision
+      projects.windows = request.windows
       core.project_sidebar, core.project_sidebar_request = projects, nil
     end
   elseif type == "dialogfinished" then

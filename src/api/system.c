@@ -239,6 +239,10 @@ top:
     return 0;
   }
   last_event_window_id = event_window_id(&e);
+  if (anvil_hosted_surface_sidebar()) {
+    if (e.type >= SDL_EVENT_USER) last_event_window_id = e.user.windowID;
+    anvil_hosted_surface_is_window(e.type >= SDL_EVENT_USER ? SDL_GetWindowFromID(e.user.windowID) : SDL_GetWindowFromEvent(&e));
+  }
 
   switch (e.type) {
     case SDL_EVENT_QUIT:
@@ -1776,6 +1780,22 @@ static int f_get_anvil_window_id(lua_State *L) {
   lua_pushinteger(L, anvil_hosted_surface_window_id());
   return 1;
 }
+static int f_sidebar_surfaces(lua_State *L) {
+  uint32_t ids[64]; bool removed[64];
+  size_t count = anvil_hosted_surface_sidebar_views(ids, removed, 64);
+  lua_createtable(L, count, 0);
+  for (size_t i = 0; i < count; i++) {
+    lua_createtable(L, 0, 2);
+    lua_pushinteger(L, ids[i]); lua_setfield(L, -2, "id");
+    lua_pushboolean(L, removed[i]); lua_setfield(L, -2, "removed");
+    lua_rawseti(L, -2, i + 1);
+  }
+  return 1;
+}
+static int f_activate_sidebar_surface(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_sidebar_activate((uint32_t)luaL_checkinteger(L, 1)));
+  return 1;
+}
 static int f_open_project_window(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
   lua_pushboolean(L, anvil_hosted_surface_open_project_window(path));
@@ -2441,6 +2461,8 @@ static const luaL_Reg lib[] = {
   { "select_project",        f_select_project        },
   { "new_anvil_window",      f_new_anvil_window      },
   { "get_anvil_window_id",   f_get_anvil_window_id   },
+  { "sidebar_surfaces", f_sidebar_surfaces },
+  { "activate_sidebar_surface", f_activate_sidebar_surface },
   { "open_project_window",  f_open_project_window  },
   { "open_project_picker",  f_open_project_picker  },
   { "unload_project",        f_unload_project        },

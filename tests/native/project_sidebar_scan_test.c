@@ -59,7 +59,7 @@ int main(void) {
   AnvilSidebarModel known = {0};
   const char *known_path = dir;
   CHECK(anvil_sidebar_merge_recents(&known, &known_path, 1));
-  anvil_sidebar_set_runtime(&known, known.projects[0], 1, 1, ANVIL_SIDEBAR_READY, true, false,
+  anvil_sidebar_set_runtime(&known, known.projects[0], 1, 1, 1, ANVIL_SIDEBAR_READY, true, false,
                             false);
   AnvilSidebarScan *job = anvil_sidebar_scan_start(dir, source, &known, resolve, false);
   CHECK(job);

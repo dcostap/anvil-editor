@@ -258,6 +258,7 @@ void renwin_free(RenWindow *ren) {
   anvil_d3d11_forget_surface(ren->cache.rensurface.surface);
   SDL_DestroySurface(ren->cache.rensurface.surface);
 #endif
+  anvil_hosted_surface_unregister_window(ren->cache.window);
   SDL_DestroyWindow(ren->cache.window);
   ren->cache.window = NULL;
   rencache_uninit(&ren->cache);

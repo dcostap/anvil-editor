@@ -13,6 +13,33 @@ import run_surface_latency_probe as probe
 
 
 class LatencyAcceptance(unittest.TestCase):
+    def test_saved_reference_uses_its_matching_runtime_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exe = root / "app/bin/anvil.exe"
+            exe.parent.mkdir(parents=True)
+            exe.write_bytes(b"candidate")
+            reference = root / "reference.exe"
+            reference.write_bytes(b"reference")
+            data = root / "reference-data"
+            (data / "core").mkdir(parents=True)
+            (data / "core/sidebar_app.lua").write_text("reference frontend")
+
+            def launch(config_path, timeout):
+                self.assertEqual(exe.read_bytes(), b"reference")
+                self.assertEqual((exe.parent.parent / "share/anvil/core/sidebar_app.lua").read_text(), "reference frontend")
+                config = json.loads(config_path.read_text())
+                Path(config["environment"]["ANVIL_INPUT_LATENCY_FILE"]).write_text(
+                    "done=1\nrequested=120\ncompleted=120\nsamples_ms=" + ",".join(["7"] * 120))
+                return {"exit_code": 0, "timed_out": False}
+
+            with patch.object(probe, "copy_app_tree", return_value=exe), \
+                 patch.object(probe, "invoke_hidden", side_effect=launch), \
+                 patch.object(probe, "read_console_state", return_value={"locked": False, "display_state": "on"}), \
+                 patch.object(sys, "argv", ["probe", "--no-build", "--reference-exe", str(reference),
+                     "--reference-data", str(data), "--mode", "shell", "--renderer", "d3d11", "--runs", "1"]):
+                self.assertEqual(probe.main(), 0)
+
     def test_partial_successful_process_fails_the_case(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -48,9 +48,11 @@ static int f_renwin_create(lua_State *L) {
 }
 
 static int f_renwin_gc(lua_State *L) {
-  RenWindow *window_renderer = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
-  if (window_renderer != persistant_window)
-    ren_destroy(window_renderer);
+  RenWindow **handle = luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  if (*handle && *handle != persistant_window) {
+    ren_destroy(*handle);
+    *handle = NULL;
+  }
 
   return 0;
 }
@@ -167,6 +169,7 @@ static int f_request_frame_capture(lua_State *L) {
 static const luaL_Reg renwindow_lib[] = {
   { "create",           f_renwin_create     },
   { "__gc",             f_renwin_gc         },
+  { "close",            f_renwin_gc         },
   { "get_size",         f_renwin_get_size   },
   { "get_refresh_rate", f_get_refresh_rate  },
   { "get_color",        f_get_color         },

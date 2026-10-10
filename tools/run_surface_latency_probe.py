@@ -131,8 +131,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
+    parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
-        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -153,6 +154,8 @@ def main() -> int:
     parser.add_argument("--keep", action="store_true", help="keep the temporary work directory")
     parser.add_argument("--json", type=Path, help="write the full results to this file")
     args = parser.parse_args()
+    if args.reference_data and (not args.reference_exe or not args.reference_data.is_dir()):
+        parser.error("--reference-data requires --reference-exe and a saved runtime data directory")
 
     if not args.no_build:
         build_anvil()
@@ -164,6 +167,8 @@ def main() -> int:
         exe = copy_app_tree(work / "app")
         if args.reference_exe:
             shutil.copy2(args.reference_exe, exe)
+        if args.reference_data:
+            shutil.copytree(args.reference_data, exe.parent.parent / "share/anvil", dirs_exist_ok=True)
         if args.project_case:
             shutil.copy2(ROOT / "tests/fixtures/hosted_project_probe.lua",
                          work / "app/share/anvil/plugins/hosted_project_probe.lua")

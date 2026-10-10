@@ -158,6 +158,7 @@ struct ShellWindow {
   bool sidebar;
   Uint32 id;
   ShellProject *selected, *empty;
+  ShellProject *sidebar_client; /* Surface state only; the shared record owns the transport. */
   bool closing;
   bool removing;
   bool picker_pending;
@@ -274,7 +275,7 @@ static AnvilSidebarProject *sidebar_project(const char *path);
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value);
 static void start_sidebar(void);
 static void schedule_sidebar_restart(void);
-static ShellWindow *create_window(bool sidebar);
+static ShellWindow *create_window(void);
 static bool destroy_window(ShellWindow *window);
 static bool open_project_window(ShellWindow *window, const char *path);
 static void show_project_picker(ShellWindow *window);
@@ -401,6 +402,10 @@ static void arm_close_timer(ShellProject *project) {
   project->close_timer = SDL_AddTimer(SHELL_CLOSE_TIMEOUT_MS, close_timeout, (void *)tag);
 }
 static void fail_connection(ShellProject *project, const char *cause) {
+  if (project->sidebar && project != shell.sidebar_process) {
+    if (shell.sidebar_process) fail_connection(shell.sidebar_process, cause);
+    return;
+  }
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
   SDL_Log("Shell connection failed: %s; Project=%u connection=%u", cause, project->id,
@@ -462,12 +467,21 @@ static void set_state(ShellProject *project, ShellState state) {
   if (project->state == state)
     return;
   project->state = state;
+  if (project == shell.sidebar_process) {
+    for (ShellWindow *item = shell.windows; item; item = item->next) {
+      item->ui_dirty = true;
+      if (item->sidebar_client && state != SHELL_READY) {
+        item->sidebar_client->state = state;
+        set_surface_busy(item, &item->sidebar_presentation, false);
+      }
+    }
+  }
   if (project->sidebar)
     window->ui_dirty = true;
   if (project->sidebar && (state == SHELL_STARTING || state == SHELL_FAILED))
     set_surface_busy(window, &window->sidebar_presentation, false);
   if (state != SHELL_STARTING && project->startup_timer) {
-    KillTimer(window->hwnd, project->startup_timer);
+    KillTimer(project->sidebar ? shell.service_hwnd : window->hwnd, project->startup_timer);
     project->startup_timer = 0;
   }
   if (project == window->selected) {
@@ -476,8 +490,10 @@ static void set_state(ShellProject *project, ShellState state) {
       set_surface_busy(window, &window->project_presentation, false);
   }
   static const char *names[] = {"Starting", "Ready", "Closing", "Failed", "Dormant"};
-  SDL_Log("Shell state: %s Project=%u connection=%u", names[state], project->id,
-          project->connection);
+  if (project->sidebar && project != shell.sidebar_process)
+    SDL_Log("Shell Sidebar surface state: Window=%u %s connection=%u", window->id, names[state], project->connection);
+  else SDL_Log("Shell state: %s Project=%u connection=%u", names[state], project->id,
+               project->connection);
 }
 
 static void controls_geometry(ShellWindow *window) {
@@ -659,6 +675,20 @@ static bool push_shell_event(ShellProject *project, int code, void *data, int va
 
 static bool valid_project_message(uint16_t type, const void *payload, uint32_t size) {
   switch (type) {
+  case ANVIL_SURFACE_MSG_SIDEBAR_SURFACE: {
+    if (size < sizeof(AnvilSidebarSurfacePacket)) return false;
+    const AnvilSidebarSurfacePacket *packet = payload;
+    if (!packet->window_id || packet->type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) return false;
+    switch (packet->type) {
+    case ANVIL_SURFACE_MSG_FRAME: case ANVIL_SURFACE_MSG_CURSOR: case ANVIL_SURFACE_MSG_HIT_TEST:
+    case ANVIL_SURFACE_MSG_SELECT_PROJECT: case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
+    case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
+    case ANVIL_SURFACE_MSG_TEXT_INPUT: case ANVIL_SURFACE_MSG_TITLE:
+    case ANVIL_SURFACE_MSG_VISIBLE: case ANVIL_SURFACE_MSG_SET_BOUNDS: case ANVIL_SURFACE_MSG_BORDERED:
+      return valid_project_message(packet->type, packet + 1, size - sizeof(*packet));
+    default: return false;
+    }
+  }
   case ANVIL_SURFACE_MSG_FRAME: {
     if (size != sizeof(AnvilSurfaceFrame))
       return false;
@@ -773,7 +803,8 @@ static int reader_loop(void *data) {
       ((AnvilSurfaceHello *)payload)->pid == project->process.dwProcessId) {
     push_shell_event(project, SHELL_EVENT_CONNECTED, NULL, 0);
     while (anvil_ipc_pipe_read(&project->pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
-      if (!valid_project_message(header.type, payload, header.size)) {
+      if (!valid_project_message(header.type, payload, header.size) ||
+          (header.type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE && !project->sidebar)) {
         report_transport_failure(project, FAILURE_PACKET);
         break;
       }
@@ -883,9 +914,17 @@ static SDL_Thread *start_transport_thread(SDL_ThreadFunction function, const cha
  * stall the shell window. Queue failure ends the connection, not just one key. */
 static void shell_send(ShellProject *project, uint16_t type, const void *payload, uint32_t size,
                        const void *tail, uint32_t tail_size) {
+  uint32_t window_id = project->window_id;
+  uint32_t prefix = project->sidebar && project != shell.sidebar_process ? sizeof(AnvilSidebarSurfacePacket) : 0;
+  uint16_t inner_type = type;
+  if (prefix) {
+    project = shell.sidebar_process;
+    if (!project) return;
+    type = ANVIL_SURFACE_MSG_SIDEBAR_SURFACE;
+  }
   if (!project->connected)
     return;
-  uint32_t total = size + tail_size;
+  uint32_t total = size + tail_size + prefix;
   if (total > ANVIL_SURFACE_MAX_PAYLOAD) {
     fail_connection(project, "outbound packet too large");
     return;
@@ -899,8 +938,9 @@ static void shell_send(ShellProject *project, uint16_t type, const void *payload
   message->owner = NULL;
   message->type = type;
   message->size = total;
-  if (size) memcpy(message->payload, payload, size);
-  if (tail_size) memcpy(message->payload + size, tail, tail_size);
+  if (prefix) *(AnvilSidebarSurfacePacket *)message->payload = (AnvilSidebarSurfacePacket){window_id, inner_type};
+  if (size) memcpy(message->payload + prefix, payload, size);
+  if (tail_size) memcpy(message->payload + prefix + size, tail, tail_size);
 
   SDL_LockMutex(project->lock);
   ShellMessage *previous = project->queue_tail;
@@ -980,8 +1020,8 @@ static void client_pixel_size(ShellWindow *window, int *width, int *height) {
 static void send_configure(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
-  if (window->sidebar && project == window->selected && shell.sidebar_process)
-    send_configure(shell.sidebar_process);
+  if (window->sidebar_client && project == window->selected && shell.sidebar_process)
+    send_configure(window->sidebar_client);
   if (!project->connected)
     return;
   AnvilSurfaceConfigure config = project->last_config;
@@ -1025,7 +1065,7 @@ static void send_configure(ShellProject *project) {
   config.controls_w = window->controls.right - window->controls.left;
   config.controls_h = window->controls.bottom;
   if (project->sidebar && config.render_enabled != project->last_config.render_enabled)
-    SDL_Log("Shell Sidebar rendering enabled=%u", config.render_enabled);
+    SDL_Log("Shell Sidebar rendering enabled=%u Window=%u", config.render_enabled, window->id);
   if (project->sidebar)
     config.controls_x = config.controls_y = config.controls_w = config.controls_h = 0;
   if (memcmp(&config, &project->last_config, sizeof(config)) == 0 && project->last_config.pixel_w)
@@ -1714,7 +1754,7 @@ static void resize_step(ShellWindow *window) {
   resize_buffers(window);
   send_configure(project);
   if (window->sidebar && shell.sidebar_process)
-    send_configure(shell.sidebar_process);
+    send_configure(window->sidebar_client);
   int width = window->buffer_w - window->sidebar_w, height = window->buffer_h;
   bool stale = !window->project_presentation.have_surface ||
                window->project_presentation.surface_w != width ||
@@ -1746,14 +1786,18 @@ static void handle_frame(ShellWindow *window) {
     anvil_latency_probe_start(window->window, finish_latency_probe);
 }
 static void handle_sidebar_frame(ShellWindow *window) {
-  ShellProject *project = shell.sidebar_process;
+  ShellProject *project = window->sidebar_client;
   if (!project)
     return;
   AnvilSurfaceFrame frame;
   if (load_pending_frame(project, &window->sidebar_presentation, &frame)) {
     if (project->state == SHELL_STARTING) {
       set_state(project, SHELL_READY);
-      if (shell.sidebar_restart_attempts) {
+      SDL_Log("Shell Sidebar surface Ready: Window=%u connection=%u size=%dx%d", window->id,
+              project->connection, frame.width, frame.height);
+      if (shell.sidebar_process && shell.sidebar_process->state == SHELL_STARTING)
+        set_state(shell.sidebar_process, SHELL_READY);
+      if (shell.sidebar_restart_attempts && !shell.sidebar_healthy_timer) {
         shell.sidebar_healthy_since = SDL_GetTicks();
         shell.sidebar_healthy_connection = project->connection;
         shell.sidebar_healthy_timer = SetTimer(shell.service_hwnd, 0x8004, SHELL_SIDEBAR_HEALTHY_MS, NULL);
@@ -2235,6 +2279,19 @@ static void close_decision(ShellProject *project, int decision) {
 }
 
 static void handle_message(ShellProject *project, ShellMessage *message) {
+  if (message->type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
+    AnvilSidebarSurfacePacket packet = *(AnvilSidebarSurfacePacket *)message->payload;
+    ShellWindow *target = window_for_id(packet.window_id);
+    if (!target || target->closing || !target->sidebar_client || project != shell.sidebar_process) {
+      SDL_Log("Shell ignored stale Sidebar surface request: Window=%u type=%u", packet.window_id, packet.type);
+      return;
+    }
+    message->type = packet.type;
+    message->size -= sizeof(packet);
+    memmove(message->payload, message->payload + sizeof(packet), message->size);
+    handle_message(target->sidebar_client, message);
+    return;
+  }
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
   if (project->state == SHELL_FAILED)
@@ -2254,6 +2311,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       message->type != ANVIL_SURFACE_MSG_SIDEBAR_REFRESH &&
       message->type != ANVIL_SURFACE_MSG_SELECT_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
+      message->type != ANVIL_SURFACE_MSG_FRAME &&
       message->type != ANVIL_SURFACE_MSG_EXIT_INTENT && message->type != ANVIL_SURFACE_MSG_CURSOR &&
       message->type != ANVIL_SURFACE_MSG_HIT_TEST)
     return;
@@ -2274,9 +2332,14 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     }
   }
   switch (message->type) {
+  case ANVIL_SURFACE_MSG_FRAME:
+    memcpy(&project->latest_frame, payload, sizeof(project->latest_frame));
+    project->frame_pending = true;
+    handle_sidebar_frame(window);
+    break;
   case ANVIL_SURFACE_MSG_NEW_WINDOW:
     if (*(const uint32_t *)payload == window->id && !window->closing)
-      if (!create_window(false)) window_notice(window, "Cannot create a Window.");
+      if (!create_window()) window_notice(window, "Cannot create a Window.");
     break;
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
     if (*(const uint32_t *)payload == window->id && !window->closing)
@@ -2632,8 +2695,8 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
       shell.sidebar_process->connected) {
     leave_surface(window);
     AnvilSurfaceInput input = {.event = *event,
-                               .configuration = shell.sidebar_process->last_config.configuration};
-    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+                               .configuration = window->sidebar_client->last_config.configuration};
+    shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
     return;
   }
   int control = control_at(window, event->motion.x, event->motion.y);
@@ -2676,8 +2739,8 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
       shell.sidebar_process->connected) {
     leave_surface(window);
     AnvilSurfaceInput input = {.event = *event,
-                               .configuration = shell.sidebar_process->last_config.configuration};
-    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+                               .configuration = window->sidebar_client->last_config.configuration};
+    shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
     return;
   }
   if (!window->surface_buttons && (control >= 0 || window->pressed_control >= 0)) {
@@ -2769,6 +2832,16 @@ static void handle_connected(ShellProject *project) {
   if (project->sidebar) {
     project->connected = true;
     send_configure(project);
+    for (ShellWindow *item = shell.windows; item; item = item->next) {
+      ShellProject *client = item->sidebar_client;
+      if (!client || item->closing) continue;
+      client->connected = true;
+      client->connection = project->connection;
+      client->process.dwProcessId = project->process.dwProcessId;
+      client->last_config = (AnvilSurfaceConfigure){0};
+      client->state = SHELL_STARTING;
+      send_configure(client);
+    }
     SDL_Log("Shell Sidebar connected: pid=%lu connection=%u",
             (unsigned long)project->process.dwProcessId, project->connection);
     return;
@@ -2822,11 +2895,17 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     case SHELL_EVENT_LAUNCHED:
       finish_launch(project);
       break;
-    case SHELL_EVENT_START_TIMEOUT:
-      if (project == window->selected && project->state == SHELL_STARTING &&
-          IsWindowVisible(window->hwnd) && !IsIconic(window->hwnd))
+    case SHELL_EVENT_START_TIMEOUT: {
+      bool visible = IsWindowVisible(window->hwnd) && !IsIconic(window->hwnd);
+      if (project->sidebar) {
+        visible = false;
+        for (ShellWindow *item = shell.windows; item; item = item->next)
+          visible |= !item->closing && IsWindowVisible(item->hwnd) && !IsIconic(item->hwnd);
+      }
+      if ((project->sidebar || project == window->selected) && project->state == SHELL_STARTING && visible)
         fail_connection(project, "startup deadline expired before the first frame");
       break;
+    }
     case SHELL_EVENT_CONNECTED:
       handle_connected(project);
       break;
@@ -3062,8 +3141,8 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         event->wheel.mouse_x < window->sidebar_w && shell.sidebar_process &&
         shell.sidebar_process->connected) {
       AnvilSurfaceInput input = {.event = *event,
-                                 .configuration = shell.sidebar_process->last_config.configuration};
-      shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+                                 .configuration = window->sidebar_client->last_config.configuration};
+      shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
     } else if (surface_contains(window, event->wheel.mouse_x, event->wheel.mouse_y) &&
         control_at(window, event->wheel.mouse_x, event->wheel.mouse_y) < 0 &&
         (project->state == SHELL_READY || project->state == SHELL_CLOSING)) {
@@ -3115,6 +3194,10 @@ static void push_window_event(ShellWindow *window, SDL_EventType type, float x, 
 }
 
 static LRESULT CALLBACK shell_service_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+  if (msg == WM_TIMER && shell.sidebar_process && shell.sidebar_process->startup_timer == wparam) {
+    push_shell_event(shell.sidebar_process, SHELL_EVENT_START_TIMEOUT, NULL, 0);
+    return 0;
+  }
   if (msg == WM_APP + 0x51) { check_picker_failures(); return 0; }
   if (msg == SHELL_PICKER_MESSAGE) {
     probe_project_picker(wparam, lparam);
@@ -3242,7 +3325,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       break;
     case WM_SYSCOMMAND:
       if ((wparam & 0xfff0) == SHELL_MENU_NEW_WINDOW) {
-        if (!window->closing && !create_window(false)) window_notice(window, "Cannot create a Window.");
+        if (!window->closing && !create_window()) window_notice(window, "Cannot create a Window.");
         return 0;
       }
       if ((wparam & 0xfff0) == SHELL_MENU_OPEN_PROJECT) {
@@ -3790,7 +3873,7 @@ static bool start_project(ShellProject *project, int argc, char **argv) {
       !launch_child(project, argc, argv, pipe_name))
     return false;
   project->startup_timer =
-      SetTimer(window->hwnd, 0x10000u + project->connection, SHELL_CONNECT_TIMEOUT_MS, NULL);
+      SetTimer(project->sidebar ? shell.service_hwnd : window->hwnd, 0x10000u + project->connection, SHELL_CONNECT_TIMEOUT_MS, NULL);
   if (!project->startup_timer) {
     fail_connection(project, "Project launch timer setup failed");
     return false;
@@ -3982,7 +4065,7 @@ static void finish_resolutions(void) {
         continue;
       }
       if (!project && job->new_window) {
-        window = create_window(false);
+        window = create_window();
         if (!window) {
           ShellWindow *requester = window_for_id(job->window_id);
           if (requester) window_notice(requester, "Cannot create the Project's Window.");
@@ -4147,6 +4230,13 @@ static AnvilSidebarProject *sidebar_project(const char *path) {
   return row;
 }
 static void sync_sidebar_model(void) {
+  AnvilSidebarWindow windows[ANVIL_SIDEBAR_WINDOW_LIMIT];
+  size_t count = 0;
+  for (ShellWindow *window = shell.windows; window; window = window->next) {
+    if (window->removing) continue;
+    windows[count++] = (AnvilSidebarWindow){window->id, window->selected ? window->selected->id : 0};
+  }
+  anvil_sidebar_set_windows(&shell.sidebar, windows, count);
   for (ShellProject *project = shell.projects; project; project = project->next) {
     if (!project->project_path)
       continue;
@@ -4165,8 +4255,8 @@ static void sync_sidebar_model(void) {
     if (project->failed_close && !live && !project->unloading)
       state = ANVIL_SIDEBAR_DORMANT;
     anvil_sidebar_set_runtime(&shell.sidebar, row, project->id,
-                              live ? project->process.dwProcessId : 0, state,
-                              project->window_id == shell.sidebar_window_id &&
+                              live ? project->process.dwProcessId : 0,
+                              state == ANVIL_SIDEBAR_DORMANT ? 0 : project->window_id, state,
                               window_for_id(project->window_id) && project == window_for_id(project->window_id)->selected &&
                               state != ANVIL_SIDEBAR_DORMANT, deferred,
                               live && (project->close_waiting || project->close_prompt));
@@ -4174,7 +4264,7 @@ static void sync_sidebar_model(void) {
   for (DormantProject *project = shell.dormants; project; project = project->next) {
     AnvilSidebarProject *row = anvil_sidebar_find(&shell.sidebar, project->path);
     if (row)
-      anvil_sidebar_set_runtime(&shell.sidebar, row, project->id, 0, ANVIL_SIDEBAR_DORMANT, false,
+      anvil_sidebar_set_runtime(&shell.sidebar, row, project->id, 0, 0, ANVIL_SIDEBAR_DORMANT, false,
                                 false, false);
   }
 }
@@ -4209,8 +4299,18 @@ static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t siz
   if (!shell.sidebar_process)
     start_sidebar();
 }
-static void schedule_sidebar_restart(void) {
+static ShellWindow *sidebar_service_window(void) {
   ShellWindow *window = window_for_id(shell.sidebar_window_id);
+  if (!window || window->closing) {
+    window = shell.windows;
+    while (window && window->closing) window = window->next;
+    shell.sidebar_window_id = window ? window->id : 0;
+    if (shell.sidebar_process) shell.sidebar_process->window_id = shell.sidebar_window_id;
+  }
+  return window;
+}
+static void schedule_sidebar_restart(void) {
+  ShellWindow *window = sidebar_service_window();
   ShellProject *project = shell.sidebar_process;
   if (!window || window->closing || shell.shutting_down || shell.sidebar_restart_timer || !project || project->state != SHELL_FAILED ||
       (project->launch && !project->launch->taken))
@@ -4237,7 +4337,7 @@ static void schedule_sidebar_restart(void) {
   SDL_Log("Shell Sidebar automatic restart scheduled: attempt=%u", shell.sidebar_restart_attempts + 1);
 }
 static void start_sidebar(void) {
-  ShellWindow *window = window_for_id(shell.sidebar_window_id);
+  ShellWindow *window = sidebar_service_window();
   if (shell.sidebar_healthy_timer) KillTimer(shell.service_hwnd, shell.sidebar_healthy_timer);
   shell.sidebar_healthy_timer = 0;
   if (!window || window->closing || shell.shutting_down || !shell.sidebar_userdir)
@@ -4250,7 +4350,7 @@ static void start_sidebar(void) {
     }
     old->connected = false;
     if (old->startup_timer)
-      KillTimer(window->hwnd, old->startup_timer);
+      KillTimer(shell.service_hwnd, old->startup_timer);
     old->startup_timer = 0;
     anvil_ipc_pipe_cancel(&old->pipe);
     SDL_LockMutex(old->lock);
@@ -4262,12 +4362,18 @@ static void start_sidebar(void) {
     if (!shell.retire_timer)
       shell.retire_timer = SetTimer(shell.service_hwnd, 0x8001, 100, NULL);
   }
-  SAFE_RELEASE(window->sidebar_presentation.shared_mutex);
-  SAFE_RELEASE(window->sidebar_presentation.shared);
-  SAFE_RELEASE(window->sidebar_presentation.surface);
-  close_memory_frame(&window->sidebar_presentation);
-  window->sidebar_presentation = (ShellPresentation){0};
-  set_frame_busy(window, window->project_presentation.busy);
+  for (ShellWindow *item = shell.windows; item; item = item->next) {
+    SAFE_RELEASE(item->sidebar_presentation.shared_mutex);
+    SAFE_RELEASE(item->sidebar_presentation.shared);
+    SAFE_RELEASE(item->sidebar_presentation.surface);
+    close_memory_frame(&item->sidebar_presentation);
+    item->sidebar_presentation = (ShellPresentation){0};
+    set_frame_busy(item, item->project_presentation.busy);
+    if (item->sidebar_client) {
+      item->sidebar_client->connected = false;
+      item->sidebar_client->state = SHELL_STARTING;
+    }
+  }
   ShellProject *project = allocate_project(window);
   shell.sidebar_process = project;
   if (!project) {
@@ -4282,7 +4388,9 @@ static void start_sidebar(void) {
   }
 }
 static void service_sidebar(void) {
-  ShellWindow *window = window_for_id(shell.sidebar_window_id);
+  bool visible = false;
+  for (ShellWindow *item = shell.windows; item; item = item->next)
+    visible |= !item->closing && IsWindowVisible(item->hwnd) && !IsIconic(item->hwnd);
   if (shell.sidebar_scan && anvil_sidebar_scan_done(shell.sidebar_scan)) {
     bool limited = false;
     const AnvilSidebarModel *result = anvil_sidebar_scan_result(shell.sidebar_scan, &limited);
@@ -4334,9 +4442,7 @@ static void service_sidebar(void) {
     sync_sidebar_model();
   }
   const char *disabled = SDL_getenv("ANVIL_SIDEBAR_SCAN_DISABLED");
-  if (window && !window->closing && !shell.shutting_down && !shell.sidebar_scan && shell.sidebar_userdir && shell.sidebar_scan_requested &&
-      IsWindowVisible(window->hwnd) && !IsIconic(window->hwnd) &&
-      (!shell.sidebar_process || shell.sidebar_process->last_config.render_enabled) &&
+  if (visible && !shell.shutting_down && !shell.sidebar_scan && shell.sidebar_userdir && shell.sidebar_scan_requested &&
       !(disabled && !strcmp(disabled, "1"))) {
     sync_sidebar_model();
     const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE"),
@@ -4365,7 +4471,9 @@ static void notify_sidebar_changes(void) {
   sync_sidebar_model();
   if (shell.sidebar_process && shell.sidebar_process->connected &&
       shell.sidebar_notified_revision != shell.sidebar.revision) {
-    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_SIDEBAR_CHANGED, NULL, 0, NULL, 0);
+    for (ShellWindow *window = shell.windows; window; window = window->next)
+      if (window->sidebar_client && !window->closing)
+        shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_SIDEBAR_CHANGED, NULL, 0, NULL, 0);
     shell.sidebar_notified_revision = shell.sidebar.revision;
   }
 }
@@ -4400,7 +4508,7 @@ static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value
   }
 }
 
-static ShellWindow *create_window(bool sidebar) {
+static ShellWindow *create_window(void) {
   unsigned count = 0;
   for (ShellWindow *item = shell.windows; item; item = item->next) count++;
   if (count >= 64 || shell.next_window == UINT32_MAX || shell.shutting_down) {
@@ -4410,11 +4518,15 @@ static ShellWindow *create_window(bool sidebar) {
   ShellWindow *window = calloc(1, sizeof(*window));
   if (!window) return NULL;
   window->id = ++shell.next_window;
-  window->sidebar = sidebar;
-  if (sidebar) shell.sidebar_window_id = window->id;
+  window->sidebar = true;
+  if (!shell.sidebar_window_id) shell.sidebar_window_id = window->id;
   window->empty = allocate_project(window);
   if (!window->empty) { free(window); return NULL; }
   window->empty->state = SHELL_DORMANT;
+  window->sidebar_client = allocate_project(window);
+  if (!window->sidebar_client) { release_project(window->empty); free(window); return NULL; }
+  window->sidebar_client->sidebar = true;
+  window->sidebar_client->state = SHELL_STARTING;
   window->selected = window->empty;
   window->hovered_control = window->pressed_control = -1;
   window->next = shell.windows;
@@ -4437,6 +4549,12 @@ static ShellWindow *create_window(bool sidebar) {
   composite_and_present(window);
   SDL_ShowWindow(window->window);
   window->shown = true;
+  if (shell.sidebar_process && shell.sidebar_process->connected) {
+    window->sidebar_client->connected = true;
+    window->sidebar_client->connection = shell.sidebar_process->connection;
+    window->sidebar_client->process.dwProcessId = shell.sidebar_process->process.dwProcessId;
+    send_configure(window->sidebar_client);
+  }
   SDL_Log("Shell empty Window ready: id=%u", window->id);
   return window;
 }
@@ -4471,6 +4589,15 @@ static bool destroy_window(ShellWindow *window) {
     }
   }
   SDL_Log("Shell removes Window: id=%u", window->id);
+  if (window->sidebar_client && shell.sidebar_process) {
+    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_SIDEBAR_REMOVE, &window->id, sizeof(window->id), NULL, 0);
+    if (shell.sidebar_window_id == window->id) {
+      ShellWindow *next = shell.windows;
+      while (next && (next == window || next->closing)) next = next->next;
+      shell.sidebar_window_id = next ? next->id : 0;
+      shell.sidebar_process->window_id = shell.sidebar_window_id;
+    }
+  }
   cancel_input(window);
   release_d3d11(window);
   if (window->ui_dc) {
@@ -4487,6 +4614,7 @@ static bool destroy_window(ShellWindow *window) {
   while (*link != window) link = &(*link)->next;
   *link = window->next;
   release_project(window->empty);
+  release_project(window->sidebar_client);
   free(window);
   return true;
 }
@@ -4525,7 +4653,7 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
                                       HWND_MESSAGE, NULL, services.hInstance, NULL);
   if (!shell.service_hwnd) return SDL_APP_FAILURE;
   SDL_Log("Shell service notifications hwnd=%p", (void *)shell.service_hwnd);
-  ShellWindow *window = create_window(true);
+  ShellWindow *window = create_window();
   if (!window) return SDL_APP_FAILURE;
   ShellProject *project = new_project(window);
   if (!project) return SDL_APP_FAILURE;
@@ -4546,8 +4674,8 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
   if (shell.sidebar_process) {
     finish_launch(shell.sidebar_process);
     check_transport_failure(shell.sidebar_process);
-    ShellWindow *window = window_for_id(shell.sidebar_window_id);
-    if (window) handle_sidebar_frame(window);
+    for (ShellWindow *window = shell.windows; window; window = window->next)
+      if (window->sidebar_presentation.busy) handle_sidebar_frame(window);
     schedule_sidebar_restart();
   }
   for (ShellProject *item = shell.projects; item; item = item->next) {
@@ -4596,30 +4724,6 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
     for (ShellProject *item = shell.projects; item; item = item->next)
       assigned |= item->window_id == window->id;
     if (assigned) continue;
-    if (window->sidebar && shell.sidebar_process) {
-      ShellProject *sidebar = shell.sidebar_process;
-      if (sidebar->launch && !sidebar->launch->taken) continue;
-      if (sidebar->process.hProcess && WaitForSingleObject(sidebar->process.hProcess, 0) == WAIT_TIMEOUT) {
-        SDL_Log("Shell closes the first Window's disposable Sidebar; other Windows keep running");
-        TerminateProcess(sidebar->process.hProcess, 0);
-      }
-      sidebar->connected = false;
-      if (sidebar->startup_timer) KillTimer(window->hwnd, sidebar->startup_timer);
-      sidebar->startup_timer = 0;
-      anvil_ipc_pipe_cancel(&sidebar->pipe);
-      SDL_LockMutex(sidebar->lock);
-      sidebar->writer_stop = true;
-      SDL_BroadcastCondition(sidebar->queue_cond);
-      SDL_UnlockMutex(sidebar->lock);
-      sidebar->next = shell.retiring;
-      shell.retiring = sidebar;
-      shell.sidebar_process = NULL;
-      shell.sidebar_window_id = 0;
-      if (shell.sidebar_restart_timer) KillTimer(shell.service_hwnd, shell.sidebar_restart_timer);
-      shell.sidebar_restart_timer = 0;
-      if (shell.sidebar_healthy_timer) KillTimer(shell.service_hwnd, shell.sidebar_healthy_timer);
-      shell.sidebar_healthy_timer = 0;
-    }
     destroy_window(window);
   }
   return shell.windows ? SDL_APP_CONTINUE : SDL_APP_SUCCESS;
@@ -4642,7 +4746,6 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   shell.sidebar_healthy_timer = 0;
   if (shell.sidebar_process) {
     ShellProject *project = shell.sidebar_process;
-    ShellWindow *window = window_for_id(project->window_id);
     if (project->connected)
       shell_send(project, ANVIL_SURFACE_MSG_CLOSE, NULL, 0, NULL, 0);
     if (project->process.hProcess &&
@@ -4651,8 +4754,8 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
               "independent");
       TerminateProcess(project->process.hProcess, 0);
     }
-    if (project->startup_timer && window)
-      KillTimer(window->hwnd, project->startup_timer);
+    if (project->startup_timer)
+      KillTimer(shell.service_hwnd, project->startup_timer);
     if (!stop_transport(project, deadline)) {
       SDL_Log("Shell Sidebar shutdown deadline expired; exit this shell only");
       _Exit(result == SDL_APP_FAILURE ? 1 : 0);

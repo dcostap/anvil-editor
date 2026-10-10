@@ -6,7 +6,9 @@ Approved for staged implementation. Commit and stop for review after each milest
 Implement milestone 1 first, then 2a, then 2b after their separate reviews.
 The user approved milestone 1. Its [verification record](PHASE5_WINDOW_STATE.md) retains checks, latency, and deployment evidence.
 Milestone 2a is implemented and deployed. Its [verification record](PHASE5_NEW_WINDOWS.md) retains red-green checks and matched latency.
-Stop for milestone-2a review before starting 2b.
+The user approved 2a and the separate selection fix, `f565e01c`, then authorized 2b.
+Milestone 2b is implemented. Its [verification record](PHASE5_SHARED_SIDEBARS.md) retains checks and deployment evidence.
+Stop for milestone-2b review before starting milestone 3.
 Phase 4 closeout precedes this work.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.

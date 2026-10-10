@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 12u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 13u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -58,7 +58,15 @@ typedef enum {
   ANVIL_SURFACE_MSG_NEW_WINDOW = 87,
   ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW = 88,
   ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER = 89,
+  ANVIL_SURFACE_MSG_SIDEBAR_SURFACE = 90,
+  ANVIL_SURFACE_MSG_SIDEBAR_REMOVE = 91,
 } AnvilSurfaceMessageType;
+
+/* Sidebar surface traffic shares one authenticated transport. */
+typedef struct {
+  uint32_t window_id;
+  uint32_t type;
+} AnvilSidebarSurfacePacket;
 
 typedef struct {
   uint32_t userdir_size;

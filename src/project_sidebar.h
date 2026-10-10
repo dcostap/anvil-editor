@@ -7,6 +7,9 @@
 
 #define ANVIL_SIDEBAR_PROJECT_LIMIT 256
 #define ANVIL_SIDEBAR_TERMINAL_LIMIT 32
+#define ANVIL_SIDEBAR_WINDOW_LIMIT 64
+
+typedef struct { uint32_t id, selected_project; } AnvilSidebarWindow;
 
 typedef enum {
   ANVIL_SIDEBAR_DORMANT,
@@ -31,7 +34,7 @@ typedef struct {
 typedef struct {
   char *path;
   wchar_t *identity;
-  uint32_t row_id, id, pid;
+  uint32_t row_id, id, pid, window_id;
   AnvilSidebarState state;
   bool exists, selected, deferred_dialog, close_choice;
   AnvilSidebarTerminal *terminals;
@@ -44,6 +47,8 @@ typedef struct {
   uint32_t next_row;
   uint32_t revision;
   bool status_limited;
+  AnvilSidebarWindow windows[ANVIL_SIDEBAR_WINDOW_LIMIT];
+  size_t window_count;
 } AnvilSidebarModel;
 
 /* Source order initializes the list. Later sources add new Projects first.
@@ -52,11 +57,12 @@ bool anvil_sidebar_merge_recents(AnvilSidebarModel *model, const char *const *pa
 AnvilSidebarProject *anvil_sidebar_find(const AnvilSidebarModel *model, const char *path);
 const AnvilSidebarProject *anvil_sidebar_at(const AnvilSidebarModel *model, size_t index);
 void anvil_sidebar_set_runtime(AnvilSidebarModel *model, AnvilSidebarProject *project, uint32_t id,
-                               uint32_t pid, AnvilSidebarState state, bool selected,
+                               uint32_t pid, uint32_t window_id, AnvilSidebarState state, bool selected,
                                bool deferred_dialog, bool close_choice);
 bool anvil_sidebar_set_terminals(AnvilSidebarModel *model, AnvilSidebarProject *project,
                                  const AnvilSidebarTerminal *terminals, size_t count);
 /* Pages contain Project records followed by their Terminal records. */
 char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset);
+bool anvil_sidebar_set_windows(AnvilSidebarModel *model, const AnvilSidebarWindow *windows, size_t count);
 void anvil_sidebar_destroy(AnvilSidebarModel *model);
 #endif

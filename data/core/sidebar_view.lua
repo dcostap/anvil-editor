@@ -6,10 +6,15 @@ local SidebarView = Object:extend()
 function SidebarView:new(action)
   self.action, self.rows, self.scroll = action, {}, 0
 end
-function SidebarView:set_model(projects)
+function SidebarView:set_model(projects, window_id)
   self.rows = {}
+  local selected = 0
+  for _, window in ipairs(projects.windows or {}) do
+    if window.id == window_id then selected = window.selected_project end
+  end
   for _, project in ipairs(projects) do
-    self.rows[#self.rows + 1] = {project = project}
+    self.rows[#self.rows + 1] = {project = project, selected = window_id and selected ~= 0 and project.id == selected
+      or not window_id and project.selected}
     for _, terminal in ipairs(project.terminals or {}) do
       self.rows[#self.rows + 1] = {project = project, terminal = terminal}
     end
@@ -46,7 +51,7 @@ function SidebarView:draw(width, height)
     local y = self:row_y(index)
     if y + self:row_height() > self:list_top() and y < height then
       local project, terminal = row.project, row.terminal
-      if not terminal and project.selected then
+      if not terminal and row.selected then
         renderer.draw_rect(0, y, width, self:row_height(), style.selection)
       end
       local title = terminal and terminal.title or project.path:match("([^/\\]+)[/\\]*$") or project.path
@@ -54,6 +59,7 @@ function SidebarView:draw(width, height)
       if terminal then
         state = state .. (terminal.busy == 1 and " / busy" or terminal.busy == 0 and " / idle" or " / unknown")
       else
+        if project.window_id and project.window_id ~= 0 then state = state .. " / Window " .. project.window_id end
         if project.close_choice then state = state .. " / Close choice" end
         if project.deferred_dialog then state = state .. " / dialog" end
         if not project.exists and project.state == "dormant" then state = state .. " / unavailable" end

@@ -38,21 +38,21 @@ static void lifecycle(void) {
   CHECK(anvil_sidebar_merge_recents(&model, paths, 3), "Recent source failed");
   AnvilSidebarProject *b = anvil_sidebar_find(&model, "C:/B");
   AnvilSidebarProject *a = anvil_sidebar_find(&model, "C:/A");
-  anvil_sidebar_set_runtime(&model, a, 1, 10, ANVIL_SIDEBAR_READY, false, true, false);
-  anvil_sidebar_set_runtime(&model, b, 2, 20, ANVIL_SIDEBAR_CLOSING, true, false, true);
+  anvil_sidebar_set_runtime(&model, a, 1, 10, 3, ANVIL_SIDEBAR_READY, false, true, false);
+  anvil_sidebar_set_runtime(&model, b, 2, 20, 4, ANVIL_SIDEBAR_CLOSING, true, false, true);
   CHECK(a->deferred_dialog && !a->selected && b->selected && b->close_choice &&
             b->state == ANVIL_SIDEBAR_CLOSING,
         "Project choices or selection are missing from the model");
-  anvil_sidebar_set_runtime(&model, b, 2, 20, ANVIL_SIDEBAR_FAILED, true, false, false);
+  anvil_sidebar_set_runtime(&model, b, 2, 20, 4, ANVIL_SIDEBAR_FAILED, true, false, false);
   CHECK(b->state == ANVIL_SIDEBAR_FAILED && !b->close_choice, "Failure retained a Close choice");
-  anvil_sidebar_set_runtime(&model, b, 2, 0, ANVIL_SIDEBAR_DORMANT, false, false, false);
-  anvil_sidebar_set_runtime(&model, a, 1, 0, ANVIL_SIDEBAR_DORMANT, false, false, false);
+  anvil_sidebar_set_runtime(&model, b, 2, 0, 0, ANVIL_SIDEBAR_DORMANT, false, false, false);
+  anvil_sidebar_set_runtime(&model, a, 1, 0, 0, ANVIL_SIDEBAR_DORMANT, false, false, false);
   CHECK(model.count == 3 && a->pid == 0 && b->pid == 0 && a->state == ANVIL_SIDEBAR_DORMANT &&
             b->state == ANVIL_SIDEBAR_DORMANT &&
             anvil_sidebar_at(&model, 2)->state == ANVIL_SIDEBAR_DORMANT,
         "The model lost a Dormant Project");
-  anvil_sidebar_set_runtime(&model, b, 2, 30, ANVIL_SIDEBAR_STARTING, true, false, false);
-  anvil_sidebar_set_runtime(&model, b, 2, 30, ANVIL_SIDEBAR_READY, true, false, false);
+  anvil_sidebar_set_runtime(&model, b, 2, 30, 4, ANVIL_SIDEBAR_STARTING, true, false, false);
+  anvil_sidebar_set_runtime(&model, b, 2, 30, 4, ANVIL_SIDEBAR_READY, true, false, false);
   CHECK(b->id == 2 && b->pid == 30 && b->state == ANVIL_SIDEBAR_READY &&
             !strcmp(anvil_sidebar_at(&model, 0)->path, "C:/B"),
         "Load changed identity or list order");
@@ -71,7 +71,7 @@ static void capacity(void) {
             anvil_sidebar_find(&model, paths[255]) && !anvil_sidebar_find(&model, paths[256]),
         "Large source did not keep its newest entries");
   AnvilSidebarProject *live = anvil_sidebar_find(&model, paths[255]);
-  anvil_sidebar_set_runtime(&model, live, 7, 0, ANVIL_SIDEBAR_STARTING, false, false, false);
+  anvil_sidebar_set_runtime(&model, live, 7, 0, 3, ANVIL_SIDEBAR_STARTING, false, false, false);
   const char *next = "C:/New";
   CHECK(anvil_sidebar_merge_recents(&model, &next, 1), "Full list refused a new Project");
   CHECK(anvil_sidebar_at(&model, 0) == anvil_sidebar_find(&model, next) &&

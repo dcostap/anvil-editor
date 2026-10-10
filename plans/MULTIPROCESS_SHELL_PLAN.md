@@ -464,7 +464,10 @@ Milestone 1 moves native state into an owned Window record without adding severa
 Its [verification record](PHASE5_WINDOW_STATE.md) retains both-renderer checks, valid latency runs, and the warned deployment.
 The user approved milestone 1. Milestone 2a adds New Window, native menu/picker actions, and hosted command routing.
 Its [verification record](PHASE5_NEW_WINDOWS.md) retains focused red-green checks, matched latency, and deployment hashes.
-Milestone 2a is ready for review. Milestone 2b has not started. The Sidebar stays in the first Window.
+The user approved milestone 2a and its separate maximized-Window selection fix, `f565e01c`.
+Milestone 2b serves all Windows from one Sidebar process and preserves it after first-Window Close.
+Its [verification record](PHASE5_SHARED_SIDEBARS.md) retains checks, failures, latency, and deployment evidence.
+Stop for milestone-2b review before starting milestone 3. Hosted mode stays opt-in.
 The latency probe remains under investigation. Treat differences below about 2 ms as noise.
 The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) satisfies the milestone-2 entry gate on 2026-10-10.
 Both fresh revisions return to historical-range medians in the unlocked, display-on matched repeat.

@@ -2,6 +2,7 @@
 -- Seam: public commands and native Windows owned by an isolated shell process.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if not action or not action:match("^windows%-") then return end
+local shared = action:match("^windows%-sidebars") ~= nil
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
@@ -23,8 +24,12 @@ ffi.cdef [[
   unsigned long __stdcall WaitForSingleObject(void *, unsigned long);
   int __stdcall CloseHandle(void *);
   int __stdcall GetClientRect(void *, void *);
+  long __stdcall NtSuspendProcess(void *);
+  long __stdcall NtResumeProcess(void *);
+  int __stdcall TerminateProcess(void *, unsigned int);
 ]]
 local kernel, user32 = ffi.load("kernel32"), ffi.load("user32")
+local ntdll = ffi.load("ntdll")
 local root = assert(os.getenv("ANVIL_PROJECT_PROBE_ROOT"))
 local function save(name, value)
   local file = assert(io.open(root .. "/" .. name .. ".lua", "wb"))
@@ -116,14 +121,73 @@ if path:find("/driver$", 1) then
         wait_for(function() return not subject:running() end, 10)
         assert(subject:returncode() == 0); return
       end
-      if action == "windows-open" or action == "windows-owner-close" then
+      if action == "windows-open" or action == "windows-owner-close" or shared then
         save("open", {continue = true})
         local b = wait_for(function() return load("b-ready") end, 15, "Open Project did not load the second Project")
         assert(b.shell_pid == a.shell_pid, "Open Project escaped the requesting shell")
         assert(a.window_id > 0 and b.window_id > 0 and a.window_id ~= b.window_id,
           "Projects did not receive distinct Window identities")
         assert(#windows(a.shell_pid) == 2, "Open Project did not create a second native Window")
-        if action == "windows-owner-close" then
+        if shared then
+          wait_for(function()
+            return trace():find("Shell Sidebar surface Ready: Window=" .. b.window_id, 1, true)
+          end, 5, "second Window has no Sidebar surface from the shared process")
+          os.remove(root .. "/sidebar-0.lua")
+          user32.PostMessageW(original, 0x804d, 0, 0)
+          local model = wait_for(function() return load("sidebar-0") end, 3)
+          local owners, selections = {}, {}
+          for _, row in ipairs(model.items) do
+            if row.kind == "project" then owners[row.pid] = row.window_id end
+          end
+          for _, row in ipairs(model.windows) do selections[row.id] = row.selected_project end
+          assert(owners[a.pid] == a.window_id and owners[b.pid] == b.window_id, "Sidebar snapshot lost owning Windows")
+          assert(selections[a.window_id] ~= 0 and selections[b.window_id] ~= 0 and
+            selections[a.window_id] ~= selections[b.window_id], "Sidebar selections are not independent")
+          if action == "windows-sidebars-recovery" then
+            local pid
+            for value in trace():gmatch("Shell Sidebar connected: pid=(%d+)") do pid = tonumber(value) end
+            local frontend = assert(kernel.OpenProcess(0x100801, 0, pid))
+            assert(ntdll.NtSuspendProcess(frontend) == 0, "Cannot suspend the owned Sidebar")
+            local resumed, suspend_error = pcall(function()
+              user32.PostMessageW(original, 0x112, 0xf020, 0)
+              wait_for(function() return user32.IsIconic(original) ~= 0 end, 3)
+              user32.PostMessageW(original, 0x112, 0xf120, 0)
+              wait_for(function() return user32.IsIconic(original) == 0 end, 3)
+              user32.PostMessageW(original, 0x112, 0xe010, 0)
+              wait_for(function() return #windows(a.shell_pid) == 3 end, 5, "Suspended Sidebar blocked native New Window")
+            end)
+            ntdll.NtResumeProcess(frontend)
+            if not resumed then kernel.CloseHandle(frontend); error(suspend_error) end
+            assert(kernel.TerminateProcess(frontend, 125) ~= 0)
+            kernel.CloseHandle(frontend)
+            wait_for(function()
+              local next_pid, connection
+              for value, generation in trace():gmatch("Shell Sidebar connected: pid=(%d+) connection=(%d+)") do
+                next_pid, connection = tonumber(value), generation
+              end
+              if next_pid == pid then return false end
+              local text = trace()
+              for _, window in ipairs(windows(a.shell_pid)) do
+                if not text:find("Shell Sidebar surface Ready: Window=" .. window_id(window) .. " connection=" .. connection, 1, true) then
+                  return false
+                end
+              end
+              return true
+            end, 10, "Sidebar crash did not recreate every Window's surface")
+            for _, state in ipairs({a, b}) do
+              local project = assert(kernel.OpenProcess(0x100000, 0, state.pid))
+              assert(kernel.WaitForSingleObject(project, 0) ~= 0, "Sidebar recovery restarted a Project")
+              kernel.CloseHandle(project)
+            end
+            for _, window in ipairs(windows(a.shell_pid)) do
+              if window_id(window) ~= a.window_id and window_id(window) ~= b.window_id then
+                user32.PostMessageW(window, 0x10, 0, 0)
+              end
+            end
+            wait_for(function() return #windows(a.shell_pid) == 2 end, 5)
+          end
+        end
+        if action == "windows-owner-close" or shared then
           local project = assert(kernel.OpenProcess(0x100000, 0, a.pid))
           save("close-a", {continue = true})
           wait_for(function() return kernel.WaitForSingleObject(project, 0) == 0 end, 10, "first Project did not close")
@@ -132,6 +196,18 @@ if path:find("/driver$", 1) then
           wait_for(function() return #windows(a.shell_pid) == 1 end, 8, "first Window did not close independently")
           local remaining = assert(windows(a.shell_pid)[1])
           assert(window_id(remaining) == b.window_id, "first Close removed the other Window")
+          if shared then
+            local pid
+            for value in trace():gmatch("Shell Sidebar connected: pid=(%d+)") do pid = tonumber(value) end
+            local frontend = assert(kernel.OpenProcess(0x100000, 0, tonumber(pid)))
+            assert(kernel.WaitForSingleObject(frontend, 0) ~= 0, "first Window Close ended the shared Sidebar")
+            kernel.CloseHandle(frontend)
+            os.remove(root .. "/sidebar-0.lua")
+            user32.PostMessageW(remaining, 0x804d, 0, 0)
+            local model = wait_for(function() return load("sidebar-0") end, 3)
+            assert(model.windows and #model.windows == 1 and model.windows[1].id == b.window_id,
+              "Sidebar snapshot did not retain the surviving Window's selection")
+          end
           user32.PostMessageW(remaining, 0x112, 0xe010, 0)
           wait_for(function() return #windows(a.shell_pid) == 2 end, 5,
             "remaining Window native controls required the first Window")
@@ -324,13 +400,13 @@ else
       wait_for(function() return load("finish") end, 25)
       quit(); return
     end
-    if action == "windows-open" or action == "windows-owner-close" then
+    if action == "windows-open" or action == "windows-owner-close" or shared then
       wait_for(function() return load("open") end, 15)
       require("core.config").plugins.ipc.single_instance = true
       assert(command.perform("core:open_project_folder"))
       core.global_prompt_bar:set_text(root .. "/Replacement")
       core.global_prompt_bar:submit()
-      if action == "windows-owner-close" then
+      if action == "windows-owner-close" or shared then
         wait_for(function() return load("close-a") end, 25)
         quit(); return
       end
