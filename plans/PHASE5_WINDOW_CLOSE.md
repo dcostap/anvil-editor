@@ -192,3 +192,11 @@ Per-pair candidate-minus-reference medians (direct D3D11 / hosted D3D11 / direct
 Pair 2's hosted shifts are unexplained and retained. The other pairs disagree in sign.
 Neither code change runs on the input-to-Present path: the priority raise runs only at process exit,
 and the revision change runs only when a selection request is queued.
+
+### Step 2 deployment
+
+`bb393d87` is deployed with `update-anvil-dev-build.bat`. It exited 0 and restored all five source-data junctions.
+The build hash equals the measured latency candidate.
+
+- Build `build-windows-x86_64/src/anvil.exe`: `7fb065d5d688f0e862457f5ceecd1ccfb8bb58a7e0d3589119e339be22f57ef0`
+- Portable `anvil-portable/anvil.exe` (stripped): `c9508d0b85b2f45c76194a7c2a1860b28588fce8baf277b021af2a2a3d6a2304`
