@@ -7,7 +7,7 @@ The user confirmed Windows was unlocked with the display on. The runner confirme
 The same fresh revisions completed the matched, alternating, non-diagnostic repeat with historical-range medians.
 Both revisions showed the large slowdown in the earlier locked, display-off session, not a candidate-only regression.
 The large shift did not repeat under normal console conditions. The exact environment mechanism remains unproved.
-Phase 5 still awaits plan review. Do not start its implementation without approval.
+The user approved staged Phase 5 implementation after this baseline. Stop for review after each milestone.
 Do not operate the user's Windows or switch desktops to obtain environment controls.
 
 Hosted mode stays opt-in. Differences below about 2 ms remain noise.

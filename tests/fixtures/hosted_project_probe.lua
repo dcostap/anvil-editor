@@ -598,6 +598,9 @@ if project:find("/driver$", 1) then
         save(root .. "/continue.lua", {continue = true})
       elseif action == "controls" then
         local window = assert(shell_window(state.shell_pid))
+        local initial_client = ffi.new("struct RECT[1]")
+        assert(user32.GetClientRect(window, initial_client) ~= 0)
+        local origin_x = tonumber(initial_client[0].right) - state.surface_w
         local process_handle = own_handle(state.pid, 0x101801); handles[#handles + 1] = process_handle
         local function click(x,y)
           local point = math.floor(x) + math.floor(y)*65536
@@ -623,9 +626,18 @@ if project:find("/driver$", 1) then
         caption(1)
         assert(wait_for(function() return user32.IsZoomed(window) == 0 end, 3), "native Restore waited for the suspended Project")
         local bounds = ffi.new("struct RECT[1]"); assert(user32.GetWindowRect(window,bounds) ~= 0)
-        local point = (tonumber(bounds[0].left)+24) + (tonumber(bounds[0].top)+state.controls_h/2)*65536
-        assert(user32.SendMessageW(window,0x84,0,point) == 2, "native header did not offer window drag")
-        point = tonumber(bounds[0].right)-1 + (tonumber(bounds[0].bottom)-1)*65536
+        -- Find a caption region, not the Sidebar's native Restart action.
+        local caption_found = false
+        local y = tonumber(bounds[0].top) + state.controls_h / 2
+        for x = tonumber(bounds[0].left) + 24, tonumber(bounds[0].right) - state.controls_w, 8 do
+          local point = math.floor(x) % 65536 + (math.floor(y) % 65536) * 65536
+          if user32.SendMessageW(window,0x84,0,point) == 2 then
+            caption_found = true
+            break
+          end
+        end
+        assert(caption_found, "native header did not offer window drag")
+        local point = tonumber(bounds[0].right)-1 + (tonumber(bounds[0].bottom)-1)*65536
         assert(user32.SendMessageW(window,0x84,0,point) == 17, "native border did not offer window resize")
         local x, y = tonumber(bounds[0].left)+20, tonumber(bounds[0].top)+20
         local w, h = tonumber(bounds[0].right-bounds[0].left)+70, tonumber(bounds[0].bottom-bounds[0].top)+45
@@ -649,7 +661,7 @@ if project:find("/driver$", 1) then
         end, 5), "Project exit did not enter Failed")
         local rect = ffi.new("struct RECT[1]"); user32.GetClientRect(window,rect)
         local scale = state.controls_w/138
-        local x = (48*scale + tonumber(rect[0].right))/2
+        local x = (origin_x + tonumber(rect[0].right))/2
         local y = (state.controls_h + tonumber(rect[0].bottom))/2 + 46*scale
         click(x-78*scale,y)
         assert(wait_for(function() return load(root .. "/replacement.lua") end, 15), "Failed Restart did not launch a replacement")
@@ -868,6 +880,7 @@ else
     if action == "controls" then
       local _, _, w, h = system.get_window_controls()
       state.controls_w, state.controls_h = w,h
+      state.surface_w = core.root_panel.size.x
     end
     if action == "launch" then
       state.command_line = command_line(pid)

@@ -458,12 +458,15 @@ Add the Sidebar process with a minimal list UI, plus its crash restart.
 
 ### Phase 5: several Anvil Windows
 
-Draft for review: [Phase 5: several Anvil Windows](PHASE5_SEVERAL_WINDOWS.md).
-Do not implement it before approval. Phase 4 closeout comes first.
+Approved for staged implementation: [Phase 5: several Anvil Windows](PHASE5_SEVERAL_WINDOWS.md).
+Commit milestone 1, then 2a, then 2b. Stop for review after each milestone.
+Milestone 1 moves native state into an owned Window record without adding several-Window behavior.
+Its [verification record](PHASE5_WINDOW_STATE.md) retains both-renderer checks, valid latency runs, and the warned deployment.
+Milestone 1 is ready for review. Milestones 2a and 2b have not started.
 The latency probe remains under investigation. Treat differences below about 2 ms as noise.
 The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) satisfies the milestone-2 entry gate on 2026-10-10.
 Both fresh revisions return to historical-range medians in the unlocked, display-on matched repeat.
-All 24 cases are complete and environment-valid. Plan review still blocks implementation.
+All 24 cases are complete and environment-valid.
 Exclude locked/display-off or unavailable states from baselines. Do not accept performance gains from unreliable comparisons.
 
 Add new windows, moving a Project between windows, and bringing the owning window

@@ -2,11 +2,14 @@
 
 ## Status
 
-Draft for review. Do not implement this plan before approval.
+Approved for staged implementation. Commit and stop for review after each milestone.
+Implement milestone 1 first, then 2a, then 2b after their separate reviews.
+Milestone 1 is implemented and deployed. Its [verification record](PHASE5_WINDOW_STATE.md) retains checks, latency, and deployment evidence.
+Stop for milestone-1 review before starting 2a.
 Phase 4 closeout precedes this work.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
-The milestone-2 latency entry gate is satisfied on 2026-10-10. Plan review still blocks implementation.
+The milestone-2 latency entry gate is satisfied on 2026-10-10.
 The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) records the accepted unlocked/display-on matched repeat.
 Do not use unreliable latency results to accept a performance change.
 Treat differences below about 2 ms as noise.
@@ -54,6 +57,19 @@ Add a targeted red only for newly required observable behavior, not structure or
 Commit after focused checks pass.
 
 ### 2. New Window and shared Sidebar surfaces
+
+Implement this milestone in two separate commits. Stop for review after each commit.
+
+#### 2a. New Window and hosted commands
+
+Add New Window, the empty state, native Title Bar menu, and shell-owned folder picker.
+Route the existing hosted commands and Project APIs through the shell.
+Keep the Sidebar in the first Window during this slice.
+
+#### 2b. Shared Sidebar surfaces
+
+Add one hosted Sidebar surface per Window, served by the single Sidebar process.
+Keep independent surface sizes, configurations, selection, and input routing.
 
 Entry gate: latency baseline re-established through matched, alternating runs of freshly built reference and candidate revisions.
 This gate is satisfied by the 2026-10-10 repeat. All 24 runs are complete and environment-valid, with historical-range medians.
@@ -186,6 +202,8 @@ Do not run unrelated suites or overlap latency with builds or correctness checks
 Retain partial runs, unmatched inputs, timing tails, and maxima. Incomplete matches fail.
 
 Commit each complete milestone after its focused checks.
+For compositing or input changes, require environment-valid latency runs with exit 0, not exit 2.
+Report their medians beside the accepted 2026-10-10 baseline.
 Warn before updating the portable app. The updater ends Terminal Sessions and running commands.
 Report executable hashes and fresh deployment logs.
 Keep all manual and instrumented acceptance gates visible.
