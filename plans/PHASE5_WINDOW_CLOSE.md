@@ -62,3 +62,10 @@ The full `--suite anvil` run at 100% CPU from the user's workloads passed 24 of 
 
 Raw data: `%TEMP%/anvil-m4-priority/` (`load-compare.txt`, `summary.txt`, `suite.txt`).
 Artifact names omit the `anvil-surface-latency-` prefix.
+
+### Step 1 deployment
+
+`420882b2` is deployed with `update-anvil-dev-build.bat`, which ended all Anvil processes as the user permitted.
+
+- Build `build-windows-x86_64/src/anvil.exe`: `205646cc72f12c2f2bed0898eeb7a4cc772b3a2f18fd2edc1d0b692c34df680d`
+- Portable `anvil-portable/anvil.exe` (stripped): `48c54ba55ee0ab04ab94c03dcffea6c40a4da835962ea91e7860a668d66cde00`
