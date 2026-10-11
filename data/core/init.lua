@@ -812,7 +812,9 @@ function core.init()
   -- so we delay it on all platforms, except macOS. On macOS setting the
   -- mode to maximized seems to cause issues resetting its size so setting
   -- the size is all we need on that platform.
-  if app_state.window_mode == "maximized" and PLATFORM ~= "Mac OS X" and not restored_window then
+  -- A hosted Project's Anvil Window belongs to the shell, which restores its own placement.
+  local apply_saved_window = not restored_window and not system.is_hosted_surface()
+  if app_state.window_mode == "maximized" and PLATFORM ~= "Mac OS X" and apply_saved_window then
     core.add_thread(function()
       startup_measure("apply_maximized_window_mode", function()
         system.set_window_mode(core.window, "maximized")
@@ -856,7 +858,7 @@ function core.init()
   -- after the frame is enabled. Applying them before borderless setup treats the
   -- saved outer HWND height as SDL client height, which can push the titlebar
   -- above the monitor when restoring a screen-height window.
-  if app_state.window and not restored_window then
+  if app_state.window and apply_saved_window then
     startup_measure("apply_saved_window_bounds", function()
       system.set_window_size(core.window, table.unpack(app_state.window))
     end)

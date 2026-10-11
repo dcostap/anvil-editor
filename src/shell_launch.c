@@ -32,7 +32,7 @@ struct AnvilShellLaunchRequest {
   char **argv;
 };
 
-static wchar_t mutex_name[96], pipe_name[128];
+static wchar_t mutex_name[96], pipe_name[128], user_dir[32768];
 static HANDLE owner_mutex, stop_event, server_thread;
 static PSECURITY_DESCRIPTOR pipe_security;
 static volatile LONG client_count;
@@ -76,9 +76,12 @@ static uint32_t hash_text(uint32_t hash, const wchar_t *text) {
 
 static bool init_names(void) {
   if (mutex_name[0]) return true;
-  wchar_t exe[32768], userdir[32768];
+  wchar_t exe[32768], *userdir = user_dir;
   DWORD length = GetModuleFileNameW(NULL, exe, SDL_arraysize(exe));
-  if (!length || length >= SDL_arraysize(exe) || !user_directory(exe, userdir, SDL_arraysize(userdir))) return false;
+  if (!length || length >= SDL_arraysize(exe) || !user_directory(exe, userdir, SDL_arraysize(user_dir))) {
+    user_dir[0] = 0;
+    return false;
+  }
   size_t end = wcslen(userdir);
   while (end > 3 && (userdir[end - 1] == L'\\' || userdir[end - 1] == L'/')) userdir[--end] = 0;
   uint32_t hash = hash_text(hash_text(2166136261u, exe), L"\n");
@@ -429,6 +432,7 @@ void anvil_shell_launch_stop(void) {
   /* A blocked client thread may still use these, so they stay for the process lifetime. */
 }
 
+const wchar_t *anvil_shell_launch_user_directory(void) { return mutex_name[0] ? user_dir : NULL; }
 int anvil_shell_launch_argc(const AnvilShellLaunchRequest *request) { return request->argc; }
 char **anvil_shell_launch_argv(const AnvilShellLaunchRequest *request) { return request->argv; }
 const char *anvil_shell_launch_cwd(const AnvilShellLaunchRequest *request) { return request->cwd; }

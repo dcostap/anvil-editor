@@ -2,8 +2,11 @@
 
 ## Status
 
-Draft for review. No code yet. Commit and stop for review after each milestone.
-Phase 5 closeout precedes milestone 1: matched latency for Phase 5 milestone 5, and the interactive foreground check.
+The user accepted all five review decisions on 2026-10-11 and authorized milestone 1.
+Commit and stop for review after each milestone.
+Milestone 1 is implemented and deployed; see its record below. Stop for review before milestone 2.
+Phase 5 closeout stays pending: matched latency for Phase 5 milestone 5, and the interactive foreground check.
+Milestone 1 does not change compositing or input, so that latency run does not block it.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
 
@@ -123,6 +126,8 @@ Run matched latency after this milestone, because it changes transport setup.
 
 ## Review decisions
 
+The user accepted each recommendation below.
+
 1. **What does "full quit" restore?** Close is per Window. The last Window Close ends the shell.
    Recommendation: restore the Windows open when the shell ended. A Window the user closed earlier is gone.
    After separate Closes, only the last Window returns. A crash or reboot keeps every Window from the last write.
@@ -149,3 +154,55 @@ Milestones 1 and 2 do not change compositing or input, so they need no latency g
 Milestone 3 needs matched latency against the previous milestone's portable.
 Commit each milestone after its focused checks. Report hashes and deployment logs.
 Keep all manual and instrumented acceptance gates visible.
+
+## Milestone 1 record
+
+### Implementation
+
+- `src/shell_state.c` encodes, decodes, and atomically replaces `USERDIR/shell-windows.state`.
+  A worker thread writes it. A partial or malformed file restores nothing.
+- The shell writes 500 ms after the last placement, selection, focus, New Window, or Close change.
+  It writes the final state when the last Window closes, and again when the shell ends with Windows open.
+- A Window's entry is captured when its Close begins, because the Close changes the selection as it ends Projects.
+- Restore creates Windows back to front, with their normal bounds set while hidden, then maximizes as saved.
+- Restored Projects resolve as initial Projects. A launch argument after a restore runs as an external launch,
+  so it waits for the restored identities and cannot duplicate them.
+- Hosted Projects no longer apply their own saved window bounds or maximize at startup (`data/core/init.lua`).
+  Before this, each restored Window moved to the Project's App State bounds, `800x600` at `0,0` by default.
+  Direct mode is unchanged.
+
+### Red-green
+
+Native seam `anvil:shell-state` (`tests/native/shell_state_test.c`): round trip, every cut of a partial file,
+malformed lines, the Window bound, and latest-wins atomic writes. The first run found a partial-file case that
+decoded; the decoder now requires every line to complete.
+
+Fixture `tests/fixtures/shell_restore_probe.lua` (`restore-*` cases):
+
+| Case | Checks |
+| --- | --- |
+| `restore-crash` | Two Windows, one moved and one maximized. Kill every process, then launch with no argument. Both Windows return with their bounds, modes, front order, Selected Projects, and the Project's Workspace file. |
+| `restore-sequential` | Close Window A, then Window B. The next launch restores only B, with its bounds. |
+| `restore-argument` | A restored Project named by an aliased argument opens once. Another Project argument opens a new Window beside the restored one. |
+
+- Red, deployed Phase 5 build (`xlij14ro`): "shell did not write its Window state", "restore did not load the last
+  Window's Project", and "restore did not load Project".
+- First green attempt (`y0wg7ee0`): `restore-crash` failed with Window A at `0,0 800x600`; the Project's
+  startup bounds overrode the shell. Fixed in `data/core/init.lua`.
+- Green: `vuzuqhig`, then D3D11 `rx4zc7aj` and software `rgo4knlo`.
+
+### Regression checks
+
+D3D11 `rx4zc7aj` and software `rgo4knlo`: all `launch-*` cases, `duplicate`, `foreground`, `new-window`,
+`launch`, `arguments`, `controls`, `move`, `windows-new`, `windows-move`, `windows-close-dirty`,
+`windows-close-quit`, `loaded-launch`, `dormant-launch`, and `identity-alias` pass, except one D3D11 `controls` run.
+That run timed out waiting 5 s for a fixture-killed Project to exit while the machine ran heavy unrelated work.
+Its log shows no exit at all within that time. Milestone 4 recorded that fixture kills stay slow under load.
+Two reruns each with this build (`nlklk8nv`, `8xdog3od`) and the deployed Phase 5 build (`z5dxjpir`, `3nvc0kj0`) pass.
+
+### Deployment
+
+`update-anvil-dev-build.bat` rebuilt and installed the dev portable app. It ended all Anvil processes.
+
+- Build `build-windows-x86_64/src/anvil.exe`: `ec59c5bdfb97525d4cab856f8b12173bf7e7a94bcca3f5f8bacb3f1184f8a857`
+- Portable `anvil-portable/anvil.exe`: `7e712aa9b37bdca4ad676d035c945e70633e1fa0f21d7651d75830ae1e435d90`

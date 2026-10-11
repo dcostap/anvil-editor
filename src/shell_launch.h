@@ -28,6 +28,9 @@ bool anvil_shell_launch_start(bool (*notify)(AnvilShellLaunchRequest *request));
 /* Stops accepting launches and releases shell ownership. Call on the thread that took ownership. */
 void anvil_shell_launch_stop(void);
 
+/* The user directory that keys this shell, without a trailing separator. NULL when the key is unavailable. */
+const wchar_t *anvil_shell_launch_user_directory(void);
+
 /* Request arguments use the shell's layout: argv[0] is the executable, argv[1] is `--shell`.
  * Path arguments are absolute. */
 int anvil_shell_launch_argc(const AnvilShellLaunchRequest *request);

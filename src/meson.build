@@ -48,6 +48,7 @@ anvil_sources = [
     'input_latency_probe.c',
     'anvil_shell.c',
     'shell_launch.c',
+    'shell_state.c',
     'project_sidebar.c',
     'project_sidebar_scan.c',
     'sidebar_registry_watch.c',
@@ -269,6 +270,10 @@ if host_machine.system() == 'windows'
         ['../tests/native/process_exit_test.c', 'process_exit.c'],
         include_directories: anvil_includes, c_args: anvil_cargs)
     test('process-exit', process_exit_test, env: anvil_test_env, suite: 'anvil', is_parallel: false)
+    shell_state_test = executable('shell_state_test',
+        ['../tests/native/shell_state_test.c', 'shell_state.c'],
+        include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
+    test('shell-state', shell_state_test, env: anvil_test_env, suite: 'anvil')
     test('terminal-replay', terminal_replay_test, env: anvil_test_env, suite: 'anvil')
 endif
 test('fuzzy', fuzzy_test, env: anvil_test_env)
