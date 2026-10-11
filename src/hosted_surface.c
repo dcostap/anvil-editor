@@ -18,6 +18,8 @@
 #define MEMORY_LOCK_TIMEOUT_MS 100
 #define HOSTED_QUEUE_LIMIT (8u * 1024u * 1024u)
 #define SHELL_LOSS_DEADLINE_MS 5000
+/* A pipe can break just before the shell process is signalled as ended. */
+#define SHELL_EXIT_GRACE_MS 1000
 
 typedef struct HostedMessage {
   struct HostedMessage *next;
@@ -71,6 +73,8 @@ static struct {
   Uint32 adopted_event, gone_event;
   bool lost, writing;
   SDL_AtomicInt adopting, reader_running;
+  /* Set when this Project's own rendering failed. No shell can adopt a broken surface. */
+  SDL_AtomicInt render_failed;
   AnvilSurfaceConfigure adopted_config;
   /* Window state the next shell does not know. */
   char title[4097];
@@ -259,8 +263,15 @@ static int SDLCALL loss_watchdog(void *data) {
     SDL_UnlockMutex(hosted.queue_lock);
     DWORD period = adoption_period();
     uint64_t deadline = GetTickCount64() + period;
-    /* The Sidebar process restarts with the next shell instead. */
-    hosted.offer = hosted.sidebar || !hosted.project_path ? NULL
+    /* Only a Project whose shell ended waits for adoption. A live shell that dropped the connection has
+     * already failed this Project, and a Project whose rendering failed cannot show a surface. The Sidebar
+     * process restarts with the next shell instead. */
+    bool shell_ended = reason == WAIT_OBJECT_0 ||
+                       WaitForSingleObject(hosted.shell_process, SHELL_EXIT_GRACE_MS) == WAIT_OBJECT_0;
+    bool render_failed = SDL_GetAtomicInt(&hosted.render_failed) != 0;
+    if (!shell_ended || render_failed)
+      SDL_Log("Project offers no adoption: %s", render_failed ? "its rendering failed" : "the shell is still running");
+    hosted.offer = hosted.sidebar || !hosted.project_path || !shell_ended || render_failed ? NULL
                  : anvil_adoption_offer_open(hosted.project_path, view->config.window_id);
     SDL_Log("Project shell connection lost; save %s; native deadline=%u ms",
             hosted.offer ? "and wait for adoption" : "and detach now", SHELL_LOSS_DEADLINE_MS);
@@ -312,6 +323,7 @@ bool anvil_hosted_surface_active(void) {
 }
 bool anvil_hosted_surface_sidebar(void) { return hosted.active && hosted.sidebar; }
 void anvil_hosted_surface_render_failed(const char *cause) {
+  SDL_SetAtomicInt(&hosted.render_failed, 1);
   signal_loss(cause, ANVIL_SURFACE_MSG_FRAME, 0);
 }
 uint32_t anvil_hosted_surface_shell_pid(void) { return hosted.shell_pid; }
