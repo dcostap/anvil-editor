@@ -12,6 +12,7 @@
 #include "process_exit.h"
 #include "shell_launch.h"
 #include "shell_state.h"
+#include "shell_adoption.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -35,6 +36,8 @@
 /* How long one resize step waits for a surface frame of the new size. */
 #define SHELL_RESIZE_WAIT_MS 50
 #define SHELL_CLOSE_TIMEOUT_MS 5000
+/* Covers the Project's shell-loss save, which can take up to its 5 s deadline. */
+#define SHELL_ADOPTION_REQUEST_MS 8000
 
 /* Owned-window fault actions. These require the isolated test environment. */
 #define SHELL_FAULT_MESSAGE (WM_APP + 0x4b)
@@ -120,6 +123,10 @@ typedef struct ShellProject {
   /* A restored Project waits for its turn to start. Rank 0 is the frontmost saved Window. */
   bool restore_waiting;
   int restore_rank;
+  /* A running Project from the shell that ended. Its first start asks it to connect instead of creating a
+   * process. */
+  DWORD adopt_pid;
+  uint64_t adopt_created;
   AnvilIPCPipe pipe;
   bool connected;
   Uint32 connection;
@@ -619,6 +626,9 @@ static wchar_t *build_child_command_line(ShellProject *project, const wchar_t *e
 struct ProjectLaunch {
   ShellProject *project;
   Uint32 connection;
+  DWORD adopt_pid;
+  uint64_t adopt_created;
+  char pipe_name[128];
   wchar_t exe[MAX_PATH * 4];
   wchar_t *command_line;
   PROCESS_INFORMATION process;
@@ -637,6 +647,26 @@ static int SDLCALL launch_thread(void *data) {
     SDL_Log("Shell paused the owned Project launch worker: Project=%u", project->id);
     SDL_Delay(7000);
   }
+  if (launch->adopt_pid) {
+    DWORD pid = launch->adopt_pid;
+    AnvilAdoptionRecord record = {.pid = pid, .created = launch->adopt_created};
+    HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, FALSE, pid);
+    if (process && anvil_adoption_request(&record, launch->pipe_name, SHELL_ADOPTION_REQUEST_MS)) {
+      launch->process = (PROCESS_INFORMATION){.hProcess = process, .dwProcessId = pid};
+      SDL_Log("Shell foreground grant to Project pid=%lu allowed=%d", (unsigned long)pid,
+              AllowSetForegroundWindow(pid) != 0);
+      SDL_Log("Shell adopted Project pid=%lu path=%s", (unsigned long)pid, project->project_path);
+      goto launched;
+    }
+    /* Never two runtimes for one Project. The Project saved when it lost its shell. */
+    if (process && WaitForSingleObject(process, 0) == WAIT_TIMEOUT) {
+      TerminateProcess(process, 1);
+      WaitForSingleObject(process, 2000);
+      SDL_Log("Shell ended a Project that did not accept adoption: pid=%lu", (unsigned long)pid);
+    }
+    if (process) CloseHandle(process);
+    SDL_Log("Shell starts a new runtime instead of adopting pid=%lu", (unsigned long)pid);
+  }
   STARTUPINFOW startup = {.cb = sizeof(startup)};
   if (!CreateProcessW(launch->exe, launch->command_line, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL,
                       NULL, &startup, &launch->process)) {
@@ -649,6 +679,7 @@ static int SDLCALL launch_thread(void *data) {
     SDL_Log("Shell started Project pid=%lu path=%s", (unsigned long)launch->process.dwProcessId,
             project->project_path ? project->project_path : "Sidebar (no Project)");
   }
+launched:
   SDL_SetAtomicInt(&launch->done, 1);
   SDL_Event event = {0};
   event.type = shell.event_type;
@@ -666,6 +697,11 @@ static bool launch_child(ShellProject *project, int argc, char **argv, const cha
   project->launch = launch;
   launch->project = retain_project(project);
   launch->connection = project->connection;
+  /* Adoption is tried once. A later restart creates a process. */
+  launch->adopt_pid = project->adopt_pid;
+  launch->adopt_created = project->adopt_created;
+  project->adopt_pid = 0;
+  SDL_strlcpy(launch->pipe_name, pipe_name, sizeof(launch->pipe_name));
   DWORD exe_len = GetModuleFileNameW(NULL, launch->exe, (DWORD)SDL_arraysize(launch->exe));
   if (!exe_len || exe_len >= SDL_arraysize(launch->exe))
     goto failed;
@@ -3796,7 +3832,8 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
   unsigned pending = 0;
   for (ProjectResolve *item = shell.resolvers; item; item = item->next)
     pending++;
-  if (pending >= 8) {
+  /* A restore resolves every saved Window and adopted Project at once. */
+  if (pending >= (initial ? ANVIL_SHELL_STATE_MAX_WINDOWS + ANVIL_ADOPTION_MAX_RECORDS + 8 : 8)) {
     SDL_Log("Shell rejected Project selection: identity queue full");
     return false;
   }
@@ -3879,7 +3916,7 @@ static bool stop_transport(ShellProject *project, Uint64 deadline) {
   project->launcher = NULL;
   if (project->launch) {
     if (!project->launch->taken && project->launch->process.hProcess) {
-      CloseHandle(project->launch->process.hThread);
+      if (project->launch->process.hThread) CloseHandle(project->launch->process.hThread);
       CloseHandle(project->launch->process.hProcess);
     }
     free(project->launch->command_line);
@@ -3926,7 +3963,8 @@ static bool start_project(ShellProject *project, int argc, char **argv) {
       window->project_presentation.shared_name[0] = 0;
       close_memory_frame(&window->project_presentation);
     }
-    CloseHandle(project->process.hThread);
+    /* An adopted Project has no primary thread handle. */
+    if (project->process.hThread) CloseHandle(project->process.hThread);
     CloseHandle(project->process.hProcess);
     project->process = (PROCESS_INFORMATION){0};
     while (project->queue_head) {
@@ -4303,6 +4341,23 @@ static void finish_resolutions(void) {
           begin_unload(project);
         free_resolution(job);
         continue;
+      }
+      ShellProject *existing = job->restored ? loaded_project(job->identity) : NULL;
+      if (existing && existing != project) {
+        /* Two saved entries name one Project. Keep the adopted runtime; neither has started yet. */
+        bool keep_this = project->adopt_pid && !existing->adopt_pid;
+        ShellProject *duplicate = keep_this ? existing : project;
+        ShellProject *kept = keep_this ? project : existing;
+        SDL_Log("Shell restored one Project twice; keep Project=%u and drop Project=%u", kept->id, duplicate->id);
+        duplicate->restore_waiting = false;
+        ShellWindow *duplicate_window = window_for_id(duplicate->window_id);
+        bool selected = duplicate_window && duplicate_window->selected == duplicate;
+        retire_failed_placeholder(duplicate);
+        if (selected && kept->window_id == duplicate_window->id) select_project(kept);
+        if (!keep_this) {
+          free_resolution(job);
+          continue;
+        }
       }
       if (project && !job->initial) {
         ShellWindow *owner = window_for_id(project->window_id);
@@ -4861,6 +4916,7 @@ static void window_entry(ShellWindow *window, AnvilShellWindowState *entry) {
   WINDOWPLACEMENT placement = {.length = sizeof(placement)};
   GetWindowPlacement(window->hwnd, &placement);
   RECT bounds = placement.rcNormalPosition;
+  entry->id = window->id;
   entry->x = bounds.left;
   entry->y = bounds.top;
   entry->w = bounds.right - bounds.left;
@@ -4942,6 +4998,8 @@ static void advance_restore(void) {
     return;
   }
   if (!shell.restore_timer) shell.restore_timer = SetTimer(shell.service_hwnd, 0x8007, 100, NULL);
+  /* Duplicate saved entries resolve to one identity. Start nothing until each restored identity is known. */
+  if (initial_resolution_pending()) return;
   if (active && active->state == SHELL_STARTING && SDL_GetTicks() < shell.restore_active_since + RESTORE_STAGGER_MS &&
       (!active->process.hProcess || WaitForSingleObject(active->process.hProcess, 0) == WAIT_TIMEOUT))
     return;
@@ -4953,35 +5011,70 @@ static void advance_restore(void) {
   if (!start_project(next, 0, NULL)) fail_connection(next, "Restored Project startup failed");
 }
 
-/* Restores saved Windows back to front, so the frontmost Window opens last. Returns the restored count. */
-static size_t restore_windows(AnvilShellState *saved) {
+/* A restored Project resolves its identity, then waits for the restore sequence to start or adopt it. */
+static ShellProject *restored_project(ShellWindow *window, const char *path, int rank) {
+  ShellProject *project = new_project(window);
+  if (!project) {
+    window_notice(window, "Cannot load Project: runtime allocation failed.");
+    return NULL;
+  }
+  /* App State keeps the path while its identity resolves. */
+  project->project_path = _strdup(path);
+  if (!queue_resolution(window, path, 0, NULL, true, false, false, NULL)) {
+    SDL_Log("Shell could not resolve a restored Project");
+    set_state(project, SHELL_FAILED);
+    return project;
+  }
+  shell.resolvers->project_id = project->id;
+  shell.resolvers->restored = true;
+  project->resolving = true;
+  project->restore_waiting = true;
+  project->restore_rank = rank;
+  return project;
+}
+
+static void adopt_record(ShellProject *project, AnvilAdoptionRecord *record) {
+  if (!project) return;
+  project->adopt_pid = record->pid;
+  project->adopt_created = record->created;
+  record->pid = 0;
+}
+
+/* Restores saved Windows back to front, so the frontmost Window opens last. Each adoptable Project returns to
+ * its saved Window, or to the frontmost Window when that Window was not saved. Returns the Window count. */
+static size_t restore_windows(AnvilShellState *saved, AnvilAdoptionRecord *adoptable, size_t adoptable_count) {
   size_t restored = 0;
+  int rank = (int)saved->count;
+  ShellWindow *front = NULL;
   for (size_t i = saved->count; i-- > 0;) {
     AnvilShellWindowState *entry = &saved->windows[i];
     ShellWindow *window = create_window(entry);
     if (!window) continue;
     restored++;
-    if (!entry->path) continue;
-    ShellProject *project = new_project(window);
-    if (!project) {
-      window_notice(window, "Cannot load Project: runtime allocation failed.");
-      continue;
+    front = window;
+    if (entry->path) {
+      ShellProject *project = restored_project(window, entry->path, (int)i);
+      if (project) select_project(project);
+      for (size_t j = 0; project && j < adoptable_count; j++)
+        if (adoptable[j].pid && adoptable[j].window_id == entry->id && !strcmp(adoptable[j].path, entry->path)) {
+          adopt_record(project, &adoptable[j]);
+          break;
+        }
     }
-    select_project(project);
-    /* App State keeps the path while its identity resolves. */
-    project->project_path = _strdup(entry->path);
-    if (!queue_resolution(window, entry->path, 0, NULL, true, false, false, NULL)) {
-      SDL_Log("Shell could not resolve a restored Project");
-      set_state(project, SHELL_FAILED);
-    } else {
-      shell.resolvers->project_id = project->id;
-      shell.resolvers->restored = true;
-      project->resolving = true;
-      project->restore_waiting = true;
-      project->restore_rank = (int)i;
-    }
+    for (size_t j = 0; j < adoptable_count; j++)
+      if (adoptable[j].pid && adoptable[j].window_id == entry->id)
+        adopt_record(restored_project(window, adoptable[j].path, rank++), &adoptable[j]);
   }
-  SDL_Log("Shell restored %u of %u saved Windows", (unsigned)restored, (unsigned)saved->count);
+  for (size_t j = 0; j < adoptable_count; j++) {
+    if (!adoptable[j].pid) continue;
+    if (!front && (front = create_window(NULL))) restored++;
+    if (!front) break;
+    ShellProject *project = restored_project(front, adoptable[j].path, rank++);
+    if (project && front->selected == front->empty) select_project(project);
+    adopt_record(project, &adoptable[j]);
+  }
+  SDL_Log("Shell restored %u Windows from %u saved Windows and %u adoptable Projects", (unsigned)restored,
+          (unsigned)saved->count, (unsigned)adoptable_count);
   return restored;
 }
 
@@ -5094,8 +5187,12 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
     shell.state_enabled = anvil_shell_state_writer_start(state_file);
     if (!shell.state_enabled) SDL_Log("Shell Window state writer unavailable; Windows will not be restored");
   } else SDL_Log("Shell user directory unavailable; Windows will not be restored");
-  size_t restored = saved.count ? restore_windows(&saved) : 0;
+  /* Projects from a shell that ended wait for this one. */
+  static AnvilAdoptionRecord adoptable[ANVIL_ADOPTION_MAX_RECORDS];
+  size_t adoptable_count = userdir ? anvil_adoption_scan(adoptable, SDL_arraysize(adoptable)) : 0;
+  size_t restored = saved.count || adoptable_count ? restore_windows(&saved, adoptable, adoptable_count) : 0;
   anvil_shell_state_free(&saved);
+  for (size_t i = 0; i < adoptable_count; i++) anvil_adoption_free(&adoptable[i]);
   if (restored) {
     /* A Project argument after a restore acts like an external launch. */
     if (has_project_argument(argc, argv) &&

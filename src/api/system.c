@@ -541,6 +541,13 @@ top:
       if (anvil_hosted_surface_loss_event(e.type)) {
         lua_pushliteral(L, "shelllost"); return 1;
       }
+      if (anvil_hosted_surface_adopted_event(e.type)) {
+        anvil_hosted_surface_finish_adoption();
+        lua_pushliteral(L, "shelladopted"); return 1;
+      }
+      if (anvil_hosted_surface_gone_event(e.type)) {
+        lua_pushliteral(L, "shellgone"); return 1;
+      }
       if (anvil_hosted_surface_configuration_event(e.type)) {
         lua_pushliteral(L, "windowconfiguration"); return 1;
       }
@@ -1664,6 +1671,12 @@ static int f_is_hosted_surface(lua_State *L) {
   return 1;
 }
 
+/* Call after the shell-loss save. True: the Project waits for the next shell to adopt it. */
+static int f_await_shell_adoption(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_await_adoption());
+  return 1;
+}
+
 
 static int f_sleep(lua_State *L) {
   double n = luaL_checknumber(L, 1);
@@ -2465,6 +2478,7 @@ static const luaL_Reg lib[] = {
   { "get_time",              f_get_time              },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "is_hosted_surface",     f_is_hosted_surface     },
+  { "await_shell_adoption",  f_await_shell_adoption  },
   { "select_project",        f_select_project        },
   { "new_anvil_window",      f_new_anvil_window      },
   { "get_anvil_window_id",   f_get_anvil_window_id   },

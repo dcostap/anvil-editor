@@ -12,6 +12,8 @@
 #define ANVIL_SHELL_STATE_MAX_BYTES (256 * 1024)
 
 typedef struct {
+  /* The Window's id in the shell that wrote the file. Adopted Projects name it. */
+  uint32_t id;
   /* Normal (restored) bounds in Windows workspace coordinates, as `GetWindowPlacement` reports them. */
   int32_t x, y, w, h;
   bool maximized;
@@ -30,6 +32,11 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size);
 /* Decodes a complete file. Returns false for an unknown version, malformed data, or exceeded bounds. */
 bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *state);
 void anvil_shell_state_free(AnvilShellState *state);
+
+/* Replaces `file` atomically through a temporary file beside it. */
+bool anvil_shell_file_replace(const wchar_t *file, const char *data, size_t size);
+/* Reads at most `limit` bytes. Returns NULL when `file` is missing, unreadable, or larger. */
+char *anvil_shell_file_read(const wchar_t *file, size_t limit, size_t *size);
 
 /* Reads `file`. Returns false when it is missing or invalid. */
 bool anvil_shell_state_load(const wchar_t *file, AnvilShellState *state);

@@ -2277,9 +2277,30 @@ end
 function core.on_shell_lost()
   if core.shell_lost then return end
   core.shell_lost = true
+  -- Save first, so a Project that no shell adopts keeps what a plain shell loss keeps.
+  local ok, err = pcall(core.save_workspace)
+  if not ok then core.log_quiet("Shell lost: Workspace save failed: %s", tostring(err)) end
+  save_app_state()
+  if system.await_shell_adoption() then
+    core.log_quiet("Shell lost: Workspace saved; wait for the next shell to adopt this Project")
+    return
+  end
+  core.on_shell_gone()
+end
+
+function core.on_shell_gone()
   core.log_quiet("Shell lost: save Workspace, detach Terminal Sessions, and exit now; named unsaved contents may be lost")
   -- Bypass interactive quit policy. Workspace exit saves and detaches Views.
   core.exit(function() core.quit_request = true end, true)
+end
+
+-- The adopting shell starts with none of this Project's shell-side state.
+function core.on_shell_adopted()
+  core.shell_lost = false
+  core.log_quiet("Shell adopted this Project: shell pid=%s Window=%s", tostring(system.get_window_process_id()),
+    tostring(system.get_anvil_window_id()))
+  core.publish_project_sidebar()
+  core.redraw = true
 end
 
 local function trace_keyboard_input(stage, type, key, event, route)
@@ -2303,6 +2324,8 @@ end
 
 function core.on_event(type, ...)
   if type == "shelllost" then core.on_shell_lost(); return true end
+  if type == "shellgone" then core.on_shell_gone(); return true end
+  if type == "shelladopted" then core.on_shell_adopted(); return true end
   if core.shell_lost and (type == "quit" or type == "windowclosed") then return true end
   core.current_event_context = event_summary(type, ...)
   record_focus_input_event(type, ...)

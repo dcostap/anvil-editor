@@ -1,4 +1,5 @@
 #include "shell_state.h"
+#include "shell_adoption.h"
 #include <SDL3/SDL.h>
 #include <windows.h>
 #include <stdio.h>
@@ -9,9 +10,9 @@ static int failures;
 #define CHECK(cond, message) do { if (!(cond)) { fprintf(stderr, "FAIL: %s\n", message); failures++; } } while (0)
 
 static AnvilShellWindowState sample[] = {
-  {-8, 40, 1200, 800, true, "C:\\Projects\\Front Project"},
-  {100, 120, 900, 700, false, NULL},
-  {30, 30, 640, 480, false, "D:\\x\\\xc3\xa9t\xc3\xa9"},
+  {3, -8, 40, 1200, 800, true, "C:\\Projects\\Front Project"},
+  {1, 100, 120, 900, 700, false, NULL},
+  {7, 30, 30, 640, 480, false, "D:\\x\\\xc3\xa9t\xc3\xa9"},
 };
 
 static void round_trip(void) {
@@ -23,6 +24,7 @@ static void round_trip(void) {
   CHECK(decoded.count == 3, "Window count changed");
   for (size_t i = 0; i < 3 && i < decoded.count; i++) {
     AnvilShellWindowState *a = &sample[i], *b = &decoded.windows[i];
+    CHECK(a->id == b->id, "Window id changed");
     CHECK(a->x == b->x && a->y == b->y && a->w == b->w && a->h == b->h && a->maximized == b->maximized,
           "Window placement changed");
     CHECK((!a->path && !b->path) || (a->path && b->path && !strcmp(a->path, b->path)), "Selected Project changed");
@@ -40,21 +42,23 @@ static void round_trip(void) {
 static void rejects(void) {
   AnvilShellState decoded;
   const char *bad[] = {
-    "anvil-shell-windows 2\n",
-    "anvil-shell-windows 1\nwindow 0 0 0 10 0 0 \n",
-    "anvil-shell-windows 1\nwindow 0 0 10 10 2 0 \n",
-    "anvil-shell-windows 1\nwindow 0 0 10 10 0 5 abc\n",
-    "anvil-shell-windows 1\nwindow 0 0 10 10 0 3 abc\ngarbage\n",
+    "anvil-shell-windows 1\nwindow 0 0 10 10 0 0 \n",
+    "anvil-shell-windows 3\n",
+    "anvil-shell-windows 2\nwindow 0 0 0 10 10 0 0 \n",
+    "anvil-shell-windows 2\nwindow 1 0 0 0 10 0 0 \n",
+    "anvil-shell-windows 2\nwindow 1 0 0 10 10 2 0 \n",
+    "anvil-shell-windows 2\nwindow 1 0 0 10 10 0 5 abc\n",
+    "anvil-shell-windows 2\nwindow 1 0 0 10 10 0 3 abc\ngarbage\n",
   };
   for (size_t i = 0; i < SDL_arraysize(bad); i++) {
     CHECK(!anvil_shell_state_decode(bad[i], strlen(bad[i]), &decoded), "malformed file decoded");
     anvil_shell_state_free(&decoded);
   }
-  CHECK(anvil_shell_state_decode("anvil-shell-windows 1\n", 22, &decoded) && decoded.count == 0,
+  CHECK(anvil_shell_state_decode("anvil-shell-windows 2\n", 22, &decoded) && decoded.count == 0,
         "empty state rejected");
   anvil_shell_state_free(&decoded);
   AnvilShellWindowState many[ANVIL_SHELL_STATE_MAX_WINDOWS + 1] = {0};
-  for (size_t i = 0; i < SDL_arraysize(many); i++) many[i].w = many[i].h = 10;
+  for (size_t i = 0; i < SDL_arraysize(many); i++) many[i].id = 1, many[i].w = many[i].h = 10;
   AnvilShellState too_many = {many, SDL_arraysize(many)};
   size_t size;
   CHECK(!anvil_shell_state_encode(&too_many, &size), "Window bound not enforced");
@@ -80,11 +84,43 @@ static void writer(void) {
   DeleteFileW(file);
 }
 
+/* An adoption record names one Project process. A damaged record adopts nothing. */
+static void adoption_records(void) {
+  AnvilAdoptionRecord record = {4242, 0x01dc1234abcd5678ull, 9, "C:\\Projects\\R\xc3\xa9cord"}, decoded;
+  size_t size = 0;
+  char *data = anvil_adoption_encode(&record, &size);
+  CHECK(data, "record encode failed");
+  CHECK(data && anvil_adoption_decode(data, size, &decoded), "record decode failed");
+  CHECK(decoded.pid == record.pid && decoded.created == record.created && decoded.window_id == record.window_id &&
+        decoded.path && !strcmp(decoded.path, record.path), "record changed");
+  anvil_adoption_free(&decoded);
+  for (size_t cut = 0; data && cut < size; cut++) {
+    CHECK(!anvil_adoption_decode(data, cut, &decoded), "partial record decoded");
+    anvil_adoption_free(&decoded);
+  }
+  free(data);
+  const char *bad[] = {
+    "anvil-adoption 2\n1 1 1 1 a\n",
+    "anvil-adoption 1\n0 1 1 1 a\n",
+    "anvil-adoption 1\n1 1 1 0 \n",
+    "anvil-adoption 1\n4294967296 1 1 1 a\n",
+    "anvil-adoption 1\n1 1 1 1 ab\n",
+    "anvil-adoption 1\n1 1 1 1 a\nextra",
+  };
+  for (size_t i = 0; i < SDL_arraysize(bad); i++) {
+    CHECK(!anvil_adoption_decode(bad[i], strlen(bad[i]), &decoded), "malformed record decoded");
+    anvil_adoption_free(&decoded);
+  }
+  AnvilAdoptionRecord empty = {1, 1, 1, NULL};
+  CHECK(!anvil_adoption_encode(&empty, &size), "record without a Project encoded");
+}
+
 int main(int argc, char **argv) {
   (void)argc; (void)argv;
   round_trip();
   rejects();
   writer();
+  adoption_records();
   if (failures) return 1;
   printf("shell state: ok\n");
   return 0;

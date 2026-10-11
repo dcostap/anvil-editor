@@ -3,6 +3,9 @@
 #include "input_latency_probe.h"
 #include "system_events.h"
 #include "process_exit.h"
+#ifdef _WIN32
+#include "shell_adoption.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,6 +62,20 @@ static struct {
   DWORD shell_pid;
   HANDLE shell_process, loss_signal, exit_sent;
   Uint32 loss_event;
+  /* Adoption after shell loss. `lost` drops outbound messages until the UI thread applies the new shell's
+   * configuration. `adopting` holds inbound messages until then. Both change under `queue_lock`. */
+  char *project_path;
+  AnvilAdoptionOffer *offer;
+  HANDLE adoption_ready;
+  Uint32 adopted_event, gone_event;
+  bool lost, writing;
+  SDL_AtomicInt adopting, reader_running;
+  AnvilSurfaceConfigure adopted_config;
+  /* Window state the next shell does not know. */
+  char title[4097];
+  bool has_title, has_hit_test;
+  AnvilSurfaceHitTest hit_test;
+  int bordered, visible;
   Uint32 receive_event;
   Uint32 geometry_event;
   SDL_AtomicInt inbound_bytes;
@@ -70,7 +87,7 @@ static struct {
   HostedMessage *inbound_head, *inbound_tail;
   size_t queued;
   char pipe_name[256];
-  AnvilIPCPipe pipe;
+  AnvilIPCPipe *pipe;
   SDL_Thread *reader;
   struct {
     uint32_t id;
@@ -78,7 +95,7 @@ static struct {
     void *userdata;
   } dialogs[ANVIL_SURFACE_DIALOG_LIMIT];
 
-} hosted = { .valid = true };
+} hosted = { .valid = true, .bordered = -1, .visible = -1 };
 
 bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
   bool project = *argc > 1 && !strcmp(argv[1], ANVIL_PROJECT_ARG);
@@ -86,6 +103,7 @@ bool anvil_hosted_surface_parse_args(int *argc, char **argv) {
   for (int i = 1; i < *argc; i++) if (!strcmp(argv[i], ANVIL_PROJECT_ARGUMENTS_ARG)) original_arguments = true;
   if (project) {
     if (*argc < 3 || argv[2][0] == '-') { hosted.valid = false; return false; }
+    hosted.project_path = _strdup(argv[2]);
     int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, argv[2], -1, NULL, 0);
     wchar_t *path = count > 0 ? malloc(count * sizeof(wchar_t)) : NULL;
     DWORD attrs = INVALID_FILE_ATTRIBUTES;
@@ -140,21 +158,146 @@ bool anvil_hosted_surface_restarted(void) { return hosted.restarted; }
 bool anvil_hosted_surface_loss_event(Uint32 type) { return hosted.active && type == hosted.loss_event; }
 bool anvil_hosted_surface_configuration_event(Uint32 type) { return hosted.active && type == hosted.geometry_event; }
 
-static int SDLCALL loss_watchdog(void *data) {
-  (void)data;
-  HANDLE signals[] = { hosted.shell_process, hosted.loss_signal };
-  DWORD reason = WaitForMultipleObjects(2, signals, FALSE, INFINITE);
-  if (SDL_GetAtomicInt(&hosted.intentional_exit)) return 0;
-  if (reason == WAIT_OBJECT_0) SDL_Log("Project shell loss cause: shell process exit pid=%lu", (unsigned long)hosted.shell_pid);
-  SDL_Log("Project shell connection lost; save and detach now; native deadline=%u ms", SHELL_LOSS_DEADLINE_MS);
-  anvil_ipc_pipe_cancel(&hosted.pipe);
-  SDL_Event event = {0}; event.type = hosted.loss_event; SDL_PushEvent(&event);
+static AnvilIPCPipe *open_shell_pipe(const char *name, DWORD pid, AnvilSurfaceConfigure *config, HANDLE *process);
+static int SDLCALL reader_thread(void *data);
+
+static void free_messages(HostedMessage **head, HostedMessage **tail, bool inbound) {
+  while (*head) {
+    HostedMessage *next = (*head)->next;
+    if (inbound) SDL_AddAtomicInt(&hosted.inbound_bytes, -(int)(sizeof(**head) + (*head)->size + 1));
+    free(*head);
+    *head = next;
+  }
+  *tail = NULL;
+}
+
+/* Connects to an adopting shell. The UI thread applies its configuration when the adopted event arrives. */
+static bool adopt(const char *name, DWORD pid) {
+  char prefix[64];
+  snprintf(prefix, sizeof(prefix), "%s%lu-", PIPE_PREFIX, (unsigned long)pid);
+  if (strncmp(name, prefix, strlen(prefix)) || strlen(name) >= sizeof(hosted.pipe_name)) {
+    SDL_Log("Project refused an adopting shell's pipe name");
+    return false;
+  }
+  AnvilSurfaceConfigure config;
+  HANDLE process = NULL;
+  AnvilIPCPipe *pipe = open_shell_pipe(name, pid, &config, &process);
+  if (!pipe) return false;
+  /* The lost connection's reader ends on its cancelled pipe. Its writer is idle once `writing` clears. */
+  for (int i = 0; i < 200 && SDL_GetAtomicInt(&hosted.reader_running); i++) Sleep(10);
+  bool reader_done = !SDL_GetAtomicInt(&hosted.reader_running);
+  SDL_LockMutex(hosted.queue_lock);
+  while (hosted.writing) {
+    SDL_UnlockMutex(hosted.queue_lock);
+    Sleep(1);
+    SDL_LockMutex(hosted.queue_lock);
+  }
+  AnvilIPCPipe *old = hosted.pipe;
+  hosted.pipe = pipe;
+  free_messages(&hosted.inbound_head, &hosted.inbound_tail, true);
+  hosted.adopted_config = config;
+  SDL_SetAtomicInt(&hosted.adopting, 1);
+  SDL_UnlockMutex(hosted.queue_lock);
+  if (reader_done) {
+    anvil_ipc_pipe_close(old);
+    free(old);
+  } else SDL_Log("Project lost connection's reader did not end; keep its pipe");
+  CloseHandle(hosted.shell_process);
+  hosted.shell_process = process;
+  hosted.shell_pid = pid;
+  SDL_strlcpy(hosted.pipe_name, name, sizeof(hosted.pipe_name));
+  ResetEvent(hosted.loss_signal);
+  SDL_SetAtomicInt(&hosted.loss_cause, 0);
+  SDL_SetAtomicInt(&hosted.reader_running, 1);
+  SDL_Thread *reader = SDL_CreateThread(reader_thread, "anvil-hosted-input", pipe);
+  if (reader) SDL_DetachThread(reader);
+  else {
+    SDL_SetAtomicInt(&hosted.reader_running, 0);
+    SetEvent(hosted.loss_signal);
+  }
+  SDL_Event event = {0};
+  event.type = hosted.adopted_event;
+  SDL_PushEvent(&event);
+  SDL_Log("Project adopted by shell pid=%lu configuration=%llu", (unsigned long)pid,
+          (unsigned long long)config.configuration);
+  return true;
+}
+
+static void loss_deadline(void) {
   Sleep(SHELL_LOSS_DEADLINE_MS);
   SDL_Log("Project shell-loss deadline expired; retain the last durable Workspace; unsaved edits may be lost");
   /* A stalled thread can hold DLL teardown locks. Do not run DLL detach here. */
   anvil_process_terminate(GetCurrentProcess(), 124);
-  return 0;
 }
+
+/* Probe faults shorten the period or make the Project never answer a shell. */
+static DWORD adoption_period(void) {
+  const char *fault = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE") ? SDL_getenv("ANVIL_SURFACE_FAULT_ADOPTION_PERIOD_MS") : NULL;
+  int period = fault ? SDL_atoi(fault) : 0;
+  return period > 0 ? (DWORD)period : ANVIL_ADOPTION_PERIOD_MS;
+}
+
+static bool adoption_hangs(void) {
+  const char *fault = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE") ? SDL_getenv("ANVIL_SURFACE_FAULT_ADOPTION") : NULL;
+  return fault && !SDL_strcmp(fault, "hang");
+}
+
+static int SDLCALL loss_watchdog(void *data) {
+  (void)data;
+  for (;;) {
+    HANDLE signals[] = { hosted.shell_process, hosted.loss_signal };
+    DWORD reason = WaitForMultipleObjects(2, signals, FALSE, INFINITE);
+    if (SDL_GetAtomicInt(&hosted.intentional_exit)) return 0;
+    if (reason == WAIT_OBJECT_0) SDL_Log("Project shell loss cause: shell process exit pid=%lu", (unsigned long)hosted.shell_pid);
+    SDL_SetAtomicInt(&hosted.loss_cause, 1);
+    anvil_ipc_pipe_cancel(hosted.pipe);
+    SDL_LockMutex(hosted.queue_lock);
+    hosted.lost = true;
+    free_messages(&hosted.head, &hosted.tail, false);
+    hosted.queued = 0;
+    SDL_UnlockMutex(hosted.queue_lock);
+    DWORD period = adoption_period();
+    uint64_t deadline = GetTickCount64() + period;
+    /* The Sidebar process restarts with the next shell instead. */
+    hosted.offer = hosted.sidebar || !hosted.project_path ? NULL
+                 : anvil_adoption_offer_open(hosted.project_path, view->config.window_id);
+    SDL_Log("Project shell connection lost; save %s; native deadline=%u ms",
+            hosted.offer ? "and wait for adoption" : "and detach now", SHELL_LOSS_DEADLINE_MS);
+    SDL_Event event = {0}; event.type = hosted.loss_event; SDL_PushEvent(&event);
+    if (!hosted.offer) loss_deadline();
+    if (WaitForSingleObject(hosted.adoption_ready, SHELL_LOSS_DEADLINE_MS) != WAIT_OBJECT_0) {
+      anvil_adoption_offer_close(hosted.offer);
+      SDL_Log("Project did not finish its shell-loss save in time");
+      anvil_process_terminate(GetCurrentProcess(), 124);
+    }
+    ResetEvent(hosted.adoption_ready);
+    SDL_Log("Project waits up to %lu ms for a shell to adopt it", (unsigned long)period);
+    char name[256];
+    DWORD pid = 0;
+    bool adopted = false;
+    if (adoption_hangs()) {
+      SDL_Log("Project adoption fault: never answer a shell");
+      for (;;) Sleep(INFINITE);
+    }
+    while (!adopted && anvil_adoption_offer_accept(hosted.offer, deadline, name, sizeof(name), &pid))
+      adopted = adopt(name, pid);
+    anvil_adoption_offer_close(hosted.offer);
+    hosted.offer = NULL;
+    if (!adopted) {
+      SDL_Log("No shell adopted this Project within %lu ms; save, detach, and exit", (unsigned long)period);
+      SDL_Event gone = {0}; gone.type = hosted.gone_event; SDL_PushEvent(&gone);
+      loss_deadline();
+    }
+  }
+}
+
+bool anvil_hosted_surface_await_adoption(void) {
+  if (!hosted.active || !hosted.offer) return false;
+  SetEvent(hosted.adoption_ready);
+  return true;
+}
+bool anvil_hosted_surface_adopted_event(Uint32 type) { return hosted.active && type == hosted.adopted_event; }
+bool anvil_hosted_surface_gone_event(Uint32 type) { return hosted.active && type == hosted.gone_event; }
 
 static void signal_loss(const char *cause, uint16_t type, size_t bytes) {
   if (SDL_GetAtomicInt(&hosted.intentional_exit)) return;
@@ -430,13 +573,31 @@ complete:
   free(message);
 }
 
+static void apply_configure(const AnvilSurfaceConfigure *config);
+/* Runs on the UI thread. The new shell knows nothing this Project told the old one, so send it again. */
+void anvil_hosted_surface_finish_adoption(void) {
+  SDL_LockMutex(hosted.queue_lock);
+  AnvilSurfaceConfigure config = hosted.adopted_config;
+  hosted.lost = false;
+  SDL_UnlockMutex(hosted.queue_lock);
+  apply_configure(&config);
+  view->last_cursor = -1;
+  if (hosted.has_title) anvil_hosted_surface_set_title(hosted.title);
+  if (hosted.has_hit_test) anvil_hosted_surface_set_hit_test(&hosted.hit_test);
+  if (hosted.bordered >= 0) anvil_hosted_surface_set_bordered(hosted.bordered);
+  if (hosted.visible >= 0) anvil_hosted_surface_set_visible(hosted.visible);
+  SDL_SetAtomicInt(&hosted.adopting, 0);
+  push_window_event(SDL_EVENT_WINDOW_EXPOSED);
+  anvil_hosted_surface_poll();
+}
+
 bool anvil_hosted_surface_take_sidebar_query_needed(void) {
   bool needed = hosted.sidebar_query_needed;
   hosted.sidebar_query_needed = false;
   return needed;
 }
 void anvil_hosted_surface_poll(void) {
-  if (!hosted.active || !hosted.queue_lock) return;
+  if (!hosted.active || !hosted.queue_lock || SDL_GetAtomicInt(&hosted.adopting)) return;
   /* Configuration, focus, and input share one caller-visible order. */
   while (!system_has_pending_events()) {
     SDL_LockMutex(hosted.queue_lock);
@@ -458,12 +619,16 @@ bool anvil_hosted_surface_dispatch(const SDL_Event *event) {
 }
 
 static int SDLCALL reader_thread(void *data) {
-  (void)data;
+  AnvilIPCPipe *pipe = data;
   uint8_t *payload = malloc(ANVIL_SURFACE_MAX_PAYLOAD);
-  if (!payload) { signal_loss("inbound allocation failed", 0, ANVIL_SURFACE_MAX_PAYLOAD); return 1; }
+  if (!payload) {
+    signal_loss("inbound allocation failed", 0, ANVIL_SURFACE_MAX_PAYLOAD);
+    SDL_SetAtomicInt(&hosted.reader_running, 0);
+    return 1;
+  }
   AnvilIPCHeader header = {0};
   const char *cause = "pipe EOF or invalid packet";
-  while (anvil_ipc_pipe_read(&hosted.pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
+  while (anvil_ipc_pipe_read(pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
     uint16_t type = header.type;
     uint32_t size = header.size;
     uint8_t *body = payload;
@@ -555,6 +720,7 @@ static int SDLCALL reader_thread(void *data) {
 failed:
   free(payload);
   signal_loss(cause, header.type, header.size);
+  SDL_SetAtomicInt(&hosted.reader_running, 0);
   return 0;
 }
 
@@ -567,13 +733,20 @@ static int SDLCALL writer_thread(void *data) {
     hosted.head = message->next;
     if (!hosted.head) hosted.tail = NULL;
     hosted.queued -= sizeof(*message) + message->size;
+    AnvilIPCPipe *pipe = hosted.pipe;
+    hosted.writing = true;
     SDL_UnlockMutex(hosted.queue_lock);
-    bool ok = anvil_ipc_pipe_write(&hosted.pipe, message->type, message->payload, message->size, NULL, 0);
+    bool ok = anvil_ipc_pipe_write(pipe, message->type, message->payload, message->size, NULL, 0);
+    SDL_LockMutex(hosted.queue_lock);
+    hosted.writing = false;
+    SDL_UnlockMutex(hosted.queue_lock);
     bool final = message->type == ANVIL_SURFACE_MSG_EXIT_INTENT || message->type == ANVIL_SURFACE_MSG_RESTART;
     free(message);
     if (final) SetEvent(hosted.exit_sent);
-    if (!ok) { signal_loss("pipe write failed", 0, 0); return 1; }
+    /* The writer outlives a lost connection. Messages are dropped until an adopting shell connects. */
+    if (!ok) signal_loss("pipe write failed", 0, 0);
   }
+  return 0;
 }
 
 static void send_message(uint16_t type, const void *payload, uint32_t size) {
@@ -589,6 +762,11 @@ static void send_message(uint16_t type, const void *payload, uint32_t size) {
   if (size) memcpy(message->payload + prefix, payload, size);
   size += prefix;
   SDL_LockMutex(hosted.queue_lock);
+  if (hosted.lost) {
+    SDL_UnlockMutex(hosted.queue_lock);
+    free(message);
+    return;
+  }
   if (type == ANVIL_SURFACE_MSG_FRAME && hosted.tail && hosted.tail->type == message->type && hosted.tail->size == size &&
       (!wrapped || ((AnvilSidebarSurfacePacket *)hosted.tail->payload)->window_id == view->config.window_id)) {
     memcpy(hosted.tail->payload, message->payload, size);
@@ -734,12 +912,12 @@ static void send_int(uint16_t type, int value) {
   send_message(type, &message, sizeof(message));
 }
 
-bool anvil_hosted_surface_connect(void) {
-  if (!hosted.active) return false;
+/* Opens a shell's surface pipe, checks its server, greets it, and reads its first configuration. */
+static AnvilIPCPipe *open_shell_pipe(const char *name, DWORD pid, AnvilSurfaceConfigure *config, HANDLE *process) {
   HANDLE handle = INVALID_HANDLE_VALUE;
   Uint64 deadline = SDL_GetTicks() + CONNECT_TIMEOUT_MS;
   for (;;) {
-    handle = CreateFileA(hosted.pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+    handle = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                          OPEN_EXISTING,
                          FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
                          NULL);
@@ -747,55 +925,72 @@ bool anvil_hosted_surface_connect(void) {
     if (GetLastError() != ERROR_PIPE_BUSY || SDL_GetTicks() >= deadline) {
       SDL_Log("Hosted surface could not open the shell pipe: %lu",
               (unsigned long)GetLastError());
-      return false;
+      return NULL;
     }
-    WaitNamedPipeA(hosted.pipe_name, 100);
+    WaitNamedPipeA(name, 100);
   }
-  if (!anvil_ipc_pipe_init(&hosted.pipe, handle, ANVIL_SURFACE_PROTOCOL_VERSION, ANVIL_SURFACE_MAX_PAYLOAD)) {
+  AnvilIPCPipe *pipe = calloc(1, sizeof(*pipe));
+  if (!pipe || !anvil_ipc_pipe_init(pipe, handle, ANVIL_SURFACE_PROTOCOL_VERSION, ANVIL_SURFACE_MAX_PAYLOAD)) {
+    free(pipe);
     CloseHandle(handle);
-    return false;
+    return NULL;
   }
   ULONG server = 0;
-  if (!GetNamedPipeServerProcessId(handle, &server) || server != hosted.shell_pid ||
-      !(hosted.shell_process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server))) {
-    SDL_Log("Project rejected shell pipe identity: expected=%lu actual=%lu", (unsigned long)hosted.shell_pid, (unsigned long)server);
-    return false;
+  if (!GetNamedPipeServerProcessId(handle, &server) || server != pid ||
+      !(*process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server))) {
+    SDL_Log("Project rejected shell pipe identity: expected=%lu actual=%lu", (unsigned long)pid, (unsigned long)server);
+    anvil_ipc_pipe_close(pipe);
+    free(pipe);
+    return NULL;
   }
-  hosted.pipe.timeout_ms = CONNECT_TIMEOUT_MS;
+  pipe->timeout_ms = CONNECT_TIMEOUT_MS;
 
   AnvilSurfaceHello hello = { (uint32_t)GetCurrentProcessId() };
-  if (!anvil_ipc_pipe_write(&hosted.pipe, ANVIL_SURFACE_MSG_HELLO, &hello, sizeof(hello), NULL, 0)) {
-    SDL_Log("Hosted surface could not greet the shell.");
-    return false;
-  }
-
-  /* Startup reads the display scale and initial size, so wait for them. */
   AnvilIPCHeader header = { 0 };
-  AnvilSurfaceConfigure config;
-  bool read = anvil_ipc_pipe_read(&hosted.pipe, &header, &config, sizeof(config));
-  if (!read || header.type != ANVIL_SURFACE_MSG_CONFIGURE || header.size != sizeof(config) || !valid_configure(&config)) {
-    SDL_Log("Hosted surface did not receive its first configuration: read=%d type=%u size=%u error=%lu",
-            read, (unsigned)header.type, (unsigned)header.size, (unsigned long)GetLastError());
-    return false;
+  bool greeted = anvil_ipc_pipe_write(pipe, ANVIL_SURFACE_MSG_HELLO, &hello, sizeof(hello), NULL, 0);
+  /* Startup reads the display scale and initial size, so wait for them. */
+  bool read = greeted && anvil_ipc_pipe_read(pipe, &header, config, sizeof(*config));
+  if (!read || header.type != ANVIL_SURFACE_MSG_CONFIGURE || header.size != sizeof(*config) || !valid_configure(config)) {
+    SDL_Log("Hosted surface did not receive its first configuration: greeted=%d read=%d type=%u size=%u error=%lu",
+            greeted, read, (unsigned)header.type, (unsigned)header.size, (unsigned long)GetLastError());
+    CloseHandle(*process);
+    *process = NULL;
+    anvil_ipc_pipe_close(pipe);
+    free(pipe);
+    return NULL;
   }
+  pipe->timeout_ms = INFINITE;
+  return pipe;
+}
+
+bool anvil_hosted_surface_connect(void) {
+  if (!hosted.active) return false;
+  AnvilSurfaceConfigure config;
+  hosted.pipe = open_shell_pipe(hosted.pipe_name, hosted.shell_pid, &config, &hosted.shell_process);
+  if (!hosted.pipe) return false;
   view->config = config;
   view->config_applied = true;
 
-  hosted.pipe.timeout_ms = INFINITE;
   hosted.queue_lock = SDL_CreateMutex(); hosted.queue_condition = SDL_CreateCondition();
   hosted.loss_signal = CreateEventW(NULL, TRUE, FALSE, NULL);
   hosted.exit_sent = CreateEventW(NULL, TRUE, FALSE, NULL);
+  hosted.adoption_ready = CreateEventW(NULL, TRUE, FALSE, NULL);
   hosted.loss_event = SDL_RegisterEvents(1);
   hosted.receive_event = SDL_RegisterEvents(1);
   hosted.geometry_event = SDL_RegisterEvents(1);
+  hosted.adopted_event = SDL_RegisterEvents(1);
+  hosted.gone_event = SDL_RegisterEvents(1);
   if (!hosted.queue_lock || !hosted.queue_condition || !hosted.loss_signal || !hosted.exit_sent ||
-      hosted.loss_event == (Uint32)-1 || hosted.receive_event == (Uint32)-1 || hosted.geometry_event == (Uint32)-1) return false;
+      !hosted.adoption_ready || hosted.loss_event == (Uint32)-1 || hosted.receive_event == (Uint32)-1 ||
+      hosted.geometry_event == (Uint32)-1 || hosted.adopted_event == (Uint32)-1 || hosted.gone_event == (Uint32)-1)
+    return false;
   SDL_Thread *writer = SDL_CreateThread(writer_thread, "anvil-project-writer", NULL);
   SDL_Thread *watchdog = SDL_CreateThread(loss_watchdog, "anvil-project-deadline", NULL);
   if (!writer || !watchdog) return false;
   SDL_DetachThread(writer); SDL_DetachThread(watchdog);
 
-  hosted.reader = SDL_CreateThread(reader_thread, "anvil-hosted-input", NULL);
+  SDL_SetAtomicInt(&hosted.reader_running, 1);
+  hosted.reader = SDL_CreateThread(reader_thread, "anvil-hosted-input", hosted.pipe);
   if (!hosted.reader) return false;
   SDL_DetachThread(hosted.reader);
   return true;
@@ -955,7 +1150,7 @@ bool anvil_hosted_surface_has_focus(void) {
 }
 
 bool anvil_hosted_surface_should_render(void) {
-  return !hosted.active || view->config.render_enabled != 0;
+  return !hosted.active || (view->config.render_enabled != 0 && !SDL_GetAtomicInt(&hosted.loss_cause));
 }
 
 float anvil_hosted_surface_display_scale(void) {
@@ -1009,17 +1204,25 @@ void anvil_hosted_surface_set_title(const char *title) {
   if (!title) return;
   size_t len = strlen(title);
   if (len > 4096) len = 4096;
+  if (title != hosted.title) {
+    memcpy(hosted.title, title, len);
+    hosted.title[len] = 0;
+    hosted.has_title = true;
+  }
   send_message(ANVIL_SURFACE_MSG_TITLE, title, (uint32_t)len);
 }
 
 void anvil_hosted_surface_set_hit_test(const AnvilSurfaceHitTest *hit_test) {
   if (!hit_test) return;
+  hosted.hit_test = *hit_test;
+  hosted.has_hit_test = true;
   AnvilSurfaceHitTest message = *hit_test;
   message.configuration = view->config.configuration;
   send_message(ANVIL_SURFACE_MSG_HIT_TEST, &message, sizeof(message));
 }
 
 void anvil_hosted_surface_set_bordered(bool bordered) {
+  hosted.bordered = bordered;
   send_int(ANVIL_SURFACE_MSG_BORDERED, bordered ? 1 : 0);
 }
 
@@ -1036,7 +1239,10 @@ void anvil_hosted_surface_flash(int operation) {
   send_int(ANVIL_SURFACE_MSG_FLASH, operation);
 }
 
-void anvil_hosted_surface_set_visible(bool visible) { send_int(ANVIL_SURFACE_MSG_VISIBLE, visible); }
+void anvil_hosted_surface_set_visible(bool visible) {
+  hosted.visible = visible;
+  send_int(ANVIL_SURFACE_MSG_VISIBLE, visible);
+}
 bool anvil_hosted_surface_set_opacity(float opacity) {
   if (!(opacity >= 0 && opacity <= 1)) return false;
   send_message(ANVIL_SURFACE_MSG_OPACITY, &opacity, sizeof(opacity)); return true;
@@ -1070,6 +1276,10 @@ void anvil_hosted_surface_controls(int *x, int *y, int *w, int *h) { *x = *y = *
 bool anvil_hosted_surface_parse_valid(void) { return true; }
 bool anvil_hosted_surface_restarted(void) { return false; }
 bool anvil_hosted_surface_loss_event(Uint32 type) { (void)type; return false; }
+bool anvil_hosted_surface_adopted_event(Uint32 type) { (void)type; return false; }
+bool anvil_hosted_surface_gone_event(Uint32 type) { (void)type; return false; }
+bool anvil_hosted_surface_await_adoption(void) { return false; }
+void anvil_hosted_surface_finish_adoption(void) {}
 void anvil_hosted_surface_exit_intent(const char *path) { (void)path; }
 void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) { (void)decision; }
 void anvil_hosted_surface_dialog_result_failed(void) {}

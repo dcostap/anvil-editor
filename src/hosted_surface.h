@@ -28,6 +28,13 @@ void anvil_hosted_surface_controls(int *x, int *y, int *w, int *h);
 bool anvil_hosted_surface_restarted(void);
 bool anvil_hosted_surface_parse_valid(void);
 bool anvil_hosted_surface_loss_event(Uint32 type);
+/* After shell loss, a Project waits for the next shell to adopt it. `await_adoption` reports that its save
+ * finished and returns false when this process cannot be adopted; it then exits as before. */
+bool anvil_hosted_surface_await_adoption(void);
+bool anvil_hosted_surface_adopted_event(Uint32 type);
+bool anvil_hosted_surface_gone_event(Uint32 type);
+/* Applies the adopting shell's configuration on the UI thread and sends it this Project's window state. */
+void anvil_hosted_surface_finish_adoption(void);
 void anvil_hosted_surface_exit_intent(const char *restart_path);
 void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision);
 void anvil_hosted_surface_dialog_result_failed(void);

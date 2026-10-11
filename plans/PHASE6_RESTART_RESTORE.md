@@ -4,7 +4,7 @@
 
 The user accepted all five review decisions on 2026-10-11 and authorized milestone 1.
 Commit and stop for review after each milestone.
-Milestones 1 and 2 are implemented and deployed; see their records below. Stop for review before milestone 3.
+Milestones 1, 2, and 3 are implemented and deployed; see their records below. Stop for review.
 Phase 5 closeout stays pending: matched latency for Phase 5 milestone 5, and the interactive foreground check.
 Milestone 1 does not change compositing or input, so that latency run does not block it.
 Hosted mode stays opt-in.
@@ -257,3 +257,85 @@ D3D11 `uqm06cjk` and software `8tespfce`: `restore-crash`, `restore-sequential`,
 
 - Build `build-windows-x86_64/src/anvil.exe`: `8f38fc7e58d3e3385ee233e973027541050e9e8ae4fff01999ab13883a282224`
 - Portable `anvil-portable/anvil.exe`: `272ca60c3f763fb839d839de71414e0fc8edab795743bfac92f01f4d748b5c24`
+
+## Milestone 3 record
+
+### Implementation
+
+- On shell loss a Project stops rendering, publishes `USERDIR/adoption/<pid>-<created>.record`, and opens
+  `\\.\pipe\AnvilAdopt-<pid>-<created>`. The pipe has a user-only DACL and rejects remote clients.
+  Lua then saves the Workspace and App State, as a plain shell loss did. The native 5 s deadline still bounds that save.
+- The Project then waits 60 s from the loss. It accepts only a client that is the same executable, user, and
+  session. The request is versioned and names the shell's surface pipe, which must belong to that client's PID.
+  On acceptance the Project connects to that pipe with a new HELLO and configuration, starts a new reader, and
+  resends its title, hit test, border, and visibility. Outbound messages from the lost connection are dropped.
+- With no adoption, the Project removes its record and exits through the old shell-loss path.
+- The Sidebar process publishes no record. It exits as before and the next shell starts a new one (decision 3).
+- The shell reads the records before it restores. A record for a dead PID, a different start time, or a different
+  identity is deleted; damaged records are deleted too. Each valid record's Project returns to its saved Window,
+  by Window id and path. Records for unsaved Windows join the frontmost Window, or one new Window.
+- The restore sequence adopts instead of creating a process. The request waits up to 8 s, which covers the
+  Project's save. If it fails, the shell ends the old process before it starts a new runtime, so one Project
+  never has two runtimes. Adoption is tried once per Project.
+- The shell state file is now version 2. Each Window line carries its Window id. Version 1 files restore nothing.
+- `ANVIL_SURFACE_FAULT_ADOPTION_PERIOD_MS` and `ANVIL_SURFACE_FAULT_ADOPTION=hang` are probe faults. They need
+  `ANVIL_SURFACE_FAULT_PROBE=1`.
+
+### Red-green
+
+Native `anvil:shell-state`: version 2 round trip and rejects, plus adoption record round trip, every partial
+cut, and malformed records.
+
+New `adopt-*` cases in `tests/fixtures/shell_restore_probe.lua`:
+
+| Case | Checks |
+| --- | --- |
+| `adopt-return` | Two Windows, moved. Kill only the shell, then launch with no argument. Both Project PIDs return in their saved Windows. The unsaved edit stays in the Buffer and off disk. The Terminal Session host stays the same live process. No new runtime starts; records are removed; native controls respond. |
+| `adopt-timeout` | With a 2 s period and no relaunch, the Project exits and removes its record. |
+| `adopt-stale` | A dead-PID record, a live PID with another start time, and a damaged file are each removed. Startup is not delayed. |
+| `adopt-hung` | The Project never answers. The shell opens the Window at once, native controls respond, then it ends the old process and starts one new runtime. |
+| `adopt-userdir` | A shell for another user directory does not adopt or end the Project. |
+
+- Red, deployed milestone 2 build: every case failed because no record was published, and `adopt-stale`
+  failed with "the shell kept stale records".
+- First green: `adopt-return` failed only on the fixture's expected text (`get_text` omits the final newline).
+- Green on D3D11 and software, all five cases.
+- Review fix: an adopted Project now gets the shell's foreground grant, and the shell closes no NULL thread handle.
+  All five cases, `shell-loss`, `restore-crash`, `foreground`, and `launch-forward` pass on both renderers after it.
+
+`shell-loss`, `end-loss`, and `stalled-loss` now set the 2 s probe period. They still check the Workspace save,
+Terminal detach and reattach, and the native deadline.
+
+### Regression checks
+
+D3D11: `shell-loss`, `end-loss`, `stalled-loss`, `restart`, `switch`, `new-window`, all `restore-*` and `launch-*`
+cases, `windows-close-dirty`, `windows-close-crash`, `windows-close-quit`, `windows-new`, and `windows-move` pass.
+Software: `shell-loss`, `end-loss`, `stalled-loss`, `restart`, `restore-crash`, `restore-argument`,
+`restore-stagger`, `launch-forward`, `launch-hung`, and `windows-close-dirty` pass.
+The hosted native tests pass; `hosted_routing_test` now links the adoption sources.
+
+### Matched latency
+
+Reference: the milestone 2 portable exe (`272ca60c…`) with `data` from `f8bd1f51`. Candidate before the review
+fix: `e10a53b0…`. Three alternating pairs, 360 valid samples per row and build, no failures.
+Evidence: `%TEMP%/anvil-phase6-m3-matched-31zvwgrc/results.json`.
+
+| Row | Reference p50 / p90 / p99 | Candidate p50 / p90 / p99 |
+| --- | --- | --- |
+| direct D3D11 | 8.16 / 17.53 / 29.05 | 8.22 / 17.53 / 25.68 |
+| shell D3D11 | 8.30 / 19.76 / 39.51 | 8.03 / 17.22 / 21.23 |
+| direct software | 15.67 / 24.42 / 30.25 | 13.12 / 22.94 / 25.43 |
+| shell software | 28.65 / 39.40 / 51.73 | 25.10 / 34.54 / 50.43 |
+
+The candidate's shell D3D11 maximum is 120 ms against 41 ms; one sample, with heavy unrelated load on the machine.
+The review fix changes only the adoption branch and handle cleanup, not the steady-state transport.
+
+### Deployment
+
+`update-anvil-dev-build.bat` rebuilt and installed the dev portable app. It ended all Anvil processes.
+The first attempt failed to link `hosted_routing_test`; the second passed. The fresh session log has no errors or warnings.
+
+- Build `build-windows-x86_64/src/anvil.exe`: `15df32001a94b4844b23fc96e4926dcec1fe3e6f3651e643ca67c87402d26761`
+- Portable `anvil-portable/anvil.exe`: `8628315ba8be224b7dc766937b609aac6e2f459825d6c370af0312f25000378d`
+
+Manual gates stay open: a real reboot, physical input after adoption, and mixed DPI.

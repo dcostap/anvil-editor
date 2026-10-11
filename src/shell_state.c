@@ -6,9 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STATE_HEADER "anvil-shell-windows 1\n"
+#define STATE_HEADER "anvil-shell-windows 2\n"
 
-/* Each Window is one line: `window <x> <y> <w> <h> <maximized> <path bytes> <path>`. */
+/* Each Window is one line: `window <id> <x> <y> <w> <h> <maximized> <path bytes> <path>`. */
 char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   if (state->count > ANVIL_SHELL_STATE_MAX_WINDOWS) return NULL;
   size_t capacity = sizeof(STATE_HEADER);
@@ -24,8 +24,8 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   for (size_t i = 0; i < state->count; i++) {
     const AnvilShellWindowState *window = &state->windows[i];
     const char *path = window->path ? window->path : "";
-    n += (size_t)snprintf(data + n, capacity - n, "window %ld %ld %ld %ld %d %zu %s\n", (long)window->x,
-                          (long)window->y, (long)window->w, (long)window->h, window->maximized ? 1 : 0,
+    n += (size_t)snprintf(data + n, capacity - n, "window %lu %ld %ld %ld %ld %d %zu %s\n",
+                          (unsigned long)window->id, (long)window->x, (long)window->y, (long)window->w, (long)window->h, window->maximized ? 1 : 0,
                           strlen(path), path);
   }
   *size = n;
@@ -65,30 +65,32 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
   if (!state->windows) return false;
   bool complete = true;
   while (cursor < end) {
-    long values[6];
+    long values[7];
     complete = false;
     if (state->count >= ANVIL_SHELL_STATE_MAX_WINDOWS || end - cursor < 7 || memcmp(cursor, "window ", 7)) break;
     cursor += 7;
     bool ok = true;
-    for (int i = 0; ok && i < 6; i++) ok = read_long(&cursor, end, &values[i]);
-    if (!ok || values[2] <= 0 || values[3] <= 0 || (values[4] != 0 && values[4] != 1) || values[5] < 0 ||
-        values[5] > ANVIL_SHELL_STATE_MAX_PATH || values[5] >= end - cursor || cursor[values[5]] != '\n' ||
-        memchr(cursor, '\0', (size_t)values[5]))
+    for (int i = 0; ok && i < 7; i++) ok = read_long(&cursor, end, &values[i]);
+    long length = values[6];
+    if (!ok || values[0] <= 0 || values[3] <= 0 || values[4] <= 0 || (values[5] != 0 && values[5] != 1) ||
+        length < 0 || length > ANVIL_SHELL_STATE_MAX_PATH || length >= end - cursor || cursor[length] != '\n' ||
+        memchr(cursor, '\0', (size_t)length))
       break;
     AnvilShellWindowState *window = &state->windows[state->count];
-    window->x = values[0];
-    window->y = values[1];
-    window->w = values[2];
-    window->h = values[3];
-    window->maximized = values[4] == 1;
-    if (values[5]) {
-      window->path = malloc((size_t)values[5] + 1);
+    window->id = (uint32_t)values[0];
+    window->x = values[1];
+    window->y = values[2];
+    window->w = values[3];
+    window->h = values[4];
+    window->maximized = values[5] == 1;
+    if (length) {
+      window->path = malloc((size_t)length + 1);
       if (!window->path) break;
-      memcpy(window->path, cursor, (size_t)values[5]);
-      window->path[values[5]] = 0;
+      memcpy(window->path, cursor, (size_t)length);
+      window->path[length] = 0;
     }
     state->count++;
-    cursor += values[5] + 1;
+    cursor += length + 1;
     complete = true;
   }
   /* A partial or malformed file restores nothing. */
@@ -97,7 +99,7 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
   return false;
 }
 
-static bool write_file(const wchar_t *file, const char *data, size_t size) {
+bool anvil_shell_file_replace(const wchar_t *file, const char *data, size_t size) {
   wchar_t temp[MAX_PATH * 4];
   if (_snwprintf(temp, SDL_arraysize(temp), L"%ls.tmp", file) < 0) return false;
   temp[SDL_arraysize(temp) - 1] = 0;
@@ -111,19 +113,32 @@ static bool write_file(const wchar_t *file, const char *data, size_t size) {
   return ok;
 }
 
+char *anvil_shell_file_read(const wchar_t *file, size_t limit, size_t *size) {
+  HANDLE handle = CreateFileW(file, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+  if (handle == INVALID_HANDLE_VALUE) return NULL;
+  LARGE_INTEGER length;
+  char *data = NULL;
+  DWORD read = 0;
+  bool ok = GetFileSizeEx(handle, &length) && (uint64_t)length.QuadPart <= limit &&
+            (data = malloc((size_t)length.QuadPart + 1)) &&
+            ReadFile(handle, data, (DWORD)length.QuadPart, &read, NULL) && read == length.QuadPart;
+  CloseHandle(handle);
+  if (!ok) {
+    free(data);
+    return NULL;
+  }
+  data[read] = 0;
+  *size = read;
+  return data;
+}
+
 bool anvil_shell_state_load(const wchar_t *file, AnvilShellState *state) {
   state->windows = NULL;
   state->count = 0;
-  HANDLE handle = CreateFileW(file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-  if (handle == INVALID_HANDLE_VALUE) return false;
-  LARGE_INTEGER size;
-  char *data = NULL;
-  DWORD read = 0;
-  bool ok = GetFileSizeEx(handle, &size) && size.QuadPart <= ANVIL_SHELL_STATE_MAX_BYTES &&
-            (data = malloc((size_t)size.QuadPart + 1)) &&
-            ReadFile(handle, data, (DWORD)size.QuadPart, &read, NULL) && read == size.QuadPart;
-  CloseHandle(handle);
-  ok = ok && anvil_shell_state_decode(data, read, state);
+  size_t size = 0;
+  char *data = anvil_shell_file_read(file, ANVIL_SHELL_STATE_MAX_BYTES, &size);
+  bool ok = data && anvil_shell_state_decode(data, size, state);
   free(data);
   return ok;
 }
@@ -149,7 +164,7 @@ static int SDLCALL writer_thread(void *data) {
     writer.pending = NULL;
     if (!pending) break;
     SDL_UnlockMutex(writer.lock);
-    if (!write_file(writer.file, pending, size))
+    if (!anvil_shell_file_replace(writer.file, pending, size))
       SDL_Log("Shell Window state write failed: Windows error=%lu", (unsigned long)GetLastError());
     else
       SDL_Log("Shell Window state written: bytes=%lu", (unsigned long)size);

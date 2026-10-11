@@ -31,6 +31,16 @@ void anvil_shell_launch_stop(void);
 /* The user directory that keys this shell, without a trailing separator. NULL when the key is unavailable. */
 const wchar_t *anvil_shell_launch_user_directory(void);
 
+/* Helpers shared with Project adoption. */
+/* USERDIR as data/core/start.lua computes it, without a trailing separator. */
+bool anvil_shell_user_directory(wchar_t *out, DWORD size);
+/* True when `pid` runs this executable as this user in this session. */
+bool anvil_shell_same_identity(DWORD pid);
+/* Completes one overlapped pipe transfer, bounded by `timeout` and the optional stop event. */
+bool anvil_shell_transfer(HANDLE pipe, bool write, void *data, DWORD size, DWORD timeout, HANDLE stop);
+/* A security descriptor that admits only the current user. */
+PSECURITY_DESCRIPTOR anvil_shell_user_security(void);
+
 /* Request arguments use the shell's layout: argv[0] is the executable, argv[1] is `--shell`.
  * Path arguments are absolute. */
 int anvil_shell_launch_argc(const AnvilShellLaunchRequest *request);

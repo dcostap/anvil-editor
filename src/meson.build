@@ -49,6 +49,7 @@ anvil_sources = [
     'anvil_shell.c',
     'shell_launch.c',
     'shell_state.c',
+    'shell_adoption.c',
     'project_sidebar.c',
     'project_sidebar_scan.c',
     'sidebar_registry_watch.c',
@@ -271,7 +272,7 @@ if host_machine.system() == 'windows'
         include_directories: anvil_includes, c_args: anvil_cargs)
     test('process-exit', process_exit_test, env: anvil_test_env, suite: 'anvil', is_parallel: false)
     shell_state_test = executable('shell_state_test',
-        ['../tests/native/shell_state_test.c', 'shell_state.c'],
+        ['../tests/native/shell_state_test.c', 'shell_state.c', 'shell_adoption.c', 'shell_launch.c'],
         include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
     test('shell-state', shell_state_test, env: anvil_test_env, suite: 'anvil')
     test('terminal-replay', terminal_replay_test, env: anvil_test_env, suite: 'anvil')
@@ -305,7 +306,8 @@ if host_machine.system() == 'windows'
     test('sidebar-scan', sidebar_scan_test, env: anvil_test_env, suite: 'anvil')
     hosted_routing_test = executable('hosted_routing_test',
         ['../tests/native/hosted_routing_test.c', 'hosted_surface.c', 'surface_protocol.c', 'process_exit.c',
-         'ipc_pipe.c', 'system_events.c', 'custom_events.c', 'resize_diagnostics.c', 'input_latency_probe.c'],
+         'ipc_pipe.c', 'system_events.c', 'custom_events.c', 'resize_diagnostics.c', 'input_latency_probe.c',
+         'shell_adoption.c', 'shell_launch.c', 'shell_state.c'],
         include_directories: anvil_includes,
         dependencies: [sdl_dep],
         c_args: anvil_cargs,

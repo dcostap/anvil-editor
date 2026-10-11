@@ -490,7 +490,9 @@ restart.
 Restore windows, Selected Projects, and Workspaces after a full quit or reboot.
 
 Plan: [Phase 6: shell restart and restore](PHASE6_RESTART_RESTORE.md). The user accepted its decisions.
-Milestone 1 restores Windows and Selected Projects from shell-written App State. Stop for review before milestone 2.
+Milestone 1 restores Windows and Selected Projects from shell-written App State.
+Milestone 2 handles restore failures and starts restored Projects one at a time.
+Milestone 3 adopts running Projects after the shell ends, within 60 s. The Sidebar process restarts. Stop for review.
 
 ### Phase 7: sidebar presentation
 

@@ -1,8 +1,9 @@
 -- mod-version:3
--- Seam: App State restore of Anvil Windows across shell runs, on isolated owned Windows.
--- Each run records its Project runtimes, so restored and duplicate runtimes stay visible.
+-- Seam: App State restore of Anvil Windows across shell runs, and adoption of running Projects after a shell
+-- ends, on isolated owned Windows.
+-- Each run records its Project runtimes, so restored, adopted, and duplicate runtimes stay visible.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
-if not action or not action:match("^restore%-") then return end
+if not action or not (action:match("^restore%-") or action:match("^adopt%-")) then return end
 local core, common = require "core", require "core.common"
 local ffi = require "ffi"
 ffi.cdef [[
@@ -22,6 +23,7 @@ ffi.cdef [[
  void * __stdcall OpenProcess(unsigned long, int, unsigned long);
  int __stdcall TerminateProcess(void *, unsigned int);
  int __stdcall CloseHandle(void *);
+ unsigned long __stdcall WaitForSingleObject(void *, unsigned long);
  int __stdcall GetSystemMetrics(int);
  int __stdcall GetWindowRect(void *, ProbeRect *);
  void * __stdcall MonitorFromWindow(void *, unsigned long);
@@ -91,15 +93,30 @@ local function above(upper, lower)
  return false
 end
 local function quit() core.exit(function() core.quit_request = true end, true) end
+local function alive(pid)
+ local handle = kernel.OpenProcess(0x100000, 0, pid) -- SYNCHRONIZE
+ if handle == nil then return false end
+ local running = kernel.WaitForSingleObject(handle, 0) == 258
+ kernel.CloseHandle(handle); return running
+end
+-- Adoption records that Projects published after they lost their shell.
+local function records()
+ local found = {}
+ for _, file in ipairs(system.list_dir(root .. "/user/adoption") or {}) do
+  if file:match("%.record$") then found[#found + 1] = file end
+ end
+ return found
+end
 local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b", [root .. "/Other"] = "c"}
 -- Cases that seed their own state file start without a first run.
 local seeded = action == "restore-crash" or action == "restore-sequential" or action == "restore-argument"
 -- Writes the shell's Window state, front to back, before the first shell starts.
 local function write_state(entries)
- local lines = {"anvil-shell-windows 1\n"}
- for _, item in ipairs(entries) do
+ local lines = {"anvil-shell-windows 2\n"}
+ for i, item in ipairs(entries) do
   local folder = (root .. "/" .. item[5]):gsub("/", "\\")
-  lines[#lines + 1] = string.format("window %d %d %d %d 0 %d %s\n", item[1], item[2], item[3], item[4], #folder, folder)
+  lines[#lines + 1] = string.format("window %d %d %d %d %d 0 %d %s\n", i, item[1], item[2], item[3], item[4], #folder,
+   folder)
  end
  local file = assert(io.open(root .. "/user/shell-windows.state", "wb"))
  file:write(table.concat(lines)); file:close()
@@ -113,6 +130,25 @@ if path:match("/driver$") then
   local function launch(...)
    local item = assert(require("core.process").start({EXEFILE, "--shell", ...}, options))
    launched[#launched + 1] = item; return item
+  end
+  local function launch_userdir(userdir, ...)
+   local item = assert(require("core.process").start({EXEFILE, "--shell", ...}, {stdin=options.stdin,
+    stdout=options.stdout, stderr=options.stderr, cwd=root, env={ANVIL_USERDIR=userdir}}))
+   launched[#launched + 1] = item; return item
+  end
+  -- Adopted records from one shell, by Project process.
+  local function adopted(name, shell)
+   for _, file in ipairs(system.list_dir(root) or {}) do
+    local pid = file:match("^" .. name .. "%-adopted%-(%d+)%.lua$")
+    local record = pid and load(name .. "-adopted-" .. pid)
+    if record and record.shell_pid == shell then return record end
+   end
+  end
+  local function controls(window, label)
+   user32.PostMessageW(window, 0x112, 0xf020, 0) -- SC_MINIMIZE
+   wait(function() return user32.IsIconic(window) ~= 0 end, 2, label .. ": Minimize did not respond")
+   user32.PostMessageW(window, 0x112, 0xf120, 0) -- SC_RESTORE
+   wait(function() return user32.IsIconic(window) == 0 end, 2, label .. ": Restore did not respond")
   end
   local function kill(pid)
    local handle = kernel.OpenProcess(0x1F0FFF, 0, pid)
@@ -278,12 +314,116 @@ if path:match("/driver$") then
      "the slow Project did not let the next one start")
     return close_shell(shell, "stagger")
    end
+   if action == "adopt-return" then
+    -- A new shell takes back the running Projects in their saved Windows. Unsaved edits and Terminal Sessions
+    -- stay live, because no Project restarts.
+    local first = launch(root .. "/Project")
+    local a = wait(function() return ready("a")[1] end, 20)
+    local b = wait(function() return ready("b")[1] end, 20)
+    local all = windows(first:pid())
+    local aw, bw = assert(all[a.window_id]), assert(all[b.window_id])
+    assert(user32.SetWindowPos(aw, nil, 120, 90, 900, 650, 0x14) ~= 0)
+    assert(user32.SetWindowPos(bw, nil, 300, 200, 800, 600, 0x14) ~= 0)
+    local saved_a, saved_b = placement(aw), placement(bw)
+    written(2)
+    kill(first:pid())
+    wait(function() return not first:running() end, 5)
+    wait(function() return #records() == 2 end, 10, "lost Projects did not publish adoption records")
+    assert(alive(a.pid) and alive(b.pid), "a Project ended with its shell")
+    local second = launch()
+    local a2 = wait(function() return adopted("a", second:pid()) end, 30, "the new shell did not adopt Project")
+    local b2 = wait(function() return adopted("b", second:pid()) end, 30, "the new shell did not adopt Replacement")
+    assert(a2.pid == a.pid and b2.pid == b.pid, "adoption changed a Project process")
+    local found, count = windows(second:pid())
+    assert(count == 2, "adoption did not return both Windows")
+    assert(a2.window_id ~= b2.window_id, "adopted Projects share one Window")
+    assert(common.serialize(placement(assert(found[a2.window_id]))) == common.serialize(saved_a),
+     "adopted Project is not in its saved Window")
+    assert(common.serialize(placement(assert(found[b2.window_id]))) == common.serialize(saved_b),
+     "adopted Replacement is not in its saved Window")
+    assert(a2.dirty and a2.text == "unsaved on disk", "adoption lost the unsaved edit")
+    local file = assert(io.open(root .. "/Project/edited.txt", "rb"))
+    assert(file:read("*a") == "on disk\n", "shell loss saved the unsaved edit"); file:close()
+    assert(a2.host_pid == a.host_pid and alive(a.host_pid), "adoption lost the Terminal Session")
+    assert(#ready("a", second:pid()) == 0 and #ready("b", second:pid()) == 0, "adoption also started a runtime")
+    wait(function() return #records() == 0 end, 5, "adopted Projects kept their records")
+    -- The adopted Window works: native controls respond and the Project draws again.
+    controls(found[a2.window_id], "adopted Window")
+    return
+   end
+
+   if action == "adopt-timeout" then
+    -- With no next shell, a lost Project waits for its period, then exits and removes its record.
+    local first = launch(root .. "/Project")
+    local a = wait(function() return ready("a")[1] end, 20)
+    kill(first:pid())
+    wait(function() return #records() == 1 end, 10, "lost Project did not publish an adoption record")
+    wait(function() return not alive(a.pid) end, 20, "Project outlived its adoption period")
+    assert(#records() == 0, "Project left its adoption record")
+    assert(trace():find("No shell adopted this Project", 1, true), "Project did not report its period end")
+    return
+   end
+
+   if action == "adopt-stale" then
+    -- Stale or damaged records start nothing and do not delay startup.
+    system.mkdir(root .. "/user/adoption")
+    local folder = (root .. "/Project"):gsub("/", "\\")
+    local function record(file, pid, created)
+     local handle = assert(io.open(root .. "/user/adoption/" .. file, "wb"))
+     handle:write(string.format("anvil-adoption 1\n%d %d 1 %d %s\n", pid, created, #folder, folder)); handle:close()
+    end
+    record("1000002-1.record", 1000002, 1) -- no such process
+    record("driver-1.record", kernel.GetCurrentProcessId(), 1) -- a live process from another start time
+    local junk = assert(io.open(root .. "/user/adoption/junk.record", "wb")); junk:write("junk"); junk:close()
+    local started = system.get_time()
+    local shell = launch(root .. "/Project")
+    local a = wait(function() return ready("a", shell:pid())[1] end, 20, "stale records blocked startup")
+    assert(system.get_time() - started < 15, "stale records delayed startup")
+    assert(#records() == 0, "the shell kept stale records")
+    local _, removed = trace():gsub("Shell removed a stale adoption record", "")
+    assert(removed == 3, "the shell did not report each stale record")
+    assert(select(2, windows(shell:pid())) == 1 and a.window_id, "stale records changed the Windows")
+    return close_shell(shell, "stale")
+   end
+
+   if action == "adopt-hung" then
+    -- A Project that does not answer ends, and the shell starts a new runtime. Its Windows respond meanwhile.
+    local first = launch(root .. "/Project")
+    local a = wait(function() return ready("a")[1] end, 20)
+    kill(first:pid())
+    wait(function() return #records() == 1 end, 10, "lost Project did not publish an adoption record")
+    local second = launch()
+    local window = wait(function() local found, count = windows(second:pid()); return count == 1 and next(found) and
+     select(2, next(found)) end, 10, "the shell did not open the Window before adoption")
+    assert(alive(a.pid), "the shell gave up on the Project too early")
+    controls(window, "Window during adoption")
+    local a2 = wait(function() return ready("a", second:pid())[1] end, 30, "the shell did not start a new runtime")
+    assert(a2.pid ~= a.pid, "the new runtime reused the hung process")
+    assert(not alive(a.pid), "the hung Project kept running beside its new runtime")
+    assert(trace():find("did not accept adoption", 1, true), "the shell did not report the failed adoption")
+    return close_shell(second, "hung")
+   end
+
+   if action == "adopt-userdir" then
+    -- A shell for another user directory does not take this directory's Projects.
+    local first = launch(root .. "/Project")
+    local a = wait(function() return ready("a")[1] end, 20)
+    kill(first:pid())
+    wait(function() return #records() == 1 end, 10, "lost Project did not publish an adoption record")
+    local other = launch_userdir(root .. "/user2", root .. "/Project")
+    local a2 = wait(function() return ready("a", other:pid())[1] end, 20, "the other user directory did not start")
+    assert(a2.pid ~= a.pid and not adopted("a", other:pid()), "another user directory adopted the Project")
+    assert(alive(a.pid) and #records() == 1, "another user directory ended the Project")
+    return close_shell(other, "other user directory")
+   end
    error("unknown restore probe " .. action)
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action}); file:close()
   for _, item in ipairs(launched) do if item:running() then item:terminate(); item:wait(1) end end
-  for _, name in ipairs({"a", "b", "c"}) do for _, record in ipairs(ready(name)) do kill(record.pid) end end
+  for _, name in ipairs({"a", "b", "c"}) do
+   for _, record in ipairs(ready(name)) do kill(record.pid); if record.host_pid then kill(record.host_pid) end end
+  end
   quit()
  end)
 elseif names[path] then
@@ -297,8 +437,30 @@ elseif names[path] then
    core.save_workspace()
    if action ~= "restore-argument" then assert(core.open_project_in_new_window(root .. "/Replacement")) end
   end
+  local editor, session
+  if action == "adopt-return" and name == "a" then
+   local terminal = require "plugins.terminal"
+   local term = terminal.open {cwd = path, shell = "cmd.exe /D /Q"}
+   session = wait(function() return term.session and (term.session:stats().host_pid or 0) > 0 and term.session end,
+    10, "Terminal Session did not start")
+   editor = assert(core.open_file(path .. "/edited.txt"))
+   editor.buffer:insert(1, 1, "unsaved ")
+   assert(core.open_project_in_new_window(root .. "/Replacement"))
+  end
+  if action:match("^adopt%-") then
+   local on_adopted = core.on_shell_adopted
+   function core.on_shell_adopted(...)
+    on_adopted(...)
+    local lines = editor and editor.buffer.lines
+    save(name .. "-adopted-" .. pid, {pid=pid, shell_pid=system.get_window_process_id(),
+     window_id=system.get_anvil_window_id(), dirty=editor and editor.buffer:is_dirty(),
+     text=lines and editor.buffer:get_text(1, 1, #lines, #lines[#lines]),
+     host_pid=session and session:stats().host_pid})
+   end
+  end
   local view = core.active_view
   save(name .. "-ready-" .. pid, {pid=pid, shell_pid=system.get_window_process_id(),
-   window_id=system.get_anvil_window_id(), active=view and view.buffer and view.buffer.abs_filename})
+   window_id=system.get_anvil_window_id(), active=view and view.buffer and view.buffer.abs_filename,
+   host_pid=session and session:stats().host_pid})
  end)
 end

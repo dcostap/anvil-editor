@@ -74,16 +74,24 @@ static uint32_t hash_text(uint32_t hash, const wchar_t *text) {
   return hash;
 }
 
+bool anvil_shell_user_directory(wchar_t *out, DWORD size) {
+  wchar_t exe[32768];
+  DWORD length = GetModuleFileNameW(NULL, exe, SDL_arraysize(exe));
+  if (!length || length >= SDL_arraysize(exe) || !user_directory(exe, out, size)) {
+    if (size) out[0] = 0;
+    return false;
+  }
+  size_t end = wcslen(out);
+  while (end > 3 && (out[end - 1] == L'\\' || out[end - 1] == L'/')) out[--end] = 0;
+  return true;
+}
+
 static bool init_names(void) {
   if (mutex_name[0]) return true;
   wchar_t exe[32768], *userdir = user_dir;
   DWORD length = GetModuleFileNameW(NULL, exe, SDL_arraysize(exe));
-  if (!length || length >= SDL_arraysize(exe) || !user_directory(exe, userdir, SDL_arraysize(user_dir))) {
-    user_dir[0] = 0;
+  if (!length || length >= SDL_arraysize(exe) || !anvil_shell_user_directory(userdir, SDL_arraysize(user_dir)))
     return false;
-  }
-  size_t end = wcslen(userdir);
-  while (end > 3 && (userdir[end - 1] == L'\\' || userdir[end - 1] == L'/')) userdir[--end] = 0;
   uint32_t hash = hash_text(hash_text(2166136261u, exe), L"\n");
   hash = hash_text(hash, userdir);
   DWORD session = 0;
@@ -105,7 +113,7 @@ static PSID current_user(void) {
 }
 
 /* Both ends run the same executable as the same user in the same session. */
-static bool same_identity(DWORD pid) {
+bool anvil_shell_same_identity(DWORD pid) {
   wchar_t own[32768], other[32768];
   DWORD own_size = GetModuleFileNameW(NULL, own, SDL_arraysize(own)), other_size = SDL_arraysize(other);
   DWORD own_session = 0, other_session = 1;
@@ -128,7 +136,7 @@ static bool same_identity(DWORD pid) {
 }
 
 /* Completes one overlapped transfer, bounded by `timeout` and the optional stop event. */
-static bool transfer(HANDLE pipe, bool write, void *data, DWORD size, DWORD timeout, HANDLE stop) {
+bool anvil_shell_transfer(HANDLE pipe, bool write, void *data, DWORD size, DWORD timeout, HANDLE stop) {
   HANDLE event = CreateEventW(NULL, TRUE, FALSE, NULL);
   if (!event) return false;
   ULONGLONG deadline = GetTickCount64() + timeout;
@@ -224,7 +232,7 @@ static AnvilShellLaunchStatus send_request(const char *request, size_t size, ULO
   }
   ULONG server = 0;
   AnvilShellLaunchStatus status = 0;
-  if (!GetNamedPipeServerProcessId(pipe, &server) || !same_identity(server)) {
+  if (!GetNamedPipeServerProcessId(pipe, &server) || !anvil_shell_same_identity(server)) {
     SDL_Log("Shell launch refused a pipe server that is not this user's Anvil shell");
   } else {
     /* The shell raises the Project's Window. Windows lets it take the foreground only with this grant. */
@@ -233,9 +241,9 @@ static AnvilShellLaunchStatus send_request(const char *request, size_t size, ULO
     ((uint32_t *)request)[2] = granted ? LAUNCH_FLAG_FOREGROUND : 0;
     ULONGLONG now = GetTickCount64();
     uint32_t reply[2] = {0, 0};
-    if (now < deadline && transfer(pipe, true, (void *)request, (DWORD)size, (DWORD)(deadline - now), NULL) &&
+    if (now < deadline && anvil_shell_transfer(pipe, true, (void *)request, (DWORD)size, (DWORD)(deadline - now), NULL) &&
         (now = GetTickCount64()) < deadline &&
-        transfer(pipe, false, reply, sizeof(reply), (DWORD)(deadline - now), NULL) && reply[0] == LAUNCH_MAGIC &&
+        anvil_shell_transfer(pipe, false, reply, sizeof(reply), (DWORD)(deadline - now), NULL) && reply[0] == LAUNCH_MAGIC &&
         reply[1] >= ANVIL_SHELL_LAUNCH_ACCEPTED && reply[1] <= ANVIL_SHELL_LAUNCH_BUSY)
       status = reply[1];
   }
@@ -282,11 +290,11 @@ static void release_request(AnvilShellLaunchRequest *request) {
 
 static char *read_text(HANDLE pipe, size_t *total) {
   uint32_t length = 0;
-  if (!transfer(pipe, false, &length, sizeof(length), LAUNCH_READ_MS, stop_event) || length > LAUNCH_MAX_TEXT ||
+  if (!anvil_shell_transfer(pipe, false, &length, sizeof(length), LAUNCH_READ_MS, stop_event) || length > LAUNCH_MAX_TEXT ||
       (*total += sizeof(length) + length) > LAUNCH_MAX_BYTES)
     return NULL;
   char *text = malloc(length + 1);
-  if (!text || (length && !transfer(pipe, false, text, length, LAUNCH_READ_MS, stop_event))) { free(text); return NULL; }
+  if (!text || (length && !anvil_shell_transfer(pipe, false, text, length, LAUNCH_READ_MS, stop_event))) { free(text); return NULL; }
   text[length] = 0;
   return text;
 }
@@ -294,13 +302,13 @@ static char *read_text(HANDLE pipe, size_t *total) {
 static AnvilShellLaunchRequest *read_request(HANDLE pipe, DWORD client) {
   uint32_t header[3];
   size_t total = sizeof(header);
-  if (!transfer(pipe, false, header, sizeof(header), LAUNCH_READ_MS, stop_event) || header[0] != LAUNCH_MAGIC ||
+  if (!anvil_shell_transfer(pipe, false, header, sizeof(header), LAUNCH_READ_MS, stop_event) || header[0] != LAUNCH_MAGIC ||
       header[1] != LAUNCH_VERSION)
     return NULL;
   AnvilShellLaunchRequest *request = calloc(1, sizeof(*request));
   uint32_t count = 0;
   bool ok = request && (request->cwd = read_text(pipe, &total)) &&
-            transfer(pipe, false, &count, sizeof(count), LAUNCH_READ_MS, stop_event) && count <= LAUNCH_MAX_ARGS &&
+            anvil_shell_transfer(pipe, false, &count, sizeof(count), LAUNCH_READ_MS, stop_event) && count <= LAUNCH_MAX_ARGS &&
             (request->argv = calloc(count + 2, sizeof(*request->argv))) &&
             (request->argv[0] = _strdup("anvil")) && (request->argv[1] = _strdup(ANVIL_SHELL_ARG));
   if (request) request->argc = request->argv ? 2 : 0;
@@ -340,7 +348,7 @@ static DWORD WINAPI client_proc(void *data) {
         SDL_Log("Shell launch reply deadline expired: pid=%lu", (unsigned long)client);
     }
     uint32_t reply[2] = {LAUNCH_MAGIC, (uint32_t)status};
-    transfer(pipe, true, reply, sizeof(reply), LAUNCH_READ_MS, NULL);
+    anvil_shell_transfer(pipe, true, reply, sizeof(reply), LAUNCH_READ_MS, NULL);
     FlushFileBuffers(pipe);
     release_request(request);
   }
@@ -381,11 +389,11 @@ static DWORD WINAPI server_proc(void *data) {
     if (WaitForSingleObject(stop_event, 0) == WAIT_OBJECT_0) { CloseHandle(pipe); break; }
     ULONG client = 0;
     HANDLE thread = NULL;
-    if (connected && GetNamedPipeClientProcessId(pipe, &client) && same_identity(client) &&
+    if (connected && GetNamedPipeClientProcessId(pipe, &client) && anvil_shell_same_identity(client) &&
         InterlockedIncrement(&client_count) <= LAUNCH_MAX_CLIENTS) {
       thread = CreateThread(NULL, 0, client_proc, pipe, 0, NULL);
       if (!thread) InterlockedDecrement(&client_count);
-    } else if (connected && client && same_identity(client)) {
+    } else if (connected && client && anvil_shell_same_identity(client)) {
       InterlockedDecrement(&client_count);
       SDL_Log("Shell launch refused pid=%lu: too many pending launches", (unsigned long)client);
     } else if (connected) {
@@ -398,15 +406,22 @@ static DWORD WINAPI server_proc(void *data) {
   return 0;
 }
 
-bool anvil_shell_launch_start(bool (*notify)(AnvilShellLaunchRequest *request)) {
-  if (!owner_mutex || server_thread) return false;
+PSECURITY_DESCRIPTOR anvil_shell_user_security(void) {
+  static PSECURITY_DESCRIPTOR security;
+  if (security) return security;
   PSID self = current_user();
   wchar_t *sid = NULL, sddl[256];
   /* Only this user may connect. Remote clients are rejected separately. */
-  if (!self || !ConvertSidToStringSidW(self, &sid)) return false;
+  if (!self || !ConvertSidToStringSidW(self, &sid)) return NULL;
   _snwprintf(sddl, SDL_arraysize(sddl), L"D:P(A;;GA;;;%ls)", sid);
   LocalFree(sid);
-  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &pipe_security, NULL)) return false;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &security, NULL)) return NULL;
+  return security;
+}
+
+bool anvil_shell_launch_start(bool (*notify)(AnvilShellLaunchRequest *request)) {
+  if (!owner_mutex || server_thread) return false;
+  if (!(pipe_security = anvil_shell_user_security())) return false;
   notify_request = notify;
   stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
   server_thread = stop_event ? CreateThread(NULL, 0, server_proc, NULL, 0, NULL) : NULL;
