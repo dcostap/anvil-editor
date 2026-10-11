@@ -22,6 +22,11 @@ ffi.cdef [[
  void * __stdcall OpenProcess(unsigned long, int, unsigned long);
  int __stdcall TerminateProcess(void *, unsigned int);
  int __stdcall CloseHandle(void *);
+ int __stdcall GetSystemMetrics(int);
+ int __stdcall GetWindowRect(void *, ProbeRect *);
+ void * __stdcall MonitorFromWindow(void *, unsigned long);
+ typedef struct { unsigned long size; ProbeRect monitor, work; unsigned long flags; } ProbeMonitor;
+ int __stdcall GetMonitorInfoW(void *, ProbeMonitor *);
 ]]
 local user32, kernel = ffi.load("user32"), ffi.load("kernel32")
 local root = assert(os.getenv("ANVIL_PROJECT_PROBE_ROOT"))
@@ -41,7 +46,8 @@ local function wait(fn, seconds, message)
  error(message or "restore probe timed out")
 end
 local function trace()
- local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+ local file = io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb")
+ if not file then return "" end
  local text = file:read("*a"); file:close(); return text
 end
 -- Ready records of one Project, optionally only those from one shell.
@@ -85,7 +91,19 @@ local function above(upper, lower)
  return false
 end
 local function quit() core.exit(function() core.quit_request = true end, true) end
-local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b"}
+local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b", [root .. "/Other"] = "c"}
+-- Cases that seed their own state file start without a first run.
+local seeded = action == "restore-crash" or action == "restore-sequential" or action == "restore-argument"
+-- Writes the shell's Window state, front to back, before the first shell starts.
+local function write_state(entries)
+ local lines = {"anvil-shell-windows 1\n"}
+ for _, item in ipairs(entries) do
+  local folder = (root .. "/" .. item[5]):gsub("/", "\\")
+  lines[#lines + 1] = string.format("window %d %d %d %d 0 %d %s\n", item[1], item[2], item[3], item[4], #folder, folder)
+ end
+ local file = assert(io.open(root .. "/user/shell-windows.state", "wb"))
+ file:write(table.concat(lines)); file:close()
+end
 
 if path:match("/driver$") then
  core.add_background_thread(function()
@@ -190,12 +208,82 @@ if path:match("/driver$") then
     assert(select(2, windows(third:pid())) == 2, "restore with an argument did not keep both Windows")
     return close_shell(third, "third")
    end
+   if action == "restore-invalid" then
+    -- A damaged state file opens one empty Window.
+    local file = assert(io.open(root .. "/user/shell-windows.state", "wb"))
+    file:write("anvil-shell-windows 1\nwindow 10 10\n"); file:close()
+    local shell = launch()
+    wait(function() return select(2, windows(shell:pid())) == 1 end, 20, "invalid state did not open one Window")
+    assert(trace():find("Shell Window state is invalid", 1, true), "invalid state was not reported")
+    return close_shell(shell, "invalid")
+   end
+
+   if action == "restore-missing" then
+    -- A Window whose Project folder is gone stays open and empty, with a notice.
+    write_state({{100, 100, 800, 600, "Project"}, {160, 160, 800, 600, "Gone"}})
+    local shell = launch()
+    local a = wait(function() return ready("a", shell:pid())[1] end, 20, "restore did not load Project")
+    wait(function() return trace():find("Cannot restore this Window's Project", 1, true) end, 10,
+     "missing Project folder showed no notice")
+    local found, count = windows(shell:pid())
+    assert(count == 2, "missing Project folder removed its Window")
+    assert(found[a.window_id], "restored Project has no Window")
+    assert(not trace():find("Shell state: Failed", 1, true), "missing Project folder showed a failed runtime")
+    return close_shell(shell, "missing")
+   end
+
+   if action == "restore-offscreen" then
+    -- A Window saved mostly on a monitor that is gone opens fully on a visible monitor.
+    -- Windows itself only moves a Window that is completely off screen.
+    local right = user32.GetSystemMetrics(76) + user32.GetSystemMetrics(78) -- virtual screen x + width
+    write_state({{right - 150, 100, 900, 650, "Project"}})
+    local shell = launch()
+    local a = wait(function() return ready("a", shell:pid())[1] end, 20, "restore did not load Project")
+    local window = assert(windows(shell:pid())[a.window_id])
+    local rect, info = ffi.new("ProbeRect"), ffi.new("ProbeMonitor")
+    info.size = ffi.sizeof(info)
+    assert(user32.GetWindowRect(window, rect) ~= 0)
+    assert(user32.GetMonitorInfoW(user32.MonitorFromWindow(window, 2), info) ~= 0)
+    local w = info.work
+    assert(rect.left >= w.left and rect.top >= w.top and rect.right <= w.right and rect.bottom <= w.bottom,
+     string.format("restored Window is not on a visible monitor: %d,%d %d,%d work %d,%d %d,%d", rect.left, rect.top,
+      rect.right, rect.bottom, w.left, w.top, w.right, w.bottom))
+    return close_shell(shell, "offscreen")
+   end
+
+   if action == "restore-stagger" then
+    -- Restored Projects start one at a time, frontmost first. A slow start does not hold the others for long,
+    -- and native controls work in every Window meanwhile. The fault pauses Replacement's launch.
+    write_state({{100, 100, 800, 600, "Project"}, {140, 140, 800, 600, "Replacement"}, {180, 180, 800, 600, "Other"}})
+    local shell = launch()
+    wait(function() return ready("c", shell:pid())[1] end, 20, "a slow restored Project held the next one")
+    assert(#ready("b", shell:pid()) == 0, "the fault did not pause Replacement")
+    for _, window in pairs(windows(shell:pid())) do
+     user32.PostMessageW(window, 0x112, 0xf020, 0) -- SC_MINIMIZE
+     wait(function() return user32.IsIconic(window) ~= 0 end, 2, "Minimize waited for the restore sequence")
+     user32.PostMessageW(window, 0x112, 0xf120, 0) -- SC_RESTORE
+     wait(function() return user32.IsIconic(window) == 0 end, 2, "Restore waited for the restore sequence")
+    end
+    assert(select(2, windows(shell:pid())) == 3, "restore did not return three Windows")
+    wait(function() return ready("b", shell:pid())[1] end, 20, "restore did not load Replacement")
+    local text = trace()
+    local order = {}
+    for rank in text:gmatch("Shell starts restored Project: Project=%d+ rank=(%d+)") do order[#order + 1] = rank end
+    assert(table.concat(order, ",") == "0,1,2", "restored Projects did not start front to back: " ..
+     table.concat(order, ","))
+    local function started(name)
+     return assert(text:find("Shell started Project pid=%d+ path=[^\n]*" .. name), name .. " did not start")
+    end
+    assert(started("Project") < started("Other") and started("Other") < started("Replacement"),
+     "the slow Project did not let the next one start")
+    return close_shell(shell, "stagger")
+   end
    error("unknown restore probe " .. action)
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action}); file:close()
   for _, item in ipairs(launched) do if item:running() then item:terminate(); item:wait(1) end end
-  for _, name in ipairs({"a", "b"}) do for _, record in ipairs(ready(name)) do kill(record.pid) end end
+  for _, name in ipairs({"a", "b", "c"}) do for _, record in ipairs(ready(name)) do kill(record.pid) end end
   quit()
  end)
 elseif names[path] then
@@ -203,7 +291,7 @@ elseif names[path] then
  core.add_background_thread(function()
   -- Let first-run Workspace setup or restore finish.
   coroutine.yield(1)
-  if name == "a" and not load("a-seeded") then
+  if seeded and name == "a" and not load("a-seeded") then
    save("a-seeded", true)
    core.set_active_view(core.open_file(path .. "/edited.txt"))
    core.save_workspace()

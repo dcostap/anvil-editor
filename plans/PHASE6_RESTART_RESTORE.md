@@ -4,7 +4,7 @@
 
 The user accepted all five review decisions on 2026-10-11 and authorized milestone 1.
 Commit and stop for review after each milestone.
-Milestone 1 is implemented and deployed; see its record below. Stop for review before milestone 2.
+Milestones 1 and 2 are implemented and deployed; see their records below. Stop for review before milestone 3.
 Phase 5 closeout stays pending: matched latency for Phase 5 milestone 5, and the interactive foreground check.
 Milestone 1 does not change compositing or input, so that latency run does not block it.
 Hosted mode stays opt-in.
@@ -206,3 +206,54 @@ Two reruns each with this build (`nlklk8nv`, `8xdog3od`) and the deployed Phase 
 
 - Build `build-windows-x86_64/src/anvil.exe`: `ec59c5bdfb97525d4cab856f8b12173bf7e7a94bcca3f5f8bacb3f1184f8a857`
 - Portable `anvil-portable/anvil.exe`: `7e712aa9b37bdca4ad676d035c945e70633e1fa0f21d7651d75830ae1e435d90`
+
+## Milestone 2 record
+
+### Implementation
+
+- The shell logs whether the state file is absent or invalid. Either way it opens one fresh Window.
+- A restored Window's identity job names its Project. If the folder is gone, the shell retires the placeholder
+  and the Window stays empty with "Cannot restore this Window's Project. Its folder was not found."
+  No Project enters Failed. If the user selects another Project while one resolves, the restore keeps that choice.
+- Before showing a restored Window, the shell checks how much of it the monitors show. Windows only moves a
+  Window that is completely off screen. When part of it is hidden, the shell clamps it into the nearest
+  monitor's work area, shrinking it if needed.
+- Restored Projects resolve concurrently but start one at a time, frontmost first.
+  The next one starts when the previous one is Ready, has ended, or has run for 2 s.
+  The sequence runs from the shell loop and a 100 ms timer; native controls never wait for it.
+  A restored Window that begins Close drops out of the sequence. An external launch for a waiting Project
+  moves it to the front of the sequence.
+- External launches during restore still wait for the restored identities (milestone 1, `restore-argument`).
+- Mixed-DPI bounds are not verified. The fixture desktop has one monitor; mixed DPI stays a manual gate.
+
+### Red-green
+
+New `restore-*` cases in `tests/fixtures/shell_restore_probe.lua`. The driver writes the state file directly.
+
+| Case | Checks |
+| --- | --- |
+| `restore-invalid` | A truncated state file opens one Window and logs that the state is invalid. |
+| `restore-missing` | The front Window's Project loads. The Window whose folder is gone stays, shows the notice, and nothing enters Failed. |
+| `restore-offscreen` | A Window saved with 150 px on screen opens inside its monitor's work area. |
+| `restore-stagger` | Three Windows with the middle one's launch paused 7 s. Starts run front to back, the back Project starts during the pause, and Minimize and Restore work in every Window meanwhile. |
+
+- Red, deployed milestone 1 build (`lbgckv8p`, `vu6s9nnu`): "invalid state was not reported";
+  "missing Project folder showed no notice" (the Project entered Failed); the Window stayed at `2410,100`
+  outside the `2560` px work area; "restored Projects did not start front to back".
+  A first `restore-offscreen` variant saved fully off screen and passed on the old build, because Windows moves
+  such a Window itself. The case now saves a partly visible Window.
+- Green: D3D11 `caaq3bfg`, software `k6144i76`. Under load the front Project took 2.1 s, so the 2 s interval
+  started the next one first; the back Project started during the 7 s pause.
+
+### Regression checks
+
+D3D11 `uqm06cjk` and software `8tespfce`: `restore-crash`, `restore-sequential`, `restore-argument`,
+`launch-forward`, `launch-concurrent`, `new-window`, `launch`, `arguments`, `controls`, `windows-new`,
+`windows-close-dirty`, `windows-close-quit`, `loaded-launch`, `dormant-launch`, and `identity-alias` pass.
+
+### Deployment
+
+`update-anvil-dev-build.bat` rebuilt and installed the dev portable app. It ended all Anvil processes.
+
+- Build `build-windows-x86_64/src/anvil.exe`: `8f38fc7e58d3e3385ee233e973027541050e9e8ae4fff01999ab13883a282224`
+- Portable `anvil-portable/anvil.exe`: `272ca60c3f763fb839d839de71414e0fc8edab795743bfac92f01f4d748b5c24`

@@ -117,6 +117,9 @@ typedef struct ShellProject {
   char *restart_path, *project_path;
   wchar_t *identity;
   bool resolving;
+  /* A restored Project waits for its turn to start. Rank 0 is the frontmost saved Window. */
+  bool restore_waiting;
+  int restore_rank;
   AnvilIPCPipe pipe;
   bool connected;
   Uint32 connection;
@@ -227,6 +230,9 @@ typedef struct {
   UINT_PTR resolve_timer;
   UINT_PTR state_timer;
   bool state_enabled;
+  UINT_PTR restore_timer;
+  Uint32 restore_active;
+  Uint64 restore_active_since;
   uint64_t activation;
   UINT_PTR retire_timer;
   AnvilSidebarModel sidebar;
@@ -298,6 +304,8 @@ static void schedule_sidebar_restart(void);
 static ShellWindow *create_window(const AnvilShellWindowState *placement);
 static bool destroy_window(ShellWindow *window);
 static void save_windows(bool final);
+static void advance_restore(void);
+static void retire_failed_placeholder(ShellProject *project);
 static bool open_project_window(ShellWindow *window, const char *path);
 static void show_project_picker(ShellWindow *window);
 static void finish_project_picker(ShellPicker *picker);
@@ -3323,6 +3331,10 @@ static LRESULT CALLBACK shell_service_wndproc(HWND hwnd, UINT msg, WPARAM wparam
       save_windows(false);
       return 0;
     }
+    if (shell.restore_timer && wparam == shell.restore_timer) {
+      advance_restore();
+      return 0;
+    }
     if (shell.resolve_timer && wparam == shell.resolve_timer) {
       finish_resolutions();
       return 0;
@@ -3736,6 +3748,9 @@ struct ProjectResolve {
   bool launch;
   /* An external launch has no requesting Window. It replies once its Project is selected or started. */
   AnvilShellLaunchRequest *external;
+  /* A restored Window's initial resolution names its Project, because the Window's selection can change first. */
+  Uint32 project_id;
+  bool restored;
   int argc;
   char **argv;
   char *path;
@@ -4200,6 +4215,7 @@ static void finish_external(ProjectResolve *job) {
   } else if (project) {
     SDL_Log("Shell external launch selects loaded Project: pid=%lu Project=%u Window=%u", client, project->id,
             owner->id);
+    if (project->restore_waiting) project->restore_rank = -1;
     select_project(project);
   } else if (!sidebar_project(job->path)) {
     SDL_Log("Shell external launch rejected: Project Sidebar list is full or allocation failed");
@@ -4252,6 +4268,15 @@ static void finish_resolutions(void) {
       continue;
     }
     ShellProject *project = job->initial ? window->selected : NULL;
+    if (job->project_id) {
+      project = NULL;
+      for (ShellProject *item = shell.projects; item; item = item->next)
+        if (item->id == job->project_id) project = item;
+      if (!project) {
+        free_resolution(job);
+        continue;
+      }
+    }
     if (job->initial)
       project->resolving = false;
     if (job->initial && window->closing) {
@@ -4261,7 +4286,13 @@ static void finish_resolutions(void) {
     } else if (!job->success) {
       SDL_Log("Shell rejected Project identity: Windows error=%lu",
               (unsigned long)job->error);
-      if (job->initial)
+      if (job->restored) {
+        /* The Window stays, empty. Its Project Sidebar entry comes from recent Projects and stays too. */
+        SDL_Log("Shell restored Window has no Project: Window=%u path=%s", window->id, job->path);
+        project->restore_waiting = false;
+        retire_failed_placeholder(project);
+        window_notice(window, "Cannot restore this Window's Project. Its folder was not found.");
+      } else if (job->initial)
         fail_connection(project, "Initial Project identity resolution failed");
       else window_notice(window, "Cannot open Project. Check the directory path.");
     } else if (job->initial ||
@@ -4305,13 +4336,16 @@ static void finish_resolutions(void) {
         window_notice(window, "Cannot load Project: runtime allocation failed.");
       else {
         if (created) assign_identity(project, job);
-        select_project(project);
+        /* The user may have selected another Project in a restored Window while this one resolved. */
+        if (!job->restored || window->selected == project) select_project(project);
         if (!job->initial) raise_owner(project);
         if (created || (project->failed_close && project->process.hProcess &&
                         WaitForSingleObject(project->process.hProcess, 0) ==
                             WAIT_OBJECT_0)) {
-          if (!start_project(project, job->initial ? job->argc : 0,
-                             job->initial ? job->argv : NULL))
+          if (project->restore_waiting) {
+            /* The restore sequence starts it. */
+          } else if (!start_project(project, job->initial ? job->argc : 0,
+                                    job->initial ? job->argv : NULL))
             fail_connection(project, "Project selection startup failed");
         }
       }
@@ -4710,6 +4744,38 @@ static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value
   }
 }
 
+static BOOL CALLBACK add_visible_area(HMONITOR monitor, HDC dc, LPRECT bounds, LPARAM data) {
+  (void)monitor; (void)dc;
+  RECT *target = (RECT *)((LONG_PTR *)data)[0], overlap;
+  if (IntersectRect(&overlap, target, bounds))
+    *(LONGLONG *)((LONG_PTR *)data)[1] += (LONGLONG)(overlap.right - overlap.left) * (overlap.bottom - overlap.top);
+  return TRUE;
+}
+
+/* Saved normal bounds in workspace coordinates. A Window that is not fully visible, for example on a removed
+ * monitor, moves onto the nearest monitor's work area and shrinks to fit it. */
+static RECT visible_placement(const AnvilShellWindowState *placement) {
+  RECT bounds = {placement->x, placement->y, placement->x + placement->w, placement->y + placement->h};
+  MONITORINFO primary = {.cbSize = sizeof(primary)};
+  if (!GetMonitorInfoW(MonitorFromPoint((POINT){0, 0}, MONITOR_DEFAULTTOPRIMARY), &primary)) return bounds;
+  /* Workspace coordinates start at the primary work area. */
+  int dx = primary.rcWork.left - primary.rcMonitor.left, dy = primary.rcWork.top - primary.rcMonitor.top;
+  RECT screen = {bounds.left + dx, bounds.top + dy, bounds.right + dx, bounds.bottom + dy};
+  LONGLONG visible = 0;
+  LONG_PTR data[2] = {(LONG_PTR)&screen, (LONG_PTR)&visible};
+  EnumDisplayMonitors(NULL, NULL, add_visible_area, (LPARAM)data);
+  if (visible >= (LONGLONG)(screen.right - screen.left) * (screen.bottom - screen.top)) return bounds;
+  MONITORINFO target = {.cbSize = sizeof(target)};
+  if (!GetMonitorInfoW(MonitorFromRect(&screen, MONITOR_DEFAULTTONEAREST), &target)) return bounds;
+  RECT work = target.rcWork;
+  int w = SDL_min(screen.right - screen.left, work.right - work.left);
+  int h = SDL_min(screen.bottom - screen.top, work.bottom - work.top);
+  int x = SDL_clamp(screen.left, work.left, work.right - w), y = SDL_clamp(screen.top, work.top, work.bottom - h);
+  SDL_Log("Shell moved a restored Window onto a visible monitor: saved=%ld,%ld %ldx%ld screen=%d,%d %dx%d",
+          (long)placement->x, (long)placement->y, (long)placement->w, (long)placement->h, x, y, w, h);
+  return (RECT){x - dx, y - dy, x - dx + w, y - dy + h};
+}
+
 static ShellWindow *create_window(const AnvilShellWindowState *placement) {
   unsigned count = 0;
   for (ShellWindow *item = shell.windows; item; item = item->next) count++;
@@ -4753,8 +4819,7 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement) {
     GetWindowPlacement(window->hwnd, &saved);
     saved.flags = 0;
     saved.showCmd = SW_HIDE;
-    saved.rcNormalPosition = (RECT){placement->x, placement->y, placement->x + placement->w,
-                                    placement->y + placement->h};
+    saved.rcNormalPosition = visible_placement(placement);
     if (!SetWindowPlacement(window->hwnd, &saved))
       SDL_Log("Shell could not restore Window bounds: Windows error=%lu", (unsigned long)GetLastError());
     update_scale(window);
@@ -4856,6 +4921,38 @@ static bool has_project_argument(int argc, char **argv) {
   return false;
 }
 
+#define RESTORE_STAGGER_MS 2000
+/* Starts restored Projects one at a time, frontmost first. The next one starts when the previous one is ready,
+ * has failed, or has used its stagger interval. Native controls never wait for this sequence. */
+static void advance_restore(void) {
+  ShellProject *next = NULL, *active = NULL;
+  for (ShellProject *item = shell.projects; item; item = item->next) {
+    if (item->id == shell.restore_active) active = item;
+    if (!item->restore_waiting) continue;
+    ShellWindow *owner = window_for_id(item->window_id);
+    if (!owner || owner->closing || item->failed_close) {
+      item->restore_waiting = false;
+      continue;
+    }
+    if (!next || item->restore_rank < next->restore_rank) next = item;
+  }
+  if (!next) {
+    if (shell.restore_timer) KillTimer(shell.service_hwnd, shell.restore_timer);
+    shell.restore_timer = 0;
+    return;
+  }
+  if (!shell.restore_timer) shell.restore_timer = SetTimer(shell.service_hwnd, 0x8007, 100, NULL);
+  if (active && active->state == SHELL_STARTING && SDL_GetTicks() < shell.restore_active_since + RESTORE_STAGGER_MS &&
+      (!active->process.hProcess || WaitForSingleObject(active->process.hProcess, 0) == WAIT_TIMEOUT))
+    return;
+  if (next->resolving) return;
+  next->restore_waiting = false;
+  shell.restore_active = next->id;
+  shell.restore_active_since = SDL_GetTicks();
+  SDL_Log("Shell starts restored Project: Project=%u rank=%d", next->id, next->restore_rank);
+  if (!start_project(next, 0, NULL)) fail_connection(next, "Restored Project startup failed");
+}
+
 /* Restores saved Windows back to front, so the frontmost Window opens last. Returns the restored count. */
 static size_t restore_windows(AnvilShellState *saved) {
   size_t restored = 0;
@@ -4876,7 +4973,13 @@ static size_t restore_windows(AnvilShellState *saved) {
     if (!queue_resolution(window, entry->path, 0, NULL, true, false, false, NULL)) {
       SDL_Log("Shell could not resolve a restored Project");
       set_state(project, SHELL_FAILED);
-    } else project->resolving = true;
+    } else {
+      shell.resolvers->project_id = project->id;
+      shell.resolvers->restored = true;
+      project->resolving = true;
+      project->restore_waiting = true;
+      project->restore_rank = (int)i;
+    }
   }
   SDL_Log("Shell restored %u of %u saved Windows", (unsigned)restored, (unsigned)saved->count);
   return restored;
@@ -4985,7 +5088,9 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   AnvilShellState saved = {0};
   if (userdir && _snwprintf(state_file, SDL_arraysize(state_file), L"%ls\\%ls", userdir,
                             ANVIL_SHELL_STATE_FILE) > 0) {
-    if (!anvil_shell_state_load(state_file, &saved)) SDL_Log("Shell Window state: none or invalid; start one Window");
+    if (!anvil_shell_state_load(state_file, &saved))
+      SDL_Log("Shell Window state %s; start one Window",
+              GetFileAttributesW(state_file) == INVALID_FILE_ATTRIBUTES ? "is absent" : "is invalid or too large");
     shell.state_enabled = anvil_shell_state_writer_start(state_file);
     if (!shell.state_enabled) SDL_Log("Shell Window state writer unavailable; Windows will not be restored");
   } else SDL_Log("Shell user directory unavailable; Windows will not be restored");
@@ -5019,6 +5124,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
   check_picker_failures();
   for (ShellWindow *window = shell.windows; window; window = window->next) check_gpu_failure(window);
   finish_resolutions();
+  advance_restore();
   service_sidebar();
   if (shell.sidebar_process) {
     finish_launch(shell.sidebar_process);
