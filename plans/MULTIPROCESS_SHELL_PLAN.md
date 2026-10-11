@@ -489,6 +489,8 @@ Adopt the running Sidebar process, Projects, and Terminal Sessions after a shell
 restart.
 Restore windows, Selected Projects, and Workspaces after a full quit or reboot.
 
+Draft plan for review: [Phase 6: shell restart and restore](PHASE6_RESTART_RESTORE.md).
+
 ### Phase 7: sidebar presentation
 
 Design the final Project Sidebar UI.
