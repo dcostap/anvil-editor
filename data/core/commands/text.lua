@@ -3457,10 +3457,7 @@ keymap.add {
 }
 
 keymap.add_direct {
-  ["ctrl+-"] = "editor:fold_at_caret",
   ["ctrl+shift+-"] = "editor:fold_at_caret",
-  ["ctrl+="] = "editor:unfold_at_caret",
   ["ctrl+shift+="] = "editor:unfold_at_caret",
-  ["ctrl+plus"] = "editor:unfold_at_caret",
   ["ctrl+shift+plus"] = "editor:unfold_at_caret",
 }
