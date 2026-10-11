@@ -500,6 +500,8 @@ passed manually on 2026-10-12. A real reboot, IME, and mixed DPI remain open.
 
 Design the final Project Sidebar UI.
 
+Plan: [Phase 7: Project Sidebar presentation](PHASE7_SIDEBAR_PRESENTATION.md). Draft; its decisions await review.
+
 ## Risks to verify early
 
 - Typing latency through shared-texture compositing.
