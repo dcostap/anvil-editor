@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 14u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 15u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -152,6 +152,9 @@ typedef struct {
   uint64_t configuration;
   int32_t width, height;
   uint64_t input_seq;    /* highest latency-probe input consumed before this frame */
+  /* The frame's full-window background, R | G << 8 | B << 16 | A << 24. The shell fills
+   * exposed areas with it until a frame of the new size arrives. */
+  uint32_t background;
   char name[ANVIL_SURFACE_NAME_MAX];
 } AnvilSurfaceFrame;
 

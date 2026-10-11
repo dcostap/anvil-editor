@@ -80,6 +80,7 @@ struct D3D11Window {
   /* Hosted windows have no swapchain. Frames render into backbuffer and are
      copied into a named shared texture that the shell composites. */
   bool hosted;
+  int capacity_w, capacity_h; /* hosted texture size; width and height are the used region */
   ID3D11Texture2D *shared_texture;
   IDXGIKeyedMutex *shared_mutex;
   HANDLE shared_handle;
@@ -853,14 +854,17 @@ static void d3d11_release_window_buffers(D3D11Window *w) {
   }
 }
 
+/* The hosted surface grows with slack, so a live resize reuses one shared texture.
+ * Frames publish their used size; the shell copies only that region. */
 static bool d3d11_create_hosted_buffers(D3D11Window *w, int width, int height) {
   static unsigned serial = 0;
   d3d11_release_window_buffers(w);
 
+  int capacity_w = width + width / 4, capacity_h = height + height / 4;
   D3D11_TEXTURE2D_DESC desc;
   memset(&desc, 0, sizeof(desc));
-  desc.Width = (UINT)width;
-  desc.Height = (UINT)height;
+  desc.Width = (UINT)capacity_w;
+  desc.Height = (UINT)capacity_h;
   desc.MipLevels = 1;
   desc.ArraySize = 1;
   desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -904,6 +908,8 @@ static bool d3d11_create_hosted_buffers(D3D11Window *w, int width, int height) {
   }
   w->width = width;
   w->height = height;
+  w->capacity_w = capacity_w;
+  w->capacity_h = capacity_h;
   return true;
 }
 
@@ -1091,7 +1097,14 @@ static D3D11Window *d3d11_get_or_create_window(SDL_Window *window, int width, in
 
 static bool d3d11_resize_window(D3D11Window *w, int width, int height) {
   if (w && w->hosted) {
-    if (w->width == width && w->height == height && w->backbuffer) return true;
+    /* Reuse the texture while the size fits. Outside a live resize, give back a much larger one. */
+    bool fits = w->backbuffer && width <= w->capacity_w && height <= w->capacity_h;
+    bool oversized = width * 2 < w->capacity_w || height * 2 < w->capacity_h;
+    if (fits && (!oversized || anvil_resize_diag_live_resize())) {
+      w->width = width;
+      w->height = height;
+      return true;
+    }
     d3d11_unbind_resize_references();
     return d3d11_create_hosted_buffers(w, width, height);
   }
@@ -2060,9 +2073,9 @@ static bool d3d11_publish_hosted_frame(D3D11Window *w) {
   }
   bool acquired = hr == S_OK;
   if (acquired) {
-    g_d3d11.context->lpVtbl->CopyResource(g_d3d11.context,
-                                          (ID3D11Resource *)w->shared_texture,
-                                          (ID3D11Resource *)w->backbuffer);
+    D3D11_BOX box = {0, 0, 0, (UINT)w->width, (UINT)w->height, 1};
+    g_d3d11.context->lpVtbl->CopySubresourceRegion(g_d3d11.context, (ID3D11Resource *)w->shared_texture, 0,
+                                                   0, 0, 0, (ID3D11Resource *)w->backbuffer, 0, &box);
     hr = w->shared_mutex->lpVtbl->ReleaseSync(w->shared_mutex, 0);
     if (SDL_CompareAndSwapAtomicInt(&test_sync_failure, 2, 0)) hr = E_FAIL;
     if (hr != S_OK) {

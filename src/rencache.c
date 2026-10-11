@@ -738,6 +738,9 @@ static RenColor rencache_detect_frame_clear_color(RenCache *ren_cache) {
      rect and use its color for both the D3D clear and swapchain background. */
   Command *cmd = NULL;
   RenRect screen = ren_cache->screen_rect;
+  /* A wallpaper draws an image and then a translucent theme-background tint over the full window.
+     Without an opaque full-window rect, the tint's colour stands in for the background. */
+  bool tinted = false;
   int transform_depth = 0;
   while (next_command(ren_cache, &cmd)) {
     if (cmd->type == PUSH_TRANSFORM) {
@@ -752,12 +755,16 @@ static RenColor rencache_detect_frame_clear_color(RenCache *ren_cache) {
     if (cmd->type != DRAW_RECT) continue;
     DrawRectCommand *rcmd = (DrawRectCommand*)&cmd->command;
     RenRect r = rcmd->rect;
-    if (rcmd->color.a == 255 &&
-        r.x <= 0 && r.y <= 0 &&
-        r.x + r.width >= screen.width &&
-        r.y + r.height >= screen.height) {
-      clear = rcmd->color;
-      break;
+    if (r.x <= 0 && r.y <= 0 && r.x + r.width >= screen.width && r.y + r.height >= screen.height) {
+      if (rcmd->color.a == 255) {
+        clear = rcmd->color;
+        break;
+      }
+      if (!tinted && rcmd->color.a > 0) {
+        clear = rcmd->color;
+        clear.a = 255;
+        tinted = true;
+      }
     }
   }
   return clear;
@@ -898,6 +905,11 @@ void rencache_end_frame(RenCache *ren_cache) {
       g_rencache_last_frame_stats = g_rencache_frame_stats;
     }
     return;
+  }
+  if (ren_cache->window && anvil_hosted_surface_is_window(ren_cache->window)) {
+    RenColor clear = rencache_detect_frame_clear_color(ren_cache);
+    anvil_hosted_surface_set_background(ren_cache->window,
+      (uint32_t)clear.r | (uint32_t)clear.g << 8 | (uint32_t)clear.b << 16 | (uint32_t)clear.a << 24);
   }
   if (rencache_try_d3d11_command_frame(ren_cache)) return;
 

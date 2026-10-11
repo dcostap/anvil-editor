@@ -158,8 +158,13 @@ typedef struct ShellProject {
 typedef struct {
   ID3D11Texture2D *surface, *shared;
   IDXGIKeyedMutex *shared_mutex;
-  int surface_w, surface_h;
+  int surface_w, surface_h; /* the last frame's size within the private texture */
+  int texture_w, texture_h; /* private texture capacity; it grows with slack */
   bool have_surface, busy;
+  /* Screen position of the last frame that matched its configuration. A stale frame stays there during a live
+   * resize, so a left- or top-edge drag does not move the content. */
+  POINT anchor;
+  bool anchored;
   char shared_name[ANVIL_SURFACE_NAME_MAX];
   HANDLE memory_mapping, memory_mutex;
   const uint8_t *memory_view;
@@ -206,6 +211,8 @@ struct ShellWindow {
    * a slow surface process can not make every step wait. */
   bool live_resize;
   bool resize_wait_disabled;
+  /* The selected Project's frame background, R | G << 8 | B << 16 | A << 24. Exposed areas use it. */
+  uint32_t background;
 
   float scale;
   int sidebar_w;
@@ -214,7 +221,8 @@ struct ShellWindow {
   bool pointer_in_surface;
   bool shown;
   ID3D11Texture2D *ui;
-  int ui_w, ui_h;
+  int ui_w, ui_h;               /* layer capacity */
+  int ui_layout_w, ui_layout_h; /* the size the layer was last painted for */
   bool ui_dirty;
   bool ui_hover_dirty;
   HDC ui_dc;
@@ -318,6 +326,24 @@ static void show_project_picker(ShellWindow *window);
 static void finish_project_picker(ShellPicker *picker);
 static void probe_project_picker(WPARAM action, LPARAM window_id);
 static void check_picker_failures(void);
+/* The swapchain background shows where Windows grows the window before the next present. */
+static void apply_swapchain_background(ShellWindow *window) {
+  if (!window->swapchain) return;
+  uint32_t c = window->background;
+  DXGI_RGBA rgba = {(c & 0xff) / 255.0f, (c >> 8 & 0xff) / 255.0f, (c >> 16 & 0xff) / 255.0f, 1.0f};
+  window->swapchain->lpVtbl->SetBackgroundColor(window->swapchain, &rgba);
+}
+/* The Project frame's background fills exposed areas, the native UI and the DWM border. */
+static void apply_background(ShellWindow *window, uint32_t background) {
+  background |= 0xffu << 24;
+  if (window->background == background) return;
+  window->background = background;
+  apply_swapchain_background(window);
+  COLORREF color = background & 0xffffff;
+  if (window->hwnd) win32_frame_hwnd_update_dwm(window->hwnd, true, &color);
+  window->ui_dirty = true;
+  SDL_Log("Shell Window background: id=%u color=%06x", window->id, (unsigned)color);
+}
 static void window_notice(ShellWindow *window, const char *text) {
   SDL_strlcpy(window->notice, text, sizeof(window->notice));
   window->ui_dirty = true;
@@ -1220,7 +1246,10 @@ static bool init_d3d11(ShellWindow *window) {
     desc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
     hr = factory->lpVtbl->CreateSwapChainForHwnd(factory, (IUnknown *)window->device, hwnd, &desc,
                                                  NULL, NULL, &window->swapchain);
-    if (SUCCEEDED(hr)) factory->lpVtbl->MakeWindowAssociation(factory, hwnd, DXGI_MWA_NO_ALT_ENTER);
+    if (SUCCEEDED(hr)) {
+      factory->lpVtbl->MakeWindowAssociation(factory, hwnd, DXGI_MWA_NO_ALT_ENTER);
+      apply_swapchain_background(window);
+    }
     window->buffer_w = (int)desc.Width;
     window->buffer_h = (int)desc.Height;
   } else if (SUCCEEDED(hr)) {
@@ -1306,15 +1335,18 @@ static void resize_buffers(ShellWindow *window) {
   window->buffer_h = pixel_h;
 }
 
+/* Grows the private texture with slack, so a live resize reuses it. The last frame survives growth, so a
+ * stale step can still show it. The caller sets surface_w and surface_h after it copies a frame. */
 static bool ensure_surface_texture(ShellWindow *window, ShellPresentation *surface, int width, int height) {
-  if (surface->surface && surface->surface_w == width && surface->surface_h == height)
+  if (surface->surface && width <= surface->texture_w && height <= surface->texture_h)
     return true;
-  SAFE_RELEASE(surface->surface);
-  surface->have_surface = false;
+  int capacity_w = width + width / 4, capacity_h = height + height / 4;
+  ID3D11Texture2D *previous = surface->surface;
+  surface->surface = NULL;
   D3D11_TEXTURE2D_DESC desc;
   ZeroMemory(&desc, sizeof(desc));
-  desc.Width = (UINT)width;
-  desc.Height = (UINT)height;
+  desc.Width = (UINT)capacity_w;
+  desc.Height = (UINT)capacity_h;
   desc.MipLevels = 1;
   desc.ArraySize = 1;
   desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -1324,10 +1356,19 @@ static bool ensure_surface_texture(ShellWindow *window, ShellPresentation *surfa
   HRESULT hr = window->device->lpVtbl->CreateTexture2D(window->device, &desc, NULL, &surface->surface);
   if (FAILED(hr)) {
     SDL_Log("Shell private surface creation failed: 0x%08lx", (unsigned long)hr);
+    SAFE_RELEASE(previous);
+    surface->have_surface = false;
+    surface->texture_w = surface->texture_h = 0;
     return false;
   }
-  surface->surface_w = width;
-  surface->surface_h = height;
+  if (previous && surface->have_surface) {
+    D3D11_BOX box = {0, 0, 0, (UINT)surface->surface_w, (UINT)surface->surface_h, 1};
+    window->context->lpVtbl->CopySubresourceRegion(window->context, (ID3D11Resource *)surface->surface, 0, 0, 0,
+                                                 0, (ID3D11Resource *)previous, 0, &box);
+  }
+  SAFE_RELEASE(previous);
+  surface->texture_w = capacity_w;
+  surface->texture_h = capacity_h;
   return true;
 }
 
@@ -1360,9 +1401,9 @@ static bool load_d3d11_frame(ShellProject *project, ShellPresentation *surface,
   }
   D3D11_TEXTURE2D_DESC desc;
   surface->shared->lpVtbl->GetDesc(surface->shared, &desc);
-  if (desc.Width != (UINT)frame->width || desc.Height != (UINT)frame->height ||
+  if (desc.Width < (UINT)frame->width || desc.Height < (UINT)frame->height ||
       desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) return false;
-  if (!ensure_surface_texture(window, surface, (int)desc.Width, (int)desc.Height))
+  if (!ensure_surface_texture(window, surface, frame->width, frame->height))
     return false;
   HRESULT acquired = take_fault(FAULT_ACQUIRE) ? WAIT_ABANDONED
                      : SDL_GetAtomicInt(&probe_fault) == FAULT_BUSY
@@ -1378,8 +1419,11 @@ static bool load_d3d11_frame(ShellProject *project, ShellPresentation *surface,
     }
     return false;
   }
-  window->context->lpVtbl->CopyResource(window->context, (ID3D11Resource *)surface->surface,
-                                      (ID3D11Resource *)surface->shared);
+  D3D11_BOX box = {0, 0, 0, (UINT)frame->width, (UINT)frame->height, 1};
+  window->context->lpVtbl->CopySubresourceRegion(window->context, (ID3D11Resource *)surface->surface, 0, 0, 0, 0,
+                                               (ID3D11Resource *)surface->shared, 0, &box);
+  surface->surface_w = frame->width;
+  surface->surface_h = frame->height;
   HRESULT released = surface->shared_mutex->lpVtbl->ReleaseSync(surface->shared_mutex, 0);
   if (take_fault(FAULT_RELEASE)) released = E_FAIL;
   if (released != S_OK) {
@@ -1449,9 +1493,12 @@ static bool load_memory_frame(ShellProject *project, ShellPresentation *surface,
       sizeof(*header) + (size_t)header->stride * (size_t)header->height <= surface->memory_size &&
       ensure_surface_texture(window, surface, header->width, header->height);
   if (ok) {
+    D3D11_BOX box = {0, 0, 0, (UINT)header->width, (UINT)header->height, 1};
     window->context->lpVtbl->UpdateSubresource(window->context, (ID3D11Resource *)surface->surface, 0,
-                                             NULL, surface->memory_view + sizeof(*header),
+                                             &box, surface->memory_view + sizeof(*header),
                                              (UINT)header->stride, 0);
+    surface->surface_w = header->width;
+    surface->surface_h = header->height;
   }
   BOOL released = ReleaseMutex(surface->memory_mutex);
   if (take_fault(FAULT_RELEASE)) {
@@ -1523,7 +1570,7 @@ static void paint_failed_window(ShellWindow *window, HDC dc) {
   client_pixel_size(window, &window->buffer_w, &window->buffer_h);
   controls_geometry(window);
   RECT client = {0, 0, window->buffer_w, window->buffer_h};
-  ui_fill(dc, client, RGB(23, 23, 28));
+  ui_fill(dc, client, window->background & 0xffffff);
   SetBkMode(dc, TRANSPARENT);
   SetTextColor(dc, RGB(220, 220, 225));
   HGDIOBJ old = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
@@ -1542,12 +1589,19 @@ static void paint_failed_window(ShellWindow *window, HDC dc) {
 static void update_ui(ShellWindow *window) {
   ShellProject *project = window->selected;
   controls_geometry(window);
-  if (!window->ui_dirty && !window->ui_hover_dirty && window->ui && window->ui_w == window->buffer_w &&
-      window->ui_h == window->buffer_h)
+  if (!window->ui_dirty && !window->ui_hover_dirty && window->ui && window->ui_layout_w == window->buffer_w &&
+      window->ui_layout_h == window->buffer_h)
     return;
   if (window->buffer_w <= 0 || window->buffer_h <= 0)
     return;
-  if (!window->ui || window->ui_w != window->buffer_w || window->ui_h != window->buffer_h) {
+  if (window->ui_layout_w != window->buffer_w || window->ui_layout_h != window->buffer_h) {
+    window->ui_layout_w = window->buffer_w;
+    window->ui_layout_h = window->buffer_h;
+    window->ui_dirty = true;
+  }
+  /* The layer grows with slack, so a live resize repaints it without reallocating. */
+  if (!window->ui || window->ui_w < window->buffer_w || window->ui_h < window->buffer_h) {
+    int capacity_w = window->buffer_w + window->buffer_w / 4, capacity_h = window->buffer_h + window->buffer_h / 4;
     SAFE_RELEASE(window->ui);
     if (window->ui_dc) {
       SelectObject(window->ui_dc, window->ui_old_bitmap);
@@ -1557,8 +1611,8 @@ static void update_ui(ShellWindow *window) {
     window->ui_dc = CreateCompatibleDC(NULL);
     BITMAPINFO info = {0};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = window->buffer_w;
-    info.bmiHeader.biHeight = -window->buffer_h;
+    info.bmiHeader.biWidth = capacity_w;
+    info.bmiHeader.biHeight = -capacity_h;
     info.bmiHeader.biPlanes = 1;
     info.bmiHeader.biBitCount = 32;
     info.bmiHeader.biCompression = BI_RGB;
@@ -1568,8 +1622,8 @@ static void update_ui(ShellWindow *window) {
       return;
     window->ui_old_bitmap = SelectObject(window->ui_dc, window->ui_bitmap);
     D3D11_TEXTURE2D_DESC desc = {0};
-    desc.Width = window->buffer_w;
-    desc.Height = window->buffer_h;
+    desc.Width = capacity_w;
+    desc.Height = capacity_h;
     desc.MipLevels = 1;
     desc.ArraySize = 1;
     desc.SampleDesc.Count = 1;
@@ -1580,8 +1634,8 @@ static void update_ui(ShellWindow *window) {
       fail_gpu(window, "native UI texture creation failed", hr);
       return;
     }
-    window->ui_w = window->buffer_w;
-    window->ui_h = window->buffer_h;
+    window->ui_w = capacity_w;
+    window->ui_h = capacity_h;
     window->ui_dirty = true;
   }
   HDC dc = window->ui_dc;
@@ -1589,6 +1643,9 @@ static void update_ui(ShellWindow *window) {
   RECT dirty[] = {{0, 0, window->sidebar_w, window->buffer_h}, window->controls, window->failure_card};
   bool full = window->ui_dirty;
   int dirty_count = (project->state == SHELL_FAILED || project->state == SHELL_DORMANT) ? 3 : 2;
+  /* The composite reads the full Project area only while no Project frame covers it, and the notice strip. */
+  bool cover = project->state == SHELL_STARTING || project->state == SHELL_DORMANT ||
+               (project->state == SHELL_FAILED && !window->project_presentation.have_surface);
   HRGN clip = CreateRectRgn(0, 0, 0, 0);
   if (!full) {
     for (int i = 0; i < dirty_count; i++) {
@@ -1599,7 +1656,7 @@ static void update_ui(ShellWindow *window) {
     SelectClipRgn(dc, clip);
   } else
     SelectClipRgn(dc, NULL);
-  ui_fill(dc, all, RGB(23, 23, 28));
+  ui_fill(dc, all, window->background & 0xffffff);
   HFONT font = CreateFontW(-(int)(13 * window->scale), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                            ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
@@ -1647,22 +1704,28 @@ static void update_ui(ShellWindow *window) {
   DeleteObject(pen);
   draw_lifecycle(window, dc);
   GdiFlush();
-  if (full) {
-    window->context->lpVtbl->UpdateSubresource(window->context, (ID3D11Resource *)window->ui, 0, NULL,
-                                             window->ui_pixels, window->buffer_w * 4, 0);
+  RECT uploads[4];
+  int upload_count = 0;
+  if (full && cover) {
+    uploads[upload_count++] = all;
   } else {
-    for (int i = 0; i < dirty_count; i++) {
-      RECT rect = dirty[i];
-      if (rect.right <= rect.left || rect.bottom <= rect.top)
-        continue;
-      D3D11_BOX box = {rect.left, rect.top, 0, rect.right, rect.bottom, 1};
-      const uint8_t *pixels =
-          (uint8_t *)window->ui_pixels + ((size_t)rect.top * window->buffer_w + rect.left) * 4;
-      window->context->lpVtbl->UpdateSubresource(window->context, (ID3D11Resource *)window->ui, 0, &box,
-                                               pixels, window->buffer_w * 4, 0);
-    }
-    SDL_Log("Shell UI hover upload: regions=%d", dirty_count);
+    for (int i = 0; i < dirty_count; i++) uploads[upload_count++] = dirty[i];
+    if (full)
+      uploads[upload_count++] = (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w,
+                                       SDL_min(window->buffer_h, window->controls.bottom + (LONG)(48 * window->scale))};
   }
+  for (int i = 0; i < upload_count; i++) {
+    RECT rect = uploads[i];
+    rect.right = SDL_min(rect.right, window->buffer_w);
+    rect.bottom = SDL_min(rect.bottom, window->buffer_h);
+    if (rect.right <= rect.left || rect.bottom <= rect.top)
+      continue;
+    D3D11_BOX box = {rect.left, rect.top, 0, rect.right, rect.bottom, 1};
+    const uint8_t *pixels = (uint8_t *)window->ui_pixels + ((size_t)rect.top * window->ui_w + rect.left) * 4;
+    window->context->lpVtbl->UpdateSubresource(window->context, (ID3D11Resource *)window->ui, 0, &box, pixels,
+                                             window->ui_w * 4, 0);
+  }
+  if (!full) SDL_Log("Shell UI hover upload: regions=%d", dirty_count);
   SelectObject(dc, old_font);
   DeleteObject(font);
   SelectClipRgn(dc, NULL);
@@ -1685,21 +1748,37 @@ static void composite_and_present(ShellWindow *window) {
   if (window->render_failed) { InvalidateRect(window->hwnd, NULL, FALSE); return; }
   if (!window->rtv)
     return;
-  const FLOAT sidebar[4] = {0.09f, 0.09f, 0.11f, 1.0f};
-  window->context->lpVtbl->ClearRenderTargetView(window->context, window->rtv, sidebar);
-  if (window->project_presentation.have_surface) {
-    D3D11_BOX box = {
-        0,
-        0,
-        0,
-        (UINT)SDL_min(window->project_presentation.surface_w, project->last_config.pixel_w),
-        (UINT)SDL_min(window->project_presentation.surface_h, project->last_config.pixel_h),
-        1};
-    if ((int)box.right > 0 && (int)box.bottom > 0) {
+  uint32_t background = window->background;
+  const FLOAT clear[4] = {(background & 0xff) / 255.0f, (background >> 8 & 0xff) / 255.0f,
+                          (background >> 16 & 0xff) / 255.0f, 1.0f};
+  window->context->lpVtbl->ClearRenderTargetView(window->context, window->rtv, clear);
+  ShellPresentation *content = &window->project_presentation;
+  if (content->have_surface) {
+    /* A frame of the current size anchors the content. While a live resize waits for one, the old frame keeps
+     * its screen position and the Project background fills the rest. */
+    POINT origin = {project->last_config.origin_x, project->last_config.origin_y};
+    ClientToScreen(window->hwnd, &origin);
+    int x = project->last_config.origin_x, y = project->last_config.origin_y;
+    bool current = content->surface_w == project->last_config.pixel_w &&
+                   content->surface_h == project->last_config.pixel_h;
+    if (current || !window->live_resize || !content->anchored) {
+      content->anchor = origin;
+      content->anchored = current;
+    } else {
+      x += content->anchor.x - origin.x;
+      y += content->anchor.y - origin.y;
+    }
+    /* Clip to the Project area of the backbuffer. */
+    int left = SDL_max(x, project->last_config.origin_x), top = SDL_max(y, project->last_config.origin_y);
+    int right = SDL_min(x + content->surface_w, project->last_config.origin_x + project->last_config.pixel_w);
+    int bottom = SDL_min(y + content->surface_h, project->last_config.origin_y + project->last_config.pixel_h);
+    right = SDL_min(right, window->buffer_w);
+    bottom = SDL_min(bottom, window->buffer_h);
+    if (right > left && bottom > top) {
+      D3D11_BOX box = {(UINT)(left - x), (UINT)(top - y), 0, (UINT)(right - x), (UINT)(bottom - y), 1};
       window->context->lpVtbl->CopySubresourceRegion(
-          window->context, (ID3D11Resource *)window->backbuffer, 0, (UINT)project->last_config.origin_x,
-          (UINT)project->last_config.origin_y, 0,
-          (ID3D11Resource *)window->project_presentation.surface, 0, &box);
+          window->context, (ID3D11Resource *)window->backbuffer, 0, (UINT)left, (UINT)top, 0,
+          (ID3D11Resource *)content->surface, 0, &box);
     }
   }
   update_ui(window);
@@ -1727,7 +1806,8 @@ static void composite_and_present(ShellWindow *window) {
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w,
                            SDL_min(window->buffer_h, window->controls.bottom + (LONG)(48 * window->scale))});
   anvil_latency_probe_stage("present-begin");
-  HRESULT hr = window->swapchain->lpVtbl->Present(window->swapchain, 1, 0);
+  /* Like a direct window, a live resize step does not wait for vertical blank. */
+  HRESULT hr = window->swapchain->lpVtbl->Present(window->swapchain, window->live_resize ? 0 : 1, 0);
   anvil_latency_probe_stage("present-end");
   if (take_fault(FAULT_PRESENT))
     hr = DXGI_ERROR_DEVICE_REMOVED;
@@ -1798,6 +1878,8 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
   }
   set_surface_busy(window, surface, false);
   surface->have_surface = true;
+  if (surface == &window->project_presentation && frame->background)
+    apply_background(window, frame->background);
   if (surface->surface_w == window->buffer_w - window->sidebar_w &&
       surface->surface_h == window->buffer_h) {
     window->resize_wait_disabled = false;
@@ -1838,14 +1920,21 @@ static void resize_step(ShellWindow *window) {
   bool stale = !window->project_presentation.have_surface ||
                window->project_presentation.surface_w != width ||
                window->project_presentation.surface_h != height;
-  if (stale && project->connected && window->shown && !window->resize_wait_disabled &&
-      !wait_for_surface_size(window, width, height)) {
+  Uint64 started = SDL_GetTicksNS();
+  bool waited = stale && project->connected && window->shown && !window->resize_wait_disabled;
+  if (waited && !wait_for_surface_size(window, width, height)) {
     window->resize_wait_disabled = true;
     SDL_Log("Anvil shell resize to %dx%d timed out waiting for the surface", width, height);
   }
   AnvilSurfaceFrame frame;
   load_pending_frame(window->selected, &window->project_presentation, &frame);
   if (window->shown) composite_and_present(window);
+  if (window->live_resize)
+    SDL_Log("Shell resize step: Window=%u target=%dx%d presented=%dx%d matched=%d waited=%d wait_ms=%.1f",
+            window->id, width, height, window->project_presentation.surface_w,
+            window->project_presentation.surface_h,
+            window->project_presentation.surface_w == width && window->project_presentation.surface_h == height,
+            waited, (double)(SDL_GetTicksNS() - started) / SDL_NS_PER_MS);
 }
 
 static void handle_frame(ShellWindow *window) {
@@ -3590,7 +3679,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     case WM_DPICHANGED:
     case WM_SETTINGCHANGE:
     case WM_THEMECHANGED:
-      win32_frame_hwnd_update_dwm(hwnd, true, NULL);
+      win32_frame_hwnd_update_dwm(hwnd, true, &(COLORREF){window->background & 0xffffff});
       break;
   }
   return CallWindowProcW(window->sdl_wndproc, hwnd, msg, wparam, lparam);
@@ -4839,6 +4928,7 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement) {
     return NULL;
   }
   ShellWindow *window = calloc(1, sizeof(*window));
+  if (window) window->background = 23 | 23 << 8 | 28 << 16;
   if (!window) return NULL;
   window->id = ++shell.next_window;
   window->sidebar = true;
