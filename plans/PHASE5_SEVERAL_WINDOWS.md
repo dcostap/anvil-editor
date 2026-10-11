@@ -15,7 +15,7 @@ The Sidebar Restart [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) satisfies th
 The user authorized milestone 4. It is implemented. Its [verification record](PHASE5_WINDOW_CLOSE.md) retains checks, failures, and matched latency.
 The user authorized milestone 5. It is implemented. Its [verification record](PHASE5_EXTERNAL_LAUNCH.md) retains checks and deployment hashes.
 The user approved milestone 5. Its matched latency found no regression. Phase 5 is complete.
-The interactive foreground check remains open with the manual gates below.
+The interactive foreground check passed on 2026-10-12; see the Phase 6 manual checks.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
 The milestone-2 latency entry gate is satisfied on 2026-10-10.

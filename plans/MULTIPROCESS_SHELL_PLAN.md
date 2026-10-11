@@ -493,8 +493,8 @@ Plan: [Phase 6: shell restart and restore](PHASE6_RESTART_RESTORE.md). The user 
 Milestone 1 restores Windows and Selected Projects from shell-written App State.
 Milestone 2 handles restore failures and starts restored Projects one at a time.
 Milestone 3 adopts running Projects after the shell ends, within 60 s. The Sidebar process restarts.
-The user approved milestone 3. Phase 6 is complete. Manual checks remain open: a real reboot, physical input
-after adoption, the interactive foreground check, IME, and mixed DPI.
+The user approved milestone 3. Phase 6 is complete. The foreground check and physical input after adoption
+passed manually on 2026-10-12. A real reboot, IME, and mixed DPI remain open.
 
 ### Phase 7: sidebar presentation
 

@@ -5,10 +5,11 @@
 The user accepted all five review decisions on 2026-10-11 and authorized milestone 1.
 Commit and stop for review after each milestone.
 Milestones 1, 2, and 3 are implemented and deployed; see their records below. The user approved milestone 3.
-Phase 6 is complete. Phase 5 milestone 5 matched latency is recorded; the interactive foreground check stays open.
+Phase 6 is complete. Phase 5 milestone 5 matched latency is recorded. The interactive foreground check and
+physical input after adoption passed on 2026-10-12; see the manual checks below.
 Milestone 1 does not change compositing or input, so that latency run does not block it.
 Hosted mode stays opt-in.
-Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
+IME, mixed DPI, a real reboot, allocator failure, and instrumented lifetime acceptance remain open.
 
 Read [the main plan](MULTIPROCESS_SHELL_PLAN.md) and [Phase 5](PHASE5_SEVERAL_WINDOWS.md) first.
 Use the terms in `CONTEXT.md`. This plan does not rename them.
@@ -339,3 +340,16 @@ The first attempt failed to link `hosted_routing_test`; the second passed. The f
 - Portable `anvil-portable/anvil.exe`: `8628315ba8be224b7dc766937b609aac6e2f459825d6c370af0312f25000378d`
 
 Manual gates stay open: a real reboot, physical input after adoption, and mixed DPI.
+
+## Manual checks, 2026-10-12
+
+The user ran these on the deployed portable in hosted mode, with two Windows and two Projects.
+
+- Passed: selecting the other Window's Project from a Sidebar raised that Window and moved keyboard input to it.
+  This closes the Phase 5 interactive foreground check.
+- Passed: physical input after adoption. The user ended only the shell in Task Manager and relaunched within 60 s.
+  Both Windows returned in place, with an unsaved edit and a running Terminal Session intact.
+  Typing, mouse, scrolling, and the native window controls worked in both Windows.
+  The Project logs show `Shell lost` at 00:40:09 and `Shell adopted this Project` at 00:40:29 for Windows 1 and 2.
+  The session logs from that run have no errors or warnings.
+- Skipped: IME, mixed DPI, and a real reboot. They stay open.
