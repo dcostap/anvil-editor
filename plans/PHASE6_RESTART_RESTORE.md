@@ -4,8 +4,8 @@
 
 The user accepted all five review decisions on 2026-10-11 and authorized milestone 1.
 Commit and stop for review after each milestone.
-Milestones 1, 2, and 3 are implemented and deployed; see their records below. Stop for review.
-Phase 5 closeout stays pending: matched latency for Phase 5 milestone 5, and the interactive foreground check.
+Milestones 1, 2, and 3 are implemented and deployed; see their records below. The user approved milestone 3.
+Phase 6 is complete. Phase 5 milestone 5 matched latency is recorded; the interactive foreground check stays open.
 Milestone 1 does not change compositing or input, so that latency run does not block it.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.

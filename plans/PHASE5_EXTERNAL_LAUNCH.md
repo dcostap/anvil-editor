@@ -4,8 +4,7 @@
 
 The user authorized milestone 5 on 2026-10-11. It is implemented and deployed. Stop for review.
 Hosted mode remains opt-in. Direct-mode single-instance IPC is unchanged.
-Matched latency is pending: the user's machine ran other heavy work, and the user said not to spend time on performance.
-Run the matched comparison after the load ends. Use the milestone 4 portable below as the reference.
+The user approved milestone 5. Matched latency against milestone 4 found no regression; see below.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
 An interactive foreground check also remains open. The private desktop has no foreground Window to grant from.
 
@@ -90,3 +89,29 @@ Software (`bkh05t_j`): all six `windows-close-*` cases, `windows-new`, `windows-
 - Build `build-windows-x86_64/src/anvil.exe`: `4a7c69c10880104ae96e95a42ba01dbc73a5e9f7bb31caf80f24d96619eaf190`
 - Portable `anvil-portable/anvil.exe`: `6c20edcc270e51ea2f6cb54d3fd16f72120c2a8e243f30647b9a14fe9b4af7aa`
 - Latency reference, milestone 4 portable: `c9508d0b85b2f45c76194a7c2a1860b28588fce8baf277b021af2a2a3d6a2304`
+
+## Matched latency
+
+Run on 2026-10-11, after the user approved Phase 6 milestone 3. The machine still ran other heavy work.
+The saved milestone 4 and 5 portables no longer existed, so both builds were rebuilt from their commits
+in detached worktrees (`anvil-baseline-5241a046`, `anvil-baseline-32df6800`). Options match the dev build:
+MinGW GCC, `debugoptimized`, optimization 3, portable, `forcefallback`, PPM off. Each app was installed with
+`meson install --strip` and uses its own revision's runtime data.
+
+- Reference, milestone 4 (`5241a046`): `5f6f3d281dd87536acb4effe8305ec0bad231ef643eae2df166babad2ce88fbb`
+- Candidate, milestone 5 (`32df6800`): `f90312e934948015fb5c9940402b6e7aa937887de16f15f1d792c297d3bd980e`
+
+These hashes differ from the deployed portables above; PE timestamps differ between builds.
+Three alternating pairs, 360 valid samples per row and build, no failed or ineligible runs.
+Evidence: `%TEMP%/anvil-phase5-m5-matched-_cma7spy/results.json`.
+
+| Row | Milestone 4 p50 / p90 / p99 | Milestone 5 p50 / p90 / p99 |
+| --- | --- | --- |
+| direct D3D11 | 8.61 / 17.44 / 21.25 | 8.16 / 17.53 / 30.62 |
+| shell D3D11 | 8.12 / 17.43 / 20.76 | 8.88 / 18.32 / 21.59 |
+| direct software | 16.87 / 26.12 / 43.36 | 16.07 / 24.11 / 30.96 |
+| shell software | 13.91 / 22.92 / 27.78 | 13.52 / 21.93 / 26.57 |
+
+Every p50 and p90 difference is below the 2 ms noise bound. The direct D3D11 p99 shift is in a control row:
+milestone 5 did not change direct mode. No regression found. Milestone 5 changes launch forwarding only,
+not compositing or input.

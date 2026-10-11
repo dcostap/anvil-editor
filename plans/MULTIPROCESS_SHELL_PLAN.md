@@ -473,7 +473,7 @@ Its [verification record](PHASE5_PROJECT_MOVE.md) retains checks, memory investi
 The user approved milestone 3. Review follow-up `48b33622` keeps Sidebar Move choices across revisions.
 The Sidebar Restart [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) satisfies the milestone-4 entry gate. No timeout changed.
 The user authorized milestone 4. It is implemented; see [its record](PHASE5_WINDOW_CLOSE.md).
-The user authorized milestone 5. External hosted launches reach the running shell; see [its record](PHASE5_EXTERNAL_LAUNCH.md). Its matched latency is pending. Stop for review. Hosted mode stays opt-in.
+The user authorized milestone 5. External hosted launches reach the running shell; see [its record](PHASE5_EXTERNAL_LAUNCH.md). Its matched latency found no regression. Phase 5 is complete. Hosted mode stays opt-in.
 The latency probe remains under investigation. Treat differences below about 2 ms as noise.
 The [fresh baseline investigation](PHASE4_LATENCY_BASELINE.md) satisfies the milestone-2 entry gate on 2026-10-10.
 Both fresh revisions return to historical-range medians in the unlocked, display-on matched repeat.
@@ -492,7 +492,9 @@ Restore windows, Selected Projects, and Workspaces after a full quit or reboot.
 Plan: [Phase 6: shell restart and restore](PHASE6_RESTART_RESTORE.md). The user accepted its decisions.
 Milestone 1 restores Windows and Selected Projects from shell-written App State.
 Milestone 2 handles restore failures and starts restored Projects one at a time.
-Milestone 3 adopts running Projects after the shell ends, within 60 s. The Sidebar process restarts. Stop for review.
+Milestone 3 adopts running Projects after the shell ends, within 60 s. The Sidebar process restarts.
+The user approved milestone 3. Phase 6 is complete. Manual checks remain open: a real reboot, physical input
+after adoption, the interactive foreground check, IME, and mixed DPI.
 
 ### Phase 7: sidebar presentation
 
