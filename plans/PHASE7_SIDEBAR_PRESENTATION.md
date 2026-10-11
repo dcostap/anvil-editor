@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft for review, 2026-10-12. No code changes until the user accepts the decisions below.
+Draft, 2026-10-12. The user left the design to the agent and will tweak it later.
+The recommendations below are the starting design. [Hosted presentation quality](HOSTED_PRESENTATION_QUALITY.md)
+comes first, because the Sidebar's look depends on layered composition.
 Commit and stop for review after each milestone. Hosted mode stays opt-in.
 
 Read [the main plan](MULTIPROCESS_SHELL_PLAN.md) and [Phase 4](PHASE4_PROJECTS_AND_SIDEBAR.md) first.
