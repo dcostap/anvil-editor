@@ -10,6 +10,7 @@
 #include "project_sidebar_scan.h"
 #include "sidebar_registry_watch.h"
 #include "process_exit.h"
+#include "shell_launch.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -79,6 +80,7 @@ enum {
   SHELL_EVENT_START_TIMEOUT,
   SHELL_EVENT_LAUNCHED,
   SHELL_EVENT_PICKER_RESULT,
+  SHELL_EVENT_EXTERNAL,
 };
 
 typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED, SHELL_DORMANT } ShellState;
@@ -271,6 +273,8 @@ static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
 static void present_deferred_dialogs(ShellProject *project);
 static void finish_launch(ShellProject *project);
 static void finish_resolutions(void);
+static bool queue_resolution(ShellWindow *window, const char *path, int argc, char **argv, bool initial, bool unload,
+                             bool new_window, AnvilShellLaunchRequest *external);
 static bool unload_project_path(ShellWindow *window, const char *path);
 static void begin_unload(ShellProject *project);
 static void drain_retired_projects(void);
@@ -2883,6 +2887,23 @@ static void handle_connected(ShellProject *project) {
     shell_send(project, ANVIL_SURFACE_MSG_CLOSE, NULL, 0, NULL, 0);
 }
 
+/* Runs on the launch server thread. */
+static bool notify_external(AnvilShellLaunchRequest *request) {
+  SDL_Event event = {.type = shell.event_type};
+  event.user.code = SHELL_EVENT_EXTERNAL;
+  event.user.data1 = request;
+  return SDL_PushEvent(&event);
+}
+
+static void accept_external(AnvilShellLaunchRequest *request) {
+  SDL_Log("Shell external launch received: pid=%lu arguments=%d",
+          (unsigned long)anvil_shell_launch_client_pid(request), anvil_shell_launch_argc(request) - 2);
+  if (shell.shutting_down ||
+      !queue_resolution(NULL, anvil_shell_launch_cwd(request), anvil_shell_launch_argc(request),
+                        anvil_shell_launch_argv(request), false, false, true, request))
+    anvil_shell_launch_finish(request, ANVIL_SHELL_LAUNCH_BUSY);
+}
+
 SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   ShellWindow *window = NULL;
   ShellProject *project = NULL;
@@ -2890,6 +2911,10 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   if (event->type == shell.event_type) {
     if (event->user.code == SHELL_EVENT_PICKER_RESULT) {
       finish_project_picker(event->user.data1);
+      return SDL_APP_CONTINUE;
+    }
+    if (event->user.code == SHELL_EVENT_EXTERNAL) {
+      accept_external(event->user.data1);
       return SDL_APP_CONTINUE;
     }
     if (event->user.code == SHELL_EVENT_MESSAGE) {
@@ -3681,6 +3706,8 @@ struct ProjectResolve {
   unsigned revision;
   uint64_t close_generation;
   bool initial, success, unload, new_window;
+  /* An external launch has no requesting Window. It replies once its Project is selected or started. */
+  AnvilShellLaunchRequest *external;
   int argc;
   char **argv;
   char *path;
@@ -3689,6 +3716,7 @@ struct ProjectResolve {
 };
 
 static void free_resolution(ProjectResolve *job) {
+  if (job->external) anvil_shell_launch_finish(job->external, ANVIL_SHELL_LAUNCH_BUSY);
   for (int i = 0; i < job->argc; i++)
     free(job->argv[i]);
   free(job->argv);
@@ -3721,7 +3749,7 @@ static int SDLCALL resolve_project_thread(void *data) {
 }
 
 static bool queue_resolution(ShellWindow *window, const char *path, int argc, char **argv,
-                             bool initial, bool unload, bool new_window) {
+                             bool initial, bool unload, bool new_window, AnvilShellLaunchRequest *external) {
   unsigned pending = 0;
   for (ProjectResolve *item = shell.resolvers; item; item = item->next)
     pending++;
@@ -3736,8 +3764,8 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
     return false;
   }
   job->initial = initial;
-  job->window_id = window->id;
-  job->close_generation = window->close_generation;
+  job->window_id = window ? window->id : 0;
+  job->close_generation = window ? window->close_generation : 0;
   job->unload = unload;
   job->new_window = new_window;
   job->argc = argc;
@@ -3767,7 +3795,7 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
     return false;
   }
   /* Only a selection replaces the Window's earlier pending selection. Unload and New Window requests do not. */
-  job->revision = window->resolve_revision + (unload || new_window ? 0 : 1);
+  job->revision = window ? window->resolve_revision + (unload || new_window ? 0 : 1) : 0;
   job->thread =
       SDL_CreateThread(resolve_project_thread, "anvil-project-identity", job);
   if (!job->thread) {
@@ -3775,7 +3803,8 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
     SDL_Log("Shell rejected Project selection: identity worker failed");
     return false;
   }
-  window->resolve_revision = job->revision;
+  if (window) window->resolve_revision = job->revision;
+  job->external = external;
   job->next = shell.resolvers;
   shell.resolvers = job;
   return true;
@@ -4040,17 +4069,17 @@ static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
 static bool select_project_path(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path)
     return false;
-  return queue_resolution(window, path, 0, NULL, false, false, false);
+  return queue_resolution(window, path, 0, NULL, false, false, false, NULL);
 }
 
 static bool unload_project_path(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path)
     return false;
-  return queue_resolution(window, path, 0, NULL, false, true, false);
+  return queue_resolution(window, path, 0, NULL, false, true, false, NULL);
 }
 static bool open_project_window(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path) return false;
-  if (!queue_resolution(window, path, 0, NULL, false, false, true)) {
+  if (!queue_resolution(window, path, 0, NULL, false, false, true, NULL)) {
     window_notice(window, "Cannot submit the Open Project request.");
     return false;
   }
@@ -4081,17 +4110,111 @@ static void begin_unload(ShellProject *project) {
   request_close(project);
 }
 
+static ShellProject *loaded_project(const wchar_t *identity) {
+  for (ShellProject *item = shell.projects; item; item = item->next)
+    if (item->identity && CompareStringOrdinal(item->identity, -1, identity, -1, TRUE) == CSTR_EQUAL)
+      return item;
+  return NULL;
+}
+
+/* Takes the resolved path and identity, and the Dormant record's Project id when one matches. */
+static void assign_identity(ShellProject *project, ProjectResolve *job) {
+  DormantProject **dormant_link = &shell.dormants;
+  while (*dormant_link && CompareStringOrdinal((*dormant_link)->identity, -1, job->identity, -1,
+                                               TRUE) != CSTR_EQUAL)
+    dormant_link = &(*dormant_link)->next;
+  DormantProject *dormant = *dormant_link;
+  free(project->project_path);
+  free(project->identity);
+  project->project_path = job->path;
+  job->path = NULL;
+  project->identity = job->identity;
+  job->identity = NULL;
+  if (dormant) {
+    project->id = dormant->id;
+    *dormant_link = dormant->next;
+    free(dormant->path);
+    free(dormant->identity);
+    free(dormant->title);
+    free(dormant);
+  }
+}
+
+static void raise_owner(ShellProject *project) {
+  ShellWindow *owner = window_for_id(project->window_id);
+  if (!owner || owner->closing) return;
+  SDL_ShowWindow(owner->window);
+  if (IsIconic(owner->hwnd)) SDL_RestoreWindow(owner->window);
+  owner->shown = true;
+  send_configure(project);
+  SDL_RaiseWindow(owner->window);
+}
+
+/* An external launch selects its loaded Project, or starts it in a new Window. */
+static void finish_external(ProjectResolve *job) {
+  AnvilShellLaunchRequest *request = job->external;
+  job->external = NULL;
+  unsigned long client = anvil_shell_launch_client_pid(request);
+  ShellProject *project = job->success ? loaded_project(job->identity) : NULL;
+  ShellWindow *owner = project ? window_for_id(project->window_id) : NULL;
+  AnvilShellLaunchStatus status = ANVIL_SHELL_LAUNCH_ACCEPTED;
+  if (shell.shutting_down) {
+    status = ANVIL_SHELL_LAUNCH_BUSY;
+  } else if (!job->success) {
+    SDL_Log("Shell external launch identity failed: pid=%lu Windows error=%lu", client, (unsigned long)job->error);
+    status = ANVIL_SHELL_LAUNCH_REJECTED;
+  } else if (project && (!owner || owner->closing)) {
+    SDL_Log("Shell external launch waits for its Project's Window Close: pid=%lu Project=%u", client, project->id);
+    status = ANVIL_SHELL_LAUNCH_BUSY;
+  } else if (project) {
+    SDL_Log("Shell external launch selects loaded Project: pid=%lu Project=%u Window=%u", client, project->id,
+            owner->id);
+    select_project(project);
+  } else if (!sidebar_project(job->path)) {
+    SDL_Log("Shell external launch rejected: Project Sidebar list is full or allocation failed");
+    status = ANVIL_SHELL_LAUNCH_REJECTED;
+  } else if (!(owner = create_window()) || !(project = new_project(owner))) {
+    SDL_Log("Shell external launch rejected: Window or runtime allocation failed");
+    if (owner) destroy_window(owner);
+    status = ANVIL_SHELL_LAUNCH_REJECTED;
+  } else {
+    assign_identity(project, job);
+    select_project(project);
+    SDL_Log("Shell external launch starts Project: pid=%lu Project=%u Window=%u", client, project->id, owner->id);
+    if (!start_project(project, job->argc, job->argv)) fail_connection(project, "External launch startup failed");
+  }
+  if (status == ANVIL_SHELL_LAUNCH_ACCEPTED) {
+    /* Windows decides whether the raise takes the foreground. Without the launcher's grant it may only flash. */
+    SDL_Log("Shell external launch raise: foreground grant=%d",
+            anvil_shell_launch_foreground_granted(request));
+    raise_owner(project);
+  }
+  anvil_shell_launch_finish(request, status);
+}
+
+static bool initial_resolution_pending(void) {
+  for (ProjectResolve *item = shell.resolvers; item; item = item->next)
+    if (item->initial) return true;
+  return false;
+}
+
 static void finish_resolutions(void) {
   ProjectResolve **link = &shell.resolvers;
   while (*link) {
     ProjectResolve *job = *link;
-    if (!SDL_GetAtomicInt(&job->done)) {
+    /* The first Project has no identity until its resolution finishes. A launch waits so it cannot duplicate it. */
+    if (!SDL_GetAtomicInt(&job->done) || (job->external && initial_resolution_pending())) {
       link = &job->next;
       continue;
     }
     if (job->thread)
       SDL_WaitThread(job->thread, NULL);
     *link = job->next;
+    if (job->external) {
+      finish_external(job);
+      free_resolution(job);
+      continue;
+    }
     ShellWindow *window = window_for_id(job->window_id);
     if (!window) {
       free_resolution(job);
@@ -4112,15 +4235,7 @@ static void finish_resolutions(void) {
       else window_notice(window, "Cannot open Project. Check the directory path.");
     } else if (job->initial ||
                (!window->closing && (job->new_window || job->unload || job->revision == window->resolve_revision))) {
-      if (!job->initial) {
-        for (ShellProject *item = shell.projects; item; item = item->next)
-          if (item->identity &&
-              CompareStringOrdinal(item->identity, -1, job->identity, -1,
-                                   TRUE) == CSTR_EQUAL) {
-            project = item;
-            break;
-          }
-      }
+      if (!job->initial) project = loaded_project(job->identity);
       if (job->unload) {
         if (project)
           begin_unload(project);
@@ -4135,11 +4250,6 @@ static void finish_resolutions(void) {
           continue;
         }
       }
-      DormantProject **dormant_link = &shell.dormants;
-      while (*dormant_link && CompareStringOrdinal((*dormant_link)->identity, -1, job->identity, -1,
-                                                   TRUE) != CSTR_EQUAL)
-        dormant_link = &(*dormant_link)->next;
-      DormantProject *dormant = *dormant_link;
       bool created = job->initial || !project;
       /* Reserve a list entry before creating another runtime. Every runtime
        * can then become Dormant without dropping another Dormant record. */
@@ -4163,33 +4273,9 @@ static void finish_resolutions(void) {
       if (!project)
         window_notice(window, "Cannot load Project: runtime allocation failed.");
       else {
-        if (created) {
-          free(project->project_path);
-          free(project->identity);
-          project->project_path = job->path;
-          job->path = NULL;
-          project->identity = job->identity;
-          job->identity = NULL;
-          if (dormant) {
-            project->id = dormant->id;
-            *dormant_link = dormant->next;
-            free(dormant->path);
-            free(dormant->identity);
-            free(dormant->title);
-            free(dormant);
-          }
-        }
+        if (created) assign_identity(project, job);
         select_project(project);
-        if (!job->initial) {
-          ShellWindow *owner = window_for_id(project->window_id);
-          if (owner && !owner->closing) {
-            SDL_ShowWindow(owner->window);
-            if (IsIconic(owner->hwnd)) SDL_RestoreWindow(owner->window);
-            owner->shown = true;
-            send_configure(project);
-            SDL_RaiseWindow(owner->window);
-          }
-        }
+        if (!job->initial) raise_owner(project);
         if (created || (project->failed_close && project->process.hProcess &&
                         WaitForSingleObject(project->process.hProcess, 0) ==
                             WAIT_OBJECT_0)) {
@@ -4707,6 +4793,13 @@ static bool destroy_window(ShellWindow *window) {
 SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   *appstate = &shell;
   anvil_surface_log_init("shell");
+  /* Another shell for this executable and user directory takes the launch. This process then ends. */
+  AnvilShellLaunchResult launch = anvil_shell_launch_own_or_forward(argc, argv);
+  if (launch == ANVIL_SHELL_LAUNCH_FORWARDED) shell_exit(0);
+  if (launch == ANVIL_SHELL_LAUNCH_FAILED) {
+    fprintf(stderr, "Anvil: the running Anvil did not accept this launch. Try again.\n");
+    shell_exit(1);
+  }
   anvil_latency_probe_init("shell");
 
   SDL_SetAppMetadata("Anvil", ANVIL_PROJECT_VERSION_STR, "io.github.dcostap.Anvil");
@@ -4743,10 +4836,12 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   ShellProject *project = new_project(window);
   if (!project) return SDL_APP_FAILURE;
   select_project(project);
-  if (!queue_resolution(window, NULL, argc, argv, true, false, false)) {
+  if (!queue_resolution(window, NULL, argc, argv, true, false, false, NULL)) {
     SDL_Log("Anvil shell could not resolve its initial Project");
     set_state(project, SHELL_FAILED);
   } else project->resolving = true;
+  if (!anvil_shell_launch_start(notify_external))
+    SDL_Log("Shell launch server unavailable; later launches cannot reach this shell");
   return SDL_APP_CONTINUE;
 }
 
@@ -4816,6 +4911,8 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
 
 void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   shell.shutting_down = true;
+  /* Later launches then own a new shell instead of waiting for this one. */
+  anvil_shell_launch_stop();
   (void)appstate;
   (void)result;
   /* Project loss detection owns save/detach and its deadline. Never kill it with a shell job. */

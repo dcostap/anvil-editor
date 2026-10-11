@@ -718,7 +718,10 @@ if project:find("/driver$", 1) then
         else
           assert(replacement.pid == state.pid, "direct restart replaced its process")
         end
-        if action == "new-window" then
+        if action == "new-window" and mode == "shell" then
+          -- Phase 5: one shell owns every hosted Window for its user directory.
+          assert(replacement.shell_pid == state.shell_pid, "hosted New Window started another shell")
+        elseif action == "new-window" then
           assert(replacement.shell_pid ~= state.shell_pid, "New Window reused the original shell")
         else
           assert(replacement.shell_pid == state.shell_pid, "restart replaced the shell window process")

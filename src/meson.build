@@ -47,6 +47,7 @@ anvil_sources = [
     'window_backend.c',
     'input_latency_probe.c',
     'anvil_shell.c',
+    'shell_launch.c',
     'project_sidebar.c',
     'project_sidebar_scan.c',
     'sidebar_registry_watch.c',

@@ -13,7 +13,8 @@ Milestone 3 is implemented. Its [verification record](PHASE5_PROJECT_MOVE.md) re
 The user approved `f2742110`. Review follow-up `48b33622` keeps Move choices across Sidebar revisions.
 The Sidebar Restart [cause record](PHASE5_SIDEBAR_RESTART_CAUSE.md) satisfies the milestone-4 entry gate.
 The user authorized milestone 4. It is implemented. Its [verification record](PHASE5_WINDOW_CLOSE.md) retains checks, failures, and matched latency.
-Stop for review. Do not start milestone 5.
+The user authorized milestone 5. It is implemented. Its [verification record](PHASE5_EXTERNAL_LAUNCH.md) retains checks and deployment hashes.
+Matched latency for milestone 5 is pending until the user's other heavy work ends. Stop for review.
 Phase 4 closeout precedes this work.
 Hosted mode stays opt-in.
 Physical input, IME, mixed DPI, allocator failure, and instrumented lifetime acceptance remain open.
@@ -191,6 +192,8 @@ An already presented Project raises its owning Window.
 The external launcher grants the shell foreground permission with `AllowSetForegroundWindow` before requesting a raise.
 Retain the explicit raise request and handle a denied foreground grant without blocking native controls.
 Do not add adoption after shell loss in this milestone.
+
+The user authorized milestone 5. It is implemented; see [the record](PHASE5_EXTERNAL_LAUNCH.md).
 
 ## Review decisions
 

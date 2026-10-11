@@ -133,7 +133,7 @@ def main() -> int:
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
     parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
-        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -188,6 +188,8 @@ def main() -> int:
                             (case_dir / "Other/edited.txt").write_bytes(b"on disk\n")
                     if action.startswith("identity-"):
                         fixture = "project_identity_probe.lua"
+                    if action.startswith("launch-"):
+                        fixture = "shell_launch_probe.lua"
                     if action.startswith("dormant-"):
                         fixture = "dormant_projects_probe.lua"
                     if action.startswith("sidebar-"):
@@ -197,7 +199,7 @@ def main() -> int:
                         (case_dir / "user/appstate.lua").write_text(
                             'return {recents={' + ','.join(json.dumps(str(case_dir / name).replace("\\", "/"))
                                 for name in ("Project", "Recent", "Replacement")) + '}}', encoding="utf-8")
-                    if action == "identity-alias":
+                    if action in ("identity-alias", "launch-forward"):
                         subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", native_path(case_dir / "alias"),
                                         native_path(case_dir / "Project")], check=True, capture_output=True)
                     shutil.copy2(ROOT / "tests/fixtures" / fixture, work / "app/share/anvil/plugins/hosted_project_probe.lua")
@@ -211,9 +213,12 @@ def main() -> int:
                     namespace = "anvil-test-" + work.name.rsplit("-", 1)[-1] + "-" + action
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
-                    if action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-")) or action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
+                    if action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-")) or action in ("conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
+                    if action == "launch-userdir":
+                        (case_dir / "user2").mkdir()
+                        (case_dir / "user2/init.lua").write_text(init, encoding="utf-8")
                     result = case_dir / "result.lua"
                     config = {
                         "exe": native_path(exe), "working_directory": native_path(case_dir / "driver"),
