@@ -1,4 +1,5 @@
 local core = require "core"
+local config = require "core.config"
 local test = require "core.test"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
@@ -21,6 +22,9 @@ end
 
 test.describe("Fuzzy Searcher Project symbols", function()
   test.before_each(function(context)
+    -- These tests draw without a window, which a wallpaper image needs.
+    context.wallpaper = config.wallpaper
+    config.wallpaper = "none"
     context.renderer_draw_text = renderer.draw_text
     context.renderer_draw_rect = renderer.draw_rect
     context.renderer_draw_rounded_rect = renderer.draw_rounded_rect
@@ -32,6 +36,7 @@ test.describe("Fuzzy Searcher Project symbols", function()
   end)
 
   test.after_each(function(context)
+    config.wallpaper = context.wallpaper
     if context.original_lsp_enabled then lsp_manager.is_enabled = context.original_lsp_enabled end
     if context.original_lsp_workspace_symbols then lsp_provider.workspace_symbols = context.original_lsp_workspace_symbols end
     if context.original_ts_workspace_symbols_async then symbol_index.workspace_symbols_async = context.original_ts_workspace_symbols_async end

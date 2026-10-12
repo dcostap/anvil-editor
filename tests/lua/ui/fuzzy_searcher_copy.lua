@@ -1,4 +1,5 @@
 local core = require "core"
+local config = require "core.config"
 local command = require "core.command"
 local keymap = require "core.keymap"
 local style = require "core.style"
@@ -20,6 +21,9 @@ end
 
 test.describe("Fuzzy Searcher selected-result copy", function()
   test.before_each(function(context)
+    -- These tests draw without a window, which a wallpaper image needs.
+    context.wallpaper = config.wallpaper
+    config.wallpaper = "none"
     context.previous_clipboard = system.get_clipboard()
     context.previous_cursor_clipboard = core.cursor_clipboard
     context.previous_cursor_clipboard_whole_line = core.cursor_clipboard_whole_line
@@ -27,6 +31,7 @@ test.describe("Fuzzy Searcher selected-result copy", function()
   end)
 
   test.after_each(function(context)
+    config.wallpaper = context.wallpaper
     if core.fuzzy_searcher_active_view then
       core.fuzzy_searcher_active_view:close()
     end

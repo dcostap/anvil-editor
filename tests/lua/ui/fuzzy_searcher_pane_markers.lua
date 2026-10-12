@@ -1,4 +1,5 @@
 local core = require "core"
+local config = require "core.config"
 local panes = require "core.panes"
 local style = require "core.style"
 local test = require "core.test"
@@ -18,12 +19,16 @@ end
 
 test.describe("Fuzzy Searcher Pane markers", function()
   test.before_each(function(context)
+    -- These tests draw without a window, which a wallpaper image needs.
+    context.wallpaper = config.wallpaper
+    config.wallpaper = "none"
     context.set_active_view = core.set_active_view
     panes.reset_for_tests()
     core.set_active_view = function(view) core.active_view = view end
   end)
 
   test.after_each(function(context)
+    config.wallpaper = context.wallpaper
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     panes.reset_for_tests()
     core.set_active_view = context.set_active_view
