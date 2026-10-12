@@ -674,6 +674,8 @@ function RootPanel:on_mouse_pressed(button, x, y, clicks)
   end
   self.overlapping_view = view
   local pane = panes().pane_for_view(view)
+  -- A click on the overlay beside the UI, such as over a hosted Sidebar, dismisses like one over a Pane.
+  if not view and self.app_overlay then pane = panes().active() end
   if pane then panes().focus(pane) end
   if button == "middle" and view and view.get_autoscroll_target then
     local target = view:get_autoscroll_target(x, y)

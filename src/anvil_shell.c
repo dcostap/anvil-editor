@@ -2030,6 +2030,8 @@ static void finish_latency_probe(void) {
 }
 
 /* Copies the newest published frame into the private surface texture. */
+static void leave_sidebar(ShellWindow *window);
+
 static bool load_pending_frame(ShellProject *project, ShellPresentation *surface,
                                AnvilSurfaceFrame *frame) {
   ShellWindow *window = window_for_id(project->window_id);
@@ -2097,6 +2099,7 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
     if (!(window->overlay >> 24) != !(frame->overlay >> 24))
       SDL_Log("Shell Window overlay: id=%u shown=%d", window->id, (frame->overlay >> 24) != 0);
     window->overlay = frame->overlay;
+    if (window->overlay >> 24) leave_sidebar(window);
   }
   /* A fresh Project frame shows the Project is responsive again, so resize steps wait for it once more.
    * During a drag frames trail the window size, so requiring an exact match kept waiting off for the rest
@@ -2991,6 +2994,12 @@ static void leave_surface(ShellWindow *window) {
     apply_cursor(ANVIL_SURFACE_CURSOR_ARROW);
 }
 
+/* The Sidebar takes pointer input unless the Project's modal overlay dim covers it. */
+static bool sidebar_takes_pointer(ShellWindow *window, float x) {
+  return !window->surface_buttons && !(window->overlay >> 24) && x >= 0 && x < window->sidebar_w &&
+         shell.sidebar_process && shell.sidebar_process->connected;
+}
+
 static void leave_sidebar(ShellWindow *window) {
   if (!window->pointer_in_sidebar) return;
   window->pointer_in_sidebar = false;
@@ -3096,9 +3105,7 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
   ShellProject *project = window->selected;
   window->pointer_x = event->motion.x;
   window->pointer_y = event->motion.y;
-  if (!window->surface_buttons && event->motion.x >= 0 && event->motion.x < window->sidebar_w &&
-      event->motion.y >= window->controls.bottom && shell.sidebar_process &&
-      shell.sidebar_process->connected) {
+  if (sidebar_takes_pointer(window, event->motion.x) && event->motion.y >= window->controls.bottom) {
     leave_surface(window);
     window->pointer_in_sidebar = true;
     AnvilSurfaceInput input = {.event = *event,
@@ -3142,9 +3149,7 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
   Uint32 mask = SDL_BUTTON_MASK(event->button.button);
   bool down = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
   int control = control_at(window, event->button.x, event->button.y);
-  if (!window->surface_buttons && control < 0 && event->button.x >= 0 &&
-      event->button.x < window->sidebar_w && shell.sidebar_process &&
-      shell.sidebar_process->connected) {
+  if (control < 0 && sidebar_takes_pointer(window, event->button.x)) {
     leave_surface(window);
     AnvilSurfaceInput input = {.event = *event,
                                .configuration = window->sidebar_client->last_config.configuration};
@@ -3572,9 +3577,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     route_button(window, event);
     break;
   case SDL_EVENT_MOUSE_WHEEL:
-    if (!window->surface_buttons && event->wheel.mouse_x >= 0 &&
-        event->wheel.mouse_x < window->sidebar_w && shell.sidebar_process &&
-        shell.sidebar_process->connected) {
+    if (sidebar_takes_pointer(window, event->wheel.mouse_x)) {
       AnvilSurfaceInput input = {.event = *event,
                                  .configuration = window->sidebar_client->last_config.configuration};
       shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);

@@ -34,6 +34,23 @@ test.describe("Global Prompt Bar pointer interception", function()
 
 end)
 
+test.describe("Global Prompt Bar outside clicks", function()
+  test.it("closes on a click on the overlay beside the editor UI", function()
+    -- A hosted Window extends the overlay over its Sidebar, left of the Root Panel.
+    local bar, root = core.global_prompt_bar, core.root_panel
+    bar:exit(true)
+    local previous_active = core.active_view
+    bar:enter("Outside Click", { suggest = function() return { "one" } end })
+    test.equal(core.active_view, bar)
+    root:on_mouse_pressed("left", root.position.x - 5, root.position.y + 20, 1)
+    root:on_mouse_released("left", root.position.x - 5, root.position.y + 20)
+    bar:update()
+    test.ok(core.active_view ~= bar, "the prompt kept focus after a click on the overlay")
+    bar:exit(true)
+    if previous_active and core.active_view ~= previous_active then core.set_active_view(previous_active) end
+  end)
+end)
+
 test.describe("Global Prompt Bar suggestion geometry", function()
   test.it("lets the suggestion dropdown reach the prompt bar", function()
     local bar = core.global_prompt_bar

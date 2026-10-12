@@ -1,7 +1,8 @@
 -- mod-version:3
 -- Seam: an owned hosted Window on a private desktop. The Project surface spans the Window and lays out its UI
 -- right of the Sidebar, the Sidebar is blended over the Project's backdrop where the renderer allows it, and a
--- modal overlay dim reaches the shell so it can cover the Sidebar too.
+-- modal overlay dim reaches the shell so it can cover the Sidebar too. A click on the covered Sidebar goes to the
+-- Project, whose modal UI decides what an outside click does.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "layers" then return end
 local core, common = require "core", require "core.common"
@@ -12,6 +13,8 @@ ffi.cdef [[
  unsigned long __stdcall GetWindowThreadProcessId(void *, unsigned long *);
  void * __stdcall GetPropW(void *, const wchar_t *);
  intptr_t __stdcall SendMessageW(void *, unsigned int, uintptr_t, intptr_t);
+ int __stdcall PostMessageW(void *, unsigned int, uintptr_t, intptr_t);
+ unsigned int __stdcall GetDpiForWindow(void *);
  void * __stdcall OpenProcess(unsigned long, int, unsigned long);
  int __stdcall TerminateProcess(void *, unsigned int);
  int __stdcall CloseHandle(void *);
@@ -53,6 +56,21 @@ local function capture(window, index)
  wait(function() return trace():find("capture%-" .. index .. "%.bmp") end, 5,
   "shell capture " .. index .. " was not written")
 end
+-- Clicks the Sidebar's Refresh button and reports whether the shell started a status scan.
+local function click_refresh(window, layout)
+ local scale = user32.GetDpiForWindow(window) / 96
+ local point = math.floor(layout.content_x - 6 * scale) + math.floor(46 * scale) * 65536
+ local _, before = trace():gsub("Shell Sidebar status scan started", "")
+ -- The shell's routing probe message: posted Win32 clicks are ignored on an inactive desktop.
+ for action = 0, 2 do user32.PostMessageW(window, 0x804a, action, point); coroutine.yield(.1) end
+ local deadline = system.get_time() + 3
+ repeat
+  coroutine.yield(.05)
+  local _, after = trace():gsub("Shell Sidebar status scan started", "")
+  if after > before then return true end
+ until system.get_time() >= deadline
+ return false
+end
 local function quit() core.exit(function() core.quit_request = true end, true) end
 
 if path:match("/driver$") then
@@ -73,11 +91,14 @@ if path:match("/driver$") then
    local window = wait(function() return shell_window(shell:pid()) end, 10, "shell Window not found")
    coroutine.yield(1)
    capture(window, 1)
+   assert(click_refresh(window, layout), "a Sidebar click did not reach the Sidebar")
    save("overlay-go", {go=true})
    wait(function() return trace():find("Shell Window overlay: id=%d+ shown=1") end, 10,
     "the Project overlay did not reach the shell")
    coroutine.yield(1)
    capture(window, 2)
+   assert(not click_refresh(window, layout), "the Sidebar took a click under the Project's modal overlay")
+   wait(function() return load("outside-click") end, 5, "the Project did not receive the click on the dimmed Sidebar")
    save("overlay-hide", {go=true})
    wait(function() return trace():find("Shell Window overlay: id=%d+ shown=0") end, 10,
     "the shell kept the Project overlay after it closed")
@@ -94,6 +115,13 @@ if path:match("/driver$") then
   quit()
  end)
 elseif path == root .. "/Project" then
+ local on_event = core.on_event
+ core.on_event = function(kind, button, x, ...)
+  if kind == "mousepressed" and core.root_panel.app_overlay and x < system.get_window_content_x() then
+   save("outside-click", {x=x})
+  end
+  return on_event(kind, button, x, ...)
+ end
  core.add_background_thread(function()
   coroutine.yield(.5)
   local width = core.window:get_size()
