@@ -137,18 +137,18 @@ command.add(function()
   local TextView = require "core.textview"
   return core.active_view and core.active_view:extends(TextView), core.active_view
 end, {
-  ["editor:clone_caret_above_intellij"] = function(dv)
+  ["editor:clone_caret_above_intellij"] = command.palette(function(dv)
     clone_caret_intellij(dv, -1)
-  end,
-  ["editor:clone_caret_below_intellij"] = function(dv)
+  end, { keywords = { "add", "cursor", "cursors", "above", "multi" } }),
+  ["editor:clone_caret_below_intellij"] = command.palette(function(dv)
     clone_caret_intellij(dv, 1)
-  end,
-  ["editor:clone_caret_above_until_first_line_intellij"] = function(dv)
+  end, { keywords = { "add", "cursor", "cursors", "below", "multi" } }),
+  ["editor:clone_caret_above_until_first_line_intellij"] = command.palette(function(dv)
     clone_caret_until_edge_intellij(dv, -1)
-  end,
-  ["editor:clone_caret_below_until_last_line_intellij"] = function(dv)
+  end, { keywords = { "add", "cursor", "cursors", "to", "top", "first", "multi" } }),
+  ["editor:clone_caret_below_until_last_line_intellij"] = command.palette(function(dv)
     clone_caret_until_edge_intellij(dv, 1)
-  end,
+  end, { keywords = { "add", "cursor", "cursors", "to", "bottom", "last", "multi" } }),
 })
 
 local selection_history = setmetatable({}, { __mode = "k" })
@@ -1341,7 +1341,9 @@ end, {
   ["editor:shrink_selection_smart"] = shrink_smart_selection,
   ["editor:expand_selection_block"] = expand_block_selection,
   ["editor:add_selection_next_occurrence"] = add_selection_for_next_occurrence,
-  ["editor:select_all_occurrences"] = select_all_occurrences,
+  ["editor:select_all_occurrences"] = command.palette(select_all_occurrences, {
+    keywords = { "select", "all", "occurrences", "matches", "selection", "multi", "cursor" },
+  }),
   ["editor:comment_with_line_comment_at_start"] = line_comment_at_start,
   ["editor:restore_selection_origin_or_select_none"] = restore_selection_origin_or_select_none,
   ["editor:duplicate_current_line"] = duplicate_current_line,
