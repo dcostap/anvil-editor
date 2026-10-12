@@ -2957,6 +2957,20 @@ static void clear_composition(ShellWindow *window) {
   forward_event(window, &event, "");
 }
 
+/* SDL owns a Project drag's capture, so it keeps reporting motion and the release outside the Window. A
+ * raw SetCapture left SDL dropping the Window's mouse focus there, which lost the button release. */
+static void capture_surface_pointer(ShellWindow *window) {
+  if (!SDL_CaptureMouse(true)) {
+    SDL_Log("Shell pointer capture fell back to native capture: %s", SDL_GetError());
+    SetCapture(window->hwnd);
+  }
+}
+
+static void release_surface_pointer(ShellWindow *window) {
+  SDL_CaptureMouse(false);
+  if (GetCapture() == window->hwnd) ReleaseCapture();
+}
+
 static void cancel_input(ShellWindow *window) {
   ShellProject *project = window->selected;
   Uint32 buttons = window->surface_buttons;
@@ -2965,7 +2979,7 @@ static void cancel_input(ShellWindow *window) {
   window->pointer_in_surface = false;
   window->hovered_control = -1;
   window->ui_hover_dirty = true;
-  if (GetCapture() == window->hwnd) ReleaseCapture();
+  release_surface_pointer(window);
   for (int button = 1; button <= 5; button++) {
     if (!(buttons & SDL_BUTTON_MASK(button))) continue;
     SDL_Event event = {0};
@@ -3184,13 +3198,13 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
       return;
     }
     window->surface_buttons |= mask;
-    SetCapture(window->hwnd);
+    capture_surface_pointer(window);
   } else {
     if (!(window->surface_buttons & mask))
       return;
     window->surface_buttons &= ~mask;
     if (!window->surface_buttons) {
-      ReleaseCapture();
+      release_surface_pointer(window);
       if (!surface_contains(window, event->button.x, event->button.y) || control >= 0)
         leave_surface(window);
     }
