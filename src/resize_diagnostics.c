@@ -48,9 +48,21 @@ static void csv_write_field(FILE *file, const char *value) {
   fputc('"', file);
 }
 
+/* "{pid}" in ANVIL_RESIZE_STATS_FILE becomes the process id, so a shell and its
+ * Project processes write separate files. */
 static const char *default_stats_path(char *buf, size_t buf_size) {
   const char *path = getenv("ANVIL_RESIZE_STATS_FILE");
-  if (path && path[0]) return path;
+  if (path && path[0]) {
+    const char *marker = strstr(path, "{pid}");
+    if (!marker) return path;
+#ifdef _WIN32
+    unsigned long pid = GetCurrentProcessId();
+#else
+    unsigned long pid = 0;
+#endif
+    SDL_snprintf(buf, buf_size, "%.*s%lu%s", (int)(marker - path), path, pid, marker + 5);
+    return buf;
+  }
 
 #ifdef _WIN32
   DWORD len = GetTempPathA((DWORD)buf_size, buf);

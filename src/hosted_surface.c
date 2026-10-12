@@ -52,6 +52,7 @@ typedef struct HostedView {
   SDL_AtomicInt focused;
   int last_cursor;
   uint32_t frame_generation;
+  Uint64 resize_configured_ns; /* when the latest live-resize size arrived; zero once published */
   uint32_t background, overlay;
   SharedMemoryFrame memory;
 } HostedView;
@@ -65,6 +66,8 @@ static struct {
   bool valid, restarted, sidebar, sidebar_query_needed;
   DWORD shell_pid;
   HANDLE shell_process, loss_signal, exit_sent;
+  /* Set for each inbound shell message, so an idle UI thread wakes for a resize or input at once. */
+  HANDLE inbound_signal;
   Uint32 loss_event;
   /* Adoption after shell loss. `lost` drops outbound messages until the UI thread applies the new shell's
    * configuration. `adopting` holds inbound messages until then. Both change under `queue_lock`. */
@@ -419,6 +422,7 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
   }
   apply_window_size();
   if (had_config && (previous.pixel_w != config->pixel_w || previous.pixel_h != config->pixel_h)) {
+    if (live_resize) view->resize_configured_ns = SDL_GetTicksNS();
     SDL_Event event = {0};
     event.type = SDL_EVENT_WINDOW_RESIZED;
     event.window.windowID = view->window_id;
@@ -611,6 +615,11 @@ bool anvil_hosted_surface_take_sidebar_query_needed(void) {
   hosted.sidebar_query_needed = false;
   return needed;
 }
+bool anvil_hosted_surface_wait_inbound(double seconds) {
+  if (!hosted.active || !hosted.inbound_signal) return false;
+  return WaitForSingleObject(hosted.inbound_signal, (DWORD)SDL_max(0.0, seconds * 1000.0)) == WAIT_OBJECT_0;
+}
+
 void anvil_hosted_surface_poll(void) {
   if (!hosted.active || !hosted.queue_lock || SDL_GetAtomicInt(&hosted.adopting)) return;
   /* Configuration, focus, and input share one caller-visible order. */
@@ -701,6 +710,7 @@ static int SDLCALL reader_thread(void *data) {
         next->event.motion.yrel += previous->event.motion.yrel;
         memcpy(tail->payload, payload, header.size);
         SDL_UnlockMutex(hosted.queue_lock);
+        SetEvent(hosted.inbound_signal);
         continue;
       }
     }
@@ -725,6 +735,7 @@ static int SDLCALL reader_thread(void *data) {
     else hosted.inbound_head = message;
     hosted.inbound_tail = message;
     SDL_UnlockMutex(hosted.queue_lock);
+    SetEvent(hosted.inbound_signal);
     SDL_Event event = {0};
     event.type = hosted.receive_event;
     if (wake && !SDL_PushEvent(&event)) {
@@ -988,6 +999,7 @@ bool anvil_hosted_surface_connect(void) {
 
   hosted.queue_lock = SDL_CreateMutex(); hosted.queue_condition = SDL_CreateCondition();
   hosted.loss_signal = CreateEventW(NULL, TRUE, FALSE, NULL);
+  hosted.inbound_signal = CreateEventW(NULL, FALSE, FALSE, NULL);
   hosted.exit_sent = CreateEventW(NULL, TRUE, FALSE, NULL);
   hosted.adoption_ready = CreateEventW(NULL, TRUE, FALSE, NULL);
   hosted.loss_event = SDL_RegisterEvents(1);
@@ -1067,6 +1079,11 @@ void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, in
   anvil_latency_probe_stage("frame-published");
   SDL_strlcpy(frame.name, name, sizeof(frame.name));
   send_message(ANVIL_SURFACE_MSG_FRAME, &frame, sizeof(frame));
+  if (view->resize_configured_ns && width == view->config.pixel_w && height == view->config.pixel_h) {
+    SDL_Log("Hosted resize frame: %dx%d configure_to_publish_ms=%.1f", width, height,
+            (double)(SDL_GetTicksNS() - view->resize_configured_ns) / SDL_NS_PER_MS);
+    view->resize_configured_ns = 0;
+  }
 }
 
 static void release_memory_frame(SharedMemoryFrame *memory) {
@@ -1296,6 +1313,7 @@ bool anvil_hosted_surface_connect(void) { return false; }
 bool anvil_hosted_surface_active(void) { return false; }
 bool anvil_hosted_surface_dispatch(const SDL_Event *event) { (void)event; return false; }
 void anvil_hosted_surface_poll(void) {}
+bool anvil_hosted_surface_wait_inbound(double seconds) { (void)seconds; return false; }
 bool anvil_hosted_surface_take_sidebar_query_needed(void) { return false; }
 bool anvil_hosted_surface_configuration_event(Uint32 type) { (void)type; return false; }
 uint32_t anvil_hosted_surface_shell_pid(void) { return 0; }

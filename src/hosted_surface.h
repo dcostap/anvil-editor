@@ -21,6 +21,8 @@ bool anvil_hosted_surface_sidebar(void);
 bool anvil_hosted_surface_dispatch(const SDL_Event *event);
 /* Apply the next packet only after the UI consumes previous events. */
 void anvil_hosted_surface_poll(void);
+/* Waits up to seconds for a shell message. False without one or outside a hosted Project. */
+bool anvil_hosted_surface_wait_inbound(double seconds);
 bool anvil_hosted_surface_take_sidebar_query_needed(void);
 bool anvil_hosted_surface_configuration_event(Uint32 type);
 uint32_t anvil_hosted_surface_shell_pid(void);

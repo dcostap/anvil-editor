@@ -2044,6 +2044,9 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
   if (!pending) return false;
   if (!anvil_surface_frame_matches(&project->last_config, frame)) {
     set_surface_busy(window, surface, false);
+    /* A slow Project trails every configure during a drag. Its frames still show it is responsive. */
+    if (surface == &window->project_presentation && window->live_resize)
+      window->resize_wait_disabled = false;
     SDL_Log("Shell discarded stale frame: configuration=%llu current=%llu; last safe frame=%s",
             (unsigned long long)frame->configuration,
             (unsigned long long)project->last_config.configuration,
@@ -2095,8 +2098,11 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
       SDL_Log("Shell Window overlay: id=%u shown=%d", window->id, (frame->overlay >> 24) != 0);
     window->overlay = frame->overlay;
   }
-  if (surface == &window->project_presentation && surface->surface_w == window->buffer_w &&
-      surface->surface_h == window->buffer_h) {
+  /* A fresh Project frame shows the Project is responsive again, so resize steps wait for it once more.
+   * During a drag frames trail the window size, so requiring an exact match kept waiting off for the rest
+   * of the drag and presented stale content. */
+  if (surface == &window->project_presentation &&
+      (window->live_resize || (surface->surface_w == window->buffer_w && surface->surface_h == window->buffer_h))) {
     window->resize_wait_disabled = false;
   }
   return true;

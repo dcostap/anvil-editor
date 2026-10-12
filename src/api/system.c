@@ -1696,6 +1696,20 @@ static int f_sleep(lua_State *L) {
 }
 
 
+/* Like sleep, but a hosted Project wakes early when the shell sends a resize or input. */
+static int f_idle(lua_State *L) {
+  double n = luaL_checknumber(L, 1);
+  if (n < 0) n = 0;
+  if (anvil_hosted_surface_active()) {
+    lua_pushboolean(L, anvil_hosted_surface_wait_inbound(n));
+    return 1;
+  }
+  f_sleep(L);
+  lua_pushboolean(L, false);
+  return 1;
+}
+
+
 static int f_exec(lua_State *L) {
   size_t len;
   const char *cmd = luaL_checklstring(L, 1, &len);
@@ -2524,6 +2538,7 @@ static const luaL_Reg lib[] = {
   { "project_close_decision", f_project_close_decision },
   { "test_surface_failure", f_test_surface_failure },
   { "sleep",                 f_sleep                 },
+  { "idle",                  f_idle                  },
   { "exec",                  f_exec                  },
 #ifdef _WIN32
   { "open_in_system",        f_open_in_system        },

@@ -93,11 +93,19 @@ if path:match("/driver$") then
     return {label=label, total=total, matched=matched, wait_p50=waits[math.ceil(#waits / 2)],
      wait_max=waits[#waits]}
    end
-   stats = {
-    drag("right grow", 40, 12), drag("right shrink", 40, -12),
-    drag("left grow", 40, 12, true), drag("left shrink", 40, -12, true),
-    drag("right fast", 20, 40), drag("left fast", 20, -40, true),
-   }
+   if action == "resize-stall" then
+    -- The Project misses the first step's wait once, then trails each step. Later steps must wait for it
+    -- again, not present stale content for the rest of the drag.
+    save("stall", {go=true})
+    stats = {drag("right grow after a stall", 40, 12)}
+    assert(trace():find("timed out waiting for the surface", 1, true), "the Project stall did not time out a step")
+   else
+    stats = {
+     drag("right grow", 40, 12), drag("right shrink", 40, -12),
+     drag("left grow", 40, 12, true), drag("left shrink", 40, -12, true),
+     drag("right fast", 20, 40), drag("left fast", 20, -40, true),
+    }
+   end
    -- Exposed areas and the native UI take the Project's theme background, not a fixed colour.
    local reported
    for color in trace():gmatch("Shell Window background: id=%d+ color=(%x+)") do reported = tonumber(color, 16) end
@@ -123,6 +131,15 @@ if path:match("/driver$") then
   quit()
  end)
 elseif path == root .. "/Project" then
+ local on_event, stalled = core.on_event, false
+ core.on_event = function(kind, ...)
+  -- One missed wait, then slow sizes that still fit within a step, as on a loaded machine.
+  if kind == "resized" and load("stall") then
+   system.sleep(stalled and .012 or .12)
+   stalled = true
+  end
+  return on_event(kind, ...)
+ end
  core.add_background_thread(function()
   -- Real text content, so each resize re-lays out and redraws a full Document View.
   local lines = {}

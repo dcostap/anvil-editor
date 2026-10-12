@@ -2452,7 +2452,8 @@ function core.on_event(type, ...)
     local modal = dispatch_modal_input("touch_moved", ...)
     if not modal then core.root_panel:on_touch_moved(...) end
   elseif type == "resized" then
-    core.window_resizing_until = system.get_time() + 0.20
+    -- A hosted Project renders each configured size immediately. Uncapped frames would only delay the next size.
+    if not system.is_hosted_surface() then core.window_resizing_until = system.get_time() + 0.20 end
     local window_mode = system.get_window_mode(core.window)
     if window_mode ~= "fullscreen" and window_mode ~= "maximized" then
       core.window_size = table.pack(system.get_window_size(core.window))
@@ -3651,7 +3652,8 @@ function core.run_step(options)
     sleep_requested_ms = sleep_requested_ms + seconds * 1000
     if immediate then return end
     local sleep_start = system.get_time()
-    system.sleep(seconds)
+    -- A hosted Project wakes early for shell input, so a live-resize size never waits out a frame slot.
+    system.idle(seconds)
     sleep_actual_ms = sleep_actual_ms + (system.get_time() - sleep_start) * 1000
   end
 
