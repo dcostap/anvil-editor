@@ -2,13 +2,18 @@ local perf = require "core.perf"
 local renderer = require "renderer"
 local test = require "core.test"
 local core = require "core"
+local config = require "core.config"
 local Buffer = require "core.buffer"
 local panes = require "core.panes"
 
 test.describe("performance frame cost report", function()
-  local frames, original_stats
+  local frames, original_stats, original_diff_layout
   test.after_each(function()
     if perf.is_recording() then perf.stop_recording() end
+    if original_diff_layout then
+      config.plugins.diffview.layout = original_diff_layout
+      original_diff_layout = nil
+    end
     if original_stats then renderer.get_last_frame_stats = original_stats end
     panes.reset_for_tests()
     if frames then
@@ -110,6 +115,8 @@ test.describe("performance frame cost report", function()
 
   test.it("records both Diff View sides with balanced draw scopes", function()
     local diffview = require "plugins.diffview"
+    original_diff_layout = config.plugins.diffview.layout
+    config.plugins.diffview.layout = "side-by-side"
     local view = diffview.string_to_string("before\nretained", "after\nretained", "Left", "Right")
     local deadline = system.get_time() + 10
     while view.updater_idx do

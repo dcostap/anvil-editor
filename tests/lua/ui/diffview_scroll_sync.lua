@@ -6,13 +6,18 @@ local diffview = require "plugins.diffview"
 
 test.describe("Diff Side scroll synchronization", function()
   test.before_each(function(context)
+    -- Let the startup Workspace restore before choosing the test layout.
+    coroutine.yield(0.01)
     context.active_view = core.active_view
     core.active_view = View()
+    context.layout = config.plugins.diffview.layout
+    config.plugins.diffview.layout = "side-by-side"
   end)
 
   test.after_each(function(context)
     if context.view then context.view:on_close() end
     core.active_view = context.active_view
+    config.plugins.diffview.layout = context.layout
   end)
 
   test.it("reveals both sides together after an unfocused comparison receives its layout", function(context)

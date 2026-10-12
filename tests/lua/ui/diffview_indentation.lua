@@ -279,6 +279,9 @@ test.describe("Diff View change backgrounds", function()
     local before = "OUTER APPLY (\n    -- removed explanation\n    SELECT ISNULL(SUM(m.Unidades), 0) AS UnidadesServidas\nFROM stock"
     local after = "OUTER APPLY (\n    SELECT\n        ISNULL(SUM(m.Unidades), 0) AS UnidadesServidas,\n        MAX(m.Fecha) AS FechaUltimoServicio\nFROM stock"
     local view = open_diff(context, before, after, false)
+    -- Keep the longest added line clear of the surface edge in any font.
+    view.size.x = 1600
+    view:update()
     local function check(surface, line, col, expected)
       local color_at = backgrounds(surface, line)
       local x, y = surface:get_line_screen_position(line, col)

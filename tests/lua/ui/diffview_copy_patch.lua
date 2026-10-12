@@ -159,7 +159,7 @@ test.describe("Copy scoped diff patches", function()
     write("file.txt", before .. "\n")
     write("change.patch", system.get_clipboard())
     local proc = assert(process.start({
-      "git", "-c", "core.autocrlf=false", "apply", "change.patch",
+      "git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", "change.patch",
     }, {
       cwd = context.root, stdin = process.REDIRECT_DISCARD,
       stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_PIPE,
