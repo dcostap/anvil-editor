@@ -14,7 +14,7 @@ local style = require "core.style"
 ---@field default_scale number
 ---Allow using CTRL + MouseWheel for changing the scale.
 ---@field use_mousewheel boolean
-local MIN_SCALE = 0.7
+local MIN_SCALE = 0.25
 local MAX_SCALE = 6
 local FONT_ZOOM_STEP = 1
 local current_scale = SCALE
