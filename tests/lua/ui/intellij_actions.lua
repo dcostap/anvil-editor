@@ -144,7 +144,7 @@ test.describe("IntelliJ actions batch behavior", function()
     local view, buffer = open_editor(context, "aa\nbb\ncc\ndd")
     set_view_selections(view, { 2, 2, 2, 2 })
 
-    test.ok(command.perform("editor:clone_caret_below_until_last_line_intellij"))
+    test.ok(command.perform("editor:clone_carets_to_bottom"))
 
     test.same(view_selections(view), {
       2, 2, 2, 2,

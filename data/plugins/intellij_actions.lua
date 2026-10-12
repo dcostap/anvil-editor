@@ -137,16 +137,16 @@ command.add(function()
   local TextView = require "core.textview"
   return core.active_view and core.active_view:extends(TextView), core.active_view
 end, {
-  ["editor:clone_caret_above_intellij"] = command.palette(function(dv)
+  ["editor:clone_caret_above"] = command.palette(function(dv)
     clone_caret_intellij(dv, -1)
   end, { keywords = { "add", "cursor", "cursors", "above", "multi" } }),
-  ["editor:clone_caret_below_intellij"] = command.palette(function(dv)
+  ["editor:clone_caret_below"] = command.palette(function(dv)
     clone_caret_intellij(dv, 1)
   end, { keywords = { "add", "cursor", "cursors", "below", "multi" } }),
-  ["editor:clone_caret_above_until_first_line_intellij"] = command.palette(function(dv)
+  ["editor:clone_carets_to_top"] = command.palette(function(dv)
     clone_caret_until_edge_intellij(dv, -1)
   end, { keywords = { "add", "cursor", "cursors", "to", "top", "first", "multi" } }),
-  ["editor:clone_caret_below_until_last_line_intellij"] = command.palette(function(dv)
+  ["editor:clone_carets_to_bottom"] = command.palette(function(dv)
     clone_caret_until_edge_intellij(dv, 1)
   end, { keywords = { "add", "cursor", "cursors", "to", "bottom", "last", "multi" } }),
 })
@@ -1382,10 +1382,10 @@ end, {
 })
 
 keymap.add({
-  ["ctrl+alt+n"] = "editor:clone_caret_above_intellij",
-  ["ctrl+alt+m"] = "editor:clone_caret_below_intellij",
-  ["ctrl+alt+shift+n"] = "editor:clone_caret_above_until_first_line_intellij",
-  ["ctrl+alt+shift+m"] = "editor:clone_caret_below_until_last_line_intellij",
+  ["ctrl+alt+n"] = "editor:clone_caret_above",
+  ["ctrl+alt+m"] = "editor:clone_caret_below",
+  ["ctrl+alt+shift+n"] = "editor:clone_carets_to_top",
+  ["ctrl+alt+shift+m"] = "editor:clone_carets_to_bottom",
   ["alt+w"] = "editor:move_to_matching_bracket_with_history",
   ["alt+shift+p"] = "editor:expand_selection_block",
   ["alt+p"] = "editor:add_selection_next_occurrence",
