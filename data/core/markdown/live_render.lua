@@ -6931,8 +6931,11 @@ local function build_render_line(view, line, _context)
     owner = view.__markdown_live_owner
   end
   if pending and not current_semantic_model(view) then
-    if pending.render_line.markdown_typography_generation
-      == provider_generation_state(view).typography_generation
+    -- Raw source rows draw with the current Editor font and carry no Markdown
+    -- measurements to remeasure.
+    if pending.render_line.raw_passthrough
+      or pending.render_line.markdown_typography_generation
+        == provider_generation_state(view).typography_generation
     then
       return pending.render_line
     end

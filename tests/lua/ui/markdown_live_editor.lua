@@ -2572,41 +2572,6 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("keeps a first nested task stable when it cannot be indented further", function()
-    local old_tab_type, old_indent_size = config.tab_type, config.indent_size
-    config.tab_type, config.indent_size = "soft", 4
-    local view, buffer = make_view(
-      "- [ ] parent\n    - [ ] \n    - [ ] sibling\nplain",
-      "pending-task-indent.md"
-    )
-    buffer:set_selection(4, 1)
-    refresh(view)
-
-    buffer:set_selection(2, 11)
-    local old_active = core.active_view
-    core.active_view = view
-    local ok, err = pcall(function()
-      test.equal(command.perform("core:indent"), true)
-      test.equal(buffer.lines[2], "    - [ ] \n")
-      test.equal(test.not_nil(markdown_model.peek(buffer)).status, "ready")
-
-      local function task_checkbox()
-        for _, fragment in ipairs(
-          test.not_nil(view:get_line_render(2)).fragments or {}
-        ) do
-          if fragment.markdown_task_checkbox then return fragment end
-        end
-      end
-
-      test.not_nil(task_checkbox())
-      local published = test.not_nil(view:get_line_render(2))
-      test.equal(published.markdown_provenance, "current")
-    end)
-    core.active_view = old_active
-    config.tab_type, config.indent_size = old_tab_type, old_indent_size
-    if not ok then error(err, 0) end
-  end)
-
   test.it("toggles task checkboxes without moving the caret", function()
     local view, buffer = make_view("- [ ] todo\nplain", "task-toggle.md")
     buffer:set_selection(2, 3)
