@@ -66,4 +66,38 @@ test.describe("Terminal Windows Rerun", function()
     os.remove(output)
     test.ok(ok, err)
   end)
+
+  test.it("reruns an approved command in a Terminal that uses the default shell", function()
+    test.skip_if(PLATFORM ~= "Windows", "Windows command lines are Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local root = system.getcwd()
+    local output = USERDIR .. "/rerun-default-shell.txt"
+    os.remove(output)
+    -- Restored and revived Terminals keep the configured shell, which is unset by default.
+    local view = terminal.open { cwd = root }
+    local ok, err = pcall(function()
+      test.is_nil(view:get_state().shell)
+      local deadline = system.get_time() + 10
+      repeat
+        view:service_session(true)
+        coroutine.yield(.01)
+      until view.state == "running" and view.session:text_capture() or system.get_time() >= deadline
+      view.interrupted_command = string.format('"%s/tests/fixtures/terminal argv\'s.exe" "%s/tests/fixtures/terminal_rerun_arguments.lua" "%s" default',
+        root, root, output)
+      test.ok(view:rerun_interrupted_command())
+      local actual
+      deadline = system.get_time() + 15
+      repeat
+        view:service_session(true)
+        local file = io.open(output, "rb")
+        if file then actual = file:read("*a"); file:close() end
+        if actual then break end
+        coroutine.yield(.01)
+      until system.get_time() >= deadline
+      test.equal(actual, "7:default\n")
+    end)
+    view:on_close()
+    os.remove(output)
+    test.ok(ok, err)
+  end)
 end)

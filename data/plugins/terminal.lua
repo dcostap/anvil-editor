@@ -604,7 +604,7 @@ function TerminalView:rerun_interrupted_command()
   local text = self.interrupted_command
   if self.state ~= "running" or not self.session or type(text) ~= "string" or
       text == "" or #text > 16384 or text:find("[%z\r\n]") then return false end
-  local shell = self.launch_options.shell:lower()
+  local shell = (self.launch_options.shell or ""):lower()
   if shell == "" or shell:find("powershell", 1, true) or shell:find("pwsh", 1, true) then
     local exe, args = text:match('^%s*"([^"]+)"%s*(.*)$')
     if not exe then exe, args = text:match('^%s*([^%s"]+)%s*(.*)$') end
