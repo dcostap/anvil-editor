@@ -65,7 +65,10 @@ function comment_todo.apply(highlighter, idx, tokens, raw_tokens_at)
   local function info(line)
     if line < 1 or line > #highlighter.buffer.lines then return nil end
     if not cache.info[line] then
-      cache.info[line] = line_info(highlighter, line, raw_tokens_at(line))
+      -- The caller already looked up this line's tokens.
+      cache.info[line] = line_info(
+        highlighter, line, line == idx and tokens or raw_tokens_at(line)
+      )
     end
     return cache.info[line]
   end
