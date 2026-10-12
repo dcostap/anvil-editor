@@ -1389,6 +1389,7 @@ keymap.add({
   ["alt+w"] = "editor:move_to_matching_bracket_with_history",
   ["alt+shift+p"] = "editor:expand_selection_block",
   ["alt+p"] = "editor:add_selection_next_occurrence",
+  ["alt+shift+w"] = "editor:select_all_occurrences",
   ["alt+e"] = "editor:comment_with_line_comment_at_start",
   ["alt+shift+o"] = "editor:extend_selection_smart",
   ["alt+shift+u"] = "editor:shrink_selection_smart",
