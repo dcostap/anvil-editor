@@ -1745,6 +1745,28 @@ static int f_get_window_controls(lua_State *L) {
   int x, y, w, h; anvil_hosted_surface_controls(&x, &y, &w, &h);
   lua_pushinteger(L, x); lua_pushinteger(L, y); lua_pushinteger(L, w); lua_pushinteger(L, h); return 4;
 }
+static int f_get_window_content_x(lua_State *L) {
+  lua_pushinteger(L, anvil_hosted_surface_content_x());
+  return 1;
+}
+static int f_set_surface_overlay(lua_State *L) {
+  RenWindow *ren = *(RenWindow**)luaL_checkudata(L, 1, API_TYPE_RENWINDOW);
+  uint32_t overlay = 0;
+  if (!lua_isnoneornil(L, 2)) {
+    uint32_t channel[4];
+    for (int i = 0; i < 4; i++) {
+      lua_Number value = luaL_checknumber(L, i + 2);
+      channel[i] = (uint32_t)(value < 0 ? 0 : value > 255 ? 255 : value);
+    }
+    overlay = channel[0] | channel[1] << 8 | channel[2] << 16 | channel[3] << 24;
+  }
+  anvil_hosted_surface_set_overlay(ren->cache.window, overlay);
+  return 0;
+}
+static int f_is_surface_transparent(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_transparent());
+  return 1;
+}
 static int f_get_startup_path_arguments(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   int count = (int)lua_rawlen(L, 1), output = 0;
@@ -2493,6 +2515,9 @@ static const luaL_Reg lib[] = {
   { "request_project_sidebar", f_request_project_sidebar },
   { "get_window_process_id", f_get_window_process_id },
   { "get_window_controls",   f_get_window_controls },
+  { "get_window_content_x",  f_get_window_content_x },
+  { "set_surface_overlay",   f_set_surface_overlay },
+  { "is_surface_transparent", f_is_surface_transparent },
   { "get_startup_path_arguments", f_get_startup_path_arguments },
   { "prepare_project_exit",  f_prepare_project_exit  },
   { "project_close_decision", f_project_close_decision },

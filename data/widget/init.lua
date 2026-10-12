@@ -746,14 +746,17 @@ end
 
 ---Center the widget horizontally and vertically to the screen or parent widget.
 function Widget:centered()
-  local w, h = system.get_window_size(core.window);
+  -- Without a parent, center in the app area; a hosted shell's Sidebar covers the window's left edge.
+  local x, y = core.root_panel.position.x, core.root_panel.position.y
+  local w, h = core.root_panel.size.x, core.root_panel.size.y
   if self.parent then
+    x, y = 0, 0
     w = self.parent:get_width()
     h = self.parent:get_height()
   end
   self:set_position(
-    (w / 2) - (self:get_width() / 2),
-    (h / 2) - (self:get_height() / 2)
+    x + (w / 2) - (self:get_width() / 2),
+    y + (h / 2) - (self:get_height() / 2)
   )
 end
 

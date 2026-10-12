@@ -412,7 +412,8 @@ if project:find("/driver$", 1) then
         local window = assert(shell_window(state.shell_pid))
         local client = ffi.new("struct RECT")
         assert(user32.GetClientRect(window, client) ~= 0)
-        local origin_x = tonumber(client.right - client.left) - state.surface_w
+        -- The Project surface spans the client area; its UI starts at content_x.
+        local origin_x = state.content_x
         local owner = ffi.new("unsigned long[1]")
         local thread = user32.GetWindowThreadProcessId(window, owner)
         assert(tonumber(owner[0]) == state.shell_pid)
@@ -430,7 +431,7 @@ if project:find("/driver$", 1) then
             probe_action or buttons, point(x, y)) ~= 0)
           coroutine.yield(.1)
         end
-        local x, y = state.x + origin_x, state.y
+        local x, y = state.x, state.y
         post(0x200, 0, x, y)
         post(0x201, 1, x, y)
         assert(captured(), "Project drag did not capture the native window")
@@ -573,7 +574,6 @@ if project:find("/driver$", 1) then
         assert(user32.GetWindowRect(window, rect) ~= 0)
         local client = ffi.new("struct RECT")
         assert(user32.GetClientRect(window, client) ~= 0)
-        local origin_x = tonumber(client.right) - state.surface_w
         local function discarded()
           local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
           local text = file:read("*a"); file:close()
@@ -582,7 +582,7 @@ if project:find("/driver$", 1) then
         end
         local function hit()
           assert(user32.GetWindowRect(window, rect) ~= 0)
-          local x = tonumber(rect.left) + origin_x + state.hit_x
+          local x = tonumber(rect.left) + state.hit_x
           local y = tonumber(rect.top) + state.hit_y
           return tonumber(user32.SendMessageW(window, 0x84, 0, x % 65536 + (y % 65536) * 65536))
         end
@@ -600,7 +600,7 @@ if project:find("/driver$", 1) then
         local window = assert(shell_window(state.shell_pid))
         local initial_client = ffi.new("struct RECT[1]")
         assert(user32.GetClientRect(window, initial_client) ~= 0)
-        local origin_x = tonumber(initial_client[0].right) - state.surface_w
+        local origin_x = state.content_x
         local process_handle = own_handle(state.pid, 0x101801); handles[#handles + 1] = process_handle
         local function click(x,y)
           local point = math.floor(x) + math.floor(y)*65536
@@ -856,7 +856,7 @@ else
       local entry = assert(core.title_bar.entries[1])
       state.hit_x = math.floor(entry.x + entry.w / 2)
       state.hit_y = math.floor(entry.y + entry.h / 2)
-      state.surface_w = core.root_panel.size.x
+      state.content_x = system.get_window_content_x()
       routing_view.buffer:set_selection(1, 1)
       core.on_event("textediting", "λ中", 0, 2)
       coroutine.yield(.1)
@@ -877,13 +877,13 @@ else
       coroutine.yield(.2)
       state.x, state.y = routing_view:get_line_screen_position(1, 2)
       state.y = state.y + routing_view:get_line_height() / 2
-      state.surface_w = core.root_panel.size.x
+      state.content_x = system.get_window_content_x()
       drag_events = function() return left, entered end
     end
     if action == "controls" then
       local _, _, w, h = system.get_window_controls()
       state.controls_w, state.controls_h = w,h
-      state.surface_w = core.root_panel.size.x
+      state.content_x = system.get_window_content_x()
     end
     if action == "launch" then
       state.command_line = command_line(pid)

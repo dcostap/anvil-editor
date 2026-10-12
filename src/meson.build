@@ -166,10 +166,17 @@ if host_machine.system() == 'windows'
         output: 'd3d11_quad_shader.h',
         command: [d3d11_shader_compiler, '@INPUT@', '@OUTPUT@'],
     )
+    shell_compose_shader = custom_target(
+        'shell_compose_shader',
+        input: 'shell_compose.hlsl',
+        output: 'shell_compose_shader.h',
+        command: [d3d11_shader_compiler, '@INPUT@', '@OUTPUT@', 'shell_compose'],
+    )
     anvil_sources += [
         'win32_frame.c',
         'd3d11_backend.c',
         d3d11_quad_shader,
+        shell_compose_shader,
         'zig_abi_compat.c',
         'api/terminal_native.c',
         'ipc_pipe.c',

@@ -77,7 +77,7 @@ local function draw_hud()
   end
   local w = width + pad * 2
   local h = #lines * line_h + pad * 2
-  local x = math.floor(core.root_panel.size.x - w - 14 * SCALE)
+  local x = math.floor(core.root_panel.position.x + core.root_panel.size.x - w - 14 * SCALE)
   local y = math.floor(14 * SCALE)
 
   renderer.draw_rect(x, y, w, h, recording and style.performance_hud_recording_background or style.performance_hud_background)

@@ -3002,7 +3002,10 @@ function core.step(next_frame_time, options)
   local priority_event = event_received and event_received ~= "mousemoved"
   local resizing = options.live_resize or (core.window_resizing_until and core.window_resizing_until > system.get_time())
   local render_enabled = system.window_should_render(core.window)
-  core.root_panel.size.x, core.root_panel.size.y = width, height
+  -- A hosted Project's surface spans the window. Its UI starts right of the shell's Sidebar.
+  local content_x = system.get_window_content_x()
+  core.root_panel.position.x = content_x
+  core.root_panel.size.x, core.root_panel.size.y = width - content_x, height
   if uncapped or resizing or priority_event or options.immediate or next_frame_time < system.get_time() then
     core.ui_snapshot_id = core.ui_snapshot_id + 1
     local stats = core.perf_frame_stats

@@ -5,6 +5,7 @@
 #include "process_exit.h"
 #ifdef _WIN32
 #include "shell_adoption.h"
+#include "d3d11_backend.h"
 #endif
 
 #include <stdio.h>
@@ -51,7 +52,7 @@ typedef struct HostedView {
   SDL_AtomicInt focused;
   int last_cursor;
   uint32_t frame_generation;
-  uint32_t background;
+  uint32_t background, overlay;
   SharedMemoryFrame memory;
 } HostedView;
 static HostedView first_view = {.last_cursor = -1};
@@ -451,7 +452,8 @@ static bool valid_configure(const AnvilSurfaceConfigure *config) {
     config->display_scale > 0 && config->display_scale <= 16 && config->refresh_hz >= 0 && config->refresh_hz <= 1000 &&
     config->controls_x >= 0 && config->controls_y >= 0 && config->controls_w >= 0 && config->controls_h >= 0 &&
     config->controls_x <= config->pixel_w && config->controls_w <= config->pixel_w - config->controls_x &&
-    config->controls_y <= config->pixel_h && config->controls_h <= config->pixel_h - config->controls_y;
+    config->controls_y <= config->pixel_h && config->controls_h <= config->pixel_h - config->controls_y &&
+    config->content_x >= 0 && config->content_x < config->pixel_w;
 }
 
 static HostedView *sidebar_view(uint32_t id, bool create) {
@@ -1043,6 +1045,11 @@ void anvil_hosted_surface_unregister_window(SDL_Window *window) {
 void anvil_hosted_surface_set_background(SDL_Window *window, uint32_t background) {
   if (anvil_hosted_surface_is_window(window)) view->background = background;
 }
+void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay) {
+  if (anvil_hosted_surface_is_window(window)) view->overlay = overlay;
+}
+int anvil_hosted_surface_content_x(void) { return hosted.active ? view->config.content_x : 0; }
+bool anvil_hosted_surface_transparent(void) { return hosted.active && hosted.sidebar && anvil_d3d11_enabled(); }
 
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height) {
   if (!anvil_hosted_surface_should_render()) return;
@@ -1056,6 +1063,7 @@ void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, in
   frame.width = width;
   frame.height = height;
   frame.background = view->background;
+  frame.overlay = view->overlay;
   frame.input_seq = anvil_latency_probe_consumed_seq();
   anvil_latency_probe_stage("frame-published");
   SDL_strlcpy(frame.name, name, sizeof(frame.name));
@@ -1157,6 +1165,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   frame.width = surface->w;
   frame.height = surface->h;
   frame.background = view->background;
+  frame.overlay = view->overlay;
   frame.input_seq = anvil_latency_probe_consumed_seq();
   anvil_latency_probe_stage("frame-published");
   SDL_strlcpy(frame.name, view->memory.name, sizeof(frame.name));
@@ -1326,6 +1335,9 @@ uint32_t anvil_hosted_surface_window_id(void) { return 0; }
 void anvil_hosted_surface_set_background(SDL_Window *window, uint32_t background) {
   (void)window; (void)background;
 }
+void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay) { (void)window; (void)overlay; }
+int anvil_hosted_surface_content_x(void) { return 0; }
+bool anvil_hosted_surface_transparent(void) { return false; }
 bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }

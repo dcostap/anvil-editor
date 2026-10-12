@@ -72,10 +72,14 @@ static bool write_byte_array(FILE *file, const char *name, ID3DBlob *blob) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 3) {
-    fprintf(stderr, "Usage: %s INPUT.hlsl OUTPUT.h\n", argv[0]);
+  if (argc != 3 && argc != 4) {
+    fprintf(stderr, "Usage: %s INPUT.hlsl OUTPUT.h [PREFIX]\n", argv[0]);
     return 2;
   }
+  const char *prefix = argc == 4 ? argv[3] : "anvil_quad";
+  char vertex_name[128], pixel_name[128];
+  snprintf(vertex_name, sizeof(vertex_name), "%s_vertex_shader", prefix);
+  snprintf(pixel_name, sizeof(pixel_name), "%s_pixel_shader", prefix);
 
   char *source = NULL;
   size_t source_size = 0;
@@ -101,15 +105,9 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  bool ok = fputs(
-    "/* Generated from d3d11_quad.hlsl. Do not edit. */\n"
-    "#ifndef ANVIL_D3D11_QUAD_SHADER_H\n"
-    "#define ANVIL_D3D11_QUAD_SHADER_H\n\n",
-    output
-  ) != EOF;
-  ok = ok && write_byte_array(output, "anvil_quad_vertex_shader", vertex);
-  ok = ok && write_byte_array(output, "anvil_quad_pixel_shader", pixel);
-  ok = ok && fputs("#endif\n", output) != EOF;
+  bool ok = fprintf(output, "/* Generated from %s. Do not edit. */\n#pragma once\n\n", argv[1]) >= 0;
+  ok = ok && write_byte_array(output, vertex_name, vertex);
+  ok = ok && write_byte_array(output, pixel_name, pixel);
   ok = fclose(output) == 0 && ok;
 
   vertex->lpVtbl->Release(vertex);

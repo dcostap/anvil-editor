@@ -731,6 +731,9 @@ static void push_rect(RenCache *ren_cache, RenRect r, int *count) {
 static RenColor rencache_detect_frame_clear_color(RenCache *ren_cache) {
   RenColor clear = { 0, 0, 0, 255 };
   if (!ren_cache) return clear;
+  /* A transparent Sidebar surface starts each frame empty; the shell blends it over the Project. */
+  if (ren_cache->window && anvil_hosted_surface_is_window(ren_cache->window) && anvil_hosted_surface_transparent())
+    return (RenColor){ 0, 0, 0, 0 };
 
   /* DXGI uses the swapchain background color for newly exposed pixels during
      fast live-resize before the next presented frame lands.  Anvil's command

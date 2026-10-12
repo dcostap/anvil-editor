@@ -453,7 +453,7 @@ function TreeList:draw_tooltip()
   local x, y = self.tooltip.x + tooltip_offset, self.tooltip.y + tooltip_offset
   w, h = w + style.padding.x, h + style.padding.y
 
-  if x + w > core.root_panel.size.x then -- check if we can span right
+  if x + w > core.root_panel.position.x + core.root_panel.size.x then -- check if we can span right
     x = x - w -- span left instead
   end
 

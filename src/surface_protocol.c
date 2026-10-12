@@ -180,7 +180,8 @@ bool anvil_surface_layout_changed(const AnvilSurfaceConfigure *previous, const A
     previous->display_scale != next->display_scale || previous->button_width != next->button_width ||
     previous->title_height != next->title_height || previous->resize_border != next->resize_border ||
     previous->controls_x != next->controls_x || previous->controls_y != next->controls_y ||
-    previous->controls_w != next->controls_w || previous->controls_h != next->controls_h;
+    previous->controls_w != next->controls_w || previous->controls_h != next->controls_h ||
+    previous->content_x != next->content_x;
 }
 
 bool anvil_surface_frame_matches(const AnvilSurfaceConfigure *config, const AnvilSurfaceFrame *frame) {

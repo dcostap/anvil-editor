@@ -13,6 +13,7 @@
 #include "shell_launch.h"
 #include "shell_state.h"
 #include "shell_adoption.h"
+#include "shell_compose_shader.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -44,6 +45,8 @@
 #define SHELL_CONTROL_MESSAGE (WM_APP + 0x4c)
 #define SHELL_MODEL_MESSAGE (WM_APP + 0x4d)
 #define SHELL_PICKER_MESSAGE (WM_APP + 0x50)
+/* Probe only: save the next composed frame as ANVIL_SHELL_CAPTURE_DIR/capture-<wparam>.bmp. */
+#define SHELL_CAPTURE_MESSAGE (WM_APP + 0x52)
 #define SHELL_MENU_NEW_WINDOW 0xe010
 #define SHELL_MENU_OPEN_PROJECT 0xe020
 enum {
@@ -165,6 +168,10 @@ typedef struct {
    * resize, so a left- or top-edge drag does not move the content. */
   POINT anchor;
   bool anchored;
+  /* The last frame has premultiplied alpha; the shell blends it instead of copying it. */
+  bool transparent;
+  ID3D11ShaderResourceView *view; /* for blending; follows the private texture */
+  ID3D11Texture2D *view_texture;
   char shared_name[ANVIL_SURFACE_NAME_MAX];
   HANDLE memory_mapping, memory_mutex;
   const uint8_t *memory_view;
@@ -213,6 +220,16 @@ struct ShellWindow {
   bool resize_wait_disabled;
   /* The selected Project's frame background, R | G << 8 | B << 16 | A << 24. Exposed areas use it. */
   uint32_t background;
+  /* The Project's modal overlay dim, in the same format; the shell extends it over the Sidebar. */
+  uint32_t overlay;
+  /* Blending for transparent layers. Without it, layers are copied. */
+  ID3D11VertexShader *compose_vs;
+  ID3D11PixelShader *compose_ps;
+  ID3D11Buffer *compose_constants;
+  ID3D11BlendState *compose_blend;
+  ID3D11RasterizerState *compose_raster;
+  bool compose_failed;
+  unsigned capture; /* probe capture index of the next composed frame, or zero */
 
   float scale;
   int sidebar_w;
@@ -221,6 +238,7 @@ struct ShellWindow {
   bool pointer_in_surface;
   bool shown;
   ID3D11Texture2D *ui;
+  ID3D11ShaderResourceView *ui_view;
   int ui_w, ui_h;               /* layer capacity */
   int ui_layout_w, ui_layout_h; /* the size the layer was last painted for */
   bool ui_dirty;
@@ -1135,7 +1153,7 @@ static void send_configure(ShellProject *project) {
     /* A minimized window keeps the last surface size. */
     int pixel_w = 0, pixel_h = 0;
     client_pixel_size(window, &pixel_w, &pixel_h);
-    config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_w : pixel_w - window->sidebar_w);
+    config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_w : pixel_w);
     config.pixel_h = SDL_max(1, pixel_h);
     RECT rect;
     if (GetWindowRect(window->hwnd, &rect)) {
@@ -1146,12 +1164,13 @@ static void send_configure(ShellProject *project) {
     }
   } else if (project->last_config.window_id != window->id) {
     /* A newly assigned surface has no prior geometry in this minimized Window. */
-    config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_w : window->buffer_w - window->sidebar_w);
+    config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_w : window->buffer_w);
     config.pixel_h = SDL_max(1, window->buffer_h);
   }
   config.display_scale = window->scale;
-  config.origin_x = project->sidebar ? 0 : window->sidebar_w;
+  config.origin_x = 0;
   config.origin_y = 0;
+  config.content_x = project->sidebar ? 0 : SDL_min(window->sidebar_w, SDL_max(0, config.pixel_w - 1));
   config.refresh_hz = current_refresh_rate(window);
   typedef UINT(WINAPI * DpiForWindow)(HWND);
   typedef int(WINAPI * MetricForDpi)(int, UINT);
@@ -1165,7 +1184,7 @@ static void send_configure(ShellProject *project) {
       metric ? metric(SM_CXSIZEFRAME, dpi) + metric(SM_CXPADDEDBORDER, dpi)
              : GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
   controls_geometry(window);
-  config.controls_x = SDL_max(0, window->controls.left - window->sidebar_w);
+  config.controls_x = SDL_max(0, window->controls.left);
   config.controls_y = 0;
   config.controls_w = window->controls.right - window->controls.left;
   config.controls_h = window->controls.bottom;
@@ -1267,7 +1286,17 @@ static void release_d3d11(ShellWindow *window) {
   SAFE_RELEASE(window->project_presentation.shared_mutex);
   SAFE_RELEASE(window->project_presentation.shared);
   SAFE_RELEASE(window->project_presentation.surface);
+  SAFE_RELEASE(window->ui_view);
   SAFE_RELEASE(window->ui);
+  SAFE_RELEASE(window->compose_vs);
+  SAFE_RELEASE(window->compose_ps);
+  SAFE_RELEASE(window->compose_constants);
+  SAFE_RELEASE(window->compose_blend);
+  SAFE_RELEASE(window->compose_raster);
+  window->compose_failed = false;
+  SAFE_RELEASE(window->project_presentation.view);
+  SAFE_RELEASE(window->sidebar_presentation.view);
+  window->project_presentation.view_texture = window->sidebar_presentation.view_texture = NULL;
   SAFE_RELEASE(window->rtv);
   SAFE_RELEASE(window->backbuffer);
   SAFE_RELEASE(window->swapchain);
@@ -1629,7 +1658,12 @@ static void update_ui(ShellWindow *window) {
     desc.SampleDesc.Count = 1;
     desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    SAFE_RELEASE(window->ui_view);
     HRESULT hr = window->device->lpVtbl->CreateTexture2D(window->device, &desc, NULL, &window->ui);
+    if (SUCCEEDED(hr))
+      hr = window->device->lpVtbl->CreateShaderResourceView(window->device, (ID3D11Resource *)window->ui, NULL,
+                                                            &window->ui_view);
     if (FAILED(hr)) {
       fail_gpu(window, "native UI texture creation failed", hr);
       return;
@@ -1657,14 +1691,16 @@ static void update_ui(ShellWindow *window) {
   } else
     SelectClipRgn(dc, NULL);
   ui_fill(dc, all, window->background & 0xffffff);
+  RECT strip = {0, 0, window->sidebar_w, window->controls.bottom};
+  ui_fill(dc, strip, 0);
+  ui_fill(dc, window->controls, 0);
   HFONT font = CreateFontW(-(int)(13 * window->scale), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                            ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
   HGDIOBJ old_font = SelectObject(dc, font);
   SetBkMode(dc, TRANSPARENT);
   SetTextColor(dc, RGB(220, 220, 225));
-  RECT logo = {0, 0, window->sidebar_w, (LONG)(48 * window->scale)};
-  DrawTextW(dc, L"Restart Sidebar", -1, &logo, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  DrawTextW(dc, L"Restart Sidebar", -1, &strip, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
   RECT status = {0, window->buffer_h - (LONG)(40 * window->scale), window->sidebar_w, window->buffer_h};
   DrawTextW(dc,
             shell.sidebar_process && shell.sidebar_process->state == SHELL_FAILED
@@ -1704,6 +1740,18 @@ static void update_ui(ShellWindow *window) {
   DeleteObject(pen);
   draw_lifecycle(window, dc);
   GdiFlush();
+  /* Blended regions take premultiplied alpha from their brightest channel. Other regions are copied. */
+  RECT blended[] = {strip, window->controls};
+  for (int i = 0; i < 2; i++) {
+    RECT rect = blended[i];
+    for (int y = SDL_max(0, rect.top); y < SDL_min(rect.bottom, window->buffer_h); y++) {
+      uint8_t *row = (uint8_t *)window->ui_pixels + (size_t)y * window->ui_w * 4;
+      for (int x = SDL_max(0, rect.left); x < SDL_min(rect.right, window->buffer_w); x++) {
+        uint8_t *pixel = row + x * 4;
+        pixel[3] = SDL_max(pixel[0], SDL_max(pixel[1], pixel[2]));
+      }
+    }
+  }
   RECT uploads[4];
   int upload_count = 0;
   if (full && cover) {
@@ -1734,6 +1782,109 @@ static void update_ui(ShellWindow *window) {
   window->ui_hover_dirty = false;
 }
 
+typedef struct {
+  float dst[4], src[4], color[4];
+  float viewport[2], solid, pad;
+} ShellComposeConstants;
+
+static bool compose_ready(ShellWindow *window) {
+  if (window->compose_vs) return true;
+  if (window->compose_failed) return false;
+  ID3D11Device *device = window->device;
+  HRESULT hr = device->lpVtbl->CreateVertexShader(device, shell_compose_vertex_shader,
+                                                  sizeof(shell_compose_vertex_shader), NULL, &window->compose_vs);
+  if (SUCCEEDED(hr))
+    hr = device->lpVtbl->CreatePixelShader(device, shell_compose_pixel_shader, sizeof(shell_compose_pixel_shader),
+                                           NULL, &window->compose_ps);
+  if (SUCCEEDED(hr)) {
+    D3D11_BUFFER_DESC desc = {sizeof(ShellComposeConstants), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    hr = device->lpVtbl->CreateBuffer(device, &desc, NULL, &window->compose_constants);
+  }
+  if (SUCCEEDED(hr)) {
+    D3D11_BLEND_DESC desc = {0};
+    desc.RenderTarget[0].BlendEnable = TRUE;
+    desc.RenderTarget[0].SrcBlend = desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    desc.RenderTarget[0].DestBlend = desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    desc.RenderTarget[0].BlendOp = desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    hr = device->lpVtbl->CreateBlendState(device, &desc, &window->compose_blend);
+  }
+  if (SUCCEEDED(hr)) {
+    D3D11_RASTERIZER_DESC desc = {0};
+    desc.FillMode = D3D11_FILL_SOLID;
+    desc.CullMode = D3D11_CULL_NONE;
+    desc.DepthClipEnable = TRUE;
+    hr = device->lpVtbl->CreateRasterizerState(device, &desc, &window->compose_raster);
+  }
+  if (FAILED(hr)) {
+    SAFE_RELEASE(window->compose_vs);
+    SAFE_RELEASE(window->compose_ps);
+    SAFE_RELEASE(window->compose_constants);
+    SAFE_RELEASE(window->compose_blend);
+    SAFE_RELEASE(window->compose_raster);
+    window->compose_failed = true;
+    SDL_Log("Shell blending unavailable: 0x%08lx; transparent layers are copied", (unsigned long)hr);
+    return false;
+  }
+  return true;
+}
+
+/* Blends a premultiplied layer, or a solid premultiplied colour when view is NULL, into dst. */
+static void compose_rect(ShellWindow *window, ID3D11ShaderResourceView *view, RECT dst, int src_x, int src_y,
+                         const float color[4]) {
+  dst.right = SDL_min(dst.right, window->buffer_w);
+  dst.bottom = SDL_min(dst.bottom, window->buffer_h);
+  if (dst.right <= dst.left || dst.bottom <= dst.top || !compose_ready(window)) return;
+  ID3D11DeviceContext *context = window->context;
+  ShellComposeConstants constants = {
+      {(float)dst.left, (float)dst.top, (float)dst.right, (float)dst.bottom},
+      {(float)src_x, (float)src_y, 0, 0},
+      {color ? color[0] : 0, color ? color[1] : 0, color ? color[2] : 0, color ? color[3] : 0},
+      {(float)window->buffer_w, (float)window->buffer_h},
+      view ? 0.0f : 1.0f,
+      0};
+  context->lpVtbl->UpdateSubresource(context, (ID3D11Resource *)window->compose_constants, 0, NULL, &constants, 0,
+                                     0);
+  D3D11_VIEWPORT viewport = {0, 0, (float)window->buffer_w, (float)window->buffer_h, 0, 1};
+  context->lpVtbl->OMSetRenderTargets(context, 1, &window->rtv, NULL);
+  context->lpVtbl->OMSetBlendState(context, window->compose_blend, NULL, 0xffffffff);
+  context->lpVtbl->RSSetViewports(context, 1, &viewport);
+  context->lpVtbl->RSSetState(context, window->compose_raster);
+  context->lpVtbl->IASetInputLayout(context, NULL);
+  context->lpVtbl->IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+  context->lpVtbl->VSSetShader(context, window->compose_vs, NULL, 0);
+  context->lpVtbl->VSSetConstantBuffers(context, 0, 1, &window->compose_constants);
+  context->lpVtbl->PSSetShader(context, window->compose_ps, NULL, 0);
+  context->lpVtbl->PSSetConstantBuffers(context, 0, 1, &window->compose_constants);
+  context->lpVtbl->PSSetShaderResources(context, 0, 1, &view);
+  context->lpVtbl->Draw(context, 4, 0);
+  ID3D11ShaderResourceView *none = NULL;
+  context->lpVtbl->PSSetShaderResources(context, 0, 1, &none);
+}
+
+static ID3D11ShaderResourceView *presentation_view(ShellWindow *window, ShellPresentation *surface) {
+  if (surface->view && surface->view_texture == surface->surface) return surface->view;
+  SAFE_RELEASE(surface->view);
+  surface->view_texture = NULL;
+  if (!surface->surface) return NULL;
+  HRESULT hr = window->device->lpVtbl->CreateShaderResourceView(window->device, (ID3D11Resource *)surface->surface,
+                                                                NULL, &surface->view);
+  if (FAILED(hr)) {
+    SDL_Log("Shell layer view creation failed: 0x%08lx", (unsigned long)hr);
+    return NULL;
+  }
+  surface->view_texture = surface->surface;
+  return surface->view;
+}
+
+static void copy_ui(ShellWindow *window, RECT rect);
+static void blend_ui(ShellWindow *window, RECT rect) {
+  if (window->ui_view && compose_ready(window))
+    compose_rect(window, window->ui_view, rect, rect.left, rect.top, NULL);
+  else
+    copy_ui(window, rect);
+}
+
 static void copy_ui(ShellWindow *window, RECT rect) {
   if (!window->ui || rect.right <= rect.left || rect.bottom <= rect.top)
     return;
@@ -1741,6 +1892,44 @@ static void copy_ui(ShellWindow *window, RECT rect) {
   window->context->lpVtbl->CopySubresourceRegion(window->context, (ID3D11Resource *)window->backbuffer, 0,
                                                rect.left, rect.top, 0, (ID3D11Resource *)window->ui,
                                                0, &box);
+}
+
+/* Writes the composed backbuffer for an isolated probe. */
+static void capture_backbuffer(ShellWindow *window) {
+  unsigned index = window->capture;
+  window->capture = 0;
+  const char *directory = SDL_getenv("ANVIL_SHELL_CAPTURE_DIR");
+  if (!directory) return;
+  D3D11_TEXTURE2D_DESC desc;
+  window->backbuffer->lpVtbl->GetDesc(window->backbuffer, &desc);
+  desc.Usage = D3D11_USAGE_STAGING;
+  desc.BindFlags = 0;
+  desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+  desc.MiscFlags = 0;
+  ID3D11Texture2D *staging = NULL;
+  if (FAILED(window->device->lpVtbl->CreateTexture2D(window->device, &desc, NULL, &staging))) return;
+  window->context->lpVtbl->CopyResource(window->context, (ID3D11Resource *)staging,
+                                        (ID3D11Resource *)window->backbuffer);
+  D3D11_MAPPED_SUBRESOURCE mapped;
+  if (SUCCEEDED(window->context->lpVtbl->Map(window->context, (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0,
+                                             &mapped))) {
+    char path[MAX_PATH];
+    SDL_snprintf(path, sizeof(path), "%s\\capture-%u.bmp", directory, index);
+    FILE *file = fopen(path, "wb");
+    if (file) {
+      BITMAPFILEHEADER header = {0x4d42, 0, 0, 0, sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)};
+      BITMAPINFOHEADER info = {sizeof(info), (LONG)desc.Width, -(LONG)desc.Height, 1, 32, BI_RGB};
+      header.bfSize = header.bfOffBits + desc.Width * desc.Height * 4;
+      fwrite(&header, sizeof(header), 1, file);
+      fwrite(&info, sizeof(info), 1, file);
+      for (UINT y = 0; y < desc.Height; y++)
+        fwrite((uint8_t *)mapped.pData + (size_t)y * mapped.RowPitch, 4, desc.Width, file);
+      fclose(file);
+      SDL_Log("Shell probe capture written: %s", path);
+    }
+    window->context->lpVtbl->Unmap(window->context, (ID3D11Resource *)staging, 0);
+  }
+  SAFE_RELEASE(staging);
 }
 
 static void composite_and_present(ShellWindow *window) {
@@ -1782,21 +1971,30 @@ static void composite_and_present(ShellWindow *window) {
     }
   }
   update_ui(window);
-  copy_ui(window, (RECT){0, 0, window->sidebar_w, window->buffer_h});
-  if (window->sidebar_presentation.have_surface && shell.sidebar_process &&
-      shell.sidebar_process->state != SHELL_FAILED) {
-    D3D11_BOX box = {0,
-                     0,
-                     0,
-                     (UINT)SDL_min(window->sidebar_w, window->sidebar_presentation.surface_w),
-                     (UINT)SDL_min(window->buffer_h, window->sidebar_presentation.surface_h),
-                     1};
-    window->context->lpVtbl->CopySubresourceRegion(
-        window->context, (ID3D11Resource *)window->backbuffer, 0, 0, 0, 0,
-        (ID3D11Resource *)window->sidebar_presentation.surface, 0, &box);
+  /* Layers: the Project backdrop and UI, the Sidebar, the Project's overlay dim over the Sidebar, then the
+   * native strip and window controls. A transparent Sidebar shows the Project's wallpaper under it. */
+  ShellPresentation *sidebar = &window->sidebar_presentation;
+  if (sidebar->have_surface && shell.sidebar_process && shell.sidebar_process->state != SHELL_FAILED) {
+    RECT rect = {0, 0, SDL_min(window->sidebar_w, sidebar->surface_w), SDL_min(window->buffer_h, sidebar->surface_h)};
+    ID3D11ShaderResourceView *view = sidebar->transparent ? presentation_view(window, sidebar) : NULL;
+    if (view && compose_ready(window)) {
+      compose_rect(window, view, rect, 0, 0, NULL);
+    } else {
+      D3D11_BOX box = {0, 0, 0, (UINT)rect.right, (UINT)rect.bottom, 1};
+      window->context->lpVtbl->CopySubresourceRegion(window->context, (ID3D11Resource *)window->backbuffer, 0,
+                                                     0, 0, 0, (ID3D11Resource *)sidebar->surface, 0, &box);
+    }
+  } else {
+    copy_ui(window, (RECT){0, window->controls.bottom, window->sidebar_w, window->buffer_h});
   }
-  copy_ui(window, (RECT){0, 0, window->sidebar_w, window->controls.bottom});
-  copy_ui(window, window->controls);
+  if (window->overlay >> 24) {
+    uint32_t c = window->overlay;
+    float a = (c >> 24) / 255.0f;
+    float dim[4] = {(c & 0xff) / 255.0f * a, (c >> 8 & 0xff) / 255.0f * a, (c >> 16 & 0xff) / 255.0f * a, a};
+    compose_rect(window, NULL, (RECT){0, 0, window->sidebar_w, window->buffer_h}, 0, 0, dim);
+  }
+  blend_ui(window, (RECT){0, 0, window->sidebar_w, window->controls.bottom});
+  blend_ui(window, window->controls);
   if (project->state == SHELL_STARTING || project->state == SHELL_DORMANT ||
       (project->state == SHELL_FAILED && !window->project_presentation.have_surface))
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h});
@@ -1805,6 +2003,7 @@ static void composite_and_present(ShellWindow *window) {
   if (window->notice[0])
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w,
                            SDL_min(window->buffer_h, window->controls.bottom + (LONG)(48 * window->scale))});
+  if (window->capture) capture_backbuffer(window);
   anvil_latency_probe_stage("present-begin");
   /* Like a direct window, a live resize step does not wait for vertical blank. */
   HRESULT hr = window->swapchain->lpVtbl->Present(window->swapchain, window->live_resize ? 0 : 1, 0);
@@ -1880,7 +2079,16 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
   surface->have_surface = true;
   if (surface == &window->project_presentation && frame->background)
     apply_background(window, frame->background);
-  if (surface->surface_w == window->buffer_w - window->sidebar_w &&
+  bool transparent = frame->kind == ANVIL_SURFACE_FRAME_D3D11 && (frame->background >> 24) == 0;
+  if (surface == &window->sidebar_presentation && transparent != surface->transparent)
+    SDL_Log("Shell Sidebar layer: Window=%u transparent=%d", window->id, transparent);
+  surface->transparent = transparent;
+  if (surface == &window->project_presentation) {
+    if (!(window->overlay >> 24) != !(frame->overlay >> 24))
+      SDL_Log("Shell Window overlay: id=%u shown=%d", window->id, (frame->overlay >> 24) != 0);
+    window->overlay = frame->overlay;
+  }
+  if (surface == &window->project_presentation && surface->surface_w == window->buffer_w &&
       surface->surface_h == window->buffer_h) {
     window->resize_wait_disabled = false;
   }
@@ -1916,7 +2124,7 @@ static void resize_step(ShellWindow *window) {
   send_configure(project);
   if (window->sidebar && shell.sidebar_process)
     send_configure(window->sidebar_client);
-  int width = window->buffer_w - window->sidebar_w, height = window->buffer_h;
+  int width = window->buffer_w, height = window->buffer_h;
   bool stale = !window->project_presentation.have_surface ||
                window->project_presentation.surface_w != width ||
                window->project_presentation.surface_h != height;
@@ -2659,7 +2867,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       memcpy(&project->hit, payload, sizeof(project->hit));
       project->hit.title_height = SDL_clamp(project->hit.title_height, 0, (int)(96 * window->scale));
       controls_geometry(window);
-      int available = SDL_max(0, window->controls.left - window->sidebar_w);
+      int available = SDL_max(0, window->controls.left);
       project->hit.client_x = SDL_clamp(project->hit.client_x, 0, available);
       project->hit.client_width =
           SDL_clamp(project->hit.client_width, 0, available - project->hit.client_x);
@@ -3497,6 +3705,11 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       if (!SDL_PushEvent(&event))
         report_transport_failure(project, FAILURE_EVENT);
     }
+    return 0;
+  }
+  if (msg == SHELL_CAPTURE_MESSAGE && SDL_getenv("ANVIL_SURFACE_FAULT_PROBE")) {
+    window->capture = (unsigned)wparam;
+    composite_and_present(window);
     return 0;
   }
   if (msg == SHELL_FAULT_MESSAGE && SDL_getenv("ANVIL_SURFACE_FAULT_PROBE")) {

@@ -78,7 +78,9 @@ function SidebarView:on_mouse_wheel(amount, height)
 end
 function SidebarView:draw(width, height)
   renderer.set_clip_rect(0, 0, width, height)
-  renderer.draw_rect(0, 0, width, height, style.background2)
+  -- On a transparent surface the shell blends the panel over the Project's backdrop and wallpaper.
+  renderer.draw_rect(0, 0, width, height,
+    system.is_surface_transparent() and style.wallpaper_surface(style.background2) or style.background2)
   local h = style.font:get_height()
   for index, row in ipairs(self.rows) do
     local y = self:row_y(index)

@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 15u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 16u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -113,6 +113,9 @@ typedef struct {
   float refresh_hz;
   int32_t button_width, title_height, resize_border;
   int32_t controls_x, controls_y, controls_w, controls_h;
+  /* The surface covers the whole client area. The Project lays out its UI right of content_x and draws only
+   * its backdrop to the left of it, where the shell blends the Sidebar. */
+  int32_t content_x;
 } AnvilSurfaceConfigure;
 
 typedef struct {
@@ -155,6 +158,9 @@ typedef struct {
   /* The frame's full-window background, R | G << 8 | B << 16 | A << 24. The shell fills
    * exposed areas with it until a frame of the new size arrives. */
   uint32_t background;
+  /* The dim the Project draws over its UI while a modal overlay is open, in the same layout; zero when none.
+   * The shell applies it over the Sidebar, so the overlay covers the whole window. */
+  uint32_t overlay;
   char name[ANVIL_SURFACE_NAME_MAX];
 } AnvilSurfaceFrame;
 

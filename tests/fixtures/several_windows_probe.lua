@@ -224,9 +224,7 @@ if path:find("/driver$", 1) then
           return
         end
         local function scroll(window, state)
-          local bounds = ffi.new("long[4]")
-          assert(user32.GetClientRect(window, bounds) ~= 0)
-          local x = math.floor(tonumber(bounds[2]) - state.surface_w + state.x)
+          local x = math.floor(state.x)
           local y = math.floor(state.y)
           user32.PostMessageW(window, 0x804a, 0, x + y * 65536)
           user32.PostMessageW(window, 0x804a, 3, x + y * 65536)
@@ -376,7 +374,6 @@ else
       coroutine.yield(.2)
       state.x, state.y = editor:get_line_screen_position(1, 2)
       state.y = state.y + editor:get_line_height() / 2
-      state.surface_w = core.root_panel.size.x
       local on_event = core.on_event
       core.on_event = function(kind, ...)
         local result = on_event(kind, ...)

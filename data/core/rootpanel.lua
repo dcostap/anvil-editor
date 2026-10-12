@@ -321,12 +321,17 @@ end
 
 function RootPanel:draw_active_app_overlay()
   local overlay = self.app_overlay
-  if not overlay or overlay.progress <= 0 then return end
-  local source = type(overlay.color) == "string" and style[overlay.color] or overlay.color
-  if type(source) ~= "table" then return end
+  local source = overlay and overlay.progress > 0
+    and (type(overlay.color) == "string" and style[overlay.color] or overlay.color)
+  if type(source) ~= "table" then
+    system.set_surface_overlay(core.window)
+    return
+  end
   local color = { table.unpack(source) }
   color[4] = (color[4] or 255) * overlay.progress
   self:draw_app_overlay(color, overlay.unobscured_view)
+  -- A hosted shell extends the dim over its Sidebar.
+  system.set_surface_overlay(core.window, color[1], color[2], color[3], color[4])
 end
 
 function RootPanel:shell_views()
@@ -959,21 +964,24 @@ local function draw_split_dividers(node)
 end
 
 -- Replace existing content in one region with the window-aligned wallpaper.
+-- The backdrop covers the whole window surface, including a hosted Project's area under the Sidebar.
+function RootPanel:backdrop_rect()
+  return 0, 0, self.position.x + self.size.x, self.position.y + self.size.y
+end
+
 function RootPanel:draw_wallpaper_region(x, y, width, height)
   if width <= 0 or height <= 0 then return end
   if not self.wallpaper then
     renderer.draw_rect(x, y, width, height, style.background)
     return
   end
-  local clipped = x ~= self.position.x or y ~= self.position.y
-    or width ~= self.size.x or height ~= self.size.y
+  local bx, by, bw, bh = self:backdrop_rect()
+  local clipped = x ~= bx or y ~= by or width ~= bw or height ~= bh
   if clipped then core.push_clip_rect(x, y, width, height) end
   local iw, ih = self.wallpaper:get_size()
-  local scale = math.max(self.size.x / iw, self.size.y / ih)
+  local scale = math.max(bw / iw, bh / ih)
   local w, h = iw * scale, ih * scale
-  renderer.draw_canvas_scaled(self.wallpaper,
-    self.position.x + (self.size.x - w) / 2,
-    self.position.y + (self.size.y - h) / 2, w, h)
+  renderer.draw_canvas_scaled(self.wallpaper, bx + (bw - w) / 2, by + (bh - h) / 2, w, h)
   if clipped then core.pop_clip_rect() end
   renderer.draw_rect(x, y, width, height,
     style.wallpaper_surface(style.background, self.wallpaper_backdrop_opacity))
@@ -987,7 +995,8 @@ function RootPanel:draw_wallpaper(has_pane_view)
     self.wallpaper_contrast_image = nil
     self.wallpaper_visibility = nil
     self.wallpaper_backdrop_opacity = nil
-    renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
+    local x, y, w, h = self:backdrop_rect()
+    renderer.draw_rect(x, y, w, h, style.background)
     return
   end
   if self.wallpaper_name ~= selected then
@@ -1002,7 +1011,7 @@ function RootPanel:draw_wallpaper(has_pane_view)
     end
   end
   if not self.wallpaper then
-    self:draw_wallpaper_region(self.position.x, self.position.y, self.size.x, self.size.y)
+    self:draw_wallpaper_region(self:backdrop_rect())
     return
   end
   if self.wallpaper_contrast_image ~= self.wallpaper then
@@ -1023,7 +1032,7 @@ function RootPanel:draw_wallpaper(has_pane_view)
   -- With a View, both fills attenuate the image. Without one, the root does it alone.
   self.wallpaper_backdrop_opacity = 1 - self.wallpaper_visibility
     / (has_pane_view and (1 - style.wallpaper_surface_opacity) or 1)
-  self:draw_wallpaper_region(self.position.x, self.position.y, self.size.x, self.size.y)
+  self:draw_wallpaper_region(self:backdrop_rect())
 end
 
 function RootPanel:draw()
