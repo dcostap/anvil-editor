@@ -53,10 +53,13 @@ end
 test.describe("DiffView batch behavior", function()
   test.before_each(function(context)
     context.original_active_view = core.active_view
+    context.layout = config.plugins.diffview.layout
+    config.plugins.diffview.layout = "side-by-side"
     panes.reset_for_tests()
   end)
 
   test.after_each(function(context)
+    config.plugins.diffview.layout = context.layout
     core.active_view = context.original_active_view
     if context.restore_file_at then context.restore_file_at() end
     if context.historical_buffer then

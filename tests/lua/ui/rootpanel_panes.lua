@@ -7,6 +7,7 @@ local View = require "core.view"
 local test = require "core.test"
 local autocomplete = require "plugins.autocomplete"
 local Widget = require "widget"
+local config = require "core.config"
 
 local FakeView = View:extend()
 
@@ -89,7 +90,12 @@ test.describe("Root Panel Pane presentation", function()
       cursor_change_req = core.cursor_change_req,
       redraw = core.redraw,
       app_overlay = core.app_overlay,
+      wallpaper = config.wallpaper,
+      push_clip_rect = core.push_clip_rect,
+      pop_clip_rect = core.pop_clip_rect,
     }
+    -- These tests draw without a window; the wallpaper image and clip rects need one.
+    config.wallpaper = "none"
     core.title_bar = FakeView("title", 10)
     core.nag_view = FakeView("nag", 5)
     core.nag_view.show_height = 5
@@ -101,6 +107,8 @@ test.describe("Root Panel Pane presentation", function()
     core.root_panel = root
     core.set_active_view = function(view) core.active_view = view end
     renderer.draw_rect = function() end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
     core.cursor_change_req = nil
   end)
 
@@ -111,6 +119,8 @@ test.describe("Root Panel Pane presentation", function()
     system.set_cursor = saved.set_cursor
     saved.draw_rect = nil
     saved.set_cursor = nil
+    config.wallpaper = saved.wallpaper
+    saved.wallpaper = nil
     for key, value in pairs(saved) do core[key] = value end
   end)
 
