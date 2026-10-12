@@ -335,7 +335,7 @@ test.describe("Markdown list pending geometry", function()
     test.ok(pending_marker, pending_detail)
   end)
 
-  test.it("keeps an indented list prefix raw while typing", function()
+  test.it("keeps a preview-only list marker while typing", function()
     local view, buffer = make_view(
       "- parent\n- item\nplain\n", "pending-indented-list-code.md"
     )
@@ -347,21 +347,18 @@ test.describe("Markdown list pending geometry", function()
 
     local source = (buffer.lines[2] or ""):gsub("\n$", "")
     test.ok(source:match("^%s+%-%s+item$"))
-    test.ok(
-      not render_detail(view, 2):find("list=true", 1, true),
-      render_detail(view, 2)
-    )
+    test.ok(has_presented_list_marker(view, 2), render_detail(view, 2))
 
     buffer:set_selection(2, #buffer.lines[2])
     test.equal(view:on_text_input("x"), true)
     test.equal(markdown_model.peek(buffer).status, "pending")
-    test.ok(not has_presented_list_marker(view, 2), render_detail(view, 2))
+    test.ok(has_presented_list_marker(view, 2), render_detail(view, 2))
 
     wait_ready(view)
-    test.ok(not has_presented_list_marker(view, 2), render_detail(view, 2))
+    test.ok(has_presented_list_marker(view, 2), render_detail(view, 2))
   end)
 
-  test.it("keeps an indented list prefix raw while deleting its body", function()
+  test.it("keeps a preview-only list marker while deleting its body", function()
     local view, buffer = make_view(
       "- parent\n- item\nplain\n", "pending-indented-list-code-delete.md"
     )
@@ -375,7 +372,7 @@ test.describe("Markdown list pending geometry", function()
     for _ = 1, 4 do
       test.equal(perform(view, "core:backspace"), true)
       test.ok(
-        not has_presented_list_marker(view, 2),
+        has_presented_list_marker(view, 2),
         "after deletion " .. tostring(_) .. ": " .. render_detail(view, 2)
       )
     end
@@ -383,10 +380,10 @@ test.describe("Markdown list pending geometry", function()
     local source = (buffer.lines[2] or ""):gsub("\n$", "")
     test.equal(source, "        - ")
     test.equal(markdown_model.peek(buffer).status, "pending")
-    test.ok(not has_presented_list_marker(view, 2), render_detail(view, 2))
+    test.ok(has_presented_list_marker(view, 2), render_detail(view, 2))
 
     wait_ready(view)
-    test.ok(not has_presented_list_marker(view, 2), render_detail(view, 2))
+    test.ok(has_presented_list_marker(view, 2), render_detail(view, 2))
   end)
 
   test.it("keeps the marker presented when Backspace removes the final body character", function()
