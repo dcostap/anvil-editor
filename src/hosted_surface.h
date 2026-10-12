@@ -58,8 +58,6 @@ void anvil_hosted_surface_set_background(SDL_Window *window, uint32_t background
 void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay);
 /* The left edge of the Project UI inside the full-window surface; zero when not hosted. */
 int anvil_hosted_surface_content_x(void);
-/* A D3D11 Sidebar surface is drawn on a transparent clear and blended by the shell. */
-bool anvil_hosted_surface_transparent(void);
 bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surface,
                                            const SDL_Rect *rects, int count);
 

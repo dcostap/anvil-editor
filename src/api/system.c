@@ -1763,8 +1763,9 @@ static int f_set_surface_overlay(lua_State *L) {
   anvil_hosted_surface_set_overlay(ren->cache.window, overlay);
   return 0;
 }
+/* A D3D11 Sidebar surface is drawn on a transparent clear and blended by the shell. */
 static int f_is_surface_transparent(lua_State *L) {
-  lua_pushboolean(L, anvil_hosted_surface_transparent());
+  lua_pushboolean(L, anvil_hosted_surface_sidebar() && anvil_d3d11_enabled());
   return 1;
 }
 static int f_get_startup_path_arguments(lua_State *L) {

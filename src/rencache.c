@@ -732,7 +732,7 @@ static RenColor rencache_detect_frame_clear_color(RenCache *ren_cache) {
   RenColor clear = { 0, 0, 0, 255 };
   if (!ren_cache) return clear;
   /* A transparent Sidebar surface starts each frame empty; the shell blends it over the Project. */
-  if (ren_cache->window && anvil_hosted_surface_is_window(ren_cache->window) && anvil_hosted_surface_transparent())
+  if (ren_cache->window && anvil_hosted_surface_is_window(ren_cache->window) && anvil_hosted_surface_sidebar() && anvil_d3d11_enabled())
     return (RenColor){ 0, 0, 0, 0 };
 
   /* DXGI uses the swapchain background color for newly exposed pixels during

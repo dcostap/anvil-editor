@@ -1049,7 +1049,6 @@ void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay) {
   if (anvil_hosted_surface_is_window(window)) view->overlay = overlay;
 }
 int anvil_hosted_surface_content_x(void) { return hosted.active ? view->config.content_x : 0; }
-bool anvil_hosted_surface_transparent(void) { return hosted.active && hosted.sidebar && anvil_d3d11_enabled(); }
 
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height) {
   if (!anvil_hosted_surface_should_render()) return;
@@ -1337,7 +1336,6 @@ void anvil_hosted_surface_set_background(SDL_Window *window, uint32_t background
 }
 void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay) { (void)window; (void)overlay; }
 int anvil_hosted_surface_content_x(void) { return 0; }
-bool anvil_hosted_surface_transparent(void) { return false; }
 bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
