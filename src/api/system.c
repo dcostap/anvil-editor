@@ -585,42 +585,34 @@ static int f_pending_event_count(lua_State *L) {
   return 1;
 }
 
-static int f_wait_event(lua_State *L) {
-  int nargs = lua_gettop(L);
-
+bool system_wait_event(double seconds) {
   /* If events are already pending in our queue, return immediately. */
-  if (system_has_pending_events()) {
-    lua_pushboolean(L, true);
-    return 1;
-  }
+  if (system_has_pending_events()) return true;
 
   if (anvil_hosted_surface_sidebar()) {
     /* Return to SDL. Its callback loop owns the blocking event wait. */
     char rate[32];
-    if (nargs && !lua_isnil(L, 1)) {
-      double timeout = luaL_checknumber(L, 1);
-      SDL_snprintf(rate, sizeof(rate), "%d", (int)fmin(1000, fmax(1, ceil(1 / fmax(.001, timeout)))));
+    if (seconds >= 0) {
+      SDL_snprintf(rate, sizeof(rate), "%d", (int)fmin(1000, fmax(1, ceil(1 / fmax(.001, seconds)))));
       SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, rate);
     } else {
       SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "waitevent");
     }
-    lua_pushboolean(L, false);
-    return 1;
+    return false;
   }
 
   /* In SDL3 callback mode SDL_WaitEvent / SDL_WaitEventTimeout must not be
    * called from SDL_AppIterate.  Use SDL_Delay as a non-blocking substitute
    * so that the callback loop can still deliver events on the next iteration.
    * Indefinite waits are capped at 100 ms to keep the editor responsive. */
-  if (nargs >= 1) {
-    double n = luaL_checknumber(L, 1);
-    if (n < 0) n = 0;
-    if (n > 0) SDL_Delay((Uint32)(n * 1000));
-  } else {
-    SDL_Delay(100);
-  }
+  if (seconds > 0) SDL_Delay((Uint32)(seconds * 1000));
+  else if (seconds < 0) SDL_Delay(100);
+  return system_has_pending_events();
+}
 
-  lua_pushboolean(L, system_has_pending_events());
+static int f_wait_event(lua_State *L) {
+  double seconds = lua_isnoneornil(L, 1) ? -1 : fmax(0, luaL_checknumber(L, 1));
+  lua_pushboolean(L, system_wait_event(seconds));
   return 1;
 }
 

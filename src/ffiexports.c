@@ -103,18 +103,8 @@ EXPORT void system_sleep_ffi(double ms)
 }
 
 EXPORT bool system_wait_event_ffi(double n) {
-  /* Return immediately when events are already queued. */
-  if (system_has_pending_events()) return true;
-
-  /* In SDL3 callback mode we cannot block with SDL_WaitEvent.
-   * Sleep for the requested duration (capped to 100 ms for the indefinite
-   * case) and re-check for events that may have been pushed concurrently. */
-  if (n == -1)
-    SDL_Delay(100);
-  else if (n > 0)
-    SDL_Delay((Uint32)(n * 1000));
-
-  return system_has_pending_events();
+  /* The Lua binding's rules, including a hosted Sidebar handing its wait to SDL. */
+  return system_wait_event(n);
 }
 
 EXPORT bool system_has_pending_events_ffi(void) {

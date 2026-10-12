@@ -237,6 +237,7 @@ struct ShellWindow {
   float pointer_x, pointer_y;
   bool pointer_in_surface;
   bool pointer_in_sidebar; /* the Sidebar surface received motion and needs a leave */
+  Uint64 sidebar_input_ns;  /* first Sidebar input since its last frame, for the input-to-frame diagnostic */
   bool shown;
   ID3D11Texture2D *ui;
   ID3D11ShaderResourceView *ui_view;
@@ -2197,6 +2198,11 @@ static void handle_sidebar_frame(ShellWindow *window) {
           SDL_Log("Shell Sidebar recovery-budget timer failed; manual Restart remains available");
       }
     }
+    if (window->sidebar_input_ns) {
+      SDL_Log("Shell Sidebar input frame: input_to_frame_ms=%.1f",
+              (double)(SDL_GetTicksNS() - window->sidebar_input_ns) / SDL_NS_PER_MS);
+      window->sidebar_input_ns = 0;
+    }
     if (window->shown)
       composite_and_present(window);
   }
@@ -3014,6 +3020,12 @@ static bool sidebar_takes_pointer(ShellWindow *window, float x) {
          shell.sidebar_process && shell.sidebar_process->connected;
 }
 
+static void send_sidebar_input(ShellWindow *window, const SDL_Event *event) {
+  AnvilSurfaceInput input = {.event = *event, .configuration = window->sidebar_client->last_config.configuration};
+  if (!window->sidebar_input_ns) window->sidebar_input_ns = SDL_GetTicksNS();
+  shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+}
+
 static void leave_sidebar(ShellWindow *window) {
   if (!window->pointer_in_sidebar) return;
   window->pointer_in_sidebar = false;
@@ -3122,9 +3134,7 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
   if (sidebar_takes_pointer(window, event->motion.x) && event->motion.y >= window->controls.bottom) {
     leave_surface(window);
     window->pointer_in_sidebar = true;
-    AnvilSurfaceInput input = {.event = *event,
-                               .configuration = window->sidebar_client->last_config.configuration};
-    shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+    send_sidebar_input(window, event);
     return;
   }
   leave_sidebar(window);
@@ -3165,9 +3175,7 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
   int control = control_at(window, event->button.x, event->button.y);
   if (control < 0 && sidebar_takes_pointer(window, event->button.x)) {
     leave_surface(window);
-    AnvilSurfaceInput input = {.event = *event,
-                               .configuration = window->sidebar_client->last_config.configuration};
-    shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+    send_sidebar_input(window, event);
     return;
   }
   if (!window->surface_buttons && (control >= 0 || window->pressed_control >= 0)) {
@@ -3592,9 +3600,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     break;
   case SDL_EVENT_MOUSE_WHEEL:
     if (sidebar_takes_pointer(window, event->wheel.mouse_x)) {
-      AnvilSurfaceInput input = {.event = *event,
-                                 .configuration = window->sidebar_client->last_config.configuration};
-      shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+      send_sidebar_input(window, event);
     } else if (surface_contains(window, event->wheel.mouse_x, event->wheel.mouse_y) &&
         control_at(window, event->wheel.mouse_x, event->wheel.mouse_y) < 0 &&
         (project->state == SHELL_READY || project->state == SHELL_CLOSING)) {

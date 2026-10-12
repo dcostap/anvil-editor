@@ -2,7 +2,8 @@
 -- Seam: an owned hosted Window on a private desktop. The Project surface spans the Window and lays out its UI
 -- right of the Sidebar, the Sidebar is blended over the Project's backdrop where the renderer allows it, and a
 -- modal overlay dim reaches the shell so it can cover the Sidebar too. A click on the covered Sidebar goes to the
--- Project, whose modal UI decides what an outside click does.
+-- Project, whose modal UI decides what an outside click does. Sidebar hover appears without waiting for a later
+-- event.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "layers" then return end
 local core, common = require "core", require "core.common"
@@ -92,6 +93,21 @@ if path:match("/driver$") then
    coroutine.yield(1)
    capture(window, 1)
    assert(click_refresh(window, layout), "a Sidebar click did not reach the Sidebar")
+   -- Hover alternates between the Project row and empty space; each change draws one Sidebar frame.
+   local scale = user32.GetDpiForWindow(window) / 96
+   local mark = #trace()
+   for i = 1, 20 do
+    local y = math.floor((i % 2 == 0 and 88 or 400) * scale)
+    user32.PostMessageW(window, 0x804a, 0, 100 + y * 65536); coroutine.yield(.1)
+   end
+   local latencies = {}
+   for ms in trace():sub(mark + 1):gmatch("Shell Sidebar input frame: input_to_frame_ms=([%d%.]+)") do
+    latencies[#latencies + 1] = tonumber(ms)
+   end
+   table.sort(latencies)
+   assert(#latencies >= 15, "Sidebar hover produced too few frames: " .. #latencies)
+   local median = latencies[math.ceil(#latencies / 2)]
+   assert(median < 30, string.format("Sidebar hover waited %.1f ms for its frame (median)", median))
    save("overlay-go", {go=true})
    wait(function() return trace():find("Shell Window overlay: id=%d+ shown=1") end, 10,
     "the Project overlay did not reach the shell")
