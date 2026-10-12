@@ -236,6 +236,7 @@ struct ShellWindow {
   Uint32 surface_buttons;
   float pointer_x, pointer_y;
   bool pointer_in_surface;
+  bool pointer_in_sidebar; /* the Sidebar surface received motion and needs a leave */
   bool shown;
   ID3D11Texture2D *ui;
   ID3D11ShaderResourceView *ui_view;
@@ -1615,6 +1616,11 @@ static void paint_failed_window(ShellWindow *window, HDC dc) {
   SelectObject(dc, old);
 }
 
+/* The native strip above the Sidebar restarts it only while it has failed. Otherwise it drags the Window. */
+static bool sidebar_restart_offered(void) {
+  return shell.sidebar_restart_limited || !shell.sidebar_process || shell.sidebar_process->state == SHELL_FAILED;
+}
+
 static void update_ui(ShellWindow *window) {
   ShellProject *project = window->selected;
   controls_geometry(window);
@@ -1700,7 +1706,8 @@ static void update_ui(ShellWindow *window) {
   HGDIOBJ old_font = SelectObject(dc, font);
   SetBkMode(dc, TRANSPARENT);
   SetTextColor(dc, RGB(220, 220, 225));
-  DrawTextW(dc, L"Restart Sidebar", -1, &strip, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  if (sidebar_restart_offered())
+    DrawTextW(dc, L"Restart Sidebar", -1, &strip, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
   RECT status = {0, window->buffer_h - (LONG)(40 * window->scale), window->sidebar_w, window->buffer_h};
   DrawTextW(dc,
             shell.sidebar_process && shell.sidebar_process->state == SHELL_FAILED
@@ -2978,10 +2985,19 @@ static void leave_surface(ShellWindow *window) {
     apply_cursor(ANVIL_SURFACE_CURSOR_ARROW);
 }
 
+static void leave_sidebar(ShellWindow *window) {
+  if (!window->pointer_in_sidebar) return;
+  window->pointer_in_sidebar = false;
+  if (!window->sidebar_client || !shell.sidebar_process || !shell.sidebar_process->connected) return;
+  AnvilSurfaceInput input = {.configuration = window->sidebar_client->last_config.configuration};
+  input.event.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+  shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+}
+
 static int control_at(ShellWindow *window, float x, float y) {
   ShellProject *project = window->selected;
   POINT point = {(LONG)x, (LONG)y};
-  if (x >= 0 && x < window->sidebar_w && y >= 0 && y < window->controls.bottom)
+  if (x >= 0 && x < window->sidebar_w && y >= 0 && y < window->controls.bottom && sidebar_restart_offered())
     return 5;
   if (PtInRect(&window->controls, point)) {
     int width = SDL_max(1, (window->controls.right - window->controls.left) / 3);
@@ -3078,11 +3094,13 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
       event->motion.y >= window->controls.bottom && shell.sidebar_process &&
       shell.sidebar_process->connected) {
     leave_surface(window);
+    window->pointer_in_sidebar = true;
     AnvilSurfaceInput input = {.event = *event,
                                .configuration = window->sidebar_client->last_config.configuration};
     shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
     return;
   }
+  leave_sidebar(window);
   int control = control_at(window, event->motion.x, event->motion.y);
   if (window->hovered_control != control) {
     window->hovered_control = control;
@@ -3519,6 +3537,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     }
     break;
   case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+    leave_sidebar(window);
     window->hovered_control = -1;
     window->ui_hover_dirty = true;
     composite_and_present(window);
@@ -3820,7 +3839,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       LRESULT result = win32_frame_hwnd_hit_test(hwnd, &hit, lparam);
       POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ScreenToClient(hwnd, &point);
-      if (result == HTCAPTION && point.x >= 0 && point.x < window->sidebar_w)
+      if (result == HTCAPTION && point.x >= 0 && point.x < window->sidebar_w && sidebar_restart_offered())
         return HTCLIENT;
       return result;
     }

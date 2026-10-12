@@ -112,6 +112,12 @@ function core.on_event(name, ...)
     local button, x, y = ...
     local width = renwindow.get_size(core.window)
     current.view:on_mouse_pressed(button, x, y, width); core.redraw = true
+  elseif name == "mousemoved" then
+    local x, y = ...
+    local width = renwindow.get_size(core.window)
+    if current.view:on_mouse_moved(x, y, width) then core.redraw = true end
+  elseif name == "mouseleft" then
+    if current.view:on_mouse_left() then core.redraw = true end
   elseif name == "mousewheel" then
     local _, height = renwindow.get_size(core.window)
     current.view:on_mouse_wheel((...), height); core.redraw = true
