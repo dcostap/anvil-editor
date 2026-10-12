@@ -37,12 +37,14 @@ local function scale_font_once(font, factor, seen)
   end
 end
 
+-- Zoom keeps the active caret at the center of the viewport, as far as the
+-- scroll range allows.
 local function capture_active_textview_center()
   local TextView = package.loaded["core.textview"]
   local view = core.active_view
   if not TextView or not view or not view.extends or not view:extends(TextView) then return nil end
   return view:with_selection_state(function()
-    return { view = view, center = view:capture_viewport_center() }
+    return { view = view, center = view:capture_caret_center() }
   end)
 end
 

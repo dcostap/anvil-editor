@@ -128,11 +128,8 @@ test.describe("Markdown zoom first redraw", function()
           "the first redraw kept the old heading layout")
         test.same(visible_geometry(view, first_line + 1), expected_body,
           "the first redraw kept the old paragraph layout")
-        -- Zoom keeps the viewport center fixed, not the caret. Use the next
-        -- complete heading when zoom moves the first heading offscreen.
-        local visible_first = view:get_visible_line_range()
-        local drawn_line = math.max(first_line, visible_first + (visible_first % 2 == 0 and 1 or 2))
-        local heading, paragraph = drawn_geometry(view, drawn_line)
+        -- Zoom centers the caret, so its heading stays on screen.
+        local heading, paragraph = drawn_geometry(view, first_line)
         test.equal(heading.size, expected_heading.font_size)
         test.equal(paragraph.size, expected_body.font_size)
         test.ok(paragraph.y - heading.y >= heading.height,

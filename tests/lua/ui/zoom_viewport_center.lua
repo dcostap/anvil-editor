@@ -33,9 +33,9 @@ local function row_point_y(view, line, col, fraction)
     + fraction * view:get_visual_row_height(row) - view.scroll.y
 end
 
-test.describe("Zoom viewport center", function()
+test.describe("Zoom caret centering", function()
   for _, mode in ipairs { "source", "Markdown", "wrapped Markdown" } do
-    test.it("keeps the reading position centered in " .. mode .. " with an offscreen caret", function()
+    test.it("centers the caret in " .. mode .. " when zooming", function()
       coroutine.yield(0.05)
       local old_live, old_active = config.markdown_live_editor, core.active_view
       local old_scale, old_code = scale.get(), scale.get_code()
@@ -61,7 +61,6 @@ test.describe("Zoom viewport center", function()
         panes.place(function() return view end, { placement = "new", focus = true })
         core.root_panel:update()
         core.set_active_view(view)
-        view:with_selection_state(function() buffer:set_selection(1, 1) end)
         settle(view, live)
         local row = view:get_visual_row(1002, 1, false)
         if mode == "wrapped Markdown" then
@@ -70,20 +69,23 @@ test.describe("Zoom viewport center", function()
         end
         local line, col = view:get_visual_row_line_col(row)
         local fraction = 0.5
-        view.scroll.y = row_point_y(view, line, col, fraction) - view.size.y / 2
+        view:with_selection_state(function() buffer:set_selection(line, col) end)
+        settle(view, live)
+        -- Scroll the caret away from the center, as when reading elsewhere.
+        view.scroll.y = view.scroll.y + row_point_y(view, line, col, fraction) - view.size.y / 4
         view.scroll.to.y = view.scroll.y
-        test.near(row_point_y(view, line, col, fraction), view.size.y / 2, 0.001)
+        test.near(row_point_y(view, line, col, fraction), view.size.y / 4, 0.001)
         for _, action in ipairs { "editor:zoom_in", "editor:zoom_out", "editor:zoom_out" } do
           test.ok(command.perform(action))
           core.root_panel:update()
           test.near(row_point_y(view, line, col, fraction), view.size.y / 2, 1,
-            string.format("%s moved the reading position on the first redraw: y=%.2f center=%.2f",
+            string.format("%s left the caret off-center on the first redraw: y=%.2f center=%.2f",
               action, row_point_y(view, line, col, fraction), view.size.y / 2))
           settle(view, live)
           test.near(row_point_y(view, line, col, fraction), view.size.y / 2, 1,
-            action .. " moved the reading position after background layout")
+            action .. " left the caret off-center after background layout")
           test.same({ view:with_selection_state(function() return buffer:get_selection() end) },
-            { 1, 1, 1, 1 }, "zoom changed the selection")
+            { line, col, line, col }, "zoom changed the selection")
         end
       end)
       core.active_view = old_active

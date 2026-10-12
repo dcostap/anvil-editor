@@ -187,7 +187,7 @@ test.describe("Markdown zoom", function()
     end
   end
 
-  test.it("keeps the visible caret at the same height when zoom changes pending rows", function()
+  test.it("keeps the caret centered when zoom changes pending rows", function()
     coroutine.yield(0.05)
     local old_live, old_past_end = config.markdown_live_editor, config.scroll_past_end
     local old_active = core.active_view
@@ -199,18 +199,18 @@ test.describe("Markdown zoom", function()
       buffer:set_selection(30, 1)
       settle(view)
       view:scroll_to_line(30, false, true)
-      local before_y = view:get_caret_highlight_geometry(30, 1)
       buffer:insert(2, 2, "x")
       test.equal(model.peek(buffer).status, "pending")
       scale.set(old_scale * 1.2)
       scale.set_code(old_code * 1.2)
-      local scaled_y = view:get_caret_highlight_geometry(30, 1)
-      view:update()
-      local after_y = view:get_caret_highlight_geometry(30, 1)
+      local function caret_offset_from_center()
+        local y, height = view:get_caret_highlight_geometry(30, 1)
+        return y + height / 2 - (view.position.y + view.size.y / 2)
+      end
       -- Scroll coordinates use whole pixels; padding can use partial pixels.
-      test.near(after_y, before_y, 1, string.format(
-        "zoom moved the visible caret: before=%s scaled=%s updated=%s selection=%s",
-        before_y, scaled_y, after_y, buffer:get_selection()))
+      test.near(caret_offset_from_center(), 0, 2, "zoom left the caret off-center")
+      view:update()
+      test.near(caret_offset_from_center(), 0, 2, "layout update moved the centered caret")
     end)
     core.active_view = old_active
     view:on_close()

@@ -92,7 +92,7 @@ test.describe("wrapped caret geometry", function()
       { view:get_line_screen_position(1, end_col, true) })
   end)
 
-  test.it("keeps a visual-end caret at the same screen height during code zoom", function(context)
+  test.it("centers a visual-end caret on its own row during code zoom", function(context)
     local view, buffer = make_view(context, false)
     config.plugins.linewrapping.width_override = function(owner)
       return owner:get_font():get_width("xxxxxxxxxxxxxxxx")
@@ -101,13 +101,17 @@ test.describe("wrapped caret geometry", function()
     buffer:set_selection(1, start_col + 1)
     test.ok(command.perform("core:move_to_end_of_line"))
     view:update()
-    local _, before_y = view:get_line_screen_position(1, end_col, true)
     context.code_scale = scale.get_code()
 
     scale.set_code(context.code_scale * 1.2)
 
-    local _, after_y = view:get_line_screen_position(1, end_col, true)
-    test.ok(math.abs(after_y - before_y) < 0.01, "zoom must preserve the visible caret row")
+    local _, end_y = view:get_line_screen_position(1, end_col, true)
+    local _, next_y = view:get_line_screen_position(1, end_col, false)
+    test.ok(end_y < next_y, "zoom must keep the caret on the row it ends")
+    local center = view.position.y + view.size.y / 2
+    test.ok(end_y <= center and center < next_y,
+      string.format("zoom must center the caret row: end=%.2f center=%.2f next=%.2f",
+        end_y, center, next_y))
   end)
 
   test.it("places completion suggestions beside the caret when a symbol spans wrapped rows", function(context)
