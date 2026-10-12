@@ -913,12 +913,13 @@ function StatusBar:draw_item_tooltip(item)
     local font = statusbar_font()
     local w = font:get_width(text)
     local h = font:get_height()
-    local x = self.pointer.x - (w / 2) - (style.padding.x * 2)
+    local x = self.pointer.x - self.position.x - (w / 2) - (style.padding.x * 2)
 
     if x < 0 then x = 0 end
     if (x + w + (style.padding.x * 3)) > self.size.x then
       x = self.size.x - w - (style.padding.x * 3)
     end
+    x = x + self.position.x
 
     renderer.draw_rect(
       x + style.padding.x,
@@ -1068,10 +1069,9 @@ end
 ---Rebuild the active items list by evaluating predicates and calculating positions.
 ---Updates item visibility, positions, and handles panel overflow.
 function StatusBar:update_active_items()
-  local x = self:get_content_offset()
-
-  local rx = x + self.size.x
-  local lx = x
+  -- Item x positions are relative to the Status Bar's left edge.
+  local rx = self.size.x
+  local lx = 0
   local rw, lw = 0, 0
 
   self.active_items = {}
@@ -1222,7 +1222,7 @@ end
 ---@param y number Mouse y coordinate
 ---@return string panel "left", "right", or "" if none
 function StatusBar:get_hovered_panel(x, y)
-  if y >= self.position.y and x <= self.left_width + style.padding.x then
+  if y >= self.position.y and x - self.position.x <= self.left_width + style.padding.x then
     return "left"
   end
   return "right"
@@ -1260,7 +1260,7 @@ function StatusBar:get_item_visible_area(item)
     end
   end
 
-  return item_x, item_w
+  return item_x + self.position.x, item_w
 end
 
 
@@ -1485,11 +1485,11 @@ function StatusBar:draw()
     if #self.active_items > 0 then
       --- draw left pane
       core.push_clip_rect(
-        0, self.position.y,
+        self.position.x, self.position.y,
         self.left_width + style.padding.x, self.size.y
       )
       for _, item in ipairs(self.active_items) do
-        local item_x = self.left_xoffset + item.x + style.padding.x
+        local item_x = self.position.x + self.left_xoffset + item.x + style.padding.x
         local hovered, item_bg = get_item_bg_color(self, item)
         if item.alignment == StatusBar.Item.LEFT and not self.tooltip_mode then
           if type(item_bg) == "table" then
@@ -1503,7 +1503,7 @@ function StatusBar:draw()
             item.on_draw(item_x, self.position.y, self.size.y, hovered)
             core.pop_clip_rect()
           else
-            self:draw_items(item.cached_item, false, item_x - style.padding.x)
+            self:draw_items(item.cached_item, false, item_x - self.position.x - style.padding.x)
           end
         end
       end
@@ -1511,11 +1511,11 @@ function StatusBar:draw()
 
       --- draw right pane
       core.push_clip_rect(
-        self.size.x - (self.right_width + style.padding.x), self.position.y,
+        self.position.x + self.size.x - (self.right_width + style.padding.x), self.position.y,
         self.right_width + style.padding.x, self.size.y
       )
       for _, item in ipairs(self.active_items) do
-        local item_x = self.right_xoffset + item.x + style.padding.x
+        local item_x = self.position.x + self.right_xoffset + item.x + style.padding.x
         local hovered, item_bg = get_item_bg_color(self, item)
         if item.alignment == StatusBar.Item.RIGHT then
           if type(item_bg) == "table" then
@@ -1529,7 +1529,7 @@ function StatusBar:draw()
             item.on_draw(item_x, self.position.y, self.size.y, hovered)
             core.pop_clip_rect()
           else
-            self:draw_items(item.cached_item, false, item_x - style.padding.x)
+            self:draw_items(item.cached_item, false, item_x - self.position.x - style.padding.x)
           end
         end
       end

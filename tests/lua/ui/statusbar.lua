@@ -7,6 +7,7 @@ local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local StatusBar = require "core.statusbar"
 local config = require "core.config"
+local style = require "core.style"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -124,5 +125,76 @@ test.describe("status bar caret position item", function()
         item.on_draw(item.x, 0, 20, false, true)
       end
     end
+  end)
+end)
+
+test.describe("status bar placed right of the Sidebar", function()
+  test.before_each(function(context)
+    context.original_active_view = core.active_view
+    context.original_draw_text = renderer.draw_text
+    context.original_draw_rect = renderer.draw_rect
+    context.original_push_clip_rect = core.push_clip_rect
+    context.original_pop_clip_rect = core.pop_clip_rect
+  end)
+
+  test.after_each(function(context)
+    core.active_view = context.original_active_view
+    renderer.draw_text = context.original_draw_text
+    renderer.draw_rect = context.original_draw_rect
+    core.push_clip_rect = context.original_push_clip_rect
+    core.pop_clip_rect = context.original_pop_clip_rect
+  end)
+
+  test.it("draws the file name beside the caret position, not over the items after it", function(context)
+    local buffer = Buffer(nil, nil, true)
+    buffer:set_filename("src" .. PATHSEP .. "game" .. PATHSEP .. "Type.cpp")
+    core.active_view = TextView(buffer)
+    local status_bar = StatusBar()
+    status_bar.position.x, status_bar.position.y = 240, 600
+    status_bar.size.x, status_bar.size.y = 1000, 24
+    status_bar:update_active_items()
+
+    local drawn = {}
+    renderer.draw_text = function(font, text, x, y, color)
+      drawn[#drawn + 1] = { text = tostring(text), x = x, w = font:get_width(tostring(text)) }
+      return x + font:get_width(tostring(text))
+    end
+    renderer.draw_rect = function() end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    status_bar:draw()
+
+    local file, position
+    for _, item in ipairs(drawn) do
+      if item.text:find("Type.cpp", 1, true) then file = item end
+      if item.text == ":" then position = item end
+    end
+    test.ok(file and position, "the file name and caret position were not drawn")
+    test.ok(file.x >= status_bar.position.x, "the file name started left of the Status Bar")
+    test.ok(file.x + file.w <= position.x,
+      string.format("the file name ended at %d, past the caret position at %d", file.x + file.w, position.x))
+  end)
+end)
+
+test.describe("status bar pointer right of the Sidebar", function()
+  test.before_each(function(context)
+    context.original_active_view = core.active_view
+  end)
+
+  test.after_each(function(context)
+    core.active_view = context.original_active_view
+  end)
+
+  test.it("hovers the item under the pointer", function()
+    core.active_view = TextView(Buffer(nil, nil, true))
+    local status_bar = StatusBar()
+    status_bar.position.x, status_bar.position.y = 240, 600
+    status_bar.size.x, status_bar.size.y = 1000, 24
+    status_bar:update_active_items()
+
+    local position = status_bar:get_item("text:position")
+    local x = status_bar.position.x + position.x + position.w / 2 + style.padding.x
+    status_bar:on_mouse_moved(x, 610, 0, 0)
+    test.equal(status_bar.hovered_item, position)
   end)
 end)
