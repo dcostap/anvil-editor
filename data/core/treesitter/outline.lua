@@ -4,7 +4,7 @@ local outline = {}
 
 local DEFAULT_MATCH_LIMIT = 20000
 local DEFAULT_MAX_CAPTURES = 20000
-local DEFAULT_QUERY_TIMEOUT_MS = 20
+local DEFAULT_QUERY_TIMEOUT_MS = 250
 
 local function log_quiet(...)
   if core and core.log_quiet then core.log_quiet(...) end
@@ -269,6 +269,15 @@ function outline.get_buffer_outline(buffer, opts)
   if not tree_ready(ts) then return empty("not-ready") end
   if not ts.queries or not ts.queries.outline then return empty("missing-query") end
 
+  -- The outline only changes when the text does, so refining a symbol search
+  -- must not run the query again for every typed character.
+  local change_id = buffer.get_change_id and buffer:get_change_id() or 0
+  local cached = ts.outline_cache
+  if cached and cached.change_id == change_id and cached.native == ts.native
+      and cached.query == ts.queries.outline then
+    return cached.symbols
+  end
+
   local captures, err = ts.native:query_captures(ts.queries.outline, 0, byte_len(buffer, ts), {
     match_limit = opts.match_limit or (ts.language and ts.language.outline_match_limit) or DEFAULT_MATCH_LIMIT,
     max_captures = opts.max_captures or (ts.language and ts.language.outline_max_captures) or DEFAULT_MAX_CAPTURES,
@@ -329,6 +338,12 @@ function outline.get_buffer_outline(buffer, opts)
   end
   symbols = unique
   assign_parents(symbols)
+  ts.outline_cache = {
+    change_id = change_id,
+    native = ts.native,
+    query = ts.queries.outline,
+    symbols = symbols,
+  }
   return symbols
 end
 

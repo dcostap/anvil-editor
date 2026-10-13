@@ -2495,6 +2495,25 @@ main :: proc() {}
     buffer:on_close()
   end)
 
+  test.it("buffer outline of an unchanged large Buffer survives a later query that would time out", function()
+    local lines = {}
+    for i = 1, 6000 do lines[#lines + 1] = string.format("int func_%d(int a) { return a + %d; }", i, i) end
+    local buffer = c_buffer(table.concat(lines, "\n"))
+    test.ok(wait_ready(buffer, 10))
+    local first = treesitter.get_buffer_outline(buffer, { timeout_ms = 5000 })
+    test.equal(#first, 6000)
+    local again, reason = treesitter.get_buffer_outline(buffer, { timeout_ms = 1 })
+    test.equal(#again, 6000, tostring(reason))
+    buffer:apply_edits({
+      { line1 = 1, col1 = 5, line2 = 1, col2 = 11, text = "renamed" },
+    }, { type = "replace" })
+    test.ok(wait_ready(buffer, 10))
+    local after_edit = treesitter.get_buffer_outline(buffer, { timeout_ms = 5000 })
+    test.equal(#after_edit, 6000)
+    test.equal(after_edit[1].name, "renamed")
+    buffer:on_close()
+  end)
+
   test.it("buffer outline gracefully returns empty when outline query is missing", function()
     local buffer = c_buffer("int main(void) { return 0; }")
     test.ok(wait_ready(buffer))
