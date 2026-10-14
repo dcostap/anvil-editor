@@ -241,6 +241,34 @@ test.describe("Markdown Interactive Table Editing", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("keeps the header and delimiter rows in place after appending an empty row", function()
+    local view, buffer = make_view(
+      "intro\n\n| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nplain"
+    )
+    view:set_wrapping_enabled(true)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      buffer:set_selection(6, 4)
+      refresh(view)
+      local function row_top(line)
+        local _, y = view:get_line_screen_position(line)
+        return y
+      end
+      local header_to_body = row_top(5) - row_top(3)
+      local delimiter_to_body = row_top(5) - row_top(4)
+
+      test.equal(command.perform("markdown:table_cell_below"), true)
+      test.equal(buffer.lines[7], "|  |  |\n")
+      refresh(view)
+
+      test.equal(row_top(5) - row_top(3), header_to_body)
+      test.equal(row_top(5) - row_top(4), delimiter_to_body)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("appends a distinct row when the table ends the Buffer", function()
     local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |")
     local old_active = core.active_view

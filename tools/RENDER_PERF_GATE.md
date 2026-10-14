@@ -314,6 +314,16 @@ python tools/run_render_perf_gate.py --scenario markdown-task-overindent --video
 python tools/run_render_perf_gate.py --scenario markdown-callout-shift --video --no-build
 ```
 
+The table tour walks through Interactive Table Editing for visual review:
+
+```sh
+python tools/run_render_perf_gate.py --scenario markdown-table-tour --video --no-build --renderer software
+```
+
+It captures the idle table, an active cell, typing, Tab navigation, a hovered
+Hover Insertion Control, and an appended row. It asserts nothing about pixels;
+inspect the numbered PNG frames. `frames.csv` names the stage of each frame.
+
 The video scenarios are not in any normal suite. `--video` requires one video-enabled scenario.
 The runner performs the edit in its private app and captures renderer frames.
 The private video View draws its caret as if focused; the runner never focuses the user's window.

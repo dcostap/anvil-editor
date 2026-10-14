@@ -173,6 +173,22 @@ SCENARIOS["markdown-callout-shift"] = {
 SCENARIOS["markdown-task-overindent"] = dict(
     SCENARIOS["markdown-callout-shift"], fixture="video-task", window_width=420,
 )
+SCENARIOS["markdown-table-tour"] = dict(
+    SCENARIOS["markdown-callout-shift"], fixture="video-table",
+    window_width=900, window_height=560,
+)
+TABLE_TOUR_SOURCE = """# Project status
+
+Some intro paragraph before the table.
+
+| Task | Owner | Status | Estimate |
+| :--- | :---: | --- | ---: |
+| Write the parser | Ana | **done** | 3 d |
+| Draw the grid | Bo | in progress | 5 d |
+| Ship `v1.0` | Cy | todo | 1 d |
+
+Text after the table.
+"""
 
 
 def uses_performance_baseline(renderer: str) -> bool:
@@ -858,6 +874,8 @@ def run_case(
         case_fixture = work / "fixtures" / "markdown-callout.md"
     elif settings.get("fixture") == "video-task":
         case_fixture = work / "fixtures" / "markdown-task.md"
+    elif settings.get("fixture") == "video-table":
+        case_fixture = work / "fixtures" / "markdown-table.md"
     if settings.get("fixture") == "external":
         if not external_fixture:
             raise RuntimeError(f"scenario {scenario} requires an external specimen")
@@ -1715,6 +1733,9 @@ def main() -> int:
         if scenario == "markdown-callout-shift":
             fixture_name = "markdown-callout.md"
             source = "> [!NOTE] Callout words that wrap across several visual rows\n\nsentinel"
+        elif scenario == "markdown-table-tour":
+            fixture_name = "markdown-table.md"
+            source = TABLE_TOUR_SOURCE
         else:
             fixture_name = "markdown-task.md"
             source = "- [ ] parent\n    - [ ] \n    - [ ] sibling\nplain\n"

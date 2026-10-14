@@ -198,6 +198,21 @@ local function source_table_bounds(buffer, line)
   end
 end
 
+-- Like source_table_bounds, but a delimiter row also resolves to its table.
+-- The line index leaves delimiter rows out so a delimiter cannot claim a
+-- second table, but every row of one table must extend identically.
+local function source_table_bounds_with_delimiter(buffer, line)
+  local index = source_index(buffer)
+  local table_range = index.by_line[line]
+  if not table_range then
+    local header = index.by_line[line - 1]
+    if header and header.delimiter_line == line then table_range = header end
+  end
+  if table_range then
+    return table_range.line1, table_range.line2
+  end
+end
+
 local function source_row_at(buffer, line)
   return source_row(line_text(buffer, line))
 end
@@ -273,7 +288,7 @@ end
 ---fences and other raw blocks remain excluded.
 function tables.extend_semantic_table(view, line, table_node)
   if not (view and view.buffer and line) then return table_node end
-  local line1, source_line2 = source_table_bounds(view.buffer, line)
+  local line1, source_line2 = source_table_bounds_with_delimiter(view.buffer, line)
   if not line1 then return table_node end
   local instance = model.peek(view.buffer)
   if not (instance and instance.status == "ready"

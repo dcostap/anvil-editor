@@ -1109,8 +1109,69 @@ local function record_video()
     benchmark.measure_count = frame_count
   end
 
-  for _ = 1, 5 do capture("before") end
-  if benchmark.scenario == "markdown-callout-shift" then
+  if benchmark.scenario == "markdown-table-tour" then
+    -- A fixed walk through Interactive Table Editing for visual review. It
+    -- captures each stage without asserting pixels.
+    local function settle_semantics()
+      local deadline = system.get_time() + 5
+      repeat
+        heartbeat(false)
+        coroutine.yield()
+      until model.peek(view.buffer).status == "ready" or system.get_time() > deadline
+      linewrapping.complete_async_reconstruction(view)
+    end
+    local function hover_fragment(line, predicate)
+      local render = view:get_line_render(line)
+      for _, fragment in ipairs(render and render.fragments or {}) do
+        if predicate(fragment) then
+          local line_x, line_y = view:get_line_screen_position(line)
+          local width = fragment.hit_width or fragment.width or 0
+          local height = fragment.widget and fragment.widget.height
+            or render.table_row_height or view:get_line_height()
+          view:on_mouse_moved(line_x + (fragment.layout_x or 0) + width / 2,
+            line_y + (fragment.draw_y_offset or 0) + height / 2, 0, 0)
+          return true
+        end
+      end
+      return false
+    end
+    local function find_line(pattern)
+      for line, text in ipairs(view.buffer.lines) do
+        if text:find(pattern) then return line end
+      end
+      error("table tour line not found: " .. pattern)
+    end
+    for _ = 1, 3 do capture("idle") end
+    local body = find_line("Write the parser")
+    view.buffer:set_selection(body, view.buffer.lines[body]:find("parser") + 6)
+    for _ = 1, 3 do capture("active-cell") end
+    view:on_text_input(" fast")
+    capture("typed")
+    settle_semantics()
+    for _ = 1, 2 do capture("typed-settled") end
+    command.perform("markdown:table_next_cell")
+    settle_semantics()
+    for _ = 1, 2 do capture("next-cell") end
+    hover_fragment(find_line("Task"), function(fragment)
+      return fragment.table_insert_control == "column"
+    end)
+    for _ = 1, 2 do capture("hover-column-control") end
+    local last = find_line("Ship")
+    view.buffer:set_selection(last, view.buffer.lines[last]:find("Ship") + 1)
+    command.perform("markdown:table_cell_below")
+    settle_semantics()
+    for _ = 1, 2 do capture("appended-row") end
+    view.buffer:set_selection(find_line("Text after"), 1)
+    settle_semantics()
+    for _ = 1, 2 do capture("final") end
+    benchmark.action_count = 1
+    benchmark.video_reproduced = true
+  else
+    for _ = 1, 5 do capture("before") end
+  end
+  if benchmark.scenario == "markdown-table-tour" then
+    -- Captured above.
+  elseif benchmark.scenario == "markdown-callout-shift" then
     -- The in-process test inspects pending presentation before worker delivery.
     local drain_limit = config.worker_pool_drain_max_messages
     config.worker_pool_drain_max_messages = 0
@@ -1134,7 +1195,9 @@ local function record_video()
   else
     error("unknown video scenario: " .. benchmark.scenario)
   end
-  for _ = 1, 8 do capture("published") end
+  if benchmark.scenario ~= "markdown-table-tour" then
+    for _ = 1, 8 do capture("published") end
+  end
   if benchmark.scenario == "markdown-task-overindent" then
     -- Move the caret off the task so Live Preview shows its new depth.
     view.buffer:set_selection(4, 1)
