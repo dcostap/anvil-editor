@@ -718,7 +718,10 @@ function table_presentation.layout(view, table_node, instance)
       -- glyphs. Keep a readable cell width and let Text View expose the
       -- table's horizontal overflow instead of crushing every column. A
       -- column with shorter content keeps its natural width.
-      math.min(widths[column], pad * 2 + font:get_width("MMMMMMMM"))
+      math.min(widths[column], pad * 2 + font:get_width("MMMMMMMM")),
+      -- Empty and very short columns stay wide enough to read as cells and
+      -- to click into.
+      pad * 2 + font:get_width("MMMMM")
     )
     for row_line = line1, line2 do
       local presentation = presentations[row_line] and presentations[row_line][column]

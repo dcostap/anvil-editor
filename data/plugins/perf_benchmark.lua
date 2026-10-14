@@ -1193,6 +1193,18 @@ local function record_video()
     view.buffer:set_selection(find_line("Text after"), 1)
     settle_semantics()
     for _ = 1, 2 do capture("final") end
+    local after = find_line("Text after")
+    view.buffer:set_selection(after, #view.buffer.lines[after])
+    command.perform("markdown:insert_table")
+    settle_semantics()
+    for _ = 1, 2 do capture("inserted-table") end
+    view:on_text_input("Item")
+    command.perform("markdown:table_next_cell")
+    view:on_text_input("Qty")
+    command.perform("markdown:table_cell_below")
+    view:on_text_input("3")
+    settle_semantics()
+    for _ = 1, 2 do capture("filled-table") end
     benchmark.action_count = 1
     benchmark.video_reproduced = true
   else
