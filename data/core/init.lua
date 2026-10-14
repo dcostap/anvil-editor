@@ -2992,6 +2992,11 @@ function core.step(next_frame_time, options)
   if core.startup_trace_active and startup then startup.stage_end(startup_event_stage, "ok",
     "count=" .. tostring(step_stats.event_count)) end
 
+  -- Publish quick Markdown parses for this frame's edits before layout, so
+  -- the frame draws real semantics rather than a provisional projection.
+  local markdown_model = package.loaded["core.markdown.model"]
+  if markdown_model then core.try(markdown_model.settle_pending) end
+
   local width, height = core.window:get_size()
 
   -- update

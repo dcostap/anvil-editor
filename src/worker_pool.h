@@ -142,6 +142,14 @@ AnvilWorkerPool *anvil_worker_pool_create(const char *name, int worker_count);
 void anvil_worker_pool_destroy(AnvilWorkerPool *pool, bool cancel_running);
 
 AnvilWorkerJob *anvil_worker_pool_submit(AnvilWorkerPool *pool, const AnvilWorkerJobSpec *spec, char **error);
+/* Runs a Markdown parse job on the calling thread. Returns NULL with
+ * over_budget set when the parse and its queries exceed budget_ms. */
+AnvilWorkerTreeSitterIndexResult *anvil_worker_markdown_parse_now(
+  const AnvilWorkerJobSpec *spec,
+  uint32_t budget_ms,
+  bool *over_budget,
+  char **error
+);
 void anvil_worker_job_retain(AnvilWorkerJob *job);
 void anvil_worker_job_release(AnvilWorkerJob *job);
 bool anvil_worker_pool_cancel(AnvilWorkerPool *pool, AnvilWorkerJob *job);

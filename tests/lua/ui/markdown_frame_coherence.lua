@@ -116,6 +116,34 @@ test.describe("Markdown frame coherence", function()
     )
   end)
 
+  test.it("draws the frame after a keystroke from the published parse", function(context)
+    local view, buffer, instance = make_view(
+      context, "# Heading with **bold** text\nplain"
+    )
+    buffer:set_selection(1, #buffer.lines[1])
+    view:get_line_render(1)
+
+    view:on_text_input("!")
+    test.equal(instance.status, "pending")
+
+    local poll_event = system.poll_event
+    system.poll_event = function() return nil end
+    local ok, err = pcall(core.step, system.get_time(), { immediate = true })
+    system.poll_event = poll_event
+    if not ok then error(err, 0) end
+
+    test.equal(instance.status, "ready", "the frame drew before its parse published")
+    test.equal(instance.published_revision, buffer.text_revision)
+    local generation = instance.generation
+    local pool = worker_pool.current_system()
+    local deadline = system.get_time() + 0.2
+    while system.get_time() < deadline do
+      if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+      coroutine.yield(0.005)
+    end
+    test.equal(instance.generation, generation, "the worker published the same revision again")
+  end)
+
   test.it("keeps heading inline presentation unchanged at publication", function(context)
     local view, buffer, instance = make_view(
       context, "# Heading with **bold** text\nplain"
@@ -431,6 +459,52 @@ test.describe("Markdown frame coherence", function()
       pending_next_y, idle_next_y,
       "the following line moved while the list item edit was pending"
     )
+  end)
+
+  test.it("hides an image link's source in the frame after typing past it", function(context)
+    config.markdown_live_render_images = true
+    local image_path = USERDIR .. PATHSEP .. "frame-coherence-reveal.png"
+    local file = test.not_nil(io.open(image_path, "wb"))
+    file:write("png")
+    file:close()
+    local load_image = canvas.load_image
+    canvas.load_image = function()
+      local image = { get_size = function() return 300, 120 end }
+      image.scaled = function() return image end
+      return image
+    end
+    local poll_event = system.poll_event
+    local ok, err = pcall(function()
+      local link = "![[frame-coherence-reveal.png]]"
+      local view, buffer, instance = make_view(
+        context, "before " .. link .. "\nnext line",
+        {
+          wrapped = true,
+          filename = USERDIR .. PATHSEP .. "frame-coherence-reveal.md",
+        }
+      )
+      buffer:set_selection(1, #"before " + #link + 1)
+      view:get_line_render(1)
+      view:update()
+      test.ok(
+        visible_signature(view, 1):find(link, 1, true),
+        "the caret beside the link did not reveal its source"
+      )
+
+      view:on_text_input("x")
+      system.poll_event = function() return nil end
+      core.step(system.get_time(), { immediate = true })
+      system.poll_event = poll_event
+
+      local drawn = visible_signature(view, 1)
+      test.equal(drawn:find(link, 1, true), nil, "the frame still showed the link source")
+      wait_ready(instance)
+      test.equal(drawn, visible_signature(view, 1), "publication changed the line again")
+    end)
+    system.poll_event = poll_event
+    canvas.load_image = load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
   end)
 
   test.it("keeps a revealed image link in place while typing before it", function(context)

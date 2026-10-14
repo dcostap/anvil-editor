@@ -1209,6 +1209,8 @@ static void run_language_detect(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
 typedef struct AnvilWorkerTSParseRun {
   uint64_t started_ticks;
   uint32_t timeout_ms;
+  /* Nonzero for an input-thread run. Passing it cancels the whole run. */
+  uint64_t deadline_ns;
   AnvilWorkerJob *job;
   AnvilWorkerCancelToken *cancel_token;
   bool timed_out;
@@ -1219,15 +1221,21 @@ static bool worker_job_or_token_cancelled(AnvilWorkerJob *job, AnvilWorkerCancel
   return job_cancelled(job) || anvil_worker_cancel_token_cancelled(token);
 }
 
+static bool treesitter_run_deadline_passed(const AnvilWorkerTSParseRun *run) {
+  return run && run->deadline_ns && SDL_GetTicksNS() >= run->deadline_ns;
+}
+
 static bool treesitter_cancel_callback(void *payload) {
   AnvilWorkerTSParseRun *run = (AnvilWorkerTSParseRun *)payload;
-  return run && worker_job_or_token_cancelled(run->job, run->cancel_token);
+  return run && (worker_job_or_token_cancelled(run->job, run->cancel_token)
+    || treesitter_run_deadline_passed(run));
 }
 
 static bool treesitter_deadline_callback(void *payload) {
   AnvilWorkerTSParseRun *run = (AnvilWorkerTSParseRun *)payload;
   if (!run) return false;
-  if (worker_job_or_token_cancelled(run->job, run->cancel_token)) {
+  if (worker_job_or_token_cancelled(run->job, run->cancel_token)
+      || treesitter_run_deadline_passed(run)) {
     run->cancelled = true;
     return true;
   }
@@ -2218,10 +2226,27 @@ static bool run_markdown_inline_query(
   return true;
 }
 
-static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job) {
-  AnvilWorkerPool *pool = context->pool;
+typedef enum MarkdownParseOutcome {
+  MARKDOWN_PARSE_OK,
+  MARKDOWN_PARSE_CANCELLED,
+  MARKDOWN_PARSE_FAILED,
+} MarkdownParseOutcome;
+
+/* Parses one Markdown source and runs its block and inline queries. The
+ * worker job and the bounded input-thread parse share this path. A nonzero
+ * deadline cancels the whole run once it passes. Returned errors use the
+ * pool allocator. */
+static AnvilWorkerTreeSitterIndexResult *execute_markdown_parse(
+  AnvilWorkerJob *job,
+  TSQueryCursor **query_cursor,
+  uint64_t deadline_ns,
+  MarkdownParseOutcome *outcome,
+  char **out_error
+) {
   uint64_t job_started = SDL_GetTicks();
   char *error = NULL;
+  *outcome = MARKDOWN_PARSE_FAILED;
+  *out_error = NULL;
   size_t owned_text_len = 0;
   char *owned_text;
   if (job->text) {
@@ -2233,40 +2258,28 @@ static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job)
     owned_text = read_file_text(job->path, &owned_text_len, job->max_file_bytes, &error);
   }
   if (!owned_text) {
-    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
-    AnvilWorkerResult *result = result_new(job, "error");
-    if (result) result->error = error ? error : pool_strdup("failed to read Markdown input");
-    enqueue_result(pool, result);
-    return;
+    *out_error = error ? error : pool_strdup("failed to read Markdown input");
+    return NULL;
   }
   uint32_t normalized_text_len = 0;
   if (!validate_text_buffer(owned_text, owned_text_len, &normalized_text_len, &error)) {
     free(owned_text);
-    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
-    AnvilWorkerResult *result = result_new(job, "error");
-    if (result) result->error = error ? error : pool_strdup("failed to validate Markdown input");
-    enqueue_result(pool, result);
-    return;
+    *out_error = error ? error : pool_strdup("failed to validate Markdown input");
+    return NULL;
   }
   AnvilTSSnapshot *snapshot = anvil_ts_snapshot_new_take_text(owned_text, normalized_text_len, &error);
   if (!snapshot) {
-    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
-    AnvilWorkerResult *result = result_new(job, "error");
-    if (result) result->error = error ? pool_strdup(error) : pool_strdup("failed to create Markdown snapshot");
+    *out_error = error ? pool_strdup(error) : pool_strdup("failed to create Markdown snapshot");
     free(error);
-    enqueue_result(pool, result);
-    return;
+    return NULL;
   }
 
-  if ((job->outline_query || job->usage_query) && !context->query_cursor) {
-    context->query_cursor = ts_query_cursor_new();
-    if (!context->query_cursor) {
+  if ((job->outline_query || job->usage_query) && !*query_cursor) {
+    *query_cursor = ts_query_cursor_new();
+    if (!*query_cursor) {
       anvil_ts_snapshot_free(snapshot);
-      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
-      AnvilWorkerResult *result = result_new(job, "error");
-      if (result) result->error = pool_strdup("failed to initialize Markdown query cursor");
-      enqueue_result(pool, result);
-      return;
+      *out_error = pool_strdup("failed to initialize Markdown query cursor");
+      return NULL;
     }
   }
   AnvilWorkerCancelToken *cancel_token = job->cancel_token ? anvil_worker_cancel_token_open(job->cancel_token) : NULL;
@@ -2274,6 +2287,7 @@ static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job)
   memset(&run, 0, sizeof(run));
   run.started_ticks = SDL_GetTicks();
   run.timeout_ms = job->parse_timeout_ms ? job->parse_timeout_ms : 750;
+  run.deadline_ns = deadline_ns;
   run.job = job;
   run.cancel_token = cancel_token;
   AnvilMarkdownTree *tree = anvil_markdown_tree_parse_incremental(
@@ -2286,21 +2300,18 @@ static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job)
   );
   uint64_t parse_ms = SDL_GetTicks() - run.started_ticks;
   if (!tree) {
-    bool cancelled = worker_job_or_token_cancelled(job, cancel_token) || (error && strstr(error, "cancelled"));
+    bool cancelled = worker_job_or_token_cancelled(job, cancel_token)
+      || treesitter_run_deadline_passed(&run)
+      || (error && strstr(error, "cancelled"));
     anvil_worker_cancel_token_release(cancel_token);
     anvil_ts_snapshot_free(snapshot);
     if (cancelled) {
-      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
-      enqueue_simple_result(pool, job, "cancelled");
-      free(error);
+      *outcome = MARKDOWN_PARSE_CANCELLED;
     } else {
-      SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
-      AnvilWorkerResult *result = result_new(job, "error");
-      if (result) result->error = error ? pool_strdup(error) : pool_strdup("Markdown parse failed");
-      free(error);
-      enqueue_result(pool, result);
+      *out_error = error ? pool_strdup(error) : pool_strdup("Markdown parse failed");
     }
-    return;
+    free(error);
+    return NULL;
   }
 
   AnvilWorkerTreeSitterIndexResult *index_result = (AnvilWorkerTreeSitterIndexResult *) SDL_calloc(1, sizeof(*index_result));
@@ -2308,11 +2319,8 @@ static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job)
     anvil_markdown_tree_free(tree);
     anvil_worker_cancel_token_release(cancel_token);
     anvil_ts_snapshot_free(snapshot);
-    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
-    AnvilWorkerResult *result = result_new(job, "error");
-    if (result) result->error = pool_strdup("out of memory allocating Markdown result");
-    enqueue_result(pool, result);
-    return;
+    *out_error = pool_strdup("out of memory allocating Markdown result");
+    return NULL;
   }
   SDL_SetAtomicInt(&index_result->refcount, 1);
   index_result->language = pool_strdup("markdown");
@@ -2332,11 +2340,8 @@ static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job)
     anvil_markdown_tree_free(tree);
     anvil_worker_cancel_token_release(cancel_token);
     anvil_ts_snapshot_free(snapshot);
-    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
-    AnvilWorkerResult *result = result_new(job, "error");
-    if (result) result->error = pool_strdup("out of memory storing Markdown result");
-    enqueue_result(pool, result);
-    return;
+    *out_error = pool_strdup("out of memory storing Markdown result");
+    return NULL;
   }
   const AnvilTSLanguage *block_language = anvil_ts_language_by_id("markdown");
   bool same_outline_query = job->previous_result && job->outline_query &&
@@ -2366,7 +2371,7 @@ static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job)
       snapshot,
       have_identity_edit ? &identity_edit : NULL,
       &run,
-      context->query_cursor,
+      *query_cursor,
       job->match_limit ? job->match_limit : 50000,
       job->max_captures ? job->max_captures : 50000,
       job->query_timeout_ms ? job->query_timeout_ms : 20,
@@ -2383,7 +2388,7 @@ static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job)
       snapshot,
       have_identity_edit ? &identity_edit : NULL,
       &run,
-      context->query_cursor,
+      *query_cursor,
       job->usage_match_limit ? job->usage_match_limit : (job->match_limit ? job->match_limit : 50000),
       job->usage_max_captures ? job->usage_max_captures : (job->max_captures ? job->max_captures : 50000),
       job->usage_query_timeout_ms ? job->usage_query_timeout_ms : (job->query_timeout_ms ? job->query_timeout_ms : 20)
@@ -2482,21 +2487,41 @@ static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job)
     anvil_markdown_tree_free(tree);
     anvil_worker_treesitter_index_result_free(index_result);
     SDL_free(fatal_error);
-    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
-    enqueue_simple_result(pool, job, "cancelled");
-    return;
+    *outcome = MARKDOWN_PARSE_CANCELLED;
+    return NULL;
   }
   if (fatal_error) {
     anvil_markdown_tree_free(tree);
     anvil_worker_treesitter_index_result_free(index_result);
-    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
-    AnvilWorkerResult *result = result_new(job, "error");
-    if (result) result->error = fatal_error;
-    enqueue_result(pool, result);
-    return;
+    *out_error = fatal_error;
+    return NULL;
   }
 
   index_result->markdown_tree = tree;
+  *outcome = MARKDOWN_PARSE_OK;
+  return index_result;
+}
+
+static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job) {
+  AnvilWorkerPool *pool = context->pool;
+  MarkdownParseOutcome outcome = MARKDOWN_PARSE_FAILED;
+  char *error = NULL;
+  AnvilWorkerTreeSitterIndexResult *index_result =
+    execute_markdown_parse(job, &context->query_cursor, 0, &outcome, &error);
+  if (outcome == MARKDOWN_PARSE_CANCELLED) {
+    SDL_free(error);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+    enqueue_simple_result(pool, job, "cancelled");
+    return;
+  }
+  if (!index_result) {
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *result = result_new(job, "error");
+    if (result) result->error = error ? error : pool_strdup("Markdown parse failed");
+    else SDL_free(error);
+    enqueue_result(pool, result);
+    return;
+  }
   AnvilWorkerResult *result = result_new(job, "result");
   if (!result) {
     anvil_worker_treesitter_index_result_free(index_result);
@@ -2508,6 +2533,62 @@ static void run_markdown_parse(AnvilWorkerContext *context, AnvilWorkerJob *job)
   enqueue_result(pool, result);
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
   enqueue_simple_result(pool, job, "final");
+}
+
+AnvilWorkerTreeSitterIndexResult *anvil_worker_markdown_parse_now(
+  const AnvilWorkerJobSpec *spec,
+  uint32_t budget_ms,
+  bool *over_budget,
+  char **error
+) {
+  if (over_budget) *over_budget = false;
+  if (error) *error = NULL;
+  if (!spec || !spec->text || spec->text_len > UINT32_MAX ||
+      spec->outline_query_len > UINT32_MAX || spec->usage_query_len > UINT32_MAX) {
+    pool_set_error(error, "invalid Markdown parse input");
+    return NULL;
+  }
+  uint64_t deadline_ns = SDL_GetTicksNS() + (uint64_t)budget_ms * SDL_NS_PER_MS;
+  AnvilWorkerJob job;
+  memset(&job, 0, sizeof(job));
+  job.text_len = spec->text_len;
+  job.text = pool_textdup(spec->text, spec->text_len);
+  job.outline_query_len = spec->outline_query ? spec->outline_query_len : 0;
+  job.usage_query_len = spec->usage_query ? spec->usage_query_len : 0;
+  job.outline_query = spec->outline_query ? pool_memdup0(spec->outline_query, job.outline_query_len) : NULL;
+  job.usage_query = spec->usage_query ? pool_memdup0(spec->usage_query, job.usage_query_len) : NULL;
+  job.parse_timeout_ms = spec->parse_timeout_ms;
+  job.query_timeout_ms = spec->query_timeout_ms;
+  job.match_limit = spec->match_limit;
+  job.max_captures = spec->max_captures;
+  job.usage_query_timeout_ms = spec->usage_query_timeout_ms;
+  job.usage_match_limit = spec->usage_match_limit;
+  job.usage_max_captures = spec->usage_max_captures;
+  job.result_capabilities = spec->result_capabilities_set
+    ? spec->result_capabilities
+    : (ANVIL_WORKER_TS_CAPTURE_PAGING | ANVIL_WORKER_TS_LINE_RANGE_LOOKUP);
+  job.previous_result = spec->previous_result;
+  TSQueryCursor *query_cursor = NULL;
+  MarkdownParseOutcome outcome = MARKDOWN_PARSE_FAILED;
+  char *parse_error = NULL;
+  AnvilWorkerTreeSitterIndexResult *result = NULL;
+  if (!job.text || (spec->outline_query && !job.outline_query) ||
+      (spec->usage_query && !job.usage_query)) {
+    parse_error = pool_strdup("out of memory copying Markdown parse input");
+  } else {
+    result = execute_markdown_parse(&job, &query_cursor, deadline_ns, &outcome, &parse_error);
+  }
+  if (query_cursor) ts_query_cursor_delete(query_cursor);
+  free(job.text);
+  SDL_free(job.outline_query);
+  SDL_free(job.usage_query);
+  if (!result && outcome == MARKDOWN_PARSE_CANCELLED && over_budget) *over_budget = true;
+  if (!result && error) {
+    *error = parse_error ? parse_error : pool_strdup("Markdown parse exceeded its budget");
+  } else {
+    SDL_free(parse_error);
+  }
+  return result;
 }
 
 static AnvilWorkerTreeSitterIndexResult *execute_project_batch_file(
