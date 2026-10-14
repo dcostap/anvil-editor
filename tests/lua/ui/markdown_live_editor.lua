@@ -2598,6 +2598,43 @@ test.describe("Markdown Live Preview", function()
     test.equal(immediate_checkbox.widget.checked, true)
   end)
 
+  test.it("toggles a task checkbox on a line that also shows an image", function()
+    local previous_images = config.markdown_live_render_images
+    local previous_load = canvas.load_image_data
+    config.markdown_live_render_images = true
+    canvas.load_image_data = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local ok, err = pcall(function()
+      local view, buffer = make_view(
+        "- [ ] todo ![Logo](data:image/png;base64,iVBORw0K)\nplain",
+        "task-image-toggle.md"
+      )
+      buffer:set_selection(2, 3)
+      refresh(view)
+      local render = test.not_nil(view:get_line_render(1))
+      local checkbox
+      for _, fragment in ipairs(render.fragments or {}) do
+        if fragment.markdown_task_checkbox then checkbox = fragment break end
+      end
+      checkbox = test.not_nil(checkbox)
+      local line_x, line_y = view:get_line_screen_position(1)
+      local checkbox_x = line_x
+        + view:get_line_render_col_x_offset(render, checkbox.source_col1) + 2
+      local hit = view:get_render_widget_at_position(checkbox_x, line_y + 2)
+      test.ok(hit and hit.fragment.markdown_task_checkbox,
+        "the checkbox on the image line did not receive the hover hit")
+      test.equal(view:on_mouse_pressed("left", checkbox_x, line_y + 2, 1), true)
+      test.equal(buffer.lines[1], "- [x] todo ![Logo](data:image/png;base64,iVBORw0K)\n")
+    end)
+    config.markdown_live_render_images = previous_images
+    canvas.load_image_data = previous_load
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps checkbox toggle layout work local to the task row", function()
     local view, buffer = make_view(table.concat({
       "# Before",

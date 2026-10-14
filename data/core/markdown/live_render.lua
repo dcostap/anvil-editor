@@ -3510,7 +3510,9 @@ function edit_visual_projection.pending_list_render(
       local col1 = fragment.source_col1 or 1
       if col1 >= old_prefix.content_col
         and not edit_visual_projection.is_list_prefix_fragment(fragment)
-        and not fragment.widget
+        -- Image blocks own the item's lower rows. Dropping one collapses
+        -- the item until publication restores it.
+        and (not fragment.widget or fragment.image_block)
       then
         local copy = {}
         for key, value in pairs(fragment) do copy[key] = value end
@@ -4391,8 +4393,8 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     if render.position_rows then
       render.position_rows = nil
       render.layout_height = nil
-      render = layout_inline_image_rows(view, source, render)
     end
+    render = layout_inline_image_rows(view, source, render)
     render.markdown_pending_code_background = captured and captured.fenced
       or render.markdown_code_block or nil
     local entry = pending_entry(

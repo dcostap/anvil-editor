@@ -397,4 +397,39 @@ test.describe("Markdown frame coherence", function()
       )
     )
   end)
+
+  test.it("keeps a list item's image rendered while typing in that item", function(context)
+    config.markdown_live_render_images = true
+    canvas.load_image_data = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local view, buffer, instance = make_view(
+      context, "- item ![Logo](data:image/png;base64,iVBORw0K) after\nnext line"
+    )
+    buffer:set_selection(1, #"- item" + 1)
+    view:get_line_render(1)
+    local _, idle_next_y = view:get_line_screen_position(2)
+
+    view:on_text_input("x")
+
+    test.equal(instance.status, "pending")
+    local pending = visible_signature(view, 1)
+    local _, pending_next_y = view:get_line_screen_position(2)
+    wait_ready(instance)
+    local published = visible_signature(view, 1)
+    test.equal(
+      pending, published,
+      string.format(
+        "the list item changed from %q to %q at publication",
+        pending, published
+      )
+    )
+    test.equal(
+      pending_next_y, idle_next_y,
+      "the following line moved while the list item edit was pending"
+    )
+  end)
 end)
