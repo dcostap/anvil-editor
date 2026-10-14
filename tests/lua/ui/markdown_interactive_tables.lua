@@ -779,7 +779,9 @@ test.describe("Markdown Interactive Table Editing", function()
   end)
 
   test.it("reveals insertion controls progressively as the pointer approaches", function()
-    local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n")
+    local view, buffer = make_view(
+      "| Alpha column | Beta column |\n| --- | --- |\n| one | two |\n"
+    )
     buffer:set_selection(3, 4)
     refresh(view)
     local control = test.not_nil(table_control(view, 1, "column", 2))
@@ -812,6 +814,51 @@ test.describe("Markdown Interactive Table Editing", function()
     cells = table_cells(view, 3)
     test.equal(cells[1].text_lines[1].text, "`one`")
     test.equal(cells[2].text_lines[1].text, "two")
+  end)
+
+  test.it("renders inline formatting and link labels inside cells", function()
+    local view, buffer = make_view(
+      "| A | B |\n| --- | --- |\n| ship **done** now | see [the docs](https://example.com/a/b) |\n\nplain"
+    )
+    buffer:set_selection(5, 1)
+    refresh(view)
+    local cells = table_cells(view, 3)
+    test.equal(cells[1].text_lines[1].text, "ship done now")
+    test.equal(cells[2].text_lines[1].text, "see the docs")
+    local strong
+    for _, run in ipairs(cells[1].text_lines[1].runs or {}) do
+      if run.text == "done" then strong = run end
+    end
+    test.not_nil(strong, "bold text did not render as its own run")
+    test.ok(strong.font ~= cells[1].font, "bold text used the cell's plain font")
+  end)
+
+  test.it("reveals only the syntax of the span holding the caret in an active cell", function()
+    local view, buffer = make_view("| A | B |\n| --- | --- |\n| **a** b | two |\n\nplain")
+    buffer:set_selection(3, buffer.lines[3]:find("b |", 1, true) + 1)
+    refresh(view)
+    test.equal(table_cells(view, 3)[1].text_lines[1].text, "a b")
+
+    buffer:set_selection(3, buffer.lines[3]:find("a", 1, true) + 1)
+    test.equal(table_cells(view, 3)[1].text_lines[1].text, "**a** b")
+  end)
+
+  test.it("places the caret after hidden syntax when clicking rendered text", function()
+    local view, buffer = make_view("| A | B |\n| --- | --- |\n| **bold** x | two |\n\nplain")
+    buffer:set_selection(5, 1)
+    refresh(view)
+    local cell = table_cells(view, 3)[1]
+    local line_x, line_y = view:get_line_screen_position(3)
+    local runs = test.not_nil(cell.text_lines[1].runs)
+    local x_run
+    for _, run in ipairs(runs) do
+      if run.text and run.text:match("x$") then x_run = run end
+    end
+    x_run = test.not_nil(x_run)
+    local x = line_x + cell.layout_x + cell.text_lines[1].x_offset + x_run.x + x_run.width
+    local y = line_y + cell.text_y_padding + 2
+    local line, col = view:resolve_screen_position(x, y)
+    test.same({ line, col }, { 3, buffer.lines[3]:find("x", 1, true) + 1 })
   end)
 
   test.it("refreshes elided active-cell identity within one row", function()

@@ -184,8 +184,8 @@ Some intro paragraph before the table.
 | Task | Owner | Status | Estimate |
 | :--- | :---: | --- | ---: |
 | Write the parser | Ana | **done** | 3 d |
-| Draw the grid | Bo | in progress | 5 d |
-| Ship `v1.0` | Cy | todo | 1 d |
+| Draw the grid | *Bo* | ~~blocked~~ in progress | 5 d |
+| Ship `v1.0` | Cy | todo, see [notes](https://example.com/notes) | 1 d |
 
 Text after the table.
 """

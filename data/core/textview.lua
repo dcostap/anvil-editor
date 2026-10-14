@@ -5408,12 +5408,14 @@ end
 ---Resolve highlight geometry for a Buffer position with an explicit boundary side.
 ---@return number y
 ---@return number height
+---@return boolean? suppressed True when the position's row draws no Current Line Highlight
 function TextView:get_position_highlight_geometry(line, col, line_end)
   local _, row = self:get_position_line_render_row(line, col or 1)
   if row then
     local _, line_y = self:get_line_screen_position(line)
     return line_y + (row.highlight_y_offset or row.y_offset or 0),
-      math.max(1, row.highlight_height or row.height or self:get_line_height())
+      math.max(1, row.highlight_height or row.height or self:get_line_height()),
+      row.suppress_line_highlight
   end
   local y = self:get_position_screen_y(line, col, line_end)
   local row_height = self:get_position_visual_row_height(
@@ -5652,9 +5654,31 @@ function TextView:get_line_render_native_wrap(render_line, width, mode, start_co
   return splits
 end
 
+---Return the x offset of `col` within a position row drawn as styled runs.
+---Hidden syntax has no width, and a run whose text is not its source (such as
+---a link label) maps its interior columns to its start.
+local function position_runs_col_x(runs, col)
+  local x = 0
+  for _, run in ipairs(runs) do
+    if col <= run.col1 then return run.x end
+    if col < run.col2 then
+      if run.exact then
+        return run.x + run.font:get_width(run.text:sub(1, col - run.col1))
+      end
+      return run.x
+    end
+    x = run.x + (run.width or 0)
+  end
+  return x
+end
+
 function TextView:get_line_render_col_x_offset(render_line, col, position_row)
-  local xoffset = get_line_render_raw_col_x_offset(self, render_line, col)
   local row = position_row or self:get_line_render_position_row(render_line, col)
+  if row and row.runs then
+    return (render_line.x_offset or 0) + (row.x_offset or 0)
+      + position_runs_col_x(row.runs, col)
+  end
+  local xoffset = get_line_render_raw_col_x_offset(self, render_line, col)
   if not row then return xoffset end
   local row_start = get_line_render_raw_col_x_offset(
     self, render_line, row.source_col1 or 1
@@ -6843,10 +6867,10 @@ function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
     for entry in self:iter_visible_visual_rows() do
       local position = highlighted_rows[entry.visual_row]
       if position then
-        local y, height = self:get_position_highlight_geometry(
+        local y, height, suppressed = self:get_position_highlight_geometry(
           position.line, position.col, position.line_end
         )
-        draw_highlight(self.position.x, y, height)
+        if not suppressed then draw_highlight(self.position.x, y, height) end
       end
     end
     return
@@ -6856,10 +6880,10 @@ function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
       if line1 > maxline then break end
       if line1 >= minline and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2)) then
         local line_end = linewrapping.has_wrapped_line_end_affinity(self, line1, col1)
-        local y, height = self:get_position_highlight_geometry(
+        local y, height, suppressed = self:get_position_highlight_geometry(
           line1, col1, line_end
         )
-        draw_highlight(self.position.x, y, height)
+        if not suppressed then draw_highlight(self.position.x, y, height) end
       end
     end
     return
@@ -6869,8 +6893,8 @@ function TextView:draw_current_line_highlights(minline, maxline, draw_highlight)
     if line1 >= minline
     and (hcl ~= "no_selection" or (line1 == line2 and col1 == col2))
     then
-      local y, height = self:get_position_highlight_geometry(line1, col1, false)
-      draw_highlight(self.position.x, y, height)
+      local y, height, suppressed = self:get_position_highlight_geometry(line1, col1, false)
+      if not suppressed then draw_highlight(self.position.x, y, height) end
     end
   end
 end
@@ -7277,12 +7301,47 @@ end
 local function draw_render_fragment_background(fragment, x, y, width, height, force)
   if fragment.background and (force or not fragment.background_under_selection) then
     renderer.draw_rect(x, y, width, height, fragment.background)
+    if fragment.background_overlay then
+      renderer.draw_rect(x, y, width, height, fragment.background_overlay)
+    end
   end
   if fragment_is_hovered(fragment) and fragment_uses_hand_cursor(fragment) then
     renderer.draw_rect(
       x, y, width, height,
       fragment.hover_background or style.interactive_hover_background
     )
+  end
+end
+
+---Draw one visual line of styled runs, such as a Markdown table cell line.
+---Runs share the vertical center of `reference_font`, the line's base font.
+local function draw_render_text_runs(runs, x, y, reference_font, default_color)
+  local thickness = math.max(1, common.round(SCALE))
+  local reference_height = reference_font:get_height()
+  for _, run in ipairs(runs) do
+    if not run.hidden and run.text and run.text ~= "" then
+      local font = run.font
+      local run_x = x + run.x
+      local text_y = y + math.floor((reference_height - font:get_height()) / 2)
+      if run.background then
+        local padding = math.max(1, common.round(SCALE * 2))
+        renderer.draw_rect(
+          run_x - padding, y, run.width + padding * 2, reference_height, run.background
+        )
+      end
+      local color = run.color or default_color
+      renderer.draw_text(font, run.text, run_x, text_y, color)
+      if run.strikethrough then
+        renderer.draw_rect(
+          run_x, text_y + math.floor(font:get_height() / 2), run.width, thickness, color
+        )
+      end
+      if run.underline then
+        renderer.draw_rect(
+          run_x, text_y + font:get_height() - thickness, run.width, thickness, color
+        )
+      end
+    end
   end
 end
 
@@ -7340,6 +7399,10 @@ local function draw_render_fragment_text(
       local line_text = type(line) == "table" and line.text or line
       local line_x_offset = type(line) == "table" and line.x_offset
         or fragment.text_x_offset or 0
+      if type(line) == "table" and line.runs then
+        draw_render_text_runs(line.runs, x + line_x_offset, line_y, font, color)
+        line_text = nil
+      end
       if fragment.text_line_background and line_text and line_text ~= "" then
         local padding = fragment.text_line_background_padding or 0
         renderer.draw_rect(
@@ -8558,13 +8621,15 @@ function TextView:draw_line_body(line, x, y)
       for i = visible_idx1, visible_idx2 do
         local position = highlight_rows[i]
         if position then
-          local highlight_y, highlight_height =
+          local highlight_y, highlight_height, suppressed =
             self:get_position_highlight_geometry(
               line, position.col, position.line_end
             )
-          self:draw_line_highlight(
-            x + self.scroll.x, highlight_y, highlight_height
-          )
+          if not suppressed then
+            self:draw_line_highlight(
+              x + self.scroll.x, highlight_y, highlight_height
+            )
+          end
         end
       end
     end
@@ -8666,11 +8731,13 @@ function TextView:draw_line_body(line, x, y)
       and (self:get_current_line_highlight_mode() ~= "no_selection"
         or (line1 == line2 and col1 == col2))
       then
-        local highlight_y, highlight_height =
+        local highlight_y, highlight_height, suppressed =
           self:get_position_highlight_geometry(line, col1, false)
-        self:draw_line_highlight(
-          x + self.scroll.x, highlight_y, highlight_height
-        )
+        if not suppressed then
+          self:draw_line_highlight(
+            x + self.scroll.x, highlight_y, highlight_height
+          )
+        end
         break
       end
     end

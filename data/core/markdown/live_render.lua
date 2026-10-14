@@ -1593,6 +1593,94 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
   return fragments
 end
 
+local function splice_inline_pieces(pieces, line_text, col1, col2, inserted)
+  local result = {}
+  for _, piece in ipairs(pieces) do
+    local a, b = piece.source_col1, piece.source_col2
+    if b <= col1 or a >= col2 then
+      result[#result + 1] = piece
+    elseif piece.hidden or piece.text == line_text:sub(a, b - 1) then
+      local function part(part_col1, part_col2)
+        local copy = {}
+        for key, value in pairs(piece) do copy[key] = value end
+        copy.source_col1, copy.source_col2 = part_col1, part_col2
+        if not piece.hidden then copy.text = line_text:sub(part_col1, part_col2 - 1) end
+        result[#result + 1] = copy
+      end
+      if a < col1 then part(a, col1) end
+      if b > col2 then part(col2, b) end
+    end
+  end
+  for _, piece in ipairs(inserted) do result[#result + 1] = piece end
+  table.sort(result, function(a, b) return a.source_col1 < b.source_col1 end)
+  return result
+end
+
+---Partition a table row into prose-style inline pieces for its cells.
+---`reveal` is "none", "all" (formatting syntax visible, links collapsed), or a
+---selection state whose spans show syntax.
+---Return nil while the row has no semantic nodes to present.
+table_presentation.inline_pieces = function(view, line_text, line, reveal, base)
+  if not semantic_line(view, line) then return nil end
+  local reveal_units
+  if reveal == "all" then
+    reveal_units = { { whole_line = true } }
+  elseif type(reveal) == "table" then
+    reveal_units = reveal_units_for_line(view, line, reveal)
+  else
+    reveal_units = {}
+  end
+  local opts = {
+    base_font = base.base_font, base_bold = base.base_bold,
+    base_italic_font = base.base_italic_font, color = base.color,
+  }
+  local pieces, col = {}, 1
+  local function plain(col1, col2)
+    if col2 <= col1 then return end
+    pieces[#pieces + 1] = {
+      source_col1 = col1, source_col2 = col2, text = line_text:sub(col1, col2 - 1),
+      font = base.base_font, color = base.color, plain = true,
+    }
+  end
+  local formatting = semantic_formatting_fragments(view, line_text, line, reveal_units, opts)
+  for _, fragment in ipairs(formatting) do
+    plain(col, fragment.source_col1)
+    pieces[#pieces + 1] = fragment
+    col = math.max(col, fragment.source_col2)
+  end
+  plain(col, #line_text + 1)
+  for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
+    local inserted
+    -- Table layout sizes for "all" so revealed markers never resize a column.
+    -- A revealed link destination is usually long, so it wraps inside the cell
+    -- while it is edited instead of widening the column permanently.
+    if reveal ~= "all"
+      and reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
+    then
+      inserted = revealed_link_fragments(view, line_text, line, span, opts)
+    else
+      local link = span.link
+      local kind, icon = attachment_kind(link.path or link.raw_target)
+      local label = textual_link_label(link)
+      local fragment = {
+        source_col1 = span.col1, source_col2 = span.col2,
+        text = kind and (icon .. " " .. label) or label,
+      }
+      if not kind then
+        fragment.text_source_col1, fragment.text_source_col2 =
+          link_text_source_range(line_text, span, label)
+      end
+      fragment = decorate_link_fragment(view, line, span, fragment, opts)
+      if fragment and kind then fragment.background = style.markdown_live_attachment_bg end
+      inserted = fragment and { fragment } or nil
+    end
+    if inserted then
+      pieces = splice_inline_pieces(pieces, line_text, span.col1, span.col2, inserted)
+    end
+  end
+  return pieces
+end
+
 local view_in_source_mode
 
 local callout_runtime = {}

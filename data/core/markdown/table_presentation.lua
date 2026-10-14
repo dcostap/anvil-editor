@@ -224,6 +224,325 @@ local function table_cell_natural_width(font, text, literal_breaks)
   end
 end
 
+-- Inline Markdown inside cells ---------------------------------------------
+--
+-- Live Preview registers `table_presentation.inline_pieces(view, text, line,
+-- reveal, base)`. It returns prose-style fragments that partition one source
+-- row: formatting, links, and hidden syntax markers. A cell renders the pieces
+-- inside its content range as styled runs. `reveal` is "none", "all" (every
+-- marker visible, the widest presentation), or a selection state.
+
+local function normalize_runs(line_text, pieces)
+  local runs = {}
+  local function add(run)
+    if run.col2 > run.col1 or not run.hidden then runs[#runs + 1] = run end
+  end
+  for _, piece in ipairs(pieces or {}) do
+    local col1 = piece.source_col1 or 1
+    local col2 = piece.source_col2 or col1
+    local function styled(run)
+      run.font = piece.font
+      run.color = piece.color
+      run.background = piece.background
+      run.strikethrough = piece.strikethrough
+      run.underline = piece.underline
+      run.plain = piece.plain
+      run.link = piece.link ~= nil or nil
+      return run
+    end
+    if piece.hidden or not piece.text then
+      add({ col1 = col1, col2 = col2, hidden = true })
+    elseif piece.text == line_text:sub(col1, col2 - 1) then
+      add(styled({ col1 = col1, col2 = col2, text = piece.text, exact = true }))
+    elseif piece.text_source_col1 and piece.text_source_col2
+      and line_text:sub(piece.text_source_col1, piece.text_source_col2 - 1) == piece.text
+    then
+      add({ col1 = col1, col2 = piece.text_source_col1, hidden = true })
+      add(styled({
+        col1 = piece.text_source_col1, col2 = piece.text_source_col2,
+        text = piece.text, exact = true,
+      }))
+      add({ col1 = piece.text_source_col2, col2 = col2, hidden = true })
+    else
+      add(styled({ col1 = col1, col2 = col2, text = piece.text }))
+    end
+  end
+  return runs
+end
+
+local function slice_runs(runs, col1, col2)
+  local sliced = {}
+  for _, run in ipairs(runs) do
+    if run.col2 > col1 and run.col1 < col2 then
+      if run.exact or run.hidden then
+        local a, b = math.max(col1, run.col1), math.min(col2, run.col2)
+        local copy = {}
+        for key, value in pairs(run) do copy[key] = value end
+        copy.col1, copy.col2 = a, b
+        if run.exact then copy.text = run.text:sub(a - run.col1 + 1, b - run.col1) end
+        sliced[#sliced + 1] = copy
+      elseif run.col1 >= col1 then
+        sliced[#sliced + 1] = run
+      end
+    end
+  end
+  return sliced
+end
+
+local function runs_are_plain(runs)
+  for _, run in ipairs(runs) do
+    if not run.plain then return false end
+  end
+  return true
+end
+
+local function runs_natural_width(runs)
+  local width = 0
+  for _, run in ipairs(runs) do
+    if not run.hidden and run.text ~= "" then width = width + run.font:get_width(run.text) end
+  end
+  return width
+end
+
+local function run_tokens(runs)
+  local tokens = {}
+  for _, run in ipairs(runs) do
+    if run.hidden then
+      tokens[#tokens + 1] = {
+        run = run, col1 = run.col1, col2 = run.col2, text = "", hidden = true,
+      }
+    elseif not run.exact then
+      tokens[#tokens + 1] = { run = run, col1 = run.col1, col2 = run.col2, text = run.text }
+    else
+      local text, position = run.text, 1
+      while position <= #text do
+        local first, last = text:find("^%s+", position)
+        local space = first ~= nil
+        if not space then first, last = text:find("^%S+", position) end
+        tokens[#tokens + 1] = {
+          run = run, exact = true, space = space,
+          col1 = run.col1 + first - 1, col2 = run.col1 + last,
+          text = text:sub(first, last),
+        }
+        position = last + 1
+      end
+    end
+  end
+  return tokens
+end
+
+local function token_width(token)
+  if token.hidden or token.text == "" then return 0 end
+  return token.run.font:get_width(token.text)
+end
+
+---Greedily wrap styled runs at word boundaries within `width`. Each line
+---keeps its runs with x offsets and source columns for drawing and hit tests.
+local function wrap_runs(runs, width, empty_col)
+  width = math.max(1, width)
+  local lines, line = {}, nil
+  local function new_line()
+    line = { tokens = {}, width = 0, content_width = 0 }
+  end
+  local function finish_line()
+    lines[#lines + 1] = line
+    new_line()
+  end
+  local function append(token, token_advance)
+    line.tokens[#line.tokens + 1] = token
+    line.width = line.width + token_advance
+    if not token.space then line.content_width = line.width end
+  end
+  new_line()
+  local tokens = run_tokens(runs)
+  local index = 1
+  while index <= #tokens do
+    local token = tokens[index]
+    if token.space then
+      -- Spaces never start a wrapped line.
+      if line.content_width > 0 then append(token, token_width(token)) end
+      index = index + 1
+    else
+      local last, group_width = index, 0
+      while last <= #tokens and not tokens[last].space do
+        group_width = group_width + token_width(tokens[last])
+        last = last + 1
+      end
+      if line.content_width > 0 and line.width + group_width > width then
+        finish_line()
+      end
+      if line.width + group_width <= width then
+        for position = index, last - 1 do
+          append(tokens[position], token_width(tokens[position]))
+        end
+      else
+        -- A word wider than the cell breaks between characters.
+        for position = index, last - 1 do
+          local item = tokens[position]
+          if item.hidden or not item.exact then
+            local advance = token_width(item)
+            if line.content_width > 0 and line.width + advance > width then finish_line() end
+            append(item, advance)
+          else
+            local char_col = item.col1
+            for char in common.utf8_chars(item.text) do
+              local advance = item.run.font:get_width(char)
+              if line.content_width > 0 and line.width + advance > width then
+                finish_line()
+              end
+              append({
+                run = item.run, exact = true,
+                col1 = char_col, col2 = char_col + #char, text = char,
+              }, advance)
+              char_col = char_col + #char
+            end
+          end
+        end
+      end
+      index = last
+    end
+  end
+  if #line.tokens > 0 or #lines == 0 then finish_line() end
+
+  local wrapped = {}
+  for _, entry in ipairs(lines) do
+    local pieces, texts, x = {}, {}, 0
+    for _, token in ipairs(entry.tokens) do
+      local previous = pieces[#pieces]
+      if previous and previous.source == token.run and previous.col2 == token.col1
+        and previous.exact and token.exact
+      then
+        previous.text = previous.text .. token.text
+        previous.col2 = token.col2
+      else
+        local run = token.run
+        pieces[#pieces + 1] = {
+          source = run, text = token.text, col1 = token.col1, col2 = token.col2,
+          exact = token.exact or nil, hidden = token.hidden or nil,
+          font = run.font, color = run.color, background = run.background,
+          strikethrough = run.strikethrough, underline = run.underline,
+        }
+      end
+    end
+    for _, piece in ipairs(pieces) do
+      piece.x = x
+      piece.width = (piece.hidden or piece.text == "") and 0 or piece.font:get_width(piece.text)
+      x = x + piece.width
+      piece.source = nil
+      texts[#texts + 1] = piece.text
+    end
+    local first, last = pieces[1], pieces[#pieces]
+    wrapped[#wrapped + 1] = {
+      text = table.concat(texts),
+      runs = pieces,
+      width = entry.content_width,
+      source_col1 = first and first.col1 or empty_col,
+      source_col2 = last and last.col2 or empty_col,
+    }
+  end
+  return wrapped
+end
+
+local function cell_break_segments(text, source_col1)
+  local segments, start = {}, 1
+  while true do
+    local break_col1, break_col2 = next_table_break(text, start)
+    local finish = break_col1 or (#text + 1)
+    segments[#segments + 1] = {
+      col1 = source_col1 + start - 1, col2 = source_col1 + finish - 1,
+    }
+    if not break_col1 then break end
+    start = break_col2 + 1
+  end
+  return segments
+end
+
+local function rich_cell_lines(presentation, width)
+  local lines = {}
+  for _, segment in ipairs(presentation.segments) do
+    local runs = slice_runs(presentation.runs, segment.col1, segment.col2)
+    for _, line in ipairs(wrap_runs(runs, width, segment.col1)) do
+      lines[#lines + 1] = line
+    end
+  end
+  return lines
+end
+
+local function rich_cell_natural_width(presentation)
+  local width = 0
+  for _, segment in ipairs(presentation.segments) do
+    width = math.max(width, runs_natural_width(
+      slice_runs(presentation.runs, segment.col1, segment.col2)
+    ))
+  end
+  return width
+end
+
+---Return a rich presentation for a cell, or nil when its source is plain.
+local function rich_presentation(runs, text, source_col1, source_col2, base)
+  if not runs then return nil end
+  local cell_runs = slice_runs(runs, source_col1, source_col2)
+  if runs_are_plain(cell_runs) then return nil end
+  local texts = {}
+  for _, run in ipairs(cell_runs) do
+    if not run.hidden then texts[#texts + 1] = run.text end
+  end
+  return {
+    text = table.concat(texts),
+    source_col1 = source_col1,
+    source_col2 = source_col2,
+    font = base.base_font,
+    color = base.color,
+    runs = cell_runs,
+    segments = cell_break_segments(text, source_col1),
+  }
+end
+
+local function presentation_has_link(presentation)
+  for _, run in ipairs(presentation.runs or {}) do
+    if run.link then return true end
+  end
+  return false
+end
+
+local function presentation_lines(presentation, width)
+  if presentation.runs then return rich_cell_lines(presentation, width) end
+  return table_wrap_cell_text(
+    presentation.font, presentation.text, width, presentation.literal_breaks
+  )
+end
+
+local function presentation_natural_width(presentation)
+  if presentation.runs then return rich_cell_natural_width(presentation) end
+  return table_cell_natural_width(
+    presentation.font, presentation.text, presentation.literal_breaks
+  )
+end
+
+local function inline_base(view, header)
+  if header then
+    return {
+      base_font = live_fonts.inline_style(view, "strong"),
+      base_bold = true,
+      base_italic_font = live_fonts.inline_style(view, "strong_emphasis"),
+      color = style.markdown_live_table_header,
+    }
+  end
+  return { base_font = live_fonts.body(view), color = style.markdown_live_table_cell }
+end
+
+local function row_inline_runs(view, text, line, reveal, base)
+  local provider = table_presentation.inline_pieces
+  if not provider then return nil end
+  local ok, pieces = pcall(provider, view, text, line, reveal, base)
+  if not ok then
+    core.log_quiet("Markdown table inline presentation failed at %s:%d: %s",
+      view.buffer:get_name(), line, tostring(pieces))
+    return nil
+  end
+  return pieces and normalize_runs(text, pieces) or nil
+end
+
 function table_presentation.available_width(view)
   -- Tables may use the full editor viewport even when prose has a narrower
   -- configured wrap column. This matches reading-mode table layout and avoids
@@ -340,7 +659,7 @@ function table_presentation.layout(view, table_node, instance)
     rows[line] = row
   end
 
-  local pad = math.max(font:get_width(" ") * 1.5, SCALE * 6)
+  local pad = math.max(font:get_width(" ") * 2.25, SCALE * 9)
   local vertical_pad = math.max(math.floor(SCALE * 5), 2)
   local widths, presentations, active_presentations = {}, {}, {}
   local minimums = {}
@@ -349,6 +668,11 @@ function table_presentation.layout(view, table_node, instance)
   for line = line1, line2 do
     if line ~= line1 + 1 then
       local row = rows[line]
+      local base = inline_base(view, line == line1)
+      local runs = row_inline_runs(view, row.text, line, "none", base)
+      -- Every marker revealed is the widest presentation an active cell can
+      -- show, so sizing for it keeps column widths stable while editing.
+      local revealed_runs = runs and row_inline_runs(view, row.text, line, "all", base)
       presentations[line] = {}
       active_presentations[line] = {}
       for column, cell in ipairs(row.cells) do
@@ -356,27 +680,31 @@ function table_presentation.layout(view, table_node, instance)
         local presentation = table_cell_presentation(
           view, text, source_col1, source_col2, line == line1
         )
+        if not presentation.source_elided then
+          presentation = rich_presentation(runs, text, source_col1, source_col2, base)
+            or presentation
+        end
         presentations[line][column] = presentation
-        if presentation.source_elided then
+        if presentation.source_elided or presentation_has_link(presentation) then
+          -- Revealing elided source or a link destination can add lines.
           selection_stable_layout = false
         else
-          active_presentations[line][column] = {
+          active_presentations[line][column] = rich_presentation(
+            revealed_runs, text, source_col1, source_col2, base
+          ) or {
             text = text,
             source_col1 = source_col1,
             source_col2 = source_col2,
-            font = line == line1 and live_fonts.inline_style(view, "strong") or font,
+            font = base.base_font,
           }
         end
         widths[column] = math.max(
-          widths[column], table_cell_natural_width(
-            presentation.font, presentation.text, presentation.literal_breaks
-          ) + pad * 2
+          widths[column], presentation_natural_width(presentation) + pad * 2
         )
         local active = active_presentations[line][column]
         if active then
           widths[column] = math.max(
-            widths[column],
-            table_cell_natural_width(active.font, active.text) + pad * 2
+            widths[column], presentation_natural_width(active) + pad * 2
           )
         end
       end
@@ -388,8 +716,9 @@ function table_presentation.layout(view, table_node, instance)
       pad * 2 + live_fonts.inline_style(view, "strong"):get_width(header_text),
       -- Below this floor dense grids become columns of individually wrapped
       -- glyphs. Keep a readable cell width and let Text View expose the
-      -- table's horizontal overflow instead of crushing every column.
-      pad * 2 + font:get_width("MMMMMMMM")
+      -- table's horizontal overflow instead of crushing every column. A
+      -- column with shorter content keeps its natural width.
+      math.min(widths[column], pad * 2 + font:get_width("MMMMMMMM"))
     )
     for row_line = line1, line2 do
       local presentation = presentations[row_line] and presentations[row_line][column]
@@ -433,21 +762,15 @@ function table_presentation.layout(view, table_node, instance)
       wrapped_cells[row_line] = {}
       local row = rows[row_line]
       local max_lines = 1
-      for column, cell in ipairs(row.cells) do
+      for column in ipairs(row.cells) do
         local presentation = presentations[row_line][column]
-        local wrapped = table_wrap_cell_text(
-          presentation.font, presentation.text, widths[column] - pad * 2,
-          presentation.literal_breaks
-        )
+        local wrapped = presentation_lines(presentation, widths[column] - pad * 2)
         wrapped_cells[row_line][column] = wrapped
         max_lines = math.max(max_lines, #wrapped)
         local active = active_presentations[row_line][column]
         if active then
           max_lines = math.max(
-            max_lines,
-            #table_wrap_cell_text(
-              active.font, active.text, widths[column] - pad * 2
-            )
+            max_lines, #presentation_lines(active, widths[column] - pad * 2)
           )
         end
       end
@@ -522,21 +845,32 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     return false
   end
   local max_lines = 1
+  local base = inline_base(view, header)
+  local active_runs
+  local active_columns = {}
   for column, cell in ipairs(row.cells) do
     local presentation = layout.presentations[line][column]
     local wrapped = layout.wrapped_cells[line][column]
-    if cell_active(cell) then
+    local active = cell_active(cell)
+    active_columns[column] = active
+    if active then
+      -- An active cell reveals the Markdown source of the span holding the
+      -- caret, like prose. Elided cells reveal their complete source.
       local text, source_col1, source_col2 = table_cell_content(row.text, cell)
-      presentation = {
+      if active_runs == nil and not presentation.source_elided then
+        active_runs = row_inline_runs(view, row.text, line, selection_state, base) or false
+      end
+      presentation = not presentation.source_elided and rich_presentation(
+        active_runs or nil, text, source_col1, source_col2, base
+      ) or {
         text = text,
         source_col1 = source_col1,
         source_col2 = source_col2,
-        font = header and live_fonts.inline_style(view, "strong") or live_fonts.body(view),
-        color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
+        font = base.base_font,
+        color = base.color,
       }
-      wrapped = table_wrap_cell_text(
-        presentation.font, text, layout.widths[column] - layout.padding * 2,
-        presentation.literal_breaks
+      wrapped = presentation_lines(
+        presentation, layout.widths[column] - layout.padding * 2
       )
     end
     row_presentations[column], row_wrapped[column] = presentation, wrapped
@@ -559,6 +893,10 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
         draw = function(_, _, x, y, row_height)
           renderer.draw_rect(x, y, layout.separator_width, row_height,
             style.markdown_live_table_background)
+          if header then
+            renderer.draw_rect(x, y, layout.separator_width, row_height,
+              style.markdown_live_table_header_background)
+          end
           renderer.draw_rect(
             x + math.floor((layout.separator_width - line_width) / 2), y,
             line_width, row_height, style.markdown_live_table_separator
@@ -586,7 +924,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     local text_lines = {}
     for _, wrapped in ipairs(row_wrapped[column]) do
       local wrapped_text = wrapped.text or ""
-      local text_width = cell_font:get_width(wrapped_text)
+      local text_width = wrapped.runs and wrapped.width or cell_font:get_width(wrapped_text)
       local offset = alignment == "right"
         and math.max(layout.padding, layout.widths[column] - text_width - layout.padding)
         or alignment == "center"
@@ -595,8 +933,11 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       text_lines[#text_lines + 1] = {
         text = wrapped_text,
         x_offset = offset,
-        source_col1 = presentation.source_col1 + (wrapped.col1 or 1) - 1,
-        source_col2 = presentation.source_col1 + (wrapped.col2 or 1) - 1,
+        runs = wrapped.runs,
+        source_col1 = wrapped.runs and wrapped.source_col1
+          or presentation.source_col1 + (wrapped.col1 or 1) - 1,
+        source_col2 = wrapped.runs and wrapped.source_col2
+          or presentation.source_col1 + (wrapped.col2 or 1) - 1,
       }
     end
     local separator = row.separators[column]
@@ -619,6 +960,8 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       font = cell_font,
       color = presentation.color,
       background = style.markdown_live_table_background,
+      background_overlay = active_columns[column] and style.markdown_live_table_active_cell
+        or header and style.markdown_live_table_header_background or nil,
       background_under_selection = true,
       background_full_height = true,
       background_border_top = header and style.markdown_live_table_separator or nil,
@@ -656,6 +999,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
           y_offset = (fragment.text_y_padding or 0)
             + (visual_index - 1) * (fragment.text_line_height or layout.text_line_height),
           height = fragment.text_line_height or layout.text_line_height,
+          runs = text_line.runs,
           navigation_group = fragment.table_column,
           navigation_index = visual_index,
           table_cell = fragment.table_column,
@@ -669,6 +1013,8 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
           selection_y = 0,
           selection_height = row_height,
           selection_outline = style.caret,
+          -- The active cell's tint marks the caret row inside a table.
+          suppress_line_highlight = true,
         }
       end
     end
