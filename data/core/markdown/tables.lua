@@ -850,20 +850,6 @@ function tables.ime_text_editing(view, text, start, length)
   return true, #prefix, #through_selection - #prefix
 end
 
-function tables.paste(view)
-  local clipboard = system.get_clipboard() or ""
-  local selection_count = #view.buffer.selections / 4
-  if core.cursor_clipboard
-  and core.cursor_clipboard.full == clipboard
-  and #core.cursor_clipboard_whole_line == selection_count
-  then
-    return text_input_by_selection(view, function(_, index)
-      return tostring(core.cursor_clipboard[index] or ""):gsub("\r", "")
-    end)
-  end
-  return tables.text_input(view, clipboard)
-end
-
 function tables.paste_primary(view, x, y)
   if type(x) == "number" and type(y) == "number" then
     local line, col = view:resolve_screen_position(x, y)
@@ -1269,28 +1255,14 @@ function tables.format(view)
   })
 end
 
----Return whether `line` is outside every table so a new one can start there.
-function tables.can_insert_table(view)
-  if not (view and view.buffer) then return false end
-  local line = view.buffer:get_selection()
-  return source_table_bounds_with_delimiter(view.buffer, line) == nil
-    and context_at(view, line, nil, false) == nil
-end
-
----Insert an empty table at the caret and place the caret in its first header
----cell. A blank caret line becomes the table; otherwise the table starts
----below the caret line. Blank lines keep it apart from neighboring blocks.
-function tables.insert_table(view, columns, body_rows)
-  if not tables.can_insert_table(view) then return false end
-  columns = math.max(1, math.min(columns or 2, tables.MAX_PRESENTATION_COLUMNS))
-  body_rows = math.max(0, body_rows or 1)
+---Write a new table at the caret. A blank caret line becomes the table;
+---otherwise the table starts below the caret line. Blank lines keep it apart
+---from neighboring blocks. Returns the table's first line.
+local function insert_model_at_caret(view, model, reason)
   local buffer = view.buffer
   local line = buffer:get_selection()
   local current = line_text(buffer, line)
-  local model = { columns = columns, alignments = {}, rows = {} }
-  for _ = 1, body_rows + 1 do model.rows[#model.rows + 1] = empty_cells(columns) end
-  local lines = tables.serialize_model(model)
-  local text = table.concat(lines, "\n")
+  local text = table.concat(tables.serialize_model(model), "\n")
   local table_line
   local edit
   if current:match("^%s*$") then
@@ -1311,13 +1283,235 @@ function tables.insert_table(view, columns, body_rows)
   if line < #buffer.lines and not following:match("^%s*$") then
     edit.text = edit.text .. "\n"
   end
-  buffer:apply_edits({ edit }, { type = "markdown-table", reason = "insert-table" })
-  local row = source_row(line_text(buffer, table_line))
-  local cell = row and row.cells[1]
-  if cell then buffer:set_selection(table_line, cell.content_col1) end
+  buffer:apply_edits({ edit }, { type = "markdown-table", reason = reason })
   core.log_quiet(
-    "Markdown table inserted at %s:%d: %d columns, %d body rows",
-    buffer:get_name(), table_line, columns, body_rows
+    "Markdown table %s at %s:%d: %d columns, %d rows",
+    reason, buffer:get_name(), table_line, model.columns, #model.rows
+  )
+  return table_line
+end
+
+local function place_caret_in_cell(buffer, line, column, at_end)
+  local row = source_row(line_text(buffer, line))
+  local cell = row and row.cells[column]
+  if cell then
+    buffer:set_selection(line, at_end and cell.content_col2 or cell.content_col1)
+  end
+end
+
+---Return whether a new table can start at the caret line.
+function tables.can_insert_table(view)
+  if not (view and view.buffer) then return false end
+  local line = view.buffer:get_selection()
+  return source_table_bounds_with_delimiter(view.buffer, line) == nil
+    and context_at(view, line, nil, false) == nil
+    and not source_line_in_fence_or_frontmatter(view.buffer, line)
+end
+
+---Insert an empty table at the caret and place the caret in its first header
+---cell.
+function tables.insert_table(view, columns, body_rows)
+  if not tables.can_insert_table(view) then return false end
+  columns = math.max(1, math.min(columns or 2, tables.MAX_PRESENTATION_COLUMNS))
+  local model = { columns = columns, alignments = {}, rows = {} }
+  for _ = 1, math.max(0, body_rows or 1) + 1 do
+    model.rows[#model.rows + 1] = empty_cells(columns)
+  end
+  local table_line = insert_model_at_caret(view, model, "insert-table")
+  place_caret_in_cell(view.buffer, table_line, 1)
+  return true
+end
+
+---Return the caret line's cells when Enter should turn it into a table
+---header: a single caret at the end of a pipe-delimited row with at least two
+---cells, outside any table, code fence, or front matter.
+function tables.header_row_at_caret(view)
+  if not (view and view.buffer) or #view.buffer.selections ~= 4 then return nil end
+  local buffer = view.buffer
+  local line, col, anchor_line, anchor_col = buffer:get_selection()
+  if line ~= anchor_line or col ~= anchor_col then return nil end
+  local text = line_text(buffer, line)
+  local trimmed = text:gsub("%s+$", "")
+  if col <= #trimmed then return nil end
+  local row = source_row(trimmed)
+  if not (row and row.canonical and row.columns >= 2) or delimiter_row(row) then
+    return nil
+  end
+  if line < #buffer.lines and delimiter_row(source_row_at(buffer, line + 1)) then
+    return nil
+  end
+  if source_table_bounds_with_delimiter(buffer, line)
+  or source_line_in_fence_or_frontmatter(buffer, line)
+  then
+    return nil
+  end
+  local cells = {}
+  for column, cell in ipairs(row.cells) do
+    cells[column] = trimmed:sub(cell.content_col1, cell.content_col2 - 1)
+  end
+  return cells
+end
+
+---Turn the caret's header row into a table with one empty body row and place
+---the caret in the first body cell.
+function tables.create_from_header_row(view)
+  local header = tables.header_row_at_caret(view)
+  if not header then return false end
+  local buffer = view.buffer
+  local line = buffer:get_selection()
+  local model = { columns = #header, alignments = {}, rows = { header, empty_cells(#header) } }
+  local lines = tables.serialize_model(model, line_text(buffer, line):match("^%s*"))
+  local text = table.concat(lines, "\n")
+  local before = line > 1 and line_text(buffer, line - 1) or ""
+  local table_line = line
+  if not before:match("^%s*$") then
+    -- A table cannot continue a paragraph.
+    text = "\n" .. text
+    table_line = line + 1
+  end
+  if line < #buffer.lines and not line_text(buffer, line + 1):match("^%s*$") then
+    -- A following line without pipes would otherwise become a table row.
+    text = text .. "\n"
+  end
+  buffer:apply_edits({
+    { line1 = line, col1 = 1, line2 = line, col2 = #line_text(buffer, line) + 1, text = text },
+  }, { type = "markdown-table", reason = "create-from-header" })
+  place_caret_in_cell(buffer, table_line + 2, 1)
+  core.log_quiet(
+    "Markdown table created from header row at %s:%d: %d columns",
+    buffer:get_name(), table_line, #header
+  )
+  return true
+end
+
+-- Spreadsheet paste ---------------------------------------------------------
+
+local MAX_GRID_PASTE_BYTES = 1024 * 1024
+
+---Parse tab-separated text as copied from a spreadsheet. Quoted fields may
+---hold tabs, newlines, and doubled quotes.
+local function parse_tsv(text)
+  local rows, row, cell = {}, {}, {}
+  local i, n = 1, #text
+  local cell_start = true
+  while i <= n do
+    local char = text:sub(i, i)
+    if cell_start and char == '"' then
+      local j = i + 1
+      while j <= n do
+        local quoted = text:sub(j, j)
+        if quoted == '"' then
+          if text:sub(j + 1, j + 1) ~= '"' then j = j + 1 break end
+          j = j + 1
+        end
+        cell[#cell + 1] = text:sub(j, j)
+        j = j + 1
+      end
+      i, cell_start = j, false
+    elseif char == "\t" then
+      row[#row + 1] = table.concat(cell)
+      cell, cell_start = {}, true
+      i = i + 1
+    elseif char == "\n" then
+      row[#row + 1] = table.concat(cell)
+      rows[#rows + 1] = row
+      row, cell, cell_start = {}, {}, true
+      i = i + 1
+    else
+      local next_special = text:find('[\t\n]', i) or n + 1
+      cell[#cell + 1] = text:sub(i, next_special - 1)
+      i, cell_start = next_special, false
+    end
+  end
+  if #cell > 0 or #row > 0 then
+    row[#row + 1] = table.concat(cell)
+    rows[#rows + 1] = row
+  end
+  return rows
+end
+
+---Return clipboard text as a grid of Markdown cell sources when it is
+---tab-separated with more than one cell, or nil.
+function tables.spreadsheet_grid(text)
+  text = tostring(text or "")
+  if #text > MAX_GRID_PASTE_BYTES or not text:find("\t", 1, true) then return nil end
+  text = text:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("\n+$", "")
+  local rows = parse_tsv(text)
+  local columns = 0
+  for _, cells in ipairs(rows) do columns = math.max(columns, #cells) end
+  if columns > tables.MAX_PRESENTATION_COLUMNS
+  or #rows > tables.MAX_PRESENTATION_ROWS
+  or #rows * columns < 2
+  then
+    return nil
+  end
+  for _, cells in ipairs(rows) do
+    for column = 1, columns do
+      local value = (cells[column] or ""):match("^%s*(.-)%s*$")
+      cells[column] = tables.normalize_cell_input(value)
+    end
+  end
+  return { rows = rows, columns = columns }
+end
+
+local function paste_grid(view, context, grid)
+  local model = model_from_context(context)
+  local last_column = context.column + grid.columns - 1
+  if last_column > tables.MAX_PRESENTATION_COLUMNS then return false end
+  while model.columns < last_column do
+    model.columns = model.columns + 1
+    for _, cells in ipairs(model.rows) do cells[model.columns] = "" end
+  end
+  local last_row = context.grid_row + #grid.rows - 1
+  while #model.rows < last_row do model.rows[#model.rows + 1] = empty_cells(model.columns) end
+  for row_offset, cells in ipairs(grid.rows) do
+    for column_offset, value in ipairs(cells) do
+      model.rows[context.grid_row + row_offset - 1][context.column + column_offset - 1] = value
+    end
+  end
+  local last_value = grid.rows[#grid.rows][grid.columns] or ""
+  apply_model(context, model, "paste-grid", {
+    row = last_row, column = last_column, offset = #last_value,
+  })
+  return true
+end
+
+function tables.paste(view)
+  local clipboard = system.get_clipboard() or ""
+  local selection_count = #view.buffer.selections / 4
+  if core.cursor_clipboard
+  and core.cursor_clipboard.full == clipboard
+  and #core.cursor_clipboard_whole_line == selection_count
+  then
+    return text_input_by_selection(view, function(_, index)
+      return tostring(core.cursor_clipboard[index] or ""):gsub("\r", "")
+    end)
+  end
+  if selection_count == 1 then
+    local grid = tables.spreadsheet_grid(clipboard)
+    local context = grid and tables.context(view)
+    if context and paste_grid(view, context, grid) then return true end
+  end
+  return tables.text_input(view, clipboard)
+end
+
+---Return whether the clipboard should paste as a new table at the caret:
+---spreadsheet rows outside any table, with no selection to replace.
+function tables.can_paste_table(view)
+  if not (view and view.buffer) or view.buffer:has_any_selection() then return false end
+  if #view.buffer.selections ~= 4 or not tables.can_insert_table(view) then return false end
+  local grid = tables.spreadsheet_grid(system.get_clipboard())
+  return grid ~= nil and #grid.rows >= 2 and grid.columns >= 2
+end
+
+---Paste spreadsheet rows as a new table whose first row is the header.
+function tables.paste_table(view)
+  if not tables.can_paste_table(view) then return false end
+  local grid = tables.spreadsheet_grid(system.get_clipboard())
+  local model = { columns = grid.columns, alignments = {}, rows = grid.rows }
+  local table_line = insert_model_at_caret(view, model, "paste-table")
+  place_caret_in_cell(
+    view.buffer, grid_row_line(table_line, #grid.rows), grid.columns, true
   )
   return true
 end

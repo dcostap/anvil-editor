@@ -256,3 +256,35 @@ end, {
     markdown_tables.insert_table(view, 2, 1)
   end),
 })
+
+local function live_table_editing(view)
+  return config.markdown_live_interactive_tables == true
+    and view and view:extends(Editor)
+    and not view.buffer.read_only
+    and markdown_live.is_markdown_buffer(view.buffer)
+    and markdown_live.is_live_mode(view)
+end
+
+command.add(function()
+  local view = core.active_view
+  if live_table_editing(view) and markdown_tables.header_row_at_caret(view) then
+    return true, view
+  end
+  return false
+end, {
+  ["markdown:table_from_header_row"] = function(view)
+    markdown_tables.create_from_header_row(view)
+  end,
+})
+
+command.add(function()
+  local view = core.active_view
+  if live_table_editing(view) and markdown_tables.can_paste_table(view) then
+    return true, view
+  end
+  return false
+end, {
+  ["markdown:paste_table"] = command.palette(function(view)
+    markdown_tables.paste_table(view)
+  end),
+})
