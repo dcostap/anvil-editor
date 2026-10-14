@@ -822,7 +822,9 @@ test.describe("Markdown Interactive Table Editing", function()
     local control = test.not_nil(table_control(view, 1, "column", 2))
     local line_x, line_y = view:get_line_screen_position(1)
     local size = control.widget.width
-    local x = line_x + control.layout_x - size
+    -- Approach the table-edge control from outside the table, where no
+    -- other table control is nearer.
+    local x = line_x + control.layout_x + (control.hit_width or size) + size
     local y = line_y + control.draw_y_offset + size / 2
     local near = test.not_nil(view:get_render_widget_near_position(x, y), string.format(
       "control proximity missing at %d:%d (radius=%s)",
@@ -1331,5 +1333,95 @@ test.describe("Markdown Interactive Table Editing", function()
       test.same(row_cells(buffer, 6), { "two<br>lines", "10" })
       test.same({ caret_cell(buffer) }, { 6, 2 })
     end)
+  end)
+
+  local function table_handle(view, line, kind, index)
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
+      if fragment.table_handle == kind and fragment.table_handle_index == index then
+        local line_x, line_y = view:get_line_screen_position(line)
+        return line_x + fragment.layout_x + fragment.hit_width / 2,
+          line_y + fragment.draw_y_offset + fragment.widget.height / 2
+      end
+    end
+    error(kind .. " handle " .. tostring(index) .. " not found on line " .. line)
+  end
+
+  local function selected_cells(view)
+    local cells = {}
+    local selections = view.buffer.selections
+    for index = 1, #selections, 4 do
+      local line, col = selections[index], selections[index + 1]
+      local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+      local row = test.not_nil(markdown_tables.source_row(text))
+      for column, cell in ipairs(row.cells) do
+        if col >= cell.col1 and col <= cell.col2 then
+          test.equal(selections[index + 3], cell.content_col1,
+            "handle selection did not cover the whole cell")
+          test.equal(col, cell.content_col2, "handle selection did not cover the whole cell")
+          cells[#cells + 1] = line .. ":" .. column
+        end
+      end
+    end
+    table.sort(cells)
+    return cells
+  end
+
+  local function click_at(view, x, y)
+    view:on_mouse_moved(x, y, 0, 0)
+    test.equal(view:on_mouse_pressed("left", x, y, 1), true)
+    view:on_mouse_released("left", x, y)
+  end
+
+  local function drag_from_to(view, x1, y1, x2, y2)
+    view:on_mouse_moved(x1, y1, 0, 0)
+    test.equal(view:on_mouse_pressed("left", x1, y1, 1), true)
+    view:on_mouse_moved((x1 + x2) / 2, (y1 + y2) / 2, 0, 0)
+    view:on_mouse_moved(x2, y2, 0, 0)
+    view:on_mouse_released("left", x2, y2)
+  end
+
+  test.it("selects a whole row or column from its handle", function()
+    local view, buffer = make_view(
+      "| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nplain"
+    )
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 4, "row", 4))
+    test.same(selected_cells(view), { "4:1", "4:2" })
+
+    refresh(view)
+    click_at(view, table_handle(view, 1, "column", 2))
+    test.same(selected_cells(view), { "1:2", "3:2", "4:2" })
+  end)
+
+  test.it("drags a row handle to move the row as one undo step", function()
+    local original = "| A | B |\n| --- | --- |\n| one | 1 |\n| two | 2 |\n| three | 3 |\n\nplain"
+    local view, buffer = make_view(original)
+    buffer:set_selection(7, 1)
+    refresh(view)
+    local x, y = table_handle(view, 3, "row", 3)
+    local _, target_y = cell_center(view, 5, 1)
+    drag_from_to(view, x, y, x, target_y)
+    test.same(row_cells(buffer, 3), { "two", "2" })
+    test.same(row_cells(buffer, 4), { "three", "3" })
+    test.same(row_cells(buffer, 5), { "one", "1" })
+    test.same(selected_cells(view), { "5:1", "5:2" })
+    buffer:undo()
+    test.equal(table.concat(buffer.lines):gsub("\n$", ""), original)
+  end)
+
+  test.it("drags a column handle to move the column and its alignment", function()
+    local view, buffer = make_view(
+      "| A | B | C |\n| --- | :---: | --- |\n| one | two | three |\n\nplain"
+    )
+    buffer:set_selection(5, 1)
+    refresh(view)
+    local x, y = table_handle(view, 1, "column", 2)
+    local target_x = cell_center(view, 3, 3)
+    drag_from_to(view, x, y, target_x, y)
+    test.same(row_cells(buffer, 1), { "A", "C", "B" })
+    test.same(row_cells(buffer, 3), { "one", "three", "two" })
+    test.ok(row_cells(buffer, 2)[3]:match("^:%-+:$"), "alignment did not move with its column")
+    test.same(selected_cells(view), { "1:3", "3:3" })
   end)
 end)

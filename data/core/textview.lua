@@ -6320,7 +6320,36 @@ end
 ---Updates cursor icon, gutter hover state, and extends selection if dragging.
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
+---Hand the pointer to a render widget drag started by a widget press.
+---`drag.on_move(drag, view, x, y)` and `drag.on_release(drag, view, x, y)`
+---receive the pointer; `drag.draw(drag, view)` paints above the text.
+function TextView:begin_render_widget_drag(drag)
+  self.render_widget_drag = drag
+  self.mouse_selecting = nil
+end
+
+local function call_render_widget_drag(view, drag, name, ...)
+  local fn = drag[name]
+  if not fn then return end
+  local ok, err = pcall(fn, drag, view, ...)
+  if not ok then
+    core.log_quiet(
+      "TextView render widget drag %s failed for %s: %s",
+      name, view.buffer:get_name(), tostring(err)
+    )
+    view.render_widget_drag = nil
+  end
+end
+
 function TextView:on_mouse_moved(x, y, ...)
+  local drag = self.render_widget_drag
+  if drag then
+    TextView.super.on_mouse_moved(self, x, y, ...)
+    call_render_widget_drag(self, drag, "on_move", x, y)
+    self.cursor = drag.cursor or "hand"
+    core.redraw = true
+    return true
+  end
   local selecting = self.mouse_selecting ~= nil
   TextView.super.on_mouse_moved(self, x, y, ...)
 
@@ -6503,6 +6532,13 @@ end
 ---Handle mouse release to end text selection.
 function TextView:on_mouse_released(...)
   TextView.super.on_mouse_released(self, ...)
+  local drag = self.render_widget_drag
+  if drag then
+    self.render_widget_drag = nil
+    local _, x, y = ...
+    call_render_widget_drag(self, drag, "on_release", x, y)
+    core.redraw = true
+  end
   self.mouse_selecting = nil
   self:end_line_render_interaction("mouse-release")
 end
@@ -8956,6 +8992,9 @@ end
 function TextView:draw_overlay()
   if self.wrapped_settings then
     linewrapping.draw_guide(self)
+  end
+  if self.render_widget_drag then
+    call_render_widget_drag(self, self.render_widget_drag, "draw")
   end
   local scope = perf_scope_begin("core_overlay")
   local stats = core.textview_frame_stats

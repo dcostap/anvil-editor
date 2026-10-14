@@ -1156,6 +1156,35 @@ local function record_video()
       return fragment.table_insert_control == "column"
     end)
     for _ = 1, 2 do capture("hover-column-control") end
+    hover_fragment(find_line("Draw the grid"), function(fragment)
+      return fragment.table_handle == "row"
+    end)
+    for _ = 1, 2 do capture("hover-row-handle") end
+    do
+      -- Drag the hovered row handle below "Ship" and capture mid-drag.
+      local from = find_line("Draw the grid")
+      local render = view:get_line_render(from)
+      for _, fragment in ipairs(render and render.fragments or {}) do
+        if fragment.table_handle == "row" then
+          local line_x, line_y = view:get_line_screen_position(from)
+          local x = line_x + fragment.layout_x + fragment.hit_width / 2
+          local y = line_y + fragment.widget.height / 2
+          view:on_mouse_pressed("left", x, y, 1)
+          local _, target_y = view:get_line_screen_position(find_line("Ship"))
+          view:on_mouse_moved(x, target_y + 4, 0, 0)
+          for _ = 1, 2 do capture("dragging-row") end
+          view:on_mouse_released("left", x, target_y + 4)
+          break
+        end
+      end
+    end
+    settle_semantics()
+    for _ = 1, 2 do capture("dropped-row") end
+    hover_fragment(find_line("Task"), function(fragment)
+      return fragment.table_handle == "column" and fragment.table_handle_index == 3
+    end)
+    for _ = 1, 2 do capture("hover-column-handle") end
+    view.buffer:set_selection(find_line("Task") + 2, 3)
     local last = find_line("Ship")
     view.buffer:set_selection(last, view.buffer.lines[last]:find("Ship") + 1)
     command.perform("markdown:table_cell_below")

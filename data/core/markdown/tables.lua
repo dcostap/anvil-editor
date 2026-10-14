@@ -1153,6 +1153,67 @@ function tables.move_column(view, direction)
   })
 end
 
+local function select_cells(view, cells)
+  local selections = {}
+  for _, cell in ipairs(cells) do
+    for _, value in ipairs(selection_for_cell(cell[1], cell[2]) or {}) do
+      selections[#selections + 1] = value
+    end
+  end
+  if #selections == 0 then return false end
+  view.buffer:set_selection_list(selections, #selections / 4, { merge_cursors = false })
+  return true
+end
+
+---Select every cell of the table row at `line` as Table Cell Selections.
+function tables.select_row(view, line)
+  local context = context_at(view, line, 1, false)
+  if not context then return false end
+  local cells = {}
+  for column = 1, context.columns do cells[#cells + 1] = { context.current_row, column } end
+  return select_cells(view, cells)
+end
+
+---Select every cell of `column` in the table holding `line`.
+function tables.select_column(view, line, column)
+  local context = context_at(view, line, 1, false)
+  if not context or column < 1 or column > context.columns then return false end
+  local cells = {}
+  for _, row in ipairs(context.editable_rows) do cells[#cells + 1] = { row, column } end
+  return select_cells(view, cells)
+end
+
+---Move the body row at `line` to grid row `target` and select it.
+function tables.move_row_to(view, line, target)
+  local context = context_at(view, line, 1, true)
+  if not context or context.grid_row <= 1 then return false end
+  local model = model_from_context(context)
+  target = common.clamp(target, 2, #model.rows)
+  if target == context.grid_row then return false end
+  table.insert(model.rows, target, table.remove(model.rows, context.grid_row))
+  apply_model(context, model, "drag-row")
+  return tables.select_row(view, grid_row_line(context.line1, target))
+end
+
+---Move `column` of the table holding `line` to `target` and select it.
+function tables.move_column_to(view, line, column, target)
+  local context = context_at(view, line, 1, true)
+  if not context or column < 1 or column > context.columns then return false end
+  target = common.clamp(target, 1, context.columns)
+  if target == column then return false end
+  local model = model_from_context(context)
+  for _, cells in ipairs(model.rows) do
+    table.insert(cells, target, table.remove(cells, column))
+  end
+  -- Alignments can have nil holes, which table.remove cannot shift.
+  local alignments = {}
+  for index = 1, model.columns do alignments[index] = model.alignments[index] or false end
+  table.insert(alignments, target, table.remove(alignments, column))
+  for index = 1, model.columns do model.alignments[index] = alignments[index] or nil end
+  apply_model(context, model, "drag-column")
+  return tables.select_column(view, context.line1, target)
+end
+
 ---Columns holding a selection, or the caret's column.
 local function selected_columns(view, context)
   local columns, seen = {}, {}
