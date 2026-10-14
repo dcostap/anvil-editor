@@ -3725,7 +3725,7 @@ end
 
 interactive_table_render_line = function(view, table_node, line, allow_pending)
   local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
-  local fragments, layout, position_rows, interactive_row_height =
+  local fragments, layout, position_rows, interactive_row_height, frame =
     table_row_fragments(view, table_node, line, allow_pending)
   if not (fragments and layout) then return nil end
   local metric_height = interactive_row_height or layout.row_heights[line]
@@ -3781,6 +3781,9 @@ interactive_table_render_line = function(view, table_node, line, allow_pending)
     on_ime_text_editing = on_ime_text_editing,
     on_table_source_changed = rebuild_pending,
     on_table_structure_changed = on_structure_changed,
+    horizontal_scroll = frame and frame.horizontal_scroll,
+    horizontal_clip = frame and frame.horizontal_clip,
+    table_content_height = frame and frame.table_content_height,
   })
 end
 
@@ -4673,6 +4676,7 @@ local function capture_edit_projection(view, transaction)
   local previous_callouts = owner.pending_callouts or {}
   local ranges = edit_projection.ordered_changed_ranges(transaction)
   edit_visual_projection.rebase_image_consumers(view, ranges)
+  table_presentation.remap_scroll_states(view, ranges)
   owner.pending_lines = build_edit_projection(
     view, transaction, pre_edit_lines
   )
@@ -5494,65 +5498,6 @@ function provider:generation(view)
     .. ":semantic-pending-line:" .. tostring(state.semantic_pending_line)
     .. ":semantic-adoption-generation:" .. tostring(state.semantic_adoption_generation)
   return state.generation
-end
-
-function provider:horizontal_extent(view)
-  if view_in_source_mode(view)
-  or config.markdown_live_interactive_tables ~= true
-  then
-    return 0
-  end
-  local instance = current_semantic_model(view)
-  if not instance then return table_presentation.cached_horizontal_extent(view) end
-  local owner = view.__markdown_live_owner
-  local key = table.concat({
-    tostring(instance.generation), tostring(view.buffer.text_revision),
-    tostring(self:generation(view)),
-  }, ":")
-  local cached = owner and owner.table_horizontal_extent
-  if cached and cached.key == key then
-    if not cached.complete then
-      cached.width = math.max(cached.width, table_presentation.cached_horizontal_extent(view))
-    end
-    return cached.width
-  end
-
-  local width = 0
-  local nodes, reason = instance:table_nodes_for_lines(1, #view.buffer.lines, {
-    limit = 100000,
-  })
-  local seen = {}
-  for _, node in ipairs(nodes or {}) do
-    if node.type == "table" and not seen[node.id] then
-      seen[node.id] = true
-      local table_node = node
-      local source_line1, source_line2 = markdown_tables.source_bounds(view, node.source.line1)
-      local semantic_line2 = node.source.line2
-      if node.source.col2 == 1 and semantic_line2 > node.source.line1 then
-        semantic_line2 = semantic_line2 - 1
-      end
-      -- This node already came from the current table query. Only an empty-row
-      -- extension needs another semantic lookup for its source bounds.
-      if source_line1 ~= node.source.line1 or (source_line2 or 0) > semantic_line2 then
-        table_node = markdown_tables.extend_semantic_table(view, node.source.line1, node)
-      end
-      local layout = table_presentation.layout(view, table_node, instance)
-      if layout then width = math.max(width, layout.total_width or 0) end
-    end
-  end
-  if reason == "limit" then
-    width = math.max(width, table_presentation.cached_horizontal_extent(view))
-    core.log_quiet(
-      "Markdown table horizontal extent used partial semantic results for %s",
-      view.buffer:get_name()
-    )
-  end
-  if owner then
-    owner.table_horizontal_extent = {
-      key = key, width = width, complete = reason ~= "limit",
-    }
-  end
-  return width
 end
 
 function provider:line_generation(view, line)

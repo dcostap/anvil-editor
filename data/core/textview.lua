@@ -4262,14 +4262,35 @@ local function line_render_content_geometry(render_line, row_height, first_row)
     and math.max(0, tonumber(render_line.first_row_content_y_offset) or 0) or 0
   first_row_offset = math.min(first_row_offset, math.max(0, row_height - 1))
   local available_height = math.max(1, row_height - first_row_offset)
-  local content_height = render_line.table_row and available_height or math.min(
-    available_height, render_line.text_row_height or available_height
-  )
+  local content_height = render_line.table_row
+    and math.min(available_height, render_line.table_content_height or available_height)
+    or math.min(available_height, render_line.text_row_height or available_height)
   local y_offset = first_row_offset
   if render_line.content_vertical_alignment == "bottom" then
     y_offset = y_offset + math.max(0, available_height - content_height)
   end
   return y_offset, content_height
+end
+
+-- A rendered line can own a horizontally scrolling region, such as a wide
+-- Markdown table. `horizontal_scroll.x` shifts the line's content left at
+-- draw and hit-test time, and `horizontal_clip` bounds it in unscrolled line
+-- coordinates. Render plans keep unscrolled geometry, so scrolling never
+-- invalidates layout.
+local function render_line_scroll_x(render_line)
+  local scroll = render_line and render_line.horizontal_scroll
+  return scroll and (scroll.x or 0) or 0
+end
+
+local function render_line_hit_x(render_line, x)
+  local clip = render_line and render_line.horizontal_clip
+  if clip then x = common.clamp(x, clip.x1, math.max(clip.x1, clip.x2 - 1)) end
+  return x + render_line_scroll_x(render_line)
+end
+
+local function render_line_clip_contains(render_line, x)
+  local clip = render_line and render_line.horizontal_clip
+  return not clip or x >= clip.x1 and x <= clip.x2
 end
 
 local function position_is_first_visual_row(view, line, col, line_end)
@@ -4416,6 +4437,7 @@ function TextView:get_line_screen_position(line, col, line_end)
       )
     end
     local dx = col and self:get_col_x_offset(line, col, line_end) or 0
+    dx = dx - render_line_scroll_x(self:peek_line_render(line))
     local content_y = render_y_offset()
       + self:get_visual_row_y_offset(visual_row) + style.padding.y
     local x, y = self:get_content_offset()
@@ -4424,6 +4446,7 @@ function TextView:get_line_screen_position(line, col, line_end)
   local visual_row = self:has_composed_visual_rows()
     and self:get_composed_visual_row_for_position(line, col, line_end) or line
   local dx = col and self:get_col_x_offset(line, col) or 0
+  dx = dx - render_line_scroll_x(self:peek_line_render(line))
   local content_y = render_y_offset()
     + self:get_visual_row_y_offset(visual_row) + style.padding.y
   local x, y = self:get_content_offset()
@@ -4885,6 +4908,9 @@ function TextView:get_render_fragment_at_position(x, y)
   end
   local line_x, line_y = self:get_line_screen_position(line)
   local xrel, yrel = x - line_x, y - line_y
+  if not render_line_clip_contains(render_line, xrel - render_line_scroll_x(render_line)) then
+    return nil
+  end
   local row = self:get_visual_row(line, 1)
   local row_height = self:get_visual_row_height(row)
   local content_y_offset, content_height = 0, row_height
@@ -5008,6 +5034,9 @@ function TextView:get_render_widget_at_position(x, y)
 
   local line_x, line_y = self:get_line_screen_position(line)
   local xrel, yrel = x - line_x, y - line_y
+  if not render_line_clip_contains(render_line, xrel - render_line_scroll_x(render_line)) then
+    return nil
+  end
   local row = self:get_visual_row(line, 1)
   local row_height = self:get_visual_row_height(row)
   local content_y_offset, content_height = 0, row_height
@@ -5074,7 +5103,10 @@ function TextView:get_render_widget_near_position(x, y)
   local best
   for line = math.max(1, resolved_line - 1), math.min(#self.buffer.lines, resolved_line + 1) do
     local render_line = self:get_line_render(line)
-    if render_line then
+    if render_line and render_line_clip_contains(
+      render_line,
+      x - self:get_line_screen_position(line) - render_line_scroll_x(render_line)
+    ) then
       local line_x, line_y = self:get_line_screen_position(line)
       local row = self:get_visual_row(line, 1)
       local row_height = self:get_visual_row_height(row)
@@ -5931,7 +5963,7 @@ function TextView:resolve_screen_position(x, y)
         local rendered_col, rendered_row
         if render_line then
           rendered_col, rendered_row = self:get_line_render_position_col(
-            render_line, x - ox,
+            render_line, render_line_hit_x(render_line, x - ox),
             rendered_position_hit_y(
               self, entry.line, render_line, idx,
               y - (oy + self:get_visual_row_y_offset(idx))
@@ -5957,7 +5989,7 @@ function TextView:resolve_screen_position(x, y)
     local rendered_col, rendered_row
     if render_line then
       rendered_col, rendered_row = self:get_line_render_position_col(
-        render_line, x - ox,
+        render_line, render_line_hit_x(render_line, x - ox),
         rendered_position_hit_y(
           self, row_line, render_line, idx,
           y - (oy + self:get_visual_row_y_offset(idx))
@@ -6003,7 +6035,7 @@ function TextView:resolve_screen_position(x, y)
   local rendered_col, rendered_row
   if render_line then
     rendered_col, rendered_row = self:get_line_render_position_col(
-      render_line, x - ox,
+      render_line, render_line_hit_x(render_line, x - ox),
       rendered_position_hit_y(
         self, line, render_line, row,
         y - (oy + self:get_visual_row_y_offset(row))
@@ -6085,6 +6117,57 @@ end
 ---@param col integer Column number
 ---@param instant? boolean Jump immediately without animation
 ---@param opts? table Optional range/scroll options
+---Scroll a rendered line's horizontal region, such as a wide Markdown table.
+---@param region table The render line's `horizontal_scroll` state
+---@param x number Target scroll offset; clamped to `[0, region.max]`
+---@param instant? boolean Jump without animation
+function TextView:set_line_render_horizontal_scroll(region, x, instant)
+  x = common.clamp(x, 0, math.max(0, region.max or 0))
+  region.to = x
+  if instant then
+    region.x = x
+    region.move_data_x = nil
+  elseif region.x ~= x then
+    self.__horizontal_scroll_regions = self.__horizontal_scroll_regions
+      or setmetatable({}, { __mode = "k" })
+    self.__horizontal_scroll_regions[region] = true
+  end
+  core.redraw = true
+end
+
+---Scroll the region of `line` so the caret at `col` is visible. A table cell
+---that fits is revealed whole.
+---@return boolean handled True when the line owns a horizontal region
+function TextView:reveal_line_render_horizontal_position(line, col, instant)
+  local render_line = self:has_line_render_providers() and self:get_line_render(line)
+  local region = render_line and render_line.horizontal_scroll
+  local clip = render_line and render_line.horizontal_clip
+  if not (region and clip) then return false end
+  local width = clip.x2 - clip.x1
+  local x1 = self:get_col_x_offset(line, col)
+  local x2 = x1
+  local _, row = self:get_position_line_render_row(line, col)
+  local margin = math.min(width * 0.25, 2 * self:get_font():get_width(" "))
+  if row and row.selection_x1 and row.selection_x2
+  and row.selection_x2 - row.selection_x1 + margin * 2 <= width then
+    -- Reveal the whole cell with its borders.
+    x1, x2 = math.min(x1, row.selection_x1), math.max(x2, row.selection_x2)
+  end
+  x1, x2 = x1 - margin, x2 + margin
+  local current = region.to or region.x or 0
+  local target = current
+  if x2 > current + clip.x2 then target = x2 - clip.x2 end
+  if x1 < target + clip.x1 then target = x1 - clip.x1 end
+  if target ~= current then
+    core.log_quiet(
+      "TextView revealed line %d col %d in its horizontal region: %.1f -> %.1f",
+      line, col, current, target
+    )
+    self:set_line_render_horizontal_scroll(region, target, instant)
+  end
+  return true
+end
+
 function TextView:scroll_to_make_visible(line, col, instant, opts)
   if self.wrapping_enabled then self:update_wrap_cache() end
   self:get_visual_row_metric_cache()
@@ -6150,6 +6233,12 @@ function TextView:scroll_to_make_visible(line, col, instant, opts)
       + context_lh * below_pad
 
     self.scroll.to.y = math.max(0, common.clamp(self.scroll.to.y, below, above))
+  end
+
+  if self:reveal_line_render_horizontal_position(line, col, instant) then
+    -- The line's own scrolling region owns horizontal reveal.
+    self:notify_scroll_listeners("scroll_to_make_visible")
+    return
   end
 
   local fixed_gutter_right = self:get_gutter_width()
@@ -6258,7 +6347,9 @@ local function update_render_hover_state(view, x, y)
     local hit = view:get_render_widget_at_position(x, y)
     if hit and hit.widget.cursor then
       view.cursor = hit.widget.cursor
-      if view.cursor == "hand" then hovered_fragment = hit.fragment end
+      if view.cursor == "hand" or hit.widget.track_hover then
+        hovered_fragment = hit.fragment
+      end
     else
       hit = view:get_render_fragment_at_position(x, y)
       if hit and hit.fragment.cursor then
@@ -6543,6 +6634,30 @@ function TextView:on_mouse_released(...)
   self:end_line_render_interaction("mouse-release")
 end
 
+---Scroll the horizontal region under the pointer, such as a wide Markdown
+---table, with a horizontal wheel or Shift+wheel.
+function TextView:on_mouse_wheel(y, x)
+  local delta = x or 0
+  if delta == 0 and keymap.modkeys.shift then delta = y or 0 end
+  local mouse = core.root_panel and core.root_panel.mouse
+  if delta ~= 0 and mouse and self:has_line_render_providers() then
+    local line = self:resolve_screen_position(mouse.x, mouse.y)
+    local render_line = self:get_line_render(line)
+    local region = render_line and render_line.horizontal_scroll
+    if region and render_line.horizontal_clip and (region.max or 0) > 0
+    and render_line_clip_contains(
+      render_line,
+      mouse.x - self:get_line_screen_position(line) - render_line_scroll_x(render_line)
+    ) then
+      self:set_line_render_horizontal_scroll(
+        region, (region.to or region.x or 0) - delta * config.mouse_wheel_scroll
+      )
+      return true
+    end
+  end
+  return TextView.super.on_mouse_wheel(self, y, x)
+end
+
 function TextView:autoscroll(dy)
   TextView.super.autoscroll(self, dy)
   self:notify_scroll_listeners("autoscroll")
@@ -6710,6 +6825,18 @@ function TextView:update()
   local perf_active = core.perf_frame_stats ~= nil
   local update_start = perf_active and system.get_time()
   local file_open_update = file_open_view_update_begin(self)
+
+  local regions = self.__horizontal_scroll_regions
+  if regions then
+    for region in pairs(regions) do
+      local to = region.to or region.x
+      self:move_towards(region, "x", to, 0.2, "scroll")
+      if math.abs(region.x - to) < 0.5 then
+        region.x, region.move_data_x = to, nil
+        regions[region] = nil
+      end
+    end
+  end
 
   -- clear cache if font or indent size changed
   local phase_start = perf_active and system.get_time()
@@ -7898,6 +8025,13 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
     or false
   local lh = self:get_position_caret_height(line, col, line_end)
   local render_line = self:get_line_render(line)
+  local clip = render_line and render_line.horizontal_clip
+  if clip then
+    -- A caret scrolled out of its line's region stays hidden, like text.
+    local visible_x = x - self:get_line_screen_position(line)
+      - render_line_scroll_x(render_line)
+    if visible_x < clip.x1 or visible_x > clip.x2 then return end
+  end
   local _, position_row = self:get_position_line_render_row(line, col)
   if render_line and not position_row then
     local row_height = self:get_position_visual_row_height(line, col, line_end)
@@ -8055,7 +8189,7 @@ end
 local function draw_render_line_under_selection_backgrounds(view, render_line, x, y, line)
   if not (render_line and render_line.under_selection_backgrounds) then return end
   local tx = x + (render_line.x_offset or 0)
-  local row_height = render_line.layout_height
+  local row_height = render_line.table_content_height or render_line.layout_height
     or view:get_position_visual_row_height(line, 1)
   for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
     local font = render_fragment_font(view, fragment)
@@ -8579,7 +8713,7 @@ local function line_search_matches(view, line)
   return matches
 end
 
-function TextView:draw_line_body(line, x, y)
+local function draw_line_body_contents(self, line, x, y)
   local selection_color = self:get_selection_background_color()
   if not self.buffer.lines[line] then
     core.log_quiet(
@@ -8888,6 +9022,21 @@ function TextView:draw_line_body(line, x, y)
   perf_scope_end(phase_scope)
   perf_scope_end(body_scope)
   return result
+end
+
+
+function TextView:draw_line_body(line, x, y)
+  local render_line = self.buffer.lines[line] and self:has_line_render_providers()
+    and self:get_line_render(line)
+  local clip = render_line and render_line.horizontal_clip
+  if not clip then return draw_line_body_contents(self, line, x, y) end
+  core.push_clip_rect(x + clip.x1, self.position.y, clip.x2 - clip.x1, self.size.y)
+  local ok, height = pcall(
+    draw_line_body_contents, self, line, x - render_line_scroll_x(render_line), y
+  )
+  core.pop_clip_rect()
+  if not ok then error(height, 0) end
+  return height
 end
 
 

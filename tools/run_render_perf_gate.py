@@ -188,6 +188,11 @@ Some intro paragraph before the table.
 | Ship `v1.0` | Cy | todo, see [notes](https://example.com/notes) | 1 d |
 
 Text after the table.
+
+| Ejercicio | Nombre | Unidades | PrecioVenta | ImporteVenta | Margen | Consumo | Comentario largo |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 2025 | Nelec 2026 | 10 | 200.000 | 2.000.000 | 40 | 1.200.000 | revisar con el equipo de ventas antes del cierre |
+| 2025 | HeroA | 100 | 195.000 | 19.500.000 | 35 | 12.675.000 | ok |
 """
 
 

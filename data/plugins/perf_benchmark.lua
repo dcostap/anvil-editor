@@ -1205,6 +1205,28 @@ local function record_video()
     view:on_text_input("3")
     settle_semantics()
     for _ = 1, 2 do capture("filled-table") end
+    -- A table wider than the editor scrolls inside its own frame.
+    local wide = find_line("Nelec 2026")
+    view.buffer:set_selection(wide, view.buffer.lines[wide]:find("Nelec") + 1)
+    view:scroll_to_make_visible(wide, view.buffer.lines[wide]:find("Nelec") + 1, true)
+    settle_semantics()
+    for _ = 1, 2 do capture("wide-table") end
+    local comment = view.buffer.lines[wide]:find("revisar") + 2
+    view.buffer:set_selection(wide, comment)
+    view:scroll_to_make_visible(wide, comment, true)
+    for _ = 1, 6 do capture("wide-revealed") end
+    do
+      local last_row = find_line("HeroA")
+      local render = view:get_line_render(last_row)
+      for _, fragment in ipairs(render and render.fragments or {}) do
+        if fragment.table_scrollbar then
+          local line_x, line_y = view:get_line_screen_position(last_row)
+          view:on_mouse_moved(line_x + render.horizontal_scroll.x + 200,
+            line_y + fragment.draw_y_offset + fragment.widget.height / 2, 0, 0)
+        end
+      end
+    end
+    for _ = 1, 2 do capture("wide-scrollbar-hover") end
     benchmark.action_count = 1
     benchmark.video_reproduced = true
   else

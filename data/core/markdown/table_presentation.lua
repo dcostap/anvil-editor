@@ -543,6 +543,60 @@ local function row_inline_runs(view, text, line, reveal, base)
   return pieces and normalize_runs(text, pieces) or nil
 end
 
+local function control_metrics(text_line_height)
+  local size = math.max(math.floor(SCALE * 6), math.floor(text_line_height * 0.72 + 0.5))
+  local hit_padding = math.max(math.floor(SCALE * 2), math.floor(size * 0.18 + 0.5))
+  return size, hit_padding, size + hit_padding * 2
+end
+
+-- Table Scroll -------------------------------------------------------------
+-- A table wider than the editor scrolls inside its own frame. Its rows share
+-- one state, keyed by the header line, so the offset survives row rebuilds.
+
+---Return the shared horizontal scroll state of the table whose header row
+---is `line1`. Text View reads `x` when it draws and hit-tests the rows.
+function table_presentation.scroll_state(view, line1)
+  local states = view.__markdown_table_scroll
+  if not states then
+    states = {}
+    view.__markdown_table_scroll = states
+  end
+  local state = states[line1]
+  if not state then
+    state = { x = 0, to = 0, max = 0 }
+    states[line1] = state
+  end
+  return state
+end
+
+---Move scroll states with their tables after an edit adds or removes lines.
+function table_presentation.remap_scroll_states(view, ranges)
+  local states = view.__markdown_table_scroll
+  if not (states and next(states)) then return end
+  local remapped = {}
+  for line1, state in pairs(states) do
+    local delta, mapped = 0, nil
+    for _, range in ipairs(ranges) do
+      local old_line1 = range.old_line1 or range.new_line1 or 1
+      local old_line2 = range.old_line2 or old_line1
+      if line1 < old_line1 then
+        mapped = line1 + delta
+        break
+      end
+      if line1 <= old_line2 then
+        local new_line1 = range.new_line1 or old_line1
+        local new_line2 = math.max(new_line1, range.new_line2 or new_line1)
+        mapped = math.min(new_line1 + line1 - old_line1, new_line2)
+        break
+      end
+      delta = delta + (range.line_delta or 0)
+    end
+    mapped = mapped or line1 + delta
+    if not remapped[mapped] or (state.x or 0) > 0 then remapped[mapped] = state end
+  end
+  view.__markdown_table_scroll = remapped
+end
+
 function table_presentation.available_width(view)
   -- Tables may use the full editor viewport even when prose has a narrower
   -- configured wrap column. This matches reading-mode table layout and avoids
@@ -780,8 +834,13 @@ function table_presentation.layout(view, table_node, instance)
       row_heights[row_line] = max_lines * text_line_height + vertical_pad * 2
     end
   end
+  local _, _, control_hit_size = control_metrics(text_line_height)
+  -- Scrolling ends past the last border so its Hover Insertion Control fits.
+  local scroll_max = total_width > available_width
+    and math.ceil(total_width + control_hit_size / 2 - available_width) or 0
   local layout = {
     id = table_node.id, line1 = line1, line2 = line2,
+    viewport_width = available_width, scroll_max = scroll_max,
     delimiter_line = line1 + 1, rows = rows, columns = columns,
     widths = widths, alignments = alignments, padding = pad,
     vertical_padding = vertical_pad, text_line_height = text_line_height,
@@ -795,23 +854,15 @@ function table_presentation.layout(view, table_node, instance)
   return store(layout)
 end
 
-function table_presentation.cached_horizontal_extent(view)
-  local cache = view.__markdown_live_table_layout_cache
-  if not cache then return 0 end
-  local font = live_fonts.body(view)
-  local bucket = cache.buckets[table_geometry_key(font, table_presentation.available_width(view))]
-  local width = 0
-  for _, layout in pairs(bucket and bucket.layouts or {}) do
-    if layout then width = math.max(width, tonumber(layout.total_width) or 0) end
-  end
-  return width
-end
-
 -- Table handles ------------------------------------------------------------
 -- A grip on a body row's left border and on top of each header cell. A click
 -- selects the whole row or column; a drag moves it to the drop position.
 
 local function line_bottom(view, line)
+  local content = view:get_line_render(line)
+  if content and content.table_content_height then
+    return select(2, view:get_line_screen_position(line)) + content.table_content_height
+  end
   if line < #view.buffer.lines then
     return select(2, view:get_line_screen_position(line + 1))
   end
@@ -843,6 +894,19 @@ local function draw_grip(x, y, width, height, visibility, vertical)
   end
 end
 
+-- Draw a drag preview inside the table's frame, like its rows.
+local function draw_in_table_frame(owner, line, draw)
+  local render = owner:get_line_render(line)
+  local clip = render and render.horizontal_clip
+  if not clip then return draw() end
+  local scroll = render.horizontal_scroll
+  local x = owner:get_line_screen_position(line) + (scroll and scroll.x or 0)
+  core.push_clip_rect(x + clip.x1, owner.position.y, clip.x2 - clip.x1, owner.size.y)
+  local ok, err = pcall(draw)
+  core.pop_clip_rect()
+  if not ok then error(err, 0) end
+end
+
 local function table_rows_for_drag(view, line)
   local context = markdown_tables.interactive_context(view, line, 1)
   if not context then return nil end
@@ -872,6 +936,9 @@ local function row_drag(view, spec, press_y)
   end
   function drag.draw(self, owner)
     if not (self.moved and self.target) then return end
+    draw_in_table_frame(owner, lines[1], function() self:draw_preview(owner) end)
+  end
+  function drag.draw_preview(self, owner)
     local x, from_y = owner:get_line_screen_position(lines[self.from])
     local from_bottom = line_bottom(owner, lines[self.from])
     renderer.draw_rect(
@@ -910,6 +977,17 @@ local function column_drag(view, spec, column, press_x)
   function drag.on_move(self, owner, x)
     if not self.moved and math.abs(x - press_x) < threshold then return end
     self.moved = true
+    local render = owner:get_line_render(lines[1])
+    local scroll, clip = render and render.horizontal_scroll, render and render.horizontal_clip
+    if scroll and clip then
+      local left = owner:get_line_screen_position(lines[1]) + scroll.x + clip.x1
+      local edge = spec.text_line_height * 2
+      local step = x < left + edge and x - (left + edge)
+        or x > left + clip.x2 - edge and x - (left + clip.x2 - edge) or 0
+      if step ~= 0 then
+        owner:set_line_render_horizontal_scroll(scroll, scroll.x + step, true)
+      end
+    end
     local relative = x - owner:get_line_screen_position(lines[1])
     if relative < cell_x[1].x1 then
       self.target = 1
@@ -923,6 +1001,9 @@ local function column_drag(view, spec, column, press_x)
   end
   function drag.draw(self, owner)
     if not (self.moved and self.target) then return end
+    draw_in_table_frame(owner, lines[1], function() self:draw_preview(owner) end)
+  end
+  function drag.draw_preview(self, owner)
     local x, top = owner:get_line_screen_position(lines[1])
     local bottom = line_bottom(owner, lines[#lines])
     local from = cell_x[self.from]
@@ -988,14 +1069,15 @@ local function append_table_handles(view, fragments, spec)
   end
 
   if not spec.header then
-    -- The pill sits on the table's left border; its hit area stays inside
-    -- the first cell's padding because the gutter owns presses to its left.
-    local hit_width = math.max(thickness * 2, spec.padding)
+    -- The pill sits in the first cell's leading padding, between the left
+    -- border and the text, so the gutter and the table frame never crop it.
+    local hit_width = spec.separator_width + spec.padding
     handle("row", spec.line, 0, hit_width, spec.row_height,
       function(draw_x, draw_y, visibility)
         local height = math.min(length, spec.row_height - 4)
+        local center = draw_x + (spec.separator_width * 1.5 + spec.padding) / 2
         draw_grip(
-          draw_x - thickness / 2 + math.max(1, math.floor(SCALE)),
+          math.floor(center - thickness / 2 + 0.5),
           draw_y + (spec.row_height - height) / 2,
           thickness, height, visibility, true
         )
@@ -1021,6 +1103,85 @@ local function append_table_handles(view, fragments, spec)
   end
 end
 
+-- A scrollbar in a band below an overflowing table's last row. It stays in
+-- the table's frame while the rows scroll.
+local function append_table_scrollbar(view, fragments, spec)
+  local region, layout = spec.region, spec.layout
+  local thickness = math.max(4, math.floor(SCALE * 6 + 0.5))
+  local gap = math.max(3, math.floor(SCALE * 5 + 0.5))
+  local band = gap * 2 + thickness
+  local viewport = layout.viewport_width
+  local function thumb(x)
+    local content = viewport + region.max
+    local width = math.max(thickness * 4, viewport * viewport / content)
+    local offset = region.max > 0 and (viewport - width) * region.x / region.max or 0
+    return x + offset, width
+  end
+  local function frame_left(owner)
+    return owner:get_line_screen_position(spec.line) + region.x
+  end
+  fragments[#fragments + 1] = {
+    source_col1 = spec.source_col,
+    source_col2 = spec.source_col,
+    text = "",
+    width = 0,
+    -- Rows shift left by the scroll offset; this hit area spans every
+    -- visible offset, and Text View clips it to the frame.
+    hit_width = layout.total_width + viewport,
+    layout_x = 0,
+    draw_y_offset = spec.row_height,
+    semantic_id = spec.semantic_id,
+    table_scrollbar = true,
+    widget = {
+      width = layout.total_width + viewport,
+      height = band,
+      cursor = "arrow",
+      track_hover = true,
+      suppress_hover_overlay = true,
+      draw = function(_, fragment, draw_x, draw_y)
+        local left = draw_x + region.x
+        local y = draw_y + spec.row_height + gap
+        renderer.draw_rounded_rect(
+          left, y, viewport, thickness, thickness / 2,
+          with_alpha(style.markdown_live_table_separator, 0.35)
+        )
+        local thumb_x, thumb_width = thumb(left)
+        local color = (region.dragging or fragment.hovered) and style.scrollbar_active
+          or style.scrollbar_hover
+        renderer.draw_rounded_rect(thumb_x, y, thumb_width, thickness, thickness / 2, color)
+      end,
+      on_mouse_pressed = function(_, owner, _, button, x)
+        if button ~= "left" then return false end
+        local left = frame_left(owner)
+        local thumb_x, thumb_width = thumb(left)
+        local grab = x - thumb_x
+        if grab < 0 or grab > thumb_width then
+          -- A press on the track centers the thumb there, then drags it.
+          grab = thumb_width / 2
+          local travel = math.max(1, viewport - thumb_width)
+          owner:set_line_render_horizontal_scroll(
+            region, (x - left - grab) / travel * region.max, true
+          )
+        end
+        region.dragging = true
+        owner:begin_render_widget_drag({
+          cursor = "arrow",
+          on_move = function(_, drag_owner, move_x)
+            local travel = math.max(1, viewport - thumb_width)
+            drag_owner:set_line_render_horizontal_scroll(
+              region, (move_x - frame_left(drag_owner) - grab) / travel * region.max, true
+            )
+          end,
+          on_release = function() region.dragging = nil end,
+        })
+        core.log_quiet("Markdown Table Scroll scrollbar pressed in %s", owner.buffer:get_name())
+        return true
+      end,
+    },
+  }
+  return band
+end
+
 ---Return a table row's fragments, its table layout, caret position rows and
 ---row height. Cells that hold a caret in `selection_state` present source.
 function table_presentation.row_fragments(view, table_node, line, instance, selection_state)
@@ -1028,6 +1189,17 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
   if not layout then return nil end
   local row = layout.rows[line]
   if not row then return nil end
+  local region
+  if layout.scroll_max > 0 then
+    region = table_presentation.scroll_state(view, layout.line1)
+    region.max = layout.scroll_max
+    region.x = math.min(region.x or 0, region.max)
+    region.to = math.min(region.to or region.x, region.max)
+  end
+  local extras = region and {
+    horizontal_scroll = region,
+    horizontal_clip = { x1 = 0, x2 = layout.viewport_width },
+  } or {}
   if line == layout.delimiter_line then
     local thickness = math.max(1, math.floor(SCALE))
     return {
@@ -1045,7 +1217,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
           end,
         },
       },
-    }, layout
+    }, layout, nil, nil, extras
   end
 
   local fragments = {}
@@ -1248,14 +1420,8 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     fragment_x = fragment_x + (fragment.width or 0)
   end
 
-  local control_size = math.max(
-    math.floor(SCALE * 6),
-    math.floor(layout.text_line_height * 0.72 + 0.5)
-  )
-  local control_hit_padding = math.max(
-    math.floor(SCALE * 2), math.floor(control_size * 0.18 + 0.5)
-  )
-  local control_hit_size = control_size + control_hit_padding * 2
+  local control_size, control_hit_padding, control_hit_size =
+    control_metrics(layout.text_line_height)
   local control_proximity_radius = math.max(
     layout.text_line_height * 1.6, control_size * 2
   )
@@ -1355,10 +1521,19 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       source_col = first_presentation.source_col1,
       control_hit_size = control_hit_size,
       padding = layout.padding,
+      separator_width = layout.separator_width,
       proximity_radius = control_proximity_radius,
     })
   end
-  return fragments, layout, position_rows, row_height
+  if region and line == layout.line2 then
+    extras.table_content_height = row_height
+    row_height = row_height + append_table_scrollbar(view, fragments, {
+      region = region, layout = layout, row_height = row_height, line = line,
+      source_col = row.separators[1].col1,
+      semantic_id = table_node.id .. ":scrollbar",
+    })
+  end
+  return fragments, layout, position_rows, row_height, extras
 end
 
 function table_presentation.geometry_signature(view)

@@ -223,6 +223,10 @@ _Avoid_: permanent table toolbar, table context menu
 A temporary grip on a table row or column that appears on hover. Clicking it selects the whole row or column as Table Cell Selections; dragging it moves the row or column within the table.
 _Avoid_: drag handle menu, table context menu
 
+**Table Scroll**:
+Horizontal scrolling of a table wider than the editor inside the table's own frame, with a scrollbar below the table. The document does not scroll sideways; moving the caret into a hidden cell scrolls the table to show it.
+_Avoid_: table overflow, horizontal document scroll
+
 **Table Formatting**:
 Rewriting a Markdown table's source so every column is padded to its widest cell and the delimiter row states each column's alignment. Row, column, alignment, and sort changes apply it to the whole table as one undoable change. Typing inside a cell does not.
 _Avoid_: table prettify, auto-align

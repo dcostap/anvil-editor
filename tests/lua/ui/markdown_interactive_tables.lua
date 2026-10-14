@@ -7,6 +7,7 @@ local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local markdown_tables = require "core.markdown.tables"
+local keymap = require "core.keymap"
 local style = require "core.style"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
@@ -51,7 +52,9 @@ local function cell_center(view, line, column)
     local width = fragment.width or 0
     if fragment.table_cell and fragment.table_column == column then
       local line_x, line_y = view:get_line_screen_position(line)
-      return line_x + x + width / 2, line_y + (render.table_row_height or view:get_line_height()) / 2
+      local height = render.table_content_height or render.table_row_height
+        or view:get_line_height()
+      return line_x + x + width / 2, line_y + height / 2
     end
     x = x + width
   end
@@ -637,17 +640,34 @@ test.describe("Markdown Interactive Table Editing", function()
     test.ok(narrow > wide, "pending table row retained stale wide geometry")
   end)
 
-  test.it("exposes horizontal overflow for a wide rendered table", function()
-    local view = make_view(table.concat({
-      "|   |   |   |   |   |   |   |   |   |",
-      "|---|---|---|---|---|---|---|---|---|",
-      "|CodigoEmpresa|Proyecto|proyecto2|PROT PROD|Reales|Previstos|Diferencia|Incremento|Previsto + Incre|",
-      "|1|2023/031|MISTY MOUNTAINS/ MG. LE 15M D|1|1.428,15|1.263,41|164,73|324,25|1.587,66|",
-      "",
-    }, "\n"))
+  local WIDE_TABLE = table.concat({
+    "|   |   |   |   |   |   |   |   |   |",
+    "|---|---|---|---|---|---|---|---|---|",
+    "|CodigoEmpresa|Proyecto|proyecto2|PROT PROD|Reales|Previstos|Diferencia|Incremento|Previsto + Incre|",
+    "|1|2023/031|MISTY MOUNTAINS/ MG. LE 15M D|1|1.428,15|1.263,41|164,73|324,25|1.587,66|",
+    "",
+    "plain",
+  }, "\n")
+
+  local function wide_table_view()
+    local view, buffer = make_view(WIDE_TABLE)
     view.size.x = 760
     view:set_wrapping_enabled(true)
+    buffer:set_selection(6, 1)
     refresh(view)
+    return view, buffer
+  end
+
+  local function content_left(view)
+    return view.position.x + view:get_gutter_width()
+  end
+
+  local function visible(view, x)
+    return x >= content_left(view) and x <= view.position.x + view.size.x
+  end
+
+  test.it("scrolls a wide table inside its own frame instead of the document", function()
+    local view = wide_table_view()
     local function column_boundaries(line)
       local boundaries, x = {}, 0
       for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
@@ -658,59 +678,103 @@ test.describe("Markdown Interactive Table Editing", function()
     end
     test.same(column_boundaries(1), column_boundaries(3))
     test.same(column_boundaries(1), column_boundaries(4))
-    local function drawn_vertical_borders(line)
-      local result = {}
-      local row_height = view:get_position_visual_row_height(line, 1)
-      local old_draw_rect = renderer.draw_rect
-      local old_draw_text = renderer.draw_text
-      renderer.draw_rect = function(x, _, width, height)
-        if width <= math.max(1, math.ceil(SCALE)) and height >= row_height - 1 then
-          result[#result + 1] = math.floor(x * 100 + 0.5) / 100
-        end
-      end
-      renderer.draw_text = function(font, text, x)
-        return x + font:get_width(text)
-      end
-      local ok, err = pcall(function() view:draw_line_text(line, 0, 0) end)
-      renderer.draw_rect = old_draw_rect
-      renderer.draw_text = old_draw_text
-      if not ok then error(err, 0) end
-      table.sort(result)
-      return result
-    end
-    test.same(drawn_vertical_borders(1), drawn_vertical_borders(3))
-    test.same(drawn_vertical_borders(1), drawn_vertical_borders(4))
-    local scrollable_width = view:get_h_scrollable_size()
-    test.ok(
-      scrollable_width > view.size.x,
-      "wide rendered table should extend the horizontal scroll range"
-    )
-    view:update_scrollbar()
-    test.equal(view.h_scrollbar.force_status, "expanded")
-    local _, _, scrollbar_width, scrollbar_height = view.h_scrollbar:get_track_rect()
-    test.ok(scrollbar_width > 0 and scrollbar_height > 0)
+    test.ok(view:get_h_scrollable_size() <= view.size.x,
+      "a wide table must not widen the document")
+    test.not_ok(visible(view, (cell_center(view, 4, 9))), "the last column starts out of view")
 
     local last_cell = table_cells(view, 4)[9]
+    view.buffer:set_selection(4, last_cell.text_source_col1)
     view:scroll_to_make_visible(4, last_cell.text_source_col1, true)
-    test.ok(view.scroll.x > 0, "caret visibility should scroll a wide wrapped table")
-
-    view.scroll.x = scrollable_width - view.size.x
-    view.scroll.to.x = view.scroll.x
+    test.equal(view.scroll.x, 0)
     local x, y = cell_center(view, 4, 9)
-    test.ok(x >= view.position.x and x <= view.position.x + view.size.x)
+    test.ok(visible(view, x), "caret visibility should scroll the table to the last column")
+    test.not_ok(visible(view, (cell_center(view, 4, 1))), "the first column scrolled out of view")
     local line, col = view:resolve_screen_position(x, y)
-    local context = test.not_nil(markdown_tables.interactive_context(view, line, col))
-    test.equal(context.column, 9)
+    test.equal(test.not_nil(markdown_tables.interactive_context(view, line, col)).column, 9)
 
-    view.size.x = 2000
-    test.equal(view:get_h_scrollable_size(), view.size.x)
-    view:clamp_scroll_position()
-    test.equal(view.scroll.to.x, 0)
+    local first_cell = table_cells(view, 3)[1]
+    view.buffer:set_selection(3, first_cell.text_source_col1)
+    view:scroll_to_make_visible(3, first_cell.text_source_col1, true)
+    test.ok(visible(view, (cell_center(view, 3, 1))), "the first column scrolled back into view")
+  end)
 
-    view.size.x = 760
-    view:set_wrapping_enabled(false)
-    view:update_scrollbar()
-    test.equal(view.h_scrollbar.force_status, "expanded")
+  test.it("keeps clicks on a scrolled table inside its visible columns", function()
+    local view = wide_table_view()
+    local last_cell = table_cells(view, 4)[9]
+    view:scroll_to_make_visible(4, last_cell.text_source_col1, true)
+    local _, y = cell_center(view, 4, 1)
+    local line, col = view:resolve_screen_position(content_left(view) + 2, y)
+    local column = test.not_nil(markdown_tables.interactive_context(view, line, col)).column
+    test.ok(column > 1, "a click at the frame's left edge reached a hidden column")
+    local cell = table_cells(view, 4)[column]
+    local center = cell_center(view, 4, column)
+    test.ok(center + cell.width / 2 > content_left(view), "the clicked column is not visible")
+  end)
+
+  test.it("hides the caret of a cell scrolled out of the table frame", function()
+    local view = wide_table_view()
+    local last_cell = table_cells(view, 4)[9]
+    local animated = config.animated_caret
+    local old_draw_rect = renderer.draw_rect
+    local drawn = 0
+    config.animated_caret = false
+    renderer.draw_rect = function() drawn = drawn + 1 end
+    local ok, err = pcall(function()
+      local x, y = view:get_caret_screen_position(4, last_cell.text_source_col1)
+      view:draw_caret(x, y, 4, last_cell.text_source_col1)
+      test.equal(drawn, 0, "a caret outside the table frame was drawn")
+      x, y = view:get_caret_screen_position(4, table_cells(view, 4)[1].text_source_col1)
+      view:draw_caret(x, y, 4, table_cells(view, 4)[1].text_source_col1)
+      test.equal(drawn, 1, "a caret inside the table frame was not drawn")
+    end)
+    renderer.draw_rect = old_draw_rect
+    config.animated_caret = animated
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("scrolls a wide table with a horizontal wheel over it", function()
+    local view = wide_table_view()
+    local transitions = config.transitions
+    local mouse_x, mouse_y = core.root_panel.mouse.x, core.root_panel.mouse.y
+    config.transitions = false
+    local ok, err = pcall(function()
+      local before, y = cell_center(view, 4, 1)
+      core.root_panel.mouse.x, core.root_panel.mouse.y = before, y
+      test.equal(view:on_mouse_wheel(0, -1), true)
+      view:update()
+      local after = cell_center(view, 4, 1)
+      test.ok(after < before, "the wheel did not scroll the table")
+      test.equal(view.scroll.x, 0)
+      -- Shift+wheel scrolls the table back.
+      keymap.modkeys.shift = true
+      test.equal(view:on_mouse_wheel(1, 0), true)
+      keymap.modkeys.shift = false
+      view:update()
+      test.equal(cell_center(view, 4, 1), before)
+    end)
+    keymap.modkeys.shift = false
+    config.transitions = transitions
+    core.root_panel.mouse.x, core.root_panel.mouse.y = mouse_x, mouse_y
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("scrolls a wide table from the scrollbar below it", function()
+    local view = wide_table_view()
+    local render = test.not_nil(view:get_line_render(4))
+    local scrollbar
+    for _, fragment in ipairs(render.fragments or {}) do
+      if fragment.table_scrollbar then scrollbar = fragment end
+    end
+    test.not_nil(scrollbar, "an overflowing table needs a scrollbar")
+    local _, line_y = view:get_line_screen_position(4)
+    local y = line_y + scrollbar.draw_y_offset + scrollbar.widget.height / 2
+    local right = view.position.x + view:get_gutter_width()
+      + require("core.markdown.table_presentation").available_width(view) - 2
+    view:on_mouse_moved(right, y, 0, 0)
+    test.equal(view:on_mouse_pressed("left", right, y, 1), true)
+    view:on_mouse_released("left", right, y)
+    test.ok(visible(view, (cell_center(view, 4, 9))), "the scrollbar did not reach the last column")
+    test.equal(view.buffer:get_selection(), 6, "the scrollbar moved the caret")
   end)
 
   test.it("shows hover controls that insert columns and rows at their edges", function()
@@ -1435,5 +1499,28 @@ test.describe("Markdown Interactive Table Editing", function()
     test.same(row_cells(buffer, 3), { "one", "three", "two" })
     test.ok(row_cells(buffer, 2)[3]:match("^:%-+:$"), "alignment did not move with its column")
     test.same(selected_cells(view), { "1:3", "3:3" })
+  end)
+
+  test.it("draws the row handle inside the table", function()
+    local view = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+    view.buffer:set_selection(5, 1)
+    refresh(view)
+    local x, y = table_handle(view, 3, "row", 3)
+    view:on_mouse_moved(x, y, 0, 0)
+    local line_x, line_y = view:get_line_screen_position(3)
+    local lefts = {}
+    local old_draw_rounded_rect = renderer.draw_rounded_rect
+    local old_draw_rect, old_draw_text = renderer.draw_rect, renderer.draw_text
+    renderer.draw_rounded_rect = function(left) lefts[#lefts + 1] = left end
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
+    local ok, err = pcall(function() view:draw_line_text(3, line_x, line_y) end)
+    renderer.draw_rounded_rect = old_draw_rounded_rect
+    renderer.draw_rect, renderer.draw_text = old_draw_rect, old_draw_text
+    if not ok then error(err, 0) end
+    test.ok(#lefts > 0, "the hovered row handle was not drawn")
+    for _, left in ipairs(lefts) do
+      test.ok(left >= line_x, "the row handle starts left of the table border")
+    end
   end)
 end)
