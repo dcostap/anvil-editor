@@ -1560,9 +1560,12 @@ end
 ---spreadsheet rows outside any table, with no selection to replace.
 function tables.can_paste_table(view)
   if not (view and view.buffer) or view.buffer:has_any_selection() then return false end
-  if #view.buffer.selections ~= 4 or not tables.can_insert_table(view) then return false end
+  if #view.buffer.selections ~= 4 then return false end
+  -- The clipboard check is cheap and usually fails; the table and fence
+  -- checks scan the Buffer.
   local grid = tables.spreadsheet_grid(system.get_clipboard())
   return grid ~= nil and #grid.rows >= 2 and grid.columns >= 2
+    and tables.can_insert_table(view)
 end
 
 ---Paste spreadsheet rows as a new table whose first row is the header.

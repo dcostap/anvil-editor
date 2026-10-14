@@ -880,6 +880,18 @@ test.describe("Markdown Interactive Table Editing", function()
     test.equal(table_cells(view, 3)[1].text_lines[1].text, "**a** b")
   end)
 
+  test.it("keeps whole-cell selections rendered without revealing syntax", function()
+    local view, buffer = make_view("| A | B |\n| --- | --- |\n| **a** b | ~~two~~ |\n\nplain")
+    buffer:set_selection(5, 1)
+    refresh(view)
+    test.equal(markdown_tables.select_row(view, 3), true)
+    test.equal(table_cells(view, 3)[1].text_lines[1].text, "a b")
+    test.equal(table_cells(view, 3)[2].text_lines[1].text, "two")
+
+    buffer:set_selection(3, buffer.lines[3]:find("a", 1, true) + 1)
+    test.equal(table_cells(view, 3)[1].text_lines[1].text, "**a** b")
+  end)
+
   test.it("places the caret after hidden syntax when clicking rendered text", function()
     local view, buffer = make_view("| A | B |\n| --- | --- |\n| **bold** x | two |\n\nplain")
     buffer:set_selection(5, 1)

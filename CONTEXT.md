@@ -219,6 +219,10 @@ _Avoid_: Grid cursor, table highlight
 A temporary table-edge control that appears on hover and inserts a row or column at the indicated boundary.
 _Avoid_: permanent table toolbar, table context menu
 
+**Table Handle**:
+A temporary grip on a table row or column that appears on hover. Clicking it selects the whole row or column as Table Cell Selections; dragging it moves the row or column within the table.
+_Avoid_: drag handle menu, table context menu
+
 **Table Formatting**:
 Rewriting a Markdown table's source so every column is padded to its widest cell and the delimiter row states each column's alignment. Row, column, alignment, and sort changes apply it to the whole table as one undoable change. Typing inside a cell does not.
 _Avoid_: table prettify, auto-align

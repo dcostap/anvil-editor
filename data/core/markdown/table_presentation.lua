@@ -1053,8 +1053,18 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     for index = 1, #(selection_state and selection_state.selections or {}), 4 do
       local line1, col1 = selection_state.selections[index], selection_state.selections[index + 1]
       local line2, col2 = selection_state.selections[index + 2], selection_state.selections[index + 3]
+      -- A Table Cell Selection covers the whole cell and keeps it rendered;
+      -- only a caret or a partial selection edits the cell's source.
+      if line1 == line and line2 == line
+      and cell.content_col1 < cell.content_col2
+      and math.min(col1, col2) == cell.content_col1
+      and math.max(col1, col2) == cell.content_col2
+      then
+        goto continue_selection
+      end
       if line1 == line and col1 >= cell.col1 and col1 <= cell.col2 then return true end
       if line2 == line and col2 >= cell.col1 and col2 <= cell.col2 then return true end
+      ::continue_selection::
     end
     return false
   end
