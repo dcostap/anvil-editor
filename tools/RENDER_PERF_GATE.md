@@ -322,7 +322,7 @@ python tools/run_render_perf_gate.py --scenario markdown-table-tour --video --no
 
 It captures the idle table, an active cell, typing, Tab navigation, a hovered
 Hover Insertion Control, a row handle drag and drop, a hovered column handle,
-an appended row, an inserted table, and a wide table's Table Scroll with its
+a rectangle of Table Cell Selections, a selected column, an appended row, an inserted table, and a wide table's Table Scroll with its
 scrollbar. It asserts nothing about pixels;
 inspect the numbered PNG frames. `frames.csv` names the stage of each frame.
 

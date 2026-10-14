@@ -1184,6 +1184,21 @@ local function record_video()
       return fragment.table_handle == "column" and fragment.table_handle_index == 3
     end)
     for _ = 1, 2 do capture("hover-column-handle") end
+    do
+      -- A rectangle of Table Cell Selections from "Owner" to "Status" over
+      -- two body rows, then a whole column through its handle.
+      local markdown_tables = require "core.markdown.tables"
+      local first, second = find_line("Draw the grid"), find_line("Ship")
+      markdown_tables.select_rectangle(
+        view, first, view.buffer.lines[first]:find("Bo"),
+        second, view.buffer.lines[second]:find("todo") + 1
+      )
+      settle_semantics()
+      for _ = 1, 2 do capture("selected-cells") end
+      markdown_tables.select_column(view, first, 4)
+      settle_semantics()
+      for _ = 1, 2 do capture("selected-column") end
+    end
     view.buffer:set_selection(find_line("Task") + 2, 3)
     local last = find_line("Ship")
     view.buffer:set_selection(last, view.buffer.lines[last]:find("Ship") + 1)

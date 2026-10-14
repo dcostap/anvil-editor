@@ -189,6 +189,8 @@ style.markdown_live_table_cell = style.text
 style.markdown_live_table_separator = style.divider
 style.markdown_live_table_header_background = { common.color "rgba(255, 255, 255, 0.05)" }
 style.markdown_live_table_active_cell = { common.color "rgba(89, 160, 250, 0.10)" }
+style.markdown_live_table_cell_selection = { common.color "rgba(210, 163, 107, 0.14)" }
+style.markdown_live_table_cell_selection_outline = style.accent
 style.markdown_live_hidden_syntax = style.dim
 
 -- Diff/search/selection-like colors

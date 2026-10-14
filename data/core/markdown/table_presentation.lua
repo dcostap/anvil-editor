@@ -1286,16 +1286,16 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       text = "", width = layout.separator_width,
       semantic_id = id,
       table_border = true,
+      -- Painted below selections, so a Table Cell Selection's tint continues
+      -- across the grid lines between selected cells.
+      background = style.markdown_live_table_background,
+      background_overlay = header and style.markdown_live_table_header_background or nil,
+      background_under_selection = true,
+      background_full_height = true,
       widget = {
         width = layout.separator_width,
         height = row_height,
         draw = function(_, _, x, y, row_height)
-          renderer.draw_rect(x, y, layout.separator_width, row_height,
-            style.markdown_live_table_background)
-          if header then
-            renderer.draw_rect(x, y, layout.separator_width, row_height,
-              style.markdown_live_table_header_background)
-          end
           renderer.draw_rect(
             x + math.floor((layout.separator_width - line_width) / 2), y,
             line_width, row_height, style.markdown_live_table_separator
@@ -1376,6 +1376,16 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
   local position_rows = {}
   local fragment_x = 0
   local cell_x = {}
+  -- A Table Cell Selection's frame runs along the grid lines around its cell.
+  local grid_line_width = math.max(1, math.floor(SCALE))
+  local grid_line_offset = math.floor((layout.separator_width - grid_line_width) / 2)
+  local function neighbor_row(step)
+    local neighbor = line + step
+    if neighbor == layout.delimiter_line then neighbor = neighbor + step end
+    if neighbor < layout.line1 or neighbor > layout.line2 then return nil end
+    return neighbor
+  end
+  local row_above, row_below = neighbor_row(-1), neighbor_row(1)
   for _, fragment in ipairs(fragments) do
     -- A table row is one shared grid. Source-position mappings describe caret
     -- placement inside cells, but must never reposition the border/cell
@@ -1411,7 +1421,16 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
           selection_x2 = fragment_x + (fragment.width or 0),
           selection_y = 0,
           selection_height = row_height,
-          selection_outline = style.caret,
+          selection_fill = style.markdown_live_table_cell_selection,
+          selection_outline = style.markdown_live_table_cell_selection_outline,
+          selection_frame_x1 = fragment_x - layout.separator_width + grid_line_offset,
+          selection_frame_x2 = fragment_x + (fragment.width or 0)
+            + grid_line_offset + grid_line_width,
+          -- A body row's top grid line is the bottom line of the row above.
+          selection_frame_y1 = header and 0 or -grid_line_width,
+          selection_frame_y2 = row_height,
+          table_row_above = row_above,
+          table_row_below = row_below,
           -- The active cell's tint marks the caret row inside a table.
           suppress_line_highlight = true,
         }

@@ -8375,6 +8375,8 @@ function TextView:prepare_line_body_draw_cache(minline, maxline)
 
   self.__line_body_highlight_cache = highlight_cache
   self.__line_body_selection_cache = selection_cache
+  -- Rebuilt lazily for this draw by the Table Cell Selection painters.
+  self.__table_cell_selection_cache = nil
   self.__line_body_search_match_cache = search_match_cache
   self.__line_body_selection_newline_cache = selection_newline_cache
   self.__line_gutter_selection_cache = gutter_selection_cache
@@ -8580,17 +8582,143 @@ local function draw_line_render_full_cell(view, row, x, y, color)
     1, row.selection_height or row.height or view:get_line_height()
   )
   renderer.draw_rect(x1, sy, x2 - x1, sh, color)
-  if row.selection_outline then
-    local border = math.max(1, math.floor(SCALE))
-    renderer.draw_rect(x1, sy, x2 - x1, border, row.selection_outline)
-    renderer.draw_rect(
-      x1, sy + math.max(0, sh - border), x2 - x1, border,
-      row.selection_outline
-    )
-    renderer.draw_rect(x1, sy, border, sh, row.selection_outline)
-    renderer.draw_rect(x2 - border, sy, border, sh, row.selection_outline)
-  end
   return true
+end
+
+---Single-line selections by line, each mapping its first column to its last.
+---Built once per draw; the draw clears it when it finishes.
+local function table_cell_selection_lookup(view)
+  local buffer = view.buffer
+  local cached = view.__table_cell_selection_cache
+  if cached and cached.selections == buffer.selections
+  and cached.count == #buffer.selections
+  and cached.revision == buffer.selection_revision
+  and cached.change_id == buffer:get_change_id()
+  then
+    return cached
+  end
+  local lookup = {
+    grouped = #buffer.selections > 4,
+    selections = buffer.selections, count = #buffer.selections,
+    revision = buffer.selection_revision, change_id = buffer:get_change_id(),
+  }
+  for _, line1, col1, line2, col2 in buffer:get_selections(true) do
+    if line1 == line2 then
+      lookup[line1] = lookup[line1] or {}
+      lookup[line1][col1] = col2
+    end
+  end
+  view.__table_cell_selection_cache = lookup
+  return lookup
+end
+
+---Whether a selection covers exactly the cell of `row`. An empty cell only
+---counts as part of a selection group; a lone caret there is a caret.
+local function row_has_table_cell_selection(lookup, line, row)
+  local col1, col2 = row.cell_source_col1, row.cell_source_col2
+  local selected = col1 and lookup[line] and lookup[line][col1]
+  if selected == nil then return false end
+  if col1 == col2 then return lookup.grouped and selected == col1 end
+  return selected == col2
+end
+
+local function table_cell_row(rows, column)
+  for _, row in ipairs(rows or {}) do
+    if row.selection_full_cell and row.table_cell == column then return row end
+  end
+end
+
+local function draw_table_cell_selection_fill(row, x, y)
+  local x1, x2 = x + row.selection_frame_x1, x + row.selection_frame_x2
+  local height = row.selection_height
+  if x2 <= x1 or not height or height <= 0 then return false end
+  renderer.draw_rect(x1, y + (row.selection_y or 0), x2 - x1, height, row.selection_fill)
+  return true
+end
+
+---Fill a rounded outline corner at (`cx`, `cy`); `sx` and `sy` point inward.
+local function draw_outline_corner(cx, cy, sx, sy, radius, thickness, color)
+  renderer.draw_poly({
+    { cx, cy + sy * radius, cx, cy, cx + sx * radius, cy },
+    {
+      cx + sx * radius, cy + sy * thickness,
+      cx + sx * thickness, cy + sy * thickness,
+      cx + sx * thickness, cy + sy * radius,
+    },
+  }, color)
+end
+
+---Outline each group of Table Cell Selections once around its outer edge.
+---Drawn above the text pass so the outline covers the table's grid lines.
+local function draw_table_cell_selection_outlines(view, line, render_line, x, y)
+  local rows = render_line and render_line.position_rows
+  if type(rows) ~= "table" or #rows == 0 then return end
+  local lookup = table_cell_selection_lookup(view)
+  if not lookup[line] then return end
+  local function selected(neighbor_line, column)
+    if not neighbor_line then return false end
+    local neighbor_rows = rows
+    if neighbor_line ~= line then
+      if not lookup[neighbor_line] then return false end
+      local neighbor_render = view:get_line_render(neighbor_line)
+      neighbor_rows = neighbor_render and neighbor_render.position_rows
+    end
+    local row = table_cell_row(neighbor_rows, column)
+    return row ~= nil and row_has_table_cell_selection(lookup, neighbor_line, row)
+  end
+  local thickness = math.max(1, common.round(2 * SCALE))
+  local radius = math.max(thickness + 1, common.round(5 * SCALE))
+  for _, row in ipairs(rows) do
+    if row.selection_full_cell and row.selection_outline and row.selection_frame_x1
+    and row_has_table_cell_selection(lookup, line, row)
+    then
+      local column = row.table_cell
+      local left = not selected(line, column - 1)
+      local right = not selected(line, column + 1)
+      local top = not selected(row.table_row_above, column)
+      local bottom = not selected(row.table_row_below, column)
+      local x1, x2 = x + row.selection_frame_x1, x + row.selection_frame_x2
+      local y1, y2 = y + row.selection_frame_y1, y + row.selection_frame_y2
+      local color = row.selection_outline
+      local r_tl = top and left and radius or 0
+      local r_tr = top and right and radius or 0
+      local r_bl = bottom and left and radius or 0
+      local r_br = bottom and right and radius or 0
+      if top then
+        renderer.draw_rect(x1 + r_tl, y1, x2 - x1 - r_tl - r_tr, thickness, color)
+      end
+      if bottom then
+        renderer.draw_rect(x1 + r_bl, y2 - thickness, x2 - x1 - r_bl - r_br, thickness, color)
+      end
+      if left then
+        renderer.draw_rect(x1, y1 + r_tl, thickness, y2 - y1 - r_tl - r_bl, color)
+      end
+      if right then
+        renderer.draw_rect(x2 - thickness, y1 + r_tr, thickness, y2 - y1 - r_tr - r_br, color)
+      end
+      if r_tl > 0 then draw_outline_corner(x1, y1, 1, 1, radius, thickness, color) end
+      if r_tr > 0 then draw_outline_corner(x2, y1, -1, 1, radius, thickness, color) end
+      if r_bl > 0 then draw_outline_corner(x1, y2, 1, -1, radius, thickness, color) end
+      if r_br > 0 then draw_outline_corner(x2, y2, -1, -1, radius, thickness, color) end
+    end
+  end
+end
+
+---Whether a caret belongs to a Table Cell Selection, which shows no caret.
+local function is_table_cell_selection(view, line1, col1, line2, col2)
+  if line1 ~= line2 then return false end
+  local render_line = view:get_line_render(line1)
+  local rows = render_line and render_line.position_rows
+  if type(rows) ~= "table" then return false end
+  local first = math.min(col1, col2)
+  for _, row in ipairs(rows) do
+    if row.selection_full_cell and row.selection_fill and row.cell_source_col1 == first then
+      return row_has_table_cell_selection(
+        table_cell_selection_lookup(view), line1, row
+      )
+    end
+  end
+  return false
 end
 
 local function draw_line_render_position_row_range(
@@ -8604,7 +8732,13 @@ local function draw_line_render_position_row_range(
     and col1 <= (row.cell_source_col1 or math.huge)
     and col2 >= (row.cell_source_col2 or -math.huge)
     then
-      drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
+      if row.selection_fill and row.selection_frame_x1
+      and col1 == row.cell_source_col1 and col2 == row.cell_source_col2
+      then
+        drawn = draw_table_cell_selection_fill(row, x, y) or drawn
+      else
+        drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
+      end
       goto continue_position_row_selection
     end
     local row_col1 = math.max(1, row.source_col1 or 1)
@@ -8667,7 +8801,11 @@ local function draw_line_render_empty_cell_selections(
   local drawn = false
   for _, row in ipairs(rows) do
     if row.selection_empty_cell and carets[row.cell_source_col1] then
-      drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
+      if row.selection_fill and row.selection_frame_x1 then
+        drawn = draw_table_cell_selection_fill(row, x, y) or drawn
+      else
+        drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
+      end
     end
   end
   return drawn
@@ -8866,6 +9004,7 @@ local function draw_line_body_contents(self, line, x, y)
     body_phase_scope = perf_scope_begin("text")
     self:draw_soft_wrap_continuation_indicators(line, x, y)
     local line_height = self:draw_line_text(line, x, y)
+    draw_table_cell_selection_outlines(self, line, render_line, x, y)
     perf_scope_end(body_phase_scope)
 
     body_phase_scope = perf_scope_begin("post_text_overlays")
@@ -8996,6 +9135,7 @@ local function draw_line_body_contents(self, line, x, y)
   perf_scope_end(phase_scope)
   phase_scope = perf_scope_begin("text", true)
   local line_height = self:draw_line_text(line, x, y)
+  draw_table_cell_selection_outlines(self, line, render_line, x, y)
   perf_scope_end(phase_scope)
   phase_scope = perf_scope_begin("post_text_overlays", true)
 
@@ -9167,7 +9307,9 @@ function TextView:draw_overlay()
       local line1, col1, line2, col2 = caret[1], caret[2], caret[3], caret[4]
       if is_active and ime.editing then
         self:draw_ime_decoration(line1, col1, line2, col2)
-      elseif blink_visible then
+      elseif blink_visible
+      and not is_table_cell_selection(self, line1, col1, line2, col2)
+      then
         local x, y = self:get_caret_screen_position(line1, col1)
         self:draw_caret(x, y, line1, col1, caret_idx, caret_color)
       end
@@ -9179,7 +9321,9 @@ function TextView:draw_overlay()
       if line1 >= minline and line1 <= maxline then
         if is_active and ime.editing then
           self:draw_ime_decoration(line1, col1, line2, col2)
-        elseif blink_visible then
+        elseif blink_visible
+        and not is_table_cell_selection(self, line1, col1, line2, col2)
+        then
           local x, y = self:get_caret_screen_position(line1, col1)
           self:draw_caret(x, y, line1, col1, caret_idx, caret_color)
         end
@@ -9252,6 +9396,7 @@ function TextView:draw_folded()
 
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
+  self.__table_cell_selection_cache = nil
   self.__line_body_search_match_cache = nil
   self.__line_gutter_selection_cache = nil
   self.__visible_caret_cache = nil
@@ -9447,6 +9592,7 @@ function TextView:draw_wrapped()
 
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
+  self.__table_cell_selection_cache = nil
   self.__line_body_search_match_cache = nil
   self.__line_gutter_selection_cache = nil
   self.__visible_caret_cache = nil
@@ -9553,6 +9699,7 @@ local function draw_textview(self)
   core.pop_clip_rect()
   self.__line_body_highlight_cache = nil
   self.__line_body_selection_cache = nil
+  self.__table_cell_selection_cache = nil
   self.__line_gutter_selection_cache = nil
 
   perf_scope_end(phase_scope)

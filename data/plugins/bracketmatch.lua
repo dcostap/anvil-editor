@@ -255,6 +255,8 @@ local function draw_decoration(dv, x, y, line, col, width)
     dv:iter_text_range_screen_segments(line, col, col + width, x, y)
   do
     local screen_w = screen_x2 - screen_x
+    -- Rendered Markdown can hide a bracket, such as a link's syntax.
+    if screen_w <= 0 then goto continue_segment end
     if conf.style == "underline" then
       renderer.draw_rect(
         screen_x, screen_y + row_height - thickness,
@@ -266,6 +268,7 @@ local function draw_decoration(dv, x, y, line, col, width)
       renderer.draw_rect(screen_x, screen_y, thickness, row_height, frame_color)
       renderer.draw_rect(screen_x2 - thickness, screen_y, thickness, row_height, frame_color)
     end
+    ::continue_segment::
   end
 end
 

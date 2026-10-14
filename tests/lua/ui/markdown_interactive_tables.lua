@@ -528,67 +528,156 @@ test.describe("Markdown Interactive Table Editing", function()
     test.equal(top_color, style.selection)
   end)
 
-  test.it("outlines a completely selected cell", function()
-    local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
-    buffer:set_selection(3, 6, 3, 3)
-    refresh(view)
-    view:prepare_line_body_draw_cache(3, 3)
-    local x, y = view:get_line_screen_position(3)
-    local outlines = 0
-    local old_draw_rect = renderer.draw_rect
-    local old_draw_text = renderer.draw_text
-    renderer.draw_rect = function(_, _, _, _, color)
-      if color == style.caret then outlines = outlines + 1 end
-    end
-    renderer.draw_text = function(font, text, tx)
-      return tx + font:get_width(text)
-    end
-    local ok, err = pcall(function() view:draw_line_body(3, x, y) end)
-    renderer.draw_rect = old_draw_rect
-    renderer.draw_text = old_draw_text
-    if not ok then error(err, 0) end
-    test.ok(outlines >= 4, "fully selected table cell did not receive an outline")
-  end)
+  local SELECTION_FILL, SELECTION_OUTLINE = { 1, 2, 3, 40 }, { 4, 5, 6, 255 }
 
-  local function count_cell_paint(view, line)
-    view:prepare_line_body_draw_cache(line, line)
-    local x, y = view:get_line_screen_position(line)
-    local selection_fills, outlines = 0, 0
-    local old_draw_rect = renderer.draw_rect
-    local old_draw_text = renderer.draw_text
-    renderer.draw_rect = function(_, _, width, height, color)
-      if color == style.selection and width > 1 and height > 1 then
-        selection_fills = selection_fills + 1
-      elseif color == style.caret then
-        outlines = outlines + 1
-      end
-    end
-    renderer.draw_text = function(font, text, tx)
-      return tx + font:get_width(text)
-    end
-    local ok, err = pcall(function() view:draw_line_body(line, x, y) end)
-    renderer.draw_rect = old_draw_rect
-    renderer.draw_text = old_draw_text
+  ---Run `fn` with recognizable Table Cell Selection colors.
+  local function with_cell_selection_colors(fn)
+    local fill = style.markdown_live_table_cell_selection
+    local outline = style.markdown_live_table_cell_selection_outline
+    style.markdown_live_table_cell_selection = SELECTION_FILL
+    style.markdown_live_table_cell_selection_outline = SELECTION_OUTLINE
+    local ok, err = pcall(fn)
+    style.markdown_live_table_cell_selection = fill
+    style.markdown_live_table_cell_selection_outline = outline
     if not ok then error(err, 0) end
-    return selection_fills, outlines
   end
 
+  ---Draw the bodies of `lines` and return the rectangles painted per color.
+  local function paint_rects(view, lines)
+    view:prepare_line_body_draw_cache(lines[1], lines[#lines])
+    local rects = {}
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local old_draw_poly = renderer.draw_poly
+    renderer.draw_rect = function(_, _, width, height, color)
+      rects[color] = rects[color] or {}
+      table.insert(rects[color], { width = width, height = height })
+    end
+    renderer.draw_text = function(font, text, tx)
+      return tx + font:get_width(text)
+    end
+    renderer.draw_poly = function() end
+    local ok, err = pcall(function()
+      for _, line in ipairs(lines) do
+        local x, y = view:get_line_screen_position(line)
+        view:draw_line_body(line, x, y)
+      end
+    end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    renderer.draw_poly = old_draw_poly
+    if not ok then error(err, 0) end
+    return rects
+  end
+
+  local function count_cell_paint(view, line)
+    local rects = paint_rects(view, { line })
+    return #(rects[SELECTION_FILL] or {}), #(rects[SELECTION_OUTLINE] or {})
+  end
+
+  test.it("outlines a completely selected cell", function()
+    with_cell_selection_colors(function()
+      local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+      buffer:set_selection(3, 6, 3, 3)
+      refresh(view)
+      local fills, outlines = count_cell_paint(view, 3)
+      test.equal(fills, 1, "fully selected table cell was not painted")
+      test.equal(outlines, 4, "fully selected table cell did not receive an outline")
+    end)
+  end)
+
   test.it("paints selection state for an empty cell in a Table Cell Selection", function()
-    local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")
-    buffer:set_selection(3, 3)
-    refresh(view)
-    test.equal(markdown_tables.select_rectangle(view, 3, 3, 3, 8), true)
-    local selection_fills, outlines = count_cell_paint(view, 3)
-    test.ok(selection_fills >= 2, "empty selected table cell was not painted")
-    test.ok(outlines >= 8, "empty selected table cell was not outlined")
+    with_cell_selection_colors(function()
+      local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")
+      buffer:set_selection(3, 3)
+      refresh(view)
+      test.equal(markdown_tables.select_rectangle(view, 3, 3, 3, 8), true)
+      local fills, outlines = count_cell_paint(view, 3)
+      test.equal(fills, 2, "empty selected table cell was not painted")
+      test.ok(outlines > 0, "empty selected table cell was not outlined")
+    end)
   end)
 
   test.it("shows a lone caret in an empty cell without selection paint", function()
-    local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")
-    buffer:set_selection(3, 3)
+    with_cell_selection_colors(function()
+      local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")
+      buffer:set_selection(3, 3)
+      refresh(view)
+      local fills, outlines = count_cell_paint(view, 3)
+      test.equal(fills, 0)
+      test.equal(outlines, 0)
+    end)
+  end)
+
+  test.it("does not frame a link's hidden bracket in a selected cell", function()
+    local view, buffer = make_view(
+      "| A | B |\n| --- | --- |\n| one | see [notes](https://example.com) |\n| two | four |\n\nplain"
+    )
+    buffer:set_selection(6, 1)
     refresh(view)
-    local selection_fills = count_cell_paint(view, 3)
-    test.equal(selection_fills, 0)
+    local old_active = core.active_view
+    core.active_view = view
+    local old_draw_rect = renderer.draw_rect
+    local old_draw_text = renderer.draw_text
+    local ok, err = pcall(function()
+      test.equal(markdown_tables.select_rectangle(
+        view, 4, buffer.lines[4]:find("four"), 3, buffer.lines[3]:find("see") + 1
+      ), true)
+      -- The primary caret ends the link cell, right after its hidden ")".
+      local line, col = buffer:get_selection()
+      test.same({ line, buffer.lines[3]:sub(col - 1, col - 1) }, { 3, ")" })
+      test.equal(table_cells(view, 3)[2].text_lines[1].text, "see notes")
+      view:update()
+      local bracket_frames = 0
+      renderer.draw_rect = function(_, _, _, _, color)
+        if color == style.bracketmatch_frame_color then
+          bracket_frames = bracket_frames + 1
+        end
+      end
+      renderer.draw_text = function(font, text, x)
+        return x + font:get_width(text)
+      end
+      local x, y = view:get_line_screen_position(3)
+      view:draw_line_text(3, x, y)
+      test.equal(bracket_frames, 0)
+    end)
+    renderer.draw_rect = old_draw_rect
+    renderer.draw_text = old_draw_text
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("outlines a group of selected cells once around its edge", function()
+    with_cell_selection_colors(function()
+      local view, buffer = make_view(table.concat({
+        "| A | B | C |", "| --- | --- | --- |",
+        "| one | two | three |", "| four | five | six |", "| seven | eight | nine |",
+        "", "plain",
+      }, "\n"))
+      buffer:set_selection(7, 1)
+      refresh(view)
+      local function outline_edges(lines)
+        local horizontal, vertical = 0, 0
+        for _, rect in ipairs(paint_rects(view, lines)[SELECTION_OUTLINE] or {}) do
+          if rect.width > rect.height then
+            horizontal = horizontal + 1
+          else
+            vertical = vertical + 1
+          end
+        end
+        return horizontal, vertical
+      end
+
+      test.equal(markdown_tables.select_row(view, 4), true)
+      local horizontal, vertical = outline_edges({ 4 })
+      test.equal(vertical, 2, "a selected row needs one left and one right edge")
+      test.equal(horizontal, 3 * 2, "each selected cell needs its top and bottom edge")
+
+      test.equal(markdown_tables.select_column(view, 3, 2), true)
+      horizontal, vertical = outline_edges({ 1, 3, 4, 5 })
+      test.equal(horizontal, 2, "a selected column needs one top and one bottom edge")
+      test.equal(vertical, 4 * 2, "each selected cell needs its left and right edge")
+    end)
   end)
 
   test.it("keeps every table row rendered through direct editing paths", function()
@@ -954,6 +1043,32 @@ test.describe("Markdown Interactive Table Editing", function()
 
     buffer:set_selection(3, buffer.lines[3]:find("a", 1, true) + 1)
     test.equal(table_cells(view, 3)[1].text_lines[1].text, "**a** b")
+  end)
+
+  test.it("shows no carets in a group of selected cells", function()
+    local view, buffer = make_view(
+      "| A | B |\n| --- | --- |\n| one | see [notes](https://example.com) |\n| three | four |\n\nplain"
+    )
+    buffer:set_selection(6, 1)
+    refresh(view)
+    local active_view, disable_blink = core.active_view, config.disable_blink
+    local carets = {}
+    view.active_window_has_focus = function() return true end
+    view.draw_caret = function(_, _, _, line) carets[#carets + 1] = line end
+    core.active_view, config.disable_blink = view, true
+    local ok, err = pcall(function()
+      test.equal(markdown_tables.select_column(view, 3, 1), true)
+      view:draw_overlay()
+      test.same(carets, {}, "selected cells drew carets")
+      test.equal(markdown_tables.select_column(view, 3, 2), true)
+      view:draw_overlay()
+      test.same(carets, {}, "selected cells holding a link drew carets")
+      buffer:set_selection(3, 3)
+      view:draw_overlay()
+      test.same(carets, { 3 }, "a caret in a cell was not drawn")
+    end)
+    core.active_view, config.disable_blink = active_view, disable_blink
+    if not ok then error(err, 0) end
   end)
 
   test.it("places the caret after hidden syntax when clicking rendered text", function()

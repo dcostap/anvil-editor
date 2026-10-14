@@ -368,6 +368,8 @@ style.markdown_live_table_cell = style.text
 style.markdown_live_table_separator = style.divider
 style.markdown_live_table_header_background = { common.color "rgba(0, 0, 0, 0.04)" }
 style.markdown_live_table_active_cell = { common.color "rgba(9, 105, 218, 0.07)" }
+style.markdown_live_table_cell_selection = { common.color "rgba(53, 116, 240, 0.09)" }
+style.markdown_live_table_cell_selection_outline = style.accent
 style.markdown_live_hidden_syntax = style.dim
 
 style.log["INFO"] = { icon = "i", color = style.text }
