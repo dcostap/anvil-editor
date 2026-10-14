@@ -25,7 +25,7 @@ end
 local function make_view(context, source, opts)
   opts = opts or {}
   serial = serial + 1
-  local name = "markdown-frame-coherence-" .. serial .. ".md"
+  local name = opts.filename or ("markdown-frame-coherence-" .. serial .. ".md")
   local buffer = Buffer(name, name, true)
   buffer:insert(1, 1, source)
   buffer:clear_undo_redo()
@@ -431,5 +431,66 @@ test.describe("Markdown frame coherence", function()
       pending_next_y, idle_next_y,
       "the following line moved while the list item edit was pending"
     )
+  end)
+
+  test.it("keeps a revealed image link in place while typing before it", function(context)
+    config.markdown_live_render_images = true
+    local image_path = USERDIR .. PATHSEP .. "frame-coherence-image.png"
+    local file = test.not_nil(io.open(image_path, "wb"))
+    file:write("png")
+    file:close()
+    local load_image = canvas.load_image
+    canvas.load_image = function()
+      local image = { get_size = function() return 300, 120 end }
+      image.scaled = function() return image end
+      return image
+    end
+    local ok, err = pcall(function()
+      local view, buffer, instance = make_view(
+        context, "before ![[frame-coherence-image.png]] after text\nnext line",
+        {
+          wrapped = true,
+          filename = USERDIR .. PATHSEP .. "frame-coherence-image-link.md",
+        }
+      )
+      buffer:set_selection(1, #"before " + 1)
+      view:get_line_render(1)
+      view:update()
+
+      view:on_text_input("x")
+
+      test.equal(instance.status, "pending")
+      local function geometry()
+        local columns = {}
+        for col = 1, #buffer.lines[1] do
+          local x, y = view:get_line_screen_position(1, col)
+          columns[col] = string.format("%.2f,%.2f", x, y)
+        end
+        local typed
+        for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+          local col1 = fragment.source_col1 or 1
+          if col1 <= #"before " + 1 and #"before " + 1 < (fragment.source_col2 or col1) then
+            typed = fragment.color
+          end
+        end
+        return columns, typed
+      end
+      local pending, pending_color = geometry()
+      wait_ready(instance)
+      local published, published_color = geometry()
+      for col = 1, #published do
+        test.equal(
+          pending[col], published[col],
+          string.format("column %d moved at publication", col)
+        )
+      end
+      test.equal(
+        pending_color, published_color,
+        "the typed character changed color at publication"
+      )
+    end)
+    canvas.load_image = load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
   end)
 end)
