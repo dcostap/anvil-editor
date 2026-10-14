@@ -188,34 +188,71 @@ command.add(function()
   end
   return false
 end, {
-  ["markdown:table_insert_row_above"] = function(view)
+  ["markdown:table_insert_row_above"] = command.palette(function(view)
     markdown_tables.insert_row(view, "above")
-  end,
-  ["markdown:table_insert_row_below"] = function(view)
+  end),
+  ["markdown:table_insert_row_below"] = command.palette(function(view)
     markdown_tables.insert_row(view, "below")
-  end,
-  ["markdown:table_delete_row"] = function(view)
+  end),
+  ["markdown:table_delete_row"] = command.palette(function(view)
     markdown_tables.delete_row(view)
-  end,
-  ["markdown:table_move_row_up"] = function(view)
+  end),
+  ["markdown:table_move_row_up"] = command.palette(function(view)
     markdown_tables.move_row(view, -1)
-  end,
-  ["markdown:table_move_row_down"] = function(view)
+  end),
+  ["markdown:table_move_row_down"] = command.palette(function(view)
     markdown_tables.move_row(view, 1)
-  end,
-  ["markdown:table_insert_column_left"] = function(view)
+  end),
+  ["markdown:table_insert_column_left"] = command.palette(function(view)
     markdown_tables.insert_column(view, "left")
-  end,
-  ["markdown:table_insert_column_right"] = function(view)
+  end),
+  ["markdown:table_insert_column_right"] = command.palette(function(view)
     markdown_tables.insert_column(view, "right")
-  end,
-  ["markdown:table_delete_column"] = function(view)
+  end),
+  ["markdown:table_delete_column"] = command.palette(function(view)
     markdown_tables.delete_column(view)
-  end,
-  ["markdown:table_move_column_left"] = function(view)
+  end),
+  ["markdown:table_move_column_left"] = command.palette(function(view)
     markdown_tables.move_column(view, -1)
-  end,
-  ["markdown:table_move_column_right"] = function(view)
+  end),
+  ["markdown:table_move_column_right"] = command.palette(function(view)
     markdown_tables.move_column(view, 1)
-  end,
+  end),
+  ["markdown:table_align_column_left"] = command.palette(function(view)
+    markdown_tables.set_alignment(view, "left")
+  end),
+  ["markdown:table_align_column_center"] = command.palette(function(view)
+    markdown_tables.set_alignment(view, "center")
+  end),
+  ["markdown:table_align_column_right"] = command.palette(function(view)
+    markdown_tables.set_alignment(view, "right")
+  end),
+  ["markdown:table_clear_column_alignment"] = command.palette(function(view)
+    markdown_tables.set_alignment(view, nil)
+  end),
+  ["markdown:table_sort_ascending"] = command.palette(function(view)
+    markdown_tables.sort_rows(view, false)
+  end),
+  ["markdown:table_sort_descending"] = command.palette(function(view)
+    markdown_tables.sort_rows(view, true)
+  end),
+  ["markdown:table_format"] = command.palette(function(view)
+    markdown_tables.format(view)
+  end),
+})
+
+command.add(function()
+  local view = core.active_view
+  if view and view:extends(Editor)
+  and not view.buffer.read_only
+  and markdown_live.is_markdown_buffer(view.buffer)
+  and markdown_tables.can_insert_table(view)
+  then
+    return true, view
+  end
+  return false
+end, {
+  ["markdown:insert_table"] = command.palette(function(view)
+    markdown_tables.insert_table(view, 2, 1)
+  end),
 })

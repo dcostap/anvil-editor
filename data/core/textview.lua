@@ -8482,6 +8482,9 @@ local function draw_line_render_empty_cell_selections(
 )
   local rows = render_line and render_line.position_rows
   if type(rows) ~= "table" then return false end
+  -- A lone caret in an empty cell is a caret, not a Table Cell Selection.
+  -- Empty cells only look selected as part of a selection group.
+  if #view.buffer.selections <= 4 then return false end
   local carets = {}
   for _, caret_line, caret_col, anchor_line, anchor_col in
     view.buffer:get_selections(false)

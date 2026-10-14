@@ -507,29 +507,182 @@ local function refresh_structure(context, refresh, line1, line2)
   end
 end
 
-local function insert_source_row(buffer, line, text)
-  if line <= #buffer.lines then
-    buffer:insert(line, 1, text)
-    return line
+-- Table model ---------------------------------------------------------------
+-- Structural commands edit a table as a grid of trimmed cell sources plus one
+-- alignment per column, then write the whole table back in canonical padded
+-- form: every column is as wide as its widest cell and the delimiter row
+-- spells each alignment. The rewrite is one Buffer edit, so one undo step.
+
+local MIN_COLUMN_WIDTH = 3
+
+local function marker_alignment(marker)
+  local left, right = marker:sub(1, 1) == ":", marker:sub(-1) == ":"
+  if left and right then return "center" end
+  if left then return "left" end
+  if right then return "right" end
+  return nil
+end
+
+local function display_width(text)
+  local _, count = text:gsub("[^\128-\191]", "")
+  return count
+end
+
+local function model_from_context(context)
+  local model = { columns = context.columns, alignments = {}, rows = {} }
+  local delimiter = context.rows[2]
+  for column, cell in ipairs(delimiter.cells) do
+    model.alignments[column] = marker_alignment(
+      delimiter.text:sub(cell.content_col1, cell.content_col2 - 1)
+    )
   end
-  local last = #buffer.lines
-  local current = buffer.lines[last] or "\n"
-  local row = tostring(text or ""):gsub("\n$", "")
-  -- Buffer lines retain their newline terminator. Insert a newline plus the
-  -- new row immediately before the final terminator instead of asking
-  -- Buffer:insert for an out-of-range line, which intentionally clamps.
-  buffer:insert(last, #current, "\n" .. row)
-  return last + 1
+  for _, row in ipairs(context.editable_rows) do
+    local cells = {}
+    for column, cell in ipairs(row.cells) do
+      cells[column] = row.text:sub(cell.content_col1, cell.content_col2 - 1)
+    end
+    model.rows[#model.rows + 1] = cells
+  end
+  return model
+end
+
+local function pad_cell(text, width, alignment)
+  local gap = width - display_width(text)
+  if gap <= 0 then return text end
+  if alignment == "right" then return string.rep(" ", gap) .. text end
+  if alignment == "center" then
+    local left = math.floor(gap / 2)
+    return string.rep(" ", left) .. text .. string.rep(" ", gap - left)
+  end
+  return text .. string.rep(" ", gap)
+end
+
+local function delimiter_marker(width, alignment)
+  if alignment == "center" then return ":" .. string.rep("-", width - 2) .. ":" end
+  if alignment == "left" then return ":" .. string.rep("-", width - 1) end
+  if alignment == "right" then return string.rep("-", width - 1) .. ":" end
+  return string.rep("-", width)
+end
+
+---Return the canonical source lines, without newlines, for a table model.
+---`model.rows[1]` is the header row; the delimiter row is generated.
+function tables.serialize_model(model, indent)
+  local widths = {}
+  for column = 1, model.columns do
+    local width = MIN_COLUMN_WIDTH
+    for _, cells in ipairs(model.rows) do
+      width = math.max(width, display_width(cells[column] or ""))
+    end
+    widths[column] = width
+  end
+  local function source_line(cells)
+    return (indent or "") .. "| " .. table.concat(cells, " | ") .. " |"
+  end
+  local lines = {}
+  for index, cells in ipairs(model.rows) do
+    local padded = {}
+    for column = 1, model.columns do
+      padded[column] = pad_cell(cells[column] or "", widths[column], model.alignments[column])
+    end
+    lines[#lines + 1] = source_line(padded)
+    if index == 1 then
+      local markers = {}
+      for column = 1, model.columns do
+        markers[column] = delimiter_marker(widths[column], model.alignments[column])
+      end
+      lines[#lines + 1] = source_line(markers)
+    end
+  end
+  return lines
+end
+
+local function grid_row_line(line1, grid_row)
+  return line1 + grid_row - 1 + (grid_row > 1 and 1 or 0)
+end
+
+local function editable_rows_between(buffer, line1, line2)
+  local rows = {}
+  for line = line1, line2 do
+    if line ~= line1 + 1 then
+      local row = source_row(line_text(buffer, line))
+      if not row then return nil end
+      row.line = line
+      rows[#rows + 1] = row
+    end
+  end
+  return rows
+end
+
+---Write `model` over the table described by `context` and place the caret.
+---`target` names a grid row and column; `offset` keeps the caret's byte
+---offset inside the cell contents and `select` selects the whole cell.
+local function apply_model(context, model, reason, target)
+  local buffer = context.buffer
+  local refresh = structure_refresher(context)
+  local indent = context.rows[1].text:match("^%s*") or ""
+  local lines = tables.serialize_model(model, indent)
+  local old_count = context.line2 - context.line1 + 1
+  local edits = {}
+  if #lines == old_count then
+    -- Rewrite only changed rows so unchanged rows keep their marks.
+    for index, text in ipairs(lines) do
+      local line = context.line1 + index - 1
+      local current = line_text(buffer, line)
+      if current ~= text then
+        edits[#edits + 1] = {
+          line1 = line, col1 = 1, line2 = line, col2 = #current + 1, text = text,
+        }
+      end
+    end
+  else
+    edits[1] = {
+      line1 = context.line1, col1 = 1,
+      line2 = context.line2, col2 = #line_text(buffer, context.line2) + 1,
+      text = table.concat(lines, "\n"),
+    }
+  end
+  if #edits > 0 then
+    buffer:apply_edits(edits, { type = "markdown-table", reason = reason })
+  end
+  local line2 = context.line1 + #lines - 1
+  core.log_quiet(
+    "Markdown table %s at %s:%d: %d rows, %d columns, %d edits",
+    reason, buffer:get_name(), context.line1, #model.rows, model.columns, #edits
+  )
+  if target then
+    local line = grid_row_line(context.line1, target.row)
+    local row = source_row(line_text(buffer, line))
+    local cell = row and row.cells[target.column]
+    if cell then
+      if target.select then
+        buffer:set_selection(line, cell.content_col2, line, cell.content_col1)
+      else
+        buffer:set_selection(line, math.min(
+          cell.content_col1 + math.max(0, target.offset or 0), cell.content_col2
+        ))
+      end
+    end
+  end
+  refresh_structure(context, refresh, context.line1, line2)
+  return true, line2
+end
+
+local function caret_offset(context)
+  if context.col < context.cell.content_col1 then return 0 end
+  return context.col - context.cell.content_col1
+end
+
+local function empty_cells(columns)
+  local cells = {}
+  for column = 1, columns do cells[column] = "" end
+  return cells
 end
 
 local function append_body_row(context)
-  local refresh = structure_refresher(context)
-  local text = "|" .. string.rep("  |", context.columns) .. "\n"
-  local inserted_line = insert_source_row(context.buffer, context.line2 + 1, text)
-  local row = source_row(text:gsub("\n$", ""))
-  row.line = inserted_line
-  refresh_structure(context, refresh, context.line1, inserted_line)
-  return row
+  local model = model_from_context(context)
+  model.rows[#model.rows + 1] = empty_cells(model.columns)
+  local _, line2 = apply_model(context, model, "append-row")
+  return editable_rows_between(context.buffer, context.line1, line2)
 end
 
 function tables.navigate(view, direction)
@@ -559,13 +712,15 @@ function tables.navigate(view, direction)
     end
     if not targets[index] then targets[index] = { row = row, column = column } end
   end
-  local appended
-  if append then appended = append_body_row(first) end
+  -- Appending rewrites the table in canonical form, which can move every
+  -- cell, so destinations resolve against the rewritten rows.
+  local rows = first.editable_rows
+  if append then rows = append_body_row(first) or rows end
   local selections = {}
   for index, target in ipairs(targets) do
     local selection
     if target.row then
-      local row = first.editable_rows[target.row] or appended
+      local row = rows[math.min(target.row, #rows)]
       selection = selection_for_cell(row, target.column)
     else
       selection = target
@@ -931,122 +1086,239 @@ function tables.select_rectangle(view, anchor_line, anchor_col, line, col)
   return true
 end
 
-local function apply_line_replacements(context, replacements, reason)
-  local refresh = structure_refresher(context)
-  local edits = {}
-  for line, text in pairs(replacements) do
-    edits[#edits + 1] = {
-      line1 = line, col1 = 1, line2 = line, col2 = #line_text(context.buffer, line) + 1,
-      text = text,
-    }
-  end
-  table.sort(edits, function(a, b) return a.line1 < b.line1 end)
-  context.buffer:apply_edits(edits, { type = "markdown-table", reason = reason })
-  refresh_structure(context, refresh, context.line1, context.line2)
-  return true
-end
-
 function tables.insert_row(view, side)
   local context = tables.context(view)
   if not context then return false end
-  local refresh = structure_refresher(context)
-  local insertion_line
-  if context.line <= context.delimiter_line then
-    insertion_line = context.delimiter_line + 1
-  elseif side == "above" then
-    insertion_line = context.line
-  else
-    insertion_line = context.line + 1
-  end
-  local row = "|" .. string.rep("  |", context.columns) .. "\n"
-  insertion_line = insert_source_row(context.buffer, insertion_line, row)
-  context.buffer:set_selection(insertion_line, 3)
-  refresh_structure(context, refresh, context.line1, context.line2 + 1)
-  return true
+  local model = model_from_context(context)
+  -- The header row stays first; a row inserted "above" it lands below it.
+  local index = context.grid_row + 1
+  if side == "above" and context.grid_row > 1 then index = context.grid_row end
+  table.insert(model.rows, index, empty_cells(model.columns))
+  return apply_model(context, model, "insert-row", {
+    row = index, column = context.column,
+  })
 end
 
 function tables.delete_row(view)
   local context = tables.context(view)
-  if not context or context.line <= context.delimiter_line then return false end
-  local refresh = structure_refresher(context)
-  local line = context.line
-  context.buffer:remove(line, 1, line + 1, 1)
-  context.buffer:set_selection(math.min(line, #context.buffer.lines), 1)
-  refresh_structure(context, refresh, context.line1, context.line2 - 1)
-  return true
+  if not context or context.grid_row <= 1 then return false end
+  local model = model_from_context(context)
+  table.remove(model.rows, context.grid_row)
+  return apply_model(context, model, "delete-row", {
+    row = math.min(context.grid_row, #model.rows), column = context.column,
+  })
 end
 
 function tables.move_row(view, direction)
   local context = tables.context(view)
-  if not context or context.line <= context.delimiter_line then return false end
-  local refresh = structure_refresher(context)
-  local target = context.line + direction
-  if target <= context.delimiter_line or target > context.line2 then return false end
-  local first, second = math.min(context.line, target), math.max(context.line, target)
-  local first_text, second_text = context.buffer.lines[first], context.buffer.lines[second]
-  context.buffer:apply_edits({
-    { line1 = first, col1 = 1, line2 = second + 1, col2 = 1, text = second_text .. first_text },
-  }, { type = "markdown-table", reason = "move-row" })
-  context.buffer:set_selection(target, context.col)
-  refresh_structure(context, refresh, context.line1, context.line2)
-  return true
+  if not context or context.grid_row <= 1 then return false end
+  local target = context.grid_row + direction
+  local model = model_from_context(context)
+  if target <= 1 or target > #model.rows then return false end
+  model.rows[context.grid_row], model.rows[target] =
+    model.rows[target], model.rows[context.grid_row]
+  return apply_model(context, model, "move-row", {
+    row = target, column = context.column, offset = caret_offset(context),
+  })
 end
 
 function tables.insert_column(view, side)
   local context = tables.context(view)
   if not context then return false end
-  local replacements = {}
-  for _, row in ipairs(context.rows) do
-    local insertion = row.pipes[context.column + (side == "left" and 0 or 1)]
-    local value = row.line == context.delimiter_line and " --- |" or "  |"
-    replacements[row.line] = row.text:sub(1, insertion) .. value .. row.text:sub(insertion + 1)
+  if context.columns >= tables.MAX_PRESENTATION_COLUMNS then return false end
+  local model = model_from_context(context)
+  local index = context.column + (side == "left" and 0 or 1)
+  for _, cells in ipairs(model.rows) do table.insert(cells, index, "") end
+  -- Alignments may have holes, so shift them explicitly.
+  for column = model.columns, index, -1 do
+    model.alignments[column + 1] = model.alignments[column]
   end
-  apply_line_replacements(context, replacements, "insert-column")
-  local row = source_row(line_text(context.buffer, context.line))
-  local target_column = context.column + (side == "left" and 0 or 1)
-  local cell = row and row.cells[target_column]
-  context.buffer:set_selection(
-    context.line, cell and cell.content_col1 or context.col
-  )
-  return true
+  model.alignments[index] = nil
+  model.columns = model.columns + 1
+  return apply_model(context, model, "insert-column", {
+    row = context.grid_row, column = index,
+  })
 end
 
 function tables.delete_column(view)
   local context = tables.context(view)
   if not context or context.columns <= 1 then return false end
-  local replacements = {}
-  for _, row in ipairs(context.rows) do
-    local left, right = row.pipes[context.column], row.pipes[context.column + 1]
-    replacements[row.line] = row.text:sub(1, left) .. row.text:sub(right + 1)
+  local model = model_from_context(context)
+  for _, cells in ipairs(model.rows) do table.remove(cells, context.column) end
+  for column = context.column, model.columns do
+    model.alignments[column] = model.alignments[column + 1]
   end
-  apply_line_replacements(context, replacements, "delete-column")
-  context.buffer:set_selection(context.line, math.max(1, context.rows[context.line - context.line1 + 1].pipes[context.column]))
-  return true
+  model.columns = model.columns - 1
+  return apply_model(context, model, "delete-column", {
+    row = context.grid_row, column = math.min(context.column, model.columns),
+  })
 end
 
 function tables.move_column(view, direction)
   local context = tables.context(view)
   if not context then return false end
-  local target = context.column + direction
-  if target < 1 or target > context.columns then return false end
-  local a, b = math.min(context.column, target), math.max(context.column, target)
-  local replacements = {}
-  for _, row in ipairs(context.rows) do
-    local cells = {}
-    for i = 1, context.columns do
-      cells[i] = row.text:sub(row.pipes[i] + 1, row.pipes[i + 1] - 1)
+  local a, b = context.column, context.column + direction
+  if b < 1 or b > context.columns then return false end
+  local model = model_from_context(context)
+  for _, cells in ipairs(model.rows) do cells[a], cells[b] = cells[b], cells[a] end
+  model.alignments[a], model.alignments[b] = model.alignments[b], model.alignments[a]
+  return apply_model(context, model, "move-column", {
+    row = context.grid_row, column = b, offset = caret_offset(context),
+  })
+end
+
+---Columns holding a selection, or the caret's column.
+local function selected_columns(view, context)
+  local columns, seen = {}, {}
+  for _, selection_context in ipairs(collect_interactive_contexts(view) or { context }) do
+    if same_table(selection_context, context) and not seen[selection_context.column] then
+      seen[selection_context.column] = true
+      columns[#columns + 1] = selection_context.column
     end
-    cells[a], cells[b] = cells[b], cells[a]
-    local parts = { row.text:sub(1, row.pipes[1]) }
-    for i = 1, context.columns do
-      parts[#parts + 1] = cells[i]
-      parts[#parts + 1] = "|"
-    end
-    parts[#parts + 1] = row.text:sub(row.pipes[#row.pipes] + 1)
-    replacements[row.line] = table.concat(parts)
   end
-  apply_line_replacements(context, replacements, "move-column")
-  context.buffer:set_selection(context.line, context.rows[context.line - context.line1 + 1].pipes[target] + 2)
+  return columns
+end
+
+---Set the alignment of every selected column: "left", "center", "right", or
+---nil to remove explicit alignment.
+function tables.set_alignment(view, alignment)
+  local context = tables.context(view)
+  if not context then return false end
+  local model = model_from_context(context)
+  for _, column in ipairs(selected_columns(view, context)) do
+    model.alignments[column] = alignment
+  end
+  -- Re-padding moves cell text, so a Table Cell Selection group is restored
+  -- by grid position rather than by source columns.
+  local selected_cells = {}
+  local contexts = collect_interactive_contexts(view)
+  if contexts and #contexts > 1 then
+    for _, selection_context in ipairs(contexts) do
+      selected_cells[#selected_cells + 1] = {
+        selection_context.grid_row, selection_context.column,
+      }
+    end
+  end
+  local ok, line2 = apply_model(context, model, "align-" .. tostring(alignment or "none"), {
+    row = context.grid_row, column = context.column, offset = caret_offset(context),
+  })
+  if #selected_cells > 0 then
+    local rows = editable_rows_between(context.buffer, context.line1, line2) or {}
+    local selections = {}
+    for _, cell in ipairs(selected_cells) do
+      for _, value in ipairs(selection_for_cell(rows[cell[1]], cell[2]) or {}) do
+        selections[#selections + 1] = value
+      end
+    end
+    if #selections > 0 then
+      view.buffer:set_selection_list(selections, #selections / 4, { merge_cursors = false })
+    end
+  end
+  return ok
+end
+
+local function sort_key(text)
+  local plain = text:gsub("[%*_~`]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+  return tonumber((plain:gsub(",", ""))), plain:lower()
+end
+
+---Sort body rows by the caret's column. The header row stays first, empty
+---cells sort last, and numbers compare numerically.
+function tables.sort_rows(view, descending)
+  local context = tables.context(view)
+  if not context then return false end
+  local model = model_from_context(context)
+  local column = context.column
+  local entries = {}
+  for index = 2, #model.rows do
+    local number, text = sort_key(model.rows[index][column] or "")
+    entries[#entries + 1] = {
+      cells = model.rows[index], number = number, text = text, index = index,
+    }
+  end
+  table.sort(entries, function(a, b)
+    if (a.text == "") ~= (b.text == "") then return b.text == "" end
+    local order
+    if a.number and b.number then
+      if a.number ~= b.number then order = a.number < b.number end
+    elseif a.number or b.number then
+      order = a.number ~= nil
+    elseif a.text ~= b.text then
+      order = a.text < b.text
+    end
+    if order == nil then return a.index < b.index end
+    if descending then return not order end
+    return order
+  end)
+  local caret_row = context.grid_row
+  for index, entry in ipairs(entries) do
+    model.rows[index + 1] = entry.cells
+    if entry.index == context.grid_row then caret_row = index + 1 end
+  end
+  return apply_model(context, model, descending and "sort-descending" or "sort-ascending", {
+    row = caret_row, column = column, offset = caret_offset(context),
+  })
+end
+
+---Rewrite the caret's table in canonical padded form.
+function tables.format(view)
+  local context = tables.context(view)
+  if not context then return false end
+  return apply_model(context, model_from_context(context), "format", {
+    row = context.grid_row, column = context.column, offset = caret_offset(context),
+  })
+end
+
+---Return whether `line` is outside every table so a new one can start there.
+function tables.can_insert_table(view)
+  if not (view and view.buffer) then return false end
+  local line = view.buffer:get_selection()
+  return source_table_bounds_with_delimiter(view.buffer, line) == nil
+    and context_at(view, line, nil, false) == nil
+end
+
+---Insert an empty table at the caret and place the caret in its first header
+---cell. A blank caret line becomes the table; otherwise the table starts
+---below the caret line. Blank lines keep it apart from neighboring blocks.
+function tables.insert_table(view, columns, body_rows)
+  if not tables.can_insert_table(view) then return false end
+  columns = math.max(1, math.min(columns or 2, tables.MAX_PRESENTATION_COLUMNS))
+  body_rows = math.max(0, body_rows or 1)
+  local buffer = view.buffer
+  local line = buffer:get_selection()
+  local current = line_text(buffer, line)
+  local model = { columns = columns, alignments = {}, rows = {} }
+  for _ = 1, body_rows + 1 do model.rows[#model.rows + 1] = empty_cells(columns) end
+  local lines = tables.serialize_model(model)
+  local text = table.concat(lines, "\n")
+  local table_line
+  local edit
+  if current:match("^%s*$") then
+    local before = line > 1 and line_text(buffer, line - 1) or ""
+    if not before:match("^%s*$") then
+      text = "\n" .. text
+      table_line = line + 1
+    else
+      table_line = line
+    end
+    edit = { line1 = line, col1 = 1, line2 = line, col2 = #current + 1, text = text }
+  else
+    text = "\n\n" .. text
+    table_line = line + 2
+    edit = { line1 = line, col1 = #current + 1, line2 = line, col2 = #current + 1, text = text }
+  end
+  local following = line_text(buffer, line + 1)
+  if line < #buffer.lines and not following:match("^%s*$") then
+    edit.text = edit.text .. "\n"
+  end
+  buffer:apply_edits({ edit }, { type = "markdown-table", reason = "insert-table" })
+  local row = source_row(line_text(buffer, table_line))
+  local cell = row and row.cells[1]
+  if cell then buffer:set_selection(table_line, cell.content_col1) end
+  core.log_quiet(
+    "Markdown table inserted at %s:%d: %d columns, %d body rows",
+    buffer:get_name(), table_line, columns, body_rows
+  )
   return true
 end
 

@@ -3900,40 +3900,48 @@ test.describe("Markdown Live Preview", function()
       markdown_model.get(buffer):submit("table-command-test")
       refresh(view)
     end
+    local function cells(line)
+      local values = {}
+      for value in (buffer.lines[line] or ""):gmatch("|([^|\n]*)") do
+        values[#values + 1] = value:match("^%s*(.-)%s*$")
+      end
+      values[#values] = nil
+      return values
+    end
     local ok, err = pcall(function()
       buffer:set_selection(3, 3)
       refresh(view)
       test.equal(command.perform("markdown:table_insert_row_below"), true)
-      test.equal(buffer.lines[4], "|  |  |\n")
+      test.same(cells(4), { "", "" })
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
       test.equal(command.perform("markdown:table_delete_row"), true)
-      test.equal(buffer.lines[3], "| 3 | 4 |\n")
+      test.same(cells(3), { "3", "4" })
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
       test.equal(command.perform("markdown:table_move_row_down"), true)
-      test.equal(buffer.lines[3], "| 3 | 4 |\n")
-      test.equal(buffer.lines[4], "| 1 | 2 |\n")
+      test.same(cells(3), { "3", "4" })
+      test.same(cells(4), { "1", "2" })
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
       test.equal(command.perform("markdown:table_insert_column_right"), true)
-      test.equal(buffer.lines[1], "| A |  | B |\n")
-      test.equal(buffer.lines[3], "| 1 |  | 2 |\n")
+      test.same(cells(1), { "A", "", "B" })
+      test.same(cells(3), { "1", "", "2" })
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
       test.equal(command.perform("markdown:table_delete_column"), true)
-      test.equal(buffer.lines[1], "| B |\n")
-      test.equal(buffer.lines[3], "| 2 |\n")
+      test.same(cells(1), { "B" })
+      test.same(cells(3), { "2" })
       buffer:undo(); reparse()
 
       buffer:set_selection(3, 3)
       test.equal(command.perform("markdown:table_move_column_right"), true)
-      test.equal(buffer.lines[1], "| B | A |\n")
-      test.equal(buffer.lines[3], "| 2 | 1 |\n")
+      test.same(cells(1), { "B", "A" })
+      test.same(cells(3), { "2", "1" })
     end)
     core.active_view = old_active
     if not ok then error(err, 0) end

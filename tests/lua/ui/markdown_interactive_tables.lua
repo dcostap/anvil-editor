@@ -58,6 +58,27 @@ local function cell_center(view, line, column)
   error("table cell not found")
 end
 
+local function row_cells(buffer, line)
+  local text = (buffer.lines[line] or ""):gsub("\n$", "")
+  local row = test.not_nil(
+    markdown_tables.source_row(text), "line " .. line .. " is not a table row"
+  )
+  local cells = {}
+  for index, cell in ipairs(row.cells) do
+    cells[index] = text:sub(cell.content_col1, cell.content_col2 - 1)
+  end
+  return cells
+end
+
+local function caret_cell(buffer)
+  local line, col = buffer:get_selection()
+  local text = (buffer.lines[line] or ""):gsub("\n$", "")
+  local row = test.not_nil(markdown_tables.source_row(text), "caret is outside a table row")
+  for index, cell in ipairs(row.cells) do
+    if col >= cell.col1 and col <= cell.col2 then return line, index end
+  end
+end
+
 local function table_control(view, line, kind, index)
   for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
     if fragment.table_insert_control == kind
@@ -227,15 +248,15 @@ test.describe("Markdown Interactive Table Editing", function()
       refresh(view)
 
       test.equal(command.perform("markdown:table_cell_below"), true)
-      test.equal(buffer.lines[4], "|  |  |\n")
+      test.same(row_cells(buffer, 4), { "", "" })
       local appended = test.not_nil(
         view.__markdown_live_owner.pending_lines[4],
         "appended table row did not receive an pending presentation"
       )
       test.ok(test.not_nil(appended.render_line).table_row, "appended row fell back to source")
       test.equal(#table_cells(view, 4), 2)
-      local line1, col1, line2, col2 = buffer:get_selection()
-      test.same({ line1, col1, line2, col2 }, { 4, 6, 4, 6 })
+      test.ok(not buffer:has_selection(), "appended empty cell was not a caret")
+      test.same({ caret_cell(buffer) }, { 4, 2 })
     end)
     core.active_view = old_active
     if not ok then error(err, 0) end
@@ -259,7 +280,7 @@ test.describe("Markdown Interactive Table Editing", function()
       local delimiter_to_body = row_top(5) - row_top(4)
 
       test.equal(command.perform("markdown:table_cell_below"), true)
-      test.equal(buffer.lines[7], "|  |  |\n")
+      test.same(row_cells(buffer, 7), { "", "" })
       refresh(view)
 
       test.equal(row_top(5) - row_top(3), header_to_body)
@@ -277,8 +298,8 @@ test.describe("Markdown Interactive Table Editing", function()
       buffer:set_selection(3, 10)
       refresh(view)
       test.equal(command.perform("markdown:table_next_cell"), true)
-      test.equal(buffer.lines[3], "| one | two |\n")
-      test.equal(buffer.lines[4], "|  |  |\n")
+      test.same(row_cells(buffer, 3), { "one", "two" })
+      test.same(row_cells(buffer, 4), { "", "" })
       test.equal(#table_cells(view, 4), 2)
     end)
     core.active_view = old_active
@@ -293,8 +314,8 @@ test.describe("Markdown Interactive Table Editing", function()
       buffer:set_selection(3, 4)
       refresh(view)
       test.equal(command.perform("markdown:table_insert_row_below"), true)
-      test.equal(buffer.lines[3], "| one | two |\n")
-      test.equal(buffer.lines[4], "|  |  |\n")
+      test.same(row_cells(buffer, 3), { "one", "two" })
+      test.same(row_cells(buffer, 4), { "", "" })
     end)
     core.active_view = old_active
     if not ok then error(err, 0) end
@@ -316,7 +337,7 @@ test.describe("Markdown Interactive Table Editing", function()
       buffer:set_selection(5, 82)
       refresh(view)
       test.equal(command.perform("markdown:table_next_cell"), true)
-      test.equal(buffer.lines[6], "|  |  |  |  |\n")
+      test.same(row_cells(buffer, 6), { "", "", "", "" })
       local cells = table_cells(view, 6)
       test.equal(#cells, 4)
       local header = table_cells(view, 1)
@@ -526,12 +547,9 @@ test.describe("Markdown Interactive Table Editing", function()
     test.ok(outlines >= 4, "fully selected table cell did not receive an outline")
   end)
 
-  test.it("paints selection state for an empty selected cell", function()
-    local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")
-    buffer:set_selection(3, 3)
-    refresh(view)
-    view:prepare_line_body_draw_cache(3, 3)
-    local x, y = view:get_line_screen_position(3)
+  local function count_cell_paint(view, line)
+    view:prepare_line_body_draw_cache(line, line)
+    local x, y = view:get_line_screen_position(line)
     local selection_fills, outlines = 0, 0
     local old_draw_rect = renderer.draw_rect
     local old_draw_text = renderer.draw_text
@@ -545,12 +563,29 @@ test.describe("Markdown Interactive Table Editing", function()
     renderer.draw_text = function(font, text, tx)
       return tx + font:get_width(text)
     end
-    local ok, err = pcall(function() view:draw_line_body(3, x, y) end)
+    local ok, err = pcall(function() view:draw_line_body(line, x, y) end)
     renderer.draw_rect = old_draw_rect
     renderer.draw_text = old_draw_text
     if not ok then error(err, 0) end
-    test.ok(selection_fills >= 1, "empty selected table cell was not painted")
-    test.ok(outlines >= 4, "empty selected table cell was not outlined")
+    return selection_fills, outlines
+  end
+
+  test.it("paints selection state for an empty cell in a Table Cell Selection", function()
+    local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")
+    buffer:set_selection(3, 3)
+    refresh(view)
+    test.equal(markdown_tables.select_rectangle(view, 3, 3, 3, 8), true)
+    local selection_fills, outlines = count_cell_paint(view, 3)
+    test.ok(selection_fills >= 2, "empty selected table cell was not painted")
+    test.ok(outlines >= 8, "empty selected table cell was not outlined")
+  end)
+
+  test.it("shows a lone caret in an empty cell without selection paint", function()
+    local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")
+    buffer:set_selection(3, 3)
+    refresh(view)
+    local selection_fills = count_cell_paint(view, 3)
+    test.equal(selection_fills, 0)
   end)
 
   test.it("keeps every table row rendered through direct editing paths", function()
@@ -712,13 +747,13 @@ test.describe("Markdown Interactive Table Editing", function()
     buffer:set_selection(5, 1)
     refresh(view)
     click_control(view, 1, test.not_nil(table_control(view, 1, "column", 1)))
-    test.equal(buffer.lines[1], "| A |  | B |\n")
-    test.equal(buffer.lines[3], "| one |  | two |\n")
+    test.same(row_cells(buffer, 1), { "A", "", "B" })
+    test.same(row_cells(buffer, 3), { "one", "", "two" })
 
     markdown_model.get(buffer):submit("interactive-table-hover-column")
     refresh(view)
     click_control(view, 3, test.not_nil(table_control(view, 3, "row", 3)))
-    test.equal(buffer.lines[4], "|  |  |  |\n")
+    test.same(row_cells(buffer, 4), { "", "", "" })
   end)
 
   test.it("keeps a wide table rendered after inserting an empty body row", function()
@@ -745,7 +780,7 @@ test.describe("Markdown Interactive Table Editing", function()
     local y = line_y + control.draw_y_offset + control.widget.height / 2
     view:on_mouse_moved(x, y, 0, 0)
     test.equal(view:on_mouse_pressed("left", x, y, 1), true)
-    test.equal(buffer.lines[4], "|  |  |  |  |\n")
+    test.same(row_cells(buffer, 4), { "", "", "", "" })
 
     markdown_model.get(buffer):submit("interactive-table-empty-row")
     refresh(view)
@@ -1088,18 +1123,135 @@ test.describe("Markdown Interactive Table Editing", function()
       buffer:set_selection(4, 11)
       refresh(view)
       test.equal(command.perform("markdown:table_insert_row_above"), true)
-      test.equal(buffer.lines[4], "|  |  |\n")
+      test.same(row_cells(buffer, 4), { "", "" })
+      test.same(row_cells(buffer, 5), { "three", "four" })
       buffer:undo()
       markdown_model.get(buffer):submit("interactive-table-command-undo")
       refresh(view)
 
       buffer:set_selection(3, 10)
       test.equal(command.perform("markdown:table_insert_column_left"), true)
-      test.equal(buffer.lines[1], "| A |  | B |\n")
-      test.equal(buffer.lines[3], "| one |  | two |\n")
+      test.same(row_cells(buffer, 1), { "A", "", "B" })
+      test.same(row_cells(buffer, 3), { "one", "", "two" })
       test.equal(#table_cells(view, 3), 3)
     end)
     core.active_view = old_active
     if not ok then error(err, 0) end
+  end)
+
+  local function with_active(view, fn)
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(fn)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end
+
+  local function source(buffer)
+    return table.concat(buffer.lines):gsub("\n$", "")
+  end
+
+  test.it("formats a table into padded columns with alignment markers", function()
+    local original = "| A | Long header |\n|:-|--:|\n| one | 2 |\n\nplain"
+    local view, buffer = make_view(original)
+    with_active(view, function()
+      buffer:set_selection(3, 5)
+      refresh(view)
+      test.equal(command.perform("markdown:table_format"), true)
+      test.equal(source(buffer), table.concat({
+        "| A   | Long header |",
+        "| :-- | ----------: |",
+        "| one |           2 |",
+        "",
+        "plain",
+      }, "\n"))
+      local line, col = buffer:get_selection()
+      test.same({ line, col }, { 3, 5 })
+      buffer:undo()
+      test.equal(source(buffer), original)
+    end)
+  end)
+
+  test.it("aligns every column of a Table Cell Selection", function()
+    local view, buffer = make_view("| A | B | C |\n| --- | --- | --- |\n| one | two | three |\n\nplain")
+    with_active(view, function()
+      buffer:set_selection(3, 4)
+      refresh(view)
+      test.equal(markdown_tables.select_rectangle(view, 3, 4, 3, 10), true)
+      test.equal(command.perform("markdown:table_align_column_right"), true)
+      local markers = row_cells(buffer, 2)
+      test.ok(markers[1]:match("^%-+:$"), "first selected column is not right-aligned")
+      test.ok(markers[2]:match("^%-+:$"), "second selected column is not right-aligned")
+      test.ok(markers[3]:match("^%-+$"), "unselected column changed alignment")
+      test.equal(#view.buffer.selections / 4, 2)
+
+      markdown_model.get(buffer):submit("interactive-table-align")
+      refresh(view)
+      test.equal(table_cells(view, 3)[1].table_alignment, "right")
+      test.equal(command.perform("markdown:table_clear_column_alignment"), true)
+      test.ok(row_cells(buffer, 2)[1]:match("^%-+$"), "alignment was not cleared")
+    end)
+  end)
+
+  test.it("sorts body rows by the caret's column with the header fixed", function()
+    local view, buffer = make_view(
+      "| Name | Size |\n| --- | --- |\n| b | 10 |\n| a | 9 |\n|  |  |\n| c |  |\n\nplain"
+    )
+    with_active(view, function()
+      buffer:set_selection(3, 10)
+      refresh(view)
+      test.equal(command.perform("markdown:table_sort_ascending"), true)
+      test.same(row_cells(buffer, 1), { "Name", "Size" })
+      test.same(row_cells(buffer, 3), { "a", "9" })
+      test.same(row_cells(buffer, 4), { "b", "10" })
+      test.same({ caret_cell(buffer) }, { 4, 2 })
+
+      test.equal(command.perform("markdown:table_sort_descending"), true)
+      test.same(row_cells(buffer, 3), { "b", "10" })
+      test.same(row_cells(buffer, 4), { "a", "9" })
+      test.equal(row_cells(buffer, 5)[2], "")
+      test.equal(row_cells(buffer, 6)[2], "")
+    end)
+  end)
+
+  test.it("moves a column with its alignment as one undo step", function()
+    local original = "| A | B |\n| :-- | --: |\n| 1 | 2 |\n\nplain"
+    local view, buffer = make_view(original)
+    with_active(view, function()
+      buffer:set_selection(3, 3)
+      refresh(view)
+      test.equal(command.perform("markdown:table_move_column_right"), true)
+      test.same(row_cells(buffer, 1), { "B", "A" })
+      test.same(row_cells(buffer, 3), { "2", "1" })
+      local markers = row_cells(buffer, 2)
+      test.ok(markers[1]:match("^%-+:$") and markers[2]:match("^:%-+$"),
+        "alignment did not move with its column")
+      test.same({ caret_cell(buffer) }, { 3, 2 })
+      buffer:undo()
+      test.equal(source(buffer), original)
+    end)
+  end)
+
+  test.it("inserts a new table below the caret line and starts in its header", function()
+    local view, buffer = make_view("intro\nafter")
+    with_active(view, function()
+      buffer:set_selection(1, 6)
+      refresh(view)
+      test.equal(command.perform("markdown:insert_table"), true)
+      test.equal(buffer.lines[1], "intro\n")
+      test.equal(buffer.lines[2], "\n")
+      test.same(row_cells(buffer, 3), { "", "" })
+      test.ok(row_cells(buffer, 4)[1]:match("^%-+$"), "delimiter row is missing")
+      test.same(row_cells(buffer, 5), { "", "" })
+      test.equal(buffer.lines[6], "\n")
+      test.equal(buffer.lines[7], "after\n")
+      test.same({ caret_cell(buffer) }, { 3, 1 })
+
+      refresh(view)
+      test.equal(#table_cells(view, 3), 2)
+      test.equal(command.perform("markdown:insert_table"), false)
+      view:on_text_input("Name")
+      test.equal(row_cells(buffer, 3)[1], "Name")
+    end)
   end)
 end)

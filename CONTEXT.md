@@ -219,6 +219,10 @@ _Avoid_: Grid cursor, table highlight
 A temporary table-edge control that appears on hover and inserts a row or column at the indicated boundary.
 _Avoid_: permanent table toolbar, table context menu
 
+**Table Formatting**:
+Rewriting a Markdown table's source so every column is padded to its widest cell and the delimiter row states each column's alignment. Row, column, alignment, and sort changes apply it to the whole table as one undoable change. Typing inside a cell does not.
+_Avoid_: table prettify, auto-align
+
 **Markdown Reveal Unit**:
 The smallest formatted Markdown construct whose source syntax becomes visible while it is being edited in Markdown Live Preview.
 An enclosing heading also shows its source markers. Other inline constructs keep their own reveal state.
