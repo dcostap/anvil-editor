@@ -1224,14 +1224,18 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
   local header = line == layout.line1
   local row_height = layout.row_heights[line] or live_fonts.body_line_height(view)
   local row_presentations, row_wrapped = {}, {}
+  local selections = selection_state and selection_state.selections or {}
+  -- An empty cell's caret is part of a Table Cell Selection when other
+  -- selections accompany it, as the selection paint decides.
+  local grouped = #selections > 4
   local function cell_active(cell)
-    for index = 1, #(selection_state and selection_state.selections or {}), 4 do
-      local line1, col1 = selection_state.selections[index], selection_state.selections[index + 1]
-      local line2, col2 = selection_state.selections[index + 2], selection_state.selections[index + 3]
+    for index = 1, #selections, 4 do
+      local line1, col1 = selections[index], selections[index + 1]
+      local line2, col2 = selections[index + 2], selections[index + 3]
       -- A Table Cell Selection covers the whole cell and keeps it rendered;
       -- only a caret or a partial selection edits the cell's source.
       if line1 == line and line2 == line
-      and cell.content_col1 < cell.content_col2
+      and (cell.content_col1 < cell.content_col2 or grouped)
       and math.min(col1, col2) == cell.content_col1
       and math.max(col1, col2) == cell.content_col2
       then

@@ -598,6 +598,23 @@ test.describe("Markdown Interactive Table Editing", function()
     end)
   end)
 
+  test.it("tints empty and filled cells of a Table Cell Selection alike", function()
+    local active_cell = style.markdown_live_table_active_cell
+    local marker = { 7, 8, 9, 30 }
+    style.markdown_live_table_active_cell = marker
+    local ok, err = pcall(with_cell_selection_colors, function()
+      local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n|  | four |\n\nplain")
+      buffer:set_selection(6, 1)
+      refresh(view)
+      test.equal(markdown_tables.select_rectangle(view, 3, 3, 4, 9), true)
+      local rects = paint_rects(view, { 3, 4 })
+      test.equal(#(rects[marker] or {}), 0, "selected empty cells drew the active cell tint")
+      test.equal(#(rects[SELECTION_FILL] or {}), 4)
+    end)
+    style.markdown_live_table_active_cell = active_cell
+    if not ok then error(err, 0) end
+  end)
+
   test.it("shows a lone caret in an empty cell without selection paint", function()
     with_cell_selection_colors(function()
       local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")
