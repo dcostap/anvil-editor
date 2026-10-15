@@ -208,19 +208,15 @@ An Editor mode that shows all Markdown source syntax normally instead of present
 _Avoid_: Raw rendering mode
 
 **Interactive Table Editing**:
-A Markdown Live Preview behavior that keeps a Markdown table presented as an editable grid while its cells are navigated, selected, structurally changed, and edited. Hover Insertion Controls provide direct row and column insertion at table boundaries.
+A Markdown Live Preview behavior that keeps a Markdown table presented as an editable grid while its cells are navigated, selected, structurally changed, and edited.
 _Avoid_: Table Source Mode, raw table editing
 
 **Table Cell Selection**:
 One of a group of selections that each cover one table cell's complete editable contents in Interactive Table Editing. Dragging within one cell creates an ordinary text selection, even when it covers all of the cell's text; dragging across cell boundaries creates a rectangular group represented as multiple Table Cell Selections. Selected cells, including empty ones, look selected as whole cells rather than as selected text.
 _Avoid_: Grid cursor, table highlight
 
-**Hover Insertion Control**:
-A temporary table-edge control that appears on hover and inserts a row or column at the indicated boundary.
-_Avoid_: permanent table toolbar, table context menu
-
 **Table Handle**:
-A temporary grip on a table row or column that appears on hover. Clicking it selects the whole row or column as Table Cell Selections; dragging it moves the row or column within the table.
+A grip in its own space beside a table row or above a table column that appears on hover. Pressing it selects the whole row or column as Table Cell Selections; dragging it carries the grip along the table and moves the row or column to where it is dropped.
 _Avoid_: drag handle menu, table context menu
 
 **Table Scroll**:

@@ -546,12 +546,6 @@ local function row_inline_runs(view, text, line, reveal, base)
   return pieces and normalize_runs(text, pieces) or nil
 end
 
-local function control_metrics(text_line_height)
-  local size = math.max(math.floor(SCALE * 6), math.floor(text_line_height * 0.72 + 0.5))
-  local hit_padding = math.max(math.floor(SCALE * 2), math.floor(size * 0.18 + 0.5))
-  return size, hit_padding, size + hit_padding * 2
-end
-
 -- Table Scroll -------------------------------------------------------------
 -- A table wider than the editor scrolls inside its own frame. Its rows share
 -- one state, keyed by the header line, so the offset survives row rebuilds.
@@ -797,7 +791,10 @@ function table_presentation.layout(view, table_node, instance)
     alignments[column] = left and right and "center" or right and "right" or "left"
   end
   local separator_width = math.max(font:get_width(" "), math.max(1, SCALE * 3))
-  local chrome_width = separator_width * (columns + 1)
+  -- Table Handles get their own room: a gutter left of the table and a band
+  -- above its header row.
+  local handle_size = canonical and math.max(8, math.floor(SCALE * 16 + 0.5)) or 0
+  local chrome_width = separator_width * (columns + 1) + handle_size
   local content_budget = math.max(1, available_width - chrome_width)
   local natural_content_width, minimum_content_width = 0, 0
   for column, width in ipairs(widths) do
@@ -813,7 +810,7 @@ function table_presentation.layout(view, table_node, instance)
       widths[column] = math.max(minimums[column], width - shrink * share)
     end
   end
-  local total_width = chrome_width
+  local total_width = chrome_width - handle_size
   for _, width in ipairs(widths) do total_width = total_width + width end
   local row_heights, wrapped_cells = {}, {}
   local text_line_height = live_fonts.body_line_height(view)
@@ -837,10 +834,8 @@ function table_presentation.layout(view, table_node, instance)
       row_heights[row_line] = max_lines * text_line_height + vertical_pad * 2
     end
   end
-  local _, _, control_hit_size = control_metrics(text_line_height)
-  -- Scrolling ends past the last border so its Hover Insertion Control fits.
-  local scroll_max = total_width > available_width
-    and math.ceil(total_width + control_hit_size / 2 - available_width) or 0
+  local scroll_max = handle_size + total_width > available_width
+    and math.ceil(handle_size + total_width - available_width) or 0
   local layout = {
     id = table_node.id, line1 = line1, line2 = line2,
     viewport_width = available_width, scroll_max = scroll_max,
@@ -852,26 +847,34 @@ function table_presentation.layout(view, table_node, instance)
     active_presentations = active_presentations,
     selection_stable_layout = selection_stable_layout,
     separator_width = separator_width, total_width = total_width,
-    canonical = canonical,
+    handle_size = handle_size, canonical = canonical,
   }
   return store(layout)
 end
 
 -- Table handles ------------------------------------------------------------
--- A grip on a body row's left border and on top of each header cell. A click
--- selects the whole row or column; a drag moves it to the drop position.
+-- Each body row has a grip in the gutter left of the table, and each column
+-- has one in the band above its header cell. Pressing a grip selects its row
+-- or column. Dragging carries the grip along the table and moves the row or
+-- column to where the grip is dropped.
+
+local function line_top(view, line)
+  return select(2, view:get_line_screen_position(line))
+end
 
 local function line_bottom(view, line)
   local content = view:get_line_render(line)
   if content and content.table_content_height then
-    return select(2, view:get_line_screen_position(line)) + content.table_content_height
+    return line_top(view, line) + content.table_content_height
   end
-  if line < #view.buffer.lines then
-    return select(2, view:get_line_screen_position(line + 1))
-  end
+  if line < #view.buffer.lines then return line_top(view, line + 1) end
+  return line_top(view, line) + (content and content.table_row_height or view:get_line_height())
+end
+
+-- The top of a row's cells, below the band that holds the column handles.
+local function cells_top(view, line)
   local render = view:get_line_render(line)
-  local _, y = view:get_line_screen_position(line)
-  return y + (render and render.table_row_height or view:get_line_height())
+  return line_top(view, line) + (render and render.first_row_content_y_offset or 0)
 end
 
 local function with_alpha(color, factor)
@@ -880,24 +883,57 @@ local function with_alpha(color, factor)
   return value
 end
 
-local function draw_grip(x, y, width, height, visibility, vertical)
-  visibility = visibility * visibility * (3 - 2 * visibility)
-  renderer.draw_rounded_rect(
-    x, y, width, height, math.min(width, height) / 2,
-    with_alpha(style.accent, visibility * 0.75)
-  )
-  local dot = math.max(1, math.floor(math.min(width, height) * 0.4 + 0.5))
-  local dot_color = with_alpha(style.background, visibility)
-  for index = -1, 1 do
-    local cx = x + width / 2 + (vertical and 0 or index * dot * 2)
-    local cy = y + height / 2 + (vertical and index * dot * 2 or 0)
-    renderer.draw_rect(
-      math.floor(cx - dot / 2 + 0.5), math.floor(cy - dot / 2 + 0.5), dot, dot, dot_color
-    )
+local function handle_metrics()
+  local ring = math.max(1, math.floor(SCALE * 2 + 0.5))
+  return ring, math.max(2, math.floor(SCALE * 4 + 0.5))
+end
+
+-- A handle rounds only its corners away from the table.
+local function draw_handle_shape(x, y, width, height, side, radius, color)
+  radius = math.min(radius, width / 2, height / 2)
+  renderer.draw_rounded_rect(x, y, width, height, radius, color)
+  if side == "left" then
+    renderer.draw_rect(x + width - radius, y, radius, height, color)
+  else
+    renderer.draw_rect(x, y + height - radius, width, radius, color)
   end
 end
 
--- Draw a drag preview inside the table's frame, like its rows.
+-- Six dots, two by three for a row grip and three by two for a column grip.
+local function draw_grip_dots(x, y, width, height, vertical, color)
+  local dot = math.max(2, math.floor(SCALE * 2.5 + 0.5))
+  local near = math.max(dot + 1, math.floor(SCALE * 4 + 0.5))
+  local far = math.max(dot + 1, math.floor(SCALE * 4.7 + 0.5))
+  local step_x, step_y = vertical and near or far, vertical and far or near
+  local columns, rows = vertical and 2 or 3, vertical and 3 or 2
+  local left = math.floor(x + (width - step_x * (columns - 1) - dot) / 2 + 0.5)
+  local top = math.floor(y + (height - step_y * (rows - 1) - dot) / 2 + 0.5)
+  for row = 0, rows - 1 do
+    for column = 0, columns - 1 do
+      renderer.draw_rounded_rect(
+        left + column * step_x, top + row * step_y, dot, dot, dot / 2, color
+      )
+    end
+  end
+end
+
+-- The grip under the pointer while it selects or moves its row or column.
+local function draw_active_handle(x, y, width, height, side)
+  local ring, radius = handle_metrics()
+  draw_handle_shape(
+    x - ring, y - ring, width + ring * 2, height + ring * 2, side, radius + ring,
+    style.markdown_live_table_cell_selection_outline
+  )
+  draw_grip_dots(x, y, width, height, side == "left", style.background)
+end
+
+local function draw_drop_indicator(x, y, width, height)
+  renderer.draw_rounded_rect(
+    x, y, width, height, math.max(1, math.floor(SCALE * 2 + 0.5)), style.accent
+  )
+end
+
+-- Draw a drag inside the table's frame, like its rows.
 local function draw_in_table_frame(owner, line, draw)
   local render = owner:get_line_render(line)
   local clip = render and render.horizontal_clip
@@ -918,68 +954,111 @@ local function table_rows_for_drag(view, line)
   return context, lines
 end
 
+-- Scroll the view while a row is dragged near its top or bottom edge.
+local function scroll_toward_pointer(owner, y, margin)
+  local top, bottom = owner.position.y + margin, owner.position.y + owner.size.y - margin
+  local step = y < top and y - top or y > bottom and y - bottom or 0
+  if step == 0 then return end
+  owner.scroll.to.y = owner.scroll.to.y + step
+  owner:clamp_scroll_position()
+end
+
 local function row_drag(view, spec, press_y)
-  local context, lines = table_rows_for_drag(view, spec.line)
-  if not context then return nil end
-  local drag = { cursor = "hand", moved = false, from = context.grid_row }
+  local _, lines = table_rows_for_drag(view, spec.line)
+  if not lines then return nil end
+  local from
+  for index, row_line in ipairs(lines) do
+    if row_line == spec.line then from = index end
+  end
+  if not from or from < 2 then return nil end
+  local drag = {
+    cursor = "hand", table_handle_drag = true, moved = false,
+    from = from, target = from, pointer_y = press_y,
+    press_document_y = press_y + view.scroll.y,
+  }
   local threshold = math.max(3, spec.text_line_height * 0.25)
-  function drag.on_move(self, owner, x, y)
+  -- The grip's top edge and height, and where it points. The grip follows
+  -- the pointer within the body; the point it carries can reach every row.
+  function drag.handle_y(self, owner)
+    local top = line_top(owner, lines[self.from])
+    local height = line_bottom(owner, lines[self.from]) - top
+    if not self.moved then return top, height, top + height / 2 end
+    local offset = self.pointer_y + owner.scroll.y - self.press_document_y
+    local min_y = line_top(owner, lines[2])
+    local max_y = line_bottom(owner, lines[#lines])
+    return common.clamp(top + offset, min_y, math.max(min_y, max_y - height)), height,
+      common.clamp(top + height / 2 + offset, min_y, max_y - 1)
+  end
+  function drag.on_move(self, owner, _, y)
     if not self.moved and math.abs(y - press_y) < threshold then return end
     self.moved = true
-    local hovered = owner:resolve_screen_position(x, y)
-    if hovered <= lines[2] - 1 or hovered < lines[1] then
-      self.target = 2
-    elseif hovered > lines[#lines] then
-      self.target = #lines
-    else
-      for index, row_line in ipairs(lines) do
-        if row_line == hovered then self.target = math.max(2, index) break end
-      end
+    self.pointer_y = y
+    scroll_toward_pointer(owner, y, spec.text_line_height)
+    local _, _, point = self:handle_y(owner)
+    self.target = #lines
+    for index = 2, #lines do
+      if point < line_bottom(owner, lines[index]) then self.target = index break end
     end
   end
   function drag.draw(self, owner)
-    if not (self.moved and self.target) then return end
     draw_in_table_frame(owner, lines[1], function() self:draw_preview(owner) end)
   end
   function drag.draw_preview(self, owner)
-    local x, from_y = owner:get_line_screen_position(lines[self.from])
-    local from_bottom = line_bottom(owner, lines[self.from])
-    renderer.draw_rect(
-      x, from_y, spec.table_width, from_bottom - from_y,
-      with_alpha(style.accent, 0.12)
-    )
-    if self.target == self.from then return end
-    local target_line = lines[self.target]
-    local edge_y = self.target > self.from and line_bottom(owner, target_line)
-      or select(2, owner:get_line_screen_position(target_line))
-    local thickness = math.max(2, math.floor(SCALE * 2 + 0.5))
-    renderer.draw_rect(
-      x, math.floor(edge_y - thickness / 2), spec.table_width, thickness, style.accent
-    )
+    local ring = handle_metrics()
+    local x = owner:get_line_screen_position(lines[1])
+    local handle_y, height = self:handle_y(owner)
+    if self.target ~= self.from then
+      local target_line = lines[self.target]
+      local edge_y = self.target > self.from and line_bottom(owner, target_line)
+        or line_top(owner, target_line)
+      local thickness = math.max(2, math.floor(SCALE * 4 + 0.5))
+      draw_drop_indicator(
+        x + spec.table_x1, math.floor(edge_y - thickness / 2),
+        spec.table_x2 - spec.table_x1, thickness
+      )
+    end
+    draw_active_handle(x + ring, handle_y, spec.handle_size - ring, height, "left")
   end
   function drag.on_release(self, owner)
-    if self.moved and self.target and self.target ~= self.from then
+    if self.moved and self.target ~= self.from then
       core.log_quiet(
         "Markdown table handle moved row %d to %d in %s",
         self.from, self.target, owner.buffer:get_name()
       )
       markdown_tables.move_row_to(owner, lines[self.from], self.target)
-    elseif not self.moved then
-      markdown_tables.select_row(owner, lines[self.from])
+      owner:keep_viewport_for_selection()
     end
   end
   return drag
 end
 
 local function column_drag(view, spec, column, press_x)
-  local context, lines = table_rows_for_drag(view, spec.line)
-  if not context then return nil end
-  local drag = { cursor = "hand", moved = false, from = column }
-  local threshold = math.max(3, spec.text_line_height * 0.25)
+  local _, lines = table_rows_for_drag(view, spec.line)
+  if not lines then return nil end
   local cell_x = spec.cell_x
+  local drag = {
+    cursor = "hand", table_handle_drag = true, moved = false,
+    from = column, target = column, pointer_x = press_x,
+    press_table_x = press_x - view:get_line_screen_position(lines[1]),
+  }
+  local threshold = math.max(3, spec.text_line_height * 0.25)
+  -- The grip's left edge and width in table coordinates, and where it
+  -- points. The grip follows the pointer across the columns; the point it
+  -- carries can reach every column.
+  function drag.handle_x(self, owner)
+    local from = cell_x[self.from]
+    local width = from.x2 - from.x1
+    if not self.moved then return from.x1, width, from.x1 + width / 2 end
+    local offset = self.pointer_x - owner:get_line_screen_position(lines[1])
+      - self.press_table_x
+    local min_x, max_x = cell_x[1].x1, cell_x[#cell_x].x2
+    return common.clamp(from.x1 + offset, min_x, math.max(min_x, max_x - width)), width,
+      common.clamp(from.x1 + width / 2 + offset, min_x, max_x - 1)
+  end
   function drag.on_move(self, owner, x)
     if not self.moved and math.abs(x - press_x) < threshold then return end
     self.moved = true
+    self.pointer_x = x
     local render = owner:get_line_render(lines[1])
     local scroll, clip = render and render.horizontal_scroll, render and render.horizontal_clip
     if scroll and clip then
@@ -991,79 +1070,92 @@ local function column_drag(view, spec, column, press_x)
         owner:set_line_render_horizontal_scroll(scroll, scroll.x + step, true)
       end
     end
-    local relative = x - owner:get_line_screen_position(lines[1])
-    if relative < cell_x[1].x1 then
-      self.target = 1
-    elseif relative >= cell_x[#cell_x].x2 then
-      self.target = #cell_x
-    else
-      for index, bounds in ipairs(cell_x) do
-        if relative >= bounds.x1 and relative < bounds.x2 then self.target = index break end
-      end
+    local _, _, point = self:handle_x(owner)
+    self.target = #cell_x
+    for index, bounds in ipairs(cell_x) do
+      if point < bounds.x2 then self.target = index break end
     end
   end
   function drag.draw(self, owner)
-    if not (self.moved and self.target) then return end
     draw_in_table_frame(owner, lines[1], function() self:draw_preview(owner) end)
   end
   function drag.draw_preview(self, owner)
-    local x, top = owner:get_line_screen_position(lines[1])
-    local bottom = line_bottom(owner, lines[#lines])
-    local from = cell_x[self.from]
-    renderer.draw_rect(
-      x + from.x1, top, from.x2 - from.x1, bottom - top, with_alpha(style.accent, 0.12)
-    )
-    if self.target == self.from then return end
-    local target = cell_x[self.target]
-    local edge_x = x + (self.target > self.from and target.x2 or target.x1)
-    local thickness = math.max(2, math.floor(SCALE * 2 + 0.5))
-    renderer.draw_rect(
-      math.floor(edge_x - thickness / 2), top, thickness, bottom - top, style.accent
-    )
+    local ring = handle_metrics()
+    local x = owner:get_line_screen_position(lines[1])
+    local top = cells_top(owner, lines[1])
+    if self.target ~= self.from then
+      local target = cell_x[self.target]
+      local edge_x = x + (self.target > self.from and target.x2 or target.x1)
+      local thickness = math.max(2, math.floor(SCALE * 4 + 0.5))
+      draw_drop_indicator(
+        math.floor(edge_x - thickness / 2), top,
+        thickness, line_bottom(owner, lines[#lines]) - top
+      )
+    end
+    local handle_x, width = self:handle_x(owner)
+    local height = spec.handle_size - ring
+    draw_active_handle(x + handle_x, top - height, width, height, "top")
   end
   function drag.on_release(self, owner)
-    if self.moved and self.target and self.target ~= self.from then
+    if self.moved and self.target ~= self.from then
       core.log_quiet(
         "Markdown table handle moved column %d to %d in %s",
         self.from, self.target, owner.buffer:get_name()
       )
       markdown_tables.move_column_to(owner, lines[1], self.from, self.target)
-    elseif not self.moved then
-      markdown_tables.select_column(owner, lines[1], self.from)
+      owner:keep_viewport_for_selection()
     end
   end
   return drag
 end
 
 local function append_table_handles(view, fragments, spec)
-  local thickness = math.max(4, math.floor(SCALE * 5 + 0.5))
-  local length = math.max(thickness * 3, math.floor(spec.text_line_height * 0.85 + 0.5))
-  local function handle(kind, index, layout_x, hit_width, hit_height, draw, start_drag)
+  local ring, radius = handle_metrics()
+  local function handle(
+    kind, index, layout_x, draw_y_offset, width, height, side, select_cells, start_drag
+  )
     fragments[#fragments + 1] = {
       source_col1 = spec.source_col,
       source_col2 = spec.source_col,
       text = "",
       width = 0,
-      hit_width = hit_width,
+      hit_width = width,
       layout_x = layout_x,
-      draw_y_offset = 0,
+      draw_y_offset = draw_y_offset,
       semantic_id = spec.table_node.id .. ":handle:" .. kind .. ":" .. index,
       table_handle = kind,
       table_handle_index = index,
       widget = {
-        width = hit_width,
-        height = hit_height,
-        proximity_radius = spec.proximity_radius,
+        width = width,
+        height = height,
+        proximity_radius = spec.handle_size,
         suppress_hover_overlay = true,
         cursor = "hand",
-        draw = function(_, fragment, draw_x, draw_y)
+        draw = function(owner, fragment, draw_x, draw_y)
+          -- A dragged grip draws itself; the others stay out of its way.
+          local drag = owner.render_widget_drag
+          if drag and drag.table_handle_drag then return end
           local visibility = fragment.hovered and 1 or fragment.proximity or 0
-          if visibility > 0.01 then draw(draw_x, draw_y, visibility) end
+          if visibility <= 0.01 then return end
+          local x, y = draw_x, draw_y + draw_y_offset
+          if fragment.hovered then
+            draw_handle_shape(
+              x, y, width, height, side, radius, style.markdown_live_table_header_background
+            )
+          end
+          draw_grip_dots(x, y, width, height, side == "left", with_alpha(style.dim, visibility))
         end,
         on_mouse_pressed = function(_, owner, _, button, x, y)
           if button ~= "left" then return false end
           local drag = start_drag(owner, x, y)
           if not drag then return false end
+          -- The grip is on screen, so its row or column needs no scrolling.
+          select_cells(owner)
+          owner:keep_viewport_for_selection()
+          core.log_quiet(
+            "Markdown table handle selected %s %d in %s",
+            kind, index, owner.buffer:get_name()
+          )
           owner:begin_render_widget_drag(drag)
           return true
         end,
@@ -1072,35 +1164,16 @@ local function append_table_handles(view, fragments, spec)
   end
 
   if not spec.header then
-    -- The pill sits in the first cell's leading padding, between the left
-    -- border and the text, so the gutter and the table frame never crop it.
-    local hit_width = spec.separator_width + spec.padding
-    handle("row", spec.line, 0, hit_width, spec.row_height,
-      function(draw_x, draw_y, visibility)
-        local height = math.min(length, spec.row_height - 4)
-        local center = draw_x + (spec.separator_width * 1.5 + spec.padding) / 2
-        draw_grip(
-          math.floor(center - thickness / 2 + 0.5),
-          draw_y + (spec.row_height - height) / 2,
-          thickness, height, visibility, true
-        )
-      end,
+    handle("row", spec.line, ring, 0, spec.handle_size - ring, spec.row_height, "left",
+      function(owner) markdown_tables.select_row(owner, spec.line) end,
       function(owner, _, y) return row_drag(owner, spec, y) end
     )
     return
   end
-  local hit_height = thickness + math.max(2, math.floor(SCALE * 3))
+  local height = spec.handle_size - ring
   for column, bounds in ipairs(spec.cell_x) do
-    local width = math.min(length * 1.4, (bounds.x2 - bounds.x1) * 0.6)
-    local hit_width = width + spec.control_hit_size * 0.5
-    handle("column", column, (bounds.x1 + bounds.x2 - hit_width) / 2, hit_width, hit_height,
-      function(draw_x, draw_y, visibility)
-        draw_grip(
-          draw_x + (hit_width - width) / 2,
-          draw_y + math.max(1, math.floor(SCALE * 2)),
-          width, thickness, visibility, false
-        )
-      end,
+    handle("column", column, bounds.x1, -height, bounds.x2 - bounds.x1, height, "top",
+      function(owner) markdown_tables.select_column(owner, spec.line, column) end,
       function(owner, x) return column_drag(owner, spec, column, x) end
     )
   end
@@ -1209,6 +1282,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       {
         source_col1 = 1, source_col2 = #row.text + 1,
         width = layout.total_width,
+        layout_x = layout.handle_size,
         semantic_id = table_node.id .. ":delimiter",
         table_separator = true,
         widget = {
@@ -1226,6 +1300,18 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
   local fragments = {}
   local header = line == layout.line1
   local row_height = layout.row_heights[line] or live_fonts.body_line_height(view)
+  if layout.handle_size > 0 then
+    -- The gutter that holds the row handle, left of the first border.
+    fragments[1] = {
+      source_col1 = row.separators[1].col1, source_col2 = row.separators[1].col1,
+      text = "", width = layout.handle_size,
+      semantic_id = table_node.id .. ":gutter:" .. line,
+      table_handle_gutter = true,
+    }
+  end
+  -- The header row's cells sit below the band that holds the column handles.
+  local band = header and layout.handle_size or 0
+  if band > 0 then extras.first_row_content_y_offset = band end
   local row_presentations, row_wrapped = {}, {}
   local selections = selection_state and selection_state.selections or {}
   -- An empty cell's caret is part of a Table Cell Selection when other
@@ -1413,7 +1499,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
           x_offset = fragment_x + (text_line.x_offset or 0),
           hit_x1 = fragment_x,
           hit_x2 = fragment_x + (fragment.width or 0),
-          y_offset = (fragment.text_y_padding or 0)
+          y_offset = band + (fragment.text_y_padding or 0)
             + (visual_index - 1) * (fragment.text_line_height or layout.text_line_height),
           height = fragment.text_line_height or layout.text_line_height,
           runs = text_line.runs,
@@ -1427,7 +1513,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
             and fragment.text_source_col1 == fragment.text_source_col2,
           selection_x1 = fragment_x,
           selection_x2 = fragment_x + (fragment.width or 0),
-          selection_y = 0,
+          selection_y = band,
           selection_height = row_height,
           selection_fill = style.markdown_live_table_cell_selection,
           selection_outline = style.markdown_live_table_cell_selection_outline,
@@ -1435,8 +1521,8 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
           selection_frame_x2 = fragment_x + (fragment.width or 0)
             + grid_line_offset + grid_line_width,
           -- A body row's top grid line is the bottom line of the row above.
-          selection_frame_y1 = header and 0 or -grid_line_width,
-          selection_frame_y2 = row_height,
+          selection_frame_y1 = header and band or -grid_line_width,
+          selection_frame_y2 = band + row_height,
           table_row_above = row_above,
           table_row_below = row_below,
           -- The active cell's tint marks the caret row inside a table.
@@ -1447,109 +1533,15 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     fragment_x = fragment_x + (fragment.width or 0)
   end
 
-  local control_size, control_hit_padding, control_hit_size =
-    control_metrics(layout.text_line_height)
-  local control_proximity_radius = math.max(
-    layout.text_line_height * 1.6, control_size * 2
-  )
-  local function insertion_control(kind, after, source_col, x, y_offset, action)
-    local icon_thickness = math.max(1, math.floor(control_size * 0.11 + 0.5))
-    local icon_length = math.max(icon_thickness * 3, math.floor(control_size * 0.44))
-    fragments[#fragments + 1] = {
-      source_col1 = source_col,
-      source_col2 = source_col,
-      text = "",
-      width = 0,
-      hit_width = control_hit_size,
-      layout_x = x - control_hit_padding,
-      draw_y_offset = y_offset - control_hit_padding,
-      control_size = control_size,
-      semantic_id = table_node.id .. ":insert:" .. kind .. ":" .. tostring(after),
-      table_insert_control = kind,
-      table_insert_after = after,
-      widget = {
-        width = control_hit_size,
-        height = control_hit_size,
-        proximity_radius = control_proximity_radius,
-        suppress_hover_overlay = true,
-        cursor = "hand",
-        draw = function(_, fragment, draw_x, draw_y)
-          local visibility = fragment.hovered and 1 or fragment.proximity or 0
-          if visibility <= 0.01 then return end
-          visibility = visibility * visibility * (3 - 2 * visibility)
-          local button_x = draw_x + control_hit_padding
-          local button_y = draw_y + (fragment.draw_y_offset or 0)
-            + control_hit_padding
-          local accent = { table.unpack(style.accent) }
-          accent[4] = (accent[4] or 255) * visibility * (0.35 + visibility * 0.4)
-          renderer.draw_rounded_rect(
-            button_x, button_y, control_size, control_size, control_size / 2,
-            accent
-          )
-          local center_x = button_x + control_size / 2
-          local center_y = button_y + control_size / 2
-          local foreground = { table.unpack(style.background) }
-          foreground[4] = (foreground[4] or 255) * visibility
-          renderer.draw_rect(
-            center_x - icon_length / 2, center_y - icon_thickness / 2,
-            icon_length, icon_thickness, foreground
-          )
-          renderer.draw_rect(
-            center_x - icon_thickness / 2, center_y - icon_length / 2,
-            icon_thickness, icon_length, foreground
-          )
-        end,
-        on_mouse_pressed = function(_, owner, _, button)
-          if button ~= "left" then return false end
-          core.log_quiet(
-            "Markdown table Hover Insertion Control: insert %s after %s at %s:%d",
-            kind, tostring(after), owner.buffer:get_name(), line
-          )
-          return action(owner)
-        end,
-      },
-    }
-  end
-  if header and layout.canonical then
-    for column, bounds in ipairs(cell_x) do
-      local target_column = column
-      local cell = row.cells[column]
-      insertion_control(
-        "column", column, cell.col2,
-        bounds.x2 - control_size / 2,
-        math.max(0, (row_height - control_size) / 2),
-        function(owner)
-          owner.buffer:set_selection(
-            line, row_presentations[target_column].source_col1
-          )
-          return markdown_tables.insert_column(owner, "right")
-        end
-      )
-    end
-  end
-  local first_bounds = cell_x[1]
   local first_presentation = row_presentations[1]
-  if layout.canonical and first_bounds and first_presentation then
-    insertion_control(
-      "row", line, first_presentation.source_col1,
-      (first_bounds.x1 + first_bounds.x2 - control_size) / 2,
-      math.max(0, row_height - control_size - math.max(1, SCALE * 2)),
-      function(owner)
-        owner.buffer:set_selection(line, first_presentation.source_col1)
-        return markdown_tables.insert_row(owner, "below")
-      end
-    )
-  end
-  if layout.canonical and first_bounds and first_presentation then
+  if layout.handle_size > 0 and first_presentation then
     append_table_handles(view, fragments, {
       table_node = table_node, line = line, header = header,
-      cell_x = cell_x, table_width = fragment_x, row_height = row_height,
+      cell_x = cell_x, row_height = row_height,
+      table_x1 = layout.handle_size, table_x2 = fragment_x,
+      handle_size = layout.handle_size,
       text_line_height = layout.text_line_height,
       source_col = first_presentation.source_col1,
-      control_hit_size = control_hit_size,
-      padding = layout.padding,
-      separator_width = layout.separator_width,
-      proximity_radius = control_proximity_radius,
     })
   end
   if region and line == layout.line2 then

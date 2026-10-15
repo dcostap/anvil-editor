@@ -1153,6 +1153,8 @@ function tables.move_column(view, direction)
   })
 end
 
+-- The first cell is the primary selection. Callers list the cell nearest the
+-- handle that selected the cells first, so the view stays where it is.
 local function select_cells(view, cells)
   local selections = {}
   for _, cell in ipairs(cells) do
@@ -1161,7 +1163,7 @@ local function select_cells(view, cells)
     end
   end
   if #selections == 0 then return false end
-  view.buffer:set_selection_list(selections, #selections / 4, { merge_cursors = false })
+  view.buffer:set_selection_list(selections, 1, { merge_cursors = false })
   return true
 end
 

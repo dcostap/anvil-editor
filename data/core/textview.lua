@@ -4272,6 +4272,21 @@ local function line_render_content_geometry(render_line, row_height, first_row)
   return y_offset, content_height
 end
 
+-- Where the fragments of an unwrapped rendered line sit, relative to the line
+-- top. A line drawn as one full row, like a table row, places every fragment
+-- in its content geometry; other lines with caret rows place fragments by
+-- those rows.
+local function unwrapped_fragment_geometry(view, render_line, line, col, row_height)
+  if render_line.position_rows_draw_full_line then
+    return line_render_content_geometry(render_line, row_height, true)
+  end
+  if type(render_line.position_rows) == "table" and #render_line.position_rows > 0 then
+    return 0, row_height
+  end
+  local y_offset, height = view:get_line_render_content_geometry(line, col)
+  return y_offset or 0, height or row_height
+end
+
 -- A rendered line can own a horizontally scrolling region, such as a wide
 -- Markdown table. `horizontal_scroll.x` shifts the line's content left at
 -- draw and hit-test time, and `horizontal_clip` bounds it in unscrolled line
@@ -4942,14 +4957,9 @@ function TextView:get_render_fragment_at_position(x, y)
   end
   local row = self:get_visual_row(line, 1)
   local row_height = self:get_visual_row_height(row)
-  local content_y_offset, content_height = 0, row_height
-  if not (type(render_line.position_rows) == "table" and #render_line.position_rows > 0) then
-    content_y_offset, content_height = self:get_line_render_content_geometry(
-      line, col
-    )
-    content_y_offset = content_y_offset or 0
-    content_height = content_height or row_height
-  end
+  local content_y_offset, content_height = unwrapped_fragment_geometry(
+    self, render_line, line, col, row_height
+  )
   local tx = render_line.x_offset or 0
   local _, indent_size = self.buffer:get_indent_info()
   for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
@@ -5068,12 +5078,9 @@ function TextView:get_render_widget_at_position(x, y)
   end
   local row = self:get_visual_row(line, 1)
   local row_height = self:get_visual_row_height(row)
-  local content_y_offset, content_height = 0, row_height
-  if not (type(render_line.position_rows) == "table" and #render_line.position_rows > 0) then
-    content_y_offset, content_height = self:get_line_render_content_geometry(line, 1)
-    content_y_offset = content_y_offset or 0
-    content_height = content_height or row_height
-  end
+  local content_y_offset, content_height = unwrapped_fragment_geometry(
+    self, render_line, line, 1, row_height
+  )
   local tx = render_line.x_offset or 0
   local _, indent_size = self.buffer:get_indent_info()
   local widget_hits = {}
@@ -5139,12 +5146,9 @@ function TextView:get_render_widget_near_position(x, y)
       local line_x, line_y = self:get_line_screen_position(line)
       local row = self:get_visual_row(line, 1)
       local row_height = self:get_visual_row_height(row)
-      local content_y_offset, content_height = 0, row_height
-      if not (type(render_line.position_rows) == "table" and #render_line.position_rows > 0) then
-        content_y_offset, content_height = self:get_line_render_content_geometry(line, 1)
-        content_y_offset = content_y_offset or 0
-        content_height = content_height or row_height
-      end
+      local content_y_offset, content_height = unwrapped_fragment_geometry(
+        self, render_line, line, 1, row_height
+      )
       local tx = render_line.x_offset or 0
       local _, indent_size = self.buffer:get_indent_info()
       for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
@@ -6441,6 +6445,12 @@ local function update_render_hover_state(view, x, y)
 end
 
 
+---Keep the viewport where it is for the current selection, such as one a
+---pointer made on screen. A later selection change scrolls as usual.
+function TextView:keep_viewport_for_selection()
+  self.viewport_kept_selection = linewrapping.selection_state_key(self.buffer)
+end
+
 ---Handle mouse movement for cursor changes and text selection.
 ---Updates cursor icon, gutter hover state, and extends selection if dragging.
 ---@param x number Screen x coordinate
@@ -6934,7 +6944,11 @@ function TextView:update()
         self.buffer:get_name(), line1, col1, tostring(line_end), tostring(position_row)
       )
     end
-    if core.active_view == self and not ime.editing then
+    local kept = self.viewport_kept_selection
+    if kept and kept ~= linewrapping.selection_state_key(self.buffer) then
+      self.viewport_kept_selection, kept = nil, nil
+    end
+    if core.active_view == self and not ime.editing and not kept then
       local scroll_start = perf_active and system.get_time()
       self:scroll_to_make_visible(line1, col1, self.needs_initial_scroll_validation,
         (jump or (zoom_center and not selection_moved)) and { vertical = false } or nil)
@@ -8238,6 +8252,8 @@ local function draw_render_line_under_selection_backgrounds(view, render_line, x
   local tx = x + (render_line.x_offset or 0)
   local row_height = render_line.table_content_height or render_line.layout_height
     or view:get_position_visual_row_height(line, 1)
+  -- Full-height backgrounds fill the content below the line's leading space.
+  local content_y = y + math.max(0, tonumber(render_line.first_row_content_y_offset) or 0)
   for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
     local font = render_fragment_font(view, fragment)
     local width = fragment.width or (fragment.widget and fragment.widget.width)
@@ -8246,7 +8262,7 @@ local function draw_render_line_under_selection_backgrounds(view, render_line, x
     if fragment.background_under_selection and fragment.background then
       local background_y, background_height = y, font:get_height()
       if fragment.background_full_height then
-        background_height = row_height
+        background_y, background_height = content_y, row_height
       else
         local content_y_offset, content_height = view:get_line_render_content_geometry(
           line, fragment.source_col1 or 1

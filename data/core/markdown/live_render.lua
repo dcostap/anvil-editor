@@ -3784,6 +3784,7 @@ interactive_table_render_line = function(view, table_node, line, allow_pending)
     horizontal_scroll = frame and frame.horizontal_scroll,
     horizontal_clip = frame and frame.horizontal_clip,
     table_content_height = frame and frame.table_content_height,
+    first_row_content_y_offset = frame and frame.first_row_content_y_offset,
   })
 end
 

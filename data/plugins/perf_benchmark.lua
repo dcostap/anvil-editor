@@ -1128,8 +1128,9 @@ local function record_video()
           local width = fragment.hit_width or fragment.width or 0
           local height = fragment.widget and fragment.widget.height
             or render.table_row_height or view:get_line_height()
+          local top = line_y + (render.first_row_content_y_offset or 0)
           view:on_mouse_moved(line_x + (fragment.layout_x or 0) + width / 2,
-            line_y + (fragment.draw_y_offset or 0) + height / 2, 0, 0)
+            top + (fragment.draw_y_offset or 0) + height / 2, 0, 0)
           return true
         end
       end
@@ -1152,10 +1153,6 @@ local function record_video()
     command.perform("markdown:table_next_cell")
     settle_semantics()
     for _ = 1, 2 do capture("next-cell") end
-    hover_fragment(find_line("Task"), function(fragment)
-      return fragment.table_insert_control == "column"
-    end)
-    for _ = 1, 2 do capture("hover-column-control") end
     hover_fragment(find_line("Draw the grid"), function(fragment)
       return fragment.table_handle == "row"
     end)
@@ -1184,6 +1181,26 @@ local function record_video()
       return fragment.table_handle == "column" and fragment.table_handle_index == 3
     end)
     for _ = 1, 2 do capture("hover-column-handle") end
+    do
+      -- Carry the hovered column handle one column right, capture it, and
+      -- bring it back so the drop leaves the table unchanged.
+      local header = find_line("Task")
+      local render = view:get_line_render(header)
+      for _, fragment in ipairs(render and render.fragments or {}) do
+        if fragment.table_handle == "column" and fragment.table_handle_index == 3 then
+          local line_x, line_y = view:get_line_screen_position(header)
+          local x = line_x + fragment.layout_x + fragment.hit_width / 2
+          local y = line_y + render.first_row_content_y_offset + fragment.draw_y_offset
+            + fragment.widget.height / 2
+          view:on_mouse_pressed("left", x, y, 1)
+          view:on_mouse_moved(x + fragment.hit_width * 0.8, y, 0, 0)
+          for _ = 1, 2 do capture("dragging-column") end
+          view:on_mouse_moved(x, y, 0, 0)
+          view:on_mouse_released("left", x, y)
+          break
+        end
+      end
+    end
     do
       -- A rectangle of Table Cell Selections from "Owner" to "Status" over
       -- two body rows, then a whole column through its handle.

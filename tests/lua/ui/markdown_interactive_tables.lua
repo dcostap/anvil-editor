@@ -55,7 +55,8 @@ local function cell_center(view, line, column)
       local line_x, line_y = view:get_line_screen_position(line)
       local height = render.table_content_height or render.table_row_height
         or view:get_line_height()
-      return line_x + x + width / 2, line_y + height / 2
+      local top = line_y + (render.first_row_content_y_offset or 0)
+      return line_x + x + width / 2, top + height / 2
     end
     x = x + width
   end
@@ -80,16 +81,6 @@ local function caret_cell(buffer)
   local row = test.not_nil(markdown_tables.source_row(text), "caret is outside a table row")
   for index, cell in ipairs(row.cells) do
     if col >= cell.col1 and col <= cell.col2 then return line, index end
-  end
-end
-
-local function table_control(view, line, kind, index)
-  for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
-    if fragment.table_insert_control == kind
-    and (index == nil or fragment.table_insert_after == index)
-    then
-      return fragment
-    end
   end
 end
 
@@ -209,14 +200,6 @@ test.describe("Markdown Interactive Table Editing", function()
     refresh(view)
     test.equal(markdown_tables.has_interactive_context(view), false)
     test.equal(test.not_nil(view:get_line_render(3)).table_row, nil)
-  end)
-
-  test.it("does not show insertion controls for optional-pipe tables", function()
-    local view, buffer = make_view("A | B\n--- | ---\none | two\n")
-    buffer:set_selection(3, 4)
-    refresh(view)
-    test.equal(table_control(view, 1, "column", 1), nil)
-    test.equal(table_control(view, 3, "row", 3), nil)
   end)
 
   test.it("navigates every selected cell and selects destination contents", function()
@@ -963,49 +946,6 @@ test.describe("Markdown Interactive Table Editing", function()
     test.equal(view.buffer:get_selection(), 6, "the scrollbar moved the caret")
   end)
 
-  test.it("shows hover controls that insert columns and rows at their edges", function()
-    local function click_control(view, line, control)
-      local line_x, line_y = view:get_line_screen_position(line)
-      local width = control.hit_width or control.widget.width
-      local height = control.widget.height
-      local x = line_x + control.layout_x + width / 2
-      local y = line_y + control.draw_y_offset + height / 2
-      local hit_line, hit_col = view:resolve_screen_position(x, y)
-      if not view:get_render_widget_at_position(x, y) then
-        error(string.format(
-          "table insertion control was not hit (wanted line %d, resolved %d:%d at %.1f,%.1f)",
-          line, hit_line, hit_col, x, y
-        ), 0)
-      end
-      view:on_mouse_moved(x, y, 0, 0)
-      local hovered = view.hovered_render_fragment
-      if not hovered then
-        error(string.format(
-          "table insertion control did not hover (cursor=%s gutter=%s scrollbar=%s selecting=%s posthit=%s)",
-          tostring(view.cursor), tostring(view.hovering_gutter),
-          tostring(view:scrollbar_hovering()), tostring(view.mouse_selecting),
-          tostring(view:get_render_widget_at_position(x, y) ~= nil)
-        ), 0)
-      end
-      test.equal(hovered.table_insert_control, control.table_insert_control)
-      test.equal(hovered.hovered, true)
-      test.equal(view.cursor, "hand")
-      test.equal(view:on_mouse_pressed("left", x, y, 1), true)
-    end
-
-    local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
-    buffer:set_selection(5, 1)
-    refresh(view)
-    click_control(view, 1, test.not_nil(table_control(view, 1, "column", 1)))
-    test.same(row_cells(buffer, 1), { "A", "", "B" })
-    test.same(row_cells(buffer, 3), { "one", "", "two" })
-
-    markdown_model.get(buffer):submit("interactive-table-hover-column")
-    refresh(view)
-    click_control(view, 3, test.not_nil(table_control(view, 3, "row", 3)))
-    test.same(row_cells(buffer, 4), { "", "", "" })
-  end)
-
   test.it("keeps a wide table rendered after inserting an empty body row", function()
     local view, buffer = make_view(table.concat({
       "| CodigoEmpresa | Proyecto | proyecto2                              | PROT PROD |",
@@ -1024,12 +964,7 @@ test.describe("Markdown Interactive Table Editing", function()
     buffer:set_selection(3, 4)
     refresh(view)
 
-    local control = test.not_nil(table_control(view, 3, "row", 3))
-    local line_x, line_y = view:get_line_screen_position(3)
-    local x = line_x + control.layout_x + (control.hit_width or control.widget.width) / 2
-    local y = line_y + control.draw_y_offset + control.widget.height / 2
-    view:on_mouse_moved(x, y, 0, 0)
-    test.equal(view:on_mouse_pressed("left", x, y, 1), true)
+    test.equal(markdown_tables.insert_row(view, "below"), true)
     test.same(row_cells(buffer, 4), { "", "", "", "" })
 
     markdown_model.get(buffer):submit("interactive-table-empty-row")
@@ -1061,32 +996,6 @@ test.describe("Markdown Interactive Table Editing", function()
     end
     buffer:set_selection(5, 4)
     test.equal(test.not_nil(markdown_tables.interactive_context(view)).line, 5)
-  end)
-
-  test.it("reveals insertion controls progressively as the pointer approaches", function()
-    local view, buffer = make_view(
-      "| Alpha column | Beta column |\n| --- | --- |\n| one | two |\n"
-    )
-    buffer:set_selection(3, 4)
-    refresh(view)
-    local control = test.not_nil(table_control(view, 1, "column", 2))
-    local line_x, line_y = view:get_line_screen_position(1)
-    local size = control.widget.width
-    -- Approach the table-edge control from outside the table, where no
-    -- other table control is nearer.
-    local x = line_x + control.layout_x + (control.hit_width or size) + size
-    local y = line_y + control.draw_y_offset + size / 2
-    local near = test.not_nil(view:get_render_widget_near_position(x, y), string.format(
-      "control proximity missing at %d:%d (radius=%s)",
-      view:resolve_screen_position(x, y), select(2, view:resolve_screen_position(x, y)),
-      tostring(control.widget.proximity_radius)
-    ))
-    test.equal(near.fragment.semantic_id, control.semantic_id)
-    view:on_mouse_moved(x, y, 0, 0)
-    local approaching = test.not_nil(view.proximity_render_fragment)
-    test.equal(approaching.semantic_id, control.semantic_id)
-    test.ok(not approaching.hovered)
-    test.ok((approaching.proximity or 0) > 0 and approaching.proximity < 1)
   end)
 
   test.it("reveals only the active cell's inline Markdown source", function()
@@ -1623,15 +1532,41 @@ test.describe("Markdown Interactive Table Editing", function()
     end)
   end)
 
-  local function table_handle(view, line, kind, index)
-    for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
+  -- The screen rectangle of a table handle: x, y, width, height.
+  local function table_handle_rect(view, line, kind, index)
+    local render = test.not_nil(view:get_line_render(line))
+    for _, fragment in ipairs(render.fragments or {}) do
       if fragment.table_handle == kind and fragment.table_handle_index == index then
         local line_x, line_y = view:get_line_screen_position(line)
-        return line_x + fragment.layout_x + fragment.hit_width / 2,
-          line_y + fragment.draw_y_offset + fragment.widget.height / 2
+        return line_x + fragment.layout_x,
+          line_y + (render.first_row_content_y_offset or 0) + fragment.draw_y_offset,
+          fragment.hit_width, fragment.widget.height
       end
     end
     error(kind .. " handle " .. tostring(index) .. " not found on line " .. line)
+  end
+
+  local function table_handle(view, line, kind, index)
+    local x, y, width, height = table_handle_rect(view, line, kind, index)
+    return x + width / 2, y + height / 2
+  end
+
+  -- The screen rectangle of a table cell: x, y, width, height.
+  local function cell_rect(view, line, column)
+    local render = test.not_nil(view:get_line_render(line))
+    for _, fragment in ipairs(render.fragments or {}) do
+      if fragment.table_cell and fragment.table_column == column then
+        local line_x, line_y = view:get_line_screen_position(line)
+        return line_x + fragment.layout_x,
+          line_y + (render.first_row_content_y_offset or 0),
+          fragment.width, render.table_content_height or render.table_row_height
+      end
+    end
+    error("table cell not found")
+  end
+
+  local function overlaps(x1, y1, w1, h1, x2, y2, w2, h2)
+    return x1 < x2 + w2 and x2 < x1 + w1 and y1 < y2 + h2 and y2 < y1 + h1
   end
 
   local function selected_cells(view)
@@ -1698,6 +1633,41 @@ test.describe("Markdown Interactive Table Editing", function()
     test.equal(table.concat(buffer.lines):gsub("\n$", ""), original)
   end)
 
+  test.it("drops a wide column onto a narrower column under the pointer", function()
+    local view, buffer = make_view(
+      "| A much, much wider header text | B |\n| --- | --- |\n| one | two |\n\nplain"
+    )
+    buffer:set_selection(5, 1)
+    refresh(view)
+    local x, y = table_handle(view, 1, "column", 1)
+    local target_x = cell_center(view, 3, 2)
+    drag_from_to(view, x, y, target_x, y)
+    test.same(row_cells(buffer, 1), { "B", "A much, much wider header text" })
+    test.same(row_cells(buffer, 3), { "two", "one" })
+  end)
+
+  test.it("keeps the view still when a dragged row is dropped", function()
+    local lines = { "# Title", "", "intro", "", "| A | B |", "| --- | --- |",
+      "| one | 1 |", "| two | 2 |", "| three | 3 |", "" }
+    for index = 1, 40 do lines[#lines + 1] = "line " .. index end
+    local view, buffer = make_view(table.concat(lines, "\n"))
+    buffer:set_selection(3, 1)
+    refresh(view)
+    with_active(view, function()
+      view:update()
+      local scroll_y = view.scroll.to.y
+      local x, y = table_handle(view, 7, "row", 7)
+      local _, target_y = cell_center(view, 9, 1)
+      drag_from_to(view, x, y, x, target_y)
+      test.same(row_cells(buffer, 9), { "one", "1" })
+      for _ = 1, 3 do
+        refresh(view)
+        view:update()
+      end
+      test.equal(view.scroll.to.y, scroll_y, "dropping the row moved the view")
+    end)
+  end)
+
   test.it("drags a column handle to move the column and its alignment", function()
     local view, buffer = make_view(
       "| A | B | C |\n| --- | :---: | --- |\n| one | two | three |\n\nplain"
@@ -1713,26 +1683,57 @@ test.describe("Markdown Interactive Table Editing", function()
     test.same(selected_cells(view), { "1:3", "3:3" })
   end)
 
-  test.it("draws the row handle inside the table", function()
-    local view = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
-    view.buffer:set_selection(5, 1)
+  test.it("gives handles their own room beside and above the cells", function()
+    local view = make_view(
+      "| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nplain"
+    )
+    view.buffer:set_selection(6, 1)
     refresh(view)
-    local x, y = table_handle(view, 3, "row", 3)
-    view:on_mouse_moved(x, y, 0, 0)
-    local line_x, line_y = view:get_line_screen_position(3)
-    local lefts = {}
-    local old_draw_rounded_rect = renderer.draw_rounded_rect
-    local old_draw_rect, old_draw_text = renderer.draw_rect, renderer.draw_text
-    renderer.draw_rounded_rect = function(left) lefts[#lefts + 1] = left end
-    renderer.draw_rect = function() end
-    renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
-    local ok, err = pcall(function() view:draw_line_text(3, line_x, line_y) end)
-    renderer.draw_rounded_rect = old_draw_rounded_rect
-    renderer.draw_rect, renderer.draw_text = old_draw_rect, old_draw_text
-    if not ok then error(err, 0) end
-    test.ok(#lefts > 0, "the hovered row handle was not drawn")
-    for _, left in ipairs(lefts) do
-      test.ok(left >= line_x, "the row handle starts left of the table border")
+    local line_x = view:get_line_screen_position(3)
+    for _, line in ipairs({ 1, 3, 4 }) do
+      for column = 1, 2 do
+        local cx, cy, cw, ch = cell_rect(view, line, column)
+        for _, handle in ipairs({ { 3, "row", 3 }, { 4, "row", 4 }, { 1, "column", 1 },
+          { 1, "column", 2 } }) do
+          local hx, hy, hw, hh = table_handle_rect(view, handle[1], handle[2], handle[3])
+          test.ok(hx >= line_x, "a handle starts left of the table's own space")
+          test.ok(not overlaps(hx, hy, hw, hh, cx, cy, cw, ch), string.format(
+            "%s handle %d covers cell %d:%d", handle[2], handle[3], line, column
+          ))
+        end
+      end
     end
+  end)
+
+  test.it("selects the row or column as soon as its handle is pressed", function()
+    local view, buffer = make_view(
+      "| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nplain"
+    )
+    buffer:set_selection(6, 1)
+    refresh(view)
+    local x, y = table_handle(view, 1, "column", 1)
+    view:on_mouse_moved(x, y, 0, 0)
+    test.equal(view:on_mouse_pressed("left", x, y, 1), true)
+    test.same(selected_cells(view), { "1:1", "3:1", "4:1" })
+    view:on_mouse_released("left", x, y)
+  end)
+
+  test.it("keeps the view still when a column handle selects a tall column", function()
+    local rows = { "| A | B |", "| --- | --- |" }
+    for index = 1, 60 do rows[#rows + 1] = "| row " .. index .. " | value |" end
+    rows[#rows + 1] = ""
+    rows[#rows + 1] = "plain"
+    local view, buffer = make_view(table.concat(rows, "\n"))
+    buffer:set_selection(1, 1)
+    refresh(view)
+    with_active(view, function()
+      view:update()
+      local scroll_y = view.scroll.to.y
+      click_at(view, table_handle(view, 1, "column", 2))
+      test.equal(#selected_cells(view), 61)
+      view:update()
+      view:update()
+      test.equal(view.scroll.to.y, scroll_y, "selecting the column moved the view")
+    end)
   end)
 end)
