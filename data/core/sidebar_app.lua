@@ -90,6 +90,8 @@ local function add_surface(id, window)
         return
       end
     end
+    core.log_quiet("Sidebar %s dropped: Window=%d row=%s is not in the model (%d rows)", action, id,
+      tostring(row_id), #(core.project_sidebar or {}))
   end, collapsed)
   surfaces[id] = surface
   core.log_quiet("Sidebar surface created: Window=%d", id)
@@ -165,6 +167,7 @@ function core.on_event(name, ...)
   elseif name == "projectsidebar" then saved_event(name, ...)
   elseif name == "mousepressed" then
     local button, x, y = ...
+    core.log_quiet("Sidebar press: Window=%d button=%s x=%d y=%d", current.id, button, x, y)
     local width, height = renwindow.get_size(core.window)
     current.view:set_size(width, height)
     current.view:on_mouse_pressed(button, x, y); core.redraw = true
