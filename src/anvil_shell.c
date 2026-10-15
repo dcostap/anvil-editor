@@ -2950,6 +2950,8 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     service_sidebar();
     break;
   case ANVIL_SURFACE_MSG_SELECT_PROJECT:
+    SDL_Log("Shell Project selection requested: Window=%u from=%s closing=%d", window->id,
+            project->sidebar ? "Sidebar" : "Project", window->closing);
     if (!window->closing)
       select_project_path(window, payload);
     break;

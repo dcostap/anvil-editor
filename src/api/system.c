@@ -587,18 +587,35 @@ static int f_pending_event_count(lua_State *L) {
   return 1;
 }
 
+/* Ends a hosted Sidebar's long event wait. Poll skips the event because it has no callback. */
+static SDL_TimerID sidebar_wake_timer;
+static Uint32 SDLCALL sidebar_wake(void *userdata, SDL_TimerID id, Uint32 interval) {
+  (void)userdata; (void)id; (void)interval;
+  static Uint32 type;
+  if (!type) type = SDL_RegisterEvents(1);
+  SDL_Event event = {.type = type};
+  if (type) SDL_PushEvent(&event);
+  return 0;
+}
+
 bool system_wait_event(double seconds) {
   /* If events are already pending in our queue, return immediately. */
   if (system_has_pending_events()) return true;
 
   if (anvil_hosted_surface_sidebar()) {
-    /* Return to SDL. Its callback loop owns the blocking event wait. */
-    char rate[32];
-    if (seconds >= 0) {
+    /* Return to SDL. Its callback loop owns the blocking event wait. Short waits poll at a fixed rate. Long waits
+     * still wake for each event, and a timer ends them. A fixed rate below one per second would delay input. */
+    if (sidebar_wake_timer) {
+      SDL_RemoveTimer(sidebar_wake_timer);
+      sidebar_wake_timer = 0;
+    }
+    if (seconds >= 0 && seconds < 1) {
+      char rate[32];
       SDL_snprintf(rate, sizeof(rate), "%d", (int)fmin(1000, fmax(1, ceil(1 / fmax(.001, seconds)))));
       SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, rate);
     } else {
       SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "waitevent");
+      if (seconds >= 1) sidebar_wake_timer = SDL_AddTimer((Uint32)fmin(seconds * 1000, 86400000), sidebar_wake, NULL);
     }
     return false;
   }

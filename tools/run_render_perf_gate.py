@@ -145,6 +145,15 @@ SCENARIOS["terminal-blocks"] = {
     "visual": True,
     "paced": False,
 }
+# Project Sidebar rows, age groups and Terminal Session groups from a fixed model.
+SCENARIOS["project-sidebar"] = {
+    "start_line": 1,
+    "window_width": 1100,
+    "window_height": 900,
+    "theme": "light",
+    "visual": True,
+    "paced": False,
+}
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,
     "tab_count": 8,

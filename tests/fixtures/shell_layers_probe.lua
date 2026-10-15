@@ -58,16 +58,17 @@ local function capture(window, index)
   "shell capture " .. index .. " was not written")
 end
 -- Clicks the Sidebar's Refresh button and reports whether the shell started a status scan.
-local function click_refresh(window, layout)
+-- Clicks the Project's row, left of its Unload button. The Sidebar asks the shell to select it.
+local function click_project(window)
  local scale = user32.GetDpiForWindow(window) / 96
- local point = math.floor(layout.content_x - 6 * scale) + math.floor(46 * scale) * 65536
- local _, before = trace():gsub("Shell Sidebar status scan started", "")
+ local point = math.floor(40 * scale) + math.floor(54 * scale) * 65536
+ local _, before = trace():gsub("Shell Project selection requested: Window=%d+ from=Sidebar", "")
  -- The shell's routing probe message: posted Win32 clicks are ignored on an inactive desktop.
  for action = 0, 2 do user32.PostMessageW(window, 0x804a, action, point); coroutine.yield(.1) end
  local deadline = system.get_time() + 3
  repeat
   coroutine.yield(.05)
-  local _, after = trace():gsub("Shell Sidebar status scan started", "")
+  local _, after = trace():gsub("Shell Project selection requested: Window=%d+ from=Sidebar", "")
   if after > before then return true end
  until system.get_time() >= deadline
  return false
@@ -94,12 +95,12 @@ if path:match("/driver$") then
    local window = wait(function() return shell_window(shell:pid()) end, 10, "shell Window not found")
    coroutine.yield(1)
    capture(window, 1)
-   assert(click_refresh(window, layout), "a Sidebar click did not reach the Sidebar")
+   assert(click_project(window), "a Sidebar click did not reach the Sidebar")
    -- Hover alternates between the Project row and empty space; each change draws one Sidebar frame.
    local scale = user32.GetDpiForWindow(window) / 96
    local mark = #trace()
    for i = 1, 20 do
-    local y = math.floor((i % 2 == 0 and 88 or 400) * scale)
+    local y = math.floor((i % 2 == 0 and 54 or 400) * scale)
     user32.PostMessageW(window, 0x804a, 0, 100 + y * 65536); coroutine.yield(.1)
    end
    local latencies = {}
@@ -115,7 +116,7 @@ if path:match("/driver$") then
     "the Project overlay did not reach the shell")
    coroutine.yield(1)
    capture(window, 2)
-   assert(not click_refresh(window, layout), "the Sidebar took a click under the Project's modal overlay")
+   assert(not click_project(window), "the Sidebar took a click under the Project's modal overlay")
    wait(function() return load("outside-click") end, 5, "the Project did not receive the click on the dimmed Sidebar")
    save("overlay-hide", {go=true})
    wait(function() return trace():find("Shell Window overlay: id=%d+ shown=0") end, 10,

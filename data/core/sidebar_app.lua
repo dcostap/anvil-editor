@@ -5,6 +5,23 @@ local surfaces, current = {}, nil
 local SidebarView, font, base_font_size
 local fonts, style = {}, nil
 local color_theme = require "core.color_theme"
+local storage = require "core.storage"
+
+-- Which Sidebar groups are collapsed. Every surface shares it, and the next Sidebar process restores it.
+local collapsed = {}
+local function load_collapsed()
+  local ok, saved = pcall(storage.load, "sidebar", "collapsed")
+  if ok and type(saved) == "table" then
+    for key, value in pairs(saved) do
+      if type(key) == "string" and type(value) == "boolean" then collapsed[key] = value end
+    end
+  end
+  core.log_quiet("Sidebar collapse state: %s", ok and saved and "loaded" or "defaults")
+end
+local function save_collapsed()
+  local ok, err = pcall(storage.save, "sidebar", "collapsed", collapsed)
+  if not ok then core.log_quiet("Sidebar collapse state not saved: %s", tostring(err)) end
+end
 
 local function save()
   if not current then return end
@@ -36,17 +53,20 @@ local function activate(id)
 end
 local function add_surface(id, window)
   local surface = {id = id, window = window, native_id = system.get_window_id(window), scale = system.get_scale(window),
-    redraw = true, query_needed = true, refresh_needed = false}
+    redraw = true, query_needed = true}
   surface.view = SidebarView(function(action, row_id, target)
+    if action == "collapsed" then
+      core.log_quiet("Sidebar group %s collapsed=%s", row_id, tostring(target))
+      save_collapsed()
+      -- Other surfaces share the state. Their rows change too.
+      for _, other in pairs(surfaces) do
+        if other ~= surface then other.view:rebuild_rows(); other.redraw = true end
+      end
+      return
+    end
     if action == "move" then
       core.log_quiet("Sidebar Move: Window=%d Project=%d target=%d", id, row_id, target)
       if not system.move_project(row_id, target) then core.log_quiet("Sidebar Move request rejected: Project=%d target=%d", row_id, target) end
-      return
-    end
-    if action == "refresh" then
-      core.project_sidebar_request = nil
-      surface.query_needed, surface.refresh_needed = true, true
-      core.log_quiet("Sidebar Refresh requested: Window=%d", id)
       return
     end
     for _, project in ipairs(core.project_sidebar or {}) do
@@ -58,7 +78,7 @@ local function add_surface(id, window)
         return
       end
     end
-  end)
+  end, collapsed)
   surfaces[id] = surface
   core.log_quiet("Sidebar surface created: Window=%d", id)
 end
@@ -105,6 +125,7 @@ function core.init()
   local window = renwindow.create("Sidebar", 240, 600)
   core.window, core.active_window = window, window
   SCALE = system.get_scale(window)
+  load_collapsed()
   apply_color_theme()
   SidebarView = require "core.sidebar_view"
   style = require "core.style"
@@ -132,17 +153,21 @@ function core.on_event(name, ...)
   elseif name == "projectsidebar" then saved_event(name, ...)
   elseif name == "mousepressed" then
     local button, x, y = ...
-    local width = renwindow.get_size(core.window)
+    local width, height = renwindow.get_size(core.window)
+    current.view:set_size(width, height)
     current.view:on_mouse_pressed(button, x, y, width); core.redraw = true
   elseif name == "mousemoved" then
     local x, y = ...
-    local width = renwindow.get_size(core.window)
+    local width, height = renwindow.get_size(core.window)
+    current.view:set_size(width, height)
     if current.view:on_mouse_moved(x, y, width) then core.redraw = true end
+    current.pointer_y = y
   elseif name == "mouseleft" then
+    current.pointer_y = nil
     if current.view:on_mouse_left() then core.redraw = true end
   elseif name == "mousewheel" then
     local _, height = renwindow.get_size(core.window)
-    current.view:on_mouse_wheel((...), height); core.redraw = true
+    current.view:on_mouse_wheel((...), height, current.pointer_y); core.redraw = true
   elseif name == "resized" or name == "exposed" or name == "displaychanged" then core.redraw = true end
   save()
 end
@@ -180,9 +205,11 @@ function core.run_step()
         surface.query_needed = true
         core.log_quiet("Sidebar snapshot timed out: Window=%d", id)
       end
-      if visible and surface.query_needed and core.request_project_sidebar(surface.refresh_needed) then
-        surface.query_needed, surface.refresh_needed = false, false
+      if visible and surface.query_needed and core.request_project_sidebar() then
+        surface.query_needed = false
       end
+      -- Ages tick each minute, and Projects move between groups as they age.
+      if visible and surface.view:refresh_ages() then core.redraw = true end
       if core.project_sidebar and surface.revision ~= core.project_sidebar.revision then
         surface.revision = core.project_sidebar.revision
         surface.view:set_model(core.project_sidebar, id); core.redraw = true
@@ -202,7 +229,8 @@ function core.run_step()
   local used = {}
   for _, surface in pairs(surfaces) do used[surface.scale] = true end
   for scale in pairs(fonts) do if not used[scale] then fonts[scale] = nil end end
-  if pending then system.wait_event(.01) else system.wait_event() end
+  -- Wake each minute so ages stay current.
+  if pending then system.wait_event(.01) else system.wait_event(60 - os.time() % 60) end
   return true
 end
 return core

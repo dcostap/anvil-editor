@@ -106,19 +106,11 @@ test.describe("Sidebar list actions", function()
     if not ok then error(err) end
   end)
 
-  test.it("offers Refresh without a Project or Terminal action", function()
-    local actions, action = recorder()
-    local view = SidebarView(action)
-    view:set_model({})
-    view:on_mouse_pressed("left", 235, row_y(view, "header"), 240)
-    test.same(actions, {{"refresh"}})
-  end)
-
   test.it("selects Projects and requires the explicit Unload button", function()
     local actions, action = recorder()
     local view = SidebarView(action)
     view:set_model({{row_id=7,path="C:/B",state="ready",terminals={}},
-                    {row_id=9,path="C:/A",state="dormant",exists=true,terminals={}}})
+                    {row_id=9,path="C:/A",state="dormant",exists=true,activity=os.time(),terminals={}}})
     view:on_mouse_pressed("left", 20, row_y(view, "project", 2))
     test.same(actions[1], {"select", 9})
     view:on_mouse_pressed("right", 20, row_y(view, "project", 1))
@@ -128,36 +120,6 @@ test.describe("Sidebar list actions", function()
     -- A Dormant Project has nothing to unload.
     view:on_mouse_pressed("left", 230, row_y(view, "project", 2), 240)
     test.same(actions[3], {"select", 9})
-  end)
-
-  test.it("lists loaded Projects before Recent Dormant Projects", function()
-    local view = SidebarView(function() end)
-    view:set_model({{row_id=1,path="C:/Old",state="dormant",exists=true,terminals={}},
-                    {row_id=2,path="C:/Open",state="ready",terminals={}},
-                    {row_id=3,path="C:/Older",state="dormant",exists=true,terminals={}}})
-    local order = {}
-    for _, row in ipairs(view.rows) do
-      if row.kind == "project" then order[#order + 1] = row.project.path end
-      if row.kind == "header" then order[#order + 1] = row.label end
-    end
-    test.same(order, {"PROJECTS", "C:/Open", "RECENT", "C:/Old", "C:/Older"})
-  end)
-
-  test.it("collapses a long Recent list behind Show more", function()
-    local actions, action = recorder()
-    local view = SidebarView(action)
-    local model = {}
-    for i = 1, 30 do
-      model[i] = {row_id=i,path="C:/P" .. i,state="dormant",exists=true,terminals={}}
-    end
-    view:set_model(model)
-    test.ok(count(view, "project") < 30, "Recent list was not collapsed")
-    view:on_mouse_pressed("left", 20, row_y(view, "more"))
-    test.equal(count(view, "project"), 30)
-    test.equal(#actions, 0)
-    -- Expansion survives model revisions.
-    view:set_model(model)
-    test.equal(count(view, "project"), 30)
   end)
 
   test.it("shows Terminal records and Project choices without giving Terminals Project actions", function()
@@ -179,5 +141,143 @@ test.describe("Sidebar list actions", function()
     test.ok(not view:on_mouse_moved(21, row_y(view, "project"), 240), "Same-row motion requested a redraw")
     test.ok(view:on_mouse_left())
     test.is_nil(view.hover)
+  end)
+end)
+
+local DAY = 24 * 60 * 60
+
+local function paths(view, area)
+  local list = {}
+  for _, row in ipairs(view.rows) do
+    if row.kind == "project" and row.area == area then list[#list + 1] = row.project.path end
+  end
+  return list
+end
+
+local function titles(view)
+  local list = {}
+  for _, row in ipairs(view.rows) do
+    if row.kind == "terminal" then list[#list + 1] = row.terminal.title end
+  end
+  return list
+end
+
+local function row_index(view, predicate)
+  for index, row in ipairs(view.rows) do
+    if predicate(row) then return index, row end
+  end
+  error("no matching row")
+end
+
+test.describe("Sidebar age groups", function()
+  local now = os.time()
+  local function project(id, path, age, state, terminals)
+    return {row_id=id,id=id,path=path,state=state or "dormant",exists=true,
+      activity=age and now - age or 0,terminals=terminals or {}}
+  end
+
+  test.it("keeps recent and loaded Projects on top and groups older Projects at the bottom", function()
+    local view = SidebarView(function() end)
+    view:set_size(240, 800)
+    view:set_model({project(1, "C:/Week", DAY), project(2, "C:/Month", 10 * DAY), project(3, "C:/Old", 60 * DAY),
+      project(4, "C:/Loaded", 90 * DAY, "ready"), project(5, "C:/Unknown")})
+    test.same(paths(view, "main"), {"C:/Week", "C:/Loaded"})
+    -- Older groups start collapsed except the newest one.
+    test.same(paths(view, "bottom"), {"C:/Month"})
+    local index = row_index(view, function(row) return row.kind == "group" and row.bucket == "older" end)
+    view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 240)
+    test.same(paths(view, "bottom"), {"C:/Month", "C:/Old", "C:/Unknown"})
+  end)
+
+  test.it("aligns the groups to the bottom, below a gap after the main list", function()
+    local view = SidebarView(function() end)
+    view:set_size(240, 800)
+    view:set_model({project(1, "C:/Week", DAY), project(2, "C:/Month", 10 * DAY)})
+    local main_index = row_index(view, function(row) return row.area == "main" end)
+    local last_main = view:row_y(main_index) + view.rows[main_index].h
+    local first_bottom, last_bottom = math.huge, 0
+    for index, row in ipairs(view.rows) do
+      if row.area == "bottom" then
+        first_bottom = math.min(first_bottom, view:row_y(index))
+        last_bottom = math.max(last_bottom, view:row_y(index) + row.h)
+      end
+    end
+    test.ok(first_bottom - last_main > 800 - last_bottom, "The groups are not aligned to the bottom")
+  end)
+
+  test.it("gives the groups at most part of the height and scrolls them on their own", function()
+    local view = SidebarView(function() end)
+    view:set_size(240, 600)
+    local model = {project(100, "C:/Week", DAY)}
+    for i = 1, 40 do model[#model + 1] = project(i, "C:/Month" .. i, 10 * DAY) end
+    view:set_model(model)
+    local top = math.huge
+    for index, row in ipairs(view.rows) do
+      if row.area == "bottom" then top = math.min(top, view:row_y(index)) end
+    end
+    test.ok(top >= 300, "The groups took more than half of the height")
+    local main_index = row_index(view, function(row) return row.area == "main" end)
+    local main_y = view:row_y(main_index)
+    local month_index = row_index(view, function(row) return row.kind == "project" and row.project.path == "C:/Month1" end)
+    local month_y = view:row_y(month_index)
+    view:on_mouse_wheel(-3, 600, 590)
+    test.ok(view:row_y(month_index) < month_y, "The groups did not scroll")
+    test.equal(view:row_y(main_index), main_y, "Scrolling the groups moved the main list")
+  end)
+
+  test.it("moves an older Project to the main list when it loads", function()
+    local view = SidebarView(function() end)
+    view:set_size(240, 800)
+    view:set_model({project(1, "C:/Old", 10 * DAY)})
+    test.same(paths(view, "main"), {})
+    view:set_model({project(1, "C:/Old", 10 * DAY, "starting")})
+    test.same(paths(view, "main"), {"C:/Old"})
+  end)
+
+  test.it("folds a Project's older Terminal Sessions into collapsed groups", function()
+    local view = SidebarView(function() end)
+    view:set_size(240, 800)
+    local function terminal(title, age, bell)
+      return {id=title,title=title,cwd="C:/P",state="running",busy=0,bell=bell and 1 or 0,activity=now - age}
+    end
+    view:set_model({project(1, "C:/P", 60, "ready", {terminal("recent", 20 * 60), terminal("days", 3 * DAY),
+      terminal("week", 10 * DAY), terminal("month", 40 * DAY), terminal("bell", 40 * DAY, true)})})
+    -- A ringing Terminal Session stays visible however old it is.
+    test.same(titles(view), {"recent", "days", "bell"})
+    local index = row_index(view, function(row) return row.kind == "terminal_group" and row.bucket == "older" end)
+    view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 240)
+    test.same(titles(view), {"recent", "days", "bell", "month"})
+  end)
+
+  test.it("restores collapsed groups and reports changes for the next Sidebar", function()
+    local actions, action = recorder()
+    local view = SidebarView(action, {["group:older"] = false})
+    view:set_size(240, 800)
+    view:set_model({project(1, "C:/Old", 60 * DAY)})
+    test.same(paths(view, "bottom"), {"C:/Old"})
+    local index = row_index(view, function(row) return row.kind == "group" and row.bucket == "older" end)
+    view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 240)
+    test.same(paths(view, "bottom"), {})
+    test.same(actions, {{"collapsed", "group:older", true}})
+  end)
+
+  test.it("shows each Terminal Session's live title", function()
+    local view = SidebarView(function() end)
+    view:set_size(240, 800)
+    view:set_model({project(1, "C:/P", 60, "ready",
+      {{id="a",title="[40 s] \u{03C0} - GLP4",cwd="C:/P",state="running",busy=1,bell=0,activity=now},
+       {id="b",title="",cwd="C:/P",state="running",busy=0,bell=0,activity=now}})})
+    local old_rect, old_rounded, old_text, old_clip =
+      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
+    local labels = {}
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
+    renderer.draw_text = function(_, text) labels[#labels + 1] = text end
+    local ok, err = pcall(view.draw, view, 240, 800)
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
+      old_rect, old_rounded, old_text, old_clip
+    if not ok then error(err) end
+    local text = table.concat(labels, "\n")
+    test.ok(text:find("[40 s] \u{03C0} - GLP4", 1, true), "The live title is missing")
+    test.ok(text:find("Terminal", 1, true), "An untitled Terminal Session has no label")
   end)
 end)

@@ -737,6 +737,11 @@ local function setup_scenario()
     require("core.panes").place(function() return view end, {
       placement = "current", focus = true, reason = "perf-terminal-blocks",
     })
+  elseif benchmark.scenario == "project-sidebar" then
+    view = require("core.sidebar_scene")()
+    require("core.panes").place(function() return view end, {
+      placement = "current", focus = true, reason = "perf-project-sidebar",
+    })
   elseif benchmark.scenario == "filetree-edit-repeat" then
     local root = common.dirname(benchmark.fixture) .. PATHSEP .. "editable-tree"
     view = require("plugins.filetree").new()
