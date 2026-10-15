@@ -133,7 +133,7 @@ def main() -> int:
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
     parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
-        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -203,6 +203,8 @@ def main() -> int:
                         fixture = "shell_selection_probe.lua"
                     if action == "terminal-focus":
                         fixture = "shell_terminal_focus_probe.lua"
+                    if action == "toggle-sidebar":
+                        fixture = "shell_sidebar_layout_probe.lua"
                     if action.startswith("dormant-"):
                         fixture = "dormant_projects_probe.lua"
                     if action.startswith("sidebar-"):
@@ -226,7 +228,7 @@ def main() -> int:
                     namespace = "anvil-test-" + work.name.rsplit("-", 1)[-1] + "-" + action
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
-                    if action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
+                    if action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     if action in ("theme-global", "theme-empty", "reveal"):
@@ -243,7 +245,7 @@ def main() -> int:
                             "ANVIL_USERDIR": native_path(case_dir / "user"),
                             "USERPROFILE": native_path(case_dir / "user"), "HOME": native_path(case_dir / "user"),
                             "ANVIL_PROJECT_PROBE": action, "ANVIL_PROJECT_PROBE_MODE": mode,
-                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("routing", "windows-open", "layers", "terminal-focus") or action.startswith("windows-move") else "",
+                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("routing", "windows-open", "layers", "terminal-focus", "toggle-sidebar") or action.startswith("windows-move") else "",
                             "ANVIL_PROJECT_PROBE_ROOT": native_path(case_dir).replace("\\", "/"),
                             "ANVIL_PROJECT_PROBE_RESULT": native_path(result),
                             "ANVIL_TEST_DISABLE_PLUGINS": "autorestart,autoreload,autosave_fast,autosaveonfocuslost",
@@ -272,7 +274,7 @@ def main() -> int:
                         config["environment"]["ANVIL_SIDEBAR_SCAN_DELAY"] = "1"
                     if action == "restore-stagger":
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
-                    if action in ("layers", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus"):
+                    if action in ("layers", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
                         config["environment"]["ANVIL_SHELL_CAPTURE_DIR"] = native_path(case_dir)
                     if action == "theme-global":
@@ -296,7 +298,7 @@ def main() -> int:
                         config["environment"]["ANVIL_SURFACE_FAULT_NO_FRAME"] = "1"
                     config_path = case_dir / "launch.json"
                     config_path.write_text(json.dumps(config), encoding="utf-8")
-                    launcher = invoke_hidden(config_path, 150 if action == "sidebar-recovery-reset" else 60)
+                    launcher = invoke_hidden(config_path, 150 if action in ("sidebar-recovery-reset", "toggle-sidebar") else 60)
                     text = result.read_text(encoding="utf-8") if result.exists() else "missing result"
                     ok = ('["ok"]=true' in text and not launcher.get("timed_out")
                           and launcher.get("exit_code") == 0)

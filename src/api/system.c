@@ -1845,6 +1845,12 @@ static int f_set_focused_terminal(lua_State *L) {
   return 1;
 }
 
+/* Returns false outside a shell, which has no Project Sidebar. */
+static int f_toggle_project_sidebar(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_toggle_sidebar());
+  return 1;
+}
+
 static int f_select_terminal(lua_State *L) {
   size_t path_size = 0, id_size = 0;
   const char *path = luaL_checklstring(L, 1, &path_size);
@@ -2597,6 +2603,7 @@ static const luaL_Reg lib[] = {
   { "select_project",        f_select_project        },
   { "set_focused_terminal",  f_set_focused_terminal  },
   { "select_terminal",       f_select_terminal       },
+  { "toggle_project_sidebar", f_toggle_project_sidebar },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
   { "set_shell_colors", f_set_shell_colors },

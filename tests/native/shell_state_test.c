@@ -39,6 +39,24 @@ static void project_activity(void) {
   anvil_shell_state_free(&decoded);
 }
 
+/* Every Window shares one Sidebar width and hidden state. */
+static void sidebar_layout(void) {
+  AnvilShellState state = {sample, 3, NULL, 0, 320, true}, decoded;
+  size_t size = 0;
+  char *data = anvil_shell_state_encode(&state, &size);
+  CHECK(data && anvil_shell_state_decode(data, size, &decoded), "Sidebar layout did not round-trip");
+  CHECK(decoded.count == 3 && decoded.sidebar_points == 320 && decoded.sidebar_hidden,
+        "Sidebar layout changed");
+  anvil_shell_state_free(&decoded);
+  free(data);
+  /* A file from before the Sidebar layout keeps its Windows and uses the default layout. */
+  const char *old = "anvil-shell-windows 3\nwindow 1 0 0 10 10 0 3 abc\nproject 5 3 abc\n";
+  CHECK(anvil_shell_state_decode(old, strlen(old), &decoded) && decoded.count == 1 && decoded.project_count == 1 &&
+            decoded.sidebar_points == 0 && !decoded.sidebar_hidden,
+        "Window state without a Sidebar layout rejected");
+  anvil_shell_state_free(&decoded);
+}
+
 static void round_trip(void) {
   AnvilShellState state = {sample, 3}, decoded;
   size_t size = 0;
@@ -67,7 +85,11 @@ static void rejects(void) {
   AnvilShellState decoded;
   const char *bad[] = {
     "anvil-shell-windows 1\nwindow 0 0 10 10 0 0 \n",
-    "anvil-shell-windows 4\n",
+    "anvil-shell-windows 5\n",
+    "anvil-shell-windows 4\nsidebar 0 0\n",
+    "anvil-shell-windows 4\nsidebar 240 2\n",
+    "anvil-shell-windows 4\nsidebar 240 0\nsidebar 240 0\n",
+    "anvil-shell-windows 3\nsidebar 240 0\n",
     "anvil-shell-windows 3\nproject -1 3 abc\n",
     "anvil-shell-windows 3\nproject 5 0 \n",
     "anvil-shell-windows 2\nwindow 0 0 0 10 10 0 0 \n",
@@ -145,6 +167,7 @@ int main(int argc, char **argv) {
   (void)argc; (void)argv;
   round_trip();
   project_activity();
+  sidebar_layout();
   rejects();
   writer();
   adoption_records();

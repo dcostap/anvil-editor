@@ -33,4 +33,29 @@ test.describe("Hosted Title Bar ownership", function()
     RootPanel():on_mouse_left()
     test.is_nil(title.hovered_entry)
   end)
+  test.it("asks the shell to toggle the Project Sidebar from the start of the Title Bar", function()
+    local hosted, toggle, hit_test = system.is_hosted_surface, system.toggle_project_sidebar, system.set_window_hit_test
+    local requests, ranges = 0, nil
+    system.is_hosted_surface = function() return true end
+    system.toggle_project_sidebar = function() requests = requests + 1; return true end
+    system.set_window_hit_test = function(_, _, _, _, x, w, x2, w2) ranges = {{x, w}, {x2, w2}} end
+    local ok, err = pcall(function()
+      local title = TitleBar()
+      core.title_bar = title
+      title.size.x = 800
+      title:update()
+      local x, y = title.position.x + 4, title.position.y + title.size.y / 2
+      local interactive = false
+      for _, range in ipairs(ranges or {}) do
+        interactive = interactive or (x >= range[1] and x < range[1] + range[2])
+      end
+      test.ok(interactive, "the Sidebar toggle drags the Window instead of taking clicks")
+      title:on_mouse_moved(x, y)
+      test.ok(title:on_mouse_pressed("left", x, y, 1))
+      title:on_mouse_released("left", x, y)
+      test.equal(requests, 1)
+    end)
+    system.is_hosted_surface, system.toggle_project_sidebar, system.set_window_hit_test = hosted, toggle, hit_test
+    assert(ok, err)
+  end)
 end)

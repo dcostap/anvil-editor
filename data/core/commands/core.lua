@@ -272,6 +272,10 @@ end
 
 command.add(function() return system.is_hosted_surface() end, {
   ["core:unload_project"] = command.palette(function() return core.unload_project() end),
+  ["core:toggle_project_sidebar"] = command.palette(function()
+    core.log_quiet("Project Sidebar toggle requested")
+    return system.toggle_project_sidebar()
+  end),
 })
 
 command.add(nil, {

@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 20u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 21u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -74,6 +74,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_FOCUSED_TERMINAL = 95,
   /* Select a Project and focus one of its Terminal Sessions. Payload: id + NUL + Project path + NUL. */
   ANVIL_SURFACE_MSG_SELECT_TERMINAL = 96,
+  /* Hide the Project Sidebar in every Window, or show it again. No payload. */
+  ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR = 97,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */

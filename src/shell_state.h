@@ -34,6 +34,9 @@ typedef struct {
   size_t count;
   AnvilShellProjectActivity *projects;
   size_t project_count;
+  /* The Project Sidebar's width in points, shared by every Window. 0 means the default. */
+  int sidebar_points;
+  bool sidebar_hidden;
 } AnvilShellState;
 
 /* Encodes `state`. Returns NULL when it exceeds the bounds above. */

@@ -31,6 +31,16 @@
 
 /* The shell owns the Sidebar region, including its native Restart action. */
 #define SHELL_SIDEBAR_POINTS 240
+/* A drag on the Sidebar's edge sets its width within these bounds, in points. Every Window shares the width. */
+#define SHELL_SIDEBAR_MIN_POINTS 160
+#define SHELL_SIDEBAR_MAX_POINTS 480
+/* A wider Sidebar leaves the Project area at least this width, in points. */
+#define SHELL_PROJECT_MIN_POINTS 240
+/* How far from the Sidebar's edge, in points, the pointer grabs it. */
+#define SHELL_SIDEBAR_GRIP_POINTS 4
+/* The Sidebar slides open or closed over this time. */
+#define SHELL_SIDEBAR_SLIDE_MS 180
+#define SHELL_SIDEBAR_SLIDE_TIMER 0x8102u
 #define SHELL_CONNECT_TIMEOUT_MS 30000
 #define SHELL_SIDEBAR_HEALTHY_MS 60000
 #define SHELL_WRITE_QUEUE_LIMIT (8u * 1024u * 1024u)
@@ -252,7 +262,14 @@ struct ShellWindow {
   unsigned capture; /* probe capture index of the next composed frame, or zero */
 
   float scale;
-  int sidebar_w;
+  /* The shown Sidebar width. While the Sidebar slides it is less than sidebar_full_w, the Sidebar surface's width. */
+  int sidebar_w, sidebar_full_w;
+  float sidebar_open; /* 0 hidden, 1 shown */
+  float sidebar_slide_from;
+  Uint64 sidebar_slide_start;
+  bool sidebar_sliding;
+  bool sidebar_grip_hover, sidebar_dragging;
+  float sidebar_drag_offset;
   Uint32 surface_buttons;
   float pointer_x, pointer_y;
   bool pointer_in_surface;
@@ -300,6 +317,9 @@ typedef struct {
   /* The Color Theme is global. The latest colours from any Project or the Sidebar draw what no Project covers. */
   AnvilSurfaceShellColors theme_colors;
   bool has_theme_colors;
+  /* The Project Sidebar's width in points and whether it is hidden. Every Window shares them. */
+  int sidebar_points;
+  bool sidebar_hidden;
   AnvilSidebarScan *sidebar_scan;
   char *sidebar_userdir, *sidebar_recents;
   /* Saved Project activity for Projects the Project Sidebar does not list yet. */
@@ -372,6 +392,7 @@ static void sync_sidebar_model(void);
 static AnvilSidebarProject *sidebar_project(const char *path);
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value);
 static void start_sidebar(void);
+static void set_sidebar_hidden(bool hidden);
 static void schedule_sidebar_restart(void);
 static ShellWindow *create_window(const AnvilShellWindowState *placement);
 static bool destroy_window(ShellWindow *window);
@@ -919,6 +940,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
+  case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
     return size == 0;
   case ANVIL_SURFACE_MSG_TITLE:
     return !memchr(payload, 0, size);
@@ -1175,10 +1197,20 @@ static void shell_send_int(ShellProject *project, uint16_t type, int value) {
 /* ------------------------------------------------------------------------ */
 /* Layout and configuration                                                 */
 
+/* Sets the Window's Sidebar widths from the shared width and the Window's slide. Returns whether they changed. */
+static bool layout_sidebar(ShellWindow *window) {
+  int full = window->sidebar ? (int)(shell.sidebar_points * window->scale + 0.5f) : 0;
+  int shown = (int)(full * window->sidebar_open + 0.5f);
+  bool changed = full != window->sidebar_full_w || shown != window->sidebar_w;
+  window->sidebar_full_w = full;
+  window->sidebar_w = shown;
+  return changed;
+}
+
 static void update_scale(ShellWindow *window) {
   float scale = SDL_GetWindowDisplayScale(window->window);
   window->scale = scale > 0 ? scale : 1.0f;
-  window->sidebar_w = window->sidebar ? (int)(SHELL_SIDEBAR_POINTS * window->scale + 0.5f) : 0;
+  layout_sidebar(window);
 }
 
 static AnvilSurfaceWindowMode current_window_mode(ShellWindow *window) {
@@ -1216,13 +1248,13 @@ static void send_configure(ShellProject *project) {
   config.window_id = window->id;
   config.window_mode = current_window_mode(window);
   config.live_resize = window->live_resize;
-  config.render_enabled = (project == window->selected || project->sidebar) &&
+  config.render_enabled = (project == window->selected || (project->sidebar && window->sidebar_w > 0)) &&
                           IsWindowVisible(window->hwnd) && !IsIconic(window->hwnd);
   if (config.window_mode != ANVIL_SURFACE_WINDOW_MINIMIZED) {
     /* A minimized window keeps the last surface size. */
     int pixel_w = 0, pixel_h = 0;
     client_pixel_size(window, &pixel_w, &pixel_h);
-    config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_w : pixel_w);
+    config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_full_w : pixel_w);
     config.pixel_h = SDL_max(1, pixel_h);
     RECT rect;
     if (GetWindowRect(window->hwnd, &rect)) {
@@ -1233,7 +1265,7 @@ static void send_configure(ShellProject *project) {
     }
   } else if (project->last_config.window_id != window->id) {
     /* A newly assigned surface has no prior geometry in this minimized Window. */
-    config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_w : window->buffer_w);
+    config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_full_w : window->buffer_w);
     config.pixel_h = SDL_max(1, window->buffer_h);
   }
   config.display_scale = window->scale;
@@ -1674,7 +1706,8 @@ static bool reveal_ready(ShellWindow *window) {
   bool theme = shell.has_theme_colors || project->has_shell_colors;
   bool area = window->project_presentation.have_surface || project->state == SHELL_FAILED ||
               (!project->resolving && project->state != SHELL_STARTING);
-  bool sidebar = !window->sidebar || window->sidebar_presentation.have_surface || shell.sidebar_restart_limited ||
+  bool sidebar = !window->sidebar || !window->sidebar_w || window->sidebar_presentation.have_surface ||
+                 shell.sidebar_restart_limited ||
                  (shell.sidebar_process && shell.sidebar_process->state == SHELL_FAILED);
   return theme && area && sidebar;
 }
@@ -2147,12 +2180,16 @@ static void composite_and_present(ShellWindow *window) {
    * native strip and window controls. A transparent Sidebar shows the Project's wallpaper under it. */
   ShellPresentation *sidebar = &window->sidebar_presentation;
   if (sidebar->have_surface && shell.sidebar_process && shell.sidebar_process->state != SHELL_FAILED) {
-    RECT rect = {0, 0, SDL_min(window->sidebar_w, sidebar->surface_w), SDL_min(window->buffer_h, sidebar->surface_h)};
+    /* A sliding Sidebar moves left. Its surface keeps the open width, and the Window shows its right part. */
+    int slide = window->sidebar_full_w - window->sidebar_w;
+    RECT rect = {0, 0, SDL_min(window->sidebar_w, sidebar->surface_w - slide),
+                 SDL_min(window->buffer_h, sidebar->surface_h)};
     ID3D11ShaderResourceView *view = sidebar->transparent ? presentation_view(window, sidebar) : NULL;
-    if (view && compose_ready(window)) {
-      compose_rect(window, view, rect, 0, 0, NULL);
+    if (rect.right <= 0 || rect.bottom <= 0) {
+    } else if (view && compose_ready(window)) {
+      compose_rect(window, view, rect, slide, 0, NULL);
     } else {
-      D3D11_BOX box = {0, 0, 0, (UINT)rect.right, (UINT)rect.bottom, 1};
+      D3D11_BOX box = {(UINT)slide, 0, 0, (UINT)(slide + rect.right), (UINT)rect.bottom, 1};
       window->context->lpVtbl->CopySubresourceRegion(window->context, (ID3D11Resource *)window->backbuffer, 0,
                                                      0, 0, 0, (ID3D11Resource *)sidebar->surface, 0, &box);
     }
@@ -2931,6 +2968,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     case ANVIL_SURFACE_MSG_BORDERED:
     case ANVIL_SURFACE_MSG_SET_BOUNDS:
     case ANVIL_SURFACE_MSG_CLEAR_IME:
+    case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
       SDL_Log("Shell ignored an unselected Project Window request: id=%u type=%u", project->id,
               message->type);
       return;
@@ -3000,6 +3038,10 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     if (project->sidebar && !window->closing) select_terminal_path(window, path, payload);
     break;
   }
+  case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
+    SDL_Log("Shell Sidebar toggle requested: Window=%u", window->id);
+    if (!window->closing) set_sidebar_hidden(!shell.sidebar_hidden);
+    break;
   case ANVIL_SURFACE_MSG_FOCUSED_TERMINAL:
     if (project->sidebar || !strcmp(project->focused_terminal, payload)) break;
     memcpy(project->focused_terminal, payload, message->size);
@@ -3193,6 +3235,130 @@ static void restore_project_activity(void) {
   shell.saved_activity_count = kept;
 }
 
+/* ------------------------------------------------------------------------ */
+/* Sidebar width and slide                                                  */
+
+static void leave_surface(ShellWindow *window);
+static void clear_composition(ShellWindow *window);
+
+static float ease_out(float t) {
+  t = 1.0f - t;
+  return 1.0f - t * t * t;
+}
+
+/* Shows the Window's new Sidebar width: the Project and the Sidebar get their new sizes, and the Window composes. */
+static void apply_sidebar_layout(ShellWindow *window) {
+  if (!layout_sidebar(window)) return;
+  window->ui_dirty = true;
+  send_configure(window->selected);
+  if (window->shown) composite_and_present(window);
+}
+
+static void slide_sidebar(ShellWindow *window) {
+  float target = shell.sidebar_hidden ? 0.0f : 1.0f;
+  float t = (float)(SDL_GetTicks() - window->sidebar_slide_start) / SHELL_SIDEBAR_SLIDE_MS;
+  if (t >= 1.0f || !window->shown || IsIconic(window->hwnd)) {
+    KillTimer(window->hwnd, SHELL_SIDEBAR_SLIDE_TIMER);
+    window->sidebar_sliding = false;
+    window->sidebar_open = target;
+  } else
+    window->sidebar_open = window->sidebar_slide_from + (target - window->sidebar_slide_from) * ease_out(t);
+  apply_sidebar_layout(window);
+  if (!window->sidebar_sliding)
+    SDL_Log("Shell Sidebar slide ended: Window=%u width=%d", window->id, window->sidebar_w);
+}
+
+/* Every Window slides its Sidebar open or closed. A Window that is not shown changes at once. */
+static void set_sidebar_hidden(bool hidden) {
+  if (shell.sidebar_hidden == hidden) return;
+  shell.sidebar_hidden = hidden;
+  SDL_Log("Shell Sidebar %s", hidden ? "hidden" : "shown");
+  for (ShellWindow *window = shell.windows; window; window = window->next) {
+    window->sidebar_dragging = window->sidebar_grip_hover = false;
+    window->sidebar_slide_from = window->sidebar_open;
+    window->sidebar_slide_start = SDL_GetTicks();
+    if (window->shown && !window->revealing && !IsIconic(window->hwnd) &&
+        SetTimer(window->hwnd, SHELL_SIDEBAR_SLIDE_TIMER, USER_TIMER_MINIMUM, NULL)) {
+      window->sidebar_sliding = true;
+      if (hidden) leave_sidebar(window);
+    } else {
+      window->sidebar_sliding = false;
+      window->sidebar_open = hidden ? 0.0f : 1.0f;
+      apply_sidebar_layout(window);
+    }
+  }
+  windows_changed();
+}
+
+/* The Sidebar's edge resizes it, unless it slides or the Project's modal overlay dim covers it. */
+static bool sidebar_grip_at(ShellWindow *window, float x, float y) {
+  float grip = SDL_max(2.0f, SHELL_SIDEBAR_GRIP_POINTS * window->scale);
+  return window->sidebar && window->sidebar_w > 0 && !window->sidebar_sliding && !window->surface_buttons &&
+         window->pressed_control < 0 && !(window->overlay >> 24) && y >= window->controls.bottom &&
+         x >= window->sidebar_w - grip && x < window->sidebar_w + grip;
+}
+
+static void drag_sidebar(ShellWindow *window, float x) {
+  float widest = SDL_min((float)SHELL_SIDEBAR_MAX_POINTS, window->buffer_w / window->scale - SHELL_PROJECT_MIN_POINTS);
+  float points = SDL_clamp((x - window->sidebar_drag_offset) / window->scale, (float)SHELL_SIDEBAR_MIN_POINTS,
+                           SDL_max((float)SHELL_SIDEBAR_MIN_POINTS, widest));
+  if ((int)(points + 0.5f) == shell.sidebar_points) return;
+  shell.sidebar_points = (int)(points + 0.5f);
+  apply_sidebar_layout(window);
+}
+
+/* The dragged Window shows each step. Other Windows take the final width, and the shell saves it. */
+static void end_sidebar_drag(ShellWindow *window) {
+  if (!window->sidebar_dragging) return;
+  window->sidebar_dragging = false;
+  SDL_Log("Shell Sidebar width: Window=%u points=%d", window->id, shell.sidebar_points);
+  for (ShellWindow *other = shell.windows; other; other = other->next) apply_sidebar_layout(other);
+  windows_changed();
+}
+
+/* Grip hover, drag and double-click reset. Returns whether the Sidebar's edge took the event. */
+static bool route_sidebar_grip(ShellWindow *window, const SDL_Event *event) {
+  if (event->type == SDL_EVENT_MOUSE_MOTION) {
+    if (window->sidebar_dragging) {
+      drag_sidebar(window, event->motion.x);
+      return true;
+    }
+    bool grip = sidebar_grip_at(window, event->motion.x, event->motion.y);
+    if (grip != window->sidebar_grip_hover) {
+      window->sidebar_grip_hover = grip;
+      if (grip) {
+        leave_sidebar(window);
+        leave_surface(window);
+        if (window->hovered_control >= 0) {
+          window->hovered_control = -1;
+          window->ui_hover_dirty = true;
+          composite_and_present(window);
+        }
+      }
+      apply_cursor(grip ? ANVIL_SURFACE_CURSOR_SIZEH : ANVIL_SURFACE_CURSOR_ARROW);
+    }
+    return grip;
+  }
+  if (event->button.button != SDL_BUTTON_LEFT) return window->sidebar_dragging;
+  if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
+    if (!window->sidebar_dragging) return false;
+    end_sidebar_drag(window);
+    return true;
+  }
+  if (!sidebar_grip_at(window, event->button.x, event->button.y)) return false;
+  if (event->button.clicks == 2) {
+    shell.sidebar_points = SHELL_SIDEBAR_POINTS;
+    SDL_Log("Shell Sidebar width reset: points=%d", shell.sidebar_points);
+    for (ShellWindow *other = shell.windows; other; other = other->next) apply_sidebar_layout(other);
+    windows_changed();
+    return true;
+  }
+  window->sidebar_dragging = true;
+  window->sidebar_drag_offset = event->button.x - window->sidebar_w;
+  clear_composition(window);
+  return true;
+}
+
 static void forward_event(ShellWindow *window, const SDL_Event *event, const char *text) {
   ShellProject *project = window->selected;
   if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_TEXT_INPUT ||
@@ -3239,6 +3405,8 @@ static void release_surface_pointer(ShellWindow *window) {
 
 static void cancel_input(ShellWindow *window) {
   ShellProject *project = window->selected;
+  end_sidebar_drag(window);
+  window->sidebar_grip_hover = false;
   Uint32 buttons = window->surface_buttons;
   window->surface_buttons = 0;
   window->pressed_control = -1;
@@ -3282,6 +3450,12 @@ static bool sidebar_takes_pointer(ShellWindow *window, float x) {
 
 static void send_sidebar_input(ShellWindow *window, const SDL_Event *event) {
   AnvilSurfaceInput input = {.event = *event, .configuration = window->sidebar_client->last_config.configuration};
+  /* A sliding Sidebar shows its surface moved left. */
+  float slide = (float)(window->sidebar_full_w - window->sidebar_w);
+  if (event->type == SDL_EVENT_MOUSE_MOTION) input.event.motion.x += slide;
+  else if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_BUTTON_UP)
+    input.event.button.x += slide;
+  else if (event->type == SDL_EVENT_MOUSE_WHEEL) input.event.wheel.mouse_x += slide;
   if (!window->sidebar_input_ns) window->sidebar_input_ns = SDL_GetTicksNS();
   shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
 }
@@ -3391,6 +3565,7 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
   ShellProject *project = window->selected;
   window->pointer_x = event->motion.x;
   window->pointer_y = event->motion.y;
+  if (route_sidebar_grip(window, event)) return;
   if (sidebar_takes_pointer(window, event->motion.x) && event->motion.y >= window->controls.bottom) {
     leave_surface(window);
     window->pointer_in_sidebar = true;
@@ -3432,6 +3607,7 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
   window->pointer_y = event->button.y;
   Uint32 mask = SDL_BUTTON_MASK(event->button.button);
   bool down = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+  if (!window->surface_buttons && route_sidebar_grip(window, event)) return;
   int control = control_at(window, event->button.x, event->button.y);
   if (control < 0 && sidebar_takes_pointer(window, event->button.x)) {
     leave_surface(window);
@@ -3614,9 +3790,10 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     case SHELL_EVENT_START_TIMEOUT: {
       bool visible = IsWindowVisible(window->hwnd) && !IsIconic(window->hwnd);
       if (project->sidebar) {
+        /* A hidden Sidebar renders nothing until it is shown. */
         visible = false;
         for (ShellWindow *item = shell.windows; item; item = item->next)
-          visible |= !item->closing && IsWindowVisible(item->hwnd) && !IsIconic(item->hwnd);
+          visible |= !item->closing && item->sidebar_w > 0 && IsWindowVisible(item->hwnd) && !IsIconic(item->hwnd);
       }
       if ((project->sidebar || project == window->selected) && project->state == SHELL_STARTING && visible)
         fail_connection(project, "startup deadline expired before the first frame");
@@ -3995,6 +4172,10 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     reveal_window(window, "timed out");
     return 0;
   }
+  if (msg == WM_TIMER && wparam == SHELL_SIDEBAR_SLIDE_TIMER) {
+    slide_sidebar(window);
+    return 0;
+  }
   if (msg == WM_TIMER && wparam == SHELL_SELECTION_HOLD_TIMER) {
     KillTimer(hwnd, SHELL_SELECTION_HOLD_TIMER);
     end_selection_hold(window);
@@ -4144,10 +4325,18 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       return result;
     }
 
-    case WM_GETMINMAXINFO:
+    case WM_GETMINMAXINFO: {
       CallWindowProcW(window->sdl_wndproc, hwnd, msg, wparam, lparam);
-      win32_frame_hwnd_apply_work_area(hwnd, (MINMAXINFO *)lparam);
+      MINMAXINFO *info = (MINMAXINFO *)lparam;
+      win32_frame_hwnd_apply_work_area(hwnd, info);
+      /* The frame has no borders, so the minimum Window size is the minimum client size: the Project area and the
+       * open Sidebar. SDL's minimum size would add borders and grow the Window each time it is set. */
+      info->ptMinTrackSize.x = SDL_max(info->ptMinTrackSize.x,
+                                       (LONG)(SHELL_PROJECT_MIN_POINTS * window->scale) +
+                                           (shell.sidebar_hidden ? 0 : window->sidebar_full_w));
+      info->ptMinTrackSize.y = SDL_max(info->ptMinTrackSize.y, (LONG)(180 * window->scale));
       return 0;
+    }
 
     case WM_NCACTIVATE:
       /* SDL tracks keyboard focus from this message; the frame is drawn by
@@ -5548,8 +5737,8 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement) {
     destroy_window(window);
     return NULL;
   }
+  window->sidebar_open = shell.sidebar_hidden ? 0.0f : 1.0f;
   update_scale(window);
-  SDL_SetWindowMinimumSize(window->window, 240 + window->sidebar_w, 180);
   set_window_icon(window);
   if (placement) {
     /* Normal bounds first, while hidden. A maximized Window then keeps them for Restore. */
@@ -5655,7 +5844,7 @@ static void save_windows(bool final) {
       activity[j] = activity[j - 1];
       activity[j - 1] = swap;
     }
-  AnvilShellState state = {entries, count, activity, activity_count};
+  AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.sidebar_hidden};
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
   if (!data) {
@@ -5893,6 +6082,11 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
     shell.state_enabled = anvil_shell_state_writer_start(state_file);
     if (!shell.state_enabled) SDL_Log("Shell Window state writer unavailable; Windows will not be restored");
   } else SDL_Log("Shell user directory unavailable; Windows will not be restored");
+  shell.sidebar_points = saved.sidebar_points
+                             ? SDL_clamp(saved.sidebar_points, SHELL_SIDEBAR_MIN_POINTS, SHELL_SIDEBAR_MAX_POINTS)
+                             : SHELL_SIDEBAR_POINTS;
+  shell.sidebar_hidden = saved.sidebar_hidden;
+  SDL_Log("Shell Sidebar layout: points=%d hidden=%d", shell.sidebar_points, shell.sidebar_hidden);
   /* Projects from a shell that ended wait for this one. */
   static AnvilAdoptionRecord adoptable[ANVIL_ADOPTION_MAX_RECORDS];
   size_t adoptable_count = userdir ? anvil_adoption_scan(adoptable, SDL_arraysize(adoptable)) : 0;

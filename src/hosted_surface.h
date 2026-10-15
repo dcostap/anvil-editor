@@ -75,6 +75,8 @@ bool anvil_hosted_surface_unload_project(const char *path);
 bool anvil_hosted_surface_focused_terminal(const char *id);
 /* The Sidebar asks the shell to select a Project and focus one of its Terminal Sessions. */
 bool anvil_hosted_surface_select_terminal(const char *path, const char *id);
+/* Asks the shell to hide the Project Sidebar in every Window, or to show it again. */
+bool anvil_hosted_surface_toggle_sidebar(void);
 /* Tells the shell that this Project saved a Color Theme, so other processes reload it. */
 bool anvil_hosted_surface_color_theme_saved(void);
 /* The shell draws this Project's Window controls in these colours while the Project is selected. */

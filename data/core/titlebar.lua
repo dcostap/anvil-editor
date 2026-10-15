@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
@@ -29,6 +30,7 @@ local caption_glyphs = {
   "\238\164\163", -- U+E923 ChromeRestore
   "\238\162\187", -- U+E8BB ChromeClose
 }
+local SIDEBAR_GLYPH = "\238\156\128" -- U+E700 GlobalNavigationButton
 
 local function panes()
   return core.panes or require "core.panes"
@@ -91,6 +93,19 @@ end
 local function draw_glyph_line(x, y, w, h, color)
   renderer.draw_rect(math.floor(x), math.floor(y),
     math.max(1, math.floor(w)), math.max(1, math.floor(h)), color)
+end
+
+-- Three bars: the shell's Project Sidebar toggle.
+local function draw_sidebar_glyph(rect, color)
+  local font = get_caption_font()
+  if font then
+    draw_centered_text(font, SIDEBAR_GLYPH, rect, color)
+    return
+  end
+  local width, line = math.floor(12 * SCALE), math.max(1, math.floor(SCALE))
+  local x = math.floor(rect.x + (rect.w - width) / 2)
+  local y = math.floor(rect.y + rect.h / 2)
+  for row = -1, 1 do draw_glyph_line(x, y + row * math.floor(4 * SCALE), width, line, color) end
 end
 
 local function draw_caption_glyph(index, rect, color)
@@ -308,14 +323,19 @@ function TitleBar:update_geometry()
     }
   end
 
+  -- Inside the shell, the Title Bar starts with the Project Sidebar toggle.
+  self.sidebar_toggle_rect = self.shell_controls
+    and {x = self.position.x, y = self.position.y, w = math.min(h, math.max(0, caption_start - self.position.x)), h = h}
+    or nil
+  local project_x = self.position.x + (self.sidebar_toggle_rect and self.sidebar_toggle_rect.w or 0)
   local project_font = project_title_font()
   local project_width = math.min(220 * SCALE, math.ceil(
     project_font:get_width(project_name()) + style.padding.x * 2 + TEXT_FIT_RESERVE
   ))
   self.project_rect = {
-    x = self.position.x,
+    x = project_x,
     y = self.position.y,
-    w = self.shell_controls and math.min(project_width, math.max(0, caption_start - self.position.x)) or project_width,
+    w = self.shell_controls and math.min(project_width, math.max(0, caption_start - project_x)) or project_width,
     h = h,
   }
   local start_x = self.project_rect.x + self.project_rect.w
@@ -377,15 +397,18 @@ function TitleBar:configure_hit_test(enabled)
   end
   local interactive_width = interactive_x and interactive_right - interactive_x or 0
   interactive_x = interactive_x or 0
+  local toggle = self.sidebar_toggle_rect
+  local toggle_x, toggle_width = toggle and toggle.x or 0, toggle and toggle.w or 0
   local _, _, resize_border = window_frame_metrics()
   local signature = table.concat({
     tostring(core.window), tostring(self.size.y), tostring(interactive_x),
-    tostring(interactive_width), tostring(resize_border), tostring(caption_width())
+    tostring(interactive_width), tostring(resize_border), tostring(caption_width()),
+    tostring(toggle_x), tostring(toggle_width)
   }, ":")
   if signature == self.hit_test_signature then return end
   self.hit_test_signature = signature
   system.set_window_hit_test(core.window, self.size.y, caption_width() * CAPTION_COUNT,
-    math.floor(resize_border or 8 * SCALE), interactive_x, interactive_width, 0, 0)
+    math.floor(resize_border or 8 * SCALE), interactive_x, interactive_width, toggle_x, toggle_width)
 end
 
 -- The shell draws the Window controls, so it needs the Color Theme's colours. Sends them when they change.
@@ -440,6 +463,7 @@ function TitleBar:on_mouse_moved(x, y, ...)
   self.mouse_x, self.mouse_y = x, y
   self.hovered_entry = self:entry_at(x, y)
   self.hovered_caption = self:caption_at(x, y)
+  self.hovered_sidebar_toggle = contains(self.sidebar_toggle_rect, x, y)
   if self.pressed_pane then
     self.drag_x, self.drag_y = x, y
     if not self.dragged_pane and common.distance(
@@ -477,8 +501,8 @@ end
 
 function TitleBar:on_mouse_left()
   self.mouse_x, self.mouse_y = nil, nil
-  self.hovered_entry, self.hovered_caption = nil, nil
-  if not self.pressed_pane then self.pressed_caption = nil end
+  self.hovered_entry, self.hovered_caption, self.hovered_sidebar_toggle = nil, nil, false
+  if not self.pressed_pane then self.pressed_caption, self.pressed_sidebar_toggle = nil, false end
   core.redraw = true
 end
 
@@ -621,6 +645,11 @@ function TitleBar:on_mouse_pressed(button, x, y, clicks)
     core.redraw = true
     return true
   end
+  if contains(self.sidebar_toggle_rect, x, y) then
+    self.pressed_sidebar_toggle = true
+    core.redraw = true
+    return true
+  end
   local index = self:entry_at(x, y)
   if index then
     local pane = panes().ordered()[index]
@@ -645,6 +674,14 @@ function TitleBar:on_mouse_released(button, x, y)
   self.pressed_caption = nil
   if pressed and released == pressed then perform_caption(pressed) end
   if pressed then core.redraw = true end
+  if self.pressed_sidebar_toggle then
+    self.pressed_sidebar_toggle = false
+    core.redraw = true
+    if button == "left" and contains(self.sidebar_toggle_rect, x, y) then
+      command.perform("core:toggle_project_sidebar")
+    end
+    return true
+  end
   if self.pressed_pane then
     local source = self.pressed_pane
     local dragged = self.dragged_pane ~= nil
@@ -663,6 +700,7 @@ end
 
 function TitleBar:on_focus_lost()
   self.pressed_caption = nil
+  self.pressed_sidebar_toggle = false
   if self.pressed_pane then self:clear_pane_drag("cancelled") end
 end
 
@@ -775,6 +813,14 @@ function TitleBar:draw()
   local font = style.font
   local project_font = project_title_font()
   local pane_entries = self:get_pane_entries()
+  local toggle = self.sidebar_toggle_rect
+  if toggle and toggle.w > 0 then
+    if self.hovered_sidebar_toggle then
+      renderer.draw_rect(toggle.x, toggle.y, toggle.w, toggle.h,
+        self.pressed_sidebar_toggle and style.titlebar_control_pressed or style.titlebar_control_hover)
+    end
+    draw_sidebar_glyph(toggle, self.hovered_sidebar_toggle and style.text or style.dim)
+  end
   draw_centered_text(project_font,
     fit_text(project_font, project_name(), math.max(0, self.project_rect.w - style.padding.x * 2)),
     self.project_rect, style.text)
