@@ -165,7 +165,8 @@ bool anvil_sidebar_set_terminals(AnvilSidebarModel *model, AnvilSidebarProject *
     const AnvilSidebarTerminal *a = &project->terminals[i], *b = &terminals[i];
     changed = strcmp(a->id, b->id) || strcmp(a->title, b->title ? b->title : "") ||
               strcmp(a->cwd, b->cwd ? b->cwd : "") || a->busy != b->busy || a->bell != b->bell ||
-              a->state != b->state || a->attached != b->attached || a->host_pid != b->host_pid;
+              a->state != b->state || a->attached != b->attached || a->host_pid != b->host_pid ||
+              a->activity != b->activity;
   }
   if (!changed)
     return true;
@@ -253,19 +254,20 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
       if (!j) {
         append(&item,
                "{kind=\"project\",row_id=%u,id=%u,pid=%u,window_id=%u,state=\"%s\",selected=%s,exists=%s,"
-               "deferred_dialog=%s,close_choice=%s,path=",
+               "deferred_dialog=%s,close_choice=%s,activity=%lld,path=",
                row->row_id, row->id, row->pid, row->window_id, states[row->state], row->selected ? "true" : "false",
                row->exists ? "true" : "false", row->deferred_dialog ? "true" : "false",
-               row->close_choice ? "true" : "false");
+               row->close_choice ? "true" : "false", (long long)row->activity);
         quoted(&item, row->path);
         append(&item, "},");
       } else {
         const AnvilSidebarTerminal *terminal = &row->terminals[j - 1];
         append(&item,
                "{kind=\"terminal\",row_id=%u,id=\"%s\",host_pid=%u,state=\"%s\",busy=%d,bell=%d,"
-               "attached=%s,title=",
+               "attached=%s,activity=%lld,title=",
                row->row_id, terminal->id, terminal->host_pid, terminal_states[terminal->state],
-               terminal->busy, terminal->bell, terminal->attached ? "true" : "false");
+               terminal->busy, terminal->bell, terminal->attached ? "true" : "false",
+               (long long)terminal->activity);
         quoted(&item, terminal->title);
         append(&item, ",cwd=");
         quoted(&item, terminal->cwd);

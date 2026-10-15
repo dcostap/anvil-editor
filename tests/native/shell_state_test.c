@@ -15,6 +15,30 @@ static AnvilShellWindowState sample[] = {
   {7, 30, 30, 640, 480, false, "D:\\x\\\xc3\xa9t\xc3\xa9"},
 };
 
+static AnvilShellProjectActivity activity[] = {
+  {"C:\\Projects\\Front Project", 1760000000},
+  {"D:\\x\\\xc3\xa9t\xc3\xa9", 1750000000},
+};
+
+/* The Project Sidebar groups Projects by the last time the user worked in them. */
+static void project_activity(void) {
+  AnvilShellState state = {sample, 3, activity, 2}, decoded;
+  size_t size = 0;
+  char *data = anvil_shell_state_encode(&state, &size);
+  CHECK(data && anvil_shell_state_decode(data, size, &decoded), "Project activity did not round-trip");
+  CHECK(decoded.count == 3 && decoded.project_count == 2, "Project activity count changed");
+  for (size_t i = 0; i < 2 && i < decoded.project_count; i++)
+    CHECK(!strcmp(decoded.projects[i].path, activity[i].path) && decoded.projects[i].activity == activity[i].activity,
+          "Project activity changed");
+  anvil_shell_state_free(&decoded);
+  free(data);
+  /* A file from before Project activity still restores its Windows. */
+  const char *old = "anvil-shell-windows 2\nwindow 1 0 0 10 10 0 3 abc\n";
+  CHECK(anvil_shell_state_decode(old, strlen(old), &decoded) && decoded.count == 1 && decoded.project_count == 0,
+        "Window state without Project activity rejected");
+  anvil_shell_state_free(&decoded);
+}
+
 static void round_trip(void) {
   AnvilShellState state = {sample, 3}, decoded;
   size_t size = 0;
@@ -43,7 +67,9 @@ static void rejects(void) {
   AnvilShellState decoded;
   const char *bad[] = {
     "anvil-shell-windows 1\nwindow 0 0 10 10 0 0 \n",
-    "anvil-shell-windows 3\n",
+    "anvil-shell-windows 4\n",
+    "anvil-shell-windows 3\nproject -1 3 abc\n",
+    "anvil-shell-windows 3\nproject 5 0 \n",
     "anvil-shell-windows 2\nwindow 0 0 0 10 10 0 0 \n",
     "anvil-shell-windows 2\nwindow 1 0 0 0 10 0 0 \n",
     "anvil-shell-windows 2\nwindow 1 0 0 10 10 2 0 \n",
@@ -118,6 +144,7 @@ static void adoption_records(void) {
 int main(int argc, char **argv) {
   (void)argc; (void)argv;
   round_trip();
+  project_activity();
   rejects();
   writer();
   adoption_records();

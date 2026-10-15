@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <time.h>
 
 #define CLIENT_QUEUE_LIMIT (8u * 1024u * 1024u)
 #define CLIENT_STALL_TIMEOUT_MS 10000u
@@ -38,12 +39,15 @@ typedef struct {
   uint64_t writer_progress;
   volatile LONG backpressured, client_stop;
   volatile LONG stop, reader_stop, reader_done;
-  volatile LONG64 last_output, exit_sent_ms;
+  volatile LONG64 last_output, exit_sent_ms, last_input;
   HANDLE reader, writer, client, console_close;
   const char *id, *pipe_name, *project, *shell, *cwd;
   char log_path[32768], record_path[32768], snapshot_path[32768];
   char last_cwd[32768], interrupted_command[16384];
   bool explicit_close, shell_ended;
+  /* The live title the Project Sidebar shows, and the last activity in Unix seconds. */
+  char title[1024];
+  int64_t activity;
   uint64_t snapshot_at, snapshot_revision;
   volatile LONG64 model_revision;
 } TerminalHost;
@@ -147,6 +151,8 @@ static bool write_registry(TerminalHost *host) {
     registry_string(file, "project_path", host->project);
     registry_string(file, "shell", host->shell);
     registry_string(file, "cwd", host->last_cwd);
+    registry_string(file, "title", host->title);
+    fprintf(file, "  activity = %lld,\n", (long long)host->activity);
     registry_string(file, "status", host->shell_ended ? "exited" : "running");
     registry_string(file, "snapshot_path", host->snapshot_path);
     registry_string(file, "interrupted_command", host->interrupted_command);
@@ -287,6 +293,7 @@ static DWORD WINAPI host_client(void *userdata) {
   AnvilIPCHeader header; uint8_t bytes[ANVIL_TERMINAL_MAX_PAYLOAD];
   while (anvil_ipc_pipe_read(&host->pipe, &header, bytes, sizeof(bytes))) {
     if (header.type == ANVIL_TERMINAL_INPUT && header.size) {
+      InterlockedExchange64(&host->last_input, GetTickCount64());
       DWORD offset = 0;
       while (offset < header.size && !host->client_stop) {
         DWORD written = 0;
@@ -554,7 +561,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
   char expected_pipe[128]; snprintf(expected_pipe, sizeof(expected_pipe), "\\\\.\\pipe\\anvil-terminal-%s", argv[2]);
   if (strcmp(argv[3], expected_pipe) != 0) return 1;
   TerminalHost host = { .busy = true, .id = argv[2], .pipe_name = argv[3], .shell = argv[5],
-    .cwd = argv[6], .project = argv[12] };
+    .cwd = argv[6], .project = argv[12], .activity = (int64_t)time(NULL) };
   InitializeCriticalSection(&host.lock);
   InitializeConditionVariable(&host.ready); InitializeConditionVariable(&host.space);
   const char *directories[] = { "logs", "terminal-sessions" };
@@ -615,6 +622,10 @@ int anvil_terminal_host_main(int argc, char **argv) {
   ever_running = true;
   exit_code = 0;
   uint64_t exited_at = 0, drain_started = 0, idle_since = GetTickCount64(), busy_probe_at = 0;
+  /* Title changes reach the record at most once a second, and typing at most once a minute. */
+  uint64_t title_probe_at = 0, title_written_at = 0, input_seen = 0;
+  int64_t activity_written = host.activity;
+  bool title_pending = false;
   bool exit_queued = false, final_snapshot_saved = false;
   while (!host.stop) {
     uint64_t now = GetTickCount64();
@@ -681,8 +692,11 @@ int anvil_terminal_host_main(int argc, char **argv) {
         host.status_pending = true;
       }
       LeaveCriticalSection(&host.lock);
-      if (command_changed || busy_changed)
+      if (busy_changed) host.activity = (int64_t)time(NULL);
+      if (command_changed || busy_changed) {
         write_registry(&host);
+        activity_written = host.activity;
+      }
       if (host.attached || busy) idle_since = 0;
       else if (!idle_since) idle_since = now;
       uint64_t last = InterlockedCompareExchange64(&host.last_output, 0, 0);
@@ -698,6 +712,34 @@ int anvil_terminal_host_main(int argc, char **argv) {
       if (queue_record(&host, ANVIL_TERMINAL_STATUS, &status, sizeof(status))) host.status_pending = false;
     }
     LeaveCriticalSection(&host.lock);
+    if (!exited_at && now >= title_probe_at) {
+      title_probe_at = now + 250;
+      char title[sizeof(host.title)] = "";
+      EnterCriticalSection(&host.lock);
+      GhosttyString text = {0};
+      if (ghostty_terminal_get(host.model, GHOSTTY_TERMINAL_DATA_TITLE, &text) == GHOSTTY_SUCCESS && text.ptr) {
+        size_t length = text.len < sizeof(title) ? text.len : sizeof(title) - 1;
+        memcpy(title, text.ptr, length);
+        title[length] = 0;
+      }
+      LeaveCriticalSection(&host.lock);
+      if (strcmp(title, host.title)) {
+        strcpy(host.title, title);
+        host.activity = (int64_t)time(NULL);
+        title_pending = true;
+      }
+      uint64_t input = (uint64_t)InterlockedCompareExchange64(&host.last_input, 0, 0);
+      if (input != input_seen) {
+        input_seen = input;
+        host.activity = (int64_t)time(NULL);
+      }
+      if ((title_pending && now - title_written_at >= 1000) || host.activity - activity_written >= 60) {
+        write_registry(&host);
+        title_pending = false;
+        title_written_at = now;
+        activity_written = host.activity;
+      }
+    }
     uint64_t revision = InterlockedCompareExchange64(&host.model_revision, 0, 0);
     if (host.model && revision != host.snapshot_revision && now - host.snapshot_at >= 20000) save_snapshot(&host, false);
     Sleep(10);

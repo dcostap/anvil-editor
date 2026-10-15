@@ -361,11 +361,20 @@ else
           assert(core.request_project_sidebar())
           wait_for(function() return not core.project_sidebar_request end, 5)
           save("a-sidebar-status", core.project_sidebar)
+          -- The selected Project and the Terminal Session both report when the user last worked in them.
+          local now, a_active = os.time(), false
+          for _, project in ipairs(core.project_sidebar or {}) do
+            if project.path:gsub("\\", "/") == directory:gsub("\\", "/") then
+              a_active = project.activity > now - 600 and project.activity <= now + 5
+            end
+          end
           for _, project in ipairs(core.project_sidebar or {}) do
             if project.path:gsub("\\", "/") == root .. "/Replacement" and project.state == "dormant" then
               for _, terminal in ipairs(project.terminals) do
                 if terminal.id == b.session_id and terminal.host_pid == b.host_pid and terminal.state == "running" and
-                    terminal.busy == 1 and not terminal.attached and terminal.cwd:gsub("\\", "/") == root .. "/Replacement" then
+                    terminal.busy == 1 and not terminal.attached and terminal.cwd:gsub("\\", "/") == root .. "/Replacement"
+                    and terminal.title:find("ANVIL_B_TITLE", 1, true) and terminal.activity > now - 600
+                    and a_active then
                   save("a-sidebar-kept", {continue = true}); return true
                 end
               end
@@ -438,7 +447,8 @@ else
           assert(command.perform("terminal:reset_quit_choice"))
           terminal = require("plugins.terminal").open {cwd = directory, shell = "cmd.exe /D /Q"}
           wait_for(function() return terminal.session and terminal.state == "running" and terminal.session:stats().host_pid > 0 end, 10)
-          terminal.session:write(string.format([[powershell.exe -NoProfile -Command "Add-Content -LiteralPath '%s/terminal-command-count.txt' -Value one; Write-Output ('KEEP_'+'B_READY'); Start-Sleep -Seconds 180"]], root) .. "\r")
+          -- cmd shows the title while the command runs. The Sidebar shows the same live title.
+          terminal.session:write(string.format([[title ANVIL_B_TITLE& powershell.exe -NoProfile -Command "Add-Content -LiteralPath '%s/terminal-command-count.txt' -Value one; Write-Output ('KEEP_'+'B_READY'); Start-Sleep -Seconds 180"]], root) .. "\r")
           wait_for(function()
             local _, status = terminal.session:update()
             local capture = terminal.session:text_capture()

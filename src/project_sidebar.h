@@ -25,6 +25,9 @@ typedef struct {
   int busy; /* -1 means unknown. */
   int bell; /* -1 means unavailable. */
   bool attached;
+  /* The last time the user typed into it, or a command started or ended, or its title changed. Unix seconds; 0 means
+   * unknown. */
+  int64_t activity;
   enum {
     ANVIL_SIDEBAR_TERMINAL_RUNNING,
     ANVIL_SIDEBAR_TERMINAL_EXITED,
@@ -37,6 +40,8 @@ typedef struct {
   uint32_t row_id, id, pid, window_id;
   AnvilSidebarState state;
   bool exists, selected, deferred_dialog, close_choice;
+  /* The last time the user worked in it, in Unix seconds; 0 means unknown. The shell sets and saves it. */
+  int64_t activity;
   AnvilSidebarTerminal *terminals;
   size_t terminal_count;
 } AnvilSidebarProject;

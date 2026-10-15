@@ -8,6 +8,7 @@
 /* The shell's App State for Anvil Windows. The shell alone writes this file. Lua never reads or writes it. */
 #define ANVIL_SHELL_STATE_FILE L"shell-windows.state"
 #define ANVIL_SHELL_STATE_MAX_WINDOWS 64
+#define ANVIL_SHELL_STATE_MAX_PROJECTS 256
 #define ANVIL_SHELL_STATE_MAX_PATH 32768
 #define ANVIL_SHELL_STATE_MAX_BYTES (256 * 1024)
 
@@ -21,10 +22,18 @@ typedef struct {
   char *path;
 } AnvilShellWindowState;
 
+/* The last time the user worked in a Project, in Unix seconds. The Project Sidebar groups Projects by it. */
+typedef struct {
+  char *path;
+  int64_t activity;
+} AnvilShellProjectActivity;
+
 typedef struct {
   /* Front to back. */
   AnvilShellWindowState *windows;
   size_t count;
+  AnvilShellProjectActivity *projects;
+  size_t project_count;
 } AnvilShellState;
 
 /* Encodes `state`. Returns NULL when it exceeds the bounds above. */

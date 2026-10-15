@@ -21,6 +21,7 @@
 #include <dxgi1_2.h>
 #include <dwmapi.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -298,6 +299,9 @@ typedef struct {
   bool has_theme_colors;
   AnvilSidebarScan *sidebar_scan;
   char *sidebar_userdir, *sidebar_recents;
+  /* Saved Project activity for Projects the Project Sidebar does not list yet. */
+  AnvilShellProjectActivity saved_activity[ANVIL_SHELL_STATE_MAX_PROJECTS];
+  size_t saved_activity_count;
   UINT_PTR sidebar_timer;
   AnvilSidebarWatch *sidebar_watch;
   uint64_t sidebar_notified_revision;
@@ -3107,8 +3111,43 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
 /* ------------------------------------------------------------------------ */
 /* Window and input                                                         */
 
+/* The Project Sidebar groups Projects by the last time the user typed or clicked in them, or selected them. */
+static void note_project_activity(ShellProject *project) {
+  if (!project || project->sidebar || !project->project_path) return;
+  AnvilSidebarProject *row = anvil_sidebar_find(&shell.sidebar, project->project_path);
+  if (!row) return;
+  int64_t now = (int64_t)time(NULL);
+  /* The Sidebar shows ages in minutes. More frequent updates would only redraw it and rewrite the state file. */
+  if (row->activity && now >= row->activity && now - row->activity < 60) return;
+  row->activity = now;
+  shell.sidebar.revision++;
+  windows_changed();
+}
+
+/* Saved activity applies once the Project Sidebar lists its Project. */
+static void restore_project_activity(void) {
+  size_t kept = 0;
+  for (size_t i = 0; i < shell.saved_activity_count; i++) {
+    AnvilShellProjectActivity *saved = &shell.saved_activity[i];
+    AnvilSidebarProject *row = anvil_sidebar_find(&shell.sidebar, saved->path);
+    if (!row) {
+      shell.saved_activity[kept++] = *saved;
+      continue;
+    }
+    if (saved->activity > row->activity) {
+      row->activity = saved->activity;
+      shell.sidebar.revision++;
+    }
+    free(saved->path);
+  }
+  shell.saved_activity_count = kept;
+}
+
 static void forward_event(ShellWindow *window, const SDL_Event *event, const char *text) {
   ShellProject *project = window->selected;
+  if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_TEXT_INPUT ||
+      event->type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+    note_project_activity(project);
   AnvilSurfaceInput input;
   SDL_zero(input);
   input.event = *event;
@@ -4591,6 +4630,7 @@ static void select_project(ShellProject *project) {
     return;
   ShellProject *previous = window->selected;
   windows_changed();
+  note_project_activity(project);
   cancel_input(window);
   if (previous->connected)
     shell_send_int(previous, ANVIL_SURFACE_MSG_FOCUS, 0);
@@ -5060,6 +5100,7 @@ static AnvilSidebarProject *sidebar_project(const char *path) {
       return NULL;
     }
     row = anvil_sidebar_find(&shell.sidebar, path);
+    restore_project_activity();
   }
   return row;
 }
@@ -5237,6 +5278,7 @@ static void service_sidebar(void) {
         shell.sidebar.seeded = false;
       if (anvil_sidebar_merge_recents(&shell.sidebar, paths, result->count)) {
         shell.sidebar_seeded = true;
+        restore_project_activity();
         for (size_t i = 0; i < result->count; i++) {
           const AnvilSidebarProject *source = result->projects[i];
           AnvilSidebarProject *row = anvil_sidebar_find(&shell.sidebar, source->path);
@@ -5516,7 +5558,22 @@ static void save_windows(bool final) {
     if (order[i]->closing && order[i]->close_entry_valid) entries[i] = order[i]->close_entry;
     else window_entry(order[i], &entries[i]);
   }
-  AnvilShellState state = {entries, count};
+  /* Most recent first, so the bound drops the oldest. */
+  static AnvilShellProjectActivity activity[ANVIL_SHELL_STATE_MAX_PROJECTS];
+  size_t activity_count = 0;
+  for (size_t i = 0; i < shell.sidebar.count && activity_count < SDL_arraysize(activity); i++) {
+    const AnvilSidebarProject *row = shell.sidebar.projects[i];
+    if (row->activity > 0) activity[activity_count++] = (AnvilShellProjectActivity){row->path, row->activity};
+  }
+  for (size_t i = 0; i < shell.saved_activity_count && activity_count < SDL_arraysize(activity); i++)
+    activity[activity_count++] = shell.saved_activity[i];
+  for (size_t i = 1; i < activity_count; i++)
+    for (size_t j = i; j > 0 && activity[j].activity > activity[j - 1].activity; j--) {
+      AnvilShellProjectActivity swap = activity[j];
+      activity[j] = activity[j - 1];
+      activity[j - 1] = swap;
+    }
+  AnvilShellState state = {entries, count, activity, activity_count};
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
   if (!data) {
@@ -5757,6 +5814,12 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   /* Projects from a shell that ended wait for this one. */
   static AnvilAdoptionRecord adoptable[ANVIL_ADOPTION_MAX_RECORDS];
   size_t adoptable_count = userdir ? anvil_adoption_scan(adoptable, SDL_arraysize(adoptable)) : 0;
+  /* The state file keeps the paths; the shell keeps them until the Project Sidebar lists their Projects. */
+  for (size_t i = 0; i < saved.project_count && i < SDL_arraysize(shell.saved_activity); i++) {
+    shell.saved_activity[shell.saved_activity_count++] = saved.projects[i];
+    saved.projects[i].path = NULL;
+  }
+  SDL_Log("Shell Project activity loaded: Projects=%u", (unsigned)shell.saved_activity_count);
   size_t restored = saved.count || adoptable_count ? restore_windows(&saved, adoptable, adoptable_count) : 0;
   anvil_shell_state_free(&saved);
   for (size_t i = 0; i < adoptable_count; i++) anvil_adoption_free(&adoptable[i]);

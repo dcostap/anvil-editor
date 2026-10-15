@@ -44,8 +44,8 @@ int main(void) {
     fprintf(f,
             "'..i end; return "
             "{version=1,session_id='%032x',project_path='%s',host_creation_time='0000000000000000',"
-            "status='exited',host_pid=1,cwd='%s',shell='fixture'}",
-            i, dir, dir);
+            "status='exited',host_pid=1,cwd='%s',shell='fixture',title='Session %u',activity=%u}",
+            i, dir, dir, i, 1700000000u + i);
     fclose(f);
   }
   char source[32768];
@@ -72,6 +72,9 @@ int main(void) {
   CHECK(result && result->count == 256 && !limited);
   AnvilSidebarProject *project = anvil_sidebar_find(result, dir);
   CHECK(project && project->terminal_count == 32);
+  /* The host's live title and last activity, not its shell command. */
+  CHECK(!strcmp(project->terminals[3].title, "Session 3"));
+  CHECK(project->terminals[3].activity == 1700000003);
   CHECK(anvil_sidebar_find(result, strcat(strcpy(path, dir), "/Recent-1")));
   CHECK(!anvil_sidebar_find(result, strcat(strcpy(path, dir), "/Recent-259")));
   anvil_sidebar_scan_free(job);
@@ -84,6 +87,6 @@ int main(void) {
   RemoveDirectoryA(path);
   RemoveDirectoryA(dir);
   SDL_Quit();
-  puts("PASS newest paths and independent bounded record decodes");
+  puts("PASS newest paths, live titles, activity, and independent bounded record decodes");
   return 0;
 }

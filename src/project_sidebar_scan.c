@@ -300,7 +300,12 @@ static void terminal_records(AnvilSidebarScan *job, lua_State *L) {
       terminal.attached = false;
       terminal.busy = -1;
     }
-    const char *cwd = string_field(L, "cwd"), *title = string_field(L, "shell");
+    const char *cwd = string_field(L, "cwd"), *title = string_field(L, "title");
+    lua_getfield(L, 1, "activity");
+    double activity = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0;
+    lua_pop(L, 1);
+    if (isfinite(activity) && activity > 0 && activity < 1e12)
+      terminal.activity = (int64_t)activity;
     /* Cwd is a path, not an arbitrary control payload. */
     if (cwd)
       for (const unsigned char *p = (const unsigned char *)cwd; *p; p++)

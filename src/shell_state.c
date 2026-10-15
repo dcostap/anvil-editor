@@ -6,9 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STATE_HEADER "anvil-shell-windows 2\n"
+#define STATE_HEADER "anvil-shell-windows 3\n"
+/* Version 2 had no Project activity. Its Windows still restore. */
+#define STATE_HEADER_2 "anvil-shell-windows 2\n"
 
-/* Each Window is one line: `window <id> <x> <y> <w> <h> <maximized> <path bytes> <path>`. */
+/* Each Window is one line: `window <id> <x> <y> <w> <h> <maximized> <path bytes> <path>`.
+ * Each Project activity is one line: `project <unix seconds> <path bytes> <path>`. */
 char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   if (state->count > ANVIL_SHELL_STATE_MAX_WINDOWS) return NULL;
   size_t capacity = sizeof(STATE_HEADER);
@@ -18,6 +21,13 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
     capacity += length + 96;
   }
   if (capacity > ANVIL_SHELL_STATE_MAX_BYTES) return NULL;
+  /* Project activity is best effort. Entries that do not fit are left out; Windows always fit. */
+  size_t projects = 0;
+  for (size_t i = 0; i < state->project_count && projects < ANVIL_SHELL_STATE_MAX_PROJECTS; i++, projects++) {
+    size_t length = strlen(state->projects[i].path);
+    if (length > ANVIL_SHELL_STATE_MAX_PATH || capacity + length + 48 > ANVIL_SHELL_STATE_MAX_BYTES) break;
+    capacity += length + 48;
+  }
   char *data = malloc(capacity);
   if (!data) return NULL;
   size_t n = (size_t)snprintf(data, capacity, "%s", STATE_HEADER);
@@ -28,6 +38,11 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
                           (unsigned long)window->id, (long)window->x, (long)window->y, (long)window->w, (long)window->h, window->maximized ? 1 : 0,
                           strlen(path), path);
   }
+  for (size_t i = 0; i < projects; i++) {
+    const AnvilShellProjectActivity *project = &state->projects[i];
+    n += (size_t)snprintf(data + n, capacity - n, "project %ld %zu %s\n", (long)project->activity,
+                          strlen(project->path), project->path);
+  }
   *size = n;
   return data;
 }
@@ -37,6 +52,10 @@ void anvil_shell_state_free(AnvilShellState *state) {
   free(state->windows);
   state->windows = NULL;
   state->count = 0;
+  for (size_t i = 0; i < state->project_count; i++) free(state->projects[i].path);
+  free(state->projects);
+  state->projects = NULL;
+  state->project_count = 0;
 }
 
 static bool read_long(const char **cursor, const char *end, long *value) {
@@ -55,42 +74,67 @@ static bool read_long(const char **cursor, const char *end, long *value) {
   return true;
 }
 
+/* Reads `<path bytes> <path>\n` into a new string. */
+static bool read_path(const char **cursor, const char *end, long length, char **path) {
+  if (length < 0 || length > ANVIL_SHELL_STATE_MAX_PATH || length >= end - *cursor || (*cursor)[length] != '\n' ||
+      memchr(*cursor, '\0', (size_t)length))
+    return false;
+  *path = NULL;
+  if (length) {
+    *path = malloc((size_t)length + 1);
+    if (!*path) return false;
+    memcpy(*path, *cursor, (size_t)length);
+    (*path)[length] = 0;
+  }
+  *cursor += length + 1;
+  return true;
+}
+
 bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *state) {
-  state->windows = NULL;
-  state->count = 0;
+  *state = (AnvilShellState){0};
   size_t header = strlen(STATE_HEADER);
-  if (size > ANVIL_SHELL_STATE_MAX_BYTES || size < header || memcmp(data, STATE_HEADER, header)) return false;
+  bool version_2 = size >= header && !memcmp(data, STATE_HEADER_2, header);
+  if (size > ANVIL_SHELL_STATE_MAX_BYTES || size < header || (memcmp(data, STATE_HEADER, header) && !version_2))
+    return false;
   const char *cursor = data + header, *end = data + size;
   state->windows = calloc(ANVIL_SHELL_STATE_MAX_WINDOWS, sizeof(*state->windows));
-  if (!state->windows) return false;
+  state->projects = version_2 ? NULL : calloc(ANVIL_SHELL_STATE_MAX_PROJECTS, sizeof(*state->projects));
+  if (!state->windows || (!version_2 && !state->projects)) {
+    anvil_shell_state_free(state);
+    return false;
+  }
   bool complete = true;
   while (cursor < end) {
     long values[7];
     complete = false;
+    if (!version_2 && end - cursor >= 8 && !memcmp(cursor, "project ", 8)) {
+      cursor += 8;
+      long activity, length;
+      AnvilShellProjectActivity *project = &state->projects[state->project_count];
+      if (state->project_count >= ANVIL_SHELL_STATE_MAX_PROJECTS || !read_long(&cursor, end, &activity) ||
+          activity <= 0 || !read_long(&cursor, end, &length) || length == 0 ||
+          !read_path(&cursor, end, length, &project->path))
+        break;
+      project->activity = activity;
+      state->project_count++;
+      complete = true;
+      continue;
+    }
     if (state->count >= ANVIL_SHELL_STATE_MAX_WINDOWS || end - cursor < 7 || memcmp(cursor, "window ", 7)) break;
     cursor += 7;
     bool ok = true;
     for (int i = 0; ok && i < 7; i++) ok = read_long(&cursor, end, &values[i]);
-    long length = values[6];
-    if (!ok || values[0] <= 0 || values[3] <= 0 || values[4] <= 0 || (values[5] != 0 && values[5] != 1) ||
-        length < 0 || length > ANVIL_SHELL_STATE_MAX_PATH || length >= end - cursor || cursor[length] != '\n' ||
-        memchr(cursor, '\0', (size_t)length))
-      break;
     AnvilShellWindowState *window = &state->windows[state->count];
+    if (!ok || values[0] <= 0 || values[3] <= 0 || values[4] <= 0 || (values[5] != 0 && values[5] != 1) ||
+        !read_path(&cursor, end, values[6], &window->path))
+      break;
     window->id = (uint32_t)values[0];
     window->x = values[1];
     window->y = values[2];
     window->w = values[3];
     window->h = values[4];
     window->maximized = values[5] == 1;
-    if (length) {
-      window->path = malloc((size_t)length + 1);
-      if (!window->path) break;
-      memcpy(window->path, cursor, (size_t)length);
-      window->path[length] = 0;
-    }
     state->count++;
-    cursor += length + 1;
     complete = true;
   }
   /* A partial or malformed file restores nothing. */
@@ -134,8 +178,7 @@ char *anvil_shell_file_read(const wchar_t *file, size_t limit, size_t *size) {
 }
 
 bool anvil_shell_state_load(const wchar_t *file, AnvilShellState *state) {
-  state->windows = NULL;
-  state->count = 0;
+  *state = (AnvilShellState){0};
   size_t size = 0;
   char *data = anvil_shell_file_read(file, ANVIL_SHELL_STATE_MAX_BYTES, &size);
   bool ok = data && anvil_shell_state_decode(data, size, state);
