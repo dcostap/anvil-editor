@@ -320,3 +320,45 @@ test.describe("Sidebar age groups", function()
     test.ok(label.right <= 170, "The shortened name runs past the Sidebar's edge")
   end)
 end)
+
+test.describe("Sidebar Terminal spinners", function()
+  local now = os.time()
+
+  local function view_with(title)
+    local view = SidebarView(function() end)
+    view:set_model({{row_id=1,id=1,path="C:/P",state="ready",exists=true,activity=now,terminals={
+      {id="t",title=title,cwd="C:/P",state="running",busy=1,bell=0,activity=now}}}})
+    return view
+  end
+
+  -- The Terminal title the view draws at the clock time `time`.
+  local function title_at(view, time)
+    local old_rect, old_rounded, old_text, old_clip, old_time =
+      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect, system.get_time
+    local title
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
+    renderer.draw_text = function(_, text) if text:find("GLP4") then title = text end end
+    system.get_time = function() return time end
+    local ok, err = pcall(view.draw, view, 400, 800)
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect, system.get_time =
+      old_rect, old_rounded, old_text, old_clip, old_time
+    if not ok then error(err) end
+    return test.not_nil(title, "The Terminal title is missing")
+  end
+
+  test.it("turns a working Terminal's braille spinner between title reports", function()
+    local view = view_with("\u{280B} [17 s] \u{03C0} - GLP4")
+    local first = title_at(view, 100)
+    local delay = test.not_nil(view:animation_delay(100), "The Sidebar does not ask for the spinner's next frame")
+    local second = title_at(view, 100 + delay)
+    test.ok(first ~= second, "The spinner did not turn: " .. first)
+    test.equal(first:sub(4), " [17 s] \u{03C0} - GLP4")
+    test.equal(second:sub(4), " [17 s] \u{03C0} - GLP4")
+  end)
+
+  test.it("leaves a Terminal title without a spinner still", function()
+    local view = view_with("\u{03C0} - GLP4")
+    test.equal(title_at(view, 100), "\u{03C0} - GLP4")
+    test.equal(view:animation_delay(100), nil)
+  end)
+end)

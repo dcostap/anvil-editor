@@ -221,7 +221,7 @@ function core.run_step()
     if core.session_log then core.session_log:close(); core.session_log = nil end
     return false
   end
-  local pending = false
+  local pending, spin_at = false, nil
   for id, surface in pairs(surfaces) do
     if activate(id) then
       local visible, now = system.window_should_render(core.window), system.get_time()
@@ -239,13 +239,19 @@ function core.run_step()
         surface.revision = core.project_sidebar.revision
         surface.view:set_model(core.project_sidebar, id); core.redraw = true
       end
+      -- A working Terminal's spinner turns between the host's title reports.
+      if visible and surface.spin_at and now >= surface.spin_at then core.redraw = true end
       if visible and core.redraw then
         local width, height = renwindow.get_size(core.window)
         renderer.begin_frame(core.window)
         surface.view:draw(width, height)
         renderer.end_frame()
         core.redraw = false
+        local delay = surface.view:animation_delay(now)
+        surface.spin_at = delay and now + delay
       end
+      if not visible then surface.spin_at = nil end
+      if surface.spin_at then spin_at = math.min(spin_at or math.huge, surface.spin_at) end
       pending = pending or core.project_sidebar_request ~= nil
       save()
     end
@@ -255,7 +261,9 @@ function core.run_step()
   for _, surface in pairs(surfaces) do used[surface.scale] = true end
   for scale in pairs(fonts) do if not used[scale] then fonts[scale] = nil end end
   -- Wake each minute so ages stay current.
-  if pending then system.wait_event(.01) else system.wait_event(60 - os.time() % 60) end
+  if pending then system.wait_event(.01)
+  elseif spin_at then system.wait_event(math.max(0, spin_at - system.get_time()))
+  else system.wait_event(60 - os.time() % 60) end
   return true
 end
 return core

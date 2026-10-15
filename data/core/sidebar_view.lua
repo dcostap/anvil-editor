@@ -18,6 +18,10 @@ local GROUPS = {
 }
 -- The groups take at most this part of the height below the list top.
 local GROUPS_HEIGHT = 0.4
+-- Programs such as Pi lead their title with a braille spinner frame while they work. The Terminal host reports
+-- titles at most once a second, so the Sidebar turns a leading spinner itself.
+local SPINNER = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+local SPINNER_FRAME = 0.08
 
 ---@param action fun(name: string, ...)
 ---@param collapsed table<string, boolean>? Saved collapse state, shared by every Sidebar surface.
@@ -353,6 +357,19 @@ local function fit(label, width)
 end
 
 -- Draws a label shortened before a right-aligned note, then the note.
+-- The title with its leading braille character (U+2800 to U+28FF) swapped for the spinner frame at `clock`, or nil.
+local function spinner_title(title, clock)
+  local first, second = title:byte(1, 2)
+  if first ~= 0xE2 or not second or second < 0xA0 or second > 0xA3 then return nil end
+  return SPINNER[math.floor(clock / SPINNER_FRAME) % #SPINNER + 1] .. title:sub(4)
+end
+
+-- Seconds until a drawn spinner shows its next frame, or nil when the last draw showed none.
+function SidebarView:animation_delay(clock)
+  if not self.spinning then return nil end
+  return SPINNER_FRAME - clock % SPINNER_FRAME
+end
+
 function SidebarView:label_with_note(label, color, note, x, y, row, right)
   local ty = y + (row.h - style.font:get_height()) / 2
   local note_w = note and style.font:get_width(note) + 8 * SCALE or 0
@@ -393,7 +410,10 @@ function SidebarView:draw_row(row, y, width, now)
     local color, note = terminal_status(terminal)
     local x = left + 22 * SCALE + row.depth * m.indent
     dot(x - 8 * SCALE, cy, 3 * SCALE, color)
-    self:label_with_note(terminal.title ~= "" and terminal.title or "Terminal",
+    local title = terminal.title ~= "" and terminal.title or "Terminal"
+    local spinning = terminal.state == "running" and spinner_title(title, self.clock)
+    if spinning then title, self.spinning = spinning, true end
+    self:label_with_note(title,
       terminal.state == "running" and style.text or style.dim, note or age_text(terminal.activity, now),
       x, y, row, right)
     return
@@ -414,6 +434,7 @@ end
 function SidebarView:draw(width, height)
   if width ~= self.width or height ~= self.view_h then self:set_size(width, height) end
   local now = os.time()
+  self.clock, self.spinning = system.get_time(), false
   renderer.set_clip_rect(0, 0, width, height)
   -- On a transparent surface the shell blends the panel over the Project's backdrop and wallpaper.
   renderer.draw_rect(0, 0, width, height,
