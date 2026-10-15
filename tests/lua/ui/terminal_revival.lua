@@ -88,6 +88,36 @@ test.describe("Terminal revival", function()
     test.ok(ok, err)
   end)
 
+  test.it("gives the revived shell the restored screen size", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local state = view:get_state()
+    local kernel = require("ffi").load("kernel32")
+    local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
+    local restored
+    local ok, err = pcall(function()
+      test.ok(view.session:resize(100, 30, 8, 16))
+      checkpoint_on_detach(view, state)
+      kernel.TerminateProcess(handle, 99); kernel.WaitForSingleObject(handle, 5000)
+      restored = terminal.from_state(state)
+      test.ok(wait_for(restored, function() return restored.state == "running" end), "terminal did not revive")
+      -- The View asks for the size it had before the host ended.
+      test.ok(restored.session:resize(100, 30, 8, 16))
+      test.ok(restored.session:write(
+        "powershell.exe -NoProfile -Command \"'ANVIL_COLS=' + [Console]::WindowWidth\"\r"))
+      test.ok(wait_for(restored, function()
+        return screen_text(restored):find("ANVIL_COLS=%d")
+      end), "shell did not report its width: " .. screen_text(restored))
+      test.equal(screen_text(restored):match("ANVIL_COLS=(%d+)"), "100")
+    end)
+    if restored then restored:on_close() end
+    view:on_close()
+    if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end
+    kernel.CloseHandle(handle)
+    test.ok(ok, err)
+  end)
+
   test.it("offers the interrupted child command without running it until approval", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
