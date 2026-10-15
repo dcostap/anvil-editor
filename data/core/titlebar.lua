@@ -297,7 +297,8 @@ function TitleBar:update_geometry()
   self.caption_rects = {}
   local shell_x, shell_y, shell_w, shell_h = system.get_window_controls()
   self.shell_controls = shell_x and {x = shell_x, y = shell_y, w = shell_w, h = shell_h} or nil
-  if self.shell_controls then caption_start = self.position.x + shell_x end
+  -- The shell reports its controls in surface coordinates, like the Project's own layout.
+  if self.shell_controls then caption_start = shell_x end
   for i = 1, self.shell_controls and 0 or CAPTION_COUNT do
     self.caption_rects[i] = {
       x = caption_start + (i - 1) * button_width,
@@ -429,7 +430,7 @@ function TitleBar:get_external_drop_target(x, y)
   if not self.visible or self.size.y <= 0 then return end
   local rect = {
     x = self.position.x, y = self.position.y,
-    w = math.max(0, (self.shell_controls and self.position.x + self.shell_controls.x or self.caption_rects[1] and self.caption_rects[1].x
+    w = math.max(0, (self.shell_controls and self.shell_controls.x or self.caption_rects[1] and self.caption_rects[1].x
       or self.position.x + self.size.x) - self.position.x), h = self.size.y,
   }
   if contains(rect, x, y) then return { kind = "new", area = "titlebar", rect = rect } end

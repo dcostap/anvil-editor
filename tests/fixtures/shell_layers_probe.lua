@@ -84,6 +84,8 @@ if path:match("/driver$") then
    assert(layout.content_x > 0, "the Project surface does not reserve the Sidebar")
    assert(layout.root_x == layout.content_x, "the Project UI does not start at the Sidebar edge")
    assert(layout.root_x + layout.root_w == layout.window_w, "the Project UI does not reach the Window's right edge")
+   assert(layout.tabs_right <= layout.controls_x, "the Title Bar's tabs reach " .. layout.tabs_right
+    .. ", under the Window controls at " .. layout.controls_x)
    wait(function() return trace():find("Shell Sidebar surface Ready", 1, true) end, 15, "Sidebar did not become Ready")
    if os.getenv("ANVIL_RENDERER") ~= "software" then
     wait(function() return trace():find("Shell Sidebar layer: Window=%d+ transparent=1") end, 10,
@@ -141,8 +143,10 @@ elseif path == root .. "/Project" then
  core.add_background_thread(function()
   coroutine.yield(.5)
   local width = core.window:get_size()
+  local lane, controls_x = core.title_bar.tab_lane, system.get_window_controls()
   save("layout", {pid=tonumber(kernel.GetCurrentProcessId()), content_x=system.get_window_content_x(),
-   root_x=core.root_panel.position.x, root_w=core.root_panel.size.x, window_w=width})
+   root_x=core.root_panel.position.x, root_w=core.root_panel.size.x, window_w=width,
+   tabs_right=lane.x + lane.w, controls_x=controls_x})
   wait(function() return load("overlay-go") end, 30)
   local owner = {}
   core.root_panel:show_app_overlay(owner, "nagbar_dim")
