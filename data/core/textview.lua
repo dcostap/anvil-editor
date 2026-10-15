@@ -5306,8 +5306,18 @@ function TextView:get_position_line_render_row(line, col, prefer_next)
   and affinity.selection_key == linewrapping.selection_state_key(self.buffer)
   and affinity.text_revision == (self.buffer.text_revision or 0)
   then
+    -- Affinity picks between rows that share a boundary. A render change can move the position off the chosen
+    -- row, such as a caret that reveals Markdown source that then wraps.
     local index = affinity.positions[render_position_key(line, col)]
-    if index and rows[index] then return render_line, rows[index], index end
+    local row = index and rows[index]
+    if row and col >= (row.source_col1 or 1) and col <= (row.source_col2 or col) then
+      return render_line, row, index
+    end
+    if row then
+      affinity.positions[render_position_key(line, col)] = nil
+      core.log_quiet("Dropped stale caret row affinity at %s:%d:%d: row=%d spans %s-%s",
+        self.buffer:get_name(), line, col, index, tostring(row.source_col1), tostring(row.source_col2))
+    end
   end
   local row, index = self:get_line_render_position_row(render_line, col, prefer_next)
   return render_line, row, index
