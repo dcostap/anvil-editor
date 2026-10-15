@@ -616,6 +616,31 @@ test.describe("Markdown Interactive Table Editing", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("tints the pressed cell like the rest of a dragged Table Cell Selection", function()
+    local active_cell = style.markdown_live_table_active_cell
+    local marker = { 7, 8, 9, 30 }
+    style.markdown_live_table_active_cell = marker
+    local ok, err = pcall(with_cell_selection_colors, function()
+      local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
+      buffer:set_selection(5, 1)
+      refresh(view)
+      -- The press puts a caret in the first cell, and the drag holds the
+      -- rendered rows from that moment until the button is released.
+      buffer:set_selection(3, 4)
+      view:begin_line_render_interaction("mouse-selection")
+      local paint_ok, paint_err = pcall(function()
+        test.equal(markdown_tables.select_rectangle(view, 3, 4, 3, 9), true)
+        local rects = paint_rects(view, { 3 })
+        test.equal(#(rects[marker] or {}), 0, "the pressed cell kept the active cell tint")
+        test.equal(#(rects[SELECTION_FILL] or {}), 2)
+      end)
+      view:end_line_render_interaction("mouse-release")
+      if not paint_ok then error(paint_err, 0) end
+    end)
+    style.markdown_live_table_active_cell = active_cell
+    if not ok then error(err, 0) end
+  end)
+
   test.it("shows a lone caret in an empty cell without selection paint", function()
     with_cell_selection_colors(function()
       local view, buffer = make_view("| A | B |\n| --- | --- |\n|  | two |\n\nplain")

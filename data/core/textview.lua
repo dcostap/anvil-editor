@@ -7495,10 +7495,12 @@ function TextView:draw_line_hint(line, x, y)
   return tx, draw_x, width
 end
 
-local function draw_render_fragment_background(fragment, x, y, width, height, force)
+local function draw_render_fragment_background(
+  fragment, x, y, width, height, force, skip_overlay
+)
   if fragment.background and (force or not fragment.background_under_selection) then
     renderer.draw_rect(x, y, width, height, fragment.background)
-    if fragment.background_overlay then
+    if fragment.background_overlay and not skip_overlay then
       renderer.draw_rect(x, y, width, height, fragment.background_overlay)
     end
   end
@@ -8228,6 +8230,9 @@ function TextView:iter_text_range_screen_segments(line, col1, col2, origin_x, or
   end
 end
 
+-- Defined with the Table Cell Selection drawing below.
+local fragment_in_table_cell_selection
+
 local function draw_render_line_under_selection_backgrounds(view, render_line, x, y, line)
   if not (render_line and render_line.under_selection_backgrounds) then return end
   local tx = x + (render_line.x_offset or 0)
@@ -8251,8 +8256,12 @@ local function draw_render_line_under_selection_backgrounds(view, render_line, x
             + math.max(0, (content_height - font:get_height()) / 2)
         end
       end
+      -- A rendered row can hold an active cell from the moment a drag
+      -- started; the live Table Cell Selection replaces its tint.
       draw_render_fragment_background(
-        fragment, draw_x, background_y, width, background_height, true
+        fragment, draw_x, background_y, width, background_height, true,
+        fragment.selection_replaces_overlay
+          and fragment_in_table_cell_selection(view, line, fragment)
       )
     end
     tx = draw_x + width
@@ -8662,6 +8671,13 @@ local function row_has_table_cell_selection(lookup, line, row)
   if selected == nil then return false end
   if col1 == col2 then return lookup.grouped and selected == col1 end
   return selected == col2
+end
+
+fragment_in_table_cell_selection = function(view, line, fragment)
+  return row_has_table_cell_selection(table_cell_selection_lookup(view), line, {
+    cell_source_col1 = fragment.text_source_col1,
+    cell_source_col2 = fragment.text_source_col2,
+  })
 end
 
 local function table_cell_row(rows, column)

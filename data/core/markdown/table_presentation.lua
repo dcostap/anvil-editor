@@ -1368,6 +1368,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       background = style.markdown_live_table_background,
       background_overlay = active_columns[column] and style.markdown_live_table_active_cell
         or header and style.markdown_live_table_header_background or nil,
+      selection_replaces_overlay = active_columns[column] or nil,
       background_under_selection = true,
       background_full_height = true,
       background_border_top = header and style.markdown_live_table_separator or nil,
