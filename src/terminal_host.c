@@ -589,7 +589,6 @@ int anvil_terminal_host_main(int argc, char **argv) {
   if (!anvil_ipc_pipe_init(&host.pipe, handle, ANVIL_TERMINAL_PROTOCOL_VERSION,
                           ANVIL_TERMINAL_MAX_PAYLOAD)) { handle = INVALID_HANDLE_VALUE; goto cleanup; }
   handle = INVALID_HANDLE_VALUE;
-  host.pty.cols = size.cols; host.pty.rows = size.rows;
   if (argc == 16) {
     revival_lock = registry_lock(host.id);
     if (!revival_lock || registry_host_live(&host)) { error = ERROR_PIPE_BUSY; goto cleanup; }
@@ -606,6 +605,8 @@ int anvil_terminal_host_main(int argc, char **argv) {
     host_log(&host, "revival: restored disk screen; start new shell");
   } else if (!anvil_terminal_model_new(&host.model, size.cols, size.rows, size.cell_width,
         size.cell_height, strcmp(argv[11], "-1") == 0 ? NULL : &lines)) goto cleanup;
+  /* A revived shell starts at the restored screen size, which client resizes compare against. */
+  host.pty.cols = size.cols; host.pty.rows = size.rows;
   if (!size.cols || !size.rows || size.cols > 32767 || size.rows > 32767 || !size.cell_width || !size.cell_height ||
       !anvil_conpty_start(&host.pty, argv[5], argv[6], argv[13], &error) || !write_registry(&host)) goto cleanup;
   if (revival_lock) { ReleaseMutex(revival_lock); CloseHandle(revival_lock); revival_lock = NULL; }
