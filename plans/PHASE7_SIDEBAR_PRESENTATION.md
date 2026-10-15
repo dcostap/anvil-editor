@@ -33,6 +33,33 @@ User feedback, 2026-10-15:
   Sidebar reads titles from the Terminal Session registry scan, which does not carry the live title.
 - The Sidebar does not show which Terminal Session has keyboard focus in its Project.
 
+More user feedback, 2026-10-15 (collected, not yet decided):
+
+- The Sidebar should feel modern: resizable, collapsible, with an animated collapse.
+- The PROJECTS header and the Refresh button are probably redundant. Remove that row.
+- Group Projects by age. Projects active in the last week, loaded or Dormant, sit in a top-aligned main area.
+  Older Projects go into bottom-aligned, collapsible groups such as "Older than a week" and "Older than a
+  month", below a separator. The bottom area takes at most about 40% of the height. Loading an older Project
+  moves it to the main area.
+- Each Terminal Session shows its age, for example its last activity ("20 min", "1 d").
+- A Project's age is its own activity or its newest Terminal Session's activity, whichever is later.
+- Inside a Project, older Terminal Sessions go into collapsible subgroups, collapsed by default. A Project row
+  is then at most three levels deep:
+
+  ```text
+  PROJECT
+    terminal0 (20 min)
+    terminal1 (1 d)
+    terminal2 (3 d)
+  + Older than a week
+  - Older than a month
+      terminal5 (1 month)
+  ```
+
+What exists today for ages: the recent Project list stores order only, with no time. The Terminal Session
+registry record stores the host's process creation time, not activity. The host rewrites the record when busy
+changes, on snapshots, and on attach and detach, so it could also store the time of its last activity.
+
 Facts that constrain the design:
 
 - The width is fixed at 240 points (`SHELL_SIDEBAR_POINTS`). There is no collapse.
@@ -61,7 +88,7 @@ Each item has a recommendation. Accept, change, or reject each one.
    The full path shows in a hover tooltip drawn by the Sidebar. Disambiguate equal folder names by adding the
    parent folder name in dim text. The Selected Project of this Window has the selection background.
    Alternative: two lines, with the parent path always visible.
-2. **Project status.** Recommendation: a small mark before the name instead of words.
+2. **Project status.** (May change with the age groups below.) Recommendation: a small mark before the name instead of words.
    - Selected in this Window: no mark, selection background.
    - Loaded in another Window: a hollow dot, plus that Window's number in dim text on the right.
    - Loaded in this Window but not selected: a filled dot.
@@ -90,14 +117,24 @@ Each item has a recommendation. Accept, change, or reject each one.
    points. A command and a native menu item collapse it to zero width and restore it. Width and collapse
    state apply to all Windows and are saved in the shell's state file.
    Alternative: per-Window width.
-8. **Theme.** Recommendation: new style keys in `data/colors/default.lua` for the Sidebar background, row hover,
+8. **Age groups.** Open. Needs answers to these questions first:
+   - What counts as a Project's activity, and where the shell saves it.
+   - What counts as a Terminal Session's activity: commands starting and ending, typed input, or output.
+   - Whether rows reorder as activity changes. Sorting by activity would swap rows each time the user switches
+     between two Projects. Grouping by age with a stable order inside each group would not.
+   - Where a loaded Project older than a week goes. Today loading it counts as activity, so it moves to the
+     main area.
+9. **Collapsed Sidebar.** Open: hidden completely with a Title Bar toggle, or a narrow rail. Animating the
+   width resizes the Project surface on every frame, which costs a round trip to the Project each time.
+   A prototype must show whether that stays smooth or the Project should resize once at the end.
+10. **Theme.** Recommendation: new style keys in `data/colors/default.lua` for the Sidebar background, row hover,
    status marks, and the warning mark. Other themes override them. The Sidebar process already loads the theme.
 
 ## Milestones
 
 ### 1. Row layout and status
 
-Decisions 1, 2, and 8. One-line Project rows, status marks, dim Dormant names, folder-name disambiguation,
+Decisions 1, 2, and 10. One-line Project rows, status marks, dim Dormant names, folder-name disambiguation,
 hover highlight, and the tooltip. Remove the "Right-click for Move" text and the status strings.
 Seams: in-process Lua UI tests of `SidebarView` with a fixed model (row kinds, labels, marks, hit testing,
 tooltip text). Render check through the render performance gate with a new Sidebar scenario.
