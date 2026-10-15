@@ -5533,7 +5533,12 @@ local function get_line_render_raw_col_x_offset(self, render_line, col)
       if col <= col2 then return xoffset end
     else
       local text = fragment.text or ""
-      if col < col2 and not fragment.widget then
+      -- A table cell's text that ends at its closing pipe ends inside the
+      -- cell rather than at the start of the pipe.
+      if (col < col2 or col == col2 and fragment.table_cell
+        and fragment.text_source_col2 == col2)
+      and not fragment.widget
+      then
         local text_col1 = fragment.text_source_col1
         local text_col2 = fragment.text_source_col2
         if text_col1 and text_col2 then
@@ -8851,7 +8856,7 @@ local function line_search_matches(view, line)
   return matches
 end
 
-local function draw_line_body_contents(self, line, x, y)
+function TextView:draw_line_body(line, x, y)
   local selection_color = self:get_selection_background_color()
   if not self.buffer.lines[line] then
     core.log_quiet(
@@ -9165,14 +9170,18 @@ local function draw_line_body_contents(self, line, x, y)
 end
 
 
-function TextView:draw_line_body(line, x, y)
+---Draw the body of `line` inside its horizontal region, if it owns one.
+---`draw_line_body` and its overrides then receive the scrolled x and draw
+---clipped to the region.
+---@param x number The line's unscrolled screen x
+function TextView:draw_line_body_in_region(line, x, y)
   local render_line = self.buffer.lines[line] and self:has_line_render_providers()
     and self:get_line_render(line)
   local clip = render_line and render_line.horizontal_clip
-  if not clip then return draw_line_body_contents(self, line, x, y) end
+  if not clip then return self:draw_line_body(line, x, y) end
   core.push_clip_rect(x + clip.x1, self.position.y, clip.x2 - clip.x1, self.size.y)
   local ok, height = pcall(
-    draw_line_body_contents, self, line, x - render_line_scroll_x(render_line), y
+    self.draw_line_body, self, line, x - render_line_scroll_x(render_line), y
   )
   core.pop_clip_rect()
   if not ok then error(height, 0) end
@@ -9388,7 +9397,7 @@ function TextView:draw_folded()
     elseif not drawn_bodies[entry.line] then
       drawn_bodies[entry.line] = true
       local line_y = line_origin_y(entry)
-      self:draw_line_body(entry.line, x + gw, line_y)
+      self:draw_line_body_in_region(entry.line, x + gw, line_y)
     end
   end
   self:draw_overlay()
@@ -9547,7 +9556,7 @@ function TextView:draw_wrapped()
     local first_idx = self.wrapped_line_to_idx[line]
     if first_idx then
       local y = base_y + self:get_visual_row_y_offset(first_idx) + style.padding.y
-      local drawn_height = self:draw_line_body(line, x + gw, y)
+      local drawn_height = self:draw_line_body_in_region(line, x + gw, y)
       local next_idx = self.wrapped_line_to_idx[line + 1]
       if not next_idx and line == #self.buffer.lines then next_idx = total + 1 end
       if next_idx then
@@ -9688,9 +9697,10 @@ local function draw_textview(self)
   -- right side it is redundant with the Node's clip.
   core.push_clip_rect(pos.x + gw, pos.y, self.size.x - gw, self.size.y)
   local body_start = stats and system.get_time()
+  local line_x = self:get_content_offset() + gw
   for i = minline, maxline do
-    local line_x, line_y = self:get_line_screen_position(i)
-    self:draw_line_body(i, line_x, line_y)
+    local _, line_y = self:get_line_screen_position(i)
+    self:draw_line_body_in_region(i, line_x, line_y)
   end
   if stats then stats.body_ms = stats.body_ms + (system.get_time() - body_start) * 1000 end
   perf_scope_end(phase_scope)

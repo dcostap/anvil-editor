@@ -61,8 +61,10 @@ function Preview:draw(x, y, width, height)
   for entry in self:iter_visible_visual_rows() do
     if entry.line >= self.target_line and not drawn[entry.line] then
       drawn[entry.line] = true
-      local tx, ty = self:get_line_screen_position(entry.line)
-      self:draw_line_body(entry.line, tx, ty)
+      local _, ty = self:get_line_screen_position(entry.line)
+      self:draw_line_body_in_region(
+        entry.line, self:get_content_offset() + self:get_gutter_width(), ty
+      )
     end
   end
   core.pop_clip_rect()
