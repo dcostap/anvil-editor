@@ -248,6 +248,8 @@ local function normalize_runs(line_text, pieces)
       run.underline = piece.underline
       run.plain = piece.plain
       run.link = piece.link ~= nil or nil
+      -- A clickable piece, such as a link, stays a hover and click target.
+      run.target = piece.on_mouse_pressed and piece or nil
       return run
     end
     if piece.hidden or not piece.text then
@@ -421,6 +423,7 @@ local function wrap_runs(runs, width, empty_col)
           exact = token.exact or nil, hidden = token.hidden or nil,
           font = run.font, color = run.color, background = run.background,
           strikethrough = run.strikethrough, underline = run.underline,
+          target = run.target,
         }
       end
     end

@@ -1,4 +1,5 @@
 local command = require "core.command"
+local common = require "core.common"
 local config = require "core.config"
 local core = require "core"
 local Buffer = require "core.buffer"
@@ -624,6 +625,33 @@ test.describe("Markdown Interactive Table Editing", function()
       test.equal(fills, 0)
       test.equal(outlines, 0)
     end)
+  end)
+
+  test.it("opens a link in a table cell from its rendered text", function()
+    local view, buffer = make_view(
+      "| A | B |\n| --- | --- |\n| one | see [notes](https://example.com) |\n\nplain"
+    )
+    buffer:set_selection(5, 1)
+    refresh(view)
+    local old_open = common.open_in_system
+    local opened
+    common.open_in_system = function(path) opened = path return true end
+    local ok, err = pcall(function()
+      local function point(word)
+        local x, y = view:get_line_screen_position(3, buffer.lines[3]:find(word, 1, true))
+        return x + 3, y + 3
+      end
+      local x, y = point("see")
+      view:on_mouse_moved(x, y, 0, 0)
+      test.equal(view.cursor, "ibeam")
+      x, y = point("notes")
+      view:on_mouse_moved(x, y, 0, 0)
+      test.equal(view.cursor, "hand")
+      view:on_mouse_pressed("left", x, y, 1)
+      test.equal(opened, "https://example.com")
+    end)
+    common.open_in_system = old_open
+    if not ok then error(err, 0) end
   end)
 
   test.it("does not frame a link's hidden bracket in a selected cell", function()

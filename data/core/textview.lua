@@ -4861,11 +4861,40 @@ function TextView:resolve_line_render(line)
   return resolved
 end
 
+---Return the clickable run under (`x`, `y`), such as a link inside a
+---Markdown table cell. Its target acts as a render fragment.
+local function render_run_target_at(view, line, render_line, x, y)
+  local rows = render_line.position_rows
+  if type(rows) ~= "table" then return nil end
+  local line_x, line_y = view:get_line_screen_position(line)
+  local xrel = x - line_x
+  if not render_line_clip_contains(render_line, xrel - render_line_scroll_x(render_line)) then
+    return nil
+  end
+  xrel = xrel - (render_line.x_offset or 0)
+  local yrel = y - line_y
+  for _, row in ipairs(rows) do
+    local top = row.y_offset or 0
+    if row.runs and yrel >= top and yrel < top + (row.height or 0) then
+      for _, run in ipairs(row.runs) do
+        local left = (row.x_offset or 0) + (run.x or 0)
+        if run.target and not run.hidden
+        and xrel >= left and xrel < left + (run.width or 0)
+        then
+          return { line = line, fragment = run.target }
+        end
+      end
+    end
+  end
+end
+
 function TextView:get_render_fragment_at_position(x, y)
   if not self:has_line_render_providers() then return nil end
   local line, col = self:resolve_screen_position(x, y)
   local render_line = self:get_line_render(line)
   if not render_line then return nil end
+  local run_hit = render_run_target_at(self, line, render_line, x, y)
+  if run_hit then return run_hit end
   if self.wrapped_settings and not render_line.disable_wrapping then
     local idx, _, _, row_start = linewrapping.get_line_idx_col_count(self, line, col)
     local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
@@ -7495,6 +7524,14 @@ local function draw_render_text_runs(runs, x, y, reference_font, default_color)
         local padding = math.max(1, common.round(SCALE * 2))
         renderer.draw_rect(
           run_x - padding, y, run.width + padding * 2, reference_height, run.background
+        )
+      end
+      if run.target and fragment_is_hovered(run.target)
+      and fragment_uses_hand_cursor(run.target)
+      then
+        renderer.draw_rect(
+          run_x, y, run.width, reference_height,
+          run.target.hover_background or style.interactive_hover_background
         )
       end
       local color = run.color or default_color
