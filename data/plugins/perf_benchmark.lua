@@ -1048,6 +1048,9 @@ local function fail(err)
   end)
 end
 
+-- Video scenarios that open a second note and capture its first frames.
+local OPEN_SCENARIOS = { ["markdown-open"] = true, ["markdown-open-long"] = true }
+
 local function record_video()
   assert(benchmark.video_dir ~= "", "video output directory is required")
   local view = assert(benchmark.view)
@@ -1059,6 +1062,7 @@ local function record_video()
   local pending_y, ready_y
 
   local function capture(stage)
+    local capture_started = system.get_time()
     frame_count = frame_count + 1
     local path = benchmark.video_dir .. PATHSEP .. string.format("frame-%04d.png", frame_count)
     if not software then
@@ -1076,12 +1080,19 @@ local function record_video()
       assert(ok, err)
     end
     assert(system.get_file_info(path), "video frame was not saved: " .. path)
+    if OPEN_SCENARIOS[benchmark.scenario] then
+      core.log_quiet("Markdown open video: frame %d %s took %.1fms",
+        frame_count, stage, (system.get_time() - capture_started) * 1000)
+    end
     local status = model.peek(view.buffer).status
     local line = #view.buffer.lines
     local row = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line] or line
     local y = view:get_visual_row_y_offset(row)
     local indent = view.buffer.lines[2]:match("^( *)")
     local callout_rows, callout_heights, blank_height, provenance, blank_render = 0, "", 0, "", ""
+    if OPEN_SCENARIOS[benchmark.scenario] then
+      provenance = (view:get_line_render(1) or {}).markdown_provenance or "raw"
+    end
     if benchmark.scenario == "markdown-callout-shift" then
       local callout_line = stage == "before" and 1 or 2
       callout_rows = view:get_visual_row_count_for_line(callout_line)
@@ -1266,6 +1277,20 @@ local function record_video()
   end
   if benchmark.scenario == "markdown-table-tour" then
     -- Captured above.
+  elseif OPEN_SCENARIOS[benchmark.scenario] then
+    -- Open a second note from this coroutine, like a click before the next
+    -- frame. Its first frame should already show rendered Markdown.
+    local opened = system.get_time()
+    view = open_file(common.dirname(benchmark.fixture) .. PATHSEP .. "markdown-open-note.md")
+    local open_ms = (system.get_time() - opened) * 1000
+    view.active_window_has_focus = function() return true end
+    benchmark.action_count = 1
+    capture("opened")
+    core.log_quiet(
+      "Markdown open video: opened in %.1fms, first frame after %.1fms with semantics %s",
+      open_ms, (system.get_time() - opened) * 1000, model.peek(view.buffer).status
+    )
+    benchmark.video_reproduced = (view:get_line_render(1) or {}).markdown_provenance ~= "current"
   elseif benchmark.scenario == "markdown-callout-shift" then
     -- The in-process test inspects pending presentation before worker delivery.
     local drain_limit = config.worker_pool_drain_max_messages

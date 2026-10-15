@@ -177,6 +177,42 @@ SCENARIOS["markdown-table-tour"] = dict(
     SCENARIOS["markdown-callout-shift"], fixture="video-table",
     window_width=900, window_height=560,
 )
+# A typical note settles its first parse before its first frame. A long
+# note parses in its worker and lays out its visible lines first.
+SCENARIOS["markdown-open"] = dict(
+    SCENARIOS["markdown-callout-shift"], fixture="video-open",
+    window_width=900, window_height=560, open_sections=5,
+)
+SCENARIOS["markdown-open-long"] = dict(SCENARIOS["markdown-open"], open_sections=24)
+OPEN_NOTE_SECTION = """## Section {index}
+
+A paragraph with **bold**, *italic*, `code`, a [link](https://example.com/{index}) and a
+[[wiki link {index}]]. It is long enough to wrap across more than one visual row in the view.
+
+- [ ] Open task {index}
+- [x] Done task {index}
+    - Nested item with ==highlight==
+
+> [!NOTE] Callout {index}
+> Callout body text.
+
+| Name | Value |
+| --- | ---: |
+| alpha | {index} |
+
+```lua
+local value = {index}
+```
+
+"""
+
+
+def open_note_source(sections: int) -> str:
+    return "# Opened note\n\n" + "".join(
+        OPEN_NOTE_SECTION.format(index=index) for index in range(1, sections + 1)
+    )
+
+
 TABLE_TOUR_SOURCE = """# Project status
 
 Some intro paragraph before the table.
@@ -881,6 +917,8 @@ def run_case(
         case_fixture = work / "fixtures" / "markdown-task.md"
     elif settings.get("fixture") == "video-table":
         case_fixture = work / "fixtures" / "markdown-table.md"
+    elif settings.get("fixture") == "video-open":
+        case_fixture = work / "fixtures" / "markdown-open-start.md"
     if settings.get("fixture") == "external":
         if not external_fixture:
             raise RuntimeError(f"scenario {scenario} requires an external specimen")
@@ -1741,6 +1779,12 @@ def main() -> int:
         elif scenario == "markdown-table-tour":
             fixture_name = "markdown-table.md"
             source = TABLE_TOUR_SOURCE
+        elif SCENARIOS[scenario].get("fixture") == "video-open":
+            fixture_name = "markdown-open-start.md"
+            source = "# Start\n\nThe note opened before the measured open.\n"
+            (work / "fixtures" / "markdown-open-note.md").write_text(
+                open_note_source(SCENARIOS[scenario]["open_sections"]), encoding="utf-8"
+            )
         else:
             fixture_name = "markdown-task.md"
             source = "- [ ] parent\n    - [ ] \n    - [ ] sibling\nplain\n"

@@ -314,6 +314,16 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 2), "bold")
   end)
 
+  test.it("draws a newly opened note rendered in its first frame", function()
+    local view, buffer = make_view("# Title\n**bold**\nplain", "opened-note.md")
+    buffer:set_selection(3, 1)
+    markdown.live_render.refresh_view(view)
+    -- Each frame finishes quick parses after input and before drawing.
+    markdown_model.settle_pending()
+    test.equal(visible_render_text(view, 1), "Title")
+    test.equal(visible_render_text(view, 2), "bold")
+  end)
+
   test.it("keeps an edited formatted paragraph rendered while semantics are pending", function()
     local view, buffer = make_view("Before **bold** after\nplain", "pending-edit.md")
     buffer:set_selection(2, 1)

@@ -17,6 +17,13 @@ local METADATA_LISTENER_ID = "markdown-semantic-model"
 -- Input-thread time each frame may spend finishing pending parses before
 -- it draws. A slower parse falls back to its worker job.
 local SETTLE_BUDGET_MS = 8
+-- An opened Buffer's first parse may take longer, once, so its first frame
+-- draws rendered Markdown instead of its raw source.
+local FIRST_PARSE_BUDGET_MS = 20
+-- That first frame lays out every rendered line of the Buffer at once. A
+-- longer Buffer leaves its first parse to the worker and shows its source
+-- until the background layout of its rendered lines is ready.
+local FIRST_PARSE_MAX_LINES = 400
 local settle_queue = setmetatable({}, { __mode = "k" })
 
 local function active_perf()
@@ -446,12 +453,19 @@ function Model:settle(budget_ms)
   then
     return nil
   end
-  -- A first parse has no tree to reuse, so it goes to the worker. Without a
-  -- listener nothing draws this Buffer.
-  if not self.result or not next(self.listeners) then return nil end
+  -- Without a listener nothing draws this Buffer.
+  if not next(self.listeners) then return nil end
+  local first = not self.result
+  if first and #self:buffer().lines > FIRST_PARSE_MAX_LINES then
+    core.log_quiet(
+      "Markdown model left first parse of %d lines to its worker",
+      #self:buffer().lines
+    )
+    return nil
+  end
   -- The last incremental parse predicts this one. Leave a slow Buffer to
   -- its worker instead of spending the budget on a likely miss.
-  if self.diagnostics.last_incremental_ms >= budget_ms then
+  if not first and self.diagnostics.last_incremental_ms >= budget_ms then
     self.diagnostics.settle_skipped = self.diagnostics.settle_skipped + 1
     return nil
   end
@@ -462,7 +476,7 @@ function Model:settle(budget_ms)
   local elapsed = elapsed_ms(started)
   if not result then
     self.diagnostics.settle_misses = self.diagnostics.settle_misses + 1
-    if over_budget then
+    if over_budget and not first then
       -- Skip later attempts until a worker publication reports a fast parse.
       self.diagnostics.last_incremental_ms = math.max(
         self.diagnostics.last_incremental_ms, budget_ms
@@ -480,8 +494,8 @@ function Model:settle(budget_ms)
   self.parse_generation = self.parse_generation + 1
   self.diagnostics.settled = self.diagnostics.settled + 1
   core.log_quiet(
-    "Markdown model settled revision %d on the input thread in %.2fms",
-    submission.revision, elapsed
+    "Markdown model settled %s %d on the input thread in %.2fms",
+    first and "first parse of revision" or "revision", submission.revision, elapsed
   )
   self:publish(
     result, submission.revision, submission.signature,
@@ -792,8 +806,14 @@ function model.settle_pending()
   local spent = 0
   local pending = {}
   for instance in pairs(settle_queue) do pending[#pending + 1] = instance end
+  -- The Buffer the user looks at settles before the others.
+  local active = core.active_view and core.active_view.buffer
+  table.sort(pending, function(a, b)
+    return active ~= nil and a:buffer() == active and b:buffer() ~= active
+  end)
   for _, instance in ipairs(pending) do
-    local remaining = SETTLE_BUDGET_MS - spent
+    local budget = instance.result and SETTLE_BUDGET_MS or FIRST_PARSE_BUDGET_MS
+    local remaining = budget - spent
     if remaining < 1 then
       -- The frame budget is spent. Leave the rest to their workers.
       instance.pending_submission = nil

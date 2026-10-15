@@ -325,6 +325,18 @@ handle drag and drop, a hovered and a dragged column handle, a rectangle of Tabl
 scrollbar. It asserts nothing about pixels;
 inspect the numbered PNG frames. `frames.csv` names the stage of each frame.
 
+The open replays open a second note the way a click does and capture its first frames:
+
+```sh
+python tools/run_render_perf_gate.py --scenario markdown-open --video --no-build --renderer software
+python tools/run_render_perf_gate.py --scenario markdown-open-long --video --no-build --renderer software
+```
+
+`markdown-open` opens a typical note of about 100 lines. `markdown-open-long` opens one
+of about 480 lines. The `provenance` column of `frames.csv` is `current` for a frame
+that draws rendered Markdown. The terminal reports `yes` when the first frame after the
+open drew its source instead. The app log records how long each frame took to capture.
+
 The video scenarios are not in any normal suite. `--video` requires one video-enabled scenario.
 The runner performs the edit in its private app and captures renderer frames.
 The private video View draws its caret as if focused; the runner never focuses the user's window.
