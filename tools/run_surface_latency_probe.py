@@ -162,7 +162,8 @@ def main() -> int:
     renderers = args.renderer or ["d3d11", "software"]
     modes = args.mode or ["direct", "shell"]
 
-    work = Path(tempfile.mkdtemp(prefix="anvil-surface-latency-"))
+    # Projects report long paths. A TEMP with an 8.3 short name would not match them.
+    work = Path(tempfile.mkdtemp(prefix="anvil-surface-latency-")).resolve()
     try:
         exe = copy_app_tree(work / "app")
         if args.reference_exe:
