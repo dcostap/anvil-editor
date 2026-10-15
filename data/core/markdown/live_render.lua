@@ -1401,6 +1401,7 @@ revealed_link_fragments = function(view, line_text, line, span, opts)
       color = style.markdown_live_hidden_syntax,
       font = opts and opts.base_font or nil,
       semantic_id = span.semantic_id .. ":syntax:" .. col1,
+      markdown_link_syntax = true,
     }
   end
   marker(span.col1, linked_col1)
@@ -3114,6 +3115,19 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
     end
     if contains then owner_index = i break end
   end
+  -- Text typed against a link's syntax marker belongs to the text before it.
+  -- The parser publishes it there, so the pending frame must keep its style.
+  if owner_index and owner_index > 1 and start_col == end_col then
+    local owner = render_line.fragments[owner_index]
+    local previous = render_line.fragments[owner_index - 1]
+    if owner.markdown_link_syntax and (owner.source_col1 or 1) == start_col
+      and previous.source_col2 == start_col
+      and not (previous.hidden or previous.widget or previous.width
+        or previous.text_x_offset)
+    then
+      owner_index = owner_index - 1
+    end
+  end
   local owner = owner_index and render_line.fragments[owner_index]
   if owner and owner.markdown_task_checkbox
     and replacement:match("^%[[ xX]%]$")
@@ -3198,6 +3212,16 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
       if fragment.markdown_reveal_col2 >= end_col then
         fragment.markdown_reveal_col2 = fragment.markdown_reveal_col2 + delta
       end
+    end
+    -- Image rows split the line at these columns. Text typed at the end
+    -- of the image source stays outside that source.
+    if fragment.image_block_col1 and fragment.image_block_col1 >= end_col then
+      fragment.image_block_col1 = fragment.image_block_col1 + delta
+    end
+    if fragment.image_block_col2 and fragment.image_block_col2 >= end_col
+      and fragment.image_block_col2 > start_col
+    then
+      fragment.image_block_col2 = fragment.image_block_col2 + delta
     end
   end
   current_text = current_text:sub(1, start_col - 1)
@@ -3510,7 +3534,9 @@ function edit_visual_projection.pending_list_render(
       local col1 = fragment.source_col1 or 1
       if col1 >= old_prefix.content_col
         and not edit_visual_projection.is_list_prefix_fragment(fragment)
-        and not fragment.widget
+        -- Image blocks own the item's lower rows. Dropping one collapses
+        -- the item until publication restores it.
+        and (not fragment.widget or fragment.image_block)
       then
         local copy = {}
         for key, value in pairs(fragment) do copy[key] = value end
@@ -4391,8 +4417,8 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     if render.position_rows then
       render.position_rows = nil
       render.layout_height = nil
-      render = layout_inline_image_rows(view, source, render)
     end
+    render = layout_inline_image_rows(view, source, render)
     render.markdown_pending_code_background = captured and captured.fenced
       or render.markdown_code_block or nil
     local entry = pending_entry(

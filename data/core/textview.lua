@@ -5028,11 +5028,24 @@ function TextView:get_render_widget_at_position(x, y)
       local width = widget and (fragment.hit_width or widget.width or fragment.width)
         or fragment.width or font:get_width(text, { tab_offset = tx })
       if widget then
+        -- Inline widgets draw on their own position row. Centering them in
+        -- the complete line puts the hit area below them, over any image.
+        local col1 = fragment.source_col1 or 1
+        local position_row = render_line.position_rows
+          and not render_line.position_rows_draw_full_line
+          and not fragment.image_block
+          and self:get_line_render_position_row(
+            render_line, col1, (fragment.source_col2 or col1) > col1
+          ) or nil
         local left, top, hit_width, hit_height = render_widget_rect(
           fragment,
-          fragment.layout_x ~= nil and fragment.layout_x or tx,
-          content_y_offset,
-          content_height
+          fragment.layout_x ~= nil and fragment.layout_x
+            or position_row and self:get_line_render_col_x_offset(
+              render_line, col1, position_row
+            )
+            or tx,
+          position_row and (position_row.y_offset or 0) or content_y_offset,
+          position_row and (position_row.height or row_height) or content_height
         )
         widget_hits[#widget_hits + 1] = {
           fragment = fragment, widget = widget,

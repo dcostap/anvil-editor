@@ -9,9 +9,15 @@ local model = {}
 local Model = {}
 Model.__index = Model
 
+local native_ok, native_pool = pcall(require, "worker_pool_native")
+
 local models_by_buffer = setmetatable({}, { __mode = "k" })
 local MARKDOWN_EXTENSIONS = { md = true, markdown = true, mdown = true }
 local METADATA_LISTENER_ID = "markdown-semantic-model"
+-- Input-thread time each frame may spend finishing pending parses before
+-- it draws. A slower parse falls back to its worker job.
+local SETTLE_BUDGET_MS = 8
+local settle_queue = setmetatable({}, { __mode = "k" })
 
 local function active_perf()
   local perf = package.loaded["core.perf"]
@@ -51,6 +57,22 @@ local function source_text(buffer)
   return table.concat(buffer and buffer.lines or {})
 end
 
+local function parse_payload(text, previous_result)
+  return {
+    text = text,
+    outline_query = queries.block,
+    usage_query = queries.inline,
+    parse_timeout_ms = 5000,
+    query_timeout_ms = 1000,
+    usage_query_timeout_ms = 5000,
+    match_limit = 200000,
+    max_captures = 200000,
+    usage_match_limit = 200000,
+    usage_max_captures = 200000,
+    previous_result = previous_result,
+  }
+end
+
 function Model:new(buffer)
   return setmetatable({
     buffer_ref = weak_buffer(buffer),
@@ -87,6 +109,10 @@ function Model:new(buffer)
       incremental_publications = 0,
       reused_block_captures = 0,
       reused_inline_regions = 0,
+      last_incremental_ms = 0,
+      settled = 0,
+      settle_misses = 0,
+      settle_skipped = 0,
     },
   }, self)
 end
@@ -243,6 +269,7 @@ function Model:publish(result, revision, signature, generation, changed_range)
   self.diagnostics.last_parse_ms = summary.metrics and summary.metrics.parse_ms or 0
   self.diagnostics.last_total_ms = summary.metrics and summary.metrics.total_ms or 0
   if summary.metrics and summary.metrics.incremental then
+    self.diagnostics.last_incremental_ms = self.diagnostics.last_total_ms
     self.diagnostics.incremental_publications = self.diagnostics.incremental_publications + 1
     self.diagnostics.reused_block_captures = self.diagnostics.reused_block_captures
       + (summary.metrics.reused_block_captures or 0)
@@ -359,19 +386,7 @@ function Model:submit(reason)
     native = true,
     native_kind = "markdown_parse",
     generation = generation,
-    native_payload = {
-      text = text,
-      outline_query = queries.block,
-      usage_query = queries.inline,
-      parse_timeout_ms = 5000,
-      query_timeout_ms = 1000,
-      usage_query_timeout_ms = 5000,
-      match_limit = 200000,
-      max_captures = 200000,
-      usage_match_limit = 200000,
-      usage_max_captures = 200000,
-      previous_result = self.result,
-    },
+    native_payload = parse_payload(text, self.result),
     is_stale = function()
       return not self:is_current(revision, signature, generation)
     end,
@@ -405,12 +420,74 @@ function Model:submit(reason)
     return false, err
   end
   self.request = handle
+  self.pending_submission = {
+    text = text, revision = revision, signature = signature,
+    generation = generation, changed_range = changed_range,
+  }
+  settle_queue[self] = true
   core.log_quiet(
     "Markdown model scheduled generation=%d revision=%d bytes=%d reason=%s",
     generation, revision, #text, tostring(reason or "initial")
   )
   self:notify("pending")
   return true
+end
+
+-- Finish the pending parse on the input thread when it fits the budget, so
+-- the next frame draws from real semantics instead of an edit projection.
+-- Returns the elapsed milliseconds when it tried to parse.
+function Model:settle(budget_ms)
+  local submission = self.pending_submission
+  self.pending_submission = nil
+  settle_queue[self] = nil
+  if not (submission and native_ok and native_pool.markdown_parse_now) then return nil end
+  if self.status ~= "pending"
+    or not self:is_current(submission.revision, submission.signature, submission.generation)
+  then
+    return nil
+  end
+  -- A first parse has no tree to reuse, so it goes to the worker. Without a
+  -- listener nothing draws this Buffer.
+  if not self.result or not next(self.listeners) then return nil end
+  -- The last incremental parse predicts this one. Leave a slow Buffer to
+  -- its worker instead of spending the budget on a likely miss.
+  if self.diagnostics.last_incremental_ms >= budget_ms then
+    self.diagnostics.settle_skipped = self.diagnostics.settle_skipped + 1
+    return nil
+  end
+  local started = system.get_time()
+  local result, err, over_budget = native_pool.markdown_parse_now(
+    parse_payload(submission.text, self.result), math.max(1, math.floor(budget_ms))
+  )
+  local elapsed = elapsed_ms(started)
+  if not result then
+    self.diagnostics.settle_misses = self.diagnostics.settle_misses + 1
+    if over_budget then
+      -- Skip later attempts until a worker publication reports a fast parse.
+      self.diagnostics.last_incremental_ms = math.max(
+        self.diagnostics.last_incremental_ms, budget_ms
+      )
+    end
+    core.log_quiet(
+      "Markdown model left revision %d to its worker after %.2fms: %s",
+      submission.revision, elapsed, tostring(err)
+    )
+    return elapsed
+  end
+  -- The worker job parses the same text. Retire its generation so a late
+  -- result cannot publish this revision a second time.
+  self:cancel_request("settled on input thread")
+  self.parse_generation = self.parse_generation + 1
+  self.diagnostics.settled = self.diagnostics.settled + 1
+  core.log_quiet(
+    "Markdown model settled revision %d on the input thread in %.2fms",
+    submission.revision, elapsed
+  )
+  self:publish(
+    result, submission.revision, submission.signature,
+    self.parse_generation, submission.changed_range
+  )
+  return elapsed
 end
 
 function Model:schedule(reason, transaction)
@@ -683,6 +760,8 @@ function Model:close(reason)
   if buffer and buffer.remove_metadata_listener then buffer:remove_metadata_listener(METADATA_LISTENER_ID) end
   self:cancel_request(reason or "close")
   self.parse_generation = self.parse_generation + 1
+  self.pending_submission = nil
+  settle_queue[self] = nil
   if self.result then self.result:close() end
   self.result = nil
   self.listeners = {}
@@ -705,6 +784,24 @@ function model.get(buffer, opts)
   end
   if opts.ensure ~= false then current:ensure() end
   return current
+end
+
+-- Called once per frame after input and before layout and drawing.
+function model.settle_pending()
+  if not next(settle_queue) then return end
+  local spent = 0
+  local pending = {}
+  for instance in pairs(settle_queue) do pending[#pending + 1] = instance end
+  for _, instance in ipairs(pending) do
+    local remaining = SETTLE_BUDGET_MS - spent
+    if remaining < 1 then
+      -- The frame budget is spent. Leave the rest to their workers.
+      instance.pending_submission = nil
+      settle_queue[instance] = nil
+    else
+      spent = spent + (instance:settle(remaining) or 0)
+    end
+  end
 end
 
 function model.peek(buffer)

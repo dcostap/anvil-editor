@@ -25,7 +25,7 @@ end
 local function make_view(context, source, opts)
   opts = opts or {}
   serial = serial + 1
-  local name = "markdown-frame-coherence-" .. serial .. ".md"
+  local name = opts.filename or ("markdown-frame-coherence-" .. serial .. ".md")
   local buffer = Buffer(name, name, true)
   buffer:insert(1, 1, source)
   buffer:clear_undo_redo()
@@ -114,6 +114,34 @@ test.describe("Markdown frame coherence", function()
       provider:line_background(view, 1),
       "the quote background disappeared before semantic publication"
     )
+  end)
+
+  test.it("draws the frame after a keystroke from the published parse", function(context)
+    local view, buffer, instance = make_view(
+      context, "# Heading with **bold** text\nplain"
+    )
+    buffer:set_selection(1, #buffer.lines[1])
+    view:get_line_render(1)
+
+    view:on_text_input("!")
+    test.equal(instance.status, "pending")
+
+    local poll_event = system.poll_event
+    system.poll_event = function() return nil end
+    local ok, err = pcall(core.step, system.get_time(), { immediate = true })
+    system.poll_event = poll_event
+    if not ok then error(err, 0) end
+
+    test.equal(instance.status, "ready", "the frame drew before its parse published")
+    test.equal(instance.published_revision, buffer.text_revision)
+    local generation = instance.generation
+    local pool = worker_pool.current_system()
+    local deadline = system.get_time() + 0.2
+    while system.get_time() < deadline do
+      if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
+      coroutine.yield(0.005)
+    end
+    test.equal(instance.generation, generation, "the worker published the same revision again")
   end)
 
   test.it("keeps heading inline presentation unchanged at publication", function(context)
@@ -396,5 +424,147 @@ test.describe("Markdown frame coherence", function()
         pending, published
       )
     )
+  end)
+
+  test.it("keeps a list item's image rendered while typing in that item", function(context)
+    config.markdown_live_render_images = true
+    canvas.load_image_data = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local view, buffer, instance = make_view(
+      context, "- item ![Logo](data:image/png;base64,iVBORw0K) after\nnext line"
+    )
+    buffer:set_selection(1, #"- item" + 1)
+    view:get_line_render(1)
+    local _, idle_next_y = view:get_line_screen_position(2)
+
+    view:on_text_input("x")
+
+    test.equal(instance.status, "pending")
+    local pending = visible_signature(view, 1)
+    local _, pending_next_y = view:get_line_screen_position(2)
+    wait_ready(instance)
+    local published = visible_signature(view, 1)
+    test.equal(
+      pending, published,
+      string.format(
+        "the list item changed from %q to %q at publication",
+        pending, published
+      )
+    )
+    test.equal(
+      pending_next_y, idle_next_y,
+      "the following line moved while the list item edit was pending"
+    )
+  end)
+
+  test.it("hides an image link's source in the frame after typing past it", function(context)
+    config.markdown_live_render_images = true
+    local image_path = USERDIR .. PATHSEP .. "frame-coherence-reveal.png"
+    local file = test.not_nil(io.open(image_path, "wb"))
+    file:write("png")
+    file:close()
+    local load_image = canvas.load_image
+    canvas.load_image = function()
+      local image = { get_size = function() return 300, 120 end }
+      image.scaled = function() return image end
+      return image
+    end
+    local poll_event = system.poll_event
+    local ok, err = pcall(function()
+      local link = "![[frame-coherence-reveal.png]]"
+      local view, buffer, instance = make_view(
+        context, "before " .. link .. "\nnext line",
+        {
+          wrapped = true,
+          filename = USERDIR .. PATHSEP .. "frame-coherence-reveal.md",
+        }
+      )
+      buffer:set_selection(1, #"before " + #link + 1)
+      view:get_line_render(1)
+      view:update()
+      test.ok(
+        visible_signature(view, 1):find(link, 1, true),
+        "the caret beside the link did not reveal its source"
+      )
+
+      view:on_text_input("x")
+      system.poll_event = function() return nil end
+      core.step(system.get_time(), { immediate = true })
+      system.poll_event = poll_event
+
+      local drawn = visible_signature(view, 1)
+      test.equal(drawn:find(link, 1, true), nil, "the frame still showed the link source")
+      wait_ready(instance)
+      test.equal(drawn, visible_signature(view, 1), "publication changed the line again")
+    end)
+    system.poll_event = poll_event
+    canvas.load_image = load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("keeps a revealed image link in place while typing before it", function(context)
+    config.markdown_live_render_images = true
+    local image_path = USERDIR .. PATHSEP .. "frame-coherence-image.png"
+    local file = test.not_nil(io.open(image_path, "wb"))
+    file:write("png")
+    file:close()
+    local load_image = canvas.load_image
+    canvas.load_image = function()
+      local image = { get_size = function() return 300, 120 end }
+      image.scaled = function() return image end
+      return image
+    end
+    local ok, err = pcall(function()
+      local view, buffer, instance = make_view(
+        context, "before ![[frame-coherence-image.png]] after text\nnext line",
+        {
+          wrapped = true,
+          filename = USERDIR .. PATHSEP .. "frame-coherence-image-link.md",
+        }
+      )
+      buffer:set_selection(1, #"before " + 1)
+      view:get_line_render(1)
+      view:update()
+
+      view:on_text_input("x")
+
+      test.equal(instance.status, "pending")
+      local function geometry()
+        local columns = {}
+        for col = 1, #buffer.lines[1] do
+          local x, y = view:get_line_screen_position(1, col)
+          columns[col] = string.format("%.2f,%.2f", x, y)
+        end
+        local typed
+        for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+          local col1 = fragment.source_col1 or 1
+          if col1 <= #"before " + 1 and #"before " + 1 < (fragment.source_col2 or col1) then
+            typed = fragment.color
+          end
+        end
+        return columns, typed
+      end
+      local pending, pending_color = geometry()
+      wait_ready(instance)
+      local published, published_color = geometry()
+      for col = 1, #published do
+        test.equal(
+          pending[col], published[col],
+          string.format("column %d moved at publication", col)
+        )
+      end
+      test.equal(
+        pending_color, published_color,
+        "the typed character changed color at publication"
+      )
+    end)
+    canvas.load_image = load_image
+    os.remove(image_path)
+    if not ok then error(err, 0) end
   end)
 end)

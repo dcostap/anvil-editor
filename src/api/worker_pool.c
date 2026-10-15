@@ -2477,8 +2477,50 @@ static const luaL_Reg markdown_vault_snapshot_methods[] = {
   { NULL, NULL }
 };
 
+/* Parses Markdown on the calling thread within a budget. Returns the same
+ * result handle as a markdown_parse job, or nil, an error, and whether the
+ * budget ran out. */
+static int f_markdown_parse_now(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  uint32_t budget_ms = (uint32_t)luaL_checkinteger(L, 2);
+  AnvilWorkerJobSpec spec;
+  memset(&spec, 0, sizeof(spec));
+  spec.kind = "markdown_parse";
+  spec.text = opt_lstring_field(L, 1, "text", &spec.text_len);
+  luaL_argcheck(L, spec.text != NULL, 1, "Markdown parse requires text");
+  spec.outline_query = opt_lstring_field(L, 1, "outline_query", &spec.outline_query_len);
+  spec.usage_query = opt_lstring_field(L, 1, "usage_query", &spec.usage_query_len);
+  spec.parse_timeout_ms = opt_uint32_field(L, 1, "parse_timeout_ms", 0);
+  spec.query_timeout_ms = opt_uint32_field(L, 1, "query_timeout_ms", 0);
+  spec.match_limit = opt_uint32_field(L, 1, "match_limit", 0);
+  spec.max_captures = opt_uint32_field(L, 1, "max_captures", 0);
+  spec.usage_query_timeout_ms = opt_uint32_field(L, 1, "usage_query_timeout_ms", 0);
+  spec.usage_match_limit = opt_uint32_field(L, 1, "usage_match_limit", 0);
+  spec.usage_max_captures = opt_uint32_field(L, 1, "usage_max_captures", 0);
+  lua_getfield(L, 1, "previous_result");
+  if (!lua_isnil(L, -1)) {
+    LuaTreeSitterIndexResult *previous = check_treesitter_index_result(L, -1);
+    spec.previous_result = previous->result;
+  }
+  lua_pop(L, 1);
+  bool over_budget = false;
+  char *error = NULL;
+  AnvilWorkerTreeSitterIndexResult *result =
+    anvil_worker_markdown_parse_now(&spec, budget_ms, &over_budget, &error);
+  if (!result) {
+    lua_pushnil(L);
+    lua_pushstring(L, error ? error : "Markdown parse failed");
+    lua_pushboolean(L, over_budget);
+    SDL_free(error);
+    return 3;
+  }
+  push_treesitter_index_result_handle(L, result);
+  return 1;
+}
+
 static const luaL_Reg lib[] = {
   { "new", f_new },
+  { "markdown_parse_now", f_markdown_parse_now },
   { "new_project_builder", f_new_project_builder },
   { "new_cancel_token", f_new_cancel_token },
   { "open_cancel_token", f_open_cancel_token },
