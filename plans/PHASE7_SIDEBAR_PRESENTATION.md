@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft, 2026-10-12. The user left the design to the agent and will tweak it later.
+Built, 2026-10-15. The user left the design to the agent and will tweak it later. See
+[Decisions taken](#decisions-taken) for what shipped; the review list below is the original draft.
 The recommendations below are the starting design. [Hosted presentation quality](HOSTED_PRESENTATION_QUALITY.md)
 comes first, because the Sidebar's look depends on layered composition.
 Commit and stop for review after each milestone. Hosted mode stays opt-in.
@@ -167,3 +168,31 @@ Milestones 1–3 do not change compositing or input routing to Projects, so they
 Milestone 4 needs matched latency against the previous milestone's portable.
 Commit each milestone and report hashes and deployment logs.
 Manual check after milestone 4: the user uses the Sidebar for a day with hosted mode on.
+
+## Decisions taken
+
+The user asked the agent to decide independently. These choices shipped on 2026-10-15:
+
+- **Header row.** The PROJECTS header and the Refresh button are gone. Refresh stays an internal recovery path.
+- **Live Terminal Session rows.** Each row shows the title its tab shows, and its age. The Terminal Session
+  focused in the Selected Project takes the highlight instead of its Project. Clicking a Terminal Session row
+  selects its Project and focuses that Terminal Session.
+- **Activity.** A Terminal Session's activity is typing, clicks, selection, a command starting or ending, and a
+  title change. Output alone does not count, so a noisy log tail does not look recent. A Project's age is its
+  own activity or its newest Terminal Session's, whichever is later. A Terminal Session whose activity is
+  unknown shows directly under its Project.
+- **Age groups.** Projects active in the last 7 days sit in the top-aligned main area. Older Projects go into
+  bottom-aligned "Older than a week" and "Older than a month" groups. The bottom area takes at most 40% of the
+  height and scrolls. Terminal Sessions use the same 7 and 30 day groups inside their Project. Order inside a
+  group is stable (recent order), so switching between Projects never swaps rows. Group collapse state lives in
+  the Sidebar's storage.
+- **Width and collapse.** Drag the Sidebar's right edge between 160 and 480 points. Double-click the edge to
+  reset it to 240. The Title Bar's Sidebar button and the "Toggle Project Sidebar" command hide and show it
+  with a 180 ms slide. The Project area follows the slide. Width and hidden state apply to all Windows and are
+  saved in the shell's state file (version 4).
+- **Native Project menu.** Right-click a Project for a native menu that follows the theme's dark or light
+  mode. A loaded Project offers Move to each other Window, Move to New Window, and Unload. A Dormant Project
+  offers Open in New Window. Both offer Copy Path and Show in File Explorer. The inline Move rows and the hover
+  Unload button are gone. Terminal Session rows have no menu.
+- **Remove from list: dropped.** Each Project process owns its recent Project list and saves it again, so the
+  shell cannot remove an entry without a shared list of removed Projects. Revisit it with that list.
