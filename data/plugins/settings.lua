@@ -13,6 +13,7 @@ local panes = require "core.panes"
 local view_icons = require "core.view_icons"
 local startup = package.loaded["core.startup"]
 local wallpapers = require "core.wallpapers"
+local color_theme = require "core.color_theme"
 
 local function startup_measure(name, fn)
   if startup then return startup.measure(name, fn) end
@@ -55,20 +56,6 @@ settings.plugin_sections = {}
 settings.config = {}
 settings.default_keybindings = {}
 settings.ready = false
-
-local DEFAULT_COLOR_THEME_NAME = "dark"
-local DEFAULT_COLOR_THEME_MODULE = "default"
-
-local function normalize_color_theme_name(name)
-  if name == nil or name == "" or name == DEFAULT_COLOR_THEME_MODULE then
-    return DEFAULT_COLOR_THEME_NAME
-  end
-  return name
-end
-
-local function color_theme_display_name(module_name)
-  return module_name == DEFAULT_COLOR_THEME_MODULE and DEFAULT_COLOR_THEME_NAME or module_name
-end
 
 local function first_party_core_plugins()
   return core.first_party_core_plugins or {}
@@ -1182,7 +1169,7 @@ local function get_installed_colors()
         end
         -- insert color to ordered table if not duplicate
         filename = filename:gsub("%.lua$", "")
-        local name = color_theme_display_name(filename)
+        local name = color_theme.name(filename)
         if not files[name] then
           table.insert(ordered, {name = name, module = filename, colors = colors})
         end
@@ -1240,26 +1227,33 @@ local function save_settings()
 end
 
 local function find_color_theme(name)
-  name = normalize_color_theme_name(name)
+  name = color_theme.name(name)
   for _, details in ipairs(get_installed_colors()) do
     if details.name == name then return details end
   end
   return nil
 end
 
-local function color_theme_module_name(name)
-  local normalized = normalize_color_theme_name(name)
-  local details = find_color_theme(normalized)
-  if details then return details.module end
-  return normalized == DEFAULT_COLOR_THEME_NAME and DEFAULT_COLOR_THEME_MODULE or normalized
-end
-
 local function apply_color_theme(name)
-  name = normalize_color_theme_name(name)
-  core.reload_module("colors." .. color_theme_module_name(name))
+  name = color_theme.name(name)
+  core.reload_module(color_theme.module_name(name))
   settings.config.theme = name
   save_settings()
-  core.log_quiet("Theme set to %s", name)
+  -- Other Projects and the Sidebar reload the saved Color Theme.
+  local shared = system.color_theme_saved()
+  core.log_quiet("Theme set to %s; shared with the shell: %s", name, tostring(shared))
+end
+
+-- Another Project saved a Color Theme, or new Theme Editor edits. Keep settings.config in step so a later
+-- save here does not restore the old Color Theme.
+local on_event = core.on_event
+function core.on_event(type, ...)
+  if type ~= "colorthemechanged" then return on_event(type, ...) end
+  local name = color_theme.saved_name()
+  settings.config.theme = name
+  core.try(core.reload_module, color_theme.module_name(name))
+  core.log_quiet("Theme %s reloaded after another Project saved it", name)
+  return true
 end
 
 local function apply_wallpaper(name)
@@ -1899,7 +1893,7 @@ function Settings:load_color_settings()
   listbox:add_column("Theme")
   listbox:add_column("Colors")
 
-  local current_theme = normalize_color_theme_name(settings.config.theme)
+  local current_theme = color_theme.name(settings.config.theme)
 
   for idx, details in ipairs(colors) do
     local name = details.name
@@ -2627,13 +2621,13 @@ function core.run()
   -- apply user chosen color theme
   startup_measure("settings_apply_theme", function()
     if settings.config.theme then
-      local normalized_theme = normalize_color_theme_name(settings.config.theme)
+      local normalized_theme = color_theme.name(settings.config.theme)
       if settings.config.theme ~= normalized_theme then
         settings.config.theme = normalized_theme
         save_settings()
       end
       core.try(function()
-        core.reload_module("colors." .. color_theme_module_name(normalized_theme))
+        core.reload_module(color_theme.module_name(normalized_theme))
       end)
     else
       core.try(function() core.reload_module("colors.default") end)
@@ -2692,7 +2686,7 @@ end
 local theme_commands = {
   ["core:cycle_to_next_theme"] = command.palette(function()
     local themes = get_installed_colors()
-    local current = normalize_color_theme_name(settings.config.theme)
+    local current = color_theme.name(settings.config.theme)
     local next_theme = themes[1]
     for index, theme in ipairs(themes) do
       if theme.name == current then
@@ -2707,7 +2701,7 @@ local theme_commands = {
   end),
 
   ["core:select_theme"] = command.palette(function()
-    local original = normalize_color_theme_name(settings.config.theme)
+    local original = color_theme.name(settings.config.theme)
     local preview = original
     core.global_prompt_bar:enter("Theme", {
       overlay = false,
@@ -2724,18 +2718,18 @@ local theme_commands = {
         local name = suggestion and suggestion.name
         if not name or name == preview then return end
         if core.try(function()
-          core.reload_module("colors." .. color_theme_module_name(name))
+          core.reload_module(color_theme.module_name(name))
         end) then
           preview = name
         else
           core.try(function()
-            core.reload_module("colors." .. color_theme_module_name(preview))
+            core.reload_module(color_theme.module_name(preview))
           end)
         end
       end,
       cancel = function()
         if preview ~= original then
-          core.reload_module("colors." .. color_theme_module_name(original))
+          core.reload_module(color_theme.module_name(original))
         end
       end,
       validate = function(text, suggestion)

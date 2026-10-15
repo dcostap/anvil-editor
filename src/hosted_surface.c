@@ -508,6 +508,13 @@ static void dispatch_message(HostedMessage *message) {
     }
     goto complete;
   }
+  if (type == ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED) {
+    /* The Color Theme belongs to the whole process, not to one Sidebar surface. */
+    CustomEvent event = {0};
+    if (!push_custom_event("colorthemechanged", &event))
+      SDL_Log("Color Theme change event dropped: %s", SDL_GetError());
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
     const AnvilSidebarSurfacePacket *packet = (const void *)payload;
     type = packet->type;
@@ -682,6 +689,7 @@ static int SDLCALL reader_thread(void *data) {
         break;
       case ANVIL_SURFACE_MSG_CLOSE:
       case ANVIL_SURFACE_MSG_SIDEBAR_CHANGED:
+      case ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED:
         if (size) goto failed;
         break;
       case ANVIL_SURFACE_MSG_DIALOG_RESULT:
@@ -904,6 +912,12 @@ bool anvil_hosted_surface_open_project_picker(void) {
 bool anvil_hosted_surface_unload_project(const char *path) {
   if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_UNLOAD_PROJECT, path, (uint32_t)strlen(path) + 1);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_color_theme_saved(void) {
+  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  send_message(ANVIL_SURFACE_MSG_COLOR_THEME_SAVED, NULL, 0);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1357,6 +1371,7 @@ int anvil_hosted_surface_content_x(void) { return 0; }
 bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
+bool anvil_hosted_surface_color_theme_saved(void) { return false; }
 bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recents) {
   (void)userdir;
   (void)recents;

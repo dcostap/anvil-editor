@@ -1815,6 +1815,12 @@ static int f_select_project(lua_State *L) {
   return 1;
 }
 
+/* Returns false outside a shell, where no other process shows this Color Theme. */
+static int f_color_theme_saved(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_color_theme_saved());
+  return 1;
+}
+
 static int f_new_anvil_window(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_new_window());
   return 1;
@@ -1888,6 +1894,11 @@ static int projectsidebar_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, event->user.data1);
   free(event->user.data1);
   return 2;
+}
+static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
+  (void)event;
+  lua_pushstring(L, "colorthemechanged");
+  return 1;
 }
 static int projectsidebarchanged_callback(lua_State *L, SDL_Event *event) {
   (void)event;
@@ -2512,6 +2523,7 @@ static const luaL_Reg lib[] = {
   { "await_shell_adoption",  f_await_shell_adoption  },
   { "select_project",        f_select_project        },
   { "new_anvil_window",      f_new_anvil_window      },
+  { "color_theme_saved",     f_color_theme_saved     },
   { "get_anvil_window_id",   f_get_anvil_window_id   },
   { "sidebar_surfaces", f_sidebar_surfaces },
   { "activate_sidebar_surface", f_activate_sidebar_surface },
@@ -2562,6 +2574,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Project Sidebar event: %s", SDL_GetError());
   if (!register_custom_event("projectsidebarchanged", projectsidebarchanged_callback))
     return luaL_error(L, "Unable to register the Sidebar revision event: %s", SDL_GetError());
+  if (!register_custom_event("colorthemechanged", colorthemechanged_callback))
+    return luaL_error(L, "Unable to register the Color Theme event: %s", SDL_GetError());
   luaL_newmetatable(L, API_TYPE_NATIVE_PLUGIN);
   lua_pushcfunction(L, f_library_gc);
   lua_setfield(L, -2, "__gc");

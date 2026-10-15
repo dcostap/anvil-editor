@@ -4,6 +4,7 @@ local saved_event = core.on_event
 local surfaces, current = {}, nil
 local SidebarView, font, base_font_size
 local fonts, style = {}, nil
+local color_theme = require "core.color_theme"
 
 local function save()
   if not current then return end
@@ -61,6 +62,18 @@ local function add_surface(id, window)
   surfaces[id] = surface
   core.log_quiet("Sidebar surface created: Window=%d", id)
 end
+-- Projects save the Color Theme; the Sidebar draws with the saved one.
+local function apply_color_theme()
+  local name = color_theme.saved_name()
+  local ok, err = pcall(color_theme.load_style, name)
+  if not ok then
+    core.log_quiet("Sidebar Color Theme %s failed: %s", name, tostring(err))
+    color_theme.load_style("dark")
+  end
+  for _, surface in pairs(surfaces) do surface.redraw = true end
+  core.redraw = true
+  core.log_quiet("Sidebar Color Theme: %s", name)
+end
 local function sync_surfaces()
   for _, item in ipairs(system.sidebar_surfaces()) do
     local surface = surfaces[item.id]
@@ -90,7 +103,7 @@ function core.init()
   local window = renwindow.create("Sidebar", 240, 600)
   core.window, core.active_window = window, window
   SCALE = system.get_scale(window)
-  require "colors.default"
+  apply_color_theme()
   SidebarView = require "core.sidebar_view"
   style = require "core.style"
   font = style.font
@@ -142,7 +155,9 @@ function core.run_step()
     for candidate, surface in pairs(surfaces) do
       if surface.native_id == native_id then id = candidate end
     end
-    if event[1] == "projectsidebarchanged" and not native_id then
+    if event[1] == "colorthemechanged" then
+      apply_color_theme()
+    elseif event[1] == "projectsidebarchanged" and not native_id then
       for _, surface in pairs(surfaces) do surface.request, surface.query_needed = nil, true end
       core.project_sidebar_request = nil
     elseif activate(id) or event[1] == "quit" or event[1] == "shelllost" then

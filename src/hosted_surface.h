@@ -71,6 +71,8 @@ uint32_t anvil_hosted_surface_window_id(void);
 bool anvil_hosted_surface_open_project_window(const char *path);
 bool anvil_hosted_surface_open_project_picker(void);
 bool anvil_hosted_surface_unload_project(const char *path);
+/* Tells the shell that this Project saved a Color Theme, so other processes reload it. */
+bool anvil_hosted_surface_color_theme_saved(void);
 bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recents);
 bool anvil_hosted_surface_sidebar_query(int offset, bool refresh);
 float anvil_hosted_surface_display_scale(void);

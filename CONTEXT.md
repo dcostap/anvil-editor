@@ -608,7 +608,7 @@ A separate project-owned window for a large singleton tool that should stay avai
 _Avoid_: popup, modal, detached panel
 
 **Color Theme**:
-A named set of colors for Anvil's interface and language text.
+A named set of colors for Anvil's interface and language text. The chosen Color Theme is global: every Project and the Project Sidebar show the same one, and a change in one Project reaches all of them.
 _Avoid_: Color scheme
 
 **Wallpaper**:

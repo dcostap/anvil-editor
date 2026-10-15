@@ -330,6 +330,7 @@ static void begin_unload(ShellProject *project);
 static void drain_retired_projects(void);
 static void service_sidebar(void);
 static void notify_sidebar_changes(void);
+static void broadcast_color_theme(ShellProject *source);
 static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size);
 static void sync_sidebar_model(void);
 static AnvilSidebarProject *sidebar_project(const char *path);
@@ -861,6 +862,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_RAISE:
   case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
+  case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
     return size == 0;
   case ANVIL_SURFACE_MSG_TITLE:
     return !memchr(payload, 0, size);
@@ -2757,6 +2759,9 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_SIDEBAR_SOURCE:
     sidebar_source(payload, message->size);
+    break;
+  case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
+    broadcast_color_theme(project);
     break;
   case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: {
     sync_sidebar_model();
@@ -5117,6 +5122,21 @@ static void notify_sidebar_changes(void) {
         shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_SIDEBAR_CHANGED, NULL, 0, NULL, 0);
     shell.sidebar_notified_revision = shell.sidebar.revision;
   }
+}
+
+/* The Color Theme is one setting for every Project and the Sidebar. The saving Project already shows it. */
+static void broadcast_color_theme(ShellProject *source) {
+  int count = 0;
+  for (ShellProject *item = shell.projects; item; item = item->next)
+    if (item != source && item->connected) {
+      shell_send(item, ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED, NULL, 0, NULL, 0);
+      count++;
+    }
+  if (shell.sidebar_process && shell.sidebar_process->connected) {
+    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED, NULL, 0, NULL, 0);
+    count++;
+  }
+  SDL_Log("Shell Color Theme saved by Project %u; notified %d processes", source->id, count);
 }
 
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value) {

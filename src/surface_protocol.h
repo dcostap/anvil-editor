@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 16u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 17u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -30,6 +30,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_DIALOG_RESULT = 5,
   ANVIL_SURFACE_MSG_SIDEBAR_MODEL = 6,
   ANVIL_SURFACE_MSG_SIDEBAR_CHANGED = 7,
+  /* Another process saved a Color Theme; reload the saved one. No payload. */
+  ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED = 8,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -61,6 +63,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_SIDEBAR_SURFACE = 90,
   ANVIL_SURFACE_MSG_SIDEBAR_REMOVE = 91,
   ANVIL_SURFACE_MSG_MOVE_PROJECT = 92,
+  /* This Project saved a Color Theme. The shell tells every other Project and the Sidebar. No payload. */
+  ANVIL_SURFACE_MSG_COLOR_THEME_SAVED = 93,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */
