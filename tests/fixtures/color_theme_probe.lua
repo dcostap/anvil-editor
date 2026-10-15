@@ -2,6 +2,8 @@
 -- Seam: an owned shell Window with two loaded Projects and the Sidebar. The Color Theme is one saved setting:
 -- the Sidebar starts with it, and a theme saved in one Project reaches the other Project and the Sidebar. The
 -- software renderer keeps the Sidebar opaque, so its empty area shows the theme's exact background2 colour.
+-- The shell's Window controls draw in the selected Project's Color Theme: its text colour, and its pressed colour.
+-- A posted mouse move hovers only until the real cursor's leave event, so a held press shows the fill instead.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "theme-global" then return end
 local core, common = require "core", require "core.common"
@@ -13,6 +15,7 @@ ffi.cdef [[
  unsigned long __stdcall GetWindowThreadProcessId(void *, unsigned long *);
  void * __stdcall GetPropW(void *, const wchar_t *);
  intptr_t __stdcall SendMessageW(void *, unsigned int, uintptr_t, intptr_t);
+ int __stdcall PostMessageW(void *, unsigned int, uintptr_t, intptr_t);
  void * __stdcall OpenProcess(unsigned long, int, unsigned long);
  int __stdcall TerminateProcess(void *, unsigned int);
  int __stdcall CloseHandle(void *);
@@ -50,8 +53,8 @@ local function shell_window(pid)
 end
 local function rgb(color) return {color[1], color[2], color[3]} end
 local captures = 0
--- The colour of the Sidebar's empty bottom-left area in the shell's next composed frame.
-local function sidebar_color(window)
+-- The shell's next composed frame, with a reader for its pixels.
+local function capture(window)
  captures = captures + 1
  user32.SendMessageW(window, 0x8052, captures, 0)
  local name = "capture-" .. captures .. ".bmp"
@@ -64,15 +67,62 @@ local function sidebar_color(window)
   return value >= 2147483648 and value - 4294967296 or value
  end
  local width, height = int32(18), math.abs(int32(22))
- -- Top-down BGRA rows follow the 54-byte headers.
- local offset = 54 + ((height - 8) * width + 8) * 4
- return {data:byte(offset + 3), data:byte(offset + 2), data:byte(offset + 1)}
+ return {width = width, height = height, pixel = function(x, y)
+  -- Top-down BGRA rows follow the 54-byte headers.
+  local offset = 54 + (math.floor(y) * width + math.floor(x)) * 4
+  return {data:byte(offset + 3), data:byte(offset + 2), data:byte(offset + 1)}
+ end}
+end
+-- The colour of the Sidebar's empty bottom-left area in the shell's next composed frame.
+local function sidebar_color(window)
+ local frame = capture(window)
+ return frame.pixel(8, frame.height - 8)
 end
 local function same(a, b) return a[1] == b[1] and a[2] == b[2] and a[3] == b[3] end
+local function near(a, b, tolerance)
+ for i = 1, 3 do if math.abs(a[i] - b[i]) > tolerance then return false end end
+ return true
+end
 local function show(color) return string.format("#%02x%02x%02x", color[1], color[2], color[3]) end
 local function quit() core.exit(function() core.quit_request = true end, true) end
 local function ready(name)
- save(name, {pid = tonumber(kernel.GetCurrentProcessId()), background2 = rgb(style.background2)})
+ local _, _, controls_w, controls_h = system.get_window_controls()
+ save(name, {pid = tonumber(kernel.GetCurrentProcessId()), background2 = rgb(style.background2),
+  text = rgb(style.text), dim = rgb(style.dim), pressed = {table.unpack(style.titlebar_control_pressed)},
+  controls_w = controls_w, controls_h = controls_h})
+end
+-- The minimize, maximize and close buttons fill the controls rect at the frame's top-right corner.
+local function control_rect(frame, state, index)
+ local left, width = frame.width - state.controls_w, math.floor(state.controls_w / 3)
+ return {x = left + index * width, w = index == 2 and state.controls_w - 2 * width or width, h = state.controls_h}
+end
+-- The selected Project uses a light Color Theme here, so its dark text colour draws the glyphs, or its dim
+-- colour while the shell Window is not focused.
+local function check_controls(window, state)
+ pcall(wait, function() return trace():find("Shell Window control colours", 1, true) end, 5)
+ local frame = capture(window)
+ local close = control_rect(frame, state, 2)
+ local glyph = frame.pixel(close.x + math.floor(close.w / 2), math.floor(close.h / 2))
+ assert(near(glyph, state.text, 24) or near(glyph, state.dim, 24), "the close glyph drew " .. show(glyph)
+  .. ", not the Color Theme's text " .. show(state.text) .. " or dim " .. show(state.dim))
+ local minimize = control_rect(frame, state, 0)
+ local x, y = minimize.x + 3, 3
+ local before = frame.pixel(x, y)
+ local point = minimize.x + math.floor(minimize.w / 2) + math.floor(minimize.h / 2) * 65536
+ user32.PostMessageW(window, 0x200, 0, point)
+ user32.PostMessageW(window, 0x201, 1, point)
+ coroutine.yield(.3)
+ local pressed = capture(window).pixel(x, y)
+ -- Releasing outside the button cancels it, so the Window stays open.
+ local away = math.floor(frame.width / 2) + math.floor(frame.height / 2) * 65536
+ user32.PostMessageW(window, 0x200, 1, away)
+ user32.PostMessageW(window, 0x202, 0, away)
+ coroutine.yield(.2)
+ local alpha = (state.pressed[4] or 255) / 255
+ local expected = {}
+ for i = 1, 3 do expected[i] = math.floor(before[i] * (1 - alpha) + state.pressed[i] * alpha + .5) end
+ assert(near(pressed, expected, 3), "pressed minimize drew " .. show(pressed) .. " over " .. show(before)
+  .. ", not the Color Theme's pressed " .. show(expected))
 end
 
 if path:match("/driver$") then
@@ -89,6 +139,7 @@ if path:match("/driver$") then
    local started = sidebar_color(window)
    assert(same(started, a.background2), "the Sidebar started with " .. show(started)
     .. ", not the saved Color Theme's " .. show(a.background2))
+   check_controls(window, a)
    save("select-b", {go = true})
    wait(function() return load("b-ready") end, 30, "Project B did not start")
    save("b-theme", {go = true})

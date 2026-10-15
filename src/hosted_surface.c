@@ -82,8 +82,9 @@ static struct {
   AnvilSurfaceConfigure adopted_config;
   /* Window state the next shell does not know. */
   char title[4097];
-  bool has_title, has_hit_test;
+  bool has_title, has_hit_test, has_control_colors;
   AnvilSurfaceHitTest hit_test;
+  AnvilSurfaceControlColors control_colors;
   int bordered, visible;
   Uint32 receive_event;
   Uint32 geometry_event;
@@ -610,6 +611,7 @@ void anvil_hosted_surface_finish_adoption(void) {
   view->last_cursor = -1;
   if (hosted.has_title) anvil_hosted_surface_set_title(hosted.title);
   if (hosted.has_hit_test) anvil_hosted_surface_set_hit_test(&hosted.hit_test);
+  if (hosted.has_control_colors) anvil_hosted_surface_set_control_colors(&hosted.control_colors);
   if (hosted.bordered >= 0) anvil_hosted_surface_set_bordered(hosted.bordered);
   if (hosted.visible >= 0) anvil_hosted_surface_set_visible(hosted.visible);
   SDL_SetAtomicInt(&hosted.adopting, 0);
@@ -918,6 +920,14 @@ bool anvil_hosted_surface_unload_project(const char *path) {
 bool anvil_hosted_surface_color_theme_saved(void) {
   if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_COLOR_THEME_SAVED, NULL, 0);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_set_control_colors(const AnvilSurfaceControlColors *colors) {
+  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  hosted.control_colors = *colors;
+  hosted.has_control_colors = true;
+  send_message(ANVIL_SURFACE_MSG_CONTROL_COLORS, colors, sizeof(*colors));
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1372,6 +1382,10 @@ bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; re
 bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_color_theme_saved(void) { return false; }
+bool anvil_hosted_surface_set_control_colors(const AnvilSurfaceControlColors *colors) {
+  (void)colors;
+  return false;
+}
 bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recents) {
   (void)userdir;
   (void)recents;

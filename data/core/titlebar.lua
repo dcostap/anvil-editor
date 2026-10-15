@@ -386,9 +386,40 @@ function TitleBar:configure_hit_test(enabled)
     math.floor(resize_border or 8 * SCALE), interactive_x, interactive_width, 0, 0)
 end
 
+-- The shell draws the Window controls, so it needs the Color Theme's caption colours. Sends them when they change.
+local CONTROL_COLORS = {
+  {"text", "text"}, {"inactive_text", "dim"},
+  {"hover", "titlebar_control_hover"}, {"pressed", "titlebar_control_pressed"},
+  {"close_hover", "titlebar_close_hover"}, {"close_pressed", "titlebar_close_pressed"},
+  {"close_text", "titlebar_close_text"},
+}
+function TitleBar:sync_shell_control_colors()
+  local sent, changed = self.shell_control_colors, false
+  if sent then
+    for _, key in ipairs(CONTROL_COLORS) do
+      local color, previous = style[key[2]], sent[key[1]]
+      for i = 1, 4 do
+        if color[i] ~= previous[i] then changed = true; break end
+      end
+      if changed then break end
+    end
+    if not changed then return end
+  end
+  local colors = {}
+  for _, key in ipairs(CONTROL_COLORS) do
+    local color = style[key[2]]
+    colors[key[1]] = {color[1], color[2], color[3], color[4]}
+  end
+  self.shell_control_colors = colors
+  local delivered = system.set_window_control_colors(colors)
+  core.log_quiet("Shell Window control colours sent: delivered=%s text=%s", tostring(delivered),
+    table.concat(colors.text, ","))
+end
+
 function TitleBar:update()
   self.size.y = self.visible and bar_height() or 0
   self:update_geometry()
+  if self.shell_controls then self:sync_shell_control_colors() end
   local previous_scroll = self.tab_scroll
   self:move_towards("tab_scroll", self.tab_scroll_target, 0.25, "scroll")
   if self.tab_scroll ~= previous_scroll then self:update_geometry() end

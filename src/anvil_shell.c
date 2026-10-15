@@ -143,6 +143,8 @@ typedef struct ShellProject {
   SDL_Condition *frame_cond;
   AnvilSurfaceConfigure last_config;
   AnvilSurfaceHitTest hit;
+  AnvilSurfaceControlColors control_colors;
+  bool has_control_colors;
   int child_cursor;
   Uint64 close_requested_ns;
   SDL_TimerID close_timer;
@@ -252,6 +254,9 @@ struct ShellWindow {
   bool frame_busy;
   SDL_TimerID retry_timer;
   int hovered_control, pressed_control;
+  /* The colours of the drawn controls layer; a change repaints it. */
+  AnvilSurfaceControlColors ui_colors;
+  bool ui_focused;
   RECT controls, restart_button, close_button;
   RECT failure_card;
 };
@@ -855,6 +860,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size == sizeof(uint64_t);
   case ANVIL_SURFACE_MSG_HIT_TEST:
     return size == sizeof(AnvilSurfaceHitTest);
+  case ANVIL_SURFACE_MSG_CONTROL_COLORS:
+    return size == sizeof(AnvilSurfaceControlColors);
   case ANVIL_SURFACE_MSG_SET_BOUNDS:
     return size == sizeof(AnvilSurfaceBounds);
   case ANVIL_SURFACE_MSG_OPACITY:
@@ -1624,9 +1631,51 @@ static bool sidebar_restart_offered(void) {
   return shell.sidebar_restart_limited || !shell.sidebar_process || shell.sidebar_process->state == SHELL_FAILED;
 }
 
+/* The selected Project's Color Theme colours the controls. Before it reports them, they match the dark theme. */
+static AnvilSurfaceControlColors control_colors(ShellWindow *window) {
+  ShellProject *project = window->selected;
+  if (project && project->has_control_colors) return project->control_colors;
+  return (AnvilSurfaceControlColors){0xffe1dcdcu, 0xff8c8c8cu, 0x12ffffffu, 0x20ffffffu,
+                                     0xff1c2bc4u, 0xff201f99u, 0xffffffffu};
+}
+
+static bool window_focused(ShellWindow *window) {
+  return window->window && (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+}
+
+/* GDI draws white coverage on black. This turns a rect of it into the premultiplied colour. */
+static void tint_coverage(ShellWindow *window, RECT rect, uint32_t color) {
+  unsigned r = color & 0xff, g = color >> 8 & 0xff, b = color >> 16 & 0xff, a = color >> 24;
+  for (int y = SDL_max(0, rect.top); y < SDL_min(rect.bottom, window->buffer_h); y++) {
+    uint8_t *row = (uint8_t *)window->ui_pixels + (size_t)y * window->ui_w * 4;
+    for (int x = SDL_max(0, rect.left); x < SDL_min(rect.right, window->buffer_w); x++) {
+      uint8_t *pixel = row + x * 4;
+      unsigned coverage = SDL_max(pixel[0], SDL_max(pixel[1], pixel[2])) * a / 255;
+      pixel[0] = (uint8_t)(b * coverage / 255);
+      pixel[1] = (uint8_t)(g * coverage / 255);
+      pixel[2] = (uint8_t)(r * coverage / 255);
+      pixel[3] = (uint8_t)coverage;
+    }
+  }
+}
+
+static RECT control_rect(ShellWindow *window, int index) {
+  int width = (window->controls.right - window->controls.left) / 3;
+  return (RECT){window->controls.left + index * width, 0,
+                index == 2 ? window->controls.right : window->controls.left + (index + 1) * width,
+                window->controls.bottom};
+}
+
 static void update_ui(ShellWindow *window) {
   ShellProject *project = window->selected;
   controls_geometry(window);
+  AnvilSurfaceControlColors colors = control_colors(window);
+  bool focused = window_focused(window);
+  if (memcmp(&colors, &window->ui_colors, sizeof(colors)) || focused != window->ui_focused) {
+    window->ui_colors = colors;
+    window->ui_focused = focused;
+    window->ui_hover_dirty = true;
+  }
   if (!window->ui_dirty && !window->ui_hover_dirty && window->ui && window->ui_layout_w == window->buffer_w &&
       window->ui_layout_h == window->buffer_h)
     return;
@@ -1719,15 +1768,11 @@ static void update_ui(ShellWindow *window) {
             : project->state == SHELL_CLOSING ? L"..."
                                               : L"\x2022",
             -1, &status, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-  int bw = (window->controls.right - window->controls.left) / 3;
-  HPEN pen = CreatePen(PS_SOLID, SDL_max(1, (int)window->scale), RGB(220, 220, 225));
+  /* Glyphs are white coverage here, and tint_coverage colours them. The composite draws hover backgrounds. */
+  HPEN pen = CreatePen(PS_SOLID, SDL_max(1, (int)window->scale), RGB(255, 255, 255));
   HGDIOBJ old_pen = SelectObject(dc, pen);
   for (int i = 0; i < 3; i++) {
-    RECT rect = {window->controls.left + i * bw, 0,
-                 i == 2 ? window->controls.right : window->controls.left + (i + 1) * bw,
-                 window->controls.bottom};
-    if (window->hovered_control == i || window->pressed_control == i)
-      ui_fill(dc, rect, i == 2 ? RGB(190, 45, 45) : RGB(55, 55, 62));
+    RECT rect = control_rect(window, i);
     int x = (rect.left + rect.right) / 2, y = rect.bottom / 2,
         r = SDL_max(3, (int)(5 * window->scale));
     if (i == 0) {
@@ -1750,17 +1795,19 @@ static void update_ui(ShellWindow *window) {
   DeleteObject(pen);
   draw_lifecycle(window, dc);
   GdiFlush();
-  /* Blended regions take premultiplied alpha from their brightest channel. Other regions are copied. */
-  RECT blended[] = {strip, window->controls};
-  for (int i = 0; i < 2; i++) {
-    RECT rect = blended[i];
-    for (int y = SDL_max(0, rect.top); y < SDL_min(rect.bottom, window->buffer_h); y++) {
-      uint8_t *row = (uint8_t *)window->ui_pixels + (size_t)y * window->ui_w * 4;
-      for (int x = SDL_max(0, rect.left); x < SDL_min(rect.right, window->buffer_w); x++) {
-        uint8_t *pixel = row + x * 4;
-        pixel[3] = SDL_max(pixel[0], SDL_max(pixel[1], pixel[2]));
-      }
+  /* Blended regions are premultiplied: the strip's light text, and the controls in the Color Theme's colours.
+   * Other regions are copied. */
+  for (int y = SDL_max(0, strip.top); y < SDL_min(strip.bottom, window->buffer_h); y++) {
+    uint8_t *row = (uint8_t *)window->ui_pixels + (size_t)y * window->ui_w * 4;
+    for (int x = SDL_max(0, strip.left); x < SDL_min(strip.right, window->buffer_w); x++) {
+      uint8_t *pixel = row + x * 4;
+      pixel[3] = SDL_max(pixel[0], SDL_max(pixel[1], pixel[2]));
     }
+  }
+  for (int i = 0; i < 3; i++) {
+    bool hot = window->hovered_control == i || window->pressed_control == i;
+    tint_coverage(window, control_rect(window, i),
+                  i == 2 && hot ? colors.close_text : focused ? colors.text : colors.inactive_text);
   }
   RECT uploads[4];
   int upload_count = 0;
@@ -2004,6 +2051,15 @@ static void composite_and_present(ShellWindow *window) {
     compose_rect(window, NULL, (RECT){0, 0, window->sidebar_w, window->buffer_h}, 0, 0, dim);
   }
   blend_ui(window, (RECT){0, 0, window->sidebar_w, window->controls.bottom});
+  int hot = window->pressed_control >= 0 ? window->pressed_control : window->hovered_control;
+  if (hot >= 0 && hot < 3) {
+    AnvilSurfaceControlColors colors = window->ui_colors;
+    uint32_t c = window->pressed_control >= 0 ? (hot == 2 ? colors.close_pressed : colors.pressed)
+                                              : (hot == 2 ? colors.close_hover : colors.hover);
+    float a = (c >> 24) / 255.0f;
+    float fill[4] = {(c & 0xff) / 255.0f * a, (c >> 8 & 0xff) / 255.0f * a, (c >> 16 & 0xff) / 255.0f * a, a};
+    compose_rect(window, NULL, control_rect(window, hot), 0, 0, fill);
+  }
   blend_ui(window, window->controls);
   if (project->state == SHELL_STARTING || project->state == SHELL_DORMANT ||
       (project->state == SHELL_FAILED && !window->project_presentation.have_surface))
@@ -2762,6 +2818,13 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
     broadcast_color_theme(project);
+    break;
+  case ANVIL_SURFACE_MSG_CONTROL_COLORS:
+    memcpy(&project->control_colors, payload, sizeof(project->control_colors));
+    project->has_control_colors = true;
+    SDL_Log("Shell Window control colours: Project=%u text=%08x hover=%08x", project->id,
+            (unsigned)project->control_colors.text, (unsigned)project->control_colors.hover);
+    if (project == window->selected && window->shown) composite_and_present(window);
     break;
   case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: {
     sync_sidebar_model();
@@ -3573,6 +3636,8 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS,
                      event->type == SDL_EVENT_WINDOW_FOCUS_GAINED);
     }
+    /* Unfocused controls use the dim glyph colour. */
+    if (window->shown) composite_and_present(window);
     break;
   case SDL_EVENT_WINDOW_MOUSE_LEAVE:
     leave_sidebar(window);
