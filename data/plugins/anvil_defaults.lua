@@ -251,60 +251,13 @@ local prose_heading_font_path = DATADIR
 local prose_heading_emphasis_font_path = DATADIR
   .. "/fonts/Merriweather_24pt-SemiBoldItalic.ttf"
 local font_size = 14 * SCALE
-local max_default_font_group = 10 -- native renderer FONT_FALLBACK_MAX
-
-local default_font_fallbacks = {
-  -- Keep color emoji early so broad Unicode fonts do not steal emoji glyphs.
-  { "C:/Windows/Fonts/seguiemj.ttf" },
-  -- Broad glyph coverage for the Unicode stress-test/general Windows installs.
-  { "C:/Windows/Fonts/ARIALUNI.TTF" },
-  -- Extra CJK/supplemental and common script coverage when Arial Unicode is absent/incomplete.
-  { "C:/Windows/Fonts/YuGothR.ttc", "C:/Windows/Fonts/msgothic.ttc" },
-  { "C:/Windows/Fonts/malgun.ttf" },
-  { "C:/Windows/Fonts/seguisym.ttf" },
-  { "C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/NotoSans-Regular.ttf" },
-  { "C:/Windows/Fonts/Nirmala.ttc" },
-  { "C:/Windows/Fonts/LeelawUI.ttf" },
-  -- These fill remaining slots on machines without some of the broader fonts above.
-  { "C:/Windows/Fonts/NotoNaskhArabic-Regular.ttf", "C:/Windows/Fonts/NotoSansArabic-Regular.ttf" },
-  { "C:/Windows/Fonts/NotoSansHebrew-Regular.ttf" },
-  { "C:/Windows/Fonts/msjh.ttc", "C:/Windows/Fonts/mingliub.ttc" },
-}
-
-local function load_optional_font(paths, fonts)
-  if #fonts >= max_default_font_group - 1 then return end
-  for _, path in ipairs(paths) do
-    if system.get_file_info(path) then
-      local ok, font_or_error = pcall(renderer.font.load, path, font_size)
-      if ok and font_or_error then
-        table.insert(fonts, font_or_error)
-        core.log_quiet("Default font fallback loaded: %s", path)
-        return
-      end
-      core.log_quiet("Default font fallback failed: %s (%s)", path, tostring(font_or_error))
-    end
-  end
-end
-
-local function load_fallback_fonts(role)
-  local fonts = {}
-  for _, paths in ipairs(default_font_fallbacks) do
-    load_optional_font(paths, fonts)
-  end
-  core.log_quiet("Default %s font fallbacks loaded: %d", role, #fonts)
-  return fonts
-end
+local font_fallbacks = require "core.font_fallbacks"
 
 local function load_text_font(primary_path, options, fallbacks, size)
   size = size or font_size
-  local fonts = {
-    renderer.font.load(primary_path, size, options or { ligatures = true }),
-  }
-  for _, font in ipairs(fallbacks) do
-    fonts[#fonts + 1] = options and font:copy(size, options)
-      or (font:get_size() == size and font or font:copy(size))
-  end
-  return renderer.font.group(fonts)
+  return font_fallbacks.group(
+    renderer.font.load(primary_path, size, options or { ligatures = true }), fallbacks, options
+  )
 end
 local interface_fallbacks, code_fallbacks, terminal_fallbacks
 
@@ -339,11 +292,11 @@ end
 
 interface_fallbacks = startup_measure(
   "font_interface_fallback_loading",
-  function() return load_fallback_fonts("interface") end
+  function() return font_fallbacks.load(font_size, "interface") end
 )
 code_fallbacks = startup_measure(
   "font_code_fallback_loading",
-  function() return load_fallback_fonts("code") end
+  function() return font_fallbacks.load(font_size, "code") end
 )
 terminal_fallbacks = code_fallbacks
 

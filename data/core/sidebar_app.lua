@@ -143,7 +143,9 @@ function core.init()
   apply_color_theme()
   SidebarView = require "core.sidebar_view"
   style = require "core.style"
-  font = style.font
+  -- Terminal titles carry spinners and symbols the text font lacks. The editor's fallbacks draw them.
+  local font_fallbacks = require "core.font_fallbacks"
+  font = font_fallbacks.group(style.font, font_fallbacks.load(style.font:get_size(), "Sidebar"))
   -- A blended surface keeps one alpha per pixel. Subpixel text would lose the backdrop in some channels and show
   -- dark coloured outlines over a bright wallpaper. Copies at other scales keep this antialiasing.
   if system.is_surface_transparent() then
