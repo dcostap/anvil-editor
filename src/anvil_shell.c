@@ -359,7 +359,7 @@ static void apply_swapchain_background(ShellWindow *window) {
   DXGI_RGBA rgba = {(c & 0xff) / 255.0f, (c >> 8 & 0xff) / 255.0f, (c >> 16 & 0xff) / 255.0f, 1.0f};
   window->swapchain->lpVtbl->SetBackgroundColor(window->swapchain, &rgba);
 }
-/* The Project frame's background fills exposed areas, the native UI and the DWM border. */
+/* The Project frame's background fills exposed areas, the native UI and the DWM caption. */
 static void apply_background(ShellWindow *window, uint32_t background) {
   background |= 0xffu << 24;
   if (window->background == background) return;

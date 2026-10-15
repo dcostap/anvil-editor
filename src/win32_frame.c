@@ -37,6 +37,9 @@ void anvil_set_live_resize(bool live_resize);
 #ifndef DWMWA_COLOR_DEFAULT
 #define DWMWA_COLOR_DEFAULT 0xFFFFFFFF
 #endif
+#ifndef DWMWA_COLOR_NONE
+#define DWMWA_COLOR_NONE 0xFFFFFFFE
+#endif
 #ifndef WS_EX_NOREDIRECTIONBITMAP
 #define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
 #endif
@@ -191,8 +194,11 @@ void win32_frame_hwnd_update_dwm(HWND hwnd, bool enabled, const COLORREF *frame_
   MARGINS margins = enabled ? (MARGINS){ 1, 1, 1, 1 } : (MARGINS){ 0, 0, 0, 0 };
   DwmExtendFrameIntoClientArea(hwnd, &margins);
 
+  /* DWM draws its 1px border inside the window edge, over the Title Bar and the caption buttons' hover fills.
+     No single colour matches every edge pixel, so the drawn frame has none and keeps DWM's shadow. */
+  COLORREF border = enabled ? (COLORREF)DWMWA_COLOR_NONE : (COLORREF)DWMWA_COLOR_DEFAULT;
+  DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
   COLORREF color = enabled && frame_color ? *frame_color : (COLORREF)DWMWA_COLOR_DEFAULT;
-  DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &color, sizeof(color));
   DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &color, sizeof(color));
 }
 
@@ -739,7 +745,6 @@ void win32_frame_set_background(SDL_Window *window, RenColor color) {
   frame->background_brush = background_brush;
   frame->background_color = background_color;
   frame->has_background_color = true;
-  DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &background_color, sizeof(background_color));
   DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &background_color, sizeof(background_color));
 }
 
