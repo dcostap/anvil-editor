@@ -26,44 +26,20 @@ local function recorder()
 end
 
 test.describe("Sidebar list actions", function()
-  test.it("offers explicit target Windows for a loaded Project Move", function()
+  test.it("asks the shell for a Project's actions menu at a right-click", function()
     local actions, action = recorder()
     local view = SidebarView(action)
     view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={}},
-      windows={{id=5,selected_project=31},{id=8,selected_project=0},{id=9,selected_project=44}}}, 8)
-    -- Right-click opens Move choices. It does not move or unload the Project.
-    view:on_mouse_pressed("right", 20, row_y(view, "project"), 240)
-    test.equal(#actions, 0)
-    test.equal(count(view, "move"), 2)
-    view:on_mouse_pressed("left", 20, row_y(view, "move", 2), 240)
-    test.same(actions, {{"move", 31, 9}})
-    test.equal(count(view, "move"), 0)
-  end)
-
-  test.it("keeps Move choices across Sidebar updates while the Project keeps its owner", function()
-    local actions, action = recorder()
-    local view = SidebarView(action)
-    local function model(busy, owner, state)
-      return {{row_id=7,id=31,path="C:/A",state=state or "ready",window_id=owner,
-        terminals={{id="session",title="shell",cwd="C:/A",busy=busy,state="running"}}},
-        windows={{id=5,selected_project=31},{id=9,selected_project=0}}}
-    end
-    view:set_model(model(0, 5), 9)
-    view:on_mouse_pressed("right", 20, row_y(view, "project"), 240)
-    -- A Terminal busy change is a new revision. The open choices must stay under the cursor.
-    view:set_model(model(1, 5), 9)
-    test.equal(count(view, "move"), 1)
-    view:on_mouse_pressed("left", 20, row_y(view, "move"), 240)
-    test.same(actions, {{"move", 31, 9}})
-    -- A changed owner or an unloaded Project invalidates the choices.
-    view:on_mouse_pressed("right", 20, row_y(view, "project"), 240)
-    view:set_model(model(1, 9), 9)
-    test.equal(count(view, "move"), 0)
-    view:set_model(model(1, 9), 9)
-    test.equal(count(view, "move"), 0, "Choices reopened after the owner changed")
-    view:on_mouse_pressed("right", 20, row_y(view, "project"), 240)
-    view:set_model(model(1, 0, "dormant"), 9)
-    test.equal(count(view, "move"), 0)
+      {row_id=9,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}},
+      windows={{id=5,selected_project=31},{id=8,selected_project=0}}}, 8)
+    local y = row_y(view, "project", 1)
+    view:on_mouse_pressed("right", 20, y, 240)
+    test.same(actions, {{"menu", 7, 20, y}})
+    -- A Dormant Project has a menu too, and the right-click neither selects nor unloads.
+    local dormant_y = row_y(view, "project", 2)
+    view:on_mouse_pressed("right", 230, dormant_y, 240)
+    test.same(actions[2], {"menu", 9, 230, dormant_y})
+    test.equal(#actions, 2)
   end)
 
   test.it("highlights each Window's Selected Project and names Projects shown in other Windows", function()
@@ -106,20 +82,15 @@ test.describe("Sidebar list actions", function()
     if not ok then error(err) end
   end)
 
-  test.it("selects Projects and requires the explicit Unload button", function()
+  test.it("selects a Project clicked anywhere on its row", function()
     local actions, action = recorder()
     local view = SidebarView(action)
     view:set_model({{row_id=7,path="C:/B",state="ready",terminals={}},
                     {row_id=9,path="C:/A",state="dormant",exists=true,activity=os.time(),terminals={}}})
-    view:on_mouse_pressed("left", 20, row_y(view, "project", 2))
-    test.same(actions[1], {"select", 9})
-    view:on_mouse_pressed("right", 20, row_y(view, "project", 1))
-    test.equal(#actions, 1, "Right-click unloaded the Project")
+    view:on_mouse_pressed("left", 20, row_y(view, "project", 2), 240)
+    view:on_mouse_moved(230, row_y(view, "project", 1), 240)
     view:on_mouse_pressed("left", 230, row_y(view, "project", 1), 240)
-    test.same(actions[2], {"unload", 7})
-    -- A Dormant Project has nothing to unload.
-    view:on_mouse_pressed("left", 230, row_y(view, "project", 2), 240)
-    test.same(actions[3], {"select", 9})
+    test.same(actions, {{"select", 9}, {"select", 7}})
   end)
 
   test.it("asks to focus a clicked Terminal Session without giving it Project actions", function()

@@ -393,6 +393,7 @@ static AnvilSidebarProject *sidebar_project(const char *path);
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value);
 static void start_sidebar(void);
 static void set_sidebar_hidden(bool hidden);
+static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y);
 static void schedule_sidebar_restart(void);
 static ShellWindow *create_window(const AnvilShellWindowState *placement);
 static bool destroy_window(ShellWindow *window);
@@ -875,7 +876,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     switch (packet->type) {
     case ANVIL_SURFACE_MSG_FRAME: case ANVIL_SURFACE_MSG_CURSOR: case ANVIL_SURFACE_MSG_HIT_TEST:
     case ANVIL_SURFACE_MSG_SELECT_PROJECT: case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
-    case ANVIL_SURFACE_MSG_MOVE_PROJECT: case ANVIL_SURFACE_MSG_SELECT_TERMINAL:
+    case ANVIL_SURFACE_MSG_MOVE_PROJECT: case ANVIL_SURFACE_MSG_SELECT_TERMINAL: case ANVIL_SURFACE_MSG_PROJECT_MENU:
     case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
     case ANVIL_SURFACE_MSG_TEXT_INPUT: case ANVIL_SURFACE_MSG_TITLE:
     case ANVIL_SURFACE_MSG_VISIBLE: case ANVIL_SURFACE_MSG_SET_BOUNDS: case ANVIL_SURFACE_MSG_BORDERED:
@@ -903,6 +904,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_NEW_WINDOW:
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER:
     return size == sizeof(uint32_t) && *(const uint32_t *)payload != 0;
+  case ANVIL_SURFACE_MSG_PROJECT_MENU:
+    return size == sizeof(AnvilSurfaceProjectMenu) && ((const AnvilSurfaceProjectMenu *)payload)->row_id;
   case ANVIL_SURFACE_MSG_MOVE_PROJECT:
     return size == sizeof(AnvilSurfaceMoveProject) && ((const AnvilSurfaceMoveProject *)payload)->project_id &&
            ((const AnvilSurfaceMoveProject *)payload)->target_window_id;
@@ -2955,6 +2958,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_MOVE_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_SELECT_TERMINAL &&
+      message->type != ANVIL_SURFACE_MSG_PROJECT_MENU &&
       message->type != ANVIL_SURFACE_MSG_FRAME &&
       message->type != ANVIL_SURFACE_MSG_EXIT_INTENT && message->type != ANVIL_SURFACE_MSG_CURSOR &&
       message->type != ANVIL_SURFACE_MSG_HIT_TEST)
@@ -3036,6 +3040,11 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     SDL_Log("Shell Terminal Session selection requested: Window=%u session=%s closing=%d", window->id,
             (const char *)payload, window->closing);
     if (project->sidebar && !window->closing) select_terminal_path(window, path, payload);
+    break;
+  }
+  case ANVIL_SURFACE_MSG_PROJECT_MENU: {
+    const AnvilSurfaceProjectMenu *request = payload;
+    if (project->sidebar && !window->closing) show_project_menu(window, request->row_id, request->x, request->y);
     break;
   }
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
@@ -5668,6 +5677,169 @@ static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value
     SDL_free(wide);
     free(snapshot);
   }
+}
+
+/* Win32 popup menus are light unless the app prefers dark mode, which only undocumented uxtheme ordinals set. Menus
+ * follow the Color Theme's lightness; without the ordinals they stay light. */
+/* SDL's clipboard needs an SDL window. The shell's Windows are its own, so it owns the clipboard through one of
+ * them. Another process can hold the clipboard briefly, so opening it retries. */
+static bool copy_text(HWND owner, const char *text) {
+  wchar_t *wide = (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", text, strlen(text) + 1);
+  if (!wide) return false;
+  size_t bytes = (wcslen(wide) + 1) * sizeof(wchar_t);
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+  void *data = memory ? GlobalLock(memory) : NULL;
+  if (data) {
+    memcpy(data, wide, bytes);
+    GlobalUnlock(memory);
+  }
+  SDL_free(wide);
+  if (!data) {
+    if (memory) GlobalFree(memory);
+    return false;
+  }
+  bool opened = false;
+  for (int attempt = 0; attempt < 10 && !(opened = OpenClipboard(owner)); attempt++) Sleep(10);
+  bool copied = opened && EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, memory);
+  if (opened) CloseClipboard();
+  if (!copied) GlobalFree(memory);
+  return copied;
+}
+
+static void match_menu_theme(ShellWindow *window) {
+  typedef int(WINAPI * SetPreferredAppMode)(int);
+  typedef BOOL(WINAPI * AllowDarkModeForWindow)(HWND, BOOL);
+  typedef void(WINAPI * FlushMenuThemes)(void);
+  static bool loaded;
+  static SetPreferredAppMode set_mode;
+  static AllowDarkModeForWindow allow_window;
+  static FlushMenuThemes flush;
+  if (!loaded) {
+    loaded = true;
+    HMODULE uxtheme = LoadLibraryExW(L"uxtheme.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (uxtheme) {
+      set_mode = (SetPreferredAppMode)(void *)GetProcAddress(uxtheme, MAKEINTRESOURCEA(135));
+      allow_window = (AllowDarkModeForWindow)(void *)GetProcAddress(uxtheme, MAKEINTRESOURCEA(133));
+      flush = (FlushMenuThemes)(void *)GetProcAddress(uxtheme, MAKEINTRESOURCEA(136));
+    }
+    SDL_Log("Shell menu theme support: %s", set_mode && allow_window && flush ? "dark and light" : "light only");
+  }
+  if (!set_mode || !allow_window || !flush) return;
+  uint32_t c = shell_colors(window).background;
+  bool dark = (c & 0xff) * 299 + (c >> 8 & 0xff) * 587 + (c >> 16 & 0xff) * 114 < 128 * 1000;
+  allow_window(window->hwnd, dark);
+  set_mode(dark ? 2 : 3); /* ForceDark or ForceLight */
+  flush();
+}
+
+enum { PROJECT_MENU_OPEN_WINDOW = 1, PROJECT_MENU_NEW_WINDOW, PROJECT_MENU_UNLOAD, PROJECT_MENU_COPY_PATH,
+       PROJECT_MENU_EXPLORER, PROJECT_MENU_MOVE = 0x100 };
+
+/* The Sidebar's actions menu for one Project. The shell performs the chosen command itself. */
+static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y) {
+  sync_sidebar_model();
+  const AnvilSidebarProject *row = NULL;
+  for (size_t i = 0; i < shell.sidebar.count; i++)
+    if (shell.sidebar.projects[i]->row_id == row_id) row = shell.sidebar.projects[i];
+  if (!row) {
+    SDL_Log("Shell Project menu: Sidebar row %u is gone", row_id);
+    return;
+  }
+  char *path = _strdup(row->path);
+  uint32_t project_id = row->id, owner = row->window_id;
+  bool loaded = owner && project_id && row->state != ANVIL_SIDEBAR_DORMANT;
+  bool exists = row->exists;
+  HMENU menu = CreatePopupMenu();
+  if (!path || !menu) {
+    free(path);
+    if (menu) DestroyMenu(menu);
+    return;
+  }
+  /* Labels go to the log, and an isolated probe chooses one by its label. */
+  char labels[1024] = "";
+  size_t length = 0;
+  /* An isolated probe names the label in the file ANVIL_SHELL_MENU_PROBE, and the shell shows no menu. */
+  const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
+  const char *choice_file = probe && !strcmp(probe, "1") ? SDL_getenv("ANVIL_SHELL_MENU_PROBE") : NULL;
+  char choice_label[128] = "";
+  if (choice_file) {
+    FILE *file = fopen(choice_file, "rb");
+    size_t read = file ? fread(choice_label, 1, sizeof(choice_label) - 1, file) : 0;
+    if (file) fclose(file);
+    choice_label[read] = 0;
+  }
+  const char *choice = choice_file ? choice_label : NULL;
+  UINT chosen = 0;
+#define MENU_ITEM(id, label)                                                                                       \
+  do {                                                                                                         \
+    AppendMenuW(menu, MF_STRING, (id), L##label);                                                              \
+    length += (size_t)snprintf(labels + length, sizeof(labels) - SDL_min(length, sizeof(labels)), "%s%s",    \
+                               length ? "|" : "", label);                                                      \
+    if (choice && !strcmp(choice, label)) chosen = (id);                                                       \
+  } while (0)
+  if (loaded) {
+    for (ShellWindow *item = shell.windows; item; item = item->next) {
+      if (item->id == owner || item->closing || item->removing || item->id > 0xefff) continue;
+      wchar_t label[64];
+      char narrow[64];
+      _snwprintf(label, SDL_arraysize(label), L"Move to Window %u", item->id);
+      snprintf(narrow, sizeof(narrow), "Move to Window %u", item->id);
+      AppendMenuW(menu, MF_STRING, PROJECT_MENU_MOVE + item->id, label);
+      length += (size_t)snprintf(labels + length, sizeof(labels) - SDL_min(length, sizeof(labels)), "%s%s",
+                                 length ? "|" : "", narrow);
+      if (choice && !strcmp(choice, narrow)) chosen = PROJECT_MENU_MOVE + item->id;
+    }
+    MENU_ITEM(PROJECT_MENU_NEW_WINDOW, "Move to New Window");
+    MENU_ITEM(PROJECT_MENU_UNLOAD, "Unload");
+  } else if (exists) {
+    MENU_ITEM(PROJECT_MENU_OPEN_WINDOW, "Open in New Window");
+  }
+  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  MENU_ITEM(PROJECT_MENU_COPY_PATH, "Copy Path");
+  if (exists) MENU_ITEM(PROJECT_MENU_EXPLORER, "Show in File Explorer");
+#undef MENU_ITEM
+  SDL_Log("Shell Project menu: Window=%u row=%u items=%s", window->id, row_id, labels);
+  if (choice) {
+    SDL_Log("Shell Project menu probe chose: %s", chosen ? choice : "nothing");
+  } else {
+    /* The Sidebar reports surface pixels; a sliding Sidebar shows its surface moved left. */
+    POINT point = {x - (window->sidebar_full_w - window->sidebar_w), y};
+    ClientToScreen(window->hwnd, &point);
+    match_menu_theme(window);
+    cancel_input(window);
+    SetForegroundWindow(window->hwnd);
+    chosen = (UINT)TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, point.x, point.y,
+                                    window->hwnd, NULL);
+    PostMessageW(window->hwnd, WM_NULL, 0, 0);
+  }
+  DestroyMenu(menu);
+  if (chosen) SDL_Log("Shell Project menu command: %u row=%u", chosen, row_id);
+  /* The menu's loop can close the Window. */
+  window = window_for_id(window->id) == window ? window : NULL;
+  if (!window || window->closing) chosen = 0;
+  if (chosen >= PROJECT_MENU_MOVE) {
+    move_project(window, project_id, chosen - PROJECT_MENU_MOVE);
+  } else if (chosen == PROJECT_MENU_NEW_WINDOW) {
+    ShellWindow *target = create_window(NULL);
+    if (target) move_project(window, project_id, target->id);
+    else window_notice(window, "Cannot create a Window.");
+  } else if (chosen == PROJECT_MENU_UNLOAD) {
+    unload_project_path(window, path);
+  } else if (chosen == PROJECT_MENU_OPEN_WINDOW) {
+    open_project_window(window, path);
+  } else if (chosen == PROJECT_MENU_COPY_PATH || chosen == PROJECT_MENU_EXPLORER) {
+    for (char *p = path; *p; p++)
+      if (*p == '/') *p = '\\';
+    if (chosen == PROJECT_MENU_COPY_PATH) {
+      if (!copy_text(window->hwnd, path)) SDL_Log("Shell could not copy the Project path: %lu", GetLastError());
+    } else {
+      wchar_t *wide = (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", path, strlen(path) + 1);
+      HINSTANCE result = wide ? ShellExecuteW(window->hwnd, L"explore", wide, NULL, NULL, SW_SHOWNORMAL) : NULL;
+      if ((INT_PTR)result <= 32) SDL_Log("Shell could not show the Project in File Explorer: %d", (int)(INT_PTR)result);
+      SDL_free(wide);
+    }
+  }
+  free(path);
 }
 
 static BOOL CALLBACK add_visible_area(HMONITOR monitor, HDC dc, LPRECT bounds, LPARAM data) {

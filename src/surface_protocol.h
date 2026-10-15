@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 21u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 22u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -76,6 +76,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_SELECT_TERMINAL = 96,
   /* Hide the Project Sidebar in every Window, or show it again. No payload. */
   ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR = 97,
+  /* Show the actions menu for one Sidebar row's Project. Payload: AnvilSurfaceProjectMenu. */
+  ANVIL_SURFACE_MSG_PROJECT_MENU = 98,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */
@@ -84,6 +86,8 @@ typedef struct {
   uint32_t type;
 } AnvilSidebarSurfacePacket;
 typedef struct { uint32_t project_id, target_window_id; } AnvilSurfaceMoveProject;
+/* A Sidebar row id and the pointer position in Sidebar surface pixels. */
+typedef struct { uint32_t row_id; int32_t x, y; } AnvilSurfaceProjectMenu;
 
 typedef struct {
   uint32_t userdir_size;

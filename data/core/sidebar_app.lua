@@ -54,7 +54,7 @@ end
 local function add_surface(id, window)
   local surface = {id = id, window = window, native_id = system.get_window_id(window), scale = system.get_scale(window),
     redraw = true, query_needed = true}
-  surface.view = SidebarView(function(action, row_id, target)
+  surface.view = SidebarView(function(action, row_id, target, ...)
     if action == "collapsed" then
       core.log_quiet("Sidebar group %s collapsed=%s", row_id, tostring(target))
       save_collapsed()
@@ -75,9 +75,10 @@ local function add_surface(id, window)
       end
       return
     end
-    if action == "move" then
-      core.log_quiet("Sidebar Move: Window=%d Project=%d target=%d", id, row_id, target)
-      if not system.move_project(row_id, target) then core.log_quiet("Sidebar Move request rejected: Project=%d target=%d", row_id, target) end
+    if action == "menu" then
+      local x, y = target, ...
+      local sent = system.show_project_menu(row_id, x, y)
+      core.log_quiet("Sidebar Project menu: Window=%d row=%d sent=%s", id, row_id, tostring(sent))
       return
     end
     for _, project in ipairs(core.project_sidebar or {}) do
@@ -85,7 +86,7 @@ local function add_surface(id, window)
         if action == "select" then
           core.log_quiet("Sidebar selection: Window=%d Project=%d owner=%d", id, project.id, project.window_id)
           system.select_project(project.path)
-        elseif action == "unload" then system.unload_project(project.path) end
+        end
         return
       end
     end
@@ -166,12 +167,12 @@ function core.on_event(name, ...)
     local button, x, y = ...
     local width, height = renwindow.get_size(core.window)
     current.view:set_size(width, height)
-    current.view:on_mouse_pressed(button, x, y, width); core.redraw = true
+    current.view:on_mouse_pressed(button, x, y); core.redraw = true
   elseif name == "mousemoved" then
     local x, y = ...
     local width, height = renwindow.get_size(core.window)
     current.view:set_size(width, height)
-    if current.view:on_mouse_moved(x, y, width) then core.redraw = true end
+    if current.view:on_mouse_moved(x, y) then core.redraw = true end
     current.pointer_y = y
   elseif name == "mouseleft" then
     current.pointer_y = nil

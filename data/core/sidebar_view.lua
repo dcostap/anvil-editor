@@ -1,7 +1,8 @@
 local Object = require "core.object"
 local style = require "core.style"
 
--- The shell owns identity and lifecycle. This view sends only Project and Terminal Session actions.
+-- The shell owns identity and lifecycle. This view sends only Project and Terminal Session actions. A right-click on
+-- a Project asks the shell for its native actions menu: Move, Unload and the rest.
 -- Layout: the main list holds loaded Projects and Projects used in the last week. Older Projects sit in
 -- collapsible age groups aligned to the bottom, which take at most part of the height and scroll on their own.
 -- Inside a Project, older Terminal Sessions fold into collapsible groups the same way.
@@ -34,14 +35,7 @@ function SidebarView:set_size(width, height)
 end
 
 function SidebarView:set_model(projects, window_id)
-  -- Revisions arrive for unrelated changes, such as Terminal state. Keep open Move choices while still valid.
-  local move_project = nil
-  for _, project in ipairs(projects) do
-    if project.id == self.move_project and project.window_id == self.move_owner and project.state ~= "dormant" then
-      move_project = project.id
-    end
-  end
-  self.projects, self.window_id, self.move_project = projects, window_id, move_project
+  self.projects, self.window_id = projects, window_id
   self:rebuild_rows()
 end
 
@@ -54,7 +48,6 @@ local function metrics()
     group = h + 12 * SCALE,
     project = h + 14 * SCALE,
     terminal = h + 8 * SCALE,
-    unload = 26 * SCALE,
     indent = 14 * SCALE,
   }
 end
@@ -117,13 +110,6 @@ function SidebarView:rebuild_rows()
       end
     end
     add({kind = "project", project = project, selected = is_selected and not focused}, m.project)
-    if self.move_project == project.id then
-      for _, window in ipairs(projects.windows or {}) do
-        if window.id ~= project.window_id then
-          add({kind = "move", project = project, move_target = window.id}, m.terminal)
-        end
-      end
-    end
     -- Recent and ringing Terminal Sessions show directly, and so do those from hosts that do not report
     -- activity. Older ones fold into groups.
     local older = {}
@@ -233,25 +219,12 @@ function SidebarView:row_at(y)
   end
 end
 
-local function in_unload(row, x, width)
-  return width and row.kind == "project" and row.project.state ~= "dormant"
-    and x >= width - metrics().pad - metrics().unload
-end
-
-function SidebarView:on_mouse_pressed(button, x, y, width)
+function SidebarView:on_mouse_pressed(button, x, y)
   if button ~= "left" and button ~= "right" then return end
   local row = self:row_at(y)
   if not row then return end
   if row.kind == "group" or row.kind == "terminal_group" then
     if button == "left" then self:toggle(row.key, row.collapsed) end
-    return
-  end
-  if row.kind == "move" then
-    if button == "left" then
-      self.action("move", row.project.id, row.move_target)
-      self.move_project = nil
-      self:rebuild_rows()
-    end
     return
   end
   if row.kind == "terminal" then
@@ -260,15 +233,7 @@ function SidebarView:on_mouse_pressed(button, x, y, width)
   end
   if row.kind ~= "project" then return end
   if button == "right" then
-    if row.project.id and row.project.window_id and row.project.window_id ~= 0 then
-      self.move_project = self.move_project ~= row.project.id and row.project.id or nil
-      self.move_owner = row.project.window_id
-      self:rebuild_rows()
-    end
-    return
-  end
-  if in_unload(row, x, width) then
-    self.action("unload", row.project.row_id)
+    self.action("menu", row.project.row_id, x, y)
   else
     self.action("select", row.project.row_id)
   end
@@ -277,15 +242,14 @@ end
 function SidebarView:update_hover()
   local row = self.hover_y and self:row_at(self.hover_y)
   local hover = row and row.kind ~= "empty" and row or nil
-  local unload = row and in_unload(row, self.hover_x, self.hover_width)
-  local changed = hover ~= self.hover or unload ~= self.hover_unload
-  self.hover, self.hover_unload = hover, unload
+  local changed = hover ~= self.hover
+  self.hover = hover
   return changed
 end
 
 -- Returns true when the hover changed and the view needs a redraw.
-function SidebarView:on_mouse_moved(x, y, width)
-  self.hover_x, self.hover_y, self.hover_width = x, y, width
+function SidebarView:on_mouse_moved(x, y)
+  self.hover_x, self.hover_y = x, y
   return self:update_hover()
 end
 
@@ -424,11 +388,6 @@ function SidebarView:draw_row(row, y, width, now)
       x, y, row, right)
     return
   end
-  if row.kind == "move" then
-    text("Move to Window " .. row.move_target, left + 30 * SCALE, y + (row.h - style.font:get_height()) / 2,
-      style.accent)
-    return
-  end
   if row.kind == "terminal" then
     local terminal = row.terminal
     local color, note = terminal_status(terminal)
@@ -448,21 +407,8 @@ function SidebarView:draw_row(row, y, width, now)
     note = "Window " .. project.window_id
   end
   if not note and project.state == "dormant" then note = age_text(project_activity(project), now) end
-  local unload = project.state ~= "dormant" and self.hover == row
   local dim_name = project.state == "dormant" and not project.exists
-  self:label_with_note(name_of(project.path), dim_name and style.dim or style.text,
-    not unload and note or nil, x, y, row, unload and right - m.unload or right)
-  if unload then
-    local bx = right - m.unload
-    local ty = y + (row.h - style.font:get_height()) / 2
-    if self.hover_unload then
-      renderer.draw_rounded_rect(bx + 2 * SCALE, y + 4 * SCALE, m.unload - 4 * SCALE, row.h - 8 * SCALE, 4 * SCALE,
-        tint(style.text, 36))
-    end
-    local glyph = "\u{00D7}"
-    text(glyph, bx + (m.unload - style.font:get_width(glyph)) / 2, ty,
-      self.hover_unload and style.text or style.dim)
-  end
+  self:label_with_note(name_of(project.path), dim_name and style.dim or style.text, note, x, y, row, right)
 end
 
 function SidebarView:draw(width, height)

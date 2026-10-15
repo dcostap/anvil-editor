@@ -1845,6 +1845,15 @@ static int f_set_focused_terminal(lua_State *L) {
   return 1;
 }
 
+/* The Sidebar's right-click on a Project row. The shell shows the menu and performs its command. */
+static int f_show_project_menu(lua_State *L) {
+  lua_Integer row = luaL_checkinteger(L, 1);
+  luaL_argcheck(L, row > 0 && row <= UINT32_MAX, 1, "invalid Sidebar row");
+  lua_pushboolean(L, anvil_hosted_surface_project_menu((uint32_t)row, (int)luaL_checknumber(L, 2),
+                                                       (int)luaL_checknumber(L, 3)));
+  return 1;
+}
+
 /* Returns false outside a shell, which has no Project Sidebar. */
 static int f_toggle_project_sidebar(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_toggle_sidebar());
@@ -2604,6 +2613,7 @@ static const luaL_Reg lib[] = {
   { "set_focused_terminal",  f_set_focused_terminal  },
   { "select_terminal",       f_select_terminal       },
   { "toggle_project_sidebar", f_toggle_project_sidebar },
+  { "show_project_menu",     f_show_project_menu     },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
   { "set_shell_colors", f_set_shell_colors },
