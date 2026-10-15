@@ -36,6 +36,10 @@
 #define SHELL_PIPE_BUFFER (64u * 1024u)
 /* How long one resize step waits for a surface frame of the new size. */
 #define SHELL_RESIZE_WAIT_MS 50
+/* A newly selected Project's first frame replaces the previous Project's frame. If it takes longer than this,
+ * the shell stops showing the old Project. */
+#define SHELL_SELECTION_HOLD_MS 500
+#define SHELL_SELECTION_HOLD_TIMER 0x8100u
 #define SHELL_CLOSE_TIMEOUT_MS 5000
 /* Covers the Project's shell-loss save, which can take up to its 5 s deadline. */
 #define SHELL_ADOPTION_REQUEST_MS 8000
@@ -166,6 +170,9 @@ typedef struct {
   int surface_w, surface_h; /* the last frame's size within the private texture */
   int texture_w, texture_h; /* private texture capacity; it grows with slack */
   bool have_surface, busy;
+  /* The surface still shows the previously selected Project until the selected one presents. */
+  bool held;
+  Uint64 held_since;
   /* Screen position of the last frame that matched its configuration. A stale frame stays there during a live
    * resize, so a left- or top-edge drag does not move the content. */
   POINT anchor;
@@ -1316,6 +1323,7 @@ static void release_d3d11(ShellWindow *window) {
   SAFE_RELEASE(window->device);
   close_memory_frame(&window->project_presentation);
   window->project_presentation.have_surface = false;
+  window->project_presentation.held = false;
   window->project_presentation.shared_name[0] = 0;
   SAFE_RELEASE(window->sidebar_presentation.shared_mutex);
   SAFE_RELEASE(window->sidebar_presentation.shared);
@@ -1631,6 +1639,26 @@ static bool sidebar_restart_offered(void) {
   return shell.sidebar_restart_limited || !shell.sidebar_process || shell.sidebar_process->state == SHELL_FAILED;
 }
 
+/* The Project area shows the native starting, dormant or failed card while no Project frame covers it. A held
+ * frame of the previous Project covers it until the selected Project presents. */
+static bool project_area_covered(ShellWindow *window) {
+  ShellProject *project = window->selected;
+  ShellPresentation *content = &window->project_presentation;
+  if (project->state == SHELL_FAILED) return !content->have_surface || content->held;
+  if (content->held) return false;
+  return project->state == SHELL_STARTING || project->state == SHELL_DORMANT;
+}
+
+static void end_selection_hold(ShellWindow *window) {
+  ShellPresentation *content = &window->project_presentation;
+  if (!content->held) return;
+  content->held = content->have_surface = false;
+  window->ui_dirty = true;
+  SDL_Log("Shell stopped showing the previous Project's frame: Window=%u Project=%u waited %.1f ms", window->id,
+          window->selected->id, (double)(SDL_GetTicksNS() - content->held_since) / SDL_NS_PER_MS);
+  if (window->shown) composite_and_present(window);
+}
+
 /* The selected Project's Color Theme colours the controls. Before it reports them, they match the dark theme. */
 static AnvilSurfaceControlColors control_colors(ShellWindow *window) {
   ShellProject *project = window->selected;
@@ -1736,8 +1764,7 @@ static void update_ui(ShellWindow *window) {
   bool full = window->ui_dirty;
   int dirty_count = (project->state == SHELL_FAILED || project->state == SHELL_DORMANT) ? 3 : 2;
   /* The composite reads the full Project area only while no Project frame covers it, and the notice strip. */
-  bool cover = project->state == SHELL_STARTING || project->state == SHELL_DORMANT ||
-               (project->state == SHELL_FAILED && !window->project_presentation.have_surface);
+  bool cover = project_area_covered(window);
   HRGN clip = CreateRectRgn(0, 0, 0, 0);
   if (!full) {
     for (int i = 0; i < dirty_count; i++) {
@@ -2061,8 +2088,7 @@ static void composite_and_present(ShellWindow *window) {
     compose_rect(window, NULL, control_rect(window, hot), 0, 0, fill);
   }
   blend_ui(window, window->controls);
-  if (project->state == SHELL_STARTING || project->state == SHELL_DORMANT ||
-      (project->state == SHELL_FAILED && !window->project_presentation.have_surface))
+  if (project_area_covered(window))
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h});
   else if (project->state == SHELL_FAILED)
     copy_ui(window, window->failure_card);
@@ -2148,6 +2174,12 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
   }
   set_surface_busy(window, surface, false);
   surface->have_surface = true;
+  if (surface->held) {
+    surface->held = false;
+    KillTimer(window->hwnd, SHELL_SELECTION_HOLD_TIMER);
+    SDL_Log("Shell replaced the previous Project's frame: Window=%u Project=%u after %.1f ms", window->id,
+            project->id, (double)(SDL_GetTicksNS() - surface->held_since) / SDL_NS_PER_MS);
+  }
   if (surface == &window->project_presentation && frame->background)
     apply_background(window, frame->background);
   bool transparent = frame->kind == ANVIL_SURFACE_FRAME_D3D11 && (frame->background >> 24) == 0;
@@ -2200,7 +2232,7 @@ static void resize_step(ShellWindow *window) {
   if (window->sidebar && shell.sidebar_process)
     send_configure(window->sidebar_client);
   int width = window->buffer_w, height = window->buffer_h;
-  bool stale = !window->project_presentation.have_surface ||
+  bool stale = !window->project_presentation.have_surface || window->project_presentation.held ||
                window->project_presentation.surface_w != width ||
                window->project_presentation.surface_h != height;
   Uint64 started = SDL_GetTicksNS();
@@ -3799,6 +3831,11 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   if (!window)
     return DefWindowProcW(hwnd, msg, wparam, lparam);
   ShellProject *project = window->selected;
+  if (msg == WM_TIMER && wparam == SHELL_SELECTION_HOLD_TIMER) {
+    KillTimer(hwnd, SHELL_SELECTION_HOLD_TIMER);
+    end_selection_hold(window);
+    return 0;
+  }
   if (msg == WM_TIMER) {
     ShellProject *timed = NULL;
     if (shell.sidebar_process && shell.sidebar_process->window_id == window->id &&
@@ -4397,7 +4434,7 @@ static bool start_project(ShellProject *project, int argc, char **argv) {
     project->writer_stop = false;
     project->frame_pending = false;
     if (project == window->selected)
-      window->project_presentation.have_surface = false;
+      window->project_presentation.have_surface = window->project_presentation.held = false;
     project->close_requested_ns = 0;
     stop_close_timer(project);
     project->close_serial++;
@@ -4489,7 +4526,17 @@ static void select_project(ShellProject *project) {
   SAFE_RELEASE(window->project_presentation.shared);
   window->project_presentation.shared_name[0] = 0;
   close_memory_frame(&window->project_presentation);
-  window->project_presentation.have_surface = false;
+  /* Keep the previous Project's last frame on screen until the selected Project presents, so the switch shows no
+   * empty frames. A Project that does not present soon gets its normal starting area. Dormant and failed Projects
+   * present nothing, so their cards show at once. */
+  ShellPresentation *content = &window->project_presentation;
+  content->held = content->have_surface && (project->state == SHELL_READY || project->state == SHELL_STARTING);
+  if (content->held) {
+    content->held_since = SDL_GetTicksNS();
+    SetTimer(window->hwnd, SHELL_SELECTION_HOLD_TIMER, SHELL_SELECTION_HOLD_MS, NULL);
+  } else {
+    content->have_surface = false;
+  }
   window->selected = project;
   window->resize_wait_disabled = false;
   window->ui_dirty = true;
