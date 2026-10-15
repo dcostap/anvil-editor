@@ -19,12 +19,19 @@ and selection. The Sidebar process only draws and reports user actions.
 
 ## Current state
 
-`data/core/sidebar_view.lua` (124 lines) draws every row with three text lines:
+Commit f1899f7f redesigned the list. `data/core/sidebar_view.lua` now draws:
 
-- Project row: folder name, then a state string such as `ready / Window 2 / Close choice`, then
-  "Right-click for Move". A loaded Project has an "Unload" button on the right.
-- Terminal Session row: title, then `running / busy`, then its working directory.
-- A "Refresh" bar above the list. Right-click on a Project opens inline "Move to Window N" rows.
+- A PROJECTS header with Refresh, then the loaded Projects with their Terminal Sessions, then RECENT Dormant
+  Projects collapsed behind "Show more".
+- One-line Project rows with status dots, rounded hover and selection, an Unload button on hover, and the
+  owning Window only for Projects shown in another Window. Right-click still opens inline Move rows.
+- One-line Terminal Session rows with a status dot and the title, or "Terminal" when the title is empty.
+
+User feedback, 2026-10-15:
+
+- A Terminal Session row must show the same live title as its tab, for example `[40 s] π - GLP4`. Today the
+  Sidebar reads titles from the Terminal Session registry scan, which does not carry the live title.
+- The Sidebar does not show which Terminal Session has keyboard focus in its Project.
 
 Facts that constrain the design:
 
@@ -70,8 +77,10 @@ Each item has a recommendation. Accept, change, or reject each one.
 4. **Remove from list.** New action. Recommendation: allowed only for Dormant Projects with no running Terminal
    Session. It removes the recent entry; it never deletes files or Workspace data. Opening the directory again
    brings it back.
-5. **Terminal Session rows.** Recommendation: one line each, indented under its Project — the title, with the
-   working directory in the tooltip. A mark shows busy, idle, exited, or bell. Clicking a row selects its
+5. **Terminal Session rows.** Recommendation: one line each, indented under its Project — the live title that
+   its tab shows, with the working directory in the tooltip. A mark shows busy, idle, exited, or bell. The
+   Terminal Session focused in the Selected Project has the selection background, and the Project row then has
+   none. Clicking a row selects its
    Project and focuses that Terminal Session in the Project. Under a Dormant Project, clicking loads the
    Project first. Each Project's Terminal Sessions can be collapsed with a chevron; collapsed state persists.
    Alternative: show only a count of Terminal Sessions per Project.
