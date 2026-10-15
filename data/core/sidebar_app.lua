@@ -94,6 +94,13 @@ function core.init()
   SidebarView = require "core.sidebar_view"
   style = require "core.style"
   font = style.font
+  -- A blended surface keeps one alpha per pixel. Subpixel text would lose the backdrop in some channels and show
+  -- dark coloured outlines over a bright wallpaper. Copies at other scales keep this antialiasing.
+  if system.is_surface_transparent() then
+    font = font:copy(font:get_size(), {antialiasing = "grayscale"})
+    style.font = font
+    core.log_quiet("Sidebar font uses grayscale antialiasing on a transparent surface")
+  end
   base_font_size = font:get_size() / SCALE
   fonts[SCALE] = font
   local id = system.get_anvil_window_id()
