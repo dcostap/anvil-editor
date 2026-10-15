@@ -8663,14 +8663,14 @@ local function table_cell_selection_lookup(view)
   return lookup
 end
 
----Whether a selection covers exactly the cell of `row`. An empty cell only
----counts as part of a selection group; a lone caret there is a caret.
+---Whether a selection covers exactly the cell of `row` as part of a group.
+---A lone selection of one cell's whole text, or a lone caret in an empty
+---cell, is ordinary text selection.
 local function row_has_table_cell_selection(lookup, line, row)
+  if not lookup.grouped then return false end
   local col1, col2 = row.cell_source_col1, row.cell_source_col2
   local selected = col1 and lookup[line] and lookup[line][col1]
-  if selected == nil then return false end
-  if col1 == col2 then return lookup.grouped and selected == col1 end
-  return selected == col2
+  return selected ~= nil and selected == col2
 end
 
 fragment_in_table_cell_selection = function(view, line, fragment)
@@ -8779,6 +8779,24 @@ local function is_table_cell_selection(view, line1, col1, line2, col2)
   return false
 end
 
+---How a selection from `col1` to `col2` paints the cell of `row`: "cell"
+---for a Table Cell Selection, "covered" for a range that runs past the cell,
+---or nil for text selection.
+local function table_cell_selection_paint(view, row, col1, col2)
+  local cell_col1, cell_col2 = row.cell_source_col1, row.cell_source_col2
+  if not row.table_cell or not cell_col1
+  or col1 > cell_col1 or col2 < cell_col2
+  then
+    return nil
+  end
+  if col1 < cell_col1 or col2 > cell_col2 then return "covered" end
+  if row.selection_fill and row.selection_frame_x1
+  and table_cell_selection_lookup(view).grouped
+  then
+    return "cell"
+  end
+end
+
 local function draw_line_render_position_row_range(
   view, render_line, col1, col2, x, y, color
 )
@@ -8786,16 +8804,16 @@ local function draw_line_render_position_row_range(
   if type(rows) ~= "table" or #rows == 0 then return false end
   local drawn = false
   for _, row in ipairs(rows) do
-    if row.selection_full_cell
-    and col1 <= (row.cell_source_col1 or math.huge)
-    and col2 >= (row.cell_source_col2 or -math.huge)
-    then
-      if row.selection_fill and row.selection_frame_x1
-      and col1 == row.cell_source_col1 and col2 == row.cell_source_col2
-      then
-        drawn = draw_table_cell_selection_fill(row, x, y) or drawn
-      else
-        drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
+    local cell_paint = table_cell_selection_paint(view, row, col1, col2)
+    if cell_paint then
+      -- The cell's first line paints the whole cell; its wrapped lines add
+      -- nothing.
+      if row.selection_full_cell then
+        if cell_paint == "cell" then
+          drawn = draw_table_cell_selection_fill(row, x, y) or drawn
+        else
+          drawn = draw_line_render_full_cell(view, row, x, y, color) or drawn
+        end
       end
       goto continue_position_row_selection
     end

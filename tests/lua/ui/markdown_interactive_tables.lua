@@ -576,14 +576,41 @@ test.describe("Markdown Interactive Table Editing", function()
     return #(rects[SELECTION_FILL] or {}), #(rects[SELECTION_OUTLINE] or {})
   end
 
-  test.it("outlines a completely selected cell", function()
+  test.it("shows a lone selection of a cell's whole text as text selection", function()
     with_cell_selection_colors(function()
       local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two |\n\nplain")
       buffer:set_selection(3, 6, 3, 3)
       refresh(view)
-      local fills, outlines = count_cell_paint(view, 3)
-      test.equal(fills, 1, "fully selected table cell was not painted")
-      test.equal(outlines, 4, "fully selected table cell did not receive an outline")
+      local rects = paint_rects(view, { 3 })
+      test.equal(#(rects[SELECTION_FILL] or {}), 0, "a lone selection looked like a selected cell")
+      test.equal(#(rects[SELECTION_OUTLINE] or {}), 0, "a lone selection was outlined")
+      local text = test.not_nil((rects[style.selection] or {})[1], "the text selection was not drawn")
+      test.ok(text.width < table_cells(view, 3)[1].width, "the text selection covered the whole cell")
+
+      local active_view, disable_blink = core.active_view, config.disable_blink
+      local carets = {}
+      view.active_window_has_focus = function() return true end
+      view.draw_caret = function(_, _, _, line) carets[#carets + 1] = line end
+      core.active_view, config.disable_blink = view, true
+      local ok, err = pcall(function() view:draw_overlay() end)
+      core.active_view, config.disable_blink = active_view, disable_blink
+      if not ok then error(err, 0) end
+      test.same(carets, { 3 }, "a lone selection in a cell hid its caret")
+    end)
+  end)
+
+  test.it("paints no text selection on the wrapped lines of selected cells", function()
+    with_cell_selection_colors(function()
+      local view, buffer = make_view(
+        "| A | B |\n| --- | --- |\n| first<br>second | two |\n\nplain"
+      )
+      buffer:set_selection(5, 1)
+      refresh(view)
+      test.equal(#table_cells(view, 3)[1].text_lines, 2)
+      test.equal(markdown_tables.select_row(view, 3), true)
+      local rects = paint_rects(view, { 3 })
+      test.equal(#(rects[SELECTION_FILL] or {}), 2)
+      test.equal(#(rects[style.selection] or {}), 0, "selected cells also drew text selection")
     end)
   end)
 

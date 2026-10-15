@@ -212,7 +212,7 @@ A Markdown Live Preview behavior that keeps a Markdown table presented as an edi
 _Avoid_: Table Source Mode, raw table editing
 
 **Table Cell Selection**:
-A selection of one table cell's complete editable contents in Interactive Table Editing. Dragging within one cell creates an ordinary text selection; dragging across cell boundaries creates a rectangular group represented as multiple Table Cell Selections. A selected cell, including an empty selected cell, is visually distinguished from a partial text selection.
+One of a group of selections that each cover one table cell's complete editable contents in Interactive Table Editing. Dragging within one cell creates an ordinary text selection, even when it covers all of the cell's text; dragging across cell boundaries creates a rectangular group represented as multiple Table Cell Selections. Selected cells, including empty ones, look selected as whole cells rather than as selected text.
 _Avoid_: Grid cursor, table highlight
 
 **Hover Insertion Control**:
