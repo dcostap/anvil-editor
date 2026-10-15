@@ -74,7 +74,7 @@ bool anvil_hosted_surface_unload_project(const char *path);
 /* Tells the shell that this Project saved a Color Theme, so other processes reload it. */
 bool anvil_hosted_surface_color_theme_saved(void);
 /* The shell draws this Project's Window controls in these colours while the Project is selected. */
-bool anvil_hosted_surface_set_control_colors(const AnvilSurfaceControlColors *colors);
+bool anvil_hosted_surface_set_shell_colors(const AnvilSurfaceShellColors *colors);
 bool anvil_hosted_surface_sidebar_source(const char *userdir, const char *recents);
 bool anvil_hosted_surface_sidebar_query(int offset, bool refresh);
 float anvil_hosted_surface_display_scale(void);

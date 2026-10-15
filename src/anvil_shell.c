@@ -147,8 +147,8 @@ typedef struct ShellProject {
   SDL_Condition *frame_cond;
   AnvilSurfaceConfigure last_config;
   AnvilSurfaceHitTest hit;
-  AnvilSurfaceControlColors control_colors;
-  bool has_control_colors;
+  AnvilSurfaceShellColors shell_colors;
+  bool has_shell_colors;
   int child_cursor;
   Uint64 close_requested_ns;
   SDL_TimerID close_timer;
@@ -264,7 +264,7 @@ struct ShellWindow {
   SDL_TimerID retry_timer;
   int hovered_control, pressed_control;
   /* The colours of the drawn controls layer; a change repaints it. */
-  AnvilSurfaceControlColors ui_colors;
+  AnvilSurfaceShellColors ui_colors;
   bool ui_focused;
   RECT controls, restart_button, close_button;
   RECT failure_card;
@@ -285,6 +285,9 @@ typedef struct {
   uint64_t activation;
   UINT_PTR retire_timer;
   AnvilSidebarModel sidebar;
+  /* The Color Theme is global. The latest colours from any Project or the Sidebar draw what no Project covers. */
+  AnvilSurfaceShellColors theme_colors;
+  bool has_theme_colors;
   AnvilSidebarScan *sidebar_scan;
   char *sidebar_userdir, *sidebar_recents;
   UINT_PTR sidebar_timer;
@@ -869,8 +872,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size == sizeof(uint64_t);
   case ANVIL_SURFACE_MSG_HIT_TEST:
     return size == sizeof(AnvilSurfaceHitTest);
-  case ANVIL_SURFACE_MSG_CONTROL_COLORS:
-    return size == sizeof(AnvilSurfaceControlColors);
+  case ANVIL_SURFACE_MSG_SHELL_COLORS:
+    return size == sizeof(AnvilSurfaceShellColors);
   case ANVIL_SURFACE_MSG_SET_BOUNDS:
     return size == sizeof(AnvilSurfaceBounds);
   case ANVIL_SURFACE_MSG_OPACITY:
@@ -1569,7 +1572,7 @@ static void ui_fill(HDC dc, RECT rect, COLORREF color) {
   DeleteObject(brush);
 }
 
-static void draw_lifecycle(ShellWindow *window, HDC dc) {
+static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellColors *colors) {
   ShellProject *project = window->selected;
   window->restart_button = (RECT){0};
   window->close_button = (RECT){0};
@@ -1582,11 +1585,13 @@ static void draw_lifecycle(ShellWindow *window, HDC dc) {
     RECT area = {window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h};
     DrawTextW(dc, L"No Project selected", -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     area.top = (area.top + area.bottom) / 2 + (int)(24 * window->scale);
+    COLORREF text = SetTextColor(dc, colors->inactive_text & 0xffffff);
     DrawTextW(dc, window->sidebar
                   ? L"Right-click the Title Bar to open a Project or create a Window.\n"
                     L"You can also select a Project in the Sidebar."
                   : L"Right-click the Title Bar to open a Project or create a Window.", -1,
               &area, DT_CENTER | DT_TOP | DT_WORDBREAK);
+    SetTextColor(dc, text);
     return;
   }
   if (project->state != SHELL_STARTING && project->state != SHELL_FAILED &&
@@ -1608,23 +1613,41 @@ static void draw_lifecycle(ShellWindow *window, HDC dc) {
   int w = (int)(140 * window->scale), h = (int)(32 * window->scale), gap = (int)(8 * window->scale);
   window->restart_button = (RECT){x - w - gap, y, x - gap, y + h};
   window->close_button = (RECT){x + gap, y, x + w + gap, y + h};
-  ui_fill(dc, window->restart_button, RGB(55, 55, 62));
-  ui_fill(dc, window->close_button, RGB(55, 55, 62));
+  ui_fill(dc, window->restart_button, colors->button & 0xffffff);
+  ui_fill(dc, window->close_button, colors->button & 0xffffff);
   DrawTextW(dc, project->state == SHELL_DORMANT ? L"Load Project" : L"Restart Project", -1,
             &window->restart_button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
   DrawTextW(dc, project->state == SHELL_DORMANT ? L"Close Window" : L"Unload Project", -1,
             &window->close_button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+/* The selected Project's Color Theme colours what the shell draws. Before it reports them, the latest colours
+ * from another Project or the Sidebar do: the Color Theme is global. Before any report, the dark theme's. */
+static AnvilSurfaceShellColors shell_colors(ShellWindow *window) {
+  ShellProject *project = window->selected;
+  if (project && project->has_shell_colors) return project->shell_colors;
+  if (shell.has_theme_colors) return shell.theme_colors;
+  return (AnvilSurfaceShellColors){0xff1c1717u, 0xff3e3737u, 0xffe1dcdcu, 0xff8c8c8cu, 0x12ffffffu,
+                                   0x20ffffffu, 0xff1c2bc4u, 0xff201f99u, 0xffffffffu};
+}
+
+/* Without a Project frame, the Project area shows the Color Theme's background. */
+static void sync_backdrop(ShellWindow *window) {
+  if (window->project_presentation.have_surface) return;
+  apply_background(window, shell_colors(window).background);
+}
+
 static void paint_failed_window(ShellWindow *window, HDC dc) {
   client_pixel_size(window, &window->buffer_w, &window->buffer_h);
   controls_geometry(window);
+  sync_backdrop(window);
+  AnvilSurfaceShellColors colors = shell_colors(window);
   RECT client = {0, 0, window->buffer_w, window->buffer_h};
   ui_fill(dc, client, window->background & 0xffffff);
   SetBkMode(dc, TRANSPARENT);
-  SetTextColor(dc, RGB(220, 220, 225));
+  SetTextColor(dc, colors.text & 0xffffff);
   HGDIOBJ old = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
-  draw_lifecycle(window, dc);
+  draw_lifecycle(window, dc, &colors);
   const wchar_t *labels[] = {L"−", L"□", L"×"};
   int width = (window->controls.right - window->controls.left) / 3;
   for (int i = 0; i < 3; i++) {
@@ -1661,14 +1684,6 @@ static void end_selection_hold(ShellWindow *window) {
   if (window->shown) composite_and_present(window);
 }
 
-/* The selected Project's Color Theme colours the controls. Before it reports them, they match the dark theme. */
-static AnvilSurfaceControlColors control_colors(ShellWindow *window) {
-  ShellProject *project = window->selected;
-  if (project && project->has_control_colors) return project->control_colors;
-  return (AnvilSurfaceControlColors){0xffe1dcdcu, 0xff8c8c8cu, 0x12ffffffu, 0x20ffffffu,
-                                     0xff1c2bc4u, 0xff201f99u, 0xffffffffu};
-}
-
 static bool window_focused(ShellWindow *window) {
   return window->window && (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS) != 0;
 }
@@ -1699,7 +1714,8 @@ static RECT control_rect(ShellWindow *window, int index) {
 static void update_ui(ShellWindow *window) {
   ShellProject *project = window->selected;
   controls_geometry(window);
-  AnvilSurfaceControlColors colors = control_colors(window);
+  sync_backdrop(window);
+  AnvilSurfaceShellColors colors = shell_colors(window);
   bool focused = window_focused(window);
   if (memcmp(&colors, &window->ui_colors, sizeof(colors)) || focused != window->ui_focused) {
     window->ui_colors = colors;
@@ -1786,9 +1802,11 @@ static void update_ui(ShellWindow *window) {
                            ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
   HGDIOBJ old_font = SelectObject(dc, font);
   SetBkMode(dc, TRANSPARENT);
-  SetTextColor(dc, RGB(220, 220, 225));
+  /* The strip's text is white coverage, and tint_coverage colours it. */
+  SetTextColor(dc, RGB(255, 255, 255));
   if (sidebar_restart_offered())
     DrawTextW(dc, L"Restart Sidebar", -1, &strip, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+  SetTextColor(dc, colors.text & 0xffffff);
   RECT status = {0, window->buffer_h - (LONG)(40 * window->scale), window->sidebar_w, window->buffer_h};
   DrawTextW(dc,
             shell.sidebar_process && shell.sidebar_process->state == SHELL_FAILED
@@ -1822,17 +1840,11 @@ static void update_ui(ShellWindow *window) {
   }
   SelectObject(dc, old_pen);
   DeleteObject(pen);
-  draw_lifecycle(window, dc);
+  draw_lifecycle(window, dc, &colors);
   GdiFlush();
-  /* Blended regions are premultiplied: the strip's light text, and the controls in the Color Theme's colours.
-   * Other regions are copied. */
-  for (int y = SDL_max(0, strip.top); y < SDL_min(strip.bottom, window->buffer_h); y++) {
-    uint8_t *row = (uint8_t *)window->ui_pixels + (size_t)y * window->ui_w * 4;
-    for (int x = SDL_max(0, strip.left); x < SDL_min(strip.right, window->buffer_w); x++) {
-      uint8_t *pixel = row + x * 4;
-      pixel[3] = SDL_max(pixel[0], SDL_max(pixel[1], pixel[2]));
-    }
-  }
+  /* Blended regions are premultiplied: the strip's text and the controls, in the Color Theme's colours. Other
+   * regions are copied. */
+  tint_coverage(window, strip, colors.text);
   for (int i = 0; i < 3; i++) {
     bool hot = window->hovered_control == i || window->pressed_control == i;
     tint_coverage(window, control_rect(window, i),
@@ -2023,6 +2035,7 @@ static void composite_and_present(ShellWindow *window) {
   if (window->render_failed) { InvalidateRect(window->hwnd, NULL, FALSE); return; }
   if (!window->rtv)
     return;
+  sync_backdrop(window);
   uint32_t background = window->background;
   const FLOAT clear[4] = {(background & 0xff) / 255.0f, (background >> 8 & 0xff) / 255.0f,
                           (background >> 16 & 0xff) / 255.0f, 1.0f};
@@ -2082,7 +2095,7 @@ static void composite_and_present(ShellWindow *window) {
   blend_ui(window, (RECT){0, 0, window->sidebar_w, window->controls.bottom});
   int hot = window->pressed_control >= 0 ? window->pressed_control : window->hovered_control;
   if (hot >= 0 && hot < 3) {
-    AnvilSurfaceControlColors colors = window->ui_colors;
+    AnvilSurfaceShellColors colors = window->ui_colors;
     uint32_t c = window->pressed_control >= 0 ? (hot == 2 ? colors.close_pressed : colors.pressed)
                                               : (hot == 2 ? colors.close_hover : colors.hover);
     float a = (c >> 24) / 255.0f;
@@ -2768,6 +2781,26 @@ static void close_decision(ShellProject *project, int decision) {
   composite_and_present(window);
 }
 
+/* Projects and the Sidebar send the global Color Theme's colours. The Sidebar's have no Window. */
+static void apply_shell_colors(ShellProject *project, const AnvilSurfaceShellColors *payload) {
+  AnvilSurfaceShellColors colors;
+  memcpy(&colors, payload, sizeof(colors));
+  if (!project->sidebar) {
+    project->shell_colors = colors;
+    project->has_shell_colors = true;
+  }
+  shell.theme_colors = colors;
+  shell.has_theme_colors = true;
+  SDL_Log("Shell colours: %s=%u background=%08x text=%08x hover=%08x", project->sidebar ? "Sidebar" : "Project",
+          project->id, (unsigned)colors.background, (unsigned)colors.text, (unsigned)colors.hover);
+  /* Windows without the selected Project's own colours, or without its frame, now use these. */
+  for (ShellWindow *item = shell.windows; item; item = item->next) {
+    item->ui_dirty = true;
+    if (item->render_failed) InvalidateRect(item->hwnd, NULL, FALSE);
+    else if (item->shown) composite_and_present(item);
+  }
+}
+
 static void handle_message(ShellProject *project, ShellMessage *message) {
   if (message->type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
     AnvilSidebarSurfacePacket packet = *(AnvilSidebarSurfacePacket *)message->payload;
@@ -2782,6 +2815,10 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     message->size -= sizeof(packet);
     memmove(message->payload, message->payload + sizeof(packet), message->size);
     handle_message(target->sidebar_client, message);
+    return;
+  }
+  if (message->type == ANVIL_SURFACE_MSG_SHELL_COLORS) {
+    apply_shell_colors(project, (const AnvilSurfaceShellColors *)message->payload);
     return;
   }
   ShellWindow *window = window_for_id(project->window_id);
@@ -2852,13 +2889,6 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
     broadcast_color_theme(project);
-    break;
-  case ANVIL_SURFACE_MSG_CONTROL_COLORS:
-    memcpy(&project->control_colors, payload, sizeof(project->control_colors));
-    project->has_control_colors = true;
-    SDL_Log("Shell Window control colours: Project=%u text=%08x hover=%08x", project->id,
-            (unsigned)project->control_colors.text, (unsigned)project->control_colors.hover);
-    if (project == window->selected && window->shown) composite_and_present(window);
     break;
   case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: {
     sync_sidebar_model();

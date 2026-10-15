@@ -46,4 +46,41 @@ function color_theme.load_style(name)
   theme_edits.apply(style, theme_edits.capture(style), draft)
 end
 
+-- The shell draws the Window controls, and the Project area while no Project frame covers it. Each shell
+-- colour name maps to its style key.
+local SHELL_COLORS = {
+  {"background", "background"}, {"button", "background2"},
+  {"text", "text"}, {"inactive_text", "dim"},
+  {"hover", "titlebar_control_hover"}, {"pressed", "titlebar_control_pressed"},
+  {"close_hover", "titlebar_close_hover"}, {"close_pressed", "titlebar_close_pressed"},
+  {"close_text", "titlebar_close_text"},
+}
+
+---The colours the shell needs from a style, for system.set_shell_colors.
+---@param style table
+---@return table<string, table>
+function color_theme.shell_colors(style)
+  local colors = {}
+  for _, key in ipairs(SHELL_COLORS) do
+    local color = style[key[2]]
+    colors[key[1]] = {color[1], color[2], color[3], color[4]}
+  end
+  return colors
+end
+
+---Whether a style still has the shell colours that were sent.
+---@param style table
+---@param sent table<string, table>?
+---@return boolean
+function color_theme.same_shell_colors(style, sent)
+  if not sent then return false end
+  for _, key in ipairs(SHELL_COLORS) do
+    local color, previous = style[key[2]], sent[key[1]]
+    for i = 1, 4 do
+      if color[i] ~= previous[i] then return false end
+    end
+  end
+  return true
+end
+
 return color_theme

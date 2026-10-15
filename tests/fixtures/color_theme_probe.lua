@@ -4,8 +4,9 @@
 -- software renderer keeps the Sidebar opaque, so its empty area shows the theme's exact background2 colour.
 -- The shell's Window controls draw in the selected Project's Color Theme: its text colour, and its pressed colour.
 -- A posted mouse move hovers only until the real cursor's leave event, so a held press shows the fill instead.
+-- theme-empty: a shell Window with no Project draws its Project area and Window controls in the saved Color Theme.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
-if action ~= "theme-global" then return end
+if action ~= "theme-global" and action ~= "theme-empty" then return end
 local core, common = require "core", require "core.common"
 local style = require "core.style"
 local ffi = require "ffi"
@@ -38,7 +39,9 @@ local function wait(fn, seconds, message)
  error(message or "Color Theme probe timed out")
 end
 local function trace()
- local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+ -- The shell creates the log when it starts.
+ local file = io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb")
+ if not file then return "" end
  local text = file:read("*a"); file:close(); return text
 end
 local function shell_window(pid)
@@ -99,7 +102,7 @@ end
 -- The selected Project uses a light Color Theme here, so its dark text colour draws the glyphs, or its dim
 -- colour while the shell Window is not focused.
 local function check_controls(window, state)
- pcall(wait, function() return trace():find("Shell Window control colours", 1, true) end, 5)
+ pcall(wait, function() return trace():find("Shell colours: Project", 1, true) end, 5)
  local frame = capture(window)
  local close = control_rect(frame, state, 2)
  local glyph = frame.pixel(close.x + math.floor(close.w / 2), math.floor(close.h / 2))
@@ -125,7 +128,53 @@ local function check_controls(window, state)
   .. ", not the Color Theme's pressed " .. show(expected))
 end
 
-if path:match("/driver$") then
+if path:match("/driver$") and action == "theme-empty" then
+ core.add_background_thread(function()
+  local shell
+  local ok, err = pcall(function()
+   local process = require "core.process"
+   shell = assert(process.start({EXEFILE, "--shell", root .. "/Project"},
+    {stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
+   wait(function() return load("a-ready") end, 30, "Project A did not start")
+   -- Project A asks for a New Window, which has no Project.
+   save("new-window", {go = true})
+   -- Project A's Window was empty before A started too.
+   local id = wait(function()
+    local ids = {}
+    for found in trace():gmatch("Shell empty Window ready: id=(%d+)") do ids[#ids + 1] = found end
+    return ids[2]
+   end, 10, "the shell did not open an empty Window")
+   local hex = assert(trace():match("Shell Window record: id=" .. id .. " SDL=%d+ hwnd=(%x+)"))
+   local window = ffi.cast("void *", tonumber(hex, 16))
+   wait(function() return trace():find("Shell Sidebar surface Ready: Window=" .. id, 1, true) end, 15,
+    "the empty Window's Sidebar did not become Ready")
+   coroutine.yield(1)
+   -- The driver loaded the same saved Color Theme.
+   local frame = capture(window)
+   local area = frame.pixel(frame.width - 24, frame.height - 24)
+   assert(same(area, rgb(style.background)), "the empty Project area drew " .. show(area)
+    .. ", not the Color Theme's background " .. show(rgb(style.background)))
+   local x, y, w, h
+   for cx, cy, cw, ch in trace():gmatch("Shell controls: x=(%d+) y=(%d+) w=(%d+) h=(%d+)") do
+    x, y, w, h = tonumber(cx), tonumber(cy), tonumber(cw), tonumber(ch)
+   end
+   assert(x, "the shell did not report its Window controls")
+   local state = {controls_w = w, controls_h = h, text = rgb(style.text), dim = rgb(style.dim)}
+   local close = control_rect(frame, state, 2)
+   local glyph = frame.pixel(close.x + math.floor(close.w / 2), math.floor(close.h / 2))
+   assert(near(glyph, state.text, 24) or near(glyph, state.dim, 24), "the close glyph drew " .. show(glyph)
+    .. ", not the Color Theme's text " .. show(state.text) .. " or dim " .. show(state.dim))
+  end)
+  local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
+  file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})
+  file:close()
+  if shell and shell:running() then shell:terminate(); shell:wait(1) end
+  local state = load("a-ready")
+  local handle = state and kernel.OpenProcess(0x1F0FFF, 0, state.pid)
+  if handle ~= nil and handle then kernel.TerminateProcess(handle, 9); kernel.CloseHandle(handle) end
+  quit()
+ end)
+elseif path:match("/driver$") then
  core.add_background_thread(function()
   local shell
   local ok, err = pcall(function()
@@ -164,6 +213,13 @@ if path:match("/driver$") then
    if handle ~= nil and handle then kernel.TerminateProcess(handle, 9); kernel.CloseHandle(handle) end
   end
   quit()
+ end)
+elseif path:match("/Project$") and action == "theme-empty" then
+ core.add_background_thread(function()
+  coroutine.yield(.5)
+  ready("a-ready")
+  wait(function() return load("new-window") end, 60)
+  assert(system.new_anvil_window(), "New Window request failed")
  end)
 elseif path:match("/Project$") then
  core.add_background_thread(function()

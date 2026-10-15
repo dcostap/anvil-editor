@@ -1822,9 +1822,9 @@ static int f_color_theme_saved(lua_State *L) {
 }
 
 /* Each field is an {r, g, b[, a]} colour; alpha defaults to 255. */
-static uint32_t check_control_color(lua_State *L, int table, const char *field) {
+static uint32_t check_shell_color(lua_State *L, int table, const char *field) {
   lua_getfield(L, table, field);
-  if (!lua_istable(L, -1)) luaL_error(L, "window control colour %s must be a table", field);
+  if (!lua_istable(L, -1)) luaL_error(L, "shell colour %s must be a table", field);
   uint32_t color = 0;
   for (int i = 0; i < 4; i++) {
     lua_rawgeti(L, -1, i + 1);
@@ -1836,14 +1836,15 @@ static uint32_t check_control_color(lua_State *L, int table, const char *field) 
   return color;
 }
 
-static int f_set_window_control_colors(lua_State *L) {
+static int f_set_shell_colors(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
-  AnvilSurfaceControlColors colors = {
-      check_control_color(L, 1, "text"),        check_control_color(L, 1, "inactive_text"),
-      check_control_color(L, 1, "hover"),       check_control_color(L, 1, "pressed"),
-      check_control_color(L, 1, "close_hover"), check_control_color(L, 1, "close_pressed"),
-      check_control_color(L, 1, "close_text")};
-  lua_pushboolean(L, anvil_hosted_surface_set_control_colors(&colors));
+  AnvilSurfaceShellColors colors = {
+      check_shell_color(L, 1, "background"),  check_shell_color(L, 1, "button"),
+      check_shell_color(L, 1, "text"),        check_shell_color(L, 1, "inactive_text"),
+      check_shell_color(L, 1, "hover"),       check_shell_color(L, 1, "pressed"),
+      check_shell_color(L, 1, "close_hover"), check_shell_color(L, 1, "close_pressed"),
+      check_shell_color(L, 1, "close_text")};
+  lua_pushboolean(L, anvil_hosted_surface_set_shell_colors(&colors));
   return 1;
 }
 
@@ -2550,7 +2551,7 @@ static const luaL_Reg lib[] = {
   { "select_project",        f_select_project        },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
-  { "set_window_control_colors", f_set_window_control_colors },
+  { "set_shell_colors", f_set_shell_colors },
   { "get_anvil_window_id",   f_get_anvil_window_id   },
   { "sidebar_surfaces", f_sidebar_surfaces },
   { "activate_sidebar_surface", f_activate_sidebar_surface },

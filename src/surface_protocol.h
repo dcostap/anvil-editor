@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 18u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 19u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
@@ -65,7 +65,7 @@ typedef enum {
   ANVIL_SURFACE_MSG_MOVE_PROJECT = 92,
   /* This Project saved a Color Theme. The shell tells every other Project and the Sidebar. No payload. */
   ANVIL_SURFACE_MSG_COLOR_THEME_SAVED = 93,
-  ANVIL_SURFACE_MSG_CONTROL_COLORS = 94,
+  ANVIL_SURFACE_MSG_SHELL_COLORS = 94,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */
@@ -201,12 +201,14 @@ typedef struct {
   int32_t x, y, w, h;
 } AnvilSurfaceBounds;
 
-/* The Color Theme's colours for the Window controls the shell draws, each R | G << 8 | B << 16 | A << 24. */
+/* The Color Theme's colours for what the shell draws, each R | G << 8 | B << 16 | A << 24. Projects and the
+ * Sidebar send them. The Project area uses the background while no Project frame covers it. */
 typedef struct {
-  uint32_t text, inactive_text; /* glyphs while the Window is focused, and while it is not */
+  uint32_t background, button;  /* the Project area, and the buttons of its native cards */
+  uint32_t text, inactive_text; /* card text and control glyphs; glyphs use inactive_text while unfocused */
   uint32_t hover, pressed;      /* minimize and maximize backgrounds */
   uint32_t close_hover, close_pressed, close_text;
-} AnvilSurfaceControlColors;
+} AnvilSurfaceShellColors;
 
 /* Appends SDL_Log output from the shell and hosted processes to the file named
  * by ANVIL_SURFACE_LOG. Both processes can share the file. Startup failures

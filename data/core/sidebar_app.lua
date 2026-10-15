@@ -72,7 +72,9 @@ local function apply_color_theme()
   end
   for _, surface in pairs(surfaces) do surface.redraw = true end
   core.redraw = true
-  core.log_quiet("Sidebar Color Theme: %s", name)
+  -- The shell draws an empty Project area and its Window controls in these colours.
+  local delivered = system.set_shell_colors(color_theme.shell_colors(require "core.style"))
+  core.log_quiet("Sidebar Color Theme: %s shell_colors=%s", name, tostring(delivered))
 end
 local function sync_surfaces()
   for _, item in ipairs(system.sidebar_surfaces()) do

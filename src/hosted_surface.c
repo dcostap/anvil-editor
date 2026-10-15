@@ -82,9 +82,9 @@ static struct {
   AnvilSurfaceConfigure adopted_config;
   /* Window state the next shell does not know. */
   char title[4097];
-  bool has_title, has_hit_test, has_control_colors;
+  bool has_title, has_hit_test, has_shell_colors;
   AnvilSurfaceHitTest hit_test;
-  AnvilSurfaceControlColors control_colors;
+  AnvilSurfaceShellColors shell_colors;
   int bordered, visible;
   Uint32 receive_event;
   Uint32 geometry_event;
@@ -611,7 +611,7 @@ void anvil_hosted_surface_finish_adoption(void) {
   view->last_cursor = -1;
   if (hosted.has_title) anvil_hosted_surface_set_title(hosted.title);
   if (hosted.has_hit_test) anvil_hosted_surface_set_hit_test(&hosted.hit_test);
-  if (hosted.has_control_colors) anvil_hosted_surface_set_control_colors(&hosted.control_colors);
+  if (hosted.has_shell_colors) anvil_hosted_surface_set_shell_colors(&hosted.shell_colors);
   if (hosted.bordered >= 0) anvil_hosted_surface_set_bordered(hosted.bordered);
   if (hosted.visible >= 0) anvil_hosted_surface_set_visible(hosted.visible);
   SDL_SetAtomicInt(&hosted.adopting, 0);
@@ -787,7 +787,9 @@ static int SDLCALL writer_thread(void *data) {
 
 static void send_message(uint16_t type, const void *payload, uint32_t size) {
   if (!hosted.active || !hosted.queue_lock || size > ANVIL_SURFACE_MAX_PAYLOAD) return;
-  bool wrapped = hosted.sidebar && type != ANVIL_SURFACE_MSG_EXIT_INTENT && type != ANVIL_SURFACE_MSG_RESTART;
+  /* The Sidebar's process-wide messages have no surface. */
+  bool wrapped = hosted.sidebar && type != ANVIL_SURFACE_MSG_EXIT_INTENT && type != ANVIL_SURFACE_MSG_RESTART &&
+                 type != ANVIL_SURFACE_MSG_SHELL_COLORS;
   uint32_t prefix = wrapped ? sizeof(AnvilSidebarSurfacePacket) : 0;
   if (size > ANVIL_SURFACE_MAX_PAYLOAD - prefix) { signal_loss("Sidebar outbound packet overflow", type, size); return; }
   HostedMessage *message = malloc(sizeof(*message) + size + prefix);
@@ -923,11 +925,11 @@ bool anvil_hosted_surface_color_theme_saved(void) {
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
-bool anvil_hosted_surface_set_control_colors(const AnvilSurfaceControlColors *colors) {
-  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
-  hosted.control_colors = *colors;
-  hosted.has_control_colors = true;
-  send_message(ANVIL_SURFACE_MSG_CONTROL_COLORS, colors, sizeof(*colors));
+bool anvil_hosted_surface_set_shell_colors(const AnvilSurfaceShellColors *colors) {
+  if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  hosted.shell_colors = *colors;
+  hosted.has_shell_colors = true;
+  send_message(ANVIL_SURFACE_MSG_SHELL_COLORS, colors, sizeof(*colors));
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1382,7 +1384,7 @@ bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; re
 bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_color_theme_saved(void) { return false; }
-bool anvil_hosted_surface_set_control_colors(const AnvilSurfaceControlColors *colors) {
+bool anvil_hosted_surface_set_shell_colors(const AnvilSurfaceShellColors *colors) {
   (void)colors;
   return false;
 }
