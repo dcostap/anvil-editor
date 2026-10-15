@@ -37,8 +37,8 @@
 /* How long one resize step waits for a surface frame of the new size. */
 #define SHELL_RESIZE_WAIT_MS 50
 /* A newly selected Project's first frame replaces the previous Project's frame. If it takes longer than this,
- * the shell stops showing the old Project. */
-#define SHELL_SELECTION_HOLD_MS 500
+ * the shell stops showing the old Project. A Project that is not loaded yet usually presents within a second. */
+#define SHELL_SELECTION_HOLD_MS 1500
 #define SHELL_SELECTION_HOLD_TIMER 0x8100u
 #define SHELL_CLOSE_TIMEOUT_MS 5000
 /* Covers the Project's shell-loss save, which can take up to its 5 s deadline. */
@@ -170,9 +170,11 @@ typedef struct {
   int surface_w, surface_h; /* the last frame's size within the private texture */
   int texture_w, texture_h; /* private texture capacity; it grows with slack */
   bool have_surface, busy;
-  /* The surface still shows the previously selected Project until the selected one presents. */
+  /* The surface still shows the previously selected Project until the selected one presents. The held frame
+   * keeps that Project's layout: a starting Project has none yet. */
   bool held;
   Uint64 held_since;
+  AnvilSurfaceConfigure held_config;
   /* Screen position of the last frame that matched its configuration. A stale frame stays there during a live
    * resize, so a left- or top-edge drag does not move the content. */
   POINT anchor;
@@ -2027,13 +2029,13 @@ static void composite_and_present(ShellWindow *window) {
   window->context->lpVtbl->ClearRenderTargetView(window->context, window->rtv, clear);
   ShellPresentation *content = &window->project_presentation;
   if (content->have_surface) {
+    const AnvilSurfaceConfigure *config = content->held ? &content->held_config : &project->last_config;
     /* A frame of the current size anchors the content. While a live resize waits for one, the old frame keeps
      * its screen position and the Project background fills the rest. */
-    POINT origin = {project->last_config.origin_x, project->last_config.origin_y};
+    POINT origin = {config->origin_x, config->origin_y};
     ClientToScreen(window->hwnd, &origin);
-    int x = project->last_config.origin_x, y = project->last_config.origin_y;
-    bool current = content->surface_w == project->last_config.pixel_w &&
-                   content->surface_h == project->last_config.pixel_h;
+    int x = config->origin_x, y = config->origin_y;
+    bool current = content->surface_w == config->pixel_w && content->surface_h == config->pixel_h;
     if (current || !window->live_resize || !content->anchored) {
       content->anchor = origin;
       content->anchored = current;
@@ -2042,9 +2044,9 @@ static void composite_and_present(ShellWindow *window) {
       y += content->anchor.y - origin.y;
     }
     /* Clip to the Project area of the backbuffer. */
-    int left = SDL_max(x, project->last_config.origin_x), top = SDL_max(y, project->last_config.origin_y);
-    int right = SDL_min(x + content->surface_w, project->last_config.origin_x + project->last_config.pixel_w);
-    int bottom = SDL_min(y + content->surface_h, project->last_config.origin_y + project->last_config.pixel_h);
+    int left = SDL_max(x, config->origin_x), top = SDL_max(y, config->origin_y);
+    int right = SDL_min(x + content->surface_w, config->origin_x + config->pixel_w);
+    int bottom = SDL_min(y + content->surface_h, config->origin_y + config->pixel_h);
     right = SDL_min(right, window->buffer_w);
     bottom = SDL_min(bottom, window->buffer_h);
     if (right > left && bottom > top) {
@@ -4533,6 +4535,7 @@ static void select_project(ShellProject *project) {
   content->held = content->have_surface && (project->state == SHELL_READY || project->state == SHELL_STARTING);
   if (content->held) {
     content->held_since = SDL_GetTicksNS();
+    content->held_config = previous->last_config;
     SetTimer(window->hwnd, SHELL_SELECTION_HOLD_TIMER, SHELL_SELECTION_HOLD_MS, NULL);
   } else {
     content->have_surface = false;

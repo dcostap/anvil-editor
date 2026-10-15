@@ -1,6 +1,7 @@
 -- mod-version:3
--- Seam: an owned shell Window with two loaded Projects. Selecting a Project that has not presented yet keeps the
--- previous Project's frame on screen, so the switch shows no empty Project area.
+-- Seam: an owned shell Window with two Projects. Selecting a Project that has not presented yet keeps the
+-- previous Project's frame on screen, so the switch shows no empty Project area. This holds for a Project that
+-- starts on selection and for a loaded Project that is slow to present.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "select-hold" then return end
 local core, common = require "core", require "core.common"
@@ -89,15 +90,29 @@ if path:match("/driver$") then
    local process = require "core.process"
    shell = assert(process.start({EXEFILE, "--shell", root .. "/Project"},
     {stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
-   wait(function() return load("a-ready") end, 30, "Project A did not start")
+   local a = wait(function() return load("a-ready") end, 30, "Project A did not start")
    local window = wait(function() return shell_window(shell:pid()) end, 10, "shell Window not found")
+   coroutine.yield(.5)
+   -- An empty stretch of the Title Bar, left of the Window controls.
+   local first = capture(window)
+   local x, y = first.width - a.controls_w - 24, 4
+   local a_shown = first.pixel(x, y)
+   assert(not same(a_shown, a.background), "the probe pixel shows A's background " .. show(a_shown))
+   -- B starts on selection. Until its first frame, every composed frame still shows A.
+   local presented = count(trace(), "showing its first")
    save("select-b", {go = true})
+   wait(function() return trace():find("path=[^\n]*Replacement") end, 10, "the shell did not select Project B")
+   local frames = 0
+   while count(trace(), "showing its first") == presented do
+    local starting = capture(window).pixel(x, y)
+    frames = frames + 1
+    assert(same(starting, a_shown), "starting Project B showed " .. show(starting) .. " in frame " .. frames
+     .. ", not A's " .. show(a_shown))
+   end
+   assert(frames > 0, "Project B presented before the probe saw the switch")
    local b = wait(function() return load("b-ready") end, 30, "Project B did not start")
    coroutine.yield(.5)
-   -- An empty stretch of B's Title Bar, left of the Window controls.
-   local before = capture(window)
-   local x, y = before.width - b.controls_w - 24, 4
-   local shown = before.pixel(x, y)
+   local shown = capture(window).pixel(x, y)
    assert(not same(shown, b.background), "the probe pixel shows B's background " .. show(shown))
    -- A cannot present while its UI thread sleeps, so its selection waits for its first frame.
    save("a-block", {go = true})
