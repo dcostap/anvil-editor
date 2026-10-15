@@ -83,6 +83,7 @@ static struct {
   /* Window state the next shell does not know. */
   char title[4097];
   bool has_title, has_hit_test, has_shell_colors;
+  char focused_terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
   AnvilSurfaceHitTest hit_test;
   AnvilSurfaceShellColors shell_colors;
   int bordered, visible;
@@ -516,6 +517,15 @@ static void dispatch_message(HostedMessage *message) {
       SDL_Log("Color Theme change event dropped: %s", SDL_GetError());
     goto complete;
   }
+  if (type == ANVIL_SURFACE_MSG_FOCUS_TERMINAL) {
+    CustomEvent event = {0};
+    event.data1 = _strdup((const char *)payload);
+    if (!event.data1 || !push_custom_event("focusterminal", &event)) {
+      free(event.data1);
+      SDL_Log("Terminal Session focus request dropped: copy or event delivery failed");
+    }
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
     const AnvilSidebarSurfacePacket *packet = (const void *)payload;
     type = packet->type;
@@ -612,6 +622,7 @@ void anvil_hosted_surface_finish_adoption(void) {
   if (hosted.has_title) anvil_hosted_surface_set_title(hosted.title);
   if (hosted.has_hit_test) anvil_hosted_surface_set_hit_test(&hosted.hit_test);
   if (hosted.has_shell_colors) anvil_hosted_surface_set_shell_colors(&hosted.shell_colors);
+  if (!hosted.sidebar) anvil_hosted_surface_focused_terminal(hosted.focused_terminal);
   if (hosted.bordered >= 0) anvil_hosted_surface_set_bordered(hosted.bordered);
   if (hosted.visible >= 0) anvil_hosted_surface_set_visible(hosted.visible);
   SDL_SetAtomicInt(&hosted.adopting, 0);
@@ -699,6 +710,11 @@ static int SDLCALL reader_thread(void *data) {
         break;
       case ANVIL_SURFACE_MSG_SIDEBAR_MODEL:
         if (size < 2 || body[size - 1] || memchr(body, 0, size - 1))
+          goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_FOCUS_TERMINAL:
+        if (hosted.sidebar || size != ANVIL_SURFACE_TERMINAL_ID_LEN + 1 || body[size - 1] ||
+            strspn((const char *)body, "0123456789abcdef") != ANVIL_SURFACE_TERMINAL_ID_LEN)
           goto failed;
         break;
       case ANVIL_SURFACE_MSG_SIDEBAR_REMOVE:
@@ -916,6 +932,30 @@ bool anvil_hosted_surface_open_project_picker(void) {
 bool anvil_hosted_surface_unload_project(const char *path) {
   if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_UNLOAD_PROJECT, path, (uint32_t)strlen(path) + 1);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_focused_terminal(const char *id) {
+  size_t size = strlen(id);
+  if (hosted.sidebar || (size && size != ANVIL_SURFACE_TERMINAL_ID_LEN)) return false;
+  memcpy(hosted.focused_terminal, id, size + 1);
+  if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  send_message(ANVIL_SURFACE_MSG_FOCUSED_TERMINAL, id, (uint32_t)size + 1);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_select_terminal(const char *path, const char *id) {
+  size_t path_size = strlen(path) + 1;
+  if (!hosted.active || !hosted.sidebar || strlen(id) != ANVIL_SURFACE_TERMINAL_ID_LEN || path_size < 2 ||
+      path_size >= 32768 || SDL_GetAtomicInt(&hosted.loss_cause))
+    return false;
+  size_t size = ANVIL_SURFACE_TERMINAL_ID_LEN + 1 + path_size;
+  char *request = malloc(size);
+  if (!request) { signal_loss("Terminal Session selection allocation failed", ANVIL_SURFACE_MSG_SELECT_TERMINAL, size); return false; }
+  memcpy(request, id, ANVIL_SURFACE_TERMINAL_ID_LEN + 1);
+  memcpy(request + ANVIL_SURFACE_TERMINAL_ID_LEN + 1, path, path_size);
+  send_message(ANVIL_SURFACE_MSG_SELECT_TERMINAL, request, (uint32_t)size);
+  free(request);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1384,6 +1424,8 @@ bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; re
 bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_color_theme_saved(void) { return false; }
+bool anvil_hosted_surface_focused_terminal(const char *id) { (void)id; return false; }
+bool anvil_hosted_surface_select_terminal(const char *path, const char *id) { (void)path; (void)id; return false; }
 bool anvil_hosted_surface_set_shell_colors(const AnvilSurfaceShellColors *colors) {
   (void)colors;
   return false;

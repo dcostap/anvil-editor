@@ -151,6 +151,11 @@ void anvil_sidebar_set_runtime(AnvilSidebarModel *model, AnvilSidebarProject *pr
   project->deferred_dialog = deferred_dialog;
   project->close_choice = close_choice;
 }
+void anvil_sidebar_set_focused_terminal(AnvilSidebarModel *model, AnvilSidebarProject *project, const char *id) {
+  if (!strcmp(project->focused_terminal, id)) return;
+  snprintf(project->focused_terminal, sizeof(project->focused_terminal), "%s", id);
+  model->revision++;
+}
 void anvil_sidebar_destroy(AnvilSidebarModel *model) {
   for (size_t i = 0; i < model->count; i++)
     free_project(model->projects[i]);
@@ -254,10 +259,12 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
       if (!j) {
         append(&item,
                "{kind=\"project\",row_id=%u,id=%u,pid=%u,window_id=%u,state=\"%s\",selected=%s,exists=%s,"
-               "deferred_dialog=%s,close_choice=%s,activity=%lld,path=",
+               "deferred_dialog=%s,close_choice=%s,activity=%lld,focused_terminal=",
                row->row_id, row->id, row->pid, row->window_id, states[row->state], row->selected ? "true" : "false",
                row->exists ? "true" : "false", row->deferred_dialog ? "true" : "false",
                row->close_choice ? "true" : "false", (long long)row->activity);
+        quoted(&item, row->focused_terminal);
+        append(&item, ",path=");
         quoted(&item, row->path);
         append(&item, "},");
       } else {

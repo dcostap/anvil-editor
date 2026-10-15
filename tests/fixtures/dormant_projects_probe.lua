@@ -1,5 +1,6 @@
 -- mod-version:3
--- Seam: explicit Project unload/load, Workspace restoration, and an owned Window.
+-- Seam: explicit Project unload/load, Workspace restoration, and an owned Window. dormant-terminal-sidebar loads
+-- the Dormant Project through its Sidebar Terminal Session, which the loaded Project then focuses.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if not action or not action:match("^dormant%-") then return end
 local with_terminal = action:find("^dormant%-terminal") ~= nil
@@ -262,8 +263,9 @@ if directory:match("/driver$") then
       end
       local resumed = wait_for(function() return read("a-resumed") end, 8, "Unload did not resume the remaining Project")
       assert(resumed.pid == a.pid, "Unload replaced A")
+      local kept
       if action == "dormant-terminal-sidebar" then
-        wait_for(function() return read("a-sidebar-kept") end, 12,
+        kept = wait_for(function() return read("a-sidebar-kept") end, 12,
           "Dormant B's busy detached Terminal is missing from the Sidebar model")
       end
       if action == "dormant-launch" then
@@ -273,7 +275,21 @@ if directory:match("/driver$") then
         return
       end
       save("load-b", {continue = true})
+      if kept then
+        -- A Sidebar click on B's Terminal Session row.
+        user32.PostMessageW(assert(shell_window(a.shell_pid)), 0x804d, 2, kept.b_row)
+      end
       local restored = wait_for(function() return read("b-restored") end, 15)
+      if kept then
+        -- B's restored Workspace may already show the session. The shell must still deliver the request once B
+        -- is Ready.
+        local log = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+        local text = log:read("*a"); log:close()
+        assert(text:find("Shell Terminal Session focus delivered after start: Project=%d+ session=" .. b.session_id),
+          "The shell did not ask the loaded Project to focus the selected Terminal Session")
+        assert(restored.focused, "Loading B through its Terminal Session did not focus that session")
+        assert(restored.views == 1, "Focusing the Terminal Session opened another view of it")
+      end
       assert(restored.pid ~= b.pid and restored.shell_pid == a.shell_pid, "Load reused the old process or replaced the Window")
       assert(restored.text == "PERSIST_B_on disk", "Load lost the saved Buffer")
       assert(restored.selection == "1,3,1,8", "Load lost Workspace selection")
@@ -375,7 +391,7 @@ else
                     terminal.busy == 1 and not terminal.attached and terminal.cwd:gsub("\\", "/") == root .. "/Replacement"
                     and terminal.title:find("ANVIL_B_TITLE", 1, true) and terminal.activity > now - 600
                     and a_active then
-                  save("a-sidebar-kept", {continue = true}); return true
+                  save("a-sidebar-kept", {continue = true, b_row = project.row_id}); return true
                 end
               end
             end
@@ -392,7 +408,7 @@ else
         assert(core.unload_project(root .. "/Replacement"))
       end
       wait_for(function() return read("load-b") end, action == "dormant-hang" and 20 or 10)
-      assert(core.open_project_in_same_window(root .. "/Replacement"))
+      if action ~= "dormant-terminal-sidebar" then assert(core.open_project_in_same_window(root .. "/Replacement")) end
       if action == "dormant-crash" or action == "dormant-unload-restart" then
         wait_for(function() return not system.window_should_render(core.window) end, 10)
         save("a-selected-b-failure", {continue = true})
@@ -429,6 +445,16 @@ else
         end, 15, "Load did not reattach the Terminal View")
         local stats = terminal.session:stats()
         restored.session_id, restored.host_pid, restored.attach_count = stats.session_id, stats.host_pid, stats.attach_count
+      end
+      if action == "dormant-terminal-sidebar" then
+        restored.focused = wait_for(function()
+          local view = core.active_view
+          return view.terminal_view and view.session_id == restored.session_id
+        end, 10, "B did not focus the Terminal Session the Sidebar selected")
+        restored.views = 0
+        for _, view in ipairs(require("plugins.terminal").open_views()) do
+          if view.session_id == restored.session_id then restored.views = restored.views + 1 end
+        end
       end
       save("b-restored", restored)
       wait_for(function() return read("finish") end, 10)

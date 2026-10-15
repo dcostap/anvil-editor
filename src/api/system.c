@@ -1832,6 +1832,29 @@ static int f_select_project(lua_State *L) {
   return 1;
 }
 
+static bool valid_terminal_id(const char *id, size_t size) {
+  return size == 32 && strspn(id, "0123456789abcdef") == 32;
+}
+
+/* nil or "" when the active view shows no Terminal Session. */
+static int f_set_focused_terminal(lua_State *L) {
+  size_t size = 0;
+  const char *id = luaL_optlstring(L, 1, "", &size);
+  luaL_argcheck(L, size == 0 || valid_terminal_id(id, size), 1, "invalid Terminal Session id");
+  lua_pushboolean(L, anvil_hosted_surface_focused_terminal(id));
+  return 1;
+}
+
+static int f_select_terminal(lua_State *L) {
+  size_t path_size = 0, id_size = 0;
+  const char *path = luaL_checklstring(L, 1, &path_size);
+  const char *id = luaL_checklstring(L, 2, &id_size);
+  luaL_argcheck(L, path_size > 0 && path_size < 32767 && !memchr(path, 0, path_size), 1, "invalid Project path");
+  luaL_argcheck(L, valid_terminal_id(id, id_size), 2, "invalid Terminal Session id");
+  lua_pushboolean(L, anvil_hosted_surface_select_terminal(path, id));
+  return 1;
+}
+
 /* Returns false outside a shell, where no other process shows this Color Theme. */
 static int f_color_theme_saved(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_color_theme_saved());
@@ -1935,6 +1958,12 @@ static int f_request_project_sidebar(lua_State *L) {
 }
 static int projectsidebar_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, "projectsidebar");
+  lua_pushstring(L, event->user.data1);
+  free(event->user.data1);
+  return 2;
+}
+static int focusterminal_callback(lua_State *L, SDL_Event *event) {
+  lua_pushstring(L, "focusterminal");
   lua_pushstring(L, event->user.data1);
   free(event->user.data1);
   return 2;
@@ -2566,6 +2595,8 @@ static const luaL_Reg lib[] = {
   { "is_hosted_surface",     f_is_hosted_surface     },
   { "await_shell_adoption",  f_await_shell_adoption  },
   { "select_project",        f_select_project        },
+  { "set_focused_terminal",  f_set_focused_terminal  },
+  { "select_terminal",       f_select_terminal       },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
   { "set_shell_colors", f_set_shell_colors },
@@ -2621,6 +2652,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Sidebar revision event: %s", SDL_GetError());
   if (!register_custom_event("colorthemechanged", colorthemechanged_callback))
     return luaL_error(L, "Unable to register the Color Theme event: %s", SDL_GetError());
+  if (!register_custom_event("focusterminal", focusterminal_callback))
+    return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
   luaL_newmetatable(L, API_TYPE_NATIVE_PLUGIN);
   lua_pushcfunction(L, f_library_gc);
   lua_setfield(L, -2, "__gc");

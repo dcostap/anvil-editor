@@ -42,6 +42,8 @@ typedef struct {
   bool exists, selected, deferred_dialog, close_choice;
   /* The last time the user worked in it, in Unix seconds; 0 means unknown. The shell sets and saves it. */
   int64_t activity;
+  /* The Terminal Session the Project's active view shows, or empty. */
+  char focused_terminal[33];
   AnvilSidebarTerminal *terminals;
   size_t terminal_count;
 } AnvilSidebarProject;
@@ -64,6 +66,8 @@ const AnvilSidebarProject *anvil_sidebar_at(const AnvilSidebarModel *model, size
 void anvil_sidebar_set_runtime(AnvilSidebarModel *model, AnvilSidebarProject *project, uint32_t id,
                                uint32_t pid, uint32_t window_id, AnvilSidebarState state, bool selected,
                                bool deferred_dialog, bool close_choice);
+/* id is a Terminal Session id, or empty when the Project shows no Terminal Session. */
+void anvil_sidebar_set_focused_terminal(AnvilSidebarModel *model, AnvilSidebarProject *project, const char *id);
 bool anvil_sidebar_set_terminals(AnvilSidebarModel *model, AnvilSidebarProject *project,
                                  const AnvilSidebarTerminal *terminals, size_t count);
 /* Pages contain Project records followed by their Terminal records. */

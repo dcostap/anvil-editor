@@ -15,9 +15,9 @@ local function terminal(id, title, age, fields)
   return item
 end
 
-local function project(row_id, path, state, age, window_id, terminals)
+local function project(row_id, path, state, age, window_id, terminals, focused_terminal)
   return {row_id = row_id, id = row_id, path = path, state = state, exists = true, window_id = window_id or 0,
-    activity = os.time() - age, terminals = terminals or {}}
+    activity = os.time() - age, terminals = terminals or {}, focused_terminal = focused_terminal}
 end
 
 function Scene:new()
@@ -32,7 +32,7 @@ function Scene:new()
       terminal("e", "build log", 10 * DAY),
       terminal("f", "ssh server", 40 * DAY, {bell = 1}),
       terminal("g", "old shell", 45 * DAY),
-    }),
+    }, "b"),
     project(2, "D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas", "ready", 2 * 60 * 60, 2, {
       terminal("h", "\u{03C0} - Israel Mallo Mart\u{00ED}nez", 5 * MINUTE),
     }),

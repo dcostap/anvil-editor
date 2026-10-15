@@ -64,6 +64,17 @@ local function add_surface(id, window)
       end
       return
     end
+    if action == "select_terminal" then
+      for _, project in ipairs(core.project_sidebar or {}) do
+        if project.row_id == row_id then
+          local sent = system.select_terminal(project.path, target)
+          core.log_quiet("Sidebar Terminal Session selection: Window=%d Project=%d session=%s sent=%s", id,
+            project.id or 0, target, tostring(sent))
+          return
+        end
+      end
+      return
+    end
     if action == "move" then
       core.log_quiet("Sidebar Move: Window=%d Project=%d target=%d", id, row_id, target)
       if not system.move_project(row_id, target) then core.log_quiet("Sidebar Move request rejected: Project=%d target=%d", row_id, target) end

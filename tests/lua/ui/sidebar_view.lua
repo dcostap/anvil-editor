@@ -122,15 +122,64 @@ test.describe("Sidebar list actions", function()
     test.same(actions[3], {"select", 9})
   end)
 
-  test.it("shows Terminal records and Project choices without giving Terminals Project actions", function()
+  test.it("asks to focus a clicked Terminal Session without giving it Project actions", function()
     local actions, action = recorder()
     local view = SidebarView(action)
     view:set_model({{row_id=7,path="C:/B",state="closing",close_choice=true,deferred_dialog=true,
       terminals={{id="session",title="shell",cwd="C:/B",busy=1,state="running",attached=false}}}})
     test.equal(count(view, "project"), 1)
     test.equal(count(view, "terminal"), 1)
-    view:on_mouse_pressed("left", 20, row_y(view, "terminal"))
-    test.equal(#actions, 0)
+    view:on_mouse_pressed("left", 230, row_y(view, "terminal"), 240)
+    test.same(actions, {{"select_terminal", 7, "session"}})
+    -- Right-click has no Terminal Session action yet.
+    view:on_mouse_pressed("right", 20, row_y(view, "terminal"), 240)
+    test.equal(#actions, 1)
+    test.ok(view:on_mouse_moved(20, row_y(view, "terminal"), 240), "A Terminal Session row is not a hover target")
+    test.equal(view.hover.terminal.id, "session")
+  end)
+
+  test.it("highlights the focused Terminal Session of the Window's Selected Project instead of the Project", function()
+    local style = require "core.style"
+    local function model(focused)
+      return {
+        {row_id=1,id=11,path="C:/A",state="ready",window_id=7,focused_terminal=focused,terminals={
+          {id="a",title="first",cwd="C:/A",state="running",busy=0,bell=0,activity=os.time()},
+          {id="b",title="second",cwd="C:/A",state="running",busy=0,bell=0,activity=os.time()}}},
+        windows={{id=7,selected_project=11},{id=9,selected_project=0}},
+      }
+    end
+    local old_rect, old_rounded, old_text, old_clip =
+      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
+    local function highlighted(view)
+      local selected, titles = {}, {}
+      renderer.draw_rect, renderer.set_clip_rect = function() end, function() end
+      renderer.draw_rounded_rect = function(_, y, _, h, _, color)
+        if color == style.selection then selected[#selected + 1] = {y, y + h} end
+      end
+      -- Each highlighted row's first label is its name.
+      renderer.draw_text = function(_, text, _, y)
+        for _, band in ipairs(selected) do
+          if y >= band[1] and y < band[2] and not band.named then titles[#titles + 1], band.named = text, true end
+        end
+      end
+      view:draw(600, 1000)
+      return table.concat(titles, ",")
+    end
+    local ok, err = pcall(function()
+      local view = SidebarView(function() end)
+      view:set_model(model("b"), 7)
+      test.equal(highlighted(view), "second")
+      -- No focused Terminal Session: the Project row shows the selection.
+      view:set_model(model(""), 7)
+      test.equal(highlighted(view), "A")
+      -- Another Window's Sidebar highlights neither.
+      local other = SidebarView(function() end)
+      other:set_model(model("b"), 9)
+      test.equal(highlighted(other), "")
+    end)
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
+      old_rect, old_rounded, old_text, old_clip
+    if not ok then error(err) end
   end)
 
   test.it("tracks the hovered row and clears it when the pointer leaves", function()

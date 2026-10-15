@@ -1,7 +1,7 @@
 local Object = require "core.object"
 local style = require "core.style"
 
--- The shell owns identity and lifecycle. This view sends only Project actions.
+-- The shell owns identity and lifecycle. This view sends only Project and Terminal Session actions.
 -- Layout: the main list holds loaded Projects and Projects used in the last week. Older Projects sit in
 -- collapsible age groups aligned to the bottom, which take at most part of the height and scroll on their own.
 -- Inside a Project, older Terminal Sessions fold into collapsible groups the same way.
@@ -103,12 +103,20 @@ function SidebarView:rebuild_rows()
   for _, window in ipairs(projects.windows or {}) do
     if window.id == window_id then selected = window.selected_project end
   end
-  local function add_terminal(project, terminal, depth)
-    add({kind = "terminal", project = project, terminal = terminal, depth = depth}, m.terminal)
+  local function add_terminal(project, terminal, depth, focused)
+    add({kind = "terminal", project = project, terminal = terminal, depth = depth,
+      selected = focused == terminal.id}, m.terminal)
   end
   local function add_project(project)
-    add({kind = "project", project = project, selected = window_id and selected ~= 0 and project.id == selected
-      or not window_id and project.selected}, m.project)
+    local is_selected = window_id and selected ~= 0 and project.id == selected or not window_id and project.selected
+    -- The Selected Project's focused Terminal Session takes the highlight. It always shows, even when old.
+    local focused
+    if is_selected and project.focused_terminal and project.focused_terminal ~= "" then
+      for _, terminal in ipairs(project.terminals or {}) do
+        if terminal.id == project.focused_terminal then focused = terminal.id end
+      end
+    end
+    add({kind = "project", project = project, selected = is_selected and not focused}, m.project)
     if self.move_project == project.id then
       for _, window in ipairs(projects.windows or {}) do
         if window.id ~= project.window_id then
@@ -121,11 +129,11 @@ function SidebarView:rebuild_rows()
     local older = {}
     for _, terminal in ipairs(project.terminals or {}) do
       local bucket = (terminal.activity or 0) > 0 and age_bucket(terminal.activity, now)
-      if bucket and not (terminal.bell and terminal.bell ~= 0) then
+      if bucket and not (terminal.bell and terminal.bell ~= 0) and terminal.id ~= focused then
         older[bucket] = older[bucket] or {}
         table.insert(older[bucket], terminal)
       else
-        add_terminal(project, terminal, 1)
+        add_terminal(project, terminal, 1, focused)
       end
     end
     for _, group in ipairs(GROUPS) do
@@ -136,7 +144,7 @@ function SidebarView:rebuild_rows()
         add({kind = "terminal_group", project = project, bucket = group.bucket, label = group.terminal_label,
           count = #terminals, key = key, collapsed = collapsed}, m.terminal)
         if not collapsed then
-          for _, terminal in ipairs(terminals) do add_terminal(project, terminal, 2) end
+          for _, terminal in ipairs(terminals) do add_terminal(project, terminal, 2, focused) end
         end
       end
     end
@@ -246,6 +254,10 @@ function SidebarView:on_mouse_pressed(button, x, y, width)
     end
     return
   end
+  if row.kind == "terminal" then
+    if button == "left" then self.action("select_terminal", row.project.row_id, row.terminal.id) end
+    return
+  end
   if row.kind ~= "project" then return end
   if button == "right" then
     if row.project.id and row.project.window_id and row.project.window_id ~= 0 then
@@ -264,7 +276,7 @@ end
 
 function SidebarView:update_hover()
   local row = self.hover_y and self:row_at(self.hover_y)
-  local hover = row and row.kind ~= "empty" and row.kind ~= "terminal" and row or nil
+  local hover = row and row.kind ~= "empty" and row or nil
   local unload = row and in_unload(row, self.hover_x, self.hover_width)
   local changed = hover ~= self.hover or unload ~= self.hover_unload
   self.hover, self.hover_unload = hover, unload

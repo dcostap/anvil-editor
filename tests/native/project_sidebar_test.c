@@ -175,7 +175,36 @@ static void pages(void) {
   lua_close(L);
   anvil_sidebar_destroy(&model);
 }
+/* The Sidebar highlights the Terminal Session the Project reports as focused. */
+static void focused_terminal(void) {
+  AnvilSidebarModel model = {0};
+  const char *paths[] = {"C:/B"};
+  CHECK(anvil_sidebar_merge_recents(&model, paths, 1), "Recent source failed");
+  AnvilSidebarProject *b = anvil_sidebar_find(&model, "C:/B");
+  uint32_t revision = model.revision;
+  anvil_sidebar_set_focused_terminal(&model, b, "0123456789abcdef0123456789abcdef");
+  CHECK(model.revision != revision, "A focus change did not publish a revision");
+  revision = model.revision;
+  anvil_sidebar_set_focused_terminal(&model, b, "0123456789abcdef0123456789abcdef");
+  CHECK(model.revision == revision, "An unchanged focus published a revision");
+  char *page = anvil_sidebar_snapshot(&model, 0);
+  CHECK(page, "Snapshot failed");
+  lua_State *L = luaL_newstate();
+  CHECK(L && !luaL_loadbuffer(L, page, strlen(page), "=Sidebar page") && !lua_pcall(L, 0, 1, 0),
+        "Invalid snapshot encoding");
+  free(page);
+  lua_getfield(L, 1, "items");
+  lua_rawgeti(L, -1, 1);
+  lua_getfield(L, -1, "focused_terminal");
+  CHECK(lua_isstring(L, -1) && !strcmp(lua_tostring(L, -1), "0123456789abcdef0123456789abcdef"),
+        "The snapshot omitted the focused Terminal Session");
+  lua_close(L);
+  anvil_sidebar_set_focused_terminal(&model, b, "");
+  CHECK(model.revision != revision && !b->focused_terminal[0], "Clearing the focus did not publish");
+  anvil_sidebar_destroy(&model);
+}
 int main(void) {
+  focused_terminal();
   order();
   capacity();
   lifecycle();

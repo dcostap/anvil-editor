@@ -2158,5 +2158,61 @@ function core.quit(force, exit_code)
   end, core.cancel_quit)
 end
 
+-- Focuses the open view of a Terminal Session. Returns false when no view shows it.
+function M.focus_session(id)
+  for _, view in ipairs(M.open_views()) do
+    if view.session_id == id then
+      local pane = panes.pane_for_view(view)
+      if pane and panes.present(view, { pane = pane, focus = true }) then return true end
+    end
+  end
+  return false
+end
+
+-- In a shell, the Project Sidebar highlights the Terminal Session the active view shows, and its Terminal
+-- Session rows ask this Project to focus one.
+if system.is_hosted_surface() then
+  local reported
+  local function report_focused_terminal()
+    local view = core.active_view
+    local id = view and view.terminal_view and view.session_id or ""
+    if #id ~= 32 or id:find("[^0-9a-f]") then id = "" end
+    if id == reported then return end
+    reported = id
+    local delivered = system.set_focused_terminal(id)
+    core.log_quiet("Terminal Session focus reported to the shell: %s delivered=%s", id ~= "" and id or "none",
+      tostring(delivered))
+  end
+  local function after_step(...)
+    report_focused_terminal()
+    return ...
+  end
+  local step = core.step
+  function core.step(...)
+    return after_step(step(...))
+  end
+
+  local on_event = core.on_event
+  function core.on_event(type, ...)
+    if type ~= "focusterminal" then return on_event(type, ...) end
+    local id = ...
+    if M.focus_session(id) then
+      core.log_quiet("Terminal Session %s focused for the Sidebar", id)
+      return true
+    end
+    -- A starting Project may still be restoring its Workspace views. Look again after that, then open it.
+    core.add_thread(function()
+      coroutine.yield()
+      if M.focus_session(id) then
+        core.log_quiet("Terminal Session %s focused for the Sidebar after Workspace restore", id)
+        return
+      end
+      local view = M.open { session_id = id, focus = true, placement = "current", reason = "sidebar-terminal-focus" }
+      core.log_quiet("Terminal Session %s opened for the Sidebar: %s", id, view and "ok" or "failed")
+    end)
+    return true
+  end
+end
+
 M.cleanup_records()
 return M

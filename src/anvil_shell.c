@@ -168,6 +168,9 @@ typedef struct ShellProject {
   SDL_AtomicInt transport_failure, inbound_bytes, reader_done, writer_done;
   ShellState state;
   bool sidebar;
+  /* The Terminal Session the Project's active view shows, and one the Sidebar asked it to focus once Ready. */
+  char focused_terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
+  char pending_terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
 } ShellProject;
 
 typedef struct {
@@ -344,10 +347,13 @@ static void reveal_when_ready(ShellWindow *window);
 static void request_close(ShellProject *project);
 static void cancel_input(ShellWindow *window);
 static void set_state(ShellProject *project, ShellState state);
+static void shell_send(ShellProject *project, uint16_t type, const void *payload, uint32_t size,
+                       const void *tail, uint32_t tail_size);
 static void check_transport_failure(ShellProject *project);
 static void check_gpu_failure(ShellWindow *window);
 static void close_memory_frame(ShellPresentation *surface);
 static bool select_project_path(ShellWindow *window, const char *path);
+static bool select_terminal_path(ShellWindow *window, const char *path, const char *id);
 static void select_project(ShellProject *project);
 static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id);
 static void present_deferred_dialogs(ShellProject *project);
@@ -586,6 +592,18 @@ static void set_state(ShellProject *project, ShellState state) {
   if (project->state == state)
     return;
   project->state = state;
+  if (!project->sidebar) {
+    /* A new runtime reports its own focus. A failed one drops a focus request it cannot serve. */
+    if (state == SHELL_STARTING) project->focused_terminal[0] = 0;
+    if (state == SHELL_FAILED || state == SHELL_DORMANT) project->pending_terminal[0] = 0;
+    if (state == SHELL_READY && project->pending_terminal[0]) {
+      SDL_Log("Shell Terminal Session focus delivered after start: Project=%u session=%s", project->id,
+              project->pending_terminal);
+      shell_send(project, ANVIL_SURFACE_MSG_FOCUS_TERMINAL, project->pending_terminal,
+                 ANVIL_SURFACE_TERMINAL_ID_LEN + 1, NULL, 0);
+      project->pending_terminal[0] = 0;
+    }
+  }
   if (project == shell.sidebar_process) {
     for (ShellWindow *item = shell.windows; item; item = item->next) {
       item->ui_dirty = true;
@@ -821,6 +839,12 @@ static bool push_shell_event(ShellProject *project, int code, void *data, int va
   return false;
 }
 
+static bool valid_terminal_id(const char *id) {
+  for (int i = 0; i < ANVIL_SURFACE_TERMINAL_ID_LEN; i++)
+    if (!strchr("0123456789abcdef", id[i]) || !id[i]) return false;
+  return true;
+}
+
 static bool valid_project_message(uint16_t type, const void *payload, uint32_t size) {
   switch (type) {
   case ANVIL_SURFACE_MSG_SIDEBAR_SURFACE: {
@@ -830,7 +854,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     switch (packet->type) {
     case ANVIL_SURFACE_MSG_FRAME: case ANVIL_SURFACE_MSG_CURSOR: case ANVIL_SURFACE_MSG_HIT_TEST:
     case ANVIL_SURFACE_MSG_SELECT_PROJECT: case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
-    case ANVIL_SURFACE_MSG_MOVE_PROJECT:
+    case ANVIL_SURFACE_MSG_MOVE_PROJECT: case ANVIL_SURFACE_MSG_SELECT_TERMINAL:
     case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
     case ANVIL_SURFACE_MSG_TEXT_INPUT: case ANVIL_SURFACE_MSG_TITLE:
     case ANVIL_SURFACE_MSG_VISIBLE: case ANVIL_SURFACE_MSG_SET_BOUNDS: case ANVIL_SURFACE_MSG_BORDERED:
@@ -905,6 +929,15 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
            !memchr(payload, 0, size - 1);
   case ANVIL_SURFACE_MSG_DIALOG:
     return size >= sizeof(AnvilSurfaceDialog);
+  case ANVIL_SURFACE_MSG_FOCUSED_TERMINAL:
+    return (size == 1 || (size == ANVIL_SURFACE_TERMINAL_ID_LEN + 1 && valid_terminal_id(payload))) &&
+           !((const char *)payload)[size - 1];
+  case ANVIL_SURFACE_MSG_SELECT_TERMINAL: {
+    const char *text = payload;
+    uint32_t path = ANVIL_SURFACE_TERMINAL_ID_LEN + 1;
+    return size > path + 1 && size - path < 32768 && valid_terminal_id(text) && !text[path - 1] &&
+           !text[size - 1] && !memchr(text + path, 0, size - path - 1);
+  }
   default:
     return false;
   }
@@ -2884,6 +2917,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       message->type != ANVIL_SURFACE_MSG_SELECT_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_MOVE_PROJECT &&
+      message->type != ANVIL_SURFACE_MSG_SELECT_TERMINAL &&
       message->type != ANVIL_SURFACE_MSG_FRAME &&
       message->type != ANVIL_SURFACE_MSG_EXIT_INTENT && message->type != ANVIL_SURFACE_MSG_CURSOR &&
       message->type != ANVIL_SURFACE_MSG_HIT_TEST)
@@ -2958,6 +2992,20 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
     if (!window->closing)
       unload_project_path(window, payload);
+    break;
+  case ANVIL_SURFACE_MSG_SELECT_TERMINAL: {
+    const char *path = (const char *)payload + ANVIL_SURFACE_TERMINAL_ID_LEN + 1;
+    SDL_Log("Shell Terminal Session selection requested: Window=%u session=%s closing=%d", window->id,
+            (const char *)payload, window->closing);
+    if (project->sidebar && !window->closing) select_terminal_path(window, path, payload);
+    break;
+  }
+  case ANVIL_SURFACE_MSG_FOCUSED_TERMINAL:
+    if (project->sidebar || !strcmp(project->focused_terminal, payload)) break;
+    memcpy(project->focused_terminal, payload, message->size);
+    SDL_Log("Shell Project focused Terminal Session: Project=%u session=%s", project->id,
+            project->focused_terminal[0] ? project->focused_terminal : "none");
+    notify_sidebar_changes();
     break;
   case ANVIL_SURFACE_MSG_DIALOG:
     show_dialog(project, message);
@@ -4360,6 +4408,8 @@ struct ProjectResolve {
   /* A restored Window's initial resolution names its Project, because the Window's selection can change first. */
   Uint32 project_id;
   bool restored;
+  /* A Sidebar Terminal Session click: focus this session once the Project is selected. */
+  char terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
   int argc;
   char **argv;
   char *path;
@@ -4740,6 +4790,13 @@ static bool select_project_path(ShellWindow *window, const char *path) {
   return queue_resolution(window, path, 0, NULL, false, false, false, NULL);
 }
 
+/* Selects the Project like a Project row click, then focuses the Terminal Session in it. */
+static bool select_terminal_path(ShellWindow *window, const char *path, const char *id) {
+  if (!select_project_path(window, path)) return false;
+  memcpy(shell.resolvers->terminal, id, ANVIL_SURFACE_TERMINAL_ID_LEN + 1);
+  return true;
+}
+
 static bool unload_project_path(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path)
     return false;
@@ -4868,6 +4925,17 @@ static bool initial_resolution_pending(void) {
   return false;
 }
 
+/* A Ready Project focuses the session now. A starting Project focuses it once Ready. */
+static void focus_terminal(ShellProject *project, const char *id) {
+  if (project->connected && project->state == SHELL_READY) {
+    SDL_Log("Shell Terminal Session focus sent: Project=%u session=%s", project->id, id);
+    shell_send(project, ANVIL_SURFACE_MSG_FOCUS_TERMINAL, id, ANVIL_SURFACE_TERMINAL_ID_LEN + 1, NULL, 0);
+  } else {
+    SDL_Log("Shell Terminal Session focus waits for its Project: Project=%u session=%s", project->id, id);
+    memcpy(project->pending_terminal, id, ANVIL_SURFACE_TERMINAL_ID_LEN + 1);
+  }
+}
+
 static void finish_resolutions(void) {
   ProjectResolve **link = &shell.resolvers;
   while (*link) {
@@ -4979,6 +5047,7 @@ static void finish_resolutions(void) {
         /* The user may have selected another Project in a restored Window while this one resolved. */
         if (!job->restored || window->selected == project) select_project(project);
         if (!job->initial) raise_owner(project);
+        if (job->terminal[0]) focus_terminal(project, job->terminal);
         if (created || (project->failed_close && project->process.hProcess &&
                         WaitForSingleObject(project->process.hProcess, 0) ==
                             WAIT_OBJECT_0)) {
@@ -5137,12 +5206,16 @@ static void sync_sidebar_model(void) {
                               window_for_id(project->window_id) && project == window_for_id(project->window_id)->selected &&
                               state != ANVIL_SIDEBAR_DORMANT, deferred,
                               live && (project->close_waiting || project->close_prompt));
+    anvil_sidebar_set_focused_terminal(&shell.sidebar, row,
+                                       state == ANVIL_SIDEBAR_DORMANT ? "" : project->focused_terminal);
   }
   for (DormantProject *project = shell.dormants; project; project = project->next) {
     AnvilSidebarProject *row = anvil_sidebar_find(&shell.sidebar, project->path);
-    if (row)
+    if (row) {
       anvil_sidebar_set_runtime(&shell.sidebar, row, project->id, 0, 0, ANVIL_SIDEBAR_DORMANT, false,
                                 false, false);
+      anvil_sidebar_set_focused_terminal(&shell.sidebar, row, "");
+    }
   }
 }
 static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size) {
@@ -5377,6 +5450,13 @@ static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value
     for (size_t i = 0; i < shell.sidebar.count; i++)
       if (shell.sidebar.projects[i]->row_id == (uint32_t)value) {
         select_project_path(window, shell.sidebar.projects[i]->path);
+        return;
+      }
+  } else if (action == 2) {
+    /* A Sidebar click on the row's first Terminal Session. */
+    for (size_t i = 0; i < shell.sidebar.count; i++)
+      if (shell.sidebar.projects[i]->row_id == (uint32_t)value && shell.sidebar.projects[i]->terminal_count) {
+        select_terminal_path(window, shell.sidebar.projects[i]->path, shell.sidebar.projects[i]->terminals[0].id);
         return;
       }
   } else if (action == 0 && value >= 0) {

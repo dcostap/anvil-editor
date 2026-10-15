@@ -12,9 +12,11 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 19u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 20u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
+/* A Terminal Session id: 32 lowercase hex digits. */
+#define ANVIL_SURFACE_TERMINAL_ID_LEN 32
 #define ANVIL_SURFACE_PIPE_ARG "--anvil-hosted-pipe="
 #define ANVIL_SHELL_ARG "--shell"
 #define ANVIL_PROJECT_ARG "--project"
@@ -32,6 +34,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_SIDEBAR_CHANGED = 7,
   /* Another process saved a Color Theme; reload the saved one. No payload. */
   ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED = 8,
+  /* Focus this Terminal Session, opening it in this Project if no view shows it. Payload: id + NUL. */
+  ANVIL_SURFACE_MSG_FOCUS_TERMINAL = 9,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -66,6 +70,10 @@ typedef enum {
   /* This Project saved a Color Theme. The shell tells every other Project and the Sidebar. No payload. */
   ANVIL_SURFACE_MSG_COLOR_THEME_SAVED = 93,
   ANVIL_SURFACE_MSG_SHELL_COLORS = 94,
+  /* The Terminal Session this Project's active view shows. Payload: id + NUL, or only NUL for none. */
+  ANVIL_SURFACE_MSG_FOCUSED_TERMINAL = 95,
+  /* Select a Project and focus one of its Terminal Sessions. Payload: id + NUL + Project path + NUL. */
+  ANVIL_SURFACE_MSG_SELECT_TERMINAL = 96,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */
