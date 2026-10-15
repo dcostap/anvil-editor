@@ -300,4 +300,23 @@ test.describe("Sidebar age groups", function()
     test.ok(text:find("[40 s] \u{03C0} - GLP4", 1, true), "The live title is missing")
     test.ok(text:find("Terminal", 1, true), "An untitled Terminal Session has no label")
   end)
+
+  test.it("shortens a long Project name with an ellipsis inside a narrow Sidebar", function()
+    local view = SidebarView(function() end)
+    view:set_model({project(1, "C:/Israel Mallo Mart\u{00ED}nez - ManualSistemas", 60, "ready", {})})
+    local old_rect, old_rounded, old_text, old_clip =
+      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
+    local drawn = {}
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
+    renderer.draw_text = function(font, text, x) drawn[#drawn + 1] = {text = text, right = x + font:get_width(text)} end
+    local ok, err = pcall(view.draw, view, 170, 800)
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
+      old_rect, old_rounded, old_text, old_clip
+    if not ok then error(err) end
+    local label
+    for _, item in ipairs(drawn) do if item.text:find("^Israel") then label = item end end
+    test.not_nil(label, "The Project name is missing")
+    test.ok(label.text:find("\u{2026}$"), "The long name is not shortened: " .. label.text)
+    test.ok(label.right <= 170, "The shortened name runs past the Sidebar's edge")
+  end)
 end)

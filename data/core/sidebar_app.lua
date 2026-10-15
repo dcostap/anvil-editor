@@ -180,7 +180,15 @@ function core.on_event(name, ...)
   elseif name == "mousewheel" then
     local _, height = renwindow.get_size(core.window)
     current.view:on_mouse_wheel((...), height, current.pointer_y); core.redraw = true
-  elseif name == "resized" or name == "exposed" or name == "displaychanged" then core.redraw = true end
+  elseif name == "resized" or name == "exposed" or name == "displaychanged" then
+    if name == "resized" then
+      local width, height = renwindow.get_size(core.window)
+      local configured_w, configured_h = ...
+      core.log_quiet("Sidebar surface resized: configured=%sx%s surface=%dx%d",
+        tostring(configured_w), tostring(configured_h), width, height)
+    end
+    core.redraw = true
+  end
   save()
 end
 function core.run_step()

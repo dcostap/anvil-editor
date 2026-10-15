@@ -99,6 +99,23 @@ if path:match("/driver$") then
    wait(function() return trace():find("Shell Sidebar width: Window=%d+ points=320") end, 5,
     "A drag on the Sidebar's edge did not set its width")
    wait(function() return content_x(1) == width(320) end, 5, "The Project area did not follow the Sidebar's width")
+   wait(function() return trace():find("Shell Sidebar frame width: Window=%d+ width=" .. width(320) .. " ") end, 5,
+    "The Sidebar did not draw at its wider width")
+   -- A drag narrower than the Sidebar's starting width. The Sidebar draws at that width too, so its rows fit.
+   post(0, width(320), y)
+   post(1, width(320), y)
+   post(0, width(200), y)
+   post(0, width(170), y)
+   post(2, width(170), y)
+   wait(function() return content_x(1) == width(170) end, 5, "The Project area did not follow the narrower Sidebar")
+   wait(function() return trace():find("Shell Sidebar frame width: Window=%d+ width=" .. width(170) .. " ") end, 5,
+    "The Sidebar did not draw at its narrower width")
+   post(0, width(170), y)
+   post(1, width(170), y)
+   post(0, width(250), y)
+   post(0, width(320), y)
+   post(2, width(320), y)
+   wait(function() return content_x(1) == width(320) end, 5, "The Project area did not follow the Sidebar's width")
    coroutine.yield(.5)
    user32.SendMessageW(window, 0x8052, 1, 0)
    wait(function() return trace():find("capture%-1%.bmp") end, 5, "shell capture was not written")

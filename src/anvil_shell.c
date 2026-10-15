@@ -2402,7 +2402,12 @@ static void handle_sidebar_frame(ShellWindow *window) {
   if (!project)
     return;
   AnvilSurfaceFrame frame;
+  int previous_w = window->sidebar_presentation.surface_w;
   if (load_pending_frame(project, &window->sidebar_presentation, &frame)) {
+    /* The Sidebar draws at the width the shell configures. A stale width shows cropped. */
+    if (project->state != SHELL_STARTING && frame.width != previous_w)
+      SDL_Log("Shell Sidebar frame width: Window=%u width=%d configured=%d", window->id, frame.width,
+              window->sidebar_full_w);
     if (project->state == SHELL_STARTING) {
       set_state(project, SHELL_READY);
       SDL_Log("Shell Sidebar surface Ready: Window=%u connection=%u size=%dx%d", window->id,

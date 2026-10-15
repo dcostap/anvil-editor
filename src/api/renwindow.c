@@ -41,8 +41,11 @@ static int f_renwin_create(lua_State *L) {
   *window_renderer = ren_create(window);
 
   /* Set a minimum size to prevent too small to see issues on unmaximize.
-  ** Needs to be set after renderer to work: libsdl-org/SDL/issues/1408 */
-  SDL_SetWindowMinimumSize(window, 240, 180);
+  ** Needs to be set after renderer to work: libsdl-org/SDL/issues/1408
+  ** The shell sizes hosted surfaces and owns the Window's minimum, so a
+  ** minimum here would keep a narrow Sidebar at the wrong width. */
+  if (!anvil_hosted_surface_is_window(window))
+    SDL_SetWindowMinimumSize(window, 240, 180);
 
   return 1;
 }
