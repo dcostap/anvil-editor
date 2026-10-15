@@ -41,6 +41,7 @@ anvil_sources = [
     'arena_allocator.c',
     'custom_events.c',
     'system_events.c',
+    'key_text.c',
     'win32_single_instance.c',
     'surface_protocol.c',
     'hosted_surface.c',
@@ -305,6 +306,14 @@ drop_events_test = executable('drop_events_test',
     c_args: anvil_cargs,
 )
 test('drop-events', drop_events_test, env: anvil_test_env)
+
+key_text_test = executable('key_text_test',
+    ['../tests/native/key_text_test.c', 'key_text.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('key-text', key_text_test, env: anvil_test_env, suite: 'anvil')
 
 if host_machine.system() == 'windows'
     sidebar_scan_test = executable('sidebar_scan_test',

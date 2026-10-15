@@ -342,13 +342,13 @@ test.describe("Native terminal session", function()
     local caps_lock = 0x2000
     test.not_ok(session:key("o", { raw = num_lock }, "press", {
       scancode = 18,
-      text = "O",
+      text = "o",
       unshifted_codepoint = string.byte("o"),
       consumed_modifiers = 0,
     }))
     test.not_ok(session:key("space", { raw = num_lock }, "press", {
       scancode = 44,
-      text = "Space",
+      text = " ",
       unshifted_codepoint = string.byte(" "),
       consumed_modifiers = 0,
     }))

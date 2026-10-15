@@ -17,6 +17,7 @@
 #include "arena_allocator.h"
 #include "custom_events.h"
 #include "../system_events.h"
+#include "../key_text.h"
 #include "../win32_frame.h"
 #include "../resize_diagnostics.h"
 #include "../shutdown_diagnostics.h"
@@ -178,8 +179,9 @@ static void push_key_event_info(lua_State *L, const SDL_KeyboardEvent *event) {
       SDL_KMOD_LEVEL5 | SDL_KMOD_RALT);
   SDL_Keycode layout_key = SDL_GetKeyFromScancode(event->scancode, layout_mods, false);
   SDL_Keycode unshifted_key = SDL_GetKeyFromScancode(event->scancode, 0, false);
-  if (!(layout_key & SDLK_SCANCODE_MASK) && layout_key >= 0x20 && layout_key <= 0x10ffff) {
-    lua_pushstring(L, SDL_GetKeyName(layout_key));
+  char text[5];
+  if (key_text_from_keycode(layout_key, text)) {
+    lua_pushstring(L, text);
     lua_setfield(L, -2, "text");
   }
   if (!(unshifted_key & SDLK_SCANCODE_MASK) &&
