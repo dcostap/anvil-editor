@@ -19,6 +19,7 @@
 #include <commctrl.h>
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
+#include <dwmapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +41,10 @@
  * the shell stops showing the old Project. A Project that is not loaded yet usually presents within a second. */
 #define SHELL_SELECTION_HOLD_MS 1500
 #define SHELL_SELECTION_HOLD_TIMER 0x8100u
+/* A new Window stays cloaked until it can show its Project, Sidebar and Color Theme. If they take longer than this,
+ * it shows what it has. */
+#define SHELL_REVEAL_MS 2000
+#define SHELL_REVEAL_TIMER 0x8101u
 #define SHELL_CLOSE_TIMEOUT_MS 5000
 /* Covers the Project's shell-loss save, which can take up to its 5 s deadline. */
 #define SHELL_ADOPTION_REQUEST_MS 8000
@@ -250,6 +255,9 @@ struct ShellWindow {
   bool pointer_in_sidebar; /* the Sidebar surface received motion and needs a leave */
   Uint64 sidebar_input_ns;  /* first Sidebar input since its last frame, for the input-to-frame diagnostic */
   bool shown;
+  /* DWM does not draw the shown Window until its content is ready. It stays visible to Windows and its Projects. */
+  bool revealing;
+  Uint64 reveal_since;
   ID3D11Texture2D *ui;
   ID3D11ShaderResourceView *ui_view;
   int ui_w, ui_h;               /* layer capacity */
@@ -328,6 +336,7 @@ static ShellWindow *window_for_id(Uint32 id) {
 }
 static bool start_project(ShellProject *project, int argc, char **argv);
 static void composite_and_present(ShellWindow *window);
+static void reveal_when_ready(ShellWindow *window);
 static void request_close(ShellProject *project);
 static void cancel_input(ShellWindow *window);
 static void set_state(ShellProject *project, ShellState state);
@@ -1621,6 +1630,33 @@ static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellC
             &window->close_button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+/* A new Window shows once it has the Color Theme, the selected Project's first frame or its card, and the
+ * Sidebar's first frame. */
+static bool reveal_ready(ShellWindow *window) {
+  ShellProject *project = window->selected;
+  bool theme = shell.has_theme_colors || project->has_shell_colors;
+  bool area = window->project_presentation.have_surface || project->state == SHELL_FAILED ||
+              (!project->resolving && project->state != SHELL_STARTING);
+  bool sidebar = !window->sidebar || window->sidebar_presentation.have_surface || shell.sidebar_restart_limited ||
+                 (shell.sidebar_process && shell.sidebar_process->state == SHELL_FAILED);
+  return theme && area && sidebar;
+}
+
+static void reveal_window(ShellWindow *window, const char *reason) {
+  KillTimer(window->hwnd, SHELL_REVEAL_TIMER);
+  if (!window->revealing) return;
+  window->revealing = false;
+  composite_and_present(window);
+  BOOL cloak = FALSE;
+  DwmSetWindowAttribute(window->hwnd, DWMWA_CLOAK, &cloak, sizeof(cloak));
+  SDL_Log("Shell Window shown: id=%u %s after %.1f ms", window->id, reason,
+          (double)(SDL_GetTicksNS() - window->reveal_since) / SDL_NS_PER_MS);
+}
+
+static void reveal_when_ready(ShellWindow *window) {
+  if (window->revealing && reveal_ready(window)) reveal_window(window, "ready");
+}
+
 /* The selected Project's Color Theme colours what the shell draws. Before it reports them, the latest colours
  * from another Project or the Sidebar do: the Color Theme is global. Before any report, the dark theme's. */
 static AnvilSurfaceShellColors shell_colors(ShellWindow *window) {
@@ -2279,6 +2315,7 @@ static void handle_frame(ShellWindow *window) {
     set_state(project, SHELL_READY);
   }
   composite_and_present(window);
+  reveal_when_ready(window);
   anvil_latency_probe_presented(frame.input_seq);
   if (project->state == SHELL_READY && !project->close_requested_ns)
     anvil_latency_probe_start(window->window, finish_latency_probe);
@@ -2310,6 +2347,7 @@ static void handle_sidebar_frame(ShellWindow *window) {
     }
     if (window->shown)
       composite_and_present(window);
+    reveal_when_ready(window);
   }
 }
 
@@ -2798,6 +2836,7 @@ static void apply_shell_colors(ShellProject *project, const AnvilSurfaceShellCol
     item->ui_dirty = true;
     if (item->render_failed) InvalidateRect(item->hwnd, NULL, FALSE);
     else if (item->shown) composite_and_present(item);
+    reveal_when_ready(item);
   }
 }
 
@@ -3863,6 +3902,10 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   if (!window)
     return DefWindowProcW(hwnd, msg, wparam, lparam);
   ShellProject *project = window->selected;
+  if (msg == WM_TIMER && wparam == SHELL_REVEAL_TIMER) {
+    reveal_window(window, "timed out");
+    return 0;
+  }
   if (msg == WM_TIMER && wparam == SHELL_SELECTION_HOLD_TIMER) {
     KillTimer(hwnd, SHELL_SELECTION_HOLD_TIMER);
     end_selection_hold(window);
@@ -5396,6 +5439,13 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement) {
     update_scale(window);
   }
   if (!init_d3d11(window)) fail_gpu(window, "initial presentation creation failed", E_FAIL);
+  BOOL cloak = TRUE;
+  window->revealing = SUCCEEDED(DwmSetWindowAttribute(window->hwnd, DWMWA_CLOAK, &cloak, sizeof(cloak)));
+  if (window->revealing) {
+    window->reveal_since = SDL_GetTicksNS();
+    if (!SetTimer(window->hwnd, SHELL_REVEAL_TIMER, SHELL_REVEAL_MS, NULL))
+      SDL_Log("Shell Window reveal timer failed: id=%u", window->id);
+  } else SDL_Log("Shell Window cloak failed: id=%u; show it at once", window->id);
   composite_and_present(window);
   SDL_ShowWindow(window->window);
   if (placement && placement->maximized) SDL_MaximizeWindow(window->window);
@@ -5416,6 +5466,7 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement) {
     send_configure(window->sidebar_client);
   }
   SDL_Log("Shell empty Window ready: id=%u", window->id);
+  reveal_when_ready(window);
   return window;
 }
 

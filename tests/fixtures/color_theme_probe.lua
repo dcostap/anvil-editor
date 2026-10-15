@@ -5,8 +5,10 @@
 -- The shell's Window controls draw in the selected Project's Color Theme: its text colour, and its pressed colour.
 -- A posted mouse move hovers only until the real cursor's leave event, so a held press shows the fill instead.
 -- theme-empty: a shell Window with no Project draws its Project area and Window controls in the saved Color Theme.
+-- reveal: a starting shell first shows its Window with the loaded Project, Sidebar and Color Theme, so its first
+-- visible frame already looks like the settled frame.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
-if action ~= "theme-global" and action ~= "theme-empty" then return end
+if action ~= "theme-global" and action ~= "theme-empty" and action ~= "reveal" then return end
 local core, common = require "core", require "core.common"
 local style = require "core.style"
 local ffi = require "ffi"
@@ -17,6 +19,8 @@ ffi.cdef [[
  void * __stdcall GetPropW(void *, const wchar_t *);
  intptr_t __stdcall SendMessageW(void *, unsigned int, uintptr_t, intptr_t);
  int __stdcall PostMessageW(void *, unsigned int, uintptr_t, intptr_t);
+ int __stdcall IsWindowVisible(void *);
+ long __stdcall DwmGetWindowAttribute(void *, unsigned long, void *, unsigned long);
  void * __stdcall OpenProcess(unsigned long, int, unsigned long);
  int __stdcall TerminateProcess(void *, unsigned int);
  int __stdcall CloseHandle(void *);
@@ -128,7 +132,52 @@ local function check_controls(window, state)
   .. ", not the Color Theme's pressed " .. show(expected))
 end
 
-if path:match("/driver$") and action == "theme-empty" then
+if path:match("/driver$") and action == "reveal" then
+ core.add_background_thread(function()
+  local shell
+  local ok, err = pcall(function()
+   local process = require "core.process"
+   shell = assert(process.start({EXEFILE, "--shell", root .. "/Project"},
+    {stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
+   local window = wait(function() return shell_window(shell:pid()) end, 10, "shell Window not found")
+   -- Windows draws the Window once it is visible and DWM does not cloak it.
+   local dwm, cloaked = ffi.load("dwmapi"), ffi.new("unsigned long[1]")
+   wait(function()
+    cloaked[0] = 1
+    return user32.IsWindowVisible(window) ~= 0 and dwm.DwmGetWindowAttribute(window, 14, cloaked, 4) == 0
+     and cloaked[0] == 0
+   end, 15, "the shell never showed its Window")
+   local first = capture(window)
+   wait(function() return load("a-ready") end, 30, "Project A did not start")
+   wait(function() return trace():find("Shell Sidebar surface Ready", 1, true) end, 15, "Sidebar did not become Ready")
+   coroutine.yield(1.5)
+   local settled = capture(window)
+   local controls_w = tonumber(trace():match("Shell controls: x=%d+ y=%d+ w=(%d+)"))
+   -- The Title Bar left of the Window controls, the Sidebar's empty area, and the Project area.
+   local points = {{settled.width - controls_w - 24, 4, "Title Bar"}, {8, settled.height - 8, "Sidebar"},
+    {math.floor(settled.width * .75), math.floor(settled.height * .75), "Project area"}}
+   for _, point in ipairs(points) do
+    local shown, final = first.pixel(point[1], point[2]), settled.pixel(point[1], point[2])
+    -- The Project's wallpaper still settles after its first frame. The dark fallback is far from either.
+    assert(near(shown, final, 24), "the first visible frame drew " .. show(shown) .. " in the " .. point[3]
+     .. ", not the loaded " .. show(final))
+   end
+  end)
+  local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
+  file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})
+  file:close()
+  if shell and shell:running() then shell:terminate(); shell:wait(1) end
+  local state = load("a-ready")
+  local handle = state and kernel.OpenProcess(0x1F0FFF, 0, state.pid)
+  if handle ~= nil and handle then kernel.TerminateProcess(handle, 9); kernel.CloseHandle(handle) end
+  quit()
+ end)
+elseif path:match("/Project$") and action == "reveal" then
+ core.add_background_thread(function()
+  coroutine.yield(.5)
+  ready("a-ready")
+ end)
+elseif path:match("/driver$") and action == "theme-empty" then
  core.add_background_thread(function()
   local shell
   local ok, err = pcall(function()
