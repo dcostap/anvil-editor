@@ -529,7 +529,8 @@ static bool prepare_revival(GhosttyTerminal model, uint16_t rows) {
     GhosttyFormatterTerminalOptions options = {
       .size = sizeof(options), .emit = GHOSTTY_FORMATTER_FORMAT_VT, .trim = true,
     };
-    bool ok = ghostty_formatter_terminal_new(NULL, &formatter, model, options) == GHOSTTY_SUCCESS &&
+    /* Ghostty's NULL default allocator crashes the host; use the allocator that owns the model. */
+    bool ok = ghostty_formatter_terminal_new(&terminal_allocator, &formatter, model, options) == GHOSTTY_SUCCESS &&
       ghostty_formatter_format_buf(formatter, NULL, 0, &length) == GHOSTTY_OUT_OF_SPACE &&
       length <= ANVIL_TERMINAL_DISK_SNAPSHOT_LIMIT;
     if (ok) alternate = malloc(length ? length : 1);
