@@ -356,7 +356,6 @@ local function fit(label, width)
   return label .. ellipsis
 end
 
--- Draws a label shortened before a right-aligned note, then the note.
 -- The title with its leading braille character (U+2800 to U+28FF) swapped for the spinner frame at `clock`, or nil.
 local function spinner_title(title, clock)
   local first, second = title:byte(1, 2)
@@ -370,8 +369,11 @@ function SidebarView:animation_delay(clock)
   return SPINNER_FRAME - clock % SPINNER_FRAME
 end
 
+-- Draws a label shortened before a right-aligned note, then the note. The note keeps the same inset from the
+-- row highlight's right edge as the row's content keeps from its left edge.
 function SidebarView:label_with_note(label, color, note, x, y, row, right)
   local ty = y + (row.h - style.font:get_height()) / 2
+  right = right - 8 * SCALE
   local note_w = note and style.font:get_width(note) + 8 * SCALE or 0
   if note_w > (right - x) / 2 then note, note_w = nil, 0 end
   text(fit(label, math.max(0, right - x - note_w)), x, ty, color)
