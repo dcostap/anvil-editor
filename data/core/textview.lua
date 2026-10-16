@@ -8264,12 +8264,28 @@ local function draw_render_line_under_selection_backgrounds(view, render_line, x
     or view:get_position_visual_row_height(line, 1)
   -- Full-height backgrounds fill the content below the line's leading space.
   local content_y = y + math.max(0, tonumber(render_line.first_row_content_y_offset) or 0)
+  local wrapped = view.wrapped_settings and not render_line.disable_wrapping
   for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
     local font = render_fragment_font(view, fragment)
     local width = fragment.width or (fragment.widget and fragment.widget.width)
       or font:get_width(fragment.text or "")
     local draw_x = fragment.layout_x ~= nil and x + fragment.layout_x or tx
-    if fragment.background_under_selection and fragment.background then
+    if wrapped and fragment.background_under_selection and fragment.background then
+      -- A soft-wrapped fragment gets one background on each Wrapped Visual Row
+      -- that draws part of its text.
+      local col1 = fragment.text_source_col1 or fragment.source_col1 or 1
+      local col2 = fragment.text_source_col2 or fragment.source_col2 or col1
+      local height = font:get_height()
+      for x1, segment_y, x2, segment_height in view:iter_text_range_screen_segments(
+        line, col1, col2, x, y
+      ) do
+        if x2 > x1 then
+          draw_render_fragment_background(
+            fragment, x1, segment_y + (segment_height - height) / 2, x2 - x1, height, true
+          )
+        end
+      end
+    elseif fragment.background_under_selection and fragment.background then
       local background_y, background_height = y, font:get_height()
       if fragment.background_full_height then
         background_y, background_height = content_y, row_height

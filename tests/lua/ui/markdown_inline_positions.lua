@@ -4,6 +4,7 @@ local Editor = require "core.editor"
 local markdown = require "core.markdown"
 local model = require "core.markdown.model"
 local linewrapping = require "core.linewrapping"
+local live_fonts = require "core.markdown.live_fonts"
 local style = require "core.style"
 local worker_pool = require "core.worker_pool"
 local test = require "core.test"
@@ -91,6 +92,64 @@ test.describe("Markdown inline positions", function()
     end
     test.equal(top_color, style.selection)
     test.not_equal(top_color, style.markdown_live_inline_code_bg)
+    model.close(buffer, "test")
+  end)
+
+  test.it("draws a soft-wrapped code background behind its text on each row", function()
+    local buffer = Buffer("inline-code-wrap.md", "inline-code-wrap.md", true)
+    buffer:insert(1, 1, "2. Obsidian, *Open folder as vault*, `C:\\Users\\<usuario>\\red_vault`."
+      .. " Debe siempre llamarse `red_vault`.\n\nend\n")
+    buffer:clear_undo_redo()
+    local view = Editor(buffer)
+    view.size.y = 400
+    view:set_wrapping_enabled(true)
+    markdown.live_render.refresh_view(view)
+    wait_ready(view)
+    buffer:set_selection(3, 1)
+    local code_font = live_fonts.inline_style(view, "code")
+    local wrapped_code = 0
+    for width = 300, 1000, 25 do
+      view.size.x = width
+      view:update_wrap_cache()
+      linewrapping.complete_async_reconstruction(view)
+      local backgrounds, code = {}, {}
+      local old_draw_rect, old_draw_text = renderer.draw_rect, renderer.draw_text
+      renderer.draw_rect = function(rx, ry, rw, rh, color)
+        if color == style.markdown_live_inline_code_bg then
+          backgrounds[#backgrounds + 1] = { x1 = rx, x2 = rx + rw, y = ry + rh / 2 }
+        end
+      end
+      renderer.draw_text = function(font, text, tx, ty, _, opts)
+        local tx2 = tx + font:get_width(text, opts)
+        if font == code_font then
+          code[#code + 1] = { text = text, x1 = tx, x2 = tx2, y = ty + font:get_height() / 2 }
+        end
+        return tx2
+      end
+      local x, y = view:get_line_screen_position(1)
+      local ok, err = pcall(function() view:draw_line_body(1, x, y) end)
+      renderer.draw_rect, renderer.draw_text = old_draw_rect, old_draw_text
+      if not ok then error(err, 0) end
+      local function same_row(a, b) return math.abs(a.y - b.y) < 2 end
+      for _, piece in ipairs(code) do
+        local covered = false
+        for _, background in ipairs(backgrounds) do
+          covered = covered or same_row(piece, background)
+            and background.x1 <= piece.x1 + 0.5 and background.x2 >= piece.x2 - 0.5
+        end
+        test.ok(covered, string.format("width %d: '%s' drew without its background", width, piece.text))
+        if piece.y > y + view:get_line_height() then wrapped_code = wrapped_code + 1 end
+      end
+      for _, background in ipairs(backgrounds) do
+        local behind_text = false
+        for _, piece in ipairs(code) do
+          behind_text = behind_text or same_row(piece, background)
+            and piece.x1 < background.x2 and piece.x2 > background.x1
+        end
+        test.ok(behind_text, string.format("width %d: a code background has no text", width))
+      end
+    end
+    test.ok(wrapped_code > 0, "some width must wrap code below the first row")
     model.close(buffer, "test")
   end)
 
