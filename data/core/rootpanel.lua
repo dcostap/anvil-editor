@@ -92,6 +92,7 @@ function RootPanel:new()
   self.mouse = { x = 0, y = 0 }
   self.deferred_draws = {}
   self.app_overlay = nil
+  self.above_sidebar = {}
   self.grab = nil
   self.overlapping_view = nil
   self.touched_view = nil
@@ -331,22 +332,44 @@ function RootPanel:draw_active_app_overlay()
   self.surface_overlay_color = color
 end
 
+-- The most areas one frame shows above a hosted shell's Sidebar.
+local ABOVE_SIDEBAR_MAX = 4
+
 -- A modal view that draws over a hosted shell's Sidebar reports its drawn area each frame it draws.
 function RootPanel:show_above_sidebar(x, y, w, h)
-  self.above_sidebar = { x = x, y = y, w = w, h = h }
+  if #self.above_sidebar >= ABOVE_SIDEBAR_MAX then
+    core.log_quiet("Area above the Sidebar dropped: %d already shown", ABOVE_SIDEBAR_MAX)
+    return
+  end
+  local left, top = math.floor(x), math.floor(y)
+  self.above_sidebar[#self.above_sidebar + 1] = { left, top, math.ceil(x + w) - left, math.ceil(y + h) - top }
 end
 
--- A hosted shell extends the dim over its Sidebar, and shows the reported area above the Sidebar and the dim.
+-- A modal view that dims the whole Window adds its dim over the Sidebar, above any dim already there.
+function RootPanel:dim_sidebar(color)
+  local under = self.surface_overlay_color
+  local alpha = (color[4] or 255) / 255
+  if not under then
+    self.surface_overlay_color = { color[1], color[2], color[3], alpha * 255 }
+    return
+  end
+  local under_alpha = under[4] / 255
+  local total = alpha + under_alpha * (1 - alpha)
+  local mixed = { [4] = total * 255 }
+  for i = 1, 3 do
+    mixed[i] = total > 0 and (color[i] * alpha + under[i] * under_alpha * (1 - alpha)) / total or 0
+  end
+  self.surface_overlay_color = mixed
+end
+
+-- A hosted shell extends the dim over its Sidebar, and shows the reported areas above the Sidebar and the dim.
 function RootPanel:publish_surface_overlay()
-  local color, area = self.surface_overlay_color, self.above_sidebar
+  local color = self.surface_overlay_color
   if not color then
     system.set_surface_overlay(core.window)
-  elseif area then
-    local left, top = math.floor(area.x), math.floor(area.y)
-    system.set_surface_overlay(core.window, color[1], color[2], color[3], color[4],
-      left, top, math.ceil(area.x + area.w) - left, math.ceil(area.y + area.h) - top)
   else
-    system.set_surface_overlay(core.window, color[1], color[2], color[3], color[4])
+    system.set_surface_overlay(core.window, color[1], color[2], color[3], color[4],
+      #self.above_sidebar > 0 and self.above_sidebar or nil)
   end
 end
 
@@ -1057,7 +1080,7 @@ function RootPanel:draw()
   local started, scope = perf_begin("rootpanel_core_draw")
   self:begin_keyboard_caret_frame()
   local pane_views = self:pane_views()
-  self.above_sidebar = nil
+  self.above_sidebar = {}
   self:draw_wallpaper(#pane_views > 0)
   local group = panes().visible_group()
   for _, view in ipairs(pane_views) do

@@ -253,7 +253,7 @@ struct ShellWindow {
   /* The Project's modal overlay dim, in the same format; the shell extends it over the Sidebar. */
   uint32_t overlay;
   /* The area of the Project's frame shown above the Sidebar while the overlay is shown, in surface pixels. */
-  RECT raised;
+  RECT raised[ANVIL_SURFACE_RAISED_MAX];
   /* Blending for transparent layers. Without it, layers are copied. */
   ID3D11VertexShader *compose_vs;
   ID3D11PixelShader *compose_ps;
@@ -2211,13 +2211,13 @@ static void composite_and_present(ShellWindow *window) {
     float a = (c >> 24) / 255.0f;
     float dim[4] = {(c & 0xff) / 255.0f * a, (c >> 8 & 0xff) / 255.0f * a, (c >> 16 & 0xff) / 255.0f * a, a};
     compose_rect(window, NULL, (RECT){0, 0, window->sidebar_w, window->buffer_h}, 0, 0, dim);
-    /* A modal popup that extends over the Sidebar shows above it and its dim. A held frame belongs to the
-     * previous Project, so its popup area does not apply. */
-    RECT raised = {window->raised.left + content_at.x, window->raised.top + content_at.y,
-                   window->raised.right + content_at.x, window->raised.bottom + content_at.y};
-    RECT sidebar_area = {0, 0, window->sidebar_w, window->buffer_h}, shown;
-    if (!content->held && IntersectRect(&shown, &raised, &sidebar_area) &&
-        IntersectRect(&shown, &shown, &content_area)) {
+    /* Modal UI that extends over the Sidebar, such as a popup and a warning bar, shows above it and its dim. The
+     * Project draws each area's own dim. A held frame belongs to the previous Project, so its areas do not apply. */
+    RECT sidebar_area = {0, 0, window->sidebar_w, window->buffer_h};
+    for (int i = 0; i < ANVIL_SURFACE_RAISED_MAX && !content->held; i++) {
+      RECT raised = {window->raised[i].left + content_at.x, window->raised[i].top + content_at.y,
+                     window->raised[i].right + content_at.x, window->raised[i].bottom + content_at.y}, shown;
+      if (!IntersectRect(&shown, &raised, &sidebar_area) || !IntersectRect(&shown, &shown, &content_area)) continue;
       D3D11_BOX box = {(UINT)(shown.left - content_at.x), (UINT)(shown.top - content_at.y), 0,
                        (UINT)(shown.right - content_at.x), (UINT)(shown.bottom - content_at.y), 1};
       window->context->lpVtbl->CopySubresourceRegion(
@@ -2338,8 +2338,10 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
     if (!(window->overlay >> 24) != !(frame->overlay >> 24))
       SDL_Log("Shell Window overlay: id=%u shown=%d", window->id, (frame->overlay >> 24) != 0);
     window->overlay = frame->overlay;
-    window->raised = (RECT){frame->raised_x, frame->raised_y, frame->raised_x + SDL_max(0, frame->raised_w),
-                            frame->raised_y + SDL_max(0, frame->raised_h)};
+    for (int i = 0; i < ANVIL_SURFACE_RAISED_MAX; i++) {
+      const AnvilSurfaceArea *area = &frame->raised[i];
+      window->raised[i] = (RECT){area->x, area->y, area->x + SDL_max(0, area->w), area->y + SDL_max(0, area->h)};
+    }
     if (window->overlay >> 24) leave_sidebar(window);
   }
   /* A fresh Project frame shows the Project is responsive again, so resize steps wait for it once more.

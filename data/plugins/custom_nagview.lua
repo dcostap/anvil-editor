@@ -226,9 +226,10 @@ local function leftmost_button_x(nag, content_x, content_width)
   return x
 end
 
+-- The bar spans the whole Window, including a hosted shell's Sidebar, and centres its content lane on it.
 function NagView:get_limited_content_bounds()
-  local ox, oy = self:get_content_offset()
-  local full_width = self.size.x
+  local _, oy = self:get_content_offset()
+  local ox, _, full_width = core.root_panel:backdrop_rect()
   local content_width = math.min(full_width, max_content_width())
   local content_x = ox + (full_width - content_width) / 2
   return content_x, oy, content_width, self.show_height, ox, full_width
@@ -373,6 +374,7 @@ local function draw_nagview(self)
 
   -- Full-width visual bar; capped centered content lane.
   renderer.draw_rect(full_x, oy, full_width, self.show_height, style.nagbar)
+  core.root_panel:show_above_sidebar(full_x, oy, full_width, self.show_height)
 
   local overflow = math.max(0, full_width - content_width)
   if overflow > 0 then

@@ -1785,11 +1785,26 @@ static int f_set_surface_overlay(lua_State *L) {
     }
     overlay = channel[0] | channel[1] << 8 | channel[2] << 16 | channel[3] << 24;
   }
-  /* The optional area above the Sidebar: x, y, w, h in surface pixels. */
-  int raised[4] = {0};
-  if (overlay && !lua_isnoneornil(L, 6))
-    for (int i = 0; i < 4; i++) raised[i] = (int)luaL_checknumber(L, i + 6);
-  anvil_hosted_surface_set_overlay(ren->cache.window, overlay, raised[0], raised[1], raised[2], raised[3]);
+  /* The optional areas above the Sidebar: a list of {x, y, w, h} in surface pixels. */
+  AnvilSurfaceArea raised[ANVIL_SURFACE_RAISED_MAX] = {0};
+  int count = 0;
+  if (overlay && !lua_isnoneornil(L, 6)) {
+    luaL_checktype(L, 6, LUA_TTABLE);
+    count = (int)lua_rawlen(L, 6);
+    luaL_argcheck(L, count <= ANVIL_SURFACE_RAISED_MAX, 6, "too many areas above the Sidebar");
+    for (int i = 0; i < count; i++) {
+      lua_rawgeti(L, 6, i + 1);
+      luaL_checktype(L, -1, LUA_TTABLE);
+      int32_t *field[] = {&raised[i].x, &raised[i].y, &raised[i].w, &raised[i].h};
+      for (int j = 0; j < 4; j++) {
+        lua_rawgeti(L, -1, j + 1);
+        *field[j] = (int32_t)luaL_checknumber(L, -1);
+        lua_pop(L, 1);
+      }
+      lua_pop(L, 1);
+    }
+  }
+  anvil_hosted_surface_set_overlay(ren->cache.window, overlay, raised, count);
   return 0;
 }
 /* A D3D11 Sidebar surface is drawn on a transparent clear and blended by the shell. */

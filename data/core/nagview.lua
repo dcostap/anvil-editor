@@ -117,14 +117,16 @@ end
 
 
 ---Draw semi-transparent overlay to dim content behind the dialog.
+---The dim covers the whole Window, including a hosted shell's Sidebar.
 function NagView:dim_window_content()
-  local ox, oy = self:get_content_offset()
+  local _, oy = self:get_content_offset()
   oy = oy + self.show_height
-  local w, h = core.root_panel.size.x, core.root_panel.size.y - oy
+  local x, _, w, h = core.root_panel:backdrop_rect()
   core.root_panel:defer_draw(function()
     local dim_color = { table.unpack(style.nagbar_dim) }
     dim_color[4] = style.nagbar_dim[4] * self.dim_alpha
-    renderer.draw_rect(ox, oy, w, h, dim_color)
+    renderer.draw_rect(x, oy, w, h - oy, dim_color)
+    core.root_panel:dim_sidebar(dim_color)
   end)
 end
 

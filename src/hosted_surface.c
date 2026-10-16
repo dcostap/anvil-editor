@@ -54,7 +54,7 @@ typedef struct HostedView {
   uint32_t frame_generation;
   Uint64 resize_configured_ns; /* when the latest live-resize size arrived; zero once published */
   uint32_t background, overlay;
-  int32_t raised_x, raised_y, raised_w, raised_h;
+  AnvilSurfaceArea raised[ANVIL_SURFACE_RAISED_MAX];
   SharedMemoryFrame memory;
 } HostedView;
 static HostedView first_view = {.last_cursor = -1};
@@ -1137,10 +1137,13 @@ void anvil_hosted_surface_unregister_window(SDL_Window *window) {
 void anvil_hosted_surface_set_background(SDL_Window *window, uint32_t background) {
   if (anvil_hosted_surface_is_window(window)) view->background = background;
 }
-void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, int x, int y, int w, int h) {
+void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, const AnvilSurfaceArea *raised,
+                                      int count) {
   if (!anvil_hosted_surface_is_window(window)) return;
   view->overlay = overlay;
-  view->raised_x = x; view->raised_y = y; view->raised_w = w; view->raised_h = h;
+  memset(view->raised, 0, sizeof(view->raised));
+  count = SDL_clamp(count, 0, ANVIL_SURFACE_RAISED_MAX);
+  if (count) memcpy(view->raised, raised, (size_t)count * sizeof(*raised));
 }
 int anvil_hosted_surface_content_x(void) { return hosted.active ? view->config.content_x : 0; }
 
@@ -1157,8 +1160,7 @@ void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, in
   frame.height = height;
   frame.background = view->background;
   frame.overlay = view->overlay;
-  frame.raised_x = view->raised_x; frame.raised_y = view->raised_y;
-  frame.raised_w = view->raised_w; frame.raised_h = view->raised_h;
+  memcpy(frame.raised, view->raised, sizeof(frame.raised));
   frame.input_seq = anvil_latency_probe_consumed_seq();
   anvil_latency_probe_stage("frame-published");
   SDL_strlcpy(frame.name, name, sizeof(frame.name));
@@ -1266,8 +1268,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   frame.height = surface->h;
   frame.background = view->background;
   frame.overlay = view->overlay;
-  frame.raised_x = view->raised_x; frame.raised_y = view->raised_y;
-  frame.raised_w = view->raised_w; frame.raised_h = view->raised_h;
+  memcpy(frame.raised, view->raised, sizeof(frame.raised));
   frame.input_seq = anvil_latency_probe_consumed_seq();
   anvil_latency_probe_stage("frame-published");
   SDL_strlcpy(frame.name, view->memory.name, sizeof(frame.name));
@@ -1438,8 +1439,9 @@ uint32_t anvil_hosted_surface_window_id(void) { return 0; }
 void anvil_hosted_surface_set_background(SDL_Window *window, uint32_t background) {
   (void)window; (void)background;
 }
-void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, int x, int y, int w, int h) {
-  (void)window; (void)overlay; (void)x; (void)y; (void)w; (void)h;
+void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, const AnvilSurfaceArea *raised,
+                                      int count) {
+  (void)window; (void)overlay; (void)raised; (void)count;
 }
 int anvil_hosted_surface_content_x(void) { return 0; }
 bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; return false; }

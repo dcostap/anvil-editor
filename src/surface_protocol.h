@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 23u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 24u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -168,6 +168,10 @@ bool anvil_surface_dialog_result_valid(const void *packet, uint32_t size);
 
 typedef struct { uint32_t pid; } AnvilSurfaceHello;
 
+/* The most frame areas one frame shows above the Sidebar. */
+#define ANVIL_SURFACE_RAISED_MAX 4
+typedef struct { int32_t x, y, w, h; } AnvilSurfaceArea;
+
 typedef struct {
   uint32_t kind;         /* AnvilSurfaceFrameKind */
   uint32_t generation;   /* increments for every published frame */
@@ -180,9 +184,9 @@ typedef struct {
   /* The dim the Project draws over its UI while a modal overlay is open, in the same layout; zero when none.
    * The shell applies it over the Sidebar, so the overlay covers the whole window. */
   uint32_t overlay;
-  /* While the overlay is shown, the frame area the shell shows above the Sidebar, such as a modal popup that
-   * extends over it. Surface pixels; an empty area shows none. */
-  int32_t raised_x, raised_y, raised_w, raised_h;
+  /* While the overlay is shown, the frame areas the shell shows above the Sidebar, such as a modal popup and a
+   * warning bar that extend over it. Surface pixels; an empty area shows none. */
+  AnvilSurfaceArea raised[ANVIL_SURFACE_RAISED_MAX];
   char name[ANVIL_SURFACE_NAME_MAX];
 } AnvilSurfaceFrame;
 

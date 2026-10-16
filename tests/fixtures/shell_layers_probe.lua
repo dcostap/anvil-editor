@@ -3,7 +3,8 @@
 -- right of the Sidebar, the Sidebar is blended over the Project's backdrop where the renderer allows it, and a
 -- modal overlay dim reaches the shell so it can cover the Sidebar too. A click on the covered Sidebar goes to the
 -- Project, whose modal UI decides what an outside click does. Sidebar hover appears without waiting for a later
--- event. The fuzzy picker is centred on the whole Window, shows above the Sidebar, and takes clicks there.
+-- event. The fuzzy picker is centred on the whole Window, shows above the Sidebar, and takes clicks there. A
+-- warning over the picker spans the Window too, and its dim covers the Sidebar and the picker above it.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "layers" then return end
 local core, common = require "core", require "core.common"
@@ -152,6 +153,26 @@ if path:match("/driver$") then
    save("picker-check", {go=true})
    local state = wait(function() return load("picker-state") end, 10, "the Project did not report the picker")
    assert(state.open, "a click on the fuzzy picker over the Sidebar closed it")
+   save("warning-go", {go=true})
+   local warning = wait(function() return load("warning") end, 10, "the Project did not show the warning")
+   coroutine.yield(1)
+   capture(window, 4)
+   -- The band's top padding is flat on both sides of the Sidebar edge.
+   local band_y = math.floor(warning.y + 2)
+   over, beside = capture_pixel(4, layout.content_x - 8, band_y), capture_pixel(4, layout.content_x + 8, band_y)
+   assert(over[1] == beside[1] and over[2] == beside[2] and over[3] == beside[3], string.format(
+    "the warning stops at the Sidebar: over=%d,%d,%d beside=%d,%d,%d",
+    over[1], over[2], over[3], beside[1], beside[2], beside[3]))
+   -- The picker's empty lower part, under the warning's dim, on both sides of the Sidebar edge.
+   y = math.floor(picker.y + picker.h * .9)
+   over, beside = capture_pixel(4, layout.content_x - 8, y), capture_pixel(4, layout.content_x + 8, y)
+   assert(over[1] == beside[1] and over[2] == beside[2] and over[3] == beside[3], string.format(
+    "the warning's dim skips the picker over the Sidebar: over=%d,%d,%d beside=%d,%d,%d",
+    over[1], over[2], over[3], beside[1], beside[2], beside[3]))
+   local before, after = capture_pixel(3, 4, layout.window_h - 4), capture_pixel(4, 4, layout.window_h - 4)
+   assert(after[1] + after[2] + after[3] < before[1] + before[2] + before[3], string.format(
+    "the warning's dim does not cover the Sidebar: before=%d,%d,%d after=%d,%d,%d",
+    before[1], before[2], before[3], after[1], after[2], after[3]))
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})
@@ -174,11 +195,11 @@ elseif path == root .. "/Project" then
  end
  core.add_background_thread(function()
   coroutine.yield(.5)
-  local width = core.window:get_size()
+  local width, height = core.window:get_size()
   local lane, controls_x = core.title_bar.tab_lane, system.get_window_controls()
   save("layout", {pid=tonumber(kernel.GetCurrentProcessId()), content_x=system.get_window_content_x(),
    root_x=core.root_panel.position.x, root_w=core.root_panel.size.x, window_w=width,
-   tabs_right=lane.x + lane.w, controls_x=controls_x})
+   tabs_right=lane.x + lane.w, controls_x=controls_x, window_h=height})
   wait(function() return load("overlay-go") end, 30)
   local owner = {}
   core.root_panel:show_app_overlay(owner, "nagbar_dim")
@@ -198,5 +219,11 @@ elseif path == root .. "/Project" then
   wait(function() return load("picker-check") end, 30)
   local overlay = core.root_panel.app_overlay
   save("picker-state", {open=overlay ~= nil and overlay.owner == picker and overlay.target == 1})
+  wait(function() return load("warning-go") end, 30)
+  local nag = core.nag_view
+  nag:show("Probe", "A warning over the picker", {{text="OK", default_yes=true}}, function() end)
+  wait(function() return nag.show_height >= nag:get_target_height() and nag.dim_alpha >= 1 end, 10)
+  coroutine.yield(.5)
+  save("warning", {y=nag.position.y, h=nag.show_height})
  end)
 end
