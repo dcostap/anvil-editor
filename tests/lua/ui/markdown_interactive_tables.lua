@@ -157,6 +157,43 @@ test.describe("Markdown Interactive Table Editing", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("draws the caret after a space typed at the end of a cell", function()
+    local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two words |\n\nplain")
+    view.size.x = 800
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      buffer:set_selection(3, #"| one | two words" + 1)
+      refresh(view)
+      local before = view:get_col_x_offset(3, #"| one | two words" + 1)
+      test.equal(view:on_text_input(" "), true)
+      refresh(view)
+      test.equal(buffer.lines[3], "| one | two words  |\n")
+      local space = table_cells(view, 3)[2].font:get_width(" ")
+      test.same({ buffer:get_selection() }, { 3, #"| one | two words " + 1, 3, #"| one | two words " + 1 })
+      test.ok(math.abs(view:get_col_x_offset(3, #"| one | two words " + 1) - (before + space)) < 0.5,
+        "the caret must sit one space after the text")
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("deletes a space typed at the end of a cell", function()
+    local view, buffer = make_view("| A | B |\n| --- | --- |\n| one | two words |\n\nplain")
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      buffer:set_selection(3, #"| one | two words" + 1)
+      refresh(view)
+      test.equal(view:on_text_input(" "), true)
+      test.equal(command.perform("markdown:table_backspace"), true)
+      test.equal(buffer.lines[3], "| one | two words |\n")
+      test.same({ buffer:get_selection() }, { 3, #"| one | two words" + 1, 3, #"| one | two words" + 1 })
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("wraps inline code within the available table width", function()
     local code = "alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda"
     local view, buffer = make_view(table.concat({

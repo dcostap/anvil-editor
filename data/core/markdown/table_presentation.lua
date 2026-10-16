@@ -1514,11 +1514,18 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
         x1 = fragment_x,
         x2 = fragment_x + (fragment.width or 0),
       }
-      for visual_index, text_line in ipairs(fragment.text_lines or {}) do
+      local text_lines = fragment.text_lines or {}
+      for visual_index, text_line in ipairs(text_lines) do
+        local last = visual_index == #text_lines
         position_rows[#position_rows + 1] = {
           source_col1 = text_line.source_col1,
           source_col2 = text_line.source_col2,
           end_inclusive = true,
+          -- The cell's last row also holds a caret in the whitespace after its
+          -- text, such as a space just typed, and places it after that space.
+          trailing_col2 = last and fragment.source_col2 or nil,
+          trailing_font = last and fragment.font or nil,
+          trailing_x2 = last and fragment_x + (fragment.width or 0) or nil,
           x_offset = fragment_x + (text_line.x_offset or 0),
           hit_x1 = fragment_x,
           hit_x2 = fragment_x + (fragment.width or 0),

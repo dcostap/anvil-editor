@@ -973,7 +973,8 @@ function tables.delete_char(view, direction)
       if direction < 0 then col1, col2 = target, context.col
       else col1, col2 = context.col, target end
       col1 = math.max(col1, context.cell.content_col1)
-      col2 = math.min(col2, context.cell.content_col2)
+      -- Whitespace typed after the cell's text stays deletable up to the caret.
+      col2 = math.min(col2, math.max(context.cell.content_col2, context.col))
     end
     if col2 > col1 then
       local key = context.line .. ":" .. col1 .. ":" .. col2

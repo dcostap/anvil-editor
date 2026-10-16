@@ -5270,7 +5270,9 @@ function TextView:get_line_render_position_row(render_line, col, prefer_next)
   for index, row in ipairs(rows) do
     local col1 = math.max(1, row.source_col1 or 1)
     local col2 = math.max(col1, row.source_col2 or col1)
-    if col >= col1 and (col < col2 or (row.end_inclusive and col == col2)) then
+    if col >= col1 and (col < col2 or (row.end_inclusive and col == col2)
+      or row.trailing_col2 and col > col2 and col <= row.trailing_col2)
+    then
       local next_row = rows[index + 1]
       if prefer_next and col == col2 and next_row
         and col >= (next_row.source_col1 or col)
@@ -5754,6 +5756,17 @@ end
 
 function TextView:get_line_render_col_x_offset(render_line, col, position_row)
   local row = position_row or self:get_line_render_position_row(render_line, col)
+  local text_col2 = row and row.source_col2
+  if row and row.trailing_col2 and text_col2 and col > text_col2 then
+    -- A caret in the whitespace after a row's text sits after that
+    -- whitespace, within the row's box.
+    local x = self:get_line_render_col_x_offset(render_line, text_col2, row)
+    local whitespace = (render_line.source_text or ""):sub(text_col2, col - 1)
+    return math.min(
+      x + row.trailing_font:get_width(whitespace),
+      (render_line.x_offset or 0) + row.trailing_x2
+    )
+  end
   if row and row.runs then
     return (render_line.x_offset or 0) + (row.x_offset or 0)
       + position_runs_col_x(row.runs, col)
