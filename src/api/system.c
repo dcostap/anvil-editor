@@ -1785,7 +1785,11 @@ static int f_set_surface_overlay(lua_State *L) {
     }
     overlay = channel[0] | channel[1] << 8 | channel[2] << 16 | channel[3] << 24;
   }
-  anvil_hosted_surface_set_overlay(ren->cache.window, overlay);
+  /* The optional area above the Sidebar: x, y, w, h in surface pixels. */
+  int raised[4] = {0};
+  if (overlay && !lua_isnoneornil(L, 6))
+    for (int i = 0; i < 4; i++) raised[i] = (int)luaL_checknumber(L, i + 6);
+  anvil_hosted_surface_set_overlay(ren->cache.window, overlay, raised[0], raised[1], raised[2], raised[3]);
   return 0;
 }
 /* A D3D11 Sidebar surface is drawn on a transparent clear and blended by the shell. */

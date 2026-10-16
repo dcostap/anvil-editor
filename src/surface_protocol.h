@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 22u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 23u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -180,6 +180,9 @@ typedef struct {
   /* The dim the Project draws over its UI while a modal overlay is open, in the same layout; zero when none.
    * The shell applies it over the Sidebar, so the overlay covers the whole window. */
   uint32_t overlay;
+  /* While the overlay is shown, the frame area the shell shows above the Sidebar, such as a modal popup that
+   * extends over it. Surface pixels; an empty area shows none. */
+  int32_t raised_x, raised_y, raised_w, raised_h;
   char name[ANVIL_SURFACE_NAME_MAX];
 } AnvilSurfaceFrame;
 

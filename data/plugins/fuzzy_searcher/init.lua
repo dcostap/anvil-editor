@@ -3813,8 +3813,8 @@ function FSView:new(prefix, opts)
 end
 
 function FSView:layout()
-  local root = core.root_panel
-  local rw, rh = root.size.x, root.size.y
+  -- The picker spans the whole window. In a hosted shell, it shows above the Sidebar.
+  local rx, ry, rw, rh = core.root_panel:backdrop_rect()
   local width_ratio = fuzzy_searcher.width or 0.90
   local reduce_at = fuzzy_searcher.side_padding_reduce_width or 1500 * SCALE
   local min_width = fuzzy_searcher.min_width or 1200 * SCALE
@@ -3829,8 +3829,8 @@ function FSView:layout()
   side_padding = common.clamp(side_padding, 0, math.max(0, rw / 2 - 1))
   local w = math.max(1, rw - side_padding * 2)
   local h = math.min(rh, math.max(rh * fuzzy_searcher.height, fuzzy_searcher.min_height or 0))
-  local x = root.position.x + (rw - w) / 2
-  local y = root.position.y + (rh - h) / 2
+  local x = rx + (rw - w) / 2
+  local y = ry + (rh - h) / 2
   self:set_size(w, h)
   self:set_position(x, y)
   local pad = style.padding.x
@@ -8026,10 +8026,12 @@ function FSView:draw()
     scale, visible = self:opening_transition()
   end
   if not visible then return false end
+  local inset_x = self.size.x * (1 - scale) / 2
+  local inset_y = self.size.y * (1 - scale) / 2
+  core.root_panel:show_above_sidebar(self.position.x + inset_x, self.position.y + inset_y,
+    self.size.x * scale, self.size.y * scale)
   if config.wallpaper ~= "none"
     and self.updated and self.size.x > 0 and self.size.y > 0 then
-    local inset_x = self.size.x * (1 - scale) / 2
-    local inset_y = self.size.y * (1 - scale) / 2
     core.root_panel:draw_wallpaper_region(
       self.position.x + inset_x, self.position.y + inset_y,
       self.size.x * scale, self.size.y * scale)

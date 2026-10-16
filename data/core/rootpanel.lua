@@ -323,15 +323,31 @@ function RootPanel:draw_active_app_overlay()
   local overlay = self.app_overlay
   local source = overlay and overlay.progress > 0
     and (type(overlay.color) == "string" and style[overlay.color] or overlay.color)
-  if type(source) ~= "table" then
-    system.set_surface_overlay(core.window)
-    return
-  end
+  self.surface_overlay_color = nil
+  if type(source) ~= "table" then return end
   local color = { table.unpack(source) }
   color[4] = (color[4] or 255) * overlay.progress
   self:draw_app_overlay(color, overlay.unobscured_view)
-  -- A hosted shell extends the dim over its Sidebar.
-  system.set_surface_overlay(core.window, color[1], color[2], color[3], color[4])
+  self.surface_overlay_color = color
+end
+
+-- A modal view that draws over a hosted shell's Sidebar reports its drawn area each frame it draws.
+function RootPanel:show_above_sidebar(x, y, w, h)
+  self.above_sidebar = { x = x, y = y, w = w, h = h }
+end
+
+-- A hosted shell extends the dim over its Sidebar, and shows the reported area above the Sidebar and the dim.
+function RootPanel:publish_surface_overlay()
+  local color, area = self.surface_overlay_color, self.above_sidebar
+  if not color then
+    system.set_surface_overlay(core.window)
+  elseif area then
+    local left, top = math.floor(area.x), math.floor(area.y)
+    system.set_surface_overlay(core.window, color[1], color[2], color[3], color[4],
+      left, top, math.ceil(area.x + area.w) - left, math.ceil(area.y + area.h) - top)
+  else
+    system.set_surface_overlay(core.window, color[1], color[2], color[3], color[4])
+  end
 end
 
 function RootPanel:shell_views()
@@ -1041,6 +1057,7 @@ function RootPanel:draw()
   local started, scope = perf_begin("rootpanel_core_draw")
   self:begin_keyboard_caret_frame()
   local pane_views = self:pane_views()
+  self.above_sidebar = nil
   self:draw_wallpaper(#pane_views > 0)
   local group = panes().visible_group()
   for _, view in ipairs(pane_views) do
@@ -1086,6 +1103,7 @@ function RootPanel:draw()
     item.fn(table.unpack(item, 1, #item))
   end
   perf_end("rootpanel_deferred_draw", deferred_started, deferred_scope)
+  self:publish_surface_overlay()
   self:draw_keyboard_caret()
   self:draw_autoscroll()
   if core.cursor_change_req then

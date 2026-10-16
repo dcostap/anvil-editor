@@ -56,8 +56,8 @@ bool anvil_hosted_surface_is_window(SDL_Window *window);
 void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, int width, int height);
 /* Records the background of the frame being published, R | G << 8 | B << 16 | A << 24. */
 void anvil_hosted_surface_set_background(SDL_Window *window, uint32_t background);
-/* Records the modal overlay dim of the frame being published, or zero. */
-void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay);
+/* Records the modal overlay dim of the frame being published, or zero, and the area shown above the Sidebar. */
+void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, int x, int y, int w, int h);
 /* The left edge of the Project UI inside the full-window surface; zero when not hosted. */
 int anvil_hosted_surface_content_x(void);
 bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surface,

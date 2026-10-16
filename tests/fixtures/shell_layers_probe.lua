@@ -3,7 +3,7 @@
 -- right of the Sidebar, the Sidebar is blended over the Project's backdrop where the renderer allows it, and a
 -- modal overlay dim reaches the shell so it can cover the Sidebar too. A click on the covered Sidebar goes to the
 -- Project, whose modal UI decides what an outside click does. Sidebar hover appears without waiting for a later
--- event.
+-- event. The fuzzy picker is centred on the whole Window, shows above the Sidebar, and takes clicks there.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "layers" then return end
 local core, common = require "core", require "core.common"
@@ -73,6 +73,14 @@ local function click_project(window)
  until system.get_time() >= deadline
  return false
 end
+-- The B, G, R bytes of one pixel of a written shell capture.
+local function capture_pixel(index, x, y)
+ local path = assert(trace():match("Shell probe capture written: ([^\r\n]-capture%-" .. index .. "%.bmp)"))
+ local file = assert(io.open(path, "rb")); local bytes = file:read("*a"); file:close()
+ local width = bytes:byte(19) + bytes:byte(20) * 256 + bytes:byte(21) * 65536
+ local offset = 54 + (math.floor(y) * width + math.floor(x)) * 4
+ return {bytes:byte(offset + 1, offset + 3)}
+end
 local function quit() core.exit(function() core.quit_request = true end, true) end
 
 if path:match("/driver$") then
@@ -121,6 +129,29 @@ if path:match("/driver$") then
    save("overlay-hide", {go=true})
    wait(function() return trace():find("Shell Window overlay: id=%d+ shown=0") end, 10,
     "the shell kept the Project overlay after it closed")
+   mark = #trace()
+   save("picker-go", {go=true})
+   local picker = wait(function() return load("picker") end, 15, "the Project did not open the fuzzy picker")
+   assert(math.abs(picker.x + picker.w / 2 - layout.window_w / 2) <= 1,
+    "the fuzzy picker is not centred on the Window: x=" .. picker.x .. " w=" .. picker.w)
+   assert(picker.x < layout.content_x, "the fuzzy picker stops at the Sidebar edge")
+   wait(function() return trace():find("Shell Window overlay: id=%d+ shown=1", mark) end, 10,
+    "the picker's overlay did not reach the shell")
+   coroutine.yield(1)
+   capture(window, 3)
+   -- The picker's top padding is flat without a wallpaper, on both sides of the Sidebar edge.
+   local y = math.floor(picker.y + picker.pad)
+   assert(y >= picker.controls_bottom, "the picker's top padding is under the native strip")
+   local over, beside = capture_pixel(3, layout.content_x - 8, y), capture_pixel(3, layout.content_x + 8, y)
+   assert(over[1] == beside[1] and over[2] == beside[2] and over[3] == beside[3], string.format(
+    "the Sidebar covers the fuzzy picker: over=%d,%d,%d beside=%d,%d,%d",
+    over[1], over[2], over[3], beside[1], beside[2], beside[3]))
+   local point = (layout.content_x - 8) + y * 65536
+   for step = 0, 2 do user32.PostMessageW(window, 0x804a, step, point); coroutine.yield(.1) end
+   coroutine.yield(.5)
+   save("picker-check", {go=true})
+   local state = wait(function() return load("picker-state") end, 10, "the Project did not report the picker")
+   assert(state.open, "a click on the fuzzy picker over the Sidebar closed it")
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})
@@ -153,5 +184,19 @@ elseif path == root .. "/Project" then
   core.root_panel:show_app_overlay(owner, "nagbar_dim")
   wait(function() return load("overlay-hide") end, 30)
   core.root_panel:hide_app_overlay(owner)
+  wait(function() return load("picker-go") end, 30)
+  require("core.wallpapers").select("none")
+  assert(require("core.command").perform("fuzzy:open"))
+  local picker = wait(function()
+   local overlay = core.root_panel.app_overlay
+   return overlay and overlay.owner ~= owner and overlay.target == 1 and overlay.owner
+  end, 10)
+  coroutine.yield(1)
+  local _, controls_y, _, controls_h = system.get_window_controls()
+  save("picker", {x=picker.position.x, y=picker.position.y, w=picker.size.x, h=picker.size.y,
+   pad=math.floor(require("core.style").padding.x / 2), controls_bottom=controls_y + controls_h})
+  wait(function() return load("picker-check") end, 30)
+  local overlay = core.root_panel.app_overlay
+  save("picker-state", {open=overlay ~= nil and overlay.owner == picker and overlay.target == 1})
  end)
 end
