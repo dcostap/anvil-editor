@@ -86,19 +86,17 @@ if path:match("/driver$") then
     "Copy Path did not copy the Project's path")
    menu("Move to New Window", "Move to New Window|Unload|Copy Path|Show in File Explorer")
    wait(function() return load("project").window == 2 end, 15, "The Project did not move to a new Window")
-   -- The first Window is empty now. Its Sidebar offers the Project's move back.
-   menu("Unload", "Move to Window 1|Move to New Window|Unload|Copy Path|Show in File Explorer")
+   -- The Move took the first Window's only Project, so that Window closes.
+   wait(function() return #shell_windows(shell:pid()) == 1 end, 10, "The first Window stayed open without a Project")
+   local other = shell_windows(shell:pid())[1]
+   assert(other ~= window, "The Project's new Window closed")
+   window = other
+   menu("Unload", "Move to New Window|Unload|Copy Path|Show in File Explorer")
    wait(function() return trace():find("Shell Project is Dormant: id=", 1, true) end, 15,
     "Unload did not unload the Project")
    menu("", "Open in New Window|Copy Path|Show in File Explorer")
-   -- Closing the first Window leaves the other Window's Sidebar working: a click on the Dormant Project loads it
-   -- there.
-   local other
-   for _, candidate in ipairs(shell_windows(shell:pid())) do if candidate ~= window then other = candidate end end
-   assert(other, "The second Window is missing")
+   -- After the first Window closed, a click on the Dormant Project in the other Window's Sidebar loads it there.
    os.remove(root .. "/project.lua")
-   user32.PostMessageW(window, 0x0010, 0, 0)
-   wait(function() return #shell_windows(shell:pid()) == 1 end, 10, "The first Window did not close")
    coroutine.yield(.5)
    for step = 0, 2 do user32.PostMessageW(other, 0x804a, step, point); coroutine.yield(.1) end
    wait(function() local project = load("project"); return project and project.window == 2 end, 15,

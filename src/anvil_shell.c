@@ -4980,6 +4980,14 @@ static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
   select_project(project);
   requester->notice[0] = 0;
   requester->ui_dirty = true;
+  /* A Window that the Move left without a Project closes. Dormant Projects belong to no Window. */
+  bool emptied = true;
+  for (ShellProject *item = shell.projects; item; item = item->next)
+    emptied &= item->window_id != source->id;
+  if (emptied) {
+    SDL_Log("Shell closes Window emptied by Move: id=%u", source->id);
+    request_close(source->empty);
+  }
   sync_sidebar_model();
   notify_sidebar_changes();
   SDL_Log("Shell moved Project: id=%u pid=%lu source=%u target=%u configuration=%llu", project->id,

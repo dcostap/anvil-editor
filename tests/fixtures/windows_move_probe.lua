@@ -152,30 +152,39 @@ if path:match("/driver$") then
     "Move replaced the live Buffer or Project")
    assert(after.selection==before.selection and after.session_id==before.session_id and after.host_pid==before.host_pid
     and after.attach_count==before.attach_count and after.workspace==before.workspace,"Move lost selection, Workspace, or Terminal attachment")
-   save("new",true); wait(function() return load("new-requested") end)
-   local empty_id = wait(function()
-    for id in pairs(windows(a.shell_pid)) do if id~=a.window_id and id~=b.window_id then return id end end
-   end,5)
-   local empty=windows(a.shell_pid)[empty_id]
+   local function new_window(stage)
+    local known = windows(a.shell_pid)
+    save("new-"..stage,true); wait(function() return load("new-requested-"..stage) end)
+    return wait(function() for id in pairs(windows(a.shell_pid)) do if not known[id] then return id end end end,5)
+   end
+   local function closed(id, message)
+    wait(function()
+     local hwnd = windows(a.shell_pid)[id]
+     return (not hwnd or user32.IsWindowVisible(hwnd)==0) and selected(model(),id)==nil
+    end,5,message)
+   end
+   local empty_id = new_window("1")
    move(empty_id,"empty")
    wait(function() return row(model(),a.pid).window_id==empty_id end,5,"Move to empty Window failed")
    page=model(); assert(selected(page,b.window_id)==br.id and selected(page,empty_id)==ar.id)
    move(b.window_id,"occupied-again")
    wait(function() return row(model(),a.pid).window_id==b.window_id end,5)
-   assert(selected(model(),empty_id)==0,"source Window did not become empty")
-   user32.PostMessageW(empty,0x112,0xf020,0); wait(function() return user32.IsIconic(empty)~=0 end,3)
-   move(empty_id,"minimized")
-   wait(function() return row(model(),a.pid).window_id==empty_id end,5)
-   assert(user32.IsIconic(empty)~=0,"Move raised a deliberately minimized target")
+   closed(empty_id,"Move left its source Window open without a Project")
+   local minimized_id = new_window("2")
+   local minimized=windows(a.shell_pid)[minimized_id]
+   user32.PostMessageW(minimized,0x112,0xf020,0); wait(function() return user32.IsIconic(minimized)~=0 end,3)
+   move(minimized_id,"minimized")
+   wait(function() return row(model(),a.pid).window_id==minimized_id end,5)
+   assert(user32.IsIconic(minimized)~=0,"Move raised a deliberately minimized target")
    page=model(); assert(selected(page,b.window_id)==br.id,"Move did not select B's previous Project")
-   assert(selected(page,empty_id)==ar.id)
-   user32.PostMessageW(empty,0x112,0xf120,0); wait(function() return user32.IsIconic(empty)==0 end,3)
-   save("inspect-2",{target=empty_id}); local final=wait(function() return load("a-state-2") end)
-   assert(final.window_id==empty_id and final.session_id==before.session_id and final.attach_count==before.attach_count)
+   assert(selected(page,minimized_id)==ar.id)
+   user32.PostMessageW(minimized,0x112,0xf120,0); wait(function() return user32.IsIconic(minimized)==0 end,3)
+   save("inspect-2",{target=minimized_id}); local final=wait(function() return load("a-state-2") end)
+   assert(final.window_id==minimized_id and final.session_id==before.session_id and final.attach_count==before.attach_count)
    move(a.window_id,"return")
    wait(function() return row(model(),a.pid).window_id==a.window_id end,5)
-   page=model(); assert(selected(page,empty_id)==0 and selected(page,a.window_id)==ar.id)
-   user32.PostMessageW(empty,0x10,0,0)
+   assert(selected(model(),a.window_id)==ar.id)
+   closed(minimized_id,"Move left its source Window open without a Project")
    save("finish",true)
    wait(function() return not subject:running() end,15)
   end)
@@ -258,7 +267,11 @@ elseif path == root .. "/Replacement" then
      assert(system.move_project(request.project_id,request.target)); sent[stage]=true; save("requested-"..stage,true)
     end
    end
-   if load("new") and not load("new-requested") then assert(command.perform("core:new_anvil_window")); save("new-requested",true) end
+   for _,stage in ipairs{"1","2"} do
+    if load("new-"..stage) and not load("new-requested-"..stage) then
+     assert(command.perform("core:new_anvil_window")); save("new-requested-"..stage,true)
+    end
+   end
    coroutine.yield(.01)
   end
   quit()

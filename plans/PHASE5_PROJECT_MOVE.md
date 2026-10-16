@@ -25,7 +25,7 @@ Do not stop the user's workloads to free memory.
 - A left-click on a target submits Move. A right-click alone does not move the Project.
 - The shell validates both Windows, Close choices, and native dialogs before changing the assignment.
 - Rejections show status messages. They do not queue a later Move.
-- The source selects another assigned Project or becomes empty.
+- The source selects another assigned Project. A source left without a Project closes.
 - The target retains its previous Project as loaded and unpresented.
 - Move retains the Project reference through the transition. It does not restart the Project or detach Terminal Sessions.
 - Window identity now changes layout identity, even when the surface sizes are equal.
