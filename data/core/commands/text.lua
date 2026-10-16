@@ -3137,6 +3137,43 @@ local function wrapped_move_to(dv, name, move_fn, ...)
   end
 end
 
+---Selecting can reveal Markdown source, which re-wraps the line. A selection
+---that went to its row's end then ends inside the next row. Move each such
+---end back to the end of the row it started on, in the revealed layout.
+local function settle_row_end_selections(dv, origins, old_state)
+  for _ = 1, 3 do
+    -- Publishing the selection reveals its source and re-wraps those lines.
+    if dv.capture_selection_state then dv:capture_selection_state(old_state) end
+    local selections, affinity_positions, moved = {}, {}, false
+    for index, line1, col1, line2, col2 in dv.buffer:get_selections(false) do
+      local line_end = linewrapping.has_wrapped_line_end_affinity(dv, line1, col1)
+      local origin = origins[index]
+      if origin and origin.line == line1 then
+        local origin_row = linewrapping.get_line_idx_col_count(
+          dv, origin.line, origin.col, origin.line_end
+        )
+        if linewrapping.get_line_idx_col_count(dv, line1, col1, line_end) > origin_row then
+          local next_line, next_col = linewrapping.get_idx_line_col(dv, origin_row + 1)
+          if next_line == line1 and next_col < col1 then
+            core.log_quiet("Selection end moved from %d:%d to the revealed row's end %d:%d",
+              line1, col1, line1, next_col)
+            col1, line_end, moved = next_col, true, true
+          end
+        end
+      end
+      selections[#selections + 1] = line1
+      selections[#selections + 1] = col1
+      selections[#selections + 1] = line2
+      selections[#selections + 1] = col2
+      add_line_end_affinity(affinity_positions, line1, col1, line_end)
+    end
+    if not moved then return end
+    old_state = dv.get_selection_state and dv:get_selection_state()
+    dv.buffer:set_selection_list(selections, dv.buffer.last_selection, { merge_cursors = true })
+    linewrapping.set_wrapped_line_end_affinity(dv, affinity_positions)
+  end
+end
+
 local function wrapped_select_to(dv, name, move_fn, ...)
   if not dv.wrapped_settings
   and not (dv.needs_line_render_position_navigation
@@ -3147,9 +3184,18 @@ local function wrapped_select_to(dv, name, move_fn, ...)
   if dv.clear_pending_line_render_position_row_affinity then
     dv:clear_pending_line_render_position_row_affinity()
   end
+  local old_state = dv.get_selection_state and dv:get_selection_state()
+  local row_end = name == "core:select_to_end_of_line"
+  local origins = {}
   local selections = {}
   local affinity_positions = {}
-  for _, line1, col1, line2, col2 in dv.buffer:get_selections(false) do
+  for index, line1, col1, line2, col2 in dv.buffer:get_selections(false) do
+    if row_end then
+      origins[index] = {
+        line = line1, col = col1,
+        line_end = linewrapping.has_wrapped_line_end_affinity(dv, line1, col1),
+      }
+    end
     local line, col, line_end = move_fn(dv.buffer, line1, col1, ...)
     selections[#selections + 1] = line
     selections[#selections + 1] = col
@@ -3162,6 +3208,7 @@ local function wrapped_select_to(dv, name, move_fn, ...)
   if dv.apply_pending_line_render_position_row_affinity then
     dv:apply_pending_line_render_position_row_affinity()
   end
+  if row_end and dv.wrapped_settings then settle_row_end_selections(dv, origins, old_state) end
   set_primary_selection(dv.buffer)
 end
 
