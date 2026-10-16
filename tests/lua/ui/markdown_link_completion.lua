@@ -155,6 +155,14 @@ test.describe("Markdown link completion", function()
     test.equal(context.buffer.lines[2], "[[#Alta old target|My label]] after\n")
   end)
 
+  test.it("ends an unclosed link at the caret and keeps the table cell after it", function(context)
+    core.root_panel:on_text_input("| a | see [[#Alta |")
+    context.view:set_selection_state({ selections = { 2, 18, 2, 18 }, last_selection = 1 })
+    test.ok(command.perform("markdown:complete_link"))
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(context.buffer.lines[2], "| a | see [[#Alta de usuarios]] |\n")
+  end)
+
   test.it("keeps all query words when a note name contains spaces", function(context)
     local first = context.root .. PATHSEP .. "Alpha Plan.md"
     local second = context.root .. PATHSEP .. "Beta Plan.md"

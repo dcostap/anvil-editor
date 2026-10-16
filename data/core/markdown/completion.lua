@@ -60,14 +60,16 @@ function completion.context(view)
   else
     mode, query = "note", partial
   end
+  -- An unclosed link ends at the caret, so the text after it, such as a table cell's closing pipe, stays.
   local close = text:find("]]", col, true)
-  local target_end = close or #text + 1
-  local alias_start = text:find("|", col, true)
-  local alias = alias_start and alias_start < target_end and text:sub(alias_start, target_end - 1) or nil
+  local next_open = text:find("[[", col, true)
+  if close and next_open and next_open < close then close = nil end
+  local alias_start = close and text:find("|", col, true)
+  local alias = alias_start and alias_start < close and text:sub(alias_start, close - 1) or nil
   return {
     line = line,
     col1 = col1,
-    col2 = close and close + 2 or #text + 1,
+    col2 = close and close + 2 or col,
     mode = mode,
     query = query,
     query_col = col - #query,
