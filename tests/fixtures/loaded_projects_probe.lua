@@ -110,6 +110,11 @@ if path():find("/driver$", 1) then
         assert(restarted.pid ~= b.pid and restarted.shell_pid == b.shell_pid, "Restart replaced the wrong process")
         assert(kernel.WaitForSingleObject(a_handle, 0) == 258, "B's Restart ended A")
         assert(kernel.WaitForSingleObject(b_handle, 5000) == 0, "B's Restart retained the old process")
+        -- The shell keeps the restarted Project under its folder's name, which the Sidebar shows as one Project.
+        local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+        local text = file:read("*a"); file:close()
+        local started = text:match("Shell started Project pid=" .. restarted.pid .. " path=([^\r\n]*)")
+        assert(started and started:match("Replacement$"), "B's Restart changed its Project path to " .. tostring(started))
         b_handle = kernel.OpenProcess(0x100000, 0, restarted.pid)
         assert(b_handle ~= nil); handles[#handles + 1] = b_handle
       end

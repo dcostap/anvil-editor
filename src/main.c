@@ -600,6 +600,10 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
       if (anvil_hosted_surface_active()) {
         char *path = SDL_GetCurrentDirectory();
         if (!path) return SDL_APP_FAILURE;
+        /* SDL ends the directory with a separator. The shell keeps the Project path as the folder's name. */
+        size_t length = strlen(path);
+        while (length > 1 && (path[length - 1] == '\\' || path[length - 1] == '/') && path[length - 2] != ':')
+          path[--length] = 0;
         anvil_hosted_surface_exit_intent(path);
         SDL_free(path);
         return SDL_APP_SUCCESS;

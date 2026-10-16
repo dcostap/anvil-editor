@@ -203,7 +203,23 @@ static void focused_terminal(void) {
   CHECK(model.revision != revision && !b->focused_terminal[0], "Clearing the focus did not publish");
   anvil_sidebar_destroy(&model);
 }
+static void trailing_separator(void) {
+  AnvilSidebarModel model = {0};
+  const char *paths[] = {"C:\\Projects\\GLP4", "C:\\"};
+  CHECK(anvil_sidebar_merge_recents(&model, paths, 2), "Recent source failed");
+  AnvilSidebarProject *project = anvil_sidebar_find(&model, "C:\\Projects\\GLP4");
+  CHECK(anvil_sidebar_find(&model, "C:\\Projects\\GLP4\\") == project &&
+            anvil_sidebar_find(&model, "C:/Projects/GLP4/") == project,
+        "A trailing separator named another Project");
+  const char *restarted[] = {"C:\\Projects\\GLP4\\"};
+  CHECK(anvil_sidebar_merge_recents(&model, restarted, 1) && model.count == 2,
+        "A trailing separator duplicated a Project");
+  CHECK(anvil_sidebar_find(&model, "C:\\") && !anvil_sidebar_find(&model, "C:"),
+        "A drive root matched its drive-relative path");
+  anvil_sidebar_destroy(&model);
+}
 int main(void) {
+  trailing_separator();
   focused_terminal();
   order();
   capacity();

@@ -7,21 +7,32 @@
 #include <windows.h>
 #endif
 
+/* Windows separators are interchangeable, and a trailing separator names the same folder. A root such as C:\ or /
+ * keeps its separator. */
 static wchar_t *identity(const char *path) {
 #ifdef _WIN32
+  const wchar_t separator = L'\\';
   int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
   wchar_t *value = count > 0 ? malloc(count * sizeof(*value)) : NULL;
-  if (value)
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, value, count);
-  return value;
+  if (!value)
+    return NULL;
+  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, value, count);
+  for (wchar_t *c = value; *c; c++)
+    if (*c == L'/')
+      *c = separator;
 #else
+  const wchar_t separator = L'/';
   size_t count = strlen(path) + 1;
   wchar_t *value = malloc(count * sizeof(*value));
-  if (value)
-    for (size_t i = 0; i < count; i++)
-      value[i] = (unsigned char)path[i];
-  return value;
+  if (!value)
+    return NULL;
+  for (size_t i = 0; i < count; i++)
+    value[i] = (unsigned char)path[i];
 #endif
+  size_t length = wcslen(value);
+  while (length > 1 && value[length - 1] == separator && value[length - 2] != L':')
+    value[--length] = 0;
+  return value;
 }
 static bool equal(const wchar_t *a, const wchar_t *b) {
 #ifdef _WIN32
