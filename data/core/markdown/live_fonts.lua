@@ -71,6 +71,12 @@ function live_fonts.inline_style(
 )
   view.__markdown_live_inline_fonts = view.__markdown_live_inline_fonts or {}
   local cache = view.__markdown_live_inline_fonts
+  -- Code keeps its own size in prose-sized text, such as table cells, and grows only in larger text.
+  if span_type == "code" and base_font
+    and base_font:get_size() <= live_fonts.body(view):get_size()
+  then
+    base_font = nil
+  end
   local font
   if span_type == "code" then
     font = style.code_font

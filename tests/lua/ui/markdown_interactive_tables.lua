@@ -107,6 +107,56 @@ test.describe("Markdown Interactive Table Editing", function()
     test.ok(test.not_nil(view:get_line_render(3)).table_row)
   end)
 
+  test.it("draws inline code in a cell at the size it has in prose", function()
+    local view, buffer = make_view(
+      "| A | B |\n| --- | --- |\n| `tipo` | see `ip` here |\n\nplain `code`"
+    )
+    view.size.x = 800
+    buffer:set_selection(5, 1)
+    refresh(view)
+    local prose
+    for _, fragment in ipairs(test.not_nil(view:get_line_render(5)).fragments) do
+      if fragment.text == "code" then prose = fragment.font:get_size() end
+    end
+    local sizes = {}
+    for _, cell in ipairs(table_cells(view, 3)) do
+      for _, text_line in ipairs(cell.text_lines or {}) do
+        for _, run in ipairs(text_line.runs or {}) do sizes[run.text] = (run.font or cell.font):get_size() end
+      end
+    end
+    test.equal(sizes.tipo, test.not_nil(prose))
+    test.equal(sizes.ip, prose)
+  end)
+
+  test.it("keeps the table layout while typing in a cell beside inline code", function()
+    local view, buffer = make_view(table.concat({
+      "| Propiedad | Qué es |",
+      "| --- | --- |",
+      "| `descripcion` | Documentación, nota |",
+      "| `ip` | Sin `ip` no se vigila |",
+      "",
+      "plain",
+    }, "\n"))
+    view.size.x = 800
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      buffer:set_selection(3, #"| `descripcion` | Documentación, nota" + 1)
+      refresh(view)
+      -- The typed text widens only its own column.
+      local function layout()
+        local heights = {}
+        for line = 3, 4 do heights[line] = test.not_nil(view:get_line_render(line)).layout_height end
+        return { first_column = table_cells(view, 3)[1].width, heights = heights }
+      end
+      local before = layout()
+      view:on_text_input("s")
+      test.same(layout(), before)
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("wraps inline code within the available table width", function()
     local code = "alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda"
     local view, buffer = make_view(table.concat({

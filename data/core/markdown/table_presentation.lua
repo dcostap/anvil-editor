@@ -78,7 +78,7 @@ local function table_cell_presentation(view, text, source_col1, source_col2, hea
         color = style.markdown_live_table_cell,
         background = style.markdown_live_inline_code_bg,
         literal_breaks = true,
-      }
+      }, #ticks
     end
   end
   return {
@@ -501,6 +501,27 @@ local function rich_presentation(runs, text, source_col1, source_col2, base)
   }
 end
 
+---Return a whole-cell code span with its backticks shown, as the parsed cell
+---reveals it, so the cell keeps its width before the row is parsed again.
+local function revealed_code_presentation(view, text, source_col1, source_col2, ticks, base)
+  local inner1, inner2 = source_col1 + ticks, source_col2 - ticks
+  local function marker(col1, col2)
+    return {
+      col1 = col1, col2 = col2, text = text:sub(col1 - source_col1 + 1, col2 - source_col1),
+      exact = true, font = base.base_font, color = base.color,
+    }
+  end
+  return rich_presentation({
+    marker(source_col1, inner1),
+    {
+      col1 = inner1, col2 = inner2, text = text:sub(ticks + 1, -ticks - 1), exact = true,
+      font = live_fonts.inline_style(view, "code"), color = base.color,
+      background = style.markdown_live_inline_code_bg,
+    },
+    marker(inner2, source_col2),
+  }, text, source_col1, source_col2, base)
+end
+
 local function presentation_has_link(presentation)
   for _, run in ipairs(presentation.runs or {}) do
     if run.link then return true end
@@ -728,7 +749,7 @@ function table_presentation.layout(view, table_node, instance)
       active_presentations[line] = {}
       for column, cell in ipairs(row.cells) do
         local text, source_col1, source_col2 = table_cell_content(row.text, cell)
-        local presentation = table_cell_presentation(
+        local presentation, code_ticks = table_cell_presentation(
           view, text, source_col1, source_col2, line == line1
         )
         if not presentation.source_elided then
@@ -742,6 +763,8 @@ function table_presentation.layout(view, table_node, instance)
         else
           active_presentations[line][column] = rich_presentation(
             revealed_runs, text, source_col1, source_col2, base
+          ) or code_ticks and revealed_code_presentation(
+            view, text, source_col1, source_col2, code_ticks, base
           ) or {
             text = text,
             source_col1 = source_col1,
