@@ -29,8 +29,9 @@ A scenario names four things:
   when the setup is ready, and dispatches each action.
 - **Launch mode**: `direct` runs one Project process. `shell` runs the native
   shell, and the benchmark runs in the named Project's process.
-- **Budgets**: absolute limits. A frame budget of 6.06 ms is one frame at
-  165 Hz. Each scenario sets its action latency budget.
+- **Budgets**: absolute limits. The p95 frame work time must stay within
+  4 ms, well under one 165 Hz frame (6.06 ms). No frame may take more than
+  16.7 ms, one 60 Hz frame. Each scenario sets its action latency budget.
 
 A scenario can set `targets` to pass that many clean tracked files to its scene
 as `settings.targets`. A scene that edits them sets `writes`, and the next run
@@ -57,16 +58,24 @@ Each scoring run records frames without detail instrumentation. The verdict
 uses the median of each run's p95 frame work time (frame time minus sleep) and
 each action's p95 latency.
 
+`editor-type-baseline` types short lines into a small file after the
+Project's startup scans and indexes finish. It shows the cost of the cheapest
+real input frame. `editor-type-startup` types while that startup work runs.
+
 When a scenario is over budget, one more run records the per-frame detail
 timers (`ANVIL_DOCVIEW_STATS`). The report lists the costliest timers per
-measured frame. Nested timers overlap, so read them as a tree. `--attribute`
+measured frame. Nested timers overlap, so read them as a tree. Scheduler
+threads appear as `thread <file>:<line>_ms`, named by the code that started
+them. `--attribute`
 records them for passing scenarios too. `--diagnose` adds a LuaJIT sampling
 run with draw scopes and a Speedscope profile.
 
 ## Scenes are shared with Lua tests
 
 `tests/scenes/support.lua` holds setup and readiness helpers such as
-`open_file_tree`, `expand_file_tree`, `git_settled`, `hover`, and `wheel`.
+`open_file_tree`, `expand_file_tree`, `git_settled`, `background_settled`,
+`hover`, and `wheel`. `background_settled` waits until no worker job has run
+for 2 seconds.
 Scenario runs load scenes through `data/core/perf_scene.lua`.
 `tests/run-lua-tests.sh` copies `tests/scenes` into the test app, so a Lua test
 can `require "scenes.support"` and reach the same state. In a test, wait with

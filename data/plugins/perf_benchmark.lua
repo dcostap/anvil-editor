@@ -212,20 +212,32 @@ local function write_metrics()
   return write_atomic(benchmark.metrics_file, table.concat(lines, "\n") .. "\n")
 end
 
+local function add_detail(key, value)
+  local detail = benchmark.details[key]
+  if not detail then
+    detail = { total = 0, frames = 0, max = 0 }
+    benchmark.details[key] = detail
+  end
+  detail.total, detail.frames = detail.total + value, detail.frames + 1
+  if value > detail.max then detail.max = value end
+end
+
 -- Sums every per-frame detail timer and counter, which attributes frame cost to its code.
 local function add_frame_details()
-  local stats = core.perf_frame_stats
-  if benchmark.details_file == "" or not stats then return end
-  for key, value in pairs(stats) do
-    if type(value) == "number" and value ~= 0 then
-      local detail = benchmark.details[key]
-      if not detail then
-        detail = { total = 0, frames = 0, max = 0 }
-        benchmark.details[key] = detail
-      end
-      detail.total, detail.frames = detail.total + value, detail.frames + 1
-      if value > detail.max then detail.max = value end
+  if benchmark.details_file == "" then return end
+  -- Scheduler threads add their run time by the location that started them.
+  local thread_times = core.thread_time_stats
+  if thread_times then
+    for loc, seconds in pairs(thread_times) do
+      local name = loc:gsub("^.-[/\\]share[/\\]anvil[/\\]", ""):gsub(",", ";")
+      add_detail("thread " .. name .. "_ms", seconds * 1000)
     end
+    core.thread_time_stats = {}
+  end
+  local stats = core.perf_frame_stats
+  if not stats then return end
+  for key, value in pairs(stats) do
+    if type(value) == "number" and value ~= 0 then add_detail(key, value) end
   end
 end
 
@@ -997,6 +1009,7 @@ end
 
 local function begin_state_settle()
   benchmark.state_settle_count = 0
+  benchmark.state_settle_scroll_frames = 0
   benchmark.state_settle_deadline = system.get_time() + CAPTURE_DECORATION_TIMEOUT
   set_phase("state_settle", "state_settle_started")
   core.redraw = true
@@ -1481,6 +1494,7 @@ function perf.on_frame(snapshot)
       if benchmark.warmup_count >= benchmark.warmup_frames then
         collectgarbage("collect")
         set_phase("measure", "measurement_started")
+        if benchmark.details_file ~= "" then core.thread_time_stats = {} end
         benchmark.measure_start = system.get_time()
         if benchmark.actions then benchmark.actions.origin = benchmark.measure_start end
         perform_action()
@@ -1542,6 +1556,13 @@ function perf.on_frame(snapshot)
       end
     elseif benchmark.phase == "state_settle" then
       benchmark.state_settle_count = benchmark.state_settle_count + 1
+      -- Scroll gets its frame allowance from when it last moved, because a late
+      -- layout change, such as an exact line width, can start a new animation.
+      if scroll_is_settled() then
+        benchmark.state_settle_scroll_frames = 0
+      else
+        benchmark.state_settle_scroll_frames = (benchmark.state_settle_scroll_frames or 0) + 1
+      end
       if capture_is_ready() then
         mark_lifecycle("state_settled")
         prepare_screenshot()
@@ -1551,7 +1572,7 @@ function perf.on_frame(snapshot)
           "decorations did not settle within %d seconds", CAPTURE_DECORATION_TIMEOUT
         ))
       elseif not scroll_is_settled()
-      and benchmark.state_settle_count >= benchmark.state_settle_max_frames then
+      and benchmark.state_settle_scroll_frames >= benchmark.state_settle_max_frames then
         local view = benchmark.view
         local scroll = view and view.scroll or {}
         local target = scroll.to or {}

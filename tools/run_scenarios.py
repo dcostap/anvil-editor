@@ -35,7 +35,10 @@ from perf_fixtures import FolderSpec, ProjectSetSpec, RepoSpec  # noqa: E402
 import run_render_perf_gate as gate  # noqa: E402
 
 RESULTS_ROOT = gate.ROOT / "tools" / "perf-results" / "scenarios"
-FRAME_BUDGET_MS = 6.06  # One frame at 165 Hz.
+# A steady interaction should draw a frame in well under one 165 Hz frame (6.06 ms).
+FRAME_BUDGET_MS = 4.0
+# No frame may miss 60 Hz. p95 hides single hitches, such as one slow frame per action.
+FRAME_SPIKE_MS = 16.7
 ACTION_BUDGET_MS = 100.0
 
 REPO_MEDIUM = RepoSpec("repo-medium", files=6000, commits=20, modified=120, staged=20,
@@ -58,6 +61,7 @@ class Scenario:
     settings: dict[str, Any] = field(default_factory=dict)
     launch: str = "direct"  # "direct" runs one Project process; "shell" runs the native shell.
     frame_budget_ms: float = FRAME_BUDGET_MS
+    frame_spike_ms: float = FRAME_SPIKE_MS
     action_budget_ms: float = ACTION_BUDGET_MS
     # Budgets for named actions, such as cold and warm Project switches.
     action_budgets: dict[str, float] = field(default_factory=dict)
@@ -77,6 +81,14 @@ class Scenario:
 
 
 SCENARIOS: dict[str, Scenario] = {
+    # The baseline: typing in a small file with nothing else open.
+    "editor-type-baseline": Scenario(
+        "editor_type", REPO_MEDIUM, actions=300, suites=("smoke",), targets=1, writes=True,
+        timeout_seconds=300),
+    # Typing right after the Project opens, while its file scan and indexes run.
+    "editor-type-startup": Scenario(
+        "editor_type", REPO_MEDIUM, actions=600, suites=("smoke",), targets=1, writes=True,
+        settings={"during_startup": True}),
     "filetree-scroll-medium": Scenario(
         "filetree_scroll", REPO_MEDIUM, actions=40, suites=("smoke",),
         settings={"rows": 600, "max_level": 3},
@@ -233,6 +245,9 @@ def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
     if frame and frame["work_ms_p95"] > scenario.frame_budget_ms:
         findings.append({"metric": "frame work_ms p95", "value": frame["work_ms_p95"],
                          "budget": scenario.frame_budget_ms})
+    if frame and frame["work_ms_max"] > scenario.frame_spike_ms:
+        findings.append({"metric": "frame work_ms max", "value": frame["work_ms_max"],
+                         "budget": scenario.frame_spike_ms})
     for action, values in actions.items():
         budget = scenario.action_budgets.get(action, scenario.action_budget_ms)
         values["budget_ms"] = budget
@@ -257,7 +272,8 @@ def markdown(report: dict[str, Any]) -> str:
         frame = case["frame"]
         if frame:
             lines.append(f"Frame work ms: p50 {frame['work_ms_p50']:.2f}, p95 {frame['work_ms_p95']:.2f}, "
-                         f"max {frame['work_ms_max']:.2f} (budget {case['frame_budget_ms']:.2f}). "
+                         f"max {frame['work_ms_max']:.2f} (budgets: p95 {case['frame_budget_ms']:.2f}, "
+                         f"max {case['frame_spike_ms']:.1f}). "
                          f"Lua heap {frame['lua_heap_kib_avg'] / 1024:.1f} MiB.")
             lines.append("")
         lines.append("| Action | p50 ms | p95 ms | max ms | budget ms | redraws |")
@@ -289,6 +305,7 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
     case: dict[str, Any] = {"scene": scenario.scene, "launch": scenario.launch,
                             "fixture": None if args.project else scenario.fixture.key,
                             "frame_budget_ms": scenario.frame_budget_ms,
+                            "frame_spike_ms": scenario.frame_spike_ms,
                             "action_budget_ms": scenario.action_budget_ms}
     root = scenario_root(scenario, args.project, args.fixture_cache, log)
     mode = "throughput" if scenario.self_driven else "metrics"

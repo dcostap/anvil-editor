@@ -3267,6 +3267,8 @@ local run_threads = coroutine.wrap(function()
           end
           runs = runs + 1
           pass_runs = pass_runs + 1
+          local thread_times = core.thread_time_stats
+          if thread_times then thread_times[thread.loc] = (thread_times[thread.loc] or 0) + end_time end
           if end_time > slowest_time then
             slowest_time = end_time
             slowest_loc = thread.loc or ""

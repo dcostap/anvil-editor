@@ -45,6 +45,51 @@ function support.wheel(ticks)
   core.on_event("mousewheel", -ticks, 0)
 end
 
+---Return the kinds of queued or running worker jobs, or nil when every pool is idle.
+function support.busy_workers()
+  local worker_pool = package.loaded["core.worker_pool"]
+  if not worker_pool then return nil end
+  local kinds
+  for _, pool in ipairs(worker_pool.open_pools()) do
+    -- Pools keep a small record of finished jobs so their status stays readable.
+    for _, job in pairs(pool.jobs) do
+      if job.finished_at then goto continue end
+      kinds = kinds or {}
+      local kind = job.handle and job.handle.kind or job.spec and job.spec.kind
+      kinds[#kinds + 1] = string.format("%s:%s#%s(%s)", pool.name, tostring(kind), tostring(job.id),
+        tostring(job.status))
+      ::continue::
+    end
+  end
+  return kinds
+end
+
+---Report whether background work has been idle for `seconds` (2 by default), such as the
+---startup file scan and indexes. A Project that keeps polling settles after `limit`.
+function support.background_settled(context, seconds, limit)
+  local now = system.get_time()
+  context.settle_started = context.settle_started or now
+  local busy = support.busy_workers()
+  if busy then
+    context.idle_since = nil
+  else
+    context.idle_since = context.idle_since or now
+  end
+  if context.idle_since and now - context.idle_since >= (seconds or 2) then
+    core.log_quiet("Scene: background work settled after %.1f s", now - context.settle_started)
+    return true
+  end
+  if now - context.settle_started >= (limit or 60) then
+    if not context.settle_timed_out then
+      context.settle_timed_out = true
+      core.log_quiet("Scene: background work did not settle within %.0f s: %s", limit or 60,
+        table.concat(busy or {}, ", "))
+    end
+    return true
+  end
+  return false
+end
+
 function support.git_settled(path, is_directory)
   local git_status = package.loaded["plugins.file_git_status"]
   return not git_status or git_status:is_settled(path, is_directory)
