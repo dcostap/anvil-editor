@@ -44,6 +44,22 @@ function Scene:action_ready()
   return ready, self.result
 end
 
+---Report whether the scene drives its own actions from a coroutine.
+---Scenes that span processes use this, because another process presents their result.
+function Scene:runs_itself()
+  return self.module.run ~= nil
+end
+
+---Run a self-driven scene. `record(row)` adds one action with its measured latency.
+function Scene:run(record)
+  self.context.record = function(row)
+    self.completed = self.completed + 1
+    self.result = row.result or "ok"
+    record(row)
+  end
+  self.module.run(self.context)
+end
+
 function Scene:capture_ready()
   return not self.module.capture_ready or self.module.capture_ready(self.context)
 end

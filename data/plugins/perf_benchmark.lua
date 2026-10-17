@@ -1600,6 +1600,36 @@ core.add_thread(function()
     coroutine.yield()
   end
   mark_lifecycle("first_ready_frame")
+  if benchmark.workload and benchmark.workload.runs_itself and benchmark.workload:runs_itself() then
+    -- Another process can present this scene's results, so this process may stop redrawing.
+    -- Background threads keep running in an unselected hosted Project.
+    set_phase("run", "run_started")
+    benchmark.measure_start = system.get_time()
+    core.add_background_thread(function()
+      while not benchmark.finished do
+        heartbeat(true)
+        coroutine.yield(1)
+      end
+    end)
+    core.add_background_thread(function()
+      local ran, reason = xpcall(function()
+        benchmark.workload:run(function(row)
+          local id = #benchmark.action_rows + 1
+          benchmark.action_rows[id] = {
+            id = id, name = row.name,
+            start_ms = ((row.started or system.get_time()) - benchmark.measure_start) * 1000,
+            dispatch_ms = 0, ready_ms = row.latency_ms, latency_ms = row.latency_ms,
+            redraws = 1, result = row.result or "ok",
+          }
+          benchmark.action_count = id
+        end)
+      end, debug.traceback)
+      if not ran then fail(reason); return end
+      benchmark.measure_end = system.get_time()
+      finish_success()
+    end)
+    return
+  end
   if benchmark.mode == "video" then
     benchmark.measure_start = system.get_time()
     set_phase("video", "video_started")

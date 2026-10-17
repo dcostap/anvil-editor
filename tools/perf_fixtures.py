@@ -354,6 +354,16 @@ class Churn:
         self._thread.join()
 
 
+def clean_files(spec: RepoSpec | FolderSpec, count: int) -> list[str]:
+    """Return tracked files that the working-tree changes leave untouched, spread over the tree."""
+    paths = tracked_paths(spec)
+    changed = set()
+    if isinstance(spec, RepoSpec):
+        changed = {path for paths_of_kind in worktree_changes(spec, paths).values() for path in paths_of_kind}
+    clean = [path for path in paths if path not in changed]
+    return [clean[index] for index in stride_pick(count, len(clean), 7)]
+
+
 def members(spec: ProjectSetSpec) -> list[tuple[str, RepoSpec]]:
     """Return each Project's folder name and repository spec."""
     return [(f"project-{index:02d}", RepoSpec(**dict(asdict(spec.repo), name=f"project-{index:02d}",
@@ -362,8 +372,11 @@ def members(spec: ProjectSetSpec) -> list[tuple[str, RepoSpec]]:
 
 
 def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec, cache_root: Path | None = None,
-                rebuild: bool = False) -> Path:
-    """Return a ready fixture root, building it into the cache when needed."""
+                rebuild: bool = False, touched: list[str] | None = None) -> Path:
+    """Return a ready fixture root, building it into the cache when needed.
+
+    `touched` lists tracked files that a scene edits. The next call restores them.
+    """
     cache_root = cache_root or default_cache_root()
     root = cache_root / spec.key
     marker = root.with_name(root.name + ".complete")
@@ -384,7 +397,7 @@ def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec, cache_root: Path |
         for name, member in members(spec):
             apply_worktree(member, root / name)
     elif isinstance(spec, RepoSpec):
-        apply_worktree(spec, root)
+        apply_worktree(spec, root, touched)
     return root
 
 

@@ -32,6 +32,10 @@ A scenario names four things:
 - **Budgets**: absolute limits. A frame budget of 6.06 ms is one frame at
   165 Hz. Each scenario sets its action latency budget.
 
+A scenario can set `targets` to pass that many clean tracked files to its scene
+as `settings.targets`. A scene that edits them sets `writes`, and the next run
+restores them.
+
 A scenario can also set `churn_interval`. A background thread then edits
 modified files in the fixture during the run, as a build or a coding agent
 does. File watchers and Git status refreshes stay busy during measurement.
@@ -77,9 +81,32 @@ A scene module returns a table with these functions:
 - `action_ready(context, index)` returns `true, result` when the action's
   effect is visible.
 - `state(context)` is optional. Its values appear in the report state.
+- `run(context)` replaces `dispatch` and `action_ready` in a self-driven
+  scene. See [Shell scenarios](#shell-scenarios).
 
 `context.settings` holds the scenario settings, and `context.root` is the
-fixture root.
+measured Project's root.
+
+## Shell scenarios
+
+A `shell` scenario starts `anvil --shell <Project>` on the hidden desktop. With
+a `ProjectSetSpec` fixture, the first repository is the measured Project, and
+`settings.projects` lists every repository. The shell writes its events to
+`surface.log` in the run directory. The run ends when the measured Project
+reaches the `finished` or `failed` phase, because the shell keeps running.
+
+Frame scenes, such as `filetree_scroll`, run unchanged in the hosted Project.
+A flow that another process presents, such as a Project switch, uses a
+self-driven scene instead. Its `run(context)` function runs in a background
+coroutine and calls `context.record { name = ..., latency_ms = ... }` once for
+each action. A Project keeps running background coroutines after another
+Project is selected. Self-driven scenes record no frames, so their scenarios
+have only action budgets.
+
+`tests/scenes/shell.lua` reads the surface log. `shell.select_project` selects
+a Project and returns the shell's time from the selection to that Project's
+first composited frame. Cold switches start the Project's process. Warm
+switches show a loaded Project again.
 
 ## Adding a scenario
 
