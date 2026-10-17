@@ -146,9 +146,48 @@ function line_packets.invalidate_buffer(buffer, line1, line2)
   end
 end
 
+local function forget_frame_state(view)
+  local prepared = view.__line_packet_prepared
+  if prepared then
+    prepared.line, prepared.x, prepared.y, prepared.entry = nil, nil, nil, nil
+  end
+  local last = view.__line_packet_last_content
+  if last and last.entry and not last.entry.retained and last.entry.packet then
+    last.entry.packet:release()
+    last.entry.packet = nil
+  end
+  view.__line_packet_last_content = nil
+end
+
+-- A packet does not depend on its line number, so lines that only moved keep
+-- their packets under the new number. Edited lines lose theirs.
+local function shift_entries(view, ranges)
+  local cache = view.__line_packet_cache
+  if not cache then return end
+  table.sort(ranges, function(a, b) return a.old_line1 < b.old_line1 end)
+  local lines = {}
+  for line in pairs(cache.entries) do lines[#lines + 1] = line end
+  table.sort(lines)
+  local entries, index, delta = {}, 1, 0
+  for _, line in ipairs(lines) do
+    while ranges[index] and ranges[index].old_line2 < line do
+      delta = delta + ranges[index].line_delta
+      index = index + 1
+    end
+    if ranges[index] and line >= ranges[index].old_line1 then
+      discard_entry(cache, line, "invalidation")
+    else
+      entries[line + delta] = cache.entries[line]
+    end
+  end
+  cache.entries = entries
+  forget_frame_state(view)
+end
+
 function line_packets.apply_transaction(view, transaction)
   if not (view and transaction and transaction.changed) then return end
   local first_line, last_line, structure_changed
+  local ranges = {}
   for _, range in ipairs(transaction.changed_ranges or {}) do
     local old_line1 = range.old_line1 or range.new_line1 or 1
     local old_line2 = range.old_line2 or old_line1
@@ -161,10 +200,23 @@ function line_packets.apply_transaction(view, transaction)
       line_delta = new_line2 - new_line1 - old_line2 + old_line1
     end
     structure_changed = structure_changed or line_delta ~= 0
+    ranges[#ranges + 1] = {
+      old_line1 = old_line1, old_line2 = old_line2,
+      new_line1 = new_line1, new_line2 = new_line2, line_delta = line_delta,
+    }
   end
   if not first_line then return end
   if structure_changed then
-    line_packets.invalidate_range(view, first_line, math.huge)
+    shift_entries(view, ranges)
+    for _, contributor in pairs(contributors) do
+      if contributor.invalidate_transaction then
+        for _, range in ipairs(ranges) do
+          contributor.invalidate_transaction(
+            view, range.new_line1, range.new_line2, transaction
+          )
+        end
+      end
+    end
   else
     line_packets.invalidate_range(view, first_line, last_line)
     for _, contributor in pairs(contributors) do
@@ -368,8 +420,7 @@ local function wrapped_row_signature(
   if count == 1 then return "" end
   local parts = {}
   for row_idx = built_first, built_last do
-    local row_line, row_col = linewrapping.get_idx_line_col(view, row_idx)
-    parts[#parts + 1] = tostring(row_line)
+    local _, row_col = linewrapping.get_idx_line_col(view, row_idx)
     parts[#parts + 1] = tostring(row_col)
   end
   parts[#parts + 1] = tostring(built_first - first_idx + 1)
@@ -418,11 +469,11 @@ local function make_key(
   view, line, first_idx, built_first, built_last, count,
   row_signature, base_signature
 )
+  -- Rows are relative to the line, so a packet still matches after its line moves.
   return {
     text = view.buffer.lines[line],
-    first_idx = first_idx,
-    built_first = built_first,
-    built_last = built_last,
+    built_first = built_first - first_idx,
+    built_last = built_last - first_idx,
     wrapped_row_count = count,
     row_signature = row_signature,
     continuation_offset = view.wrapped_line_offsets
@@ -437,9 +488,8 @@ local function key_matches(
 )
   return key
     and key.text == view.buffer.lines[line]
-    and key.first_idx == first_idx
-    and key.built_first == built_first
-    and key.built_last == built_last
+    and key.built_first == built_first - first_idx
+    and key.built_last == built_last - first_idx
     and key.wrapped_row_count == count
     and key.row_signature == row_signature
     and key.continuation_offset == (
@@ -506,6 +556,8 @@ local function build_entry(view, line, screen_x, screen_y)
     cache.hits = cache.hits + 1
     perf_add("textview_line_packet_hits", 1)
     touch_entry(cache, existing)
+    existing.first_idx, existing.last_idx = first_idx, last_idx
+    existing.built_first, existing.built_last = built_first, built_last
     return existing
   end
   local key = make_key(

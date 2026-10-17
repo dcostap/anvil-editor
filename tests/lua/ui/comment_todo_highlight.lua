@@ -137,4 +137,32 @@ test.describe("TODO comment highlighting", function()
     test.not_equal(color_on(1), todo)
     buffer:on_close()
   end)
+
+  test.it("colors cached comment lines that join a TODO when a line between them is removed", function()
+    local buffer = make_buffer("-- TODO: first\n\n-- second\n-- third", "comment_todo_join.lua")
+    local view = Editor(buffer)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 1000, 1000
+    view.__test_force_line_packets = true
+    view:set_wrapping_enabled(false)
+
+    local function color_on(line)
+      local y = (line - 1) * view:get_line_height()
+      local ok, err = pcall(line_packets.draw_content, view, line, 0, y)
+      test.ok(ok, tostring(err))
+      for _, item in ipairs(line_packets.inspect_line(view, line) or {}) do
+        if item.type == "text" then
+          return table.concat(item.color, ",")
+        end
+      end
+    end
+
+    local todo = table.concat(style.syntax.todo, ",")
+    test.not_equal(color_on(3), todo)
+    test.not_equal(color_on(4), todo)
+    buffer:remove(1, math.huge, 2, math.huge)
+    test.equal(color_on(2), todo)
+    test.equal(color_on(3), todo)
+    buffer:on_close()
+  end)
 end)

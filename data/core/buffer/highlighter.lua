@@ -153,6 +153,7 @@ end
 function Highlighter:batch_notify(changed_ranges)
   local first_line
   local last_line
+  local old_last_line
   local line_delta = 0
   local applied = 0
   for _, range in ipairs(changed_ranges or {}) do
@@ -160,6 +161,7 @@ function Highlighter:batch_notify(changed_ranges)
     local new_line1 = range.new_line1
     if old_line1 and new_line1 then
       first_line = math.min(first_line or new_line1, new_line1)
+      old_last_line = math.max(old_last_line or old_line1, range.old_line2 or old_line1)
       local remove_count = math.max(0, range.old_line_count or ((range.old_line2 or old_line1) - old_line1 + 1))
       local insert_count = math.max(0, range.new_line_count or ((range.new_line2 or new_line1) - new_line1 + 1))
       last_line = math.max(last_line or new_line1, new_line1 + math.max(1, insert_count) - 1)
@@ -171,7 +173,15 @@ function Highlighter:batch_notify(changed_ranges)
     end
   end
   if not first_line then return end
-  self:invalidate_render_cache(first_line, math.min(#self.buffer.lines, last_line or first_line))
+  -- The TODO cache and the line packets still use the old line numbers. Text
+  -- Views move the packets of unchanged lines after this.
+  comment_todo.invalidate(self, first_line, old_last_line, function(line, count)
+    invalidate_line_packets(self, line, count)
+  end)
+  invalidate_line_packets(self, first_line, old_last_line - first_line)
+  self:invalidate_render_cache(
+    first_line, math.min(#self.buffer.lines, last_line or first_line), true
+  )
   self:invalidate(first_line)
   if core and core.log_quiet and applied > 1 then
     core.log_quiet("Highlighter batch update shifted %d changed range(s) from line %d", applied, first_line)
@@ -184,7 +194,7 @@ function Highlighter:update_notify(line, n)
   self.buffer:clear_cache(line, n)
 end
 
-function Highlighter:invalidate_render_cache(first_line, last_line)
+function Highlighter:invalidate_render_cache(first_line, last_line, packets_invalidated)
   comment_todo.invalidate(self, first_line, last_line, function(line, count)
     invalidate_line_packets(self, line, count)
   end)
@@ -196,7 +206,9 @@ function Highlighter:invalidate_render_cache(first_line, last_line)
     self.packet_reset_generation = (self.packet_reset_generation or 0) + 1
   end
   if first_line then
-    invalidate_line_packets(self, first_line, math.max(0, (last_line or first_line) - first_line))
+    if not packets_invalidated then
+      invalidate_line_packets(self, first_line, math.max(0, (last_line or first_line) - first_line))
+    end
   else
     invalidate_line_packets(self)
   end

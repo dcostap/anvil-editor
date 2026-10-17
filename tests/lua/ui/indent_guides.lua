@@ -101,6 +101,32 @@ test.describe("indent guide drawing", function()
     buffer:on_close()
   end)
 
+  test.it("updates cached guides on a blank line whose neighbor moves away", function()
+    local line_packets = require "core.textview_line_packets"
+    local buffer, view = new_view("    a\n        x\n\ny")
+    view.size.x = 400
+    view.__test_force_line_packets = true
+    local guide = table.concat(style.indent_guide, ",")
+    local function packet_guides(line)
+      local x, y = view:get_line_screen_position(line)
+      local ok, err = pcall(line_packets.draw_content, view, line, x, y)
+      test.ok(ok, tostring(err))
+      local count = 0
+      for _, item in ipairs(line_packets.inspect_line(view, line) or {}) do
+        if table.concat(item.color, ",") == guide then
+          count = count + (item.type == "rect_grid" and item.count or 1)
+        end
+      end
+      return count
+    end
+
+    test.ok(packet_guides(3) > 0, "expected the blank line to take the deeper neighbor's guides")
+    buffer:apply_edits({ { line1 = 2, col1 = 1, line2 = 2, col2 = 10, text = "x\nw" } })
+    test.equal(buffer.lines[4], "\n")
+    test.equal(packet_guides(4), 0)
+    buffer:on_close()
+  end)
+
   test.it("removes guides from rows shifted by a File Tree collapse", function(context)
     local root = core.root_project().path .. PATHSEP .. "indent-guide-filetree-tests-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)

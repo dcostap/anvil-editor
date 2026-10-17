@@ -103,7 +103,8 @@ function comment_todo.invalidate(highlighter, first, last, invalidate_packets)
   highlighter.todo_comment_cache = nil
   if not cache or not first then return end
   local seen = {}
-  for line = math.max(1, first - 1), math.min(#highlighter.buffer.lines, (last or first) + 1) do
+  -- An edit can pass old line numbers past the new end of the Buffer.
+  for line = math.max(1, first - 1), (last or first) + 1 do
     local group = cache.groups[line]
     if group and not seen[group] then
       seen[group] = true

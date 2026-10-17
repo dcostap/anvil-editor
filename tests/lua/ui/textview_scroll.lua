@@ -578,6 +578,80 @@ test.describe("TextView selection scrolling", function()
       "expected an edit to replace the cached line")
   end)
 
+  local function draw_lines(view, count)
+    renderer.begin_frame(core.window)
+    local ok, err = pcall(function()
+      for line = 1, count do
+        local x, y = view:get_line_screen_position(line)
+        view:draw_line_text(line, x, y)
+      end
+    end)
+    renderer.end_frame()
+    if not ok then error(err, 0) end
+  end
+
+  local function packet_text(view, line)
+    local text = {}
+    for _, item in ipairs(line_packets.inspect_line(view, line) or {}) do
+      if item.type == "text" then text[#text + 1] = item.text end
+    end
+    return table.concat(text)
+  end
+
+  test.it("keeps line packets below an inserted line", function(context)
+    local view, buffer = open_editor(context, "one\ntwo\nthree\nfour\nfive\nsix\n")
+    disable_wrapping(view)
+    view.__test_force_line_packets = true
+    draw_lines(view, 6)
+    local builds = line_packets.diagnostics(view).builds
+
+    buffer:insert(1, 4, "\nnew")
+    draw_lines(view, 7)
+
+    local expected = { "one", "new", "two", "three", "four", "five", "six" }
+    for line, text in ipairs(expected) do
+      test.equal(packet_text(view, line), text)
+    end
+    test.ok(line_packets.diagnostics(view).builds - builds <= 2,
+      "expected only the edited lines to be rebuilt")
+  end)
+
+  test.it("keeps wrapped line packets below an inserted line", function(context)
+    local long = string.rep("wrapped words ", 12)
+    local view, buffer = open_editor(context, "one\n" .. long .. "\ntail\n")
+    view.__test_force_line_packets = true
+    view:update_wrap_cache()
+    draw_lines(view, 3)
+    local builds = line_packets.diagnostics(view).builds
+
+    buffer:insert(1, 4, "\nnew")
+    view:update_wrap_cache()
+    draw_lines(view, 4)
+
+    test.equal(select(2, packet_text(view, 3):gsub("wrapped words", "")), 12)
+    test.equal(packet_text(view, 4), "tail")
+    test.ok(line_packets.diagnostics(view).builds - builds <= 2,
+      "expected only the edited lines to be rebuilt")
+  end)
+
+  test.it("keeps line packets below removed lines", function(context)
+    local view, buffer = open_editor(context, "one\ntwo\nthree\nfour\nfive\nsix\n")
+    disable_wrapping(view)
+    view.__test_force_line_packets = true
+    draw_lines(view, 6)
+    local builds = line_packets.diagnostics(view).builds
+
+    buffer:remove(1, 4, 3, 6)
+    draw_lines(view, 4)
+
+    local expected = { "one", "four", "five", "six" }
+    for line, text in ipairs(expected) do
+      test.equal(packet_text(view, line), text)
+    end
+    test.ok(line_packets.diagnostics(view).builds - builds <= 1,
+      "expected only the edited line to be rebuilt")
+  end)
+
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)
     local prefix = string.rep("x", 120)
     local target = "NEEDLE"
