@@ -973,18 +973,8 @@ function common.normalize_path(filename)
 end
 
 
----Returns a normalized key for comparing path identity.
----
----On Windows, filesystem path identity is case-insensitive for the normal
----project/workspace use cases in Anvil, so the key is folded to lowercase.
----The key intentionally does not resolve symlinks or short names; it only
----normalizes separators/dot components and platform case rules.
----@param filename string|nil
----@return string|nil
-function common.path_compare_key(filename)
-  if type(filename) ~= "string" then return end
-  if filename == "" then return "" end
-  local raw = filename:gsub('[/\\]', '\\')
+local function compute_path_compare_key(filename)
+  local raw =filename:gsub('[/\\]', '\\')
   local raw_trimmed = raw:gsub('\\+$', '')
   local is_unc_root = false
   if raw_trimmed:sub(1, 2) == "\\\\" then
@@ -1005,6 +995,31 @@ function common.path_compare_key(filename)
   end
   filename = filename:gsub('/+$', '')
   return filename ~= "" and filename or PATHSEP
+end
+
+-- Views compute keys for every visible row on every frame, and a key depends
+-- only on its string. The cache restarts when it fills.
+local compare_keys, compare_key_count = {}, 0
+local MAX_COMPARE_KEYS = 16384
+
+---Returns a normalized key for comparing path identity.
+---
+---On Windows, filesystem path identity is case-insensitive for the normal
+---project/workspace use cases in Anvil, so the key is folded to lowercase.
+---The key intentionally does not resolve symlinks or short names; it only
+---normalizes separators/dot components and platform case rules.
+---@param filename string|nil
+---@return string|nil
+function common.path_compare_key(filename)
+  if type(filename) ~= "string" then return end
+  if filename == "" then return "" end
+  local key = compare_keys[filename]
+  if key then return key end
+  key = compute_path_compare_key(filename)
+  if compare_key_count >= MAX_COMPARE_KEYS then compare_keys, compare_key_count = {}, 0 end
+  compare_keys[filename] = key
+  compare_key_count = compare_key_count + 1
+  return key
 end
 
 
