@@ -154,6 +154,42 @@ test.describe("Markdown inline positions", function()
   end)
 
   for _, wrapped in ipairs({ false, true }) do
+    test.it("pads the code background beyond its text, wrapping=" .. tostring(wrapped), function()
+      local name = "inline-code-padding-" .. tostring(wrapped) .. ".md"
+      local buffer = Buffer(name, name, true)
+      buffer:insert(1, 1, "before `code` after\n\nend\n")
+      buffer:clear_undo_redo()
+      local view = Editor(buffer)
+      view.size.x, view.size.y = 960, 400
+      view:set_wrapping_enabled(wrapped)
+      markdown.live_render.refresh_view(view)
+      wait_ready(view)
+      buffer:set_selection(3, 1)
+      local code_font = live_fonts.inline_style(view, "code")
+      local x1, x2, code_x1, code_x2 = math.huge, -math.huge, nil, nil
+      local old_draw_rect, old_draw_text = renderer.draw_rect, renderer.draw_text
+      renderer.draw_rect = function(rx, _, rw, _, color)
+        if color == style.markdown_live_inline_code_bg then
+          x1, x2 = math.min(x1, rx), math.max(x2, rx + rw)
+        end
+      end
+      renderer.draw_text = function(font, text, tx, _, _, opts)
+        local tx2 = tx + font:get_width(text, opts)
+        if font == code_font and text == "code" then code_x1, code_x2 = tx, tx2 end
+        return tx2
+      end
+      local x, y = view:get_line_screen_position(1)
+      local ok, err = pcall(function() view:draw_line_body(1, x, y) end)
+      renderer.draw_rect, renderer.draw_text = old_draw_rect, old_draw_text
+      if not ok then error(err, 0) end
+      test.not_nil(code_x1, "the code text was not drawn")
+      test.ok(x1 < code_x1 - 1 and x2 > code_x2 + 1, string.format(
+        "the code background %.1f..%.1f does not pad the text %.1f..%.1f", x1, x2, code_x1, code_x2))
+      model.close(buffer, "test")
+    end)
+  end
+
+  for _, wrapped in ipairs({ false, true }) do
     test.it("aligns prose and code after a task, wrapping=" .. tostring(wrapped), function()
       local name = "inline-after-task-" .. tostring(wrapped) .. ".md"
       local buffer = Buffer(name, name, true)

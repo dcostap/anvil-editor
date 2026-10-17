@@ -8289,14 +8289,20 @@ local function draw_render_line_under_selection_backgrounds(view, render_line, x
       local col1 = fragment.text_source_col1 or fragment.source_col1 or 1
       local col2 = fragment.text_source_col2 or fragment.source_col2 or col1
       local height = font:get_height()
+      local segments = {}
       for x1, segment_y, x2, segment_height in view:iter_text_range_screen_segments(
         line, col1, col2, x, y
       ) do
-        if x2 > x1 then
-          draw_render_fragment_background(
-            fragment, x1, segment_y + (segment_height - height) / 2, x2 - x1, height, true
-          )
-        end
+        if x2 > x1 then segments[#segments + 1] = { x1, segment_y, x2, segment_height } end
+      end
+      -- Padding widens the fragment's outer ends, not its wrap points.
+      for index, segment in ipairs(segments) do
+        local x1, segment_y, x2, segment_height = segment[1], segment[2], segment[3], segment[4]
+        if index == 1 then x1 = x1 - (fragment.background_padding_left or 0) end
+        if index == #segments then x2 = x2 + (fragment.background_padding_right or 0) end
+        draw_render_fragment_background(
+          fragment, x1, segment_y + (segment_height - height) / 2, x2 - x1, height, true
+        )
       end
     elseif fragment.background_under_selection and fragment.background then
       local background_y, background_height = y, font:get_height()
@@ -8311,10 +8317,12 @@ local function draw_render_line_under_selection_backgrounds(view, render_line, x
             + math.max(0, (content_height - font:get_height()) / 2)
         end
       end
+      local padding_left = fragment.background_padding_left or 0
       -- A rendered row can hold an active cell from the moment a drag
       -- started; the live Table Cell Selection replaces its tint.
       draw_render_fragment_background(
-        fragment, draw_x, background_y, width, background_height, true,
+        fragment, draw_x - padding_left, background_y,
+        width + padding_left + (fragment.background_padding_right or 0), background_height, true,
         fragment.selection_replaces_overlay
           and fragment_in_table_cell_selection(view, line, fragment)
       )

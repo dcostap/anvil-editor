@@ -768,6 +768,19 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
             markdown_comment = true,
           }
         end
+      elseif marker and not marker_revealed and marker_span.type == "code" then
+        -- A hidden code delimiter leaves a small gap. The code background
+        -- spreads over it, so the code stands apart from the prose beside it.
+        fragments[#fragments + 1] = {
+          source_col1 = col1, source_col2 = col2,
+          text = "", width = math.max(1, math.floor(3 * SCALE)),
+          text_source_col1 = col1, text_source_col2 = col1,
+          font = opts.base_font,
+          color = style.markdown_live_hidden_syntax,
+          markdown_reveal_col1 = marker_span.col1,
+          markdown_reveal_col2 = marker_span.col2,
+          markdown_code_padding = math.max(1, math.floor(3 * SCALE)),
+        }
       elseif marker or escape_marker then
         local revealed = marker_revealed or escape_revealed
         fragments[#fragments + 1] = {
@@ -802,6 +815,17 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
       previous.text = (previous.text or "") .. (fragment.text or "")
     else
       merged[#merged + 1] = fragment
+    end
+  end
+  for index, fragment in ipairs(merged) do
+    if fragment.markdown_code_padding then
+      local before, after = merged[index - 1], merged[index + 1]
+      if before and before.background == style.markdown_live_inline_code_bg then
+        before.background_padding_right = fragment.markdown_code_padding
+      end
+      if after and after.background == style.markdown_live_inline_code_bg then
+        after.background_padding_left = fragment.markdown_code_padding
+      end
     end
   end
   return merged
@@ -6952,11 +6976,19 @@ refresh_projected_reveal = function(view, line, state, projected_entry)
           state, line, fragment.markdown_reveal_col1,
           fragment.markdown_reveal_col2
         )
-      if reveal == (fragment.hidden == true) then changed = true end
-      fragment.hidden = not reveal or nil
-      fragment.text = reveal and entry.source_text:sub(
-        fragment.source_col1, fragment.source_col2 - 1
-      ) or nil
+      local source = entry.source_text:sub(fragment.source_col1, fragment.source_col2 - 1)
+      if fragment.markdown_code_padding then
+        -- A hidden code delimiter is a gap rather than hidden source.
+        if reveal == (fragment.text == "") then changed = true end
+        fragment.text = reveal and source or ""
+        fragment.width = not reveal and fragment.markdown_code_padding or nil
+        fragment.text_source_col1 = not reveal and fragment.source_col1 or nil
+        fragment.text_source_col2 = not reveal and fragment.source_col1 or nil
+      else
+        if reveal == (fragment.hidden == true) then changed = true end
+        fragment.hidden = not reveal or nil
+        fragment.text = reveal and source or nil
+      end
     end
   end
   if not changed then return false end
