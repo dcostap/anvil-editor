@@ -20,8 +20,8 @@ local GROUPS = {
   {bucket = "older", label = "Older", terminal_label = "Older than a month", collapsed = false},
 }
 -- The groups take at most this part of the height below the list top, and at most this many Project rows.
-local GROUPS_HEIGHT = 0.4
-local GROUPS_ROWS = 8
+local GROUPS_HEIGHT = 0.5
+local GROUPS_ROWS = 16
 -- Programs such as Pi lead their title with a braille spinner frame while they work. The Terminal host reports
 -- titles at most once a second, so the Sidebar turns a leading spinner itself.
 local SPINNER = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
