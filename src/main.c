@@ -19,6 +19,7 @@
 #endif
 #include "api/terminal_native.h"
 #include "hosted_surface.h"
+#include "launch_mode.h"
 #include "input_latency_probe.h"
 #include "surface_protocol.h"
 #include "treesitter/service.h"
@@ -357,7 +358,7 @@ static bool init_lua_state(AppState *app) {
 }
 
 
-/* `anvil --shell` runs the native shell instead of the Lua application. */
+/* On Windows the native shell runs unless launch_mode.h routes the launch to the Lua application. */
 static bool shell_mode = false;
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
@@ -369,10 +370,19 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     exit(anvil_terminal_host_main(argc, argv));
   }
 #endif
-  if (argc > 1 && strcmp(argv[1], ANVIL_SHELL_ARG) == 0) {
+#ifdef _WIN32
+  if (anvil_launch_runs_shell(&argc, argv)) {
     shell_mode = true;
-    return anvil_shell_init(appstate, argc, argv);
+    if (argc > 1 && strcmp(argv[1], ANVIL_SHELL_ARG) == 0) return anvil_shell_init(appstate, argc, argv);
+    /* The shell reads its launch from argv[2]. The array lives as long as the process. */
+    char **shell_argv = SDL_calloc((size_t)argc + 2, sizeof(char *));
+    if (!shell_argv) return SDL_APP_FAILURE;
+    shell_argv[0] = argv[0];
+    shell_argv[1] = (char *)ANVIL_SHELL_ARG;
+    for (int i = 1; i < argc; i++) shell_argv[i + 1] = argv[i];
+    return anvil_shell_init(appstate, argc + 1, shell_argv);
   }
+#endif
   bool hosted = anvil_hosted_surface_parse_args(&argc, argv);
   if (!anvil_hosted_surface_parse_valid()) {
     fprintf(stderr, "Invalid Project mode or hosted connection arguments\n");

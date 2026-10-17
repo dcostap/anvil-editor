@@ -55,9 +55,7 @@ def run_case(exe: Path, work: Path, mode: str, renderer: str, samples: int,
         "ANVIL_INPUT_LATENCY_WARMUP_MS": str(warmup_ms),
         "ANVIL_SURFACE_LOG": native_path(run_dir / "surface.log"),
     }
-    arguments = [native_path(probe_file)]
-    if mode == "shell":
-        arguments.insert(0, "--shell")
+    arguments = ["--shell" if mode == "shell" else "--direct", native_path(probe_file)]
     config = {
         "exe": native_path(exe),
         "working_directory": native_path(project),
@@ -242,7 +240,7 @@ def main() -> int:
                     result = case_dir / "result.lua"
                     config = {
                         "exe": native_path(exe), "working_directory": native_path(case_dir / "driver"),
-                        "arguments": [native_path(case_dir / "driver")],
+                        "arguments": ["--direct", native_path(case_dir / "driver")],
                         "environment": {
                             "ANVIL_USERDIR": native_path(case_dir / "user"),
                             "USERPROFILE": native_path(case_dir / "user"), "HOME": native_path(case_dir / "user"),

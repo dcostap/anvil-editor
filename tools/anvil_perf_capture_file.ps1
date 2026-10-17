@@ -200,7 +200,7 @@ try {
   # system has already resolved this path and Windows paths cannot contain a
   # quote, so explicit command-line quoting is sufficient here.
   $quotedFile = '"' + $File + '"'
-  $launchArguments = if ($NewInstance) { @("edit", $quotedFile) } else { @($quotedFile) }
+  $launchArguments = if ($NewInstance) { @("edit", $quotedFile) } else { @("--direct", $quotedFile) }
   $p = Start-Process -FilePath $Exe -ArgumentList $launchArguments -WorkingDirectory (Split-Path -Parent $Exe) -PassThru
   $targetProcess = $p
   Write-Host "Started pid $($p.Id)"

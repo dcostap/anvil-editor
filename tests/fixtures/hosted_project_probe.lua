@@ -160,7 +160,7 @@ if project:find("/driver$", 1) then
       local process = require "core.process"
       local function start(mode, directory)
         local args = { EXEFILE }
-        if mode == "shell" then args[#args + 1] = "--shell" end
+        args[#args + 1] = mode == "shell" and "--shell" or "--direct"
         if type(directory) == "table" then for _, arg in ipairs(directory) do args[#args + 1] = arg end
         else args[#args + 1] = directory end
         local proc = assert(process.start(args, { stdin = process.REDIRECT_DISCARD, stdout = process.REDIRECT_DISCARD, stderr = process.REDIRECT_DISCARD }))

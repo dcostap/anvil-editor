@@ -269,7 +269,7 @@ if ($SoftwareRenderer) { $env:ANVIL_RENDERER = "software" } else { Remove-Item E
 Write-Host "Launching $Exe"
 Write-Host "File: $File"
 Write-Host "Run dir: $runDir"
-$p = Start-Process -FilePath $Exe -ArgumentList @($File) -PassThru
+$p = Start-Process -FilePath $Exe -ArgumentList @("--direct", $File) -PassThru
 Write-Host "Started pid $($p.Id)"
 
 $deadline = (Get-Date).AddSeconds(20)

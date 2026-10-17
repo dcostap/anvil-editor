@@ -315,6 +315,14 @@ key_text_test = executable('key_text_test',
 )
 test('key-text', key_text_test, env: anvil_test_env, suite: 'anvil')
 
+launch_mode_test = executable('launch_mode_test',
+    ['../tests/native/launch_mode_test.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('launch-mode', launch_mode_test, env: anvil_test_env, suite: 'anvil')
+
 if host_machine.system() == 'windows'
     sidebar_scan_test = executable('sidebar_scan_test',
         ['../tests/native/project_sidebar_scan_test.c', 'project_sidebar.c', 'project_sidebar_scan.c'],

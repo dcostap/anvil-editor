@@ -983,7 +983,7 @@ def run_case(
         # The benchmark plugin owns file/view activation. Passing the fixture
         # on the command line would enqueue a second deferred open that can
         # steal focus back from custom visual scenes during warmup.
-        "arguments": [],
+        "arguments": ["--direct"],
         "environment": environment,
         "heartbeat_path": native_path(heartbeat_file),
         "resource_samples_path": native_path(resource_samples_file),

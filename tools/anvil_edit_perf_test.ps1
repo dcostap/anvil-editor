@@ -71,7 +71,7 @@ Write-Host "File: $File"
 if ($DisablePlugins -ne "") { Write-Host "Disabled plugins: $DisablePlugins" }
 if ($SoftwareRenderer) { Write-Host "Renderer: software" } else { Write-Host "Renderer: default" }
 
-$p = Start-Process -FilePath $Exe -ArgumentList @($File) -PassThru
+$p = Start-Process -FilePath $Exe -ArgumentList @("--direct", $File) -PassThru
 
 $timeout = [Math]::Max(30, $WarmupSeconds + $StressSeconds + 20)
 $deadline = (Get-Date).AddSeconds($timeout)

@@ -139,6 +139,23 @@ C:\Projects\c_projects\anvil-portable\anvil.exe
 The daily launcher is the stripped executable. Do not switch it back to the
 unstripped build output; use `launch-anvil-debug.bat` for native debugging.
 
+## Launch mode
+
+On Windows, Anvil starts the native shell by default. The shell owns the
+Windows, the Project Sidebar, and one hosted process for each loaded Project.
+`--shell` is still accepted.
+
+These launches run the Lua application without a shell:
+
+- `--direct`, which is removed before the Lua command line is parsed
+- CLI commands such as `test`, `help`, `list`, `repl`, `run`, and `edit`
+- `--help`, `-h`, `--version`, and `-v`
+- the shell's own Project and Sidebar processes
+
+`src/launch_mode.h` owns this rule. `anvil:launch-mode` tests it.
+Tools that measure the Lua application alone pass `--direct`.
+Other platforms have no shell and always run the Lua application.
+
 ## Renderer selection
 
 The dev portable build defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.
@@ -442,7 +459,7 @@ There is not a separate Lua framework for in-process UI tests: they are ordinary
 - **Headless/runtime tests** instantiate non-visual objects such as Documents, commands, fuzzy indexes, processes, threads, and pure helper modules, then assert their state.
 - **In-process UI tests** instantiate or reuse Anvil UI objects such as Document Views, panels, prompt bars, widgets, tabs/nodes, fuzzy pickers, and settings views. They drive behavior by calling methods/event handlers programmatically, such as `core.on_event(...)`, `core.root_panel:on_mouse_pressed(...)`, `view:on_mouse_moved(...)`, `node:set_active_view(...)`, or widget `on_change(...)`, then assert Lua state/layout/focus directly. These are the preferred layer for TDD of editor UI behavior.
 - **Isolated renderer checks** run the real renderer on a private desktop. Use the [render performance gate](tools/RENDER_PERF_GATE.md) for pixel checks and renderer diagnostics.
-- **Native window tests** check platform behavior through `tools/run_anvil_hidden_desktop.ps1`, such as `tools/run_surface_latency_probe.py` for the `--shell` compositor. Use these only for changes that require native window behavior.
+- **Native window tests** check platform behavior through `tools/run_anvil_hidden_desktop.ps1`, such as `tools/run_surface_latency_probe.py` for the shell compositor. Use these only for changes that require native window behavior.
 
 When adding or changing runtime/editor behavior, prefer adding or adjusting Lua tests in `tests/lua/runtime` or `tests/lua/ui` alongside the implementation. Use in-process UI tests for focus, layout, panel, widget, Document View, prompt bar, fuzzy picker, and command-routing behavior whenever possible.
 

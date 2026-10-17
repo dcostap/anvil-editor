@@ -68,7 +68,7 @@ public static class Win32SelectionPerfInput {
 "@
 
 Write-Host "Launching $Exe $File"
-$p = Start-Process -FilePath $Exe -ArgumentList @($File) -PassThru
+$p = Start-Process -FilePath $Exe -ArgumentList @("--direct", $File) -PassThru
 
 $deadline = (Get-Date).AddSeconds(15)
 $hwnd = [IntPtr]::Zero
