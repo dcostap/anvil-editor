@@ -931,6 +931,32 @@ test.describe("Terminal View", function()
     system.set_clipboard(previous or "")
   end)
 
+  test.it("applies only the latest of many selection drag motions in a frame", function(context)
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    local session = context.sessions[1]
+    -- The pointer stays inside the Terminal, so the selection does not scroll.
+    local gesture = session.selection_gesture
+    function session:selection_gesture(...)
+      gesture(self, ...)
+      return true, "none"
+    end
+    view:on_mouse_pressed("left", 6, 6)
+    for step = 1, 200 do
+      view:on_mouse_moved(6 + view.cell_width * (step % 5), 6 + view.cell_height * 2)
+    end
+    view:on_mouse_moved(6 + view.cell_width * 7, 6 + view.cell_height * 3)
+    view:update()
+    local drags = {}
+    for _, event in ipairs(session.gesture_events) do
+      if event[1] == "drag" then drags[#drags + 1] = event end
+    end
+    test.equal(#drags, 1)
+    test.equal(drags[1][2], 7)
+    test.equal(drags[1][3], 3)
+    view:on_mouse_released("left", 6 + view.cell_width * 7, 6 + view.cell_height * 3)
+  end)
+
   test.it("copies and clears the selection at a right-click", function(context)
     local previous = system.get_clipboard()
     system.set_clipboard("before")

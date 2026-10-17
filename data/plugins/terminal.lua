@@ -872,10 +872,23 @@ function TerminalView:sync_colors()
   return false
 end
 
+function TerminalView:apply_selection_drag()
+  local drag = self.pending_selection_drag
+  if not drag then return end
+  self.pending_selection_drag = nil
+  local col, row, pixel_x, pixel_y = self:mouse_position(drag.x, drag.y)
+  local _, autoscroll = self.session:selection_gesture(
+    "drag", col, row, pixel_x, pixel_y, 1, drag.rectangle
+  )
+  self.selection_autoscroll = autoscroll ~= "none" and autoscroll or nil
+  self:refresh_snapshot()
+end
+
 function TerminalView:update()
   TerminalView.super.update(self)
   if not self.session then return end
   self:sync_colors()
+  if self.selection_start then self:apply_selection_drag() end
 
   local blink_phase = math.floor((system.get_time() - core.blink_start) /
     math.max(0.1, config.blink_period / 2))
@@ -1699,6 +1712,7 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
       return true
     end
   end
+  self.pending_selection_drag = nil
   local tracking = self.snapshot and self.snapshot.mouse_tracking
   if tracking and not keymap.modkeys.shift then
     self.selection_start = nil
@@ -1753,12 +1767,10 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
     self:clear_point_hover()
   end
   if self.selection_start then
-    local _, autoscroll = self.session:selection_gesture(
-      "drag", col, row, pixel_x, pixel_y, 1,
-      keymap.modkeys.alt == true
-    )
-    self.selection_autoscroll = autoscroll ~= "none" and autoscroll or nil
-    self:refresh_snapshot()
+    -- Each drag step refreshes the whole snapshot. A busy machine can queue hundreds of motions before a frame,
+    -- so only the latest one is applied, once per frame.
+    self.pending_selection_drag = { x = x, y = y, rectangle = keymap.modkeys.alt == true }
+    core.redraw = true
     return true
   end
   if self.snapshot and self.snapshot.mouse_tracking then
@@ -1789,6 +1801,7 @@ function TerminalView:on_mouse_released(button, x, y)
   end
   local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
   if self.selection_start and button == "left" then
+    self:apply_selection_drag()
     local col, row = self:mouse_position(x, y)
     self.session:selection_gesture("release", col, row, 0, 0, 1, false)
     self.selection_start = nil
