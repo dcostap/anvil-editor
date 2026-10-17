@@ -266,7 +266,7 @@ function SidebarView:drag_scrollbar(y)
 end
 
 function SidebarView:on_mouse_pressed(button, x, y)
-  if button ~= "left" and button ~= "right" then return end
+  if button ~= "left" and button ~= "right" and button ~= "middle" then return end
   local area = button == "left" and self:scrollbar_at(x, y)
   if area then
     -- A press on the track centres the thumb there, then drags it.
@@ -287,8 +287,9 @@ function SidebarView:on_mouse_pressed(button, x, y)
     return
   end
   if row.kind ~= "project" then return end
-  if button == "right" then
-    self.menu_row = row.project.row_id
+  if button == "right" or button == "middle" then
+    -- The release acts, so the menu's loop never takes the press's own release.
+    self.click_row = {button = button, row_id = row.project.row_id}
   else
     self.action("select", row.project.row_id)
   end
@@ -296,12 +297,15 @@ end
 
 function SidebarView:on_mouse_released(button, x, y)
   if button == "left" then self.scroll_drag = nil; return end
-  if button ~= "right" then return end
-  local pressed = self.menu_row
-  self.menu_row = nil
+  local pressed = self.click_row
+  self.click_row = nil
+  if not pressed or pressed.button ~= button then return end
   local row = self:row_at(y)
-  if pressed and row and row.kind == "project" and row.project.row_id == pressed then
-    self.action("menu", pressed, x, y)
+  if not (row and row.kind == "project" and row.project.row_id == pressed.row_id) then return end
+  if button == "right" then
+    self.action("menu", pressed.row_id, x, y)
+  else
+    self.action("unload", pressed.row_id)
   end
 end
 
@@ -329,7 +333,7 @@ end
 
 function SidebarView:on_mouse_left()
   self.hover_x, self.hover_y = nil, nil
-  self.scroll_drag, self.menu_row = nil, nil
+  self.scroll_drag, self.click_row = nil, nil
   return self:update_hover()
 end
 

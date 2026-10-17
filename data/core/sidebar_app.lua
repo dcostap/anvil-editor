@@ -86,6 +86,9 @@ local function add_surface(id, window)
         if action == "select" then
           core.log_quiet("Sidebar selection: Window=%d Project=%d owner=%d", id, project.id, project.window_id)
           system.select_project(project.path)
+        elseif action == "unload" then
+          local sent = system.unload_project(project.path)
+          core.log_quiet("Sidebar unload: Window=%d Project=%d sent=%s", id, project.id or 0, tostring(sent))
         end
         return
       end

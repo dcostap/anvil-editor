@@ -56,6 +56,22 @@ test.describe("Sidebar list actions", function()
     test.same(actions, {})
   end)
 
+  test.it("unloads a Project when a middle-click releases on it", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={}},
+      {row_id=9,id=32,path="C:/B",state="ready",window_id=5,terminals={}}}, 5)
+    local y = row_y(view, "project", 1)
+    view:on_mouse_pressed("middle", 20, y, 240)
+    test.same(actions, {})
+    view:on_mouse_released("middle", 20, y)
+    test.same(actions, {{"unload", 7}})
+    -- A middle-click that moves to another row does nothing.
+    view:on_mouse_pressed("middle", 20, y, 240)
+    view:on_mouse_released("middle", 20, row_y(view, "project", 2))
+    test.equal(#actions, 1)
+  end)
+
   test.it("highlights each Window's Selected Project and names Projects shown in other Windows", function()
     local style = require "core.style"
     local model = {

@@ -273,6 +273,10 @@ struct ShellWindow {
   bool sidebar_grip_hover, sidebar_dragging;
   float sidebar_drag_offset;
   Uint32 surface_buttons;
+  /* Buttons held when a menu closed. That click closed the menu; SDL replays its
+     press at the pointer position from before the menu, so the press and its release are dropped. */
+  Uint32 menu_buttons;
+  Uint64 menu_closed_ns;
   float pointer_x, pointer_y;
   bool pointer_in_surface;
   bool pointer_in_sidebar; /* the Sidebar surface received motion and needs a leave */
@@ -3644,6 +3648,16 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
   window->pointer_x = event->button.x;
   window->pointer_y = event->button.y;
   Uint32 mask = SDL_BUTTON_MASK(event->button.button);
+  /* A release in another app leaves the bit set; a later click is a new one. */
+  if ((window->menu_buttons & mask) && event->type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+      SDL_GetTicksNS() - window->menu_closed_ns > SDL_NS_PER_SECOND)
+    window->menu_buttons &= ~mask;
+  if (window->menu_buttons & mask) {
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) window->menu_buttons &= ~mask;
+    SDL_Log("Shell dropped the menu's closing click: Window=%u button=%u %s", window->id,
+            (unsigned)event->button.button, event->type == SDL_EVENT_MOUSE_BUTTON_UP ? "up" : "down");
+    return;
+  }
   bool down = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
   if (!window->surface_buttons && route_sidebar_grip(window, event)) return;
   int control = control_at(window, event->button.x, event->button.y);
@@ -5807,6 +5821,7 @@ static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y
   }
   const char *choice = choice_file ? choice_label : NULL;
   UINT chosen = 0;
+  Uint32 held = 0;
 #define MENU_ITEM(id, label)                                                                                       \
   do {                                                                                                         \
     AppendMenuW(menu, MF_STRING, (id), L##label);                                                              \
@@ -5848,11 +5863,21 @@ static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y
     chosen = (UINT)TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, point.x, point.y,
                                     window->hwnd, NULL);
     PostMessageW(window->hwnd, WM_NULL, 0, 0);
+    /* GetAsyncKeyState reports physical buttons; SDL reports the primary button as left. */
+    bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+    if (GetAsyncKeyState(swapped ? VK_RBUTTON : VK_LBUTTON) & 0x8000) held |= SDL_BUTTON_LMASK;
+    if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) held |= SDL_BUTTON_MMASK;
+    if (GetAsyncKeyState(swapped ? VK_LBUTTON : VK_RBUTTON) & 0x8000) held |= SDL_BUTTON_RMASK;
   }
   DestroyMenu(menu);
   if (chosen) SDL_Log("Shell Project menu command: %u row=%u", chosen, row_id);
   /* The menu's loop can close the Window. */
   window = window_for_id(window->id) == window ? window : NULL;
+  if (window && held) {
+    window->menu_buttons = held;
+    window->menu_closed_ns = SDL_GetTicksNS();
+    SDL_Log("Shell Project menu closed by a click: buttons=%u", held);
+  }
   if (!window || window->closing) chosen = 0;
   if (chosen >= PROJECT_MENU_MOVE) {
     move_project(window, project_id, chosen - PROJECT_MENU_MOVE);
