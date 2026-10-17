@@ -375,6 +375,24 @@ test.describe("Markdown publication frames", function()
     end)
   end
 
+  for _, case in ipairs {
+    { name = "deep task under a bullet", source = "- parent\n             - [ ] child\n", line = 2 },
+    { name = "indented code task", source = "prose\n\n             - [x] child\n", line = 3 },
+  } do
+    test.it("shows a preview-only checkbox for " .. case.name .. " source", function(context)
+      local view, buffer = make_view(context, case.source)
+      buffer:set_selection(case.line, #buffer.lines[case.line])
+      local rows = frame(view, 1, case.line)
+      test.equal(rows[case.line].text, "<widget>child", "the task stayed as source text")
+      local render = test.not_nil(view:get_line_render(case.line))
+      local checkbox = false
+      for _, fragment in ipairs(render.fragments or {}) do
+        if fragment.markdown_task_checkbox then checkbox = true end
+      end
+      test.ok(checkbox, "the task item showed no checkbox")
+    end)
+  end
+
   test.it("continues a deep preview-only ordered item with Enter", function(context)
     local view, buffer = make_view(context, "prose\n             3. child\n")
     buffer:set_selection(2, #buffer.lines[2])

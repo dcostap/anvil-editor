@@ -3362,7 +3362,7 @@ end
 -- or indented code. Explicit raw blocks keep their source presentation.
 function edit_visual_projection.preview_list_item_for_line(view, line, text)
   local prefix = edit_visual_projection.source_list_prefix(text)
-  if not prefix or prefix.task then return nil end
+  if not prefix then return nil end
   local raw = raw_block_for_line(view, line)
   if raw and raw.type ~= "code_indented" then return nil end
   local owner = view.__markdown_live_owner
