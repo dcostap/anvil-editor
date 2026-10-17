@@ -88,6 +88,36 @@ test.describe("Terminal revival", function()
     test.ok(ok, err)
   end)
 
+  test.it("retires a lost session's record when a new shell replaces it", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local state = view:get_state()
+    local kernel = require("ffi").load("kernel32")
+    local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
+    local restored
+    local ok, err = pcall(function()
+      checkpoint_on_detach(view, state)
+      -- Without a saved screen the session cannot revive.
+      os.remove(record(state.session_id).snapshot_path)
+      kernel.TerminateProcess(handle, 99); kernel.WaitForSingleObject(handle, 5000)
+      restored = terminal.from_state(state)
+      test.ok(wait_for(restored, function() return restored.state == "running" end), "no new shell started")
+      test.ok(restored.session_id ~= state.session_id, "the lost session revived")
+      local pool = require("core.worker_pool")
+      test.ok(wait_for(restored, function()
+        local current = pool.current_system()
+        if current then current:drain({ max_ms = 5, max_messages = 64 }) end
+        return not require("terminal_native").read_session_record(state.session_id)
+      end), "the lost session's record stayed")
+    end)
+    if restored then restored:on_close() end
+    view:on_close()
+    if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end
+    kernel.CloseHandle(handle)
+    test.ok(ok, err)
+  end)
+
   test.it("gives the revived shell the restored screen size", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)

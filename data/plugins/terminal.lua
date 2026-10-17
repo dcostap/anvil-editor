@@ -331,6 +331,11 @@ function TerminalView:new(options)
       core.log_quiet("Terminal Session %s revival requested from disk", record.session_id)
     end
     session, start_error = native.new(native_options)
+    -- A new shell replaces a lost session that cannot revive. Retire its record, so the Sidebar stops listing it.
+    if session and not native_options.revive_from then
+      core.log_quiet("Terminal Session %s replaced by a new shell; retire its record", record.session_id)
+      M.cleanup_records(record.session_id)
+    end
   end
   if not session then
     self.state = "failed"
