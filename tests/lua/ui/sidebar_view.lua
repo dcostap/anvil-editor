@@ -26,20 +26,34 @@ local function recorder()
 end
 
 test.describe("Sidebar list actions", function()
-  test.it("asks the shell for a Project's actions menu at a right-click", function()
+  test.it("asks the shell for a Project's actions menu when a right-click releases on it", function()
     local actions, action = recorder()
     local view = SidebarView(action)
     view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={}},
       {row_id=9,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}},
       windows={{id=5,selected_project=31},{id=8,selected_project=0}}}, 8)
     local y = row_y(view, "project", 1)
+    -- The menu waits for the release, so its loop never takes the press's own release.
     view:on_mouse_pressed("right", 20, y, 240)
-    test.same(actions, {{"menu", 7, 20, y}})
-    -- A Dormant Project has a menu too, and the right-click neither selects nor unloads.
+    test.same(actions, {})
+    view:on_mouse_released("right", 21, y)
+    test.same(actions, {{"menu", 7, 21, y}})
+    -- A Dormant Project has a menu too, and the right-click neither selects nor starts it.
     local dormant_y = row_y(view, "project", 2)
     view:on_mouse_pressed("right", 230, dormant_y, 240)
+    view:on_mouse_released("right", 230, dormant_y)
     test.same(actions[2], {"menu", 9, 230, dormant_y})
     test.equal(#actions, 2)
+  end)
+
+  test.it("shows no menu when a right-click releases on another row", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={}},
+      {row_id=9,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}}}, 5)
+    view:on_mouse_pressed("right", 20, row_y(view, "project", 1), 240)
+    view:on_mouse_released("right", 20, row_y(view, "project", 2))
+    test.same(actions, {})
   end)
 
   test.it("highlights each Window's Selected Project and names Projects shown in other Windows", function()
@@ -202,11 +216,11 @@ test.describe("Sidebar age groups", function()
     view:set_model({project(1, "C:/Week", DAY), project(2, "C:/Month", 10 * DAY), project(3, "C:/Old", 60 * DAY),
       project(4, "C:/Loaded", 90 * DAY, "ready"), project(5, "C:/Unknown")})
     test.same(paths(view, "main"), {"C:/Week", "C:/Loaded"})
-    -- Older groups start collapsed except the newest one.
-    test.same(paths(view, "bottom"), {"C:/Month"})
+    -- Both groups start open.
+    test.same(paths(view, "bottom"), {"C:/Month", "C:/Old", "C:/Unknown"})
     local index = row_index(view, function(row) return row.kind == "group" and row.bucket == "older" end)
     view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 240)
-    test.same(paths(view, "bottom"), {"C:/Month", "C:/Old", "C:/Unknown"})
+    test.same(paths(view, "bottom"), {"C:/Month"})
   end)
 
   test.it("aligns the groups to the bottom, below a gap after the main list", function()
@@ -245,6 +259,41 @@ test.describe("Sidebar age groups", function()
     test.equal(view:row_y(main_index), main_y, "Scrolling the groups moved the main list")
   end)
 
+  test.it("limits the groups to a few rows in a tall Sidebar and scrolls the rest", function()
+    local view = SidebarView(function() end)
+    view:set_size(240, 3000)
+    local model = {}
+    for i = 1, 60 do model[#model + 1] = project(i, "C:/Old" .. i, 60 * DAY) end
+    view:set_model(model)
+    local top, height = view:bottom_area()
+    test.ok(height < (3000 - view:list_top()) * 0.25, "The groups grew with the Sidebar's height")
+    local last = row_index(view, function(row) return row.kind == "project" and row.project.path == "C:/Old60" end)
+    test.ok(view:row_y(last) >= top + height, "The last older Project fits without scrolling")
+    view:on_mouse_wheel(-1000, 3000, 2990)
+    test.ok(view:row_y(last) + view.rows[last].h <= 3000, "Scrolling did not reach the last older Project")
+  end)
+
+  test.it("scrolls the groups by dragging their scrollbar without selecting a Project", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_size(240, 600)
+    local model = {}
+    for i = 1, 40 do model[#model + 1] = project(i, "C:/Old" .. i, 60 * DAY) end
+    view:set_model(model)
+    local top = view:bottom_area()
+    local first = row_index(view, function(row) return row.kind == "project" and row.project.path == "C:/Old1" end)
+    local first_y = view:row_y(first)
+    view:on_mouse_pressed("left", 237, top + 2, 240)
+    view:on_mouse_moved(237, top + 60)
+    view:on_mouse_released("left", 237, top + 60)
+    test.ok(view:row_y(first) < first_y, "Dragging the scrollbar did not scroll the groups")
+    test.same(actions, {})
+    -- The drag ended at the release.
+    local dragged_y = view:row_y(first)
+    view:on_mouse_moved(237, top + 120)
+    test.equal(view:row_y(first), dragged_y)
+  end)
+
   test.it("moves an older Project to the main list when it loads", function()
     local view = SidebarView(function() end)
     view:set_size(240, 800)
@@ -271,14 +320,14 @@ test.describe("Sidebar age groups", function()
 
   test.it("restores collapsed groups and reports changes for the next Sidebar", function()
     local actions, action = recorder()
-    local view = SidebarView(action, {["group:older"] = false})
+    local view = SidebarView(action, {["group:older"] = true})
     view:set_size(240, 800)
     view:set_model({project(1, "C:/Old", 60 * DAY)})
-    test.same(paths(view, "bottom"), {"C:/Old"})
+    test.same(paths(view, "bottom"), {})
     local index = row_index(view, function(row) return row.kind == "group" and row.bucket == "older" end)
     view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 240)
-    test.same(paths(view, "bottom"), {})
-    test.same(actions, {{"collapsed", "group:older", true}})
+    test.same(paths(view, "bottom"), {"C:/Old"})
+    test.same(actions, {{"collapsed", "group:older", false}})
   end)
 
   test.it("shows each Terminal Session's live title", function()

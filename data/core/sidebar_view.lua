@@ -3,21 +3,25 @@ local style = require "core.style"
 
 -- The shell owns identity and lifecycle. This view sends only Project and Terminal Session actions. A right-click on
 -- a Project asks the shell for its native actions menu: Move, Unload and the rest.
+-- The menu opens at the button's release. A menu opened at the press takes the release into its own loop, and the
+-- shell then reports a stray left press that selects the Project.
 -- Layout: the main list holds loaded Projects and Projects used in the last week. Older Projects sit in
 -- collapsible age groups aligned to the bottom, which take at most part of the height and scroll on their own.
+-- Each area that overflows shows a scrollbar; its thumb drags and its track pages.
 -- Inside a Project, older Terminal Sessions fold into collapsible groups the same way.
 -- Rows keep the shell's order. Age only chooses a row's group, so rows never swap places under the pointer.
 local SidebarView = Object:extend()
 
 local DAY = 24 * 60 * 60
 local WEEK, MONTH = 7 * DAY, 30 * DAY
--- The groups below the main list. Each starts collapsed unless saved otherwise.
+-- The groups below the main list. Each starts open or collapsed as given here unless saved otherwise.
 local GROUPS = {
   {bucket = "month", label = "Last month", terminal_label = "Older than a week", collapsed = false},
-  {bucket = "older", label = "Older", terminal_label = "Older than a month", collapsed = true},
+  {bucket = "older", label = "Older", terminal_label = "Older than a month", collapsed = false},
 }
--- The groups take at most this part of the height below the list top.
+-- The groups take at most this part of the height below the list top, and at most this many Project rows.
 local GROUPS_HEIGHT = 0.4
+local GROUPS_ROWS = 8
 -- Programs such as Pi lead their title with a braille spinner frame while they work. The Terminal host reports
 -- titles at most once a second, so the Sidebar turns a leading spinner itself.
 local SPINNER = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -184,7 +188,7 @@ function SidebarView:bottom_area()
   if self.bottom_h == 0 then return self.view_h, 0 end
   local m = metrics()
   local available = math.max(0, self.view_h - m.top)
-  local height = math.min(self.bottom_h + m.pad, math.floor(available * GROUPS_HEIGHT))
+  local height = math.min(self.bottom_h + m.pad, math.floor(available * GROUPS_HEIGHT), GROUPS_ROWS * m.project + m.pad)
   return self.view_h - height, height
 end
 
@@ -223,8 +227,55 @@ function SidebarView:row_at(y)
   end
 end
 
+-- Each scrolling area with its visible span, content height and scroll field.
+function SidebarView:scroll_areas()
+  local m = metrics()
+  local bottom_top, bottom_height = self:bottom_area()
+  return {
+    {field = "scroll", top = m.top, height = self:main_bottom() - m.top, content = self.main_h},
+    {field = "bottom_scroll", top = bottom_top, height = bottom_height, content = self.bottom_h + m.pad},
+  }
+end
+
+-- The area's scrollbar thumb top and height, or nil when the area does not overflow.
+local function thumb(area, scroll)
+  if area.height <= 0 or area.content <= area.height then return end
+  local h = math.max(math.floor(24 * SCALE), area.height * area.height / area.content)
+  return area.top + (area.height - h) * scroll / (area.content - area.height), h
+end
+
+-- The area whose scrollbar is at the point.
+function SidebarView:scrollbar_at(x, y)
+  if x < self.width - 12 * SCALE then return end
+  for _, area in ipairs(self:scroll_areas()) do
+    if y >= area.top and y < area.top + area.height and thumb(area, self[area.field]) then return area end
+  end
+end
+
+function SidebarView:drag_scrollbar(y)
+  local drag = self.scroll_drag
+  local area
+  for _, candidate in ipairs(self:scroll_areas()) do
+    if candidate.field == drag.field then area = candidate end
+  end
+  local _, h = thumb(area, self[area.field])
+  if not h then return end
+  local range = area.height - h
+  self[area.field] = range > 0 and (y - drag.offset - area.top) / range * (area.content - area.height) or 0
+  self:clamp_scroll()
+end
+
 function SidebarView:on_mouse_pressed(button, x, y)
   if button ~= "left" and button ~= "right" then return end
+  local area = button == "left" and self:scrollbar_at(x, y)
+  if area then
+    -- A press on the track centres the thumb there, then drags it.
+    local top, h = thumb(area, self[area.field])
+    local offset = (y >= top and y < top + h) and y - top or h / 2
+    self.scroll_drag = {field = area.field, offset = offset}
+    self:drag_scrollbar(y)
+    return
+  end
   local row = self:row_at(y)
   if not row then return end
   if row.kind == "group" or row.kind == "terminal_group" then
@@ -237,28 +288,48 @@ function SidebarView:on_mouse_pressed(button, x, y)
   end
   if row.kind ~= "project" then return end
   if button == "right" then
-    self.action("menu", row.project.row_id, x, y)
+    self.menu_row = row.project.row_id
   else
     self.action("select", row.project.row_id)
+  end
+end
+
+function SidebarView:on_mouse_released(button, x, y)
+  if button == "left" then self.scroll_drag = nil; return end
+  if button ~= "right" then return end
+  local pressed = self.menu_row
+  self.menu_row = nil
+  local row = self:row_at(y)
+  if pressed and row and row.kind == "project" and row.project.row_id == pressed then
+    self.action("menu", pressed, x, y)
   end
 end
 
 function SidebarView:update_hover()
   local row = self.hover_y and self:row_at(self.hover_y)
   local hover = row and row.kind ~= "empty" and row or nil
-  local changed = hover ~= self.hover
-  self.hover = hover
+  local scrollbar = self.hover_x and self:scrollbar_at(self.hover_x, self.hover_y)
+  if scrollbar then hover = nil end
+  scrollbar = scrollbar and scrollbar.field
+  local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover
+  self.hover, self.scrollbar_hover = hover, scrollbar
   return changed
 end
 
--- Returns true when the hover changed and the view needs a redraw.
+-- Returns true when the hover or a dragged scrollbar changed and the view needs a redraw.
 function SidebarView:on_mouse_moved(x, y)
   self.hover_x, self.hover_y = x, y
+  if self.scroll_drag then
+    self:drag_scrollbar(y)
+    self:update_hover()
+    return true
+  end
   return self:update_hover()
 end
 
 function SidebarView:on_mouse_left()
   self.hover_x, self.hover_y = nil, nil
+  self.scroll_drag, self.menu_row = nil, nil
   return self:update_hover()
 end
 
@@ -459,6 +530,16 @@ function SidebarView:draw(width, height)
     end
   end
   renderer.set_clip_rect(0, 0, width, height)
+  local bar_w = math.max(2, math.floor(4 * SCALE))
+  for _, area in ipairs(self:scroll_areas()) do
+    local top, h = thumb(area, self[area.field])
+    if top then
+      local active = self.scroll_drag and self.scroll_drag.field == area.field
+      local color = active and style.scrollbar_active
+        or self.scrollbar_hover == area.field and style.scrollbar_hover or style.scrollbar
+      renderer.draw_rounded_rect(width - bar_w - 4 * SCALE, top, bar_w, h, bar_w / 2, color)
+    end
+  end
 end
 
 return SidebarView

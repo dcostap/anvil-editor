@@ -173,6 +173,10 @@ function core.on_event(name, ...)
     local width, height = renwindow.get_size(core.window)
     current.view:set_size(width, height)
     current.view:on_mouse_pressed(button, x, y); core.redraw = true
+  elseif name == "mousereleased" then
+    local button, x, y = ...
+    core.log_quiet("Sidebar release: Window=%d button=%s x=%d y=%d", current.id, button, x, y)
+    current.view:on_mouse_released(button, x, y); core.redraw = true
   elseif name == "mousemoved" then
     local x, y = ...
     local width, height = renwindow.get_size(core.window)
