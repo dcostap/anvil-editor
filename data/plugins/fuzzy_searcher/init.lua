@@ -5044,9 +5044,13 @@ function FSView:start_file_search(query, line, reset_selection)
   end
 
   core.add_thread(function()
+    -- A newer query replaced this one before the thread ran. Its results would be discarded.
+    if gen ~= file_search_generation or active_view ~= self then return end
+    local search_started = system.get_time()
     local recent_matches, skip_keys = collect_recent_file_matches(query, line, self.case_sensitive)
 
     if native_file_index_ready() then
+      local native_started = system.get_time()
       local ok, native_results = pcall(function()
         return fuzzy_searcher.files_fuzzy_index:search(query, {
           limit = line and math.max(keep_limit * 10, 1000)
@@ -5055,6 +5059,7 @@ function FSView:start_file_search(query, line, reset_selection)
           case_sensitive = self.case_sensitive,
         })
       end)
+      local native_finished = system.get_time()
       if ok and native_results and gen == file_search_generation and active_view == self then
         local general_matches = {}
         for _, match in ipairs(native_results) do
@@ -5090,8 +5095,17 @@ function FSView:start_file_search(query, line, reset_selection)
         apply_results(out, has_more)
         self.status = status
         self:schedule_update(true)
+        local finished = system.get_time()
+        if finished - search_started > 0.008 then
+          core.log_quiet("Fuzzy file search slow: query=%q total=%.1fms recent=%.1fms native=%.1fms results=%d",
+            query, (finished - search_started) * 1000, (native_started - search_started) * 1000,
+            (native_finished - native_started) * 1000, #native_results)
+        end
         return
       end
+      -- The fallback scan publishes nothing for a replaced query, and
+      -- materializing every native path for it costs tens of milliseconds.
+      if gen ~= file_search_generation or active_view ~= self then return end
     end
 
     local items = get_files()
