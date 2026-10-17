@@ -1833,6 +1833,44 @@ function FileTreeView:get_line_hint_entry(line)
   return entry
 end
 
+local HINT_PARTS_KEY_FIELDS = 16
+local MAX_HINT_PARTS = 4096
+
+-- Rows keep the same metadata for many frames. Reuse a row's parts while
+-- every value that `file_metadata.parts` reads is unchanged.
+function FileTreeView:get_hint_parts(path, info, git, count, pending, edited)
+  local stat = git and git.stat
+  local now = os.time()
+  local key = {
+    info.type, info.size, info.modified,
+    git and git.kind, stat and stat.additions, stat and stat.deletions,
+    git and git.error, git and git.stale,
+    count, pending, edited, now,
+    style.filetree_git_line_additions, style.filetree_git_line_deletions, style.warn,
+    style.filetree_git_status_ignored,
+  }
+  local cache = self.hint_parts_cache
+  if not cache or self.hint_parts_count >= MAX_HINT_PARTS then
+    cache = {}
+    self.hint_parts_cache, self.hint_parts_count = cache, 0
+  end
+  local cached = cache[path]
+  if cached then
+    local same = true
+    for index = 1, HINT_PARTS_KEY_FIELDS do
+      if cached.key[index] ~= key[index] then same = false; break end
+    end
+    if same then return cached.parts end
+  end
+  local parts = file_metadata.parts {
+    type = info.type, size = info.size, modified = info.modified, git = git,
+    count = count, count_pending = pending, last_edited = edited, now = now,
+  }
+  if not cached then self.hint_parts_count = self.hint_parts_count + 1 end
+  cache[path] = { key = key, parts = parts }
+  return parts
+end
+
 function FileTreeView:get_line_hint(line)
   if self.metadata_hints then return self.metadata_hints[line] end
   local stats = perf_stats()
@@ -1859,11 +1897,7 @@ function FileTreeView:get_line_hint(line)
     counts, pending = folder_counts.get(entry.abs, info.modified, filetree_config.show_hidden)
   end
   local edited = file_metadata.recent_times(entry.abs)
-  local parts = file_metadata.parts {
-    type = info.type, size = info.size, modified = info.modified, git = git,
-    count = counts and counts.count, count_pending = pending,
-    last_edited = edited,
-  }
+  local parts = self:get_hint_parts(entry.abs, info, git, counts and counts.count, pending, edited)
   if self.metadata_columns then
     file_metadata.include_columns(self.metadata_columns, self:get_font(), parts)
   end
