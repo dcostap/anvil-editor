@@ -91,11 +91,17 @@ static void destroy(LuaThread *t)
   }
 }
 
+static void init_start(lua_State* L);
+
 static int callback(LuaThread *t)
 {
   int ret = -1;
 
   SDL_AtomicIncRef(&t->ref);
+
+  /* core/start.lua takes several milliseconds and touches only this state,
+   * so it runs here instead of blocking the thread that called create. */
+  init_start(t->L);
 
   if (lua_pcall(t->L, lua_gettop(t->L) - 1, 1, 0) != LUA_OK)
     SDL_LogCritical(SDL_LOG_CATEGORY_SYSTEM, "%s", lua_tostring(t->L, -1));
@@ -381,7 +387,7 @@ static int f_thread_create(lua_State *L)
   copy_global("HOME", L, thread->L);
   copy_global("LUAJIT", L, thread->L);
 
-  /* Worker Lua states use core/start.lua to configure module paths. They are
+  /* Worker Lua states run core/start.lua in callback() to configure module paths. They are
    * not application startups and must not create application startup traces. */
   lua_pushboolean(thread->L, 1);
   lua_setglobal(thread->L, "ANVIL_LUA_THREAD");
@@ -389,9 +395,6 @@ static int f_thread_create(lua_State *L)
 #ifdef MACOS_USE_BUNDLE
   copy_global("MACOS_RESOURCES", L, thread->L);
 #endif
-
-  /* run core.start to initialize package path and cpath */
-  init_start(thread->L);
 
   /* ref count should be increased before registering the thread to
    * prevent double free on _gc since the callback can execute really fast */

@@ -2713,6 +2713,8 @@ local function renderer_present_paced()
 end
 
 local last_core_step_stats = {}
+-- A hosted Project draws nothing while the shell hides it. Its first frame after that is logged.
+local render_resume_pending = false
 
 local function perf_stats_enabled()
   local perf = package.loaded["core.perf"]
@@ -3031,6 +3033,7 @@ function core.step(next_frame_time, options)
   step_stats.update_ms = (system.get_time() - update_start_time) * 1000
 
   if not render_enabled then
+    render_resume_pending = true
     if core.startup_trace_active and startup then
       startup.stage_end(startup_update_stage, "ok", "rendering disabled")
     end
@@ -3139,6 +3142,14 @@ function core.step(next_frame_time, options)
 
   local frame_time = system.get_time() - start_time
   step_stats.frame_time_ms = frame_time * 1000
+  if render_resume_pending then
+    render_resume_pending = false
+    core.log_quiet(
+      "Rendering resumed: first frame=%.1fms events=%.1fms update=%.1fms draw=%.1fms renderer_end=%.1fms",
+      step_stats.frame_time_ms, step_stats.event_ms, step_stats.update_ms,
+      step_stats.draw_emit_ms, step_stats.renderer_end_ms
+    )
+  end
   rendering_speed = math.max(0.001, frame_time)
   if draw_perf and draw_perf.file_open_on_present then
     draw_perf.file_open_on_present()

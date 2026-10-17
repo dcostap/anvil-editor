@@ -100,7 +100,8 @@ test.describe("worker_pool_native", function()
 
   test.test("interactive native jobs overtake queued background work", function()
     local pool = new_pool("lua-native-priority", 1)
-    pool:submit({ kind = "test_count", count = 20, sleep_ms = 2 })
+    -- The busy job must outlast the test's frame-long yields before both submits.
+    pool:submit({ kind = "test_count", count = 150, sleep_ms = 2 })
     test.ok(drain_until(pool, function(message) return message.type == "progress" end))
     pool:submit({ kind = "test_echo", value = "background", priority = "background" })
     pool:submit({ kind = "test_echo", value = "interactive", priority = "interactive" })
