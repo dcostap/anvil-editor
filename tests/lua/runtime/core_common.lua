@@ -243,6 +243,29 @@ test.describe("core.common", function()
     end)
   end)
 
+  test.describe("path_compare_key", function()
+    test.test("folds separators, dot components, trailing separators and case", function()
+      if PLATFORM == "Windows" then
+        test.equal(common.path_compare_key("C:\\Users\\Name\\File.LUA"), "c:\\users\\name\\file.lua")
+        test.equal(common.path_compare_key("c:\\a\\...\\b"), "c:\\a\\...\\b")
+        test.equal(common.path_compare_key("C:/Users/Name"), "c:\\users\\name")
+        test.equal(common.path_compare_key("C:\\Users\\.\\Name"), "c:\\users\\name")
+        test.equal(common.path_compare_key("C:\\Users\\Other\\..\\Name"), "c:\\users\\name")
+        test.equal(common.path_compare_key("C:\\Users\\\\Name"), "c:\\users\\name")
+        test.equal(common.path_compare_key("C:\\Users\\Name\\"), "c:\\users\\name")
+        test.equal(common.path_compare_key("C:\\Users\\."), "c:\\users")
+        test.equal(common.path_compare_key("C:\\"), "c:")
+        test.equal(common.path_compare_key("\\\\Server\\Share\\Dir"), "\\\\server\\share\\dir")
+        test.equal(common.path_compare_key("relative\\Path"), "relative\\path")
+      else
+        test.equal(common.path_compare_key("/home/./user/../test/"), "/home/test")
+        test.equal(common.path_compare_key("/"), "/")
+      end
+      test.equal(common.path_compare_key(""), "")
+      test.is_nil(common.path_compare_key(nil))
+    end)
+  end)
+
   test.describe("relative_path", function()
     test.test("makes paths relative when possible", function(context)
       local base = context.temp_root

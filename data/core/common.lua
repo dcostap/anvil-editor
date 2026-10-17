@@ -974,6 +974,13 @@ end
 
 
 local function compute_path_compare_key(filename)
+  -- Scans and joins produce plain drive paths. Normalizing one changes
+  -- nothing that lowercasing does not already fold.
+  if PATHSEP == '\\' and filename:find('^%a:\\') and not filename:find('/', 1, true)
+      and not filename:find('\\\\', 1, true) and filename:sub(-1) ~= '\\'
+      and not filename:find('\\%.%.?\\') and not filename:find('\\%.%.?$') then
+    return filename:lower()
+  end
   local raw =filename:gsub('[/\\]', '\\')
   local raw_trimmed = raw:gsub('\\+$', '')
   local is_unc_root = false
