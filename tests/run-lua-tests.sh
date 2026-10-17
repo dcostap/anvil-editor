@@ -69,6 +69,8 @@ if [ -d "$sourcedir/subprojects/ppm" ]; then
 fi
 
 cp "$builddir/start.lua" "$datadir/core/"
+# Scenario runs and Lua tests share these scene modules as `scenes.<name>`.
+cp -R "$sourcedir/tests/scenes" "$datadir/"
 if [ -f "$builddir/conpty.dll" ]; then
   mkdir -p "$datadir/conpty"
   cp "$builddir/conpty.dll" "$builddir/OpenConsole.exe" "$datadir/conpty/"

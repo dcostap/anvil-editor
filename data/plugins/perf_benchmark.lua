@@ -19,6 +19,13 @@ local linewrapping = require "core.linewrapping"
 local perf = require "core.perf"
 local style = require "core.style"
 
+-- In the shell every Project process loads this plugin. Only the named Project runs the benchmark.
+local benchmark_project = os.getenv("ANVIL_PERF_BENCHMARK_PROJECT")
+if benchmark_project and benchmark_project ~= "" then
+  local project = core.root_project()
+  if not (project and common.path_equals(project.path, benchmark_project)) then return {} end
+end
+
 local function env_string(name, default)
   local value = os.getenv(name)
   return value and value ~= "" and value or (default or "")
@@ -38,6 +45,8 @@ local benchmark = {
   result_file = env_string("ANVIL_PERF_BENCHMARK_RESULT"),
   metrics_file = env_string("ANVIL_PERF_BENCHMARK_METRICS"),
   actions_file = env_string("ANVIL_PERF_BENCHMARK_ACTIONS"),
+  details_file = env_string("ANVIL_PERF_BENCHMARK_DETAILS"),
+  details = {},
   workload_file = env_string("ANVIL_PERF_BENCHMARK_WORKLOAD"),
   profile_dir = env_string("ANVIL_PERF_BENCHMARK_PROFILE_DIR"),
   action_timeout = env_number("ANVIL_PERF_BENCHMARK_ACTION_TIMEOUT", 30),
@@ -201,6 +210,37 @@ local function write_metrics()
     lines[#lines + 1] = table.concat(values, ",")
   end
   return write_atomic(benchmark.metrics_file, table.concat(lines, "\n") .. "\n")
+end
+
+-- Sums every per-frame detail timer and counter, which attributes frame cost to its code.
+local function add_frame_details()
+  local stats = core.perf_frame_stats
+  if benchmark.details_file == "" or not stats then return end
+  for key, value in pairs(stats) do
+    if type(value) == "number" and value ~= 0 then
+      local detail = benchmark.details[key]
+      if not detail then
+        detail = { total = 0, frames = 0, max = 0 }
+        benchmark.details[key] = detail
+      end
+      detail.total, detail.frames = detail.total + value, detail.frames + 1
+      if value > detail.max then detail.max = value end
+    end
+  end
+end
+
+local function write_details()
+  if benchmark.details_file == "" then return true end
+  local keys = {}
+  for key in pairs(benchmark.details) do keys[#keys + 1] = key end
+  table.sort(keys)
+  local lines = { "key,total,frames,max,measured_frames" }
+  for _, key in ipairs(keys) do
+    local detail = benchmark.details[key]
+    lines[#lines + 1] = string.format("%s,%.6f,%d,%.6f,%d", key, detail.total, detail.frames,
+      detail.max, benchmark.measure_count)
+  end
+  return write_atomic(benchmark.details_file, table.concat(lines, "\n") .. "\n")
 end
 
 local function write_actions()
@@ -965,7 +1005,6 @@ end
 local function finish_success()
   if benchmark.finished then return end
   benchmark.finished = true
-  set_phase("finished", "completed")
   benchmark.measure_end = benchmark.measure_end or system.get_time()
   local elapsed = math.max(0.000001, benchmark.measure_end - benchmark.measure_start)
   local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
@@ -975,6 +1014,8 @@ local function finish_success()
   end
   local metrics_ok, metrics_err = write_metrics()
   local actions_ok, actions_err = write_actions()
+  local details_ok, details_err = write_details()
+  if not details_ok then metrics_ok, metrics_err = nil, details_err end
   if not actions_ok then metrics_ok, metrics_err = nil, actions_err end
   local fields = {
     done = metrics_ok and 1 or 0,
@@ -1023,6 +1064,8 @@ local function finish_success()
   if not result_ok then
     core.log_quiet("Performance benchmark result write failed: %s", tostring(result_err))
   end
+  -- The harness can end the process tree at this phase, so every file is written first.
+  set_phase("finished", "completed")
   core.log_quiet(
     "Performance benchmark complete: scenario=%s frames=%d fps=%.1f",
     benchmark.scenario, benchmark.measure_count, benchmark.measure_count / elapsed
@@ -1036,7 +1079,6 @@ end
 local function fail(err)
   if benchmark.finished then return end
   benchmark.finished = true
-  set_phase("failed", "failed")
   if benchmark.profile then pcall(benchmark.profile.stop, benchmark.profile) end
   write_actions()
   write_metrics()
@@ -1046,6 +1088,7 @@ local function fail(err)
     mode = benchmark.mode,
     error = tostring(err),
   }
+  set_phase("failed", "failed")
   core.log_quiet("Performance benchmark failed: %s", tostring(err))
   core.add_thread(function()
     coroutine.yield()
@@ -1448,6 +1491,7 @@ function perf.on_frame(snapshot)
       benchmark.measure_count = benchmark.measure_count + 1
       if benchmark.mode ~= "throughput" and benchmark.mode ~= "visual" then
         benchmark.rows[#benchmark.rows + 1] = metric_row(snapshot)
+        add_frame_details()
       else
         benchmark.pending_action_ms = 0
       end

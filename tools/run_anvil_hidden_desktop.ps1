@@ -252,7 +252,8 @@ public static class AnvilHiddenDesktopLauncher {
     string exe, string[] args, string workingDirectory,
     string desktopName, int timeoutMilliseconds, string heartbeatPath,
     int startupTimeoutMilliseconds, int heartbeatTimeoutMilliseconds,
-    string resourceSamplesPath, string timeoutDumpPath, bool stableUiScheduling) {
+    string resourceSamplesPath, string timeoutDumpPath, bool stableUiScheduling,
+    string[] endPhases) {
     IntPtr desktop = CreateDesktop(
       desktopName, IntPtr.Zero, IntPtr.Zero, 0, DESKTOP_ALL_ACCESS, IntPtr.Zero);
     if (desktop == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -307,6 +308,7 @@ public static class AnvilHiddenDesktopLauncher {
       DateTime lastHeartbeatWrite = DateTime.MinValue;
       string lastPhase = "not_started";
       string terminationReason = "";
+      string endedPhase = "";
       long peakWorkingSet = 0, peakPrivate = 0;
       long nextResourceSampleMs = 0;
       while (true) {
@@ -329,6 +331,11 @@ public static class AnvilHiddenDesktopLauncher {
           SampleResources(pi.dwProcessId, elapsed, lastPhase, resourceSamplesPath,
             ref peakWorkingSet, ref peakPrivate);
           nextResourceSampleMs = elapsed + 250;
+        }
+        // A multiprocess app keeps running after its benchmark Project finishes.
+        if (endPhases != null && Array.IndexOf(endPhases, lastPhase) >= 0) {
+          endedPhase = lastPhase;
+          break;
         }
         if (elapsed >= timeoutMilliseconds) {
           terminationReason = "wall_timeout";
@@ -353,6 +360,12 @@ public static class AnvilHiddenDesktopLauncher {
         processTreeTerminated = TerminateJobObject(job, 124);
         if (!processTreeTerminated) TerminateProcess(pi.hProcess, 124);
         WaitForSingleObject(pi.hProcess, 5000);
+      } else if (endedPhase != "") {
+        uint endCode = endedPhase == "finished" ? 0u : 1u;
+        processTreeTerminated = TerminateJobObject(job, endCode);
+        if (!processTreeTerminated) TerminateProcess(pi.hProcess, endCode);
+        WaitForSingleObject(pi.hProcess, 5000);
+        terminationReason = "end_phase";
       }
       SampleResources(pi.dwProcessId, timer.ElapsedMilliseconds, lastPhase, resourceSamplesPath,
         ref peakWorkingSet, ref peakPrivate);
@@ -420,10 +433,14 @@ try {
   $desktopName = "AnvilBenchmark_" + [Guid]::NewGuid().ToString("N")
   $stableUiScheduling = ($configData.PSObject.Properties.Name -contains "stable_ui_scheduling") -and
     [bool]$configData.stable_ui_scheduling
+  $endPhases = @()
+  if ($configData.PSObject.Properties.Name -contains "end_phases") {
+    foreach ($phase in $configData.end_phases) { $endPhases += [string]$phase }
+  }
   $result = [AnvilHiddenDesktopLauncher]::Run(
     $exe, $arguments, $workingDirectory, $desktopName, $TimeoutSeconds * 1000,
     $heartbeatPath, $startupTimeoutSeconds * 1000, $heartbeatTimeoutSeconds * 1000,
-    $resourceSamplesPath, $timeoutDumpPath, $stableUiScheduling)
+    $resourceSamplesPath, $timeoutDumpPath, $stableUiScheduling, [string[]]$endPhases)
   $output = [ordered]@{
     pid = $result.ProcessId
     ui_processor = $result.UiProcessor

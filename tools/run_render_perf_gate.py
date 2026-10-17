@@ -263,6 +263,8 @@ def native_path(path: Path | str) -> str:
 
 
 def workload_root(work: Path, scenario: str, settings: dict[str, Any]) -> Path:
+    if settings.get("root"):
+        return Path(settings["root"])
     # Pixel references need the same Project caption as the measured scene.
     name = scenario.removesuffix("-reference") if settings.get("reference_overview") else scenario
     return work / name
@@ -570,6 +572,8 @@ def copy_app_tree(destination: Path) -> Path:
         if source.exists():
             shutil.copytree(source, datadir / name)
     shutil.copy2(start_lua, datadir / "core" / "start.lua")
+    # Scenario runs and Lua tests share these scene modules as `scenes.<name>`.
+    shutil.copytree(ROOT / "tests" / "scenes", datadir / "scenes")
     shutil.copytree(ROOT / "resources" / "icons", datadir / "icons")
     conpty = datadir / "conpty"
     conpty.mkdir()
@@ -899,6 +903,9 @@ def run_case(
     total_timeout_seconds: int | None = None, startup_timeout_seconds: int = 30,
     heartbeat_timeout_seconds: int = 15,
     action_timeout_seconds: int = 30,
+    launch_arguments: list[str] | None = None,
+    extra_environment: dict[str, str] | None = None,
+    end_phases: list[str] | None = None,
 ) -> dict[str, Any]:
     run_dir.mkdir(parents=True)
     if mode == "video":
@@ -976,6 +983,7 @@ def run_case(
     }
     if mode == "metrics" and settings.get("capture_actions"):
         environment["ANVIL_DOCVIEW_STATS"] = "1"
+    environment.update(extra_environment or {})
     launch_config = {
         "stable_ui_scheduling": True,
         "exe": native_path(exe),
@@ -983,8 +991,10 @@ def run_case(
         # The benchmark plugin owns file/view activation. Passing the fixture
         # on the command line would enqueue a second deferred open that can
         # steal focus back from custom visual scenes during warmup.
-        "arguments": ["--direct"],
+        "arguments": launch_arguments or ["--direct"],
         "environment": environment,
+        # A hosted shell keeps running after the measured Project finishes.
+        "end_phases": end_phases or [],
         "heartbeat_path": native_path(heartbeat_file),
         "resource_samples_path": native_path(resource_samples_file),
         "timeout_dump_path": native_path(timeout_dump_file),
@@ -1068,7 +1078,8 @@ def run_case(
         result["action_rows"] = actions["rows"]
         result["state"]["action_sequence"] = actions["sequence"]
         result["state"].update({key: value for key, value in values.items()
-                                if key.startswith(("workload_", "diff_", "editor_")) or key == "code_scale"})
+                                if key.startswith(("workload_", "diff_", "editor_", "scene_"))
+                                or key == "code_scale"})
     elif result["measured_frames"] != frames:
         raise RuntimeError(f"workload mismatch: expected {frames}, got {result['measured_frames']}")
     if settings.get("scroll_lines") and result["action_count"] == 0:

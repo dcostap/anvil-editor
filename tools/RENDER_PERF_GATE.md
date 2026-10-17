@@ -4,8 +4,10 @@
 
 ## Editor workload benchmarks and diagnosis
 
-The same runner also measures interactive workloads. Do not create a separate
-hidden-window runner for editor benchmarks.
+The same runner also measures interactive workloads against a baseline.
+To find performance problems on generated codebases with absolute budgets,
+use [scenario runs](SCENARIOS.md). Both runners share this runner's hidden
+desktop launcher. Do not create another hidden-window runner.
 
 ### Editor render regression baseline
 

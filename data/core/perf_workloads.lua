@@ -34,6 +34,7 @@ local function editor_target(settings, index)
 end
 
 function Workload.new(settings, root)
+  if settings.kind == "scene" then return require("core.perf_scene").new(settings, root) end
   return setmetatable({ settings = settings, root = root, completed = 0 }, Workload)
 end
 
