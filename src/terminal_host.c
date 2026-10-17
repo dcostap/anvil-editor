@@ -50,6 +50,14 @@ typedef struct {
   int64_t activity;
   uint64_t snapshot_at, snapshot_revision;
   volatile LONG64 model_revision;
+  /* Shell integration: the nonce that authenticates the shell's OSC 133 marks,
+     whether a command runs between its C and D marks, and the reader's OSC scanner. */
+  char nonce[33];
+  volatile LONG command_running;
+  int mark_state;
+  size_t mark_length;
+  bool mark_overflow;
+  char mark[128];
 } TerminalHost;
 
 static wchar_t *wide_string(const char *text) {
@@ -79,6 +87,15 @@ static bool creation_time(HANDLE process, char out[17]) {
   uint64_t value = ((uint64_t)created.dwHighDateTime << 32) | created.dwLowDateTime;
   snprintf(out, 17, "%016llx", (unsigned long long)value);
   return true;
+}
+
+static bool random_bytes(uint8_t *bytes, ULONG count) {
+  typedef BOOLEAN (WINAPI *RandomFunction)(void *, ULONG);
+  HMODULE library = LoadLibraryW(L"advapi32.dll");
+  RandomFunction random_function = library ? (RandomFunction)GetProcAddress(library, "SystemFunction036") : NULL;
+  bool ok = random_function && random_function(bytes, count);
+  if (library) FreeLibrary(library);
+  return ok;
 }
 
 bool anvil_terminal_id_valid(const char *id) {
@@ -229,12 +246,54 @@ static bool queue_record(TerminalHost *host, uint16_t type, const void *bytes, u
   return true;
 }
 
+/* Only marks that carry this session's nonce count. A nested shell or a TUI
+   cannot fake the integrated shell's prompt and hide a running command. */
+static void apply_mark(TerminalHost *host) {
+  const char *text = host->mark;
+  if (host->mark_overflow || strncmp(text, "133;", 4) || !strchr("ABCD", text[4]) || !text[4] ||
+      (text[5] && text[5] != ';')) return;
+  char tag[48]; int tag_length = snprintf(tag, sizeof(tag), "anvil=%s", host->nonce);
+  bool trusted = false;
+  for (const char *field = text + 5; *field == ';' && !trusted;) {
+    field++;
+    size_t length = strcspn(field, ";");
+    trusted = length == (size_t)tag_length && !memcmp(field, tag, length);
+    field += length;
+  }
+  if (!trusted) return;
+  LONG running = text[4] == 'C';
+  if (InterlockedExchange(&host->command_running, running) != running)
+    host_log(host, running ? "shell integration: command started" : "shell integration: command finished");
+}
+
+/* Finds OSC strings across split reads. ESC \ or BEL ends one; CAN or SUB cancels it. */
+static void scan_marks(TerminalHost *host, const uint8_t *bytes, DWORD count) {
+  enum { TEXT, ESCAPE, OSC, OSC_ESCAPE };
+  for (DWORD i = 0; i < count; i++) {
+    uint8_t ch = bytes[i];
+    if (host->mark_state == OSC_ESCAPE) {
+      if (ch == '\\') { host->mark[host->mark_length] = 0; apply_mark(host); host->mark_state = TEXT; continue; }
+      host->mark_state = ESCAPE;
+    }
+    if (host->mark_state == TEXT) { if (ch == 0x1b) host->mark_state = ESCAPE; }
+    else if (host->mark_state == ESCAPE) {
+      if (ch == ']') { host->mark_state = OSC; host->mark_length = 0; host->mark_overflow = false; }
+      else if (ch != 0x1b) host->mark_state = TEXT;
+    } else if (ch == 7) { host->mark[host->mark_length] = 0; apply_mark(host); host->mark_state = TEXT; }
+    else if (ch == 0x1b) host->mark_state = OSC_ESCAPE;
+    else if (ch == 0x18 || ch == 0x1a) host->mark_state = TEXT;
+    else if (host->mark_length + 1 < sizeof(host->mark)) host->mark[host->mark_length++] = (char)ch;
+    else host->mark_overflow = true;
+  }
+}
+
 static DWORD WINAPI host_reader(void *userdata) {
   TerminalHost *host = userdata;
   uint8_t bytes[65536];
   while (!InterlockedCompareExchange(&host->reader_stop, 0, 0)) {
     DWORD read = 0;
     if (!ReadFile(host->pty.output_read, bytes, sizeof(bytes), &read, NULL) || !read) break;
+    if (host->pty.shell_integration) scan_marks(host, bytes, read);
     EnterCriticalSection(&host->lock);
     while (host->replaying && !host->stop && !host->reader_stop)
       SleepConditionVariableCS(&host->space, &host->lock, INFINITE);
@@ -576,6 +635,9 @@ int anvil_terminal_host_main(int argc, char **argv) {
   snprintf(host.record_path, sizeof(host.record_path), "%s/terminal-sessions/%s.lua", argv[4], argv[2]);
   snprintf(host.snapshot_path, sizeof(host.snapshot_path), "%s/terminal-sessions/%s.snapshot", argv[4], argv[2]);
   snprintf(host.last_cwd, sizeof(host.last_cwd), "%s", host.cwd);
+  uint8_t nonce[16];
+  if (random_bytes(nonce, sizeof(nonce)))
+    for (size_t i = 0; i < sizeof(nonce); i++) snprintf(host.nonce + i * 2, 3, "%02x", nonce[i]);
   host_log(&host, "start");
   host_log(&host, "ConPTY runtime: %s/conpty", argv[13]);
   BOOL in_job = FALSE;
@@ -616,8 +678,9 @@ int anvil_terminal_host_main(int argc, char **argv) {
   /* A revived shell starts at the restored screen size, which client resizes compare against. */
   host.pty.cols = size.cols; host.pty.rows = size.rows;
   if (!size.cols || !size.rows || size.cols > 32767 || size.rows > 32767 || !size.cell_width || !size.cell_height ||
-      !anvil_conpty_start(&host.pty, argv[5], argv[6], argv[13], &error) || !write_registry(&host)) goto cleanup;
+      !anvil_conpty_start(&host.pty, argv[5], argv[6], argv[13], host.nonce, &error) || !write_registry(&host)) goto cleanup;
   if (revival_lock) { ReleaseMutex(revival_lock); CloseHandle(revival_lock); revival_lock = NULL; }
+  host_log(&host, "shell integration: %s", host.pty.shell_integration ? "on" : "off");
   host.reader = CreateThread(NULL, 0, host_reader, &host, 0, NULL);
   if (!host.reader) goto cleanup;
   ever_running = true;
@@ -683,7 +746,10 @@ int anvil_terminal_host_main(int argc, char **argv) {
     if (!exited_at && now >= busy_probe_at) {
       busy_probe_at = now + (host.attached ? 500 : 2000);
       char command[16384];
+      /* A child process covers any shell. The integrated shell's marks also cover
+         commands that run inside the shell, such as PowerShell's Start-Sleep. */
       bool busy = shell_busy(GetProcessId(host.pty.process), command, sizeof(command));
+      busy = busy || InterlockedCompareExchange(&host.command_running, 0, 0);
       bool command_changed = strcmp(command, host.interrupted_command) != 0;
       if (command_changed) strcpy(host.interrupted_command, command);
       EnterCriticalSection(&host.lock);
@@ -863,11 +929,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 const char *revive_from,
                                 AnvilTerminalSize *size, const size_t *scrollback_lines, DWORD *error) {
   uint8_t random[16]; char name[128];
-  typedef BOOLEAN (WINAPI *RandomFunction)(void *, ULONG);
-  HMODULE library = LoadLibraryW(L"advapi32.dll");
-  RandomFunction random_function = library ? (RandomFunction)GetProcAddress(library, "SystemFunction036") : NULL;
-  bool random_ok = revive_from ? anvil_terminal_id_valid(id) : random_function && random_function(random, sizeof(random));
-  if (library) FreeLibrary(library);
+  bool random_ok = revive_from ? anvil_terminal_id_valid(id) : random_bytes(random, sizeof(random));
   if (!random_ok) { *error = ERROR_GEN_FAILURE; return false; }
   if (!revive_from) for (size_t i = 0; i < sizeof(random); i++) snprintf(id + i * 2, 3, "%02x", random[i]);
   snprintf(name, sizeof(name), "\\\\.\\pipe\\anvil-terminal-%s", id);

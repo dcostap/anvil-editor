@@ -213,8 +213,82 @@ static bool create_shell_process(
   return true;
 }
 
+/* An option that makes PowerShell run something other than an interactive shell. */
+static bool powershell_runs_command(const char *option, size_t length) {
+  static const char *names[] = { "command", "file", "encodedcommand", "commandwithargs" };
+  if (!length) return true;
+  if ((length == 2 && !_strnicmp(option, "ec", 2)) || (length == 3 && !_strnicmp(option, "cwa", 3))) return true;
+  for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+    if (length <= strlen(names[i]) && !_strnicmp(option, names[i], length)) return true;
+  return false;
+}
+
+/* An interactive PowerShell runs Anvil's shell integration after its profile.
+   Any other shell, or a PowerShell that runs a command or script, starts as given. */
+static char *integrated_command(const char *shell, const char *datadir, const char *nonce) {
+  if (!nonce || !nonce[0]) return NULL;
+  const char *p = shell;
+  while (*p == ' ') p++;
+  const char *exe = p, *exe_end;
+  if (*p == '"') { exe = ++p; while (*p && *p != '"') p++; exe_end = p; if (*p) p++; }
+  else { while (*p && *p != ' ') p++; exe_end = p; }
+  const char *name = exe_end;
+  while (name > exe && name[-1] != '\\' && name[-1] != '/') name--;
+  size_t name_length = (size_t)(exe_end - name);
+  static const char *shells[] = { "pwsh", "pwsh.exe", "powershell", "powershell.exe" };
+  bool powershell = false;
+  for (size_t i = 0; i < 4; i++)
+    if (name_length == strlen(shells[i]) && !_strnicmp(name, shells[i], name_length)) powershell = true;
+  if (!powershell) return NULL;
+  /* A bare argument is a script path or an option value; keep the shell as given. */
+  while (*p) {
+    while (*p == ' ') p++;
+    if (!*p) break;
+    if (*p != '-' && *p != '/') return NULL;
+    const char *option = p + 1;
+    if (*option == '-') option++;
+    while (*p && *p != ' ') p++;
+    if (powershell_runs_command(option, (size_t)(p - option))) return NULL;
+  }
+  size_t length = strlen(datadir) + sizeof("/tools/shell-integration/anvil.ps1");
+  char *script = malloc(length);
+  if (!script) return NULL;
+  snprintf(script, length, "%s/tools/shell-integration/anvil.ps1", datadir);
+  wchar_t *wide = utf8_to_wide(script);
+  DWORD attributes = wide ? GetFileAttributesW(wide) : INVALID_FILE_ATTRIBUTES;
+  if (wide) HeapFree(GetProcessHeap(), 0, wide);
+  if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) { free(script); return NULL; }
+  /* A script block avoids the execution policy, which applies only to script files.
+     Single quotes inside a PowerShell literal are doubled. */
+  size_t quotes = 0;
+  for (const char *c = script; *c; c++) if (*c == '\'') quotes++;
+  static const char before[] = " -NoExit -Command \"try { . ([scriptblock]::Create([IO.File]::ReadAllText('";
+  static const char after[] = "'))) '%s' } catch {}\"";
+  length = strlen(shell) + sizeof(before) + strlen(script) + quotes + sizeof(after) + strlen(nonce);
+  char *command = malloc(length);
+  if (command) {
+    char *out = command + snprintf(command, length, "%s%s", shell, before);
+    for (const char *c = script; *c; c++) { if (*c == '\'') *out++ = '\''; *out++ = *c; }
+    snprintf(out, length - (size_t)(out - command), after, nonce);
+  }
+  free(script);
+  return command;
+}
+
+static bool start_shell(
+  AnvilConPTY *session, const char *shell, const char *cwd, const char *datadir,
+  const char *nonce, DWORD *error_out
+) {
+  char *command = integrated_command(shell, datadir, nonce);
+  session->shell_integration = command != NULL;
+  bool created = create_shell_process(session, command ? command : shell, cwd, error_out);
+  free(command);
+  return created;
+}
+
 bool anvil_conpty_start(
-  AnvilConPTY *session, const char *shell, const char *cwd, const char *datadir, DWORD *error_out
+  AnvilConPTY *session, const char *shell, const char *cwd, const char *datadir,
+  const char *nonce, DWORD *error_out
 ) {
   if (!conpty_library) {
     size_t length = strlen(datadir) + sizeof("/conpty/conpty.dll");
@@ -269,11 +343,11 @@ bool anvil_conpty_start(
 
   bool created = false;
   if (shell && shell[0]) {
-    created = create_shell_process(session, shell, cwd, error_out);
-  } else if (create_shell_process(session, "pwsh.exe -NoLogo", cwd, error_out)) {
+    created = start_shell(session, shell, cwd, datadir, nonce, error_out);
+  } else if (start_shell(session, "pwsh.exe -NoLogo", cwd, datadir, nonce, error_out)) {
     created = true;
   } else {
-    created = create_shell_process(session, "powershell.exe -NoLogo", cwd, error_out);
+    created = start_shell(session, "powershell.exe -NoLogo", cwd, datadir, nonce, error_out);
   }
   close_handle(&input_read);
   close_handle(&output_write);

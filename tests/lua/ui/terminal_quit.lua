@@ -146,4 +146,58 @@ test.describe("Terminal busy status", function()
     view:on_close()
     test.ok(ok, err)
   end)
+
+  test.it("reports a PowerShell command that runs inside the shell itself", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local function wait_busy(expected, seconds)
+      local deadline = system.get_time() + seconds
+      repeat
+        local _, status = view.session:update()
+        if status.busy == expected then return true end
+        coroutine.yield(0.01)
+      until system.get_time() >= deadline
+      return false
+    end
+    local ok, err = pcall(function()
+      test.ok(wait_busy(false, 10), "idle status missing")
+      -- Start-Sleep is a cmdlet: the shell starts no child process for it.
+      test.ok(view.session:write("Start-Sleep -Seconds 4\r"))
+      test.ok(wait_busy(true, 3), "in-shell command status missing")
+      test.ok(wait_busy(false, 8), "idle status did not return")
+    end)
+    view:on_close()
+    test.ok(ok, err)
+  end)
+
+  test.it("keeps a command busy when a program inside it prints prompt marks", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local function wait_busy(expected, seconds)
+      local deadline = system.get_time() + seconds
+      repeat
+        local _, status = view.session:update()
+        if status.busy == expected then return true end
+        coroutine.yield(0.01)
+      until system.get_time() >= deadline
+      return false
+    end
+    local ok, err = pcall(function()
+      test.ok(wait_busy(false, 10), "idle status missing")
+      -- A nested shell or TUI ends its own commands with these marks.
+      test.ok(view.session:write(
+        "Start-Sleep -Seconds 1; [Console]::Write([char]27 + ']133;D;0' + [char]7 + [char]27 + ']133;A' + [char]7); Start-Sleep -Seconds 4\r"))
+      test.ok(wait_busy(true, 3), "in-shell command status missing")
+      local deadline = system.get_time() + 2.5
+      repeat
+        local _, status = view.session:update()
+        test.ok(status.busy, "a foreign prompt mark ended the running command")
+        coroutine.yield(0.05)
+      until system.get_time() >= deadline
+    end)
+    view:on_close()
+    test.ok(ok, err)
+  end)
 end)

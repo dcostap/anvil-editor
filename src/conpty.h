@@ -11,10 +11,12 @@ typedef struct {
   HPCON pseudoconsole;
   HANDLE input_write, output_read, process, process_thread, job;
   uint16_t cols, rows;
+  /* The shell runs Anvil's shell integration, which marks commands with OSC 133. */
+  bool shell_integration;
 } AnvilConPTY;
 
 bool anvil_conpty_start(AnvilConPTY *pty, const char *shell, const char *cwd,
-                        const char *datadir, DWORD *error);
+                        const char *datadir, const char *nonce, DWORD *error);
 HRESULT anvil_conpty_resize(HPCON console, COORD size);
 void anvil_conpty_close_console(HPCON console);
 void anvil_conpty_kill(AnvilConPTY *pty);

@@ -48,6 +48,13 @@ Keep both files together. Do not fall back to the system console host.
 That host can drop Pi's mouse mode when Pi sets raw input during startup.
 Run `ui/terminal_mouse_wheel.lua` and the standalone smoke test after ConPTY updates.
 
+A Terminal Session is busy while its shell has a child process.
+An interactive PowerShell also runs `data/tools/shell-integration/anvil.ps1`.
+That script marks prompts and commands with OSC 133 and a per-session nonce.
+The host also reports a command that runs inside the shell, such as `Start-Sleep`, as busy.
+It ignores marks without the nonce, so a nested shell or TUI cannot end a running command.
+Run the `Terminal busy status` tests in `ui/terminal_quit.lua` after changes.
+
 The standalone option is `-Dembedded_runtime=true`. It is off by default.
 `scripts\build-standalone-windows.sh` enables it, strips the executable, runs
 the standalone smoke test, and promotes the result only after the test passes.
