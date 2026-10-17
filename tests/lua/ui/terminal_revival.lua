@@ -118,6 +118,44 @@ test.describe("Terminal revival", function()
     test.ok(ok, err)
   end)
 
+  test.it("keeps typed input on the revived shell's prompt", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local state = view:get_state()
+    local kernel = require("ffi").load("kernel32")
+    local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
+    local restored
+    local ok, err = pcall(function()
+      test.ok(view.session:resize(80, 12, 8, 16))
+      test.ok(wait_for(view, function() return screen_text(view):find("PS ", 1, true) end), "no first prompt")
+      checkpoint_on_detach(view, state)
+      kernel.TerminateProcess(handle, 99); kernel.WaitForSingleObject(handle, 5000)
+      restored = terminal.from_state(state)
+      local function after_marker()
+        local text = screen_text(restored)
+        local marker = text:find("Restored session", 1, true)
+        return marker and text:sub(marker) or ""
+      end
+      test.ok(wait_for(restored, function()
+        return restored.state == "running" and after_marker():find("PS ", 1, true)
+      end), "revived shell showed no prompt: " .. screen_text(restored))
+      test.ok(restored.session:write("ANVIL_TYPED"))
+      test.ok(wait_for(restored, function()
+        local capture = restored.session:text_capture()
+        local lines = {}
+        for line in (capture.text .. "\n"):gmatch("(.-)\r?\n") do lines[#lines + 1] = line end
+        local line = lines[capture.cursor_line] or ""
+        return line:find("PS .*ANVIL_TYPED") and after_marker():find("ANVIL_TYPED", 1, true)
+      end, 5), "typed input left the new prompt: " .. screen_text(restored))
+    end)
+    if restored then restored:on_close() end
+    view:on_close()
+    if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end
+    kernel.CloseHandle(handle)
+    test.ok(ok, err)
+  end)
+
   test.it("gives the revived shell the restored screen size", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)

@@ -612,6 +612,9 @@ static bool prepare_revival(GhosttyTerminal model, uint16_t rows) {
   const char *marker = "--- Restored session; the previous shell ended ---\r\n";
   ghostty_terminal_vt_write(model, (const uint8_t *)marker, strlen(marker));
   for (unsigned i = 0; i < rows; i++) ghostty_terminal_vt_write(model, (const uint8_t *)"\r\n", 2);
+  /* The new ConPTY starts with its cursor at the top left of a blank screen.
+     The model must agree, or the shell's cursor moves land on other rows. */
+  ghostty_terminal_vt_write(model, (const uint8_t *)"\033[H", 3);
   return true;
 }
 
