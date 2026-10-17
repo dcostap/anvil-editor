@@ -352,6 +352,8 @@ function Service:state_for(path, is_directory)
         core.log_quiet("Shared Git repository opened: root=%s", repo.root)
       end
       alias.state = state
+      -- Lookups that missed while this discovery was pending can find the repository now.
+      self:invalidate_lookups()
     end)
   end
   local state = alias.state
@@ -364,9 +366,9 @@ function Service:lookup(path, is_directory)
   local cache = is_directory and self.directory_lookups or self.file_lookups
   local cache_key = common.path_compare_key(path) or path
   local entry = cache[cache_key]
+  if entry and entry.retry_at and self.clock() >= entry.retry_at then entry = nil end
   if not entry then
     local state = self:state_for(path, is_directory)
-    -- Do not retain discovery failures or pending discovery. Their retries stay active.
     if not state then
       local hint = self.root_for_path(path, is_directory)
       if self.use_marker_scan then
@@ -378,6 +380,14 @@ function Service:lookup(path, is_directory)
       if alias and alias.error and not alias.not_repository then
         return { error = alias.error }
       end
+      -- A path outside any repository, or with pending discovery, has no status yet.
+      -- Rows ask for it on every frame, and each miss walks every parent folder.
+      -- Keep the miss until the negative marker retry, so discovery still retries on time.
+      -- Discovery results and refresh requests replace the cache sooner.
+      if self.lookup_count >= 4096 then self:invalidate_lookups() end
+      cache = is_directory and self.directory_lookups or self.file_lookups
+      cache[cache_key] = { info = false, retry_at = self.clock() + NEGATIVE_MARKER_RETRY }
+      self.lookup_count = self.lookup_count + 1
       return nil
     end
     local info = state.controller:lookup(path, is_directory)
@@ -402,7 +412,7 @@ function Service:lookup(path, is_directory)
     cache[cache_key] = entry
     self.lookup_count = self.lookup_count + 1
   end
-  entry.state.last_used = self.clock()
+  if entry.state then entry.state.last_used = self.clock() end
   local info = entry.info
   if not info then return nil end
   return {
