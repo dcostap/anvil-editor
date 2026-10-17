@@ -931,6 +931,37 @@ test.describe("Terminal View", function()
     system.set_clipboard(previous or "")
   end)
 
+  test.it("copies and clears the selection at a right-click", function(context)
+    local previous = system.get_clipboard()
+    system.set_clipboard("before")
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    local session = context.sessions[1]
+    session.selection_text = "selected output"
+    -- A program that tracks the mouse does not get a right-click that copies.
+    view.snapshot.mouse_tracking = true
+    test.ok(view:on_mouse_pressed("right", 20, 30))
+    test.ok(view:on_mouse_released("right", 20, 30))
+    test.equal(system.get_clipboard(), "selected output")
+    test.ok(session.selection_cleared, "the copied selection stayed")
+    test.same(session.mouse_events, {})
+    system.set_clipboard(previous or "")
+  end)
+
+  test.it("leaves the clipboard alone at a right-click without a selection", function(context)
+    local previous = system.get_clipboard()
+    system.set_clipboard("before")
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    local session = context.sessions[1]
+    view.snapshot.mouse_tracking = true
+    view:on_mouse_pressed("right", 20, 30)
+    view:on_mouse_released("right", 20, 30)
+    test.equal(system.get_clipboard(), "before")
+    test.equal(#session.mouse_events, 2, "the program lost its right-click")
+    system.set_clipboard(previous or "")
+  end)
+
   test.it("uses word and line selection gestures for repeated clicks", function(context)
     local view = terminal.open()
     view.position.x, view.position.y = 0, 0

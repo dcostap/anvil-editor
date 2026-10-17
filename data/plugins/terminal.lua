@@ -1678,6 +1678,19 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
     return true
   end
   core.set_active_view(self)
+  -- A right-click copies the selection and clears it, as in Windows Terminal. A program that tracks the mouse
+  -- does not see that click.
+  if button == "right" then
+    local text = self.session:selected_text()
+    if text and text ~= "" then
+      system.set_clipboard(text)
+      self.session:clear_selection()
+      self.right_click_copied = true
+      core.log_quiet("Terminal right-click copied %d byte(s)", #text)
+      self:refresh_snapshot()
+      return true
+    end
+  end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
   if button == "left" and keymap.modkeys.ctrl and self:contains_terminal_cell(x, y) then
     local point = self:point_of_interest_at(col, row)
@@ -1768,6 +1781,10 @@ function TerminalView:on_mouse_released(button, x, y)
         and same_point(point, target) then
       self:activate_point_of_interest(target)
     end
+    return true
+  end
+  if button == "right" and self.right_click_copied then
+    self.right_click_copied = nil
     return true
   end
   local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
