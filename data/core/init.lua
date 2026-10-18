@@ -3609,6 +3609,16 @@ function core.run()
   if startup then startup.mark("core_run_ready") end
 end
 
+---Report whether the window is being resized. A hosted Project receives
+---each size as an immediate frame; a direct window reports resize events.
+---@return boolean
+function core.live_resize_active()
+  local now = system.get_time()
+  return core.in_live_resize_frame == true
+    or (core.window_resizing_until or 0) > now
+    or (core.last_live_resize_frame_at or -math.huge) + 0.2 > now
+end
+
 ---Execute one frame of the main loop.
 ---
 ---Called by C's SDL_AppIterate on every frame.
@@ -3620,6 +3630,7 @@ function core.run_step(options)
   local immediate_reason = options.reason or ""
   local previous_live_resize_frame = core.in_live_resize_frame
   core.in_live_resize_frame = immediate and options.live_resize or false
+  if core.in_live_resize_frame then core.last_live_resize_frame_at = system.get_time() end
   local run_step_start = system.get_time()
   local startup_run_step = startup and startup.run_step_begin(options) or nil
   local sleep_requested_ms = 0

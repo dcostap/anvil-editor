@@ -52,6 +52,7 @@ WORKSPACE = ProjectSetSpec("workspace", projects=12,
 PROJECTS_MANY = ProjectSetSpec("projects-many", projects=24)
 # A note with an embedded image of about 640 KB, a typical pasted screenshot.
 MARKDOWN_IMAGE = MarkdownSpec("markdown-image")
+MARKDOWN_TABLES = MarkdownSpec("markdown-tables", tables=12)
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,12 @@ SCENARIOS: dict[str, Scenario] = {
         "markdown_image", MARKDOWN_IMAGE, actions=40, suites=("smoke",),
         settings={"note": MARKDOWN_IMAGE.note, "image_line": MARKDOWN_IMAGE.image_line,
                   "mode": "wheel"}),
+    # Each step resizes the window below the reading lane, so the prose reflows.
+    # The visible text really changes, so a step may take one 60 Hz frame.
+    "markdown-resize": Scenario(
+        "markdown_resize", MARKDOWN_TABLES, actions=48, suites=("smoke",), window=(780, 900),
+        settings={"note": MARKDOWN_TABLES.note, "image_line": MARKDOWN_TABLES.image_line},
+        frame_budget_ms=16.7, frame_spike_ms=33.0),
     "fuzzy-files-medium": Scenario(
         "fuzzy_files", REPO_MEDIUM, actions=24, suites=("smoke",), targets=24,
         action_budgets={"first-query": 1000.0}),

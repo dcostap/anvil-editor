@@ -1288,7 +1288,9 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     return "pending"
   end
 
-  local status = advance()
+  -- Each step of a live resize restarts this rebuild, so slices measured
+  -- during the resize would be discarded. Measure once the resize stops.
+  local status = core.live_resize_active() and "pending" or advance()
   token.advance = advance
   if status == "pending" then
     core.log_quiet(
@@ -1296,7 +1298,16 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
       buffer:get_name(), token.line_count, budget_ms
     )
     core.add_thread(function()
-      while advance() == "pending" do coroutine.yield(0.005) end
+      while true do
+        if core.live_resize_active() then
+          if textview.__async_wrap_reconstruction ~= token then return end
+          coroutine.yield(0.02)
+        elseif advance() == "pending" then
+          coroutine.yield(0.005)
+        else
+          return
+        end
+      end
     end)
   end
   return status == "complete"

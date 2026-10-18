@@ -79,6 +79,7 @@ test.describe("Line wrapping during live window resize", function()
 
     local wrapped = (stats.linewrapping_reconstruct_breaks_lines or 0)
       + (stats.linewrapping_update_breaks_lines or 0)
+      + (stats.linewrapping_async_reconstruct_lines or 0)
     test.ok(wrapped < 300, ("the resize frame wrapped %d of 3000 lines"):format(wrapped))
     test.ok(view:get_visual_row_count_for_line(1) > 1, "the visible rows kept the old width")
 

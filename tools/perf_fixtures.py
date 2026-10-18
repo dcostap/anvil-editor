@@ -106,6 +106,8 @@ class MarkdownSpec:
     image_height: int = 333
     lines_before: int = 30
     lines_after: int = 300
+    # Tables after the image. Their layout follows the view width.
+    tables: int = 0
     seed: int = 1
 
     @property
@@ -323,12 +325,24 @@ def prose_line(rng: random.Random, index: int) -> str:
     return " ".join(WORDS[rng.randrange(len(WORDS))] for _ in range(14)) + "."
 
 
+def table_lines(rng: random.Random, number: int) -> list[str]:
+    def cell() -> str:
+        return " ".join(WORDS[rng.randrange(len(WORDS))] for _ in range(rng.randrange(1, 5)))
+    rows = [f"| Item {number} | Owner | Status | Notes |", "| --- | --- | --- | --- |"]
+    rows += [f"| {cell()} | {cell()} | {cell()} | {cell()} |" for _ in range(5)]
+    return rows
+
+
 def build_markdown(spec: MarkdownSpec, root: Path) -> None:
     rng = random.Random(spec.seed)
     image = base64.b64encode(noise_png(spec.image_width, spec.image_height, rng)).decode("ascii")
     lines = [prose_line(rng, index + 1) for index in range(spec.lines_before)]
     lines += ["", f"![](data:image/png;base64,{image})", "# After the image"]
-    lines += [prose_line(rng, index + 1) for index in range(spec.lines_after)]
+    after = [prose_line(rng, index + 1) for index in range(spec.lines_after)]
+    gap = max(1, spec.lines_after // (spec.tables + 1))
+    for number in range(spec.tables, 0, -1):
+        after[number * gap:number * gap] = ["", *table_lines(rng, number), ""]
+    lines += after
     root.mkdir(parents=True)
     write_text(root / spec.note, "\n".join(lines) + "\n")
 
