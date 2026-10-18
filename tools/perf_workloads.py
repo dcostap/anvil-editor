@@ -82,6 +82,11 @@ EDITOR_SCENARIOS = {
     ),
 }
 SCENARIOS.update(EDITOR_SCENARIOS)
+SCENARIOS["markdown-three-pane-caret-burst"] = dict(
+    editor_scene("markdown", 51, True, action="caret-burst"),
+    window_width=1530, window_height=1417, actions=24, burst_count=23,
+    capture_checkpoints=[1, 2, 24],
+)
 # A fresh process opens the large file once. It does not measure cached reopen calls.
 for name in ("file-open-large", "file-open-huge"):
     SCENARIOS[name]["actions"] = 1
@@ -151,12 +156,37 @@ def generate(root: Path, settings: dict[str, Any]) -> dict[str, Any]:
                 f'return widget.paint(label, {i} * 3 + 7); }}\n'
                 for i in range(1, count + 1)))
         elif content == "markdown":
-            save("scene.md", "".join(
-                (f"## Section {i:06d}: an editor heading\n" if i % 12 == 1 else
-                 f"- [ ] **Task {i:06d}** with *emphasis*, `inline code`, "
-                 f"and [a link](https://example.invalid/{i}) in a long paragraph "
-                 f"that wraps in the reading lane.\n")
-                for i in range(1, count + 1)))
+            if settings.get("action") == "caret-burst":
+                # A short note, not a large-file stress case. No private content or network assets.
+                note = []
+                for i in range(1, count + 1):
+                    row = i % 12
+                    if row == 1:
+                        note.append(f"## Equipment section {i // 12 + 1}\n")
+                    elif row in (0, 2, 5, 9):
+                        note.append("\n")
+                    elif row == 3:
+                        note.append("[[Related note]]\n")
+                    elif row == 10:
+                        image = f"diagram-{i // 12 + 1}.svg"
+                        save(image, '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180">'
+                             '<rect width="320" height="180" fill="#385975"/>'
+                             '<path d="M30 90H290M90 30V150M230 30V150" stroke="#e4d8ac" '
+                             'stroke-width="12"/></svg>\n')
+                        note.append(f"![[{image}]]\n")
+                    elif row == 6:
+                        note.append("**Important:** check the equipment before changing its operating mode.\n")
+                    else:
+                        note.append("The local equipment uses a separate supply. Check its current mode, "
+                                    "then follow the numbered instructions in the related note.\n")
+                save("scene.md", "".join(note))
+            else:
+                save("scene.md", "".join(
+                    (f"## Section {i:06d}: an editor heading\n" if i % 12 == 1 else
+                     f"- [ ] **Task {i:06d}** with *emphasis*, `inline code`, "
+                     f"and [a link](https://example.invalid/{i}) in a long paragraph "
+                     f"that wraps in the reading lane.\n")
+                    for i in range(1, count + 1)))
         elif content == "unicode":
             samples = (
                 'café naïve e\u0301 A\u030a — ελληνικά Ελληνικά 中文 漢字 日本語',

@@ -162,10 +162,30 @@ for that comparison. Action p50 and p95 regress when both 10% and 2 ms limits ar
 | `file-open-huge` | First open of a generated 500,000-line file |
 | `long-line-edit` | Insert and undo in 32 lines with 64 KiB per line |
 | `multi-caret-edit` | Insert and undo at 1,024 carets |
+| `markdown-three-pane-caret-burst` | A short wrapped Markdown note in three Panes; 23 key-event pairs per action |
 
 The stress suite also includes the File Tree edit and long Markdown link workloads.
-Stress windows use fixed dimensions. The new workloads use low code zoom
-through the normal scale API. Diff fixtures contain replacements, removals,
+The three-Pane Markdown workload also runs in the interactive suite.
+It uses a synthetic note with local images, links, headings, and bold text.
+One tall Pane sits beside two stacked Panes. The bottom-right Editor receives input.
+Each action sends 23 press/release pairs through `core.on_event`, alternating down and up.
+The workload finds movement bindings from the private app's keymap. It does not set user shortcuts.
+Checks require visible Panes, Markdown Live Preview, caret movement, and unchanged Buffer text.
+Dispatch costs count toward the frame work budget, even though scripted input runs between loop snapshots.
+This covers Lua event routing, not native OS input delivery or queue delay.
+It does not replay an F11 recording.
+
+Run this focused check before changing caret movement or wrapped Markdown drawing:
+
+```sh
+python tools/run_render_perf_gate.py --scenario markdown-three-pane-caret-burst \
+  --runs 3 --metrics-runs 1 --max-runs 3 --warmup-frames 20 \
+  --diagnose --report-only --fail-on-budget
+```
+
+Stress windows use fixed dimensions. Most stress workloads use low code zoom
+through the normal scale API. The three-Pane Markdown workload uses normal code zoom.
+Diff fixtures contain replacements, removals,
 and unequal insertions. They use the real Diff View, not a mock Git response.
 
 Fixture generation runs outside measurement. Each fixture has a content hash

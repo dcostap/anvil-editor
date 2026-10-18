@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -144,6 +145,23 @@ class DiagnosticReportTests(unittest.TestCase):
 
 
 class WorkloadFixtureTests(unittest.TestCase):
+    def test_caret_burst_note_has_repeatable_local_images_and_links(self):
+        settings = workloads.SCENARIOS["markdown-three-pane-caret-burst"]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = workloads.generate(root / "first", settings)
+            second = workloads.generate(root / "second", settings)
+            self.assertEqual(first, second)
+            note = (root / "first" / "scene.md").read_text(encoding="utf-8")
+            self.assertEqual(note.count("\n"), settings["lines"])
+            images = re.findall(r"!\[\[([^]]+)\]\]", note)
+            self.assertTrue(images)
+            self.assertIn("**", note)
+            self.assertIn("[[Related note]]", note)
+            for image in images:
+                self.assertTrue((root / "first" / image).is_file())
+                self.assertTrue(any(item["path"] == image for item in first["files"]))
+
     def test_diff_fixture_is_repeatable_with_real_changes_on_both_sides(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

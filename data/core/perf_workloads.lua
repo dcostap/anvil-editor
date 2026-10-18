@@ -33,6 +33,13 @@ local function editor_target(settings, index)
   return math.min(rows, math.max(20, math.floor(rows / 2)))
 end
 
+local function movement_key(name)
+  for _, key in ipairs(require("core.keymap").get_bindings(name) or {}) do
+    if not key:find("+", 1, true) then return key end
+  end
+  error("Caret burst needs an unmodified binding for " .. name)
+end
+
 function Workload.new(settings, root)
   if settings.kind == "scene" then return require("core.perf_scene").new(settings, root) end
   return setmetatable({ settings = settings, root = root, completed = 0 }, Workload)
@@ -142,6 +149,24 @@ function Workload:setup()
     if settings.content == "markdown" then
       assert(self.view.__markdown_live_attached, "Markdown Live Preview did not attach")
     end
+    if settings.action == "caret-burst" then
+      self.editor_views = { self.view }
+      -- One tall Pane beside two stacked Panes, as in the reported recording.
+      for _, direction in ipairs { "right", "down" } do
+        assert(command.perform("pane:copy_view_to_split_" .. direction))
+        self.view = require("core.panes").active().current_view
+        core.set_active_view(self.view)
+        self.view:set_wrapping_enabled(settings.wrap)
+        position(self.view, 8)
+        self.editor_views[#self.editor_views + 1] = self.view
+      end
+      self.burst_keys = { movement_key("core:move_to_next_line"),
+        movement_key("core:move_to_previous_line") }
+      self.key_presses, self.key_releases = 0, 0
+      self.initial_revision = self.view.buffer.text_revision
+      core.log_quiet("Benchmark caret burst ready: Panes=%d pairs=%d",
+        #self.editor_views, settings.burst_count)
+    end
   else
     error("unknown benchmark workload: " .. tostring(settings.kind))
   end
@@ -170,6 +195,12 @@ function Workload:setup_ready()
     end
     return true
   end
+  if self.editor_views then
+    for _, view in ipairs(self.editor_views) do
+      if not ready_editor(view) then return false end
+      assert(view.__markdown_live_attached, "Markdown Live Preview detached from a Pane")
+    end
+  end
   return ready_editor(self.view)
 end
 
@@ -183,6 +214,9 @@ function Workload:action_name(index)
     return "diff-" .. settings.action
   end
   if settings.kind == "edit" then return index % 2 == 1 and "insert" or "undo" end
+  if settings.action == "caret-burst" then
+    return index % 2 == 1 and "caret-burst-down" or "caret-burst-up"
+  end
   if settings.kind == "editor" and settings.action == "type" then return "type-char" end
   if settings.kind == "editor" and settings.action == "scroll" then
     return index <= SCROLL_DOWN_TICKS and "wheel-down" or "wheel-up"
@@ -199,6 +233,18 @@ function Workload:dispatch(index)
   self.index = index
   if settings.kind == "find" then
     assert(command.perform("editor:find_field_next"))
+  elseif settings.kind == "editor" and settings.action == "caret-burst" then
+    assert(core.active_view == self.view, "Caret burst lost input focus")
+    local before = self.view:get_selection_state().selections
+    self.burst_start_line, self.burst_start_col = before[1], before[2]
+    local key = self.burst_keys[index % 2 == 1 and 1 or 2]
+    -- Internal events use the normal keymap and command predicates. No OS input.
+    for _ = 1, settings.burst_count do
+      assert(core.on_event("keypressed", key), "Caret burst key was not handled")
+      self.key_presses = self.key_presses + 1
+      core.on_event("keyreleased", key)
+      self.key_releases = self.key_releases + 1
+    end
   elseif settings.kind == "editor" and settings.action == "type" then
     assert(core.active_view == self.view, "Editor lost input focus")
     core.on_event("textinput", TYPED_TEXT:sub(index, index))
@@ -304,7 +350,22 @@ function Workload:action_ready()
     if self.settings.content == "markdown" then
       assert(self.view.__markdown_live_attached, "Markdown Live Preview detached")
     end
-    if self.settings.action == "type" then
+    if self.settings.action == "caret-burst" then
+      local panes = require "core.panes"
+      assert(#panes.ordered() == #self.editor_views, "Caret burst lost a Pane")
+      for _, view in ipairs(self.editor_views) do
+        assert(view.size.x > 0 and view.size.y > 0, "Caret burst Pane is not visible")
+        assert(panes.pane_for_view(view).group == panes.visible_group(),
+          "Caret burst Pane is outside the visible group")
+      end
+      assert(self.view.buffer.text_revision == self.initial_revision, "Caret burst edited the Buffer")
+      local selection = self.view:get_selection_state().selections
+      local direction = self.index % 2 == 1 and 1 or -1
+      assert((selection[1] - self.burst_start_line) * direction > 0
+        or (selection[1] == self.burst_start_line
+          and (selection[2] - self.burst_start_col) * direction > 0),
+        "Caret burst did not move in the requested direction")
+    elseif self.settings.action == "type" then
       local expected = self.typed_original .. TYPED_TEXT:sub(1, self.index) .. "\n"
       if self.view.buffer.lines[self.typed_line] ~= expected then return false end
     elseif self.settings.action == "scroll" then
@@ -362,7 +423,7 @@ function Workload:capture_ready()
 end
 
 function Workload:state()
-  return {
+  local state = {
     workload_kind = self.settings.kind, workload_result = self.result or "",
     workload_actions = self.completed,
     diff_left_changes = self.diff and #self.diff.a_changes or 0,
@@ -374,6 +435,12 @@ function Workload:state()
     editor_markdown_live = self.settings.kind == "editor"
       and self.view.__markdown_live_attached == true or false,
   }
+  if self.editor_views then
+    state.editor_visible_panes = #self.editor_views
+    state.editor_key_presses = self.key_presses
+    state.editor_key_releases = self.key_releases
+  end
+  return state
 end
 
 return Workload
