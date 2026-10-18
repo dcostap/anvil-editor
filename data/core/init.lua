@@ -3963,9 +3963,10 @@ function core.run_step(options)
     local sleep_overrun_ms = math.max(0, sleep_actual_ms - sleep_requested_ms)
     local source = work_ms >= MAIN_LOOP_STALL_MS and "application" or "scheduler"
     core.log_quiet(
-      "Main loop stall: source=%s total_ms=%.1f work_ms=%.1f sleep_requested_ms=%.1f sleep_actual_ms=%.1f sleep_overrun_ms=%.1f threads_ms=%.1f core_step_ms=%.1f event_count=%d event_ms=%.1f slowest_event=%s slowest_event_ms=%.1f update_ms=%.1f pre_draw_ms=%.1f draw_ms=%.1f renderer_end_ms=%.1f present_ms=%.1f gc_ms=%.1f pending=%s queue=%d active=%s",
+      "Main loop stall: source=%s total_ms=%.1f work_ms=%.1f sleep_requested_ms=%.1f sleep_actual_ms=%.1f sleep_overrun_ms=%.1f threads_ms=%.1f slowest_thread_ms=%.1f slowest_thread=%s core_step_ms=%.1f event_count=%d event_ms=%.1f slowest_event=%s slowest_event_ms=%.1f update_ms=%.1f pre_draw_ms=%.1f draw_ms=%.1f renderer_end_ms=%.1f present_ms=%.1f gc_ms=%.1f pending=%s queue=%d active=%s",
       source, total_ms, work_ms, sleep_requested_ms, sleep_actual_ms,
-      sleep_overrun_ms, run_threads_ms, core_step_ms, step_stats.event_count,
+      sleep_overrun_ms, run_threads_ms, last_run_threads_slowest_ms,
+      last_run_threads_slowest_loc, core_step_ms, step_stats.event_count,
       step_stats.event_ms, tostring(step_stats.slowest_event_type or ""),
       step_stats.slowest_event_ms or 0, step_stats.update_ms,
       step_stats.pre_draw_ms, step_stats.draw_emit_ms,
