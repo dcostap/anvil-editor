@@ -3080,12 +3080,15 @@ local function layout_inline_image_rows(view, line_text, render_line)
   local wrap_width = image_available_width(view)
   local wrap_mode = config.plugins.linewrapping.mode
   local rows, y, segment_start = {}, 0, 1
-  local function rendered_x(col)
-    return view:get_line_render_col_x_offset(render_line, col)
-  end
   local function append_text_rows(col1, col2, highlight_full_layout)
     if col2 <= col1 then return end
+    -- Segments are scanned in increasing column order, so a cursor keeps the
+    -- scan linear. Runs with a constant x offset, such as an embedded image's
+    -- data URI behind its label, are skipped rather than scanned.
+    local rendered_x, constant_x_until = view:get_line_render_col_x_cursor(render_line)
     local row_start, col, last_space = col1, col1, nil
+    local row_start_x = rendered_x(col1)
+    local last_space_next_x
     local function append_row(row_end)
       if row_end <= row_start then return end
       rows[#rows + 1] = {
@@ -3098,19 +3101,40 @@ local function layout_inline_image_rows(view, line_text, render_line)
       y = y + body_height
       row_start = row_end
     end
-    for char in common.utf8_chars(line_text:sub(col1, col2 - 1)) do
-      local next_col = col + #char
-      if char == " " then last_space = col end
-      local row_width = rendered_x(next_col) - rendered_x(row_start)
-      if wrap_width ~= math.huge and row_width > wrap_width and col > row_start then
-        local split = col
-        if wrap_mode == "word" and last_space and last_space >= row_start then
-          split = last_space + 1
-        end
-        append_row(split)
-        if last_space and last_space < row_start then last_space = nil end
+    local col_x = row_start_x
+    while col < col2 do
+      local stop = math.min(constant_x_until(col), col2)
+      while stop > col and (line_text:byte(stop) or 0) >= 0x80
+        and line_text:byte(stop) < 0xc0
+      do
+        stop = stop - 1
       end
-      col = next_col
+      if stop > col and (wrap_width == math.huge or col_x - row_start_x <= wrap_width) then
+        local space = line_text:find(" ", col, true)
+        while space and space < stop do
+          last_space, last_space_next_x = space, col_x
+          space = line_text:find(" ", space + 1, true)
+        end
+        rendered_x(stop)
+        col = stop
+      else
+        local char = line_text:match("^[%z\1-\127\194-\244][\128-\191]*", col)
+          or line_text:sub(col, col)
+        local next_col = col + #char
+        local next_x = rendered_x(next_col)
+        if char == " " then last_space, last_space_next_x = col, next_x end
+        local row_width = next_x - row_start_x
+        if wrap_width ~= math.huge and row_width > wrap_width and col > row_start then
+          local split, split_x = col, col_x
+          if wrap_mode == "word" and last_space and last_space >= row_start then
+            split, split_x = last_space + 1, last_space_next_x
+          end
+          append_row(split)
+          row_start_x = split_x
+          if last_space and last_space < row_start then last_space = nil end
+        end
+        col, col_x = next_col, next_x
+      end
     end
     append_row(col2)
   end

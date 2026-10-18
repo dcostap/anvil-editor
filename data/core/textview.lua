@@ -5613,6 +5613,9 @@ end
 ---Return a source-column width mapper optimized for monotonically increasing
 ---columns. Wrapping scans every UTF-8 boundary in order, so retaining the
 ---current fragment avoids restarting the mixed-fragment search per character.
+---The second function, called after the mapper with the same column, returns
+---the furthest column at or after it with the same x offset. Hidden source
+---and source replaced by a label can then be skipped instead of scanned.
 function TextView:get_line_render_col_x_cursor(render_line)
   get_line_render_raw_col_x_offset(self, render_line, 1)
   local cache = render_line.__native_text_layout_cache
@@ -5673,6 +5676,28 @@ function TextView:get_line_render_col_x_cursor(render_line)
       index = index + 1
     end
     return xoffset
+  end, function(col)
+    local entry = entries[index]
+    if not entry then return math.huge end
+    local fragment = entry.fragment
+    local col1 = fragment.source_col1 or 1
+    local col2 = fragment.source_col2 or col1
+    if col < col1 then
+      return (fragment.widget and col1 == col2) and col or col1
+    end
+    if fragment.hidden then return math.max(col, col2) end
+    if fragment.widget then return col end
+    local text_col1 = fragment.text_source_col1
+    local text_col2 = fragment.text_source_col2
+    if not (text_col1 and text_col2) then
+      -- Columns past a replacement text's length keep its full width.
+      if col - col1 >= #(fragment.text or "") then return math.max(col, col2 - 1) end
+      return col
+    end
+    if col <= text_col1 then return math.max(col, math.min(text_col1, col2 - 1)) end
+    if col <= text_col2 then return col end
+    -- Columns after the label's text keep the label's full width.
+    return math.max(col, col2 - 1)
   end
 end
 

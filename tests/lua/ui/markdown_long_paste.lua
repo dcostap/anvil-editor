@@ -7,7 +7,7 @@ local markdown_model = require "core.markdown.model"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 
-local function refresh(view)
+local function wait_ready(view)
   markdown.live_render.refresh_view(view)
   local instance = test.not_nil(markdown_model.peek(view.buffer))
   local deadline = system.get_time() + 5
@@ -17,6 +17,10 @@ local function refresh(view)
     if instance.status ~= "ready" then coroutine.yield(0.001) end
   end
   test.equal(instance.status, "ready", instance.reason)
+end
+
+local function refresh(view)
+  wait_ready(view)
   linewrapping.complete_async_reconstruction(view)
 end
 
@@ -69,5 +73,42 @@ test.describe("Markdown long paste", function()
     markdown.live_render.release(view, "test")
     markdown.live_render.release(peer, "test")
     markdown_model.close(buffer, "test")
+  end)
+
+  test.it("lays out a long data-image line promptly", function()
+    local old_images, old_load = config.markdown_live_render_images, canvas.load_image_data
+    config.markdown_live_render_images = true
+    canvas.load_image_data = function()
+      return {
+        get_size = function() return 80, 40 end,
+        scaled = function(self) return self end,
+      }
+    end
+    local data_image = "![](data:image/png;base64," .. string.rep("A", 2000000) .. ")"
+    local buffer = Buffer("data-image-layout.md", "data-image-layout.md", true)
+    buffer:insert(1, 1, "before\n\n" .. data_image .. "\n# Heading\nafter")
+    buffer:clear_undo_redo()
+    local view = Editor(buffer)
+    view.size.x, view.size.y = 800, 800
+    view:set_wrapping_enabled(true)
+    wait_ready(view)
+
+    local started = system.get_time()
+    linewrapping.complete_async_reconstruction(view)
+    local render = view:get_line_render(3)
+    local elapsed = system.get_time() - started
+
+    local image
+    for _, fragment in ipairs(render and render.fragments or {}) do
+      if fragment.widget and fragment.image_block then image = fragment end
+    end
+    test.not_nil(image, "the data image did not render as an image block")
+    test.ok(elapsed < 0.45, string.format(
+      "laying out the data-image line blocked the editor for %.3fs", elapsed
+    ))
+
+    markdown.live_render.release(view, "test")
+    markdown_model.close(buffer, "test")
+    config.markdown_live_render_images, canvas.load_image_data = old_images, old_load
   end)
 end)

@@ -119,68 +119,58 @@ function links.parse_wikilink_at(text, start_col, source_line)
   return result, close_col + 2
 end
 
-local function find_matching_bracket(text, open_col)
+-- Returns the column of the bracket that closes the one at `open_col`.
+-- Scanning jumps between brackets and escapes, so a long embedded data URI
+-- costs one search instead of one Lua step per byte.
+local function find_closing_delimiter(text, open_col, open, close, pattern)
   local depth = 0
-  local escaped = false
-  for i = open_col, #text do
+  local i = open_col
+  while true do
+    i = text:find(pattern, i)
+    if not i then return nil end
     local ch = text:sub(i, i)
-    if escaped then
-      escaped = false
-    elseif ch == "\\" then
-      escaped = true
-    elseif ch == "[" then
+    if ch == "\\" then
+      i = i + 1
+    elseif ch == open then
       depth = depth + 1
-    elseif ch == "]" then
+    elseif ch == close then
       depth = depth - 1
       if depth == 0 then return i end
     end
+    i = i + 1
   end
+end
+
+local function find_matching_bracket(text, open_col)
+  return find_closing_delimiter(text, open_col, "[", "]", "[%[%]\\]")
 end
 
 local function parse_parenthesized_target(text, open_col)
   if text:sub(open_col, open_col) ~= "(" then return nil end
-  local depth = 0
-  local escaped = false
-  for i = open_col, #text do
-    local ch = text:sub(i, i)
-    if escaped then
-      escaped = false
-    elseif ch == "\\" then
-      escaped = true
-    elseif ch == "(" then
-      depth = depth + 1
-    elseif ch == ")" then
-      depth = depth - 1
-      if depth == 0 then
-        local body_start, body_end = open_col + 1, i - 1
-        while body_start <= body_end and text:sub(body_start, body_start):match("%s") do
-          body_start = body_start + 1
-        end
-        while body_end >= body_start and text:sub(body_end, body_end):match("%s") do
-          body_end = body_end - 1
-        end
-        local target
-        local destination_col1, destination_col2
-        if text:sub(body_start, body_start) == "<" then
-          local close = text:find(">", body_start + 1, true)
-          if close and close > body_end then close = nil end
-          destination_col1 = close and body_start + 1 or body_start
-          destination_col2 = close or body_end + 1
-          target = text:sub(destination_col1, destination_col2 - 1)
-        else
-          destination_col1 = body_start
-          destination_col2 = body_start
-          while destination_col2 <= body_end
-            and not text:sub(destination_col2, destination_col2):match("%s")
-          do
-            destination_col2 = destination_col2 + 1
-          end
-          target = text:sub(destination_col1, destination_col2 - 1)
-        end
-        return target, i, destination_col1, destination_col2
-      end
-    end
+  local i = find_closing_delimiter(text, open_col, "(", ")", "[()\\]")
+  if not i then return nil end
+  local body_start, body_end = open_col + 1, i - 1
+  while body_start <= body_end and text:sub(body_start, body_start):match("%s") do
+    body_start = body_start + 1
   end
+  while body_end >= body_start and text:sub(body_end, body_end):match("%s") do
+    body_end = body_end - 1
+  end
+  local target
+  local destination_col1, destination_col2
+  if text:sub(body_start, body_start) == "<" then
+    local close = text:find(">", body_start + 1, true)
+    if close and close > body_end then close = nil end
+    destination_col1 = close and body_start + 1 or body_start
+    destination_col2 = close or body_end + 1
+    target = text:sub(destination_col1, destination_col2 - 1)
+  else
+    destination_col1 = body_start
+    local space = text:find("%s", body_start)
+    destination_col2 = (space and space <= body_end) and space or body_end + 1
+    target = text:sub(destination_col1, destination_col2 - 1)
+  end
+  return target, i, destination_col1, destination_col2
 end
 
 function links.parse_markdown_link_at(text, start_col, source_line)
@@ -306,7 +296,9 @@ end
 function links.find_links(text, source_line)
   local found = {}
   local i = 1
-  while i <= #text do
+  while true do
+    i = text:find("[!%[]", i)
+    if not i then break end
     local link, next_col
     local ch = text:sub(i, i)
     if ch == "!" and text:sub(i + 1, i + 2) == "[[" then
