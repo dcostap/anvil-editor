@@ -30,12 +30,26 @@ end
 
 images.default_cache_dir = USERDIR .. PATHSEP .. "cache"
 
+-- Hashing an embedded image's data URI takes milliseconds, and layout asks
+-- for its identity on every rebuild. Strings are interned, so a long text is
+-- a cheap key.
+local LONG_HASH_TEXT = 4096
+local long_text_hashes, long_text_hash_count = {}, 0
+
 local function hash_text(text)
+  local cached = long_text_hashes[text]
+  if cached then return cached end
   local hash = 2166136261
   for i = 1, #text do
     hash = (hash * 16777619 + text:byte(i)) % 4294967296
   end
-  return string.format("%08x", hash)
+  hash = string.format("%08x", hash)
+  if #text >= LONG_HASH_TEXT then
+    if long_text_hash_count >= 16 then long_text_hashes, long_text_hash_count = {}, 0 end
+    long_text_hashes[text] = hash
+    long_text_hash_count = long_text_hash_count + 1
+  end
+  return hash
 end
 
 local function data_asset_identity(url, max_bytes, separator)

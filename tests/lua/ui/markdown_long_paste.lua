@@ -137,6 +137,24 @@ test.describe("Markdown long paste", function()
     ))
   end)
 
+  -- A live window resize changes the width every frame. The image block
+  -- follows the width, but its link and data do not change.
+  test.it("relays out a data-image line promptly after a width change", function()
+    local view, close = open_data_image_note("data-image-resize.md")
+    linewrapping.complete_async_reconstruction(view)
+    local plan = view:get_line_render(3)
+
+    view.size.x = 700
+    local started = system.get_time()
+    local resized = view:get_line_render(3)
+    local elapsed = system.get_time() - started
+    close()
+    test.ok(resized ~= plan, "the image line kept the old width's layout")
+    test.ok(elapsed < 0.03, string.format(
+      "relaying out the data-image line took %.3fs", elapsed
+    ))
+  end)
+
   -- The pointer rests over the view while the wheel scrolls, so each frame
   -- resolves the position under it.
   test.it("resolves a pointer past the end of a data-image line promptly", function()

@@ -855,8 +855,9 @@ local function target_extension(path)
 end
 
 local function is_image_target(path)
-  return IMAGE_EXTENSIONS[target_extension(path) or ""] == true
-    or images.is_data_image(path)
+  -- Check a data URI first; finding an extension copies the whole URI.
+  return images.is_data_image(path)
+    or IMAGE_EXTENSIONS[target_extension(path) or ""] == true
 end
 
 local function attachment_kind(path)
@@ -1172,8 +1173,33 @@ local function reference_link_from_node(view, line_text, line, node)
   })
 end
 
+-- Parsing the links of a long line, such as an embedded image, takes
+-- milliseconds, and a width change rebuilds that line's layout. The spans
+-- depend only on the text and its semantic nodes, so reuse them.
+local long_line_link_spans, long_line_link_span_count = {}, 0
+local build_semantic_link_spans
+
 local function semantic_link_spans(view, line_text, line)
   local nodes = semantic_line(view, line)
+  if #line_text < LONG_SOURCE_LINE then
+    return build_semantic_link_spans(view, line_text, line, nodes)
+  end
+  local cached = long_line_link_spans[line_text]
+  if cached and cached.view == view and cached.line == line and cached.nodes == nodes then
+    return cached.spans
+  end
+  local spans = build_semantic_link_spans(view, line_text, line, nodes)
+  -- A reference link resolves against definitions elsewhere in the note.
+  for _, node in ipairs(nodes or {}) do
+    if node.type == "link_reference" then return spans end
+  end
+  if long_line_link_span_count >= 8 then long_line_link_spans, long_line_link_span_count = {}, 0 end
+  long_line_link_spans[line_text] = { view = view, line = line, nodes = nodes, spans = spans }
+  long_line_link_span_count = long_line_link_span_count + 1
+  return spans
+end
+
+build_semantic_link_spans = function(view, line_text, line, nodes)
   local by_range = {}
   for _, node in ipairs(nodes or {}) do
     if node.type == "link" or node.type == "image" or node.type == "link_reference"
