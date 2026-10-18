@@ -6,6 +6,7 @@ local core = require "core"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local panes = require "core.panes"
+local style = require "core.style"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 
@@ -49,17 +50,37 @@ local function perform(name)
   test.ok(command.perform(name), name .. " was unavailable")
 end
 
+local function cell_fill_count(view, line)
+  local count = 0
+  local draw_rect, draw_text, draw_poly = renderer.draw_rect, renderer.draw_text, renderer.draw_poly
+  renderer.draw_rect = function(_, _, _, _, color)
+    if color == style.markdown_live_table_cell_selection then count = count + 1 end
+  end
+  renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
+  renderer.draw_poly = function() end
+  local ok, err = pcall(view.with_selection_state, view, function()
+    view:prepare_line_body_draw_cache(line, line)
+    view:draw_line_body(line, view:get_line_screen_position(line))
+  end)
+  renderer.draw_rect, renderer.draw_text, renderer.draw_poly = draw_rect, draw_text, draw_poly
+  if not ok then error(err, 0) end
+  return count
+end
+
 test.describe("Markdown semantic selection", function()
   test.before_each(function(context)
     panes.reset_for_tests()
     context.buffers = {}
     context.old_live = config.markdown_live_editor
+    context.old_interactive = config.markdown_live_interactive_tables
     config.markdown_live_editor = true
+    config.markdown_live_interactive_tables = true
   end)
 
   test.after_each(function(context)
     panes.reset_for_tests()
     config.markdown_live_editor = context.old_live
+    config.markdown_live_interactive_tables = context.old_interactive
     for _, buffer in ipairs(context.buffers) do
       markdown_model.close(buffer, "test")
       buffer:on_close()
@@ -341,9 +362,107 @@ test.describe("Markdown semantic selection", function()
     perform("editor:expand_selection_block")
     test.equal(selected_text(buffer), "beta")
     perform("editor:expand_selection_block")
+    test.equal(selected_text(buffer), "beta")
+    perform("editor:expand_selection_block")
     test.equal(selected_text(buffer), "| alpha | beta |")
     perform("editor:expand_selection_block")
     test.equal(selected_text(buffer), "| Name | Value |\n| --- | --- |\n| alpha | beta |")
+  end)
+
+  for _, case in ipairs({
+    { name = "one-word", text = "beta", steps = { "beta" } },
+    { name = "multi-word", text = "beta gamma", steps = { "beta", "beta gamma" } },
+    { name = "empty", text = "", steps = {} },
+    { name = "formatted", text = "**beta gamma**", steps = { "beta", "beta gamma", "**beta gamma**" } },
+  }) do
+    test.it("selects a whole " .. case.name .. " cell before its row and shrinks back", function(context)
+      local row = "| alpha | " .. case.text .. " |"
+      local table_text = "| Name | Value |\n| --- | --- |\n" .. row
+      local view, buffer = open_markdown(context, table_text .. "\n\nafter\n")
+      local col = case.text == "" and 11 or case.name == "formatted" and 14 or 12
+      buffer:set_selection(3, col)
+
+      for _, expected in ipairs(case.steps) do
+        perform("editor:extend_selection_smart")
+        test.equal(selected_text(buffer), expected)
+        test.equal(cell_fill_count(view, 3), 0, "text selection looked like a whole cell")
+      end
+      perform("editor:extend_selection_smart")
+      test.equal(selected_text(buffer), case.text)
+      test.equal(cell_fill_count(view, 3), 1, "the whole cell was not highlighted")
+      perform("editor:extend_selection_smart")
+      test.equal(selected_text(buffer), row)
+      perform("editor:extend_selection_smart")
+      test.equal(selected_text(buffer), table_text)
+
+      perform("editor:shrink_selection_smart")
+      test.equal(selected_text(buffer), row)
+      perform("editor:shrink_selection_smart")
+      test.equal(selected_text(buffer), case.text)
+      test.equal(cell_fill_count(view, 3), 1, "shrink lost the whole-cell selection")
+      perform("editor:shrink_selection_smart")
+      test.equal(selected_text(buffer), case.text)
+      test.equal(cell_fill_count(view, 3), 0, "shrink did not restore text selection")
+    end)
+  end
+
+  test.it("keeps ordinary text selection ordinary after selecting a whole cell", function(context)
+    local view, buffer = open_markdown(context, "| A | B |\n| --- | --- |\n| one | two |\n")
+    buffer:set_selection(3, 4)
+    perform("editor:extend_selection_smart")
+    perform("editor:extend_selection_smart")
+    test.equal(cell_fill_count(view, 3), 1)
+
+    buffer:set_selection(3, 3, 3, 6)
+    test.equal(selected_text(buffer), "one")
+    test.equal(cell_fill_count(view, 3), 0)
+    perform("editor:extend_selection_smart")
+    test.equal(selected_text(buffer), "one")
+    test.equal(cell_fill_count(view, 3), 1)
+  end)
+
+  test.it("extends a whole-cell selection into the next cell", function(context)
+    local view, buffer = open_markdown(context, "| A | B |\n| --- | --- |\n| one | two |\n")
+    buffer:set_selection(3, 4)
+    perform("editor:extend_selection_smart")
+    perform("editor:extend_selection_smart")
+    perform("markdown:table_select_next_char")
+    test.equal(cell_fill_count(view, 3), 2)
+    test.same(buffer.selections, { 3, 6, 3, 3, 3, 12, 3, 9 })
+  end)
+
+  test.it("clears a selected cell without leaving its empty cell selected", function(context)
+    local view, buffer = open_markdown(context, "| A | B |\n| --- | --- |\n| one | two |\n")
+    buffer:set_selection(3, 4)
+    perform("editor:extend_selection_smart")
+    perform("editor:extend_selection_smart")
+    view:on_text_input("")
+    test.equal(buffer.lines[3], "|  | two |\n")
+    test.equal(cell_fill_count(view, 3), 0, "deleting cell text did not restore a caret")
+  end)
+
+  test.it("keeps whole-cell selection and shrink history separate between Editors", function(context)
+    local first, buffer = open_markdown(context, "| A | B |\n| --- | --- |\n| one | two |\n")
+    buffer:set_selection(3, 4)
+    perform("editor:extend_selection_smart")
+    perform("editor:extend_selection_smart")
+
+    local second = Editor(buffer)
+    panes.present(second, { placement = "new", focus = true })
+    markdown.live_render.refresh_view(second)
+    second:set_selection_state({ selections = { 3, 10, 3, 10 } })
+    perform("editor:extend_selection_smart")
+    perform("editor:extend_selection_smart")
+    test.equal(cell_fill_count(second, 3), 1)
+    perform("editor:shrink_selection_smart")
+    test.equal(selected_text(buffer), "two")
+    test.equal(cell_fill_count(second, 3), 0)
+    test.equal(cell_fill_count(first, 3), 1)
+
+    core.set_active_view(first)
+    perform("editor:shrink_selection_smart")
+    test.equal(selected_text(buffer), "one")
+    test.equal(cell_fill_count(first, 3), 0)
   end)
 
   test.it("treats a Markdown Callout as an enclosing quote block", function(context)

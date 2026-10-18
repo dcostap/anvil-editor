@@ -1838,6 +1838,7 @@ end
 
 local function selection_state_key(buffer)
   return table.concat(buffer.selections, "\31") .. "\30" .. tostring(buffer.last_selection)
+    .. "\30" .. tostring(buffer.table_cell_selection or false)
 end
 LineWrapping.selection_state_key = selection_state_key
 

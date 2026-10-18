@@ -318,6 +318,7 @@ end
 local function selection_snapshot_key(state)
   return table.concat(state and state.selections or {}, "\31")
     .. "\30" .. tostring(state and state.last_selection or 1)
+    .. "\30" .. tostring(state and state.table_cell_selection or false)
 end
 
 local function node_line_range(node, line, line_length)
@@ -7361,7 +7362,9 @@ local function invalidate_selection_lines(view, new_state, old_state)
   for state_index = 1, 2 do
     local other = table_cells_by_state[3 - state_index]
     for key, line in pairs(table_cells_by_state[state_index]) do
-      if not other[key] then lines[line] = true end
+      if not other[key] or new_state.table_cell_selection ~= old_state.table_cell_selection then
+        lines[line] = true
+      end
     end
   end
   local ordered = {}

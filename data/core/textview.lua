@@ -239,6 +239,7 @@ end
 
 local function selection_states_equal(a, b)
   if not a or not b then return a == b end
+  if a.table_cell_selection ~= b.table_cell_selection then return false end
   if (a.last_selection or 1) ~= (b.last_selection or 1) then return false end
   local as, bs = a.selections or {}, b.selections or {}
   if #as ~= #bs then return false end
@@ -533,9 +534,11 @@ end
 function TextView:get_selection_state()
   local selections = self.selection_state and self.selection_state.selections
   local last_selection = self.selection_state and self.selection_state.last_selection or 1
+  local table_cell_selection = self.selection_state and self.selection_state.table_cell_selection
   if self.buffer.bound_selection_view == self then
     selections = self.buffer.selections
     last_selection = self.buffer.last_selection
+    table_cell_selection = self.buffer.table_cell_selection
   end
   local state = normalize_selection_state(self.buffer, {
     selections = copy_array(selections),
@@ -545,6 +548,7 @@ function TextView:get_selection_state()
   return {
     selections = copy_array(state.selections),
     last_selection = state.last_selection,
+    table_cell_selection = table_cell_selection,
   }
 end
 
@@ -554,6 +558,7 @@ function TextView:set_selection_state(state)
   self.selection_state = normalize_selection_state(self.buffer, {
     selections = copy_array(state and state.selections or state),
     last_selection = state and state.last_selection or 1,
+    table_cell_selection = state and state.table_cell_selection or nil,
     owner_id = owner_id,
   })
   self.selection_state.owner_id = owner_id
@@ -562,6 +567,7 @@ function TextView:set_selection_state(state)
   if self.buffer.bound_selection_view == self then
     self.buffer.selections = self.selection_state.selections
     self.buffer.last_selection = self.selection_state.last_selection
+    self.buffer.table_cell_selection = self.selection_state.table_cell_selection
   elseif not self.buffer.bound_selection_view and self:owns_buffer_selection_mirror() then
     self:apply_selection_state()
   end
@@ -589,6 +595,7 @@ function TextView:capture_selection_state(old_state)
     self.selection_state.session_id = owner_id -- deprecated compatibility alias
   end
   TextView.owner_views[owner_id] = self
+  self.selection_state.table_cell_selection = self.buffer.table_cell_selection
   local new_state = self:get_selection_state()
   if self.notify_selection_listeners and not selection_states_equal(old_state, new_state) then
     self:notify_selection_listeners("capture", old_state, new_state)
@@ -599,6 +606,7 @@ function TextView:apply_selection_state()
   normalize_selection_state(self.buffer, self.selection_state)
   self.buffer.selections = copy_array(self.selection_state.selections)
   self.buffer.last_selection = self.selection_state.last_selection
+  self.buffer.table_cell_selection = self.selection_state.table_cell_selection
 end
 
 function TextView:become_selection_mirror_owner()
@@ -633,7 +641,8 @@ function TextView.reset_registered_selection_states(buffer)
   if views then
     for view in pairs(views) do
       if view.buffer == buffer then
-        view:set_selection_state({ selections = buffer.selections, last_selection = buffer.last_selection })
+        view:set_selection_state({ selections = buffer.selections, last_selection = buffer.last_selection,
+          table_cell_selection = buffer.table_cell_selection })
       end
     end
   end
@@ -679,6 +688,7 @@ function TextView.adjust_registered_selection_states(buffer, kind, active_view, 
       if view.buffer == buffer and view.selection_state
       and view ~= active_view
       and view.selection_state.selections ~= buffer.selections then
+        view.selection_state.table_cell_selection = nil
         if kind == "insert" then
           buffer:adjust_selection_state_for_insert(view.selection_state, ...)
         elseif kind == "remove" then
@@ -710,6 +720,7 @@ function TextView.adjust_registered_selection_states_for_batch(buffer, active_vi
           mapped[#mapped + 1] = c2
         end
         view.selection_state.selections = mapped
+        view.selection_state.table_cell_selection = nil
         view.selection_state.normalized = false
         normalize_selection_state(buffer, view.selection_state, true)
       end
@@ -729,6 +740,7 @@ function TextView:with_selection_state(fn, ...)
   local old_self_selection_state = self:get_selection_state()
   local old_selections = buffer.selections
   local old_last_selection = buffer.last_selection
+  local old_table_cell_selection = buffer.table_cell_selection
   local old_bound_view = buffer.bound_selection_view
   local old_bound_owner_id = buffer.bound_selection_owner_id or buffer.bound_selection_session_id
 
@@ -739,6 +751,7 @@ function TextView:with_selection_state(fn, ...)
   if old_bound_view and old_bound_view.selection_state then
     old_bound_view.selection_state.selections = old_selections
     old_bound_view.selection_state.last_selection = old_last_selection
+    old_bound_view.selection_state.table_cell_selection = old_table_cell_selection
     old_bound_view.selection_state.owner_id = old_bound_owner_id
       or old_bound_view.selection_state.owner_id
     old_bound_view.selection_state.session_id = old_bound_view.selection_state.owner_id
@@ -764,6 +777,7 @@ function TextView:with_selection_state(fn, ...)
   buffer.bound_selection_session_id = self.selection_state.owner_id -- deprecated compatibility alias
   buffer.selections = self.selection_state.selections
   buffer.last_selection = self.selection_state.last_selection
+  buffer.table_cell_selection = self.selection_state.table_cell_selection
 
   local args = pack(...)
   local ok, res = xpcall(function()
@@ -778,12 +792,15 @@ function TextView:with_selection_state(fn, ...)
   if #stack == 0 then buffer.__selection_binding_stack = nil end
   local restore_selections = old_selections
   local restore_last_selection = old_last_selection
+  local restore_table_cell_selection = old_table_cell_selection
   if old_bound_view and old_bound_view.selection_state then
     restore_selections = old_bound_view.selection_state.selections
     restore_last_selection = old_bound_view.selection_state.last_selection
+    restore_table_cell_selection = old_bound_view.selection_state.table_cell_selection
   end
   buffer.selections = restore_selections
   buffer.last_selection = restore_last_selection
+  buffer.table_cell_selection = restore_table_cell_selection
   buffer.bound_selection_view = old_bound_view
   buffer.bound_selection_owner_id = old_bound_owner_id
   buffer.bound_selection_session_id = old_bound_owner_id
@@ -866,6 +883,7 @@ function TextView:new(buffer)
   self.selection_state = normalize_selection_state(self.buffer, {
     selections = copy_array(self.buffer.selections),
     last_selection = self.buffer.last_selection,
+    table_cell_selection = self.buffer.table_cell_selection,
     owner_id = owner_id,
     session_id = owner_id, -- deprecated compatibility alias
     normalized = true,
@@ -8801,11 +8819,13 @@ local function table_cell_selection_lookup(view)
   and cached.count == #buffer.selections
   and cached.revision == buffer.selection_revision
   and cached.change_id == buffer:get_change_id()
+  and cached.table_cell_selection == buffer.table_cell_selection
   then
     return cached
   end
   local lookup = {
-    grouped = #buffer.selections > 4,
+    grouped = buffer.table_cell_selection or #buffer.selections > 4,
+    table_cell_selection = buffer.table_cell_selection,
     selections = buffer.selections, count = #buffer.selections,
     revision = buffer.selection_revision, change_id = buffer:get_change_id(),
   }
@@ -8819,9 +8839,8 @@ local function table_cell_selection_lookup(view)
   return lookup
 end
 
----Whether a selection covers exactly the cell of `row` as part of a group.
----A lone selection of one cell's whole text, or a lone caret in an empty
----cell, is ordinary text selection.
+---Whether a selection covers exactly the cell of `row` in cell-selection mode.
+---Without that mode, a lone cell's contents remain ordinary text selection.
 local function row_has_table_cell_selection(lookup, line, row)
   if not lookup.grouped then return false end
   local col1, col2 = row.cell_source_col1, row.cell_source_col2
@@ -9018,9 +9037,8 @@ local function draw_line_render_empty_cell_selections(
 )
   local rows = render_line and render_line.position_rows
   if type(rows) ~= "table" then return false end
-  -- A lone caret in an empty cell is a caret, not a Table Cell Selection.
-  -- Empty cells only look selected as part of a selection group.
-  if #view.buffer.selections <= 4 then return false end
+  -- A lone empty cell needs an explicit whole-cell selection, not just a caret.
+  if not table_cell_selection_lookup(view).grouped then return false end
   local carets = {}
   for _, caret_line, caret_col, anchor_line, anchor_col in
     view.buffer:get_selections(false)

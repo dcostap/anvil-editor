@@ -847,7 +847,8 @@ local function selection_state_count(state)
   return math.max(1, math.floor(#(state.selections or {}) / 4))
 end
 
-local function sync_unbound_selection_mutation(self)
+local function sync_unbound_selection_mutation(self, table_cell_selection)
+  self.table_cell_selection = table_cell_selection or nil
   self.selection_revision = (self.selection_revision or 0) + 1
   if self.bound_selection_view or self.__selection_text_adjusting then return end
   local ok, TextView = pcall(require, "core.textview")
@@ -1213,10 +1214,11 @@ function Buffer:set_selection_list(selections, last_selection, opts)
     selection_state_count(self)
   )
 
-  if opts.merge_cursors then
+  -- Whole cells keep their selection identity, including empty cell carets.
+  if opts.merge_cursors and not opts.table_cell_selection then
     self:merge_cursors()
   else
-    sync_unbound_selection_mutation(self)
+    sync_unbound_selection_mutation(self, opts.table_cell_selection)
   end
   perf_time_add("buffer_set_selection_list_ms", perf_t)
 end
@@ -1935,6 +1937,7 @@ function Buffer:apply_edits(edits, opts)
     self.selections = state.selections
   end
   self.last_selection = state.last_selection
+  self.table_cell_selection = nil
   transaction.new_selections = copy_array(self.selections)
   transaction.new_last_selection = self.last_selection
   transaction.selection_changed = true
@@ -2006,6 +2009,7 @@ end
 
 
 function Buffer:raw_insert(line, col, text, undo_stack, time, restore_observer_state)
+  self.table_cell_selection = nil
   local observer_state = {}
   local observer_transaction = { observer_state = observer_state, restore_observer_state = restore_observer_state }
   observer_transaction.edits = { { line1 = line, col1 = col, line2 = line, col2 = col, text = text } }
@@ -2074,6 +2078,7 @@ end
 
 
 function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time, restore_observer_state)
+  self.table_cell_selection = nil
   local observer_state = {}
   local observer_transaction = { observer_state = observer_state, restore_observer_state = restore_observer_state }
   observer_transaction.edits = { { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = "" } }

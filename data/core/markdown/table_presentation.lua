@@ -1483,7 +1483,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
   local selections = selection_state and selection_state.selections or {}
   -- An empty cell's caret is part of a Table Cell Selection when other
   -- selections accompany it, as the selection paint decides.
-  local grouped = #selections > 4
+  local grouped = selection_state and selection_state.table_cell_selection or #selections > 4
   local function cell_active(cell)
     for index = 1, #selections, 4 do
       local line1, col1 = selections[index], selections[index + 1]

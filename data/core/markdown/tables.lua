@@ -940,9 +940,9 @@ end
 
 -- A Table Cell Selection group as a rectangle: its focus is the primary
 -- selection's cell and its anchor the opposite corner of the cells' bounds.
--- Nil unless several selections each cover one whole cell.
+-- Nil unless selections cover whole cells in cell-selection mode.
 local function cell_group(view, contexts)
-  if #contexts < 2 then return nil end
+  if #contexts < 2 and not view.buffer.table_cell_selection then return nil end
   local selections = view.buffer.selections
   local row1, row2, col1, col2, focus
   for _, context in ipairs(contexts) do

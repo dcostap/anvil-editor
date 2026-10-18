@@ -1,4 +1,6 @@
 local markdown_model = require "core.markdown.model"
+local markdown_tables = require "core.markdown.tables"
+local config = require "core.config"
 
 local selection = {}
 
@@ -484,13 +486,15 @@ local function candidates_for(buffer, line1, col1, line2, col2, blocks_only)
   return candidates, nil, starts, start_offset, end_offset
 end
 
-local function push_history(buffer)
-  local history = histories[buffer] or {}
-  histories[buffer] = history
+local function push_history(view)
+  local buffer = view.buffer
+  local history = histories[view] or {}
+  histories[view] = history
   history[#history + 1] = {
     revision = buffer.text_revision,
     selections = copy_list(buffer.selections or {}),
     last_selection = buffer.last_selection,
+    table_cell_selection = buffer.table_cell_selection,
   }
   if #history > MAX_HISTORY then table.remove(history, 1) end
   return history[#history]
@@ -500,7 +504,7 @@ function selection.expand(view, blocks_only)
   local buffer = view and view.buffer
   if not buffer or view.__markdown_live_attached ~= true then return false, "not-live" end
 
-  local next_selections = {}
+  local next_selections, whole_cell = {}, nil
   for index, caret_line, caret_col, anchor_line, anchor_col in buffer:get_selections(false) do
     local line1, col1, line2, col2 = buffer:get_selection_idx(index, true)
     local candidates, reason, starts, start_offset, end_offset =
@@ -511,6 +515,23 @@ function selection.expand(view, blocks_only)
       if strictly_contains(candidate, start_offset, end_offset) then
         chosen = candidate
         break
+      end
+    end
+
+    -- Text and whole-cell selection can have the same range. Keep a separate
+    -- cell step before leaving that range, including when the cell is empty.
+    if #buffer.selections == 4 and not buffer.table_cell_selection
+      and config.markdown_live_interactive_tables and line1 == line2
+    then
+      local context = markdown_tables.interactive_context(view, line1, col1)
+      local cell = context and context.cell
+      if cell and col1 >= cell.col1 and col2 <= cell.col2 then
+        local first = position_offset(starts, line1, cell.content_col1)
+        local last = position_offset(starts, line1, cell.content_col2)
+        if not chosen or chosen.start_offset < first or chosen.end_offset > last then
+          chosen = { start_offset = first, end_offset = last }
+          whole_cell = true
+        end
       end
     end
     if not chosen then return false, "no-larger-node" end
@@ -531,29 +552,36 @@ function selection.expand(view, blocks_only)
     end
   end
 
-  local history = push_history(buffer)
+  local history = push_history(view)
   buffer:set_selection_list(next_selections, buffer.last_selection,
-    { sanitized = true, merge_cursors = true })
+    { sanitized = true, merge_cursors = not whole_cell, table_cell_selection = whole_cell })
   history.applied = copy_list(buffer.selections or {})
+  history.applied_table_cell_selection = buffer.table_cell_selection
+  if whole_cell then
+    require("core").log_quiet("Markdown semantic selection: whole table cell at %d:%d",
+      next_selections[1], next_selections[2])
+  end
   return true
 end
 
 function selection.shrink(view)
   local buffer = view and view.buffer
-  local history = buffer and histories[buffer]
+  local history = view and histories[view]
   if not buffer or view.__markdown_live_attached ~= true or not history or #history == 0 then
     return false, "no-history"
   end
   local previous = history[#history]
   if previous.revision ~= buffer.text_revision
     or not same_list(previous.applied, buffer.selections)
+    or previous.applied_table_cell_selection ~= buffer.table_cell_selection
   then
-    histories[buffer] = nil
+    histories[view] = nil
     return false, "stale-history"
   end
   table.remove(history)
   buffer:set_selection_list(previous.selections, previous.last_selection,
-    { sanitized = true, merge_cursors = true })
+    { sanitized = true, merge_cursors = not previous.table_cell_selection,
+      table_cell_selection = previous.table_cell_selection })
   return true
 end
 
