@@ -2,8 +2,9 @@
 --
 -- A `[^label]` reference or an `^[text]` inline footnote shows as a numbered
 -- badge. A reference's `[^label]: text` definition line sits below the
--- paragraph and stays folded away. The native extension scanner finds all
--- three. A card shows the text in the free space right of the text column,
+-- paragraph and stays folded away. An inline footnote right after a
+-- `==highlight==` is a note on the highlighted text: it takes no number, and
+-- the text shows tinted. The native extension scanner finds all of these. A card shows the text in the free space right of the text column,
 -- beside the footnote's line. When that space is too narrow, cards show
 -- inline below the footnote's block. Footnotes never change the text
 -- column's width. Each card edits its footnote in place.
@@ -359,6 +360,18 @@ local function footnote_nodes(view, line)
   return nodes
 end
 
+-- Highlights on `line` by the column after their closing `==`. An inline
+-- footnote that starts there is a note on the highlighted text.
+local function anchors_by_end(view, line)
+  local anchors = {}
+  for _, node in ipairs(footnotes.nodes_for_line(view, line) or {}) do
+    if node.type == "highlight" and node.source.line1 == line and node.source.line2 == line then
+      anchors[node.source.col2] = node.source
+    end
+  end
+  return anchors
+end
+
 local function reference_label(buffer, node)
   local range = node.attributes and node.attributes.footnote_label
   return range and line_text(buffer, node.source.line1):sub(range.col1, range.col2 - 1)
@@ -381,11 +394,14 @@ local function footnote_numbers(view)
   local numbers, by_label, count = {}, {}, 0
   for _, line in ipairs(instance:footnote_lines()) do
     if not is_definition(line_text(buffer, line)) then
+      local anchors = anchors_by_end(view, line)
       for _, node in ipairs(footnote_nodes(view, line)) do
         local number
         if node.type == "footnote_inline" then
-          count = count + 1
-          number = count
+          if not anchors[node.source.col1] then
+            count = count + 1
+            number = count
+          end
         else
           local label = reference_label(buffer, node)
           if label and definitions[label] then
@@ -426,13 +442,15 @@ local function numbered_note(buffer, node, definitions)
   }
 end
 
-local function inline_note(buffer, node)
+local function inline_note(buffer, node, anchor)
   local line, col1, col2 = node.source.line1, node.source.col1, node.source.col2
   return {
     kind = "inline",
     line = line,
     col1 = col1,
     col2 = col2,
+    anchor_col1 = anchor and anchor.col1 or nil,
+    anchor_col2 = anchor and anchor.col2 or nil,
     body_col1 = col1 + 2,
     body_col2 = col2 - 1,
     text = line_text(buffer, line):sub(col1 + 2, col2 - 2),
@@ -452,8 +470,10 @@ function footnotes.notes_for_lines(view, line1, line2)
     -- Most lines have no footnote and skip the parse. Footnotes inside a
     -- definition belong to its hidden line.
     if may_hold_note(lines[line]) and not is_definition(lines[line]) then
+      local anchors = anchors_by_end(view, line)
       for _, node in ipairs(footnote_nodes(view, line)) do
-        local note = node.type == "footnote_inline" and inline_note(buffer, node)
+        local note = node.type == "footnote_inline"
+          and inline_note(buffer, node, anchors[node.source.col1])
           or numbered_note(buffer, node, definitions)
         if note then
           note.number = numbers[line .. ":" .. note.col1]
@@ -465,10 +485,10 @@ function footnotes.notes_for_lines(view, line1, line2)
   return notes
 end
 
----The footnote whose marker holds column `col` of `line`.
+---The footnote whose marker, or highlighted text, holds column `col` of `line`.
 function footnotes.note_at(view, line, col)
   for _, note in ipairs(footnotes.notes_for_lines(view, line, line)) do
-    if col >= note.col1 and col <= note.col2 then return note end
+    if col >= (note.anchor_col1 or note.col1) and col <= note.col2 then return note end
   end
 end
 
@@ -519,6 +539,8 @@ local function note_source_is_current(buffer, note)
   local text = line_text(buffer, note.line)
   if note.kind == "inline" then
     return text:sub(note.col1, note.col2 - 1) == "^[" .. note.text .. "]"
+      and (not note.anchor_col1 or text:sub(note.anchor_col1, note.anchor_col1 + 1) == "=="
+        and text:sub(note.anchor_col2 - 2, note.anchor_col2 - 1) == "==")
   end
   local label, body_col1 = parse_definition(line_text(buffer, note.definition_line))
   return label == note.label and body_col1 == note.body_col1
@@ -526,7 +548,7 @@ local function note_source_is_current(buffer, note)
 end
 
 local function note_name(note)
-  return note.kind == "inline" and "inline" or note.label
+  return note.anchor_col1 and "on text" or note.kind == "inline" and "inline" or note.label
 end
 
 ---Replace a footnote's text. Empty text removes the footnote.
@@ -559,12 +581,19 @@ end
 local function is_blank(text) return not text:find("%S") end
 
 ---Remove a footnote: its marker, and a numbered footnote's definition line.
+---A note on highlighted text keeps the text and drops its highlight.
 function footnotes.remove(view, note)
   local buffer = view.buffer
-  local marker = { line1 = note.line, col1 = note.col1, line2 = note.line, col2 = note.col2, text = "" }
+  local line = note.line
+  local marker = { line1 = line, col1 = note.col1, line2 = line, col2 = note.col2, text = "" }
   if note.kind == "inline" then
-    buffer:apply_edits({ marker }, { type = "markdown-footnote", reason = "remove" })
-    core.log_quiet("Inline footnote removed at %s:%d", buffer:get_name(), note.line)
+    local edits = { marker }
+    if note.anchor_col1 then
+      marker.col1 = note.anchor_col2 - 2
+      edits[2] = { line1 = line, col1 = note.anchor_col1, line2 = line, col2 = note.anchor_col1 + 2, text = "" }
+    end
+    buffer:apply_edits(edits, { type = "markdown-footnote", reason = "remove" })
+    core.log_quiet("Footnote %s removed at %s:%d", note_name(note), buffer:get_name(), line)
     return true
   end
   local first, last = note.definition_line, note.definition_line
@@ -699,8 +728,9 @@ end
 
 ---Add a footnote and open its editor. Its marker goes right after the
 ---selection, or after the word at the caret. A numbered footnote writes its
----definition below the paragraph. An inline footnote (`opts.inline`) needs a
----selection and holds its own text. A caret on a footnote's marker edits that
+---definition below the paragraph. A note on text (`opts.on_text`) needs a
+---selection on one line: it highlights the selected text and follows it
+---with an inline footnote. A caret on a footnote's marker edits that
 ---footnote instead. Code and other places that show no footnotes take none.
 function footnotes.add(view, opts)
   opts = opts or {}
@@ -710,9 +740,21 @@ function footnotes.add(view, opts)
     local existing = footnotes.note_at_caret(view)
     if existing then return footnotes.begin_edit(view, existing) end
   end
-  if opts.inline and not selected then return nil end
-  local _, _, line, col = buffer:get_selection(true)
+  if opts.on_text and not selected then return nil end
+  local anchor_line, anchor_col, line, col = buffer:get_selection(true)
   local text = line_text(buffer, line)
+  if opts.on_text then
+    -- The highlight hugs the selected words.
+    local selection = anchor_line == line and text:sub(anchor_col, col - 1) or ""
+    anchor_col = anchor_col + #selection:match("^%s*")
+    col = col - #selection:match("%s*$")
+    if anchor_line ~= line or anchor_col >= col then
+      core.log_quiet("Note on text refused at %s:%d: selection spans lines or holds no text",
+        buffer:get_name(), line)
+      core.status_bar:show_message("i", style.text, "Select text on one line to add a note to it")
+      return nil
+    end
+  end
   if not selected then col = word_end(text, col) end
   local noteless = noteless_node_at(view, line, col)
   if noteless or is_definition(text) then
@@ -723,12 +765,17 @@ function footnotes.add(view, opts)
     return nil
   end
   local note, edits
-  if opts.inline then
+  if opts.on_text then
+    local marker = col + 4
     note = {
-      kind = "inline", line = line, col1 = col, col2 = col + 3,
-      body_col1 = col + 2, body_col2 = col + 2, text = "",
+      kind = "inline", line = line, col1 = marker, col2 = marker + 3,
+      anchor_col1 = anchor_col, anchor_col2 = marker,
+      body_col1 = marker + 2, body_col2 = marker + 2, text = "",
     }
-    edits = { { line1 = line, col1 = col, line2 = line, col2 = col, text = "^[]" } }
+    edits = {
+      { line1 = line, col1 = anchor_col, line2 = line, col2 = anchor_col, text = "==" },
+      { line1 = line, col1 = col, line2 = line, col2 = col, text = "==^[]" },
+    }
   else
     local label = next_label(view)
     local reference = "[^" .. label .. "]"
@@ -827,12 +874,14 @@ local function text_view_for(view, note)
 end
 
 -- A card shows its footnote's number before the text. A footnote added
--- a moment ago has no number until the next parse.
+-- a moment ago has no number until the next parse. A note on text has none.
 local function card_label(note)
+  if note.anchor_col1 then return "" end
   return note.number and tostring(note.number) or "*"
 end
 
 local function label_width(text_view, note)
+  if note.anchor_col1 then return 0 end
   return text_view:get_font():get_width(card_label(note)) + scaled(LABEL_GAP)
 end
 

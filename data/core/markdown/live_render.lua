@@ -552,6 +552,28 @@ local function semantic_setext_marker_for_line(view, line_text, line)
   end
 end
 
+-- An inline footnote right after a `==highlight==` is a note on the
+-- highlighted text. Returns the ids of those highlights and the start
+-- columns of their footnotes. Their card edits them, so their syntax never
+-- shows.
+local function noted_highlights(nodes, line)
+  local ends, highlights, notes = {}, {}, {}
+  for _, node in ipairs(nodes) do
+    if node.type == "highlight" and node.source.line1 == line and node.source.line2 == line then
+      ends[node.source.col2] = node.id
+    end
+  end
+  for _, node in ipairs(nodes) do
+    local id = node.type == "footnote_inline" and node.source.line1 == line
+      and ends[node.source.col1]
+    if id then
+      highlights[id] = true
+      notes[node.source.col1] = true
+    end
+  end
+  return highlights, notes
+end
+
 local FORMATTING_TYPES = {
   strong = true,
   emphasis = true,
@@ -564,6 +586,7 @@ local function semantic_formatting_spans(view, line_text, line)
   local nodes, generation = semantic_line(view, line)
   if not nodes then return nil end
   local spans = {}
+  local noted = noted_highlights(nodes, line)
   for _, node in ipairs(nodes) do
     if FORMATTING_TYPES[node.type] and node.source.line1 == line and node.source.line2 == line then
       local markers = {}
@@ -598,6 +621,7 @@ local function semantic_formatting_spans(view, line_text, line)
         content_ranges = { { line = line, col1 = content_col1, col2 = content_col2 } },
         semantic_id = node.id,
         semantic_generation = generation,
+        footnote_anchor = noted[node.id] or nil,
       }
     end
   end
@@ -659,7 +683,9 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
   if #spans == 0 and #specials == 0 then return {} end
   local revealed_spans = {}
   for _, span in ipairs(spans) do
-    if reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2) then
+    if not span.footnote_anchor
+      and reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
+    then
       revealed_spans[span] = true
     end
   end
@@ -742,12 +768,14 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
       end
       local function composed_fragment(extra_id)
         local bold, italic, strike, highlight, code = false, false, false, false, false
+        local anchor = false
         local ids = {}
         for _, span in ipairs(active_spans) do
           bold = bold or span.type == "strong"
           italic = italic or span.type == "emphasis"
           strike = strike or span.type == "strikethrough"
           highlight = highlight or span.type == "highlight"
+          anchor = anchor or span.footnote_anchor
           code = code or span.type == "code"
           ids[#ids + 1] = span.semantic_id
         end
@@ -769,6 +797,7 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
           color = opts.color or normal_text_color(),
           strikethrough = strike or nil,
           background = code and style.markdown_live_inline_code_bg
+            or anchor and style.markdown_footnote_anchor_bg
             or highlight and style.markdown_live_highlight_bg or nil,
           background_under_selection = code or nil,
           semantic_id = table.concat(ids, "+"),
@@ -1462,7 +1491,7 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     fragment.color = missing and style.markdown_live_link_error or style.markdown_live_link
     fragment.underline = true
   end
-  local bold, italic, strike, highlight = false, false, false, false
+  local bold, italic, strike, highlight, anchor = false, false, false, false, false
   local code = fragment.code_label or false
   local ids = { span.semantic_id }
   for _, formatting in ipairs(semantic_formatting_spans(view, "", line) or {}) do
@@ -1472,6 +1501,7 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
       italic = italic or formatting.type == "emphasis"
       strike = strike or formatting.type == "strikethrough"
       highlight = highlight or formatting.type == "highlight"
+      anchor = anchor or formatting.footnote_anchor
       code = code or formatting.type == "code"
       ids[#ids + 1] = formatting.semantic_id
     end
@@ -1488,6 +1518,7 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     or opts.base_font or fragment.font
   fragment.strikethrough = strike or nil
   fragment.background = code and style.markdown_live_inline_code_bg
+    or anchor and style.markdown_footnote_anchor_bg
     or highlight and style.markdown_live_highlight_bg or fragment.background
   fragment.background_under_selection = code or nil
   fragment.semantic_id = #ids > 0 and table.concat(ids, "+") or fragment.semantic_id
@@ -2322,14 +2353,21 @@ local function footnote_badge(view, node, line, number)
 end
 
 -- Footnote markers show as numbered badges until the caret enters them. A
--- definition line shows only while its fold is open, and its label marker
--- reads as a footnote.
+-- note on highlighted text shows only in its card. A definition line shows
+-- only while its fold is open, and its label marker reads as a footnote.
 local function semantic_footnote_fragments(view, line_text, line, reveal_units)
   local fragments = {}
-  for _, node in ipairs(semantic_line(view, line) or {}) do
+  local nodes = semantic_line(view, line) or {}
+  local _, noted = noted_highlights(nodes, line)
+  for _, node in ipairs(nodes) do
     local attributes = node.attributes or {}
     local source = node.source
-    if (node.type == "footnote_reference" or node.type == "footnote_inline")
+    if node.type == "footnote_inline" and source.line1 == line and noted[source.col1] then
+      fragments[#fragments + 1] = {
+        source_col1 = source.col1, source_col2 = source.col2,
+        text = "", hidden = true, semantic_id = node.id,
+      }
+    elseif (node.type == "footnote_reference" or node.type == "footnote_inline")
       and source.line1 == line and source.line2 == line
       and not reveal_unit_matches(reveal_units, node.id, source.col1, source.col2)
     then

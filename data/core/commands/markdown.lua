@@ -23,14 +23,14 @@ command.add(live_preview_editor, {
   end),
 })
 
--- An inline footnote follows selected text.
+-- A Text Note goes on selected text.
 command.add(function()
   local ok, view = live_preview_editor()
   if ok and view.buffer:has_selection() then return true, view end
   return false
 end, {
-  ["markdown:add_inline_footnote"] = command.palette(function(view)
-    footnotes.add(view, { inline = true })
+  ["markdown:add_text_note"] = command.palette(function(view)
+    footnotes.add(view, { on_text = true })
   end),
 })
 
