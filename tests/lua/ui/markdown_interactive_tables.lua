@@ -1679,23 +1679,61 @@ test.describe("Markdown Interactive Table Editing", function()
     end)
   end)
 
-  -- The screen rectangle of a table handle: x, y, width, height.
-  local function table_handle_rect(view, line, kind, index)
+  local function fragment_rect(view, line, fragment)
+    local render = test.not_nil(view:get_line_render(line))
+    local line_x, line_y = view:get_line_screen_position(line)
+    return line_x + fragment.layout_x,
+      line_y + (render.first_row_content_y_offset or 0) + fragment.draw_y_offset,
+      fragment.hit_width, fragment.widget.height
+  end
+
+  -- The screen rectangle of a table handle: x, y, width, height. `side` picks
+  -- the handle on the "right" of a row or "bottom" of a column.
+  local function table_handle_rect(view, line, kind, index, side)
     local render = test.not_nil(view:get_line_render(line))
     for _, fragment in ipairs(render.fragments or {}) do
-      if fragment.table_handle == kind and fragment.table_handle_index == index then
-        local line_x, line_y = view:get_line_screen_position(line)
-        return line_x + fragment.layout_x,
-          line_y + (render.first_row_content_y_offset or 0) + fragment.draw_y_offset,
-          fragment.hit_width, fragment.widget.height
+      if fragment.table_handle == kind and fragment.table_handle_index == index
+      and (not side or fragment.table_handle_side == side)
+      then
+        return fragment_rect(view, line, fragment)
       end
     end
     error(kind .. " handle " .. tostring(index) .. " not found on line " .. line)
   end
 
-  local function table_handle(view, line, kind, index)
-    local x, y, width, height = table_handle_rect(view, line, kind, index)
+  local function table_handle(view, line, kind, index, side)
+    local x, y, width, height = table_handle_rect(view, line, kind, index, side)
     return x + width / 2, y + height / 2
+  end
+
+  -- The center of a visible insert button beside a selected row or column.
+  local function insert_button(view, line, kind, side)
+    local render = test.not_nil(view:get_line_render(line))
+    for _, fragment in ipairs(render.fragments or {}) do
+      if fragment.table_insert == side and fragment.table_insert_kind == kind
+      and fragment.widget.visible(view)
+      then
+        local x, y, width, height = fragment_rect(view, line, fragment)
+        return x + width / 2, y + height / 2
+      end
+    end
+    error(kind .. " insert button " .. side .. " not visible on line " .. line)
+  end
+
+  local function has_insert_button(view, line)
+    local render = test.not_nil(view:get_line_render(line))
+    for _, fragment in ipairs(render.fragments or {}) do
+      if fragment.table_insert and fragment.widget.visible(view) then return true end
+    end
+    return false
+  end
+
+  local function with_modkey(key, fn)
+    local old = keymap.modkeys[key]
+    keymap.modkeys[key] = true
+    local ok, err = pcall(fn)
+    keymap.modkeys[key] = old
+    if not ok then error(err, 0) end
   end
 
   -- The screen rectangle of a table cell: x, y, width, height.
@@ -1725,9 +1763,11 @@ test.describe("Markdown Interactive Table Editing", function()
       local row = test.not_nil(markdown_tables.source_row(text))
       for column, cell in ipairs(row.cells) do
         if col >= cell.col1 and col <= cell.col2 then
-          test.equal(selections[index + 3], cell.content_col1,
-            "handle selection did not cover the whole cell")
-          test.equal(col, cell.content_col2, "handle selection did not cover the whole cell")
+          local other = selections[index + 3]
+          test.equal(math.min(col, other), cell.content_col1,
+            "selection did not cover the whole cell")
+          test.equal(math.max(col, other), cell.content_col2,
+            "selection did not cover the whole cell")
           cells[#cells + 1] = line .. ":" .. column
         end
       end
@@ -1881,6 +1921,165 @@ test.describe("Markdown Interactive Table Editing", function()
       view:update()
       view:update()
       test.equal(view.scroll.to.y, scroll_y, "selecting the column moved the view")
+    end)
+  end)
+
+  local GRID = "| A | B | C |\n| --- | --- | --- |\n| one | two | three |\n"
+    .. "| four | five | six |\n\nplain"
+
+  test.it("selects rows and columns from handles on their far sides", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 3, "row", 3, "right"))
+    test.same(selected_cells(view), { "3:1", "3:2", "3:3" })
+
+    refresh(view)
+    click_at(view, table_handle(view, 4, "column", 2, "bottom"))
+    test.same(selected_cells(view), { "1:2", "3:2", "4:2" })
+  end)
+
+  test.it("selects the header row from its handle", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 1, "row", 1))
+    test.same(selected_cells(view), { "1:1", "1:2", "1:3" })
+  end)
+
+  test.it("drags the header row down so a body row becomes the header", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    local x, y = table_handle(view, 1, "row", 1)
+    local _, target_y = cell_center(view, 3, 1)
+    drag_from_to(view, x, y, x, target_y)
+    test.same(row_cells(buffer, 1), { "one", "two", "three" })
+    test.same(row_cells(buffer, 3), { "A", "B", "C" })
+    test.same(row_cells(buffer, 4), { "four", "five", "six" })
+  end)
+
+  test.it("adds and removes rows with Ctrl on their handles", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 1, "row", 1))
+    refresh(view)
+    with_modkey("ctrl", function()
+      click_at(view, table_handle(view, 4, "row", 4))
+      test.same(selected_cells(view), { "1:1", "1:2", "1:3", "4:1", "4:2", "4:3" })
+      refresh(view)
+      click_at(view, table_handle(view, 1, "row", 1))
+      test.same(selected_cells(view), { "4:1", "4:2", "4:3" })
+    end)
+  end)
+
+  test.it("extends a column selection to the Shift-clicked column handle", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 1, "column", 3))
+    refresh(view)
+    with_modkey("shift", function()
+      click_at(view, table_handle(view, 1, "column", 1))
+    end)
+    test.same(selected_cells(view),
+      { "1:1", "1:2", "1:3", "3:1", "3:2", "3:3", "4:1", "4:2", "4:3" })
+  end)
+
+  test.it("starts a fresh selection when Ctrl-clicking a handle of another kind", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 3, "row", 3))
+    refresh(view)
+    with_modkey("ctrl", function()
+      click_at(view, table_handle(view, 1, "column", 1))
+    end)
+    test.same(selected_cells(view), { "1:1", "3:1", "4:1" })
+  end)
+
+  test.it("inserts a row beside a selected row from its insert buttons", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    test.equal(has_insert_button(view, 3), false)
+    click_at(view, table_handle(view, 3, "row", 3))
+    refresh(view)
+    click_at(view, insert_button(view, 3, "row", "below"))
+    test.same(row_cells(buffer, 3), { "one", "two", "three" })
+    test.same(row_cells(buffer, 4), { "", "", "" })
+    test.same(row_cells(buffer, 5), { "four", "five", "six" })
+    test.same({ caret_cell(buffer) }, { 4, 1 })
+  end)
+
+  test.it("inserts a new header above the selected header row", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 1, "row", 1))
+    refresh(view)
+    click_at(view, insert_button(view, 1, "row", "above"))
+    test.same(row_cells(buffer, 1), { "", "", "" })
+    test.same(row_cells(buffer, 3), { "A", "B", "C" })
+    test.same({ caret_cell(buffer) }, { 1, 1 })
+  end)
+
+  test.it("inserts a column left of the leftmost selected column", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 1, "column", 2))
+    refresh(view)
+    with_modkey("shift", function()
+      click_at(view, table_handle(view, 1, "column", 3))
+    end)
+    refresh(view)
+    click_at(view, insert_button(view, 1, "column", "left"))
+    test.same(row_cells(buffer, 1), { "A", "", "B", "C" })
+    test.same(row_cells(buffer, 4), { "four", "", "five", "six" })
+  end)
+
+  test.it("grows a cell selection across cells with Shift and the arrow keys", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      buffer:set_selection(3, 5)
+      refresh(view)
+      -- The first press selects to the cell's end; the next leaves the cell.
+      test.equal(command.perform("markdown:table_select_next_char"), true)
+      test.equal(command.perform("markdown:table_select_next_char"), true)
+      test.same(selected_cells(view), { "3:1", "3:2" })
+      test.equal(command.perform("markdown:table_select_down"), true)
+      test.same(selected_cells(view), { "3:1", "3:2", "4:1", "4:2" })
+      test.equal(command.perform("markdown:table_select_previous_char"), true)
+      test.same(selected_cells(view), { "3:1", "4:1" })
+    end)
+  end)
+
+  test.it("turns Shift+Up and Shift+Down at a cell's edge into cell selection", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      buffer:set_selection(3, 5)
+      refresh(view)
+      test.equal(command.perform("markdown:table_select_down"), true)
+      test.same(selected_cells(view), { "3:1", "4:1" })
+      -- Shrinking back to one cell keeps its whole contents selected.
+      test.equal(command.perform("markdown:table_select_up"), true)
+      test.same(selected_cells(view), { "3:1" })
+      test.equal(command.perform("markdown:table_select_up"), true)
+      test.same(selected_cells(view), { "1:1", "3:1" })
+    end)
+  end)
+
+  test.it("keeps a keyboard cell selection inside the table at its edge", function()
+    local view, buffer = make_view(GRID)
+    with_active(view, function()
+      buffer:set_selection(4, 3)
+      refresh(view)
+      test.equal(command.perform("markdown:table_select_down"), true)
+      test.same(selected_cells(view), { "4:1" })
+      test.equal(command.perform("markdown:table_select_up"), true)
+      test.same(selected_cells(view), { "3:1", "4:1" })
     end)
   end)
 end)

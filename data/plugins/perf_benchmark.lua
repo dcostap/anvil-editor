@@ -1287,6 +1287,9 @@ local function record_video()
       markdown_tables.select_column(view, first, 4)
       settle_semantics()
       for _ = 1, 2 do capture("selected-column") end
+      markdown_tables.select_row(view, first)
+      settle_semantics()
+      for _ = 1, 2 do capture("selected-row") end
     end
     view.buffer:set_selection(find_line("Task") + 2, 3)
     local last = find_line("Ship")

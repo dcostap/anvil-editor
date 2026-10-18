@@ -454,9 +454,14 @@ function tables.has_interactive_position(view, x, y)
   return context_at(view, line, col, false) ~= nil
 end
 
-local function selection_for_cell(row, column)
+-- The caret ends the selection at the cell's end, or at its start with
+-- `caret_at_start`.
+local function selection_for_cell(row, column, caret_at_start)
   local cell = row and row.cells[column]
   if not cell then return nil end
+  if caret_at_start then
+    return { row.line, cell.content_col1, row.line, cell.content_col2 }
+  end
   return { row.line, cell.content_col2, row.line, cell.content_col1 }
 end
 
@@ -909,9 +914,118 @@ local function adjacent_break(text, cell, col, direction)
   end
 end
 
+-- Select the cells between an anchor and a focus cell, given as grid rows and
+-- columns. The focus cell is the primary selection: keyboard extension moves
+-- that corner and keeps the opposite one.
+local function select_grid_rectangle(view, context, anchor_row, anchor_col, focus_row, focus_col)
+  local row1, row2 = math.min(anchor_row, focus_row), math.max(anchor_row, focus_row)
+  local col1, col2 = math.min(anchor_col, focus_col), math.max(anchor_col, focus_col)
+  local selections, primary = {}, 1
+  for row_index = row1, row2 do
+    local row = context.editable_rows[row_index]
+    for column = col1, col2 do
+      local selection = selection_for_cell(row, column)
+      if selection then
+        if row_index == focus_row and column == focus_col then
+          primary = #selections / 4 + 1
+        end
+        for _, value in ipairs(selection) do selections[#selections + 1] = value end
+      end
+    end
+  end
+  if #selections == 0 then return false end
+  view.buffer:set_selection_list(selections, primary, { merge_cursors = false })
+  return true
+end
+
+-- A Table Cell Selection group as a rectangle: its focus is the primary
+-- selection's cell and its anchor the opposite corner of the cells' bounds.
+-- Nil unless several selections each cover one whole cell.
+local function cell_group(view, contexts)
+  if #contexts < 2 then return nil end
+  local selections = view.buffer.selections
+  local row1, row2, col1, col2, focus
+  for _, context in ipairs(contexts) do
+    local offset = (context.selection_index - 1) * 4
+    local a, b = selections[offset + 2], selections[offset + 4]
+    if math.min(a, b) ~= context.cell.content_col1
+    or math.max(a, b) ~= context.cell.content_col2
+    then
+      return nil
+    end
+    row1 = math.min(row1 or context.grid_row, context.grid_row)
+    row2 = math.max(row2 or context.grid_row, context.grid_row)
+    col1 = math.min(col1 or context.column, context.column)
+    col2 = math.max(col2 or context.column, context.column)
+    if context.selection_index == view.buffer.last_selection then focus = context end
+  end
+  focus = focus or contexts[#contexts]
+  return {
+    context = focus,
+    focus_row = focus.grid_row, focus_col = focus.column,
+    anchor_row = focus.grid_row == row1 and row2 or row1,
+    anchor_col = focus.column == col1 and col2 or col1,
+  }
+end
+
+-- Extend a Table Cell Selection with the keyboard by moving its focus cell.
+-- A lone caret or text selection becomes one when it leaves its cell. Returns
+-- nil when the selection should extend as text instead.
+local function extend_cells(view, contexts, row_step, col_step)
+  local group = cell_group(view, contexts)
+  if not group then
+    if #contexts ~= 1 then return nil end
+    local context = contexts[1]
+    local cell = context.cell
+    if col_step < 0 and context.col > cell.content_col1
+    or col_step > 0 and context.col < cell.content_col2
+    then
+      return nil
+    end
+    group = {
+      context = context,
+      focus_row = context.grid_row, focus_col = context.column,
+      anchor_row = context.grid_row, anchor_col = context.column,
+    }
+  end
+  local context = group.context
+  local row = common.clamp(group.focus_row + row_step, 1, #context.editable_rows)
+  local column = common.clamp(group.focus_col + col_step, 1, context.columns)
+  if row == group.focus_row and column == group.focus_col then
+    -- At the table's edge a lone selection still reaches its cell's edge.
+    if not cell_group(view, contexts) then
+      local cell, offset = context.cell, (context.selection_index - 1) * 4
+      local anchor = view.buffer.selections[offset + 4]
+      local edge = (row_step < 0 or col_step < 0) and cell.content_col1 or cell.content_col2
+      view.buffer:set_selection(context.line, edge, context.line, anchor)
+    end
+    return true
+  end
+  if row == group.anchor_row and column == group.anchor_col then
+    -- One cell left: select its contents with the caret on the side the
+    -- selection travels toward, so the next step leaves the cell again.
+    local selection = selection_for_cell(
+      context.editable_rows[row], column, row_step < 0 or col_step < 0
+    )
+    view.buffer:set_selection(table.unpack(selection))
+    return true
+  end
+  core.log_quiet(
+    "Markdown table keyboard cell selection %d:%d to %d:%d in %s",
+    group.anchor_row, group.anchor_col, row, column, view.buffer:get_name()
+  )
+  return select_grid_rectangle(
+    view, context, group.anchor_row, group.anchor_col, row, column
+  )
+end
+
 function tables.move_char(view, direction, selecting)
   local contexts = collect_interactive_contexts(view)
   if not contexts then return false end
+  if selecting then
+    local handled = extend_cells(view, contexts, 0, direction)
+    if handled ~= nil then return handled end
+  end
   local selections = {}
   for _, context in ipairs(contexts) do
     local offset = (context.selection_index - 1) * 4
@@ -1000,6 +1114,9 @@ function tables.move_vertical(view, direction, selecting)
   if view.clear_pending_line_render_position_row_affinity then
     view:clear_pending_line_render_position_row_affinity()
   end
+  if selecting and cell_group(view, contexts) then
+    return extend_cells(view, contexts, direction, 0)
+  end
   local selections = {}
   for _, context in ipairs(contexts) do
     local old_offset = (context.selection_index - 1) * 4
@@ -1008,6 +1125,10 @@ function tables.move_vertical(view, direction, selecting)
     local line, col = view:move_within_line_render_position_rows(
       context.line, context.col, direction
     )
+    if not line and selecting and #contexts == 1 then
+      -- Leaving the cell's first or last visual line selects whole cells.
+      return extend_cells(view, contexts, direction, 0)
+    end
     if not line then
       local target_grid_row = context.grid_row + direction
       local target_row = context.editable_rows[target_grid_row]
@@ -1048,38 +1169,17 @@ function tables.select_rectangle(view, anchor_line, anchor_col, line, col)
     -- Table Cell Selection.
     return false
   end
-  local row1, row2 = math.min(anchor.grid_row, target.grid_row),
-    math.max(anchor.grid_row, target.grid_row)
-  local col1, col2 = math.min(anchor.column, target.column),
-    math.max(anchor.column, target.column)
-  local selections, last_selection = {}, 1
-  for row_index = row1, row2 do
-    local row = anchor.editable_rows[row_index]
-    for column = col1, col2 do
-      local selection = selection_for_cell(row, column)
-      if selection then
-        local selection_index = #selections / 4 + 1
-        for _, value in ipairs(selection) do selections[#selections + 1] = value end
-        if row_index == target.grid_row and column == target.column then
-          last_selection = selection_index
-        end
-      end
-    end
-  end
-  if #selections == 0 then return false end
-  view.buffer:set_selection_list(selections, last_selection, {
-    merge_cursors = false,
-  })
-  return true
+  return select_grid_rectangle(
+    view, anchor, anchor.grid_row, anchor.column, target.grid_row, target.column
+  )
 end
 
 function tables.insert_row(view, side)
   local context = tables.context(view)
   if not context then return false end
   local model = model_from_context(context)
-  -- The header row stays first; a row inserted "above" it lands below it.
-  local index = context.grid_row + 1
-  if side == "above" and context.grid_row > 1 then index = context.grid_row end
+  -- A row inserted above the header row becomes the new header.
+  local index = side == "above" and context.grid_row or context.grid_row + 1
   table.insert(model.rows, index, empty_cells(model.columns))
   return apply_model(context, model, "insert-row", {
     row = index, column = context.column,
@@ -1098,10 +1198,10 @@ end
 
 function tables.move_row(view, direction)
   local context = tables.context(view)
-  if not context or context.grid_row <= 1 then return false end
+  if not context then return false end
   local target = context.grid_row + direction
   local model = model_from_context(context)
-  if target <= 1 or target > #model.rows then return false end
+  if target < 1 or target > #model.rows then return false end
   model.rows[context.grid_row], model.rows[target] =
     model.rows[target], model.rows[context.grid_row]
   return apply_model(context, model, "move-row", {
@@ -1154,44 +1254,157 @@ function tables.move_column(view, direction)
   })
 end
 
--- The first cell is the primary selection. Callers list the cell nearest the
--- handle that selected the cells first, so the view stays where it is.
-local function select_cells(view, cells)
-  local selections = {}
-  for _, cell in ipairs(cells) do
-    for _, value in ipairs(selection_for_cell(cell[1], cell[2]) or {}) do
-      selections[#selections + 1] = value
+---The whole rows and whole columns of the table at `line` that the selection
+---covers, as sorted lists of grid rows and columns, or nil when the selection
+---is anything else. Only a group of several selections that each cover one
+---complete cell counts; a lone cell's contents are a text selection.
+function tables.whole_lines_selected(view, line)
+  local selections = view.buffer.selections
+  if #selections < 8 then return nil end
+  local context = context_at(view, line, 1, false)
+  if not context then return nil end
+  local grid_rows = {}
+  for index, row in ipairs(context.editable_rows) do grid_rows[row.line] = index end
+  local seen, count, row_counts, column_counts = {}, 0, {}, {}
+  for index = 1, #selections, 4 do
+    local line1, col1, line2, col2 = table.unpack(selections, index, index + 3)
+    local grid_row = line1 == line2 and grid_rows[line1]
+    if not grid_row then return nil end
+    local low, high = math.min(col1, col2), math.max(col1, col2)
+    local column
+    for cell_index, cell in ipairs(context.editable_rows[grid_row].cells) do
+      if cell.content_col1 == low and cell.content_col2 == high then
+        column = cell_index
+        break
+      end
+    end
+    if not column then return nil end
+    local key = grid_row .. ":" .. column
+    if not seen[key] then
+      seen[key] = true
+      count = count + 1
+      row_counts[grid_row] = (row_counts[grid_row] or 0) + 1
+      column_counts[column] = (column_counts[column] or 0) + 1
+    end
+  end
+  local function complete(counts, limit, size)
+    local list = {}
+    for index = 1, limit do
+      if counts[index] == size then list[#list + 1] = index end
+    end
+    return #list * size == count and list or nil
+  end
+  local rows = complete(row_counts, #context.editable_rows, context.columns)
+  local columns = complete(column_counts, context.columns, #context.editable_rows)
+  if not (rows or columns) then return nil end
+  return { rows = rows, columns = columns, context = context }
+end
+
+-- Select whole rows or columns of a table, given as a set of grid rows or
+-- columns. The cell of `focus` nearest the handle that selected it is the
+-- primary selection; the handle is on screen, so the view stays still.
+local function select_lines(view, context, kind, chosen, focus, far_side)
+  local count = kind == "row" and #context.editable_rows or context.columns
+  local across = kind == "row" and context.columns or #context.editable_rows
+  local near = far_side and across or 1
+  local selections, primary = {}, 1
+  for index = 1, count do
+    if chosen[index] then
+      for position = 1, across do
+        local row = context.editable_rows[kind == "row" and index or position]
+        local selection = selection_for_cell(row, kind == "row" and position or index)
+        if selection then
+          if index == focus and position == near then primary = #selections / 4 + 1 end
+          for _, value in ipairs(selection) do selections[#selections + 1] = value end
+        end
+      end
     end
   end
   if #selections == 0 then return false end
-  view.buffer:set_selection_list(selections, 1, { merge_cursors = false })
+  view.buffer:set_selection_list(selections, primary, { merge_cursors = false })
   return true
+end
+
+---Select the whole row at `line` (`kind` "row") or column `column` (`kind`
+---"column") of the table holding `line`, as a Table Handle does. `mode`
+---"add" toggles it within a selection of whole lines of the same kind, and
+---"extend" selects every line from that selection's anchor end to it; other
+---selections are replaced. `far_side` names a handle on the row's right or
+---the column's bottom.
+function tables.select_from_handle(view, line, kind, column, mode, far_side)
+  local context = context_at(view, line, 1, false)
+  if not context then return false end
+  local index = kind == "row" and context.grid_row or column
+  local count = kind == "row" and #context.editable_rows or context.columns
+  if not index or index < 1 or index > count then return false end
+  local chosen, focus = { [index] = true }, index
+  local covered = mode and tables.whole_lines_selected(view, line)
+  local current = covered and same_table(covered.context, context)
+    and covered[kind == "row" and "rows" or "columns"]
+  if current and mode == "add" then
+    chosen = {}
+    for _, value in ipairs(current) do chosen[value] = true end
+    if chosen[index] and #current > 1 then
+      chosen[index] = nil
+      focus = nil
+      for _, value in ipairs(current) do
+        if chosen[value] then focus = value break end
+      end
+    else
+      chosen[index] = true
+    end
+  elseif current and mode == "extend" then
+    -- The primary selection is the focus end; the far end is the anchor.
+    local primary_line, primary_col = view.buffer:get_selection()
+    local primary = context_at(view, primary_line, primary_col, false)
+    local primary_index = primary and (kind == "row" and primary.grid_row or primary.column)
+    local anchor = primary_index == current[1] and current[#current] or current[1]
+    chosen = {}
+    for value = math.min(anchor, index), math.max(anchor, index) do chosen[value] = true end
+  end
+  core.log_quiet(
+    "Markdown table handle %s %s %d in %s", mode or "selected", kind, index,
+    view.buffer:get_name()
+  )
+  return select_lines(view, context, kind, chosen, focus, far_side)
 end
 
 ---Select every cell of the table row at `line` as Table Cell Selections.
 function tables.select_row(view, line)
-  local context = context_at(view, line, 1, false)
-  if not context then return false end
-  local cells = {}
-  for column = 1, context.columns do cells[#cells + 1] = { context.current_row, column } end
-  return select_cells(view, cells)
+  return tables.select_from_handle(view, line, "row")
 end
 
 ---Select every cell of `column` in the table holding `line`.
 function tables.select_column(view, line, column)
-  local context = context_at(view, line, 1, false)
-  if not context or column < 1 or column > context.columns then return false end
-  local cells = {}
-  for _, row in ipairs(context.editable_rows) do cells[#cells + 1] = { row, column } end
-  return select_cells(view, cells)
+  return tables.select_from_handle(view, line, "column", column)
 end
 
----Move the body row at `line` to grid row `target` and select it.
+---Insert an empty row or column beside the whole rows or columns the
+---selection covers in the table holding `line`: `side` "above" or "below"
+---the outermost selected row, or "left" or "right" of the outermost column.
+---The caret moves into the new row or column.
+function tables.insert_beside_selection(view, line, side)
+  local covered = tables.whole_lines_selected(view, line)
+  local kind = (side == "above" or side == "below") and "rows" or "columns"
+  local list = covered and covered[kind]
+  if not list then return false end
+  local before = side == "above" or side == "left"
+  local index = before and list[1] or list[#list]
+  local rows = covered.context.editable_rows
+  local row = kind == "rows" and rows[index] or rows[1]
+  local cell = row.cells[kind == "rows" and 1 or index]
+  view.buffer:set_selection(row.line, cell.content_col1)
+  if kind == "rows" then return tables.insert_row(view, side) end
+  return tables.insert_column(view, side)
+end
+
+---Move the row at `line` to grid row `target` and select it. A row moved to
+---the top becomes the header row.
 function tables.move_row_to(view, line, target)
   local context = context_at(view, line, 1, true)
-  if not context or context.grid_row <= 1 then return false end
+  if not context then return false end
   local model = model_from_context(context)
-  target = common.clamp(target, 2, #model.rows)
+  target = common.clamp(target, 1, #model.rows)
   if target == context.grid_row then return false end
   table.insert(model.rows, target, table.remove(model.rows, context.grid_row))
   apply_model(context, model, "drag-row")
