@@ -225,7 +225,24 @@ local function change_project_directory_with_system_file_picker()
 end
 
 local function open_project_directory()
+  -- The shell loads Projects beside each other in one Anvil Window.
+  if system.is_hosted_surface() then
+    open_directory("Open Project", false, function(abs_path)
+      core.open_project_in_same_window(abs_path[1])
+    end, true)
+    return
+  end
   open_directory("Open Project", false, function(abs_path)
+    if common.path_equals(abs_path[1], core.root_project().path) then
+      core.error("Directory %q is currently opened", abs_path[1])
+      return
+    end
+    core.open_project_in_new_window(abs_path[1])
+  end, true)
+end
+
+local function open_project_directory_in_new_window()
+  open_directory("Open Project in New Window", false, function(abs_path)
     if not system.is_hosted_surface() and common.path_equals(abs_path[1], core.root_project().path) then
       core.error("Directory %q is currently opened", abs_path[1])
       return
@@ -383,6 +400,10 @@ command.add(nil, {
 
   ["core:open_project_folder_system_file_picker"] = function()
     open_project_directory_with_system_file_picker()
+  end,
+
+  ["core:open_project_folder_in_new_window"] = function()
+    open_project_directory_in_new_window()
   end,
 
   ["core:add_directory"] = function()

@@ -22,7 +22,7 @@ local buttons = {
     label = "Open File", tooltip = "Open an existing project file"
   },
   { name = "open_folder", icon = "d", cmd = "core:open_project_folder",
-    label = "Open Project", tooltip = "Open a project in another instance"
+    label = "Open Project", tooltip = "Open a Project"
   },
   { name = "change_folder", icon = "s", cmd = "core:change_project_folder",
     label = "Change Project", tooltip = "Change main project of current instance"

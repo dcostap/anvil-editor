@@ -21,10 +21,62 @@ test.describe("Project window launch", function()
       system.allow_process_foreground = context.original_allow_process_foreground
     end
     if context.original_projects then core.projects = context.original_projects end
+    if context.shell then
+      system.is_hosted_surface = context.shell.hosted
+      system.select_project = context.shell.select
+      system.open_project_window = context.shell.open_window
+    end
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
       test.ok(ok, err)
     end
+  end)
+
+  local function stub_shell(context)
+    context.shell = {
+      hosted = system.is_hosted_surface,
+      select = system.select_project,
+      open_window = system.open_project_window,
+      selected = {},
+      windows = {},
+    }
+    system.is_hosted_surface = function() return true end
+    system.select_project = function(path)
+      table.insert(context.shell.selected, path); return true
+    end
+    system.open_project_window = function(path)
+      table.insert(context.shell.windows, path); return true
+    end
+  end
+
+  local function submit_project_prompt(name, path)
+    test.ok(command.perform(name))
+    core.global_prompt_bar:set_text(path)
+    core.global_prompt_bar:submit()
+  end
+
+  test.it("opens a Project in this Anvil Window under the shell", function(context)
+    local project = context.temp_root .. PATHSEP .. "shell-project"
+    test.ok(common.mkdirp(project))
+    stub_shell(context)
+
+    submit_project_prompt("core:open_project_folder", project)
+
+    test.equal(#context.shell.selected, 1)
+    test.ok(common.path_equals(context.shell.selected[1], project))
+    test.same(context.shell.windows, {})
+  end)
+
+  test.it("opens a Project in a new Anvil Window only through its explicit command", function(context)
+    local project = context.temp_root .. PATHSEP .. "shell-window-project"
+    test.ok(common.mkdirp(project))
+    stub_shell(context)
+
+    submit_project_prompt("core:open_project_folder_in_new_window", project)
+
+    test.equal(#context.shell.windows, 1)
+    test.ok(common.path_equals(context.shell.windows[1], project))
+    test.same(context.shell.selected, {})
   end)
 
   test.it("starts a new Windows Project directly and grants it foreground access", function(context)

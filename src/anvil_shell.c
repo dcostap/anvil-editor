@@ -2583,9 +2583,8 @@ static void finish_project_picker(ShellPicker *picker) {
     const AnvilSurfaceDialogResult *result = picker->result;
     if (result->status == ANVIL_SURFACE_DIALOG_ACCEPT) {
       const char *path = (const char *)(result + 1);
-      bool accepted = window->selected->id ? open_project_window(window, path)
-                                           : select_project_path(window, path);
-      if (!accepted) window_notice(window, "Cannot submit the Open Project request.");
+      /* Projects load beside each other; only the explicit command opens another Window. */
+      if (!select_project_path(window, path)) window_notice(window, "Cannot submit the Open Project request.");
     } else if (result->status == ANVIL_SURFACE_DIALOG_ERROR)
       window_notice(window, "The Project folder picker failed.");
     else SDL_Log("Shell Open Project picker cancelled: Window=%u", window->id);

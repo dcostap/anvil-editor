@@ -7662,8 +7662,20 @@ end
 function FSView:confirm_folder_open(r, new_group)
   local path = common.normalize_path(r.abs_path or r.path or r.project)
   if not path then return false end
+  -- The shell loads Projects beside each other in one Anvil Window, so a
+  -- Project result opens there. A new Window is an explicit command.
+  local shell = system.is_hosted_surface()
+  if shell and (r.kind == "project" or r.kind == "new_project") then
+    core.log_quiet("Fuzzy Searcher: opening Project in this Anvil Window without a prompt")
+    if not new_group then self:close() end
+    core.add_thread(function()
+      core.open_project_in_same_window(path)
+      self:restore_activation_focus(new_group)
+    end)
+    return true
+  end
   local default_action = r.kind == "folder" and "filetree"
-    or ((new_group or r.kind == "new_project") and "project_new" or "project_here")
+    or ((new_group or r.kind == "new_project") and not shell and "project_new" or "project_here")
   local context = {
     source_view = self.source_view,
     source_pane = panes.find(self.source_pane) or panes.active(),
@@ -7671,10 +7683,14 @@ function FSView:confirm_folder_open(r, new_group)
   }
   local options = {
     { text = "Open File Tree", action = "filetree", default_yes = default_action == "filetree" },
-    { text = "Open Project in This Window", action = "project_here", default_yes = default_action == "project_here" },
-    { text = "Open Project in New Window", action = "project_new", default_yes = default_action == "project_new" },
-    { text = "Cancel", action = "cancel", default_no = true },
+    { text = shell and "Open Project" or "Open Project in This Window", action = "project_here",
+      default_yes = default_action == "project_here" },
   }
+  if not shell then
+    options[#options + 1] = { text = "Open Project in New Window", action = "project_new",
+      default_yes = default_action == "project_new" }
+  end
+  options[#options + 1] = { text = "Cancel", action = "cancel", default_no = true }
 
   core.nag_view:show(
     "Open Folder",

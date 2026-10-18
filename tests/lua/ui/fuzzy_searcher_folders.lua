@@ -85,6 +85,7 @@ test.describe("Project File Search folders", function()
     core.visited_files = context.visited_files
     core.open_project_in_same_window = context.open_project_in_same_window
     core.open_project_in_new_window = context.open_project_in_new_window
+    if context.is_hosted_surface then system.is_hosted_surface = context.is_hosted_surface end
     if context.cwd then pcall(system.chdir, context.cwd) end
     if context.root and system.get_file_info(context.root) then
       local ok, err, path = common.rm(context.root, true)
@@ -279,6 +280,47 @@ test.describe("Project File Search folders", function()
 
     test.ok(wait_until(function() return opened ~= nil end))
     test.ok(common.path_equals(opened, context.empty))
+  end)
+
+  test.it("opens a Project result in this Anvil Window without asking under the shell", function(context)
+    local opened, new_window
+    context.is_hosted_surface = system.is_hosted_surface
+    system.is_hosted_surface = function() return true end
+    core.open_project_in_same_window = function(path) opened = path; return true end
+    core.open_project_in_new_window = function(path) new_window = path; return true end
+
+    fuzzy_searcher.open_static_results("Projects", {
+      { kind = "project", label = context.empty, project = context.empty },
+    })
+    local picker = assert(core.fuzzy_searcher_active_view)
+    picker.selected = 1
+    picker:confirm(false)
+
+    test.ok(not core.nag_view.visible, "expected no Open Folder prompt")
+    test.ok(wait_until(function() return opened ~= nil end))
+    test.ok(common.path_equals(opened, context.empty))
+    test.is_nil(new_window)
+  end)
+
+  test.it("offers a folder as a File Tree or Project in this Anvil Window under the shell", function(context)
+    context.is_hosted_surface = system.is_hosted_surface
+    system.is_hosted_surface = function() return true end
+    fuzzy_searcher.open("empty nested")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    local index
+    test.ok(wait_until(function()
+      local result
+      result, index = result_for_path(picker.results, context.empty)
+      return index ~= nil
+    end))
+
+    picker.selected = index
+    picker:confirm(false)
+
+    local actions = {}
+    for _, option in ipairs(core.nag_view.options) do actions[#actions + 1] = option.action end
+    test.same(actions, { "filetree", "project_here", "cancel" })
+    select_folder_action("cancel")
   end)
 
   test.it("opens an exact Project folder path as a File Tree", function(context)

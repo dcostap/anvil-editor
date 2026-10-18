@@ -115,8 +115,8 @@ if path:find("/driver$", 1) then
           5, "hosted Open Project command did not use the shell picker")
         user32.PostMessageW(services(a.shell_pid), 0x8050, 1, a.window_id)
         local b = wait_for(function() return load("b-ready") end, 15, "occupied Window picker did not load the second Project")
-        assert(b.shell_pid == a.shell_pid and b.window_id ~= a.window_id, "occupied Window picker used the wrong owner")
-        assert(#windows(a.shell_pid) == 2, "occupied Window picker did not create exactly one Window")
+        assert(b.shell_pid == a.shell_pid and b.window_id == a.window_id, "occupied Window picker used another Window")
+        assert(#windows(a.shell_pid) == 1, "occupied Window picker created another Window")
         save("finish", {continue = true})
         wait_for(function() return not subject:running() end, 10)
         assert(subject:returncode() == 0); return
@@ -405,7 +405,7 @@ else
     if action == "windows-open" or action == "windows-owner-close" or shared then
       wait_for(function() return load("open") end, 15)
       require("core.config").plugins.ipc.single_instance = true
-      assert(command.perform("core:open_project_folder"))
+      assert(command.perform("core:open_project_folder_in_new_window"))
       core.global_prompt_bar:set_text(root .. "/Replacement")
       core.global_prompt_bar:submit()
       if action == "windows-owner-close" or shared then
@@ -413,7 +413,7 @@ else
         quit(); return
       end
       wait_for(function() return load("same-project") end, 25)
-      assert(command.perform("core:open_project_folder"))
+      assert(command.perform("core:open_project_folder_in_new_window"))
       core.global_prompt_bar:set_text(root .. "/Project")
       core.global_prompt_bar:submit()
       wait_for(function() return load("maximized-project") end, 25)
