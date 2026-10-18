@@ -563,6 +563,10 @@ _Avoid_: Terminal panel, terminal buffer, console
 The running shell or terminal application behind a Terminal View. It belongs to one Project and can keep running while no Terminal View shows it.
 _Avoid_: PTY, terminal process, shell instance
 
+**Agent Session**:
+A coding agent's saved conversation, such as a Pi session. When a Terminal Session revives after its shell ended, it resumes the Agent Session that its agent had open.
+_Avoid_: agent conversation, Pi session file
+
 **Terminal Text Capture**:
 A Text Capture containing stable text from a Terminal View while that terminal continues to run.
 _Avoid_: terminal buffer, copy mode

@@ -55,6 +55,7 @@ return { run = function(payload, ctx)
           local ok, record = pcall(chunk or function() end)
           if ok and type(record) == "table" and record.session_id == id and dead(record) then
             os.remove(directory .. id .. ".snapshot")
+            os.remove(directory .. id .. ".agent")
             if os.remove(path) then removed = removed + 1 end
           end
         end

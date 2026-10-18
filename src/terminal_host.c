@@ -43,7 +43,9 @@ typedef struct {
   HANDLE reader, writer, client, console_close;
   const char *id, *pipe_name, *project, *shell, *cwd;
   char log_path[32768], record_path[32768], snapshot_path[32768];
-  char last_cwd[32768], interrupted_command[16384];
+  char last_cwd[32768], interrupted_command[16384], agent_report_path[32768];
+  /* The busy child that interrupted_command came from. An agent report names it. */
+  DWORD interrupted_pid;
   bool explicit_close, shell_ended;
   /* The live title the Project Sidebar shows, and the last activity in Unix seconds. */
   char title[1024];
@@ -173,6 +175,7 @@ static bool write_registry(TerminalHost *host) {
     registry_string(file, "status", host->shell_ended ? "exited" : "running");
     registry_string(file, "snapshot_path", host->snapshot_path);
     registry_string(file, "interrupted_command", host->interrupted_command);
+    fprintf(file, "  interrupted_pid = %lu,\n", (unsigned long)host->interrupted_pid);
     fputs("}\n", file);
     ok = !ferror(file);
   }
@@ -192,6 +195,9 @@ static void delete_registry(TerminalHost *host) {
   if (path) DeleteFileW(path);
   free(path);
   path = wide_string(host->snapshot_path);
+  if (path) DeleteFileW(path);
+  free(path);
+  path = wide_string(host->agent_report_path);
   if (path) DeleteFileW(path);
   free(path);
   ReleaseMutex(mutex); CloseHandle(mutex);
@@ -488,8 +494,8 @@ static void join_reader(TerminalHost *host) {
 }
 
 /* Unknown process state is busy: do not end a shell on a failed probe. */
-static bool shell_busy(DWORD pid, char *command, size_t capacity) {
-  command[0] = 0;
+static bool shell_busy(DWORD pid, char *command, size_t capacity, DWORD *command_pid) {
+  command[0] = 0; *command_pid = 0;
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   if (snapshot == INVALID_HANDLE_VALUE) return true;
   PROCESSENTRY32W entry = { .dwSize = sizeof(entry) };
@@ -500,6 +506,7 @@ static bool shell_busy(DWORD pid, char *command, size_t capacity) {
       /* A prompt helper is a child, but not a command worth offering again.
          Keep scanning: another child can hold the interrupted command. */
       if (!_wcsicmp(entry.szExeFile, L"oh-my-posh.exe") || !_wcsicmp(entry.szExeFile, L"starship.exe")) continue;
+      *command_pid = entry.th32ProcessID;
       HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
       typedef LONG (WINAPI *QueryProcess)(HANDLE, ULONG, void *, ULONG, ULONG *);
       QueryProcess query = (QueryProcess)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess");
@@ -618,6 +625,43 @@ static bool prepare_revival(GhosttyTerminal model, uint16_t rows) {
   return true;
 }
 
+static void append_environment_option(const wchar_t *name, const wchar_t *option) {
+  static wchar_t current[32768], value[32768];
+  DWORD length = GetEnvironmentVariableW(name, current, 32768);
+  if (length >= 32768) return;
+  if (!length) current[0] = 0;
+  if (wcsstr(current, option)) return;
+  int count = _snwprintf(value, 32768, current[0] ? L"%ls %ls" : L"%ls%ls", current, option);
+  if (count > 0 && count < 32768) SetEnvironmentVariableW(name, value);
+}
+
+/* Node and Bun load Anvil's agent preload into each program the shell starts.
+   In Pi, it reports the session file Pi writes, so revival can resume that Agent Session. */
+static void set_agent_environment(TerminalHost *host, const char *datadir) {
+  static wchar_t option[32800], short_path[32768];
+  char script[32768];
+  snprintf(script, sizeof(script), "%s/tools/agent-sessions/pi.cjs", datadir);
+  wchar_t *report = wide_string(host->agent_report_path), *path = wide_string(script);
+  DWORD attrs = path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
+  if (!report || attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+    host_log(host, "agent preload: unavailable at %s", script);
+  } else {
+    SetEnvironmentVariableW(L"ANVIL_TERMINAL_AGENT_REPORT", report);
+    /* A Pi that started Anvil is not the Pi of this terminal. */
+    SetEnvironmentVariableW(L"ANVIL_TERMINAL_AGENT_OWNER", NULL);
+    /* Both option parsers treat a backslash as an escape. Both runtimes accept forward slashes. */
+    DWORD length = GetShortPathNameW(path, short_path, 32768);
+    for (wchar_t *p = path; *p; p++) if (*p == L'\\') *p = L'/';
+    for (wchar_t *p = short_path; length && length < 32768 && *p; p++) if (*p == L'\\') *p = L'/';
+    if (_snwprintf(option, 32800, L"--require \"%ls\"", path) > 0) append_environment_option(L"NODE_OPTIONS", option);
+    /* Bun splits BUN_OPTIONS at spaces and has no quoting, so it gets the short path. */
+    if (length && length < 32768 && !wcschr(short_path, L' ') &&
+        _snwprintf(option, 32800, L"--preload %ls", short_path) > 0) append_environment_option(L"BUN_OPTIONS", option);
+    else host_log(host, "agent preload: no path without spaces; Bun agents are not tracked");
+  }
+  free(report); free(path);
+}
+
 int anvil_terminal_host_main(int argc, char **argv) {
   if ((argc != 14 && argc != 16) || !anvil_terminal_id_valid(argv[2]) || strlen(argv[4]) > 32000 ||
       (argc == 16 && strcmp(argv[14], "--revive-from"))) return 1;
@@ -637,12 +681,14 @@ int anvil_terminal_host_main(int argc, char **argv) {
   snprintf(host.log_path, sizeof(host.log_path), "%s/logs/terminal-session-%s.log", argv[4], argv[2]);
   snprintf(host.record_path, sizeof(host.record_path), "%s/terminal-sessions/%s.lua", argv[4], argv[2]);
   snprintf(host.snapshot_path, sizeof(host.snapshot_path), "%s/terminal-sessions/%s.snapshot", argv[4], argv[2]);
+  snprintf(host.agent_report_path, sizeof(host.agent_report_path), "%s/terminal-sessions/%s.agent", argv[4], argv[2]);
   snprintf(host.last_cwd, sizeof(host.last_cwd), "%s", host.cwd);
   uint8_t nonce[16];
   if (random_bytes(nonce, sizeof(nonce)))
     for (size_t i = 0; i < sizeof(nonce); i++) snprintf(host.nonce + i * 2, 3, "%02x", nonce[i]);
   host_log(&host, "start");
   host_log(&host, "ConPTY runtime: %s/conpty", argv[13]);
+  set_agent_environment(&host, argv[13]);
   BOOL in_job = FALSE;
   if (IsProcessInJob(GetCurrentProcess(), NULL, &in_job) && in_job)
     host_log(&host, "breakaway unavailable: host remains in parent job");
@@ -749,12 +795,13 @@ int anvil_terminal_host_main(int argc, char **argv) {
     if (!exited_at && now >= busy_probe_at) {
       busy_probe_at = now + (host.attached ? 500 : 2000);
       char command[16384];
+      DWORD command_pid = 0;
       /* A child process covers any shell. The integrated shell's marks also cover
          commands that run inside the shell, such as PowerShell's Start-Sleep. */
-      bool busy = shell_busy(GetProcessId(host.pty.process), command, sizeof(command));
+      bool busy = shell_busy(GetProcessId(host.pty.process), command, sizeof(command), &command_pid);
       busy = busy || InterlockedCompareExchange(&host.command_running, 0, 0);
-      bool command_changed = strcmp(command, host.interrupted_command) != 0;
-      if (command_changed) strcpy(host.interrupted_command, command);
+      bool command_changed = strcmp(command, host.interrupted_command) != 0 || command_pid != host.interrupted_pid;
+      if (command_changed) { strcpy(host.interrupted_command, command); host.interrupted_pid = command_pid; }
       EnterCriticalSection(&host.lock);
       bool busy_changed = host.busy != busy;
       if (busy_changed) {

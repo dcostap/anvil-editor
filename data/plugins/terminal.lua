@@ -259,6 +259,43 @@ local function session_record(id)
   return record
 end
 
+-- Anvil's agent preload reports the session file that a terminal's Pi writes.
+-- A report counts only when the busy child wrote it, or that child's own child,
+-- such as the Node process that an npm shim starts.
+local function agent_resume_command(record)
+  local pid = record.interrupted_pid
+  if type(pid) ~= "number" or pid <= 0 or type(record.interrupted_command) ~= "string"
+      or record.interrupted_command == "" then return nil end
+  local file = io.open(USERDIR .. PATHSEP .. "terminal-sessions" .. PATHSEP .. record.session_id .. ".agent", "rb")
+  if not file then return nil end
+  local text = file:read(65536) or ""
+  file:close()
+  local report = {}
+  for key, value in text:gmatch("([%w_]+)=([^\r\n]*)") do report[key] = value end
+  if tonumber(report.pid) ~= pid and tonumber(report.ppid) ~= pid then
+    core.log_quiet("Terminal Session %s agent report is from another process: pid=%s ppid=%s child=%d",
+      record.session_id, tostring(report.pid), tostring(report.ppid), pid)
+    return nil
+  end
+  local session = report.session
+  local parts = { report.exe, report.script, "--session", session }
+  if not session or not (session:find("^[%x%-]+$") or (session:find("%.jsonl$") and system.get_file_info(session)))
+      or not report.exe or not system.get_file_info(report.exe)
+      or (report.script and not system.get_file_info(report.script)) then
+    core.log_quiet("Terminal Session %s agent report rejected", record.session_id)
+    return nil
+  end
+  local quoted = {}
+  for i = 1, 4 do
+    local part = parts[i]
+    if part then
+      if part:find('[%z\r\n"]') then return nil end
+      quoted[#quoted + 1] = '"' .. part .. '"'
+    end
+  end
+  return table.concat(quoted, " ")
+end
+
 function TerminalView:new(options)
   TerminalView.super.new(self)
   self.pane_constraint = {}
@@ -327,7 +364,7 @@ function TerminalView:new(options)
     if transport_error == 1067 and system.get_file_info(record.snapshot_path) then
       native_options.revive_from, native_options.revive_session_id = record.snapshot_path, record.session_id
       native_options.project_path = record.project_path
-      self.interrupted_command = record.interrupted_command
+      self:restore_interrupted_command(record)
       core.log_quiet("Terminal Session %s revival requested from disk", record.session_id)
     end
     session, start_error = native.new(native_options)
@@ -628,7 +665,26 @@ function TerminalView:rerun_interrupted_command()
   return ok
 end
 
+function TerminalView:restore_interrupted_command(record)
+  self.interrupted_command = record.interrupted_command
+  self.agent_resume_command = agent_resume_command(record)
+end
+
+-- Resuming an Agent Session runs nothing new: the agent waits for its next prompt.
+-- Any other interrupted command waits for approval.
 function TerminalView:offer_interrupted_command()
+  local resume = self.agent_resume_command
+  if resume and not self.rerun_offered then
+    self.agent_resume_command = nil
+    local original = self.interrupted_command
+    self.interrupted_command = resume
+    if self:rerun_interrupted_command() then
+      self.rerun_offered = true
+      core.log_quiet("Terminal Session %s resumed its Pi session", tostring(self.session_id))
+      return
+    end
+    self.interrupted_command = original
+  end
   local text = self.interrupted_command
   if self.rerun_offered or type(text) ~= "string" or text == "" or text:find("[%z\r\n]") or #text > 16384 then return end
   self.rerun_offered = true
@@ -660,7 +716,7 @@ function TerminalView:revive_lost_host()
     return false
   end
   self.launch_options.cwd, self.launch_options.shell = options.cwd, options.shell
-  self.interrupted_command = record.interrupted_command
+  self:restore_interrupted_command(record)
   local previous = self.session
   if previous then previous:detach() end
   self:adopt_session(session)

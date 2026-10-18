@@ -55,6 +55,13 @@ The host also reports a command that runs inside the shell, such as `Start-Sleep
 It ignores marks without the nonce, so a nested shell or TUI cannot end a running command.
 Run the `Terminal busy status` tests in `ui/terminal_quit.lua` after changes.
 
+A revived Terminal Session resumes the Pi session that its Pi had open. Pi needs no change.
+The host loads `data/tools/agent-sessions/pi.cjs` into Node and Bun through `NODE_OPTIONS` and `BUN_OPTIONS`.
+In Pi, the script writes `terminal-sessions/<id>.agent` with Pi's executable and the session file it writes.
+The record's `interrupted_pid` must match the report, so an old report cannot resume a different command.
+Both option parsers treat backslashes as escapes, and Bun has no quoting, so the host passes forward slashes and a short path to Bun.
+Run `ui/terminal_agent_resume.lua` after changes. It runs a fake Pi on Node and on Bun when they are installed.
+
 The standalone option is `-Dembedded_runtime=true`. It is off by default.
 `scripts\build-standalone-windows.sh` enables it, strips the executable, runs
 the standalone smoke test, and promotes the result only after the test passes.
