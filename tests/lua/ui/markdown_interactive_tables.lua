@@ -881,6 +881,37 @@ test.describe("Markdown Interactive Table Editing", function()
     test.equal(active_height, inactive_height)
   end)
 
+  test.it("draws cell text of a table without cell padding where a padded table draws it", function()
+    ---Return the y offset of each cell text drawn on `line`, keyed by text.
+    local function text_offsets(text, line)
+      local view, buffer = make_view(text)
+      buffer:set_selection(5, 1)
+      refresh(view)
+      view:prepare_line_body_draw_cache(line, line)
+      local x, y = view:get_line_screen_position(line)
+      local offsets = {}
+      local old_draw_rect = renderer.draw_rect
+      local old_draw_text = renderer.draw_text
+      renderer.draw_rect = function() end
+      renderer.draw_text = function(font, drawn, tx, ty)
+        offsets[drawn] = ty - y
+        return tx + font:get_width(drawn)
+      end
+      local ok, err = pcall(function() view:draw_line_body(line, x, y) end)
+      renderer.draw_rect = old_draw_rect
+      renderer.draw_text = old_draw_text
+      if not ok then error(err, 0) end
+      return offsets
+    end
+
+    for _, line in ipairs({ 1, 3 }) do
+      local padded = text_offsets("| A | B |\n| --- | --- |\n| one | two |\n\nplain", line)
+      local compact = text_offsets("|A|B|\n|---|---|\n|one|two|\n\nplain", line)
+      local cell = line == 1 and "A" or "one"
+      test.equal(compact[cell], test.not_nil(padded[cell]), "row " .. line)
+    end
+  end)
+
   test.it("remeasures pending table rows when the viewport narrows", function()
     local view, buffer = make_view(
       "| A | B |\n| --- | --- |\n"

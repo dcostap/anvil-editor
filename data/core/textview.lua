@@ -8090,9 +8090,13 @@ function TextView:draw_line_text(line, x, y)
           render_line, col1, position_row
         )
           or tx
+        -- A fragment with its own text lines, such as a table cell, fills
+        -- the content box and offsets each line itself. A caret row that
+        -- starts at its first column must not move that box onto one line.
+        local row_geometry = position_row and not fragment.text_lines
         local draw_y = content_y
-          + (position_row and (position_row.y_offset or 0) or 0)
-        local draw_height = position_row and (position_row.height or row_height)
+          + (row_geometry and (position_row.y_offset or 0) or 0)
+        local draw_height = row_geometry and (position_row.height or row_height)
           or content_height
         local font = render_fragment_font(self, fragment)
         font:set_tab_size(indent_size)
