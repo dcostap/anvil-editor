@@ -2053,7 +2053,7 @@ end
 
 -- Keep line-render invalidation on the input path bounded. Larger wrapped
 -- layouts are prepared in slices and atomically adopted by linewrapping.
-local MAX_SYNC_LINE_RENDER_WRAP_LINES = 128
+local MAX_SYNC_LINE_RENDER_WRAP_LINES = linewrapping.MAX_SYNC_WRAP_LINES
 
 function TextView:has_line_render_providers()
   return next(self.line_render_providers or {}) ~= nil

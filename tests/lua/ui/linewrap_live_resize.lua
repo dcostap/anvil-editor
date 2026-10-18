@@ -53,6 +53,44 @@ test.describe("Line wrapping during live window resize", function()
     test.ok(LineWrapping.get_total_wrapped_lines(view) < initial_rows)
   end)
 
+  test.it("wraps only the viewport in a resize frame of a long document", function(context)
+    local lines = {}
+    for i = 1, 3000 do
+      lines[i] = string.format("line %d %s", i, string.rep("wrapped words ", 6))
+    end
+    local buffer = Buffer()
+    context.buffer = buffer
+    buffer:insert(1, 1, table.concat(lines, "\n"))
+    local view = TextView(buffer)
+    view.wrapping_enabled = true
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 640, 240
+    LineWrapping.update_textview_breaks(view)
+
+    core.window_resizing_until = system.get_time() + 10
+    core.in_live_resize_frame = true
+    local previous_stats = core.perf_frame_stats
+    core.perf_frame_stats = {}
+    view.size.x = 320
+    view:update_wrap_cache()
+    local stats = core.perf_frame_stats
+    core.perf_frame_stats = previous_stats
+    core.in_live_resize_frame = false
+
+    local wrapped = (stats.linewrapping_reconstruct_breaks_lines or 0)
+      + (stats.linewrapping_update_breaks_lines or 0)
+    test.ok(wrapped < 300, ("the resize frame wrapped %d of 3000 lines"):format(wrapped))
+    test.ok(view:get_visual_row_count_for_line(1) > 1, "the visible rows kept the old width")
+
+    LineWrapping.complete_async_reconstruction(view)
+    local reference = TextView(buffer)
+    reference.wrapping_enabled = true
+    reference.size.x, reference.size.y = 320, 240
+    LineWrapping.update_textview_breaks(reference)
+    test.equal(LineWrapping.get_total_wrapped_lines(view),
+      LineWrapping.get_total_wrapped_lines(reference))
+  end)
+
   test.it("keeps the top visible Buffer line anchored while wrapping reflows", function(context)
     local lines = {}
     for i = 1, 80 do

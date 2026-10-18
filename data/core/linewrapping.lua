@@ -6,6 +6,9 @@ local style = require "core.style"
 
 local LineWrapping = {}
 
+-- Larger rewraps on the UI path run in slices after the viewport is wrapped.
+LineWrapping.MAX_SYNC_WRAP_LINES = 128
+
 local views_by_buffer = setmetatable({}, { __mode = "k" })
 local width_providers = {}
 local perf_frame_add
@@ -1772,6 +1775,13 @@ function LineWrapping.update_textview_breaks(textview, width)
       LineWrapping.reconstruct_breaks_async(textview, settings.font, width, {
         on_complete = pending.on_complete,
       })
+    elseif textview.wrapped_settings and not stale_line_count and not stale_text
+      and #textview.buffer.lines > LineWrapping.MAX_SYNC_WRAP_LINES
+    then
+      -- A live resize changes the width on every step. Wrap the viewport in
+      -- this frame and the rest of a long document in slices.
+      perf_frame_add("linewrapping_update_textview_breaks_sliced", 1)
+      LineWrapping.reconstruct_breaks_async(textview, settings.font, width)
     else
       LineWrapping.reconstruct_breaks(textview, settings.font, width)
     end
