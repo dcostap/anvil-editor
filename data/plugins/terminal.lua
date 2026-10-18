@@ -1111,14 +1111,9 @@ local function draw_text_run(view, run, origin_x, y, blink_on, foreground)
   if run.block then
     blocks.draw(run.block, origin_x, y, view.cell_width, view.cell_height,
       run.col, run.columns, color)
-  elseif renderer.draw_text_known_bounds then
-    renderer.draw_text_known_bounds(
-      font, run.text, x, y,
-      math.floor(x), math.floor(y), math.ceil(width), math.ceil(view.cell_height),
-      color
-    )
   else
-    renderer.draw_text(font, run.text, x, y, color)
+    -- Cell text keeps every grapheme on its grid cell, whatever its font's advance.
+    renderer.draw_text_cells(font, run.text, run.cells, x, y, view.cell_width, color)
   end
   if run.underline and run.underline ~= 0 then
     local underline_color = foreground and color[4] ~= 0 and foreground

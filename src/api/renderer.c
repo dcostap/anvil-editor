@@ -1063,6 +1063,46 @@ static int f_draw_text_known_bounds(lua_State *L) {
   return 1;
 }
 
+static int f_draw_text_cells(lua_State *L) {
+  RenFont* fonts[FONT_FALLBACK_MAX];
+  font_retrieve(L, fonts, 1);
+
+#ifndef LUA_JITLIBNAME
+  lua_rawgeti(L, LUA_REGISTRYINDEX, RENDERER_FONT_REF);
+  if (lua_istable(L, -1))
+  {
+    lua_pushvalue(L, 1);
+    lua_pushboolean(L, 1);
+    lua_rawset(L, -3);
+  } else {
+    fprintf(stderr, "warning: failed to reference count fonts\n");
+  }
+  lua_pop(L, 1);
+#endif
+
+  size_t len, cells_len;
+  const char *text = luaL_checklstring(L, 2, &len);
+  const uint8_t *cells = (const uint8_t *)luaL_checklstring(L, 3, &cells_len);
+  double x = luaL_checknumber(L, 4);
+  double y = luaL_checknumber(L, 5);
+  double cell_width = luaL_checknumber(L, 6);
+  RenColor color = luaXL_checkcolor(L, 7, 255);
+  int columns = 0;
+  if (!ren_text_cells_measure(cells, cells_len, len, &columns))
+    return luaL_argerror(L, 3, "cells do not describe the text");
+  if (!isfinite(cell_width) || cell_width <= 0)
+    return luaL_argerror(L, 6, "cell width must be positive");
+  RenWindow *window = ren_get_target_window();
+  if (!window)
+    return luaL_error(L, "no target window found");
+  x = rencache_draw_text_cells(
+    &window->cache, fonts, text, len, cells, cells_len / REN_TEXT_CELL_BYTES,
+    columns, x, y, cell_width, color
+  );
+  lua_pushnumber(L, x);
+  return 1;
+}
+
 static void ref_canvas(lua_State *L) {
 #ifndef LUA_JITLIBNAME
   // stores a reference to this canvas to the reference table
@@ -1625,6 +1665,7 @@ static const luaL_Reg lib[] = {
   { "draw_rounded_rect",  f_draw_rounded_rect  },
   { "draw_text",          f_draw_text          },
   { "draw_text_known_bounds", f_draw_text_known_bounds },
+  { "draw_text_cells", f_draw_text_cells },
   { "wrap_text_layouts",  f_wrap_text_layouts  },
   { "draw_poly",          f_draw_poly          },
   { "draw_canvas",        f_draw_canvas        },

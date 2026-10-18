@@ -109,6 +109,43 @@ test.describe("Native terminal session", function()
     test.ok(capture.text:find("ANVIL_SEMANTIC_MESSAGE", 1, true), capture.text)
   end)
 
+  test.it("describes each text run cell by its grapheme bytes and columns", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::OutputEncoding = [Text.Encoding]::UTF8; [Console]::Write('CELLS:A' + [char]0x754C + 'e' + [char]0x0301 + 'B')"]],
+    })
+    test.ok(session, start_error)
+
+    local text, snapshot = wait_for_text(session, "\204\129B")
+    session:close()
+
+    local cells
+    for _, row in ipairs(snapshot.rows) do
+      for _, run in ipairs(row.text_runs or {}) do
+        local start = run.text:find("A", 1, true)
+        if run.text:find("CELLS:", 1, true) and start then
+          cells = {}
+          local offset = 1
+          for index = 1, #run.cells, 2 do
+            local bytes, columns = run.cells:byte(index, index + 1)
+            if offset >= start then
+              cells[#cells + 1] = { run.text:sub(offset, offset + bytes - 1), columns }
+            end
+            offset = offset + bytes
+          end
+          test.equal(offset, #run.text + 1)
+        end
+      end
+    end
+    test.ok(cells, text)
+    test.same(cells, {
+      { "A", 1 }, { "界", 2 }, { "e\204\129", 1 }, { "B", 1 },
+    })
+  end)
+
   test.it("runs a ConPTY command and parses its VT output", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

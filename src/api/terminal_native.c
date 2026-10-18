@@ -17,6 +17,7 @@
 
 #include "api.h"
 #include "../custom_events.h"
+#include "../renderer.h"
 #include "../terminal_contrast.h"
 #include "../terminal_model.h"
 #include "../terminal_host.h"
@@ -3223,6 +3224,9 @@ typedef struct {
 typedef struct {
   uint8_t *text;
   size_t text_length;
+  /* Each cell's grapheme byte length and column count, for cell text. */
+  uint8_t *cells;
+  size_t cell_count;
   int start_col;
   int end_col;
   uint32_t foreground;
@@ -3356,6 +3360,10 @@ static void flush_text_run(
   lua_createtable(L, 0, 8);
   lua_pushlstring(L, (const char *)run->text, run->text_length);
   lua_setfield(L, -2, "text");
+  lua_pushlstring(
+    L, (const char *)run->cells, run->cell_count * REN_TEXT_CELL_BYTES
+  );
+  lua_setfield(L, -2, "cells");
   set_integer_field(L, "col", run->start_col);
   set_integer_field(L, "columns", run->end_col - run->start_col);
   set_integer_field(L, "fg", run->foreground);
@@ -3374,6 +3382,7 @@ static void flush_text_run(
   lua_rawseti(L, runs_index, ++*run_count);
   run->active = false;
   run->text_length = 0;
+  run->cell_count = 0;
 }
 
 static void flush_background_span(
@@ -3390,6 +3399,11 @@ static void flush_background_span(
   span->active = false;
 }
 
+/* The row buffer holds the text, then REN_TEXT_CELL_BYTES for each cell. */
+static size_t snapshot_text_bytes(TerminalSession *session) {
+  return (size_t)session->cols * sizeof(((TerminalRenderCell *)0)->utf8);
+}
+
 static void push_render_row(
   lua_State *L, TerminalSession *session, GhosttyRenderStateColors *colors
 ) {
@@ -3400,7 +3414,10 @@ static void push_render_row(
   lua_createtable(L, 8, 0);
   int backgrounds_index = lua_absindex(L, -1);
 
-  TerminalTextRun run = { .text = session->snapshot_text };
+  TerminalTextRun run = {
+    .text = session->snapshot_text,
+    .cells = session->snapshot_text + snapshot_text_bytes(session),
+  };
   TerminalBackgroundSpan span = {0};
   int run_count = 0;
   int span_count = 0;
@@ -3444,6 +3461,9 @@ static void push_render_row(
       }
       memcpy(run.text + run.text_length, cell.utf8, cell.text_length);
       run.text_length += cell.text_length;
+      run.cells[run.cell_count * REN_TEXT_CELL_BYTES] = (uint8_t)cell.text_length;
+      run.cells[run.cell_count * REN_TEXT_CELL_BYTES + 1] = cell.columns;
+      run.cell_count++;
       run.end_col = col + cell.columns;
     } else if (run.active && col >= run.end_col) {
       flush_text_run(L, runs_index, &run_count, &run);
@@ -3458,7 +3478,8 @@ static void push_render_row(
 }
 
 static bool ensure_snapshot_text(TerminalSession *session) {
-  size_t capacity = (size_t)session->cols * sizeof(((TerminalRenderCell *)0)->utf8);
+  size_t capacity = snapshot_text_bytes(session)
+    + (size_t)session->cols * REN_TEXT_CELL_BYTES;
   if (session->snapshot_text_capacity >= capacity) return true;
   uint8_t *text = session->snapshot_text
     ? (uint8_t *)HeapReAlloc(GetProcessHeap(), 0, session->snapshot_text, capacity)

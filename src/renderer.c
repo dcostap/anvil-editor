@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <math.h>
 #include <string.h>
+#include <limits.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_LCD_FILTER_H
@@ -2625,6 +2626,343 @@ bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **fonts, cons
   }
   if (hb_buffer)
     hb_buffer_destroy(hb_buffer);
+  return !draw_context.d3d11_failed;
+}
+
+/* Cell text places every cell at its grid origin. Glyphs inside one cluster
+   keep their natural advances, and the cluster is centered in its cell span,
+   so a fallback glyph of another width cannot move the cells after it. */
+
+bool ren_text_cells_measure(
+  const uint8_t *cells, size_t cells_len, size_t text_len, int *columns
+) {
+  if (cells_len == 0 || cells_len % REN_TEXT_CELL_BYTES != 0) return false;
+  size_t bytes = 0;
+  size_t total_columns = 0;
+  for (size_t index = 0; index < cells_len; index += REN_TEXT_CELL_BYTES) {
+    if (cells[index] == 0 || cells[index + 1] == 0) return false;
+    bytes += cells[index];
+    total_columns += cells[index + 1];
+  }
+  if (bytes != text_len || total_columns > INT_MAX) return false;
+  if (columns) *columns = (int)total_columns;
+  return true;
+}
+
+static bool is_default_ignorable(unsigned int codepoint) {
+  return codepoint == 0x200C || codepoint == 0x200D
+    || (codepoint >= 0xFE00 && codepoint <= 0xFE0F)
+    || (codepoint >= 0xE0020 && codepoint <= 0xE007F)
+    || (codepoint >= 0xE0100 && codepoint <= 0xE01EF);
+}
+
+static bool font_covers_cluster(RenFont *font, const char *text, const char *end) {
+  while (text < end) {
+    unsigned int codepoint;
+    text = utf8_to_codepoint_bounded(text, end, &codepoint);
+    if (is_default_ignorable(codepoint) || is_whitespace(codepoint)) continue;
+    if (!font_get_glyph_id(font, codepoint)) return false;
+  }
+  return true;
+}
+
+/* Returns the first font that covers every visible codepoint of a cluster.
+   Without one, the font of the first codepoint draws the cluster. */
+static RenFont *font_group_find_cluster_font(
+  RenFont **fonts, const char *text, const char *end,
+  unsigned int *codepoint_count, unsigned int *first_codepoint,
+  unsigned int *first_glyph_id
+) {
+  const char *p = utf8_to_codepoint_bounded(text, end, first_codepoint);
+  RenFont *font = font_group_find_font(fonts, *first_codepoint, first_glyph_id);
+  *codepoint_count = 1;
+  while (p < end) {
+    unsigned int codepoint;
+    p = utf8_to_codepoint_bounded(p, end, &codepoint);
+    (*codepoint_count)++;
+  }
+  g_text_frame_stats.render_chars += *codepoint_count;
+  if (*codepoint_count == 1 || font_covers_cluster(font, text, end)) return font;
+  for (int i = 0; i < FONT_FALLBACK_MAX && fonts[i]; i++) {
+    if (fonts[i] != font && font_covers_cluster(fonts[i], text, end)) {
+      *first_glyph_id = font_get_glyph_id(fonts[i], *first_codepoint);
+      return fonts[i];
+    }
+  }
+  return font;
+}
+
+static void draw_shaped_glyphs_in_span(
+  DrawGlyphContext *ctx, RenFont **fonts, RenFont *font,
+  const hb_glyph_info_t *infos, const hb_glyph_position_t *positions,
+  unsigned int first, unsigned int end, double span_x, double span, double y
+) {
+  double natural = 0;
+  for (unsigned int i = first; i < end; i++)
+    natural += hb_position_to_font_pixels(font, positions[i].x_advance) * ctx->output_scale;
+  double pen_x = span_x + (span - natural) / 2.0;
+  for (unsigned int i = first; i < end; i++) {
+    double x_offset = hb_position_to_font_pixels(font, positions[i].x_offset)
+      * ctx->output_scale;
+    double y_offset = hb_position_to_font_pixels(font, positions[i].y_offset);
+    draw_resolved_glyph(
+      ctx, fonts, font, infos[i].codepoint, pen_x + x_offset, y, y_offset,
+      infos[i].codepoint == 0
+    );
+    pen_x += hb_position_to_font_pixels(font, positions[i].x_advance)
+      * ctx->output_scale;
+  }
+}
+
+static void draw_text_cell(
+  DrawGlyphContext *ctx, RenFont **fonts, hb_buffer_t **buffer,
+  const char *text, size_t len, double span_x, double span, double y
+) {
+  unsigned int codepoint_count = 0, codepoint = 0, glyph_id = 0;
+  RenFont *font = font_group_find_cluster_font(
+    fonts, text, text + len, &codepoint_count, &codepoint, &glyph_id
+  );
+  if (codepoint_count == 1 || !font->hb_font) {
+    if (is_whitespace(codepoint)) {
+      g_text_frame_stats.render_whitespace_chars++;
+      return;
+    }
+    GlyphMetric *metric = NULL;
+    if (glyph_id) font_get_glyph_by_id(font, glyph_id, 0, NULL, &metric);
+    double advance = metric && metric->xadvance
+      ? metric->xadvance * ctx->output_scale : span;
+    draw_resolved_glyph(
+      ctx, fonts, font, glyph_id, span_x + (span - advance) / 2.0, y, 0, true
+    );
+    return;
+  }
+  if (!*buffer) *buffer = hb_buffer_create();
+  if (!*buffer) return;
+  g_text_frame_stats.render_shaped_runs++;
+  ShapedRunCacheEntry run = font_get_shaped_run(*buffer, font, text, len, TEXT_STATS_RENDER);
+  draw_shaped_glyphs_in_span(
+    ctx, fonts, font, run.glyph_infos, run.glyph_positions,
+    0, run.glyph_count, span_x, span, y
+  );
+}
+
+/* A cell joins a ligature segment only when its font draws all of it. */
+static bool text_cell_joins_segment(
+  RenFont **fonts, RenFont *font, const char *text, const char *end
+) {
+  while (text < end) {
+    unsigned int codepoint, glyph_id = 0;
+    text = utf8_to_codepoint_bounded(text, end, &codepoint);
+    if (is_whitespace(codepoint)) return false;
+    if (font_group_find_font(fonts, codepoint, &glyph_id) != font || !glyph_id)
+      return false;
+  }
+  return true;
+}
+
+#define TEXT_CELL_SEGMENT_STACK 128
+
+/* Shapes cells as one run so ligatures can form, then maps each glyph cluster
+   back to the cells that hold its bytes. */
+static void draw_text_cell_segment(
+  DrawGlyphContext *ctx, RenFont **fonts, RenFont *font, hb_buffer_t **buffer,
+  const char *text, const uint8_t *cells, size_t cell_count,
+  double origin_x, double cell_width, double y
+) {
+  size_t len = 0;
+  for (size_t cell = 0; cell < cell_count; cell++)
+    len += cells[cell * REN_TEXT_CELL_BYTES];
+  if (!*buffer) *buffer = hb_buffer_create();
+  if (!*buffer) return;
+
+  /* byte_starts and column_starts hold cell_count + 1 entries; next_start
+     holds, for each cell, the next cell that begins a glyph cluster. */
+  uint32_t stack_storage[TEXT_CELL_SEGMENT_STACK * 3 + 2];
+  uint32_t *storage = stack_storage;
+  if (cell_count > TEXT_CELL_SEGMENT_STACK) {
+    storage = SDL_malloc(sizeof(uint32_t) * (cell_count * 3 + 2));
+    if (!storage) return;
+  }
+  uint32_t *byte_starts = storage;
+  uint32_t *column_starts = byte_starts + cell_count + 1;
+  uint32_t *next_start = column_starts + cell_count + 1;
+  byte_starts[0] = column_starts[0] = 0;
+  for (size_t cell = 0; cell < cell_count; cell++) {
+    byte_starts[cell + 1] = byte_starts[cell] + cells[cell * REN_TEXT_CELL_BYTES];
+    column_starts[cell + 1] = column_starts[cell] + cells[cell * REN_TEXT_CELL_BYTES + 1];
+    next_start[cell] = 0;
+  }
+
+  g_text_frame_stats.render_shaped_runs++;
+  ShapedRunCacheEntry run = font_get_shaped_run(*buffer, font, text, len, TEXT_STATS_RENDER);
+
+  /* Mark each cell that begins a cluster, then link every cell to the next
+     such cell. A cluster spans the cells up to the next cluster's cell. */
+  for (unsigned int i = 0; i < run.glyph_count; i++) {
+    uint32_t cluster = run.glyph_infos[i].cluster;
+    size_t low = 0, high = cell_count;
+    while (high - low > 1) {
+      size_t middle = (low + high) / 2;
+      if (byte_starts[middle] <= cluster) low = middle;
+      else high = middle;
+    }
+    next_start[low] = 1;
+  }
+  uint32_t following = (uint32_t)cell_count;
+  for (size_t cell = cell_count; cell-- > 0;) {
+    bool starts_cluster = next_start[cell] != 0;
+    next_start[cell] = following;
+    if (starts_cluster) following = (uint32_t)cell;
+  }
+
+  unsigned int first = 0;
+  while (first < run.glyph_count) {
+    uint32_t cluster = run.glyph_infos[first].cluster;
+    unsigned int end = first + 1;
+    while (end < run.glyph_count && run.glyph_infos[end].cluster == cluster) end++;
+    size_t low = 0, high = cell_count;
+    while (high - low > 1) {
+      size_t middle = (low + high) / 2;
+      if (byte_starts[middle] <= cluster) low = middle;
+      else high = middle;
+    }
+    uint32_t last = next_start[low];
+    double span_x = origin_x + column_starts[low] * cell_width;
+    double span = (column_starts[last] - column_starts[low]) * cell_width;
+    draw_shaped_glyphs_in_span(
+      ctx, fonts, font, run.glyph_infos, run.glyph_positions,
+      first, end, span_x, span, y
+    );
+    first = end;
+  }
+
+  if (storage != stack_storage) SDL_free(storage);
+}
+
+static double draw_text_cells(
+  DrawGlyphContext *ctx, RenFont **fonts, const char *text, size_t len,
+  const uint8_t *cells, size_t cell_count, double origin_x, double cell_width,
+  double y
+) {
+  (void)len;
+  hb_buffer_t *hb_buffer = NULL;
+  double clip_break_x = ctx->clip_end_x
+    + ren_font_group_get_size(fonts) * ctx->surface_scale_x * ctx->output_scale * 4.0;
+  size_t offset = 0;
+  int column = 0;
+  size_t cell = 0;
+  while (cell < cell_count) {
+    double cell_x = origin_x + column * cell_width;
+    if (cell_x >= clip_break_x) {
+      g_text_frame_stats.render_chars_after_clip += cell_count - cell;
+      break;
+    }
+    const char *cell_text = text + offset;
+    size_t cell_len = cells[cell * REN_TEXT_CELL_BYTES];
+    int cell_columns = cells[cell * REN_TEXT_CELL_BYTES + 1];
+
+    unsigned int codepoint, glyph_id = 0;
+    utf8_to_codepoint_bounded(cell_text, cell_text + cell_len, &codepoint);
+    RenFont *font = font_group_find_font(fonts, codepoint, &glyph_id);
+    size_t segment_end = cell + 1;
+    size_t segment_bytes = cell_len;
+    int segment_columns = cell_columns;
+    if (font->ligatures && font->hb_font
+        && text_cell_joins_segment(fonts, font, cell_text, cell_text + cell_len)) {
+      while (segment_end < cell_count) {
+        const char *next_text = text + offset + segment_bytes;
+        size_t next_len = cells[segment_end * REN_TEXT_CELL_BYTES];
+        if (!text_cell_joins_segment(fonts, font, next_text, next_text + next_len))
+          break;
+        segment_bytes += next_len;
+        segment_columns += cells[segment_end * REN_TEXT_CELL_BYTES + 1];
+        segment_end++;
+      }
+    }
+
+    if (segment_end - cell > 1) {
+      draw_text_cell_segment(
+        ctx, fonts, font, &hb_buffer, cell_text,
+        cells + cell * REN_TEXT_CELL_BYTES, segment_end - cell,
+        cell_x, cell_width, y
+      );
+    } else {
+      draw_text_cell(
+        ctx, fonts, &hb_buffer, cell_text, cell_len,
+        cell_x, cell_columns * cell_width, y
+      );
+    }
+    offset += segment_bytes;
+    column += segment_columns;
+    cell = segment_end;
+  }
+  if (hb_buffer)
+    hb_buffer_destroy(hb_buffer);
+  return origin_x + column * cell_width;
+}
+
+double ren_draw_text_cells_transformed(
+  RenSurface *rs, RenFont **fonts, const char *text, size_t len,
+  const uint8_t *cells, size_t cell_count, float x, float y, float cell_width,
+  RenColor color, RenTransform transform
+) {
+  g_text_frame_stats.render_calls++;
+  g_text_frame_stats.render_bytes += len;
+  int transformed_alpha = lroundf(color.a * transform.opacity);
+  color.a = (uint8_t)(transformed_alpha < 0 ? 0
+    : (transformed_alpha > 255 ? 255 : transformed_alpha));
+  SDL_Surface *surface = rs->surface;
+  SDL_Rect clip;
+  SDL_GetSurfaceClipRect(surface, &clip);
+
+  const float surface_scale_x = rs->scale_x, surface_scale_y = rs->scale_y;
+  float output_scale = transform.scale > 0.0f ? transform.scale : 1.0f;
+  double origin_x = (transform.offset_x + x * output_scale) * surface_scale_x;
+  double pixel_y = (transform.offset_y + y * output_scale) * surface_scale_y;
+  DrawGlyphContext draw_context = {
+    .rs = rs,
+    .surface = surface,
+    .clip = clip,
+    .destination_pixels = surface->pixels,
+    .clip_end_x = clip.x + clip.w,
+    .clip_end_y = clip.y + clip.h,
+    .surface_scale_x = surface_scale_x,
+    .surface_scale_y = surface_scale_y,
+    .output_scale = output_scale,
+    .color = color
+  };
+  double end_x = draw_text_cells(
+    &draw_context, fonts, text, len, cells, cell_count, origin_x,
+    cell_width * output_scale * surface_scale_x, pixel_y
+  );
+  bool underline = fonts[0]->style & FONT_STYLE_UNDERLINE;
+  bool strikethrough = fonts[0]->style & FONT_STYLE_STRIKETHROUGH;
+  if (underline || strikethrough)
+    draw_font_decoration(rs, fonts[0], origin_x, end_x, pixel_y, surface_scale_x, surface_scale_y, output_scale, color, underline, strikethrough);
+  return x + (end_x - origin_x) / (surface_scale_x * output_scale);
+}
+
+bool ren_draw_text_cells_d3d11(
+  SDL_Window *window, RenRect clip, RenFont **fonts, const char *text,
+  size_t len, const uint8_t *cells, size_t cell_count, float x, float y,
+  float cell_width, RenColor color
+) {
+  if (!window || !fonts || !fonts[0]) return false;
+  g_text_frame_stats.render_calls++;
+  g_text_frame_stats.render_bytes += len;
+  DrawGlyphContext draw_context = {
+    .clip = { (int)clip.x, (int)clip.y, (int)clip.width, (int)clip.height },
+    .clip_end_x = (int)(clip.x + clip.width),
+    .clip_end_y = (int)(clip.y + clip.height),
+    .surface_scale_x = 1.0f,
+    .surface_scale_y = 1.0f,
+    .output_scale = 1.0f,
+    .color = color,
+    .d3d11 = true,
+    .d3d11_window = window,
+    .d3d11_clip = clip,
+  };
+  draw_text_cells(&draw_context, fonts, text, len, cells, cell_count, x, cell_width, y);
   return !draw_context.d3d11_failed;
 }
 

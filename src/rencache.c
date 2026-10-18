@@ -126,6 +126,10 @@ typedef struct {
   size_t len;
   int8_t tab_size;
   RenTab tab;
+  /* Cell text stores its cells after the text's terminator. */
+  float text_y;
+  float cell_width;
+  uint32_t cell_count;
   char text[];
 } DrawTextCommand;
 
@@ -529,28 +533,66 @@ void rencache_draw_rect_grid(RenCache *ren_cache, float x, float y, float step_x
   }
 }
 
+static DrawTextCommand *rencache_push_text_payload(RenCache *ren_cache, RenFont **fonts, const char *text, size_t len, const uint8_t *cells, size_t cell_count, double x, RenRect rect, RenColor color, RenTab tab, int tab_size) {
+  size_t cells_len = cell_count * REN_TEXT_CELL_BYTES;
+  if (len > UINT32_MAX || cell_count > UINT32_MAX) return NULL;
+  DrawTextCommand *cmd = push_command(ren_cache, DRAW_TEXT, sizeof(DrawTextCommand) + len + 1 + cells_len);
+  if (cmd) {
+    memcpy(cmd->text, text, len);
+    cmd->text[len] = 0;
+    if (cells_len) memcpy(cmd->text + len + 1, cells, cells_len);
+    cmd->color = color;
+    memcpy(cmd->fonts, fonts, sizeof(RenFont*)*FONT_FALLBACK_MAX);
+    for (int index = 0; index < FONT_FALLBACK_MAX && fonts[index]; index++) {
+      cmd->font_generations[index] = ren_font_get_generation(fonts[index]);
+      cmd->font_surface_scales[index] = ren_font_get_surface_scale(fonts[index]);
+    }
+    cmd->rect = rect;
+    cmd->text_x = x;
+    cmd->len = len;
+    cmd->tab_size = tab_size;
+    cmd->tab = tab;
+    cmd->text_y = (float)rect.y;
+    cmd->cell_width = 0;
+    cmd->cell_count = (uint32_t)cell_count;
+    if (ren_cache->window) {
+      g_rencache_frame_stats.text_bytes += len;
+      if (len > g_rencache_frame_stats.max_text_bytes)
+        g_rencache_frame_stats.max_text_bytes = len;
+    }
+  }
+  return cmd;
+}
+
 static double rencache_push_text_command(RenCache *ren_cache, RenFont **fonts, const char *text, size_t len, double x, RenRect rect, RenColor color, RenTab tab, int tab_size, double end_x, uint64_t draw_text_start) {
   if (rects_overlap(ren_cache->last_clip_rect, rect)) {
-    int sz = len + 1;
-    DrawTextCommand *cmd = push_command(ren_cache, DRAW_TEXT, sizeof(DrawTextCommand) + sz);
+    rencache_push_text_payload(ren_cache, fonts, text, len, NULL, 0, x, rect, color, tab, tab_size);
+  }
+  if (draw_text_start) {
+    uint64_t draw_text_end = SDL_GetPerformanceCounter();
+    g_rencache_frame_stats.draw_text_ms += rencache_perf_ms(draw_text_start, draw_text_end);
+  }
+  return end_x;
+}
+
+double rencache_draw_text_cells(RenCache *ren_cache, RenFont **fonts, const char *text, size_t len, const uint8_t *cells, size_t cell_count, int columns, double x, double y, double cell_width, RenColor color)
+{
+  uint64_t draw_text_start = ren_cache && ren_cache->window ? SDL_GetPerformanceCounter() : 0;
+  double end_x = x + columns * cell_width;
+  /* Centered glyphs may overhang their cells. The margin bounds both the
+     area the cache repaints and the area the command may draw. */
+  int height = ren_font_group_get_height(fonts);
+  RenRect rect = rencache_rect_from_floats(
+    x - height, y - height, end_x - x + height * 2.0, height * 3.0
+  );
+  if (rects_overlap(ren_cache->last_clip_rect, rect)) {
+    DrawTextCommand *cmd = rencache_push_text_payload(
+      ren_cache, fonts, text, len, cells, cell_count, x, rect, color,
+      (RenTab){ .offset = NAN }, ren_font_group_get_tab_size(fonts)
+    );
     if (cmd) {
-      memcpy(cmd->text, text, sz);
-      cmd->color = color;
-      memcpy(cmd->fonts, fonts, sizeof(RenFont*)*FONT_FALLBACK_MAX);
-      for (int index = 0; index < FONT_FALLBACK_MAX && fonts[index]; index++) {
-        cmd->font_generations[index] = ren_font_get_generation(fonts[index]);
-        cmd->font_surface_scales[index] = ren_font_get_surface_scale(fonts[index]);
-      }
-      cmd->rect = rect;
-      cmd->text_x = x;
-      cmd->len = len;
-      cmd->tab_size = tab_size;
-      cmd->tab = tab;
-      if (ren_cache->window) {
-        g_rencache_frame_stats.text_bytes += len;
-        if (len > g_rencache_frame_stats.max_text_bytes)
-          g_rencache_frame_stats.max_text_bytes = len;
-      }
+      cmd->cell_width = (float)cell_width;
+      cmd->text_y = (float)y;
     }
   }
   if (draw_text_start) {
@@ -834,7 +876,13 @@ static bool rencache_try_d3d11_command_frame(RenCache *ren_cache) {
       case DRAW_TEXT: {
         DrawTextCommand *tcmd = (DrawTextCommand*)&cmd->command;
         ren_font_group_set_tab_size(tcmd->fonts, tcmd->tab_size);
-        if (!ren_draw_text_d3d11(ren_cache->window, clip, tcmd->fonts, tcmd->text, tcmd->len,
+        if (tcmd->cell_count) {
+          if (!ren_draw_text_cells_d3d11(
+                ren_cache->window, intersect_rects(clip, tcmd->rect), tcmd->fonts,
+                tcmd->text, tcmd->len, (const uint8_t *)tcmd->text + tcmd->len + 1,
+                tcmd->cell_count, tcmd->text_x, tcmd->text_y, tcmd->cell_width,
+                tcmd->color)) { fail_reason = "draw_text_cells"; goto fail; }
+        } else if (!ren_draw_text_d3d11(ren_cache->window, clip, tcmd->fonts, tcmd->text, tcmd->len,
                                  tcmd->text_x, tcmd->rect.y, tcmd->color, tcmd->tab)) { fail_reason = "draw_text"; goto fail; }
       } break;
       case DRAW_CANVAS: {
@@ -1051,6 +1099,19 @@ void rencache_end_frame(RenCache *ren_cache) {
           break;
         case DRAW_TEXT:
           ren_font_group_set_tab_size(tcmd->fonts, tcmd->tab_size);
+          if (tcmd->cell_count) {
+            RenRect text_clip = intersect_rects(transform_rect(logical_clip, transform), r);
+            ren_set_clip_rect(
+              &rs, intersect_rects(text_clip, transform_rect(tcmd->rect, transform))
+            );
+            ren_draw_text_cells_transformed(
+              &rs, tcmd->fonts, tcmd->text, tcmd->len,
+              (const uint8_t *)tcmd->text + tcmd->len + 1, tcmd->cell_count,
+              tcmd->text_x, tcmd->text_y, tcmd->cell_width, tcmd->color, transform
+            );
+            ren_set_clip_rect(&rs, text_clip);
+            break;
+          }
           ren_draw_text_transformed(
             &rs, tcmd->fonts, tcmd->text, tcmd->len,
             tcmd->text_x, tcmd->rect.y,

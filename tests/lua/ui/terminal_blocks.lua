@@ -15,8 +15,8 @@ local function draw(runs, width, height)
   view.running = false
   view.snapshot = { background = 0, rows = {{ backgrounds = {}, text_runs = runs }} }
   view.draw_scrollbar = function() end
-  local previous_rect, previous_text, previous_known = renderer.draw_rect,
-    renderer.draw_text, renderer.draw_text_known_bounds
+  local previous_rect, previous_text, previous_known, previous_cells = renderer.draw_rect,
+    renderer.draw_text, renderer.draw_text_known_bounds, renderer.draw_text_cells
   local pixels, texts = {}, {}
   renderer.draw_rect = function(x, y, w, h, color)
     if color[1] ~= 17 or color[2] ~= 34 or color[3] ~= 51 then return end
@@ -33,9 +33,12 @@ local function draw(runs, width, height)
     texts[#texts + 1] = { text = text, x = x, y = y }
   end
   renderer.draw_text_known_bounds = renderer.draw_text
+  renderer.draw_text_cells = function(font, text, _, x, y)
+    texts[#texts + 1] = { text = text, x = x, y = y }
+  end
   local ok, err = pcall(view.draw, view)
-  renderer.draw_rect, renderer.draw_text, renderer.draw_text_known_bounds =
-    previous_rect, previous_text, previous_known
+  renderer.draw_rect, renderer.draw_text, renderer.draw_text_known_bounds, renderer.draw_text_cells =
+    previous_rect, previous_text, previous_known, previous_cells
   if not ok then error(err) end
   return pixels, texts
 end
@@ -48,9 +51,9 @@ end
 test.describe("Terminal block rendering", function()
   test.it("fills fractional cells once while keeping adjacent ordinary text", function()
     local pixels, texts = draw({
-      { text="A", col=0, columns=1, fg=0x112233 },
+      { text="A", cells="\1\1", col=0, columns=1, fg=0x112233 },
       { text="██", col=1, columns=2, block=0x2588, fg=0x112233, alpha=140 },
-      { text="B", col=3, columns=1, fg=0x112233 },
+      { text="B", cells="\1\1", col=3, columns=1, fg=0x112233 },
     }, 10.2, 19)
     test.equal(texts[1].text, "A")
     test.equal(texts[2].text, "B")

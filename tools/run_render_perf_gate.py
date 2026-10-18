@@ -1226,6 +1226,18 @@ def run_case(
                                     )
                             if not checked:
                                 raise RuntimeError(f"terminal cursor covers no reference ink: {sample['name']}")
+                        elif sample["kind"] == "grid_ink":
+                            # The glyph has ink in its own cell and none in the
+                            # two cells after it, where a drifted glyph lands.
+                            w, h = int(sample["w"]), int(sample["h"])
+                            def has_ink(left, width):
+                                return any(not matches(pixels.getpixel((px, py)), 24)
+                                           for py in range(y, y + h)
+                                           for px in range(left, left + width))
+                            if not has_ink(x, w):
+                                raise RuntimeError(f"terminal grid cell has no ink: {sample['name']}")
+                            if has_ink(int(sample["target_x"]), 2 * w):
+                                raise RuntimeError(f"terminal grid glyph drifted past its cell: {sample['name']}")
                         elif sample["kind"] == "coverage":
                             count = sum(matches(pixels.getpixel((px, py)))
                                         for py in range(y, y + int(sample["h"]))

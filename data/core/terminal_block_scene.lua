@@ -134,7 +134,8 @@ function Scene:draw()
         self.position.y + 890 + (index - 1) * 36, case.background)
       reference.cell_width = math.ceil(reference.cell_width)
       reference.snapshot.rows = {{ backgrounds = {}, text_runs = {{
-        col = 0, columns = columns, text = string.rep("M", columns), fg = case.foreground,
+        col = 0, columns = columns, text = string.rep("M", columns),
+        cells = string.rep("\1\1", columns), fg = case.foreground,
       }} }}
       draw_terminal(reference)
       local caret = terminal(self.fonts[24], reference.position.x + 80,
@@ -168,6 +169,22 @@ function Scene:draw()
       end
     end
   end
+  -- A fallback glyph whose advance differs from the cell must not move later
+  -- cells. The theme's terminal font draws U+23F5 from a fallback font.
+  local grid = terminal(style.terminal_font, self.position.x + 25, self.position.y + 1010, 0x000000)
+  grid.size.y = grid.cell_height + 12
+  grid.snapshot.rows = {{ backgrounds = {}, text_runs = {{
+    col = 0, columns = 4, text = "⏵⏵ x", cells = "\3\1\3\1\1\1\1\1", fg = 0xffffff,
+  }} }}
+  draw_terminal(grid)
+  if not self.metadata_written then
+    local left = grid.position.x + 6
+    samples[#samples + 1] = string.format("grid_ink,fallback-x,%d,%d,%d,%d,0,0,0,0,%d,,,,,,",
+      math.floor(left + 3 * grid.cell_width + 0.5), math.floor(grid.position.y + 6 + 0.5),
+      math.floor(grid.cell_width), grid.cell_height,
+      math.ceil(left + 4 * grid.cell_width))
+  end
+
   if self.metadata_written then return end
   for index, example in ipairs(expected) do
     local left = math.floor(view.position.x + 6 + 0.5) + ((index - 1) % 16) * 16

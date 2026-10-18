@@ -121,6 +121,14 @@ void ren_font_group_wrap_text(
 double ren_draw_text(RenSurface *rs, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
 double ren_draw_text_transformed(RenSurface *rs, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab, RenTransform transform);
 bool ren_draw_text_d3d11(SDL_Window *window, RenRect clip, RenFont **font, const char *text, size_t len, float x, float y, RenColor color, RenTab tab);
+/* Cell text gives every grapheme a fixed grid cell, as a terminal does.
+ * `cells` holds REN_TEXT_CELL_BYTES per cell: the grapheme's UTF-8 byte
+ * length, then its column count. Both are at least 1, and the byte lengths
+ * add up to the text length. */
+#define REN_TEXT_CELL_BYTES 2
+bool ren_text_cells_measure(const uint8_t *cells, size_t cells_len, size_t text_len, int *columns);
+double ren_draw_text_cells_transformed(RenSurface *rs, RenFont **font, const char *text, size_t len, const uint8_t *cells, size_t cell_count, float x, float y, float cell_width, RenColor color, RenTransform transform);
+bool ren_draw_text_cells_d3d11(SDL_Window *window, RenRect clip, RenFont **font, const char *text, size_t len, const uint8_t *cells, size_t cell_count, float x, float y, float cell_width, RenColor color);
 void ren_text_stats_begin_frame(void);
 void ren_text_stats_end_frame(void);
 const RenTextFrameStats *ren_text_get_last_frame_stats(void);

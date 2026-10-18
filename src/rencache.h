@@ -82,6 +82,8 @@ void  rencache_draw_rect_grid(RenCache *rc, float x, float y, float step_x, floa
 double rencache_draw_text(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenColor color, RenTab tab);
 double rencache_draw_text_known_bounds(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenRect rect, RenColor color, RenTab tab);
 double rencache_draw_text_known_bounds_captured(RenCache *rc, RenFont **font, const char *text, size_t len, double x, double y, RenRect rect, RenColor color, RenTab tab, int tab_size);
+/* Draws cell text (see ren_text_cells_measure) whose cells span `columns`. */
+double rencache_draw_text_cells(RenCache *rc, RenFont **font, const char *text, size_t len, const uint8_t *cells, size_t cell_count, int columns, double x, double y, double cell_width, RenColor color);
 RenRect rencache_draw_poly(RenCache *rc, RenPoint *points, int npoints, RenColor color);
 void  rencache_draw_canvas(RenCache *ren_cache, RenRect rect, RenCache *canvas, RenColor color);
 void  rencache_draw_pixels(RenCache *ren_cache, RenRect rect, const char* bytes, size_t len);

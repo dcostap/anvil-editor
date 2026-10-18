@@ -29,16 +29,19 @@ end
 
 local function record_draw(view)
   local old_text, old_known, old_rect = renderer.draw_text, renderer.draw_text_known_bounds, renderer.draw_rect
+  local old_cells = renderer.draw_text_cells
   local old_rounded = renderer.draw_rounded_rect
   local old_clip = renderer.set_clip_rect
   local calls = { text = {}, rect = {} }
   renderer.draw_text = function(...) calls.text[#calls.text + 1] = { ... } end
   renderer.draw_text_known_bounds = renderer.draw_text
+  renderer.draw_text_cells = renderer.draw_text
   renderer.draw_rect = function(...) calls.rect[#calls.rect + 1] = { ... } end
   renderer.draw_rounded_rect = function(...) calls.rect[#calls.rect + 1] = { ... } end
   renderer.set_clip_rect = function() end
   local ok, err = pcall(function() view:draw() end)
   renderer.draw_text, renderer.draw_text_known_bounds, renderer.draw_rect = old_text, old_known, old_rect
+  renderer.draw_text_cells = old_cells
   renderer.draw_rounded_rect = old_rounded
   renderer.set_clip_rect = old_clip
   if not ok then error(err) end
@@ -72,7 +75,7 @@ test.describe("Terminal contrast display", function()
     local session, view = fake_session(context)
     session.image.rows = { {
       backgrounds = { { col = 0, columns = 3, selected = true, color = 0x112233 } },
-      text_runs = { { col = 0, columns = 3, text = "DIM", fg = 0x005000, faint = true, alpha = 255 } },
+      text_runs = { { col = 0, columns = 3, text = "DIM", cells = "\1\1\1\1\1\1", fg = 0x005000, faint = true, alpha = 255 } },
     } }
     view.size.x, view.size.y = 800, 300
     local calls = record_draw(view)
@@ -90,7 +93,7 @@ test.describe("Terminal contrast display", function()
   test.it("does not reveal concealed text under a filled cursor", function(context)
     local session, view = fake_session(context)
     session.image.rows = {{ backgrounds = {}, text_runs = {{
-      col = 0, columns = 1, text = "M", fg = 0x080808, alpha = 0,
+      col = 0, columns = 1, text = "M", cells = "\1\1", fg = 0x080808, alpha = 0,
     }} }}
     session.image.cursor = { visible = true, style = "block", x = 0, y = 0, color = 0 }
     view.size.x, view.size.y = 800, 300

@@ -470,6 +470,7 @@ The scene sends internal drop events. It does not move the mouse or use a user's
 Use `--scenario terminal-blocks` to check terminal Block Elements on either renderer.
 The scene checks continuous bars at fractional cell widths on light and dark backgrounds.
 It checks faint ink, complementary halves, all block fractions, quadrants, and shade coverage.
+It also checks that a fallback glyph keeps later terminal cells on their grid columns.
 The checks compare pixels with independent expected values. They do not need stored goldens.
 The checks also verify readable text inside light, dark, and colored block cursors.
 They cover direct drawing, animated drawing, and horizontal motion.

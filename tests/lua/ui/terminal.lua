@@ -18,16 +18,19 @@ end
 local function draw_calls(fn)
   local previous_text = renderer.draw_text
   local previous_known = renderer.draw_text_known_bounds
+  local previous_cells = renderer.draw_text_cells
   local previous_rect = renderer.draw_rect
   local previous_rounded_rect = renderer.draw_rounded_rect
   local calls = { text = {}, rect = {} }
   renderer.draw_text = function(...) calls.text[#calls.text + 1] = { ... } end
   renderer.draw_text_known_bounds = function(...) calls.text[#calls.text + 1] = { ... } end
+  renderer.draw_text_cells = function(...) calls.text[#calls.text + 1] = { ... } end
   renderer.draw_rect = function(...) calls.rect[#calls.rect + 1] = { ... } end
   renderer.draw_rounded_rect = function(...) calls.rect[#calls.rect + 1] = { ... } end
   local ok, err = pcall(fn, calls)
   renderer.draw_text = previous_text
   renderer.draw_text_known_bounds = previous_known
+  renderer.draw_text_cells = previous_cells
   renderer.draw_rect = previous_rect
   renderer.draw_rounded_rect = previous_rounded_rect
   if not ok then error(err) end
@@ -1335,9 +1338,9 @@ test.describe("Terminal View", function()
       rows = {
         {
           text_runs = {
-            { text = "ab", col = 0, columns = 2, fg = 0xffffff },
-            { text = "c界", col = 2, columns = 3, fg = 0xff0000 },
-            { text = "d", col = 6, columns = 1, fg = 0x00ff00 },
+            { text = "ab", cells = "\1\1\1\1", col = 0, columns = 2, fg = 0xffffff },
+            { text = "c界", cells = "\1\1\3\2", col = 2, columns = 3, fg = 0xff0000 },
+            { text = "d", cells = "\1\1", col = 6, columns = 1, fg = 0x00ff00 },
           },
           backgrounds = {
             { col = 1, columns = 2, color = 0x112233 },
@@ -1354,9 +1357,10 @@ test.describe("Terminal View", function()
     test.equal(calls.text[1][2], "ab")
     test.equal(calls.text[2][2], "c界")
     test.equal(calls.text[3][2], "d")
-    test.equal(calls.text[2][3], 6 + 2 * view.cell_width)
-    test.equal(calls.text[2][7], math.ceil(3 * view.cell_width))
-    test.equal(calls.text[3][3], 6 + 6 * view.cell_width)
+    test.equal(calls.text[2][3], "\1\1\3\2")
+    test.equal(calls.text[2][4], 6 + 2 * view.cell_width)
+    test.equal(calls.text[2][6], view.cell_width)
+    test.equal(calls.text[3][4], 6 + 6 * view.cell_width)
     local color_span = calls.rect[2]
     local selection_span = calls.rect[3]
     test.equal(color_span[1], 6 + view.cell_width)
@@ -1372,7 +1376,7 @@ test.describe("Terminal View", function()
       background = 0, foreground = 0xffffff,
       rows = {{
         text_runs = {{
-          text = "x", col = 0, columns = 1, fg = 0xffffff,
+          text = "x", cells = "\1\1", col = 0, columns = 1, fg = 0xffffff,
           faint = true, overline = true, underline = 2,
           underline_color = 0xff0000,
         }},
@@ -1382,7 +1386,7 @@ test.describe("Terminal View", function()
     }
     local calls = draw_calls(function() view:draw() end)
     test.ok(#calls.rect >= 7)
-    test.equal(calls.text[1][9][4], 140)
+    test.equal(calls.text[1][#calls.text[1]][4], 140)
   end)
 
   test.it("copies terminal text without a permission prompt", function(context)

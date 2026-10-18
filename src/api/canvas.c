@@ -1,6 +1,7 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <string.h>
+#include <math.h>
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #include <assert.h>
@@ -558,6 +559,46 @@ static int f_draw_text(lua_State *L) {
   return 1;
 }
 
+static int f_draw_text_cells(lua_State *L) {
+  RenCache *canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
+  RenFont* fonts[FONT_FALLBACK_MAX];
+  font_retrieve(L, fonts, 2);
+
+#ifndef LUA_JITLIBNAME
+  // stores a reference to this font to the reference table
+  lua_rawgeti(L, LUA_REGISTRYINDEX, RENDERER_FONT_REF);
+  if (lua_istable(L, -1))
+  {
+    lua_pushvalue(L, 1);
+    lua_pushboolean(L, 1);
+    lua_rawset(L, -3);
+  } else {
+    fprintf(stderr, "warning: failed to reference count fonts\n");
+  }
+  lua_pop(L, 1);
+#endif
+
+  size_t len, cells_len;
+  const char *text = luaL_checklstring(L, 3, &len);
+  const uint8_t *cells = (const uint8_t *)luaL_checklstring(L, 4, &cells_len);
+  double x = luaL_checknumber(L, 5);
+  double y = luaL_checknumber(L, 6);
+  double cell_width = luaL_checknumber(L, 7);
+  RenColor color = luaXL_checkcolor(L, 8, 255);
+  int columns = 0;
+  if (!ren_text_cells_measure(cells, cells_len, len, &columns))
+    return luaL_argerror(L, 4, "cells do not describe the text");
+  if (!isfinite(cell_width) || cell_width <= 0)
+    return luaL_argerror(L, 7, "cell width must be positive");
+
+  double end_x = rencache_draw_text_cells(
+    canvas, fonts, text, len, cells, cells_len / REN_TEXT_CELL_BYTES,
+    columns, x, y, cell_width, color
+  );
+  lua_pushnumber(L, end_x);
+  return 1;
+}
+
 
 static int f_draw_canvas(lua_State *L) {
   RenCache *canvas_dst = luaL_checkudata(L, 1, API_TYPE_CANVAS);
@@ -634,6 +675,7 @@ static const luaL_Reg canvasLib[] = {
   { "set_clip_rect", f_set_clip_rect },
   { "draw_rect",     f_draw_rect     },
   { "draw_text",     f_draw_text     },
+  { "draw_text_cells", f_draw_text_cells },
   { "draw_poly",     f_draw_poly     },
   { "draw_canvas",   f_draw_canvas   },
   { "render",        f_render        },
