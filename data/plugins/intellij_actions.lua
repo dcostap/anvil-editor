@@ -6,6 +6,7 @@ local keymap = require "core.keymap"
 local command = require "core.command"
 local common = require "core.common"
 local search = require "core.buffer.search"
+local encoded_data = require "core.encoded_data"
 local config = require "core.config"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
@@ -1287,7 +1288,10 @@ local function add_selection_for_next_occurrence(dv)
       not config.select_add_next_no_case)
     if not l1 then break end
     start_line, start_col = l2, c2
-  until not position_in_any_selection(buffer, l1, c1)
+    -- Occurrences inside encoded data, such as a pasted base64 image, are not text.
+    local encoded = encoded_data.covers(buffer.lines[l1], c1)
+    if encoded then start_line, start_col = l1, encoded_data.run_end(buffer.lines[l1], c1) + 1 end
+  until not encoded and not position_in_any_selection(buffer, l1, c1)
 
   if not l1 then
     -- First press at EOF only arms wrap and does nothing. Press again to wrap.
@@ -1317,13 +1321,17 @@ local function select_all_occurrences(dv)
   while true do
     local s, e = haystack:find(find_text, search_at, true)
     if not s then break end
-    local l1, c1 = to_pos(s - 1)
-    local l2, c2 = to_pos(e)
-    new_selections[#new_selections + 1] = l2
-    new_selections[#new_selections + 1] = c2
-    new_selections[#new_selections + 1] = l1
-    new_selections[#new_selections + 1] = c1
-    search_at = e + 1
+    if encoded_data.covers(haystack, s) then
+      search_at = encoded_data.run_end(haystack, s) + 1
+    else
+      local l1, c1 = to_pos(s - 1)
+      local l2, c2 = to_pos(e)
+      new_selections[#new_selections + 1] = l2
+      new_selections[#new_selections + 1] = c2
+      new_selections[#new_selections + 1] = l1
+      new_selections[#new_selections + 1] = c1
+      search_at = e + 1
+    end
   end
 
   if #new_selections == 0 then return end

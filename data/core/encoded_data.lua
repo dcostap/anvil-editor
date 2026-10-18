@@ -42,6 +42,18 @@ function encoded_data.run_end(text, pos)
   return math.max(last, pos)
 end
 
+---Return the first byte of the run that contains `pos`.
+function encoded_data.run_start(text, pos)
+  local min = encoded_data.min_run_length
+  local first = pos
+  while first > 1 do
+    local tail = text:sub(math.max(1, first - min), first - 1):match(RUN_AT_END)
+    first = first - #tail
+    if #tail < min then break end
+  end
+  return first
+end
+
 ---Return the spans whose first byte lies outside encoded runs.
 ---@param spans table[] spans of `{ first, last }`
 function encoded_data.text_spans(text, spans)

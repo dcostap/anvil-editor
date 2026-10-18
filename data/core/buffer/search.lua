@@ -1,3 +1,5 @@
+local encoded_data = require "core.encoded_data"
+
 ---Provides the base in-place search functionality for documents.
 ---@class core.buffer.search
 local search = {}
@@ -101,9 +103,9 @@ function search.find(buffer, line, col, text, opt)
       line_text = line_text:lower()
     end
     local s, e = col, col
-    local matches
+    local matches, skipped
     repeat
-      matches = true
+      matches, skipped = true, false
       if opt.reverse then
         s, e = rfind(search_func, line_text, pattern, e - 1, plain)
       else
@@ -120,8 +122,17 @@ function search.find(buffer, line, col, text, opt)
           if e == line_len then s = nil e = nil break end
         end
       end
-    until matches == true or not e or e < s or e >= line_len
-    if s then
+      -- Matches inside encoded data, such as a pasted base64 image, are not text.
+      if matches and s and encoded_data.covers(line_text, s) then
+        matches, skipped = false, true
+        if opt.reverse then
+          e = encoded_data.run_start(line_text, s)
+        else
+          e = encoded_data.run_end(line_text, s) + 1
+        end
+      end
+    until matches == true or not e or (not skipped and (e < s or e >= line_len))
+    if s and matches then
       if e >= s and (e ~= line_len or s ~= e) then
         local col2 = e == line_len and e or e + 1
         buffer:add_search_selection(line, s, line, col2)

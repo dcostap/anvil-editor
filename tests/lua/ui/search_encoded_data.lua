@@ -128,4 +128,59 @@ test.describe("Text search past encoded data", function()
       test.equal(table.concat(lines, ","), "1,4")
     end)
   end)
+
+  test.describe("Selection occurrence commands", function()
+    test.after_each(function(context)
+      panes.reset_for_tests()
+      if context.buffer then
+        context.buffer:clean()
+        for i, b in ipairs(core.buffers) do
+          if b == context.buffer then table.remove(core.buffers, i); b:on_close(); break end
+        end
+      end
+    end)
+
+    -- Each case starts with the selected `plan` on the given line.
+    local function select_plan(context, line)
+      local buffer = core.open_buffer()
+      context.buffer = buffer
+      buffer:text_input("plan\n" .. image_line(4000) .. "\n" .. image_line(100000) .. "\nplan\n")
+      local view = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
+      view.size.x, view.size.y = 800, 600
+      view:with_selection_state(function() buffer:set_selection(line, 5, line, 1) end)
+      return view, buffer
+    end
+
+    local function selected_lines(view, buffer)
+      return view:with_selection_state(function()
+        local lines = {}
+        for _, l1, c1, l2, c2 in buffer:get_selections(true) do
+          lines[#lines + 1] = l1 .. ":" .. c1 .. "-" .. l2 .. ":" .. c2
+        end
+        table.sort(lines)
+        return table.concat(lines, " ")
+      end)
+    end
+
+    for _, case in ipairs {
+      { name = "adds the next occurrence", command = "editor:add_selection_next_occurrence",
+        line = 1, expected = "1:1-1:5 4:1-4:5" },
+      { name = "selects all occurrences", command = "editor:select_all_occurrences",
+        line = 1, expected = "1:1-1:5 4:1-4:5" },
+      { name = "adds the next match", command = "editor:add_selection_next_match",
+        line = 1, expected = "1:1-1:5 4:1-4:5" },
+      { name = "adds all matches", command = "editor:add_all_matching_selections",
+        line = 1, expected = "1:1-1:5 4:1-4:5" },
+      { name = "moves to the next match", command = "editor:select_next",
+        line = 1, expected = "4:1-4:5" },
+      { name = "moves to the previous match", command = "editor:select_previous",
+        line = 4, expected = "1:1-1:5" },
+    } do
+      test.it(case.name .. " past encoded data", function(context)
+        local view, buffer = select_plan(context, case.line)
+        test.ok(command.perform(case.command), case.command .. " did not run")
+        test.equal(selected_lines(view, buffer), case.expected)
+      end)
+    end
+  end)
 end)
