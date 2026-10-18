@@ -152,6 +152,20 @@ test.describe("Markdown margin notes", function()
     test.equal(core.active_view, view)
   end)
 
+  test.it("adds no note inside code, where a note would not render", function(context)
+    local source = "Run `make all` now.\n\n```\nmake all\n```\n\n    indented code\n\nend"
+    local view, buffer = open_note_view(context, source)
+    for _, caret in ipairs({ { 1, 8 }, { 4, 3 }, { 7, 8 } }) do
+      buffer:set_selection(caret[1], caret[2])
+      command.perform("markdown:add_margin_note")
+      test.equal(margin_notes.editing_input(view), nil)
+      test.equal(buffer:get_text(1, 1, math.huge, math.huge), source)
+    end
+    buffer:set_selection(1, 2)
+    test.ok(command.perform("markdown:add_margin_note"))
+    test.not_nil(margin_notes.editing_input(view))
+  end)
+
   test.it("removes a note saved empty and keeps its anchor text", function(context)
     local view, buffer = open_note_view(context,
       "From {==Terrahawks==}{>>A great show<<} it went.\n\nend")

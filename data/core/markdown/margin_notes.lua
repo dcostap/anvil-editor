@@ -423,8 +423,33 @@ local function word_bounds(text, col)
   return col1, col2
 end
 
+-- The scanner finds no notes in these nodes, so a note added there never renders.
+local NOTELESS_NODES = {
+  code = true, code_fenced = true, code_indented = true, comment = true,
+  frontmatter = true, html = true, math = true,
+}
+
+local function before(line1, col1, line2, col2)
+  return line1 < line2 or (line1 == line2 and col1 < col2)
+end
+
+-- The noteless node that a note source at `col1`..`col2` on `line` would enter.
+local function noteless_node_at(view, line, col1, col2)
+  local nodes_for_line = margin_notes.nodes_for_line
+  for _, node in ipairs(nodes_for_line and nodes_for_line(view, line) or {}) do
+    local source = node.source
+    if NOTELESS_NODES[node.type]
+      and before(source.line1, source.col1, line, col2)
+      and before(line, col1, source.line2 or source.line1, source.col2)
+    then
+      return node
+    end
+  end
+end
+
 ---Add a note on the selection, the word at the caret, or the caret point,
 ---then open its editor. A caret inside a note edits that note instead.
+---Code and other places that show no notes take no new note.
 function margin_notes.add(view)
   local existing = margin_notes.note_at_caret(view)
   if existing then return margin_notes.begin_edit(view, existing) end
@@ -443,7 +468,13 @@ function margin_notes.add(view)
   else
     col2, anchor = col1, ""
   end
-  local source = anchor ~= "" and ("{==" .. anchor .. "==}{>><<}") or "{>><<}"
+  local noteless = noteless_node_at(view, line, col1, col2)
+  if noteless then
+    core.log_quiet("Margin note refused at %s:%d inside %s", buffer:get_name(), line, noteless.type)
+    core.status_bar:show_message("i", style.text, "Margin notes cannot go inside code")
+    return nil
+  end
+  local source =anchor ~= "" and ("{==" .. anchor .. "==}{>><<}") or "{>><<}"
   buffer:apply_edits({
     { line1 = line, col1 = col1, line2 = line, col2 = col2, text = source },
   }, { type = "markdown-margin-note", reason = "add" })
