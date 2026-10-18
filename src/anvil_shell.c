@@ -2970,6 +2970,11 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     apply_shell_colors(project, (const AnvilSurfaceShellColors *)message->payload);
     return;
   }
+  /* Projects and the Sidebar process publish the source. Neither belongs to a Window. */
+  if (message->type == ANVIL_SURFACE_MSG_SIDEBAR_SOURCE) {
+    sidebar_source((const AnvilSurfaceSidebarSource *)message->payload, message->size);
+    return;
+  }
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
   if (project->state == SHELL_FAILED)
@@ -2986,7 +2991,6 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   int value =
       message->size == sizeof(AnvilSurfaceInt) ? ((const AnvilSurfaceInt *)payload)->value : 0;
   if (project->sidebar && message->type != ANVIL_SURFACE_MSG_SIDEBAR_QUERY &&
-      message->type != ANVIL_SURFACE_MSG_SIDEBAR_SOURCE &&
       message->type != ANVIL_SURFACE_MSG_SIDEBAR_REFRESH &&
       message->type != ANVIL_SURFACE_MSG_SELECT_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
@@ -3036,9 +3040,6 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER:
     if (*(const uint32_t *)payload == window->id && !window->closing)
       show_project_picker(window);
-    break;
-  case ANVIL_SURFACE_MSG_SIDEBAR_SOURCE:
-    sidebar_source(payload, message->size);
     break;
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
     broadcast_color_theme(project);

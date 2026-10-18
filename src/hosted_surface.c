@@ -806,7 +806,7 @@ static void send_message(uint16_t type, const void *payload, uint32_t size) {
   if (!hosted.active || !hosted.queue_lock || size > ANVIL_SURFACE_MAX_PAYLOAD) return;
   /* The Sidebar's process-wide messages have no surface. */
   bool wrapped = hosted.sidebar && type != ANVIL_SURFACE_MSG_EXIT_INTENT && type != ANVIL_SURFACE_MSG_RESTART &&
-                 type != ANVIL_SURFACE_MSG_SHELL_COLORS;
+                 type != ANVIL_SURFACE_MSG_SHELL_COLORS && type != ANVIL_SURFACE_MSG_SIDEBAR_SOURCE;
   uint32_t prefix = wrapped ? sizeof(AnvilSidebarSurfacePacket) : 0;
   if (size > ANVIL_SURFACE_MAX_PAYLOAD - prefix) { signal_loss("Sidebar outbound packet overflow", type, size); return; }
   HostedMessage *message = malloc(sizeof(*message) + size + prefix);
