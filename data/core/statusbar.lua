@@ -299,7 +299,7 @@ local function caret_line_col(dv)
 end
 
 ---Split a display path into styled directory and file name parts.
-local function styled_path(display)
+local function styled_path(display, name_color)
   local text = display.text
   local base_start = (text:match("^.*()[/\\]") or 0) + 1
   local prefix = display.prefix_span
@@ -307,12 +307,19 @@ local function styled_path(display)
     return {
       style.accent, text:sub(prefix[1], prefix[2]),
       style.dim, text:sub(prefix[2] + 1, base_start - 1),
-      style.text, text:sub(base_start),
+      name_color, text:sub(base_start),
     }
   elseif prefix then
-    return { style.accent, text:sub(prefix[1], prefix[2]), style.text, text:sub(prefix[2] + 1) }
+    return { style.accent, text:sub(prefix[1], prefix[2]), name_color, text:sub(prefix[2] + 1) }
   end
-  return { style.dim, text:sub(1, base_start - 1), style.text, text:sub(base_start) }
+  return { style.dim, text:sub(1, base_start - 1), name_color, text:sub(base_start) }
+end
+
+---The focused Pane's bar draws its file name in the accent color.
+local function file_name_color(view, fallback)
+  local panes = core.panes or require "core.panes"
+  local pane = panes.active()
+  return pane ~= nil and pane.current_view == view and style.accent or fallback
 end
 
 ---Ask the user to pick one action, then perform its command.
@@ -433,10 +440,13 @@ function StatusBar:register_textview_items()
     get_item = function(_, dv)
       if dv.buffer.abs_filename then
         local display = project_paths.display_path(dv.buffer.abs_filename, { kind = "file" })
-        if display and display.text then return styled_path(display) end
+        if display and display.text then return styled_path(display, file_name_color(dv, style.text)) end
       end
       local buffer_name = dv.buffer.intellij_untitled_name or dv.buffer:get_name()
-      return { dv.buffer.filename and style.text or style.dim, common.home_encode(buffer_name) }
+      return {
+        file_name_color(dv, dv.buffer.filename and style.text or style.dim),
+        common.home_encode(buffer_name),
+      }
     end,
     tooltip = function(_, dv)
       if dv.buffer.abs_filename then
@@ -585,7 +595,7 @@ function StatusBar:register_imageview_items()
     alignment = StatusBar.Item.LEFT,
     shrink = true,
     get_item = function(_, view)
-      return { style.text, common.basename(view.path) }
+      return { file_name_color(view, style.text), common.basename(view.path) }
     end,
     tooltip = function(_, view)
       return common.home_encode(view.path), "Click to copy the full path"

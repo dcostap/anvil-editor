@@ -364,21 +364,6 @@ function PaneStatusBar:draw()
 
   core.push_clip_rect(x0, y0, self.size.x, h)
   renderer.draw_rect(x0, y0, self.size.x, h, style.wallpaper_surface(style.background))
-  -- The focused Pane's bar carries an accent glow from its left edge: it holds
-  -- for a third of its width, then fades out.
-  if focused then
-    local accent = style.accent
-    local width = math.min(self.size.x * 0.5, 320 * SCALE)
-    local hold = width / 3
-    local step = math.max(1, common.round(2 * SCALE))
-    for x = 0, width - 1, step do
-      local t = x < hold and 0 or (x - hold) / (width - hold)
-      local alpha = 34 * (1 - t) * (1 - t)
-      if alpha >= 0.5 then
-        renderer.draw_rect(x0 + x, y0, math.min(step, width - x), h, { accent[1], accent[2], accent[3], alpha })
-      end
-    end
-  end
 
   local function draw_chip_background(entry)
     if entry.visible_w <= 0 or not clickable(self, entry) then return end

@@ -204,6 +204,25 @@ test.describe("Pane Status Bars", function()
     test.equal(styled_text_string(bar_of(right):get_entry("text:file").styled), "right.lua")
   end)
 
+  test.it("marks the focused Pane by drawing its file name in the accent color", function()
+    local left, right = two_panes()
+    local function name_color(pane, name)
+      local styled = bar_of(pane):get_entry("text:file").styled
+      local color
+      for _, part in ipairs(styled) do
+        if type(part) == "table" and not part.get_width then color = part end
+        if part == name then return color end
+      end
+    end
+    test.equal(panes.active(), right)
+    test.equal(name_color(right, "right.lua"), style.accent)
+    test.equal(name_color(left, "left.lua"), style.text)
+    panes.focus(left)
+    root:update()
+    test.equal(name_color(left, "left.lua"), style.accent)
+    test.equal(name_color(right, "right.lua"), style.text)
+  end)
+
   test.it("focuses the Pane and runs the action when an unfocused Pane's item is clicked", function(context)
     local left, right = two_panes()
     test.equal(panes.active(), right)
