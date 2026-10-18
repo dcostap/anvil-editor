@@ -32,16 +32,18 @@ local function open_note_view(context, text, width)
   buffer:set_filename("margin-notes.md", nil)
   buffer:insert(1, 1, text)
   buffer:clear_undo_redo()
-  context.buffer = buffer
+  context.buffers = context.buffers or {}
+  table.insert(context.buffers, buffer)
   local view = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
   context.view = view
-  view.position.x, view.position.y = 0, 0
-  view.size.x, view.size.y = width or 1400, 600
   buffer:set_selection(#buffer.lines, 1)
   markdown.live_render.refresh_view(view)
   local instance = test.not_nil(model.peek(buffer))
   ready(instance)
   core.set_active_view(view)
+  -- The root layout sizes Panes while the parse runs, so size the view after it.
+  view.position.x, view.position.y = 0, 0
+  view.size.x, view.size.y = width or 1400, 600
   return view, buffer, instance
 end
 
@@ -71,10 +73,10 @@ test.describe("Markdown margin notes", function()
   test.after_each(function(context)
     if context.view then margin_notes.cancel_edit(context.view) end
     panes.reset_for_tests()
-    if context.buffer then
-      if context.buffer:is_dirty() then context.buffer:clean() end
+    for _, buffer in ipairs(context.buffers or {}) do
+      if buffer:is_dirty() then buffer:clean() end
       for i = #core.buffers, 1, -1 do
-        if core.buffers[i] == context.buffer then table.remove(core.buffers, i) end
+        if core.buffers[i] == buffer then table.remove(core.buffers, i) end
       end
     end
     config.markdown_live_editor = context.live
@@ -148,24 +150,65 @@ test.describe("Markdown margin notes", function()
     test.ok(margin_notes.column_rect(view) ~= nil)
     local layout = test.not_nil(margin_notes.layout(view))
     test.equal(#layout.cards, 3)
+    test.equal(layout.mode, "margin")
     local lane_x, lane_width = core.centered_editor.get_lane_rect(view)
     for _, card in ipairs(layout.cards) do
       test.ok(card.x >= lane_x + lane_width, "card overlaps the reading lane")
-      test.ok(card.y >= card.anchor_y, "card starts above its anchor")
     end
     local first, second = layout.cards[1], layout.cards[2]
+    test.ok(first.y <= first.anchor_mid and first.y + first.h >= first.anchor_mid,
+      "card is not beside its anchor line")
     test.ok(second.y >= first.y + first.h, "cards on one line overlap")
     test.equal(layout.cards[3].note.text, "point")
   end)
 
-  test.it("keeps the lane clear of the note column in a narrower view", function(context)
-    local view = open_note_view(context, "Text {==anchor==}{>>note<<}.\n\nend", 1000)
+  test.it("keeps the text column width of a document without notes", function(context)
+    local plain = open_note_view(context, "Text anchor here.\n\nend", 1000)
+    plain:update()
+    local plain_x, plain_width = core.centered_editor.get_lane_rect(plain)
+    local view = open_note_view(context, "Text {==anchor==}{>>note<<} here.\n\nend", 1000)
     view:update()
-    local reserve = core.centered_editor.get_right_reserve(view)
-    test.ok(reserve > 0)
     local lane_x, lane_width = core.centered_editor.get_lane_rect(view)
-    test.ok(lane_x + lane_width <= view.position.x + view.size.x - reserve)
-    test.ok(margin_notes.column_rect(view) ~= nil)
+    test.equal(lane_x, plain_x)
+    test.equal(lane_width, plain_width)
+  end)
+
+  test.it("shows a note inline below its block when the margin has no room", function(context)
+    local view = open_note_view(context,
+      "First {==anchor==}{>>note<<} line.\nSecond line.\n\nNext block.", 1000)
+    view.buffer:set_selection(4, 1)
+    view:update()
+    test.equal(margin_notes.column_rect(view), nil)
+    local layout = test.not_nil(margin_notes.layout(view))
+    test.equal(layout.mode, "inline")
+    local card = test.not_nil(layout.cards[1])
+    local _, second_y = view:get_line_screen_position(2, 1)
+    local _, blank_y = view:get_line_screen_position(3, 1)
+    test.ok(card.y >= second_y + view:get_line_height(), "card overlaps its block")
+    test.ok(card.y + card.h <= blank_y, "card overlaps the text below its block")
+    local lane_x, lane_width = core.centered_editor.get_lane_rect(view)
+    test.ok(card.x >= lane_x and card.x + card.w <= lane_x + lane_width, "card leaves the lane")
+  end)
+
+  test.it("grows an inline note as its edited text wraps", function(context)
+    local view = open_note_view(context,
+      "First {==anchor==}{>>note<<} line.\n\nNext block.", 1000)
+    view.buffer:set_selection(1, 10)
+    test.ok(command.perform("markdown:edit_margin_note"))
+    local input = margin_notes.editing_input(view)
+    view:update()
+    test.equal(test.not_nil(margin_notes.layout(view)).mode, "inline")
+    local _, next_y = view:get_line_screen_position(3, 1)
+    input:on_text_input(string.rep(" more words", 30))
+    input:update()
+    view:update()
+    local card = test.not_nil(margin_notes.layout(view)).cards[1]
+    test.ok(card.editing)
+    local _, grown_next_y = view:get_line_screen_position(3, 1)
+    test.ok(grown_next_y > next_y, "text below the note did not move down")
+    test.ok(card.y + card.h <= grown_next_y, "note card overlaps the text below")
+    local end_x, end_y = input:get_line_screen_position(1, #input:get_text() + 1)
+    test.ok(end_x <= card.x + card.w and end_y < card.y + card.h, "note text runs past its card")
   end)
 
   test.it("edits a long note in the same wrapped shape that the card shows", function(context)

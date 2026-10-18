@@ -1,9 +1,10 @@
--- Margin notes: CriticMarkup notes shown as cards beside Markdown Live Preview.
+-- Margin notes: CriticMarkup notes shown as cards in Markdown Live Preview.
 --
 -- `{==anchor==}{>>note<<}` attaches a note to its anchor text and `{>>note<<}`
--- marks a point. The native extension scanner finds both. This module lays
--- out one card per note in the right margin, beside its anchor line, and
--- edits the note body in an inline editor inside the card.
+-- marks a point. The native extension scanner finds both. A card sits in the
+-- free space right of the text column, beside its anchor line. When that
+-- space is too narrow, cards show inline below the anchor's block. Notes
+-- never change the text column's width. Each card edits its note in place.
 local core = require "core"
 local style = require "core.style"
 local Buffer = require "core.buffer"
@@ -14,12 +15,25 @@ local panes = require "core.panes"
 
 local margin_notes = {}
 
-local CARD_WIDTH = 210
-local MIN_CARD_WIDTH = 140
-local LANE_GAP = 14
+local NOTE_FONT_SCALE = 0.875
+local CARD_RADIUS = 5
+-- Margin cards point left at their anchor line.
+local CARD_WIDTH = 200
+local MIN_CARD_WIDTH = 160
+local MARGIN_GAP = 30
 local EDGE_GAP = 12
 local CARD_SPACING = 8
-local CARD_RADIUS = 6
+local MARGIN_PAD_X, MARGIN_PAD_Y = 9, 7
+local MARGIN_POINTER_LENGTH, MARGIN_POINTER_HALF = 19, 15
+-- Inline cards point up at the block above them.
+local INLINE_PAD_X, INLINE_PAD_Y = 8, 5
+local INLINE_POINTER_LENGTH, INLINE_POINTER_HALF = 14, 10
+local INLINE_POINTER_X = 40
+local INLINE_TOP = INLINE_POINTER_LENGTH + 3
+local INLINE_BOTTOM = 4
+local MAX_BLOCK_LINES = 200
+local MAX_DISPLAYS = 64
+local ROW_PROVIDER = "markdown.margin-notes"
 -- Notes anchored just above the viewport still push visible cards down.
 local LOOKBEHIND_LINES = 80
 local PLACEHOLDER = "Write a note..."
@@ -79,24 +93,39 @@ function NoteInput:draw_background() end
 function NoteInput:draw_content_left_edge() end
 function NoteInput:draw_soft_wrap_continuation_indicators() end
 
+-- Notes read a step smaller than the prose they annotate.
+local note_fonts = setmetatable({}, { __mode = "k" })
+
+function NoteInput:get_font()
+  local base = style.markdown_body_font
+  local font = note_fonts[base]
+  if not font then
+    font = base:copy(base:get_size() * NOTE_FONT_SCALE)
+    note_fonts[base] = font
+  end
+  return font
+end
+
 -- Cards show and edit a note in the same wrapped shape.
 function NoteInput:compute_wrap_width()
   return math.max(1, self.size.x)
 end
 
----Place the text inside a card and wrap it to the card's text width.
-function NoteInput:fit_card(x, y, width)
-  self.position.x, self.position.y = x, y
+---Wrap the text to `width` and return its height. The view stays in place.
+function NoteInput:measure(width)
   if self.size.x ~= width then self.size.x = width end
   self:update_wrap_cache()
-  self.size.y = self:content_height()
-  self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = 0, 0, 0, 0
-  return self.size.y
+  return math.max(1, self:get_total_visual_lines()) * self:get_line_height()
 end
 
-function NoteInput:content_height()
-  local rows = math.max(1, self:get_total_visual_lines())
-  return rows * self:get_line_height() + style.padding.y * 2
+---Place the text with its first row at (`x`, `top`), wrapped to `width`.
+function NoteInput:fit_card(x, top, width)
+  local height = self:measure(width)
+  -- The text view draws its first row one padding below its top.
+  self.position.x, self.position.y = x, top - style.padding.y
+  self.size.y = height + style.padding.y * 2
+  self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = 0, 0, 0, 0
+  return height
 end
 
 -- Notes -------------------------------------------------------------------
@@ -137,11 +166,15 @@ function margin_notes.notes_for_lines(view, line1, line2)
   local notes = {}
   local nodes_for_line = margin_notes.nodes_for_line
   if not nodes_for_line then return notes end
-  for line = math.max(1, line1), math.min(line2, #view.buffer.lines) do
-    for _, node in ipairs(nodes_for_line(view, line) or {}) do
-      if node.type == "margin_note" and node.source.line1 == line then
-        local note = note_from_node(view.buffer, node)
-        if note then notes[#notes + 1] = note end
+  local lines = view.buffer.lines
+  for line = math.max(1, line1), math.min(line2, #lines) do
+    -- Every note body opens on its own line, so most lines skip the parse.
+    if lines[line]:find("{>>", 1, true) then
+      for _, node in ipairs(nodes_for_line(view, line) or {}) do
+        if node.type == "margin_note" and node.source.line1 == line then
+          local note = note_from_node(view.buffer, node)
+          if note then notes[#notes + 1] = note end
+        end
       end
     end
   end
@@ -303,104 +336,256 @@ local function scrollbar_width(view)
   return view.v_scrollbar and view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
 end
 
----The margin column beside the reading lane, or nil without enough room.
-function margin_notes.column_rect(view)
+-- The wrapped text column of the reading lane. Notes never change it.
+local function text_column(view)
   local centered = core.centered_editor
-  if not (centered and centered.should_center(view)) then return nil end
-  local lane_x, lane_width = centered.get_lane_rect(view)
-  local x = lane_x + lane_width + scaled(LANE_GAP)
+  local lane_x, lane_width = view.position.x, view.size.x
+  if centered and centered.should_center(view) then
+    lane_x, lane_width = centered.get_lane_rect(view)
+  end
+  local gutter = view:get_gutter_width()
+  local wrap = view.wrapped_settings and view.wrapped_settings.width
+  local width = (wrap and wrap ~= math.huge) and wrap or (lane_width - gutter - scrollbar_width(view))
+  return lane_x + gutter, math.max(0, width)
+end
+
+---The margin column in the free space right of the text column, or nil
+---when that space cannot hold a card. Notes then show inline.
+function margin_notes.column_rect(view)
+  local text_x, text_width = text_column(view)
+  local x = text_x + text_width + scaled(MARGIN_GAP)
   local right = view.position.x + view.size.x - scrollbar_width(view) - scaled(EDGE_GAP)
   local width = math.min(scaled(CARD_WIDTH), right - x)
   if width < scaled(MIN_CARD_WIDTH) then return nil end
   return x, width
 end
 
-local function reserve_width(view)
-  return scaled(CARD_WIDTH + LANE_GAP + EDGE_GAP) + scrollbar_width(view)
+-- Notes with the same text share one display view.
+local function display_for(view, text)
+  local displays = view.__margin_note_displays
+  if not displays or displays.count > MAX_DISPLAYS then
+    displays = { count = 0, views = {} }
+    view.__margin_note_displays = displays
+  end
+  local display = displays.views[text]
+  if not display then
+    display = NoteInput(view)
+    display:set_text(text)
+    displays.views[text] = display
+    displays.count = displays.count + 1
+  end
+  return display
 end
 
----Cards for the notes near the viewport, stacked so none overlap.
-function margin_notes.layout(view)
-  if not document_has_notes(view) and not edit_state(view) then return nil end
-  if not margin_notes.presents_formatting(view) then return nil end
-  local column_x, column_width = margin_notes.column_rect(view)
-  if not column_x then return nil end
-  local pad_x = style.padding.x
-  local text_width = column_width - pad_x * 2
-  local minline, maxline = view:get_visible_line_range()
-  local notes = margin_notes.notes_for_lines(view, minline - LOOKBEHIND_LINES, maxline)
+local function text_view_for(view, note)
   local edit = edit_state(view)
-  if edit then
-    local found = false
-    for i, note in ipairs(notes) do
-      if same_note(note, edit.note) then notes[i], found = edit.note, true end
-    end
-    if not found and edit.note.line >= minline - LOOKBEHIND_LINES and edit.note.line <= maxline then
-      notes[#notes + 1] = edit.note
-    end
+  if edit and same_note(note, edit.note) then return edit.input, true end
+  return display_for(view, note.text), false
+end
+
+-- Wrap a note's text inside a card at (`x`, `y`); returns the card height.
+local function place_text(text_view, x, y, width, pad_x, pad_y)
+  return text_view:fit_card(x + scaled(pad_x), y + scaled(pad_y), width - scaled(pad_x) * 2)
+    + scaled(pad_y) * 2
+end
+
+local function new_card(view, note, x, y, width, height, pointer, caret_note)
+  local text_view, editing = text_view_for(view, note)
+  local text_x, text_y = text_view:get_line_screen_position(1, 1)
+  return {
+    note = note, x = x, y = y, w = width, h = height, pointer = pointer,
+    text_view = text_view, text_left = text_view.position.x, text_top = text_view.position.y,
+    text_x = text_x, text_y = text_y, editing = editing,
+    current = same_note(note, caret_note),
+  }
+end
+
+local function notes_with_edit(view, notes, line1, line2)
+  local edit = edit_state(view)
+  if not edit then return notes end
+  local found = false
+  for i, note in ipairs(notes) do
+    if same_note(note, edit.note) then notes[i], found = edit.note, true end
   end
-  local caret_note = margin_notes.note_at_caret(view)
-  -- Notes with the same text share one display view.
-  local displays, used = view.__margin_note_displays or {}, {}
+  -- A note added a moment ago can precede the model's next parse.
+  if not found and edit.note.line >= line1 and edit.note.line <= line2 then
+    notes[#notes + 1] = edit.note
+  end
+  return notes
+end
+
+-- Margin cards are centered on their anchor line and stacked so none overlap.
+local function margin_layout(view, column_x, column_width, caret_note)
+  local minline, maxline = view:get_visible_line_range()
+  local line1 = minline - LOOKBEHIND_LINES
+  local notes = notes_with_edit(view, margin_notes.notes_for_lines(view, line1, maxline), line1, maxline)
   local cards, bottom = {}, -math.huge
+  local half_line = math.floor(view:get_line_height() / 2)
   for _, note in ipairs(notes) do
-    local anchor_col = note.anchor_col1 or note.col1
-    local _, anchor_y = view:get_line_screen_position(note.line, anchor_col)
-    local editing = edit and same_note(note, edit.note)
-    local text_view
-    if editing then
-      text_view = edit.input
-    else
-      text_view = displays[note.text]
-      if not text_view then
-        text_view = NoteInput(view)
-        text_view:set_text(note.text)
-      end
-      used[note.text] = text_view
-    end
-    local y = math.max(anchor_y, bottom + scaled(CARD_SPACING))
-    local height = text_view:fit_card(column_x + pad_x, y, text_width)
-    local text_x, text_y = text_view:get_line_screen_position(1, 1)
-    cards[#cards + 1] = {
-      note = note, x = column_x, y = y, w = column_width, h = height,
-      text_view = text_view, text_x = text_x, text_y = text_y,
-      anchor_y = anchor_y, editing = editing,
-      current = same_note(note, caret_note),
-    }
+    local _, anchor_y = view:get_line_screen_position(note.line, note.anchor_col1 or note.col1)
+    local text_view = text_view_for(view, note)
+    local height = place_text(text_view, column_x, 0, column_width, MARGIN_PAD_X, MARGIN_PAD_Y)
+    local anchor_mid = anchor_y + half_line
+    local y = math.max(anchor_mid - math.floor(height / 2), bottom + scaled(CARD_SPACING))
+    place_text(text_view, column_x, y, column_width, MARGIN_PAD_X, MARGIN_PAD_Y)
+    local card = new_card(view, note, column_x, y, column_width, height, "left", caret_note)
+    card.anchor_y, card.anchor_mid = anchor_y, anchor_mid
+    cards[#cards + 1] = card
     bottom = y + height
   end
-  view.__margin_note_displays = used
-  return { cards = cards }
+  return cards
+end
+
+-- Inline cards fill the rows that the row provider adds below each block.
+local function inline_layout(view, caret_note)
+  local cards = {}
+  local x, width = text_column(view)
+  local edit = edit_state(view)
+  for entry in view:iter_visible_visual_rows() do
+    local row = entry.provider_row
+    if row and row.margin_note then
+      local note = edit and same_note(row.margin_note, edit.note) and edit.note or row.margin_note
+      local y = entry.y + scaled(INLINE_TOP)
+      local height = place_text(text_view_for(view, note), x, y, width, INLINE_PAD_X, INLINE_PAD_Y)
+      cards[#cards + 1] = new_card(view, note, x, y, width, height, "up", caret_note)
+    end
+  end
+  return cards
+end
+
+-- Inline rows -------------------------------------------------------------
+
+local function is_blank(text) return not text:find("%S") end
+local function is_heading(text) return text:find("^%s*#") ~= nil end
+
+-- A block is a run of non-blank lines. A heading is a block of its own.
+local function is_block_end(buffer, line)
+  local text = line_text(buffer, line)
+  if is_blank(text) then return false end
+  if line >= #buffer.lines or is_heading(text) then return true end
+  local next_text = line_text(buffer, line + 1)
+  return is_blank(next_text) or is_heading(next_text)
+end
+
+local function block_start(buffer, line)
+  if is_heading(line_text(buffer, line)) then return line end
+  local first = line
+  while first > 1 and line - first < MAX_BLOCK_LINES do
+    local text = line_text(buffer, first - 1)
+    if is_blank(text) or is_heading(text) then break end
+    first = first - 1
+  end
+  return first
+end
+
+local function inline_rows(view, line)
+  local buffer = view.buffer
+  if not is_block_end(buffer, line) then return nil end
+  local first = block_start(buffer, line)
+  local notes = notes_with_edit(view, margin_notes.notes_for_lines(view, first, line), first, line)
+  if #notes == 0 then return nil end
+  local _, width = text_column(view)
+  local rows = {}
+  for _, note in ipairs(notes) do
+    local text_height = text_view_for(view, note):measure(width - scaled(INLINE_PAD_X) * 2)
+    rows[#rows + 1] = {
+      id = note.line .. ":" .. note.col1,
+      margin_note = note,
+      height = scaled(INLINE_TOP) + text_height + scaled(INLINE_PAD_Y) * 2 + scaled(INLINE_BOTTOM),
+    }
+  end
+  return rows
+end
+
+local function inline_generation(_, view)
+  local _, width = text_column(view)
+  local edit = edit_state(view)
+  local instance = markdown_model.peek(view.buffer)
+  return table.concat({
+    width, view:get_line_height(), instance and instance.published_revision or 0,
+    edit and (edit.note.line .. ":" .. edit.note.col1 .. ":" .. edit.input:get_total_visual_lines()) or "",
+  }, ":")
+end
+
+local inline_row_provider = {
+  generation = inline_generation,
+  visual_rows = function(_, view, line, placement)
+    if placement == "after" then return inline_rows(view, line) end
+  end,
+}
+
+local inline_metric_provider = {
+  -- Note rows own their height, regardless of the source line's presentation.
+  priority = 100,
+  generation = inline_generation,
+  line_height = function(_, _, _, entry)
+    local row = entry.provider_row
+    if row and row.margin_note then return row.height end
+  end,
+}
+
+local function wants_notes(view)
+  return (document_has_notes(view) or edit_state(view) ~= nil)
+    and margin_notes.presents_formatting(view)
+end
+
+-- Inline rows exist only while a view without margin space shows notes.
+local function sync_inline_rows(view)
+  local inline = wants_notes(view) and not margin_notes.column_rect(view)
+  if inline == (view.__margin_note_inline or false) then return inline end
+  view.__margin_note_inline = inline or nil
+  if inline then
+    view:add_visual_row_provider(ROW_PROVIDER, inline_row_provider)
+    view:add_visual_metric_provider(ROW_PROVIDER, inline_metric_provider)
+  else
+    view:remove_visual_row_provider(ROW_PROVIDER)
+    view:remove_visual_metric_provider(ROW_PROVIDER)
+  end
+  core.log_quiet("Margin notes %s for %s", inline and "inline" or "in the margin", view.buffer:get_name())
+  core.redraw = true
+  return inline
+end
+
+---Cards for the notes near the viewport: in the margin when it has room,
+---otherwise inline below each note's block.
+function margin_notes.layout(view)
+  if not wants_notes(view) then
+    sync_inline_rows(view)
+    return nil
+  end
+  local caret_note = margin_notes.note_at_caret(view)
+  if sync_inline_rows(view) then
+    return { mode = "inline", cards = inline_layout(view, caret_note) }
+  end
+  local column_x, column_width = margin_notes.column_rect(view)
+  return { mode = "margin", cards = margin_layout(view, column_x, column_width, caret_note) }
 end
 
 -- Drawing -----------------------------------------------------------------
 
-local function draw_dashed_hline(x1, x2, y, color)
-  local dash, gap = scaled(4), scaled(3)
-  local x = x1
-  while x < x2 do
-    renderer.draw_rect(x, y, math.min(dash, x2 - x), math.max(1, scaled(1)), color)
-    x = x + dash + gap
+local function draw_pointer(card, color)
+  local x, y = card.x, card.y
+  if card.pointer == "up" then
+    local half, length = scaled(INLINE_POINTER_HALF), scaled(INLINE_POINTER_LENGTH)
+    local cx = x + scaled(INLINE_POINTER_X) + half
+    renderer.draw_poly({ { cx - half, y + 1 }, { cx, y - length }, { cx + half, y + 1 } }, color)
+    return
   end
+  local half, length = scaled(MARGIN_POINTER_HALF), scaled(MARGIN_POINTER_LENGTH)
+  local low, high = y + half, y + card.h - half
+  local tip_y = low <= high and math.max(low, math.min(high, card.anchor_mid)) or y + math.floor(card.h / 2)
+  renderer.draw_poly({ { x + 1, tip_y - half }, { x - length, tip_y }, { x + 1, tip_y + half } }, color)
 end
 
-local function draw_card(view, card, hovered)
+local function draw_card(card, hovered)
   local emphasized = card.editing or card.current or hovered
-  local border = emphasized and style.markdown_margin_note_card_active_border
-    or style.markdown_margin_note_card_border
-  local radius = scaled(CARD_RADIUS)
-  if emphasized then
-    local note = card.note
-    local end_col = note.anchor_col2 or note.col1
-    local anchor_x = view:get_line_screen_position(note.line, end_col)
-    local y = card.anchor_y + math.floor(view:get_line_height() / 2)
-    draw_dashed_hline(anchor_x + scaled(4), card.x, y, style.markdown_margin_note_connector)
-  end
-  renderer.draw_rounded_rect(card.x - 1, card.y - 1, card.w + 2, card.h + 2, radius + 1, border)
-  renderer.draw_rounded_rect(card.x, card.y, card.w, card.h, radius, style.markdown_margin_note_card_bg)
+  local color = emphasized and style.markdown_margin_note_card_active_bg
+    or style.markdown_margin_note_card_bg
+  draw_pointer(card, color)
+  renderer.draw_rounded_rect(card.x, card.y, card.w, card.h, scaled(CARD_RADIUS), color)
   local text_view = card.text_view
-  -- The card's layout already placed and wrapped its text view.
-  text_view.position.x, text_view.position.y = card.x + style.padding.x, card.y
+  -- Cards that share a display view each place it before drawing.
+  text_view.position.x, text_view.position.y = card.text_left, card.text_top
   if text_view:get_text() == "" then
     renderer.draw_text(text_view:get_font(), PLACEHOLDER, card.text_x, card.text_y,
       style.markdown_margin_note_placeholder)
@@ -416,7 +601,7 @@ function margin_notes.draw(view)
   core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
   for _, card in ipairs(layout.cards) do
     if card.y + card.h >= view.position.y and card.y <= view.position.y + view.size.y then
-      draw_card(view, card, same_note(card.note, view.__margin_note_hover))
+      draw_card(card, same_note(card.note, view.__margin_note_hover))
     end
   end
   core.pop_clip_rect()
@@ -491,12 +676,7 @@ local function update(view)
       edit.input:update()
     end
   end
-  local centered = core.centered_editor
-  if centered then
-    local reserve = document_has_notes(view) and margin_notes.presents_formatting(view)
-      and reserve_width(view) or 0
-    centered.set_right_reserve(view, reserve)
-  end
+  sync_inline_rows(view)
 end
 
 local function call_class(view, name, ...)
@@ -540,8 +720,11 @@ function margin_notes.detach(view)
   view.on_mouse_moved, view.on_mouse_pressed, view.on_mouse_released = nil, nil, nil
   view.__margin_note_layout, view.__margin_note_hover = nil, nil
   view.__margin_note_displays = nil
-  local centered = core.centered_editor
-  if centered then centered.set_right_reserve(view, 0) end
+  if view.__margin_note_inline then
+    view.__margin_note_inline = nil
+    view:remove_visual_row_provider(ROW_PROVIDER)
+    view:remove_visual_metric_provider(ROW_PROVIDER)
+  end
   return true
 end
 

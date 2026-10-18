@@ -373,12 +373,10 @@ style.markdown_live_table_active_cell = { common.color "rgba(9, 105, 218, 0.07)"
 style.markdown_live_table_cell_selection = { common.color "rgba(107, 29, 29, 0.09)" }
 style.markdown_live_table_cell_selection_outline = style.accent
 style.markdown_live_hidden_syntax = style.dim
-style.markdown_live_margin_note_bg = { common.color "rgba(124, 92, 230, 0.16)" }
-style.markdown_live_margin_note_active_bg = { common.color "rgba(124, 92, 230, 0.30)" }
-style.markdown_margin_note_card_bg = c("ffffff")
-style.markdown_margin_note_card_border = { common.color "rgba(124, 92, 230, 0.30)" }
-style.markdown_margin_note_card_active_border = c("7c5ce6")
-style.markdown_margin_note_connector = { common.color "rgba(124, 92, 230, 0.45)" }
+style.markdown_live_margin_note_bg = { common.color "rgba(46, 140, 125, 0.16)" }
+style.markdown_live_margin_note_active_bg = { common.color "rgba(46, 140, 125, 0.30)" }
+style.markdown_margin_note_card_bg = c("e2f2ee")
+style.markdown_margin_note_card_active_bg = c("d0e9e2")
 
 style.log["INFO"] = { icon = "i", color = style.text }
 style.log["WARN"] = { icon = "!", color = style.warn }

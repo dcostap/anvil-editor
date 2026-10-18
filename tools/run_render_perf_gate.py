@@ -204,6 +204,9 @@ SCENARIOS["markdown-margin-notes"] = {
 }
 # The first note's card while its editor is open.
 SCENARIOS["markdown-margin-notes-edit"] = dict(SCENARIOS["markdown-margin-notes"], edit_note=True)
+# A view too narrow for the margin shows each card below its block.
+SCENARIOS["markdown-margin-notes-inline"] = dict(SCENARIOS["markdown-margin-notes"], window_width=900)
+SCENARIOS["markdown-margin-notes-inline-edit"] = dict(SCENARIOS["markdown-margin-notes-inline"], edit_note=True)
 MARGIN_NOTES_SOURCE = """# Chapter one
 
 From {==Terrahawks==}{>>A great show. Check the air dates before the next draft goes out.<<} it went

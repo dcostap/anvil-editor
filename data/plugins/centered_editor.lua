@@ -13,9 +13,6 @@ local centered_editor = config.plugins.centered_editor
 
 local M = {}
 
--- A right reserve never narrows the lane below this readable width.
-local MIN_RESERVED_LANE_WIDTH = 480
-
 local function perf_frame_add(key, amount)
   if not core.perf_frame_stats then return end
   local perf = package.loaded["core.perf"]
@@ -95,24 +92,6 @@ local function set_pane_membership(view, is_member)
   end
 end
 
----Width a view keeps free at its right edge, such as for margin notes.
----A view too narrow for both the reserve and a readable lane keeps none.
-function M.get_right_reserve(view)
-  local reserve = view and tonumber(view.__centered_editor_right_reserve) or 0
-  if reserve <= 0 or not view.size then return 0 end
-  if view.size.x - reserve < MIN_RESERVED_LANE_WIDTH * SCALE then return 0 end
-  return reserve
-end
-
-function M.set_right_reserve(view, width)
-  width = math.max(0, math.floor(tonumber(width) or 0))
-  if (view.__centered_editor_right_reserve or 0) == width then return false end
-  view.__centered_editor_right_reserve = width
-  core.log_quiet("Centered editor right reserve: %d for %s", width, tostring(view))
-  core.redraw = true
-  return true
-end
-
 function M.should_center(view)
   perf_frame_add("centered_editor_should_center_calls", 1)
   local cfg = settings()
@@ -141,8 +120,7 @@ function M.should_center(view)
     return false
   end
   local centered = view.size
-    and (view.size.x > max_width + (tonumber(cfg.min_margin) or 0) * 2
-      or M.get_right_reserve(view) > 0)
+    and view.size.x > max_width + (tonumber(cfg.min_margin) or 0) * 2
   perf_frame_add(
     centered and "centered_editor_should_center_true"
       or "centered_editor_should_center_too_narrow",
@@ -176,12 +154,6 @@ local function get_base_lane_rect(view)
     math.max(0, math.min(max_width, available))
   )
   local lane_x = view.position.x + math.floor((view.size.x - lane_width) / 2)
-  local reserve = M.get_right_reserve(view)
-  local right_limit = view.position.x + view.size.x - reserve
-  if reserve > 0 and lane_x + lane_width > right_limit then
-    lane_width = math.min(lane_width, math.max(0, right_limit - view.position.x - min_margin))
-    lane_x = right_limit - lane_width
-  end
   return lane_x, lane_width
 end
 
@@ -330,7 +302,6 @@ function TextView:get_presentation_layout_generation()
     and state.scale == SCALE
     and state.markdown_live_attached == not not self.__markdown_live_attached
     and state.wrapped == wrapped
-    and state.right_reserve == M.get_right_reserve(self)
   then
     return state.generation
   end
@@ -349,7 +320,6 @@ function TextView:get_presentation_layout_generation()
     scale = SCALE,
     markdown_live_attached = not not self.__markdown_live_attached,
     wrapped = wrapped,
-    right_reserve = M.get_right_reserve(self),
   }
   self.__centered_editor_presentation_layout_state = state
   return state.generation

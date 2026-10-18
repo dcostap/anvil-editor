@@ -207,13 +207,11 @@ style.markdown_live_table_cell_selection = { common.color "rgba(89, 160, 250, 0.
 style.markdown_live_table_cell_selection_outline = style.accent
 style.markdown_live_hidden_syntax = style.dim
 -- Margin notes: tinted anchors in the text and note cards in the right margin.
-style.markdown_live_margin_note_bg = { common.color "rgba(167, 139, 250, 0.20)" }
-style.markdown_live_margin_note_active_bg = { common.color "rgba(167, 139, 250, 0.38)" }
-style.markdown_margin_note_card_bg = c("272a36")
-style.markdown_margin_note_card_border = { common.color "rgba(167, 139, 250, 0.30)" }
-style.markdown_margin_note_card_active_border = c("a78bfa")
+style.markdown_live_margin_note_bg = { common.color "rgba(94, 182, 170, 0.22)" }
+style.markdown_live_margin_note_active_bg = { common.color "rgba(94, 182, 170, 0.40)" }
+style.markdown_margin_note_card_bg = c("23413f")
+style.markdown_margin_note_card_active_bg = c("2c5250")
 style.markdown_margin_note_placeholder = style.dim
-style.markdown_margin_note_connector = { common.color "rgba(167, 139, 250, 0.45)" }
 
 -- Diff/search/selection-like colors
 style.diff_delete = p("deleted_bg")

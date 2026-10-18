@@ -273,29 +273,6 @@ test.describe("centered editor", function()
     test.equal(select(2, centered_editor.get_lane_rect(markdown_view)), markdown_view.size.x)
   end)
 
-  test.it("moves the lane left only as far as a right reserve requires", function(context)
-    local view = open_editor(context, "text\n")
-    local centered_x, centered_width = centered_editor.get_lane_rect(view)
-    local view_right = view.position.x + view.size.x
-
-    centered_editor.set_right_reserve(view, 300)
-    local x, width = centered_editor.get_lane_rect(view)
-    test.equal(x, centered_x)
-    test.equal(width, centered_width)
-
-    centered_editor.set_right_reserve(view, 500)
-    x, width = centered_editor.get_lane_rect(view)
-    test.equal(width, centered_width)
-    test.equal(x + width, view_right - 500)
-
-    view.size.x = 520
-    test.equal(centered_editor.get_right_reserve(view), 0)
-
-    centered_editor.set_right_reserve(view, 0)
-    view.size.x = 1000
-    test.equal(centered_editor.get_lane_rect(view), centered_x)
-  end)
-
   test.it("allows unwrapped right-side drawn text to receive buffer mouse commands", function(context)
     local view = open_editor(context, string.rep("x", 1000) .. "\n")
     local lane_x, lane_width = centered_editor.get_lane_rect(view)

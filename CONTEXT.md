@@ -208,7 +208,7 @@ A Markdown Callout whose type marker is followed by `+` or `-`, declaring whethe
 _Avoid_: collapsible callout, folded blockquote
 
 **Margin Note**:
-A comment written in a Markdown document as CriticMarkup, either on a highlighted anchor text or at a point in a line, and shown by Markdown Live Preview as a card beside the reading lane.
+A comment written in a Markdown document as CriticMarkup, either on a highlighted anchor text or at a point in a line, and shown by Markdown Live Preview as a card beside the reading lane, or below its paragraph when no free space beside the lane can hold the card.
 _Avoid_: annotation, comment bubble, sidenote
 
 **Markdown Source Mode**:
