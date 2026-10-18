@@ -8,6 +8,7 @@
 -- change the text column's width. Each card edits its footnote in place.
 local core = require "core"
 local style = require "core.style"
+local syntax = require "core.syntax"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local file_context = require "core.file_context"
@@ -229,8 +230,9 @@ function NoteInput:new(owner)
   self.wrap_continuation_flush = true
   self:set_wrapping_enabled(true)
   self:add_line_render_provider(NOTE_FORMAT_PROVIDER, note_format_provider)
-  -- A Markdown name makes the note a Markdown Model buffer. It has no file.
-  self.buffer.filename = "footnote.md"
+  -- Markdown syntax makes the note a Markdown Model buffer. It has no file
+  -- name, so autosave never writes it to disk.
+  self.buffer:set_syntax(syntax.get("footnote.md"), "footnote")
   self.note_model = markdown_model.get(self.buffer)
   self.note_model:add_listener(NOTE_MODEL_LISTENER, function()
     self:invalidate_line_render(NOTE_FORMAT_PROVIDER)

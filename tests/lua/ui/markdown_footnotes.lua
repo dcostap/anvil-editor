@@ -205,6 +205,19 @@ test.describe("Markdown footnotes", function()
       "From Terrahawks[^1] it went.\n\n[^1]: first second\n\nend")
   end)
 
+  test.it("keeps the footnote editor's text out of files on disk", function(context)
+    local view, buffer = open_note_view(context,
+      "From Terrahawks[^1] it went.\n\n[^1]: A great show.\n\nend")
+    buffer:set_selection(1, 18)
+    test.ok(command.perform("markdown:edit_footnote"))
+    local input = footnotes.editing_input(view)
+    input:on_text_input("!")
+    -- A file name would make autosave write the editor's text to disk.
+    test.equal(input.buffer.filename, nil)
+    test.equal(input.buffer.abs_filename, nil)
+    test.ok(model.is_markdown_buffer(input.buffer), "the footnote editor is not Markdown")
+  end)
+
   test.it("removes a footnote saved empty with its definition", function(context)
     local view, buffer = open_note_view(context,
       "From Terrahawks[^1] it went.\n\n[^1]: A great show.\n\nend")
