@@ -301,8 +301,8 @@ struct ShellWindow {
   /* The colours of the drawn controls layer; a change repaints it. */
   AnvilSurfaceShellColors ui_colors;
   bool ui_focused;
-  RECT controls, restart_button, close_button;
-  RECT failure_card;
+  RECT controls, restart_button, close_button, open_button;
+  RECT lifecycle_card;
 };
 
 typedef struct {
@@ -1696,6 +1696,21 @@ static void ui_path(HDC dc, const char *path, RECT rect) {
   SDL_free(wide);
 }
 
+static bool no_project_selected(ShellWindow *window) {
+  return !window->selected->id && !window->selected->project_path;
+}
+
+/* Recovery replaces only the visible button's caption area. The rest still drags the Window. */
+static bool sidebar_restart_offered(void) {
+  return shell.sidebar_restart_limited || !shell.sidebar_process || shell.sidebar_process->state == SHELL_FAILED;
+}
+
+static RECT sidebar_restart_rect(ShellWindow *window) {
+  int w = SDL_min((int)(180 * window->scale), window->sidebar_w - (int)(24 * window->scale));
+  int x = (window->sidebar_w - w) / 2, pad = (int)(4 * window->scale);
+  return (RECT){x, pad, x + SDL_max(0, w), window->controls.bottom - pad};
+}
+
 /* A stopped Project cannot serve its old Tabs or Sidebar toggle. Do not show dead controls. */
 static bool lifecycle_titlebar(ShellWindow *window) {
   return window->selected->state == SHELL_FAILED || window->selected->state == SHELL_DORMANT ||
@@ -1712,13 +1727,12 @@ static void draw_lifecycle_titlebar(ShellWindow *window, HDC dc, const AnvilSurf
   const char *name = window->selected->project_path;
   for (const char *p = name; p && *p; p++)
     if ((*p == '/' || *p == '\\') && p[1]) name = p + 1;
-  ui_path(dc, name, bar);
+  ui_path(dc, name ? name : "Anvil", bar);
   SetTextColor(dc, colors->text & 0xffffff);
 }
 
-static void draw_recovery_button(ShellWindow *window, HDC dc, const AnvilSurfaceShellColors *colors,
-                                 RECT rect, int control, const wchar_t *label) {
-  bool primary = control == 3;
+static void draw_native_button(ShellWindow *window, HDC dc, const AnvilSurfaceShellColors *colors,
+                               RECT rect, int control, const wchar_t *label, bool primary) {
   bool hovered = window->hovered_control == control;
   bool pressed = hovered && window->pressed_control == control;
   COLORREF fill = primary ? colors->text : colors->button;
@@ -1728,6 +1742,7 @@ static void draw_recovery_button(ShellWindow *window, HDC dc, const AnvilSurface
     fill = primary ? ui_mix(fill, text, pressed ? 48 : 24) : ui_mix(fill, overlay, overlay >> 24);
   }
   COLORREF border = primary ? fill : ui_mix(fill, text, hovered ? 96 : 48);
+  ui_fill(dc, rect, colors->background & 0xffffff);
   ui_box(dc, rect, fill, border, (int)(8 * window->scale));
   SetTextColor(dc, text & 0xffffff);
   DrawTextW(dc, label, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -1738,55 +1753,49 @@ static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellC
   ShellProject *project = window->selected;
   window->restart_button = (RECT){0};
   window->close_button = (RECT){0};
-  window->failure_card = (RECT){0};
+  window->open_button = (RECT){0};
+  window->lifecycle_card = (RECT){0};
   if (window->notice[0]) {
     RECT notice = {window->sidebar_w, window->controls.bottom, window->buffer_w,
                    window->controls.bottom + (LONG)(48 * window->scale)};
     DrawTextA(dc, window->notice, -1, &notice, DT_CENTER | DT_TOP | DT_WORDBREAK);
   }
-  if (!project->id && !project->project_path) {
-    RECT area = {window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h};
-    DrawTextW(dc, L"No Project selected", -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    area.top = (area.top + area.bottom) / 2 + (int)(24 * window->scale);
-    COLORREF text = SetTextColor(dc, colors->inactive_text & 0xffffff);
-    DrawTextW(dc, window->sidebar
-                  ? L"Right-click the Title Bar to open a Project or create a Window.\n"
-                    L"You can also select a Project in the Sidebar."
-                  : L"Right-click the Title Bar to open a Project or create a Window.", -1,
-              &area, DT_CENTER | DT_TOP | DT_WORDBREAK);
-    SetTextColor(dc, text);
-    return;
-  }
-  if (project->state != SHELL_STARTING && project->state != SHELL_FAILED &&
+  bool empty = no_project_selected(window);
+  if (!empty && project->state != SHELL_STARTING && project->state != SHELL_FAILED &&
       project->state != SHELL_DORMANT)
     return;
   RECT area = {window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h};
-  if (project->state == SHELL_STARTING) {
+  if (!empty && project->state == SHELL_STARTING) {
     DrawTextW(dc, L"Starting Project...", -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     return;
   }
   int pad = (int)(24 * window->scale), gap = (int)(12 * window->scale);
   int w = SDL_min((int)(440 * window->scale), area.right - area.left - gap * 2);
-  int h = SDL_min((int)(220 * window->scale), area.bottom - area.top - gap * 2);
+  int h = SDL_min((int)((empty ? 184 : 220) * window->scale), area.bottom - area.top - gap * 2);
   int x = (area.left + area.right - w) / 2, y = (area.top + area.bottom - h) / 2;
-  RECT card = window->failure_card = (RECT){x, y, x + w, y + h};
+  RECT card = window->lifecycle_card = (RECT){x, y, x + w, y + h};
   ui_box(dc, card, colors->background, ui_mix(colors->background, colors->text, 40), (int)(12 * window->scale));
   RECT text = {x + pad, y + pad, x + w - pad, y + pad + (LONG)(28 * window->scale)};
   HFONT title = ui_font(window, 20, FW_SEMIBOLD);
   HGDIOBJ old_font = SelectObject(dc, title);
   bool dormant = project->state == SHELL_DORMANT;
-  DrawTextW(dc, dormant ? L"Project is Dormant" : L"Project failed", -1, &text,
+  DrawTextW(dc, empty ? L"Open a Project" : dormant ? L"Project is Dormant" : L"Project failed", -1, &text,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
   SelectObject(dc, old_font);
   DeleteObject(title);
-  if (h >= (int)(200 * window->scale)) {
+  if (h >= (int)((empty ? 164 : 200) * window->scale)) {
     text.top += (LONG)(36 * window->scale);
     text.bottom = text.top + (LONG)(20 * window->scale);
     SetTextColor(dc, colors->inactive_text & 0xffffff);
-    ui_path(dc, project->project_path, text);
-    text.top += (LONG)(36 * window->scale);
+    if (!empty) {
+      ui_path(dc, project->project_path, text);
+      text.top += (LONG)(36 * window->scale);
+    }
     text.bottom = text.top + (LONG)(36 * window->scale);
-    DrawTextW(dc, dormant ? L"Load to restore your Workspace."
+    DrawTextW(dc, empty ? (window->sidebar_w > 0 && w >= (int)(360 * window->scale)
+                           ? L"Choose a folder to start working.\nOr select a recent Project in the Sidebar."
+                           : L"Choose a folder to start working.")
+                         : dormant ? L"Load to restore your Workspace."
                          : w < (int)(360 * window->scale) ? L"Restart to continue, or unload."
                          : L"Restart this Project to continue.\nOr unload it and select another Project.",
               -1, &text, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
@@ -1794,13 +1803,19 @@ static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellC
   }
   int button_y = card.bottom - pad - (int)(36 * window->scale);
   int mid = (card.left + card.right) / 2;
+  if (empty) {
+    int button_w = SDL_min((int)(184 * window->scale), w - pad * 2);
+    window->open_button = (RECT){mid - button_w / 2, button_y, mid + button_w / 2, card.bottom - pad};
+    draw_native_button(window, dc, colors, window->open_button, 6, L"Open Project...", true);
+    return;
+  }
   window->restart_button = (RECT){card.left + pad, button_y, mid - gap / 2, card.bottom - pad};
   window->close_button = (RECT){mid + gap / 2, button_y, card.right - pad, card.bottom - pad};
   bool narrow = window->restart_button.right - window->restart_button.left < (int)(125 * window->scale);
-  draw_recovery_button(window, dc, colors, window->restart_button, 3,
-                       dormant ? (narrow ? L"Load" : L"Load Project") : narrow ? L"Restart" : L"Restart Project");
-  draw_recovery_button(window, dc, colors, window->close_button, 4,
-                       dormant ? (narrow ? L"Close" : L"Close Window") : narrow ? L"Unload" : L"Unload Project");
+  draw_native_button(window, dc, colors, window->restart_button, 3,
+                     dormant ? (narrow ? L"Load" : L"Load Project") : narrow ? L"Restart" : L"Restart Project", true);
+  draw_native_button(window, dc, colors, window->close_button, 4,
+                     dormant ? (narrow ? L"Close" : L"Close Window") : narrow ? L"Unload" : L"Unload Project", false);
 }
 
 /* A new Window shows once it has the Color Theme, the selected Project's first frame or its card, and the
@@ -1860,6 +1875,8 @@ static void paint_failed_window(ShellWindow *window, HDC dc) {
   HGDIOBJ old = SelectObject(dc, font);
   draw_lifecycle(window, dc, &colors);
   draw_lifecycle_titlebar(window, dc, &colors);
+  if (sidebar_restart_offered())
+    draw_native_button(window, dc, &colors, sidebar_restart_rect(window), 5, L"Restart Sidebar", false);
   const wchar_t *labels[] = {L"−", L"□", L"×"};
   int width = (window->controls.right - window->controls.left) / 3;
   for (int i = 0; i < 3; i++) {
@@ -1870,11 +1887,6 @@ static void paint_failed_window(ShellWindow *window, HDC dc) {
   }
   SelectObject(dc, old);
   DeleteObject(font);
-}
-
-/* The native strip above the Sidebar restarts it only while it has failed. Otherwise it drags the Window. */
-static bool sidebar_restart_offered(void) {
-  return shell.sidebar_restart_limited || !shell.sidebar_process || shell.sidebar_process->state == SHELL_FAILED;
 }
 
 /* The Project area shows the native starting, dormant or failed card while no Project frame covers it. A held
@@ -1992,9 +2004,9 @@ static void update_ui(ShellWindow *window) {
   HDC dc = window->ui_dc;
   RECT all = {0, 0, window->buffer_w, window->buffer_h};
   RECT titlebar = {window->sidebar_w, 0, window->controls.left, window->controls.bottom};
-  RECT dirty[] = {{0, 0, window->sidebar_w, window->buffer_h}, window->controls, window->failure_card, titlebar};
+  RECT dirty[] = {{0, 0, window->sidebar_w, window->buffer_h}, window->controls, window->lifecycle_card, titlebar};
   bool full = window->ui_dirty;
-  int dirty_count = (project->state == SHELL_FAILED || project->state == SHELL_DORMANT) ? 4 : 2;
+  int dirty_count = (no_project_selected(window) || project->state == SHELL_FAILED || project->state == SHELL_DORMANT) ? 4 : 2;
   /* The composite reads the full Project area only while no Project frame covers it, and the notice strip. */
   bool cover = project_area_covered(window);
   HRGN clip = CreateRectRgn(0, 0, 0, 0);
@@ -2014,10 +2026,9 @@ static void update_ui(ShellWindow *window) {
   HFONT font = ui_font(window, 13, FW_NORMAL);
   HGDIOBJ old_font = SelectObject(dc, font);
   SetBkMode(dc, TRANSPARENT);
-  /* The strip's text is white coverage, and tint_coverage colours it. */
-  SetTextColor(dc, RGB(255, 255, 255));
+  /* The recovery button is opaque. The rest of the strip stays transparent. */
   if (sidebar_restart_offered())
-    DrawTextW(dc, L"Restart Sidebar", -1, &strip, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_native_button(window, dc, &colors, sidebar_restart_rect(window), 5, L"Restart Sidebar", false);
   SetTextColor(dc, colors.text & 0xffffff);
   RECT status = {0, window->buffer_h - (LONG)(40 * window->scale), window->sidebar_w, window->buffer_h};
   DrawTextW(dc,
@@ -2056,10 +2067,9 @@ static void update_ui(ShellWindow *window) {
   draw_lifecycle_titlebar(window, dc, &colors);
   GdiFlush();
   /* A state change can create the card for the first time. Upload its new bounds, not the old empty rect. */
-  dirty[2] = window->failure_card;
-  /* Blended regions are premultiplied: the strip's text and the controls, in the Color Theme's colours. Other
-   * regions are copied. */
-  tint_coverage(window, strip, colors.text);
+  dirty[2] = window->lifecycle_card;
+  /* Window controls use premultiplied coverage. Cards and the Sidebar recovery button are opaque copies. */
+  if (!sidebar_restart_offered()) tint_coverage(window, strip, colors.text);
   for (int i = 0; i < 3; i++) {
     bool hot = window->hovered_control == i || window->pressed_control == i;
     tint_coverage(window, control_rect(window, i),
@@ -2330,7 +2340,10 @@ static void composite_and_present(ShellWindow *window) {
           (ID3D11Resource *)content->surface, 0, &box);
     }
   }
-  blend_ui(window, (RECT){0, 0, window->sidebar_w, window->controls.bottom});
+  if (sidebar_restart_offered())
+    copy_ui(window, sidebar_restart_rect(window));
+  else
+    blend_ui(window, (RECT){0, 0, window->sidebar_w, window->controls.bottom});
   if (lifecycle_titlebar(window))
     copy_ui(window, (RECT){window->sidebar_w, 0, window->controls.left, window->controls.bottom});
   int hot = window->pressed_control >= 0 ? window->pressed_control : window->hovered_control;
@@ -2346,7 +2359,7 @@ static void composite_and_present(ShellWindow *window) {
   if (project_area_covered(window))
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h});
   else if (project->state == SHELL_FAILED)
-    copy_ui(window, window->failure_card);
+    copy_ui(window, window->lifecycle_card);
   if (window->notice[0])
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w,
                            SDL_min(window->buffer_h, window->controls.bottom + (LONG)(48 * window->scale))});
@@ -3621,7 +3634,8 @@ static void leave_sidebar(ShellWindow *window) {
 static int control_at(ShellWindow *window, float x, float y) {
   ShellProject *project = window->selected;
   POINT point = {(LONG)x, (LONG)y};
-  if (x >= 0 && x < window->sidebar_w && y >= 0 && y < window->controls.bottom && sidebar_restart_offered())
+  RECT sidebar_button = sidebar_restart_rect(window);
+  if (sidebar_restart_offered() && PtInRect(&sidebar_button, point))
     return 5;
   if (PtInRect(&window->controls, point)) {
     int width = SDL_max(1, (window->controls.right - window->controls.left) / 3);
@@ -3633,6 +3647,7 @@ static int control_at(ShellWindow *window, float x, float y) {
     if (PtInRect(&window->close_button, point))
       return 4;
   }
+  if (no_project_selected(window) && PtInRect(&window->open_button, point)) return 6;
   return -1;
 }
 
@@ -3640,6 +3655,10 @@ static void perform_control(ShellWindow *window, int control) {
   ShellProject *project = window->selected;
   SDL_Log("Shell native control: %d state=%d", control, project->state);
   window->resize_wait_disabled = true;
+  if (control == 6) {
+    show_project_picker(window);
+    return;
+  }
   if (control == 5) {
     if (shell.sidebar_restart_timer) KillTimer(shell.service_hwnd, shell.sidebar_restart_timer);
     shell.sidebar_restart_timer = 0;
@@ -3733,7 +3752,7 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
       (control >= 0 || window->pressed_control >= 0 || project->state == SHELL_STARTING ||
        project->state == SHELL_FAILED || project->state == SHELL_DORMANT)) {
     leave_surface(window);
-    if (control == 3 || control == 4) apply_cursor(ANVIL_SURFACE_CURSOR_HAND);
+    if (control >= 3 && control <= 6) apply_cursor(ANVIL_SURFACE_CURSOR_HAND);
     return;
   }
   bool inside = surface_contains(window, event->motion.x, event->motion.y) && control < 0;
@@ -4486,7 +4505,8 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       LRESULT result = win32_frame_hwnd_hit_test(hwnd, &hit, lparam);
       POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ScreenToClient(hwnd, &point);
-      if (result == HTCAPTION && point.x >= 0 && point.x < window->sidebar_w && sidebar_restart_offered())
+      RECT sidebar_button = sidebar_restart_rect(window);
+      if (sidebar_restart_offered() && PtInRect(&sidebar_button, point))
         return HTCLIENT;
       return result;
     }

@@ -1,8 +1,9 @@
 -- mod-version:3
 -- Seam: an owned native Window on a private desktop. Failed Projects keep a draggable Title Bar.
--- Recovery buttons show pointer feedback, cancel a dragged-out press, and restart or unload the Project.
+-- Native buttons show pointer feedback and cancel a dragged-out press. Empty Windows open Projects;
+-- Sidebar recovery restores its process without taking drag space from the rest of the Title Bar.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
-if action ~= "recovery" then return end
+if action ~= "recovery" and action ~= "shell-empty" and action ~= "shell-sidebar" then return end
 local core, common = require "core", require "core.common"
 local ffi = require "ffi"
 ffi.cdef [[
@@ -14,6 +15,8 @@ ffi.cdef [[
  unsigned int __stdcall GetDpiForWindow(void *);
  typedef struct { long x, y; } RecoveryPoint;
  int __stdcall ClientToScreen(void *, RecoveryPoint *);
+ typedef struct { long left, top, right, bottom; } RecoveryRect;
+ int __stdcall GetClientRect(void *, RecoveryRect *);
  void * __stdcall OpenProcess(unsigned long, int, unsigned long);
  int __stdcall TerminateProcess(void *, unsigned int);
  int __stdcall CloseHandle(void *);
@@ -42,12 +45,12 @@ local function trace()
  if not file then return "" end
  local text = file:read("*a"); file:close(); return text
 end
-local function shell_window(pid)
+local function shell_window(pid, except)
  local property = ffi.new("wchar_t[17]", {65,110,118,105,108,83,104,101,108,108,87,105,110,100,111,119,0})
  local found
  local cb = ffi.cast("int (__stdcall *)(void *, intptr_t)", function(window)
   local owner = ffi.new("unsigned long[1]"); user32.GetWindowThreadProcessId(window, owner)
-  if tonumber(owner[0]) == pid and user32.GetPropW(window, property) ~= nil then found = window end
+  if tonumber(owner[0]) == pid and window ~= except and user32.GetPropW(window, property) ~= nil then found = window end
   return 1
  end)
  user32.EnumWindows(cb, 0); cb:free(); return found
@@ -88,6 +91,79 @@ if path:match("/driver$") then
    local layout = wait(function() return load("layout") end, 30, "Project did not start")
    local window = wait(function() return shell_window(shell:pid()) end, 10)
    wait(function() return trace():find("Shell Sidebar surface Ready", 1, true) end, 30)
+   local scale = user32.GetDpiForWindow(window) / 96
+   local function input(step, pos)
+    user32.SendMessageW(window, 0x804a, step, pos)
+    coroutine.yield(.1)
+   end
+   local function hit(x, y)
+    local p = ffi.new("RecoveryPoint", {math.floor(x), math.floor(y)})
+    user32.ClientToScreen(window, p)
+    return tonumber(user32.SendMessageW(window, 0x84, 0, point(p.x, p.y)))
+   end
+   if action == "shell-empty" or action == "shell-sidebar" then
+    local x, y, target, marker
+    if action == "shell-empty" then
+     user32.SendMessageW(window, 0x112, 0xe010, 0)
+     window = wait(function() return shell_window(shell:pid(), window) end, 10, "New Window did not open")
+     wait(function() return trace():find("Shell Sidebar surface Ready: Window=2", 1, true) end, 15)
+     local rect = ffi.new("RecoveryRect")
+     assert(user32.GetClientRect(window, rect) ~= 0)
+     x, y = (layout.content_x + rect.right) / 2, (layout.title_h + rect.bottom) / 2 + 54 * scale
+     marker = "Shell Open Project picker started: Window=2"
+     target = point(x, y)
+     assert(hit(layout.content_x + 60 * scale, layout.title_h / 2) == 2, "The empty Title Bar blocks dragging")
+    else
+     local function sidebar_pid()
+      local pid
+      for value in trace():gmatch("Shell Sidebar connected: pid=(%d+)") do pid = tonumber(value) end
+      return pid
+     end
+     for _ = 1, 8 do
+      local pid, mark = assert(sidebar_pid()), #trace()
+      kill(pid)
+      local state = wait(function()
+       local text = trace():sub(mark + 1)
+       if text:find("automatic restart limit reached", 1, true) then return "stopped" end
+       if sidebar_pid() ~= pid and text:find("Shell Sidebar surface Ready", 1, true) then return "ready" end
+      end, 15, "Sidebar neither recovered nor offered Restart")
+      if state == "stopped" then break end
+     end
+     assert(trace():find("automatic restart limit reached", 1, true), "Sidebar recovery did not stop")
+     x, y = layout.content_x / 2, layout.title_h / 2
+     target, marker = point(x, y), "Shell native control: 5"
+     assert(hit(x, y) == 1, "Restart Sidebar is a window drag target")
+     assert(hit(12 * scale, y) == 2, "Restart Sidebar took the surrounding Title Bar's drag space")
+    end
+    local away = point(layout.content_x + 60 * scale, layout.title_h + 100 * scale)
+    local function pixels(bytes) return button_pixels(bytes, x, y) end
+    input(0, away)
+    local idle = pixels(capture(window))
+    input(0, target)
+    local hover = pixels(capture(window))
+    assert(hover ~= idle, action .. " button has no hover feedback")
+    input(1, target)
+    assert(pixels(capture(window)) ~= hover, action .. " button has no press feedback")
+    local mark = #trace()
+    input(0, away); input(2, away)
+    assert(not trace():find(marker, mark + 1, true), "A dragged-out release performed the action")
+    input(0, target); input(1, target); input(2, target)
+    wait(function() return trace():find(marker, mark + 1, true) end, 5, "The button did not perform its action")
+    if action == "shell-empty" then
+     local service = ffi.cast("void *", tonumber(assert(trace():match("Shell service notifications hwnd=(%x+)")), 16))
+     user32.SendMessageW(service, 0x8050, 3, 2)
+     wait(function() return trace():find("Shell Open Project picker cancelled: Window=2", 1, true) end, 5)
+     input(0, target); input(1, target); input(2, target)
+     user32.SendMessageW(service, 0x8050, 1, 2)
+     local loaded = wait(function() return load("replacement") end, 15, "Open Project did not load the chosen folder")
+     assert(loaded.window_id == 2, "Open Project used another Window")
+    else
+     wait(function() return trace():find("Shell Sidebar surface Ready", mark + 1, true) end, 15,
+      "Restart Sidebar did not restore the Sidebar")
+    end
+    capture(window)
+    return
+   end
    local function fail(pid)
     local mark = #trace()
     kill(pid)
@@ -95,21 +171,11 @@ if path:match("/driver$") then
     coroutine.yield(.2)
    end
    fail(layout.pid)
-   local scale = user32.GetDpiForWindow(window) / 96
-   local function hit(x, y)
-    local p = ffi.new("RecoveryPoint", {math.floor(x), math.floor(y)})
-    user32.ClientToScreen(window, p)
-    return tonumber(user32.SendMessageW(window, 0x84, 0, point(p.x, p.y)))
-   end
    local cx, cy = (layout.content_x + layout.width) / 2, (layout.title_h + layout.height) / 2
    local restart, unload = point(cx - 80 * scale, cy + 54 * scale), point(cx + 80 * scale, cy + 54 * scale)
    local outside = point(cx, cy + 160 * scale)
    local function restart_pixels(bytes) return button_pixels(bytes, cx - 80 * scale, cy + 54 * scale) end
    local function unload_pixels(bytes) return button_pixels(bytes, cx + 80 * scale, cy + 54 * scale) end
-   local function input(step, pos)
-    user32.SendMessageW(window, 0x804a, step, pos)
-    coroutine.yield(.1)
-   end
    input(0, outside)
    local idle = capture(window)
    input(0, restart)
@@ -147,12 +213,14 @@ if path:match("/driver$") then
   if shell and shell:running() then shell:terminate(); shell:wait(2) end
   quit()
  end)
-elseif path == root .. "/Project" then
+elseif path == root .. "/Project" or path == root .. "/Replacement" then
  core.add_background_thread(function()
   coroutine.yield(.5)
   local width, height = core.window:get_size()
   local controls_x, _, _, title_h = system.get_window_controls()
-  save("layout", {pid=tonumber(kernel.GetCurrentProcessId()), width=width, height=height,
-   content_x=system.get_window_content_x(), controls_x=controls_x, title_h=title_h})
+  save(path == root .. "/Project" and "layout" or "replacement",
+   {pid=tonumber(kernel.GetCurrentProcessId()), width=width, height=height,
+    content_x=system.get_window_content_x(), controls_x=controls_x, title_h=title_h,
+    window_id=system.get_anvil_window_id()})
  end)
 end
