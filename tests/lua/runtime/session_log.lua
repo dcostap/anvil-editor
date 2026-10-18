@@ -70,6 +70,52 @@ test.describe("session log", function()
     remove_tree(root)
   end)
 
+  test.it("keeps every record and its timestamp across clock changes", function()
+    local SessionLog = require "core.session_log"
+    local root = join(USERDIR, "session-log-clock")
+    remove_tree(root)
+    local real_time, real_date = os.time, os.date
+    local now = real_time { year = 2026, month = 10, day = 18, hour = 23, min = 59, sec = 59 }
+    local logger
+    os.time = function(value) return value and real_time(value) or now end
+    os.date = function(format, timestamp) return real_date(format, timestamp or now) end
+    local ok, err = pcall(function()
+      logger = assert(SessionLog.start(root, { session_id = "anvil-20261018-235959-p123" }))
+      test.ok(logger:write("INFO", "first", "input.lua:10"))
+      test.ok(logger:write("INFO", "second", "input.lua:11"))
+      now = now + 1
+      test.ok(logger:write("WARN", "midnight", "input.lua:12"))
+      local file = assert(io.open(logger.path, "rb"))
+      local visible = file:read("*a")
+      file:close()
+      test.ok(visible:find("2026-10-19 00:00:00 [WARN] midnight at input.lua:12", 1, true),
+        "warning must reach the file before close")
+      now = now - 1
+      test.ok(logger:write("INFO", "clock moved back", "input.lua:13"))
+      logger:close()
+    end)
+    os.time, os.date = real_time, real_date
+    if not ok then
+      if logger then logger:close() end
+      remove_tree(root)
+      error(err, 0)
+    end
+    local file = assert(io.open(logger.path, "rb"))
+    local text = file:read("*a")
+    file:close()
+    local records = {}
+    for line in text:gmatch("[^\n]+") do
+      if line:find(" at input.lua:", 1, true) then records[#records + 1] = line end
+    end
+    test.same(records, {
+      "2026-10-18 23:59:59 [INFO] first at input.lua:10",
+      "2026-10-18 23:59:59 [INFO] second at input.lua:11",
+      "2026-10-19 00:00:00 [WARN] midnight at input.lua:12",
+      "2026-10-18 23:59:59 [INFO] clock moved back at input.lua:13",
+    })
+    remove_tree(root)
+  end)
+
   test.it("keeps only the newest session files", function()
     local SessionLog = require "core.session_log"
     local root = join(USERDIR, "session-log-prune")

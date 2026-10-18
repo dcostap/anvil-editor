@@ -117,9 +117,16 @@ end
 
 function SessionLog:write(level, text, source)
   if not self.file then return false end
+  -- Input traces can write many records within one second. Keep their format
+  -- without repeating the Windows calendar conversion for every record.
+  local second = os.time()
+  if self.timestamp_second ~= second then
+    self.timestamp_second = second
+    self.timestamp_text = os.date("%Y-%m-%d %H:%M:%S", second)
+  end
   local line = string.format(
     "%s [%s] %s at %s\n",
-    os.date("%Y-%m-%d %H:%M:%S"), tostring(level), tostring(text), tostring(source or "unknown")
+    self.timestamp_text, tostring(level), tostring(text), tostring(source or "unknown")
   )
   if self.bytes > 0 and self.bytes + #line > self.max_file_bytes then
     local rolled = self:_roll()
