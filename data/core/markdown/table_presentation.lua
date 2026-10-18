@@ -1257,13 +1257,20 @@ local function append_table_handles(view, fragments, spec)
       widget = grip,
     }
 
-    -- Insert buttons sit at the two ends of the grip, over its ends.
+    -- Insert buttons sit over the two ends of the grip. When that would
+    -- leave less grip than its width between them, they float out past the
+    -- ends, over the neighboring row or column.
     local rows = kind == "row"
     local extent = rows and height or width
-    local thickness = rows and width or height
-    local size = math.max(1, math.min(thickness, math.floor((extent - ring) / 2)))
+    local size = rows and width or height
+    local inside = extent - size * 2 >= size
     for position, insert_side in ipairs(INSERT_SIDES[kind]) do
-      local offset = position == 1 and 0 or extent - size
+      local offset
+      if inside then
+        offset = position == 1 and 0 or extent - size
+      else
+        offset = position == 1 and -size - ring or extent + ring
+      end
       local button_x = rows and layout_x or layout_x + offset
       local button_y = rows and draw_y_offset + offset or draw_y_offset
       local button_width, button_height = rows and width or size, rows and size or height
@@ -1297,6 +1304,7 @@ local function append_table_handles(view, fragments, spec)
           suppress_hover_overlay = true,
           cursor = "hand",
           visible = visible,
+          floating = true,
           draw = function(owner, fragment, draw_x, draw_y)
             if not visible(owner, true) then return end
             draw_insert_button(

@@ -1066,6 +1066,7 @@ function tables.delete_char(view, direction)
   local contexts = collect_interactive_contexts(view)
   if not contexts then return false end
   if view.buffer:has_any_selection() then
+    if tables.delete_selected_lines(view) then return true end
     return view:on_text_input("")
   end
   local edits, seen = {}, {}
@@ -1377,6 +1378,64 @@ end
 ---Select every cell of `column` in the table holding `line`.
 function tables.select_column(view, line, column)
   return tables.select_from_handle(view, line, "column", column)
+end
+
+-- Remove a table's source lines with the line break that ends them.
+local function delete_table(view, context)
+  local buffer = context.buffer
+  local line1, col1, line2, col2 = context.line1, 1, context.line2 + 1, 1
+  if context.line2 >= #buffer.lines then
+    line2, col2 = context.line2, #line_text(buffer, context.line2) + 1
+    if line1 > 1 then line1, col1 = line1 - 1, #line_text(buffer, line1 - 1) + 1 end
+  end
+  buffer:apply_edits({
+    { line1 = line1, col1 = col1, line2 = line2, col2 = col2, text = "" },
+  }, { type = "markdown-table", reason = "delete-table" })
+  buffer:set_selection(math.min(context.line1, #buffer.lines), 1)
+  core.log_quiet(
+    "Markdown table deleted at %s:%d", buffer:get_name(), context.line1
+  )
+  return true
+end
+
+---Delete the whole rows or columns the selection covers as one undoable
+---change. When they are every row or column, the table goes. A deleted
+---header row hands its place to the next row. Returns false when the
+---selection is not whole rows or columns.
+function tables.delete_selected_lines(view)
+  local covered = tables.whole_lines_selected(view, (view.buffer:get_selection()))
+  if not covered then return false end
+  local context = context_at(view, covered.context.line1, 1, true)
+  if not context then return false end
+  local model = model_from_context(context)
+  local rows, columns = covered.rows, covered.columns
+  if rows and #rows == #model.rows or columns and #columns == model.columns then
+    return delete_table(view, context)
+  end
+  if rows then
+    for index = #rows, 1, -1 do table.remove(model.rows, rows[index]) end
+    return apply_model(context, model, "delete-rows", {
+      row = math.min(rows[1], #model.rows), column = 1,
+    })
+  end
+  local removed = {}
+  for _, column in ipairs(columns) do removed[column] = true end
+  local kept = {}
+  for column = 1, model.columns do
+    if not removed[column] then kept[#kept + 1] = column end
+  end
+  -- Alignments can have nil holes, so they are rebuilt by kept column.
+  local alignments = {}
+  for index, column in ipairs(kept) do alignments[index] = model.alignments[column] end
+  for row_index, cells in ipairs(model.rows) do
+    local remaining = {}
+    for index, column in ipairs(kept) do remaining[index] = cells[column] end
+    model.rows[row_index] = remaining
+  end
+  model.alignments, model.columns = alignments, #kept
+  return apply_model(context, model, "delete-columns", {
+    row = 1, column = math.min(columns[1], model.columns),
+  })
 end
 
 ---Insert an empty row or column beside the whole rows or columns the

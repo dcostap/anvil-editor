@@ -2013,6 +2013,94 @@ test.describe("Markdown Interactive Table Editing", function()
     test.same({ caret_cell(buffer) }, { 4, 1 })
   end)
 
+  test.it("keeps a one-line row's grip usable while its insert buttons show", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 3, "row", 3))
+    refresh(view)
+    test.ok(has_insert_button(view, 3), "the selected row shows its insert buttons")
+    -- The buttons leave the grip at least as long as it is wide.
+    local _, grip_y, grip_width, grip_height = table_handle_rect(view, 3, "row", 3)
+    local top, bottom = grip_y, grip_y + grip_height
+    local _, above_y = insert_button(view, 3, "row", "above")
+    local _, below_y = insert_button(view, 3, "row", "below")
+    local render = view:get_line_render(3)
+    for _, fragment in ipairs(render.fragments) do
+      if fragment.table_insert == "above" and fragment.layout_x < grip_width * 2 then
+        local _, y, _, height = fragment_rect(view, 3, fragment)
+        if y + height > top and y < bottom then top = y + height end
+      elseif fragment.table_insert == "below" and fragment.layout_x < grip_width * 2 then
+        local _, y = fragment_rect(view, 3, fragment)
+        if y < bottom and y >= grip_y then bottom = y end
+      end
+    end
+    test.ok(above_y < below_y)
+    test.ok(bottom - top >= grip_width, string.format(
+      "the buttons leave %d of the grip uncovered", bottom - top
+    ))
+    local x, y = table_handle(view, 3, "row", 3)
+    local _, target_y = cell_center(view, 4, 1)
+    drag_from_to(view, x, y, x, target_y)
+    test.same(row_cells(buffer, 3), { "four", "five", "six" })
+    test.same(row_cells(buffer, 4), { "one", "two", "three" })
+  end)
+
+  test.it("deletes selected whole rows instead of blanking their cells", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 3, "row", 3))
+    with_active(view, function()
+      test.equal(command.perform("markdown:table_backspace"), true)
+    end)
+    test.same(row_cells(buffer, 1), { "A", "B", "C" })
+    test.same(row_cells(buffer, 3), { "four", "five", "six" })
+    test.equal(buffer.lines[4], "\n")
+    buffer:undo()
+    test.same(row_cells(buffer, 3), { "one", "two", "three" })
+  end)
+
+  test.it("makes the next row the header when the header row is deleted", function()
+    local view, buffer = make_view(GRID)
+    buffer:set_selection(6, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 1, "row", 1))
+    with_active(view, function()
+      test.equal(command.perform("markdown:table_delete"), true)
+    end)
+    test.same(row_cells(buffer, 1), { "one", "two", "three" })
+    test.same(row_cells(buffer, 3), { "four", "five", "six" })
+  end)
+
+  test.it("deletes selected whole columns with their alignment", function()
+    local view, buffer = make_view(
+      "| A | B | C |\n| --- | :---: | ---: |\n| one | two | three |\n\nplain"
+    )
+    buffer:set_selection(5, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 1, "column", 2))
+    with_active(view, function()
+      test.equal(command.perform("markdown:table_delete"), true)
+    end)
+    test.same(row_cells(buffer, 1), { "A", "C" })
+    test.same(row_cells(buffer, 3), { "one", "three" })
+    test.ok(row_cells(buffer, 2)[2]:match("^%-+:$"), "the remaining alignment moved")
+  end)
+
+  test.it("removes the table when every row is selected and deleted", function()
+    local view, buffer = make_view("before\n\n| A | B |\n| --- | --- |\n| one | two |\n\nafter")
+    buffer:set_selection(1, 1)
+    refresh(view)
+    click_at(view, table_handle(view, 3, "row", 3))
+    refresh(view)
+    with_modkey("shift", function() click_at(view, table_handle(view, 5, "row", 5)) end)
+    with_active(view, function()
+      test.equal(command.perform("markdown:table_backspace"), true)
+    end)
+    test.equal(table.concat(buffer.lines):gsub("\n$", ""), "before\n\n\nafter")
+  end)
+
   test.it("inserts a new header above the selected header row", function()
     local view, buffer = make_view(GRID)
     buffer:set_selection(6, 1)

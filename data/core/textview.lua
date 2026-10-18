@@ -5005,6 +5005,72 @@ local function render_widget_rect(fragment, x, y, row_height, padding)
   return left, top, width, content_height + padding * 2
 end
 
+-- The widget of an unwrapped rendered line under a screen position.
+-- `floating_only` limits it to floating widgets, which can reach past
+-- their own line.
+local function unwrapped_widget_hit(view, line, render_line, x, y, floating_only)
+  local line_x, line_y = view:get_line_screen_position(line)
+  local xrel, yrel = x - line_x, y - line_y
+  if not render_line_clip_contains(render_line, xrel - render_line_scroll_x(render_line)) then
+    return nil
+  end
+  local row = view:get_visual_row(line, 1)
+  local row_height = view:get_visual_row_height(row)
+  local content_y_offset, content_height = unwrapped_fragment_geometry(
+    view, render_line, line, 1, row_height
+  )
+  local tx = render_line.x_offset or 0
+  local _, indent_size = view.buffer:get_indent_info()
+  local widget_hits = {}
+  for _, fragment in ipairs(view:iter_line_render_fragments(render_line)) do
+    if not fragment.hidden then
+      local font = fragment.font or view:get_font()
+      font:set_tab_size(indent_size)
+      local widget = fragment.widget
+      local text = fragment.text or ""
+      local width = widget and (fragment.hit_width or widget.width or fragment.width)
+        or fragment.width or font:get_width(text, { tab_offset = tx })
+      if widget and (not floating_only or widget.floating) then
+        -- Inline widgets draw on their own position row. Centering them in
+        -- the complete line puts the hit area below them, over any image.
+        local col1 = fragment.source_col1 or 1
+        local position_row = render_line.position_rows
+          and not render_line.position_rows_draw_full_line
+          and not fragment.image_block
+          and view:get_line_render_position_row(
+            render_line, col1, (fragment.source_col2 or col1) > col1
+          ) or nil
+        local left, top, hit_width, hit_height = render_widget_rect(
+          fragment,
+          fragment.layout_x ~= nil and fragment.layout_x
+            or position_row and view:get_line_render_col_x_offset(
+              render_line, col1, position_row
+            )
+            or tx,
+          position_row and (position_row.y_offset or 0) or content_y_offset,
+          position_row and (position_row.height or row_height) or content_height
+        )
+        widget_hits[#widget_hits + 1] = {
+          fragment = fragment, widget = widget,
+          left = left, top = top, width = hit_width,
+          height = hit_height,
+        }
+      end
+      tx = tx + width
+    end
+  end
+  -- Later fragments draw on top of earlier ones, so overlapping interactive
+  -- controls receive the hit before decorative widgets underneath them.
+  for index = #widget_hits, 1, -1 do
+    local hit = widget_hits[index]
+    if xrel >= hit.left and xrel <= hit.left + hit.width
+    and yrel >= hit.top and yrel <= hit.top + hit.height
+    then
+      return { line = line, fragment = hit.fragment, widget = hit.widget }
+    end
+  end
+end
+
 function TextView:get_render_widget_at_position(x, y)
   if not self:has_line_render_providers() then return nil end
   local line, col = self:resolve_screen_position(x, y)
@@ -5071,66 +5137,20 @@ function TextView:get_render_widget_at_position(x, y)
     return nil
   end
 
-  local line_x, line_y = self:get_line_screen_position(line)
-  local xrel, yrel = x - line_x, y - line_y
-  if not render_line_clip_contains(render_line, xrel - render_line_scroll_x(render_line)) then
-    return nil
-  end
-  local row = self:get_visual_row(line, 1)
-  local row_height = self:get_visual_row_height(row)
-  local content_y_offset, content_height = unwrapped_fragment_geometry(
-    self, render_line, line, 1, row_height
-  )
-  local tx = render_line.x_offset or 0
-  local _, indent_size = self.buffer:get_indent_info()
-  local widget_hits = {}
-  for _, fragment in ipairs(self:iter_line_render_fragments(render_line)) do
-    if not fragment.hidden then
-      local font = fragment.font or self:get_font()
-      font:set_tab_size(indent_size)
-      local widget = fragment.widget
-      local text = fragment.text or ""
-      local width = widget and (fragment.hit_width or widget.width or fragment.width)
-        or fragment.width or font:get_width(text, { tab_offset = tx })
-      if widget then
-        -- Inline widgets draw on their own position row. Centering them in
-        -- the complete line puts the hit area below them, over any image.
-        local col1 = fragment.source_col1 or 1
-        local position_row = render_line.position_rows
-          and not render_line.position_rows_draw_full_line
-          and not fragment.image_block
-          and self:get_line_render_position_row(
-            render_line, col1, (fragment.source_col2 or col1) > col1
-          ) or nil
-        local left, top, hit_width, hit_height = render_widget_rect(
-          fragment,
-          fragment.layout_x ~= nil and fragment.layout_x
-            or position_row and self:get_line_render_col_x_offset(
-              render_line, col1, position_row
-            )
-            or tx,
-          position_row and (position_row.y_offset or 0) or content_y_offset,
-          position_row and (position_row.height or row_height) or content_height
-        )
-        widget_hits[#widget_hits + 1] = {
-          fragment = fragment, widget = widget,
-          left = left, top = top, width = hit_width,
-          height = hit_height,
-        }
-      end
-      tx = tx + width
-    end
-  end
-  -- Later fragments draw on top of earlier ones, so overlapping interactive
-  -- controls receive the hit before decorative widgets underneath them.
-  for index = #widget_hits, 1, -1 do
-    local hit = widget_hits[index]
-    if xrel >= hit.left and xrel <= hit.left + hit.width
-    and yrel >= hit.top and yrel <= hit.top + hit.height
+  -- Floating widgets draw above every line, so they take the hit first,
+  -- also where they reach over a neighboring line. The delimiter row of a
+  -- table is one line between its header and first body row.
+  for _, candidate in ipairs({ line, line - 1, line + 1, line - 2, line + 2 }) do
+    local candidate_render = candidate >= 1 and candidate <= #self.buffer.lines
+      and self:get_line_render(candidate)
+    if candidate_render
+    and not (self.wrapped_settings and not candidate_render.disable_wrapping)
     then
-      return { line = line, fragment = hit.fragment, widget = hit.widget }
+      local hit = unwrapped_widget_hit(self, candidate, candidate_render, x, y, true)
+      if hit then return hit end
     end
   end
+  return unwrapped_widget_hit(self, line, render_line, x, y, false)
 end
 
 function TextView:get_render_widget_near_position(x, y)
@@ -7774,6 +7794,17 @@ end
 
 local function draw_render_widget(view, fragment, x, y, row_height, context)
   local widget = fragment.widget
+  local deferred = view.__floating_widget_draws
+  if widget.floating and deferred then
+    -- Within a frame, floating widgets reach past their line, so they draw
+    -- after every line body, clipped as their line was.
+    local clip = core.clip_rect_stack[#core.clip_rect_stack]
+    deferred[#deferred + 1] = {
+      fragment = fragment, x = x, y = y, row_height = row_height, context = context,
+      clip = { clip[1], clip[2], clip[3], clip[4] },
+    }
+    return true
+  end
   local ok, err = pcall(widget.draw, view, fragment, x, y, row_height)
   if not ok then
     core.log_quiet(
@@ -9484,6 +9515,15 @@ function TextView:draw_overlay()
   if self.wrapped_settings then
     linewrapping.draw_guide(self)
   end
+  local floating = self.__floating_widget_draws
+  if floating then
+    self.__floating_widget_draws = nil
+    for _, item in ipairs(floating) do
+      core.push_clip_rect(table.unpack(item.clip))
+      draw_render_widget(self, item.fragment, item.x, item.y, item.row_height, item.context)
+      core.pop_clip_rect()
+    end
+  end
   if self.render_widget_drag then
     call_render_widget_drag(self, self.render_widget_drag, "draw")
   end
@@ -9911,17 +9951,25 @@ local function draw_textview(self)
   perf_scope_end(phase_scope)
 end
 
+local function draw_textview_frame(self)
+  self.__floating_widget_draws = {}
+  local ok, result = pcall(draw_textview, self)
+  self.__floating_widget_draws = nil
+  if not ok then error(result, 0) end
+  return result
+end
+
 function TextView:draw()
   local file_open_draw = file_open_view_draw_begin(self)
   local stats = core.textview_frame_stats
   if not stats then
-    local result = draw_textview(self)
+    local result = draw_textview_frame(self)
     file_open_view_draw_end(file_open_draw)
     return result
   end
   local draw_scope = perf_scope_begin("textview_core", true)
   local draw_start = system.get_time()
-  local result = draw_textview(self)
+  local result = draw_textview_frame(self)
   stats.draw_ms = stats.draw_ms + (system.get_time() - draw_start) * 1000
   perf_scope_end(draw_scope)
   file_open_view_draw_end(file_open_draw)
