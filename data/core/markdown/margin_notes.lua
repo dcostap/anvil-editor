@@ -298,20 +298,25 @@ end
 
 -- Layout ------------------------------------------------------------------
 
+-- Cards stay clear of the view's scrollbar at its widest.
+local function scrollbar_width(view)
+  return view.v_scrollbar and view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+end
+
 ---The margin column beside the reading lane, or nil without enough room.
 function margin_notes.column_rect(view)
   local centered = core.centered_editor
   if not (centered and centered.should_center(view)) then return nil end
   local lane_x, lane_width = centered.get_lane_rect(view)
   local x = lane_x + lane_width + scaled(LANE_GAP)
-  local right = view.position.x + view.size.x - scaled(EDGE_GAP)
+  local right = view.position.x + view.size.x - scrollbar_width(view) - scaled(EDGE_GAP)
   local width = math.min(scaled(CARD_WIDTH), right - x)
   if width < scaled(MIN_CARD_WIDTH) then return nil end
   return x, width
 end
 
-local function reserve_width()
-  return scaled(CARD_WIDTH + LANE_GAP + EDGE_GAP)
+local function reserve_width(view)
+  return scaled(CARD_WIDTH + LANE_GAP + EDGE_GAP) + scrollbar_width(view)
 end
 
 ---Cards for the notes near the viewport, stacked so none overlap.
@@ -450,19 +455,22 @@ local function on_mouse_moved(view, x, y, ...)
   end
 end
 
+-- Returns whether the margin layer owns the press, and the press result.
+-- A press in the note editor returns the editor's own result, so an
+-- unhandled press reaches the mouse bindings that place its caret.
 local function on_mouse_pressed(view, button, x, y, clicks)
   local card = card_at(view, x, y)
   local edit = edit_state(view)
   if card and card.editing and edit then
     core.set_active_view(edit.input)
-    edit.input:on_mouse_pressed(button, x, y, clicks)
-    return true
+    return true, edit.input:on_mouse_pressed(button, x, y, clicks)
   end
   if card and button == "left" then
     margin_notes.begin_edit(view, card.note)
-    return true
+    return true, true
   end
   if edit then end_edit(view, true) end
+  return false
 end
 
 local function on_mouse_released(view, ...)
@@ -486,7 +494,7 @@ local function update(view)
   local centered = core.centered_editor
   if centered then
     local reserve = document_has_notes(view) and margin_notes.presents_formatting(view)
-      and reserve_width() or 0
+      and reserve_width(view) or 0
     centered.set_right_reserve(view, reserve)
   end
 end
@@ -513,7 +521,8 @@ function margin_notes.attach(view)
     return call_class(self, "on_mouse_moved", x, y, ...)
   end
   view.on_mouse_pressed = function(self, button, x, y, clicks)
-    if on_mouse_pressed(self, button, x, y, clicks) then return true end
+    local owned, result = on_mouse_pressed(self, button, x, y, clicks)
+    if owned then return result end
     return call_class(self, "on_mouse_pressed", button, x, y, clicks)
   end
   view.on_mouse_released = function(self, ...)
