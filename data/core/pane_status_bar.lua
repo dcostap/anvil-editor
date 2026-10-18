@@ -338,7 +338,10 @@ function PaneStatusBar:draw_tooltip(entry)
     w = w + pad_x * 2
     local h = line_h * #lines + pad_y * 2
     local root = core.root_panel
-    local x = common.clamp(bar_x + entry.x, root.position.x, root.position.x + root.size.x - w)
+    -- Keep the box and its 1px border a small gap away from the window edges.
+    local margin = common.round(4 * SCALE) + 1
+    local x = common.clamp(bar_x + entry.x,
+      root.position.x + margin, root.position.x + root.size.x - w - margin)
     local y = bar_y - h - common.round(4 * SCALE)
     local radius = common.round(4 * SCALE)
     renderer.draw_rounded_rect(x - 1, y - 1, w + 2, h + 2, radius + 1, style.divider)

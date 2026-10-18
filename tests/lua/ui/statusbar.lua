@@ -253,6 +253,35 @@ test.describe("Pane Status Bars", function()
     test.equal(context.performed[1].name, "editor:select_line_ending")
   end)
 
+  test.it("keeps the tooltip of the right-most item inside the window", function()
+    local _, right = two_panes()
+    local x, y = entry_center(right, "text:line-ending")
+    root:on_mouse_moved(x, y, 0, 0)
+    local bar = bar_of(right)
+    bar.hover_start = system.get_time() - 10
+    local boxes, texts = {}, {}
+    renderer.draw_rounded_rect = function(rx, ry, rw, rh) boxes[#boxes + 1] = { x = rx, w = rw } end
+    renderer.draw_text = function(font, text, tx)
+      texts[#texts + 1] = { x = tx, w = font:get_width(tostring(text)) }
+      return tx + font:get_width(tostring(text))
+    end
+    root.deferred_draws = {}
+    bar:draw()
+    boxes, texts = {}, {}
+    while #root.deferred_draws > 0 do
+      local item = table.remove(root.deferred_draws)
+      item.fn(table.unpack(item, 1, #item))
+    end
+    test.ok(#boxes > 0, "no tooltip was drawn")
+    local right_edge = root.position.x + root.size.x
+    for _, box in ipairs(boxes) do
+      test.ok(box.x + box.w <= right_edge, string.format("tooltip box ends at %d, past %d", box.x + box.w, right_edge))
+    end
+    for _, text in ipairs(texts) do
+      test.ok(text.x + text.w <= right_edge, string.format("tooltip text ends at %d, past %d", text.x + text.w, right_edge))
+    end
+  end)
+
   test.it("shortens a long path from the start and keeps the file name", function(context)
     local dirs = {}
     for i = 1, 30 do dirs[i] = "directory" .. i end
