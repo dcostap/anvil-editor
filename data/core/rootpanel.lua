@@ -304,12 +304,6 @@ function RootPanel:draw_app_overlay(color, unobscured_view)
   local view_top = common.clamp(unobscured_view.position.y, top, bottom)
   local view_right = common.clamp(unobscured_view.position.x + unobscured_view.size.x, left, right)
   local view_bottom = common.clamp(unobscured_view.position.y + unobscured_view.size.y, top, bottom)
-  if unobscured_view == core.global_prompt_bar and core.status_bar then
-    local status_top = core.status_bar.position.y
-    if status_top <= view_bottom + 1 then
-      view_bottom = common.clamp(status_top + core.status_bar.size.y, top, bottom)
-    end
-  end
   if view_top > top then renderer.draw_rect(left, top, self.size.x, view_top - top, color) end
   if view_bottom < bottom then renderer.draw_rect(left, view_bottom, self.size.x, bottom - view_bottom, color) end
   if view_left > left and view_bottom > view_top then
@@ -374,7 +368,7 @@ function RootPanel:publish_surface_overlay()
 end
 
 function RootPanel:shell_views()
-  return { core.title_bar, core.nag_view, core.global_prompt_bar, core.status_bar }
+  return { core.title_bar, core.nag_view, core.global_prompt_bar }
 end
 
 function RootPanel:pane_views()
@@ -383,6 +377,17 @@ function RootPanel:pane_views()
   local result = {}
   for _, pane in ipairs(layout.leaves(group.root)) do
     if pane.current_view then result[#result + 1] = pane.current_view end
+  end
+  return result
+end
+
+---The Pane Status Bars of the visible Pane Group.
+function RootPanel:pane_status_bars()
+  local group = panes().visible_group()
+  if not group or not core.status_bar then return {} end
+  local result = {}
+  for _, pane in ipairs(layout.leaves(group.root)) do
+    result[#result + 1] = core.status_bar:bar_for_pane(pane)
   end
   return result
 end
@@ -410,6 +415,8 @@ function RootPanel:view_at(x, y)
   end
   local group = panes().visible_group()
   local pane = group and layout.pane_at(group.root, x, y)
+  local bar = pane and pane.status_bar
+  if bar and bar.size.y > 0 and point_in_view(bar, x, y) then return bar end
   return pane and pane.current_view or nil
 end
 
@@ -420,7 +427,7 @@ end
 -- Apply the destination before the Pane records the arrival place.
 local function prepare_file_destination(view, opts)
   if not opts.line and not opts.navigate then return view end
-  local pane = panes().pane_for_view(view)
+  local pane = panes().pane_for_view(view) or (view and view.status_bar_pane)
   if pane and pane.current_view == view then
     require("core.navigation_history").flush_edit(view, nil, true)
     panes().record_location(pane)
@@ -519,42 +526,47 @@ end
 
 function RootPanel:update_layout()
   local x, y, w, h = self.position.x, self.position.y, self.size.x, self.size.y
-  local title, nag, prompt, status = core.title_bar, core.nag_view, core.global_prompt_bar, core.status_bar
+  local title, nag, prompt = core.title_bar, core.nag_view, core.global_prompt_bar
 
-  for _, view in ipairs { title, nag, prompt, status } do
+  for _, view in ipairs { title, nag, prompt } do
     if view then
       view.position.x, view.size.x = x, w
       call_view(view, "update")
     end
   end
+  if core.status_bar then core.status_bar:update() end
+  local status_h = core.status_bar and core.status_bar:get_height() or 0
 
   local title_h = title and title.size.y or 0
   local nag_h = nag and (nag.show_height or nag.size.y) or 0
   local pane_prompt = prompt and prompt.pane_scope and panes().find(prompt.pane_scope)
   local prompt_h = prompt and prompt.size.y or 0
   local global_prompt_h = pane_prompt and 0 or prompt_h
-  local status_h = status and status.size.y or 0
   set_rect(title, x, y, w, title_h)
   set_rect(nag, x, y + title_h, w, nag_h)
-  set_rect(status, x, y + h - status_h, w, status_h)
-  if not pane_prompt then set_rect(prompt, x, y + h - status_h - prompt_h, w, prompt_h) end
+  if not pane_prompt then set_rect(prompt, x, y + h - prompt_h, w, prompt_h) end
 
   local content_y = y + title_h + nag_h
-  local content_h = math.max(0, h - title_h - nag_h - global_prompt_h - status_h)
+  local content_h = math.max(0, h - title_h - nag_h - global_prompt_h)
   self.content_rect = { x = x, y = content_y, w = w, h = content_h }
   local group = panes().visible_group()
   if group then
     layout.update_rects(group.root, self.content_rect)
+    -- Each Pane's Status Bar takes the bottom of the Pane; the View gets the rest.
     for _, pane in ipairs(layout.leaves(group.root)) do
-      set_rect(pane.current_view, pane.position.x, pane.position.y, pane.size.x, pane.size.y)
-    end
-    if pane_prompt and pane_prompt.group == group then
-      local bar_h = math.min(prompt_h, pane_prompt.size.y)
-      set_rect(prompt, pane_prompt.position.x,
-        pane_prompt.position.y + pane_prompt.size.y - bar_h,
-        pane_prompt.size.x, bar_h)
-      set_rect(pane_prompt.current_view, pane_prompt.position.x, pane_prompt.position.y,
-        pane_prompt.size.x, math.max(0, pane_prompt.size.y - bar_h))
+      local bar_h = math.min(status_h, pane.size.y)
+      local view_h = pane.size.y - bar_h
+      if core.status_bar then
+        local bar = core.status_bar:bar_for_pane(pane)
+        set_rect(bar, pane.position.x, pane.position.y + view_h, pane.size.x, bar_h)
+        bar:update()
+      end
+      if pane == pane_prompt then
+        local prompt_bar_h = math.min(prompt_h, view_h)
+        view_h = view_h - prompt_bar_h
+        set_rect(prompt, pane.position.x, pane.position.y + view_h, pane.size.x, prompt_bar_h)
+      end
+      set_rect(pane.current_view, pane.position.x, pane.position.y, pane.size.x, view_h)
     end
   end
 end
@@ -712,7 +724,7 @@ function RootPanel:on_mouse_pressed(button, x, y, clicks)
     end
   end
   self.overlapping_view = view
-  local pane = panes().pane_for_view(view)
+  local pane = panes().pane_for_view(view) or (view and view.status_bar_pane)
   -- A click on the overlay beside the UI, such as over a hosted Sidebar, dismisses like one over a Pane.
   if not view and self.app_overlay then pane = panes().active() end
   if pane then panes().focus(pane) end
@@ -1088,6 +1100,7 @@ function RootPanel:draw()
     call_view(view, "draw")
     core.pop_clip_rect()
   end
+  for _, bar in ipairs(self:pane_status_bars()) do call_view(bar, "draw") end
   if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
   local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")

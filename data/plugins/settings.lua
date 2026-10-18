@@ -374,12 +374,6 @@ settings.add("Graphics",
       type = settings.type.TOGGLE,
       default = false
     },
-    {
-      label = "Disable Status Bar Transitions",
-      path = "disabled_transitions.statusbar",
-      type = settings.type.TOGGLE,
-      default = false
-    },
   }
 )
 

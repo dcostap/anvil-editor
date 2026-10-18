@@ -236,8 +236,6 @@ config.disabled_transitions = {
   nagbar = false,
   ---Disables transitions when scrolling the tab bar.
   tabs = false,
-  ---Disables transitions when a notification is shown.
-  statusbar = false,
   ---Disables the Fuzzy Searcher opening transition.
   fuzzy_searcher = false,
 }

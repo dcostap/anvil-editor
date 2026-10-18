@@ -100,7 +100,7 @@ test.describe("Root Panel Pane presentation", function()
     core.nag_view = FakeView("nag", 5)
     core.nag_view.show_height = 5
     core.global_prompt_bar = FakeView("prompt", 7)
-    core.status_bar = FakeView("status", 8)
+    core.status_bar = nil
     core.app_overlay = nil
     root = RootPanel()
     root.size.x, root.size.y = 300, 200
@@ -132,10 +132,9 @@ test.describe("Root Panel Pane presentation", function()
     test.equal(core.title_bar.position.y, 0)
     test.equal(core.nag_view.position.y, 10)
     test.equal(one.position.y, 15)
-    test.equal(one.size.y, 170)
+    test.equal(one.size.y, 178)
     test.equal(two.position.x, 150)
-    test.equal(core.global_prompt_bar.position.y, 185)
-    test.equal(core.status_bar.position.y, 192)
+    test.equal(core.global_prompt_bar.position.y, 193)
   end)
 
   test.it("lays out only the visible Pane Group", function()
@@ -154,7 +153,7 @@ test.describe("Root Panel Pane presentation", function()
   test.it("renders the shell with zero Panes", function()
     root:update()
     test.same(root:pane_views(), {})
-    test.equal(root.content_rect.h, 170)
+    test.equal(root.content_rect.h, 178)
   end)
 
   test.it("runs deferred draws queued by another deferred draw", function()

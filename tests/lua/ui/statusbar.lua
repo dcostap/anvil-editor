@@ -6,6 +6,8 @@ local TextView = require "core.textview"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
 local StatusBar = require "core.statusbar"
+local RootPanel = require "core.rootpanel"
+local panes = require "core.panes"
 local config = require "core.config"
 local style = require "core.style"
 local command = require "core.command"
@@ -25,18 +27,23 @@ local function write_file(path, text)
   fp:close()
 end
 
-local function styled_text_string(item)
+local function styled_text_string(styled)
   local text = {}
-  for _, part in ipairs(item or {}) do
+  for _, part in ipairs(styled or {}) do
     if type(part) == "string" then text[#text + 1] = part end
   end
   return table.concat(text)
 end
 
+local function named_view(filename)
+  local buffer = Buffer(nil, nil, true)
+  if filename then buffer:set_filename(filename) end
+  return TextView(buffer)
+end
+
 test.describe("status bar buffer file item", function()
   test.before_each(function(context)
     context.original_projects = core.projects
-    context.original_active_view = core.active_view
     context.original_cwd = system.getcwd()
     context.temp_root = USERDIR
       .. PATHSEP .. "statusbar-project-paths-tests-"
@@ -62,7 +69,6 @@ test.describe("status bar buffer file item", function()
     project_paths.configure_workspace {}
     project_paths.load_workspace_state(nil)
     core.projects = context.original_projects
-    core.active_view = context.original_active_view
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
     if context.temp_root and system.get_file_info(context.temp_root) then
       local ok, err = common.rm(context.temp_root, true)
@@ -73,9 +79,8 @@ test.describe("status bar buffer file item", function()
   local function status_file_text(abs_filename)
     local buffer = Buffer(nil, nil, true)
     buffer:set_filename(abs_filename, abs_filename)
-    core.active_view = TextView(buffer)
-    local status_bar = StatusBar()
-    return styled_text_string(status_bar:get_item("text:file"):get_item())
+    local item = StatusBar():get_item("text:file")
+    return styled_text_string(item:get_item(TextView(buffer)))
   end
 
   test.it("uses Project Path labels like fuzzy file results", function(context)
@@ -91,13 +96,11 @@ end)
 
 test.describe("status bar caret position item", function()
   test.before_each(function(context)
-    context.original_active_view = core.active_view
     context.original_caret_column_mode = config.caret_column_mode
     config.caret_column_mode = "char"
   end)
 
   test.after_each(function(context)
-    core.active_view = context.original_active_view
     config.caret_column_mode = context.original_caret_column_mode
   end)
 
@@ -107,209 +110,160 @@ test.describe("status bar caret position item", function()
       sanitized = true,
       take_ownership = true,
     })
-    core.active_view = TextView(buffer)
-
     local item = StatusBar():get_item("text:position")
-    test.equal(styled_text_string(item:get_item()), "1:1")
-  end)
-
-  test.it("renders safely when the active view clears after layout", function()
-    core.active_view = TextView(Buffer(nil, nil, true))
-    local status_bar = StatusBar()
-    status_bar.size.x = 800
-    status_bar:update_active_items()
-
-    core.active_view = nil
-    local originals = { renderer.draw_text, renderer.draw_rect, core.push_clip_rect, core.pop_clip_rect }
-    renderer.draw_text = function(_, _, x) return x end
-    renderer.draw_rect = function() end
-    core.push_clip_rect = function() end
-    core.pop_clip_rect = function() end
-    local ok, err = pcall(status_bar.draw, status_bar)
-    renderer.draw_text, renderer.draw_rect, core.push_clip_rect, core.pop_clip_rect = table.unpack(originals)
-    test.ok(ok, err)
+    test.equal(styled_text_string(item:get_item(TextView(buffer))), "1:1")
   end)
 end)
 
-test.describe("status bar placed right of the Sidebar", function()
+test.describe("Pane Status Bars", function()
+  local saved, root
+
   test.before_each(function(context)
-    context.original_active_view = core.active_view
-    context.original_draw_text = renderer.draw_text
-    context.original_draw_rect = renderer.draw_rect
-    context.original_push_clip_rect = core.push_clip_rect
-    context.original_pop_clip_rect = core.pop_clip_rect
-  end)
-
-  test.after_each(function(context)
-    core.active_view = context.original_active_view
-    renderer.draw_text = context.original_draw_text
-    renderer.draw_rect = context.original_draw_rect
-    core.push_clip_rect = context.original_push_clip_rect
-    core.pop_clip_rect = context.original_pop_clip_rect
-  end)
-
-  test.it("draws the file name beside the caret position, not over the items after it", function(context)
-    local buffer = Buffer(nil, nil, true)
-    buffer:set_filename("src" .. PATHSEP .. "game" .. PATHSEP .. "Type.cpp")
-    core.active_view = TextView(buffer)
-    local status_bar = StatusBar()
-    status_bar.position.x, status_bar.position.y = 240, 600
-    status_bar.size.x, status_bar.size.y = 1000, 24
-    status_bar:update_active_items()
-
-    local drawn = {}
-    renderer.draw_text = function(font, text, x, y, color)
-      drawn[#drawn + 1] = { text = tostring(text), x = x, w = font:get_width(tostring(text)) }
-      return x + font:get_width(tostring(text))
-    end
-    renderer.draw_rect = function() end
-    core.push_clip_rect = function() end
-    core.pop_clip_rect = function() end
-    status_bar:draw()
-
-    local file, position
-    for _, item in ipairs(drawn) do
-      if item.text:find("Type.cpp", 1, true) then file = item end
-      if item.text == ":" then position = item end
-    end
-    test.ok(file and position, "the file name and caret position were not drawn")
-    test.ok(file.x >= status_bar.position.x, "the file name started left of the Status Bar")
-    test.ok(file.x + file.w <= position.x,
-      string.format("the file name ended at %d, past the caret position at %d", file.x + file.w, position.x))
-  end)
-end)
-
-test.describe("status bar pointer right of the Sidebar", function()
-  test.before_each(function(context)
-    context.original_active_view = core.active_view
-  end)
-
-  test.after_each(function(context)
-    core.active_view = context.original_active_view
-  end)
-
-  test.it("hovers the item under the pointer", function()
-    core.active_view = TextView(Buffer(nil, nil, true))
-    local status_bar = StatusBar()
-    status_bar.position.x, status_bar.position.y = 240, 600
-    status_bar.size.x, status_bar.size.y = 1000, 24
-    status_bar:update_active_items()
-
-    local position = status_bar:get_item("text:position")
-    local x = status_bar.position.x + position.x + position.w / 2
-    status_bar:on_mouse_moved(x, 610, 0, 0)
-    test.equal(status_bar.hovered_item, position)
-  end)
-end)
-
-test.describe("status bar clicks", function()
-  test.before_each(function(context)
-    context.original_active_view = core.active_view
-    context.original_last_active_view = core.last_active_view
-    context.original_perform = command.perform
+    panes.reset_for_tests()
+    saved = {
+      root_panel = core.root_panel,
+      status_bar = core.status_bar,
+      active_view = core.active_view,
+      last_active_view = core.last_active_view,
+      perform = command.perform,
+      draw_text = renderer.draw_text,
+      draw_rect = renderer.draw_rect,
+      draw_rounded_rect = renderer.draw_rounded_rect,
+      push_clip_rect = core.push_clip_rect,
+      pop_clip_rect = core.pop_clip_rect,
+    }
+    core.status_bar = StatusBar()
+    root = RootPanel()
+    root.position.x, root.position.y = 0, 0
+    root.size.x, root.size.y = 1000, 600
+    core.root_panel = root
     context.performed = {}
-    command.perform = function(name, ...)
-      context.performed[#context.performed + 1] = name
+    command.perform = function(name)
+      context.performed[#context.performed + 1] = { name = name, view = core.active_view }
       return true
     end
-  end)
-
-  test.after_each(function(context)
-    core.active_view = context.original_active_view
-    core.last_active_view = context.original_last_active_view
-    command.perform = context.original_perform
-  end)
-
-  local function make_status_bar()
-    local buffer = Buffer(nil, nil, true)
-    buffer:set_filename("src" .. PATHSEP .. "Type.cpp")
-    local view = TextView(buffer)
-    core.active_view = view
-    core.last_active_view = view
-    local status_bar = StatusBar()
-    status_bar.position.x, status_bar.position.y = 0, 600
-    status_bar.size.x, status_bar.size.y = 1000, 24
-    status_bar:update_active_items()
-    return status_bar, buffer
-  end
-
-  local function click(status_bar, x)
-    local y = status_bar.position.y + status_bar.size.y / 2
-    status_bar:on_mouse_moved(x, y, 0, 0)
-    status_bar:on_mouse_pressed("left", x, y, 1)
-    status_bar:on_mouse_released("left", x, y)
-  end
-
-  local function item_center(status_bar, name)
-    local item = test.not_nil(status_bar:get_item(name))
-    return status_bar.position.x + item.x + item.w / 2
-  end
-
-  test.it("does not open the log when empty space is clicked during a message", function(context)
-    local status_bar = make_status_bar()
-    status_bar:show_message("i", style.text, "Saved")
-    status_bar:update_active_items()
-    click(status_bar, status_bar.position.x + status_bar.size.x / 2)
-    test.same(context.performed, {})
-  end)
-
-  test.it("opens Go To Line from the caret position", function(context)
-    local status_bar = make_status_bar()
-    click(status_bar, item_center(status_bar, "text:position"))
-    test.same(context.performed, { "editor:go_to_line" })
-  end)
-
-  test.it("keeps focus in the editor when an item is clicked", function(context)
-    local status_bar = make_status_bar()
-    local editor = core.active_view
-    core.last_active_view = TextView(Buffer(nil, nil, true))
-    click(status_bar, item_center(status_bar, "text:position"))
-    test.equal(core.active_view, editor)
-    test.same(context.performed, { "editor:go_to_line" })
-  end)
-
-  test.it("asks for a line ending instead of toggling it on a click", function(context)
-    local status_bar = make_status_bar()
-    click(status_bar, item_center(status_bar, "text:line-ending"))
-    test.same(context.performed, { "editor:select_line_ending" })
-  end)
-end)
-
-test.describe("status bar narrow width", function()
-  test.before_each(function(context)
-    context.original_active_view = core.active_view
-    context.originals = { renderer.draw_text, renderer.draw_rect, renderer.draw_rounded_rect, core.push_clip_rect, core.pop_clip_rect }
-  end)
-
-  test.after_each(function(context)
-    core.active_view = context.original_active_view
-    renderer.draw_text, renderer.draw_rect, renderer.draw_rounded_rect, core.push_clip_rect, core.pop_clip_rect =
-      table.unpack(context.originals)
-  end)
-
-  test.it("shortens a long path from the start and keeps the file name", function()
-    local dirs = {}
-    for i = 1, 30 do dirs[i] = "directory" .. i end
-    local buffer = Buffer(nil, nil, true)
-    buffer:set_filename(table.concat(dirs, PATHSEP) .. PATHSEP .. "Type.cpp")
-    core.active_view = TextView(buffer)
-    local status_bar = StatusBar()
-    status_bar.position.x, status_bar.position.y = 0, 600
-    status_bar.size.x, status_bar.size.y = 500, 24
-    status_bar:update_active_items()
-
-    local drawn = {}
+    context.drawn = {}
     renderer.draw_text = function(font, text, x)
-      drawn[#drawn + 1] = tostring(text)
+      context.drawn[#context.drawn + 1] = tostring(text)
       return x + font:get_width(tostring(text))
     end
     renderer.draw_rect = function() end
     renderer.draw_rounded_rect = function() end
     core.push_clip_rect = function() end
     core.pop_clip_rect = function() end
-    status_bar:draw()
+  end)
 
-    local text = table.concat(drawn)
+  test.after_each(function()
+    panes.reset_for_tests()
+    command.perform = saved.perform
+    renderer.draw_text = saved.draw_text
+    renderer.draw_rect = saved.draw_rect
+    renderer.draw_rounded_rect = saved.draw_rounded_rect
+    core.push_clip_rect = saved.push_clip_rect
+    core.pop_clip_rect = saved.pop_clip_rect
+    core.root_panel = saved.root_panel
+    core.status_bar = saved.status_bar
+    core.active_view = saved.active_view
+    core.last_active_view = saved.last_active_view
+  end)
+
+  local function two_panes()
+    local left = panes.create { factory = function() return named_view("left.lua") end }
+    local right = panes.split(left, "right", { factory = function() return named_view("right.lua") end })
+    root:update()
+    return left, right
+  end
+
+  local function bar_of(pane)
+    return core.status_bar:bar_for_pane(pane)
+  end
+
+  local function entry_center(pane, name)
+    local bar = bar_of(pane)
+    local entry = test.not_nil(bar:get_entry(name))
+    return bar.position.x + entry.x + entry.w / 2, bar.position.y + bar.size.y / 2
+  end
+
+  local function click(x, y)
+    root:on_mouse_moved(x, y, 0, 0)
+    root:on_mouse_pressed("left", x, y, 1)
+    root:on_mouse_released("left", x, y)
+  end
+
+  test.it("docks a bar to the bottom of each Pane showing that Pane's file", function()
+    local left, right = two_panes()
+    for _, pane in ipairs { left, right } do
+      local bar = bar_of(pane)
+      test.ok(bar.size.y > 0, "the Pane has no Status Bar")
+      test.equal(bar.position.x, pane.position.x)
+      test.equal(bar.size.x, pane.size.x)
+      test.equal(bar.position.y + bar.size.y, pane.position.y + pane.size.y)
+      test.equal(pane.current_view.position.y + pane.current_view.size.y, bar.position.y)
+    end
+    test.equal(styled_text_string(bar_of(left):get_entry("text:file").styled), "left.lua")
+    test.equal(styled_text_string(bar_of(right):get_entry("text:file").styled), "right.lua")
+  end)
+
+  test.it("focuses the Pane and runs the action when an unfocused Pane's item is clicked", function(context)
+    local left, right = two_panes()
+    test.equal(panes.active(), right)
+    click(entry_center(left, "text:position"))
+    test.equal(panes.active(), left)
+    test.equal(#context.performed, 1)
+    test.equal(context.performed[1].name, "editor:go_to_line")
+    test.equal(context.performed[1].view, left.current_view)
+  end)
+
+  test.it("keeps focus in the Pane's editor when its item is clicked", function(context)
+    local _, right = two_panes()
+    core.last_active_view = named_view("other.lua")
+    click(entry_center(right, "text:position"))
+    test.equal(core.active_view, right.current_view)
+    test.equal(context.performed[1].name, "editor:go_to_line")
+  end)
+
+  test.it("shows a message only in the focused Pane's bar", function(context)
+    local left, right = two_panes()
+    core.status_bar:show_message("i", style.text, "Saved the file")
+    root:update()
+    context.drawn = {}
+    bar_of(left):draw()
+    test.ok(not table.concat(context.drawn):find("Saved the file", 1, true), "the unfocused bar showed the message")
+    context.drawn = {}
+    bar_of(right):draw()
+    test.ok(table.concat(context.drawn):find("Saved the file", 1, true), "the focused bar did not show the message")
+  end)
+
+  test.it("does not open the log when empty space is clicked during a message", function(context)
+    local _, right = two_panes()
+    core.status_bar:show_message("i", style.text, "Saved")
+    root:update()
+    local bar = bar_of(right)
+    local message_end = bar.position.x + bar.message_entry.x + bar.message_entry.w
+    local first_right = bar:get_entry("text:position")
+    local x = (message_end + bar.position.x + first_right.x) / 2
+    click(x, bar.position.y + bar.size.y / 2)
+    test.same(context.performed, {})
+  end)
+
+  test.it("asks for a line ending instead of toggling it on a click", function(context)
+    local _, right = two_panes()
+    click(entry_center(right, "text:line-ending"))
+    test.equal(#context.performed, 1)
+    test.equal(context.performed[1].name, "editor:select_line_ending")
+  end)
+
+  test.it("shortens a long path from the start and keeps the file name", function(context)
+    local dirs = {}
+    for i = 1, 30 do dirs[i] = "directory" .. i end
+    local filename = table.concat(dirs, PATHSEP) .. PATHSEP .. "Type.cpp"
+    local pane = panes.create { factory = function() return named_view(filename) end }
+    root.size.x = 500
+    root:update()
+    context.drawn = {}
+    bar_of(pane):draw()
+
+    local text = table.concat(context.drawn)
     test.ok(text:find("Type.cpp", 1, true), "the file name was not drawn")
     test.ok(not text:find("directory1" .. PATHSEP, 1, true), "the start of the path was not shortened")
   end)

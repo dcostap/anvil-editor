@@ -70,7 +70,7 @@ end
 
 function M.is_content_view(view)
   if not view or M.excluded_content_views[view] then return false end
-  if view == core.global_prompt_bar or view == core.nag_view or view == core.status_bar or view == core.title_bar then return false end
+  if view == core.global_prompt_bar or view == core.nag_view or view == core.title_bar then return false end
   return M.is_editor_view(view) or view.context == "workspace" or view.context == "session" or M.is_file_view(view)
 end
 
