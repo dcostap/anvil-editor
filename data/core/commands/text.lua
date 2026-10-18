@@ -2429,6 +2429,33 @@ local commands = {
     dv.buffer.crlf = not dv.buffer.crlf
   end),
 
+  ["editor:select_line_ending"] = command.palette(function(dv)
+    if not can_edit(dv, "change line ending") then return end
+    local current = dv.buffer.crlf and "CRLF" or "LF"
+    local mt = { __tostring = function(x) return x.text end }
+    local choices = {
+      setmetatable({ text = "LF", info = "Unix, macOS" }, mt),
+      setmetatable({ text = "CRLF", info = "Windows" }, mt),
+    }
+    for _, choice in ipairs(choices) do
+      if choice.text == current then choice.info = choice.info .. " (current)" end
+    end
+    core.global_prompt_bar:enter("Line Ending", {
+      submit = function(text, item)
+        local choice = (item and item.text or text):upper()
+        if not can_edit(dv, "change line ending") then return end
+        dv.buffer.crlf = choice == "CRLF"
+      end,
+      suggest = function(text)
+        return common.fuzzy_match(choices, text)
+      end,
+      validate = function(text, item)
+        local choice = (item and item.text or text):upper()
+        return choice == "LF" or choice == "CRLF"
+      end,
+    })
+  end),
+
   ["editor:change_encoding"] = command.palette(function(dv)
     if not can_edit(dv, "change encoding") then return end
     encodings.select_encoding("Select Output Encoding", function(charset)

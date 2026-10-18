@@ -15,30 +15,24 @@ local Object = require "core.object"
 ---Styled text array containing fonts, colors, and strings.
 ---@alias core.statusbar.styledtext table<integer, renderer.font|renderer.color|string>
 
----Left or right alignment identifier.
----@alias core.statusbar.position '"left"' | '"right"'
 
-
----Status Bar with customizable items displaying buffer info and system status.
+---Compact Status Bar made of items. Each item is a chip: hovering shows its
+---tooltip, and an item with an action highlights and runs that action on a
+---left click. Temporary messages and widget tooltips replace the left items;
+---right items stay visible.
 ---Access the global instance via `core.status_bar`.
 ---@class core.statusbar : core.view
 ---@field super core.view
 ---@field items core.statusbar.item[] All registered items
----@field active_items core.statusbar.item[] Currently visible items that pass predicates
----@field hovered_item core.statusbar.item Item currently under mouse cursor
----@field message_timeout number Timestamp when current message expires
----@field message_pulse_start number Timestamp when current message retrigger pulse started
----@field message core.statusbar.styledtext Current temporary message content
----@field tooltip_mode boolean Whether persistent tooltip is active
+---@field active_items core.statusbar.item[] Visible items that pass their predicates
+---@field hovered_item core.statusbar.item|nil Item under the pointer
+---@field pressed_item core.statusbar.item|nil Item that received the current left press
+---@field message_timeout number Timestamp when the current message expires
+---@field message_pulse_start number Timestamp when the current message pulse started
+---@field message table|nil Current temporary message
+---@field tooltip_mode boolean Whether a persistent tooltip replaces the left items
 ---@field tooltip core.statusbar.styledtext Persistent tooltip content
----@field left_width number Visible width of left panel
----@field right_width number Visible width of right panel
----@field r_left_width number Real (total) width of left panel content
----@field r_right_width number Real (total) width of right panel content
----@field left_xoffset number Horizontal pan offset for left panel
----@field right_xoffset number Horizontal pan offset for right panel
----@field dragged_panel '""'|core.statusbar.position Panel being dragged ("left", "right", or "")
----@field hovered_panel '""'|core.statusbar.position Panel under cursor ("left", "right", or "")
+---@field left_limit number Right edge of the left items, relative to the Status Bar
 ---@field hide_messages boolean Whether to suppress status messages
 local StatusBar = View:extend()
 
@@ -49,10 +43,24 @@ local function statusbar_font()
 end
 
 local MESSAGE_PULSE_DURATION = 0.15
-local MESSAGE_PULSE_AMPLITUDE = 7 * SCALE
+local MESSAGE_PULSE_AMPLITUDE = 3 * SCALE
 local MESSAGE_MIN_LENGTH = 20
 local MESSAGE_MAX_LENGTH = 100
 local MESSAGE_MAX_TIMEOUT_MULTIPLIER = 4
+local TOOLTIP_DELAY = 0.35
+-- After one tooltip shows, moving to a neighbor shows its tooltip at once.
+local TOOLTIP_GRACE = 0.6
+local ELLIPSIS = "…"
+
+local function metrics()
+  return {
+    edge = common.round(style.padding.x * 0.5),
+    chip = common.round(style.padding.x * 0.45),
+    gap = common.round(2 * SCALE),
+    inset = common.round(2 * SCALE),
+    radius = common.round(4 * SCALE),
+  }
+end
 
 local function message_text_length(text)
   if type(text) ~= "string" then text = tostring(text or "") end
@@ -70,55 +78,47 @@ local function message_timeout_duration(text)
   return base * (1 + progress * (MESSAGE_MAX_TIMEOUT_MULTIPLIER - 1))
 end
 
----Space separator
----@type string
-StatusBar.separator  = "  "
-
----Wide separator between status sections.
----@type string
-StatusBar.separator2 = "  "
-
----@alias core.statusbar.item.separator
----|>`StatusBar.separator`
----| `StatusBar.separator2`
 
 ---@alias core.statusbar.item.predicate fun():boolean
 ---@alias core.statusbar.item.onclick fun(button: string, x: number, y: number)
----@alias core.statusbar.item.get_item fun(self: core.statusbar.item):core.statusbar.styledtext?,core.statusbar.styledtext?
+---@alias core.statusbar.item.get_item fun(self: core.statusbar.item):core.statusbar.styledtext?
 ---@alias core.statusbar.item.ondraw fun(x, y, h, hovered: boolean, calc_only?: boolean):number
+---Returns the tooltip text, which may contain newlines, and an optional dim action hint.
+---@alias core.statusbar.item.gettooltip fun(self: core.statusbar.item):string?,string?
 
----Individual status bar item with custom rendering and interaction.
+---Individual Status Bar item.
 ---@class core.statusbar.item : core.object
 ---@field name string Unique identifier for the item
 ---@field predicate core.statusbar.item.predicate Condition to display item
 ---@field alignment core.statusbar.item.alignment Left or right side placement
----@field tooltip string Text shown on mouse hover
+---@field tooltip string|core.statusbar.item.gettooltip|nil Text shown on hover
 ---@field command string|nil Command name to execute on click
 ---@field on_click core.statusbar.item.onclick|nil Click handler function
+---@field can_click fun():boolean|nil Whether the click action applies now
 ---@field on_draw core.statusbar.item.ondraw|nil Custom drawing function
----@field background_color renderer.color|nil Normal background color
----@field background_color_hover renderer.color|nil Hover background color
+---@field shrink boolean Whether the item elides its start to fit the space left
 ---@field visible boolean Whether item is shown
----@field separator core.statusbar.item.separator Separator style
 ---@field active boolean Whether item passes predicate check
----@field x number Horizontal position (calculated)
----@field w number Width in pixels (calculated)
----@field cached_item core.statusbar.styledtext Cached rendered content
+---@field x number Chip x position relative to the Status Bar (calculated)
+---@field w number Chip width in pixels (calculated)
+---@field visible_w number Unclipped chip width in pixels (calculated)
+---@field cached_item core.statusbar.styledtext Cached content
 local StatusBarItem = Object:extend()
 
 function StatusBarItem:__tostring() return "StatusBarItem" end
 
----Options for creating a status bar item.
+---Options for creating a Status Bar item.
 ---@class core.statusbar.item.options : table
 ---@field predicate string|table|core.statusbar.item.predicate Condition for display (string=module, table=class, function=custom, nil=always)
 ---@field name string Unique identifier for the item
 ---@field alignment core.statusbar.item.alignment Left or right side placement
----@field get_item core.statusbar.item.get_item Function returning styled text (can return empty table)
+---@field get_item core.statusbar.item.get_item|core.statusbar.styledtext Styled text, or a function returning it
 ---@field command string|core.statusbar.item.onclick|nil Command name or click callback
+---@field can_click? fun():boolean Whether the click action applies now
 ---@field position? integer Insertion position (-1=end, 1=beginning)
----@field tooltip? string Text displayed on mouse hover
+---@field tooltip? string|core.statusbar.item.gettooltip Text displayed on hover
 ---@field visible? boolean Initial visibility state
----@field separator? core.statusbar.item.separator Separator style (space or pipe)
+---@field shrink? boolean Elide the start of the content when space runs out
 
 ---Align item on left side of status bar.
 ---@type integer
@@ -139,16 +139,16 @@ function StatusBarItem:new(options)
   self.name = options.name
   self.alignment = options.alignment or StatusBar.Item.LEFT
   self.command = type(options.command) == "string" and options.command or nil
-  self.tooltip = options.tooltip or ""
   self.on_click = type(options.command) == "function" and options.command or nil
+  self.can_click = options.can_click
+  self.tooltip = options.tooltip
   self.on_draw = options.on_draw
-  self.background_color = nil
-  self.background_color_hover = nil
+  self.shrink = options.shrink == true
   self.visible = options.visible == nil and true or options.visible
   self.active = false
   self.x = 0
   self.w = 0
-  self.separator = options.separator or StatusBar.separator
+  self.visible_w = 0
   self.get_item = options.get_item
 end
 
@@ -158,10 +158,8 @@ end
 ---@return core.statusbar.styledtext
 function StatusBarItem:get_item() return {} end
 
-
 ---Hide the item from the status bar.
 function StatusBarItem:hide() self.visible = false end
-
 
 ---Show the item on the status bar.
 function StatusBarItem:show() self.visible = true end
@@ -176,8 +174,84 @@ function StatusBarItem:set_predicate(predicate)
   self.predicate = command.generate_predicate(predicate)
 end
 
+---Report whether a left click on this item runs an action now.
+---@return boolean
+function StatusBarItem:is_clickable()
+  if not self.command and not self.on_click then return false end
+  return self.can_click == nil or self.can_click() == true
+end
+
+---Get the hover text and the optional action hint.
+---@return string? text
+---@return string? hint
+function StatusBarItem:get_tooltip()
+  if type(self.tooltip) == "function" then return self.tooltip(self) end
+  if self.tooltip == "" then return nil end
+  return self.tooltip
+end
+
 ---@type core.statusbar.item
 StatusBar.Item = StatusBarItem
+
+
+---Iterate the strings of styled text with their font and color.
+local function each_segment(styled, fn)
+  local font = statusbar_font()
+  local color = style.text
+  for _, part in ipairs(styled) do
+    if Object.is(part, renderer.font) then
+      font = part
+    elseif type(part) == "table" then
+      color = part
+    elseif part ~= nil then
+      fn(font, color, tostring(part))
+    end
+  end
+end
+
+local function styled_width(styled)
+  local w = 0
+  each_segment(styled, function(font, _, text) w = w + font:get_width(text) end)
+  return w
+end
+
+local function draw_styled(styled, x, y, h)
+  each_segment(styled, function(font, color, text)
+    local ty = common.round(y + (h - font:get_height()) / 2)
+    x = renderer.draw_text(font, text, common.round(x), ty, color)
+  end)
+  return x
+end
+
+---Drop text from the start of styled text so it fits in `max_w`.
+---@return core.statusbar.styledtext
+local function elide_start(styled, max_w)
+  local total = styled_width(styled)
+  if total <= max_w then return styled end
+  local font = statusbar_font()
+  local need = total - max_w + font:get_width(ELLIPSIS)
+  local dropped = 0
+  local out = { font, style.dim, ELLIPSIS }
+  each_segment(styled, function(seg_font, color, text)
+    if dropped < need then
+      local w = seg_font:get_width(text)
+      if dropped + w <= need then
+        dropped = dropped + w
+        return
+      end
+      while text ~= "" and dropped < need do
+        local ch = text:match("^[%z\1-\127\194-\244][\128-\191]*") or text:sub(1, 1)
+        dropped = dropped + seg_font:get_width(ch)
+        text = text:sub(#ch + 1)
+      end
+      if text == "" then return end
+    end
+    table.insert(out, seg_font)
+    table.insert(out, color)
+    table.insert(out, text)
+  end)
+  return out
+end
 
 
 ---Get the active Text View, excluding the Global Prompt Bar.
@@ -195,8 +269,8 @@ local function predicate_textview()
   return active_textview() ~= nil
 end
 
-local function plural_suffix(n)
-  return n == 1 and "" or "s"
+local function plural(n, word)
+  return string.format("%d %s%s", n, word, n == 1 and "" or "s")
 end
 
 local selection_counts_cache = {
@@ -283,26 +357,69 @@ local function get_buffer_selection_counts(buffer)
   return carets, selection_counts_cache.chars, selected_lines, not count_chars
 end
 
-local function draw_reserved_status_text(text, reserved_text, x, y, h, calc_only)
-  local font = statusbar_font()
-  local w = font:get_width(reserved_text)
-  if not calc_only and text ~= "" then
-    renderer.draw_text(font, text, x, y + math.floor((h - font:get_height()) / 2), style.text)
+---Get the caret line and its display column, counting hard tabs as the indent width.
+local function caret_line_col(dv)
+  local line, col = dv.buffer:sanitize_position(dv.buffer:get_selection())
+  local line_text = dv.buffer:get_utf8_line(line)
+  local byte_col = col
+  if config.caret_column_mode == "char" then
+    col = line_text:ulen(1, byte_col, true)
   end
-  return w
+  local tab_type, indent_size = dv.buffer:get_indent_info()
+  local ntabs = 0
+  if tab_type == "hard" then
+    local last_idx = 0
+    while last_idx < byte_col do
+      local s, e = string.find(line_text, "\t", last_idx, true)
+      if s and s < byte_col then
+        ntabs = ntabs + 1
+        last_idx = e + 1
+      else
+        break
+      end
+    end
+  end
+  return line, col + ntabs * (indent_size - 1)
 end
 
-local function draw_reserved_count_label(count, label, reserved_label, x, y, h, calc_only)
-  local font = statusbar_font()
-  local number_width = font:get_width("9999")
-  local w = number_width + font:get_width(reserved_label)
-  if not calc_only then
-    local ty = y + math.floor((h - font:get_height()) / 2)
-    local number = tostring(count)
-    renderer.draw_text(font, number, x + number_width - font:get_width(number), ty, style.text)
-    renderer.draw_text(font, label, x + number_width, ty, style.text)
+---Split a display path into styled directory and file name parts.
+local function styled_path(display)
+  local text = display.text
+  local base_start = (text:match("^.*()[/\\]") or 0) + 1
+  local prefix = display.prefix_span
+  if prefix and prefix[2] < base_start then
+    return {
+      style.accent, text:sub(prefix[1], prefix[2]),
+      style.dim, text:sub(prefix[2] + 1, base_start - 1),
+      style.text, text:sub(base_start),
+    }
+  elseif prefix then
+    return { style.accent, text:sub(prefix[1], prefix[2]), style.text, text:sub(prefix[2] + 1) }
   end
-  return w
+  return { style.dim, text:sub(1, base_start - 1), style.text, text:sub(base_start) }
+end
+
+---Ask the user to pick one action, then perform its command.
+---@param label string
+---@param actions { text: string, info?: string, command: string }[]
+local function choose_command(label, actions)
+  local mt = { __tostring = function(x) return x.text end }
+  for _, action in ipairs(actions) do setmetatable(action, mt) end
+  core.global_prompt_bar:enter(label, {
+    submit = function(_, item)
+      if item and item.command then command.perform(item.command) end
+    end,
+    suggest = function(text)
+      return common.fuzzy_match(actions, text)
+    end,
+    validate = function(_, item) return item ~= nil end,
+  })
+end
+
+local function copy_path(path)
+  system.set_clipboard(path)
+  core.log_quiet("Status Bar copied path: %s", path)
+  core.status_bar:show_message("i", style.text, "Copied " .. common.home_encode(path))
 end
 
 
@@ -316,26 +433,32 @@ function StatusBar:new()
   self.tooltip = {}
   self.items = {}
   self.active_items = {}
-  self.hovered_item = {}
-  self.pointer = {x = 0, y = 0}
-  self.left_width = 0
-  self.right_width = 0
-  self.r_left_width = 0
-  self.r_right_width = 0
-  self.left_xoffset = 0
-  self.right_xoffset = 0
-  self.dragged_panel = ""
-  self.hovered_panel = ""
+  self.hovered_item = nil
+  self.pressed_item = nil
+  self.hover_start = 0
+  self.tooltip_shown_at = -math.huge
+  self.tooltip_dismissed = nil
+  self.left_limit = 0
   self.hide_messages = false
   self.visible = true
 
+  self.message_item = StatusBar.Item({
+    name = "message",
+    command = function()
+      if not (core.active_view and core.active_view:is(LogView)) then
+        command.perform "log:open"
+      end
+    end,
+    tooltip = function()
+      return self.message and self.message.text, "Click to open the log"
+    end,
+  })
+
   self:register_textview_items()
-  self:register_command_items()
   self:register_imageview_items()
 end
 
 ---Register default status bar items for Text Views.
----Shows file, position, selections, indentation, encoding, line ending, etc.
 function StatusBar:register_textview_items()
   if self:get_item("text:file") then return end
 
@@ -343,196 +466,124 @@ function StatusBar:register_textview_items()
     predicate = predicate_textview,
     name = "text:file",
     alignment = StatusBar.Item.LEFT,
+    shrink = true,
     get_item = function()
       local dv = core.active_view
-      local filename
       if dv.buffer.abs_filename then
         local display = project_paths.display_path(dv.buffer.abs_filename, { kind = "file" })
-        if display and display.text then
-          if display.prefix_span then
-            local label = display.text:sub(display.prefix_span[1], display.prefix_span[2])
-            local rest = display.text:sub(display.prefix_span[2] + 1)
-            filename = { style.accent, label, style.text, rest }
-          else
-            filename = { style.text, display.text }
-          end
+        if display and display.text then return styled_path(display) end
+      end
+      local buffer_name = dv.buffer.intellij_untitled_name or dv.buffer:get_name()
+      return { dv.buffer.filename and style.text or style.dim, common.home_encode(buffer_name) }
+    end,
+    tooltip = function()
+      local dv = active_textview()
+      if not dv then return nil end
+      if dv.buffer.abs_filename then
+        return common.home_encode(dv.buffer.abs_filename), "Click to copy the full path"
+      end
+      return "Not saved to a file"
+    end,
+    can_click = function()
+      local dv = active_textview()
+      return dv ~= nil and dv.buffer.abs_filename ~= nil
+    end,
+    command = function()
+      local dv = active_textview()
+      if dv and dv.buffer.abs_filename then copy_path(dv.buffer.abs_filename) end
+    end,
+  })
+
+  self:add_item({
+    predicate = predicate_textview,
+    name = "text:selection",
+    alignment = StatusBar.Item.RIGHT,
+    get_item = function()
+      local dv = active_textview()
+      if not dv then return {} end
+      local carets, chars, lines, chars_pending = get_buffer_selection_counts(dv.buffer)
+      local parts = {}
+      if carets > 1 then table.insert(parts, plural(carets, "caret")) end
+      if chars > 0 then table.insert(parts, plural(chars, "char")) end
+      if lines > 1 or (lines > 0 and chars_pending) then table.insert(parts, plural(lines, "line")) end
+      local styled = {}
+      for i, part in ipairs(parts) do
+        if i > 1 then
+          table.insert(styled, style.dim)
+          table.insert(styled, " · ")
         end
+        table.insert(styled, style.text)
+        table.insert(styled, part)
       end
-      if not filename then
-        local buffer_name = dv.buffer.intellij_untitled_name or dv.buffer:get_name()
-        filename = {
-          dv.buffer.filename and style.text or style.dim,
-          common.home_encode(buffer_name)
-        }
+      return styled
+    end,
+    tooltip = function()
+      local dv = active_textview()
+      if not dv then return nil end
+      local carets, chars, lines, chars_pending = get_buffer_selection_counts(dv.buffer)
+      local text = {}
+      if lines > 0 then
+        table.insert(text, chars_pending
+          and string.format("%s selected (too large to count characters)", plural(lines, "line"))
+          or string.format("%s selected across %s", plural(chars, "character"), plural(lines, "line")))
       end
-      return {
-        table.unpack(filename)
-      }
-    end
+      if carets > 1 then table.insert(text, plural(carets, "caret")) end
+      return table.concat(text, "\n")
+    end,
   })
 
   self:add_item({
     predicate = predicate_textview,
     name = "text:position",
-    alignment = StatusBar.Item.LEFT,
-    get_item = {},
-    on_draw = function(x, y, h, _, calc_only)
-      local dv = active_textview()
-      if not dv then return 0 end
-      local line, col = dv.buffer:sanitize_position(dv.buffer:get_selection())
-      local line_text = dv.buffer:get_utf8_line(line)
-      local byte_col = col
-      if config.caret_column_mode == "char" then
-        col = line_text:ulen(1, byte_col, true)
-      end
-      local tab_type, indent_size = dv.buffer:get_indent_info()
-      -- Calculating tabs when the buffer is using the "hard" indent type.
-      local ntabs = 0
-      if tab_type == "hard" then
-        local last_idx = 0
-        while last_idx < byte_col do
-          local s, e = string.find(line_text, "\t", last_idx, true)
-          if s and s < byte_col then
-            ntabs = ntabs + 1
-            last_idx = e + 1
-          else
-            break
-          end
-        end
-      end
-      col = col + ntabs * (indent_size - 1)
-
-      local font = statusbar_font()
-      local line_width = font:get_width("9999")
-      local colon_width = font:get_width(":")
-      local col_width = font:get_width("9999")
-      local w = line_width + colon_width + col_width
-      if not calc_only then
-        local ty = y + math.floor((h - font:get_height()) / 2)
-        local line_text = tostring(line)
-        local col_text = tostring(col)
-        renderer.draw_text(
-          font,
-          line_text,
-          x + line_width - font:get_width(line_text),
-          ty,
-          style.text
-        )
-        renderer.draw_text(font, ":", x + line_width, ty, style.text)
-        renderer.draw_text(
-          font,
-          col_text,
-          x + line_width + colon_width,
-          ty,
-          col > config.line_limit and style.accent or style.text
-        )
-      end
-      return w
-    end,
-    command = "editor:go_to_line",
-    tooltip = "line : column"
-  })
-
-  self:add_item({
-    predicate = predicate_textview,
-    name = "text:carets",
-    alignment = StatusBar.Item.LEFT,
-    position = 3,
-    get_item = {},
-    on_draw = function(x, y, h, _, calc_only)
-      local dv = active_textview()
-      if not dv then return 0 end
-      local carets = get_buffer_selection_counts(dv.buffer)
-      local label = string.format(" caret%s", plural_suffix(carets))
-      return draw_reserved_count_label(carets, label, " carets", x, y, h, calc_only)
-    end
-  })
-
-  self:add_item({
-    predicate = predicate_textview,
-    name = "text:selected-chars",
-    alignment = StatusBar.Item.LEFT,
-    position = 4,
-    get_item = {},
-    on_draw = function(x, y, h, _, calc_only)
-      local dv = active_textview()
-      if not dv then return 0 end
-      local _, chars, _, chars_pending = get_buffer_selection_counts(dv.buffer)
-      if chars_pending or chars <= 0 then
-        return draw_reserved_status_text("", "9999 chars selected", x, y, h, calc_only)
-      end
-      local label = string.format(" char%s selected", plural_suffix(chars))
-      return draw_reserved_count_label(chars, label, " chars selected", x, y, h, calc_only)
-    end
-  })
-
-  self:add_item({
-    predicate = predicate_textview,
-    name = "text:selected-lines",
-    alignment = StatusBar.Item.LEFT,
-    position = 5,
-    get_item = {},
-    on_draw = function(x, y, h, _, calc_only)
-      local dv = active_textview()
-      if not dv then return 0 end
-      local _, _, selected_lines = get_buffer_selection_counts(dv.buffer)
-      if selected_lines <= 0 then
-        return draw_reserved_status_text("", "9999 lines selected", x, y, h, calc_only)
-      end
-      local label = string.format(" line%s selected", plural_suffix(selected_lines))
-      return draw_reserved_count_label(selected_lines, label, " lines selected", x, y, h, calc_only)
-    end
-  })
-
-  self:add_item({
-    predicate = predicate_textview,
-    name = "text:position-percent",
-    alignment = StatusBar.Item.LEFT,
+    alignment = StatusBar.Item.RIGHT,
     get_item = function()
-      local dv = core.active_view
-      local line = dv.buffer:get_selection()
+      local dv = active_textview()
+      if not dv then return {} end
+      local line, col = caret_line_col(dv)
       return {
-        string.format("%.f%%", line / #dv.buffer.lines * 100)
+        style.text, tostring(line),
+        style.dim, ":",
+        col > config.line_limit and style.accent or style.text, tostring(col),
       }
     end,
-    tooltip = "caret position"
+    tooltip = function()
+      local dv = active_textview()
+      if not dv then return nil end
+      local line, col = caret_line_col(dv)
+      local count = #dv.buffer.lines
+      local text = string.format("Line %d of %d (%.f%%), column %d", line, count, line / count * 100, col)
+      if col > config.line_limit then
+        text = text .. string.format("\nPast the %d-column line limit", config.line_limit)
+      end
+      return text, "Click to go to a line"
+    end,
+    command = "editor:go_to_line",
   })
-
 
   self:add_item({
     predicate = predicate_textview,
     name = "text:indentation",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
-      local dv = core.active_view
-      local indent_type, indent_size, indent_confirmed = dv.buffer:get_indent_info()
-      local indent_label = (indent_type == "hard") and "tabs: " or "spaces: "
+      local dv = active_textview()
+      if not dv then return {} end
+      local indent_type, indent_size, confirmed = dv.buffer:get_indent_info()
       return {
-        style.text, indent_label, indent_size,
-        indent_confirmed and "" or "*"
+        confirmed and style.text or style.dim,
+        string.format("%s: %d", indent_type == "hard" and "Tabs" or "Spaces", indent_size),
       }
     end,
-    command = function(button, x, y)
-      if button == "left" then
-        command.perform "editor:set_file_indent_size"
-      elseif button == "right" then
-        command.perform "editor:set_file_indent_type"
-      end
+    tooltip = function()
+      local dv = active_textview()
+      if not dv then return nil end
+      local indent_type, indent_size, confirmed = dv.buffer:get_indent_info()
+      local text = indent_type == "hard"
+        and string.format("Indents with tabs, %d columns wide", indent_size)
+        or string.format("Indents with %s", plural(indent_size, "space"))
+      if not confirmed then text = text .. "\nEditor default: the file shows no clear indentation" end
+      return text, "Click to change indentation"
     end,
-    separator = self.separator2
-  })
-
-  self:add_item({
-    predicate = predicate_textview,
-    name = "text:lines",
-    alignment = StatusBar.Item.RIGHT,
-    get_item = function()
-      local dv = core.active_view
-      return {
-        style.text, #dv.buffer.lines, " lines",
-      }
-    end,
-    separator = self.separator2
+    command = "editor:set_file_indentation",
   })
 
   self:add_item({
@@ -540,20 +591,28 @@ function StatusBar:register_textview_items()
     name = "text:encoding",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
-      local dv, bom = core.active_view, ""
-      if dv.buffer.bom then bom = " (BOM)" end
-      return {
-        style.text, (dv.buffer.encoding or "none"), bom
-      }
-    end,
-    command = function(button)
-      if button == "left" then
-        command.perform "editor:change_encoding"
-      elseif button == "right" then
-        command.perform "editor:reload_with_encoding"
+      local dv = active_textview()
+      if not dv then return {} end
+      local styled = { style.text, dv.buffer.encoding or "none" }
+      if dv.buffer.bom then
+        table.insert(styled, style.dim)
+        table.insert(styled, " BOM")
       end
+      return styled
     end,
-    tooltip = "encoding"
+    tooltip = function()
+      local dv = active_textview()
+      if not dv then return nil end
+      local text = "Encoding: " .. (dv.buffer.encoding or "none")
+      if dv.buffer.bom then text = text .. " with byte order mark" end
+      return text, "Click to save or reopen with another encoding"
+    end,
+    command = function()
+      choose_command("Encoding", {
+        { text = "Save with Encoding", info = "convert this file", command = "editor:change_encoding" },
+        { text = "Reopen with Encoding", info = "reread this file", command = "editor:reload_with_encoding" },
+      })
+    end,
   })
 
   self:add_item({
@@ -561,62 +620,72 @@ function StatusBar:register_textview_items()
     name = "text:line-ending",
     alignment = StatusBar.Item.RIGHT,
     get_item = function()
-      local dv = core.active_view
-      return {
-        style.text, dv.buffer.crlf and "CRLF" or "LF"
-      }
+      local dv = active_textview()
+      if not dv then return {} end
+      return { style.text, dv.buffer.crlf and "CRLF" or "LF" }
     end,
-    command = "editor:toggle_line_ending"
-  })
-
-end
-
-
----Register default status bar items for Global Prompt Bar interactions.
----Shows file count icon.
-function StatusBar:register_command_items()
-  if self:get_item("command:files") then return end
-
-  self:add_item({
-    predicate = "core.global_prompt_bar",
-    name = "command:files",
-    alignment = StatusBar.Item.RIGHT,
-    get_item = function()
-      return {
-        style.icon_font, "g",
-        statusbar_font(), style.dim, self.separator2
-      }
-    end
+    tooltip = function()
+      local dv = active_textview()
+      if not dv then return nil end
+      return dv.buffer.crlf and "Line endings: CRLF (Windows)" or "Line endings: LF (Unix)",
+        "Click to change line endings"
+    end,
+    command = "editor:select_line_ending",
   })
 end
 
 
 ---Register default status bar items for image views.
----Shows image filename, dimensions, and zoom level.
 function StatusBar:register_imageview_items()
+  local function active_image()
+    local view = core.active_view
+    return view and view:is(ImageView) and view.image and view or nil
+  end
+
   self:add_item({
     predicate = ImageView,
-    name = "image-view:details",
+    name = "image-view:file",
     alignment = StatusBar.Item.LEFT,
+    shrink = true,
     get_item = function()
-      if core.active_view.image then
-        local file = common.basename(core.active_view.path)
-        local w, h = core.active_view.image:get_size()
-        local dimensions = string.format("%dx%d", w, h)
-        return {
-          statusbar_font(), style.accent,
-          file,
-          style.text,
-          StatusBar.separator,
-          dimensions,
-          StatusBar.separator,
-          string.format("Image Zoom: %.0f%%", core.active_view.zoom_scale * 100),
-        }
-      else
-        return {}
-      end
+      local view = active_image()
+      if not view then return {} end
+      return { style.text, common.basename(view.path) }
     end,
-    position = 1
+    tooltip = function()
+      local view = active_image()
+      return view and common.home_encode(view.path), "Click to copy the full path"
+    end,
+    command = function()
+      local view = active_image()
+      if view then copy_path(view.path) end
+    end,
+  })
+
+  self:add_item({
+    predicate = ImageView,
+    name = "image-view:size",
+    alignment = StatusBar.Item.RIGHT,
+    get_item = function()
+      local view = active_image()
+      if not view then return {} end
+      local w, h = view.image:get_size()
+      return { style.text, string.format("%d × %d", w, h) }
+    end,
+    tooltip = "Image size in pixels",
+  })
+
+  self:add_item({
+    predicate = ImageView,
+    name = "image-view:zoom",
+    alignment = StatusBar.Item.RIGHT,
+    get_item = function()
+      local view = active_image()
+      if not view then return {} end
+      return { style.text, string.format("%.0f%%", view.zoom_scale * 100) }
+    end,
+    tooltip = function() return "Zoom", "Click to reset zoom" end,
+    command = "image:zoom_reset",
   })
 end
 
@@ -724,14 +793,11 @@ end
 ---@param name string Item name to remove
 ---@return core.statusbar.item|nil removed_item The removed item or nil
 function StatusBar:remove_item(name)
-  local item = nil
   for pos, it in ipairs(self.items) do
     if it.name == name then
-      item = table.remove(self.items, pos)
-      break
+      return table.remove(self.items, pos)
     end
   end
-  return item
 end
 
 
@@ -807,7 +873,7 @@ function StatusBar:show_items(names)
 end
 
 
----Display a temporary message in the status bar.
+---Display a temporary message in place of the left items.
 ---Message duration uses `config.message_timeout` as the minimum, then scales
 ---linearly up to four times that value for longer messages.
 ---@param icon string Icon character to display
@@ -834,7 +900,7 @@ function StatusBar:display_messages(enable)
 end
 
 
----Show a persistent tooltip replacing all status bar content.
+---Show a persistent tooltip in place of the left items.
 ---Remains visible until `remove_tooltip()` is called.
 ---@param text string|core.statusbar.styledtext Plain text or styled text array
 function StatusBar:show_tooltip(text)
@@ -849,612 +915,14 @@ function StatusBar:remove_tooltip()
 end
 
 
----Process styled text array with a drawing function.
----@param self core.statusbar
----@param items core.statusbar.styledtext Styled text array
----@param x number Starting x coordinate
----@param y number Starting y coordinate
----@param draw_fn fun(font, color, text, align, x, y, w, h):number Drawing or measurement function
-local function draw_items(self, items, x, y, draw_fn)
-  local font = statusbar_font()
-  local color = style.text
-
-  for _, item in ipairs(items) do
-    if Object.is(item, renderer.font) then
-      font = item
-    elseif type(item) == "table" then
-      color = item
-    else
-      x = draw_fn(font, color, item, nil, x, y, 0, self.size.y)
-    end
-  end
-
-  return x
+local function message_active(self)
+  return self.message ~= nil and system.get_time() <= self.message_timeout
 end
 
-
----Calculate text width (used as callback for draw_items).
----@param font renderer.font
----@param _ any Unused color parameter
----@param text string Text to measure
----@param _ any Unused align parameter
----@param x number Current x position
----@return number x Updated x position
-local function text_width(font, _, text, _, x)
-  return x + font:get_width(text)
-end
-
-
----Draw styled text on the status bar with optional alignment.
----@param items core.statusbar.styledtext Styled text to render
----@param right_align? boolean True to right-align, false for left-align
----@param xoffset? number Horizontal offset in pixels
----@param yoffset? number Vertical offset in pixels
-function StatusBar:draw_items(items, right_align, xoffset, yoffset)
-  local x, y = self:get_content_offset()
-  x = x + (xoffset or 0)
-  y = y + (yoffset or 0)
-  if right_align then
-    local w = draw_items(self, items, 0, 0, text_width)
-    x = x + self.size.x - w - style.padding.x
-    draw_items(self, items, x, y, common.draw_text)
-  else
-    x = x + style.padding.x
-    draw_items(self, items, x, y, common.draw_text)
-  end
-end
-
-
----Draw a tooltip box above the status bar for an item.
----@param item core.statusbar.item Item with tooltip text
-function StatusBar:draw_item_tooltip(item)
-  core.root_panel:defer_draw(function()
-    local text = item.tooltip
-    local font = statusbar_font()
-    local w = font:get_width(text)
-    local h = font:get_height()
-    local x = self.pointer.x - self.position.x - (w / 2) - (style.padding.x * 2)
-
-    if x < 0 then x = 0 end
-    if (x + w + (style.padding.x * 3)) > self.size.x then
-      x = self.size.x - w - (style.padding.x * 3)
-    end
-    x = x + self.position.x
-
-    renderer.draw_rect(
-      x + style.padding.x,
-      self.position.y - h - (style.padding.y * 2),
-      w + (style.padding.x * 2),
-      h + (style.padding.y * 2),
-      style.background3
-    )
-
-    renderer.draw_text(
-      font,
-      text,
-      -- we round the coords to prevent jumpy text on fractional scales
-      common.round(x + (style.padding.x * 2)),
-      common.round(self.position.y - h - style.padding.y),
-      style.text
-    )
-  end)
-end
-
-
----Legacy method for retrieving status bar items.
----@deprecated Use `core.status_bar:add_item()` instead
----@param nowarn boolean Suppress deprecation warning if true
----@return table left Left-aligned items
----@return table right Right-aligned items
-function StatusBar:get_items(nowarn)
-  if not nowarn and not self.get_items_warn then
-    core.warn(
-      "Overriding StatusBar:get_items() is deprecated, "
-      .. "use core.status_bar:add_item() instead."
-    )
-    self.get_items_warn = true
-  end
-  return {"{:dummy:}"}, {"{:dummy:}"}
-end
-
-
----Append all elements from one styled text array to another.
----@param t1 core.statusbar.styledtext Destination array
----@param t2 core.statusbar.styledtext Source array to append
-local function table_add(t1, t2)
-  for _, value in ipairs(t2) do
-    table.insert(t1, value)
-  end
-end
-
-
----Merge legacy get_items() results into the item list for backwards compatibility.
----@param destination table Item list to merge into
----@param items core.statusbar.styledtext Legacy styled text items
----@param alignment core.statusbar.item.alignment Item alignment
-local function merge_deprecated_items(destination, items, alignment)
-  local start = true
-  local items_start, items_end = {}, {}
-  for i, value in ipairs(items) do
-    if value ~= "{:dummy:}" then
-      if start then
-        table.insert(items_start, i, value)
-      else
-        table.insert(items_end, value)
-      end
-    else
-      start = false
-    end
-  end
-
-  local position = alignment == StatusBar.Item.LEFT and "left" or "right"
-
-  local item_start = StatusBar.Item({
-    name = "deprecated:"..position.."-start",
-    alignment = alignment,
-    get_item = items_start
-  })
-
-  local item_end = StatusBar.Item({
-    name = "deprecated:"..position.."-end",
-    alignment = alignment,
-    get_item = items_end
-  })
-
-  table.insert(destination, 1, item_start)
-  table.insert(destination, item_end)
-end
-
-
----Create and insert a separator item between status bar items.
----@param self core.statusbar
----@param destination core.statusbar.item[] Active items list
----@param separator string Separator text (space or pipe)
----@param alignment core.statusbar.item.alignment Item alignment
----@param x number X position for the separator
----@return core.statusbar.item separator The created separator item
-local function add_spacing(self, destination, separator, alignment, x)
-  ---@type core.statusbar.item
-  local space = StatusBar.Item({name = "space", alignment = alignment})
-  space.cached_item = separator == self.separator and {
-    style.text, separator
-  } or {
-    style.dim, separator
-  }
-  space.x = x
-  space.w = draw_items(self, space.cached_item, 0, 0, text_width)
-
-  table.insert(destination, space)
-
-  return space
-end
-
-
----Strip leading and trailing separators from styled text.
----@param self core.statusbar
----@param styled_text core.statusbar.styledtext Styled text to modify in-place
-local function remove_spacing(self, styled_text)
-  if
-    not Object.is(styled_text[1], renderer.font)
-    and
-    type(styled_text[1]) == "table"
-    and
-    (
-      styled_text[2] == self.separator
-      or
-      styled_text[2] == self.separator2
-    )
-  then
-    table.remove(styled_text, 1)
-    table.remove(styled_text, 1)
-  end
-
-  if
-    not Object.is(styled_text[#styled_text-1], renderer.font)
-    and
-    type(styled_text[#styled_text-1]) == "table"
-    and
-    (
-      styled_text[#styled_text] == self.separator
-      or
-      styled_text[#styled_text] == self.separator2
-    )
-  then
-    table.remove(styled_text, #styled_text)
-    table.remove(styled_text, #styled_text)
-  end
-end
-
-
----Rebuild the active items list by evaluating predicates and calculating positions.
----Updates item visibility, positions, and handles panel overflow.
-function StatusBar:update_active_items()
-  -- Item x positions are relative to the Status Bar's left edge.
-  local rx = self.size.x
-  local lx = 0
-  local rw, lw = 0, 0
-
-  self.active_items = {}
-
-  ---@type core.statusbar.item[]
-  local combined_items = {}
-  table_add(combined_items, self.items)
-
-  -- load deprecated items for compatibility
-  local dleft, dright = self:get_items(true)
-  merge_deprecated_items(combined_items, dleft, StatusBar.Item.LEFT)
-  merge_deprecated_items(combined_items, dright, StatusBar.Item.RIGHT)
-
-  local lfirst, rfirst = true, true
-
-  -- calculate left and right width
-  for _, item in ipairs(combined_items) do
-    item.cached_item = {}
-    if item.visible and item:predicate() then
-      local styled_text = type(item.get_item) == "function"
-        and item.get_item(item) or item.get_item
-
-      if #styled_text > 0 then
-        remove_spacing(self, styled_text)
-      end
-
-      if #styled_text > 0 or item.on_draw then
-        item.active = true
-        local hovered = self.hovered_item == item
-        if item.alignment == StatusBar.Item.LEFT then
-          if not lfirst then
-            local space = add_spacing(
-              self, self.active_items, item.separator, item.alignment, lx
-            )
-            lw = lw + space.w
-            lx = lx + space.w
-          else
-            lfirst = false
-          end
-          item.w = item.on_draw and
-            item.on_draw(lx, self.position.y, self.size.y, hovered, true)
-            or
-            draw_items(self, styled_text, 0, 0, text_width)
-          item.x = lx
-          lw = lw + item.w
-          lx = lx + item.w
-        else
-          if not rfirst then
-            local space = add_spacing(
-              self, self.active_items, item.separator, item.alignment, rx
-            )
-            rw = rw + space.w
-            rx = rx + space.w
-          else
-            rfirst = false
-          end
-          item.w = item.on_draw and
-            item.on_draw(rx, self.position.y, self.size.y, hovered, true)
-            or
-            draw_items(self, styled_text, 0, 0, text_width)
-          item.x = rx
-          rw = rw + item.w
-          rx = rx + item.w
-        end
-        item.cached_item = styled_text
-        table.insert(self.active_items, item)
-      else
-        item.active = false
-      end
-    else
-      item.active = false
-    end
-  end
-
-  self.r_left_width, self.r_right_width = lw, rw
-
-  -- try to calc best size for left and right
-  if lw + rw + (style.padding.x * 4) > self.size.x then
-    if lw + (style.padding.x * 2) < self.size.x / 2 then
-      rw = self.size.x - lw  - (style.padding.x * 3)
-      if rw > self.r_right_width then
-        lw = lw + (rw - self.r_right_width)
-        rw = self.r_right_width
-      end
-    elseif rw + (style.padding.x * 2) < self.size.x / 2 then
-      lw = self.size.x - rw  - (style.padding.x * 3)
-    else
-      lw = self.size.x / 2 - (style.padding.x + style.padding.x / 2)
-      rw = self.size.x / 2 - (style.padding.x + style.padding.x / 2)
-    end
-    -- reposition left and right offsets when window is resized
-    if rw >= self.r_right_width then
-      self.right_xoffset = 0
-    elseif rw > self.right_xoffset + self.r_right_width then
-      self.right_xoffset = rw - self.r_right_width
-    end
-    if lw >= self.r_left_width then
-      self.left_xoffset = 0
-    elseif lw > self.left_xoffset + self.r_left_width then
-      self.left_xoffset = lw - self.r_left_width
-    end
-  else
-    self.left_xoffset = 0
-    self.right_xoffset = 0
-  end
-
-  self.left_width, self.right_width = lw, rw
-
-  for _, item in ipairs(self.active_items) do
-    if item.alignment == StatusBar.Item.RIGHT then
-      -- re-calculate x position now that we have the total width
-      item.x = item.x - rw - (style.padding.x * 2)
-    end
-  end
-end
-
-
----Pan a status bar panel horizontally when content overflows.
----@param panel core.statusbar.position Panel to drag ("left" or "right")
----@param dx number Horizontal drag distance in pixels
-function StatusBar:drag_panel(panel, dx)
-  if panel == "left" and self.r_left_width > self.left_width then
-    local nonvisible_w = self.r_left_width - self.left_width
-    local new_offset = self.left_xoffset + dx
-    if new_offset >= 0 - nonvisible_w and new_offset <= 0 then
-      self.left_xoffset = new_offset
-    elseif dx < 0 then
-      self.left_xoffset = 0 - nonvisible_w
-    else
-      self.left_xoffset = 0
-    end
-  elseif panel == "right" and self.r_right_width > self.right_width then
-    local nonvisible_w = self.r_right_width - self.right_width
-    local new_offset = self.right_xoffset + dx
-    if new_offset >= 0 - nonvisible_w and new_offset <= 0 then
-      self.right_xoffset = new_offset
-    elseif dx < 0 then
-      self.right_xoffset = 0 - nonvisible_w
-    else
-      self.right_xoffset = 0
-    end
-  end
-end
-
-
----Determine which panel (left or right) is under the cursor.
----@param x number Mouse x coordinate
----@param y number Mouse y coordinate
----@return string panel "left", "right", or "" if none
-function StatusBar:get_hovered_panel(x, y)
-  if y >= self.position.y and x - self.position.x <= self.left_width + style.padding.x then
-    return "left"
-  end
-  return "right"
-end
-
-
----Calculate the visible portion of an item considering panel overflow.
----@param item core.statusbar.item Item to check
----@return number x Visible x coordinate (0 if fully clipped)
----@return number w Visible width (0 if fully clipped)
-function StatusBar:get_item_visible_area(item)
-  local item_ox = item.alignment == StatusBar.Item.LEFT and
-    self.left_xoffset or self.right_xoffset
-
-  local item_x = item_ox + item.x + style.padding.x
-  local item_w = item.w
-
-  if item.alignment == StatusBar.Item.LEFT then
-    if self.left_width - item_x > 0 and self.left_width - item_x < item.w then
-      item_w = (self.left_width + style.padding.x) - item_x
-    elseif self.left_width - item_x < 0 then
-      item_x = 0
-      item_w = 0
-    end
-  else
-    local rx = self.size.x - self.right_width - style.padding.x
-    if item_x < rx then
-      if item_x + item.w > rx then
-        item_x = rx
-        item_w = (item_x + item.w) - rx
-      else
-        item_x = 0
-        item_w = 0
-      end
-    end
-  end
-
-  return item_x + self.position.x, item_w
-end
-
-
-
----Handle mouse button press events.
----Clicking on active message opens log view. Left-click enables panel dragging when content overflows.
----@param button string Mouse button identifier
----@param x number Mouse x coordinate
----@param y number Mouse y coordinate
----@param clicks number Number of clicks
----@return boolean
-function StatusBar:on_mouse_pressed(button, x, y, clicks)
-  if not self.visible then return end
-  if core.last_active_view then core.set_active_view(core.last_active_view) end
-  if
-    system.get_time() < self.message_timeout
-    and
-    not (core.active_view and core.active_view:is(LogView))
-  then
-    command.perform "log:open"
-  else
-    if y >= self.position.y and button == "left" and clicks == 1 then
-      self.position.dx = x
-      if
-        self.r_left_width > self.left_width
-        or
-        self.r_right_width > self.right_width
-      then
-        self.dragged_panel = self:get_hovered_panel(x, y)
-        self.cursor = "hand"
-      end
-    end
-  end
-  return true
-end
-
-
----Handle mouse leaving the status bar area.
-function StatusBar:on_mouse_left()
-  StatusBar.super.on_mouse_left(self)
-  self.hovered_item = {}
-end
-
-
----Handle mouse movement over the status bar.
----Updates hovered item, cursor, and handles panel dragging.
----@param x number Mouse x coordinate
----@param y number Mouse y coordinate
----@param dx number Delta x movement
----@param dy number Delta y movement
-function StatusBar:on_mouse_moved(x, y, dx, dy)
-  if not self.visible then return end
-  StatusBar.super.on_mouse_moved(self, x, y, dx, dy)
-
-  self.hovered_panel = self:get_hovered_panel(x, y)
-
-  if self.dragged_panel ~= "" then
-    self:drag_panel(self.dragged_panel, dx)
-    return
-  end
-
-  if y < self.position.y or self.message then
-    self.cursor = "arrow"
-    self.hovered_item = {}
-    return
-  end
-
-  for _, item in ipairs(self.items) do
-    if
-      item.visible and item.active
-      and
-      (item.command or item.on_click or item.tooltip ~= "")
-    then
-      local item_x, item_w = self:get_item_visible_area(item)
-
-      if x > item_x and (item_x + item_w) > x then
-        self.pointer.x = x
-        self.pointer.y = y
-        if self.hovered_item ~= item then
-          self.hovered_item = item
-        end
-        if item.command or item.on_click then
-          self.cursor = "hand"
-        end
-        return
-      end
-    end
-  end
-  self.cursor = "arrow"
-  self.hovered_item = {}
-end
-
-
----Handle mouse button release events.
----Executes item command or callback if clicked on an item.
----@param button string Mouse button identifier
----@param x number Mouse x coordinate
----@param y number Mouse y coordinate
-function StatusBar:on_mouse_released(button, x, y)
-  if not self.visible then return end
-  StatusBar.super.on_mouse_released(self, button, x, y)
-
-  if self.dragged_panel ~= "" then
-    self.dragged_panel = ""
-    self.cursor = "arrow"
-    if self.position.dx ~= x then
-      return
-    end
-  end
-
-  if y < self.position.y or not self.hovered_item.active then return end
-
-  local item = self.hovered_item
-  local item_x, item_w = self:get_item_visible_area(item)
-
-  if x > item_x and (item_x + item_w) > x then
-    if item.command then
-      command.perform(item.command)
-    elseif item.on_click then
-      item.on_click(button, x, y)
-    end
-  end
-end
-
-
----Handle mouse wheel scrolling to pan overflowing panels.
----@param y number Vertical scroll amount
----@param x number Horizontal scroll amount
-function StatusBar:on_mouse_wheel(y, x)
-  if not self.visible or self.hovered_panel == "" then return end
-  if x ~= 0 then
-    self:drag_panel(self.hovered_panel, x * self.left_width / 10)
-  else
-    self:drag_panel(self.hovered_panel, y * self.left_width / 10)
-  end
-end
-
-
----Update status bar height, message scroll, and active items.
-function StatusBar:update()
-  local collapsed = not self.visible
-  if collapsed and self.size.y <= 0 then
-    return
-  elseif collapsed and self.size.y > 0 then
-    self:move_towards(self.size, "y", 0, nil, "statusbar")
-    return
-  end
-
-  local height = statusbar_font():get_height() + style.padding.y * 2;
-
-  if self.size.y + 1 < height then
-    self:move_towards(self.size, "y", height, nil, "statusbar")
-  else
-    self.size.y = height
-  end
-
-  local now = system.get_time()
-  if self.message and now < self.message_timeout then
-    self.scroll.to.y = self.size.y
-    if now - self.message_pulse_start < MESSAGE_PULSE_DURATION then
-      core.redraw = true
-    end
-  else
-    self.scroll.to.y = 0
-  end
-
-  StatusBar.super.update(self)
-
-  self:update_active_items()
-end
-
-
----Get item hover state and background color.
----@param self core.statusbar
----@param item core.statusbar.item Item to check
----@return boolean is_hovered True if item is currently hovered
----@return renderer.color|nil color Background color to use (nil if none)
-local function get_item_bg_color(self, item)
-  local hovered = self.hovered_item == item
-
-  local item_bg = hovered
-    and item.background_color_hover or item.background_color
-
-  return hovered, item_bg
-end
-
-
----Format the current status message as styled text.
----@param self core.statusbar
----@return core.statusbar.styledtext message Styled message with icon and text
 local function get_rendered_message(self)
   return {
     self.message.icon_color, style.icon_font, self.message.icon,
-    style.dim, statusbar_font(), StatusBar.separator2, style.text, self.message.text
+    statusbar_font(), style.text, "  " .. tostring(self.message.text),
   }
 end
 
@@ -1466,85 +934,304 @@ local function get_message_pulse_yoffset(self)
 end
 
 
----Render the status bar with all active items, messages, and tooltips.
+---Rebuild the active items and lay them out as chips.
+---Right items keep their full width; left items use the space that is left.
+function StatusBar:update_active_items()
+  local m = metrics()
+  local lefts, rights = {}, {}
+  self.active_items = {}
+
+  for _, item in ipairs(self.items) do
+    item.active = false
+    item.cached_item = nil
+    if item.visible and item:predicate() then
+      local styled, content_w
+      if item.on_draw then
+        content_w = item.on_draw(0, self.position.y, self.size.y, self.hovered_item == item, true)
+      else
+        styled = type(item.get_item) == "function" and item.get_item(item) or item.get_item
+        content_w = styled and #styled > 0 and styled_width(styled) or 0
+      end
+      if content_w > 0 then
+        item.active = true
+        item.cached_item = styled
+        item.w = content_w + m.chip * 2
+        table.insert(item.alignment == StatusBar.Item.RIGHT and rights or lefts, item)
+      end
+    end
+  end
+
+  local x = self.size.x - m.edge
+  for i = #rights, 1, -1 do
+    local item = rights[i]
+    x = x - item.w
+    item.x = x
+    item.visible_w = item.w
+    x = x - m.gap
+  end
+  local right_start = #rights > 0 and x + m.gap or self.size.x - m.edge
+  self.left_limit = math.max(m.edge, right_start - style.padding.x)
+
+  x = m.edge
+  for _, item in ipairs(lefts) do
+    if item.shrink then item.w = math.max(0, math.min(item.w, self.left_limit - x)) end
+    item.x = x
+    item.visible_w = math.max(0, math.min(item.w, self.left_limit - x))
+    x = x + item.w + m.gap
+  end
+
+  local message = self.message_item
+  if message_active(self) then
+    message.active = true
+    message.x = m.edge
+    message.w = styled_width(get_rendered_message(self)) + m.chip * 2
+    message.visible_w = math.max(0, math.min(message.w, self.left_limit - m.edge))
+  else
+    message.active = false
+  end
+
+  for _, item in ipairs(lefts) do table.insert(self.active_items, item) end
+  for _, item in ipairs(rights) do table.insert(self.active_items, item) end
+end
+
+
+---Find the item under a point.
+---@param x number
+---@param y number
+---@return core.statusbar.item|nil
+function StatusBar:get_item_at(x, y)
+  if y < self.position.y or y >= self.position.y + self.size.y then return nil end
+  local rx = x - self.position.x
+  local function hit(item)
+    return item.active and item.visible_w > 0 and rx >= item.x and rx < item.x + item.visible_w
+  end
+  if self.message_item.active and hit(self.message_item) then return self.message_item end
+  local left_replaced = self.message_item.active or self.tooltip_mode
+  for _, item in ipairs(self.active_items) do
+    if (item.alignment == StatusBar.Item.RIGHT or not left_replaced) and hit(item) then
+      return item
+    end
+  end
+end
+
+
+local function set_hovered(self, item)
+  if self.hovered_item == item then return end
+  self.hovered_item = item
+  self.hover_start = system.get_time()
+  self.tooltip_dismissed = nil
+  core.redraw = true
+end
+
+
+---Keep focus in the editor; a left press arms the clicked item.
+---@param button string Mouse button identifier
+---@param x number Mouse x coordinate
+---@param y number Mouse y coordinate
+---@param clicks number Number of clicks
+---@return boolean
+function StatusBar:on_mouse_pressed(button, x, y, clicks)
+  if not self.visible then return end
+  if core.last_active_view then core.set_active_view(core.last_active_view) end
+  local item = self:get_item_at(x, y)
+  set_hovered(self, item)
+  if button == "left" and item and item:is_clickable() then
+    self.pressed_item = item
+    self.tooltip_dismissed = item
+    core.redraw = true
+  end
+  return true
+end
+
+
+---Handle mouse leaving the status bar area.
+function StatusBar:on_mouse_left()
+  StatusBar.super.on_mouse_left(self)
+  set_hovered(self, nil)
+  self.pressed_item = nil
+  self.cursor = "arrow"
+end
+
+
+---Track the hovered item and show the hand cursor over items with actions.
+---@param x number Mouse x coordinate
+---@param y number Mouse y coordinate
+---@param dx number Delta x movement
+---@param dy number Delta y movement
+function StatusBar:on_mouse_moved(x, y, dx, dy)
+  if not self.visible then return end
+  StatusBar.super.on_mouse_moved(self, x, y, dx, dy)
+  local item = self:get_item_at(x, y)
+  set_hovered(self, item)
+  self.cursor = item and item:is_clickable() and "hand" or "arrow"
+end
+
+
+---Run the pressed item's action when the release lands on the same item.
+---@param button string Mouse button identifier
+---@param x number Mouse x coordinate
+---@param y number Mouse y coordinate
+function StatusBar:on_mouse_released(button, x, y)
+  if not self.visible then return end
+  StatusBar.super.on_mouse_released(self, button, x, y)
+  local pressed = self.pressed_item
+  self.pressed_item = nil
+  if button ~= "left" or not pressed then return end
+  core.redraw = true
+  if self:get_item_at(x, y) ~= pressed or not pressed:is_clickable() then return end
+  core.log_quiet("Status Bar item clicked: %s", pressed.name)
+  if pressed.command then
+    command.perform(pressed.command)
+  elseif pressed.on_click then
+    pressed.on_click(button, x, y)
+  end
+end
+
+
+---Update status bar height, message state, and active items.
+function StatusBar:update()
+  local collapsed = not self.visible
+  if collapsed and self.size.y <= 0 then
+    return
+  elseif collapsed and self.size.y > 0 then
+    self:move_towards(self.size, "y", 0, nil, "statusbar")
+    return
+  end
+
+  local height = statusbar_font():get_height() + common.round(3 * SCALE) * 2
+
+  if self.size.y + 1 < height then
+    self:move_towards(self.size, "y", height, nil, "statusbar")
+  else
+    self.size.y = height
+  end
+
+  local now = system.get_time()
+  if self.message then
+    if now > self.message_timeout then
+      self.message = nil
+      core.redraw = true
+    elseif now - self.message_pulse_start < MESSAGE_PULSE_DURATION then
+      core.redraw = true
+    end
+  end
+
+  -- Redraw until a pending hover tooltip appears.
+  local hovered = self.hovered_item
+  if hovered and hovered ~= self.tooltip_dismissed and now - self.hover_start < TOOLTIP_DELAY then
+    core.redraw = true
+  end
+
+  StatusBar.super.update(self)
+
+  self:update_active_items()
+end
+
+
+local function tooltip_lines(text, hint)
+  local lines = {}
+  for line in (tostring(text or "") .. "\n"):gmatch("(.-)\n") do
+    if line ~= "" then table.insert(lines, { style.text, line }) end
+  end
+  if hint then table.insert(lines, { style.dim, hint }) end
+  return lines
+end
+
+---Draw the hover tooltip of an item above the Status Bar.
+---@param item core.statusbar.item
+function StatusBar:draw_item_tooltip(item)
+  local text, hint = item:get_tooltip()
+  local lines = tooltip_lines(text, hint)
+  if #lines == 0 then return end
+  self.tooltip_shown_at = system.get_time()
+  core.root_panel:defer_draw(function()
+    local font = statusbar_font()
+    local line_h = font:get_height()
+    local pad_x, pad_y = common.round(style.padding.x * 0.6), common.round(style.padding.y * 0.6)
+    local w = 0
+    for _, line in ipairs(lines) do w = math.max(w, font:get_width(line[2])) end
+    w = w + pad_x * 2
+    local h = line_h * #lines + pad_y * 2
+    local x = common.clamp(self.position.x + item.x, self.position.x, self.position.x + self.size.x - w)
+    local y = self.position.y - h - common.round(4 * SCALE)
+    local radius = common.round(4 * SCALE)
+    renderer.draw_rounded_rect(x - 1, y - 1, w + 2, h + 2, radius + 1, style.divider)
+    renderer.draw_rounded_rect(x, y, w, h, radius, style.background3)
+    local ty = y + pad_y
+    for _, line in ipairs(lines) do
+      renderer.draw_text(font, line[2], common.round(x + pad_x), common.round(ty), line[1])
+      ty = ty + line_h
+    end
+  end)
+end
+
+
+---Render the status bar.
 function StatusBar:draw()
   if not self.visible and self.size.y <= 0 then return end
 
-  local background = style.background
+  local m = metrics()
+  local x0, y0, h = self.position.x, self.position.y, self.size.y
   local ds = style.divider_size or 0
-  renderer.draw_rect(self.position.x, self.position.y - ds, self.size.x, self.size.y + ds,
-    style.wallpaper_surface(background))
+  renderer.draw_rect(x0, y0 - ds, self.size.x, h + ds, style.wallpaper_surface(style.background))
 
-  if self.message and system.get_time() <= self.message_timeout then
-    self:draw_items(get_rendered_message(self), false, 0, self.size.y + get_message_pulse_yoffset(self))
-  else
-    if self.message then self.message = nil end
-    if self.tooltip_mode then
-      self:draw_items(self.tooltip)
+  local function draw_chip_background(item)
+    if not item:is_clickable() or item.visible_w <= 0 then return end
+    local color
+    if self.pressed_item == item and self.hovered_item == item then
+      color = style.titlebar_control_pressed
+    elseif self.hovered_item == item and not self.pressed_item then
+      color = style.titlebar_control_hover
     end
-    if #self.active_items > 0 then
-      --- draw left pane
-      core.push_clip_rect(
-        self.position.x, self.position.y,
-        self.left_width + style.padding.x, self.size.y
-      )
-      for _, item in ipairs(self.active_items) do
-        local item_x = self.position.x + self.left_xoffset + item.x + style.padding.x
-        local hovered, item_bg = get_item_bg_color(self, item)
-        if item.alignment == StatusBar.Item.LEFT and not self.tooltip_mode then
-          if type(item_bg) == "table" then
-            renderer.draw_rect(
-              item_x, self.position.y,
-              item.w, self.size.y, item_bg
-            )
-          end
-          if item.on_draw then
-            core.push_clip_rect(item_x, self.position.y, item.w, self.size.y)
-            item.on_draw(item_x, self.position.y, self.size.y, hovered)
-            core.pop_clip_rect()
-          else
-            self:draw_items(item.cached_item, false, item_x - self.position.x - style.padding.x)
-          end
-        end
-      end
-      core.pop_clip_rect()
+    if color then
+      renderer.draw_rounded_rect(x0 + item.x, y0 + m.inset, item.visible_w, h - m.inset * 2, m.radius, color)
+    end
+  end
 
-      --- draw right pane
-      core.push_clip_rect(
-        self.position.x + self.size.x - (self.right_width + style.padding.x), self.position.y,
-        self.right_width + style.padding.x, self.size.y
-      )
-      for _, item in ipairs(self.active_items) do
-        local item_x = self.position.x + self.right_xoffset + item.x + style.padding.x
-        local hovered, item_bg = get_item_bg_color(self, item)
-        if item.alignment == StatusBar.Item.RIGHT then
-          if type(item_bg) == "table" then
-            renderer.draw_rect(
-              item_x, self.position.y,
-              item.w, self.size.y, item_bg
-            )
-          end
-          if item.on_draw then
-            core.push_clip_rect(item_x, self.position.y, item.w, self.size.y)
-            item.on_draw(item_x, self.position.y, self.size.y, hovered)
-            core.pop_clip_rect()
-          else
-            self:draw_items(item.cached_item, false, item_x - self.position.x - style.padding.x)
-          end
-        end
-      end
+  local function draw_item(item)
+    draw_chip_background(item)
+    local cx = x0 + item.x + m.chip
+    if item.on_draw then
+      core.push_clip_rect(x0 + item.x, y0, item.visible_w, h)
+      item.on_draw(cx, y0, h, self.hovered_item == item)
       core.pop_clip_rect()
+    else
+      local styled = item.cached_item
+      if item.shrink then styled = elide_start(styled, item.w - m.chip * 2) end
+      draw_styled(styled, cx, y0, h)
+    end
+  end
 
-      -- draw tooltip
-      if self.hovered_item.tooltip ~= "" and self.hovered_item.active then
-        self:draw_item_tooltip(self.hovered_item)
-      end
+  core.push_clip_rect(x0, y0, self.left_limit, h)
+  if self.message_item.active and self.message then
+    local message = self.message_item
+    draw_chip_background(message)
+    local styled = elide_start(get_rendered_message(self), message.visible_w - m.chip * 2)
+    draw_styled(styled, x0 + message.x + m.chip, y0 + get_message_pulse_yoffset(self), h)
+  elseif self.tooltip_mode then
+    draw_styled(elide_start(self.tooltip, self.left_limit - m.edge - m.chip), x0 + m.edge + m.chip, y0, h)
+  else
+    for _, item in ipairs(self.active_items) do
+      if item.alignment == StatusBar.Item.LEFT then draw_item(item) end
+    end
+  end
+  core.pop_clip_rect()
+
+  for _, item in ipairs(self.active_items) do
+    if item.alignment == StatusBar.Item.RIGHT then draw_item(item) end
+  end
+
+  local hovered = self.hovered_item
+  if hovered and hovered.active and hovered ~= self.tooltip_dismissed then
+    local now = system.get_time()
+    if now - self.hover_start >= TOOLTIP_DELAY or now - self.tooltip_shown_at < TOOLTIP_GRACE then
+      self:draw_item_tooltip(hovered)
     end
   end
 
   -- The status bar view is clipped to its node, so draw the border inside its
   -- top edge rather than in the divider space above it.
-  renderer.draw_rect(self.position.x, self.position.y, self.size.x, ds, style.divider)
+  renderer.draw_rect(x0, y0, self.size.x, ds, style.divider)
 end
 
 return StatusBar

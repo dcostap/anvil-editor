@@ -8,6 +8,7 @@ local project_paths = require "core.project_paths"
 local StatusBar = require "core.statusbar"
 local config = require "core.config"
 local style = require "core.style"
+local command = require "core.command"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -109,8 +110,7 @@ test.describe("status bar caret position item", function()
     core.active_view = TextView(buffer)
 
     local item = StatusBar():get_item("text:position")
-    local width = item.on_draw(0, 0, 20, false, true)
-    test.ok(width > 0)
+    test.equal(styled_text_string(item:get_item()), "1:1")
   end)
 
   test.it("renders safely when the active view clears after layout", function()
@@ -120,11 +120,14 @@ test.describe("status bar caret position item", function()
     status_bar:update_active_items()
 
     core.active_view = nil
-    for _, item in ipairs(status_bar.active_items) do
-      if item.on_draw then
-        item.on_draw(item.x, 0, 20, false, true)
-      end
-    end
+    local originals = { renderer.draw_text, renderer.draw_rect, core.push_clip_rect, core.pop_clip_rect }
+    renderer.draw_text = function(_, _, x) return x end
+    renderer.draw_rect = function() end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    local ok, err = pcall(status_bar.draw, status_bar)
+    renderer.draw_text, renderer.draw_rect, core.push_clip_rect, core.pop_clip_rect = table.unpack(originals)
+    test.ok(ok, err)
   end)
 end)
 
@@ -193,8 +196,112 @@ test.describe("status bar pointer right of the Sidebar", function()
     status_bar:update_active_items()
 
     local position = status_bar:get_item("text:position")
-    local x = status_bar.position.x + position.x + position.w / 2 + style.padding.x
+    local x = status_bar.position.x + position.x + position.w / 2
     status_bar:on_mouse_moved(x, 610, 0, 0)
     test.equal(status_bar.hovered_item, position)
+  end)
+end)
+
+test.describe("status bar clicks", function()
+  test.before_each(function(context)
+    context.original_active_view = core.active_view
+    context.original_last_active_view = core.last_active_view
+    context.original_perform = command.perform
+    context.performed = {}
+    command.perform = function(name, ...)
+      context.performed[#context.performed + 1] = name
+      return true
+    end
+  end)
+
+  test.after_each(function(context)
+    core.active_view = context.original_active_view
+    core.last_active_view = context.original_last_active_view
+    command.perform = context.original_perform
+  end)
+
+  local function make_status_bar()
+    local buffer = Buffer(nil, nil, true)
+    buffer:set_filename("src" .. PATHSEP .. "Type.cpp")
+    local view = TextView(buffer)
+    core.active_view = view
+    core.last_active_view = view
+    local status_bar = StatusBar()
+    status_bar.position.x, status_bar.position.y = 0, 600
+    status_bar.size.x, status_bar.size.y = 1000, 24
+    status_bar:update_active_items()
+    return status_bar, buffer
+  end
+
+  local function click(status_bar, x)
+    local y = status_bar.position.y + status_bar.size.y / 2
+    status_bar:on_mouse_moved(x, y, 0, 0)
+    status_bar:on_mouse_pressed("left", x, y, 1)
+    status_bar:on_mouse_released("left", x, y)
+  end
+
+  local function item_center(status_bar, name)
+    local item = test.not_nil(status_bar:get_item(name))
+    return status_bar.position.x + item.x + item.w / 2
+  end
+
+  test.it("does not open the log when empty space is clicked during a message", function(context)
+    local status_bar = make_status_bar()
+    status_bar:show_message("i", style.text, "Saved")
+    status_bar:update_active_items()
+    click(status_bar, status_bar.position.x + status_bar.size.x / 2)
+    test.same(context.performed, {})
+  end)
+
+  test.it("opens Go To Line from the caret position", function(context)
+    local status_bar = make_status_bar()
+    click(status_bar, item_center(status_bar, "text:position"))
+    test.same(context.performed, { "editor:go_to_line" })
+  end)
+
+  test.it("asks for a line ending instead of toggling it on a click", function(context)
+    local status_bar = make_status_bar()
+    click(status_bar, item_center(status_bar, "text:line-ending"))
+    test.same(context.performed, { "editor:select_line_ending" })
+  end)
+end)
+
+test.describe("status bar narrow width", function()
+  test.before_each(function(context)
+    context.original_active_view = core.active_view
+    context.originals = { renderer.draw_text, renderer.draw_rect, renderer.draw_rounded_rect, core.push_clip_rect, core.pop_clip_rect }
+  end)
+
+  test.after_each(function(context)
+    core.active_view = context.original_active_view
+    renderer.draw_text, renderer.draw_rect, renderer.draw_rounded_rect, core.push_clip_rect, core.pop_clip_rect =
+      table.unpack(context.originals)
+  end)
+
+  test.it("shortens a long path from the start and keeps the file name", function()
+    local dirs = {}
+    for i = 1, 30 do dirs[i] = "directory" .. i end
+    local buffer = Buffer(nil, nil, true)
+    buffer:set_filename(table.concat(dirs, PATHSEP) .. PATHSEP .. "Type.cpp")
+    core.active_view = TextView(buffer)
+    local status_bar = StatusBar()
+    status_bar.position.x, status_bar.position.y = 0, 600
+    status_bar.size.x, status_bar.size.y = 500, 24
+    status_bar:update_active_items()
+
+    local drawn = {}
+    renderer.draw_text = function(font, text, x)
+      drawn[#drawn + 1] = tostring(text)
+      return x + font:get_width(tostring(text))
+    end
+    renderer.draw_rect = function() end
+    renderer.draw_rounded_rect = function() end
+    core.push_clip_rect = function() end
+    core.pop_clip_rect = function() end
+    status_bar:draw()
+
+    local text = table.concat(drawn)
+    test.ok(text:find("Type.cpp", 1, true), "the file name was not drawn")
+    test.ok(not text:find("directory1" .. PATHSEP, 1, true), "the start of the path was not shortened")
   end)
 end)

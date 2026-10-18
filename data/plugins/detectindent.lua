@@ -473,7 +473,45 @@ local function set_indent_size_command(dv)
 end
 
 
+local function parse_indentation(text)
+  local kind, size = text:lower():match("^%s*(%a+)%s*:?%s*(%d+)%s*$")
+  size = tonumber(size)
+  if not size or size < 1 then return nil end
+  if kind == "tabs" or kind == "tab" then return "hard", size end
+  if kind == "spaces" or kind == "space" then return "soft", size end
+end
+
+local function set_indentation_command(dv)
+  local current_type, current_size = dv.buffer:get_indent_info()
+  local current = string.format("%s: %d", current_type == "hard" and "Tabs" or "Spaces", current_size)
+  local mt = { __tostring = function(x) return x.text end }
+  local choices = {}
+  for _, choice in ipairs { "Spaces: 2", "Spaces: 4", "Spaces: 8", "Tabs: 2", "Tabs: 4", "Tabs: 8" } do
+    table.insert(choices, setmetatable({
+      text = choice,
+      info = choice == current and "current" or nil,
+    }, mt))
+  end
+  core.global_prompt_bar:enter("Indentation for this file", {
+    submit = function(text, item)
+      local type, size = parse_indentation(item and item.text or text)
+      if not type then return end
+      cache[dv.buffer] = { type = type, size = size, confirmed = true }
+      dv.buffer.indent_info = cache[dv.buffer]
+      core.log_quiet("Indentation set from picker: %s %d for %s", type, size, dv.buffer:get_name())
+    end,
+    suggest = function(text)
+      return common.fuzzy_match(choices, text)
+    end,
+    validate = function(text, item)
+      return parse_indentation(item and item.text or text) ~= nil
+    end
+  })
+end
+
+
 command.add("core.textview", {
+  ["editor:set_file_indentation"] = command.palette(set_indentation_command),
   ["editor:set_file_indent_type"] = command.palette(set_indent_type_command),
   ["editor:set_file_indent_size"] = command.palette(set_indent_size_command)
 })
