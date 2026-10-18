@@ -588,11 +588,23 @@ function footnotes.add(view)
   -- A blank line keeps the definition apart from the block that follows.
   local follows = anchor < #buffer.lines and not is_blank(line_text(buffer, anchor + 1))
   local anchor_end = #line_text(buffer, anchor) + 1
-  buffer:apply_edits({
-    { line1 = line, col1 = col, line2 = line, col2 = col, text = reference },
-    { line1 = anchor, col1 = anchor_end, line2 = anchor, col2 = anchor_end,
-      text = "\n\n" .. prefix .. (follows and "\n" or "") },
-  }, { type = "markdown-footnote", reason = "add" })
+  local definition = "\n\n" .. prefix .. (follows and "\n" or "")
+  local edits
+  if line == anchor and col == anchor_end then
+    -- A reference after the block's last word meets the definition.
+    edits = { { line1 = line, col1 = col, line2 = line, col2 = col, text = reference .. definition } }
+  else
+    edits = {
+      { line1 = line, col1 = col, line2 = line, col2 = col, text = reference },
+      { line1 = anchor, col1 = anchor_end, line2 = anchor, col2 = anchor_end, text = definition },
+    }
+  end
+  local transaction = buffer:apply_edits(edits, { type = "markdown-footnote", reason = "add" })
+  if transaction.rejected then
+    core.log_quiet("Footnote %s not added at %s:%d: %s",
+      label, buffer:get_name(), line, tostring(transaction.reason))
+    return nil
+  end
   local note = {
     label = label, line = line, col1 = col, col2 = col + #reference,
     definition_line = anchor + 2,

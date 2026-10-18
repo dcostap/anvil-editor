@@ -167,6 +167,15 @@ test.describe("Markdown footnotes", function()
       "From Terrahawks[^1] it went[^2] on.\n\n[^1]: A great show.\n\n[^2]: Later\n\nend")
   end)
 
+  test.it("adds a footnote after the last word of a one-line paragraph", function(context)
+    local view, buffer = open_note_view(context, "From Terrahawks it went\n\nend")
+    buffer:set_selection(1, 21)
+    test.ok(command.perform("markdown:add_footnote"))
+    footnotes.editing_input(view):on_text_input("What a show")
+    test.ok(command.perform("markdown:save_footnote"))
+    test.equal(document_text(buffer), "From Terrahawks it went[^1]\n\n[^1]: What a show\n\nend")
+  end)
+
   test.it("leaves the text unchanged when a new footnote is cancelled", function(context)
     local source = "From Terrahawks it went.\n\nend"
     local view, buffer = open_note_view(context, source)
