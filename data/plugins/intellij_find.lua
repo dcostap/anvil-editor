@@ -1511,9 +1511,7 @@ command.add(active_find_state, {
     if state.mode == "replace" and state.focus == "replace" then
       replace_current_match(view, state)
     else
-      state.input_active = false
-      core.set_active_view(view)
-      core.redraw = true
+      navigate(view, state, false)
     end
   end,
   ["editor:find_replace_all_confirm"] = function(view, state)

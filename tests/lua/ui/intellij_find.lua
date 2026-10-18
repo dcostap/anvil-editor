@@ -102,6 +102,23 @@ test.describe("TextView Prompt Bar find", function()
     assert_selection(view, 1, 1, 1, 6)
   end)
 
+  test.it("submitting Find moves to the next match and keeps the input focused", function(context)
+    local view, buffer = open_editor(context, "hit first\nhit second\n")
+    test.ok(command.perform("editor:find"))
+    local input = active_find_input_for(view)
+    input:set_text("hit")
+    assert_selection(view, 1, 1, 1, 4)
+
+    test.ok(command.perform("editor:find_submit_or_replace"))
+    assert_selection(view, 2, 1, 2, 4)
+    test.equal(core.active_view, input)
+
+    test.ok(command.perform("editor:find_submit_or_replace"))
+    assert_selection(view, 1, 1, 1, 4)
+    test.equal(core.active_view, input)
+    test.equal(table.concat(buffer.lines), "hit first\nhit second\n\n")
+  end)
+
   test.it("preserves the position before local find when closing the search", function(context)
     local old_options = config.plugins.navigation_history
     config.plugins.navigation_history = {
@@ -289,7 +306,7 @@ test.describe("TextView Prompt Bar find", function()
     test.ok(visited[input] and visited[diff.buffer_view_a] and visited[diff.buffer_view_b],
       "cycle must include the prompt and both Diff Sides")
     test.equal(core.active_view, input)
-    test.ok(command.perform("editor:find_submit_or_replace"))
+    core.set_active_view(diff.buffer_view_a)
     test.equal(core.active_view, diff.buffer_view_a)
     test.ok(command.perform("editor:find_close"))
   end)
@@ -420,7 +437,7 @@ test.describe("TextView Prompt Bar find", function()
     test.ok(rects[#rects].selected, "selected marker must cover overlapping matches")
     test.equal(rects[#rects].y, first)
 
-    test.ok(command.perform("editor:find_submit_or_replace"))
+    core.set_active_view(view)
     test.equal(core.active_view, view)
     test.same(markers(), rects, "leaving search input must retain the markers")
 
