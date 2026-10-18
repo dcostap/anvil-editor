@@ -4,9 +4,51 @@ local config = require "core.config"
 local Editor = require "core.editor"
 local markdown_completion = require "core.markdown.completion"
 local markdown_live = require "core.markdown.live_render"
+local margin_notes = require "core.markdown.margin_notes"
 local markdown_tables = require "core.markdown.tables"
 local markdown_rename_links = require "core.markdown.rename_links"
 local markdown_vault_index = require "core.markdown.vault_index"
+
+local function live_preview_editor()
+  local view = core.active_view
+  if view and view:extends(Editor) and markdown_live.is_live_mode(view) then
+    return true, view
+  end
+  return false
+end
+
+command.add(live_preview_editor, {
+  ["markdown:add_margin_note"] = command.palette(function(view)
+    margin_notes.add(view)
+  end),
+})
+
+command.add(function()
+  local ok, view = live_preview_editor()
+  local note = ok and margin_notes.note_at_caret(view)
+  if note then return true, view, note end
+  return false
+end, {
+  ["markdown:edit_margin_note"] = command.palette(function(view, note)
+    margin_notes.begin_edit(view, note)
+  end),
+  ["markdown:remove_margin_note"] = command.palette(function(view, note)
+    margin_notes.remove(view, note)
+  end),
+})
+
+command.add(function()
+  local owner = margin_notes.input_owner(core.active_view)
+  if owner then return true, owner end
+  return false
+end, {
+  ["markdown:save_margin_note"] = function(view)
+    margin_notes.commit_edit(view)
+  end,
+  ["markdown:cancel_margin_note"] = function(view)
+    margin_notes.cancel_edit(view)
+  end,
+})
 
 local function alternate_list_item_checkbox(view)
   local buffer = view.buffer

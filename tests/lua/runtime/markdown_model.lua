@@ -268,6 +268,7 @@ test.describe("Markdown semantic model", function()
     test.equal(text(point.attributes.margin_note_body), "aside")
     test.equal(strong_count, 1)
     test.equal(emphasis_count, 0)
+    test.equal(instance:margin_note_count(), 2)
     markdown_model.close(buffer, "test")
   end)
 

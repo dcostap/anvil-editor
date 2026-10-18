@@ -193,6 +193,25 @@ SCENARIOS["markdown-open"] = dict(
     window_width=900, window_height=560, open_sections=5,
 )
 SCENARIOS["markdown-open-long"] = dict(SCENARIOS["markdown-open"], open_sections=24)
+# Margin Note cards beside a Live Preview lane, including two on one line.
+SCENARIOS["markdown-margin-notes"] = {
+    "fixture": "markdown-margin-notes",
+    "start_line": 1,
+    "window_width": 1400,
+    "window_height": 700,
+    "visual": True,
+    "paced": False,
+}
+MARGIN_NOTES_SOURCE = """# Chapter one
+
+From {==Terrahawks==}{>>A great show. Check the air dates before the next draft goes out.<<} it went
+on to {==Space Precinct==}{>>Later.<<} and then to {==Captain Scarlet==}{>>Remake?<<}.
+
+A plain paragraph between the notes that wraps across more than one visual row in a wide view,
+so that the cards have some room to settle beside their anchors.
+
+Here a point note {>>Point notes have no anchor text.<<}sits in the sentence.
+"""
 OPEN_NOTE_SECTION = """## Section {index}
 
 A paragraph with **bold**, *italic*, `code`, a [link](https://example.com/{index}) and a
@@ -927,6 +946,9 @@ def run_case(
         work / "fixtures" / "markdown-long-link.md"
         if settings.get("fixture") == "markdown-long-link" else fixture
     )
+    if settings.get("fixture") == "markdown-margin-notes":
+        case_fixture = work / "fixtures" / "markdown-margin-notes.md"
+        case_fixture.write_text(MARGIN_NOTES_SOURCE, encoding="utf-8", newline="\n")
     if settings.get("fixture") == "video-callout":
         case_fixture = work / "fixtures" / "markdown-callout.md"
     elif settings.get("fixture") == "video-task":

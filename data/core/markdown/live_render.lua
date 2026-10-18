@@ -8,6 +8,7 @@ local images = require "core.markdown.images"
 local image_animation = require "core.image_animation"
 local fence_highlight = require "core.markdown.fence_highlight"
 local link_completion = require "core.markdown.completion"
+local margin_notes = require "core.markdown.margin_notes"
 local live_fonts = require "core.markdown.live_fonts"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
@@ -201,6 +202,8 @@ semantic_line = function(view, line)
   return nodes ~= false and nodes or nil, instance.generation
 end
 
+margin_notes.nodes_for_line = function(view, line) return (semantic_line(view, line)) end
+
 local function line_in_semantic_comment(view, line)
   local nodes = semantic_line(view, line)
   for _, node in ipairs(nodes or {}) do
@@ -227,6 +230,7 @@ local REVEAL_TYPES = {
   tag = true,
   hard_break = true,
   math = true,
+  margin_note = true,
 }
 
 local function list_marker_has_gap(line_text, marker)
@@ -554,12 +558,46 @@ local FORMATTING_TYPES = {
   code = true,
 }
 
+-- A margin note presents its anchor as tinted text. Its anchor delimiters
+-- and its whole `{>>body<<}` are hidden syntax; the body shows in the margin.
+local function margin_note_formatting_span(node, line_text, line, generation)
+  local attributes = node.attributes or {}
+  local anchor = attributes.margin_note_anchor
+  local markers = {}
+  if attributes.margin_note_anchor_open then
+    markers[#markers + 1] = attributes.margin_note_anchor_open
+    markers[#markers + 1] = attributes.margin_note_anchor_close
+  end
+  local body_open = attributes.margin_note_body_open
+  if body_open then
+    markers[#markers + 1] = {
+      line1 = line, line2 = line,
+      col1 = body_open.col1, col2 = attributes.margin_note_body_close.col2,
+    }
+  end
+  local content_col1 = anchor and anchor.col1 or node.source.col1
+  local content_col2 = anchor and anchor.col2 or node.source.col1
+  return {
+    type = "margin_note",
+    line = line,
+    col1 = node.source.col1,
+    col2 = node.source.col2,
+    markers = markers,
+    text = line_text:sub(content_col1, content_col2 - 1),
+    content_ranges = { { line = line, col1 = content_col1, col2 = content_col2 } },
+    semantic_id = node.id,
+    semantic_generation = generation,
+  }
+end
+
 local function semantic_formatting_spans(view, line_text, line)
   local nodes, generation = semantic_line(view, line)
   if not nodes then return nil end
   local spans = {}
   for _, node in ipairs(nodes) do
-    if FORMATTING_TYPES[node.type] and node.source.line1 == line and node.source.line2 == line then
+    if node.type == "margin_note" and node.source.line1 == line and node.source.line2 == line then
+      spans[#spans + 1] = margin_note_formatting_span(node, line_text, line, generation)
+    elseif FORMATTING_TYPES[node.type] and node.source.line1 == line and node.source.line2 == line then
       local markers = {}
       for _, marker in ipairs(node.marker_ranges or {}) do markers[#markers + 1] = marker end
       table.sort(markers, function(a, b) return a.col1 < b.col1 end)
@@ -736,12 +774,14 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
       end
       local function composed_fragment(extra_id)
         local bold, italic, strike, highlight, code = false, false, false, false, false
+        local note = false
         local ids = {}
         for _, span in ipairs(active_spans) do
           bold = bold or span.type == "strong"
           italic = italic or span.type == "emphasis"
           strike = strike or span.type == "strikethrough"
           highlight = highlight or span.type == "highlight"
+          note = note or span.type == "margin_note"
           code = code or span.type == "code"
           ids[#ids + 1] = span.semantic_id
         end
@@ -763,7 +803,8 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
           color = opts.color or normal_text_color(),
           strikethrough = strike or nil,
           background = code and style.markdown_live_inline_code_bg
-            or highlight and style.markdown_live_highlight_bg or nil,
+            or highlight and style.markdown_live_highlight_bg
+            or note and style.markdown_live_margin_note_bg or nil,
           background_under_selection = code or nil,
           semantic_id = table.concat(ids, "+"),
         }
@@ -1429,7 +1470,7 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     fragment.color = missing and style.markdown_live_link_error or style.markdown_live_link
     fragment.underline = true
   end
-  local bold, italic, strike, highlight = false, false, false, false
+  local bold, italic, strike, highlight, note = false, false, false, false, false
   local code = fragment.code_label or false
   local ids = { span.semantic_id }
   for _, formatting in ipairs(semantic_formatting_spans(view, "", line) or {}) do
@@ -1439,6 +1480,7 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
       italic = italic or formatting.type == "emphasis"
       strike = strike or formatting.type == "strikethrough"
       highlight = highlight or formatting.type == "highlight"
+      note = note or formatting.type == "margin_note"
       code = code or formatting.type == "code"
       ids[#ids + 1] = formatting.semantic_id
     end
@@ -1455,7 +1497,8 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     or opts.base_font or fragment.font
   fragment.strikethrough = strike or nil
   fragment.background = code and style.markdown_live_inline_code_bg
-    or highlight and style.markdown_live_highlight_bg or fragment.background
+    or highlight and style.markdown_live_highlight_bg
+    or note and style.markdown_live_margin_note_bg or fragment.background
   fragment.background_under_selection = code or nil
   fragment.semantic_id = #ids > 0 and table.concat(ids, "+") or fragment.semantic_id
   return fragment
@@ -5098,6 +5141,10 @@ view_in_source_mode = function(view)
   return owner and owner.source_mode == true
 end
 
+margin_notes.presents_formatting = function(view)
+  return view.__markdown_live_attached == true and not view_in_source_mode(view)
+end
+
 local function fenced_code_for_line(view, line)
   for _, node in ipairs(semantic_line(view, line) or {}) do
     if node.type == "code_fenced" then
@@ -7355,6 +7402,7 @@ function live.attach(view)
   if view.__markdown_live_attached then return false end
   ensure_owner(view)
   live._install_code_copy_hover(view)
+  margin_notes.attach(view)
   -- All providers must observe the reading lane during their installation.
   view.__markdown_live_attached = true
   view:add_visual_metric_provider(PROVIDER_ID, provider)
@@ -7425,6 +7473,7 @@ end
 function live.detach(view)
   if not (view and view.__markdown_live_attached) then return false end
   live._remove_code_copy_hover(view)
+  margin_notes.detach(view)
   unbind_link_index(view)
   unbind_fence_service(view)
   unbind_semantic_model(view)

@@ -206,6 +206,7 @@ struct AnvilWorkerTreeSitterIndexResult {
   bool outline_query_reusable;
   uint32_t reused_block_capture_count;
   uint32_t reused_inline_count;
+  uint32_t markdown_margin_note_count;
   AnvilMarkdownTree *markdown_tree;
   AnvilTSProjectFileResult *project_file;
   AnvilWorkerTreeSitterQueryResult outline;
@@ -691,6 +692,12 @@ uint32_t anvil_worker_treesitter_index_result_reused_block_capture_count(const A
 
 uint32_t anvil_worker_treesitter_index_result_reused_inline_count(const AnvilWorkerTreeSitterIndexResult *result) {
   return result ? result->reused_inline_count : 0;
+}
+
+uint32_t anvil_worker_treesitter_index_result_markdown_margin_note_count(
+  const AnvilWorkerTreeSitterIndexResult *result
+) {
+  return result ? result->markdown_margin_note_count : 0;
 }
 
 uint64_t anvil_worker_treesitter_index_result_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
@@ -1562,6 +1569,7 @@ static TSPoint markdown_snapshot_point(const AnvilTSSnapshot *snapshot, uint32_t
 
 typedef struct MarkdownExtensionCollector {
   AnvilWorkerTreeSitterQueryResult *query;
+  uint32_t *margin_note_count;
   const AnvilTSSnapshot *snapshot;
   uint32_t max_captures;
   bool limit_reached;
@@ -1593,6 +1601,7 @@ static bool collect_markdown_extension_capture(
     collector->out_of_memory = true;
     return false;
   }
+  if (strcmp(capture->name, "span.margin_note") == 0) (*collector->margin_note_count)++;
   return true;
 }
 
@@ -2399,8 +2408,10 @@ static AnvilWorkerTreeSitterIndexResult *execute_markdown_parse(
 
   uint32_t exclusion_count = 0;
   AnvilMarkdownExclusion *exclusions = markdown_exclusions_build(index_result, &exclusion_count);
+  index_result->markdown_margin_note_count = 0;
   MarkdownExtensionCollector extension_collector = {
     .query = &index_result->usage,
+    .margin_note_count = &index_result->markdown_margin_note_count,
     .snapshot = snapshot,
     .max_captures = job->usage_max_captures
       ? job->usage_max_captures

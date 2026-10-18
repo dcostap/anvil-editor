@@ -272,6 +272,7 @@ function Model:publish(result, revision, signature, generation, changed_range)
   self.published_metadata = signature
   self.published_byte_len = summary.byte_len or 0
   self.published_line_count = summary.line_count or 0
+  self.published_margin_note_count = summary.margin_note_count or 0
   self.diagnostics.published = self.diagnostics.published + 1
   self.diagnostics.last_parse_ms = summary.metrics and summary.metrics.parse_ms or 0
   self.diagnostics.last_total_ms = summary.metrics and summary.metrics.total_ms or 0
@@ -593,6 +594,11 @@ function Model:probe_list_markers()
   end
   self.list_probe = markers
   return markers
+end
+
+-- The number of margin notes in the published Buffer text.
+function Model:margin_note_count()
+  return self.published_margin_note_count or 0
 end
 
 function Model:status_snapshot()

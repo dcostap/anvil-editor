@@ -728,6 +728,8 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_setfield(L, -2, "byte_len");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_line_count(result->result));
   lua_setfield(L, -2, "line_count");
+  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_markdown_margin_note_count(result->result));
+  lua_setfield(L, -2, "margin_note_count");
   uint32_t changed_line1 = 0;
   uint32_t changed_line2 = 0;
   if (anvil_worker_treesitter_index_result_markdown_changed_lines(
