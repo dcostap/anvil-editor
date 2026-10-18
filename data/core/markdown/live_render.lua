@@ -2281,23 +2281,19 @@ local function semantic_break_fragments(view, line_text, line, reveal_units)
   return fragments
 end
 
-local FOOTNOTE_BADGE_SCALE = 0.8
+local FOOTNOTE_NUMBER_SCALE = 0.72
 
--- A footnote's marker shows as a badge with its number, raised like a
+-- A footnote's marker shows as its number in bold, raised like a
 -- superscript. A click on it opens the footnote's card.
 local function footnote_badge(view, node, line, number)
   local body = live_fonts.body(view)
-  local font = live_fonts.scaled(view, style.markdown_body_font,
-    body:get_size() * FOOTNOTE_BADGE_SCALE)
+  local font = live_fonts.scaled(view, style.prose_strong_font,
+    math.floor(body:get_size() * FOOTNOTE_NUMBER_SCALE + 0.5))
   local label = tostring(number)
-  local pad_x = math.max(2, math.floor(4 * SCALE))
-  local pad_y = math.max(1, math.floor(SCALE))
-  local gap = math.max(1, math.floor(2 * SCALE))
-  local pill_w = math.max(font:get_width(label) + pad_x * 2, font:get_height() + pad_y * 2)
-  local pill_h = font:get_height() + pad_y * 2
-  -- The badge keeps a gap from the word it follows. The source's own space
-  -- separates it from the next word.
-  local width = pill_w + gap
+  local gap = math.max(1, math.floor(SCALE))
+  -- The number keeps a hair of space from the word it follows. The source's
+  -- own space separates it from the next word.
+  local width = gap + font:get_width(label) + gap
   local col1 = node.source.col1
   return {
     source_col1 = col1, source_col2 = node.source.col2,
@@ -2309,14 +2305,10 @@ local function footnote_badge(view, node, line, number)
     widget = {
       wrapping = "inline", width = width, cursor = "hand",
       draw = function(_, _, x, y, row_height)
-        -- The badge's top meets the top of the line's capitals.
+        -- The number's top rises a little above the line's capitals.
         local text_top = y + math.floor((row_height - body:get_height()) / 2)
-        local top = text_top + math.floor(body:get_height() * 0.08)
-        renderer.draw_rounded_rect(x + gap, top, pill_w, pill_h,
-          math.floor(pill_h / 2), style.markdown_footnote_badge_bg)
-        renderer.draw_text(font, label,
-          x + gap + math.floor((pill_w - font:get_width(label)) / 2), top + pad_y,
-          style.markdown_live_footnote)
+        local top = text_top - math.floor(body:get_height() * 0.12)
+        renderer.draw_text(font, label, x + gap, top, style.markdown_live_footnote)
       end,
       on_mouse_pressed = function(_, owner, _, button)
         if button ~= "left" then return false end
