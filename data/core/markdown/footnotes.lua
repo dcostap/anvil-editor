@@ -744,14 +744,29 @@ function footnotes.add(view, opts)
   local anchor_line, anchor_col, line, col = buffer:get_selection(true)
   local text = line_text(buffer, line)
   if opts.on_text then
+    -- A selection of a whole line ends at the start of the next one.
+    if line == anchor_line + 1 and col == 1 then
+      line = anchor_line
+      text = line_text(buffer, line)
+      col = #text + 1
+    end
+    if anchor_line ~= line then
+      core.log_quiet("Text Note refused at %s:%d-%d: selection spans lines",
+        buffer:get_name(), anchor_line, line)
+      core.status_bar:show_message("i", style.text,
+        "Can't add a text note: the selection spans " .. (line - anchor_line + 1)
+          .. " lines. A text note can only highlight text within a single line.")
+      return nil
+    end
     -- The highlight hugs the selected words.
-    local selection = anchor_line == line and text:sub(anchor_col, col - 1) or ""
+    local selection = text:sub(anchor_col, col - 1)
     anchor_col = anchor_col + #selection:match("^%s*")
     col = col - #selection:match("%s*$")
-    if anchor_line ~= line or anchor_col >= col then
-      core.log_quiet("Note on text refused at %s:%d: selection spans lines or holds no text",
+    if anchor_col >= col then
+      core.log_quiet("Text Note refused at %s:%d: selection holds only spaces",
         buffer:get_name(), line)
-      core.status_bar:show_message("i", style.text, "Select text on one line to add a note to it")
+      core.status_bar:show_message("i", style.text,
+        "Can't add a text note: the selection is only spaces. Select the words the note is about.")
       return nil
     end
   end

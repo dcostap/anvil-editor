@@ -144,6 +144,23 @@ test.describe("Markdown footnotes", function()
     test.equal(document_text(buffer), "From ==Terra==^[What [a] show\\]]hawks it went.\n\nend")
   end)
 
+  test.it("adds a note on a whole selected line", function(context)
+    local view, buffer = open_note_view(context, "From Terrahawks\n\nend")
+    buffer:set_selection(1, 1, 2, 1)
+    test.ok(command.perform("markdown:add_text_note"))
+    footnotes.editing_input(view):on_text_input("show")
+    test.ok(command.perform("markdown:save_footnote"))
+    test.equal(document_text(buffer), "==From Terrahawks==^[show]\n\nend")
+  end)
+
+  test.it("adds no note on a selection across lines", function(context)
+    local view, buffer = open_note_view(context, "From Terra\nhawks it went.\n\nend")
+    buffer:set_selection(1, 6, 2, 3)
+    command.perform("markdown:add_text_note")
+    test.equal(footnotes.editing_input(view), nil)
+    test.equal(document_text(buffer), "From Terra\nhawks it went.\n\nend")
+  end)
+
   test.it("shows a note on highlighted text beside it without a number", function(context)
     local view, buffer = open_note_view(context,
       "A[^b] ==Terra==^[aside]hawks C[^a].\n\n[^a]: first\n\n[^b]: second\n\nend")
