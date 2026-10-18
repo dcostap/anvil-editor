@@ -259,6 +259,15 @@ test.describe("status bar clicks", function()
     test.same(context.performed, { "editor:go_to_line" })
   end)
 
+  test.it("keeps focus in the editor when an item is clicked", function(context)
+    local status_bar = make_status_bar()
+    local editor = core.active_view
+    core.last_active_view = TextView(Buffer(nil, nil, true))
+    click(status_bar, item_center(status_bar, "text:position"))
+    test.equal(core.active_view, editor)
+    test.same(context.performed, { "editor:go_to_line" })
+  end)
+
   test.it("asks for a line ending instead of toggling it on a click", function(context)
     local status_bar = make_status_bar()
     click(status_bar, item_center(status_bar, "text:line-ending"))

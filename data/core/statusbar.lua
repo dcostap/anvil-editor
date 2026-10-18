@@ -1032,7 +1032,11 @@ end
 ---@return boolean
 function StatusBar:on_mouse_pressed(button, x, y, clicks)
   if not self.visible then return end
-  if core.last_active_view then core.set_active_view(core.last_active_view) end
+  -- last_active_view is the view before the current one, so restore it only
+  -- when the Status Bar itself took focus.
+  if core.active_view == self and core.last_active_view then
+    core.set_active_view(core.last_active_view)
+  end
   local item = self:get_item_at(x, y)
   set_hovered(self, item)
   if button == "left" and item and item:is_clickable() then
