@@ -56,6 +56,8 @@ typedef struct RenCache {
   SDL_Window *window;   /* The cache can be used for both a window or surface */
   bool window_shown;
   RenSurface rensurface;
+  /* Bumped when a canvas surface changes outside its command buffer. */
+  unsigned content_version;
 #ifdef ANVIL_USE_SDL_RENDERER
   int window_width;
   int window_height;

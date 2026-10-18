@@ -15,6 +15,7 @@
 #define API_TYPE_THREAD "Thread"
 #define API_TYPE_CHANNEL "Channel"
 #define API_TYPE_CANVAS "Canvas"
+#define API_TYPE_ANIMATION "Animation"
 #define API_TYPE_PROCESS "Process"
 #define API_TYPE_DIRMONITOR "Dirmonitor"
 #define API_TYPE_NATIVE_PLUGIN "NativePlugin"

@@ -5,6 +5,7 @@ local Editor = require "core.editor"
 local attachments = require "core.markdown.attachments"
 local callouts = require "core.markdown.callouts"
 local images = require "core.markdown.images"
+local image_animation = require "core.image_animation"
 local fence_highlight = require "core.markdown.fence_highlight"
 local link_completion = require "core.markdown.completion"
 local live_fonts = require "core.markdown.live_fonts"
@@ -1035,6 +1036,24 @@ local function image_fragment(view, span, opts)
           return common.open_in_system(hit.fragment.image_path)
         end,
         draw = function(_, fragment, x, y, row_height)
+          local image_x = x + (fragment.draw_x_offset or 0)
+          local image_y
+          if fragment.draw_y_offset then
+            image_y = y + fragment.draw_y_offset
+          else
+            image_y = y + math.max(0, (row_height - height) / 2)
+          end
+          local frame = entry.animation_type and image_animation.frame(entry, {
+            version = entry.image,
+            open = images.open_animation,
+            width = natural_w,
+            height = natural_h,
+          })
+          if frame then
+            -- Frames change in place, so scale them while drawing.
+            renderer.draw_canvas_scaled(frame, image_x, image_y, width, height)
+            return
+          end
           local image = entry.image
           if width ~= natural_w or height ~= natural_h then
             if not entry.scaled_image or entry.scaled_width ~= width or entry.scaled_height ~= height then
@@ -1042,13 +1061,6 @@ local function image_fragment(view, span, opts)
               entry.scaled_width, entry.scaled_height = width, height
             end
             image = entry.scaled_image
-          end
-          local image_x = x + (fragment.draw_x_offset or 0)
-          local image_y
-          if fragment.draw_y_offset then
-            image_y = y + fragment.draw_y_offset
-          else
-            image_y = y + math.max(0, (row_height - height) / 2)
           end
           renderer.draw_canvas(image, image_x, image_y)
         end,

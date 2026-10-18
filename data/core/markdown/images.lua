@@ -1,5 +1,6 @@
 local common = require "core.common"
 local json = require "core.json"
+local image_animation = require "core.image_animation"
 
 local images = {}
 
@@ -338,7 +339,10 @@ function images.load_from_path(path, opts)
   if not image then
     return { status = "error", path = path, errmsg = errmsg or "image could not be loaded" }
   end
-  return { status = "ready", path = path, image = image }
+  return {
+    status = "ready", path = path, image = image,
+    animation_type = image_animation.detect_file_type(path),
+  }
 end
 
 function images.load_from_data_image(url, opts)
@@ -364,7 +368,20 @@ function images.load_from_data_image(url, opts)
   if not image then
     return { status = "error", errmsg = errmsg or "image data could not be loaded" }
   end
-  return { status = "ready", image = image, mime = mime_or_error }
+  return {
+    status = "ready", image = image, mime = mime_or_error,
+    animation_type = image_animation.detect_type(data),
+  }
+end
+
+---Open a streaming animation for a ready asset whose `animation_type` is set.
+---@return userdata? animation
+---@return string? errmsg
+function images.open_animation(entry)
+  if entry.path then return canvas.open_animation(entry.path, entry.animation_type) end
+  local data, errmsg = images.decode_data_image(entry.url)
+  if not data then return nil, errmsg end
+  return canvas.open_animation_data(data, entry.animation_type)
 end
 
 local assets = {}
@@ -450,6 +467,7 @@ end
 local function apply_loaded(entry, loaded)
   entry.image = nil
   entry.errmsg = nil
+  entry.animation_type = nil
   for key, value in pairs(loaded) do entry[key] = value end
   local info = entry.path and system.get_file_info(entry.path)
   entry.modified = info and info.modified

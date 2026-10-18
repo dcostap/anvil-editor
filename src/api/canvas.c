@@ -99,6 +99,216 @@ static int f_load_svg_image(lua_State *L) {
 }
 
 
+/*
+** An Animation streams frames from an IMG_AnimationDecoder into one canvas.
+** Memory stays at one frame however long the animation is: each step decodes
+** the next frame into the same surface, and the end of the stream rewinds.
+*/
+typedef struct {
+  IMG_AnimationDecoder *decoder;
+  void *data;          /* owned copy of in-memory image data, or NULL */
+  RenCache *canvas;    /* the canvas userdata referenced by canvas_ref */
+  int canvas_ref;
+  int frame_index;     /* zero-based index of the frame in the canvas */
+  int frame_count;     /* 0 until the stream has ended once */
+  lua_Integer duration_ms;
+} Animation;
+
+
+static void animation_close(Animation *anim) {
+  if (anim->decoder) {
+    IMG_CloseAnimationDecoder(anim->decoder);
+    anim->decoder = NULL;
+  }
+  if (anim->data) {
+    SDL_free(anim->data);
+    anim->data = NULL;
+  }
+}
+
+
+static bool animation_decode_into(Animation *anim, SDL_Surface *dst) {
+  SDL_Surface *frame = NULL;
+  Uint64 duration = 0;
+  if (!IMG_GetAnimationDecoderFrame(anim->decoder, &frame, &duration)) return false;
+  bool ok = true;
+  if (frame->w == dst->w && frame->h == dst->h) {
+    SDL_SetSurfaceBlendMode(frame, SDL_BLENDMODE_NONE);
+    ok = SDL_BlitSurface(frame, NULL, dst, NULL);
+  } else {
+    SDL_FillSurfaceRect(dst, NULL, 0);
+    SDL_SetSurfaceBlendMode(frame, SDL_BLENDMODE_NONE);
+    ok = SDL_BlitSurfaceScaled(frame, NULL, dst, NULL, SDL_SCALEMODE_LINEAR);
+  }
+  SDL_DestroySurface(frame);
+  anim->duration_ms = (lua_Integer) duration;
+  return ok;
+}
+
+
+static void animation_mark_changed(Animation *anim) {
+  SDL_PropertiesID props = SDL_GetSurfaceProperties(anim->canvas->rensurface.surface);
+  SDL_SetNumberProperty(props, "anvil_d3d11_generation",
+                        SDL_GetNumberProperty(props, "anvil_d3d11_generation", 0) + 1);
+  anvil_d3d11_note_surface_generation();
+  anim->canvas->content_version++;
+}
+
+
+static int push_animation(lua_State *L, IMG_AnimationDecoder *decoder, void *data) {
+  if (!decoder) {
+    SDL_free(data);
+    lua_pushnil(L);
+    lua_pushstring(L, SDL_GetError());
+    return 2;
+  }
+
+  Animation *anim = lua_newuserdata(L, sizeof(Animation));
+  memset(anim, 0, sizeof(Animation));
+  anim->decoder = decoder;
+  anim->data = data;
+  anim->canvas_ref = LUA_NOREF;
+  luaL_setmetatable(L, API_TYPE_ANIMATION);
+
+  SDL_Surface *first = NULL;
+  Uint64 duration = 0;
+  if (!IMG_GetAnimationDecoderFrame(decoder, &first, &duration)) {
+    const char *err = SDL_GetError();
+    animation_close(anim);
+    lua_pushnil(L);
+    lua_pushstring(L, err && *err ? err : "animation has no frames");
+    return 2;
+  }
+  anim->duration_ms = (lua_Integer) duration;
+
+  /* push_image takes ownership of the first frame and leaves the canvas on
+  ** the stack. Later frames are copied into this same surface. */
+  if (push_image(L, first) != 1) {
+    animation_close(anim);
+    return 2;
+  }
+  anim->canvas = lua_touserdata(L, -1);
+  anim->canvas_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  return 1;
+}
+
+
+static int f_open_animation(lua_State *L) {
+  const char *file = luaL_checkstring(L, 1);
+  const char *type = luaL_optstring(L, 2, NULL);
+  if (!type) return push_animation(L, IMG_CreateAnimationDecoder(file), NULL);
+  /* A type overrides the extension, e.g. for a cached download named *.img. */
+  SDL_IOStream *stream = SDL_IOFromFile(file, "rb");
+  if (!stream) return push_animation(L, NULL, NULL);
+  return push_animation(L, IMG_CreateAnimationDecoder_IO(stream, true, type), NULL);
+}
+
+
+static int f_open_animation_data(lua_State *L) {
+  size_t size;
+  const char *data = luaL_checklstring(L, 1, &size);
+  const char *type = luaL_checkstring(L, 2);
+  if (size == 0) {
+    lua_pushnil(L);
+    lua_pushstring(L, "image data is empty");
+    return 2;
+  }
+  /* The decoder reads lazily, so it needs its own copy of the data. */
+  void *copy = SDL_malloc(size);
+  if (!copy) {
+    lua_pushnil(L);
+    lua_pushstring(L, SDL_GetError());
+    return 2;
+  }
+  memcpy(copy, data, size);
+  SDL_IOStream *stream = SDL_IOFromConstMem(copy, size);
+  if (!stream) return push_animation(L, NULL, copy);
+  return push_animation(L, IMG_CreateAnimationDecoder_IO(stream, true, type), copy);
+}
+
+
+static Animation *check_open_animation(lua_State *L) {
+  Animation *anim = luaL_checkudata(L, 1, API_TYPE_ANIMATION);
+  if (!anim->decoder) luaL_error(L, "animation is closed");
+  return anim;
+}
+
+
+static int f_animation_get_canvas(lua_State *L) {
+  Animation *anim = luaL_checkudata(L, 1, API_TYPE_ANIMATION);
+  if (anim->canvas_ref == LUA_NOREF) return 0;
+  lua_rawgeti(L, LUA_REGISTRYINDEX, anim->canvas_ref);
+  return 1;
+}
+
+
+static int f_animation_get_frame_duration(lua_State *L) {
+  Animation *anim = luaL_checkudata(L, 1, API_TYPE_ANIMATION);
+  lua_pushinteger(L, anim->duration_ms);
+  return 1;
+}
+
+
+/*
+** Decodes the next frame into the canvas and returns its duration in
+** milliseconds. After the last frame it rewinds to the first one. Returns
+** false for an animation with one frame, and nil plus an error on failure.
+*/
+static int f_animation_next_frame(lua_State *L) {
+  Animation *anim = check_open_animation(L);
+  if (anim->frame_count == 1) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  SDL_Surface *dst = anim->canvas->rensurface.surface;
+  if (animation_decode_into(anim, dst)) {
+    anim->frame_index++;
+    animation_mark_changed(anim);
+    lua_pushinteger(L, anim->duration_ms);
+    return 1;
+  }
+  if (IMG_GetAnimationDecoderStatus(anim->decoder) != IMG_DECODER_STATUS_COMPLETE) {
+    lua_pushnil(L);
+    lua_pushstring(L, SDL_GetError());
+    return 2;
+  }
+
+  anim->frame_count = anim->frame_index + 1;
+  if (anim->frame_count == 1) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  if (!IMG_ResetAnimationDecoder(anim->decoder) || !animation_decode_into(anim, dst)) {
+    lua_pushnil(L);
+    lua_pushstring(L, SDL_GetError());
+    return 2;
+  }
+  anim->frame_index = 0;
+  animation_mark_changed(anim);
+  lua_pushinteger(L, anim->duration_ms);
+  return 1;
+}
+
+
+static int f_animation_close(lua_State *L) {
+  Animation *anim = luaL_checkudata(L, 1, API_TYPE_ANIMATION);
+  animation_close(anim);
+  return 0;
+}
+
+
+static int f_animation_gc(lua_State *L) {
+  Animation *anim = luaL_checkudata(L, 1, API_TYPE_ANIMATION);
+  animation_close(anim);
+  if (anim->canvas_ref != LUA_NOREF) {
+    luaL_unref(L, LUA_REGISTRYINDEX, anim->canvas_ref);
+    anim->canvas_ref = LUA_NOREF;
+    anim->canvas = NULL;
+  }
+  return 0;
+}
+
+
 static int f_get_size(lua_State *L) {
   RenCache *canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
   lua_pushinteger(L, canvas->rensurface.surface->w);
@@ -437,7 +647,18 @@ static const luaL_Reg lib[] = {
   { "load_image",      f_load_image      },
   { "load_image_data", f_load_image_data },
   { "load_svg_image",  f_load_svg_image  },
+  { "open_animation",      f_open_animation      },
+  { "open_animation_data", f_open_animation_data },
   { NULL,               NULL              }
+};
+
+static const luaL_Reg animationLib[] = {
+  { "get_canvas",         f_animation_get_canvas         },
+  { "get_frame_duration", f_animation_get_frame_duration },
+  { "next_frame",         f_animation_next_frame         },
+  { "close",              f_animation_close              },
+  { "__gc",               f_animation_gc                 },
+  { NULL,                 NULL                           }
 };
 
 int luaopen_canvas(lua_State *L) {
@@ -446,6 +667,12 @@ int luaopen_canvas(lua_State *L) {
   luaL_newmetatable(L, API_TYPE_CANVAS);
   luaL_setfuncs(L, canvasLib, 0);
   lua_setfield(L, -1, "__index");
+
+  luaL_newmetatable(L, API_TYPE_ANIMATION);
+  luaL_setfuncs(L, animationLib, 0);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  lua_pop(L, 1);
 
   return 1;
 }

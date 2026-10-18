@@ -163,6 +163,8 @@ typedef struct {
   RenRect rect;
   RenCache *canvas;
   RenColor color;
+  /* Part of the cell hash, so an in-place frame change repaints its cells. */
+  unsigned content_version;
 } DrawCanvasCommand;
 
 typedef struct {
@@ -616,6 +618,7 @@ void rencache_draw_canvas(RenCache *ren_cache, RenRect rect, RenCache *canvas, R
     cmd->rect = rect;
     cmd->canvas = canvas;
     cmd->color = color;
+    cmd->content_version = canvas->content_version;
     rencache_begin_frame(canvas);
   }
 }
