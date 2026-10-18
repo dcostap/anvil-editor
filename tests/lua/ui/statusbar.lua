@@ -218,21 +218,32 @@ test.describe("Pane Status Bars", function()
     end
     local focused, unfocused = text_alphas(right), text_alphas(left)
     test.ok(unfocused["left.lua"] < focused["right.lua"], "the unfocused file name was not faded")
-    test.ok(unfocused["1"] < focused["1"], "the unfocused caret position was not faded")
     panes.focus(left)
     root:update()
     focused, unfocused = text_alphas(left), text_alphas(right)
     test.ok(unfocused["right.lua"] < focused["left.lua"], "focus did not move the fade")
   end)
 
-  test.it("focuses the Pane and runs the action when an unfocused Pane's item is clicked", function(context)
+  test.it("shows only the file in the bars of unfocused Panes", function()
+    local left, right = two_panes()
+    local function names(pane)
+      local result = {}
+      for _, entry in ipairs(bar_of(pane).entries) do result[#result + 1] = entry.item.name end
+      return table.concat(result, " ")
+    end
+    test.equal(names(left), "text:file")
+    test.ok(bar_of(right):get_entry("text:position"), "the focused Pane lost its caret position")
+    panes.focus(left)
+    root:update()
+    test.equal(names(right), "text:file")
+    test.ok(bar_of(left):get_entry("text:position"), "the newly focused Pane shows no caret position")
+  end)
+
+  test.it("focuses the Pane when its bar is clicked", function()
     local left, right = two_panes()
     test.equal(panes.active(), right)
-    click(entry_center(left, "text:position"))
+    click(entry_center(left, "text:file"))
     test.equal(panes.active(), left)
-    test.equal(#context.performed, 1)
-    test.equal(context.performed[1].name, "editor:go_to_line")
-    test.equal(context.performed[1].view, left.current_view)
   end)
 
   test.it("keeps focus in the Pane's editor when its item is clicked", function(context)

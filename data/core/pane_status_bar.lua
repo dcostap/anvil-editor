@@ -68,7 +68,7 @@ local function styled_width(styled)
 end
 
 ---Text in the bars of unfocused Panes draws at this share of its opacity.
-local UNFOCUSED_OPACITY = 0.5
+local UNFOCUSED_OPACITY = 0.7
 
 local function draw_styled(styled, x, y, h, opacity)
   each_segment(styled, function(font, color, text)
@@ -159,14 +159,16 @@ end
 
 ---Evaluate the items for the Pane's View and lay them out as chips.
 ---Right chips keep their full width; left chips use the space that is left.
+---Unfocused Panes show only their left items, which name the file.
 function PaneStatusBar:layout()
   local m = metrics()
   local view = self:get_view()
+  local focused = self:is_focused()
   local lefts, rights = {}, {}
   self.entries = {}
 
   for _, item in ipairs(view and self.controller.items or {}) do
-    if item.visible and item.predicate(view) then
+    if item.visible and (focused or item.alignment == item.LEFT) and item.predicate(view) then
       local styled, content_w
       if item.on_draw then
         content_w = item.on_draw(view, 0, self.position.y, self.size.y, false, true)
@@ -202,7 +204,7 @@ function PaneStatusBar:layout()
 
   self.message_entry = nil
   local controller = self.controller
-  if self:is_focused() and controller:message_active() then
+  if focused and controller:message_active() then
     local w = styled_width(rendered_message(controller.message)) + m.chip * 2
     self.message_entry = {
       item = controller.message_item, x = m.edge, w = w,
