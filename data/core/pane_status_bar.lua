@@ -67,9 +67,15 @@ local function styled_width(styled)
   return w
 end
 
-local function draw_styled(styled, x, y, h)
+---Text in the bars of unfocused Panes draws at this share of its opacity.
+local UNFOCUSED_OPACITY = 0.5
+
+local function draw_styled(styled, x, y, h, opacity)
   each_segment(styled, function(font, color, text)
     local ty = common.round(y + (h - font:get_height()) / 2)
+    if opacity ~= 1 then
+      color = { color[1], color[2], color[3], (color[4] or 255) * opacity }
+    end
     x = renderer.draw_text(font, text, common.round(x), ty, color)
   end)
   return x
@@ -361,6 +367,7 @@ function PaneStatusBar:draw()
   local view = self:get_view()
   local focused = self:is_focused()
   local controller = self.controller
+  local opacity = focused and 1 or UNFOCUSED_OPACITY
 
   core.push_clip_rect(x0, y0, self.size.x, h)
   renderer.draw_rect(x0, y0, self.size.x, h, style.wallpaper_surface(style.background))
@@ -389,7 +396,7 @@ function PaneStatusBar:draw()
     else
       local styled = entry.styled
       if item.shrink then styled = elide_start(styled, entry.w - m.chip * 2) end
-      draw_styled(styled, cx, y0, h)
+      draw_styled(styled, cx, y0, h, opacity)
     end
   end
 
@@ -398,9 +405,9 @@ function PaneStatusBar:draw()
     local entry = self.message_entry
     draw_chip_background(entry)
     local styled = elide_start(rendered_message(controller.message), entry.visible_w - m.chip * 2)
-    draw_styled(styled, x0 + entry.x + m.chip, y0 + controller:message_pulse_offset(), h)
+    draw_styled(styled, x0 + entry.x + m.chip, y0 + controller:message_pulse_offset(), h, opacity)
   elseif focused and controller.tooltip_mode then
-    draw_styled(elide_start(controller.tooltip, self.left_limit - m.edge - m.chip), x0 + m.edge + m.chip, y0, h)
+    draw_styled(elide_start(controller.tooltip, self.left_limit - m.edge - m.chip), x0 + m.edge + m.chip, y0, h, opacity)
   else
     for _, entry in ipairs(self.entries) do
       if entry.item.alignment == entry.item.LEFT then draw_entry(entry) end

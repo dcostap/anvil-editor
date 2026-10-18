@@ -204,23 +204,28 @@ test.describe("Pane Status Bars", function()
     test.equal(styled_text_string(bar_of(right):get_entry("text:file").styled), "right.lua")
   end)
 
-  test.it("marks the focused Pane by dimming the file names of the others", function()
+  test.it("fades every item of the unfocused Panes' bars", function()
     local left, right = two_panes()
-    local function name_color(pane, name)
-      local styled = bar_of(pane):get_entry("text:file").styled
-      local color
-      for _, part in ipairs(styled) do
-        if type(part) == "table" and not part.get_width then color = part end
-        if part == name then return color end
+    local function text_alphas(pane)
+      local alphas = {}
+      renderer.draw_text = function(font, text, x, _, color)
+        alphas[tostring(text)] = color[4] or 255
+        return x + font:get_width(tostring(text))
       end
+      -- Autosave reports that the test buffers have no file, and that message
+      -- would cover the focused bar's file name.
+      core.status_bar.message = nil
+      root:update()
+      bar_of(pane):draw()
+      return alphas
     end
-    test.equal(panes.active(), right)
-    test.equal(name_color(right, "right.lua"), style.text)
-    test.equal(name_color(left, "left.lua"), style.dim)
+    local focused, unfocused = text_alphas(right), text_alphas(left)
+    test.ok(unfocused["left.lua"] < focused["right.lua"], "the unfocused file name was not faded")
+    test.ok(unfocused["1"] < focused["1"], "the unfocused caret position was not faded")
     panes.focus(left)
     root:update()
-    test.equal(name_color(left, "left.lua"), style.text)
-    test.equal(name_color(right, "right.lua"), style.dim)
+    focused, unfocused = text_alphas(left), text_alphas(right)
+    test.ok(unfocused["right.lua"] < focused["left.lua"], "focus did not move the fade")
   end)
 
   test.it("focuses the Pane and runs the action when an unfocused Pane's item is clicked", function(context)
