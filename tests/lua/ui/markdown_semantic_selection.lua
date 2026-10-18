@@ -83,6 +83,46 @@ test.describe("Markdown semantic selection", function()
     test.equal(selected_text(buffer), "bold")
   end)
 
+  test.it("grows through a sentence before its paragraph", function(context)
+    local paragraph = "Hello world. This is **the second.** Third one\nwraps here."
+    local _, buffer = open_markdown(context, paragraph .. "\n")
+    buffer:set_selection(1, 28)
+    for _, expected in ipairs({ "second", "the second.", "**the second.**",
+      "This is **the second.**", paragraph }) do
+      perform("editor:extend_selection_smart")
+      test.equal(selected_text(buffer), expected)
+    end
+
+    buffer:set_selection(2, 3)
+    for _, expected in ipairs({ "Third one\nwraps here.", paragraph }) do
+      perform("editor:expand_selection_block")
+      test.equal(selected_text(buffer), expected)
+    end
+  end)
+
+  test.it("does not end sentences at abbreviations, code, or links", function(context)
+    local paragraph = "See e.g. `a.b()` and [v1.2](x.md) docs. Next one!"
+    local _, buffer = open_markdown(context, paragraph .. "\n")
+    buffer:set_selection(1, 37)
+    perform("editor:expand_selection_block")
+    test.equal(selected_text(buffer), "See e.g. `a.b()` and [v1.2](x.md) docs.")
+    perform("editor:expand_selection_block")
+    test.equal(selected_text(buffer), paragraph)
+  end)
+
+  test.it("selects sentences inside list items and quotes", function(context)
+    local _, buffer = open_markdown(context, "- First thing. Second thing.\n- other\n\n> Quoted one. Quoted two.\n")
+    buffer:set_selection(1, 18)
+    perform("editor:expand_selection_block")
+    test.equal(selected_text(buffer), "Second thing.")
+    perform("editor:expand_selection_block")
+    test.equal(selected_text(buffer), "- First thing. Second thing.")
+
+    buffer:set_selection(4, 5)
+    perform("editor:expand_selection_block")
+    test.equal(selected_text(buffer), "Quoted one.")
+  end)
+
   test.it("uses list items, lists, heading sections, and the document as parents", function(context)
     local _, buffer = open_markdown(context, table.concat({
       "# Parent",

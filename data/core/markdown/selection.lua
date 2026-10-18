@@ -344,6 +344,96 @@ local function add_pairs(candidates, seen, text, nodes, starts)
   end
 end
 
+local SENTENCE_CONTAINERS = { paragraph = true, heading = true, table_cell = true }
+
+-- Terminators inside these nodes belong to code, URLs, or names, not prose.
+local OPAQUE_INLINE_TYPES = {
+  code = true, comment = true, embed = true, html = true, image = true,
+  link = true, link_reference = true, math = true, tag = true, wiki_link = true,
+}
+
+local CLOSING_PUNCTUATION = {
+  "\226\128\157", "\226\128\153", ")", "]", "\"", "'", "*", "_", "~", "=",
+}
+
+local function skip_block_prefixes(text, pos, last)
+  local changed = true
+  while changed and pos < last do
+    changed = false
+    local rest = text:sub(pos + 1, last)
+    for _, pattern in ipairs({ "^%s+", "^>[ ]?", "^#+%s+", "^[-*+]%s+", "^%d+[.)]%s+", "^%[[ xX]%]%s+" }) do
+      local prefix = rest:match(pattern)
+      if prefix and #prefix > 0 then
+        pos, changed = pos + #prefix, true
+        break
+      end
+    end
+  end
+  return pos
+end
+
+local function skip_closing_punctuation(text, pos, last)
+  local changed = true
+  while changed and pos < last do
+    changed = false
+    for _, closer in ipairs(CLOSING_PUNCTUATION) do
+      if text:sub(pos + 1, pos + #closer) == closer then
+        pos, changed = pos + #closer, true
+        break
+      end
+    end
+  end
+  return pos
+end
+
+local function add_sentences(candidates, seen, text, nodes, starts)
+  local opaque = {}
+  for _, node in ipairs(nodes) do
+    if node.source and OPAQUE_INLINE_TYPES[node.type] then
+      local first, last = range_offsets(node.source, starts)
+      opaque[first] = math.max(opaque[first] or first, last)
+    end
+  end
+
+  for _, node in ipairs(nodes) do
+    if node.source and SENTENCE_CONTAINERS[node.type] then
+      local first, last = range_offsets(node.source, starts)
+      last = last - #(text:sub(first + 1, last):match("%s*$") or "")
+      local sentences = {}
+      local sentence_start = skip_block_prefixes(text, first, last)
+      local pos = sentence_start
+      while pos < last do
+        if opaque[pos] then
+          pos = opaque[pos]
+        elseif text:sub(pos + 1, pos + 1) == "\\" then
+          pos = pos + 2
+        elseif text:find("^[.!?]", pos + 1) or text:sub(pos + 1, pos + 3) == "\226\128\166" then
+          local sentence_end = pos + #(text:match("^[.!?\226\128\166]+", pos + 1))
+          sentence_end = skip_closing_punctuation(text, sentence_end, last)
+          local next_start = skip_block_prefixes(text, sentence_end, last)
+          local gap = text:sub(sentence_end + 1, sentence_end + 1)
+          -- A lowercase continuation usually follows an abbreviation like "e.g.".
+          if sentence_end >= last
+            or gap:match("%s") and not text:find("^[%*_~%[%(\"'`]*%l", next_start + 1)
+          then
+            sentences[#sentences + 1] = { sentence_start, math.min(sentence_end, last) }
+            sentence_start = next_start
+          end
+          pos = math.max(sentence_end, pos + 1)
+        else
+          pos = pos + 1
+        end
+      end
+      if sentence_start < last then sentences[#sentences + 1] = { sentence_start, last } end
+      if #sentences > 1 then
+        for _, sentence in ipairs(sentences) do
+          add_candidate(candidates, seen, sentence[1], sentence[2], "sentence")
+        end
+      end
+    end
+  end
+end
+
 local function candidates_for(buffer, line1, col1, line2, col2, blocks_only)
   local instance = markdown_model.peek(buffer)
   if not instance or instance.status ~= "ready"
@@ -364,6 +454,7 @@ local function candidates_for(buffer, line1, col1, line2, col2, blocks_only)
   if not blocks_only and start_offset == end_offset then add_word(candidates, seen, text, start_offset) end
 
   add_pairs(candidates, seen, text, nodes, starts)
+  add_sentences(candidates, seen, text, nodes, starts)
 
   local containers = paragraph_container_ranges(nodes, starts)
   for _, node in ipairs(nodes) do
@@ -474,7 +565,9 @@ function selection.move_to_boundary(view)
     -- Other scopes use the same start/end positions as block selection.
     local first = candidate.start_offset
     local last = candidate.end_offset - (candidate.kind == "pair" and 1 or 0)
-    if candidate.kind ~= "pair_content" and first <= caret and caret <= last then
+    if candidate.kind ~= "pair_content" and candidate.kind ~= "sentence"
+      and first <= caret and caret <= last
+    then
       local target = caret == first and last or first
       local next_line, next_col = offset_position(buffer, starts, target)
       local panes = require "core.panes"
