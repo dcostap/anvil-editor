@@ -1295,6 +1295,11 @@ local function record_video()
       markdown_tables.select_row(view, first)
       settle_semantics()
       for _ = 1, 2 do capture("selected-row") end
+      hover_fragment(first, function(fragment)
+        return fragment.table_insert == "below" and fragment.layout_x
+          and fragment.layout_x < 20
+      end)
+      for _ = 1, 2 do capture("hover-insert-button") end
     end
     view.buffer:set_selection(find_line("Task") + 2, 3)
     local last = find_line("Ship")

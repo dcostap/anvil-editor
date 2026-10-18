@@ -971,11 +971,13 @@ local function draw_active_handle(x, y, width, height, side)
   draw_grip_dots(x, y, width, height, row_side(side), style.background)
 end
 
+-- A muted button that lights up under the pointer.
 local function draw_insert_button(x, y, width, height, hovered)
   local _, radius = handle_metrics()
+  local color = style.markdown_live_table_cell_selection_outline
   renderer.draw_rounded_rect(
     x, y, width, height, math.min(radius, width / 2, height / 2),
-    hovered and style.accent or style.markdown_live_table_cell_selection_outline
+    hovered and color or with_alpha(color, 0.45)
   )
   local arm = math.max(2, math.floor(math.min(width, height) * 0.3 + 0.5))
   local thickness = math.max(1, math.floor(SCALE * 1.5 + 0.5))
@@ -1210,7 +1212,11 @@ local function append_table_handles(view, fragments, spec)
         -- A dragged grip draws itself; the others stay out of its way.
         local drag = owner.render_widget_drag
         if drag and drag.table_handle_drag then return end
-        local hovered = fragment.hovered or hover_group.hovered
+        -- A hidden insert button passes its hover to the grip; a shown one
+        -- keeps it.
+        local pointed = owner.hovered_render_fragment
+        local on_button = pointed and pointed.table_insert and pointed.widget.visible(owner, true)
+        local hovered = fragment.hovered or hover_group.hovered and not on_button
         local visibility = hovered and 1 or fragment.proximity or 0
         if visibility <= 0.01 then return end
         local x, y = draw_x, draw_y + draw_y_offset
