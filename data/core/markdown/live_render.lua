@@ -2969,6 +2969,18 @@ local function inline_fragments(line_text, line, view, reveal_units)
   for _, fragment in ipairs(block_fragments) do
     add_fragment(fragments, occupied, fragment)
   end
+  -- A margin note's body shows in its card. Links and other elements in the
+  -- body stay hidden with it.
+  for _, node in ipairs(semantic_line(view, line) or {}) do
+    local attributes = node.type == "margin_note" and node.source.line1 == line and node.attributes
+    if attributes and attributes.margin_note_body_open and attributes.margin_note_body_close then
+      add_fragment(fragments, occupied, {
+        source_col1 = attributes.margin_note_body_open.col1,
+        source_col2 = attributes.margin_note_body_close.col2,
+        hidden = true, semantic_id = node.id,
+      })
+    end
+  end
   for _, fragment in ipairs(semantic_link_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end

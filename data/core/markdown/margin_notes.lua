@@ -11,6 +11,7 @@ local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local file_context = require "core.file_context"
 local markdown_model = require "core.markdown.model"
+local markdown_parser = require "core.markdown.parser"
 local panes = require "core.panes"
 
 local margin_notes = {}
@@ -58,6 +59,135 @@ function NoteBuffer:insert(line, col, text)
   NoteBuffer.super.insert(self, line, col, self:normalize_edit_text(text))
 end
 
+-- Note text: inline Markdown ----------------------------------------------
+--
+-- A note shows inline Markdown as Live Preview does: styled text without its
+-- syntax. While a note is edited, the syntax of the span at the caret shows.
+
+local NOTE_FORMAT_PROVIDER = "markdown.margin-note-format"
+local SPAN_FONTS = {
+  strong = "prose_strong_font",
+  emphasis = "prose_emphasis_font",
+  strong_emphasis = "prose_strong_emphasis_font",
+  code = "code_font",
+}
+local styled_fonts = setmetatable({}, { __mode = "k" })
+
+-- An inline style's font at the note font's size.
+local function styled_font(base, span_type)
+  local source = style[SPAN_FONTS[span_type]]
+  local fonts = styled_fonts[base]
+  if not fonts then
+    fonts = setmetatable({}, { __mode = "k" })
+    styled_fonts[base] = fonts
+  end
+  local font = fonts[source]
+  if not font then
+    local size = base:get_size()
+    -- Code keeps the size it has beside prose in the document.
+    if span_type == "code" then
+      size = size * source:get_size() / style.markdown_body_font:get_size()
+    end
+    font = source:copy(size)
+    fonts[source] = font
+  end
+  return font
+end
+
+local function reveal_col(view)
+  if core.active_view ~= view then return nil end
+  local _, col = view.buffer:get_selection()
+  return col
+end
+
+-- The shown text of a link span: its label, or a wiki link's alias or target.
+local function link_text_cols(source, span)
+  local range = span.link.link_text_range
+  if range then return range.col1, range.col2 end
+  local open = span.link.is_embed and 3 or 2
+  local inner = source:sub(span.col1 + open, span.col2 - 3)
+  local pipe = inner:find("|", 1, true)
+  return span.col1 + open + (pipe or 0), span.col2 - 2
+end
+
+local function note_render(view, source)
+  local base = view:get_font()
+  local caret = reveal_col(view)
+  local bounds = { [1] = true, [#source + 1] = true }
+  local hidden, styled = {}, {}
+  local function mark(col1, col2, kind, revealed)
+    if col2 <= col1 then return end
+    bounds[col1], bounds[col2] = true, true
+    if kind == "syntax" and not revealed then
+      hidden[#hidden + 1] = { col1, col2 }
+    else
+      styled[#styled + 1] = { col1, col2, kind }
+    end
+  end
+  for _, span in ipairs(markdown_parser.parse_inline(source)) do
+    local revealed = caret ~= nil and caret >= span.col1 and caret <= span.col2
+    if span.link then
+      local col1, col2 = link_text_cols(source, span)
+      mark(span.col1, col1, "syntax", revealed)
+      mark(col1, col2, "link")
+      mark(col2, span.col2, "syntax", revealed)
+    else
+      for _, marker in ipairs(span.marker_ranges) do
+        mark(marker.col1, marker.col2, "syntax", revealed)
+      end
+      local content = span.content_ranges[1]
+      mark(content.col1, content.col2, span.type)
+    end
+  end
+  local cols = {}
+  for col in pairs(bounds) do cols[#cols + 1] = col end
+  table.sort(cols)
+  local fragments = {}
+  for i = 1, #cols - 1 do
+    local col1, col2 = cols[i], cols[i + 1]
+    local is_hidden = false
+    for _, range in ipairs(hidden) do
+      if range[1] <= col1 and range[2] >= col2 then is_hidden = true break end
+    end
+    if is_hidden then
+      fragments[#fragments + 1] = { source_col1 = col1, source_col2 = col2, hidden = true }
+    else
+      local kinds = {}
+      for _, range in ipairs(styled) do
+        if range[1] <= col1 and range[2] >= col2 then kinds[range[3]] = true end
+      end
+      local bold = kinds.strong or kinds.strong_emphasis
+      local italic = kinds.emphasis or kinds.strong_emphasis
+      local font = kinds.code and styled_font(base, "code")
+        or bold and italic and styled_font(base, "strong_emphasis")
+        or bold and styled_font(base, "strong")
+        or italic and styled_font(base, "emphasis")
+        or base
+      fragments[#fragments + 1] = {
+        source_col1 = col1, source_col2 = col2,
+        text = source:sub(col1, col2 - 1),
+        font = font,
+        color = kinds.syntax and style.markdown_live_hidden_syntax
+          or kinds.link and style.markdown_live_link or style.text,
+        background = kinds.code and style.markdown_live_inline_code_bg
+          or kinds.highlight and style.markdown_live_highlight_bg or nil,
+        underline = kinds.link or nil,
+        strikethrough = kinds.strikethrough or nil,
+      }
+    end
+  end
+  return { fragments = fragments }
+end
+
+local note_format_provider = {
+  line_generation = function(_, view)
+    return tostring(view:get_font()) .. ":" .. tostring(reveal_col(view) or 0)
+  end,
+  render_line = function(_, view, _, context)
+    return note_render(view, context.source_text)
+  end,
+}
+
 local NoteInput = TextView:extend()
 
 function NoteInput:__tostring() return "MarginNoteInput" end
@@ -72,6 +202,7 @@ function NoteInput:new(owner)
   self.show_current_line_highlight = false
   self.wrap_continuation_flush = true
   self:set_wrapping_enabled(true)
+  self:add_line_render_provider(NOTE_FORMAT_PROVIDER, note_format_provider)
 end
 
 function NoteInput:get_text()

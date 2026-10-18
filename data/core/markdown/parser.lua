@@ -153,6 +153,7 @@ function parser.parse_inline(line, line_no, base_col)
   parse_delimited(line, line_no, spans, covered, "**", "strong", col_offset)
   parse_delimited(line, line_no, spans, covered, "__", "strong", col_offset)
   parse_delimited(line, line_no, spans, covered, "~~", "strikethrough", col_offset)
+  parse_delimited(line, line_no, spans, covered, "==", "highlight", col_offset)
   parse_delimited(line, line_no, spans, covered, "*", "emphasis", col_offset)
   parse_delimited(line, line_no, spans, covered, "_", "emphasis", col_offset)
 

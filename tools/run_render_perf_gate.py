@@ -209,7 +209,7 @@ SCENARIOS["markdown-margin-notes-inline"] = dict(SCENARIOS["markdown-margin-note
 SCENARIOS["markdown-margin-notes-inline-edit"] = dict(SCENARIOS["markdown-margin-notes-inline"], edit_note=True)
 MARGIN_NOTES_SOURCE = """# Chapter one
 
-From {==Terrahawks==}{>>A great show. Check the air dates before the next draft goes out.<<} it went
+From {==Terrahawks==}{>>A **great** show. Check the `air dates` before the [next draft](https://example.com) goes out.<<} it went
 on to {==Space Precinct==}{>>Later.<<} and then to {==Captain Scarlet==}{>>Remake?<<}.
 
 A plain paragraph between the notes that wraps across more than one visual row in a wide view,
