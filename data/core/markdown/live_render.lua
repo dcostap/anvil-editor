@@ -691,7 +691,10 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
   if #spans == 0 and #specials == 0 then return {} end
   local revealed_spans = {}
   for _, span in ipairs(spans) do
-    if reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2) then
+    -- A margin note's card edits it, so its syntax never shows.
+    if span.type ~= "margin_note"
+      and reveal_unit_matches(reveal_units, span.semantic_id, span.col1, span.col2)
+    then
       revealed_spans[span] = true
     end
   end
@@ -964,6 +967,33 @@ local function add_fragment(fragments, occupied, fragment)
   fragments[#fragments + 1] = fragment
   occupied[#occupied + 1] = { col1, col2 }
   return true
+end
+
+-- Formatting can span a link or another element placed before it. Its
+-- source text keeps the formatting in the gaps beside that element.
+local function add_fragment_around(fragments, occupied, fragment, line_text)
+  if add_fragment(fragments, occupied, fragment) then return end
+  local col1, col2 = fragment.source_col1, fragment.source_col2
+  if not (col1 and col2) then return end
+  if not fragment.hidden and fragment.text ~= line_text:sub(col1, col2 - 1) then return end
+  local overlaps = {}
+  for _, range in ipairs(occupied) do
+    if col1 < range[2] and range[1] < col2 then overlaps[#overlaps + 1] = range end
+  end
+  table.sort(overlaps, function(a, b) return a[1] < b[1] end)
+  local gaps, start = {}, col1
+  for _, range in ipairs(overlaps) do
+    if range[1] > start then gaps[#gaps + 1] = { start, range[1] } end
+    start = math.max(start, range[2])
+  end
+  if start < col2 then gaps[#gaps + 1] = { start, col2 } end
+  for _, gap in ipairs(gaps) do
+    local piece = {}
+    for key, value in pairs(fragment) do piece[key] = value end
+    piece.source_col1, piece.source_col2 = gap[1], gap[2]
+    if not piece.hidden then piece.text = line_text:sub(gap[1], gap[2] - 1) end
+    add_fragment(fragments, occupied, piece)
+  end
 end
 
 local resolve_live_link
@@ -2955,7 +2985,7 @@ local function inline_fragments(line_text, line, view, reveal_units)
     add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_formatting_fragments(view, line_text, line, reveal_units)) do
-    add_fragment(fragments, occupied, fragment)
+    add_fragment_around(fragments, occupied, fragment, line_text)
   end
   table.sort(fragments, function(a, b) return (a.source_col1 or 1) < (b.source_col1 or 1) end)
   return fragments, continuation_indent

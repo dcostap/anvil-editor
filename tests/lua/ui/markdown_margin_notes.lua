@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
 local Editor = require "core.editor"
+local keymap = require "core.keymap"
 local markdown = require "core.markdown"
 local margin_notes = require "core.markdown.margin_notes"
 local model = require "core.markdown.model"
@@ -57,6 +58,15 @@ local function visible_text(view, line)
   return table.concat(parts)
 end
 
+-- A click as the root panel routes it to the view: an unhandled press
+-- reaches the mouse bindings.
+local function click(view, x, y)
+  if not view:on_mouse_pressed("left", x, y, 1) then
+    keymap.on_mouse_pressed("left", x, y, 1)
+  end
+  view:on_mouse_released("left", x, y)
+end
+
 local function fragment_with_text(view, line, text)
   for _, fragment in ipairs(view:get_line_render(line).fragments) do
     if not fragment.hidden and fragment.text == text then return fragment end
@@ -88,6 +98,26 @@ test.describe("Markdown margin notes", function()
     test.equal(visible_text(view, 1), "From Terrahawks it went on.")
     local anchor = test.not_nil(fragment_with_text(view, 1, "Terrahawks"))
     test.equal(anchor.background, style.markdown_live_margin_note_bg)
+  end)
+
+  test.it("tints every part of an anchor that contains a link", function(context)
+    local view = open_note_view(context,
+      "{==Tests I ran ([with my harness](https://example.com)), where I played.==}{>>note<<}\n\nend")
+    for _, caret in ipairs({ { 3, 1 }, { 1, 5 } }) do
+      view.buffer:set_selection(caret[1], caret[2])
+      for _, text in ipairs({ "Tests I ran (", "with my harness", "), where I played." }) do
+        local fragment = test.not_nil(fragment_with_text(view, 1, text), text)
+        test.equal(fragment.background, style.markdown_live_margin_note_bg, text)
+      end
+    end
+  end)
+
+  test.it("keeps the note syntax hidden while the caret is inside it", function(context)
+    local view = open_note_view(context, "From {==Terrahawks==}{>>A great show<<} it went.\n\nend")
+    for _, col in ipairs({ 7, 12, 25 }) do
+      view.buffer:set_selection(1, col)
+      test.equal(visible_text(view, 1), "From Terrahawks it went.", "caret at column " .. col)
+    end
   end)
 
   test.it("adds a note to the selection and saves the typed text", function(context)
@@ -253,8 +283,20 @@ test.describe("Markdown margin notes", function()
     view:update()
     view.__margin_note_layout = margin_notes.layout(view)
     local x, y = input:get_line_screen_position(1, 3)
-    core.on_event("mousepressed", "left", x + 1, y + 2, 1)
-    core.on_event("mousereleased", "left", x + 1, y + 2)
+    click(view, x + 1, y + 2)
+    local line, col = input.buffer:get_selection()
+    test.equal(line, 1)
+    test.equal(col, 3)
+  end)
+
+  test.it("places the caret where the first click on a note lands", function(context)
+    local view = open_note_view(context, "From {==Terrahawks==}{>>A great show<<}.\n\nend")
+    view:update()
+    local layout = test.not_nil(margin_notes.layout(view))
+    view.__margin_note_layout = layout
+    local x, y = layout.cards[1].text_view:get_line_screen_position(1, 3)
+    click(view, x + 1, y + 2)
+    local input = test.not_nil(margin_notes.editing_input(view))
     local line, col = input.buffer:get_selection()
     test.equal(line, 1)
     test.equal(col, 3)

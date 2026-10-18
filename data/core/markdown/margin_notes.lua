@@ -24,7 +24,7 @@ local MARGIN_GAP = 30
 local EDGE_GAP = 12
 local CARD_SPACING = 8
 local MARGIN_PAD_X, MARGIN_PAD_Y = 9, 7
-local MARGIN_POINTER_LENGTH, MARGIN_POINTER_HALF = 19, 15
+local MARGIN_POINTER_LENGTH, MARGIN_POINTER_HALF = 8, 7
 -- Inline cards point up at the block above them.
 local INLINE_PAD_X, INLINE_PAD_Y = 8, 5
 local INLINE_POINTER_LENGTH, INLINE_POINTER_HALF = 14, 10
@@ -571,8 +571,11 @@ local function draw_pointer(card, color)
     renderer.draw_poly({ { cx - half, y + 1 }, { cx, y - length }, { cx + half, y + 1 } }, color)
     return
   end
-  local half, length = scaled(MARGIN_POINTER_HALF), scaled(MARGIN_POINTER_LENGTH)
-  local low, high = y + half, y + card.h - half
+  -- The pointer stays within the flat part of the card's edge.
+  local radius = scaled(CARD_RADIUS)
+  local half = math.min(scaled(MARGIN_POINTER_HALF), math.floor(card.h / 2) - radius)
+  local length = math.floor(scaled(MARGIN_POINTER_LENGTH) * half / scaled(MARGIN_POINTER_HALF))
+  local low, high = y + radius + half, y + card.h - radius - half
   local tip_y = low <= high and math.max(low, math.min(high, card.anchor_mid)) or y + math.floor(card.h / 2)
   renderer.draw_poly({ { x + 1, tip_y - half }, { x - length, tip_y }, { x + 1, tip_y + half } }, color)
 end
@@ -651,8 +654,10 @@ local function on_mouse_pressed(view, button, x, y, clicks)
     return true, edit.input:on_mouse_pressed(button, x, y, clicks)
   end
   if card and button == "left" then
-    margin_notes.begin_edit(view, card.note)
-    return true, true
+    local input = margin_notes.begin_edit(view, card.note)
+    -- The editor takes the card's text geometry, so this same press places its caret.
+    input:fit_card(card.text_left, card.text_top + style.padding.y, card.text_view.size.x)
+    return true, input:on_mouse_pressed(button, x, y, clicks)
   end
   if edit then end_edit(view, true) end
   return false
