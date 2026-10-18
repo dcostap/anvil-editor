@@ -6,6 +6,7 @@ local keymap = require "core.keymap"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
 local image_formats = require "core.image_formats"
+local image_animation = require "core.image_animation"
 
 ---@alias core.imageview.zoommode "fit" | "fixed"
 
@@ -18,6 +19,7 @@ local image_formats = require "core.image_formats"
 ---@field width number
 ---@field height number
 ---@field errmsg string?
+---@field open_animation (fun(): userdata?, string?)?
 local ImageView = View:extend()
 ImageView.view_icon = view_icons.register("image", view_icons.file("view.png"))
 
@@ -61,8 +63,10 @@ function ImageView.from_state(state)
 end
 
 ---Use an already loaded image, including Markdown's cached images.
-function ImageView:set_image(image, label, path)
+---`open_animation` returns a canvas animation for an animated image.
+function ImageView:set_image(image, label, path, open_animation)
   self.image, self.label, self.path = image, label, path
+  self.open_animation = open_animation
   self.errmsg, self.display_image, self.svg_size = nil, image, nil
   if image then
     -- Keep source dimensions for zoom. Reduce oversized display textures only once.
@@ -83,7 +87,7 @@ end
 
 function ImageView:load(path)
   local image, err = canvas.load_image(path)
-  self:set_image(image, nil, path)
+  self:set_image(image, nil, path, image and ImageView.file_animation_opener(path))
   self.errmsg = err
   if not image then
     core.log_quiet("Image View failed to load %s: %s", tostring(path), tostring(err))
@@ -347,7 +351,11 @@ function ImageView:draw_image()
     end
     core.pop_clip_rect()
   end
-  renderer.draw_canvas_scaled(self.display_image, x, y, math.max(1, w), math.max(1, h))
+  local iw, ih = self.image:get_size()
+  local frame = self.open_animation and image_animation.frame(self, {
+    version = self.image, open = self.open_animation, width = iw, height = ih,
+  })
+  renderer.draw_canvas_scaled(frame or self.display_image, x, y, math.max(1, w), math.max(1, h))
 end
 
 function ImageView:draw_controls()
@@ -372,6 +380,15 @@ function ImageView:draw()
       self.position.x, self.position.y, self.size.x, self.size.y)
   end
   core.pop_clip_rect()
+end
+
+---Return a canvas animation opener for an animated image file, or nil.
+---@param path string
+---@return (fun(): userdata?, string?)?
+function ImageView.file_animation_opener(path)
+  local animation_type = image_animation.detect_file_type(path)
+  if not animation_type then return nil end
+  return function() return canvas.open_animation(path, animation_type) end
 end
 
 function ImageView.is_supported(path)

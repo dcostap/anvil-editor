@@ -34,10 +34,11 @@ function overlay.update()
   view:update()
 end
 
-function overlay.open_image(image, label, path)
+---`open_animation` returns a canvas animation for an animated image.
+function overlay.open_image(image, label, path, open_animation)
   if not image then return false, "image is required" end
   view = ImageView()
-  view:set_image(image, label, path)
+  view:set_image(image, label, path, open_animation)
   overlay.update()
   core.root_panel:push_modal_input(overlay, {
     label = "markdown-image", handlers = modal_handlers,
@@ -54,7 +55,7 @@ function overlay.open(path)
     core.log_quiet("Image overlay failed to load %s: %s", path, tostring(err))
     return false, err
   end
-  return overlay.open_image(image, common.basename(path), path)
+  return overlay.open_image(image, common.basename(path), path, ImageView.file_animation_opener(path))
 end
 
 function overlay.zoom_at(delta, x, y)

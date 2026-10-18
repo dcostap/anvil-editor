@@ -255,3 +255,66 @@ test.describe("Image View interaction", function()
     if not ok then error(err, 0) end
   end)
 end)
+
+-- 2x2 GIF: red for 50 ms, green for 100 ms, blue for 150 ms, looping.
+local THREE_FRAME_GIF_BASE64 = "R0lGODlhAgACAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQEBQAAACwAAAAAAgACAAAIBgABCAQQEAAh+QQECgAAACwAAAAAAgACAIEA/wAAAAAAAAAAAAAIBgABCAQQEAAh+QQEDwAAACwAAAAAAgACAIEAAP8AAAAAAAAAAAAIBgABCAQQEAA7"
+
+local function drawn_color(view)
+  local old_scaled = renderer.draw_canvas_scaled
+  local color
+  renderer.draw_canvas_scaled = function(image)
+    local r, g, b = image:get_pixels(0, 0, 1, 1):byte(1, 3)
+    color = r > 200 and "red" or g > 200 and "green" or b > 200 and "blue" or "other"
+  end
+  local ok, err = pcall(view.draw_image, view)
+  renderer.draw_canvas_scaled = old_scaled
+  if not ok then error(err, 0) end
+  return color
+end
+
+test.describe("Image View animations", function()
+  test.before_each(function(context)
+    local images = require "core.markdown.images"
+    context.url = "data:image/gif;base64," .. THREE_FRAME_GIF_BASE64
+    context.path = USERDIR .. PATHSEP .. "image-view-animation.gif"
+    local file = test.not_nil(io.open(context.path, "wb"))
+    file:write(test.not_nil(images.decode_data_image(context.url)))
+    file:close()
+    context.time = system.get_time
+    context.background = config.images_background_mode
+    context.now = 1000
+    system.get_time = function() return context.now end
+    config.images_background_mode = "none"
+  end)
+
+  test.after_each(function(context)
+    overlay.close()
+    require("core.image_animation").close_all()
+    require("core.markdown.images").clear_assets()
+    system.get_time = context.time
+    config.images_background_mode = context.background
+    os.remove(context.path)
+  end)
+
+  test.it("plays an animated GIF file", function(context)
+    local view = ImageView(context.path)
+    view.size.x, view.size.y = 200, 200
+    view:update()
+    test.equal(drawn_color(view), "red")
+    context.now = context.now + 0.05
+    test.equal(drawn_color(view), "green")
+    context.now = context.now + 0.1
+    test.equal(drawn_color(view), "blue")
+  end)
+
+  test.it("plays an embedded Markdown GIF in the image overlay", function(context)
+    local images = require "core.markdown.images"
+    local entry = images.get_asset(context.url)
+    test.ok(overlay.open_image(entry.image, "Embedded image", nil,
+      function() return images.open_animation(entry) end))
+    local view = test.not_nil(overlay.get_view())
+    test.equal(drawn_color(view), "red")
+    context.now = context.now + 0.05
+    test.equal(drawn_color(view), "green")
+  end)
+end)

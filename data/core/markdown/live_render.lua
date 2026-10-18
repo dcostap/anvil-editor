@@ -1031,7 +1031,10 @@ local function image_fragment(view, span, opts)
           if button ~= "left" then return false end
           owner.buffer:set_selection(hit.line, 1)
           if embedded then
-            return require("core.markdown.image_overlay").open_image(entry.image, label)
+            return require("core.markdown.image_overlay").open_image(
+              entry.image, label, nil,
+              entry.animation_type and function() return images.open_animation(entry) end
+            )
           end
           return common.open_in_system(hit.fragment.image_path)
         end,
