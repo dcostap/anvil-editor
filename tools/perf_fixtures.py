@@ -7,6 +7,7 @@ repository to its commit and applies the same working-tree changes again.
 """
 from __future__ import annotations
 
+import base64
 from collections import deque
 from dataclasses import asdict, dataclass, field
 import hashlib
@@ -15,10 +16,12 @@ import os
 from pathlib import Path
 import random
 import shutil
+import struct
 import subprocess
 import threading
 import time
 from typing import Iterator
+import zlib
 
 # Bump when generated content changes, so stale caches are rebuilt.
 GENERATOR_VERSION = 1
@@ -89,6 +92,36 @@ class ProjectSetSpec:
         payload = json.dumps({"version": GENERATOR_VERSION, "kind": "set", **asdict(self)},
                              sort_keys=True)
         return f"{self.name}-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+
+
+@dataclass(frozen=True)
+class MarkdownSpec:
+    """A folder with one Markdown note that embeds a large image as a data URI.
+
+    Pasted screenshots often arrive this way. The image line holds the whole
+    encoded image, so it is far longer than any normal line.
+    """
+    name: str
+    image_width: int = 640
+    image_height: int = 333
+    lines_before: int = 30
+    lines_after: int = 300
+    seed: int = 1
+
+    @property
+    def key(self) -> str:
+        payload = json.dumps({"version": GENERATOR_VERSION, "kind": "markdown", **asdict(self)},
+                             sort_keys=True)
+        return f"{self.name}-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+
+    @property
+    def note(self) -> str:
+        return "notes/embedded-image.md"
+
+    @property
+    def image_line(self) -> int:
+        # Prose lines, then a blank line, then the image.
+        return self.lines_before + 2
 
 
 def default_cache_root() -> Path:
@@ -271,6 +304,35 @@ def build_folder(spec: FolderSpec, root: Path) -> None:
         write_text(root / path, source_text(path, line_count(spec, index), 1))
 
 
+def noise_png(width: int, height: int, rng: random.Random) -> bytes:
+    """Return an RGB PNG of random pixels, so compression keeps it large."""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+    rows = b"".join(bytes(1) + rng.randbytes(width * 3) for _ in range(height))
+    return (bytes((0x89,)) + b"PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
+
+
+def prose_line(rng: random.Random, index: int) -> str:
+    if index % 12 == 0:
+        return f"## {WORDS[rng.randrange(len(WORDS))].title()} notes {index}"
+    if index % 5 == 0:
+        return "- " + " ".join(WORDS[rng.randrange(len(WORDS))] for _ in range(8))
+    return " ".join(WORDS[rng.randrange(len(WORDS))] for _ in range(14)) + "."
+
+
+def build_markdown(spec: MarkdownSpec, root: Path) -> None:
+    rng = random.Random(spec.seed)
+    image = base64.b64encode(noise_png(spec.image_width, spec.image_height, rng)).decode("ascii")
+    lines = [prose_line(rng, index + 1) for index in range(spec.lines_before)]
+    lines += ["", f"![](data:image/png;base64,{image})", "# After the image"]
+    lines += [prose_line(rng, index + 1) for index in range(spec.lines_after)]
+    root.mkdir(parents=True)
+    write_text(root / spec.note, "\n".join(lines) + "\n")
+
+
 def pathspec(root: Path, command: str, paths: list[str], *options: str) -> None:
     if paths:
         # Large lists exceed the Windows command-line limit.
@@ -371,7 +433,7 @@ def members(spec: ProjectSetSpec) -> list[tuple[str, RepoSpec]]:
             for index in range(spec.projects)]
 
 
-def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec, cache_root: Path | None = None,
+def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec, cache_root: Path | None = None,
                 rebuild: bool = False, touched: list[str] | None = None) -> Path:
     """Return a ready fixture root, building it into the cache when needed.
 
@@ -390,6 +452,8 @@ def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec, cache_root: Path |
                 build_repo(member, root / name)
         elif isinstance(spec, FolderSpec):
             build_folder(spec, root)
+        elif isinstance(spec, MarkdownSpec):
+            build_markdown(spec, root)
         else:
             build_repo(spec, root)
         marker.write_text(json.dumps(asdict(spec), indent=2), encoding="utf-8")

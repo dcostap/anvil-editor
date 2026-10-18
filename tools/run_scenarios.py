@@ -31,7 +31,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import perf_diagnostics  # noqa: E402
 import perf_fixtures  # noqa: E402
-from perf_fixtures import FolderSpec, ProjectSetSpec, RepoSpec  # noqa: E402
+from perf_fixtures import FolderSpec, MarkdownSpec, ProjectSetSpec, RepoSpec  # noqa: E402
 import run_render_perf_gate as gate  # noqa: E402
 
 RESULTS_ROOT = gate.ROOT / "tools" / "perf-results" / "scenarios"
@@ -50,12 +50,14 @@ FOLDER_MEDIUM = FolderSpec("folder-medium", files=6000)
 WORKSPACE = ProjectSetSpec("workspace", projects=12,
                            repo=RepoSpec("member", files=400, modified=20, untracked=5))
 PROJECTS_MANY = ProjectSetSpec("projects-many", projects=24)
+# A note with an embedded image of about 640 KB, a typical pasted screenshot.
+MARKDOWN_IMAGE = MarkdownSpec("markdown-image")
 
 
 @dataclass(frozen=True)
 class Scenario:
     scene: str
-    fixture: RepoSpec | FolderSpec | ProjectSetSpec
+    fixture: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec
     actions: int
     suites: tuple[str, ...]
     settings: dict[str, Any] = field(default_factory=dict)
@@ -112,6 +114,17 @@ SCENARIOS: dict[str, Scenario] = {
     "filetree-scroll-shell": Scenario(
         "filetree_scroll", REPO_MEDIUM, actions=40, suites=("shell",), launch="shell",
         settings={"rows": 600, "max_level": 3}, action_budget_ms=400.0),
+    # Move the caret across a Markdown image line that holds about 850 KB of base64.
+    # The caret scrolls with animation, and entering the image line reveals and
+    # wraps its whole source once. Both are expected; per-frame work is not.
+    "markdown-embedded-image": Scenario(
+        "markdown_image", MARKDOWN_IMAGE, actions=20, suites=("smoke",),
+        settings={"note": MARKDOWN_IMAGE.note, "image_line": MARKDOWN_IMAGE.image_line},
+        frame_spike_ms=80.0, action_budget_ms=200.0),
+    "markdown-embedded-image-wheel": Scenario(
+        "markdown_image", MARKDOWN_IMAGE, actions=40, suites=("smoke",),
+        settings={"note": MARKDOWN_IMAGE.note, "image_line": MARKDOWN_IMAGE.image_line,
+                  "mode": "wheel"}),
     "fuzzy-files-medium": Scenario(
         "fuzzy_files", REPO_MEDIUM, actions=24, suites=("smoke",), targets=24,
         action_budgets={"first-query": 1000.0}),

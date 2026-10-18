@@ -5894,14 +5894,44 @@ function TextView:get_line_render_position_col(render_line, x, y)
       local previous_x = self:get_line_render_col_x_offset(render_line, col, row)
       if x <= previous_x then return col, row_index end
       local source = render_line.source_text or ""
-      for char in common.utf8_chars(source:sub(col, math.max(col, col2 - 1))) do
+      if col2 > col then
+        -- A row's x grows with its column, so search for the first character
+        -- boundary at or past `x`. A scan was quadratic on a long row, such as
+        -- an embedded image's hidden source under a resting pointer.
+        if x > self:get_line_render_col_x_offset(render_line, col2, row) then
+          return col2, row_index
+        end
+        local next_col, next_x = col2, nil
+        local function boundary_after(c)
+          c = c + 1
+          while c < next_col and (source:byte(c) or 0) >= 0x80 and source:byte(c) < 0xC0 do
+            c = c + 1
+          end
+          return c
+        end
+        while boundary_after(col) < next_col do
+          local mid = math.floor((col + next_col) / 2)
+          while mid > col and (source:byte(mid) or 0) >= 0x80 and source:byte(mid) < 0xC0 do
+            mid = mid - 1
+          end
+          if mid <= col then mid = boundary_after(col) end
+          local mid_x = self:get_line_render_col_x_offset(render_line, mid, row)
+          if x <= mid_x then
+            next_col, next_x = mid, mid_x
+          else
+            col, previous_x = mid, mid_x
+          end
+        end
+        next_x = next_x or self:get_line_render_col_x_offset(render_line, next_col, row)
+        return x <= previous_x + (next_x - previous_x) / 2 and col or next_col, row_index
+      end
+      for char in common.utf8_chars(source:sub(col, col)) do
         local next_col = col + #char
         local next_x = self:get_line_render_col_x_offset(render_line, next_col, row)
         if x <= next_x then
           return x <= previous_x + (next_x - previous_x) / 2 and col or next_col,
             row_index
         end
-        col, previous_x = next_col, next_x
       end
       return col2, row_index
     end

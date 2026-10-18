@@ -75,7 +75,8 @@ test.describe("Markdown long paste", function()
     markdown_model.close(buffer, "test")
   end)
 
-  test.it("lays out a long data-image line promptly", function()
+  -- Pasted screenshots arrive as data URIs, so one line holds the encoded image.
+  local function open_data_image_note(name)
     local old_images, old_load = config.markdown_live_render_images, canvas.load_image_data
     config.markdown_live_render_images = true
     canvas.load_image_data = function()
@@ -85,13 +86,23 @@ test.describe("Markdown long paste", function()
       }
     end
     local data_image = "![](data:image/png;base64," .. string.rep("A", 2000000) .. ")"
-    local buffer = Buffer("data-image-layout.md", "data-image-layout.md", true)
+    local buffer = Buffer(name, name, true)
     buffer:insert(1, 1, "before\n\n" .. data_image .. "\n# Heading\nafter")
     buffer:clear_undo_redo()
     local view = Editor(buffer)
     view.size.x, view.size.y = 800, 800
     view:set_wrapping_enabled(true)
     wait_ready(view)
+    return view, function()
+      markdown.live_render.release(view, "test")
+      markdown_model.close(buffer, "test")
+      view:on_close()
+      config.markdown_live_render_images, canvas.load_image_data = old_images, old_load
+    end
+  end
+
+  test.it("lays out a long data-image line promptly", function()
+    local view, close = open_data_image_note("data-image-layout.md")
 
     local started = system.get_time()
     linewrapping.complete_async_reconstruction(view)
@@ -102,13 +113,46 @@ test.describe("Markdown long paste", function()
     for _, fragment in ipairs(render and render.fragments or {}) do
       if fragment.widget and fragment.image_block then image = fragment end
     end
+    close()
     test.not_nil(image, "the data image did not render as an image block")
     test.ok(elapsed < 0.45, string.format(
       "laying out the data-image line blocked the editor for %.3fs", elapsed
     ))
+  end)
 
-    markdown.live_render.release(view, "test")
-    markdown_model.close(buffer, "test")
-    config.markdown_live_render_images, canvas.load_image_data = old_images, old_load
+  -- Drawing looks up each visible line's render plan many times per frame.
+  test.it("looks up a laid-out data-image line without copying it", function()
+    local view, close = open_data_image_note("data-image-lookup.md")
+    linewrapping.complete_async_reconstruction(view)
+    local plan = view:get_line_render(3)
+
+    local started = system.get_time()
+    for _ = 1, 100 do view:get_line_render(3) end
+    local elapsed = system.get_time() - started
+    local again = view:get_line_render(3)
+    close()
+    test.ok(again == plan, "the data-image line's plan was rebuilt")
+    test.ok(elapsed < 0.05, string.format(
+      "100 lookups of the data-image line took %.3fs", elapsed
+    ))
+  end)
+
+  -- The pointer rests over the view while the wheel scrolls, so each frame
+  -- resolves the position under it.
+  test.it("resolves a pointer past the end of a data-image line promptly", function()
+    local view, close = open_data_image_note("data-image-pointer.md")
+    linewrapping.complete_async_reconstruction(view)
+    local x, y = view:get_line_screen_position(3, 1)
+
+    local started = system.get_time()
+    local line, col = view:resolve_screen_position(view.position.x + view.size.x - 20, y + 1)
+    local elapsed = system.get_time() - started
+    local length = #view.buffer.lines[3]
+    close()
+    test.equal(line, 3)
+    test.equal(col, length)
+    test.ok(elapsed < 0.05, string.format(
+      "resolving the pointer over the data-image line took %.3fs", elapsed
+    ))
   end)
 end)

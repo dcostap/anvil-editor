@@ -39,6 +39,24 @@ local PROSE_FONT_ROLE_NAMES = {
   "prose_heading_emphasis_font",
 }
 
+-- Strips a buffer line's newline. Copying a long line, such as an embedded
+-- image, costs milliseconds, and render lookups strip the same line many
+-- times per frame. Strings are interned, so a long raw line is a cheap key.
+local LONG_SOURCE_LINE = 4096
+local stripped_long_lines, stripped_long_count = {}, 0
+
+local function source_line_text(view, line)
+  local raw = view.buffer.lines[line] or ""
+  if #raw < LONG_SOURCE_LINE then return (raw:gsub("\n$", "")) end
+  local text = stripped_long_lines[raw]
+  if text then return text end
+  if stripped_long_count >= 8 then stripped_long_lines, stripped_long_count = {}, 0 end
+  text = raw:gsub("\n$", "")
+  stripped_long_lines[raw] = text
+  stripped_long_count = stripped_long_count + 1
+  return text
+end
+
 local function extension(path)
   return (path or ""):match("%.([^.\\/]+)$") and (path or ""):match("%.([^.\\/]+)$"):lower() or nil
 end
@@ -222,7 +240,7 @@ local function list_marker_for_line(view, line)
     if node.type == "list" or node.type == "list_item" then
       local marker = node.attributes and node.attributes.list
       if marker and marker.line1 == line then
-        local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+        local text = source_line_text(view, line)
         if not list_marker_has_gap(text, marker) then return nil end
         local raw = text:sub(marker.col1, marker.col2 - 1)
         local _, token_end = raw:find("%S+")
@@ -483,7 +501,7 @@ local function semantic_heading_for_line(view, line_text, line)
       if suppressed then return nil end
       local heading = heading_for_line(line_text, line)
       if not heading and node.source.line2 > node.source.line1 then
-        local underline = (view.buffer.lines[line + 1] or ""):gsub("\n$", "")
+        local underline = source_line_text(view, line + 1)
         local indent, marks = underline:match("^( *)(=+)[ \t]*$")
         local level = 1
         if not marks then
@@ -1067,7 +1085,7 @@ end
 
 local function semantic_range_text_from_buffer(view, range)
   if not range or range.line1 ~= range.line2 then return nil end
-  local text = (view.buffer.lines[range.line1] or ""):gsub("\n$", "")
+  local text = source_line_text(view, range.line1)
   return text:sub(range.col1, range.col2 - 1)
 end
 
@@ -1739,7 +1757,7 @@ local callout_runtime = {}
 function callout_runtime.line_ranges(view, callout, line)
   local cached = callout.line_ranges[line]
   if cached ~= nil then return cached ~= false and cached or nil end
-  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local text = source_line_text(view, line)
   cached = callouts.line_ranges(text, callout.nesting_depth, line)
   if not cached then
     callout.line_ranges[line] = false
@@ -1760,13 +1778,13 @@ function callout_runtime.from_quote(view, node)
   if cache.records[key] ~= nil then
     return cache.records[key] ~= false and cache.records[key] or nil
   end
-  local text = (view.buffer.lines[node.source.line1] or ""):gsub("\n$", "")
+  local text = source_line_text(view, node.source.line1)
   local callout = callouts.parse_header(text, node.source.col1)
   if not callout then cache.records[key] = false return nil end
   local line2 = node.source.line2
   if node.source.col2 == 1 and line2 > node.source.line1 then line2 = line2 - 1 end
   while line2 > node.source.line1 do
-    local end_text = (view.buffer.lines[line2] or ""):gsub("\n$", "")
+    local end_text = source_line_text(view, line2)
     if callouts.line_ranges(end_text, callout.nesting_depth, line2) then break end
     line2 = line2 - 1
   end
@@ -1780,7 +1798,7 @@ function callout_runtime.from_quote(view, node)
   callout.quote_node_id = node.id
   callout.line_ranges = {}
   for line = callout.line1, callout.line2 do
-    local line_text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    local line_text = source_line_text(view, line)
     callout.line_ranges[line] = callouts.line_ranges(
       line_text, callout.nesting_depth, line
     ) or false
@@ -3788,7 +3806,7 @@ end
 local function publish_pending_table_row(view, line, render_line)
   local state = view.__markdown_live_owner
   if not (state and render_line) then return false end
-  local current = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local current = source_line_text(view, line)
   edit_visual_projection.store_pending_render(state, line, {
     revision = view.buffer.text_revision,
     source_text = current,
@@ -3799,7 +3817,7 @@ local function publish_pending_table_row(view, line, render_line)
 end
 
 interactive_table_render_line = function(view, table_node, line, allow_pending)
-  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local text = source_line_text(view, line)
   local fragments, layout, position_rows, interactive_row_height, frame =
     table_row_fragments(view, table_node, line, allow_pending)
   if not (fragments and layout) then return nil end
@@ -4170,7 +4188,7 @@ local function capture_pre_edit_renders(view, change)
   local captured, removed_raw_rows = 0, 0
   for line in pairs(lines) do
     local render = cached_render_line(view, line)
-    local source_text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    local source_text = source_line_text(view, line)
     local indented_node, indented_end_line
     if not (owner.pending_indented_lines and owner.pending_indented_lines[line]) then
       indented_node, indented_end_line = indented_code_for_line(view, line)
@@ -4369,7 +4387,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     local new_line = edit_projection.map_unchanged_line(ranges, old_line)
     if not new_line or next_lines[new_line] then return end
     render_line = render_line or cached_render_line(view, old_line)
-    local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
+    local source = source_line_text(view, new_line)
     if render_line and render_line.source_text == source then
       local retained_render = clone_render_line(render_line)
       retained_render.markdown_pending_code_background =
@@ -4414,7 +4432,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   end
   local function publish(line, render, captured, provenance)
     if not render then return false end
-    local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    local source = source_line_text(view, line)
     local list_reindented = can_reindent_list_projection(captured, source)
     local previous_list = captured
       and edit_visual_projection.source_list_prefix(captured.source_text or "")
@@ -4606,7 +4624,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     local new_line1 = range.new_line1 or edit.line1
     local new_line2 = range.new_line2 or new_line1
     if new_line1 == new_line2 then
-      local source = (view.buffer.lines[new_line1] or ""):gsub("\n$", "")
+      local source = source_line_text(view, new_line1)
       local joined = join_projected_renders(view, pre_edit_lines, edit, source)
       if joined then publish(new_line1, joined, captured, "retained") end
     end
@@ -4619,7 +4637,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     if split and #split == new_line2 - new_line1 + 1 then
       for index, render in ipairs(split) do
         local line = new_line1 + index - 1
-        local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
+        local source = source_line_text(view, line)
         local visual_capture = edit_visual_projection.find_capture(
           view, pre_edit_lines, source,
           index > 1 and (edit.text or ""):find("\n", 1, true) ~= nil
@@ -4661,7 +4679,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     local fallback = pre_edit_lines[old_line1] or pre_edit_lines[old_line2]
     for new_line = new_line1, new_line2 do
       if not next_lines[new_line] then
-        local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
+        local source = source_line_text(view, new_line)
         local exact
         for old_line = old_line1, old_line2 do
           local captured = pre_edit_lines[old_line]
@@ -4766,7 +4784,7 @@ local function capture_edit_projection(view, transaction)
   local function retain_indented(old_line, source_text)
     local new_line = edit_projection.map_unchanged_line(ranges, old_line)
     if not new_line then return end
-    local current = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
+    local current = source_line_text(view, new_line)
     if source_text ~= current then return end
     pending_indented[new_line] = true
     pending_indented_sources[new_line] = current
@@ -4776,7 +4794,7 @@ local function capture_edit_projection(view, transaction)
     for old_line = line1, line2 do
       local new_line = edit_projection.map_unchanged_line(ranges, old_line)
       if new_line then
-        local current = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
+        local current = source_line_text(view, new_line)
         pending_indented[new_line] = true
         pending_indented_sources[new_line] = current
       end
@@ -4799,7 +4817,7 @@ local function capture_edit_projection(view, transaction)
     local new_line2 = range.new_line2 or new_line1
     for new_line = new_line1, new_line2 do
       if not pending_indented[new_line] then
-        local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
+        local source = source_line_text(view, new_line)
         for _, captured in pairs(pre_edit_lines) do
           if captured.indented and captured.source_text == source then
             pending_indented[new_line] = true
@@ -4882,7 +4900,7 @@ local function capture_edit_projection(view, transaction)
     local new_line1 = range.new_line1 or range.old_line1 or 1
     local new_line2 = range.new_line2 or new_line1
     for new_line = new_line1, new_line2 do
-      local source = (view.buffer.lines[new_line] or ""):gsub("\n$", "")
+      local source = source_line_text(view, new_line)
       for _, captured in pairs(pre_edit_lines) do
         local record = captured.callout_record
           or captured.render_line and captured.render_line.callout_record
@@ -4928,7 +4946,7 @@ local function pending_render(view, line)
     and owner.presentation_snapshot.rows
     or owner and owner.pending_lines
   local entry = rows and rows[line]
-  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local text = source_line_text(view, line)
   if entry and entry.revision == view.buffer.text_revision and entry.source_text == text then
     if entry.render_line and entry.render_line.table_row
     and entry.table_geometry ~= table_presentation.geometry_signature(view)
@@ -5002,7 +5020,7 @@ function poi_provider:points_of_interest(view)
       and node.source.line1 == node.source.line2 and not seen[node.id]
     then
       local line = node.source.line1
-      local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+      local text = source_line_text(view, line)
       local link = node.type == "link_reference"
         and reference_link_from_node(view, text, line, node)
         or markdown_links.from_semantic_node(text, line, node)
@@ -5065,8 +5083,8 @@ end
 local function fenced_code_delimiter_kind(view, fenced, line)
   if line == fenced.source.line1 then return "open" end
   if line ~= fenced.effective_line2 then return nil end
-  local opening = (view.buffer.lines[fenced.source.line1] or ""):gsub("\n$", "")
-  local closing = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local opening = source_line_text(view, fenced.source.line1)
+  local closing = source_line_text(view, line)
   local marker, count = fence_marker(opening)
   return marker and closes_fence(closing, marker, count) and "close" or nil
 end
@@ -5112,11 +5130,11 @@ function live._markdown_code_copy_text(view, fenced)
   end
   if first_line > last_line then return "" end
 
-  local opening = (view.buffer.lines[fenced.source.line1] or ""):gsub("\n$", "")
+  local opening = source_line_text(view, fenced.source.line1)
   local prefix = opening:sub(1, math.max(0, (fenced.source.col1 or 1) - 1))
   local lines = {}
   for line = first_line, math.min(last_line, #view.buffer.lines) do
-    local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    local text = source_line_text(view, line)
     if prefix ~= "" and text:sub(1, #prefix) == prefix then
       text = text:sub(#prefix + 1)
     end
@@ -5367,7 +5385,7 @@ function edit_visual_projection.blank_after_preview_item_in_code(view, line)
     previous = previous - 1
   end
   if previous < first then return false end
-  local prior_source = (view.buffer.lines[previous] or ""):gsub("\n$", "")
+  local prior_source = source_line_text(view, previous)
   if not edit_visual_projection.preview_list_item_for_line(
     view, previous, prior_source
   ) then return false end
@@ -5377,7 +5395,7 @@ function edit_visual_projection.blank_after_preview_item_in_code(view, line)
 end
 
 semantic_line_background = function(view, line)
-  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local text = source_line_text(view, line)
   if edit_visual_projection.blank_after_preview_item_in_code(view, line) then return nil end
   if edit_visual_projection.preview_list_item_for_line(view, line, text) then
     return nil
@@ -5700,7 +5718,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
     fence_line1, fence_line2 = owner.fence_service:on_text_transaction(transaction)
     if not opening_changed and fence_line1 then
       for cached_line, captured in pairs(pre_edit_lines or {}) do
-        local source = (view.buffer.lines[cached_line] or ""):gsub("\n$", "")
+        local source = source_line_text(view, cached_line)
         if captured.fenced and captured.render_line and captured.source_text == source then
           cached_fence_lines[cached_line] = {
             revision = view.buffer.text_revision,
@@ -5716,7 +5734,7 @@ function provider:on_text_transaction(view, transaction, line1, line2)
         if render and render.markdown_code_block
           and owner.fence_service:contains_line(cached_line)
         then
-          local source = (view.buffer.lines[cached_line] or ""):gsub("\n$", "")
+          local source = source_line_text(view, cached_line)
           if render and render.source_text == source then
             cached_fence_lines[cached_line] = {
               revision = view.buffer.text_revision,
@@ -5920,8 +5938,8 @@ heading_render_line = function(view, text, heading, reveal_units)
 end
 
 local function block_spacing_after(view, line)
-  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
-  local next_text = (view.buffer.lines[line + 1] or ""):gsub("\n$", "")
+  local text = source_line_text(view, line)
+  local next_text = source_line_text(view, line + 1)
   if text:match("^%s*$") or next_text == "" or next_text:match("^%s*$") then
     return 0
   end
@@ -6230,7 +6248,7 @@ local function build_render_line(view, line, _context)
     if semantic_pending
       and (not owner.semantic_pending_line or line >= owner.semantic_pending_line)
     then
-      local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+      local text = source_line_text(view, line)
       local code = not owner.reload_projection_revision
         and owner.fence_service and owner.fence_service:contains_line(line)
       code = code or owner and owner.pending_indented_lines
@@ -6250,7 +6268,7 @@ local function build_render_line(view, line, _context)
     end
   end
   if fenced then
-    local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+    local text = source_line_text(view, line)
     local delimiter_kind = fenced_code_delimiter_kind(view, fenced, line)
     if delimiter_kind then
       local active = fenced_code_is_active(view, fenced)
@@ -6281,7 +6299,7 @@ local function build_render_line(view, line, _context)
     return fenced_code_content_render_line(view, line, text, fenced)
   end
   local table_node = table_for_line(view, line)
-  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local text = source_line_text(view, line)
   local preview_item = edit_visual_projection.preview_list_item_for_line(view, line, text)
   if not in_comment and not table_node and raw_block_for_line(view, line)
     and not preview_item
@@ -6420,7 +6438,7 @@ function provider:render_line(view, line, context)
     end
   end
 
-  local source = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local source = source_line_text(view, line)
   if render_line.source_text ~= source and provenance ~= "reload-frozen" then
     core.log_quiet(
       "Markdown Live Preview rejected mismatched render provenance=%s line=%d buffer_revision=%d semantic_revision=%s",
@@ -7399,7 +7417,7 @@ function live.link_at_caret(view)
   local line = state and state.selections and state.selections[1]
   local col = state and state.selections and state.selections[2]
   if not (line and col) then return nil end
-  local text = (view.buffer.lines[line] or ""):gsub("\n$", "")
+  local text = source_line_text(view, line)
   local best, best_size
   for _, span in ipairs(semantic_link_spans(view, text, line)) do
     if col >= span.col1 and col < span.col2 then
