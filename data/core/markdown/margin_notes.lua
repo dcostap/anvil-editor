@@ -11,7 +11,6 @@ local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local file_context = require "core.file_context"
 local markdown_model = require "core.markdown.model"
-local markdown_parser = require "core.markdown.parser"
 local panes = require "core.panes"
 
 local margin_notes = {}
@@ -62,15 +61,24 @@ end
 -- Note text: inline Markdown ----------------------------------------------
 --
 -- A note shows inline Markdown as Live Preview does: styled text without its
--- syntax. While a note is edited, the syntax of the span at the caret shows.
+-- syntax. The native Markdown parser reads each note, as it reads documents.
+-- While a note is edited, the syntax of the node at the caret shows.
 
 local NOTE_FORMAT_PROVIDER = "markdown.margin-note-format"
+local NOTE_MODEL_LISTENER = "markdown.margin-note-format"
+-- A new card parses on the input thread so it never shows raw syntax.
+local NOTE_SETTLE_MS = 4
 local SPAN_FONTS = {
   strong = "prose_strong_font",
   emphasis = "prose_emphasis_font",
   strong_emphasis = "prose_strong_emphasis_font",
   code = "code_font",
 }
+local FORMATTING_NODES = {
+  strong = true, emphasis = true, strong_emphasis = true,
+  strikethrough = true, highlight = true, code = true,
+}
+local LINK_NODES = { link = true, image = true, wiki_link = true, embed = true }
 local styled_fonts = setmetatable({}, { __mode = "k" })
 
 -- An inline style's font at the note font's size.
@@ -100,17 +108,24 @@ local function reveal_col(view)
   return col
 end
 
--- The shown text of a link span: its label, or a wiki link's alias or target.
-local function link_text_cols(source, span)
-  local range = span.link.link_text_range
-  if range then return range.col1, range.col2 end
-  local open = span.link.is_embed and 3 or 2
-  local inner = source:sub(span.col1 + open, span.col2 - 3)
-  local pipe = inner:find("|", 1, true)
-  return span.col1 + open + (pipe or 0), span.col2 - 2
+-- The shown text of a link node: its label, or a wiki link's alias or target.
+local function link_text_range(source, node)
+  local attributes = node.attributes or {}
+  local range = attributes.link_text or attributes.image_alt or attributes.alias
+    or attributes.target or attributes.link_destination
+  if range and range.line1 == 1 and range.line2 == 1 then return range.col1, range.col2 end
+  return node.source.col1, node.source.col2
+end
+
+local function note_nodes(view)
+  local instance = view.note_model
+  if not instance then return nil end
+  return instance:nodes_for_lines(1, 1, { allow_pending_result = true })
 end
 
 local function note_render(view, source)
+  local nodes = note_nodes(view)
+  if not nodes then return nil end
   local base = view:get_font()
   local caret = reveal_col(view)
   local bounds = { [1] = true, [#source + 1] = true }
@@ -124,19 +139,23 @@ local function note_render(view, source)
       styled[#styled + 1] = { col1, col2, kind }
     end
   end
-  for _, span in ipairs(markdown_parser.parse_inline(source)) do
-    local revealed = caret ~= nil and caret >= span.col1 and caret <= span.col2
-    if span.link then
-      local col1, col2 = link_text_cols(source, span)
-      mark(span.col1, col1, "syntax", revealed)
-      mark(col1, col2, "link")
-      mark(col2, span.col2, "syntax", revealed)
-    else
-      for _, marker in ipairs(span.marker_ranges) do
-        mark(marker.col1, marker.col2, "syntax", revealed)
+  for _, node in ipairs(nodes) do
+    local range = node.source
+    if range.line1 == 1 and (range.line2 or 1) == 1
+      and (FORMATTING_NODES[node.type] or LINK_NODES[node.type])
+    then
+      local revealed = caret ~= nil and caret >= range.col1 and caret <= range.col2
+      if LINK_NODES[node.type] then
+        local col1, col2 = link_text_range(source, node)
+        mark(range.col1, col1, "syntax", revealed)
+        mark(col1, col2, "link")
+        mark(col2, range.col2, "syntax", revealed)
+      else
+        mark(range.col1, range.col2, node.type)
+        for _, marker in ipairs(node.marker_ranges or {}) do
+          if marker.line1 == 1 then mark(marker.col1, marker.col2, "syntax", revealed) end
+        end
       end
-      local content = span.content_ranges[1]
-      mark(content.col1, content.col2, span.type)
     end
   end
   local cols = {}
@@ -158,7 +177,9 @@ local function note_render(view, source)
       end
       local bold = kinds.strong or kinds.strong_emphasis
       local italic = kinds.emphasis or kinds.strong_emphasis
-      local font = kinds.code and styled_font(base, "code")
+      -- Revealed syntax keeps the plain note font.
+      local font = kinds.syntax and base
+        or kinds.code and styled_font(base, "code")
         or bold and italic and styled_font(base, "strong_emphasis")
         or bold and styled_font(base, "strong")
         or italic and styled_font(base, "emphasis")
@@ -181,7 +202,10 @@ end
 
 local note_format_provider = {
   line_generation = function(_, view)
-    return tostring(view:get_font()) .. ":" .. tostring(reveal_col(view) or 0)
+    return table.concat({
+      tostring(view:get_font()), tostring(reveal_col(view) or 0),
+      tostring(view.note_model and view.note_model.generation or 0),
+    }, ":")
   end,
   render_line = function(_, view, _, context)
     return note_render(view, context.source_text)
@@ -203,6 +227,19 @@ function NoteInput:new(owner)
   self.wrap_continuation_flush = true
   self:set_wrapping_enabled(true)
   self:add_line_render_provider(NOTE_FORMAT_PROVIDER, note_format_provider)
+  -- A Markdown name makes the note a Markdown Model buffer. It has no file.
+  self.buffer.filename = "margin-note.md"
+  self.note_model = markdown_model.get(self.buffer)
+  self.note_model:add_listener(NOTE_MODEL_LISTENER, function()
+    self:invalidate_line_render(NOTE_FORMAT_PROVIDER)
+    core.redraw = true
+  end)
+end
+
+function NoteInput:close_model()
+  if not self.note_model then return end
+  self.note_model = nil
+  markdown_model.close(self.buffer, "margin note closed")
 end
 
 function NoteInput:get_text()
@@ -214,6 +251,7 @@ function NoteInput:set_text(text)
   self.buffer:insert(1, 1, text or "")
   self.buffer:clear_undo_redo()
   self.buffer:set_selection(1, math.huge, 1, math.huge)
+  self.note_model:settle(NOTE_SETTLE_MS)
 end
 
 function NoteInput:get_gutter_width() return 0, 0 end
@@ -377,6 +415,7 @@ local function end_edit(view, save)
   local text = edit.input:get_text()
   view.__margin_note_edit = nil
   panes.unregister_focus_target(edit.input)
+  edit.input:close_model()
   if core.active_view == edit.input then core.set_active_view(view) end
   if save then
     margin_notes.set_text(view, edit.note, text)
@@ -522,10 +561,18 @@ function margin_notes.column_rect(view)
   return x, width
 end
 
+local function close_displays(view)
+  local displays = view.__margin_note_displays
+  if not displays then return end
+  view.__margin_note_displays = nil
+  for _, display in pairs(displays.views) do display:close_model() end
+end
+
 -- Notes with the same text share one display view.
 local function display_for(view, text)
   local displays = view.__margin_note_displays
   if not displays or displays.count > MAX_DISPLAYS then
+    close_displays(view)
     displays = { count = 0, views = {} }
     view.__margin_note_displays = displays
   end
@@ -886,7 +933,7 @@ function margin_notes.detach(view)
   view.draw, view.update = nil, nil
   view.on_mouse_moved, view.on_mouse_pressed, view.on_mouse_released = nil, nil, nil
   view.__margin_note_layout, view.__margin_note_hover = nil, nil
-  view.__margin_note_displays = nil
+  close_displays(view)
   if view.__margin_note_inline then
     view.__margin_note_inline = nil
     view:remove_visual_row_provider(ROW_PROVIDER)
