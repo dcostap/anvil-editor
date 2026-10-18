@@ -6,14 +6,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STATE_HEADER "anvil-shell-windows 4\n"
-/* Version 3 had no Sidebar layout, and version 2 no Project activity. Their Windows still restore. */
+#define STATE_HEADER "anvil-shell-windows 5\n"
+/* Version 4 had no Sidebar source, version 3 no Sidebar layout, and version 2 no Project activity. Their
+ * Windows still restore. */
+#define STATE_HEADER_4 "anvil-shell-windows 4\n"
 #define STATE_HEADER_3 "anvil-shell-windows 3\n"
 #define STATE_HEADER_2 "anvil-shell-windows 2\n"
 
 /* Each Window is one line: `window <id> <x> <y> <w> <h> <maximized> <path bytes> <path>`.
  * Each Project activity is one line: `project <unix seconds> <path bytes> <path>`.
- * The Sidebar layout is one optional line: `sidebar <points> <hidden>`. */
+ * The Sidebar layout is one optional line: `sidebar <points> <hidden>`.
+ * The Sidebar source is two optional lines: `sidebar-userdir <bytes> <path>` and `sidebar-recents <bytes> <text>`. */
 char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   if (state->count > ANVIL_SHELL_STATE_MAX_WINDOWS) return NULL;
   size_t capacity = sizeof(STATE_HEADER) + 32;
@@ -23,6 +26,14 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
     capacity += length + 96;
   }
   if (capacity > ANVIL_SHELL_STATE_MAX_BYTES) return NULL;
+  /* The Sidebar source is best effort too, but it comes before Project activity. */
+  bool source = state->sidebar_userdir && state->sidebar_recents;
+  if (source) {
+    size_t directory = strlen(state->sidebar_userdir), recents = strlen(state->sidebar_recents);
+    source = directory <= ANVIL_SHELL_STATE_MAX_PATH && recents <= ANVIL_SHELL_STATE_MAX_RECENTS &&
+             capacity + directory + recents + 64 <= ANVIL_SHELL_STATE_MAX_BYTES;
+    if (source) capacity += directory + recents + 64;
+  }
   /* Project activity is best effort. Entries that do not fit are left out; Windows always fit. */
   size_t projects = 0;
   for (size_t i = 0; i < state->project_count && projects < ANVIL_SHELL_STATE_MAX_PROJECTS; i++, projects++) {
@@ -36,6 +47,10 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   if (state->sidebar_points > 0)
     n += (size_t)snprintf(data + n, capacity - n, "sidebar %d %d\n", state->sidebar_points,
                           state->sidebar_hidden ? 1 : 0);
+  if (source)
+    n += (size_t)snprintf(data + n, capacity - n, "sidebar-userdir %zu %s\nsidebar-recents %zu %s\n",
+                          strlen(state->sidebar_userdir), state->sidebar_userdir, strlen(state->sidebar_recents),
+                          state->sidebar_recents);
   for (size_t i = 0; i < state->count; i++) {
     const AnvilShellWindowState *window = &state->windows[i];
     const char *path = window->path ? window->path : "";
@@ -61,6 +76,9 @@ void anvil_shell_state_free(AnvilShellState *state) {
   free(state->projects);
   state->projects = NULL;
   state->project_count = 0;
+  free(state->sidebar_userdir);
+  free(state->sidebar_recents);
+  state->sidebar_userdir = state->sidebar_recents = NULL;
 }
 
 static bool read_long(const char **cursor, const char *end, long *value) {
@@ -79,9 +97,9 @@ static bool read_long(const char **cursor, const char *end, long *value) {
   return true;
 }
 
-/* Reads `<path bytes> <path>\n` into a new string. */
-static bool read_path(const char **cursor, const char *end, long length, char **path) {
-  if (length < 0 || length > ANVIL_SHELL_STATE_MAX_PATH || length >= end - *cursor || (*cursor)[length] != '\n' ||
+/* Reads `<text bytes> <text>\n` into a new string. */
+static bool read_text(const char **cursor, const char *end, long length, long limit, char **path) {
+  if (length < 0 || length > limit || length >= end - *cursor || (*cursor)[length] != '\n' ||
       memchr(*cursor, '\0', (size_t)length))
     return false;
   *path = NULL;
@@ -95,13 +113,24 @@ static bool read_path(const char **cursor, const char *end, long length, char **
   return true;
 }
 
+static bool read_path(const char **cursor, const char *end, long length, char **path) {
+  return read_text(cursor, end, length, ANVIL_SHELL_STATE_MAX_PATH, path);
+}
+
+/* Reads the `<bytes> <text>\n` of an optional line that appears at most once. */
+static bool read_named_text(const char **cursor, const char *end, long limit, char **text) {
+  long length;
+  return !*text && read_long(cursor, end, &length) && length > 0 && read_text(cursor, end, length, limit, text);
+}
+
 bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *state) {
   *state = (AnvilShellState){0};
   size_t header = strlen(STATE_HEADER);
   bool version_2 = size >= header && !memcmp(data, STATE_HEADER_2, header);
   bool version_3 = size >= header && !memcmp(data, STATE_HEADER_3, header);
+  bool version_4 = size >= header && !memcmp(data, STATE_HEADER_4, header);
   if (size > ANVIL_SHELL_STATE_MAX_BYTES || size < header ||
-      (memcmp(data, STATE_HEADER, header) && !version_2 && !version_3))
+      (memcmp(data, STATE_HEADER, header) && !version_2 && !version_3 && !version_4))
     return false;
   const char *cursor = data + header, *end = data + size;
   state->windows = calloc(ANVIL_SHELL_STATE_MAX_WINDOWS, sizeof(*state->windows));
@@ -123,6 +152,19 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
       state->sidebar_points = (int)points;
       state->sidebar_hidden = cursor[0] == '1';
       cursor += 2;
+      complete = true;
+      continue;
+    }
+    bool source = !version_2 && !version_3 && !version_4;
+    if (source && end - cursor >= 16 && !memcmp(cursor, "sidebar-userdir ", 16)) {
+      cursor += 16;
+      if (!read_named_text(&cursor, end, ANVIL_SHELL_STATE_MAX_PATH, &state->sidebar_userdir)) break;
+      complete = true;
+      continue;
+    }
+    if (source && end - cursor >= 16 && !memcmp(cursor, "sidebar-recents ", 16)) {
+      cursor += 16;
+      if (!read_named_text(&cursor, end, ANVIL_SHELL_STATE_MAX_RECENTS, &state->sidebar_recents)) break;
       complete = true;
       continue;
     }
@@ -156,8 +198,8 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
     state->count++;
     complete = true;
   }
-  /* A partial or malformed file restores nothing. */
-  if (complete) return true;
+  /* A partial or malformed file restores nothing. A source needs both lines. */
+  if (complete && !state->sidebar_userdir == !state->sidebar_recents) return true;
   anvil_shell_state_free(state);
   return false;
 }

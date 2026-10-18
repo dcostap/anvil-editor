@@ -10,6 +10,7 @@
 #define ANVIL_SHELL_STATE_MAX_WINDOWS 64
 #define ANVIL_SHELL_STATE_MAX_PROJECTS 256
 #define ANVIL_SHELL_STATE_MAX_PATH 32768
+#define ANVIL_SHELL_STATE_MAX_RECENTS (64 * 1024)
 #define ANVIL_SHELL_STATE_MAX_BYTES (256 * 1024)
 
 typedef struct {
@@ -37,6 +38,9 @@ typedef struct {
   /* The Project Sidebar's width in points, shared by every Window. 0 means the default. */
   int sidebar_points;
   bool sidebar_hidden;
+  /* The last Project Sidebar source a Project published: its user directory and recent Projects. The shell
+   * starts the Sidebar from it before any Project runs. Both are set, or neither. */
+  char *sidebar_userdir, *sidebar_recents;
 } AnvilShellState;
 
 /* Encodes `state`. Returns NULL when it exceeds the bounds above. */
