@@ -29,9 +29,10 @@ function color_theme.saved_name()
 end
 
 ---Loads a Color Theme into core.style outside the editor: the theme over colors.default, then its saved Theme
----Editor edits. The editor uses core.reload_module, which also maps syntax colours.
+---Editor edits or the given unsaved ones. The editor uses core.reload_module, which also maps syntax colours.
 ---@param name string?
-function color_theme.load_style(name)
+---@param draft table? Theme Editor edits to use instead of the saved ones.
+function color_theme.load_style(name, draft)
   local theme_edits = require "core.theme_edits"
   name = color_theme.name(name)
   package.loaded["colors.default"] = nil
@@ -41,9 +42,41 @@ function color_theme.load_style(name)
     package.loaded[module] = nil
     require(module)
   end
-  local draft, err = theme_edits.load(name)
-  if err then error(err) end
+  if not draft then
+    local err
+    draft, err = theme_edits.load(name)
+    if err then error(err) end
+  end
   theme_edits.apply(style, theme_edits.capture(style), draft)
+end
+
+---Shows a Color Theme that this Project has not saved in the Sidebar. Without `draft`, the Sidebar uses the
+---theme's saved Theme Editor edits. Returns whether the shell received it.
+---@param name string?
+---@param draft table? unsaved Theme Editor edits
+---@return boolean
+function color_theme.preview(name, draft)
+  local common = require "core.common"
+  return system.preview_color_theme(common.serialize({name = color_theme.name(name), draft = draft},
+    {escape = true}))
+end
+
+---Shows the saved Color Theme in the Sidebar again. Returns whether the shell received it.
+---@return boolean
+function color_theme.end_preview()
+  return system.preview_color_theme("")
+end
+
+---Loads a Color Theme that color_theme.preview sent into core.style, and returns its name.
+---@param text string
+---@return string
+function color_theme.load_preview(text)
+  local chunk = assert(load("return " .. text, "=Color Theme preview", "t", {}))
+  local preview = chunk()
+  assert(type(preview) == "table" and type(preview.name) == "string", "invalid Color Theme preview")
+  assert(preview.draft == nil or type(preview.draft) == "table", "invalid Color Theme preview edits")
+  color_theme.load_style(preview.name, preview.draft)
+  return preview.name
 end
 
 -- The shell draws the Window controls, and the Project area while no Project frame covers it. Each shell

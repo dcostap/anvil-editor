@@ -1910,6 +1910,11 @@ static uint32_t check_shell_color(lua_State *L, int table, const char *field) {
   return color;
 }
 
+static int f_preview_color_theme(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_preview_color_theme(luaL_checkstring(L, 1)));
+  return 1;
+}
+
 static int f_set_shell_colors(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   AnvilSurfaceShellColors colors = {
@@ -2006,6 +2011,12 @@ static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   (void)event;
   lua_pushstring(L, "colorthemechanged");
   return 1;
+}
+static int colorthemepreview_callback(lua_State *L, SDL_Event *event) {
+  lua_pushstring(L, "colorthemepreview");
+  lua_pushstring(L, event->user.data1);
+  free(event->user.data1);
+  return 2;
 }
 static int projectsidebarchanged_callback(lua_State *L, SDL_Event *event) {
   (void)event;
@@ -2636,6 +2647,7 @@ static const luaL_Reg lib[] = {
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
   { "set_shell_colors", f_set_shell_colors },
+  { "preview_color_theme", f_preview_color_theme },
   { "get_anvil_window_id",   f_get_anvil_window_id   },
   { "sidebar_surfaces", f_sidebar_surfaces },
   { "activate_sidebar_surface", f_activate_sidebar_surface },
@@ -2688,6 +2700,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Sidebar revision event: %s", SDL_GetError());
   if (!register_custom_event("colorthemechanged", colorthemechanged_callback))
     return luaL_error(L, "Unable to register the Color Theme event: %s", SDL_GetError());
+  if (!register_custom_event("colorthemepreview", colorthemepreview_callback))
+    return luaL_error(L, "Unable to register the Color Theme preview event: %s", SDL_GetError());
   if (!register_custom_event("focusterminal", focusterminal_callback))
     return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
   luaL_newmetatable(L, API_TYPE_NATIVE_PLUGIN);

@@ -2726,11 +2726,16 @@ local theme_commands = {
             core.reload_module(color_theme.module_name(preview))
           end)
         end
+        -- The Sidebar is another process. It draws the preview only when it receives it.
+        local shared = color_theme.preview(preview)
+        core.log_quiet("Theme preview %s; shared with the Sidebar: %s", preview, tostring(shared))
       end,
       cancel = function()
         if preview ~= original then
           core.reload_module(color_theme.module_name(original))
         end
+        local shared = color_theme.end_preview()
+        core.log_quiet("Theme preview ended; shared with the Sidebar: %s", tostring(shared))
       end,
       validate = function(text, suggestion)
         return (suggestion and suggestion.name) or color_theme_exists(text)

@@ -323,6 +323,8 @@ typedef struct {
   /* The Color Theme is global. The latest colours from any Project or the Sidebar draw what no Project covers. */
   AnvilSurfaceShellColors theme_colors;
   bool has_theme_colors;
+  /* The Project whose unsaved Color Theme the Sidebar draws, or 0. */
+  Uint32 theme_preview_project;
   /* The Project Sidebar's width in points and whether it is hidden. Every Window shares them. */
   int sidebar_points;
   bool sidebar_hidden;
@@ -393,6 +395,8 @@ static void drain_retired_projects(void);
 static void service_sidebar(void);
 static void notify_sidebar_changes(void);
 static void broadcast_color_theme(ShellProject *source);
+static void preview_color_theme(ShellProject *source, const char *preview, uint32_t size);
+static void end_color_theme_preview(ShellProject *source);
 static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size);
 static void sync_sidebar_model(void);
 static AnvilSidebarProject *sidebar_project(const char *path);
@@ -953,6 +957,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size == 0;
   case ANVIL_SURFACE_MSG_TITLE:
     return !memchr(payload, 0, size);
+  case ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW:
+    return size >= 1 && ((const char *)payload)[size - 1] == 0 && !memchr(payload, 0, size - 1);
   case ANVIL_SURFACE_MSG_RESTART:
   case ANVIL_SURFACE_MSG_SELECT_PROJECT:
   case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
@@ -3043,6 +3049,9 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
     broadcast_color_theme(project);
     break;
+  case ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW:
+    preview_color_theme(project, (const char *)payload, message->size);
+    break;
   case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: {
     sync_sidebar_model();
     char *snapshot = anvil_sidebar_snapshot(&shell.sidebar, (size_t)value);
@@ -3928,6 +3937,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       }
       stop_close_timer(project);
       SDL_Log("Anvil shell surface process exited with code %d", (int)(intptr_t)event->user.data2);
+      end_color_theme_preview(project);
       if (project->restart_path) {
         char *path = _strdup(project->restart_path);
         bool started = false;
@@ -5679,8 +5689,25 @@ static void notify_sidebar_changes(void) {
   }
 }
 
+/* The Sidebar draws the Color Theme that a Project previews. A preview never reaches other Projects. */
+static void preview_color_theme(ShellProject *source, const char *preview, uint32_t size) {
+  bool ended = size == 1;
+  if (ended && shell.theme_preview_project != source->id) return;
+  shell.theme_preview_project = ended ? 0 : source->id;
+  if (shell.sidebar_process && shell.sidebar_process->connected)
+    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEWED, preview, size, NULL, 0);
+  SDL_Log("Shell Color Theme preview %s by Project %u", ended ? "ended" : "shown", source->id);
+}
+
+/* A Project that exits during its preview cannot end it, so the Sidebar draws the saved Color Theme again. */
+static void end_color_theme_preview(ShellProject *source) {
+  if (shell.theme_preview_project != source->id) return;
+  preview_color_theme(source, "", 1);
+}
+
 /* The Color Theme is one setting for every Project and the Sidebar. The saving Project already shows it. */
 static void broadcast_color_theme(ShellProject *source) {
+  shell.theme_preview_project = 0;
   int count = 0;
   for (ShellProject *item = shell.projects; item; item = item->next)
     if (item != source && item->connected) {

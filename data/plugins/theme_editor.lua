@@ -4,6 +4,7 @@ local core = require "core"
 local command = require "core.command"
 local style = require "core.style"
 local edits = require "core.theme_edits"
+local color_theme = require "core.color_theme"
 local Widget = require "widget"
 local Button = require "widget.button"
 local CheckBox = require "widget.checkbox"
@@ -108,6 +109,9 @@ function ThemeEditor:preview()
   core.theme_edit_custom_syntax = edits.custom_syntax_keys(self.base, self.draft)
   core.color_theme_generation = (core.color_theme_generation or 0) + 1
   core.bump_render_style_generation("theme-editor-preview")
+  -- The Sidebar is another process. It draws the unsaved edits only when it receives them.
+  local shared = color_theme.preview(self.theme, self.draft)
+  core.log_quiet("Theme Editor preview of %s shared with the Sidebar: %s", self.theme, tostring(shared))
   self:refresh_rows()
   if self.selected_path then self:select(self.selected_path) end
 end
@@ -291,7 +295,8 @@ end
 function ThemeEditor:hide()
   ThemeEditor.super.hide(self)
   core.reload_module(module_name(self.previous_theme))
-  core.log_quiet("Theme Editor closed; unsaved changes discarded")
+  local shared = color_theme.end_preview()
+  core.log_quiet("Theme Editor closed; unsaved changes discarded; Sidebar preview ended: %s", tostring(shared))
 end
 
 function ThemeEditor:update_size_position()

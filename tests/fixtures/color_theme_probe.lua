@@ -1,6 +1,7 @@
 -- mod-version:3
 -- Seam: an owned shell Window with two loaded Projects and the Sidebar. The Color Theme is one saved setting:
--- the Sidebar starts with it, and a theme saved in one Project reaches the other Project and the Sidebar. The
+-- the Sidebar starts with it, and a theme saved in one Project reaches the other Project and the Sidebar. A
+-- theme that a Project only previews reaches the Sidebar too, and cancelling the preview restores the saved one. The
 -- software renderer keeps the Sidebar opaque, so its empty area shows the theme's exact background2 colour.
 -- The shell's Window controls draw in the selected Project's Color Theme: its text colour, and its pressed colour.
 -- A posted mouse move hovers only until the real cursor's leave event, so a held press shows the fill instead.
@@ -240,6 +241,22 @@ elseif path:match("/driver$") then
    check_controls(window, a)
    save("select-b", {go = true})
    wait(function() return load("b-ready") end, 30, "Project B did not start")
+   save("b-preview", {go = true})
+   local previewed = wait(function() return load("b-previewed") end, 10, "Project B did not preview a theme")
+   assert(not same(previewed.background2, a.background2), "the previewed theme shares background2")
+   local shown
+   local drew = pcall(wait, function()
+    shown = sidebar_color(window)
+    return same(shown, previewed.background2)
+   end, 5)
+   assert(drew, "the Sidebar drew " .. show(shown) .. ", not the previewed " .. show(previewed.background2))
+   save("b-cancel", {go = true})
+   wait(function() return load("b-cancelled") end, 10, "Project B did not cancel its preview")
+   drew = pcall(wait, function()
+    shown = sidebar_color(window)
+    return same(shown, a.background2)
+   end, 5)
+   assert(drew, "after cancel the Sidebar drew " .. show(shown) .. ", not the saved " .. show(a.background2))
    save("b-theme", {go = true})
    local applied = wait(function() return load("b-applied") end, 10, "Project B did not apply the Color Theme")
    assert(not same(applied.background2, a.background2), "the probe's two Color Themes share background2")
@@ -283,6 +300,14 @@ elseif path:match("/Replacement$") then
  core.add_background_thread(function()
   coroutine.yield(.5)
   ready("b-ready")
+  wait(function() return load("b-preview") end, 60)
+  assert(require("core.command").perform("core:select_theme"))
+  core.global_prompt_bar:set_text("dark3")
+  core.global_prompt_bar:update_suggestions()
+  save("b-previewed", {background2 = rgb(style.background2)})
+  wait(function() return load("b-cancel") end, 60)
+  core.global_prompt_bar:exit(false)
+  save("b-cancelled", {go = true})
   wait(function() return load("b-theme") end, 60)
   require("plugins.settings").apply_color_theme("dark")
   save("b-applied", {background2 = rgb(style.background2)})

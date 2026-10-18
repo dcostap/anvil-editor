@@ -36,6 +36,9 @@ typedef enum {
   ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED = 8,
   /* Focus this Terminal Session, opening it in this Project if no view shows it. Payload: id + NUL. */
   ANVIL_SURFACE_MSG_FOCUS_TERMINAL = 9,
+  /* A Project shows a Color Theme it has not saved. Draw it until the next save or preview. Payload: the
+   * preview + NUL, or only NUL to draw the saved Color Theme again. */
+  ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEWED = 10,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -78,6 +81,9 @@ typedef enum {
   ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR = 97,
   /* Show the actions menu for one Sidebar row's Project. Payload: AnvilSurfaceProjectMenu. */
   ANVIL_SURFACE_MSG_PROJECT_MENU = 98,
+  /* This Project shows a Color Theme it has not saved. The shell forwards it to the Sidebar. Payload: the
+   * preview + NUL, or only NUL when the Project shows the saved Color Theme again. */
+  ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW = 99,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */

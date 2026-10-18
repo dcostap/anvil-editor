@@ -5,6 +5,7 @@ local config = require "core.config"
 local RootPanel = require "core.rootpanel"
 local style = require "core.style"
 local theme_editor = require "plugins.theme_editor"
+local color_theme = require "core.color_theme"
 
 test.describe("theme editor", function()
   test.after_each(function()
@@ -54,6 +55,24 @@ test.describe("theme editor", function()
     test.same({8, 9, 10, 255}, style.background)
     editor:reload()
     test.same(original, style.background)
+  end)
+
+  test.it("shows unsaved edits in the Sidebar until the Theme Editor closes", function()
+    local sent, preview_color_theme = {}, system.preview_color_theme
+    system.preview_color_theme = function(text) sent[#sent + 1] = text; return true end
+    local ok, err = pcall(function()
+      local editor = theme_editor.open("dark3")
+      editor:set_palette("text_bg", {8, 9, 10, 255})
+      local preview = sent[#sent]
+      theme_editor.close()
+      test.equal(sent[#sent], "")
+      -- The Sidebar draws the unsaved edit, not only the saved theme.
+      color_theme.load_preview(preview)
+      test.same({8, 9, 10, 255}, style.background)
+    end)
+    system.preview_color_theme = preview_color_theme
+    core.reload_module(color_theme.module_name(require("plugins.settings").config.theme))
+    if not ok then error(err, 0) end
   end)
 
   test.it("keeps a disabled child rule while using the parent color", function()

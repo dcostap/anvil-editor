@@ -518,6 +518,15 @@ static void dispatch_message(HostedMessage *message) {
       SDL_Log("Color Theme change event dropped: %s", SDL_GetError());
     goto complete;
   }
+  if (type == ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEWED) {
+    CustomEvent event = {0};
+    event.data1 = _strdup((const char *)payload);
+    if (!event.data1 || !push_custom_event("colorthemepreview", &event)) {
+      free(event.data1);
+      SDL_Log("Color Theme preview dropped: copy or event delivery failed");
+    }
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_FOCUS_TERMINAL) {
     CustomEvent event = {0};
     event.data1 = _strdup((const char *)payload);
@@ -712,6 +721,9 @@ static int SDLCALL reader_thread(void *data) {
       case ANVIL_SURFACE_MSG_SIDEBAR_MODEL:
         if (size < 2 || body[size - 1] || memchr(body, 0, size - 1))
           goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEWED:
+        if (!hosted.sidebar || !size || body[size - 1] || memchr(body, 0, size - 1)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_FOCUS_TERMINAL:
         if (hosted.sidebar || size != ANVIL_SURFACE_TERMINAL_ID_LEN + 1 || body[size - 1] ||
@@ -976,6 +988,14 @@ bool anvil_hosted_surface_toggle_sidebar(void) {
 bool anvil_hosted_surface_color_theme_saved(void) {
   if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_COLOR_THEME_SAVED, NULL, 0);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_preview_color_theme(const char *preview) {
+  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  size_t size = strlen(preview) + 1;
+  if (size > ANVIL_SURFACE_MAX_PAYLOAD) return false;
+  send_message(ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW, preview, (uint32_t)size);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1446,6 +1466,7 @@ void anvil_hosted_surface_set_overlay(SDL_Window *window, uint32_t overlay, cons
 int anvil_hosted_surface_content_x(void) { return 0; }
 bool anvil_hosted_surface_open_project_window(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_open_project_picker(void) { return false; }
+bool anvil_hosted_surface_preview_color_theme(const char *preview) { (void)preview; return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_color_theme_saved(void) { return false; }
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }

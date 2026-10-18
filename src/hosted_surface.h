@@ -72,6 +72,8 @@ bool anvil_hosted_surface_new_window(void);
 uint32_t anvil_hosted_surface_window_id(void);
 bool anvil_hosted_surface_open_project_window(const char *path);
 bool anvil_hosted_surface_open_project_picker(void);
+/* Sends a Color Theme preview for the Sidebar to draw, or "" to draw the saved Color Theme again. */
+bool anvil_hosted_surface_preview_color_theme(const char *preview);
 bool anvil_hosted_surface_unload_project(const char *path);
 /* id is a Terminal Session id, or empty when the active view shows none. The shell keeps it across adoption. */
 bool anvil_hosted_surface_focused_terminal(const char *id);

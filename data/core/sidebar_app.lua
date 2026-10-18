@@ -113,10 +113,18 @@ local function add_surface(id, window)
   surfaces[id] = surface
   core.log_quiet("Sidebar surface created: Window=%d", id)
 end
--- Projects save the Color Theme; the Sidebar draws with the saved one.
-local function apply_color_theme()
+-- Projects save the Color Theme; the Sidebar draws with the saved one, or with a Project's unsaved preview.
+local function apply_color_theme(preview)
   local name = color_theme.saved_name()
-  local ok, err = pcall(color_theme.load_style, name)
+  local ok, err
+  if preview then
+    ok, err = pcall(color_theme.load_preview, preview)
+    if ok then name = err .. " (preview)" end
+  end
+  if not ok then
+    if preview then core.log_quiet("Sidebar Color Theme preview failed: %s", tostring(err)) end
+    ok, err = pcall(color_theme.load_style, name)
+  end
   if not ok then
     core.log_quiet("Sidebar Color Theme %s failed: %s", name, tostring(err))
     color_theme.load_style("dark")
@@ -220,6 +228,8 @@ function core.on_event(name, ...)
 end
 function core.run_step()
   sync_surfaces()
+  -- A Theme Editor drag sends many previews. Only the latest one in this step matters.
+  local theme_change
   while true do
     local event = table.pack(system.poll_event())
     if not event[1] then break end
@@ -230,7 +240,9 @@ function core.run_step()
       if surface.native_id == native_id then id = candidate end
     end
     if event[1] == "colorthemechanged" then
-      apply_color_theme()
+      theme_change = {}
+    elseif event[1] == "colorthemepreview" then
+      theme_change = {preview = event[2] ~= "" and event[2] or nil}
     elseif event[1] == "projectsidebarchanged" and not native_id then
       for _, surface in pairs(surfaces) do surface.request, surface.query_needed = nil, true end
       core.project_sidebar_request = nil
@@ -238,6 +250,7 @@ function core.run_step()
       core.on_event(table.unpack(event, 1, event.n))
     end
   end
+  if theme_change then apply_color_theme(theme_change.preview) end
   sync_surfaces()
   if core.quit_request then
     if core.session_log then core.session_log:close(); core.session_log = nil end
