@@ -265,6 +265,40 @@ test.describe("autocomplete batch behavior", function()
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "Quoted")
   end)
 
+  -- A pasted screenshot is one base64 data URI. Its `+` and `/` split the
+  -- payload into thousands of fragments that are not words.
+  test.it("keeps completing a note's words past an embedded data image", function(context)
+    context.autocomplete_min_len = config.plugins.autocomplete.min_len
+    context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
+    config.plugins.autocomplete.min_len = 3
+    config.plugins.autocomplete.suggestions_scope = "local"
+    local letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    local fragments = {}
+    for i = 1, config.plugins.autocomplete.max_symbols + 5000 do
+      local chars, n = {}, i
+      repeat
+        local index = n % #letters + 1
+        chars[#chars + 1] = letters:sub(index, index)
+        n = math.floor(n / #letters)
+      until n == 0
+      fragments[i] = "x" .. table.concat(chars) .. "9"
+    end
+    local payload = table.concat(fragments, "+")
+    local view = open_editor(context,
+      "![](data:image/png;base64," .. payload .. ")\n\nQuarterly review\nQuar")
+
+    -- The word list fills in the background. Typing would restart it.
+    local deadline = system.get_time() + 10
+    repeat
+      coroutine.yield(0.05)
+      core.set_active_view(view)
+      view:with_selection_state(function() autocomplete.trigger() end)
+    until autocomplete.is_open() or system.get_time() >= deadline
+
+    test.ok(autocomplete.is_open(), "the note's own words should remain available")
+    test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "Quarterly")
+  end)
+
   test.it("automatically offers only Buffer words that start with the partial", function(context)
     context.autocomplete_min_len = config.plugins.autocomplete.min_len
     context.autocomplete_scope = config.plugins.autocomplete.suggestions_scope
