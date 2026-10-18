@@ -1353,7 +1353,6 @@ end, {
     keywords = { "select", "all", "occurrences", "matches", "selection", "multi", "cursor" },
   }),
   ["editor:comment_with_line_comment_at_start"] = line_comment_at_start,
-  ["editor:restore_selection_origin_or_select_none"] = restore_selection_origin_or_select_none,
   ["editor:duplicate_current_line"] = duplicate_current_line,
   ["editor:move_to_matching_bracket_with_history"] = move_to_matching_bracket_with_history,
   ["editor:move_caret_previous_paragraph"] = function(dv)
@@ -1413,6 +1412,17 @@ keymap.add({
   ["ctrl+up"] = "editor:move_caret_previous_paragraph",
   ["ctrl+down"] = "editor:move_caret_next_paragraph",
 }, true)
+
+-- A Margin Note editor uses Escape to cancel its edit.
+command.add(function()
+  local TextView = require "core.textview"
+  local GlobalPromptBar = require "core.global_prompt_bar"
+  local view = core.active_view
+  return view and view:extends(TextView) and not view:is(GlobalPromptBar)
+    and not view.margin_note_input, view
+end, {
+  ["editor:restore_selection_origin_or_select_none"] = restore_selection_origin_or_select_none,
+})
 
 -- Keep Escape cooperative: plugin panels (GlobalPromptBar, project search,
 -- search/replace, fuzzy searcher, etc.) should get their normal close handlers,

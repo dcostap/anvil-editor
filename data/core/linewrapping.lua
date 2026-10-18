@@ -488,9 +488,26 @@ local function new_measurement_context(buffer, default_font, textview)
     char_widths = {},
     extra_indent_widths = {},
     has_line_render_providers = has_line_render_providers,
+    -- A Text View with this flag starts its continuation rows at its left edge.
+    flush_continuation = textview and textview.wrap_continuation_flush or nil,
     presentations = has_line_render_providers and {} or nil,
     perf_active = perf_diagnostics_active(),
   }
+end
+
+-- The ASCII fast paths measure each byte as one cell. They hold only for a
+-- monospace font; a proportional font, such as Markdown Prose, measures glyphs.
+local monospace_fonts = setmetatable({}, { __mode = "k" })
+
+local function font_is_monospace(font)
+  local size = font:get_size()
+  local cached = monospace_fonts[font]
+  if cached and cached.size == size then return cached.value end
+  local w = font:get_width(" ")
+  local value = font:get_width("i") == w and font:get_width("W") == w
+    and font:get_width("m") == w and font:get_width(".") == w
+  monospace_fonts[font] = { size = size, value = value }
+  return value
 end
 
 local function measurement_cell_width(context, font)
@@ -519,6 +536,7 @@ local function measurement_char_widths(context, font)
 end
 
 local function continuation_indent_width(font, text, measurement)
+  if measurement and measurement.flush_continuation then return 0 end
   local mode = measurement and measurement.wrapping_indent
     or config.plugins.linewrapping.wrapping_indent
   local indent = measurement and measurement.indent
@@ -779,7 +797,7 @@ function LineWrapping.compute_line_breaks_from_col(
     end
     local has_tab = text:find("\t", 1, true) ~= nil
     local has_non_ascii = text:find("[\128-\255]") ~= nil
-    local ascii_font = not has_non_ascii
+    local ascii_font = not has_non_ascii and font_is_monospace(font)
     local cell_width = font == default_font and default_ascii_cell_width
       or measurement_cell_width(measurement, font)
     local tab_width = cell_width * (
@@ -861,7 +879,7 @@ function LineWrapping.compute_line_breaks_from_col(
         local native_splits = font:wrap_text(
           line_text, width, mode, i - 1, visible_end_col,
           xoffset, begin_width,
-          cell_width, tab_width
+          font_is_monospace(font) and cell_width or nil, tab_width
         )
         for index = 2, #native_splits do
           splits[#splits + 1] = native_splits[index] + 1

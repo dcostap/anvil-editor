@@ -1159,3 +1159,20 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
     test.equal(affinity_y, first_row_y)
   end)
 end)
+
+test.describe("line wrapping with a proportional font", function()
+  test.it("keeps every row of ASCII text within the wrap width", function()
+    local Buffer = require "core.buffer"
+    local buffer = Buffer()
+    local text = "A long note that needs several rows in the margin card to show all of its words"
+    buffer:insert(1, 1, text)
+    local font = style.markdown_body_font
+    local width = math.floor(font:get_width(text) / 3)
+    local breaks = LineWrapping.compute_line_breaks(buffer, font, 1, width, "word")
+    test.ok(#breaks >= 3, "expected the text to need at least three rows")
+    for i, col in ipairs(breaks) do
+      local row = text:sub(col, (breaks[i + 1] or #text + 1) - 1):gsub("%s+$", "")
+      test.ok(font:get_width(row) <= width, "row is wider than the wrap width: " .. row)
+    end
+  end)
+end)

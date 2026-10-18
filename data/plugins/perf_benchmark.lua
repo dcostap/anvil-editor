@@ -814,11 +814,24 @@ local function setup_scenario()
   if benchmark.scenario:find("wrapped%-document", 1, false) then
     view:set_wrapping_enabled(true)
     linewrapping.update_textview_breaks(view)
-  elseif benchmark.scenario == "markdown-margin-notes" then
+  elseif benchmark.scenario:find("^markdown%-margin%-notes") then
     assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
     view:set_wrapping_enabled(true)
     view.buffer:set_selection(#view.buffer.lines, 1)
     linewrapping.update_textview_breaks(view)
+    if os.getenv("ANVIL_PERF_BENCHMARK_EDIT_NOTE") == "1" then
+      view.active_window_has_focus = function() return true end
+      core.add_thread(function()
+        local margin_notes = require "core.markdown.margin_notes"
+        local note
+        repeat
+          coroutine.yield(0.05)
+          note = margin_notes.notes_for_lines(view, 1, #view.buffer.lines)[1]
+        until note
+        local input = margin_notes.begin_edit(view, note)
+        input.active_window_has_focus = function() return true end
+      end)
+    end
   elseif benchmark.scenario == "markdown-long-link-caret-repeat" then
     assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
     view:set_wrapping_enabled(true)

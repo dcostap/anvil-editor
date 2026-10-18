@@ -5,7 +5,6 @@
 -- out one card per note in the right margin, beside its anchor line, and
 -- edits the note body in an inline editor inside the card.
 local core = require "core"
-local common = require "core.common"
 local style = require "core.style"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
@@ -15,13 +14,12 @@ local panes = require "core.panes"
 
 local margin_notes = {}
 
-local CARD_WIDTH = 260
-local MIN_CARD_WIDTH = 150
-local LANE_GAP = 28
-local EDGE_GAP = 16
+local CARD_WIDTH = 210
+local MIN_CARD_WIDTH = 140
+local LANE_GAP = 14
+local EDGE_GAP = 12
 local CARD_SPACING = 8
 local CARD_RADIUS = 6
-local COLLAPSED_ROWS = 6
 -- Notes anchored just above the viewport still push visible cards down.
 local LOOKBEHIND_LINES = 80
 local PLACEHOLDER = "Write a note..."
@@ -58,6 +56,8 @@ function NoteInput:new(owner)
   self.scrollable = false
   self.hide_scrollbars = true
   self.show_current_line_highlight = false
+  self.wrap_continuation_flush = true
+  self:set_wrapping_enabled(true)
 end
 
 function NoteInput:get_text()
@@ -76,6 +76,23 @@ function NoteInput:draw_line_gutter() return self:get_line_height() end
 function NoteInput:draw_line_highlight() end
 function NoteInput:draw_scrollbar() end
 function NoteInput:draw_background() end
+function NoteInput:draw_content_left_edge() end
+function NoteInput:draw_soft_wrap_continuation_indicators() end
+
+-- Cards show and edit a note in the same wrapped shape.
+function NoteInput:compute_wrap_width()
+  return math.max(1, self.size.x)
+end
+
+---Place the text inside a card and wrap it to the card's text width.
+function NoteInput:fit_card(x, y, width)
+  self.position.x, self.position.y = x, y
+  if self.size.x ~= width then self.size.x = width end
+  self:update_wrap_cache()
+  self.size.y = self:content_height()
+  self.scroll.x, self.scroll.y, self.scroll.to.x, self.scroll.to.y = 0, 0, 0, 0
+  return self.size.y
+end
 
 function NoteInput:content_height()
   local rows = math.max(1, self:get_total_visual_lines())
@@ -281,29 +298,6 @@ end
 
 -- Layout ------------------------------------------------------------------
 
-local function wrap_text(font, text, width)
-  local rows, row = {}, ""
-  for word in text:gmatch("%S+") do
-    local candidate = row == "" and word or (row .. " " .. word)
-    if font:get_width(candidate) <= width or row == "" and font:get_width(word) <= width then
-      row = candidate
-    else
-      if row ~= "" then rows[#rows + 1] = row end
-      row = word
-      -- Break a word wider than the card.
-      while font:get_width(row) > width and #row > 1 do
-        local cut = #row
-        while cut > 1 and font:get_width(row:sub(1, cut)) > width do cut = cut - 1 end
-        while cut > 1 and common.is_utf8_cont(row, cut + 1) do cut = cut - 1 end
-        rows[#rows + 1] = row:sub(1, cut)
-        row = row:sub(cut + 1)
-      end
-    end
-  end
-  if row ~= "" or #rows == 0 then rows[#rows + 1] = row end
-  return rows
-end
-
 ---The margin column beside the reading lane, or nil without enough room.
 function margin_notes.column_rect(view)
   local centered = core.centered_editor
@@ -326,10 +320,8 @@ function margin_notes.layout(view)
   if not margin_notes.presents_formatting(view) then return nil end
   local column_x, column_width = margin_notes.column_rect(view)
   if not column_x then return nil end
-  local font = style.markdown_body_font
-  local pad_x, pad_y = style.padding.x, style.padding.y
+  local pad_x = style.padding.x
   local text_width = column_width - pad_x * 2
-  local row_height = font:get_height()
   local minline, maxline = view:get_visible_line_range()
   local notes = margin_notes.notes_for_lines(view, minline - LOOKBEHIND_LINES, maxline)
   local edit = edit_state(view)
@@ -343,32 +335,37 @@ function margin_notes.layout(view)
     end
   end
   local caret_note = margin_notes.note_at_caret(view)
+  -- Notes with the same text share one display view.
+  local displays, used = view.__margin_note_displays or {}, {}
   local cards, bottom = {}, -math.huge
   for _, note in ipairs(notes) do
     local anchor_col = note.anchor_col1 or note.col1
     local _, anchor_y = view:get_line_screen_position(note.line, anchor_col)
     local editing = edit and same_note(note, edit.note)
-    local rows, height
+    local text_view
     if editing then
-      edit.input.size.x = column_width
-      height = edit.input:content_height()
+      text_view = edit.input
     else
-      rows = wrap_text(font, note.text ~= "" and note.text or PLACEHOLDER, text_width)
-      if #rows > COLLAPSED_ROWS then
-        for i = #rows, COLLAPSED_ROWS + 1, -1 do rows[i] = nil end
-        rows[COLLAPSED_ROWS] = rows[COLLAPSED_ROWS] .. " ..."
+      text_view = displays[note.text]
+      if not text_view then
+        text_view = NoteInput(view)
+        text_view:set_text(note.text)
       end
-      height = #rows * row_height + pad_y * 2
+      used[note.text] = text_view
     end
     local y = math.max(anchor_y, bottom + scaled(CARD_SPACING))
+    local height = text_view:fit_card(column_x + pad_x, y, text_width)
+    local text_x, text_y = text_view:get_line_screen_position(1, 1)
     cards[#cards + 1] = {
       note = note, x = column_x, y = y, w = column_width, h = height,
-      rows = rows, anchor_y = anchor_y, editing = editing,
+      text_view = text_view, text_x = text_x, text_y = text_y,
+      anchor_y = anchor_y, editing = editing,
       current = same_note(note, caret_note),
     }
     bottom = y + height
   end
-  return { cards = cards, font = font }
+  view.__margin_note_displays = used
+  return { cards = cards }
 end
 
 -- Drawing -----------------------------------------------------------------
@@ -382,7 +379,7 @@ local function draw_dashed_hline(x1, x2, y, color)
   end
 end
 
-local function draw_card(view, card, font, hovered)
+local function draw_card(view, card, hovered)
   local emphasized = card.editing or card.current or hovered
   local border = emphasized and style.markdown_margin_note_card_active_border
     or style.markdown_margin_note_card_border
@@ -396,32 +393,25 @@ local function draw_card(view, card, font, hovered)
   end
   renderer.draw_rounded_rect(card.x - 1, card.y - 1, card.w + 2, card.h + 2, radius + 1, border)
   renderer.draw_rounded_rect(card.x, card.y, card.w, card.h, radius, style.markdown_margin_note_card_bg)
-  if card.editing then return end
-  local color = card.note.text ~= "" and style.markdown_margin_note_text
-    or style.markdown_margin_note_placeholder
-  local y = card.y + style.padding.y
-  for _, row in ipairs(card.rows) do
-    renderer.draw_text(font, row, card.x + style.padding.x, y, color)
-    y = y + font:get_height()
+  local text_view = card.text_view
+  -- The card's layout already placed and wrapped its text view.
+  text_view.position.x, text_view.position.y = card.x + style.padding.x, card.y
+  if text_view:get_text() == "" then
+    renderer.draw_text(text_view:get_font(), PLACEHOLDER, card.text_x, card.text_y,
+      style.markdown_margin_note_placeholder)
   end
+  text_view:draw()
+  if card.editing then text_view:draw_overlay() end
 end
 
 function margin_notes.draw(view)
   local layout = margin_notes.layout(view)
   view.__margin_note_layout = layout
   if not layout then return end
-  local edit = edit_state(view)
   core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
   for _, card in ipairs(layout.cards) do
     if card.y + card.h >= view.position.y and card.y <= view.position.y + view.size.y then
-      draw_card(view, card, layout.font, same_note(card.note, view.__margin_note_hover))
-      if card.editing and edit then
-        local input = edit.input
-        input.position.x, input.position.y = card.x, card.y
-        input.size.x, input.size.y = card.w, card.h
-        input:draw()
-        input:draw_overlay()
-      end
+      draw_card(view, card, same_note(card.note, view.__margin_note_hover))
     end
   end
   core.pop_clip_rect()
@@ -540,6 +530,7 @@ function margin_notes.detach(view)
   view.draw, view.update = nil, nil
   view.on_mouse_moved, view.on_mouse_pressed, view.on_mouse_released = nil, nil, nil
   view.__margin_note_layout, view.__margin_note_hover = nil, nil
+  view.__margin_note_displays = nil
   local centered = core.centered_editor
   if centered then centered.set_right_reserve(view, 0) end
   return true

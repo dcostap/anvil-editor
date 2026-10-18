@@ -202,6 +202,8 @@ SCENARIOS["markdown-margin-notes"] = {
     "visual": True,
     "paced": False,
 }
+# The first note's card while its editor is open.
+SCENARIOS["markdown-margin-notes-edit"] = dict(SCENARIOS["markdown-margin-notes"], edit_note=True)
 MARGIN_NOTES_SOURCE = """# Chapter one
 
 From {==Terrahawks==}{>>A great show. Check the air dates before the next draft goes out.<<} it went
@@ -946,6 +948,10 @@ def run_case(
         work / "fixtures" / "markdown-long-link.md"
         if settings.get("fixture") == "markdown-long-link" else fixture
     )
+    if settings.get("fixture") == "markdown-margin-notes" and settings.get("edit_note"):
+        environment_edit_note = "1"
+    else:
+        environment_edit_note = "0"
     if settings.get("fixture") == "markdown-margin-notes":
         case_fixture = work / "fixtures" / "markdown-margin-notes.md"
         case_fixture.write_text(MARGIN_NOTES_SOURCE, encoding="utf-8", newline="\n")
@@ -976,6 +982,7 @@ def run_case(
         "ANVIL_PERF_CAPTURE": "0",
         "ANVIL_PERF_CADENCE_ONLY": "0",
         "ANVIL_PERF_BENCHMARK_SCENARIO": scenario,
+        "ANVIL_PERF_BENCHMARK_EDIT_NOTE": environment_edit_note,
         "ANVIL_PERF_BENCHMARK_THEME": str(settings.get("theme", "")),
         "ANVIL_PERF_BENCHMARK_MODE": mode,
         "ANVIL_PERF_BENCHMARK_FILE": native_path(case_fixture),

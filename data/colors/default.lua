@@ -212,7 +212,6 @@ style.markdown_live_margin_note_active_bg = { common.color "rgba(167, 139, 250, 
 style.markdown_margin_note_card_bg = c("272a36")
 style.markdown_margin_note_card_border = { common.color "rgba(167, 139, 250, 0.30)" }
 style.markdown_margin_note_card_active_border = c("a78bfa")
-style.markdown_margin_note_text = style.text
 style.markdown_margin_note_placeholder = style.dim
 style.markdown_margin_note_connector = { common.color "rgba(167, 139, 250, 0.45)" }
 

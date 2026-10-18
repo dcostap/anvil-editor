@@ -160,11 +160,33 @@ test.describe("Markdown margin notes", function()
 
   test.it("keeps the lane clear of the note column in a narrower view", function(context)
     local view = open_note_view(context, "Text {==anchor==}{>>note<<}.\n\nend", 1000)
+    view:update()
     local reserve = core.centered_editor.get_right_reserve(view)
     test.ok(reserve > 0)
     local lane_x, lane_width = core.centered_editor.get_lane_rect(view)
     test.ok(lane_x + lane_width <= view.position.x + view.size.x - reserve)
     test.ok(margin_notes.column_rect(view) ~= nil)
+  end)
+
+  test.it("edits a long note in the same wrapped shape that the card shows", function(context)
+    local long = "A long note that needs several rows in the margin card to show all of its words"
+    local view = open_note_view(context, "From {==Terrahawks==}{>>" .. long .. "<<}.\n\nend")
+    local shown = test.not_nil(margin_notes.layout(view)).cards[1]
+    view.buffer:set_selection(1, 10)
+    test.ok(command.perform("markdown:edit_margin_note"))
+    local input = margin_notes.editing_input(view)
+    input:on_text_input("")
+    local edited = test.not_nil(margin_notes.layout(view)).cards[1]
+    test.ok(edited.editing)
+    test.equal(edited.h, shown.h)
+    test.ok(input:get_total_visual_lines() > 1, "note editor does not wrap")
+    local x, y = input:get_line_screen_position(1, 1)
+    test.equal(x, shown.text_x)
+    test.equal(y, shown.text_y)
+    local row2_line, row2_col = input:get_visual_row_line_col(2)
+    test.equal(input:get_line_screen_position(row2_line, row2_col), x)
+    local end_x = input:get_line_screen_position(1, #long + 1)
+    test.ok(end_x <= edited.x + edited.w, "note text runs past its card")
   end)
 
   test.it("opens the editor when a card is clicked", function(context)
