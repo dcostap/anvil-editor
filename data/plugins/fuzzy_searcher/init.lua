@@ -5051,13 +5051,22 @@ function FSView:start_file_search(query, line, reset_selection)
 
     if native_file_index_ready() then
       local native_started = system.get_time()
+      -- The match runs on a native thread so a large index never blocks a frame.
       local ok, native_results = pcall(function()
-        return fuzzy_searcher.files_fuzzy_index:search(query, {
+        local task = fuzzy_searcher.files_fuzzy_index:search_async(query, {
           limit = line and math.max(keep_limit * 10, 1000)
             or (keep_limit + #recent_matches + 32),
           spans = true,
           case_sensitive = self.case_sensitive,
         })
+        local results = task:poll()
+        while not results do
+          coroutine.yield(0.001)
+          -- A newer query replaced this one. The task is released when it is collected.
+          if gen ~= file_search_generation or active_view ~= self then return end
+          results = task:poll()
+        end
+        return results
       end)
       local native_finished = system.get_time()
       if ok and native_results and gen == file_search_generation and active_view == self then

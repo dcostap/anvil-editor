@@ -89,4 +89,51 @@ test.describe("Native fuzzy file index", function()
     test.equal(#index:search("file_10000", { limit = 5 }), 1)
     index:free()
   end)
+
+  local function wait_search(task)
+    local deadline = system.get_time() + 5
+    local results
+    repeat
+      results = task:poll()
+      if not results then coroutine.yield(0.001) end
+    until results or system.get_time() >= deadline
+    return results
+  end
+
+  local function numbered_index(count)
+    local builder = fuzzy.file_index_builder {
+      { path = path("C:/project"), label = "project", role = "root", id = "root" },
+    }
+    local chunks = {}
+    for i = 1, count do chunks[i] = string.format("src/file_%05d.cpp\0", i) end
+    builder:feed(1, table.concat(chunks))
+    return builder:finish()
+  end
+
+  test.it("searches off the Lua thread with the same results as a direct search", function()
+    local index = numbered_index(2000)
+    local options = { limit = 20, spans = true }
+    local expected = index:search("file_01", options)
+
+    local results = wait_search(index:search_async("file_01", options))
+
+    test.not_nil(results, "native file search did not complete")
+    test.same(results, expected)
+    test.equal(results.has_more, expected.has_more)
+    index:free()
+  end)
+
+  test.it("completes a search that started before its index was freed", function()
+    local index = numbered_index(20000)
+    local options = { limit = 5, spans = true }
+    local expected = index:search("file_19999", options)
+    local task = index:search_async("file_19999", options)
+    index:free()
+
+    local results = wait_search(task)
+
+    test.not_nil(results, "native file search did not complete")
+    test.equal(#results, 1)
+    test.same(results, expected)
+  end)
 end)

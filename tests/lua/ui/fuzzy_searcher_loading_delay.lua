@@ -65,15 +65,14 @@ test.describe("Fuzzy Searcher loading feedback delay", function()
       .. " rows=" .. table.concat(result_labels(picker), ","))
 
     local fake_index = { "prior.lua", "replacement.lua" }
-    function fake_index:search(query)
+    function fake_index:search_async(query)
       test.equal(query, "priorx")
       context.refined_file_search_started = true
-      while not context.release_refined_file_search
-        and core.fuzzy_searcher_active_view == picker do
-        coroutine.yield(0.01)
-      end
       return {
-        { text = "replacement.lua", score = 1, spans = {} },
+        poll = function()
+          if not context.release_refined_file_search then return nil end
+          return { { text = "replacement.lua", score = 1, spans = {} } }
+        end,
       }
     end
     fuzzy_searcher._test.set_file_fuzzy_index_for_test(fake_index)

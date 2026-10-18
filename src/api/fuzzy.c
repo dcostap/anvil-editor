@@ -12,6 +12,7 @@
 #define API_TYPE_FUZZY_FILE_BUILDER "FuzzyFileIndexBuilder"
 #define API_TYPE_FUZZY_FILE_INDEX "FuzzyFileIndex"
 #define API_TYPE_FUZZY_FILE_BUILD_TASK "FuzzyFileIndexBuildTask"
+#define API_TYPE_FUZZY_FILE_SEARCH_TASK "FuzzyFileIndexSearchTask"
 #define FUZZY_MAX_RETURN_SPANS 256
 
 typedef struct {
@@ -22,9 +23,41 @@ typedef struct {
   FuzzyFileIndexBuilder *builder;
 } LuaFuzzyFileIndexBuilder;
 
+// A search thread keeps the index alive after Lua frees it.
 typedef struct {
   FuzzyFileIndex *index;
+  SDL_AtomicInt references;
+} SharedFuzzyFileIndex;
+
+typedef struct {
+  SharedFuzzyFileIndex *shared;
 } LuaFuzzyFileIndex;
+
+typedef struct {
+  FuzzySearchResult *results;
+  uint32_t count;
+  bool has_more;
+  FuzzySpan *spans;
+  uint32_t *span_offsets;
+} FileSearchOutput;
+
+// Owned by the search thread and the Lua task. The last one to release it frees it.
+typedef struct {
+  SharedFuzzyFileIndex *shared;
+  char *query;
+  uint32_t limit;
+  bool include_spans;
+  bool case_sensitive;
+  bool ok;
+  FileSearchOutput output;
+  SDL_AtomicInt done;
+  SDL_AtomicInt references;
+} FileSearchJob;
+
+typedef struct {
+  FileSearchJob *job;
+  bool consumed;
+} LuaFuzzyFileSearchTask;
 
 typedef struct {
   FuzzyFileIndexBuilder *builder;
@@ -116,6 +149,36 @@ static LuaFuzzyFileIndex *check_file_index(lua_State *L, int idx) {
 
 static LuaFuzzyFileBuildTask *check_file_build_task(lua_State *L, int idx) {
   return (LuaFuzzyFileBuildTask *)luaL_checkudata(L, idx, API_TYPE_FUZZY_FILE_BUILD_TASK);
+}
+
+static LuaFuzzyFileSearchTask *check_file_search_task(lua_State *L, int idx) {
+  return (LuaFuzzyFileSearchTask *)luaL_checkudata(L, idx, API_TYPE_FUZZY_FILE_SEARCH_TASK);
+}
+
+static FuzzyFileIndex *file_index_of(lua_State *L, int idx) {
+  LuaFuzzyFileIndex *index = check_file_index(L, idx);
+  return index->shared ? index->shared->index : NULL;
+}
+
+static void shared_file_index_release(SharedFuzzyFileIndex *shared) {
+  if (!shared || SDL_AddAtomicInt(&shared->references, -1) != 1) return;
+  fuzzy_file_index_free(shared->index);
+  free(shared);
+}
+
+static void push_file_index(lua_State *L, FuzzyFileIndex *index) {
+  SharedFuzzyFileIndex *shared = (SharedFuzzyFileIndex *)calloc(1, sizeof(*shared));
+  if (!shared) {
+    fuzzy_file_index_free(index);
+    luaL_error(L, "out of memory");
+    return;
+  }
+  shared->index = index;
+  SDL_SetAtomicInt(&shared->references, 1);
+  LuaFuzzyFileIndex *lua_index = (LuaFuzzyFileIndex *)lua_newuserdata(L, sizeof(*lua_index));
+  lua_index->shared = shared;
+  luaL_getmetatable(L, API_TYPE_FUZZY_FILE_INDEX);
+  lua_setmetatable(L, -2);
 }
 
 static void push_span_table(lua_State *L, const FuzzySpan *span) {
@@ -391,10 +454,7 @@ static int file_builder_finish(lua_State *L) {
   FuzzyFileIndex *index = fuzzy_file_index_builder_finish(builder->builder, &stats);
   builder->builder = NULL;
   if (!index) return luaL_error(L, "native file-index finalization failed");
-  LuaFuzzyFileIndex *lua_index = (LuaFuzzyFileIndex *)lua_newuserdata(L, sizeof(*lua_index));
-  lua_index->index = index;
-  luaL_getmetatable(L, API_TYPE_FUZZY_FILE_INDEX);
-  lua_setmetatable(L, -2);
+  push_file_index(L, index);
   push_file_index_stats(L, &stats);
   return 2;
 }
@@ -411,12 +471,10 @@ static int file_build_task_poll(lua_State *L) {
     task->consumed = true;
     return luaL_error(L, "native file-index finalization failed");
   }
-  LuaFuzzyFileIndex *lua_index = (LuaFuzzyFileIndex *)lua_newuserdata(L, sizeof(*lua_index));
-  lua_index->index = task->index;
+  FuzzyFileIndex *index = task->index;
   task->index = NULL;
   task->consumed = true;
-  luaL_getmetatable(L, API_TYPE_FUZZY_FILE_INDEX);
-  lua_setmetatable(L, -2);
+  push_file_index(L, index);
   push_file_index_stats(L, &task->stats);
   return 2;
 }
@@ -437,55 +495,88 @@ static int file_build_task_gc(lua_State *L) {
 
 static int file_index_gc(lua_State *L) {
   LuaFuzzyFileIndex *index = check_file_index(L, 1);
-  fuzzy_file_index_free(index->index);
-  index->index = NULL;
+  shared_file_index_release(index->shared);
+  index->shared = NULL;
   return 0;
 }
 
 static int file_index_len(lua_State *L) {
-  LuaFuzzyFileIndex *index = check_file_index(L, 1);
-  lua_pushinteger(L, fuzzy_file_index_count(index->index));
+  lua_pushinteger(L, fuzzy_file_index_count(file_index_of(L, 1)));
   return 1;
 }
 
 static int file_index_entry(lua_State *L) {
-  LuaFuzzyFileIndex *index = check_file_index(L, 1);
+  FuzzyFileIndex *index = file_index_of(L, 1);
   lua_Integer number = luaL_checkinteger(L, 2);
   if (number <= 0 || number > UINT32_MAX) return 0;
   FuzzyFileEntryView entry = { 0 };
-  if (!fuzzy_file_index_entry_at(index->index, (uint32_t)number - 1, &entry)) return 0;
+  if (!fuzzy_file_index_entry_at(index, (uint32_t)number - 1, &entry)) return 0;
   lua_createtable(L, 0, 10);
   push_file_entry_fields(L, &entry);
   lua_pushinteger(L, number); lua_setfield(L, -2, "index");
   return 1;
 }
 
-static int file_index_search(lua_State *L) {
-  LuaFuzzyFileIndex *index = check_file_index(L, 1);
-  const char *query = luaL_optstring(L, 2, "");
-  int opts = lua_istable(L, 3) ? 3 : 0;
-  uint32_t limit = opt_limit(L, opts, 100);
-  bool include_spans = opt_spans(L, opts);
-  uint32_t count = 0;
-  bool has_more = false;
-  bool case_sensitive = opt_case_sensitive(L, opts);
-  FuzzySearchResult *results = fuzzy_file_index_search_case(
-    index->index, query, limit, &count, &has_more, case_sensitive);
-  if (!results && limit != 0) return luaL_error(L, "out of memory");
-  lua_createtable(L, count, 1);
-  for (uint32_t i = 0; i < count; ++i) {
-    FuzzySearchResult *result = &results[i];
+static void file_search_output_free(FileSearchOutput *output) {
+  free(output->results);
+  free(output->spans);
+  free(output->span_offsets);
+  memset(output, 0, sizeof(*output));
+}
+
+// Reads only the immutable index, so it can run on any thread.
+static bool file_search_run(const FuzzyFileIndex *index, const char *query, uint32_t limit,
+                            bool include_spans, bool case_sensitive, FileSearchOutput *output) {
+  memset(output, 0, sizeof(*output));
+  output->results = fuzzy_file_index_search_case(
+    index, query, limit, &output->count, &output->has_more, case_sensitive);
+  if (!output->results && limit != 0) return false;
+  if (!include_spans || output->count == 0) return true;
+
+  output->span_offsets = (uint32_t *)malloc(sizeof(uint32_t) * (output->count + 1));
+  if (!output->span_offsets) {
+    file_search_output_free(output);
+    return false;
+  }
+  uint32_t used = 0, capacity = 0;
+  for (uint32_t i = 0; i < output->count; ++i) {
+    FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
+    uint32_t span_count = fuzzy_file_index_match_spans_case(index,
+      output->results[i].entry_index, query, case_sensitive, spans, FUZZY_MAX_RETURN_SPANS);
+    if (used + span_count > capacity) {
+      uint32_t grown = capacity ? capacity * 2 : output->count * 4;
+      if (grown < used + span_count) grown = used + span_count;
+      FuzzySpan *resized = (FuzzySpan *)realloc(output->spans, sizeof(FuzzySpan) * grown);
+      if (!resized) {
+        file_search_output_free(output);
+        return false;
+      }
+      output->spans = resized;
+      capacity = grown;
+    }
+    output->span_offsets[i] = used;
+    if (span_count) memcpy(output->spans + used, spans, sizeof(FuzzySpan) * span_count);
+    used += span_count;
+  }
+  output->span_offsets[output->count] = used;
+  return true;
+}
+
+static void push_file_search_output(lua_State *L, const FuzzyFileIndex *index,
+                                    const FileSearchOutput *output, bool include_spans) {
+  lua_createtable(L, output->count, 1);
+  for (uint32_t i = 0; i < output->count; ++i) {
+    const FuzzySearchResult *result = &output->results[i];
     FuzzyFileEntryView entry = { 0 };
-    if (!fuzzy_file_index_entry_at(index->index, result->source_index - 1, &entry)) continue;
+    if (!fuzzy_file_index_entry_at(index, result->source_index - 1, &entry)) continue;
     lua_createtable(L, 0, include_spans ? 16 : 12);
     push_file_entry_fields(L, &entry);
     lua_pushinteger(L, result->source_index); lua_setfield(L, -2, "index");
     lua_pushinteger(L, result->entry_index + 1); lua_setfield(L, -2, "entry_index");
     lua_pushinteger(L, result->score); lua_setfield(L, -2, "score");
     if (include_spans) {
-      FuzzySpan spans[FUZZY_MAX_RETURN_SPANS];
-      uint32_t span_count = fuzzy_file_index_match_spans_case(index->index,
-        result->entry_index, query, case_sensitive, spans, FUZZY_MAX_RETURN_SPANS);
+      const FuzzySpan *spans = output->spans + output->span_offsets[i];
+      uint32_t span_count = output->span_offsets[i + 1] - output->span_offsets[i];
       lua_createtable(L, span_count, 0);
       for (uint32_t s = 0; s < span_count; ++s) {
         push_span_table(L, &spans[s]);
@@ -496,9 +587,110 @@ static int file_index_search(lua_State *L) {
     }
     lua_rawseti(L, -2, i + 1);
   }
-  free(results);
-  lua_pushboolean(L, has_more); lua_setfield(L, -2, "has_more");
+  lua_pushboolean(L, output->has_more); lua_setfield(L, -2, "has_more");
+}
+
+static int file_index_search(lua_State *L) {
+  FuzzyFileIndex *index = file_index_of(L, 1);
+  const char *query = luaL_optstring(L, 2, "");
+  int opts = lua_istable(L, 3) ? 3 : 0;
+  uint32_t limit = opt_limit(L, opts, 100);
+  bool include_spans = opt_spans(L, opts);
+  bool case_sensitive = opt_case_sensitive(L, opts);
+  FileSearchOutput output;
+  if (!file_search_run(index, query, limit, include_spans, case_sensitive, &output)) {
+    return luaL_error(L, "out of memory");
+  }
+  push_file_search_output(L, index, &output, include_spans);
+  file_search_output_free(&output);
   return 1;
+}
+
+static void file_search_job_release(FileSearchJob *job) {
+  if (!job || SDL_AddAtomicInt(&job->references, -1) != 1) return;
+  file_search_output_free(&job->output);
+  shared_file_index_release(job->shared);
+  free(job->query);
+  free(job);
+}
+
+static int SDLCALL file_search_thread(void *payload) {
+  FileSearchJob *job = (FileSearchJob *)payload;
+  job->ok = file_search_run(job->shared->index, job->query, job->limit,
+    job->include_spans, job->case_sensitive, &job->output);
+  SDL_SetAtomicInt(&job->done, 1);
+  file_search_job_release(job);
+  return 0;
+}
+
+static int file_index_search_async(lua_State *L) {
+  LuaFuzzyFileIndex *index = check_file_index(L, 1);
+  luaL_argcheck(L, index->shared != NULL, 1, "file index is already freed");
+  size_t query_len = 0;
+  const char *query = luaL_optlstring(L, 2, "", &query_len);
+  int opts = lua_istable(L, 3) ? 3 : 0;
+  uint32_t limit = opt_limit(L, opts, 100);
+  bool include_spans = opt_spans(L, opts);
+  bool case_sensitive = opt_case_sensitive(L, opts);
+  LuaFuzzyFileSearchTask *task = (LuaFuzzyFileSearchTask *)lua_newuserdata(L, sizeof(*task));
+  memset(task, 0, sizeof(*task));
+  task->consumed = true;
+  luaL_getmetatable(L, API_TYPE_FUZZY_FILE_SEARCH_TASK);
+  lua_setmetatable(L, -2);
+
+  FileSearchJob *job = (FileSearchJob *)calloc(1, sizeof(*job));
+  char *query_copy = (char *)malloc(query_len + 1);
+  if (!job || !query_copy) {
+    free(job);
+    free(query_copy);
+    return luaL_error(L, "out of memory");
+  }
+  memcpy(query_copy, query, query_len + 1);
+  job->query = query_copy;
+  job->limit = limit;
+  job->include_spans = include_spans;
+  job->case_sensitive = case_sensitive;
+  job->shared = index->shared;
+  SDL_AddAtomicInt(&job->shared->references, 1);
+  SDL_SetAtomicInt(&job->references, 2);
+
+  SDL_Thread *thread = SDL_CreateThread(file_search_thread, "fuzzy-file-search", job);
+  if (!thread) {
+    SDL_SetAtomicInt(&job->references, 1);
+    file_search_job_release(job);
+    return luaL_error(L, "could not start native file search thread: %s", SDL_GetError());
+  }
+  SDL_DetachThread(thread);
+  task->job = job;
+  task->consumed = false;
+  return 1;
+}
+
+static int file_search_task_poll(lua_State *L) {
+  LuaFuzzyFileSearchTask *task = check_file_search_task(L, 1);
+  luaL_argcheck(L, !task->consumed, 1, "file search result is already consumed");
+  FileSearchJob *job = task->job;
+  if (SDL_GetAtomicInt(&job->done) == 0) return 0;
+  task->consumed = true;
+  if (!job->ok) {
+    task->job = NULL;
+    file_search_job_release(job);
+    return luaL_error(L, "out of memory");
+  }
+  // The task keeps its job until the results are pushed, so a Lua error here
+  // leaves the job for the collector to release.
+  push_file_search_output(L, job->shared->index, &job->output, job->include_spans);
+  task->job = NULL;
+  file_search_job_release(job);
+  return 1;
+}
+
+static int file_search_task_gc(lua_State *L) {
+  LuaFuzzyFileSearchTask *task = check_file_search_task(L, 1);
+  file_search_job_release(task->job);
+  task->job = NULL;
+  task->consumed = true;
+  return 0;
 }
 
 static int f_filter(lua_State *L) {
@@ -604,8 +796,15 @@ static const luaL_Reg file_build_task_methods[] = {
   { NULL, NULL }
 };
 
+static const luaL_Reg file_search_task_methods[] = {
+  { "poll", file_search_task_poll },
+  { "__gc", file_search_task_gc },
+  { NULL, NULL }
+};
+
 static const luaL_Reg file_index_methods[] = {
   { "search", file_index_search },
+  { "search_async", file_index_search_async },
   { "entry", file_index_entry },
   { "free", file_index_gc },
   { "__len", file_index_len },
@@ -645,6 +844,12 @@ int luaopen_fuzzy(lua_State *L) {
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   luaL_setfuncs(L, file_build_task_methods, 0);
+  lua_pop(L, 1);
+
+  luaL_newmetatable(L, API_TYPE_FUZZY_FILE_SEARCH_TASK);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  luaL_setfuncs(L, file_search_task_methods, 0);
   lua_pop(L, 1);
 
   luaL_newlib(L, lib);
