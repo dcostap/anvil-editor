@@ -132,7 +132,7 @@ def main() -> int:
     parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
         "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
-        "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window",
+        "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "recovery",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
         "fault-alloc", "fault-event", "fault-open", "fault-acquire", "fault-present", "fault-resize",
@@ -205,6 +205,8 @@ def main() -> int:
                         fixture = "shell_sidebar_layout_probe.lua"
                     if action == "project-menu":
                         fixture = "shell_project_menu_probe.lua"
+                    if action == "recovery":
+                        fixture = "shell_recovery_probe.lua"
                     if action.startswith("dormant-"):
                         fixture = "dormant_projects_probe.lua"
                     if action.startswith("sidebar-"):
@@ -245,7 +247,7 @@ def main() -> int:
                             "ANVIL_USERDIR": native_path(case_dir / "user"),
                             "USERPROFILE": native_path(case_dir / "user"), "HOME": native_path(case_dir / "user"),
                             "ANVIL_PROJECT_PROBE": action, "ANVIL_PROJECT_PROBE_MODE": mode,
-                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("routing", "windows-open", "layers", "terminal-focus", "toggle-sidebar", "project-menu") or action.startswith("windows-move") else "",
+                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("routing", "windows-open", "layers", "terminal-focus", "toggle-sidebar", "project-menu", "recovery") or action.startswith("windows-move") else "",
                             "ANVIL_PROJECT_PROBE_ROOT": native_path(case_dir).replace("\\", "/"),
                             "ANVIL_PROJECT_PROBE_RESULT": native_path(result),
                             "ANVIL_TEST_DISABLE_PLUGINS": "autorestart,autoreload,autosave_fast,autosaveonfocuslost",
@@ -276,7 +278,7 @@ def main() -> int:
                         config["environment"]["ANVIL_SIDEBAR_SCAN_DELAY"] = "1"
                     if action == "restore-stagger":
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
-                    if action in ("layers", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu"):
+                    if action in ("layers", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "recovery"):
                         config["environment"]["ANVIL_SURFACE_FAULT_PROBE"] = "1"
                         config["environment"]["ANVIL_SHELL_CAPTURE_DIR"] = native_path(case_dir)
                     if action == "theme-global":
