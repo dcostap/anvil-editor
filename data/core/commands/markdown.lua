@@ -23,6 +23,17 @@ command.add(live_preview_editor, {
   end),
 })
 
+-- An inline footnote follows selected text.
+command.add(function()
+  local ok, view = live_preview_editor()
+  if ok and view.buffer:has_selection() then return true, view end
+  return false
+end, {
+  ["markdown:add_inline_footnote"] = command.palette(function(view)
+    footnotes.add(view, { inline = true })
+  end),
+})
+
 command.add(function()
   local ok, view = live_preview_editor()
   local note = ok and footnotes.note_at_caret(view)

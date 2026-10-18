@@ -19,6 +19,12 @@ typedef struct ExtensionScan {
   uint32_t active_match_id;
   uint32_t next_match_id;
   bool comments_exhausted;
+  /* Matching close brackets for the line part after an inline footnote's
+     open bracket, indexed from bracket_start. */
+  uint32_t *bracket_close;
+  uint32_t bracket_capacity;
+  uint32_t bracket_start;
+  uint32_t bracket_end;
 } ExtensionScan;
 
 static bool escaped_at(const ExtensionScan *scan, uint32_t position) {
@@ -109,6 +115,37 @@ static bool at_definition_indent(const ExtensionScan *scan, uint32_t position) {
     position--;
   }
   return true;
+}
+
+/* Finds the close bracket that matches the open bracket at `open` on its
+   line. One pass matches every bracket from `open` to the line end, so a
+   line of unclosed brackets stays linear. Returns 1 when found, 0 when the
+   bracket has no match, and -1 when out of memory. */
+static int bracket_close_at(ExtensionScan *scan, uint32_t open, uint32_t *close) {
+  if (open < scan->bracket_start || open >= scan->bracket_end) {
+    uint32_t end = open;
+    while (end < scan->length && scan->source[end] != '\n') end++;
+    uint32_t length = end - open;
+    if (length * 2 > scan->bracket_capacity) {
+      uint32_t *table = (uint32_t *)realloc(scan->bracket_close, sizeof(*table) * length * 2);
+      if (!table) return -1;
+      scan->bracket_close = table;
+      scan->bracket_capacity = length * 2;
+    }
+    uint32_t *stack = scan->bracket_close + length;
+    uint32_t depth = 0;
+    for (uint32_t position = open; position < end; position++) {
+      scan->bracket_close[position - open] = UINT32_MAX;
+      if (escaped_at(scan, position)) continue;
+      char byte = scan->source[position];
+      if (byte == '[') stack[depth++] = position;
+      else if (byte == ']' && depth > 0) scan->bracket_close[stack[--depth] - open] = position;
+    }
+    scan->bracket_start = open;
+    scan->bracket_end = end;
+  }
+  *close = scan->bracket_close[open - scan->bracket_start];
+  return *close != UINT32_MAX;
 }
 
 static bool emit(ExtensionScan *scan, const char *name, uint32_t start, uint32_t end) {
@@ -210,6 +247,22 @@ static bool scan_extensions(ExtensionScan *scan) {
             !emit(scan, "content.footnote_label", cursor + 2, label_end) ||
             !emit(scan, "marker.footnote_reference_close", label_end, end)) return false;
         cursor = end;
+        continue;
+      }
+    }
+
+    /* A Pandoc inline footnote: ^[text], with balanced brackets on one line. */
+    if (scan->source[cursor] == '^' && scan->source[cursor + 1] == '[') {
+      uint32_t close = 0;
+      int found = bracket_close_at(scan, cursor + 1, &close);
+      if (found < 0) return false;
+      if (found) {
+        scan->active_match_id = scan->next_match_id++;
+        if (!emit(scan, "span.footnote_inline", cursor, close + 1) ||
+            !emit(scan, "marker.footnote_inline_open", cursor, cursor + 2) ||
+            !emit(scan, "content.footnote_text", cursor + 2, close) ||
+            !emit(scan, "marker.footnote_inline_close", close, close + 1)) return false;
+        cursor = close + 1;
         continue;
       }
     }
@@ -324,5 +377,6 @@ bool anvil_markdown_extensions_scan(
   }
   bool ok = scan_extensions(&scan);
   free(scan.escaped);
+  free(scan.bracket_close);
   return ok;
 }

@@ -3211,7 +3211,8 @@ test.describe("Markdown Live Preview", function()
     for _, fragment in ipairs(footnote_reference.fragments) do
       if fragment.footnote then footnote = fragment break end
     end
-    test.equal(test.not_nil(footnote).footnote, "note")
+    -- A footnote shows its number in the document, not its label.
+    test.equal(test.not_nil(footnote).footnote, "1")
     local footnote_definition = test.not_nil(view:get_line_render(7))
     local definition_fragment
     for _, fragment in ipairs(footnote_definition.fragments) do

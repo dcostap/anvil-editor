@@ -228,6 +228,13 @@ uint32_t anvil_worker_treesitter_index_result_markdown_footnote_definition_row(
   const AnvilWorkerTreeSitterIndexResult *result,
   uint32_t index
 );
+uint32_t anvil_worker_treesitter_index_result_markdown_footnote_count(
+  const AnvilWorkerTreeSitterIndexResult *result
+);
+uint32_t anvil_worker_treesitter_index_result_markdown_footnote_row(
+  const AnvilWorkerTreeSitterIndexResult *result,
+  uint32_t index
+);
 uint32_t anvil_worker_treesitter_index_result_reused_inline_count(const AnvilWorkerTreeSitterIndexResult *result);
 uint64_t anvil_worker_treesitter_index_result_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
 double anvil_worker_treesitter_index_result_precise_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);

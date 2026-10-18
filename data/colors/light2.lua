@@ -357,6 +357,7 @@ style.markdown_live_reference_definition = style.dim
 style.markdown_live_math_background = style.background2
 style.markdown_live_math = style.syntax.literal
 style.markdown_live_footnote = style.accent
+style.markdown_footnote_badge_bg = { style.accent[1], style.accent[2], style.accent[3], 48 }
 style.markdown_live_image_background = style.background2
 style.markdown_live_image_loading = style.dim
 style.markdown_live_image_blocked = c("9a6700")

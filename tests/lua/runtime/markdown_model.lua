@@ -267,6 +267,24 @@ test.describe("Markdown semantic model", function()
     local range = test.not_nil(definition).attributes.footnote_text
     test.equal(buffer.lines[3]:sub(range.col1, range.col2 - 1), "Is *this* right?")
     test.same(instance:footnote_definitions(), { ["1"] = 3, aside = 5 })
+    test.same(instance:footnote_lines(), { 1 })
+    markdown_model.close(buffer, "test")
+  end)
+
+  test.it("publishes an inline footnote and its line", function()
+    local buffer = make_buffer("Intro.\n\nRead the book^[See [the index] first.] today.\n")
+    local instance = markdown_model.get(buffer)
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    local line = buffer.lines[3]
+    local note
+    for _, node in ipairs(test.not_nil(instance:nodes_for_lines(3, 3))) do
+      test.ok(node.type ~= "link_reference", "an inline footnote reads as a link")
+      if node.type == "footnote_inline" then note = node end
+    end
+    local range = test.not_nil(note).attributes.footnote_text
+    test.equal(line:sub(note.source.col1, note.source.col2 - 1), "^[See [the index] first.]")
+    test.equal(line:sub(range.col1, range.col2 - 1), "See [the index] first.")
+    test.same(instance:footnote_lines(), { 3 })
     markdown_model.close(buffer, "test")
   end)
 

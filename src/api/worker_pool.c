@@ -738,6 +738,15 @@ static int treesitter_index_result_summary(lua_State *L) {
     lua_rawseti(L, -2, (int)index + 1);
   }
   lua_setfield(L, -2, "footnote_definition_lines");
+  footnote_count = anvil_worker_treesitter_index_result_markdown_footnote_count(result->result);
+  lua_createtable(L, (int)footnote_count, 0);
+  for (uint32_t index = 0; index < footnote_count; index++) {
+    lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_markdown_footnote_row(
+      result->result, index
+    ) + 1);
+    lua_rawseti(L, -2, (int)index + 1);
+  }
+  lua_setfield(L, -2, "footnote_lines");
   uint32_t changed_line1 = 0;
   uint32_t changed_line2 = 0;
   if (anvil_worker_treesitter_index_result_markdown_changed_lines(
@@ -1780,6 +1789,7 @@ static bool extension_parent(const SemanticCaptureView *capture) {
     || capture_name_equal(capture, "span.comment")
     || capture_name_equal(capture, "span.tag")
     || capture_name_equal(capture, "span.footnote_reference")
+    || capture_name_equal(capture, "span.footnote_inline")
     || capture_name_equal(capture, "marker.footnote_definition_open");
 }
 
@@ -2064,6 +2074,7 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
       else if (capture_name_prefix(decoration, "marker.footnote_")
         || capture_name_prefix(decoration, "content.footnote_"))
         family_match = capture_name_equal(parent, "span.footnote_reference")
+          || capture_name_equal(parent, "span.footnote_inline")
           || capture_name_equal(parent, "span.footnote_definition");
       if (target_or_alias)
         family_match = capture_name_equal(parent, "span.wiki_link")

@@ -231,6 +231,7 @@ local REVEAL_TYPES = {
   hard_break = true,
   math = true,
   footnote_reference = true,
+  footnote_inline = true,
 }
 
 local function list_marker_has_gap(line_text, marker)
@@ -551,16 +552,12 @@ local function semantic_setext_marker_for_line(view, line_text, line)
   end
 end
 
-local FOOTNOTE_NUMBER_SCALE = 0.75
-
 local FORMATTING_TYPES = {
   strong = true,
   emphasis = true,
   strikethrough = true,
   highlight = true,
   code = true,
-  -- A footnote reference shows its label as a small number.
-  footnote_reference = true,
 }
 
 local function semantic_formatting_spans(view, line_text, line)
@@ -745,32 +742,18 @@ local function semantic_formatting_fragments(view, line_text, line, reveal_units
       end
       local function composed_fragment(extra_id)
         local bold, italic, strike, highlight, code = false, false, false, false, false
-        local footnote
         local ids = {}
         for _, span in ipairs(active_spans) do
           bold = bold or span.type == "strong"
           italic = italic or span.type == "emphasis"
           strike = strike or span.type == "strikethrough"
           highlight = highlight or span.type == "highlight"
-          if span.type == "footnote_reference" then footnote = span.text end
           code = code or span.type == "code"
           ids[#ids + 1] = span.semantic_id
         end
         if extra_id then ids[#ids + 1] = extra_id end
         local font_type = bold and italic and "strong_emphasis"
           or bold and "strong" or italic and "emphasis" or "normal"
-        if footnote then
-          local base = opts.base_font or live_fonts.body(view)
-          return {
-            source_col1 = col1, source_col2 = col2,
-            text = line_text:sub(col1, col2 - 1),
-            font = live_fonts.scaled(view, style.markdown_body_font,
-              base:get_size() * FOOTNOTE_NUMBER_SCALE),
-            color = style.markdown_live_footnote,
-            footnote = footnote,
-            semantic_id = table.concat(ids, "+"),
-          }
-        end
         return {
           source_col1 = col1, source_col2 = col2,
           text = line_text:sub(col1, col2 - 1),
@@ -2298,15 +2281,72 @@ local function semantic_break_fragments(view, line_text, line, reveal_units)
   return fragments
 end
 
--- A footnote definition line shows only while its fold is open. Its label
--- marker reads as a footnote.
-local function semantic_footnote_fragments(view, line_text, line)
+local FOOTNOTE_BADGE_SCALE = 0.8
+
+-- A footnote's marker shows as a badge with its number, raised like a
+-- superscript. A click on it opens the footnote's card.
+local function footnote_badge(view, node, line, number)
+  local body = live_fonts.body(view)
+  local font = live_fonts.scaled(view, style.markdown_body_font,
+    body:get_size() * FOOTNOTE_BADGE_SCALE)
+  local label = tostring(number)
+  local pad_x = math.max(2, math.floor(4 * SCALE))
+  local pad_y = math.max(1, math.floor(SCALE))
+  local gap = math.max(1, math.floor(2 * SCALE))
+  local pill_w = math.max(font:get_width(label) + pad_x * 2, font:get_height() + pad_y * 2)
+  local pill_h = font:get_height() + pad_y * 2
+  -- The badge keeps a gap from the word it follows. The source's own space
+  -- separates it from the next word.
+  local width = pill_w + gap
+  local col1 = node.source.col1
+  return {
+    source_col1 = col1, source_col2 = node.source.col2,
+    text = "", width = width,
+    color = style.markdown_live_footnote,
+    semantic_id = node.id,
+    footnote = label,
+    suppress_bracketmatch = true,
+    widget = {
+      wrapping = "inline", width = width, cursor = "hand",
+      draw = function(_, _, x, y, row_height)
+        -- The badge's top meets the top of the line's capitals.
+        local text_top = y + math.floor((row_height - body:get_height()) / 2)
+        local top = text_top + math.floor(body:get_height() * 0.08)
+        renderer.draw_rounded_rect(x + gap, top, pill_w, pill_h,
+          math.floor(pill_h / 2), style.markdown_footnote_badge_bg)
+        renderer.draw_text(font, label,
+          x + gap + math.floor((pill_w - font:get_width(label)) / 2), top + pad_y,
+          style.markdown_live_footnote)
+      end,
+      on_mouse_pressed = function(_, owner, _, button)
+        if button ~= "left" then return false end
+        local note = footnotes.note_at(owner, line, col1)
+        if not note then return false end
+        footnotes.begin_edit(owner, note)
+        return true
+      end,
+    },
+  }
+end
+
+-- Footnote markers show as numbered badges until the caret enters them. A
+-- definition line shows only while its fold is open, and its label marker
+-- reads as a footnote.
+local function semantic_footnote_fragments(view, line_text, line, reveal_units)
   local fragments = {}
   for _, node in ipairs(semantic_line(view, line) or {}) do
     local attributes = node.attributes or {}
+    local source = node.source
+    if (node.type == "footnote_reference" or node.type == "footnote_inline")
+      and source.line1 == line and source.line2 == line
+      and not reveal_unit_matches(reveal_units, node.id, source.col1, source.col2)
+    then
+      local number = footnotes.number_at(view, line, source.col1)
+      if number then fragments[#fragments + 1] = footnote_badge(view, node, line, number) end
+    end
     local marker = node.type == "footnote_definition" and attributes.footnote_definition_open
     local label = attributes.footnote_label
-    if marker and label and node.source.line1 == line then
+    if marker and label and source.line1 == line then
       fragments[#fragments + 1] = {
         source_col1 = marker.col1, source_col2 = marker.col2,
         text = line_text:sub(marker.col1, marker.col2 - 1),
@@ -2952,7 +2992,7 @@ local function inline_fragments(line_text, line, view, reveal_units)
   for _, fragment in ipairs(semantic_break_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
-  for _, fragment in ipairs(semantic_footnote_fragments(view, line_text, line)) do
+  for _, fragment in ipairs(semantic_footnote_fragments(view, line_text, line, reveal_units)) do
     add_fragment(fragments, occupied, fragment)
   end
   for _, fragment in ipairs(semantic_tag_fragments(view, line_text, line, reveal_units)) do

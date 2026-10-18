@@ -208,7 +208,7 @@ A Markdown Callout whose type marker is followed by `+` or `-`, declaring whethe
 _Avoid_: collapsible callout, folded blockquote
 
 **Footnote**:
-A note in a Markdown document, written as a Pandoc footnote reference in the text and a one-line definition below its paragraph, and shown by Markdown Live Preview as a small number with a card beside the reading lane, or below its paragraph when no free space beside the lane can hold the card.
+A note in a Markdown document, written in Pandoc syntax either as a numbered footnote (a reference in the text with a one-line definition below its paragraph) or as an inline footnote (its text written in the line itself). Markdown Live Preview numbers all footnotes in document order and shows each as a numbered badge with a card beside the reading lane, or below its paragraph when no free space beside the lane can hold the card.
 _Avoid_: margin note, sidenote, endnote
 
 **Markdown Source Mode**:

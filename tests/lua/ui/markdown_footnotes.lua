@@ -68,6 +68,15 @@ local function click(view, x, y)
   view:on_mouse_released("left", x, y)
 end
 
+-- The numbers of the footnote badges on a line, in order.
+local function badges(view, line)
+  local numbers = {}
+  for _, fragment in ipairs(view:get_line_render(line).fragments) do
+    if fragment.widget and fragment.footnote then numbers[#numbers + 1] = fragment.footnote end
+  end
+  return numbers
+end
+
 local function fragment_with_text(view, line, text)
   for _, fragment in ipairs(view:get_line_render(line).fragments) do
     if not fragment.hidden and fragment.text == text then return fragment end
@@ -93,13 +102,80 @@ test.describe("Markdown footnotes", function()
     config.markdown_live_editor = context.live
   end)
 
-  test.it("shows a reference as its small number", function(context)
-    local view = open_note_view(context, "From Terrahawks[^1] it went.\n\n[^1]: A great show.\n\nend")
-    test.equal(visible_text(view, 1), "From Terrahawks1 it went.")
-    local number = test.not_nil(fragment_with_text(view, 1, "1"))
-    test.equal(number.color, style.markdown_live_footnote)
-    local body = test.not_nil(fragment_with_text(view, 1, "From Terrahawks"))
-    test.ok(number.font:get_size() < body.font:get_size(), "the number is not smaller")
+  test.it("shows a footnote marker as a badge with its number", function(context)
+    local view = open_note_view(context, "From Terrahawks[^x] it went.\n\n[^x]: A great show.\n\nend")
+    test.equal(visible_text(view, 1), "From Terrahawks it went.")
+    test.same(badges(view, 1), { "1" })
+  end)
+
+  test.it("shows the marker's source while the caret is inside it", function(context)
+    local view, buffer = open_note_view(context, "From Terrahawks[^x] it went.\n\n[^x]: A great show.\n\nend")
+    buffer:set_selection(1, 18)
+    test.equal(visible_text(view, 1), "From Terrahawks[^x] it went.")
+    test.same(badges(view, 1), {})
+  end)
+
+  test.it("numbers numbered and inline footnotes in document order", function(context)
+    local view = open_note_view(context,
+      "A[^b] B^[an aside] C[^a] D[^b] E[^none].\n\n[^a]: first\n\n[^b]: second\n\nend")
+    test.same(badges(view, 1), { "1", "2", "3", "1" })
+    local layout = test.not_nil(footnotes.layout(view))
+    local cards = {}
+    for _, card in ipairs(layout.cards) do cards[#cards + 1] = card.note.number .. " " .. card.note.text end
+    test.same(cards, { "1 second", "2 an aside", "3 first", "1 second" })
+  end)
+
+  test.it("opens a footnote's editor when its badge is clicked", function(context)
+    local view = open_note_view(context, "From Terrahawks[^x] it went.\n\n[^x]: A great show.\n\nend")
+    view:update()
+    local x, y = view:get_line_screen_position(1, 16)
+    view:on_mouse_pressed("left", x + 4, y + 4, 1)
+    local input = test.not_nil(footnotes.editing_input(view))
+    test.equal(core.active_view, input)
+    test.equal(input:get_text(), "A great show.")
+  end)
+
+  test.it("adds an inline footnote right after the selection", function(context)
+    local view, buffer = open_note_view(context, "From Terrahawks it went.\n\nend")
+    buffer:set_selection(1, 6, 1, 11)
+    test.ok(command.perform("markdown:add_inline_footnote"))
+    footnotes.editing_input(view):on_text_input("What [a] show]")
+    test.ok(command.perform("markdown:save_footnote"))
+    test.equal(document_text(buffer), "From Terra^[What [a] show\\]]hawks it went.\n\nend")
+  end)
+
+  test.it("offers an inline footnote only for selected text", function(context)
+    local view, buffer = open_note_view(context, "From Terrahawks it went.\n\nend")
+    buffer:set_selection(1, 9)
+    test.ok(not command.perform("markdown:add_inline_footnote"))
+    test.equal(footnotes.editing_input(view), nil)
+  end)
+
+  test.it("adds a numbered footnote right after the selection", function(context)
+    local view, buffer = open_note_view(context, "From Terrahawks it went.\n\nend")
+    buffer:set_selection(1, 6, 1, 11)
+    test.ok(command.perform("markdown:add_footnote"))
+    footnotes.editing_input(view):on_text_input("note")
+    test.ok(command.perform("markdown:save_footnote"))
+    test.equal(document_text(buffer), "From Terra[^1]hawks it went.\n\n[^1]: note\n\nend")
+  end)
+
+  test.it("edits an inline footnote in place", function(context)
+    local view, buffer = open_note_view(context, "From Terrahawks^[old] it went.\n\nend")
+    buffer:set_selection(1, 18)
+    test.ok(command.perform("markdown:edit_footnote"))
+    local input = test.not_nil(footnotes.editing_input(view))
+    test.equal(input:get_text(), "old")
+    input:set_text("new text")
+    test.ok(command.perform("markdown:save_footnote"))
+    test.equal(document_text(buffer), "From Terrahawks^[new text] it went.\n\nend")
+  end)
+
+  test.it("removes an inline footnote with its text", function(context)
+    local _, buffer = open_note_view(context, "From Terrahawks^[old] it went.\n\nend")
+    buffer:set_selection(1, 18)
+    test.ok(command.perform("markdown:remove_footnote"))
+    test.equal(document_text(buffer), "From Terrahawks it went.\n\nend")
   end)
 
   test.it("hides definition lines until the caret enters them", function(context)

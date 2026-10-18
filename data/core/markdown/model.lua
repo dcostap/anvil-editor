@@ -272,7 +272,8 @@ function Model:publish(result, revision, signature, generation, changed_range)
   self.published_metadata = signature
   self.published_byte_len = summary.byte_len or 0
   self.published_line_count = summary.line_count or 0
-  self.published_footnote_lines = summary.footnote_definition_lines or {}
+  self.published_footnote_definition_lines = summary.footnote_definition_lines or {}
+  self.published_footnote_lines = summary.footnote_lines or {}
   self.footnote_definitions_cache = nil
   self.diagnostics.published = self.diagnostics.published + 1
   self.diagnostics.last_parse_ms = summary.metrics and summary.metrics.parse_ms or 0
@@ -608,12 +609,19 @@ function Model:footnote_definitions()
     return cache.lines
   end
   local lines = {}
-  for _, line in ipairs(self.published_footnote_lines or {}) do
+  for _, line in ipairs(self.published_footnote_definition_lines or {}) do
     local label = buffer and (buffer.lines[line] or ""):match("^ ? ? ?%[%^([^%s%[%]]+)%]:")
     if label and not lines[label] then lines[label] = line end
   end
   self.footnote_definitions_cache = { generation = self.generation, revision = revision, lines = lines }
   return lines
+end
+
+---Lines with a footnote reference or an inline footnote, in source order,
+---from the published parse.
+---@return integer[]
+function Model:footnote_lines()
+  return self.published_footnote_lines or {}
 end
 
 function Model:status_snapshot()
@@ -631,7 +639,7 @@ end
 local function extension_parent_kind(name)
   return name == "span.wiki_link" or name == "span.embed" or name == "span.comment"
     or name == "span.tag" or name == "span.footnote_reference"
-    or name == "marker.footnote_definition_open"
+    or name == "span.footnote_inline" or name == "marker.footnote_definition_open"
 end
 
 local function extension_capture(name)

@@ -221,7 +221,7 @@ on to Space Precinct[^2] and then to Captain Scarlet[^3].
 A plain paragraph between the footnotes that wraps across more than one visual row in a wide view,
 so that the cards have some room to settle beside their references.
 
-Here a footnote[^4] sits in the sentence.
+Here a footnote[^4] sits in the sentence, and an aside^[Inline footnotes keep their text in the line.] follows it.
 
 [^4]: Footnotes can hold *inline* Markdown.
 """

@@ -145,10 +145,11 @@ int main(void) {
     "[^1]: A great show.\n",
     "   [^long-note]:\n",
     "text [^x]: not a definition\n",
+    "Aside^[with [nested] and \\] brackets] then \\^[escaped] and ^[unclosed\n",
   };
-  uint32_t note_lengths[5];
-  for (uint32_t i = 0; i < 5; i++) note_lengths[i] = (uint32_t)strlen(note_source[i]);
-  snapshot = anvil_ts_snapshot_new_from_lines(note_source, note_lengths, 5, &error);
+  uint32_t note_lengths[6];
+  for (uint32_t i = 0; i < 6; i++) note_lengths[i] = (uint32_t)strlen(note_source[i]);
+  snapshot = anvil_ts_snapshot_new_from_lines(note_source, note_lengths, 6, &error);
   CHECK(snapshot != NULL);
   const char *raw_note = strstr(snapshot->bytes, "`[^raw]`");
   CHECK(raw_note != NULL);
@@ -190,6 +191,15 @@ int main(void) {
   CHECK(empty_id != UINT32_MAX);
   CHECK(find_match_capture(&notes, "content.footnote_text", empty_id) == NULL);
   CHECK(inline_x);
+  CHECK(count_captures(&notes, "span.footnote_inline") == 1);
+  const AnvilMarkdownExtensionCapture *aside = find_capture(&notes, "span.footnote_inline");
+  CHECK(capture_text_is(snapshot, aside, "^[with [nested] and \\] brackets]"));
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "marker.footnote_inline_open", aside->match_id), "^["));
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "content.footnote_text", aside->match_id), "with [nested] and \\] brackets"));
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "marker.footnote_inline_close", aside->match_id), "]"));
   anvil_ts_snapshot_free(snapshot);
 
   uint32_t pathological_len = 128 * 1024;
@@ -203,6 +213,17 @@ int main(void) {
   );
   CHECK(snapshot != NULL);
   CaptureList empty = {0};
+  CHECK(anvil_markdown_extensions_scan(snapshot, NULL, 0, collect_capture, &empty, NULL, NULL));
+  CHECK(empty.count == 0);
+  anvil_ts_snapshot_free(snapshot);
+
+  /* A line of unclosed inline footnotes stays linear. */
+  for (uint32_t i = 0; i < pathological_len; i++) pathological[i] = (i & 1) ? '[' : '^';
+  snapshot = anvil_ts_snapshot_new_from_lines(
+    pathological_lines, pathological_lengths, 1, &error
+  );
+  CHECK(snapshot != NULL);
+  memset(&empty, 0, sizeof(empty));
   CHECK(anvil_markdown_extensions_scan(snapshot, NULL, 0, collect_capture, &empty, NULL, NULL));
   CHECK(empty.count == 0);
   anvil_ts_snapshot_free(snapshot);

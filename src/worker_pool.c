@@ -183,6 +183,26 @@ typedef struct AnvilWorkerTreeSitterQueryResult {
   bool line_index_ready;
 } AnvilWorkerTreeSitterQueryResult;
 
+/* Zero-based rows in source order. A row appears once. */
+typedef struct AnvilRowList {
+  uint32_t *rows;
+  uint32_t count;
+  uint32_t capacity;
+} AnvilRowList;
+
+static bool row_list_append(AnvilRowList *list, uint32_t row) {
+  if (list->count > 0 && list->rows[list->count - 1] == row) return true;
+  if (list->count == list->capacity) {
+    uint32_t capacity = list->capacity ? list->capacity * 2 : 16;
+    uint32_t *rows = (uint32_t *)SDL_realloc(list->rows, sizeof(*rows) * capacity);
+    if (!rows) return false;
+    list->rows = rows;
+    list->capacity = capacity;
+  }
+  list->rows[list->count++] = row;
+  return true;
+}
+
 struct AnvilWorkerTreeSitterIndexResult {
   SDL_AtomicInt refcount;
   char *language;
@@ -206,9 +226,9 @@ struct AnvilWorkerTreeSitterIndexResult {
   bool outline_query_reusable;
   uint32_t reused_block_capture_count;
   uint32_t reused_inline_count;
-  uint32_t *markdown_footnote_definition_rows;
-  uint32_t markdown_footnote_definition_count;
-  uint32_t markdown_footnote_definition_capacity;
+  AnvilRowList markdown_footnote_definitions;
+  /* Rows with a footnote reference or an inline footnote. */
+  AnvilRowList markdown_footnotes;
   AnvilMarkdownTree *markdown_tree;
   AnvilTSProjectFileResult *project_file;
   AnvilWorkerTreeSitterQueryResult outline;
@@ -568,7 +588,8 @@ void anvil_worker_treesitter_index_result_free(AnvilWorkerTreeSitterIndexResult 
   treesitter_query_result_free(&result->usage);
   anvil_markdown_tree_free(result->markdown_tree);
   anvil_ts_project_file_free(result->project_file);
-  SDL_free(result->markdown_footnote_definition_rows);
+  SDL_free(result->markdown_footnote_definitions.rows);
+  SDL_free(result->markdown_footnotes.rows);
   SDL_free(result);
 }
 
@@ -700,7 +721,7 @@ uint32_t anvil_worker_treesitter_index_result_reused_inline_count(const AnvilWor
 uint32_t anvil_worker_treesitter_index_result_markdown_footnote_definition_count(
   const AnvilWorkerTreeSitterIndexResult *result
 ) {
-  return result ? result->markdown_footnote_definition_count : 0;
+  return result ? result->markdown_footnote_definitions.count : 0;
 }
 
 /* The zero-based row of a footnote definition, in source order. */
@@ -708,8 +729,24 @@ uint32_t anvil_worker_treesitter_index_result_markdown_footnote_definition_row(
   const AnvilWorkerTreeSitterIndexResult *result,
   uint32_t index
 ) {
-  if (!result || index >= result->markdown_footnote_definition_count) return 0;
-  return result->markdown_footnote_definition_rows[index];
+  if (!result || index >= result->markdown_footnote_definitions.count) return 0;
+  return result->markdown_footnote_definitions.rows[index];
+}
+
+uint32_t anvil_worker_treesitter_index_result_markdown_footnote_count(
+  const AnvilWorkerTreeSitterIndexResult *result
+) {
+  return result ? result->markdown_footnotes.count : 0;
+}
+
+/* The zero-based row of a footnote reference or inline footnote, in source
+   order. A row with several footnotes appears once. */
+uint32_t anvil_worker_treesitter_index_result_markdown_footnote_row(
+  const AnvilWorkerTreeSitterIndexResult *result,
+  uint32_t index
+) {
+  if (!result || index >= result->markdown_footnotes.count) return 0;
+  return result->markdown_footnotes.rows[index];
 }
 
 uint64_t anvil_worker_treesitter_index_result_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind) {
@@ -1613,23 +1650,17 @@ static bool collect_markdown_extension_capture(
     collector->out_of_memory = true;
     return false;
   }
+  AnvilWorkerTreeSitterIndexResult *result = collector->index_result;
+  AnvilRowList *rows = NULL;
   if (strcmp(capture->name, "span.footnote_definition") == 0) {
-    AnvilWorkerTreeSitterIndexResult *result = collector->index_result;
-    if (result->markdown_footnote_definition_count == result->markdown_footnote_definition_capacity) {
-      uint32_t capacity = result->markdown_footnote_definition_capacity
-        ? result->markdown_footnote_definition_capacity * 2 : 16;
-      uint32_t *rows = (uint32_t *)SDL_realloc(
-        result->markdown_footnote_definition_rows, sizeof(*rows) * capacity
-      );
-      if (!rows) {
-        collector->out_of_memory = true;
-        return false;
-      }
-      result->markdown_footnote_definition_rows = rows;
-      result->markdown_footnote_definition_capacity = capacity;
-    }
-    result->markdown_footnote_definition_rows[result->markdown_footnote_definition_count++] =
-      synthetic.start_point.row;
+    rows = &result->markdown_footnote_definitions;
+  } else if (strcmp(capture->name, "span.footnote_reference") == 0 ||
+             strcmp(capture->name, "span.footnote_inline") == 0) {
+    rows = &result->markdown_footnotes;
+  }
+  if (rows && !row_list_append(rows, synthetic.start_point.row)) {
+    collector->out_of_memory = true;
+    return false;
   }
   return true;
 }
@@ -2437,7 +2468,8 @@ static AnvilWorkerTreeSitterIndexResult *execute_markdown_parse(
 
   uint32_t exclusion_count = 0;
   AnvilMarkdownExclusion *exclusions = markdown_exclusions_build(index_result, &exclusion_count);
-  index_result->markdown_footnote_definition_count = 0;
+  index_result->markdown_footnote_definitions.count = 0;
+  index_result->markdown_footnotes.count = 0;
   MarkdownExtensionCollector extension_collector = {
     .query = &index_result->usage,
     .index_result = index_result,
