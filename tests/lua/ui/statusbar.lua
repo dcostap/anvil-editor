@@ -35,8 +35,9 @@ local function styled_text_string(styled)
   return table.concat(text)
 end
 
+-- The Buffer is clean, so autosave leaves it alone when its Pane loses focus.
 local function named_view(filename)
-  local buffer = Buffer(nil, nil, true)
+  local buffer = Buffer(nil, nil, false)
   if filename then buffer:set_filename(filename) end
   return TextView(buffer)
 end
@@ -212,10 +213,6 @@ test.describe("Pane Status Bars", function()
         alphas[tostring(text)] = color[4] or 255
         return x + font:get_width(tostring(text))
       end
-      -- Autosave reports that the test buffers have no file, and that message
-      -- would cover the focused bar's file name.
-      core.status_bar.message = nil
-      root:update()
       bar_of(pane):draw()
       return alphas
     end
