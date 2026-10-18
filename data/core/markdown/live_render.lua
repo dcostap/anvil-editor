@@ -1360,7 +1360,8 @@ local function decorate_link_fragment(view, line, span, fragment, opts)
     fragment.color = missing and style.markdown_live_link_error or style.markdown_live_link
     fragment.underline = true
   end
-  local bold, italic, strike, highlight, code = false, false, false, false, false
+  local bold, italic, strike, highlight = false, false, false, false
+  local code = fragment.code_label or false
   local ids = { span.semantic_id }
   for _, formatting in ipairs(semantic_formatting_spans(view, "", line) or {}) do
     local content = formatting.content_ranges[1]
@@ -1517,6 +1518,34 @@ local function link_text_source_range(line_text, span, label)
   end
 end
 
+---Return the content of a label that is one whole code span, as in
+---[`path/`](path), or nil when the label is anything else.
+local function code_span_label(label)
+  local ticks, inner = label:match("^(`+)(.-)%1$")
+  -- A run of the same ticks inside would close the span early.
+  if not ticks or inner == "" or inner:find(ticks, 1, true) then return nil end
+  if #inner > 2 and inner:match("^ .* $") and inner:find("%S") then
+    inner = inner:sub(2, -2)
+  end
+  return inner
+end
+
+---Build the text fragment of a link that is not an attachment chip. A label
+---that is one code span renders its content in the code style.
+local function link_label_fragment(line_text, span, label)
+  local code = code_span_label(label)
+  local fragment = {
+    source_col1 = span.col1,
+    source_col2 = span.col2,
+    text = code or label,
+    color = style.markdown_live_link,
+    code_label = code and true or nil,
+  }
+  fragment.text_source_col1, fragment.text_source_col2 =
+    link_text_source_range(line_text, span, fragment.text)
+  return fragment
+end
+
 function live._image_attachment_link(view, line, span, opts)
   local link = span.link
   local embedded = images.is_data_image(link.path)
@@ -1581,18 +1610,10 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
             attachment_chip = true,
             attachment_kind = kind,
           }
+          fragment.text_source_col1, fragment.text_source_col2 =
+            link_text_source_range(line_text, span, fragment.text)
         else
-          fragment = {
-            source_col1 = span.col1,
-            source_col2 = span.col2,
-            text = label,
-            color = style.markdown_live_link,
-          }
-        end
-        local text_col1, text_col2 = link_text_source_range(line_text, span, fragment.text)
-        if text_col1 then
-          fragment.text_source_col1 = text_col1
-          fragment.text_source_col2 = text_col2
+          fragment = link_label_fragment(line_text, span, label)
         end
       end
       if not image then fragment = decorate_link_fragment(view, line, span, fragment, opts) end
@@ -1686,14 +1707,9 @@ table_presentation.inline_pieces = function(view, line_text, line, reveal, base)
       local link = span.link
       local kind, icon = attachment_kind(link.path or link.raw_target)
       local label = textual_link_label(link)
-      local fragment = {
-        source_col1 = span.col1, source_col2 = span.col2,
-        text = kind and (icon .. " " .. label) or label,
-      }
-      if not kind then
-        fragment.text_source_col1, fragment.text_source_col2 =
-          link_text_source_range(line_text, span, label)
-      end
+      local fragment = kind and {
+        source_col1 = span.col1, source_col2 = span.col2, text = icon .. " " .. label,
+      } or link_label_fragment(line_text, span, label)
       fragment = decorate_link_fragment(view, line, span, fragment, opts)
       if fragment and kind then fragment.background = style.markdown_live_attachment_bg end
       inserted = fragment and { fragment } or nil

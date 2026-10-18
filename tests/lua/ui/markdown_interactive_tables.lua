@@ -1116,6 +1116,35 @@ test.describe("Markdown Interactive Table Editing", function()
     test.ok(strong.font ~= cells[1].font, "bold text used the cell's plain font")
   end)
 
+  test.it("renders a link whose label is a code span as code", function()
+    local view, buffer = make_view(
+      "| Path | What |\n| --- | --- |\n| [`notes/`](notes) | Saved notes |\n\nplain"
+    )
+    buffer:set_selection(5, 1)
+    refresh(view)
+    local line = table_cells(view, 3)[1].text_lines[1]
+    test.equal(line.text, "notes/")
+    test.equal(line.runs[#line.runs].background, style.markdown_live_inline_code_bg)
+  end)
+
+  test.it("keeps unbreakable link labels inside their column", function()
+    local name = "a_very_long_attachment_name_for_this_table.pdf"
+    local view, buffer = make_view(
+      "| Path | What |\n| --- | --- |\n| [" .. name .. "](" .. name .. ") | "
+        .. string.rep("words that wrap ", 12) .. "|\n\nplain"
+    )
+    buffer:set_selection(5, 1)
+    refresh(view)
+    local cell = table_cells(view, 3)[1]
+    for _, text_line in ipairs(cell.text_lines) do
+      for _, run in ipairs(text_line.runs or {}) do
+        test.ok(run.x + run.width <= cell.width,
+          ("run %q ends at %.1f past cell width %.1f"):format(
+            run.text, run.x + run.width, cell.width))
+      end
+    end
+  end)
+
   test.it("reveals only the syntax of the span holding the caret in an active cell", function()
     local view, buffer = make_view("| A | B |\n| --- | --- |\n| **a** b | two |\n\nplain")
     buffer:set_selection(3, buffer.lines[3]:find("b |", 1, true) + 1)

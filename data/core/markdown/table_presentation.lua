@@ -804,6 +804,13 @@ function table_presentation.layout(view, table_node, instance)
           minimums[column], presentation.font:get_width(presentation.text) + pad * 2
         )
       end
+      -- A run whose text differs from its source, such as an attachment
+      -- chip, cannot break between characters, so the column must hold it.
+      for _, run in ipairs(presentation and presentation.runs or {}) do
+        if not run.exact and not run.hidden and run.text ~= "" then
+          minimums[column] = math.max(minimums[column], run.font:get_width(run.text) + pad * 2)
+        end
+      end
     end
     widths[column] = math.max(widths[column], minimums[column])
   end
