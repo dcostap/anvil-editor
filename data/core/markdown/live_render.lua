@@ -852,10 +852,20 @@ local function image_vertical_padding()
   return math.max(1, math.floor(6 * SCALE))
 end
 
+---Describe the view widths that width-dependent lines are laid out for.
+local function layout_width_key(view)
+  local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
+  -- The layout generation stays stable while a reading lane substitutes its
+  -- draw geometry. The raw view width alternates between update and draw.
+  return string.format("%s:%s:%s:%s", view:get_presentation_viewport_width(),
+    view:get_gutter_width(), scrollbar_width, tostring(view:get_presentation_layout_generation()))
+end
+
 local function image_available_width(view)
   -- Block images use the presentation viewport rather than the prose wrap
   -- column. A narrow prose guide must not shrink an image block or make its
   -- editable source occupy phantom rows above the image.
+  view.__markdown_layout_width_read = true
   local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
   local width = view:get_presentation_viewport_width()
     - view:get_gutter_width() - scrollbar_width
@@ -1464,6 +1474,7 @@ local function embed_preview_fragment(view, line_text, span)
   local body_font = live_fonts.body(view)
   local line_height = live_fonts.body_line_height(view)
   local padding = math.max(2, math.floor(4 * SCALE))
+  view.__markdown_layout_width_read = true
   return {
     source_col1 = #line_text + 1, source_col2 = #line_text + 1,
     width = 0, draw_x_offset = 0,
@@ -5159,6 +5170,8 @@ function live._markdown_code_copy_button_fragment(view, fenced)
   local hit_padding = 3 * SCALE
   local hit_width = button_width + hit_padding * 2
 
+  -- The button sits at the right edge of the viewport.
+  view.__markdown_layout_width_read = true
   return {
     source_col1 = 1,
     source_col2 = 1,
@@ -5522,8 +5535,6 @@ local function provider_metric_generation(view)
     return state.metric_generation
   end
   local font = live_fonts.body(view)
-  local table_width = table_presentation.available_width(view)
-  local image_width = image_available_width(view)
   local geometry_context = view.__centered_editor_in_geometry and "centered" or "host"
   perf_frame_add("markdown_live_provider_generation_calls", 1)
   perf_frame_add(
@@ -5533,24 +5544,25 @@ local function provider_metric_generation(view)
     1
   )
   perf_detail(string.format(
-    "markdown_live_provider_geometry:%s:view_width=%d:table_width=%d:image_width=%d",
-    geometry_context,
-    math.floor(tonumber(view.size and view.size.x) or 0),
-    math.floor(tonumber(table_width) or 0),
-    math.floor(tonumber(image_width) or 0)
+    "markdown_live_provider_geometry:%s:view_width=%d",
+    geometry_context, math.floor(tonumber(view.size and view.size.x) or 0)
   ), 1)
   -- `live_fonts.body()` may return a fresh size-adjusted copy. Keying
   -- by that temporary object's identity makes an unchanged layout look new
   -- whenever wrapping is locally refreshed.
+  -- The view width is not part of this generation. A width change rebuilds
+  -- only the lines laid out for a width; see `provider:line_render_current`.
   state.metric_generation = state.typography_generation .. ":" .. tostring(font:get_size())
-    .. ":width:" .. tostring(table_width)
-    .. ":image-width:" .. tostring(image_width)
     .. ":interactive-tables:" .. tostring(state.interactive_tables)
   return state.metric_generation
 end
 
 function provider:metric_generation(view)
-  return provider_metric_generation(view)
+  -- A wrapped view remeasures its rows after every width change. An
+  -- unwrapped view must remeasure tables and images, whose height follows
+  -- the width.
+  if view.wrapped_settings then return provider_metric_generation(view) end
+  return provider_metric_generation(view) .. ":width:" .. layout_width_key(view)
 end
 
 function provider:generation(view)
@@ -6344,8 +6356,18 @@ local function build_render_line(view, line, _context)
 end
 
 function provider:render_line(view, line, context)
+  -- Building a line can resolve another line, so keep the caller's mark.
+  local outer_width_read = view.__markdown_layout_width_read
+  view.__markdown_layout_width_read = false
   local render_line = build_render_line(view, line, context)
+  local width_read = view.__markdown_layout_width_read
+  view.__markdown_layout_width_read = outer_width_read or width_read
   if not render_line then return render_line end
+  -- A reused pending plan reads no width here. Its build path decides that
+  -- it is current, as `pending_render` does for a table row.
+  if width_read or render_line.markdown_layout_width or render_line.table_row then
+    render_line.markdown_layout_width = layout_width_key(view)
+  end
   -- Record the publication this plan came from. A plan built before the
   -- current revision published uses projected semantics.
   local published = markdown_model.peek(view.buffer)
@@ -6433,6 +6455,11 @@ end
 ---Publication invalidates the lines the parser changed. A projected plan
 ---elsewhere can still differ from the published semantics, so rebuild it.
 function provider:line_render_current(view, _line, render_line)
+  if render_line.markdown_layout_width
+    and render_line.markdown_layout_width ~= layout_width_key(view)
+  then
+    return false
+  end
   if not render_line.markdown_projected then return true end
   if current_semantic_model(view) then return false end
   local published = markdown_model.peek(view.buffer)

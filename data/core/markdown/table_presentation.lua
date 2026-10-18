@@ -619,6 +619,8 @@ function table_presentation.available_width(view)
   -- Tables may use the full editor viewport even when prose has a narrower
   -- configured wrap column. This matches reading-mode table layout and avoids
   -- wrapping an otherwise fitting grid merely because of the prose guide.
+  -- Live Preview rebuilds the lines that read this width when it changes.
+  view.__markdown_layout_width_read = true
   local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
   local width = view:get_presentation_viewport_width()
     - view:get_gutter_width() - scrollbar_width - style.padding.x
