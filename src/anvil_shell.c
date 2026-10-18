@@ -2986,6 +2986,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   int value =
       message->size == sizeof(AnvilSurfaceInt) ? ((const AnvilSurfaceInt *)payload)->value : 0;
   if (project->sidebar && message->type != ANVIL_SURFACE_MSG_SIDEBAR_QUERY &&
+      message->type != ANVIL_SURFACE_MSG_SIDEBAR_SOURCE &&
       message->type != ANVIL_SURFACE_MSG_SIDEBAR_REFRESH &&
       message->type != ANVIL_SURFACE_MSG_SELECT_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
@@ -5467,9 +5468,9 @@ static void sync_sidebar_model(void) {
     }
   }
 }
-/* A Project publishes its user directory and recent Projects. The state file keeps the latest source, so a
- * later shell starts the Sidebar before any Project runs. */
-static void use_sidebar_source(const char *directory, const char *recents) {
+static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size) {
+  (void)size; /* The reader checked both complete strings. */
+  const char *directory = (const char *)(source + 1), *recents = directory + source->userdir_size;
   if (shell.sidebar_recents && !strcmp(shell.sidebar_recents, recents) && shell.sidebar_userdir &&
       !strcmp(shell.sidebar_userdir, directory))
     return;
@@ -5489,7 +5490,6 @@ static void use_sidebar_source(const char *directory, const char *recents) {
   shell.sidebar_userdir = directory_copy;
   shell.sidebar_recents = source_copy;
   shell.sidebar_source_revision++;
-  windows_changed();
   if (!shell.sidebar_watch) {
     shell.sidebar_watch = anvil_sidebar_watch_start(directory_copy, shell.service_hwnd, WM_APP + 0x4e);
     if (!shell.sidebar_watch) SDL_Log("Sidebar registry watcher unavailable; use explicit Refresh");
@@ -5498,33 +5498,6 @@ static void use_sidebar_source(const char *directory, const char *recents) {
   service_sidebar();
   if (!shell.sidebar_process)
     start_sidebar();
-}
-static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size) {
-  (void)size; /* The reader checked both complete strings. */
-  const char *directory = (const char *)(source + 1);
-  use_sidebar_source(directory, directory + source->userdir_size);
-}
-/* Whether a saved user directory names this shell's own. A moved portable app keeps a stale one. */
-static bool is_launch_user_directory(const char *directory) {
-  const wchar_t *launch = anvil_shell_launch_user_directory();
-  static wchar_t saved[32768];
-  if (!launch || !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, directory, -1, saved, SDL_arraysize(saved)))
-    return false;
-  int a = (int)wcslen(saved), b = (int)wcslen(launch);
-  for (int i = 0; i < a; i++)
-    if (saved[i] == L'/') saved[i] = L'\\';
-  while (a > 3 && saved[a - 1] == L'\\') a--;
-  while (b > 3 && launch[b - 1] == L'\\') b--;
-  return CompareStringOrdinal(saved, a, launch, b, TRUE) == CSTR_EQUAL;
-}
-/* Starts the Sidebar from the saved source once a Window can show it. Takes ownership of both strings. */
-static void start_saved_sidebar(char *directory, char *recents) {
-  if (directory && recents && is_launch_user_directory(directory)) {
-    SDL_Log("Shell Sidebar starts from its saved source");
-    use_sidebar_source(directory, recents);
-  } else if (directory) SDL_Log("Shell ignored a saved Sidebar source from another user directory");
-  free(directory);
-  free(recents);
 }
 static ShellWindow *sidebar_service_window(void) {
   ShellWindow *window = window_for_id(shell.sidebar_window_id);
@@ -5567,7 +5540,7 @@ static void start_sidebar(void) {
   ShellWindow *window = sidebar_service_window();
   if (shell.sidebar_healthy_timer) KillTimer(shell.service_hwnd, shell.sidebar_healthy_timer);
   shell.sidebar_healthy_timer = 0;
-  if (!window || window->closing || shell.shutting_down || !shell.sidebar_userdir)
+  if (!window || window->closing || shell.shutting_down)
     return;
   ShellProject *old = shell.sidebar_process;
   if (old) {
@@ -6106,8 +6079,7 @@ static void save_windows(bool final) {
       activity[j] = activity[j - 1];
       activity[j - 1] = swap;
     }
-  AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.sidebar_hidden,
-                           shell.sidebar_userdir, shell.sidebar_recents};
+  AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.sidebar_hidden};
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
   if (!data) {
@@ -6359,13 +6331,12 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
     saved.projects[i].path = NULL;
   }
   SDL_Log("Shell Project activity loaded: Projects=%u", (unsigned)shell.saved_activity_count);
-  char *sidebar_userdir = saved.sidebar_userdir, *sidebar_recents = saved.sidebar_recents;
-  saved.sidebar_userdir = saved.sidebar_recents = NULL;
   size_t restored = saved.count || adoptable_count ? restore_windows(&saved, adoptable, adoptable_count) : 0;
   anvil_shell_state_free(&saved);
   for (size_t i = 0; i < adoptable_count; i++) anvil_adoption_free(&adoptable[i]);
   if (restored) {
-    start_saved_sidebar(sidebar_userdir, sidebar_recents);
+    /* The Sidebar does not wait for a Project. A restore can have only empty Windows. */
+    start_sidebar();
     /* A Project argument after a restore acts like an external launch. */
     if (has_project_argument(argc, argv) &&
         !queue_resolution(NULL, NULL, argc, argv, false, false, true, NULL))
@@ -6375,8 +6346,8 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
     return SDL_APP_CONTINUE;
   }
   ShellWindow *window = create_window(NULL);
-  start_saved_sidebar(sidebar_userdir, sidebar_recents);
   if (!window) return SDL_APP_FAILURE;
+  start_sidebar();
   ShellProject *project = new_project(window);
   if (!project) return SDL_APP_FAILURE;
   select_project(project);

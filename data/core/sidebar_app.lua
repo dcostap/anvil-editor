@@ -23,6 +23,20 @@ local function save_collapsed()
   if not ok then core.log_quiet("Sidebar collapse state not saved: %s", tostring(err)) end
 end
 
+-- The shell lists recent Projects from a source that a Project publishes. Windows can all be empty after a
+-- restart, so the Sidebar publishes the saved recent Projects itself. A later Project replaces them.
+local function publish_recents()
+  local ok, app_state = pcall(dofile, USERDIR .. PATHSEP .. "appstate.lua")
+  local recents = {}
+  if ok and type(app_state) == "table" and type(app_state.recents) == "table" then
+    for _, path in ipairs(app_state.recents) do
+      if type(path) == "string" and #recents < 256 then recents[#recents + 1] = path end
+    end
+  end
+  local sent = system.publish_project_sidebar(USERDIR, require("core.common").serialize(recents))
+  core.log_quiet("Sidebar recent source: Projects=%d sent=%s", #recents, tostring(sent))
+end
+
 local function save()
   if not current then return end
   current.model, current.request = core.project_sidebar, core.project_sidebar_request
@@ -161,6 +175,7 @@ function core.init()
   local id = system.get_anvil_window_id()
   add_surface(id, window)
   activate(id)
+  publish_recents()
 end
 function core.run() end
 function core.on_event(name, ...)

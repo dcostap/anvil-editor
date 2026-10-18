@@ -57,26 +57,6 @@ static void sidebar_layout(void) {
   anvil_shell_state_free(&decoded);
 }
 
-/* The Sidebar starts after a restart even when no Window has a Project to publish its source. */
-static void sidebar_source(void) {
-  char userdir[] = "C:\\anvil\\us\xc3\xa9r", recents[] = "{\"C:\\\\a\",\n\"D:\\\\b\"}";
-  AnvilShellState state = {sample, 1, NULL, 0, 240, false, userdir, recents}, decoded;
-  size_t size = 0;
-  char *data = anvil_shell_state_encode(&state, &size);
-  CHECK(data && anvil_shell_state_decode(data, size, &decoded), "Sidebar source did not round-trip");
-  CHECK(decoded.sidebar_userdir && !strcmp(decoded.sidebar_userdir, userdir) && decoded.sidebar_recents &&
-            !strcmp(decoded.sidebar_recents, recents),
-        "Sidebar source changed");
-  anvil_shell_state_free(&decoded);
-  free(data);
-  /* A file from before the saved source keeps its Windows and has no source. */
-  const char *old = "anvil-shell-windows 4\nsidebar 240 0\nwindow 1 0 0 10 10 0 3 abc\n";
-  CHECK(anvil_shell_state_decode(old, strlen(old), &decoded) && decoded.count == 1 && !decoded.sidebar_userdir &&
-            !decoded.sidebar_recents,
-        "Window state without a Sidebar source rejected");
-  anvil_shell_state_free(&decoded);
-}
-
 static void round_trip(void) {
   AnvilShellState state = {sample, 3}, decoded;
   size_t size = 0;
@@ -105,11 +85,7 @@ static void rejects(void) {
   AnvilShellState decoded;
   const char *bad[] = {
     "anvil-shell-windows 1\nwindow 0 0 10 10 0 0 \n",
-    "anvil-shell-windows 6\n",
-    "anvil-shell-windows 5\nsidebar-userdir 3 abc\n",
-    "anvil-shell-windows 5\nsidebar-recents 2 {}\n",
-    "anvil-shell-windows 5\nsidebar-userdir 3 abc\nsidebar-userdir 3 abc\nsidebar-recents 2 {}\n",
-    "anvil-shell-windows 4\nsidebar-userdir 3 abc\nsidebar-recents 2 {}\n",
+    "anvil-shell-windows 5\n",
     "anvil-shell-windows 4\nsidebar 0 0\n",
     "anvil-shell-windows 4\nsidebar 240 2\n",
     "anvil-shell-windows 4\nsidebar 240 0\nsidebar 240 0\n",
@@ -192,7 +168,6 @@ int main(int argc, char **argv) {
   round_trip();
   project_activity();
   sidebar_layout();
-  sidebar_source();
   rejects();
   writer();
   adoption_records();
