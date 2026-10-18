@@ -39,6 +39,32 @@ static const AnvilMarkdownExtensionCapture *find_capture(const CaptureList *list
   return NULL;
 }
 
+static const AnvilMarkdownExtensionCapture *find_match_capture(
+  const CaptureList *list, const char *name, uint32_t match_id
+) {
+  for (uint32_t i = 0; i < list->count; i++) {
+    if (list->captures[i].match_id == match_id && strcmp(list->captures[i].name, name) == 0)
+      return &list->captures[i];
+  }
+  return NULL;
+}
+
+static bool capture_text_is(
+  const AnvilTSSnapshot *snapshot, const AnvilMarkdownExtensionCapture *capture, const char *text
+) {
+  size_t length = strlen(text);
+  return capture && capture->end_byte - capture->start_byte == length &&
+    memcmp(snapshot->bytes + capture->start_byte, text, length) == 0;
+}
+
+static uint32_t count_captures(const CaptureList *list, const char *name) {
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < list->count; i++) {
+    if (strcmp(list->captures[i].name, name) == 0) count++;
+  }
+  return count;
+}
+
 int main(void) {
   const char *lines[] = {
     "[[Note#Heading|Alias]] ![[image.png|640x480]] ==marked== `==raw==` #project/anvil #123 C#code \\#escaped\n",
@@ -112,6 +138,59 @@ int main(void) {
   CHECK(comment_count == 1);
   anvil_ts_snapshot_free(snapshot);
 
+
+  const char *note_source[] = {
+    "from {==Terrahawks==}{>>What a show<<} then {>>point note<<} and {==bare==} `{>>raw<<}` \\{>>no<<} {==x==}{>><<}\n",
+    "{==open\n",
+    "close==} {>>open\n",
+  };
+  uint32_t note_lengths[3];
+  for (uint32_t i = 0; i < 3; i++) note_lengths[i] = (uint32_t)strlen(note_source[i]);
+  snapshot = anvil_ts_snapshot_new_from_lines(note_source, note_lengths, 3, &error);
+  CHECK(snapshot != NULL);
+  const char *raw_note = strstr(snapshot->bytes, "`{>>raw<<}`");
+  CHECK(raw_note != NULL);
+  AnvilMarkdownExclusion note_exclusion = {
+    .start_byte = (uint32_t)(raw_note - snapshot->bytes),
+    .end_byte = (uint32_t)(raw_note - snapshot->bytes + strlen("`{>>raw<<}`")),
+  };
+  CaptureList notes = {0};
+  CHECK(anvil_markdown_extensions_scan(
+    snapshot, &note_exclusion, 1, collect_capture, &notes, NULL, NULL
+  ));
+  CHECK(count_captures(&notes, "span.margin_note") == 4);
+  CHECK(count_captures(&notes, "span.highlight") == 0);
+  const AnvilMarkdownExtensionCapture *attached = find_capture(&notes, "span.margin_note");
+  CHECK(capture_text_is(snapshot, attached, "{==Terrahawks==}{>>What a show<<}"));
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "content.margin_note_anchor", attached->match_id), "Terrahawks"));
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "content.margin_note_body", attached->match_id), "What a show"));
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "marker.margin_note_anchor_open", attached->match_id), "{=="));
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "marker.margin_note_anchor_close", attached->match_id), "==}"));
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "marker.margin_note_body_open", attached->match_id), "{>>"));
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "marker.margin_note_body_close", attached->match_id), "<<}"));
+  uint32_t point_id = UINT32_MAX, bare_id = UINT32_MAX, empty_id = UINT32_MAX;
+  for (uint32_t i = 0; i < notes.count; i++) {
+    const AnvilMarkdownExtensionCapture *capture = &notes.captures[i];
+    if (strcmp(capture->name, "span.margin_note") != 0) continue;
+    if (capture_text_is(snapshot, capture, "{>>point note<<}")) point_id = capture->match_id;
+    if (capture_text_is(snapshot, capture, "{==bare==}")) bare_id = capture->match_id;
+    if (capture_text_is(snapshot, capture, "{==x==}{>><<}")) empty_id = capture->match_id;
+  }
+  CHECK(point_id != UINT32_MAX && bare_id != UINT32_MAX && empty_id != UINT32_MAX);
+  CHECK(find_match_capture(&notes, "content.margin_note_anchor", point_id) == NULL);
+  CHECK(capture_text_is(snapshot, find_match_capture(
+    &notes, "content.margin_note_body", point_id), "point note"));
+  CHECK(find_match_capture(&notes, "content.margin_note_body", bare_id) == NULL);
+  CHECK(find_match_capture(&notes, "marker.margin_note_body_open", empty_id) != NULL);
+  CHECK(find_match_capture(&notes, "content.margin_note_body", empty_id) == NULL);
+  anvil_ts_snapshot_free(snapshot);
+
   uint32_t pathological_len = 128 * 1024;
   char *pathological = (char *)malloc(pathological_len);
   CHECK(pathological != NULL);
@@ -140,6 +219,15 @@ int main(void) {
     snapshot, NULL, 0, collect_capture, &empty, cancel_after, &cancel
   ));
   CHECK(cancel.calls == 2);
+  anvil_ts_snapshot_free(snapshot);
+  for (uint32_t i = 0; i + 3 <= pathological_len; i += 3) memcpy(pathological + i, "{>>", 3);
+  snapshot = anvil_ts_snapshot_new_from_lines(
+    pathological_lines, pathological_lengths, 1, &error
+  );
+  CHECK(snapshot != NULL);
+  memset(&empty, 0, sizeof(empty));
+  CHECK(anvil_markdown_extensions_scan(snapshot, NULL, 0, collect_capture, &empty, NULL, NULL));
+  CHECK(empty.count == 0);
   anvil_ts_snapshot_free(snapshot);
   free(pathological);
   return 0;

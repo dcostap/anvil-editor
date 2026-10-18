@@ -609,7 +609,7 @@ end
 
 local function extension_parent_kind(name)
   return name == "span.wiki_link" or name == "span.embed" or name == "span.comment"
-    or name == "span.tag"
+    or name == "span.tag" or name == "content.margin_note_body"
 end
 
 local function extension_capture(name)
@@ -618,7 +618,8 @@ local function extension_capture(name)
     or name:match("^marker%.embed_") or name:match("^marker%.highlight_")
     or name:match("^marker%.comment_") or name == "content.target"
     or name == "content.alias" or name == "content.highlight" or name == "content.comment"
-    or name == "content.tag"
+    or name == "content.tag" or name == "span.margin_note"
+    or name:match("^marker%.margin_note_") or name:match("^content%.margin_note_")
 end
 
 function Model:captures_for_lines(kind, line1, line2, opts)
@@ -641,7 +642,7 @@ function Model:captures_for_lines(kind, line1, line2, opts)
       if not extension_capture(capture.capture) then
         for _, parent in ipairs(parents) do
           if capture.start_byte >= parent.start_byte and capture.end_byte <= parent.end_byte then
-            if parent.capture == "span.comment"
+            if parent.capture == "span.comment" or parent.capture == "content.margin_note_body"
               or capture.capture == "span.link_reference"
               or capture.capture:match("^content%.link")
             then

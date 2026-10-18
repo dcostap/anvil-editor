@@ -1964,6 +1964,8 @@ static bool markdown_extension_capture_name(const char *name) {
     strcmp(name, "span.tag") == 0 || strcmp(name, "content.tag") == 0 ||
     strncmp(name, "marker.wiki_", 12) == 0 || strncmp(name, "marker.embed_", 13) == 0 ||
     strncmp(name, "marker.highlight_", 17) == 0 || strncmp(name, "marker.comment_", 15) == 0 ||
+    strcmp(name, "span.margin_note") == 0 || strncmp(name, "marker.margin_note_", 19) == 0 ||
+    strncmp(name, "content.margin_note_", 20) == 0 ||
     strcmp(name, "content.target") == 0 || strcmp(name, "content.alias") == 0 ||
     strcmp(name, "content.highlight") == 0 || strcmp(name, "content.comment") == 0);
 }

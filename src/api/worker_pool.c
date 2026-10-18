@@ -1781,11 +1781,20 @@ static bool extension_capture_native(const SemanticCaptureView *capture) {
     || capture_name_prefix(capture, "marker.embed_")
     || capture_name_prefix(capture, "marker.highlight_")
     || capture_name_prefix(capture, "marker.comment_")
+    || capture_name_prefix(capture, "span.margin_note")
+    || capture_name_prefix(capture, "marker.margin_note_")
+    || capture_name_prefix(capture, "content.margin_note_")
     || capture_name_equal(capture, "content.target")
     || capture_name_equal(capture, "content.alias")
     || capture_name_equal(capture, "content.highlight")
     || capture_name_equal(capture, "content.comment")
     || capture_name_equal(capture, "content.tag");
+}
+
+/* Comments and margin note bodies hide every CommonMark capture inside them. */
+static bool hides_nested_captures(const SemanticCaptureView *capture) {
+  return capture_name_equal(capture, "span.comment")
+    || capture_name_equal(capture, "content.margin_note_body");
 }
 
 static bool capture_contains(
@@ -1811,8 +1820,7 @@ static uint32_t build_semantic_intervals(
   uint32_t count = 0;
   for (uint32_t index = 0; index < capture_count; index++) {
     SemanticCaptureView *capture = &captures[index];
-    if (!extension_parent(capture)
-      || (comments_only && !capture_name_equal(capture, "span.comment")))
+    if (comments_only ? !hides_nested_captures(capture) : !extension_parent(capture))
       continue;
     intervals[count++] = (SemanticInterval) {
       .start_byte = capture->start_byte,
@@ -2042,6 +2050,9 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
       else if (capture_name_prefix(decoration, "marker.comment")
         || capture_name_prefix(decoration, "content.comment"))
         family_match = capture_name_equal(parent, "span.comment");
+      else if (capture_name_prefix(decoration, "marker.margin_note")
+        || capture_name_prefix(decoration, "content.margin_note"))
+        family_match = capture_name_equal(parent, "span.margin_note");
       if (target_or_alias)
         family_match = capture_name_equal(parent, "span.wiki_link")
           || capture_name_equal(parent, "span.embed");

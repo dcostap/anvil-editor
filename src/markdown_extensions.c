@@ -16,6 +16,7 @@ typedef struct ExtensionScan {
   void *cancel_payload;
   uint32_t wikilink_disabled_until;
   uint32_t highlight_disabled_until;
+  uint32_t margin_note_disabled_until;
   uint32_t active_match_id;
   uint32_t next_match_id;
   bool comments_exhausted;
@@ -96,6 +97,34 @@ static uint32_t next_line_start(const ExtensionScan *scan, uint32_t position) {
   return position < scan->length ? position + 1 : scan->length;
 }
 
+/* Finds an unescaped three-byte CriticMarkup delimiter on the current line. */
+static uint32_t find_line_triple(ExtensionScan *scan, uint32_t start, const char *delimiter) {
+  uint32_t cursor = start;
+  uint32_t saved_exclusion_cursor = scan->exclusion_cursor;
+  uint32_t found = UINT32_MAX;
+  while (cursor + 2 < scan->length && scan->source[cursor] != '\n') {
+    if ((cursor & 0x3fff) == 0 && cancelled(scan)) break;
+    uint32_t excluded_end = 0;
+    if (excluded_at(scan, cursor, &excluded_end)) {
+      cursor = excluded_end;
+      continue;
+    }
+    if (scan->source[cursor] == delimiter[0] && scan->source[cursor + 1] == delimiter[1] &&
+        scan->source[cursor + 2] == delimiter[2] && !escaped_at(scan, cursor)) {
+      found = cursor;
+      break;
+    }
+    cursor++;
+  }
+  scan->exclusion_cursor = saved_exclusion_cursor;
+  return found;
+}
+
+static bool starts_with_triple(const ExtensionScan *scan, uint32_t position, const char *delimiter) {
+  return position + 2 < scan->length && scan->source[position] == delimiter[0] &&
+    scan->source[position + 1] == delimiter[1] && scan->source[position + 2] == delimiter[2];
+}
+
 static bool emit(ExtensionScan *scan, const char *name, uint32_t start, uint32_t end) {
   if (end <= start) return true;
   AnvilMarkdownExtensionCapture capture = {
@@ -165,6 +194,44 @@ static bool scan_extensions(ExtensionScan *scan) {
         continue;
       }
       scan->comments_exhausted = true;
+    }
+
+    /* CriticMarkup: {==anchor==}{>>note<<}, {==anchor==}, or {>>note<<}. */
+    if (cursor >= scan->margin_note_disabled_until && scan->source[cursor] == '{') {
+      bool anchored = starts_with_triple(scan, cursor, "{==");
+      bool point = !anchored && starts_with_triple(scan, cursor, "{>>");
+      if (anchored || point) {
+        uint32_t anchor_close = UINT32_MAX;
+        uint32_t body_open = cursor;
+        if (anchored) {
+          anchor_close = find_line_triple(scan, cursor + 3, "==}");
+          if (anchor_close == cursor + 3) anchor_close = UINT32_MAX;
+          body_open = anchor_close == UINT32_MAX ? UINT32_MAX : anchor_close + 3;
+        }
+        uint32_t body_close = UINT32_MAX;
+        if (body_open != UINT32_MAX && starts_with_triple(scan, body_open, "{>>"))
+          body_close = find_line_triple(scan, body_open + 3, "<<}");
+        if (cancelled(scan)) return false;
+        bool complete = anchored ? anchor_close != UINT32_MAX : body_close != UINT32_MAX;
+        if (complete) {
+          uint32_t end = body_close != UINT32_MAX ? body_close + 3 : anchor_close + 3;
+          scan->active_match_id = scan->next_match_id++;
+          if (!emit(scan, "span.margin_note", cursor, end)) return false;
+          if (anchored &&
+              (!emit(scan, "marker.margin_note_anchor_open", cursor, cursor + 3) ||
+                !emit(scan, "content.margin_note_anchor", cursor + 3, anchor_close) ||
+                !emit(scan, "marker.margin_note_anchor_close", anchor_close, anchor_close + 3)))
+            return false;
+          if (body_close != UINT32_MAX &&
+              (!emit(scan, "marker.margin_note_body_open", body_open, body_open + 3) ||
+                !emit(scan, "content.margin_note_body", body_open + 3, body_close) ||
+                !emit(scan, "marker.margin_note_body_close", body_close, body_close + 3)))
+            return false;
+          cursor = end;
+          continue;
+        }
+        scan->margin_note_disabled_until = next_line_start(scan, cursor);
+      }
     }
 
     if (scan->source[cursor] == '#' && cursor + 1 < scan->length &&
