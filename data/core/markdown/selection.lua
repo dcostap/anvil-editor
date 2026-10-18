@@ -92,14 +92,17 @@ local function byte_is_word(byte)
     or byte == string.byte("_"))
 end
 
-local function add_word(candidates, seen, text, caret)
+local function add_word(candidates, seen, text, start_offset, end_offset)
   if #text == 0 then return end
-  local probe = caret + 1
+  for index = start_offset + 1, end_offset do
+    if not byte_is_word(text:byte(index)) then return end
+  end
+  local probe = start_offset + 1
   if not byte_is_word(text:byte(probe)) and probe > 1 and byte_is_word(text:byte(probe - 1)) then
     probe = probe - 1
   end
   if not byte_is_word(text:byte(probe)) then return end
-  local first, last = probe, probe
+  local first, last = probe, math.max(probe, end_offset)
   while first > 1 and byte_is_word(text:byte(first - 1)) do first = first - 1 end
   while last < #text and byte_is_word(text:byte(last + 1)) do last = last + 1 end
   add_candidate(candidates, seen, first - 1, last, "word")
@@ -451,7 +454,7 @@ local function candidates_for(buffer, line1, col1, line2, col2, blocks_only)
   local end_offset = position_offset(starts, line2, col2)
   local candidates, seen = {}, {}
 
-  if not blocks_only and start_offset == end_offset then add_word(candidates, seen, text, start_offset) end
+  if not blocks_only then add_word(candidates, seen, text, start_offset, end_offset) end
 
   add_pairs(candidates, seen, text, nodes, starts)
   add_sentences(candidates, seen, text, nodes, starts)

@@ -100,6 +100,15 @@ test.describe("Markdown semantic selection", function()
     end
   end)
 
+  test.it("grows a partial word selection to the whole word first", function(context)
+    local _, buffer = open_markdown(context, "First one. Partial word here.\n")
+    buffer:set_selection(1, 14, 1, 17)
+    perform("editor:extend_selection_smart")
+    test.equal(selected_text(buffer), "Partial")
+    perform("editor:extend_selection_smart")
+    test.equal(selected_text(buffer), "Partial word here.")
+  end)
+
   test.it("does not end sentences at abbreviations, code, or links", function(context)
     local paragraph = "See e.g. `a.b()` and [v1.2](x.md) docs. Next one!"
     local _, buffer = open_markdown(context, paragraph .. "\n")
