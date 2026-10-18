@@ -28,7 +28,7 @@ local function install_controlled_grep(context, filename, lines, pause_after)
   process_stream.start = function(args, options)
     local is_grep = false
     for _, argument in ipairs(args or {}) do
-      if argument == "--vimgrep" or argument == "--line-number" then
+      if argument == "--line-number" then
         is_grep = true
         break
       end

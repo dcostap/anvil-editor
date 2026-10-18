@@ -10,6 +10,7 @@ local Editor = require "core.editor"
 local View = require "core.view"
 local RootPanel = require "core.rootpanel"
 local project_paths = require "core.project_paths"
+local encoded_data = require "core.encoded_data"
 local poi = require "core.poi"
 local symbol_icons = require "core.symbol_icons"
 local file_icons = require "core.file_icons"
@@ -393,19 +394,6 @@ core.add_thread(function()
     return {}
   end
 
-  -- Encoded data, such as a base64 image pasted into a note, is one long run
-  -- without spaces. Its fragments are not words.
-  local data_run_length = 256
-
-  local function next_data_run(line, from)
-    while true do
-      local run_start, run_end = line:find("[%w+/=_%-]+", from)
-      if not run_start then return nil end
-      if run_end - run_start + 1 >= data_run_length then return run_start, run_end end
-      from = run_end + 1
-    end
-  end
-
   ---@param buffer core.buffer
   ---@return table<string,boolean>
   local function get_symbols(buffer)
@@ -424,18 +412,19 @@ core.add_thread(function()
       local line = buffer.lines[i]
       local search_from = 1
       local run_start, run_end
-      if #line >= data_run_length then run_start, run_end = next_data_run(line, 1) end
+      -- Fragments of encoded data, such as a pasted base64 image, are not words.
+      run_start, run_end = encoded_data.next_run(line, 1)
       while search_from <= #line do
         local match_start, match_end, captured_symbol = line:find(symbol_pattern, search_from)
         if not match_start then break end
         while run_end and run_end < match_start do
-          run_start, run_end = next_data_run(line, run_end + 1)
+          run_start, run_end = encoded_data.next_run(line, run_end + 1)
         end
         if run_start and match_start >= run_start then
           core.log_quiet("Autocomplete skipped a %d-byte data run on line %d of %s",
             run_end - run_start + 1, i, buffer.filename or "unnamed")
           search_from = run_end + 1
-          run_start, run_end = next_data_run(line, search_from)
+          run_start, run_end = encoded_data.next_run(line, search_from)
           goto continue
         end
         local sym = captured_symbol or line:sub(match_start, match_end)

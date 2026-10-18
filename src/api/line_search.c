@@ -100,6 +100,25 @@ static size_t plain_find(const char *text, size_t len, const char *query, size_t
   return SIZE_MAX;
 }
 
+/* Matches skip encoded data, such as a pasted base64 image: a run of at least
+ * ENCODED_RUN_MIN letters, digits and `+/=_-`. data/core/encoded_data.lua
+ * applies the same rule. */
+#define ENCODED_RUN_MIN 256
+
+static int encoded_byte(unsigned char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+    || c == '+' || c == '/' || c == '=' || c == '_' || c == '-';
+}
+
+/* Returns the end of the encoded run that contains pos, or 0. */
+static size_t encoded_run_end(const char *text, size_t len, size_t pos) {
+  if (len < ENCODED_RUN_MIN || pos >= len || !encoded_byte(text[pos])) return 0;
+  size_t first = pos, end = pos + 1;
+  while (first > 0 && pos - first < ENCODED_RUN_MIN && encoded_byte(text[first - 1])) first--;
+  while (end < len && encoded_byte(text[end])) end++;
+  return end - first >= ENCODED_RUN_MIN ? end : 0;
+}
+
 /* PCRE2 receives the suffix, as regex.find_offsets does. Its exclusive end
  * becomes the old scanner's inclusive end before applying the EOL rule. */
 static void scan_line(lua_State *L, Index *out, const char *text, size_t len,
@@ -125,6 +144,11 @@ static void scan_line(lua_State *L, Index *out, const char *text, size_t len,
       first = plain_find(text, len, query, qlen, pos, sensitive, failure, fold);
       if (first == SIZE_MAX) break;
       end = first + qlen;
+    }
+    size_t run_end = encoded_run_end(text, len, first);
+    if (run_end) {
+      pos = run_end;
+      continue;
     }
     size_t s = first + 1;
     if (end >= s && (end != len || s != end))

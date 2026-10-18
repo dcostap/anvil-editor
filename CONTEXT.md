@@ -85,6 +85,10 @@ _Avoid_: semantic instance completion, dot autocomplete
 Autocomplete suggestions learned from ordinary word-like text in Buffers rather than from language-aware code sources.
 _Avoid_: dictionary autocomplete, normal-word autocomplete
 
+**Encoded Data**:
+A long unbroken run of base64-style text inside a Buffer, such as the data of a pasted screenshot. Text search, Find, and Buffer Word Completion treat it as data rather than words.
+_Avoid_: base64 blob, binary text
+
 **Container-Owned Member Symbol**:
 A named code symbol that belongs to a containing type or similar named container and is generally not valid as an unqualified completion outside that container, such as a field, method, or scoped enum member.
 _Avoid_: self-scoped symbol

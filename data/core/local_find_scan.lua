@@ -1,4 +1,6 @@
 -- Shared line matching for the UI slices and long-line workers.
+local encoded_data = require "core.encoded_data"
+
 local scan = {}
 
 function scan.compile(query, is_regex, case_sensitive)
@@ -24,10 +26,15 @@ function scan.line(text, search, emit, checkpoint)
       s, e = source:find(search.query, pos, true)
     end
     if not s then break end
-    if e and e >= s and (e ~= #source or s ~= e) then
-      emit(s, e == #source and e or e + 1)
+    -- Matches inside encoded data, such as a pasted base64 image, are not text.
+    if encoded_data.covers(text, s) then
+      pos = encoded_data.run_end(text, s) + 1
+    else
+      if e and e >= s and (e ~= #source or s ~= e) then
+        emit(s, e == #source and e or e + 1)
+      end
+      pos = math.max((e or s) + 1, s + 1)
     end
-    pos = math.max((e or s) + 1, s + 1)
     if checkpoint then checkpoint() end
   end
   if checkpoint then checkpoint() end

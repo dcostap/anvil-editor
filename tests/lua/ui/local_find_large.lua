@@ -162,7 +162,8 @@ test.describe("Local Find sliced results", function()
   end)
 
   test.it("keeps a long-line scan pending and applies the same plain and regex ranges", function(context)
-    local view, buffer, input = open(context, ("x"):rep(1000000) .. "aA aa\n")
+    -- Spaces keep the filler from reading as one run of encoded data.
+    local view, buffer, input = open(context, ("x "):rep(500000) .. "aA aa\n")
     local state = input.local_find_state
     input:set_text("aa")
     test.ok(state.info:find("Searching", 1, true))

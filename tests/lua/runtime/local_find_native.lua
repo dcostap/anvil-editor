@@ -3,7 +3,9 @@ local scan = require "core.local_find_scan"
 local native = require "line_search"
 
 test.it("native line ranges match the original line scanner", function()
-  local lines = { "", "\n", "aAa aa\n", "abc", "last a", "a\0A\n", "é É a\n" }
+  local encoded = ("Ab+/"):rep(80)
+  local lines = { "", "\n", "aAa aa\n", "abc", "last a", "a\0A\n", "é É a\n",
+    "a " .. encoded .. " a " .. encoded .. "\n" }
   for _, query in ipairs { "a", "aa", "\n", "^", "$", "a*", "(?=a)", "[", "é" } do
     for _, is_regex in ipairs { false, true } do
       for _, sensitive in ipairs { false, true } do

@@ -42,6 +42,7 @@ local fuzzy_searcher = {
   search = require "plugins.fuzzy_searcher.search",
   open_transition = require "plugins.fuzzy_searcher.open_transition",
   copy_feedback = require "core.copy_feedback",
+  encoded_data = require "core.encoded_data",
   file_icons = require "core.file_icons",
   result_limit = 30,
   max_result_limit = 500,
@@ -1766,7 +1767,15 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
         "Fuzzy grep batch started seed=%s files=%s",
         tostring(seed), scope and tostring(#scope) or "all"
       )
-      local args = { fuzzy_searcher.rg, "--vimgrep", "--color", "never" }
+      local max_scanned = fuzzy_searcher.fuzzy_scan_limit or 10000
+      local max_line_chars = fuzzy_searcher.fuzzy_line_max_chars or 1200
+      -- One record for each matching line, which is all this job keeps.
+      -- The column bound keeps one long line, such as a pasted base64
+      -- image, from streaming megabytes.
+      local args = {
+        fuzzy_searcher.rg, "--line-number", "--column", "--no-heading", "--with-filename",
+        "--color", "never", "--max-columns", tostring(max_line_chars),
+      }
       if not case_sensitive then args[#args + 1] = "-i" end
       args[#args + 1] = "-F"
       project_files.add_filter_arguments(args, include_ignored)
@@ -1787,15 +1796,15 @@ local function ensure_fuzzy_grep_job(root, scope, tokens, include_ignored, case_
         return
       end
 
-      local max_scanned = fuzzy_searcher.fuzzy_scan_limit or 10000
-      local max_line_chars = fuzzy_searcher.fuzzy_line_max_chars or 1200
       local slice_start = system.get_time()
       while not job.cancelled and job.scanned < max_scanned do
         local line = stream:read_line()
         if line then
           job.scanned = job.scanned + 1
           local r = decorate_grep_result(parse_vimgrep(line), root)
-          if r and #(r.text or "") <= max_line_chars then
+          if r and #(r.text or "") <= max_line_chars
+            and not fuzzy_searcher.search.omitted_long_line(r.text)
+          then
             local key = r.file .. ":" .. tostring(r.line)
             if not job.seen[key] then
               job.seen[key] = true
@@ -1969,6 +1978,19 @@ local function literal_spans(text, query, offset, case_sensitive)
   return spans
 end
 
+-- Ripgrep reports the first match on a line. Skip a long-line marker, and
+-- move past matches inside encoded data such as a pasted base64 image.
+function fuzzy_searcher.text_grep_result(result, query, case_sensitive)
+  if not result or fuzzy_searcher.search.omitted_long_line(result.text) then return nil end
+  if fuzzy_searcher.encoded_data.covers(result.text, result.col) then
+    local span = fuzzy_searcher.encoded_data.text_spans(result.text,
+      literal_spans(result.text, query, nil, case_sensitive))[1]
+    if not span then return nil end
+    result.col = span[1]
+  end
+  return result
+end
+
 local function offset_spans(spans, offset)
   local out = {}
   offset = offset or 0
@@ -2040,7 +2062,7 @@ function fuzzy_searcher.compile_grep(grep, case_sensitive)
       seed = query,
       case_sensitive = case_sensitive,
       match = function(text)
-        local spans = literal_spans(text, query, nil, case_sensitive)
+        local spans = fuzzy_searcher.encoded_data.text_spans(text, literal_spans(text, query, nil, case_sensitive))
         if #spans == 0 then return end
         local score, _, _, _, boundary = fuzzy_match(query, text, case_sensitive)
         return {
@@ -2060,6 +2082,9 @@ function fuzzy_searcher.compile_grep(grep, case_sensitive)
       local lower = case_sensitive and text or text:lower()
       local spans = exact_term_spans(lower, terms)
       if not spans then return end
+      local text_spans = fuzzy_searcher.encoded_data.text_spans(text, spans)
+      if #text_spans == 0 and #spans > 0 then return end
+      spans = text_spans
       for _, term in ipairs(terms) do
         if not term.exact and not lower:find(term.text, 1, true) then return end
       end
@@ -6399,7 +6424,7 @@ function FSView:start_grep(base, line, grep)
         local args = {
           fuzzy_searcher.rg,
           "--line-number", "--column", "--no-heading", "--with-filename",
-          "--color", "never",
+          "--color", "never", "--max-columns", tostring(fuzzy_searcher.search.max_columns),
         }
         if not self.case_sensitive then args[#args + 1] = "-i" end
         args[#args + 1] = "-F"
@@ -6418,7 +6443,8 @@ function FSView:start_grep(base, line, grep)
           while gen == grep_generation and active_view == self do
             local line = stream:read_line()
             if line then
-              local result = decorate_grep_result(parse_vimgrep(line), root.path)
+              local result = fuzzy_searcher.text_grep_result(decorate_grep_result(parse_vimgrep(line), root.path),
+                grep, self.case_sensitive)
               if result then add_result(result, seen, true) end
               yield_if_due()
             elseif stream.done then

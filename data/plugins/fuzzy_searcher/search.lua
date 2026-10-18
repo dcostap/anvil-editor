@@ -11,6 +11,16 @@ local modifiers = require "plugins.fuzzy_searcher.modifiers"
 
 local search = {}
 
+-- Ripgrep prints the whole line for each match. A long line, such as a pasted
+-- base64 image, would stream megabytes for every match in it, so text search
+-- omits lines longer than this.
+search.max_columns = 4096
+
+---Whether ripgrep replaced a line longer than `--max-columns` with its marker.
+function search.omitted_long_line(text)
+  return text:find("^%[Omitted long [%w ]+%]$") ~= nil
+end
+
 local function checkpoint(job)
   if job.cancelled then error(job, 0) end
   if system.get_time() >= job.deadline then
@@ -277,7 +287,7 @@ local function grep_files(job, spec, candidates, visit)
     local historical = spec.options.commit ~= nil
     local by_path, args = {}, {
       spec.rg, "--no-config", "--null", "--line-number", "--column", "--no-heading",
-      "--with-filename", "--color", "never",
+      "--with-filename", "--color", "never", "--max-columns", tostring(search.max_columns),
     }
     if historical then
       args = {
@@ -313,7 +323,7 @@ local function grep_files(job, spec, candidates, visit)
         local source = by_path[historical and path or common.path_compare_key(path)]
         if source and line then
           text = text:gsub("\r$", "")
-          local match = spec.matcher.match(text)
+          local match = not search.omitted_long_line(text) and spec.matcher.match(text)
           if match then
             local result = common.merge(source, match)
             result.kind, result.text = "grep", text
