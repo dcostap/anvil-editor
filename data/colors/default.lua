@@ -206,12 +206,10 @@ style.markdown_live_table_active_cell = { common.color "rgba(89, 160, 250, 0.10)
 style.markdown_live_table_cell_selection = { common.color "rgba(89, 160, 250, 0.14)" }
 style.markdown_live_table_cell_selection_outline = style.accent
 style.markdown_live_hidden_syntax = style.dim
--- Margin notes: tinted anchors in the text and note cards in the right margin.
-style.markdown_live_margin_note_bg = { common.color "rgba(94, 182, 170, 0.22)" }
-style.markdown_live_margin_note_active_bg = { common.color "rgba(94, 182, 170, 0.40)" }
-style.markdown_margin_note_card_bg = c("23413f")
-style.markdown_margin_note_card_active_bg = c("2c5250")
-style.markdown_margin_note_placeholder = style.dim
+-- Footnotes: cards beside the text, or below the paragraph when the margin is narrow.
+style.markdown_footnote_card_bg = c("23413f")
+style.markdown_footnote_card_active_bg = c("2c5250")
+style.markdown_footnote_placeholder = style.dim
 
 -- Diff/search/selection-like colors
 style.diff_delete = p("deleted_bg")

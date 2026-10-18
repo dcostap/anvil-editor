@@ -207,9 +207,9 @@ _Avoid_: admonition, alert block
 A Markdown Callout whose type marker is followed by `+` or `-`, declaring whether its body starts expanded or collapsed while its header remains visible.
 _Avoid_: collapsible callout, folded blockquote
 
-**Margin Note**:
-A comment written in a Markdown document as CriticMarkup, either on a highlighted anchor text or at a point in a line, and shown by Markdown Live Preview as a card beside the reading lane, or below its paragraph when no free space beside the lane can hold the card.
-_Avoid_: annotation, comment bubble, sidenote
+**Footnote**:
+A note in a Markdown document, written as a Pandoc footnote reference in the text and a one-line definition below its paragraph, and shown by Markdown Live Preview as a small number with a card beside the reading lane, or below its paragraph when no free space beside the lane can hold the card.
+_Avoid_: margin note, sidenote, endnote
 
 **Markdown Source Mode**:
 An Editor mode that shows all Markdown source syntax normally instead of presenting formatted Markdown inline.

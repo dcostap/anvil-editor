@@ -728,8 +728,16 @@ static int treesitter_index_result_summary(lua_State *L) {
   lua_setfield(L, -2, "byte_len");
   lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_line_count(result->result));
   lua_setfield(L, -2, "line_count");
-  lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_markdown_margin_note_count(result->result));
-  lua_setfield(L, -2, "margin_note_count");
+  uint32_t footnote_count =
+    anvil_worker_treesitter_index_result_markdown_footnote_definition_count(result->result);
+  lua_createtable(L, (int)footnote_count, 0);
+  for (uint32_t index = 0; index < footnote_count; index++) {
+    lua_pushinteger(L, (lua_Integer)anvil_worker_treesitter_index_result_markdown_footnote_definition_row(
+      result->result, index
+    ) + 1);
+    lua_rawseti(L, -2, (int)index + 1);
+  }
+  lua_setfield(L, -2, "footnote_definition_lines");
   uint32_t changed_line1 = 0;
   uint32_t changed_line2 = 0;
   if (anvil_worker_treesitter_index_result_markdown_changed_lines(
@@ -1770,7 +1778,9 @@ static bool extension_parent(const SemanticCaptureView *capture) {
   return capture_name_equal(capture, "span.wiki_link")
     || capture_name_equal(capture, "span.embed")
     || capture_name_equal(capture, "span.comment")
-    || capture_name_equal(capture, "span.tag");
+    || capture_name_equal(capture, "span.tag")
+    || capture_name_equal(capture, "span.footnote_reference")
+    || capture_name_equal(capture, "marker.footnote_definition_open");
 }
 
 static bool extension_capture_native(const SemanticCaptureView *capture) {
@@ -1783,9 +1793,9 @@ static bool extension_capture_native(const SemanticCaptureView *capture) {
     || capture_name_prefix(capture, "marker.embed_")
     || capture_name_prefix(capture, "marker.highlight_")
     || capture_name_prefix(capture, "marker.comment_")
-    || capture_name_prefix(capture, "span.margin_note")
-    || capture_name_prefix(capture, "marker.margin_note_")
-    || capture_name_prefix(capture, "content.margin_note_")
+    || capture_name_prefix(capture, "span.footnote_")
+    || capture_name_prefix(capture, "marker.footnote_")
+    || capture_name_prefix(capture, "content.footnote_")
     || capture_name_equal(capture, "content.target")
     || capture_name_equal(capture, "content.alias")
     || capture_name_equal(capture, "content.highlight")
@@ -1793,10 +1803,9 @@ static bool extension_capture_native(const SemanticCaptureView *capture) {
     || capture_name_equal(capture, "content.tag");
 }
 
-/* Comments and margin note bodies hide every CommonMark capture inside them. */
+/* Comments hide every CommonMark capture inside them. */
 static bool hides_nested_captures(const SemanticCaptureView *capture) {
-  return capture_name_equal(capture, "span.comment")
-    || capture_name_equal(capture, "content.margin_note_body");
+  return capture_name_equal(capture, "span.comment");
 }
 
 static bool capture_contains(
@@ -2052,9 +2061,10 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
       else if (capture_name_prefix(decoration, "marker.comment")
         || capture_name_prefix(decoration, "content.comment"))
         family_match = capture_name_equal(parent, "span.comment");
-      else if (capture_name_prefix(decoration, "marker.margin_note")
-        || capture_name_prefix(decoration, "content.margin_note"))
-        family_match = capture_name_equal(parent, "span.margin_note");
+      else if (capture_name_prefix(decoration, "marker.footnote_")
+        || capture_name_prefix(decoration, "content.footnote_"))
+        family_match = capture_name_equal(parent, "span.footnote_reference")
+          || capture_name_equal(parent, "span.footnote_definition");
       if (target_or_alias)
         family_match = capture_name_equal(parent, "span.wiki_link")
           || capture_name_equal(parent, "span.embed");

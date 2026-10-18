@@ -272,7 +272,8 @@ function Model:publish(result, revision, signature, generation, changed_range)
   self.published_metadata = signature
   self.published_byte_len = summary.byte_len or 0
   self.published_line_count = summary.line_count or 0
-  self.published_margin_note_count = summary.margin_note_count or 0
+  self.published_footnote_lines = summary.footnote_definition_lines or {}
+  self.footnote_definitions_cache = nil
   self.diagnostics.published = self.diagnostics.published + 1
   self.diagnostics.last_parse_ms = summary.metrics and summary.metrics.parse_ms or 0
   self.diagnostics.last_total_ms = summary.metrics and summary.metrics.total_ms or 0
@@ -596,9 +597,23 @@ function Model:probe_list_markers()
   return markers
 end
 
--- The number of margin notes in the published Buffer text.
-function Model:margin_note_count()
-  return self.published_margin_note_count or 0
+---Footnote definition lines by label, from the published parse. A line that
+---an edit has since changed is left out until the next parse.
+---@return table<string, integer>
+function Model:footnote_definitions()
+  local cache = self.footnote_definitions_cache
+  local buffer = self:buffer()
+  local revision = buffer and buffer.text_revision
+  if cache and cache.generation == self.generation and cache.revision == revision then
+    return cache.lines
+  end
+  local lines = {}
+  for _, line in ipairs(self.published_footnote_lines or {}) do
+    local label = buffer and (buffer.lines[line] or ""):match("^ ? ? ?%[%^([^%s%[%]]+)%]:")
+    if label and not lines[label] then lines[label] = line end
+  end
+  self.footnote_definitions_cache = { generation = self.generation, revision = revision, lines = lines }
+  return lines
 end
 
 function Model:status_snapshot()
@@ -615,7 +630,8 @@ end
 
 local function extension_parent_kind(name)
   return name == "span.wiki_link" or name == "span.embed" or name == "span.comment"
-    or name == "span.tag" or name == "content.margin_note_body"
+    or name == "span.tag" or name == "span.footnote_reference"
+    or name == "marker.footnote_definition_open"
 end
 
 local function extension_capture(name)
@@ -624,8 +640,8 @@ local function extension_capture(name)
     or name:match("^marker%.embed_") or name:match("^marker%.highlight_")
     or name:match("^marker%.comment_") or name == "content.target"
     or name == "content.alias" or name == "content.highlight" or name == "content.comment"
-    or name == "content.tag" or name == "span.margin_note"
-    or name:match("^marker%.margin_note_") or name:match("^content%.margin_note_")
+    or name == "content.tag" or name:match("^span%.footnote_")
+    or name:match("^marker%.footnote_") or name:match("^content%.footnote_")
 end
 
 function Model:captures_for_lines(kind, line1, line2, opts)
@@ -648,7 +664,7 @@ function Model:captures_for_lines(kind, line1, line2, opts)
       if not extension_capture(capture.capture) then
         for _, parent in ipairs(parents) do
           if capture.start_byte >= parent.start_byte and capture.end_byte <= parent.end_byte then
-            if parent.capture == "span.comment" or parent.capture == "content.margin_note_body"
+            if parent.capture == "span.comment"
               or capture.capture == "span.link_reference"
               or capture.capture:match("^content%.link")
             then

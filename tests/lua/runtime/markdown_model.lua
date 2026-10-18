@@ -245,30 +245,28 @@ test.describe("Markdown semantic model", function()
     markdown_model.close(buffer, "test")
   end)
 
-  test.it("publishes CriticMarkup margin notes with a formatted anchor and a raw body", function()
-    local buffer = make_buffer("Read {==the **old** book==}{>>Is *this* right?<<} and {>>aside<<}.\n")
+  test.it("publishes footnote references and the lines of their definitions", function()
+    local buffer = make_buffer("Read the book[^1] and **this**[^aside].\n\n[^1]: Is *this* right?\n\n[^aside]: An aside.\n")
     local instance = markdown_model.get(buffer)
     test.ok(wait_status(instance, "ready"), instance.reason)
-    local nodes = test.not_nil(instance:nodes_for_lines(1, 1))
     local line = buffer.lines[1]
-    local notes = {}
-    local strong_count, emphasis_count = 0, 0
-    for _, node in ipairs(nodes) do
-      if node.type == "margin_note" then notes[#notes + 1] = node end
-      if node.type == "strong" then strong_count = strong_count + 1 end
-      if node.type == "emphasis" then emphasis_count = emphasis_count + 1 end
-    end
-    test.equal(#notes, 2)
-    local attached, point = notes[1], notes[2]
     local function text(range) return line:sub(range.col1, range.col2 - 1) end
-    test.equal(text(attached.source), "{==the **old** book==}{>>Is *this* right?<<}")
-    test.equal(text(attached.attributes.margin_note_anchor), "the **old** book")
-    test.equal(text(attached.attributes.margin_note_body), "Is *this* right?")
-    test.equal(point.attributes.margin_note_anchor, nil)
-    test.equal(text(point.attributes.margin_note_body), "aside")
-    test.equal(strong_count, 1)
-    test.equal(emphasis_count, 0)
-    test.equal(instance:margin_note_count(), 2)
+    local references = {}
+    for _, node in ipairs(test.not_nil(instance:nodes_for_lines(1, 1))) do
+      test.ok(node.type ~= "link_reference", "a footnote reference reads as a link")
+      if node.type == "footnote_reference" then references[#references + 1] = node end
+    end
+    test.equal(#references, 2)
+    test.equal(text(references[1].source), "[^1]")
+    test.equal(text(references[1].attributes.footnote_label), "1")
+    test.equal(text(references[2].attributes.footnote_label), "aside")
+    local definition
+    for _, node in ipairs(test.not_nil(instance:nodes_for_lines(3, 3))) do
+      if node.type == "footnote_definition" then definition = node end
+    end
+    local range = test.not_nil(definition).attributes.footnote_text
+    test.equal(buffer.lines[3]:sub(range.col1, range.col2 - 1), "Is *this* right?")
+    test.same(instance:footnote_definitions(), { ["1"] = 3, aside = 5 })
     markdown_model.close(buffer, "test")
   end)
 

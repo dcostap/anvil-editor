@@ -193,29 +193,37 @@ SCENARIOS["markdown-open"] = dict(
     window_width=900, window_height=560, open_sections=5,
 )
 SCENARIOS["markdown-open-long"] = dict(SCENARIOS["markdown-open"], open_sections=24)
-# Margin Note cards beside a Live Preview lane, including two on one line.
-SCENARIOS["markdown-margin-notes"] = {
-    "fixture": "markdown-margin-notes",
+# Footnote cards beside a Live Preview lane, including two references on one line.
+SCENARIOS["markdown-footnotes"] = {
+    "fixture": "markdown-footnotes",
     "start_line": 1,
     "window_width": 1400,
     "window_height": 700,
     "visual": True,
     "paced": False,
 }
-# The first note's card while its editor is open.
-SCENARIOS["markdown-margin-notes-edit"] = dict(SCENARIOS["markdown-margin-notes"], edit_note=True)
+# The first footnote's card while its editor is open.
+SCENARIOS["markdown-footnotes-edit"] = dict(SCENARIOS["markdown-footnotes"], edit_note=True)
 # A view too narrow for the margin shows each card below its block.
-SCENARIOS["markdown-margin-notes-inline"] = dict(SCENARIOS["markdown-margin-notes"], window_width=900)
-SCENARIOS["markdown-margin-notes-inline-edit"] = dict(SCENARIOS["markdown-margin-notes-inline"], edit_note=True)
-MARGIN_NOTES_SOURCE = """# Chapter one
+SCENARIOS["markdown-footnotes-inline"] = dict(SCENARIOS["markdown-footnotes"], window_width=900)
+SCENARIOS["markdown-footnotes-inline-edit"] = dict(SCENARIOS["markdown-footnotes-inline"], edit_note=True)
+FOOTNOTES_SOURCE = """# Chapter one
 
-From {==Terrahawks==}{>>A **great** show. Check the `air dates` before the [next draft](https://example.com) goes out.<<} it went
-on to {==Space Precinct==}{>>Later.<<} and then to {==Captain Scarlet==}{>>Remake?<<}.
+From Terrahawks[^1] it went
+on to Space Precinct[^2] and then to Captain Scarlet[^3].
 
-A plain paragraph between the notes that wraps across more than one visual row in a wide view,
-so that the cards have some room to settle beside their anchors.
+[^1]: A **great** show. Check the `air dates` before the [next draft](https://example.com) goes out.
 
-Here a point note {>>Point notes have no anchor text.<<}sits in the sentence.
+[^2]: Later.
+
+[^3]: Remake?
+
+A plain paragraph between the footnotes that wraps across more than one visual row in a wide view,
+so that the cards have some room to settle beside their references.
+
+Here a footnote[^4] sits in the sentence.
+
+[^4]: Footnotes can hold *inline* Markdown.
 """
 OPEN_NOTE_SECTION = """## Section {index}
 
@@ -951,13 +959,13 @@ def run_case(
         work / "fixtures" / "markdown-long-link.md"
         if settings.get("fixture") == "markdown-long-link" else fixture
     )
-    if settings.get("fixture") == "markdown-margin-notes" and settings.get("edit_note"):
+    if settings.get("fixture") == "markdown-footnotes" and settings.get("edit_note"):
         environment_edit_note = "1"
     else:
         environment_edit_note = "0"
-    if settings.get("fixture") == "markdown-margin-notes":
-        case_fixture = work / "fixtures" / "markdown-margin-notes.md"
-        case_fixture.write_text(MARGIN_NOTES_SOURCE, encoding="utf-8", newline="\n")
+    if settings.get("fixture") == "markdown-footnotes":
+        case_fixture = work / "fixtures" / "markdown-footnotes.md"
+        case_fixture.write_text(FOOTNOTES_SOURCE, encoding="utf-8", newline="\n")
     if settings.get("fixture") == "video-callout":
         case_fixture = work / "fixtures" / "markdown-callout.md"
     elif settings.get("fixture") == "video-task":

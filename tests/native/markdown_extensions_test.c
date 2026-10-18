@@ -140,55 +140,56 @@ int main(void) {
 
 
   const char *note_source[] = {
-    "from {==Terrahawks==}{>>What a show<<} then {>>point note<<} and {==bare==} `{>>raw<<}` \\{>>no<<} {==x==}{>><<}\n",
-    "{==open\n",
-    "close==} {>>open\n",
+    "From Terrahawks[^1] then [^long-note] and `[^raw]` \\[^no] [^ no] [^]\n",
+    "\n",
+    "[^1]: A great show.\n",
+    "   [^long-note]:\n",
+    "text [^x]: not a definition\n",
   };
-  uint32_t note_lengths[3];
-  for (uint32_t i = 0; i < 3; i++) note_lengths[i] = (uint32_t)strlen(note_source[i]);
-  snapshot = anvil_ts_snapshot_new_from_lines(note_source, note_lengths, 3, &error);
+  uint32_t note_lengths[5];
+  for (uint32_t i = 0; i < 5; i++) note_lengths[i] = (uint32_t)strlen(note_source[i]);
+  snapshot = anvil_ts_snapshot_new_from_lines(note_source, note_lengths, 5, &error);
   CHECK(snapshot != NULL);
-  const char *raw_note = strstr(snapshot->bytes, "`{>>raw<<}`");
+  const char *raw_note = strstr(snapshot->bytes, "`[^raw]`");
   CHECK(raw_note != NULL);
   AnvilMarkdownExclusion note_exclusion = {
     .start_byte = (uint32_t)(raw_note - snapshot->bytes),
-    .end_byte = (uint32_t)(raw_note - snapshot->bytes + strlen("`{>>raw<<}`")),
+    .end_byte = (uint32_t)(raw_note - snapshot->bytes + strlen("`[^raw]`")),
   };
   CaptureList notes = {0};
   CHECK(anvil_markdown_extensions_scan(
     snapshot, &note_exclusion, 1, collect_capture, &notes, NULL, NULL
   ));
-  CHECK(count_captures(&notes, "span.margin_note") == 4);
-  CHECK(count_captures(&notes, "span.highlight") == 0);
-  const AnvilMarkdownExtensionCapture *attached = find_capture(&notes, "span.margin_note");
-  CHECK(capture_text_is(snapshot, attached, "{==Terrahawks==}{>>What a show<<}"));
+  CHECK(count_captures(&notes, "span.footnote_reference") == 3);
+  CHECK(count_captures(&notes, "span.footnote_definition") == 2);
+  const AnvilMarkdownExtensionCapture *reference = find_capture(&notes, "span.footnote_reference");
+  CHECK(capture_text_is(snapshot, reference, "[^1]"));
   CHECK(capture_text_is(snapshot, find_match_capture(
-    &notes, "content.margin_note_anchor", attached->match_id), "Terrahawks"));
+    &notes, "content.footnote_label", reference->match_id), "1"));
   CHECK(capture_text_is(snapshot, find_match_capture(
-    &notes, "content.margin_note_body", attached->match_id), "What a show"));
+    &notes, "marker.footnote_reference_open", reference->match_id), "[^"));
   CHECK(capture_text_is(snapshot, find_match_capture(
-    &notes, "marker.margin_note_anchor_open", attached->match_id), "{=="));
+    &notes, "marker.footnote_reference_close", reference->match_id), "]"));
+  const AnvilMarkdownExtensionCapture *definition = find_capture(&notes, "span.footnote_definition");
+  CHECK(capture_text_is(snapshot, definition, "[^1]: A great show."));
   CHECK(capture_text_is(snapshot, find_match_capture(
-    &notes, "marker.margin_note_anchor_close", attached->match_id), "==}"));
+    &notes, "marker.footnote_definition_open", definition->match_id), "[^1]: "));
   CHECK(capture_text_is(snapshot, find_match_capture(
-    &notes, "marker.margin_note_body_open", attached->match_id), "{>>"));
+    &notes, "content.footnote_label", definition->match_id), "1"));
   CHECK(capture_text_is(snapshot, find_match_capture(
-    &notes, "marker.margin_note_body_close", attached->match_id), "<<}"));
-  uint32_t point_id = UINT32_MAX, bare_id = UINT32_MAX, empty_id = UINT32_MAX;
+    &notes, "content.footnote_text", definition->match_id), "A great show."));
+  uint32_t empty_id = UINT32_MAX;
+  bool inline_x = false;
   for (uint32_t i = 0; i < notes.count; i++) {
     const AnvilMarkdownExtensionCapture *capture = &notes.captures[i];
-    if (strcmp(capture->name, "span.margin_note") != 0) continue;
-    if (capture_text_is(snapshot, capture, "{>>point note<<}")) point_id = capture->match_id;
-    if (capture_text_is(snapshot, capture, "{==bare==}")) bare_id = capture->match_id;
-    if (capture_text_is(snapshot, capture, "{==x==}{>><<}")) empty_id = capture->match_id;
+    if (strcmp(capture->name, "span.footnote_definition") == 0 &&
+      capture_text_is(snapshot, capture, "[^long-note]:")) empty_id = capture->match_id;
+    if (strcmp(capture->name, "span.footnote_reference") == 0 &&
+      capture_text_is(snapshot, capture, "[^x]")) inline_x = true;
   }
-  CHECK(point_id != UINT32_MAX && bare_id != UINT32_MAX && empty_id != UINT32_MAX);
-  CHECK(find_match_capture(&notes, "content.margin_note_anchor", point_id) == NULL);
-  CHECK(capture_text_is(snapshot, find_match_capture(
-    &notes, "content.margin_note_body", point_id), "point note"));
-  CHECK(find_match_capture(&notes, "content.margin_note_body", bare_id) == NULL);
-  CHECK(find_match_capture(&notes, "marker.margin_note_body_open", empty_id) != NULL);
-  CHECK(find_match_capture(&notes, "content.margin_note_body", empty_id) == NULL);
+  CHECK(empty_id != UINT32_MAX);
+  CHECK(find_match_capture(&notes, "content.footnote_text", empty_id) == NULL);
+  CHECK(inline_x);
   anvil_ts_snapshot_free(snapshot);
 
   uint32_t pathological_len = 128 * 1024;

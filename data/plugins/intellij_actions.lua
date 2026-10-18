@@ -1413,13 +1413,13 @@ keymap.add({
   ["ctrl+down"] = "editor:move_caret_next_paragraph",
 }, true)
 
--- A Margin Note editor uses Escape to cancel its edit.
+-- A Footnote editor uses Escape to cancel its edit.
 command.add(function()
   local TextView = require "core.textview"
   local GlobalPromptBar = require "core.global_prompt_bar"
   local view = core.active_view
   return view and view:extends(TextView) and not view:is(GlobalPromptBar)
-    and not view.margin_note_input, view
+    and not view.footnote_input, view
 end, {
   ["editor:restore_selection_origin_or_select_none"] = restore_selection_origin_or_select_none,
 })

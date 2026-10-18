@@ -221,8 +221,12 @@ bool anvil_worker_treesitter_index_result_markdown_changed_lines(
   uint32_t *line2
 );
 uint32_t anvil_worker_treesitter_index_result_reused_block_capture_count(const AnvilWorkerTreeSitterIndexResult *result);
-uint32_t anvil_worker_treesitter_index_result_markdown_margin_note_count(
+uint32_t anvil_worker_treesitter_index_result_markdown_footnote_definition_count(
   const AnvilWorkerTreeSitterIndexResult *result
+);
+uint32_t anvil_worker_treesitter_index_result_markdown_footnote_definition_row(
+  const AnvilWorkerTreeSitterIndexResult *result,
+  uint32_t index
 );
 uint32_t anvil_worker_treesitter_index_result_reused_inline_count(const AnvilWorkerTreeSitterIndexResult *result);
 uint64_t anvil_worker_treesitter_index_result_query_ms(const AnvilWorkerTreeSitterIndexResult *result, const char *kind);
