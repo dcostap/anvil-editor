@@ -1065,10 +1065,10 @@ end
 function tables.delete_char(view, direction)
   local contexts = collect_interactive_contexts(view)
   if not contexts then return false end
-  if view.buffer:has_any_selection() then
-    if tables.delete_selected_lines(view) then return true end
-    return view:on_text_input("")
-  end
+  -- Whole selected rows or columns go, even when their cells are empty and
+  -- their selections are carets.
+  if tables.delete_selected_lines(view) then return true end
+  if view.buffer:has_any_selection() then return view:on_text_input("") end
   local edits, seen = {}, {}
   local refreshers = {}
   for _, context in ipairs(contexts) do

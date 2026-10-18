@@ -5030,7 +5030,10 @@ local function unwrapped_widget_hit(view, line, render_line, x, y, floating_only
       local text = fragment.text or ""
       local width = widget and (fragment.hit_width or widget.width or fragment.width)
         or fragment.width or font:get_width(text, { tab_offset = tx })
-      if widget and (not floating_only or widget.floating) then
+      -- A hidden floating widget leaves the place it reaches to what is there.
+      if widget and (not floating_only
+        or widget.floating and not (widget.visible and not widget.visible(view, false)))
+      then
         -- Inline widgets draw on their own position row. Centering them in
         -- the complete line puts the hit area below them, over any image.
         local col1 = fragment.source_col1 or 1
