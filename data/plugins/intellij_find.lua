@@ -567,7 +567,7 @@ local function set_status(state)
   end
 end
 
-local function select_match_without_history(view, state, index, scroll)
+local function select_match(view, state, index, scroll)
   local match = state.matches and state.matches[index]
   state.current = match and index or 0
   if not match then return false end
@@ -591,16 +591,8 @@ local function select_match_without_history(view, state, index, scroll)
   end
   state.found = true
   set_status(state)
+  navigation_history.ignore_current_dwell(view)
   return true
-end
-
-local function select_match(view, state, index, scroll, explicit)
-  return navigation_history.perform_jump_with_options(view, {
-    record_nearby = explicit == true,
-    departure = { no_merge = true }, destination = { no_merge = true },
-  }, function()
-    return select_match_without_history(view, state, index, scroll)
-  end)
 end
 
 local refresh_matches
@@ -820,6 +812,13 @@ end
 
 local function open_find(view, as_replace)
   local state = ensure_state(view)
+  if not state.visible then
+    navigation_history.flush_edit(view, nil, true)
+    state.history_origin = {
+      selection_state = view:get_selection_state(),
+      scroll = { x = view.scroll.x, y = view.scroll.y },
+    }
+  end
   state.visible = true
   state.input_active = true
   state.mode = as_replace and "replace" or "find"
@@ -852,6 +851,11 @@ local function close_find(view, state, hide)
   state.input_active = false
   if hide then
     cancel_scan(state)
+    navigation_history.record_jump(view, state.history_origin, {
+      record_nearby = true,
+      departure = { no_merge = true }, destination = { no_merge = true },
+    })
+    state.history_origin = nil
     state.visible = false
     state.matches = {}
     state.match_indexes_by_line = {}
@@ -905,7 +909,7 @@ local function navigate(view, state, reverse)
     return
   end
   local index = choose_match(view, state, reverse, false)
-  select_match(view, state, index, true, true)
+  select_match(view, state, index, true)
   core.redraw = true
 end
 
@@ -938,6 +942,7 @@ local function add_match_to_selection(view, state, reverse)
   state.current = index
   set_status(state)
   view:scroll_to_line(match.line, true, false, { visible_margin_lines = FIND_NAV_VISIBLE_MARGIN_LINES })
+  navigation_history.ignore_current_dwell(view)
   core.redraw = true
 end
 

@@ -132,22 +132,20 @@ function M.record_departure(view)
   return inserted
 end
 
-local function perform_jump(view, record_opts, action, ...)
+-- Record a completed jump without moving the View again.
+function M.record_jump(view, origin, record_opts)
   local opts = options()
   ignored_dwell_positions[view] = nil
-  M.flush_edit(view, nil, true)
-  local origin = navigation_state(view)
-  local result = table.pack(action(view, ...))
-  if not opts.enabled then return table.unpack(result, 1, result.n) end
+  if not opts.enabled or not origin then return false end
   local destination = navigation_state(view)
   local old_position = position(origin.selection_state)
   local new_position = position(destination.selection_state)
   if not old_position or not new_position then
-    return table.unpack(result, 1, result.n)
+    return false
   end
   local moved = old_position.line ~= new_position.line or old_position.col ~= new_position.col
   if not moved or not (is_far(old_position, new_position, opts) or record_opts and record_opts.record_nearby) then
-    return table.unpack(result, 1, result.n)
+    return false
   end
 
   candidates[view] = nil
@@ -158,6 +156,15 @@ local function perform_jump(view, record_opts, action, ...)
     old_position.line, old_position.col, new_position.line, new_position.col,
     tostring(inserted)
   )
+  return inserted
+end
+
+local function perform_jump(view, record_opts, action, ...)
+  ignored_dwell_positions[view] = nil
+  M.flush_edit(view, nil, true)
+  local origin = navigation_state(view)
+  local result = table.pack(action(view, ...))
+  M.record_jump(view, origin, record_opts)
   return table.unpack(result, 1, result.n)
 end
 

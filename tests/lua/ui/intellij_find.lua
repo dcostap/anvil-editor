@@ -102,7 +102,7 @@ test.describe("TextView Prompt Bar find", function()
     assert_selection(view, 1, 1, 1, 6)
   end)
 
-  test.it("records the position before local find moves to its first match", function(context)
+  test.it("preserves the position before local find when closing the search", function(context)
     local old_options = config.plugins.navigation_history
     config.plugins.navigation_history = {
       enabled = true,
@@ -121,6 +121,7 @@ test.describe("TextView Prompt Bar find", function()
 
     test.ok(command.perform("editor:find"))
     type_into_active_view("NEEDLE")
+    test.ok(command.perform("editor:find_close"))
 
     test.equal(panes.history_length(panes.pane_for_view(view)), 3)
     test.ok(command.perform("core:navigate_back"))
