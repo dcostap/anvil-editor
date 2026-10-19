@@ -833,6 +833,8 @@ end
 
 function TerminalView:apply_status(status)
   if type(status) ~= "table" then return false end
+  -- nil while the host has not reported whether the shell runs a command.
+  self.busy = status.busy
   local revision = tonumber(status.revision)
   local kind = type(status.kind) == "string" and status.kind or self.state
   local changed = kind ~= self.state or revision ~= self.status_revision
@@ -2242,6 +2244,11 @@ function core.quit(force, exit_code)
       error(err, 0)
     end
   end, core.cancel_quit)
+end
+
+-- True when a Terminal Session can still reattach or revive. Closing its last view retires it.
+function M.session_available(id)
+  return session_record(id) ~= nil
 end
 
 -- Focuses the open view of a Terminal Session. Returns false when no view shows it.

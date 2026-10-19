@@ -9,7 +9,6 @@ local project_paths = require "core.project_paths"
 local test = require "core.test"
 local View = require "core.view"
 
-local command_slots = require "plugins.command_slots"
 local filetree = require "plugins.filetree"
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 local terminal = require "plugins.terminal"
@@ -28,7 +27,6 @@ test.describe("Command Palette View launchers", function()
     context.projects = core.projects
     context.cwd = system.getcwd()
     context.terminal_open = terminal.open
-    context.run_once = command_slots.run_once
     context.root = common.normalize_path(USERDIR .. PATHSEP
       .. "command-palette-launchers-" .. system.get_process_id() .. "-"
       .. math.floor(system.get_time() * 1000000))
@@ -52,7 +50,6 @@ test.describe("Command Palette View launchers", function()
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     terminal.open = context.terminal_open
-    command_slots.run_once = context.run_once
     panes.reset_for_tests()
     project_paths.configure_workspace {}
     core.projects = context.projects
@@ -385,33 +382,5 @@ test.describe("Command Palette View launchers", function()
     test.equal(options.cwd, common.normalize_path(context.folder))
     test.equal(options.pane, pane)
     test.equal(options.placement, "new")
-  end)
-
-  test.it("runs shell text only after explicit Shell mode activation", function(context)
-    local source = View()
-    source.current_dir = context.folder
-    local pane = panes.create { factory = function() return source end }
-    local run
-    command_slots.run_once = function(text, opts)
-      run = { text = text, opts = opts }
-      return View()
-    end
-
-    fuzzy_searcher.open("Write-Output hello")
-    test.is_nil(run)
-    core.fuzzy_searcher_active_view:close()
-
-    test.ok(command.perform_with_context("command_output:run_shell_command", {
-      source_pane = pane, source_view = source, placement = "current",
-    }))
-    local picker = core.fuzzy_searcher_active_view
-    set_query(picker, "!Write-Output hello")
-    test.equal(#picker.results, 1)
-    test.equal(picker.results[1].kind, "shell_command")
-    picker:confirm(false)
-
-    test.equal(run.text, "Write-Output hello")
-    test.equal(run.opts.cwd, common.normalize_path(context.folder))
-    test.same(fuzzy_searcher._test.prompt_history("!"), {})
   end)
 end)

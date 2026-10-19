@@ -7,8 +7,6 @@ local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local autocomplete = require "plugins.autocomplete"
 local Widget = require "widget"
-local shell = require "core.shell"
-local command_slots = require "plugins.command_slots"
 local terminal = require "plugins.terminal"
 local config = require "core.config"
 local diffview = require "plugins.diffview"
@@ -33,7 +31,6 @@ test.describe("Middle-click autoscroll", function()
       "active_view", "last_active_view", "next_active_view", "cursor_change_req", "redraw",
     } do saved[key] = core[key] end
     saved.get_time = system.get_time
-    saved.capture = shell.capture
     saved.diff_layout = config.plugins.diffview.layout
     now = saved.get_time()
     system.get_time = function() return now end
@@ -48,8 +45,6 @@ test.describe("Middle-click autoscroll", function()
     config.plugins.diffview.layout = saved.diff_layout
     panes.reset_for_tests()
     system.get_time = saved.get_time
-    shell.capture = saved.capture
-    command_slots._reset_for_tests()
     for _, key in ipairs {
       "root_panel", "title_bar", "nag_view", "global_prompt_bar", "status_bar",
       "active_view", "last_active_view", "next_active_view", "cursor_change_req", "redraw",
@@ -188,30 +183,6 @@ test.describe("Middle-click autoscroll", function()
     test.equal(view.scroll.y, stopped)
     test.equal(root:modal_input_owner(), owner)
     root:pop_modal_input(owner)
-    test.is_nil(root:modal_input_owner())
-  end)
-
-  test.it("scrolls only the current Quick Command Output and stops when its slot changes", function()
-    command_slots._reset_for_tests()
-    local callbacks
-    shell.capture = function(_, options)
-      callbacks = options
-      return { cancel = function() end }
-    end
-    local output = command_slots.run_command(1, "test output")
-    callbacks.on_output(string.rep("output line\n", 1000))
-    callbacks.on_exit { code = 0, elapsed = 0, truncated = false }
-    root:update()
-    local host = panes.active().current_view
-    start()
-    core.on_event("mousemoved", 200, 320, 0, 120)
-    tick()
-    test.ok(output.scroll.y > 0)
-    host:select_slot(2)
-    local stopped = output.scroll.y
-    tick()
-    test.equal(output.scroll.y, stopped)
-    test.equal(host:active_output_view().scroll.y, 0)
     test.is_nil(root:modal_input_owner())
   end)
 

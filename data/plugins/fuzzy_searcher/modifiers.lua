@@ -43,7 +43,7 @@ local function mode_marker(text)
   local first = text:find("%S") or 1
   local prefix = text:sub(first, first)
   if text:sub(first, first + #"º" - 1) == "º" then return first, first + #"º" - 1, "º" end
-  if prefix == "!" or prefix == ">" or prefix == "@" or prefix == "^" then
+  if prefix == ">" or prefix == "@" or prefix == "^" then
     return first, first, prefix
   end
   if text:sub(first, first + 1) == "$$" then return first, first + 1, "$$" end
@@ -100,7 +100,7 @@ function modifiers.parse(text)
   result.text = result.active and table.concat(chunks):gsub("^%s+", ""):gsub("%s+$", "") or text
   result.marker_first, result.marker_last, result.mode = mode_marker(table.concat(masked))
   if result.active and (result.mode == "$" or result.mode == "$$"
-    or result.mode == "!" or result.mode == ">") then
+    or result.mode == ">") then
     result.error = "Search Modifiers require File Search or Text Search"
   elseif result.commit and result.sort == "date" then
     result.error = "Git commits do not store file modification dates"

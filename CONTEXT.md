@@ -393,7 +393,7 @@ An action that appends one Pane's complete Navigation History after another Pane
 _Avoid_: move View, merge tabs
 
 **View**:
-The content that a Pane can show, such as an Editor, File Tree, Terminal View, or Quick Command Output View.
+The content that a Pane can show, such as an Editor, File Tree, Terminal View, or Text Capture.
 _Avoid_: Pane View, app, pane content
 
 **Current View**:
@@ -490,10 +490,6 @@ _Avoid_: command icon, tab icon
 A command that creates a View. Its Command Palette result adds a green plus badge to the View Icon.
 _Avoid_: constructor command, open badge
 
-**Shell Command Mode**:
-The explicit Fuzzy Searcher mode that runs entered shell text and opens its output in a Command Output View.
-_Avoid_: Pane Command Bar, Terminal View input
-
 **Fuzzy Searcher**:
 The floating picker used for fuzzy navigation and search modes, such as files, projects, grep, symbols, and commands.
 _Avoid_: fuzzy searcher popup
@@ -547,18 +543,6 @@ _Avoid_: new path suggestion, create match
 A brief visual highlight marking the text most recently copied by the user.
 _Avoid_: Copy flash, copy animation
 
-**Command Slot**:
-A project-scoped shortcut slot that stores one shell command for quick reruns.
-_Avoid_: Command preset, command macro
-
-**Command Output View**:
-A read-only Text View showing the output from one arbitrary Shell Command Mode run.
-_Avoid_: Command buffer, terminal buffer, output buffer
-
-**Quick Command Output View**:
-A project-scoped compound View for Command Slots A, S, D, and F. One exists per Project. Each permanent tab shows one slot's Command Output History and is a Surface Focus Target.
-_Avoid_: Command Output panel, slot output panel, tabbed Command Output View
-
 **Terminal View**:
 An interactive View connected to a running shell or terminal application.
 _Avoid_: Terminal panel, terminal buffer, console
@@ -575,9 +559,9 @@ _Avoid_: agent conversation, Pi session file
 A Text Capture containing stable text from a Terminal View while that terminal continues to run.
 _Avoid_: terminal buffer, copy mode
 
-**Command Output History**:
-A Command Slot's sequence of captured output from its runs, navigated within that slot's Quick Command Output View tab.
-_Avoid_: terminal scrollback, output buffer history
+**Quick Command**:
+A shell command assigned to one of the Project's key slots A, S, D, and F and to one Terminal Session. Running it focuses that Terminal View and enters the command. A busy Terminal Session does not receive it. The file locations in its latest output are the Project's remote Points of Interest.
+_Avoid_: Command Slot, command preset, command macro, run configuration
 
 **Text View Prompt Bar**:
 A bottom-anchored prompt scoped to a specific Text View.
@@ -596,11 +580,11 @@ A brief user-facing message shown when directional navigation reaches the bounda
 _Avoid_: wraparound feedback, no-op warning
 
 **Point of Interest / POI**:
-A navigable target within a view, such as a Git change in an Editor or a file/line reference in a Command Output View. A Point of Interest may also be activatable.
+A navigable target within a view, such as a Git change in an Editor or a file/line reference in a Terminal Text Capture. A Point of Interest may also be activatable.
 _Avoid_: diff region, link, target
 
 **Text Point of Interest / Text POI**:
-A Point of Interest tied to a concrete text range that can be presented as link-like text, such as an underlined file-location reference in a Command Output View.
+A Point of Interest tied to a concrete text range that can be presented as link-like text, such as an underlined file-location reference in a Text Capture.
 _Avoid_: link, text link
 
 **Point of Interest Activation**:
