@@ -26,6 +26,9 @@ SCENARIOS = {
     "diff-scroll-large": scenario("diff", lines=40000, change_every=8, action="scroll", wrap=True),
     "diff-steady-large": scenario("diff", lines=40000, change_every=8, action="redraw", wrap=True),
     "diff-navigate-large": scenario("diff", lines=40000, change_every=8, action="navigate", wrap=True),
+    # The Diff View header with its change counts in a light theme.
+    "diff-header-light": dict(scenario("diff", lines=400, change_every=8, action="redraw", wrap=False),
+        actions=1, code_scale=1, window_width=1400, window_height=600, theme="light"),
     "fuzzy-files-medium": scenario("fuzzy", files=1000, action="file-query"),
     "fuzzy-files-large": scenario("fuzzy", files=10000, action="file-query"),
     "fuzzy-text-large": scenario("fuzzy", files=10000, action="text-query"),

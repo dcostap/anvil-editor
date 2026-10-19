@@ -2258,20 +2258,20 @@ local function header_stat_items(stats)
   local items = {}
   if stats.deleted > 0 then
     items[#items + 1] = {
-      text = string.format("- %d", stats.deleted),
-      color = common.blend_colors(style.text, style.diff_marker_delete),
+      text = string.format("− %d", stats.deleted),
+      color = style.diff_header_delete,
     }
   end
   if stats.inserted > 0 then
     items[#items + 1] = {
       text = string.format("+ %d", stats.inserted),
-      color = common.blend_colors(style.text, style.diff_marker_insert),
+      color = style.diff_header_insert,
     }
   end
   if stats.changed > 0 then
     items[#items + 1] = {
       text = string.format("~ %d", stats.changed),
-      color = common.blend_colors(style.text, style.diff_marker_modify),
+      color = style.diff_header_modify,
     }
   end
   return items
@@ -2314,28 +2314,47 @@ local function draw_header_items(font, items, x, y, gap)
   end
 end
 
+local bold_stat_fonts = setmetatable({}, { __mode = "k" })
+
+-- Change counts use a bold copy of the small header font.
+local function header_stat_font(font)
+  local small = style.get_small_font(font)
+  local bold = bold_stat_fonts[small]
+  if not bold then
+    local ok, copy = pcall(small.copy, small, small:get_size(), { bold = true })
+    bold = ok and copy or small
+    bold_stat_fonts[small] = bold
+  end
+  return bold
+end
+
+-- Draw a title with its change counts right after it, truncating the title
+-- when both do not fit.
+local function draw_header_title(font, stat_font, title, items, x, y, stat_y, available)
+  local title_gap = font:get_width("  ")
+  local stat_gap = stat_font:get_width("  ")
+  local items_width = items and header_items_width(stat_font, items, stat_gap) or 0
+  if items_width > available then items, items_width = nil, 0 end
+  local reserved = items and items_width + title_gap or 0
+  title = truncate_header_title(font, title, math.max(0, available - reserved))
+  renderer.draw_text(font, title, x, y, style.dim)
+  if items then draw_header_items(stat_font, items, x + font:get_width(title) + title_gap, stat_y, stat_gap) end
+end
+
 local function draw_diff_header(view)
   local font = style.view_text_font
-  local stat_font = style.get_small_font(font)
+  local stat_font = header_stat_font(font)
   local header_height = view.diff_header_height or 0
   if header_height <= 0 then return end
 
   local y = view.position.y + (header_height - font:get_height()) / 2
   local stat_y = view.position.y + (header_height - stat_font:get_height()) / 2
   local padding = style.padding.x
-  local title_gap = font:get_width("  ")
-  local stat_gap = stat_font:get_width("  ")
   if view.unified then
     local title = view:get_side_title(1) .. " → " .. view:get_side_title(2)
     if not view:side_edit_permission(view.unified_view.base_index) then title = title .. "  (read-only)" end
-    local items = header_stat_items(view:get_change_stats())
-    local available = math.max(0, view.size.x - padding * 2)
-    local items_width = header_items_width(stat_font, items, stat_gap)
-    title = truncate_header_title(font, title, math.max(0, available - items_width - title_gap))
-    renderer.draw_text(font, title, view.position.x + padding, y, style.dim)
-    if items_width <= available then
-      draw_header_items(stat_font, items, view.position.x + padding + available - items_width, stat_y, stat_gap)
-    end
+    draw_header_title(font, stat_font, title, header_stat_items(view:get_change_stats()),
+      view.position.x + padding, y, stat_y, math.max(0, view.size.x - padding * 2))
     return
   end
   local half_width = view.size.x / 2
@@ -2344,19 +2363,8 @@ local function draw_diff_header(view)
   for index, side_view in ipairs { view.buffer_view_a, view.buffer_view_b } do
     local x = side_view.position.x + padding
     local available = math.max(0, side_width - padding * 2)
-    local title = view:get_side_title(index)
     local items = index == 2 and header_stat_items(view:get_change_stats()) or nil
-    if items then
-      local items_width = header_items_width(stat_font, items, stat_gap)
-      local title_width = math.max(0, available - items_width - title_gap)
-      title = truncate_header_title(font, title, title_width)
-      renderer.draw_text(font, title, x, y, style.dim)
-      local items_x = x + available - items_width
-      if items_width <= available then draw_header_items(stat_font, items, items_x, stat_y, stat_gap) end
-    else
-      title = truncate_header_title(font, title, available)
-      renderer.draw_text(font, title, x, y, style.dim)
-    end
+    draw_header_title(font, stat_font, view:get_side_title(index), items, x, y, stat_y, available)
   end
 end
 

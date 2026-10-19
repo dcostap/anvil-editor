@@ -748,6 +748,7 @@ local function setup_scenario()
     core.status_bar.message = nil
   end
 
+  if benchmark.theme ~= "" then core.reload_module("colors." .. benchmark.theme) end
   if benchmark.workload_file ~= "" then
     local fp = assert(io.open(benchmark.workload_file, "rb"))
     local settings = require("core.json").decode(fp:read("*a"))
@@ -763,7 +764,6 @@ local function setup_scenario()
   if benchmark.mode == "video" then
     config.markdown_live_editor = true
   end
-  if benchmark.theme ~= "" then core.reload_module("colors." .. benchmark.theme) end
   local view = open_file(benchmark.fixture)
   mark_lifecycle("fixture_opened")
   setup_tabs(view)
