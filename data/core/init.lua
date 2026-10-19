@@ -523,7 +523,10 @@ function core.init()
     ))
   end
   startup_measure("display_info_and_scale", function()
-    DEFAULT_SCALE, DEFAULT_FPS = system.get_display_info()
+    local display_fps
+    DEFAULT_SCALE, display_fps = system.get_display_info()
+    -- Headless and some virtual displays report 0 Hz; keep the start-up rate then.
+    if display_fps and display_fps >= 30 then DEFAULT_FPS = display_fps end
     SCALE = tonumber(os.getenv("ANVIL_SCALE")) or DEFAULT_SCALE
   end)
 
