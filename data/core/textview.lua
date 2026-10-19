@@ -1977,6 +1977,37 @@ local function splice_visual_metric_rows(view, cache, old_row1, old_row2, new_ro
   perf_frame_add("textview_visual_metric_row_splice_rows", insert_count)
 end
 
+---Record changed lines of a view whose rows are composed from collapsed folds
+---and provider rows. The next metric lookup measures them all at once, so a
+---batch of ranged invalidations compares the composed rows only once.
+local function defer_composed_metric_lines(view, cache, line1, line2, wrap_change)
+  local line_count = #view.buffer.lines
+  -- Pending lines keep their numbers only while no line is added or removed.
+  if not cache.composed_rows or cache.line_count ~= line_count then return false end
+  line1 = common.clamp(math.floor(line1), 1, line_count)
+  line2 = common.clamp(math.floor(line2 or line1), line1, line_count)
+  if wrap_change and wrap_change.line1 and wrap_change.line2 then
+    line1 = math.max(1, math.min(line1, wrap_change.line1))
+    line2 = math.min(line_count, math.max(line2, wrap_change.line2))
+  end
+  local pending = cache.pending_lines or {}
+  pending[#pending + 1] = { line1 = line1, line2 = line2 }
+  cache.pending_lines = pending
+  return true
+end
+
+-- Rows that show lines `line1..line2`. They start at the previous line's rows,
+-- because provider rows placed before a line follow the previous line.
+local function composed_row_span(position_rows, row_count, line_count, line1, line2)
+  local row1 = position_rows[math.max(1, line1 - 1)] or 1
+  local last_row = position_rows[line2] or row1
+  for line = line2 + 1, line_count do
+    local row = position_rows[line]
+    if row and row > last_row then return row1, row - 1 end
+  end
+  return row1, row_count
+end
+
 -- Two composed rows match when a metric height measured for one fits the other.
 local function same_composed_row(a, b)
   if a.type ~= b.type or a.line ~= b.line or a.row_in_line ~= b.row_in_line then
@@ -1994,12 +2025,16 @@ local function same_composed_row(a, b)
   return true
 end
 
----Mark or splice the metric rows of changed lines in a view whose rows are
----composed from collapsed folds and provider rows. Return false unless every
----row outside those lines matches the rows the cache measured.
-local function invalidate_composed_metric_lines(view, cache, line1, line2, wrap_change)
-  local old_entries = cache.composed_entries
-  if not old_entries or #old_entries ~= cache.row_count
+---Measure the pending lines of a composed-row metric cache. Return false
+---unless every other row matches a row the cache measured; the caller then
+---rebuilds every row.
+local function resolve_composed_metric_lines(view, cache)
+  local pending = cache.pending_lines
+  cache.pending_lines = nil
+  local old = cache.composed_rows
+  local line_count = #view.buffer.lines
+  if not old or #old.entries ~= cache.row_count or cache.line_count ~= line_count
+    or not view:has_composed_visual_rows()
     or cache.signature ~= view:get_visual_metric_signature(
       cache.wrap_layout_generation, cache.row_count, cache.text_revision)
   then
@@ -2007,51 +2042,137 @@ local function invalidate_composed_metric_lines(view, cache, line1, line2, wrap_
   end
   local composed = current_composed_rows(view)
   local entries = composed.entries
-  -- Rows are measured through the current UI snapshot. Use the local path
-  -- only when that snapshot already shows the current composition.
+  -- Rows are measured through the current UI snapshot. Resolve only when that
+  -- snapshot already shows the current composition.
   if view:composed_visual_rows() ~= entries then return false end
-  local line_count = #view.buffer.lines
-  line1 = common.clamp(math.floor(line1), 1, line_count)
-  line2 = common.clamp(math.floor(line2 or line1), line1, line_count)
-  if wrap_change and wrap_change.line1 and wrap_change.line2 then
-    line1 = math.max(1, math.min(line1, wrap_change.line1))
-    line2 = math.min(line_count, math.max(line2, wrap_change.line2))
-  end
-  local position_rows = composed.position_rows
   local row_count = #entries
-  -- Provider rows placed before a line follow the previous line's rows.
-  local row1 = position_rows[math.max(1, line1 - 1)] or 1
-  local last_row = position_rows[line2] or row1
-  local next_row = row_count + 1
-  for line = line2 + 1, line_count do
-    local row = position_rows[line]
-    if row and row > last_row then
-      next_row = row
-      break
+
+  local spans = {}
+  for _, range in ipairs(pending) do
+    local n1, n2 = composed_row_span(
+      composed.position_rows, row_count, line_count, range.line1, range.line2)
+    local o1, o2 = composed_row_span(
+      old.position_rows, cache.row_count, line_count, range.line1, range.line2)
+    spans[#spans + 1] = { n1 = n1, n2 = n2, o1 = o1, o2 = o2 }
+  end
+  table.sort(spans, function(a, b) return a.n1 < b.n1 end)
+  local merged = {}
+  for _, span in ipairs(spans) do
+    local last = merged[#merged]
+    if last and span.n1 <= last.n2 + 1 then
+      last.n2 = math.max(last.n2, span.n2)
+      last.o1 = math.min(last.o1, span.o1)
+      last.o2 = math.max(last.o2, span.o2)
+    else
+      merged[#merged + 1] = span
     end
   end
-  local row2 = next_row - 1
-  local delta = row_count - cache.row_count
-  local old_row2 = row2 - delta
-  if old_row2 < row1 - 1 then return false end
-  if entries ~= old_entries then
-    for row = 1, row1 - 1 do
-      if not same_composed_row(entries[row], old_entries[row]) then return false end
+
+  -- Every row between the spans must be a row the cache measured.
+  local same = composed == old
+  local previous_new, previous_old = 0, 0
+  local function gap_matches(new_end, old_end)
+    if new_end - previous_new ~= old_end - previous_old then return false end
+    if same then return true end
+    for offset = 1, new_end - previous_new do
+      if not same_composed_row(entries[previous_new + offset], old.entries[previous_old + offset]) then
+        return false
+      end
     end
-    for row = next_row, row_count do
-      if not same_composed_row(entries[row], old_entries[row - delta]) then return false end
-    end
+    return true
   end
-  if delta == 0 then
-    invalidate_visual_metric_rows(view, cache, row1, row2)
-    cache.wrap_layout_generation = view.__wrap_layout_generation or 0
-    cache.text_revision = view.buffer.text_revision or 0
-    cache.signature = view:get_visual_metric_signature()
+  for _, span in ipairs(merged) do
+    if not gap_matches(span.n1 - 1, span.o1 - 1) then return false end
+    previous_new, previous_old = span.n2, span.o2
+  end
+  if not gap_matches(row_count, cache.row_count) then return false end
+
+  if same then
+    for _, span in ipairs(merged) do invalidate_visual_metric_rows(view, cache, span.n1, span.n2) end
   else
-    splice_visual_metric_rows(view, cache, row1, old_row2, row1, row2, row_count)
+    local old_heights, old_plans = cache.heights, cache.row_plans
+    local old_dirty = cache.dirty_rows or {}
+    local old_anchor = metric_tree_row_at_y(
+      cache.height_tree, cache.row_count, math.max(0, view.scroll and view.scroll.y or 0)
+    )
+    local default_height = view:get_line_height()
+    local providers = view:visual_metric_provider_entries()
+    local line_metrics_cache = {}
+    local heights, plans, dirty = {}, {}, {}
+    local total, anchor_delta, touched_rows, measured_rows = 0, 0, 0, 0
+    local new_row, old_row = 0, 0
+    local function keep(old_end, mark_dirty)
+      while old_row < old_end do
+        old_row, new_row = old_row + 1, new_row + 1
+        heights[new_row] = old_heights[old_row]
+        plans[new_row] = old_plans[old_row]
+        total = total + heights[new_row]
+        if mark_dirty or old_dirty[old_row] then dirty[new_row] = true end
+      end
+    end
+    for _, span in ipairs(merged) do
+      keep(span.o1 - 1, false)
+      local new_count = span.n2 - span.n1 + 1
+      touched_rows = touched_rows + new_count
+      if new_count == span.o2 - span.o1 + 1 then
+        -- Same rows: keep the last resolved heights until the dirty pass.
+        keep(span.o2, true)
+      else
+        -- Measure a changed row count before publishing the new metric tree,
+        -- so the old scroll offset still maps to its anchor row.
+        local removed_height, inserted_height = 0, 0
+        for row = span.o1, span.o2 do removed_height = removed_height + old_heights[row] end
+        for row = span.n1, span.n2 do
+          local height, plan = compute_visual_row_height(
+            view, row, providers, default_height, nil, false, line_metrics_cache
+          )
+          heights[row] = height
+          plans[row] = plan == nil and UNMEASURED_ROW or plan
+          inserted_height = inserted_height + height
+        end
+        total = total + inserted_height
+        measured_rows = measured_rows + new_count
+        if span.o2 < old_anchor then
+          anchor_delta = anchor_delta + inserted_height - removed_height
+        end
+        new_row, old_row = span.n2, span.o2
+      end
+    end
+    keep(cache.row_count, false)
+    cache.heights, cache.row_plans = heights, plans
+    cache.dirty_rows = next(dirty) and dirty or nil
+    cache.row_count = row_count
+    cache.total_height = total
+    cache.height_tree = metric_tree_build(heights, row_count)
+    if anchor_delta ~= 0 and view.scroll and not view.__pending_viewport_anchor then
+      view.scroll.y = view.scroll.y + anchor_delta
+      view.scroll.to.y = view.scroll.to.y + anchor_delta
+    end
+    cache.invalidated_rows = (cache.invalidated_rows or 0) + touched_rows
+    view.render_cache_diagnostics.metric_invalidations =
+      view.render_cache_diagnostics.metric_invalidations + touched_rows
+    if measured_rows > 0 then
+      view.render_cache_diagnostics.metric_row_splices =
+        view.render_cache_diagnostics.metric_row_splices + 1
+      perf_frame_add("textview_visual_metric_row_splices", 1)
+      perf_frame_add("textview_visual_metric_row_splice_rows", measured_rows)
+    end
   end
-  cache.composed_entries = entries
+  cache.composed_rows = composed
+  cache.wrap_layout_generation = view.__wrap_layout_generation or 0
+  cache.text_revision = view.buffer.text_revision or 0
+  cache.signature = view:get_visual_metric_signature()
   return true
+end
+
+local function clear_visual_metric_cache(view)
+  local cache = view.__visual_metric_cache
+  if cache then
+    view.render_cache_diagnostics.metric_invalidations =
+      view.render_cache_diagnostics.metric_invalidations + cache.row_count
+  end
+  view.__visual_metric_generation = (view.__visual_metric_generation or 0) + 1
+  view.__visual_metric_cache = nil
 end
 
 function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
@@ -2063,8 +2184,10 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   local wrap_change = self.__line_render_wrap_change
   self.__line_render_wrap_change = nil
   if line1 and cache and self:has_composed_visual_rows() then
-    if invalidate_composed_metric_lines(self, cache, line1, line2, wrap_change) then return end
-  elseif line1 and not self:has_composed_visual_rows() then
+    if defer_composed_metric_lines(self, cache, line1, line2, wrap_change) then return end
+  elseif line1 and not self:has_composed_visual_rows()
+    and not (cache and cache.pending_lines)
+  then
     if not cache then return end
     if not self.wrapped_settings then
       invalidate_visual_metric_rows(self, cache, line1, line2)
@@ -2123,12 +2246,7 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
       end
     end
   end
-  if cache then
-    self.render_cache_diagnostics.metric_invalidations =
-      self.render_cache_diagnostics.metric_invalidations + cache.row_count
-  end
-  self.__visual_metric_generation = (self.__visual_metric_generation or 0) + 1
-  self.__visual_metric_cache = nil
+  clear_visual_metric_cache(self)
 end
 
 function TextView:visual_metric_provider_entries()
@@ -4005,6 +4123,13 @@ function TextView:get_visual_row_metric_cache()
   local perf_active = core.perf_frame_stats ~= nil
   local lookup_start = perf_active and system.get_time()
   perf_frame_add("textview_visual_metric_cache_calls", 1)
+  local pending_cache = self.__visual_metric_cache
+  if pending_cache and pending_cache.pending_lines
+    and not resolve_composed_metric_lines(self, pending_cache)
+    and self.__visual_metric_cache == pending_cache
+  then
+    clear_visual_metric_cache(self)
+  end
   local signature_start = perf_active and system.get_time()
   local signature = self:get_visual_metric_signature()
   perf_elapsed("textview_visual_metric_signature_ms", signature_start)
@@ -4097,6 +4222,12 @@ function TextView:get_visual_row_metric_cache()
     total = total + height
   end
   local height_tree = metric_tree_build(heights, row_count)
+  local composed_rows
+  if self:has_composed_visual_rows() then
+    local rows = self:composed_visual_rows()
+    composed_rows = self.__composed_visual_row_cache
+    if composed_rows and composed_rows.entries ~= rows then composed_rows = nil end
+  end
   cache = {
     signature = signature,
     wrap_layout_generation = self.__wrap_layout_generation or 0,
@@ -4109,8 +4240,9 @@ function TextView:get_visual_row_metric_cache()
     invalidated_rows = 0,
     default_height = default_height,
     sparse_metrics = sparse_metrics,
-    -- The composed rows these heights measure, compared by later local invalidation.
-    composed_entries = self:has_composed_visual_rows() and self:composed_visual_rows() or nil,
+    line_count = #self.buffer.lines,
+    -- The composed rows these heights measure, compared when changed lines are resolved.
+    composed_rows = composed_rows,
   }
   self.__visual_metric_cache = cache
   apply_viewport_anchor(self, cache)
