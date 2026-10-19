@@ -2337,8 +2337,14 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
   if line1 and cache and cache.generation == (self.__line_render_generation or 0) then
     local requested_line1 = math.max(1, math.floor(line1))
     local requested_line2 = math.max(requested_line1, math.floor(line2 or requested_line1))
-    for line in pairs(cache.lines) do
-      if line >= requested_line1 and line <= requested_line2 then cache.lines[line] = nil end
+    -- The cache can hold every line of a long document, so a short range
+    -- clears its own lines instead of visiting every cached line.
+    if requested_line2 - requested_line1 < 256 then
+      for line = requested_line1, requested_line2 do cache.lines[line] = nil end
+    else
+      for line in pairs(cache.lines) do
+        if line >= requested_line1 and line <= requested_line2 then cache.lines[line] = nil end
+      end
     end
     for line in pairs(self.__line_width_cache or {}) do
       if line >= requested_line1 and line <= requested_line2 then self.__line_width_cache[line] = nil end
