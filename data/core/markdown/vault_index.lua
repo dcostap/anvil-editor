@@ -217,6 +217,9 @@ function Index:new(root)
     watcher_serial = 0,
     buffer_update_serials = setmetatable({}, { __mode = "k" }),
     buffer_overlay_serials = setmetatable({}, { __mode = "k" }),
+    -- Overlay requests share one counter, so a request from before an
+    -- untrack never matches a request made after the Buffer is tracked again.
+    buffer_overlay_serial = 0,
     watcher_mode = "stopped",
     show_unsupported_files = obsidian_settings.showUnsupportedFiles == true,
     diagnostics = {
@@ -1108,7 +1111,8 @@ function Index:update_buffer(buffer, opts)
   local pool = worker_pool.current_system()
   if not pool then return false end
   local text = buffer:get_text(1, 1, math.huge, math.huge)
-  local serial = (self.buffer_overlay_serials[buffer] or 0) + 1
+  self.buffer_overlay_serial = self.buffer_overlay_serial + 1
+  local serial = self.buffer_overlay_serial
   self.buffer_overlay_serials[buffer] = serial
   local old_job = self.buffer_overlay_jobs[buffer]
   if old_job then pool:cancel(old_job) end
@@ -1146,6 +1150,12 @@ function Index:update_buffer(buffer, opts)
       local snapshot = message.vault_snapshot or (message.payload and message.payload.vault_snapshot)
       if not snapshot and message.type == "final" then return end
       if not snapshot then return end
+      if not self.buffer_listeners[buffer] or self.buffer_overlay_serials[buffer] ~= serial then
+        release_vault_snapshot(snapshot)
+        core.log_quiet("Markdown vault superseded overlay released: path=%s request=%d current=%s",
+          path, serial, tostring(self.buffer_overlay_serials[buffer]))
+        return
+      end
       self.buffer_overlay_jobs[buffer] = nil
       local entry = snapshot:note(path)
       if not entry then release_vault_snapshot(snapshot); return end
