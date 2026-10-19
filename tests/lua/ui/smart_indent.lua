@@ -209,6 +209,43 @@ test.describe("smart indentation", function()
     test.same(view:get_selection_state().selections, { 3, 6, 3, 6 })
   end)
 
+  test.it("pasting a block copied from after its indentation keeps the block's shape", function(context)
+    local buffer, view = new_editor(context, "f {\n  e {\n    v,\n  }\n\n  \n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 3, 4, 4)
+    test.ok(command.perform("core:copy"))
+    buffer:set_selection(6, 3, 6, 3)
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n  e {\n    v,\n  }\n\n  e {\n    v,\n  }\n}\n")
+  end)
+
+  test.it("pasting a copied block at column one removes its source indentation", function(context)
+    local buffer, view = new_editor(context, "f {\n  e {\n    v,\n  }\n}\n", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 3, 4, 4)
+    test.ok(command.perform("core:copy"))
+    buffer:set_selection(6, 1, 6, 1)
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n  e {\n    v,\n  }\n}\ne {\n  v,\n}\n")
+  end)
+
+  test.it("external block paste aligns its closing line with its first line", function(context)
+    local buffer, view = new_editor(context, "f {\n  \n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 3, 2, 3)
+    system.set_clipboard("e {\n      v,\n    }")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n  e {\n    v,\n  }\n}\n")
+  end)
+
   test.it("multi-line paste at column one remains unchanged", function(context)
     local buffer, view = new_editor(context, "", "sample.py")
     core.set_active_view(view)

@@ -216,11 +216,15 @@ local function cut_or_copy(dv, delete)
   local full_text = ""
   local text = ""
   local copied_ranges = {}
-  core.cursor_clipboard = {}
+  core.cursor_clipboard = { first_line_indent = {} }
   core.cursor_clipboard_whole_line = {}
   for idx, line1, col1, line2, col2 in target_buffer:get_selections(true, true) do
     if line1 ~= line2 or col1 ~= col2 then
       text = target_buffer:get_text(line1, col1, line2, col2)
+      -- A selection that starts after its line's indentation copies a first
+      -- line without it. Paste needs that indentation to keep the block's shape.
+      local source_indent = target_buffer.lines[line1]:match("^[\t ]*")
+      core.cursor_clipboard.first_line_indent[idx] = source_indent:sub(1, math.min(col1 - 1, #source_indent))
       full_text = full_text == "" and text or (text .. "\n" .. full_text)
       core.cursor_clipboard_whole_line[idx] = false
       copied_ranges[#copied_ranges + 1] = { line1, col1, line2, col2 }
@@ -914,13 +918,22 @@ local function remove_indent_prefix(line, indent)
   return line
 end
 
-local function smart_paste_text(buffer, line, col, text)
+local function opens_block(line)
+  return line:find("[{%(%[]%s*$") ~= nil
+end
+
+local function closes_block(line)
+  return line:find("^[\t ]*[}%)%]]") ~= nil
+end
+
+-- `first_indent` is the indentation that preceded the copied text on its
+-- source line. It is nil for text copied outside Anvil.
+local function smart_paste_text(buffer, line, col, text, first_indent)
   text = tostring(text or "")
   if not text:find("\n", 1, true) then return text end
   local line_text = buffer.lines[line] or ""
   local before = line_text:sub(1, col - 1)
   local target_indent = before:match("^[\t ]*$") and before or leading_whitespace(line_text)
-  if target_indent == "" then return text end
 
   local parts = {}
   local start = 1
@@ -933,8 +946,19 @@ local function smart_paste_text(buffer, line, col, text)
     parts[#parts + 1] = text:sub(start, nl - 1)
     start = nl + 1
   end
+
+  if not first_indent and leading_whitespace(parts[1]) == "" and opens_block(parts[1])
+  and closes_block(parts[#parts]) then
+    -- A block copied from after its indentation ends with a closing line at
+    -- the block's own indentation.
+    first_indent = leading_whitespace(parts[#parts])
+  end
+  first_indent = first_indent or ""
+  if target_indent == "" and first_indent == "" then return text end
+
+  parts[1] = first_indent .. parts[1]
   local common_indent = common_leading_indent(parts)
-  if common_indent == "" and parts[1] and parts[1]:find("%S") then
+  if common_indent == "" and parts[1]:find("%S") then
     common_indent = leading_whitespace(parts[1])
   end
 
@@ -1282,7 +1306,10 @@ local commands = {
           transaction = paste_matching_whole_lines(dv.buffer, core.cursor_clipboard)
         else
           transaction = dv.buffer:text_input_by_selection(function(idx, line1, col1)
-            return smart_paste_text(dv.buffer, line1, col1, tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""))
+            local first_indents = core.cursor_clipboard.first_line_indent
+            return smart_paste_text(dv.buffer, line1, col1,
+              tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""),
+              first_indents and first_indents[idx])
           end, nil, { type = "paste" })
         end
       else
