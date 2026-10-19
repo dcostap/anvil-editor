@@ -133,6 +133,12 @@ public:
     return pairs;
   }
 
+  std::vector<AnvilDiffPair> compare_minimal() const {
+    std::vector<AnvilDiffPair> pairs;
+    append_shortest_edit_pairs({ 1, static_cast<int>(a_.size()), 1, static_cast<int>(b_.size()) }, pairs);
+    return pairs;
+  }
+
 private:
   static constexpr int kMaxChainLength = 64; // JGit HistogramDiff default.
 
@@ -257,10 +263,10 @@ private:
 
 } // namespace
 
-extern "C" AnvilDiffPair *anvil_diff_equal_pairs(
+static AnvilDiffPair *equal_pairs(
   const AnvilDiffLine *a, int a_count,
   const AnvilDiffLine *b, int b_count,
-  int *pair_count
+  int *pair_count, bool minimal
 ) {
   if (!pair_count) return nullptr;
   *pair_count = -1;
@@ -276,7 +282,7 @@ extern "C" AnvilDiffPair *anvil_diff_equal_pairs(
   }
   try {
     HistogramMatcher matcher(a, a_count, b, b_count);
-    const std::vector<AnvilDiffPair> pairs = matcher.compare();
+    const std::vector<AnvilDiffPair> pairs = minimal ? matcher.compare_minimal() : matcher.compare();
     const size_t allocation_count = std::max<size_t>(1, pairs.size());
     auto *result = static_cast<AnvilDiffPair *>(
       std::malloc(allocation_count * sizeof(AnvilDiffPair))
@@ -290,6 +296,22 @@ extern "C" AnvilDiffPair *anvil_diff_equal_pairs(
   } catch (...) {
     return nullptr;
   }
+}
+
+extern "C" AnvilDiffPair *anvil_diff_equal_pairs(
+  const AnvilDiffLine *a, int a_count,
+  const AnvilDiffLine *b, int b_count,
+  int *pair_count
+) {
+  return equal_pairs(a, a_count, b, b_count, pair_count, false);
+}
+
+extern "C" AnvilDiffPair *anvil_diff_minimal_equal_pairs(
+  const AnvilDiffLine *a, int a_count,
+  const AnvilDiffLine *b, int b_count,
+  int *pair_count
+) {
+  return equal_pairs(a, a_count, b, b_count, pair_count, true);
 }
 
 extern "C" void anvil_diff_pairs_free(AnvilDiffPair *pairs) {

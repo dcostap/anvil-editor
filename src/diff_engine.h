@@ -29,6 +29,17 @@ AnvilDiffPair *anvil_diff_equal_pairs(
   int *pair_count
 );
 
+/*
+ * Find the longest common subsequence of equal lines. Unlike histogram
+ * anchors, a repeated run cannot pull the alignment away from it. The cost
+ * grows with the number of edits, so callers bound the input size.
+ */
+AnvilDiffPair *anvil_diff_minimal_equal_pairs(
+  const AnvilDiffLine *a, int a_count,
+  const AnvilDiffLine *b, int b_count,
+  int *pair_count
+);
+
 void anvil_diff_pairs_free(AnvilDiffPair *pairs);
 
 #ifdef __cplusplus

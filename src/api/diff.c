@@ -9,6 +9,7 @@
 
 #define MAX_TOKENS 64
 #define SCRATCH_SIZE 1024
+#define MINIMAL_DIFF_BUDGET ((size_t)16 * 1024 * 1024)
 
 typedef AnvilDiffPair Pair;
 
@@ -226,7 +227,7 @@ static bool append_reindented_pairs(AnvilDiffLine *a, int alo, int ahi,
   return ok;
 }
 
-static Pair *build_line_pairs(lua_State *L, int Aidx, int Bidx, int *npairs) {
+static Pair *build_line_pairs(lua_State *L, int Aidx, int Bidx, bool minimal, int *npairs) {
   int n = (int)lua_rawlen(L, Aidx);
   int m = (int)lua_rawlen(L, Bidx);
   AnvilDiffLine *a_lines = SDL_malloc((size_t)(n > 0 ? n : 1) * sizeof(*a_lines));
@@ -252,7 +253,9 @@ static Pair *build_line_pairs(lua_State *L, int Aidx, int Bidx, int *npairs) {
   }
 
   int exact_count = 0;
-  Pair *exact = anvil_diff_equal_pairs(a_lines, n, b_lines, m, &exact_count);
+  Pair *exact = minimal
+    ? anvil_diff_minimal_equal_pairs(a_lines, n, b_lines, m, &exact_count)
+    : anvil_diff_equal_pairs(a_lines, n, b_lines, m, &exact_count);
   int capacity = n < m ? n : m;
   Pair *pairs = malloc((size_t)(capacity > 0 ? capacity : 1) * sizeof(*pairs));
   bool ok = exact && pairs;
@@ -552,11 +555,14 @@ static int diff_iterator(lua_State *L) {
 }
 
 /*
- * diff.diff_iter(strings_table_a, strings_table_b)
+ * diff.diff_iter(strings_table_a, strings_table_b[, mode])
  *
  * Arguments:
  *  strings_table_a a list of strings to compare against strings_table_b
  *  strings_table_b a list of strings to compare against strings_table_a
+ *  mode "histogram" (default) or "minimal". Minimal keeps the most equal
+ *       items, which suits tokens with long repeated runs. Inputs above
+ *       MINIMAL_DIFF_BUDGET use histogram anchors to bound the cost.
  *
  * Returns:
  *  An iterator that yields the differences per line for a and b
@@ -564,6 +570,9 @@ static int diff_iterator(lua_State *L) {
 static int f_diff_iter(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   luaL_checktype(L, 2, LUA_TTABLE);
+  static const char *const modes[] = { "histogram", "minimal", NULL };
+  bool minimal = luaL_checkoption(L, 3, "histogram", modes) == 1;
+  lua_settop(L, 2);
   DiffState *state = (DiffState *)lua_newuserdata(L, sizeof(DiffState));
   int state_idx = lua_gettop(L);
   memset(state, 0, sizeof(*state));
@@ -574,7 +583,8 @@ static int f_diff_iter(lua_State *L) {
   state->ai = 1;
   state->bi = 1;
   state->pi = 0;
-  state->pairs = build_line_pairs(L, 1, 2, &state->npairs);
+  minimal = minimal && (size_t)(state->lenA + 1) <= MINIMAL_DIFF_BUDGET / (size_t)(state->lenB + 1);
+  state->pairs = build_line_pairs(L, 1, 2, minimal, &state->npairs);
 
   /* Push tables and the owning userdata to the closure. */
   lua_pushvalue(L, 1);
