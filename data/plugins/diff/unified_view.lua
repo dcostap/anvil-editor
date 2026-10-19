@@ -36,14 +36,10 @@ local function change_decorations(parent, index)
     inline_ranges = function(_, _, line)
       local change = change_at(line)
       if not change then return end
+      -- Both versions are visible here, so the side-by-side insertion position markers would only add noise.
       local ranges = {}
       for _, range in ipairs(change.inline_ranges or {}) do
         ranges[#ranges + 1] = { col1 = range.col1, col2 = range.col2, color = style["diff_" .. tag .. "_inline"] }
-      end
-      -- A marker shows where the other side has text that this side lacks.
-      local marker_color = index == 2 and style.diff_inline_marker_delete or style.diff_inline_marker_insert
-      for _, marker in ipairs(change.inline_markers or {}) do
-        ranges[#ranges + 1] = { col1 = marker.col, col2 = marker.col, marker = true, color = marker_color }
       end
       return ranges
     end,

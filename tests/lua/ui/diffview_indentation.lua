@@ -78,6 +78,15 @@ local function backgrounds(side, line)
   end
 end
 
+-- The Unified Diff shows both versions, so it draws no insertion position markers.
+local function check_no_marker(surface, line, col)
+  local color_at = backgrounds(surface, line)
+  local x, y = surface:get_line_screen_position(line, col)
+  local color = color_at(x + style.caret_width / 2, y + 1)
+  test.ok(color ~= style.diff_inline_marker_insert and color ~= style.diff_inline_marker_delete,
+    "the Unified Diff must not draw inline markers")
+end
+
 test.describe("Diff View change backgrounds", function()
   test.before_each(function(context)
     -- Let the startup Workspace restore before choosing the test layout.
@@ -210,11 +219,11 @@ test.describe("Diff View change backgrounds", function()
       check(unified_source(view, 1), 1, ",", style.diff_delete_inline)
       check(unified_source(view, 2), 1, "➜", style.diff_insert_inline)
       check(unified_source(view, 2), 2, "(...)", style.diff_insert_inline)
-      check_markers(unified_source(view, 1), 2, markers)
+      for _, marker in ipairs(markers) do check_no_marker(unified_source(view, 1), 2, marker.col) end
     end
   end)
 
-  test.it("shows an inline addition or deletion marker on the unchanged side in both layouts", function(context)
+  test.it("shows an inline addition or deletion marker on the unchanged side only side by side", function(context)
     for _, mode in ipairs { "none", "trim", "ignore" } do
       for _, wrapped in ipairs { false, true } do
         for _, reverse in ipairs { false, true } do
@@ -238,7 +247,7 @@ test.describe("Diff View change backgrounds", function()
           check(side, 1)
           config.plugins.diffview.layout = "unified"
           view:update()
-          check(unified_source(view, reverse and 2 or 1), 1)
+          check_no_marker(unified_source(view, reverse and 2 or 1), 1, col)
         end
       end
     end
@@ -270,20 +279,26 @@ test.describe("Diff View change backgrounds", function()
           local change_color = reverse and style.diff_delete_inline or style.diff_insert_inline
           local marker_color = reverse and style.diff_inline_marker_delete or style.diff_inline_marker_insert
           local function check_layout(short_surface, short_line, expanded_surface, expanded_line,
-                                      short_word_color, expanded_word_color)
+                                      short_word_color, expanded_word_color, unified)
             if case.replacement_col then
               check(short_surface, short_line, case.replacement_col, short_word_color)
               check(expanded_surface, expanded_line, case.new_replacement_col or case.replacement_col, expanded_word_color)
             end
             if case.extra_col then check(expanded_surface, expanded_line, case.extra_col, change_color) end
-            if case.marker_col then check(short_surface, short_line, case.marker_col, marker_color) end
+            if case.marker_col then
+              if unified then
+                check_no_marker(short_surface, short_line, case.marker_col)
+              else
+                check(short_surface, short_line, case.marker_col, marker_color)
+              end
+            end
           end
           check_layout(short, 1, expanded, 1, style.diff_modify_inline, style.diff_modify_inline)
           config.plugins.diffview.layout = "unified"
           view:update()
           local short_word_color = reverse and style.diff_insert_inline or style.diff_delete_inline
           check_layout(unified_source(view, reverse and 2 or 1), 1, unified_source(view, reverse and 1 or 2), 1,
-            short_word_color, change_color)
+            short_word_color, change_color, true)
         end
       end
     end
