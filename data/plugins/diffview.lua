@@ -632,7 +632,12 @@ function DiffView:set_navigation_state(state, opts)
   if selection.unified and state.unified_scroll then
     restore(self.unified_view, selection.unified, state.unified_scroll)
     self.unified_view:restore_focus_state(selection.unified_focus)
-    if not self.unified then self.unified_view:select_side() end
+    if config.plugins.diffview.layout == "unified" then
+      -- A View restored before its first layout keeps this place when it becomes unified.
+      self.unified_place_restored = not self.unified
+    else
+      self.unified_view:select_side()
+    end
   elseif self.unified then
     self.unified_view:select_source(selection.side == "left" and self.buffer_view_a or self.buffer_view_b)
   end
@@ -2388,12 +2393,17 @@ function DiffView:update()
         or active == self.buffer_view_b and self.buffer_view_b
         or self.navigation_focus_side == "left" and self.buffer_view_a or self.buffer_view_b
       self.navigation_focus_side = source == self.buffer_view_a and "left" or "right"
-      unified:select_source(source)
+      if self.unified_place_restored then
+        core.log_quiet("Diff View: kept the restored unified place")
+      else
+        unified:select_source(source)
+      end
     else
       local source = unified:select_side()
       if source then self.navigation_focus_side = source == self.buffer_view_a and "left" or "right" end
     end
     self.unified = use_unified
+    self.unified_place_restored = nil
     self.mouse_router.captured = nil
     self.mouse_router:leave()
     if active == unified or active == self.buffer_view_a or active == self.buffer_view_b or active == self then

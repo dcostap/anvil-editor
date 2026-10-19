@@ -324,6 +324,44 @@ test.describe("Unified Diff View", function()
     test.equal(surface:get_selection_state().selections[2], 2)
   end)
 
+  for _, layout in ipairs { "unified", "side-by-side" } do
+    test.it("restores the " .. layout .. " scroll position in a reopened Diff View", function(context)
+      config.plugins.diffview.layout = layout
+      local before, after = {}, {}
+      for i = 1, 400 do
+        before[i] = "line " .. i
+        after[i] = (i % 40 == 0) and ("changed " .. i) or before[i]
+      end
+      local before_text, after_text = table.concat(before, "\n") .. "\n", table.concat(after, "\n") .. "\n"
+      local view, surface = open(context, before_text, after_text)
+      core.set_active_view(surface)
+      -- The wheel scrolls without moving the caret.
+      test.ok(view:on_mouse_wheel(-20, 0))
+      for _ = 1, 20 do view:update() end
+      for _, side in ipairs { view.buffer_view_a, view.buffer_view_b, view.unified_view } do
+        side.scroll.y = side.scroll.to.y
+      end
+      view:update()
+      local saved_y = surface.scroll.y
+      test.ok(saved_y > 0, "the Diff View must scroll")
+      local saved_top = surface:get_visible_line_range()
+      local state = view:get_navigation_state()
+
+      local reopened = diffview.open({
+        contents = { diffview.content.text(before_text), diffview.content.text(after_text) },
+        auto_reveal_first_change = false,
+      }, true)
+      context.other_view = reopened
+      reopened:set_navigation_state(state)
+      reopened.size.x, reopened.size.y = 800, 600
+      ready(reopened)
+      for _ = 1, 5 do reopened:update() end
+      local restored = reopened:get_focus_view()
+      test.equal(restored:get_visible_line_range(), saved_top)
+      test.equal(restored.scroll.y, saved_y)
+    end)
+  end
+
   test.it("copies only change blocks touched by the unified selection", function(context)
     local _, surface = open(context, "top\nold\na\nb\nc\nd\nlast old\nend\n",
       "top\nnew\na\nb\nc\nd\nlast new\nend\n")
