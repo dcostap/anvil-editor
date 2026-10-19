@@ -1873,7 +1873,8 @@ function callout_runtime.line_ranges(view, callout, line)
 end
 
 function callout_runtime.from_quote(view, node)
-  local _, generation = semantic_line(view, node.source.line1)
+  local instance = render_semantic_model(view, node.source.line1)
+  local generation = instance and instance.generation
   local cache = view.__markdown_live_callout_cache
   if not cache or cache.generation ~= generation then
     cache = { generation = generation, records = {} }
