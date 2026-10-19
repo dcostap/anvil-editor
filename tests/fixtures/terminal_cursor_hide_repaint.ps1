@@ -8,6 +8,9 @@ function Wait-Briefly([int]$Milliseconds) {
   while ($clock.ElapsedMilliseconds -lt $Milliseconds) { }
 }
 
+# The first call compiles Wait-Briefly and loads Stopwatch. That can take
+# longer than the hold, so do it before the repaints start.
+Wait-Briefly 4
 [Console]::Write($escape + '[?25h' + $escape + '[2J' + $escape + '[H' + 'ANVIL_REPAINT_READY')
 Start-Sleep -Milliseconds 600
 
