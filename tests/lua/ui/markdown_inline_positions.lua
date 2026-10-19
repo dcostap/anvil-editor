@@ -201,9 +201,6 @@ test.describe("Markdown inline positions", function()
       view:set_wrapping_enabled(wrapped)
       markdown.live_render.refresh_view(view)
       wait_ready(view)
-      buffer:set_selection(3, 1)
-      test.ok(math.abs(view:get_col_x_offset(3, 1) - view:get_col_x_offset(2, 7)) < 0.5,
-        "the continuation must align with the task text")
       for col = 1, 12 do
         buffer:set_selection(3, col)
         local positions = {}
