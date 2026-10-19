@@ -2,8 +2,10 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
+local linewrapping = require "core.linewrapping"
 local style = require "core.style"
 local TextView = require "core.textview"
+local translate = require "core.buffer.translate"
 
 -- The Unified Diff edits one Diff Side's own Buffer. Changed lines of the
 -- other side appear as rows between its lines; they are not Buffer text.
@@ -130,12 +132,45 @@ local function sorted_selection(selections, index)
   return line1, col1, line2, col2
 end
 
--- A selection includes a group when it spans the boundary between two lines,
--- or reaches the end of the Buffer for a group after the last line.
-local function selection_crosses(lines, boundary, line1, col1, line2, col2)
-  if line1 == line2 and col1 == col2 then return false end
-  if boundary <= #lines then return line1 < boundary and line2 >= boundary end
-  return line2 == #lines and col2 >= #lines[#lines]
+-- A Unified Position is `{ line, col }` in the Buffer, or `{ line, col, other = true }`
+-- in a line of the other side. Its key orders it by where it is drawn: a group's
+-- rows come before the base line at its boundary.
+local function position_key(view, pos)
+  if pos.other then return view.other_lines[pos.line].group.boundary, 0, pos.line, pos.col end
+  local lines = view.buffer.lines
+  -- The end of the Buffer includes a group placed after the last line.
+  if pos.line == #lines and pos.col >= #lines[#lines] then return #lines + 1, 1, 0, 0 end
+  return pos.line, 1, 0, pos.col
+end
+
+local function compare_positions(view, a, b)
+  local a1, a2, a3, a4 = position_key(view, a)
+  local b1, b2, b3, b4 = position_key(view, b)
+  if a1 ~= b1 then return a1 < b1 and -1 or 1 end
+  if a2 ~= b2 then return a2 < b2 and -1 or 1 end
+  if a3 ~= b3 then return a3 < b3 and -1 or 1 end
+  if a4 ~= b4 then return a4 < b4 and -1 or 1 end
+  return 0
+end
+
+local function ordered_positions(view, anchor, caret)
+  if compare_positions(view, anchor, caret) > 0 then return caret, anchor end
+  return anchor, caret
+end
+
+-- Call `fn(group, line1, col1, line2, col2)` with the other-side text of each
+-- group between two positions. `col2` past a line's last column includes its newline.
+local function each_other_range(view, start, finish, fn)
+  local other_lines = view.other_surface.buffer.lines
+  for _, boundary in ipairs(view.projection.boundaries) do
+    local group = view.projection.groups[boundary]
+    local last = group.lines[#group.lines]
+    local from = { line = group.lines[1], col = 1, other = true }
+    local to = { line = last, col = #other_lines[last] + 1, other = true }
+    if compare_positions(view, start, from) > 0 then from = start end
+    if compare_positions(view, finish, to) < 0 then to = finish end
+    if compare_positions(view, from, to) < 0 then fn(group, from.line, from.col, to.line, to.col) end
+  end
 end
 
 local function group_first_row(view, group)
@@ -180,16 +215,22 @@ local function boundary_position(view, boundary)
   return #lines, #lines[#lines]
 end
 
-local function hit_other_row(view, row)
+-- Records the other side's line and column under the pointer, and gives
+-- TextView the Buffer position at the group's boundary.
+local function hit_other_row(view, row, x, y)
+  local surface = view:sync_other_surface()
+  local line, col = row.other_line, 1
+  if surface.wrapped_settings then
+    local idx = linewrapping.get_line_idx_col_count(surface, line)
+    local rows = surface:get_visual_row_count_for_line(line)
+    local offset = common.clamp(math.floor(y / surface:get_line_height()), 0, rows - 1)
+    local hit_line, hit_col = linewrapping.get_line_col_from_index_and_x(surface, idx + offset, x)
+    if hit_line == line then col = hit_col end
+  else
+    col = surface:get_x_offset_col(line, x)
+  end
+  view.resolved_other_position = { line = line, col = common.clamp(col, 1, #surface.buffer.lines[line]), other = true }
   return boundary_position(view, row.group.boundary)
-end
-
-local function click_other_row(view, row, button)
-  if button ~= "left" then return end
-  local previous = view.__pressed_other_focus
-  local extend = keymap.modkeys["shift"] and previous and previous.group == row.group
-  view:focus_other_lines(row.group, extend and previous.anchor or row.other_line, row.other_line)
-  view:keep_viewport_for_selection()
 end
 
 function UnifiedView:new(parent)
@@ -224,18 +265,21 @@ function UnifiedView:new(parent)
     if event == "expand" and fold.metadata then parent:expand_fold(fold.metadata.diff_fold) end
   end)
   self:add_selection_listener("diff-view", function(_, state)
-    local focus = self.other_focus
+    local selection = self.other_selection
     local selections = state and state.selections or {}
-    if focus and not (#selections == 4 and selections[1] == focus.line and selections[2] == focus.col
-        and selections[3] == focus.line and selections[4] == focus.col) then
-      self.other_focus = nil
+    if selection then
+      local base = selection.base
+      if not (#selections == 4 and selections[1] == base[1] and selections[2] == base[2]
+          and selections[3] == base[3] and selections[4] == base[4]) then
+        self.other_selection = nil
+      end
     end
     self:refresh_other_selection()
     local reset = parent.request.user_data and parent.request.user_data.on_navigation_state_change
     if reset then reset() end
   end)
   self:add_edit_guard("diff-view", function()
-    if self.other_focus then
+    if self.other_selection then
       return false, self.other_index == 1 and "Removed lines are read-only" or "Added lines are read-only"
     end
     return parent:side_edit_permission(self.base_index)
@@ -297,7 +341,7 @@ function UnifiedView:update()
 end
 
 function UnifiedView:set_projection(projection)
-  local focus = self.other_focus
+  local focus = self:get_focus_state()
   self.projection = projection
   self.projection_generation = self.projection_generation + 1
   self.other_lines = {}
@@ -308,7 +352,7 @@ function UnifiedView:set_projection(projection)
       local row = {
         id = tostring(line), other_line = line, group = group,
         draw = draw_other_row, draw_gutter = draw_other_row_gutter,
-        hit_test = hit_other_row, on_click = click_other_row,
+        hit_test = hit_other_row,
       }
       group.rows[#group.rows + 1] = row
       self.other_lines[line] = row
@@ -324,7 +368,7 @@ function UnifiedView:set_projection(projection)
   self.__overview_geometry = nil
   self:invalidate_visual_rows(OTHER_ROWS)
   self:invalidate_visual_metrics(OTHER_ROWS)
-  self.other_focus = nil
+  self.other_selection = nil
   if focus then self:restore_focus_state(focus) end
   self:refresh_other_selection()
   local pending = self.pending_source
@@ -334,136 +378,278 @@ function UnifiedView:set_projection(projection)
   end
 end
 
----Focus lines of the other side. They are read-only, so the hidden caret
----waits at their boundary until the selection moves.
-function UnifiedView:focus_other_lines(group, anchor, line, opts)
-  local caret_line, caret_col = boundary_position(self, group.boundary)
-  self.other_focus = {
-    group = group, anchor = anchor,
-    line1 = math.min(anchor, line), line2 = math.max(anchor, line),
-    line = caret_line, col = caret_col,
-  }
-  self:with_selection_state(function()
-    if opts and opts.reveal then
-      self:select_and_reveal(caret_line, caret_col, caret_line, caret_col, { instant = true })
-    else
-      self.buffer:set_selection(caret_line, caret_col)
-    end
-  end)
+-- The Buffer position where a selection end in the other side's lines meets
+-- the Buffer: the boundary of that end's group.
+local function buffer_position(view, pos)
+  if pos.other then return boundary_position(view, view.other_lines[pos.line].group.boundary) end
+  return pos.line, pos.col
+end
+
+---Select from `anchor` to `caret`, Unified Positions that can lie in the
+---other side's lines. The Buffer selection keeps the part between them that
+---is Buffer text; the other side's lines stay read-only.
+function UnifiedView:select_unified(anchor, caret, opts)
+  local reveal = opts and opts.reveal
+  local function apply(line1, col1, line2, col2)
+    self:with_selection_state(function()
+      if reveal then
+        self:select_and_reveal(line1, col1, line2, col2, { instant = true })
+      else
+        self.buffer:set_selection(line1, col1, line2, col2)
+      end
+    end)
+  end
+  if anchor.other or caret.other then
+    local start, finish = ordered_positions(self, anchor, caret)
+    local line1, col1 = buffer_position(self, start)
+    local line2, col2 = buffer_position(self, finish)
+    local base = start == anchor and { line2, col2, line1, col1 } or { line1, col1, line2, col2 }
+    self.other_selection = { anchor = anchor, caret = caret, base = base }
+    apply(base[1], base[2], base[3], base[4])
+  else
+    self.other_selection = nil
+    apply(caret.line, caret.col, anchor.line, anchor.col)
+  end
+  if not reveal then self:keep_viewport_for_selection() end
   self:refresh_other_selection()
   core.redraw = true
-  core.log_quiet("Unified Diff focused %s lines %d-%d",
-    self.other_index == 1 and "removed" or "added", self.other_focus.line1, self.other_focus.line2)
 end
 
 function UnifiedView:get_focus_state()
-  local focus = self.other_focus
-  return focus and { anchor = focus.anchor, line1 = focus.line1, line2 = focus.line2 } or nil
+  local selection = self.other_selection
+  return selection and { anchor = selection.anchor, caret = selection.caret } or nil
 end
 
 function UnifiedView:restore_focus_state(state)
-  local row = state and self.other_lines[state.anchor]
-  if not row then return false end
-  local last = state.anchor == state.line1 and state.line2 or state.line1
-  local last_row = self.other_lines[last]
-  self:focus_other_lines(row.group, state.anchor, last_row and last_row.group == row.group and last or state.anchor)
+  if not (state and state.anchor and state.caret) then return false end
+  local function valid(pos)
+    if pos.other then
+      local line = self.other_surface.buffer.lines[pos.line]
+      return self.other_lines[pos.line] ~= nil
+        and { line = pos.line, col = common.clamp(pos.col, 1, #line + 1), other = true }
+    end
+    local lines = self.buffer.lines
+    local line = common.clamp(pos.line, 1, #lines)
+    return { line = line, col = common.clamp(pos.col, 1, #lines[line]) }
+  end
+  local anchor, caret = valid(state.anchor), valid(state.caret)
+  if not (anchor and caret) then return false end
+  self:select_unified(anchor, caret)
   return true
 end
 
----Return the inclusive other-side line range a patch scope should select.
-function UnifiedView:get_other_focus_interval()
-  local focus = self.other_focus
-  if not focus then return nil end
-  return { focus.line1, focus.line2, side = self.other_index == 1 and "left" or "right" }
+---Return the inclusive line ranges a patch scope should select when the
+---selection reaches the other side's lines, or nil to use the Buffer selection.
+function UnifiedView:get_patch_intervals(scope_kind)
+  local selection = self.other_selection
+  if not selection then return nil end
+  local function side(index) return index == 1 and "left" or "right" end
+  if scope_kind == "cursor" then
+    local caret = selection.caret
+    return { { caret.line, caret.line, side = side(caret.other and self.other_index or self.base_index) } }
+  end
+  local intervals = {}
+  local function add(index, line1, line2, col2)
+    intervals[#intervals + 1] = { line1, line2 - ((col2 == 1 and line2 > line1) and 1 or 0), side = side(index) }
+  end
+  local start, finish = ordered_positions(self, selection.anchor, selection.caret)
+  each_other_range(self, start, finish, function(_, line1, _, line2, col2) add(self.other_index, line1, line2, col2) end)
+  local line1, col1, line2, col2 = sorted_selection(selection.base, 1)
+  if line1 ~= line2 or col1 ~= col2 then add(self.base_index, line1, line2, col2) end
+  return intervals
 end
 
 function UnifiedView:refresh_other_selection()
   local surface = self.other_surface
   local other_lines = surface.buffer.lines
   local selections = {}
-  local function add(line1, line2)
-    local end_line, end_col = line2 + 1, 1
-    if line2 >= #other_lines then end_line, end_col = line2, #other_lines[line2] end
-    for _, value in ipairs { line1, 1, end_line, end_col } do selections[#selections + 1] = value end
+  local function add(_, line1, col1, line2, col2)
+    -- The surface places a range that includes a line's newline at the next line.
+    if col2 > #other_lines[line2] then
+      if line2 < #other_lines then line2, col2 = line2 + 1, 1 else col2 = #other_lines[line2] end
+    end
+    for _, value in ipairs { line1, col1, line2, col2 } do selections[#selections + 1] = value end
   end
-  local focus = self.other_focus
-  if focus then
-    add(focus.line1, focus.line2)
+  local selection = self.other_selection
+  if selection then
+    local start, finish = ordered_positions(self, selection.anchor, selection.caret)
+    each_other_range(self, start, finish, add)
   else
     local state = self:get_selection_state().selections
     for index = 1, #state, 4 do
       local line1, col1, line2, col2 = sorted_selection(state, index)
-      for _, boundary in ipairs(self.projection.boundaries) do
-        if selection_crosses(self.buffer.lines, boundary, line1, col1, line2, col2) then
-          local group = self.projection.groups[boundary]
-          add(group.lines[1], group.lines[#group.lines])
-        end
-      end
+      each_other_range(self, { line = line1, col = col1 }, { line = line2, col = col2 }, add)
     end
   end
   if #selections == 0 then selections = { 1, 1, 1, 1 } end
   surface:set_selection_state({ selections = selections, last_selection = 1 })
 end
 
-local function group_text(view, group, line1, line2)
+local function other_text(view, line1, col1, line2, col2)
   local lines = view.other_surface.buffer.lines
-  local text = {}
-  for line = line1 or group.lines[1], line2 or group.lines[#group.lines] do
-    text[#text + 1] = lines[line]
-  end
-  return table.concat(text)
+  if line1 == line2 then return lines[line1]:sub(col1, col2 - 1) end
+  local parts = { lines[line1]:sub(col1) }
+  for line = line1 + 1, line2 - 1 do parts[#parts + 1] = lines[line] end
+  parts[#parts + 1] = lines[line2]:sub(1, col2 - 1)
+  return table.concat(parts)
+end
+
+-- Return the text between two positions in visual order, and whether it
+-- includes lines of the other side.
+local function selection_text(view, start, finish)
+  local lines = view.buffer.lines
+  local parts, crossed = {}, false
+  local line, col
+  if not start.other then line, col = start.line, start.col end
+  each_other_range(view, start, finish, function(group, line1, col1, line2, col2)
+    if line then
+      local target_line, target_col = boundary_position(view, group.boundary)
+      parts[#parts + 1] = view.buffer:get_text(line, col, target_line, target_col)
+      if group.boundary > #lines and not table.concat(parts):match("\n$") then parts[#parts + 1] = "\n" end
+    end
+    parts[#parts + 1] = other_text(view, line1, col1, line2, col2)
+    line, col = boundary_position(view, group.boundary)
+    crossed = true
+  end)
+  if not finish.other then parts[#parts + 1] = view.buffer:get_text(line, col, finish.line, finish.col) end
+  return table.concat(parts), crossed
 end
 
 ---Return copied text that includes other-side lines, or nil to copy Buffer text.
 function UnifiedView:get_copy_text()
-  local focus = self.other_focus
-  if focus then return group_text(self, focus.group, focus.line1, focus.line2) end
+  local selection = self.other_selection
+  if selection then
+    local start, finish = ordered_positions(self, selection.anchor, selection.caret)
+    -- A caret alone copies its whole line, as in the Buffer.
+    if compare_positions(self, start, finish) == 0 then return self.other_surface.buffer.lines[start.line] end
+    return (selection_text(self, start, finish))
+  end
   local selections = self:get_selection_state().selections
   if #selections ~= 4 then return nil end
   local line1, col1, line2, col2 = sorted_selection(selections, 1)
-  local lines = self.buffer.lines
-  local parts, line, col, crossed = {}, line1, col1, false
-  for _, boundary in ipairs(self.projection.boundaries) do
-    if selection_crosses(lines, boundary, line1, col1, line2, col2) then
-      local target_line, target_col = boundary_position(self, boundary)
-      if boundary > #lines then target_line, target_col = line2, col2 end
-      parts[#parts + 1] = self.buffer:get_text(line, col, target_line, target_col)
-      line, col = target_line, target_col
-      if boundary > #lines and not table.concat(parts):match("\n$") then parts[#parts + 1] = "\n" end
-      parts[#parts + 1] = group_text(self, self.projection.groups[boundary])
-      crossed = true
-    end
-  end
-  if not crossed then return nil end
-  parts[#parts + 1] = self.buffer:get_text(line, col, line2, col2)
-  return table.concat(parts)
+  if line1 == line2 and col1 == col2 then return nil end
+  local text, crossed = selection_text(self, { line = line1, col = col1 }, { line = line2, col = col2 })
+  return crossed and text or nil
 end
 
-function UnifiedView:draw_caret(...)
-  if self.other_focus then return end
-  return UnifiedView.super.draw_caret(self, ...)
+-- A caret in the other side's lines is drawn there instead of at the boundary.
+function UnifiedView:draw_caret(x, y, line, col, ...)
+  local selection = self.other_selection
+  local caret = selection and selection.caret
+  if caret and caret.other then
+    local lines = self.other_surface.buffer.lines
+    x, y = self:get_source_screen_position(self.other_index, caret.line, math.min(caret.col, #lines[caret.line]))
+    if not x then return end
+  end
+  return UnifiedView.super.draw_caret(self, x, y, line, col, ...)
+end
+
+---Return the Unified Position under a screen point.
+function UnifiedView:resolve_unified_position(x, y)
+  self.resolved_other_position = nil
+  local line, col = self:resolve_screen_position(x, y)
+  local other = self.resolved_other_position
+  self.resolved_other_position = nil
+  self.resolved_provider_row = nil
+  return other or { line = line, col = col }
+end
+
+local function snap_position(view, pos, snap, at_end)
+  local buffer = pos.other and view.other_surface.buffer or view.buffer
+  local line, col = pos.line, 1
+  if snap == "word" then
+    line, col = (at_end and translate.end_of_word or translate.start_of_word)(buffer, pos.line, pos.col)
+    if line ~= pos.line then line, col = pos.line, pos.col end
+  elseif at_end then
+    local group_lines = pos.other and view.other_lines[pos.line].group.lines
+    local last = group_lines and group_lines[#group_lines] or #buffer.lines
+    if pos.line < last then
+      line = pos.line + 1
+    else
+      col = #buffer.lines[pos.line] + (pos.other and 1 or 0)
+    end
+  end
+  return { line = line, col = col, other = pos.other }
+end
+
+-- Widen a pointer selection to whole words or lines, keeping its direction.
+local function snap_range(view, anchor, caret, snap)
+  if snap ~= "word" and snap ~= "lines" then return anchor, caret end
+  local start, finish = ordered_positions(view, anchor, caret)
+  start, finish = snap_position(view, start, snap, false), snap_position(view, finish, snap, true)
+  if compare_positions(view, anchor, caret) > 0 then return finish, start end
+  return start, finish
 end
 
 function UnifiedView:on_mouse_pressed(button, x, y, clicks)
-  local focus = self.other_focus
-  if button == "left" and focus then
-    -- A press elsewhere ends the focus even when the caret stays put.
-    self.other_focus = nil
-    self.__pressed_other_focus = focus
+  if button ~= "left" or self.hovering_gutter or self:scrollbar_hovering() then
+    return UnifiedView.super.on_mouse_pressed(self, button, x, y, clicks)
   end
-  local handled = UnifiedView.super.on_mouse_pressed(self, button, x, y, clicks)
-  self.__pressed_other_focus = nil
-  if focus and not self.other_focus then
-    self:refresh_other_selection()
-    core.redraw = true
+  local pos = self:resolve_unified_position(x, y)
+  local selection = self.other_selection
+  local shift = keymap.modkeys["shift"]
+  if not pos.other and not (shift and selection) then
+    -- A press in Buffer text ends the selection even when the caret stays put.
+    self.other_selection = nil
+    local handled = UnifiedView.super.on_mouse_pressed(self, button, x, y, clicks)
+    if selection then
+      self:refresh_other_selection()
+      core.redraw = true
+    end
+    return handled
   end
-  return handled
+  self.buffer:clear_search_selections()
+  local anchor = pos
+  if shift then
+    local state = self:get_selection_state().selections
+    anchor = selection and selection.anchor or { line = state[3], col = state[4] }
+  end
+  -- Click counts cycle like the keymap's click bindings.
+  local click_number = (clicks - 1) % config.max_clicks + 1
+  local snap = not shift and (click_number == 2 and "word" or click_number == 3 and "lines") or nil
+  self.unified_drag = { anchor = anchor, snap = snap }
+  self:select_unified(snap_range(self, anchor, pos, snap))
+  core.blink_reset()
+  core.log_quiet("Unified Diff selection started in %s line %d",
+    pos.other and (self.other_index == 1 and "removed" or "added") or "Buffer", pos.line)
+  return true
 end
 
----Return the Diff Side index, line and column of the caret or focused line.
+function UnifiedView:on_mouse_moved(x, y, ...)
+  local drag = self.unified_drag
+  -- A refreshed comparison can remove the line where the drag started.
+  if drag and drag.anchor.other and not self.other_lines[drag.anchor.line] then
+    drag, self.unified_drag = nil, nil
+  end
+  local buffer_drag = self.mouse_selecting
+  -- Ctrl adds carets instead, and keeps them in Buffer text.
+  if not drag and buffer_drag and not keymap.modkeys["ctrl"] then
+    local pos = self:resolve_unified_position(x, y)
+    if pos.other then
+      -- A drag that started in Buffer text continues into the other side's lines.
+      drag = { anchor = { line = buffer_drag[1], col = buffer_drag[2] }, snap = buffer_drag[3] }
+      self.unified_drag = drag
+      self.mouse_selecting = nil
+    end
+  end
+  local handled = UnifiedView.super.on_mouse_moved(self, x, y, ...)
+  if not drag then return handled end
+  self:select_unified(snap_range(self, drag.anchor, self:resolve_unified_position(x, y), drag.snap))
+  return true
+end
+
+function UnifiedView:on_mouse_released(...)
+  self.unified_drag = nil
+  return UnifiedView.super.on_mouse_released(self, ...)
+end
+
+---Return the Diff Side index, line and column of the caret.
 function UnifiedView:source_position()
-  local focus = self.other_focus
-  if focus then return self.other_index, focus.line1, 1 end
+  local selection = self.other_selection
+  local caret = selection and selection.caret
+  if caret and caret.other then
+    return self.other_index, caret.line, math.min(caret.col, #self.other_surface.buffer.lines[caret.line])
+  end
   local selections = self:get_selection_state().selections
   return self.base_index, selections[1], selections[2]
 end
@@ -501,9 +687,10 @@ function UnifiedView:select_source(source, state)
     self.pending_source = { view = source, state = state }
     return
   end
-  local row = self.other_lines[selection[1]]
-  if row then
-    self:focus_other_lines(row.group, selection[1], selection[1], { reveal = true })
+  if self.other_lines[selection[1]] then
+    local caret = { line = selection[1], col = selection[2], other = true }
+    local anchor = self.other_lines[selection[3]] and { line = selection[3], col = selection[4], other = true } or caret
+    self:select_unified(anchor, caret, { reveal = true })
     return
   end
   local line = parent.diff_model:map_line(side_key(self.other_index), selection[1])
@@ -520,12 +707,23 @@ function UnifiedView:select_side()
     return pending.view
   end
   local parent = self.diff_view_parent
-  local focus = self.other_focus
-  local source = side_view(parent, focus and self.other_index or self.base_index)
+  local other_selection = self.other_selection
+  local caret = other_selection and other_selection.caret
+  local on_other = caret and caret.other
+  local source = side_view(parent, on_other and self.other_index or self.base_index)
   local selection = self:get_selection_state().selections
   source:with_selection_state(function()
-    if focus then
-      source:select_and_reveal(focus.line1, 1, focus.line1, 1, { instant = true })
+    if on_other then
+      local lines = source.buffer.lines
+      -- A range that includes a line's newline ends at the next line.
+      local function place(pos)
+        if pos.col > #lines[pos.line] and pos.line < #lines then return pos.line + 1, 1 end
+        return pos.line, math.min(pos.col, #lines[pos.line])
+      end
+      local anchor = other_selection.anchor.other and other_selection.anchor or caret
+      local line1, col1 = place(caret)
+      local line2, col2 = place(anchor)
+      source:select_and_reveal(line1, col1, line2, col2, { instant = true })
     else
       source:select_and_reveal(selection[1], selection[2], selection[3], selection[4], { instant = true })
     end

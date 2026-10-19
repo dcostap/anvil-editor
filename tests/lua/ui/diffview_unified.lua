@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
 local diffview = require "plugins.diffview"
+local keymap = require "core.keymap"
 local test = require "core.test"
 local style = require "core.style"
 
@@ -38,6 +39,19 @@ local function click_source_line(surface, index, line, col)
   surface:on_mouse_moved(x + 1, y + 1, 0, 0)
   surface:on_mouse_pressed("left", x + 1, y + 1, 1)
   surface:on_mouse_released("left", x + 1, y + 1)
+end
+
+local function drag_source_text(surface, from, to, clicks)
+  local x1, y1 = surface:get_source_screen_position(from[1], from[2], from[3])
+  local x2, y2 = surface:get_source_screen_position(to[1], to[2], to[3])
+  test.ok(x1 and x2, "both source positions must be visible")
+  surface:on_mouse_moved(x1 + 1, y1 + 1, 0, 0)
+  -- Core gives a press the View leaves unhandled to the keymap's click commands.
+  if not surface:on_mouse_pressed("left", x1 + 1, y1 + 1, clicks or 1) then
+    keymap.on_mouse_pressed("left", x1 + 1, y1 + 1, clicks or 1)
+  end
+  surface:on_mouse_moved(x2 + 1, y2 + 1, 0, 0)
+  surface:on_mouse_released("left", x2 + 1, y2 + 1)
 end
 
 local function normalize_path(path)
@@ -182,6 +196,50 @@ test.describe("Unified Diff View", function()
     test.ok(surface:can_edit("test"))
     target = view:get_path_target()
     test.equal(normalize_path(target.path), normalize_path(USERDIR) .. "/after.lua")
+  end)
+
+  test.it("selects part of a removed line with the mouse", function(context)
+    local _, surface = open(context, "top\nold text\nbottom\n", "top\nnew text\nbottom\n")
+    core.set_active_view(surface)
+    drag_source_text(surface, { 1, 2, 1 }, { 1, 2, 4 })
+    test.equal(copy(surface), "old")
+    local allowed, reason = surface:can_edit("test")
+    test.ok(not allowed)
+    test.equal(reason, "Removed lines are read-only")
+  end)
+
+  test.it("selects across removed and added lines in either drag direction", function(context)
+    local _, surface = open(context, "top\nold text\nbottom\n", "top\nnew text\nbottom\n")
+    core.set_active_view(surface)
+    drag_source_text(surface, { 1, 2, 5 }, { 2, 2, 4 })
+    test.equal(copy(surface), "text\nnew")
+    drag_source_text(surface, { 2, 2, 4 }, { 1, 2, 5 })
+    test.equal(copy(surface), "text\nnew")
+    drag_source_text(surface, { 2, 1, 2 }, { 1, 2, 4 })
+    test.equal(copy(surface), "op\nold")
+  end)
+
+  test.it("selects text on a later wrapped row of a removed line", function(context)
+    local words = {}
+    for i = 1, 80 do words[i] = string.format("w%02d", i) end
+    local long = table.concat(words, " ")
+    local view, surface = open(context, "top\n" .. long .. "\nbottom\n", "top\nnew\nbottom\n")
+    core.set_active_view(surface)
+    surface:set_wrapping_enabled(true)
+    view:update()
+    local col = long:find("w70", 1, true)
+    local _, first_y = surface:get_source_screen_position(1, 2, 1)
+    local _, wrapped_y = surface:get_source_screen_position(1, 2, col)
+    test.ok(wrapped_y > first_y, "the removed line must wrap at this width")
+    drag_source_text(surface, { 1, 2, col }, { 1, 2, col + 7 })
+    test.equal(copy(surface), "w70 w71")
+  end)
+
+  test.it("selects a word of a removed line on double-click", function(context)
+    local _, surface = open(context, "top\nold text\nbottom\n", "top\nnew text\nbottom\n")
+    core.set_active_view(surface)
+    drag_source_text(surface, { 1, 2, 6 }, { 1, 2, 6 }, 2)
+    test.equal(copy(surface), "text")
   end)
 
   test.it("keeps the selected source location and focus when the layout changes", function(context)

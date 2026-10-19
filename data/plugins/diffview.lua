@@ -2707,11 +2707,11 @@ local function copy_diff_patch(scope_kind)
     local function append_interval(first, last)
       scope.intervals[#scope.intervals + 1] = { first, last }
     end
-    -- A focused removed line of a Unified Diff selects its own change block.
-    local focus = parent and view == parent.unified_view and view:get_other_focus_interval()
-    if focus then scope.intervals[1] = focus end
+    -- A Unified Diff selection in the other side's lines selects their change blocks.
+    local intervals = parent and view == parent.unified_view and view:get_patch_intervals(scope_kind)
+    if intervals then scope.intervals = intervals end
     with_textview_selection(view, function()
-      if focus then
+      if intervals then
         return
       elseif scope_kind == "cursor" then
         local line = view.buffer:get_selection()
