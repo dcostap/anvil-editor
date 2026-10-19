@@ -30,6 +30,12 @@ datadir="$rundir/share/anvil"
 workdir="$rundir/work"
 userdir="$rundir/user"
 
+# A Terminal Session host from the previous run can hold its files for a few
+# seconds after the editor exits.
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  rm -rf "$rundir" 2>/dev/null && break
+  sleep 0.5
+done
 rm -rf "$rundir"
 mkdir -p "$bindir" "$datadir" "$datadir/core" "$workdir/tests" "$userdir"
 
@@ -54,13 +60,21 @@ fi
 if [ -d "$sourcedir/subprojects/plugins" ]; then
   cp -a "$sourcedir/subprojects/plugins/plugins/"language_* "$datadir/plugins/" 2>/dev/null || true
 fi
+# List ppm binaries in a directory. The source tree also has a ppm.json
+# manifest, and the plugin manager fails to load without a binary.
+ppm_binaries() {
+  local file
+  for file in "$1"/ppm.*; do
+    [ -f "$file" ] && [ "${file##*.}" != json ] && printf '%s\n' "$file"
+  done
+  return 0
+}
 if [ -d "$sourcedir/subprojects/ppm" ]; then
-  if [ -d "$builddir/subprojects/ppm" ] && ls "$builddir"/subprojects/ppm/ppm.* >/dev/null 2>&1; then
+  ppm_files=$(ppm_binaries "$builddir/subprojects/ppm")
+  if [ -z "$ppm_files" ]; then ppm_files=$(ppm_binaries "$sourcedir/subprojects/ppm"); fi
+  if [ -n "$ppm_files" ]; then
     cp -a "$sourcedir/subprojects/ppm/plugins/plugin_manager" "$datadir/plugins"
-    cp -a "$builddir"/subprojects/ppm/ppm.* "$datadir/plugins/plugin_manager/"
-  elif ls "$sourcedir"/subprojects/ppm/ppm.* >/dev/null 2>&1; then
-    cp -a "$sourcedir/subprojects/ppm/plugins/plugin_manager" "$datadir/plugins"
-    cp "$sourcedir"/subprojects/ppm/ppm.* "$datadir/plugins/plugin_manager/" 2>/dev/null || true
+    while IFS= read -r file; do cp -a "$file" "$datadir/plugins/plugin_manager/"; done <<<"$ppm_files"
   fi
   if [ -d "$datadir/plugins/plugin_manager" ]; then
     mkdir -p "$datadir/libraries"
