@@ -235,7 +235,12 @@ local function use_buffer_fallback(buffer, error_message)
 	state.base_from_head_path = false
 	state.loading = false
 	state.background_reload = false
-	if load_changes_baseline(buffer) then return state end
+	if load_changes_baseline(buffer) then
+		-- Reload replaces the text without calling Buffer:on_text_change.
+		-- Refresh markers even when the Changes Baseline is already active.
+		schedule_local_diff(buffer, "buffer-fallback")
+		return state
+	end
 	if state.initial_text and not buffer.new_file and not buffer.binary then
 		if activate_changes_baseline(buffer, state.initial_text, "automatic", true) then return state end
 	end

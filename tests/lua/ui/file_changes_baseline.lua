@@ -215,6 +215,39 @@ test.describe("Changes Baseline file changes", function()
       "reopened file did not retain its Changes Baseline")
   end)
 
+  test.it("updates non-Git file changes after an external edit and reload", function(context)
+    local path = core.temp_filename(".txt", os.getenv("TEMP") or "/tmp")
+    context.path = path
+    local function write_file(contents)
+      local file = assert(io.open(path, "wb"))
+      assert(file:write(contents))
+      assert(file:close())
+    end
+    write_file("old\nkeep\n")
+
+    local buffer = Buffer(path, path, false)
+    local view = Editor(buffer)
+    context.buffer = buffer
+    context.view = view
+    core.active_view = view
+    wait_until(function()
+      return file_changes.get_patch_source(buffer) ~= nil and file_changes.is_settled(buffer)
+    end)
+    test.equal(file_change_count(view), 0)
+
+    write_file("new\nkeep\n")
+    buffer:reload()
+    wait_until(function() return file_changes.is_settled(buffer) end)
+    test.equal(file_change_count(view), 1, "reload did not show the external change")
+    test.ok(command.perform("diff:copy_diff_patch_for_file"))
+    test.contains(system.get_clipboard(), "-old\n+new\n")
+
+    write_file("old\nkeep\n")
+    buffer:reload()
+    wait_until(function() return file_changes.is_settled(buffer) end)
+    test.equal(file_change_count(view), 0, "reload kept markers after the external change was reverted")
+  end)
+
   test.it("does not reuse a Changes Baseline after a file is recreated", function(context)
     local path = USERDIR .. PATHSEP .. "recreated-file-baseline-" .. system.get_process_id()
       .. "-" .. math.floor(system.get_time() * 1000000) .. ".txt"
