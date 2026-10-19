@@ -540,7 +540,6 @@ function DiffView:new(a, b, compare_type, names)
 
   self.buffer_view_a = TextView(buffer_a)
   self.buffer_view_b = TextView(buffer_b)
-  self.unified_view = UnifiedView(self)
   self.mouse_router = MouseRouter(self, function(owner, x, y)
     return owner:mouse_side_at(x, y)
   end)
@@ -559,6 +558,7 @@ function DiffView:new(a, b, compare_type, names)
     a = content_editable(self.request, self.request.contents[1]),
     b = content_editable(self.request, self.request.contents[2]),
   }
+  self:replace_unified_view()
 
   self.buffer_view_a.diff_view_parent = self
   self.buffer_view_b.diff_view_parent = self
@@ -606,6 +606,7 @@ function DiffView:get_navigation_state()
       left = self.buffer_view_a:get_selection_state(),
       right = self.buffer_view_b:get_selection_state(),
       unified = self.unified and self.unified_view:get_selection_state() or nil,
+      unified_focus = self.unified and self.unified_view:get_focus_state() or nil,
     },
     left_scroll = { x = self.buffer_view_a.scroll.x, y = self.buffer_view_a.scroll.y },
     right_scroll = { x = self.buffer_view_b.scroll.x, y = self.buffer_view_b.scroll.y },
@@ -630,6 +631,7 @@ function DiffView:set_navigation_state(state, opts)
   restore(self.buffer_view_b, selection.right, state.right_scroll)
   if selection.unified and state.unified_scroll then
     restore(self.unified_view, selection.unified, state.unified_scroll)
+    self.unified_view:restore_focus_state(selection.unified_focus)
     if not self.unified then self.unified_view:select_side() end
   elseif self.unified then
     self.unified_view:select_source(selection.side == "left" and self.buffer_view_a or self.buffer_view_b)
@@ -673,6 +675,7 @@ function DiffView:swap_sides()
   self.request.user_data.diff_fold_state = nil
   self.request_assigned = false
   self.views_patched = false
+  self:replace_unified_view()
   self:install_view_integrations()
   self:assign_request()
   self:update_diff()
@@ -790,8 +793,7 @@ function DiffView:update_diff(scroll_source)
     }
     local model = diff_model.compute(self.buffer_view_a.buffer.lines, self.buffer_view_b.buffer.lines, compute_opts)
     local projection_started = system.get_time()
-    local projection = UnifiedView.project(model, self.buffer_view_a.buffer.lines,
-      self.buffer_view_b.buffer.lines, { should_yield = function()
+    local projection = UnifiedView.project(model, self.unified_view.base_index, { should_yield = function()
         if system.get_time() - projection_started >= 0.004 then
           projection_started = system.get_time()
           return true
@@ -1033,17 +1035,13 @@ local function gap_layout_signature(buffer_view)
   }, ":")
 end
 
-function DiffView:get_side_path_target(index, side_view)
+function DiffView:get_side_path_target(index, side_view, line)
   local content = self.request and self.request.contents and self.request.contents[index]
   local path = source_path_for_content(content)
   if not path then return nil end
-  local line = with_textview_selection(side_view, function()
+  line = line or with_textview_selection(side_view, function()
     return side_view.buffer:get_selection(false)
   end)
-  if side_view == self.unified_view then
-    local _, source_line = side_view:source_position(line)
-    line = source_line
-  end
   if content and content.kind == "fragment" then
     line = FragmentBuffer.map_line(self.side_buffers[index], line)
   elseif content and content.source_line then
@@ -1980,12 +1978,8 @@ function DiffView:install_view_integrations()
     side.view:add_fold_listener(provider_id, function(view, event, fold, reason)
       self:on_core_fold_event(side.is_a, event, fold, reason)
     end)
-    side.view:add_edit_guard(provider_id, function(view, reason)
-      local content = self.request.contents[side.is_a and 1 or 2]
-      if not self.side_editable[side.id] then
-        return false, content_read_only_reason(content)
-      end
-      return true
+    side.view:add_edit_guard(provider_id, function()
+      return self:side_edit_permission(side.is_a and 1 or 2)
     end)
     side.view.buffer:add_text_change_listener("diff-view-" .. side.id .. "-" .. tostring(self), {
       after_change = function()
@@ -1995,6 +1989,29 @@ function DiffView:install_view_integrations()
       end,
     })
   end
+end
+
+---Return whether a Diff Side accepts edits, and why it does not.
+function DiffView:side_edit_permission(index)
+  if self.side_editable[index == 1 and "a" or "b"] then return true end
+  return false, content_read_only_reason(self.request.contents[index])
+end
+
+---The Unified Diff edits the right side unless only the left side is editable.
+function DiffView:get_unified_base_index()
+  return (self.side_editable.b or not self.side_editable.a) and 2 or 1
+end
+
+function DiffView:replace_unified_view()
+  local old = self.unified_view
+  self.unified_view = UnifiedView(self)
+  if not old then return end
+  local view = self.unified_view
+  view.open_text_capture, view.continue_point_of_interest = old.open_text_capture, old.continue_point_of_interest
+  view.git_owner_view = old.git_owner_view
+  view.position.x, view.position.y, view.size.x, view.size.y = old.position.x, old.position.y, old.size.x, old.size.y
+  old:on_close()
+  if core.active_view == old then core.set_active_view(view) end
 end
 
 function DiffView:dispose_integrations()
@@ -2043,7 +2060,6 @@ function DiffView:dispose_owned_buffers(opts)
   opts = opts or {}
   self.owned_buffers_disposed = true
   self.unified_view:on_close()
-  self.unified_view.buffer:on_close()
   if core.buffer_registry then
     for buffer in pairs(self.retained_buffers or {}) do
       core.buffer_registry:release(buffer, self)
@@ -2305,7 +2321,8 @@ local function draw_diff_header(view)
   local title_gap = font:get_width("  ")
   local stat_gap = stat_font:get_width("  ")
   if view.unified then
-    local title = view:get_side_title(1) .. " → " .. view:get_side_title(2) .. "  (read-only)"
+    local title = view:get_side_title(1) .. " → " .. view:get_side_title(2)
+    if not view:side_edit_permission(view.unified_view.base_index) then title = title .. "  (read-only)" end
     local items = header_stat_items(view:get_change_stats())
     local available = math.max(0, view.size.x - padding * 2)
     local items_width = header_items_width(stat_font, items, stat_gap)
@@ -2673,7 +2690,9 @@ local function copy_diff_patch(scope_kind)
   local view, source, unavailable, side = active, nil, nil, "right"
   if parent then
     view = active == parent and parent.buffer_view_b or active
-    side = view == parent.buffer_view_a and "left" or "right"
+    local index = view == parent.unified_view and view.base_index
+      or view == parent.buffer_view_a and 1 or 2
+    side = index == 1 and "left" or "right"
     local a, b = parent.buffer_view_a.buffer, parent.buffer_view_b.buffer
     local titles = parent.request.content_titles or {}
     source = { before = a.lines, after = b.lines,
@@ -2686,25 +2705,15 @@ local function copy_diff_patch(scope_kind)
   if scope_kind ~= "file" then
     scope = { side = side, intervals = {} }
     local function append_interval(first, last)
-      if parent and view == parent.unified_view then
-        local intervals = {}
-        for line = first, last do
-          local index, source_line = view:source_position(line)
-          local interval = intervals[index]
-          if interval then
-            interval[2] = source_line
-          else
-            interval = { source_line, source_line, side = index == 1 and "left" or "right" }
-            intervals[index] = interval
-            scope.intervals[#scope.intervals + 1] = interval
-          end
-        end
-      else
-        scope.intervals[#scope.intervals + 1] = { first, last }
-      end
+      scope.intervals[#scope.intervals + 1] = { first, last }
     end
+    -- A focused removed line of a Unified Diff selects its own change block.
+    local focus = parent and view == parent.unified_view and view:get_other_focus_interval()
+    if focus then scope.intervals[1] = focus end
     with_textview_selection(view, function()
-      if scope_kind == "cursor" then
+      if focus then
+        return
+      elseif scope_kind == "cursor" then
         local line = view.buffer:get_selection()
         append_interval(line, line)
       else
@@ -2808,12 +2817,14 @@ local function open_diff_source_at_caret()
     diff_status("This Diff Side has no current file")
     return false
   end
-  local line, col = with_textview_selection(side_view, function()
-    return side_view.buffer:get_selection(false)
-  end)
+  local line, col
   if side_view == parent.unified_view then
-    local _, source_line, source_col = side_view:source_position(line, col)
-    line, col = source_line, source_col
+    local _
+    _, line, col = side_view:source_position()
+  else
+    line, col = with_textview_selection(side_view, function()
+      return side_view.buffer:get_selection(false)
+    end)
   end
   if content.kind == "fragment" then
     line = FragmentBuffer.map_line(parent.side_buffers[index], line)
@@ -2852,12 +2863,14 @@ local function open_historical_file_at_caret()
     return false
   end
   local historical = require "plugins.git.historical_buffer"
-  local line, col = with_textview_selection(side_view, function()
-    return side_view.buffer:get_selection(false)
-  end)
+  local line, col
   if side_view == parent.unified_view then
-    local _, source_line, source_col = side_view:source_position(line, col)
-    line, col = source_line, source_col
+    local _
+    _, line, col = side_view:source_position()
+  else
+    line, col = with_textview_selection(side_view, function()
+      return side_view.buffer:get_selection(false)
+    end)
   end
   if content.source_line then line = content.source_line + line - 1 end
   local function show(text)

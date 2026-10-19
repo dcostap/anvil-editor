@@ -9626,7 +9626,12 @@ function TextView:draw_folded()
         entry.fold, self.position.x, entry.y, gutter_w, entry.height
       )
     elseif entry.type == "extra" or entry.type == "provider" then
-      -- provider-owned visual row; no default gutter
+      -- A provider-owned visual row draws its own gutter, if any.
+      local row = entry.provider_row
+      if entry.type == "provider" and row and row.draw_gutter then
+        local ok, err = pcall(row.draw_gutter, self, row, self.position.x, entry.y, gutter_w, entry.height)
+        if not ok then core.log_quiet("TextView provider row gutter draw failed for %s: %s", self.buffer:get_name(), tostring(err)) end
+      end
     elseif not drawn_gutters[entry.line] then
       drawn_gutters[entry.line] = true
       local line_y = line_origin_y(entry)

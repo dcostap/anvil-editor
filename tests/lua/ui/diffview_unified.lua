@@ -25,6 +25,25 @@ local function open(context, before, after)
   return view, view:get_focus_view()
 end
 
+local function copy(surface)
+  local copied
+  system.set_clipboard = function(text) copied = text end
+  command.perform("core:copy")
+  return copied
+end
+
+local function click_source_line(surface, index, line, col)
+  local x, y = surface:get_source_screen_position(index, line, col)
+  test.ok(x, "the source line must be visible")
+  surface:on_mouse_moved(x + 1, y + 1, 0, 0)
+  surface:on_mouse_pressed("left", x + 1, y + 1, 1)
+  surface:on_mouse_released("left", x + 1, y + 1)
+end
+
+local function normalize_path(path)
+  return (path:gsub("\\", "/"))
+end
+
 test.describe("Unified Diff View", function()
   test.before_each(function(context)
     context.layout = config.plugins.diffview.layout
@@ -67,28 +86,108 @@ test.describe("Unified Diff View", function()
     test.equal(#other:get_surface_focus_targets(), 1)
   end)
 
-  test.it("shows context once and removals before additions on one read-only surface", function(context)
+  test.it("shows removed lines once above their replacements and copies them in that order", function(context)
     local view, surface = open(context, "top\nold one\nold two\nbottom\n", "top\nnew one\nnew two\nbottom\n")
     test.equal(#view:get_surface_focus_targets(), 1)
-    test.equal(table.concat(surface.buffer.lines), "top\nold one\nold two\nnew one\nnew two\nbottom\n")
-    test.ok(not surface:can_edit("test"))
+    test.equal(surface.buffer, view.buffer_view_b.buffer)
+    local _, top_y = surface:get_source_screen_position(2, 1, 1)
+    local _, removed_y = surface:get_source_screen_position(1, 3, 1)
+    local _, added_y = surface:get_source_screen_position(2, 2, 1)
+    test.ok(top_y < removed_y and removed_y < added_y, "removed lines must come before added lines")
     core.set_active_view(surface)
-    surface:with_selection_state(function() surface.buffer:set_selection(2, 1, 6, 1) end)
-    local copied
-    system.set_clipboard = function(text) copied = text end
-    command.perform("core:copy")
-    test.equal(copied, "old one\nold two\nnew one\nnew two\n")
-    system.get_clipboard = function() return "edited" end
+    surface:with_selection_state(function() surface.buffer:set_selection(1, 4, 4, 1) end)
+    test.equal(copy(surface), "\nold one\nold two\nnew one\nnew two\n")
+  end)
+
+  test.it("edits the current Diff Side through the unified surface", function(context)
+    local view, surface = open(context, "top\nold\nbottom\n", "top\nnew\nbottom\n")
+    core.set_active_view(surface)
+    test.ok(surface:can_edit("test"))
+    surface:with_selection_state(function() surface.buffer:set_selection(2, 1) end)
+    system.get_clipboard = function() return "edited " end
     command.perform("core:paste")
-    test.equal(table.concat(surface.buffer.lines), "top\nold one\nold two\nnew one\nnew two\nbottom\n")
-    test.equal(table.concat(view.buffer_view_a.buffer.lines), "top\nold one\nold two\nbottom\n")
-    test.equal(table.concat(view.buffer_view_b.buffer.lines), "top\nnew one\nnew two\nbottom\n")
+    test.equal(table.concat(view.buffer_view_b.buffer.lines), "top\nedited new\nbottom\n")
+    test.equal(table.concat(view.buffer_view_a.buffer.lines), "top\nold\nbottom\n")
+    ready(view)
+    surface:with_selection_state(function() surface.buffer:set_selection(1, 4, 3, 1) end)
+    test.equal(copy(surface), "\nold\nedited new\n")
+  end)
+
+  test.it("keeps the unified surface read-only when neither Diff Side is editable", function(context)
+    local view = diffview.open({
+      contents = {
+        diffview.content.text("top\nold\n", { editable = false }),
+        diffview.content.text("top\nnew\n", { editable = false, read_only_reason = "Committed text" }),
+      }, auto_reveal_first_change = false,
+    }, true)
+    context.view = view
+    view.size.x, view.size.y = 800, 600
+    ready(view)
+    local allowed, reason = view:get_focus_view():can_edit("test")
+    test.ok(not allowed)
+    test.equal(reason, "Committed text")
+  end)
+
+  test.it("edits the left Diff Side when only that side is editable", function(context)
+    local view = diffview.open({
+      contents = {
+        diffview.content.text("top\nold\nbottom\n"),
+        diffview.content.text("top\nnew\nbottom\n", { editable = false }),
+      }, auto_reveal_first_change = false,
+    }, true)
+    context.view = view
+    view.size.x, view.size.y = 800, 600
+    ready(view)
+    local surface = view:get_focus_view()
+    test.equal(surface.buffer, view.buffer_view_a.buffer)
+    local _, removed_y = surface:get_source_screen_position(1, 2, 1)
+    local _, added_y = surface:get_source_screen_position(2, 2, 1)
+    test.ok(removed_y < added_y, "removed lines must come before added lines")
+    core.set_active_view(surface)
+    surface:with_selection_state(function() surface.buffer:set_selection(1, 4, 3, 1) end)
+    test.equal(copy(surface), "\nold\nnew\n")
+    click_source_line(surface, 2, 2, 1)
+    local allowed, reason = surface:can_edit("test")
+    test.ok(not allowed)
+    test.equal(reason, "Added lines are read-only")
+  end)
+
+  test.it("focuses a clicked removed line for copying and its source location", function(context)
+    local view = diffview.open({
+      contents = {
+        diffview.content.text("top\nold\nbottom\n", { source_path = USERDIR .. "/before.lua", source_line = 10 }),
+        diffview.content.text("top\nnew\nbottom\n", { source_path = USERDIR .. "/after.lua", source_line = 20 }),
+      }, auto_reveal_first_change = false,
+    }, true)
+    context.view = view
+    view.size.x, view.size.y = 800, 600
+    ready(view)
+    local surface = view:get_focus_view()
+    core.set_active_view(surface)
+    surface:with_selection_state(function() surface.buffer:set_selection(2, 1) end)
+    local target = view:get_path_target()
+    test.equal(normalize_path(target.path), normalize_path(USERDIR) .. "/after.lua")
+    test.equal(target.line, 21)
+
+    click_source_line(surface, 1, 2, 2)
+    target = view:get_path_target()
+    test.equal(normalize_path(target.path), normalize_path(USERDIR) .. "/before.lua")
+    test.equal(target.line, 11)
+    test.equal(copy(surface), "old\n")
+    local allowed, reason = surface:can_edit("test")
+    test.ok(not allowed, "removed lines are not part of the editable Buffer")
+    test.equal(reason, "Removed lines are read-only")
+
+    surface:with_selection_state(function() surface.buffer:set_selection(3, 1) end)
+    test.ok(surface:can_edit("test"))
+    target = view:get_path_target()
+    test.equal(normalize_path(target.path), normalize_path(USERDIR) .. "/after.lua")
   end)
 
   test.it("keeps the selected source location and focus when the layout changes", function(context)
     local view, surface = open(context, "top\nold\nbottom\n", "top\nnew\nbottom\n")
     core.set_active_view(surface)
-    surface:with_selection_state(function() surface.buffer:set_selection(3, 2) end)
+    surface:with_selection_state(function() surface.buffer:set_selection(2, 2) end)
     test.ok(command.perform("diff:toggle_layout"))
     view:update()
     test.equal(#view:get_surface_focus_targets(), 2)
@@ -98,8 +197,22 @@ test.describe("Unified Diff View", function()
     test.ok(command.perform("diff:toggle_layout"))
     view:update()
     test.equal(core.active_view, view:get_focus_view())
-    test.equal(core.active_view:get_selection_state().selections[1], 3)
+    test.equal(core.active_view:get_selection_state().selections[1], 2)
     test.equal(core.active_view:get_selection_state().selections[2], 2)
+  end)
+
+  test.it("keeps a removed line selected when the layout changes", function(context)
+    local view, surface = open(context, "top\nold\nbottom\n", "top\nnew\nbottom\n")
+    core.set_active_view(surface)
+    click_source_line(surface, 1, 2, 1)
+    test.ok(command.perform("diff:toggle_layout"))
+    view:update()
+    test.equal(core.active_view, view.buffer_view_a)
+    test.equal(core.active_view:get_selection_state().selections[1], 2)
+    test.ok(command.perform("diff:toggle_layout"))
+    view:update()
+    test.equal(core.active_view, surface)
+    test.equal(copy(surface), "old\n")
   end)
 
   test.it("navigates deletion-only changes and copies their patch", function(context)
@@ -115,14 +228,15 @@ test.describe("Unified Diff View", function()
     test.equal(target, nil)
   end)
 
-  test.it("refreshes when a source changes without making either source read-only", function(context)
+  test.it("refreshes when either source changes", function(context)
     local view, surface = open(context, "top\nold\n", "top\nnew\n")
-    local source = view.buffer_view_b
-    test.ok(source:can_edit("test"))
-    source.buffer:insert(2, 1, "extra\n")
+    view.buffer_view_a.buffer:insert(2, 1, "gone\n")
+    view.buffer_view_b.buffer:insert(2, 1, "extra\n")
     ready(view)
-    test.equal(table.concat(surface.buffer.lines), "top\nold\nextra\nnew\n")
-    test.ok(not surface:can_edit("test"))
+    core.set_active_view(surface)
+    surface:with_selection_state(function() surface.buffer:set_selection(1, 4, 3, 4) end)
+    test.equal(copy(surface), "\ngone\nold\nextra\nnew")
+    test.ok(surface:can_edit("test"))
   end)
 
   test.it("keeps the source location when a unified comparison finishes after focus changes", function(context)
@@ -137,7 +251,7 @@ test.describe("Unified Diff View", function()
     view:update()
     ready(view)
     test.equal(core.active_view, view:get_focus_view())
-    test.equal(core.active_view:get_selection_state().selections[1], 4)
+    test.equal(core.active_view:get_selection_state().selections[1], 3)
     test.equal(core.active_view:get_selection_state().selections[2], 2)
   end)
 
@@ -150,28 +264,6 @@ test.describe("Unified Diff View", function()
     view:set_navigation_state(state)
     test.equal(surface:get_selection_state().selections[1], 3)
     test.equal(surface:get_selection_state().selections[2], 2)
-  end)
-
-  test.it("maps removed and added rows to their own source paths and line offsets", function(context)
-    local view = diffview.open({
-      contents = {
-        diffview.content.text("top\nold\nbottom\n", { source_path = USERDIR .. "/before.lua", source_line = 10 }),
-        diffview.content.text("top\nnew\nbottom\n", { source_path = USERDIR .. "/after.lua", source_line = 20 }),
-      }, auto_reveal_first_change = false,
-    }, true)
-    context.view = view
-    view.size.x, view.size.y = 800, 600
-    ready(view)
-    local surface = view:get_focus_view()
-    core.set_active_view(surface)
-    surface:with_selection_state(function() surface.buffer:set_selection(2, 1) end)
-    local target = view:get_path_target()
-    test.equal(target.path:gsub("\\", "/"), USERDIR:gsub("\\", "/") .. "/before.lua")
-    test.equal(target.line, 11)
-    surface:with_selection_state(function() surface.buffer:set_selection(3, 1) end)
-    target = view:get_path_target()
-    test.equal(target.path:gsub("\\", "/"), USERDIR:gsub("\\", "/") .. "/after.lua")
-    test.equal(target.line, 21)
   end)
 
   test.it("copies only change blocks touched by the unified selection", function(context)

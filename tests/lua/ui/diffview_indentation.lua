@@ -20,6 +20,18 @@ local function open_diff(context, before, after, wrapped)
   return view
 end
 
+-- Address one Diff Side's lines where the Unified Diff draws them.
+local function unified_source(view, index)
+  local unified = view:get_focus_view()
+  return {
+    unified = unified,
+    buffer = view.side_buffers[index],
+    get_line_screen_position = function(_, line, col)
+      return unified:get_source_screen_position(index, line, col)
+    end,
+  }
+end
+
 -- Observe the rendered background at a point, not the number of draw calls.
 local function backgrounds(side, line)
   local rects = {}
@@ -41,10 +53,16 @@ local function backgrounds(side, line)
   renderer.draw_text = function(font, text, x, y, color, opts)
     return x + font:get_width(text, opts)
   end
+  if side.unified then renderer.begin_frame(core.window) end
   local ok, err = pcall(function()
+    if side.unified then
+      side.unified:draw()
+      return
+    end
     local x, y = side:get_line_screen_position(line)
     side:draw_line_body(line, x, y)
   end)
+  if side.unified then renderer.end_frame() end
   renderer.draw_rect, renderer.draw_text = old_rect, old_text
   renderer.draw_rect_grid = old_grid
   renderer.draw_text_known_bounds = old_known_text
@@ -149,11 +167,8 @@ test.describe("Diff View change backgrounds", function()
 
     config.plugins.diffview.layout = "unified"
     view:update()
-    local unified = view:get_focus_view()
-    test.equal(unified.buffer.lines[2], "private const val LIMIT = 2_000\n")
-    test.equal(unified.buffer.lines[3], "private const val LIMIT = 1_500\n")
-    check(unified, 2, style.diff_delete_background, style.diff_delete_inline)
-    check(unified, 3, style.diff_insert_background, style.diff_insert_inline)
+    check(unified_source(view, 1), 2, style.diff_delete_background, style.diff_delete_inline)
+    check(unified_source(view, 2), 2, style.diff_insert_background, style.diff_insert_inline)
 
     config.plugins.diffview.layout = "side-by-side"
     view:update()
@@ -192,11 +207,10 @@ test.describe("Diff View change backgrounds", function()
       check_markers(view.buffer_view_a, 2, markers)
       config.plugins.diffview.layout = "unified"
       view:update()
-      local unified = view:get_focus_view()
-      check(unified, 1, ",", style.diff_delete_inline)
-      check(unified, 3, "➜", style.diff_insert_inline)
-      check(unified, 4, "(...)", style.diff_insert_inline)
-      check_markers(unified, 2, markers)
+      check(unified_source(view, 1), 1, ",", style.diff_delete_inline)
+      check(unified_source(view, 2), 1, "➜", style.diff_insert_inline)
+      check(unified_source(view, 2), 2, "(...)", style.diff_insert_inline)
+      check_markers(unified_source(view, 1), 2, markers)
     end
   end)
 
@@ -224,7 +238,7 @@ test.describe("Diff View change backgrounds", function()
           check(side, 1)
           config.plugins.diffview.layout = "unified"
           view:update()
-          check(view:get_focus_view(), reverse and 2 or 1)
+          check(unified_source(view, reverse and 2 or 1), 1)
         end
       end
     end
@@ -267,9 +281,9 @@ test.describe("Diff View change backgrounds", function()
           check_layout(short, 1, expanded, 1, style.diff_modify_inline, style.diff_modify_inline)
           config.plugins.diffview.layout = "unified"
           view:update()
-          local unified = view:get_focus_view()
           local short_word_color = reverse and style.diff_insert_inline or style.diff_delete_inline
-          check_layout(unified, reverse and 2 or 1, unified, reverse and 1 or 2, short_word_color, change_color)
+          check_layout(unified_source(view, reverse and 2 or 1), 1, unified_source(view, reverse and 1 or 2), 1,
+            short_word_color, change_color)
         end
       end
     end
@@ -298,17 +312,8 @@ test.describe("Diff View change backgrounds", function()
     view:update()
     local unified = view:get_focus_view()
     test.ok(unified ~= view.buffer_view_a and unified ~= view.buffer_view_b)
-    local found_comment, found_expression = false, false
-    for line, text in ipairs(unified.buffer.lines) do
-      if text:find("-- removed explanation", 1, true) then
-        found_comment = true
-        check(unified, line, 5, style.diff_delete_inline)
-      elseif text:find("MAX(m.Fecha)", 1, true) then
-        found_expression = true
-        check(unified, line, 9, style.diff_insert_inline)
-      end
-    end
-    test.ok(found_comment and found_expression, "Unified Diff must show both changed lines")
+    check(unified_source(view, 1), 2, 5, style.diff_delete_inline)
+    check(unified_source(view, 2), 4, 9, style.diff_insert_inline)
   end)
 
   test.it("keeps mixed-block text emphasis across wrapped rows", function(context)
@@ -352,9 +357,7 @@ test.describe("Diff View change backgrounds", function()
         check(side)
         config.plugins.diffview.layout = "unified"
         view:update()
-        local unified = view:get_focus_view()
-        test.equal(unified.buffer.lines[2], "    added code\n")
-        check(unified)
+        check(unified_source(view, reverse and 2 or 1))
       end
     end
   end)

@@ -204,6 +204,14 @@ end
 
 local function cut_or_copy(dv, delete)
   if delete and not can_edit(dv, "cut") then return end
+  -- A view can copy text that it shows between Buffer lines.
+  local view_text = not delete and dv.get_copy_text and dv:get_copy_text()
+  if view_text then
+    core.cursor_clipboard = { full = view_text }
+    core.cursor_clipboard_whole_line = {}
+    system.set_clipboard(view_text)
+    return
+  end
   local target_buffer = dv.buffer
   local full_text = ""
   local text = ""
