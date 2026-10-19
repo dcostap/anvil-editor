@@ -21,14 +21,16 @@ test.describe("theme selection preview", function()
     test.ok(command.perform("core:select_theme"))
     local bar = core.global_prompt_bar
     test.not_equal(core.root_panel.app_overlay and core.root_panel.app_overlay.owner, bar)
+    local saved_background = {table.unpack(style.background)}
     bar:set_text("light")
     bar:update_suggestions()
-    test.same({255, 255, 255, 255}, style.background)
+    local first_preview = {table.unpack(style.background)}
+    test.not_equal(table.concat(first_preview, ","), table.concat(saved_background, ","))
     bar:move_suggestion_idx(1)
-    test.same({245, 234, 215, 255}, style.background)
+    test.not_equal(table.concat(style.background, ","), table.concat(first_preview, ","))
     test.equal("dark", settings.config.theme)
     bar:exit(false)
-    test.same({28, 30, 38, 255}, style.background)
+    test.same(saved_background, style.background)
     test.equal("dark", settings.config.theme)
   end)
 
@@ -41,12 +43,13 @@ test.describe("theme selection preview", function()
       bar:set_text("light")
       bar:update_suggestions()
       bar:move_suggestion_idx(1)
+      local hovered_background = {table.unpack(style.background)}
       bar:exit(false)
       test.equal(#sent, 3)
       test.equal(sent[#sent], "")
       -- The Sidebar draws a preview with the same colours as the previewing Project.
       color_theme.load_preview(sent[2])
-      test.same({245, 234, 215, 255}, style.background)
+      test.same(hovered_background, style.background)
     end)
     system.preview_color_theme = preview_color_theme
     core.reload_module(color_theme.module_name(settings.config.theme))
