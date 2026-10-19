@@ -25,6 +25,23 @@ local function line_starts_for(lines)
   return starts, offset
 end
 
+-- Every change to a buffer's text bumps its text revision, so the line starts
+-- of one revision serve every marker until the next edit.
+local line_starts_cache = setmetatable({}, { __mode = "k" })
+
+local function buffer_lines_and_starts(buffer)
+  local lines = buffer and buffer.lines or { "\n" }
+  local revision = buffer and buffer.text_revision
+  if not revision then return lines, line_starts_for(lines) end
+  local entry = line_starts_cache[buffer]
+  if not entry or entry.lines ~= lines or entry.count ~= #lines or entry.revision ~= revision then
+    local starts, total = line_starts_for(lines)
+    entry = { lines = lines, count = #lines, revision = revision, starts = starts, total = total }
+    line_starts_cache[buffer] = entry
+  end
+  return lines, entry.starts, entry.total
+end
+
 local function sanitize_position_in_lines(lines, line, col)
   local nlines = #lines
   if nlines == 0 then return 1, 1 end
@@ -36,8 +53,7 @@ local function sanitize_position_in_lines(lines, line, col)
   return line, common.clamp(col or 1, 1, #(lines[line] or ""))
 end
 
-local function position_to_offset_for_lines(lines, line, col)
-  local starts = line_starts_for(lines)
+local function position_to_offset_for_lines(lines, starts, line, col)
   line, col = sanitize_position_in_lines(lines, line, col)
   return starts[line] + col - 1
 end
@@ -63,11 +79,11 @@ local function offset_to_position_for_lines(lines, starts, total, offset)
 end
 
 local function offsets_for_buffer_range(buffer, line1, col1, line2, col2)
-  local lines = buffer and buffer.lines or { "\n" }
+  local lines, starts = buffer_lines_and_starts(buffer)
   line1, col1 = sanitize_position_in_lines(lines, line1 or 1, col1 or 1)
   line2, col2 = sanitize_position_in_lines(lines, line2 or line1, col2 or col1)
-  local start_offset = position_to_offset_for_lines(lines, line1, col1)
-  local end_offset = position_to_offset_for_lines(lines, line2, col2)
+  local start_offset = position_to_offset_for_lines(lines, starts, line1, col1)
+  local end_offset = position_to_offset_for_lines(lines, starts, line2, col2)
   if start_offset > end_offset then start_offset, end_offset = end_offset, start_offset end
   return start_offset, end_offset
 end
@@ -90,8 +106,7 @@ end
 
 function Marker:range()
   if not self.valid then return nil end
-  local lines = self.buffer and self.buffer.lines or { "\n" }
-  local starts, total = line_starts_for(lines)
+  local lines, starts, total = buffer_lines_and_starts(self.buffer)
   local line1, col1 = offset_to_position_for_lines(lines, starts, total, self.start_offset)
   local line2, col2 = offset_to_position_for_lines(lines, starts, total, self.end_offset)
   return {
@@ -238,8 +253,7 @@ function Marker:update_for_transaction(transaction)
     s, e = ns, ne
     delta = delta + len - (b - a)
   end
-  local lines = self.buffer and self.buffer.lines or { "\n" }
-  local _, total = line_starts_for(lines)
+  local _, _, total = buffer_lines_and_starts(self.buffer)
   s = common.clamp(s, 0, total)
   e = common.clamp(e, 0, total)
   if e < s then s, e = e, s end
