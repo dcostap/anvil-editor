@@ -19,6 +19,8 @@ static bool motion_stall;
 static bool dialogs;
 static bool sidebar_drop;
 static bool sidebar_change_drop;
+static bool ping;
+static SDL_AtomicInt pong;
 static SDL_AtomicInt dialogs_checked;
 static struct { int status, filter, count; char paths[2][128]; } dialog_results[3];
 static void SDLCALL dialog_result(void *userdata, const char *const *paths, int filter) {
@@ -55,6 +57,18 @@ static int SDLCALL server(void *data) {
     anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_SIDEBAR_MODEL, page, sizeof(page), NULL, 0);
   }
   anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_FOCUS, &focus, sizeof(focus), NULL, 0);
+  if (ping) {
+    AnvilSurfaceInt request = {42};
+    if (!anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_PING, &request, sizeof(request), NULL, 0)) return 1;
+    SetEvent(sent);
+    while (anvil_ipc_pipe_read(&pipe, &header, bytes, sizeof(bytes))) {
+      if (header.type != ANVIL_SURFACE_MSG_PONG) continue;
+      SDL_SetAtomicInt(&pong, header.size == sizeof(AnvilSurfaceInt) ? ((AnvilSurfaceInt *)bytes)->value : -1);
+      break;
+    }
+    WaitForSingleObject(finish, 5000);
+    return 0;
+  }
   if (dialogs) {
     for (int i = 0; i < 3; i++) {
       do {
@@ -170,6 +184,7 @@ int main(int test_argc, char **test_argv) {
   sidebar_change_drop = test_argc > 1 && !strcmp(test_argv[1], "sidebar-change-drop");
   motion_stall = test_argc > 1 && !strcmp(test_argv[1], "motion");
   dialogs = test_argc > 1 && !strcmp(test_argv[1], "dialogs");
+  ping = test_argc > 1 && !strcmp(test_argv[1], "ping");
   AnvilSurfaceConfigure geometry = {.configuration = 7, .origin_x = 48, .origin_y = 24,
     .pixel_w = 320, .pixel_h = 240, .display_scale = 1.25f};
   AnvilSurfaceConfigure moved = geometry;
@@ -283,6 +298,27 @@ int main(int test_argc, char **test_argv) {
     SetEvent(finish);
     SDL_WaitThread(thread, NULL);
     puts("PASS asynchronous native dialog requests, complete paths, filter, cancel, and failure");
+    return 0;
+  }
+  if (ping) {
+    /* A ping proves the UI thread runs: the reader thread alone does not answer it. */
+    SDL_Delay(300);
+    CHECK(SDL_GetAtomicInt(&pong) == 0);
+    Uint64 deadline = SDL_GetTicks() + 2000;
+    while (!SDL_GetAtomicInt(&pong) && SDL_GetTicks() < deadline) {
+      while (SDL_PollEvent(&event)) {
+        CHECK(!anvil_hosted_surface_loss_event(event.type));
+        if (!anvil_hosted_surface_dispatch(&event)) system_push_event(&event);
+      }
+      anvil_hosted_surface_poll();
+      while (system_event_pop(&event)) {}
+      SDL_Delay(1);
+    }
+    CHECK(SDL_GetAtomicInt(&pong) == 42);
+    anvil_hosted_surface_exit_intent(false);
+    SetEvent(finish);
+    SDL_WaitThread(thread, NULL);
+    puts("PASS the UI thread answers a ping and the reader thread does not");
     return 0;
   }
   if (motion_stall) {

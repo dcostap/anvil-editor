@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 24u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 25u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -39,6 +39,9 @@ typedef enum {
   /* A Project shows a Color Theme it has not saved. Draw it until the next save or preview. Payload: the
    * preview + NUL, or only NUL to draw the saved Color Theme again. */
   ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEWED = 10,
+  /* Answer with ANVIL_SURFACE_MSG_PONG from the UI thread. A Project whose UI thread is stuck does not answer.
+   * Payload: AnvilSurfaceInt, returned unchanged. */
+  ANVIL_SURFACE_MSG_PING = 11,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -84,6 +87,8 @@ typedef enum {
   /* This Project shows a Color Theme it has not saved. The shell forwards it to the Sidebar. Payload: the
    * preview + NUL, or only NUL when the Project shows the saved Color Theme again. */
   ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW = 99,
+  /* The UI thread's answer to ANVIL_SURFACE_MSG_PING. Payload: the ping's AnvilSurfaceInt. */
+  ANVIL_SURFACE_MSG_PONG = 100,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */

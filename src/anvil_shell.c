@@ -54,6 +54,10 @@
 #define SHELL_SELECTION_HOLD_TIMER 0x8100u
 #define SHELL_NOTICE_MS 5000
 #define SHELL_NOTICE_TIMER 0x8103u
+/* Forwarded input carries a ping. A Project whose UI thread has not answered after this time is not responding:
+ * its modal overlay stops covering the Sidebar, so the other Projects stay reachable. */
+#define SHELL_UNRESPONSIVE_MS 2000
+#define SHELL_LIVENESS_TIMER 0x8104u
 /* A new Window stays cloaked until it can show its Project, Sidebar and Color Theme. If they take longer than this,
  * it shows what it has. */
 #define SHELL_REVEAL_MS 2000
@@ -156,6 +160,11 @@ typedef struct ShellProject {
   bool connected;
   Uint32 connection;
   bool text_active;
+  /* At most one ping is in flight. */
+  bool ping_pending;
+  Uint32 ping_serial;
+  Uint64 ping_sent;
+  bool unresponsive;
   SDL_Mutex *lock;
   SDL_Condition *queue_cond;
   ShellMessage *queue_head, *queue_tail;
@@ -452,6 +461,54 @@ static void window_notice(ShellWindow *window, const char *text) {
   window->ui_dirty = true;
   SDL_Log("Shell Window status: id=%u %s", window->id, text);
   if (window->shown) composite_and_present(window);
+}
+/* A Project that is not responding keeps its overlay dim, but the overlay no longer covers the Sidebar. */
+static bool overlay_covers_sidebar(ShellWindow *window) {
+  return (window->overlay >> 24) && !(window->selected && window->selected->unresponsive);
+}
+static const char unresponsive_notice[] = "This Project is not responding. The Sidebar and other Projects still work.";
+/* Stays until the Project answers or another Project is selected. */
+static void show_unresponsive_notice(ShellWindow *window) {
+  window_notice(window, unresponsive_notice);
+  KillTimer(window->hwnd, SHELL_NOTICE_TIMER);
+  window->notice_until = 0;
+}
+static void set_responsive(ShellProject *project) {
+  project->ping_pending = false;
+  if (!project->unresponsive) return;
+  project->unresponsive = false;
+  SDL_Log("Shell Project responding again: id=%u after %.1f s", project->id,
+          (double)(SDL_GetTicks() - project->ping_sent) / 1000.0);
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window || window->selected != project) return;
+  if (!strcmp(window->notice, unresponsive_notice)) clear_window_notice(window);
+  window->ui_dirty = true;
+  if (window->shown) composite_and_present(window);
+}
+static void project_answered(ShellProject *project, int serial) {
+  if (project->ping_pending && (Uint32)serial == project->ping_serial) set_responsive(project);
+}
+static void check_liveness(ShellWindow *window) {
+  Uint64 now = SDL_GetTicks(), next = 0;
+  for (ShellProject *project = shell.projects; project; project = project->next) {
+    if (project->window_id != window->id || !project->ping_pending || project->unresponsive) continue;
+    Uint64 waited = now - project->ping_sent;
+    if (waited < SHELL_UNRESPONSIVE_MS) {
+      Uint64 left = SHELL_UNRESPONSIVE_MS - waited;
+      if (!next || left < next) next = left;
+      continue;
+    }
+    project->unresponsive = true;
+    SDL_Log("Shell Project not responding: id=%u waited=%llu ms overlay=%d", project->id,
+            (unsigned long long)waited, project == window->selected && (window->overlay >> 24) != 0);
+    if (project != window->selected) continue;
+    /* Input held by the Project, such as a press on its dimmed Sidebar, ends here. */
+    cancel_input(window);
+    show_unresponsive_notice(window);
+    window->ui_dirty = true;
+    if (window->shown) composite_and_present(window);
+  }
+  if (next) SetTimer(window->hwnd, SHELL_LIVENESS_TIMER, (UINT)next, NULL);
 }
 static void window_entry(ShellWindow *window, AnvilShellWindowState *entry);
 static void windows_changed(void);
@@ -924,6 +981,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_VISIBLE:
   case ANVIL_SURFACE_MSG_FLASH:
   case ANVIL_SURFACE_MSG_CLOSE_DECISION:
+  case ANVIL_SURFACE_MSG_PONG:
     return size == sizeof(AnvilSurfaceInt);
   case ANVIL_SURFACE_MSG_NEW_WINDOW:
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER:
@@ -2335,7 +2393,7 @@ static void composite_and_present(ShellWindow *window) {
   } else {
     copy_ui(window, (RECT){0, window->controls.bottom, window->sidebar_w, window->buffer_h});
   }
-  if (window->overlay >> 24) {
+  if (overlay_covers_sidebar(window)) {
     uint32_t c = window->overlay;
     float a = (c >> 24) / 255.0f;
     float dim[4] = {(c & 0xff) / 255.0f * a, (c >> 8 & 0xff) / 255.0f * a, (c >> 16 & 0xff) / 255.0f * a, a};
@@ -2476,7 +2534,7 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
       const AnvilSurfaceArea *area = &frame->raised[i];
       window->raised[i] = (RECT){area->x, area->y, area->x + SDL_max(0, area->w), area->y + SDL_max(0, area->h)};
     }
-    if (window->overlay >> 24) leave_sidebar(window);
+    if (overlay_covers_sidebar(window)) leave_sidebar(window);
   }
   /* A fresh Project frame shows the Project is responsive again, so resize steps wait for it once more.
    * During a drag frames trail the window size, so requiring an exact match kept waiting off for the rest
@@ -3104,6 +3162,10 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     sidebar_source((const AnvilSurfaceSidebarSource *)message->payload, message->size);
     return;
   }
+  if (message->type == ANVIL_SURFACE_MSG_PONG) {
+    project_answered(project, ((const AnvilSurfaceInt *)message->payload)->value);
+    return;
+  }
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
   if (project->state == SHELL_FAILED)
@@ -3470,7 +3532,7 @@ static void set_sidebar_hidden(bool hidden) {
 static bool sidebar_grip_at(ShellWindow *window, float x, float y) {
   float grip = SDL_max(2.0f, SHELL_SIDEBAR_GRIP_POINTS * window->scale);
   return window->sidebar && window->sidebar_w > 0 && !window->sidebar_sliding && !window->surface_buttons &&
-         window->pressed_control < 0 && !(window->overlay >> 24) && y >= window->controls.bottom &&
+         window->pressed_control < 0 && !overlay_covers_sidebar(window) && y >= window->controls.bottom &&
          x >= window->sidebar_w - grip && x < window->sidebar_w + grip;
 }
 
@@ -3556,6 +3618,12 @@ static void forward_event(ShellWindow *window, const SDL_Event *event, const cha
     input.event.drop.source = NULL;
   }
   shell_send(project, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), text, input.text_len);
+  if (project->connected && !project->ping_pending) {
+    project->ping_pending = true;
+    project->ping_sent = SDL_GetTicks();
+    shell_send_int(project, ANVIL_SURFACE_MSG_PING, (int)++project->ping_serial);
+    SetTimer(window->hwnd, SHELL_LIVENESS_TIMER, SHELL_UNRESPONSIVE_MS, NULL);
+  }
 }
 
 static void clear_composition(ShellWindow *window) {
@@ -3620,7 +3688,7 @@ static void leave_surface(ShellWindow *window) {
 
 /* The Sidebar takes pointer input unless the Project's modal overlay dim covers it. */
 static bool sidebar_takes_pointer(ShellWindow *window, float x) {
-  return !window->surface_buttons && !(window->overlay >> 24) && x >= 0 && x < window->sidebar_w &&
+  return !window->surface_buttons && !overlay_covers_sidebar(window) && x >= 0 && x < window->sidebar_w &&
          shell.sidebar_process && shell.sidebar_process->connected;
 }
 
@@ -3917,6 +3985,7 @@ static void handle_connected(ShellProject *project) {
   SDL_Log("Anvil shell connected to surface process %lu",
           (unsigned long)project->process.dwProcessId);
   project->connected = true;
+  set_responsive(project);
   send_configure(project);
   bool focused = project == window->selected &&
                  (anvil_latency_probe_enabled() ||
@@ -4370,6 +4439,11 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       clear_window_notice(window);
     else
       SetTimer(hwnd, SHELL_NOTICE_TIMER, (UINT)(window->notice_until - now), NULL);
+    return 0;
+  }
+  if (msg == WM_TIMER && wparam == SHELL_LIVENESS_TIMER) {
+    KillTimer(hwnd, SHELL_LIVENESS_TIMER);
+    check_liveness(window);
     return 0;
   }
   if (msg == WM_TIMER && wparam == SHELL_REVEAL_TIMER) {
@@ -5079,6 +5153,7 @@ static void select_project(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
   clear_window_notice(window);
+  if (project->unresponsive) show_unresponsive_notice(window);
   if (project == window->selected)
     return;
   ShellProject *previous = window->selected;
