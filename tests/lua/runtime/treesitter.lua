@@ -2470,6 +2470,18 @@ main :: proc() {}
     test.equal(buffer.treesitter, nil)
   end)
 
+  test.it("polling skips a Buffer whose document state was finalized", function()
+    local buffer = c_buffer("int finalized(void) { return 0; }")
+    test.ok(wait_ready(buffer))
+    -- Garbage collection can finalize a document state while its Buffer is
+    -- still attached, when both become unreachable in the same cycle.
+    local state = buffer.treesitter.native
+    getmetatable(state).__gc(state)
+    test.no_error(function() treesitter.poll_all() end)
+    test.equal(buffer.treesitter, nil)
+    buffer:on_close()
+  end)
+
   test.it("buffer outline is available through language intelligence", function()
     local buffer = c_buffer("int helper(void) { return 1; }")
     test.ok(wait_ready(buffer))

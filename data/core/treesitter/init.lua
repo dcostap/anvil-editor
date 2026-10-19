@@ -449,7 +449,12 @@ end
 function treesitter.poll_all()
   local any_changed = false
   for buffer in pairs(attached_buffers) do
-    if buffer.treesitter and buffer.treesitter.native then
+    local ts = buffer.treesitter
+    if ts and ts.native and ts.native:status() == "closed" then
+      -- Garbage collection finalized the state while its Buffer was still attached.
+      log_quiet("Tree-sitter: detached %s after its document state was finalized", buffer_name(buffer))
+      treesitter.close_buffer(buffer)
+    elseif ts and ts.native then
       local _, changed, discarded = treesitter.poll_buffer(buffer)
       any_changed = any_changed or changed or discarded
     else
