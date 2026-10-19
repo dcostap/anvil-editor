@@ -475,10 +475,13 @@ test.describe("Terminal View", function()
 
     style.terminal_font:set_size(style.terminal_font:get_size() * 1.5)
     core.root_panel:update()
+    test.ok(capture:get_line_height() > old_line_height)
 
+    -- The capture opened in the Terminal's Pane. Show the Terminal again.
+    panes.present(terminal_view)
+    core.root_panel:update()
     test.ok(terminal_view.cell_width > old_cell_width)
     test.ok(terminal_view.cell_height > old_cell_height)
-    test.ok(capture:get_line_height() > old_line_height)
     local resize = test.not_nil(session.resizes[#session.resizes])
     test.equal(resize[3], terminal_view.native_cell_width)
     test.equal(resize[4], terminal_view.cell_height)

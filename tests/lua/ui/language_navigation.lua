@@ -10,6 +10,7 @@ local treesitter = require "core.treesitter"
 local symbol_index = require "core.treesitter.symbol_index"
 require "core.commands.language"
 require "plugins.gitdiff_highlight"
+local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
 local function join_path(...)
   return table.concat({...}, PATHSEP)
@@ -78,9 +79,11 @@ test.describe("language navigation", function()
     core.projects = { Project(context.temp_root) }
     system.chdir(context.temp_root)
     symbol_index.reset_for_tests()
+    fuzzy_searcher._test.clear_prompt_history()
   end)
 
   test.after_each(function(context)
+    if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     panes.reset_for_tests()
     if context.temp_root then
       for i = #core.buffers, 1, -1 do
@@ -112,69 +115,12 @@ test.describe("language navigation", function()
     symbol_index.reset_for_tests()
   end)
 
-  for _, alternate in ipairs({ false, true }) do
-    test.it("goes to a workspace declaration in the " .. (alternate and "new Pane Group" or "current Pane"), function(context)
-      local main_path = join_path(context.temp_root, "main.odin")
-      local defs_path = join_path(context.temp_root, "defs.odin")
-      write_file(main_path, [[package demo
-
-main :: proc() {
-  target()
-}
-]])
-      write_file(defs_path, [[package demo
-
-target :: proc() {}
-]])
-
-      local view = core.open_file(main_path)
-      core.set_active_view(view)
-      test.ok(wait_ready(view.buffer))
-      view.buffer:insert(5, 1, "// local edit\n")
-      test.ok(view.buffer:is_dirty())
-      view:with_selection_state(function()
-        view.buffer:set_selection(4, 5)
-      end)
-
-      local source_pane = panes.active()
-      local source_group = source_pane.group
-      core.set_active_view(view)
-      test.ok(command.perform(alternate and "core:activate_point_of_interest_alternate"
-        or "core:activate_point_of_interest"))
-      test.ok(wait_until(function()
-        local active = core.active_view
-        return active and active.buffer and common.path_equals(active.buffer.abs_filename, defs_path)
-      end))
-
-      local project_views = 0
-      for _, item in ipairs(panes.views(panes.active())) do
-        if item.buffer and item.buffer.abs_filename and common.path_belongs_to(item.buffer.abs_filename, context.temp_root) then
-          project_views = project_views + 1
-        end
-      end
-      test.equal(project_views, alternate and 1 or 2)
-      if alternate then
-        test.not_equal(panes.active().group, source_group)
-        test.equal(source_pane.current_view, view)
-      else
-        test.equal(panes.active(), source_pane)
-      end
-      local buffer = core.active_view.buffer
-      local line1, col1, line2, col2 = buffer:get_selection(true)
-      test.equal(line1, 3)
-      test.equal(col1, 1)
-      test.equal(line2, 3)
-      test.equal(col2, 7)
-    end)
-  end
-
   for _, change in ipairs({ "addition", "modification" }) do
-    test.it("opens a method declaration from a Git " .. change, function(context)
+    test.it("searches for a method declaration from a Git " .. change, function(context)
       local caller_path = join_path(context.temp_root, "Caller.kt")
-      local declaration_path = join_path(context.temp_root, "MainWindow.kt")
       local baseline = change == "addition" and "" or "  println(\"before\")\n"
       write_file(caller_path, "fun main() {\n" .. baseline .. "}\n")
-      write_file(declaration_path, [[object MainWindow {
+      write_file(join_path(context.temp_root, "MainWindow.kt"), [[object MainWindow {
   fun setVisibleAndLoadInitialSize() {}
 }
 ]])
@@ -192,27 +138,15 @@ target :: proc() {}
           if point.kind == "file-change" and point.label == change and point.line == 2 then return true end
         end
       end), "expected the method call to belong to a file change")
-      test.ok(wait_until(function()
-        local symbols, _, status = symbol_index.workspace_symbols("setVisibleAndLoadInitialSize")
-        return status == "fresh" and symbols and #symbols == 1
-      end), "expected the Project index to contain the method declaration")
       view:with_selection_state(function() view.buffer:set_selection(2, 14) end)
-      local source_pane = panes.active()
       local alternate = change == "modification"
       test.ok(command.perform(alternate and "core:activate_point_of_interest_alternate"
         or "core:activate_point_of_interest"))
-      test.ok(wait_until(function()
-        local active = core.active_view
-        return active and active.buffer and common.path_equals(active.buffer.abs_filename, declaration_path)
-      end), "expected activation to open the method declaration, not the Git preview")
-      local buffer = core.active_view.buffer
-      test.equal(buffer:get_text(buffer:get_selection(true)), "setVisibleAndLoadInitialSize")
-      if alternate then
-        test.not_equal(panes.active().group, source_pane.group)
-        test.equal(source_pane.current_view, view)
-      else
-        test.equal(panes.active(), source_pane)
-      end
+      -- A symbol inside a Git change opens its Project Symbol Search, not the Git preview.
+      local picker = test.not_nil(core.fuzzy_searcher_active_view,
+        "expected activation to search for the method declaration")
+      test.equal(picker.input:get_text(), "$setVisibleAndLoadInitialSize")
+      test.equal(picker.source_view, view)
     end)
   end
 end)

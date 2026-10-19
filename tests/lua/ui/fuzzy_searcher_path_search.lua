@@ -30,6 +30,23 @@ local function result_for_path(results, path)
   end
 end
 
+local function draw_without_window(draw)
+  local renderer = require "renderer"
+  local saved = {}
+  for name, fn in pairs(renderer) do
+    if type(fn) == "function" and (name:match("^draw_") or name:match("^push_")
+      or name:match("^pop_") or name == "set_clip_rect")
+    then
+      saved[name] = fn
+      renderer[name] = function() end
+    end
+  end
+  renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
+  local ok, err = pcall(draw)
+  for name, fn in pairs(saved) do renderer[name] = fn end
+  return ok, err
+end
+
 local function wait_until(predicate, timeout)
   local deadline = system.get_time() + (timeout or 2)
   while not predicate() and system.get_time() < deadline do coroutine.yield(0.02) end
@@ -69,7 +86,13 @@ test.describe("Fuzzy Searcher Path Search", function()
     core.open_file = context.original_open_file
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
     if context.temp_root and system.get_file_info(context.temp_root) then
-      local ok, err = common.rm(context.temp_root, true)
+      -- A Project folder watcher can hold a new folder briefly after the picker closes.
+      local ok, err
+      local deadline = system.get_time() + 2
+      repeat
+        ok, err = common.rm(context.temp_root, true)
+        if not ok then coroutine.yield(0.05) end
+      until ok or system.get_time() >= deadline
       test.ok(ok, err)
     end
     if context.home_root and system.get_file_info(context.home_root) then
@@ -210,9 +233,11 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.equal(#requests, 2)
     test.equal(requests[2].params.search,
       'file: ancestor:"' .. context.external_root .. '" needle')
-    test.equal(core.fuzzy_searcher_active_view:is_path_search(), true)
-    test.ok(core.fuzzy_searcher_active_view:list_metrics().list_w
-      < core.fuzzy_searcher_active_view.size.x)
+    local picker = core.fuzzy_searcher_active_view
+    test.equal(picker:is_path_search(), true)
+    -- Path Search is not full width: a wide picker shows its preview beside the list.
+    picker.size.x = 2000 * SCALE
+    test.ok(picker:list_metrics().list_w < picker.size.x)
   end)
 
   test.it("uses the longest existing directory prefix before search terms", function(context)
@@ -344,9 +369,10 @@ test.describe("Fuzzy Searcher Path Search", function()
     helpers.set_everything_state("unavailable")
 
     fuzzy_searcher.open(".hidden/exact.txt")
-    local result = core.fuzzy_searcher_active_view.results[1]
+    local picker = core.fuzzy_searcher_active_view
+    test.ok(wait_until(function() return picker.results[1] ~= nil end), "expected an exact path result")
+    local result = picker.results[1]
 
-    test.not_nil(result)
     test.equal(result.exact_path, true)
     test.ok(common.path_equals(result.abs_path, hidden_file))
   end)
@@ -364,6 +390,7 @@ test.describe("Fuzzy Searcher Path Search", function()
     for _, suffix in ipairs({ ":4801,5", ":6:1", ":1:10" }) do
       fuzzy_searcher.open("src/main.lua" .. suffix)
       local picker = test.not_nil(core.fuzzy_searcher_active_view)
+      test.ok(wait_until(function() return picker.results[1] ~= nil end), "expected a file link result")
       picker:confirm()
 
       local line, col = suffix:match(":(%d+)[,:](%d+)")
@@ -384,8 +411,10 @@ test.describe("Fuzzy Searcher Path Search", function()
 
     fuzzy_searcher.open("./new/deep/created.txt")
     local picker = core.fuzzy_searcher_active_view
+    test.ok(wait_until(function() return picker.results[1] ~= nil end), "expected a Create Path Result")
     test.equal(picker.results[1].kind, "create_path")
-    local drawn, draw_error = pcall(function() picker:draw() end)
+    -- Headless tests have no window, so drawing goes to stubbed primitives.
+    local drawn, draw_error = draw_without_window(function() picker:draw() end)
     test.ok(drawn, draw_error)
     picker:confirm()
 
@@ -402,6 +431,7 @@ test.describe("Fuzzy Searcher Path Search", function()
 
     fuzzy_searcher.open("./new/folder/")
     local picker = core.fuzzy_searcher_active_view
+    test.ok(wait_until(function() return picker.results[1] ~= nil end), "expected a Create Path Result")
     test.equal(picker.results[1].kind, "create_path")
     picker:confirm()
 
@@ -409,6 +439,9 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.not_nil(info)
     test.equal(info.type, "dir")
     test.equal(core.fuzzy_searcher_active_view, picker)
+    test.ok(wait_until(function()
+      return picker.results[1] and picker.results[1].exact_path
+    end), "expected the created folder as an exact path")
     test.equal(picker.results[1].exact_path, true)
     test.ok(common.path_equals(picker.results[1].abs_path, path))
   end)

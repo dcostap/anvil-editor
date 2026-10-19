@@ -36,6 +36,17 @@ local function wait_for_markdown(view)
   linewrapping.complete_async_reconstruction(view)
 end
 
+-- An opened view is laid out on the next frame.
+local function wait_for_visible_line(view, line)
+  local deadline = system.get_time() + 2
+  repeat
+    local first, last = view:get_visible_line_range()
+    if view.size.y > 0 and line >= first and line <= last then return true end
+    coroutine.yield(0.02)
+  until system.get_time() >= deadline
+  return false
+end
+
 test.describe("Fuzzy Searcher preview interaction", function()
   test.before_each(function(context)
     panes.reset_for_tests()
@@ -231,10 +242,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
     local view = core.active_view
     test.equal(view.buffer.abs_filename, path)
     test.same(selection_state(view), { 90, 7, 90, 13 })
-    test.ok(
-      view.scroll.to.y > view.scroll.y,
-      "expected the accepted match to start a viewport scroll transition"
-    )
+    test.ok(wait_for_visible_line(view, 90), "expected the accepted match inside the opened viewport")
   end)
 
   test.it("places the caret at the first separated match chunk", function(context)
@@ -258,7 +266,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
 
     local view = core.active_view
     test.same(selection_state(view), { 40, 1, 40, 1 })
-    test.ok(view.scroll.to.y > view.scroll.y)
+    test.ok(wait_for_visible_line(view, 40), "expected the match inside the opened viewport")
   end)
 
   test.it("opens a focused preview at its current selection and viewport", function(context)
@@ -312,9 +320,8 @@ test.describe("Fuzzy Searcher preview interaction", function()
     test.ok(command.perform("core:activate_point_of_interest"))
 
     local view = core.active_view
-    local first, last = view:get_visible_line_range()
     test.same(selection_state(view), { 82, 3, 82, 6 })
-    test.ok(82 >= first and 82 <= last,
+    test.ok(wait_for_visible_line(view, 82),
       "expected the Markdown source selection inside the opened viewport")
   end)
 

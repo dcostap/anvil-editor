@@ -23,12 +23,12 @@ static int compare(GhosttyTerminal a, GhosttyTerminal b) {
   };
   uint8_t *at = NULL, *bt = NULL;
   size_t al = 0, bl = 0;
-  CHECK(ghostty_formatter_terminal_new(NULL, &fa, a, plain) == GHOSTTY_SUCCESS);
-  CHECK(ghostty_formatter_terminal_new(NULL, &fb, b, plain) == GHOSTTY_SUCCESS);
-  CHECK(ghostty_formatter_format_alloc(fa, NULL, &at, &al) == GHOSTTY_SUCCESS);
-  CHECK(ghostty_formatter_format_alloc(fb, NULL, &bt, &bl) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_terminal_new(&terminal_allocator, &fa, a, plain) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_terminal_new(&terminal_allocator, &fb, b, plain) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_format_alloc(fa, &terminal_allocator, &at, &al) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_format_alloc(fb, &terminal_allocator, &bt, &bl) == GHOSTTY_SUCCESS);
   CHECK(al == bl && memcmp(at, bt, al) == 0);
-  ghostty_free(NULL, at, al); ghostty_free(NULL, bt, bl);
+  ghostty_free(&terminal_allocator, at, al); ghostty_free(&terminal_allocator, bt, bl);
   ghostty_formatter_free(fa); ghostty_formatter_free(fb);
   return 0;
 }
@@ -45,9 +45,9 @@ static int round_trip(int alternate, int utf8) {
   const char *suffix = utf8 ? "\x8c" : "1mred";
   ghostty_terminal_vt_write(a, (const uint8_t *)prefix, strlen(prefix));
   uint8_t *bytes = NULL; size_t length = 0;
-  CHECK(ghostty_snapshot_encode_alloc(a, NULL, &bytes, &length) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_snapshot_encode_alloc(a, &terminal_allocator, &bytes, &length) == GHOSTTY_SUCCESS);
   GhosttySnapshotDecoder decoder = NULL;
-  CHECK(ghostty_snapshot_decoder_new_buf(NULL, &decoder, bytes, length) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_snapshot_decoder_new_buf(&terminal_allocator, &decoder, bytes, length) == GHOSTTY_SUCCESS);
   CHECK(ghostty_snapshot_decoder_ready(decoder, &b) == GHOSTTY_SUCCESS);
   GhosttyResult result;
   do { result = ghostty_snapshot_decoder_next(decoder); } while (result == GHOSTTY_SUCCESS);
@@ -67,14 +67,14 @@ static int round_trip(int alternate, int utf8) {
   }
   ghostty_terminal_free(b); b = NULL;
   /* Neither truncated nor corrupt snapshots may publish a complete model. */
-  CHECK(ghostty_snapshot_decoder_new_buf(NULL, &decoder, bytes, length - 1) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_snapshot_decoder_new_buf(&terminal_allocator, &decoder, bytes, length - 1) == GHOSTTY_SUCCESS);
   CHECK(ghostty_snapshot_decoder_decode(decoder, &b) != GHOSTTY_SUCCESS && !b);
   ghostty_snapshot_decoder_free(decoder);
   bytes[length - 1] ^= 1;
-  CHECK(ghostty_snapshot_decoder_new_buf(NULL, &decoder, bytes, length) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_snapshot_decoder_new_buf(&terminal_allocator, &decoder, bytes, length) == GHOSTTY_SUCCESS);
   CHECK(ghostty_snapshot_decoder_decode(decoder, &b) != GHOSTTY_SUCCESS && !b);
   ghostty_snapshot_decoder_free(decoder);
-  ghostty_free(NULL, bytes, length); ghostty_terminal_free(a);
+  ghostty_free(&terminal_allocator, bytes, length); ghostty_terminal_free(a);
   return 0;
 }
 
@@ -104,14 +104,14 @@ static int disk_bounds(void) {
   CHECK(before == after && kept <= before && kept > 0);
   GhosttyFormatter formatter = NULL;
   GhosttyFormatterTerminalOptions plain = { .size = sizeof(plain), .emit = GHOSTTY_FORMATTER_FORMAT_PLAIN };
-  CHECK(ghostty_formatter_terminal_new(NULL, &formatter, restored, plain) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_terminal_new(&terminal_allocator, &formatter, restored, plain) == GHOSTTY_SUCCESS);
   uint8_t *text = NULL; size_t text_length = 0;
-  CHECK(ghostty_formatter_format_alloc(formatter, NULL, &text, &text_length) == GHOSTTY_SUCCESS);
+  CHECK(ghostty_formatter_format_alloc(formatter, &terminal_allocator, &text, &text_length) == GHOSTTY_SUCCESS);
   CHECK(text_length >= strlen(tail));
   bool found = false;
   for (size_t i = 0; i + strlen(tail) <= text_length; i++) if (!memcmp(text + i, tail, strlen(tail))) found = true;
   CHECK(found);
-  ghostty_free(NULL, text, text_length); ghostty_formatter_free(formatter);
+  ghostty_free(&terminal_allocator, text, text_length); ghostty_formatter_free(formatter);
   ghostty_terminal_free(restored); free(bytes); bytes = NULL;
   /* An unfinished graphics payload cannot be trimmed as history. Reject it
      rather than publish an oversized or partial checkpoint. */

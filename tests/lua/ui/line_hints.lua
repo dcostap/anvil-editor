@@ -74,11 +74,19 @@ test.describe("File Tree Line Hints", function()
     test.ok(contains(hint_texts(view, empty), "0"), "expected an empty folder count")
     local fuzzy = require("plugins.fuzzy_searcher")._test
     for name, count in pairs { folder = "2", empty = "0" } do
-      local texts = draw_texts(function()
-        fuzzy.draw_file_metadata(style.code_font, {
-          kind = "folder", is_folder = true, abs_path = root .. PATHSEP .. name,
-        }, 0, 0, 3000)
-      end)
+      local result = {
+        kind = "folder", is_folder = true, abs_path = root .. PATHSEP .. name,
+        file_modified = system.get_file_info(root .. PATHSEP .. name).modified,
+      }
+      local texts
+      deadline = system.get_time() + 3
+      repeat
+        texts = draw_texts(function()
+          fuzzy.draw_file_metadata(style.code_font, result, 0, 0, 3000)
+        end)
+        if contains(texts, count) then break end
+        coroutine.yield(0.01)
+      until system.get_time() >= deadline
       test.ok(contains(texts, count), "expected the same folder count in Fuzzy Searcher")
     end
   end)

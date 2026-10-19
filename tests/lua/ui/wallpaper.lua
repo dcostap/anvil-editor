@@ -88,6 +88,7 @@ test.describe("Window wallpaper", function()
     root.begin_keyboard_caret_frame = function() end
     root.draw_keyboard_caret = function() end
     root.draw_active_app_overlay = function() end
+    root.pane_status_bars = function() return {} end
     local previous = require("plugins.settings").config.theme or "dark"
     local old_rect, old_scaled, old_clip =
       renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect
@@ -123,6 +124,7 @@ test.describe("Window wallpaper", function()
     root.begin_keyboard_caret_frame = function() end
     root.draw_keyboard_caret = function() end
     root.draw_active_app_overlay = function() end
+    root.pane_status_bars = function() return {} end
     local old_rect, old_scaled, old_clip =
       renderer.draw_rect, renderer.draw_canvas_scaled, renderer.set_clip_rect
     local fills = {}
@@ -183,6 +185,7 @@ test.describe("Window wallpaper", function()
     root.begin_keyboard_caret_frame = function() end
     root.draw_keyboard_caret = function() end
     root.draw_active_app_overlay = function() end
+    root.pane_status_bars = function() return {} end
     local old_scaled, old_rect, old_clip =
       renderer.draw_canvas_scaled, renderer.draw_rect, renderer.set_clip_rect
     local rectangle

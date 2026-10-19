@@ -365,7 +365,6 @@ test.describe("TextView Prompt Bar find", function()
     local view = open_editor(context, "pl pl\n")
     test.ok(command.perform("editor:find"))
     type_into_active_view("pl")
-    view:prepare_line_body_draw_cache(1, 1)
 
     local selection_highlights = 0
     local current_line_highlights = 0

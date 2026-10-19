@@ -20,6 +20,17 @@ local function factory(name)
   return function() return NamedView(name) end
 end
 
+-- Tab lane scrolling eases over time, so let it finish before checking positions.
+local function settle(title)
+  local deadline = system.get_time() + 2
+  repeat
+    title:update()
+    if math.abs(title.tab_scroll - title.tab_scroll_target) < 1e-8 then return end
+    coroutine.yield(0.01)
+  until system.get_time() >= deadline
+  test.equal(title.tab_scroll, title.tab_scroll_target, "the Tab lane must finish scrolling")
+end
+
 test.describe("Global title bar Pane entries", function()
   local set_active_view, projects, window, window_mode, set_window_mode,
     set_window_hit_test, quit, zoom, set_clip_rect, transitions, scroll_transition, fps,
@@ -369,7 +380,7 @@ test.describe("Global title bar Pane entries", function()
     title:on_mouse_pressed("left", source.x + 2, source.y + 2, 1)
     title:on_mouse_moved(lane_right - 1, source.y + 2, lane_right - source.x, 0)
 
-    for _ = 1, 120 do title:update() end
+    settle(title)
     test.ok(title.entries[1] == nil or title.entries[1].x < source.x)
     test.equal(title.dragged_pane, first)
     title:on_mouse_released("left", -50, -50)
@@ -403,10 +414,16 @@ test.describe("Global title bar Pane entries", function()
     local before = title.entries[1].x
     test.ok(title:on_mouse_wheel(-0.25, 0))
     test.equal(title.entries[1].x, before)
-    title:update()
-    local moving = title.entries[1].x
+    -- The eased scroll starts on the next frames, so sample it once it moves.
+    local moving = before
+    local deadline = system.get_time() + 2
+    while moving == before and system.get_time() < deadline do
+      coroutine.yield(0.001)
+      title:update()
+      moving = title.entries[1].x
+    end
     test.ok(moving < before)
-    for _ = 1, 120 do title:update() end
+    settle(title)
     test.ok(title.entries[1].x < moving)
     test.ok(title.entries[1].x + title.entries[1].w > before)
     test.is_nil(title:entry_at(before - 1, title.position.y + 2))
@@ -443,16 +460,16 @@ test.describe("Global title bar Pane entries", function()
     title:update()
     test.not_ok(title:on_mouse_wheel(0, 0))
     test.ok(title:on_mouse_wheel(0, -1000))
-    for _ = 1, 120 do title:update() end
+    settle(title)
     local right = title.caption_rects[1].x
     test.equal(title.entries[6].x + title.entries[6].w, right)
     panes.focus(last)
     title:update()
     panes.focus(first)
-    for _ = 1, 120 do title:update() end
+    settle(title)
     test.equal(title.entries[1].x, title.project_rect.x + title.project_rect.w)
     title:on_mouse_wheel(0, -1000)
-    for _ = 1, 120 do title:update() end
+    settle(title)
     title.size.x = 3000
     title:update()
     test.equal(title.entries[1].x, title.project_rect.x + title.project_rect.w)
