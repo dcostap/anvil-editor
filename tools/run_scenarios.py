@@ -31,7 +31,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import perf_diagnostics  # noqa: E402
 import perf_fixtures  # noqa: E402
-from perf_fixtures import FolderSpec, MarkdownSpec, ProjectSetSpec, RepoSpec  # noqa: E402
+from perf_fixtures import FolderSpec, MarkdownSpec, NoteSpec, ProjectSetSpec, RepoSpec  # noqa: E402
 import run_render_perf_gate as gate  # noqa: E402
 
 RESULTS_ROOT = gate.ROOT / "tools" / "perf-results" / "scenarios"
@@ -53,12 +53,17 @@ PROJECTS_MANY = ProjectSetSpec("projects-many", projects=24)
 # A note with an embedded image of about 640 KB, a typical pasted screenshot.
 MARKDOWN_IMAGE = MarkdownSpec("markdown-image")
 MARKDOWN_TABLES = MarkdownSpec("markdown-tables", tables=12)
+# A hand-written gallery of every Markdown feature, repeated 11 times: about 19,000 lines.
+MARKDOWN_GALLERY = NoteSpec("markdown-gallery", "tests/fixtures/markdown/gallery-benchmark.md")
+GALLERY_SETTINGS = {"note": MARKDOWN_GALLERY.note, "start_note": MARKDOWN_GALLERY.start_note}
+# A prose line in the middle copy of the gallery.
+GALLERY_MIDDLE_LINE = 8736
 
 
 @dataclass(frozen=True)
 class Scenario:
     scene: str
-    fixture: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec
+    fixture: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | NoteSpec
     actions: int
     suites: tuple[str, ...]
     settings: dict[str, Any] = field(default_factory=dict)
@@ -132,6 +137,22 @@ SCENARIOS: dict[str, Scenario] = {
         "markdown_resize", MARKDOWN_TABLES, actions=48, suites=("smoke",), window=(780, 900),
         settings={"note": MARKDOWN_TABLES.note, "image_line": MARKDOWN_TABLES.image_line},
         frame_budget_ms=16.7, frame_spike_ms=33.0),
+    # Open the gallery from a short note until Live Preview shows it parsed and wrapped.
+    "markdown-gallery-open": Scenario(
+        "markdown_gallery", MARKDOWN_GALLERY, actions=1, suites=("markdown",),
+        settings=dict(GALLERY_SETTINGS, mode="open"), action_budget_ms=500.0),
+    # Each action scrolls three wheel ticks, including the smooth-scroll animation.
+    "markdown-gallery-wheel": Scenario(
+        "markdown_gallery", MARKDOWN_GALLERY, actions=60, suites=("markdown",),
+        settings=dict(GALLERY_SETTINGS, mode="wheel", ticks=3), action_budget_ms=400.0),
+    # The caret enters and leaves examples, so their source is revealed and hidden.
+    "markdown-gallery-caret": Scenario(
+        "markdown_gallery", MARKDOWN_GALLERY, actions=80, suites=("markdown",),
+        settings=dict(GALLERY_SETTINGS, mode="caret", line=GALLERY_MIDDLE_LINE),
+        action_budget_ms=200.0),
+    "markdown-gallery-type": Scenario(
+        "markdown_gallery", MARKDOWN_GALLERY, actions=60, suites=("markdown",),
+        settings=dict(GALLERY_SETTINGS, mode="type", line=GALLERY_MIDDLE_LINE)),
     "fuzzy-files-medium": Scenario(
         "fuzzy_files", REPO_MEDIUM, actions=24, suites=("smoke",), targets=24,
         action_budgets={"first-query": 1000.0}),

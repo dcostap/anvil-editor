@@ -27,6 +27,7 @@ import zlib
 GENERATOR_VERSION = 1
 FIXED_MTIME = 1700000000
 COMMITTER = "Anvil Fixture <fixture@example.invalid>"
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 WORDS = (
     "alpha", "anchor", "atlas", "beacon", "bridge", "buffer", "cache", "canvas",
@@ -124,6 +125,32 @@ class MarkdownSpec:
     def image_line(self) -> int:
         # Prose lines, then a blank line, then the image.
         return self.lines_before + 2
+
+
+@dataclass(frozen=True)
+class NoteSpec:
+    """A folder with a checked-in Markdown note and a short note to start from.
+
+    Use it for a hand-written specimen that a generator cannot reproduce.
+    """
+    name: str
+    # Repository-relative path of the checked-in note.
+    source: str
+
+    @property
+    def key(self) -> str:
+        digest = hashlib.sha256((REPO_ROOT / self.source).read_bytes()).hexdigest()
+        payload = json.dumps({"version": GENERATOR_VERSION, "kind": "note", **asdict(self),
+                              "content": digest}, sort_keys=True)
+        return f"{self.name}-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+
+    @property
+    def note(self) -> str:
+        return "notes/" + Path(self.source).name
+
+    @property
+    def start_note(self) -> str:
+        return "notes/start.md"
 
 
 def default_cache_root() -> Path:
@@ -347,6 +374,12 @@ def build_markdown(spec: MarkdownSpec, root: Path) -> None:
     write_text(root / spec.note, "\n".join(lines) + "\n")
 
 
+def build_note(spec: NoteSpec, root: Path) -> None:
+    (root / "notes").mkdir(parents=True)
+    shutil.copyfile(REPO_ROOT / spec.source, root / spec.note)
+    write_text(root / spec.start_note, "# Start\n\nA short note to open first.\n")
+
+
 def pathspec(root: Path, command: str, paths: list[str], *options: str) -> None:
     if paths:
         # Large lists exceed the Windows command-line limit.
@@ -447,7 +480,7 @@ def members(spec: ProjectSetSpec) -> list[tuple[str, RepoSpec]]:
             for index in range(spec.projects)]
 
 
-def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec, cache_root: Path | None = None,
+def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | NoteSpec, cache_root: Path | None = None,
                 rebuild: bool = False, touched: list[str] | None = None) -> Path:
     """Return a ready fixture root, building it into the cache when needed.
 
@@ -468,6 +501,8 @@ def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec, cac
             build_folder(spec, root)
         elif isinstance(spec, MarkdownSpec):
             build_markdown(spec, root)
+        elif isinstance(spec, NoteSpec):
+            build_note(spec, root)
         else:
             build_repo(spec, root)
         marker.write_text(json.dumps(asdict(spec), indent=2), encoding="utf-8")

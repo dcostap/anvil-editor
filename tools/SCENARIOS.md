@@ -8,6 +8,7 @@ change with a baseline and to check pixels.
 ```sh
 python tools/run_scenarios.py                    # smoke suite, 3 scoring runs each
 python tools/run_scenarios.py --suite scale      # 100,000-file repository
+python tools/run_scenarios.py --suite markdown   # the 19,000-line Markdown gallery
 python tools/run_scenarios.py --list
 python tools/run_scenarios.py --scenario filetree-scroll-folder --runs 1 --no-build
 ```
@@ -25,6 +26,9 @@ A scenario names four things:
     untracked, and ignored files.
   - `FolderSpec`: generated code outside any Git repository.
   - `ProjectSetSpec`: a folder that holds several repositories.
+  - `MarkdownSpec`: a generated note with an embedded image and tables.
+  - `NoteSpec`: a checked-in note from `tests/fixtures`, for a hand-written
+    specimen that a generator cannot reproduce.
 - **Scene**: a Lua module in `tests/scenes`. It sets up the editor, reports
   when the setup is ready, and dispatches each action.
 - **Launch mode**: `direct` runs one Project process. `shell` runs the native
