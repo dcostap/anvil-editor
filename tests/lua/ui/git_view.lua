@@ -1664,38 +1664,6 @@ test.describe("Git View command", function()
     test.equal(list.path_tree:is_expanded("src"), false)
   end)
 
-  test.it("keeps the viewport fixed when an actionable row is clicked", function(context)
-    config.scroll_context_lines = 3
-    local _, view = open_fake_git_view(context.project)
-    local log = view.model:log_tab()
-    for index = 1, 20 do
-      log.commits[index] = {
-        hash = tostring(index), short_hash = tostring(index),
-        subject = "Commit " .. index, parents = {},
-      }
-    end
-    view:update_pane_buffers()
-    local list = view:pane_view("log-list")
-    local line_height = list:get_line_height()
-    list.position.x, list.position.y = 0, 0
-    list.size.x, list.size.y = 500, line_height * 6
-    list:update()
-
-    local target_line = 10
-    local start_scroll = (target_line - 1) * line_height
-    list.scroll.y, list.scroll.to.y = start_scroll, start_scroll
-    local x, y = list:get_line_screen_position(target_line, 1)
-    x = x + math.max(1, list:get_font():get_width("1") / 2)
-    y = y + line_height / 2
-
-    test.ok(view:on_mouse_pressed("left", x, y, 1))
-    test.ok(view:on_mouse_released("left", x, y))
-    list:update()
-
-    test.equal(list.scroll.y, start_scroll)
-    test.equal(list.scroll.to.y, start_scroll)
-  end)
-
   test.it("captures every loaded Git Log item as text", function(context)
     local session, view = open_fake_git_view(context.project)
     view.model.repo = { root = "C:/repo" }

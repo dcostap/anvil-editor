@@ -877,6 +877,19 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
         pane.git_pressed_action_line = action_line
         pane.git_pressed_action_clicks = clicks or 1
       end
+    elseif action_line and pane.row_selection_mode == nil then
+      -- The changed-file list selects the clicked row. A double click opens a
+      -- file or toggles a folder on release.
+      local text = pane.buffer.lines[action_line] or ""
+      pane.buffer:clear_search_selections()
+      pane.buffer:set_selection(action_line, 1, action_line, #text)
+      pane.mouse_selecting = nil
+      -- The clicked row is visible. Do not apply keyboard caret scroll context.
+      pane.last_line1, pane.last_col1, pane.last_line2, pane.last_col2 =
+        pane.buffer:get_selection()
+      pane.git_pressed_action_line = action_line
+      pane.git_pressed_action_clicks = clicks or 1
+      core.blink_reset()
     elseif button == "left" and pane.buffer and pane.resolve_screen_position then
       local cmd = clicks == 2 and "core:set_cursor_word" or clicks and clicks >= 3 and "core:set_cursor_line" or "core:set_cursor"
       if pane.row_selection_mode == false then
