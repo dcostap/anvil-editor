@@ -3749,23 +3749,30 @@ function edit_visual_projection.pending_list_render(
       break
     end
   end
-  local task_prefix_will_reveal = parsed.task and old_prefix and old_prefix.task
-    and old_prefix.indent ~= parsed.indent
+  -- A preview item's previous row is rebuilt from its current source, so the
+  -- task prefix before the edit comes from the row's pre-edit source.
+  local prior_prefix = old_prefix
+  if previous and previous.prior_source_text then
+    prior_prefix = edit_visual_projection.source_list_prefix(previous.prior_source_text)
+  end
+  local task_prefix_will_reveal = parsed.task and prior_prefix and prior_prefix.task
+    and prior_prefix.indent ~= parsed.indent
     and edit_visual_projection.selection_reveals_list_prefix(
       selection_state, line, parsed.content_col
     )
   -- List commands can update source before they restore the body caret. Keep
   -- the prior task presentation instead of revealing that transient caret.
-  local stable_task_prefix = parsed.task and old_prefix and old_prefix.task
-    and old_prefix.indent == parsed.indent
-    and old_prefix.token == parsed.token
-    and old_prefix.task_state == parsed.task_state
+  local stable_task_prefix = parsed.task and prior_prefix and prior_prefix.task
+    and prior_prefix.indent == parsed.indent
+    and prior_prefix.token == parsed.token
+    and prior_prefix.task_state == parsed.task_state
   local reveal = previous_revealed or (not parsed.task or stable_task_prefix)
     and edit_visual_projection.selection_reveals_list_prefix(
       selection_state, line, parsed.content_col
     )
   local render = clone_render_line(previous or {})
   render.source_text = current_text
+  render.prior_source_text = nil
   render.x_offset = nil
   render.continuation_indent_col = parsed.content_col
   render.continuation_indent_font = body_font
@@ -4370,9 +4377,14 @@ local function capture_pre_edit_renders(view, change)
         or pending.render_line.markdown_pending_code_background)
       or false
     local raw_block = raw_block_for_line(view, line)
-    local preview_item = edit_visual_projection.preview_list_item_for_line(
-      view, line, source_text
-    ) ~= nil
+    -- A pending edit has no semantic blocks for this line yet. Its pending
+    -- row already records whether the line belongs to a raw block.
+    local pending_raw = pending and pending.render_line
+      and pending.render_line.raw_passthrough == true
+    local preview_item = not pending_raw
+      and edit_visual_projection.preview_list_item_for_line(
+        view, line, source_text
+      ) ~= nil
     local raw_source_removed = not preview_item
       and removes_block_source(view, transaction, raw_block)
     if raw_source_removed then removed_raw_rows = removed_raw_rows + 1 end
@@ -4754,7 +4766,11 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
       -- Preview-only list items use source-local geometry on every edit.
       -- Do not carry a paragraph's old continuation indent across frames.
       render = edit_visual_projection.pending_list_render(
-        view, line, { source_text = source, fragments = render.fragments },
+        view, line, {
+          source_text = source,
+          fragments = render.fragments,
+          prior_source_text = captured and captured.source_text or nil,
+        },
         source, projected_selection_state
       ) or render
     end
