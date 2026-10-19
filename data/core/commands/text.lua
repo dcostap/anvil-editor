@@ -202,14 +202,17 @@ function prompt_save_as(dv, text)
   })
 end
 
--- Languages whose quoted strings escape with a backslash.
-local backslash_escape_syntaxes = {
-  ["c"] = true, ["c++"] = true, ["c#"] = true, ["css"] = true, ["dart"] = true,
-  ["go"] = true, ["java"] = true, ["javascript"] = true, ["json"] = true,
-  ["jsx"] = true, ["kotlin"] = true, ["lua"] = true, ["odin"] = true,
-  ["php"] = true, ["python"] = true, ["rust"] = true, ["scala"] = true,
-  ["swift"] = true, ["tsx"] = true, ["typescript"] = true, ["zig"] = true,
-}
+-- A syntax escapes with a backslash inside `quote` when it declares that
+-- quote's string pattern with a backslash escape, as in { '"', '"', '\\' }.
+local function syntax_escapes_quote(syntax, quote)
+  for _, rule in ipairs(syntax and syntax.patterns or {}) do
+    local pattern = rule.pattern
+    if type(pattern) == "table" and pattern[1] == quote and pattern[2] == quote and pattern[3] == "\\" then
+      return true
+    end
+  end
+  return false
+end
 
 local function token_type_at(buffer, line, col)
   local token_col = 1
@@ -222,8 +225,7 @@ end
 -- Returns the quote of the single-line string literal that contains the
 -- position before `col`, or nil outside such a string.
 local function string_quote_at(buffer, line, col)
-  local syntax_name = tostring(buffer.syntax and buffer.syntax.name or ""):lower()
-  if not backslash_escape_syntaxes[syntax_name] or col <= 1 then return nil end
+  if col <= 1 then return nil end
   local token_type = token_type_at(buffer, line, col - 1)
   if not token_type or not token_type:find("^string") then return nil end
   local text = buffer.lines[line] or ""
@@ -243,7 +245,8 @@ local function string_quote_at(buffer, line, col)
     end
   end
   -- Triple-quoted strings take text as written.
-  if quote and text:sub(1, col - 1):find(quote:rep(3), 1, true) then return nil end
+  if not quote or not syntax_escapes_quote(buffer.syntax, quote) then return nil end
+  if text:sub(1, col - 1):find(quote:rep(3), 1, true) then return nil end
   return quote
 end
 

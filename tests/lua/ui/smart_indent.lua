@@ -2,6 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
 local Buffer = require "core.buffer"
+local syntax = require "core.syntax"
 local TextView = require "core.textview"
 local test = require "core.test"
 
@@ -747,6 +748,29 @@ test.describe("smart indentation", function()
     test.ok(command.perform("core:paste"))
 
     test.equal(text(buffer), 'a := "x\\"y"\nb := "x\\"y"\n')
+  end)
+
+  test.it("paste escapes inside strings of a language whose syntax declares backslash escapes", function(context)
+    syntax.add {
+      name = "Paste Escape Test Language",
+      files = { "%.pasteesc$" },
+      patterns = {
+        { pattern = { '"', '"', '\\' }, type = "string" },
+        { pattern = { "'", "'" }, type = "string" },
+      },
+      symbols = {},
+    }
+    local buffer, view = new_editor(context, "a = \"\"\nb = ''", "sample.pasteesc")
+    core.set_active_view(view)
+    system.set_clipboard('x"\\y')
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+    buffer:set_selection(1, 6, 1, 6)
+    test.ok(command.perform("core:paste"))
+    buffer:set_selection(2, 6, 2, 6)
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "a = \"x\\\"\\\\y\"\nb = 'x\"\\y'\n")
   end)
 
   test.it("paste inside a triple-quoted string does not escape", function(context)
