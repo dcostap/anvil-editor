@@ -3640,6 +3640,7 @@ function current_composed_rows(view)
   local signature = view:visual_row_cache_signature()
   local cache = view.__composed_visual_row_cache
   if not cache or cache.signature ~= signature then
+    local build_start = system.get_time()
     local entries = view:build_composed_visual_rows()
     local position_rows = {}
     for index, entry in ipairs(entries) do
@@ -3670,6 +3671,15 @@ function current_composed_rows(view)
       position_rows = position_rows,
     }
     view.__composed_visual_row_cache = cache
+    perf_frame_add("textview_composed_row_builds", 1)
+    local build_ms = (system.get_time() - build_start) * 1000
+    perf_frame_add("textview_composed_row_build_ms", build_ms)
+    if build_ms >= 16 then
+      core.log_quiet(
+        "Text View slow composed row build: elapsed=%.1fms rows=%d signature=%s path=%s",
+        build_ms, #entries, signature, view.buffer:get_name()
+      )
+    end
   end
   return cache
 end
@@ -4130,11 +4140,14 @@ function TextView:get_visual_row_metric_cache()
   local lookup_start = perf_active and system.get_time()
   perf_frame_add("textview_visual_metric_cache_calls", 1)
   local pending_cache = self.__visual_metric_cache
-  if pending_cache and pending_cache.pending_lines
-    and not resolve_composed_metric_lines(self, pending_cache)
-    and self.__visual_metric_cache == pending_cache
-  then
-    clear_visual_metric_cache(self)
+  if pending_cache and pending_cache.pending_lines then
+    local resolve_start = perf_active and system.get_time()
+    if not resolve_composed_metric_lines(self, pending_cache)
+      and self.__visual_metric_cache == pending_cache
+    then
+      clear_visual_metric_cache(self)
+    end
+    perf_elapsed("textview_visual_metric_resolve_ms", resolve_start)
   end
   local signature_start = perf_active and system.get_time()
   local signature = self:get_visual_metric_signature()
