@@ -952,6 +952,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_RAISE:
   case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
+  case ANVIL_SURFACE_MSG_RESTART:
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
     return size == 0;
@@ -959,7 +960,6 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return !memchr(payload, 0, size);
   case ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW:
     return size >= 1 && ((const char *)payload)[size - 1] == 0 && !memchr(payload, 0, size - 1);
-  case ANVIL_SURFACE_MSG_RESTART:
   case ANVIL_SURFACE_MSG_SELECT_PROJECT:
   case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
     return size > 1 && size < 32768 && ((const char *)payload)[size - 1] == 0 &&
@@ -3227,10 +3227,10 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     }
     break;
   case ANVIL_SURFACE_MSG_RESTART:
-    if (message->size > 1 && message->size < 32768 &&
-        ((const char *)payload)[message->size - 1] == 0 && !memchr(payload, 0, message->size - 1)) {
+    /* A Project restarts as itself. Its current directory follows the focused file and can be another folder. */
+    if (project->project_path) {
       free(project->restart_path);
-      project->restart_path = _strdup(payload);
+      project->restart_path = _strdup(project->project_path);
       project->intentional_exit = true;
     }
     break;

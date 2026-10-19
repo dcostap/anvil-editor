@@ -1830,9 +1830,8 @@ static int f_get_startup_path_arguments(lua_State *L) {
 }
 
 static int f_prepare_project_exit(lua_State *L) {
-  const char *path = luaL_optstring(L, 1, NULL);
-  if (path) luaL_argcheck(L, strlen(path) < 32768 && !strchr(path, '\n') && !strchr(path, '\r'), 1, "invalid Project path");
-  anvil_hosted_surface_exit_intent(path);
+  (void)L;
+  anvil_hosted_surface_exit_intent(false);
   return 0;
 }
 

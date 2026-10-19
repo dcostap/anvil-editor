@@ -279,7 +279,7 @@ int main(int test_argc, char **test_argv) {
     CHECK(dialog_results[1].status == 2 && dialog_results[1].count == 0);
     CHECK(dialog_results[2].status == 3);
     CHECK(!strcmp(SDL_GetError(), "Owned native dialog failed"));
-    anvil_hosted_surface_exit_intent(NULL);
+    anvil_hosted_surface_exit_intent(false);
     SetEvent(finish);
     SDL_WaitThread(thread, NULL);
     puts("PASS asynchronous native dialog requests, complete paths, filter, cancel, and failure");
@@ -303,7 +303,7 @@ int main(int test_argc, char **test_argv) {
       } else SDL_Delay(1);
     }
     CHECK(final_position && barrier);
-    anvil_hosted_surface_exit_intent(NULL);
+    anvil_hosted_surface_exit_intent(false);
     SetEvent(finish);
     SDL_WaitThread(thread, NULL);
     puts("PASS stalled UI retains 100001 motion packets and the final position");
@@ -344,7 +344,7 @@ int main(int test_argc, char **test_argv) {
   while (!SDL_GetAtomicInt(&frame_checked) && SDL_GetTicks() < deadline) SDL_Delay(1);
   CHECK(SDL_GetAtomicInt(&frame_checked) == 1);
   SDL_DestroySurface(surface);
-  anvil_hosted_surface_exit_intent(NULL);
+  anvil_hosted_surface_exit_intent(false);
   SetEvent(finish);
   SDL_WaitThread(thread, NULL);
   puts("PASS ordered native focus and complete UTF-8 input payloads");

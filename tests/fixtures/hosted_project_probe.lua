@@ -726,6 +726,10 @@ if project:find("/driver$", 1) then
         else
           assert(replacement.shell_pid == state.shell_pid, "restart replaced the shell window process")
         end
+        if action == "restart" then
+          assert(replacement.project == root .. "/Project",
+            "restart opened " .. tostring(replacement.project) .. " instead of its own Project")
+        end
         save(root .. "/continue.lua", { continue = true })
       elseif action == "shell-loss" or action == "stalled-loss" or action == "end-loss" then
         assert(wait_for(function() return kernel.WaitForSingleObject(handle, 0) == 0 end, 8), "Project exceeded its shell-loss deadline")
@@ -813,7 +817,7 @@ else
       assert(wait_for(function() return load(root .. "/continue.lua") end, 15)); quit(); return
     end
     if old and (action:match("^fault%-") or action:match("^startup%-") or action == "restart-startup-timer" or action == "restart" or action == "switch" or action == "new-window") then
-      save(root .. "/replacement.lua", { pid = pid, shell_pid = shell_pid })
+      save(root .. "/replacement.lua", { pid = pid, shell_pid = shell_pid, project = project })
       assert(wait_for(function() return load(root .. "/continue.lua") end, 15))
       quit(); return
     end
@@ -1096,7 +1100,10 @@ else
       local handle = own_handle(shell_pid)
       kernel.TerminateProcess(handle, 99); kernel.CloseHandle(handle)
       if action == "stalled-loss" then while true do end end
-    elseif action == "restart" then command.perform("core:restart")
+    elseif action == "restart" then
+      -- A focused file outside the Project must not choose the Project that restarts.
+      core.set_active_view(core.open_file(root .. "/Replacement/edited.txt"))
+      command.perform("core:restart")
     elseif action == "switch" then core.open_project_in_same_window(root .. "/Replacement")
     elseif action == "new-window" then
       core.open_project_in_new_window(root .. "/Replacement")

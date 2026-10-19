@@ -895,12 +895,11 @@ bool anvil_hosted_surface_show_dialog(uint32_t id, SDL_FileDialogType type, SDL_
   return true;
 }
 
-void anvil_hosted_surface_exit_intent(const char *restart_path) {
+void anvil_hosted_surface_exit_intent(bool restart) {
   if (!hosted.active || !hosted.queue_lock) return;
   SDL_SetAtomicInt(&hosted.intentional_exit, 1);
   ResetEvent(hosted.exit_sent);
-  if (restart_path) send_message(ANVIL_SURFACE_MSG_RESTART, restart_path, (uint32_t)strlen(restart_path) + 1);
-  else send_message(ANVIL_SURFACE_MSG_EXIT_INTENT, NULL, 0);
+  send_message(restart ? ANVIL_SURFACE_MSG_RESTART : ANVIL_SURFACE_MSG_EXIT_INTENT, NULL, 0);
   /* Teardown only. Normal frame and window requests never wait for the pipe. */
   if (WaitForSingleObject(hosted.exit_sent, 500) != WAIT_OBJECT_0) SDL_Log("Project exit-intent delivery timed out");
 }
@@ -1432,7 +1431,7 @@ bool anvil_hosted_surface_adopted_event(Uint32 type) { (void)type; return false;
 bool anvil_hosted_surface_gone_event(Uint32 type) { (void)type; return false; }
 bool anvil_hosted_surface_await_adoption(void) { return false; }
 void anvil_hosted_surface_finish_adoption(void) {}
-void anvil_hosted_surface_exit_intent(const char *path) { (void)path; }
+void anvil_hosted_surface_exit_intent(bool restart) { (void)restart; }
 void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) { (void)decision; }
 void anvil_hosted_surface_dialog_result_failed(void) {}
 void anvil_hosted_surface_render_failed(const char *cause) { (void)cause; }

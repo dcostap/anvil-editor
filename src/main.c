@@ -608,14 +608,8 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
 
     if (restart) {
       if (anvil_hosted_surface_active()) {
-        char *path = SDL_GetCurrentDirectory();
-        if (!path) return SDL_APP_FAILURE;
-        /* SDL ends the directory with a separator. The shell keeps the Project path as the folder's name. */
-        size_t length = strlen(path);
-        while (length > 1 && (path[length - 1] == '\\' || path[length - 1] == '/') && path[length - 2] != ':')
-          path[--length] = 0;
-        anvil_hosted_surface_exit_intent(path);
-        SDL_free(path);
+        /* The shell starts this Project again in a new process. */
+        anvil_hosted_surface_exit_intent(true);
         return SDL_APP_SUCCESS;
       }
       /* Re-initialize the Lua state in place — mirrors the goto in old main(). */
@@ -630,7 +624,7 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
       return SDL_APP_CONTINUE;
     }
 
-    anvil_hosted_surface_exit_intent(NULL);
+    anvil_hosted_surface_exit_intent(false);
     return exit_status == 0 ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
   }
 
