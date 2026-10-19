@@ -132,6 +132,7 @@ test.describe("Pane Status Bars", function()
       draw_rounded_rect = renderer.draw_rounded_rect,
       push_clip_rect = core.push_clip_rect,
       pop_clip_rect = core.pop_clip_rect,
+      get_time = system.get_time,
     }
     core.status_bar = StatusBar()
     root = RootPanel()
@@ -162,6 +163,7 @@ test.describe("Pane Status Bars", function()
     renderer.draw_rounded_rect = saved.draw_rounded_rect
     core.push_clip_rect = saved.push_clip_rect
     core.pop_clip_rect = saved.pop_clip_rect
+    system.get_time = saved.get_time
     core.root_panel = saved.root_panel
     core.status_bar = saved.status_bar
     core.active_view = saved.active_view
@@ -312,6 +314,46 @@ test.describe("Pane Status Bars", function()
     for _, text in ipairs(texts) do
       test.ok(text.x + text.w <= right_edge, string.format("tooltip text ends at %d, past %d", text.x + text.w, right_edge))
     end
+  end)
+
+  test.it("clears file hover and its tooltip until the pointer returns from the Project Sidebar", function(context)
+    local _, right = two_panes()
+    local filename = join_path(USERDIR, "hover.lua")
+    right.current_view.buffer:set_filename(filename, filename)
+    root:update()
+    local bar = bar_of(right)
+    local x, y = entry_center(right, "text:file")
+    local now = system.get_time()
+    system.get_time = function() return now end
+
+    local function shows_path_tooltip()
+      context.drawn = {}
+      root.deferred_draws = {}
+      bar:draw()
+      while #root.deferred_draws > 0 do
+        local item = table.remove(root.deferred_draws)
+        item.fn(table.unpack(item, 1, #item))
+      end
+      return table.concat(context.drawn):find("Click to copy the full path", 1, true) ~= nil
+    end
+
+    root:on_mouse_moved(x, y, 0, 0)
+    now = now + 10
+    test.ok(shows_path_tooltip(), "the file tooltip did not appear")
+    test.equal(bar.cursor, "hand")
+
+    -- The shell sends mouseleft when the pointer enters the Project Sidebar.
+    root:on_mouse_left()
+    for _ = 1, 3 do root:update() end
+    now = now + 10
+    test.ok(not shows_path_tooltip(), "the file tooltip returned after mouse exit")
+    test.equal(bar.cursor, "arrow")
+
+    root:on_mouse_moved(x, y, 0, 0)
+    root:update()
+    now = now + 10
+    test.ok(shows_path_tooltip(), "the file tooltip did not return on mouse entry")
+    test.equal(bar.cursor, "hand")
   end)
 
   test.it("shortens a long path from the start and keeps the file name", function(context)
