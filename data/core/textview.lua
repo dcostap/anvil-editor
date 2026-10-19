@@ -1889,6 +1889,7 @@ local metric_tree_build
 -- Marks a row whose height no provider measured from a render plan.
 local UNMEASURED_ROW = {}
 local compute_visual_row_height
+local current_composed_rows
 
 local function invalidate_visual_metric_rows(view, cache, row1, row2)
   row1 = common.clamp(math.floor(row1), 1, cache.row_count)
@@ -1900,6 +1901,159 @@ local function invalidate_visual_metric_rows(view, cache, row1, row2)
     view.render_cache_diagnostics.metric_invalidations + row2 - row1 + 1
 end
 
+---Replace metric rows `old_row1..old_row2` with freshly measured rows
+---`new_row1..new_row2`. Every other row keeps its measured height.
+local function splice_visual_metric_rows(view, cache, old_row1, old_row2, new_row1, new_row2, row_count)
+  local current_wrap_generation = view.__wrap_layout_generation or 0
+  local remove_count = math.max(0, old_row2 - old_row1 + 1)
+  local insert_count = math.max(0, new_row2 - new_row1 + 1)
+  -- Reconstructing a line render can leave the wrapped-row topology
+  -- unchanged. Keep the last resolved heights in that case: replacing
+  -- them with base-line placeholders makes the viewport anchor resolve
+  -- against a transient, internally inconsistent metric tree.
+  if old_row1 == new_row1 and remove_count == insert_count then
+    invalidate_visual_metric_rows(view, cache, new_row1, new_row2)
+    cache.wrap_layout_generation = current_wrap_generation
+    cache.text_revision = view.buffer.text_revision or 0
+    cache.signature = view:get_visual_metric_signature()
+    return
+  end
+  local old_anchor = metric_tree_row_at_y(
+    cache.height_tree, cache.row_count, math.max(0, view.scroll and view.scroll.y or 0)
+  )
+  local removed_height = 0
+  for row = old_row1, old_row2 do
+    removed_height = removed_height + (cache.heights[row] or 0)
+  end
+  local default_height = view:get_line_height()
+  local providers = view:visual_metric_provider_entries()
+  local inserted = {}
+  local inserted_plans = {}
+  local inserted_height = 0
+  local line_metrics_cache = {}
+  -- Measure the replacement slice before publishing the new metric tree.
+  -- A tree containing the new row mapping but temporary base heights can
+  -- map the old scroll offset to the wrong anchor row, causing the later
+  -- dirty pass to apply the same height change as a viewport correction.
+  for offset = 0, insert_count - 1 do
+    local height, plan = compute_visual_row_height(
+      view, new_row1 + offset, providers, default_height,
+      nil, false, line_metrics_cache
+    )
+    inserted[offset + 1] = height
+    inserted_plans[offset + 1] = plan == nil and UNMEASURED_ROW or plan
+    inserted_height = inserted_height + height
+  end
+  common.splice(cache.heights, old_row1, remove_count, inserted)
+  common.splice(cache.row_plans, old_row1, remove_count, inserted_plans)
+
+  local shifted_dirty = {}
+  local row_delta = insert_count - remove_count
+  for row in pairs(cache.dirty_rows or {}) do
+    if row < old_row1 then
+      shifted_dirty[row] = true
+    elseif row > old_row2 then
+      shifted_dirty[row + row_delta] = true
+    end
+  end
+  cache.dirty_rows = next(shifted_dirty) and shifted_dirty or nil
+  cache.row_count = row_count
+  cache.total_height = cache.total_height - removed_height + inserted_height
+  cache.height_tree = metric_tree_build(cache.heights, cache.row_count)
+  if old_row2 < old_anchor and view.scroll and not view.__pending_viewport_anchor then
+    local delta = inserted_height - removed_height
+    view.scroll.y = view.scroll.y + delta
+    view.scroll.to.y = view.scroll.to.y + delta
+  end
+  cache.invalidated_rows = (cache.invalidated_rows or 0) + insert_count
+  cache.wrap_layout_generation = current_wrap_generation
+  cache.text_revision = view.buffer.text_revision or 0
+  cache.signature = view:get_visual_metric_signature()
+  view.render_cache_diagnostics.metric_invalidations =
+    view.render_cache_diagnostics.metric_invalidations + insert_count
+  view.render_cache_diagnostics.metric_row_splices =
+    view.render_cache_diagnostics.metric_row_splices + 1
+  perf_frame_add("textview_visual_metric_row_splices", 1)
+  perf_frame_add("textview_visual_metric_row_splice_rows", insert_count)
+end
+
+-- Two composed rows match when a metric height measured for one fits the other.
+local function same_composed_row(a, b)
+  if a.type ~= b.type or a.line ~= b.line or a.row_in_line ~= b.row_in_line then
+    return false
+  end
+  if a.type == "fold" then return a.fold == b.fold end
+  if a.type == "provider" then
+    return a.provider_id == b.provider_id and a.placement == b.placement
+      and a.provider_row == b.provider_row
+  end
+  if a.type == "extra" then
+    return a.provider_id == b.provider_id and a.placement == b.placement
+      and a.row_in_extra == b.row_in_extra
+  end
+  return true
+end
+
+---Mark or splice the metric rows of changed lines in a view whose rows are
+---composed from collapsed folds and provider rows. Return false unless every
+---row outside those lines matches the rows the cache measured.
+local function invalidate_composed_metric_lines(view, cache, line1, line2, wrap_change)
+  local old_entries = cache.composed_entries
+  if not old_entries or #old_entries ~= cache.row_count
+    or cache.signature ~= view:get_visual_metric_signature(
+      cache.wrap_layout_generation, cache.row_count, cache.text_revision)
+  then
+    return false
+  end
+  local composed = current_composed_rows(view)
+  local entries = composed.entries
+  -- Rows are measured through the current UI snapshot. Use the local path
+  -- only when that snapshot already shows the current composition.
+  if view:composed_visual_rows() ~= entries then return false end
+  local line_count = #view.buffer.lines
+  line1 = common.clamp(math.floor(line1), 1, line_count)
+  line2 = common.clamp(math.floor(line2 or line1), line1, line_count)
+  if wrap_change and wrap_change.line1 and wrap_change.line2 then
+    line1 = math.max(1, math.min(line1, wrap_change.line1))
+    line2 = math.min(line_count, math.max(line2, wrap_change.line2))
+  end
+  local position_rows = composed.position_rows
+  local row_count = #entries
+  -- Provider rows placed before a line follow the previous line's rows.
+  local row1 = position_rows[math.max(1, line1 - 1)] or 1
+  local last_row = position_rows[line2] or row1
+  local next_row = row_count + 1
+  for line = line2 + 1, line_count do
+    local row = position_rows[line]
+    if row and row > last_row then
+      next_row = row
+      break
+    end
+  end
+  local row2 = next_row - 1
+  local delta = row_count - cache.row_count
+  local old_row2 = row2 - delta
+  if old_row2 < row1 - 1 then return false end
+  if entries ~= old_entries then
+    for row = 1, row1 - 1 do
+      if not same_composed_row(entries[row], old_entries[row]) then return false end
+    end
+    for row = next_row, row_count do
+      if not same_composed_row(entries[row], old_entries[row - delta]) then return false end
+    end
+  end
+  if delta == 0 then
+    invalidate_visual_metric_rows(view, cache, row1, row2)
+    cache.wrap_layout_generation = view.__wrap_layout_generation or 0
+    cache.text_revision = view.buffer.text_revision or 0
+    cache.signature = view:get_visual_metric_signature()
+  else
+    splice_visual_metric_rows(view, cache, row1, old_row2, row1, row2, row_count)
+  end
+  cache.composed_entries = entries
+  return true
+end
+
 function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   self.__visual_metric_snapshot_kind = nil
   self.__visual_metric_snapshot_id = nil
@@ -1908,7 +2062,9 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   local cache = self.__visual_metric_cache
   local wrap_change = self.__line_render_wrap_change
   self.__line_render_wrap_change = nil
-  if line1 and not self:has_composed_visual_rows() then
+  if line1 and cache and self:has_composed_visual_rows() then
+    if invalidate_composed_metric_lines(self, cache, line1, line2, wrap_change) then return end
+  elseif line1 and not self:has_composed_visual_rows() then
     if not cache then return end
     if not self.wrapped_settings then
       invalidate_visual_metric_rows(self, cache, line1, line2)
@@ -1943,78 +2099,8 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
       and current_row_count == wrap_change.new_row_count
       and cache.wrap_layout_generation == wrap_change.old_wrap_generation
     then
-      local old_row1, old_row2 = wrap_change.old_row1, wrap_change.old_row2
-      local new_row1, new_row2 = wrap_change.new_row1, wrap_change.new_row2
-      local remove_count = math.max(0, old_row2 - old_row1 + 1)
-      local insert_count = math.max(0, new_row2 - new_row1 + 1)
-      -- Reconstructing a line render can leave the wrapped-row topology
-      -- unchanged. Keep the last resolved heights in that case: replacing
-      -- them with base-line placeholders makes the viewport anchor resolve
-      -- against a transient, internally inconsistent metric tree.
-      if old_row1 == new_row1 and remove_count == insert_count then
-        invalidate_visual_metric_rows(self, cache, new_row1, new_row2)
-        cache.wrap_layout_generation = current_wrap_generation
-        cache.text_revision = self.buffer.text_revision or 0
-        cache.signature = self:get_visual_metric_signature()
-        return
-      end
-      local old_anchor = metric_tree_row_at_y(
-        cache.height_tree, cache.row_count, math.max(0, self.scroll and self.scroll.y or 0)
-      )
-      local removed_height = 0
-      for row = old_row1, old_row2 do
-        removed_height = removed_height + (cache.heights[row] or 0)
-      end
-      local default_height = self:get_line_height()
-      local providers = self:visual_metric_provider_entries()
-      local inserted = {}
-      local inserted_plans = {}
-      local inserted_height = 0
-      local line_metrics_cache = {}
-      -- Measure the replacement slice before publishing the new metric tree.
-      -- A tree containing the new row mapping but temporary base heights can
-      -- map the old scroll offset to the wrong anchor row, causing the later
-      -- dirty pass to apply the same height change as a viewport correction.
-      for offset = 0, insert_count - 1 do
-        local height, plan = compute_visual_row_height(
-          self, new_row1 + offset, providers, default_height,
-          nil, false, line_metrics_cache
-        )
-        inserted[offset + 1] = height
-        inserted_plans[offset + 1] = plan == nil and UNMEASURED_ROW or plan
-        inserted_height = inserted_height + height
-      end
-      common.splice(cache.heights, old_row1, remove_count, inserted)
-      common.splice(cache.row_plans, old_row1, remove_count, inserted_plans)
-
-      local shifted_dirty = {}
-      local row_delta = insert_count - remove_count
-      for row in pairs(cache.dirty_rows or {}) do
-        if row < old_row1 then
-          shifted_dirty[row] = true
-        elseif row > old_row2 then
-          shifted_dirty[row + row_delta] = true
-        end
-      end
-      cache.dirty_rows = next(shifted_dirty) and shifted_dirty or nil
-      cache.row_count = current_row_count
-      cache.total_height = cache.total_height - removed_height + inserted_height
-      cache.height_tree = metric_tree_build(cache.heights, cache.row_count)
-      if old_row2 < old_anchor and self.scroll and not self.__pending_viewport_anchor then
-        local delta = inserted_height - removed_height
-        self.scroll.y = self.scroll.y + delta
-        self.scroll.to.y = self.scroll.to.y + delta
-      end
-      cache.invalidated_rows = (cache.invalidated_rows or 0) + insert_count
-      cache.wrap_layout_generation = current_wrap_generation
-      cache.text_revision = self.buffer.text_revision or 0
-      cache.signature = self:get_visual_metric_signature()
-      self.render_cache_diagnostics.metric_invalidations =
-        self.render_cache_diagnostics.metric_invalidations + insert_count
-      self.render_cache_diagnostics.metric_row_splices =
-        self.render_cache_diagnostics.metric_row_splices + 1
-      perf_frame_add("textview_visual_metric_row_splices", 1)
-      perf_frame_add("textview_visual_metric_row_splice_rows", insert_count)
+      splice_visual_metric_rows(self, cache, wrap_change.old_row1, wrap_change.old_row2,
+        wrap_change.new_row1, wrap_change.new_row2, current_row_count)
       return
     end
     if cache.row_count == current_row_count and self.wrapped_line_to_idx
@@ -3040,8 +3126,18 @@ function TextView:add_fold_region(opts)
           fold.collapsed = false
           if not fold.__removing then self:notify_fold_listeners("invalidate", fold, reason) end
         else
+          local line1, col1, line2, col2 = fold.line1, fold.col1, fold.line2, fold.col2
+          local span = fold.span
           self:refresh_fold_region(fold)
+          fold.span = marker.end_offset - marker.start_offset
           self:notify_fold_listeners("change", fold, reason)
+          -- An edit on an earlier line only shifts the fold's offsets. Its
+          -- lines, columns, and text are unchanged, so its layout is too.
+          if fold.span == span and fold.line1 == line1 and fold.col1 == col1
+            and fold.line2 == line2 and fold.col2 == col2
+          then
+            return
+          end
         end
         self:bump_fold_generation("marker-" .. tostring(reason))
       end
@@ -3061,6 +3157,8 @@ function TextView:add_fold_region(opts)
     kind = opts.kind,
     metadata = opts.metadata,
     hidden_count = line2 - line1 + 1,
+    -- The marker's byte length tells an edit before the fold from one inside it.
+    span = marker.end_offset - marker.start_offset,
   }
   self.fold_regions[#self.fold_regions + 1] = fold
   table.sort(self.fold_regions, function(a, b)
@@ -3413,20 +3511,12 @@ function TextView:build_composed_visual_rows()
   return entries
 end
 
-function TextView:composed_visual_rows()
-  local snapshot_kind = core.ui_snapshot_active and "ui"
-    or core.render_frame_active and "frame" or nil
-  local snapshot_id = snapshot_kind == "ui" and core.ui_snapshot_id
-    or snapshot_kind == "frame" and core.render_frame_id or nil
-  if snapshot_id and self.__composed_visual_row_snapshot_kind == snapshot_kind
-    and self.__composed_visual_row_snapshot_id == snapshot_id
-  then
-    return self.__composed_visual_row_snapshot_rows
-  end
-  local signature = self:visual_row_cache_signature()
-  local cache = self.__composed_visual_row_cache
+---Return the composed rows for the current state, ignoring any UI snapshot.
+function current_composed_rows(view)
+  local signature = view:visual_row_cache_signature()
+  local cache = view.__composed_visual_row_cache
   if not cache or cache.signature ~= signature then
-    local entries = self:build_composed_visual_rows()
+    local entries = view:build_composed_visual_rows()
     local position_rows = {}
     for index, entry in ipairs(entries) do
       if entry.type == "line" then
@@ -3440,7 +3530,7 @@ function TextView:composed_visual_rows()
     -- A body-only fold keeps its first line as an ordinary rendered line.
     -- Hidden positions still map to that visible header row so navigation and
     -- reveal operations have a deterministic visual anchor.
-    for _, fold in ipairs(self:get_collapsed_folds()) do
+    for _, fold in ipairs(view:get_collapsed_folds()) do
       if fold.show_widget == false then
         local header_row = position_rows[fold.line1]
         if header_row then
@@ -3455,8 +3545,22 @@ function TextView:composed_visual_rows()
       entries = entries,
       position_rows = position_rows,
     }
-    self.__composed_visual_row_cache = cache
+    view.__composed_visual_row_cache = cache
   end
+  return cache
+end
+
+function TextView:composed_visual_rows()
+  local snapshot_kind = core.ui_snapshot_active and "ui"
+    or core.render_frame_active and "frame" or nil
+  local snapshot_id = snapshot_kind == "ui" and core.ui_snapshot_id
+    or snapshot_kind == "frame" and core.render_frame_id or nil
+  if snapshot_id and self.__composed_visual_row_snapshot_kind == snapshot_kind
+    and self.__composed_visual_row_snapshot_id == snapshot_id
+  then
+    return self.__composed_visual_row_snapshot_rows
+  end
+  local cache = current_composed_rows(self)
   if snapshot_id then
     self.__composed_visual_row_snapshot_kind = snapshot_kind
     self.__composed_visual_row_snapshot_id = snapshot_id
@@ -4005,6 +4109,8 @@ function TextView:get_visual_row_metric_cache()
     invalidated_rows = 0,
     default_height = default_height,
     sparse_metrics = sparse_metrics,
+    -- The composed rows these heights measure, compared by later local invalidation.
+    composed_entries = self:has_composed_visual_rows() and self:composed_visual_rows() or nil,
   }
   self.__visual_metric_cache = cache
   apply_viewport_anchor(self, cache)

@@ -1494,6 +1494,8 @@ function LineWrapping.update_multiple_nonstructural_breaks(textview, ranges)
     old_row2 = old_idx2,
     new_row1 = new_line_to_idx[first_line],
     new_row2 = (new_line_to_idx[last_line + 1] or (new_row_count + 1)) - 1,
+    line1 = first_line,
+    line2 = last_line,
     old_wrap_generation = old_wrap_generation,
   }
 
@@ -1595,6 +1597,8 @@ function LineWrapping.update_same_line_suffix_breaks(textview, range, transactio
     old_row2 = next_first_idx - 1,
     new_row1 = textview.wrapped_line_to_idx[line] or first_idx,
     new_row2 = (textview.wrapped_line_to_idx[line + 1] or (new_total + 1)) - 1,
+    line1 = line,
+    line2 = line,
     old_wrap_generation = old_wrap_generation,
   }
 
@@ -1729,6 +1733,8 @@ function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines, o
     old_row2 = old_idx2,
     new_row1 = textview.wrapped_line_to_idx[new_line1] or 1,
     new_row2 = (textview.wrapped_line_to_idx[new_line2 + 1] or (new_row_count + 1)) - 1,
+    line1 = new_line1,
+    line2 = new_line2,
     old_wrap_generation = old_wrap_generation,
   }
   perf_frame_add("linewrapping_update_breaks_calls", 1)
