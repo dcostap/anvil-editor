@@ -805,6 +805,11 @@ cli.register {
       end
     end
 
+    -- Tests check behavior, not motion. Views reach their targets at once
+    -- unless a test turns transitions on.
+    require("core.config").transitions = false
+    core.log_quiet("Lua tests: transitions disabled")
+
     local test_runner = require "core.test"
     local target = system.absolute_path(arguments[1] or "")
     local info = target and system.get_file_info(target)
