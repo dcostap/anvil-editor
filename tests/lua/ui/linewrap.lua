@@ -1111,7 +1111,10 @@ test.describe("line wrapping diff hunk gutter line numbers", function()
     local old_draw_text = renderer.draw_text
     local old_draw_text_known_bounds = renderer.draw_text_known_bounds
     renderer.draw_rect = function(_, _, _, _, color)
-      if color == style.diff_delete_background then count = count + 1 end
+      -- A modified line uses the modify background on its left side.
+      if color == style.diff_delete_background or color == style.diff_modify_background then
+        count = count + 1
+      end
     end
     renderer.draw_text = function(font, text, sx) return sx + font:get_width(text) end
     renderer.draw_text_known_bounds = function(_, _, sx, _, _, _, w) return sx + w end

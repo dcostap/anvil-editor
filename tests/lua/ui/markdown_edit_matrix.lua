@@ -176,6 +176,7 @@ test.describe("Markdown edit matrix", function()
           markdown.live_render.refresh_view(view)
           local instance = test.not_nil(model.peek(buffer))
           ready(instance)
+          linewrapping.complete_async_reconstruction(view)
           local original_visible = fixture.visible or fixture.source
           local sentinel_height = view:get_position_visual_row_height(#buffer.lines, 1)
           local original_box

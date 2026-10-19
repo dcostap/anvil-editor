@@ -47,6 +47,8 @@ local function refresh(view)
     if instance.status ~= "ready" then system.sleep(0.001) end
   end
   test.equal(instance.status, "ready", instance.reason)
+  -- Wrapped rows are rebuilt after publication.
+  linewrapping.complete_async_reconstruction(view)
 end
 
 local function heading_text_y(view, line, text)
@@ -290,10 +292,17 @@ test.describe("Markdown heading leading spacing", function()
   test.it("keeps following content fixed through publication when a heading wraps", function()
     local source = "# Procedimiento Apagado conexión host iDrac testing testinga"
     local view, buffer = make_view(source .. "\nstuff")
-    view.size.x = 620
+    view.size.x = 300
     view:set_wrapping_enabled(true)
     buffer:set_selection(1, #buffer.lines[1])
     refresh(view)
+    -- Use the narrowest width that keeps the rendered heading on one row,
+    -- so the next character must wrap it.
+    while view:get_visual_row_count_for_line(1) > 1 and view.size.x < 2000 do
+      view.size.x = view.size.x + 4
+      view:update()
+      linewrapping.complete_async_reconstruction(view)
+    end
 
     test.equal(
       view:get_visual_row_count_for_line(1), 1,

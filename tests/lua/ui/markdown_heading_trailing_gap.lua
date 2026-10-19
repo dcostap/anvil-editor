@@ -31,6 +31,8 @@ local function refresh(view)
     if instance.status ~= "ready" then system.sleep(0.001) end
   end
   test.equal(instance.status, "ready", instance.reason)
+  -- Wrapped rows are rebuilt after publication.
+  linewrapping.complete_async_reconstruction(view)
 end
 
 test.describe("Markdown wrapped heading spacing", function()

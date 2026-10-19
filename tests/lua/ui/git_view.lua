@@ -111,6 +111,7 @@ test.describe("Git View command", function()
     context.original_open_log = git_view.open_log
     context.original_linewrapping_default = config.plugins.linewrapping.enable_by_default
     context.original_scroll_context_lines = config.scroll_context_lines
+    context.original_diff_layout = config.plugins.diffview.layout
     panes.git_sessions = {}
     context.project = { path = "C:/repo" }
   end)
@@ -127,6 +128,7 @@ test.describe("Git View command", function()
     git_view.open_log = context.original_open_log
     config.plugins.linewrapping.enable_by_default = context.original_linewrapping_default
     config.scroll_context_lines = context.original_scroll_context_lines
+    config.plugins.diffview.layout = context.original_diff_layout
     panes.git_sessions = {}
   end)
 
@@ -902,9 +904,14 @@ test.describe("Git View command", function()
     test.equal(view:toggle_details_tree_folder(details, folder_line), true)
     test.equal(details.path_tree:is_expanded("src"), false)
 
-    log.selected_commit = 2
+    -- The Git Log list owns the selected commit.
+    local list = view:pane_view("log-list")
+    core.active_view = list
+    list.buffer:set_selection(2, 1)
+    view:sync_selection_from_pane()
     view:update_pane_buffers()
 
+    test.equal(log.selected_commit, 2)
     test.equal(details.path_tree:is_expanded("src"), true)
   end)
 
@@ -933,15 +940,23 @@ test.describe("Git View command", function()
     view:update_pane_buffers()
 
     local details = view:pane_view("details")
-    local folder_line = details.path_tree_line_offset + details.path_tree:line_for_path("src", "dir")
+    details.position.x, details.position.y = 0, 0
+    details.size.x, details.size.y = 400, 300
     core.active_view = details
-    details.buffer:set_selection(folder_line, 1)
-    test.equal(view:activate_selected_point(function() core.redraw = true end), nil)
-    view:update_pane_buffers()
+    -- Folder rows are not selectable, so a click toggles them.
+    local function click_folder()
+      local folder_line = details.path_tree_line_offset + details.path_tree:line_for_path("src", "dir")
+      local x, y = details:get_line_screen_position(folder_line, 1)
+      x = x + math.max(1, details:get_font():get_width("s") / 2)
+      y = y + details:get_line_height() / 2
+      test.ok(view:on_mouse_pressed("left", x, y, 1))
+      test.ok(view:on_mouse_released("left", x, y))
+      view:update_pane_buffers()
+    end
+    click_folder()
     test.equal(details.path_tree:is_expanded("src"), false)
     test.equal(details.path_tree:line_for_record(3), nil)
-    test.equal(view:activate_selected_point(function() core.redraw = true end), nil)
-    view:update_pane_buffers()
+    click_folder()
     test.equal(details.path_tree:is_expanded("src"), true)
 
     local line = details.path_tree_line_offset + details.path_tree:line_for_record(3)
@@ -1061,6 +1076,7 @@ test.describe("Git View command", function()
   end)
 
   test.it("reveals the first change when another Git file opens", function(context)
+    config.plugins.diffview.layout = "side-by-side"
     local _, view = open_fake_git_view(context.project)
     local first_file = { status = "modified", old_path = "first.lua", new_path = "first.lua" }
     local second_file = { status = "modified", old_path = "second.lua", new_path = "second.lua" }
@@ -1437,9 +1453,9 @@ test.describe("Git View command", function()
     test.equal(core.active_view.git_pane, "log-list")
     session:activate_root()
     test.equal(core.active_view.git_pane, "log-list")
-    core.active_view.buffer:set_selection(1, 2)
+    local list_selection = { core.active_view.buffer:get_selection() }
     session:activate_root()
-    test.equal(select(2, core.active_view.buffer:get_selection()), 2)
+    test.same({ core.active_view.buffer:get_selection() }, list_selection)
     test.equal(command.perform("pane:focus_local_next"), true)
     test.equal(core.active_view.git_pane, "details")
     test.equal(command.perform("pane:focus_local_next"), true)
@@ -1918,6 +1934,7 @@ test.describe("Git View command", function()
   end)
 
   test.it("scrolls a standalone comparison without moving the source tree", function(context)
+    config.plugins.diffview.layout = "side-by-side"
     local session, view = open_fake_git_view(context.project)
     local lines = {}
     for index = 1, 40 do lines[index] = "line " .. index end

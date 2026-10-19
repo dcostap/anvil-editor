@@ -151,7 +151,7 @@ test.describe("file change POIs", function()
     })
     test.ok(poi.navigate(editor, 1))
     local row = editor:get_visual_row_entry(3).provider_row
-    test.same(row.inline_ranges, {{ col1 = 10, col2 = 18 }})
+    test.same(row.inline_ranges, {{ col1 = 10, col2 = 18, tag = "modify" }})
     local function current_ranges()
       local result = {}
       for _, entry in ipairs(editor:decoration_provider_entries()) do

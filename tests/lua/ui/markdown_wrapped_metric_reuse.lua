@@ -166,6 +166,8 @@ test.describe("Markdown wrapped metrics after edits", function()
     end
     test.equal(view:get_render_cache_diagnostics().metric_full_rebuilds, rebuilds,
       "moving the caret must not rebuild every row height")
+    -- Compare row positions, not a scroll that is still animating.
+    view.scroll.y = view.scroll.to.y
     local actual = geometry(view)
     local fresh = make_view(context, FOLDED_NOTE)
     fresh:with_selection_state(function() fresh.buffer:set_selection(buffer:get_selection(), 1) end)

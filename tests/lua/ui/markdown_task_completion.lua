@@ -3,6 +3,7 @@ local command = require "core.command"
 local config = require "core.config"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
+local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local model = require "core.markdown.model"
 local workers = require "core.worker_pool"
@@ -64,6 +65,7 @@ test.describe("Markdown task completion during edits", function()
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(model.peek(buffer))
       ready(instance)
+      linewrapping.complete_async_reconstruction(view)
       core.set_active_view(view)
       check_completion(view, 1, "completed item", true)
 
@@ -75,9 +77,9 @@ test.describe("Markdown task completion during edits", function()
       view:on_text_input("new item")
       test.equal(instance.status, "pending")
       check_completion(view, 1, "completed item", true)
-      -- The generated row has no current semantic snapshot yet. Show its
-      -- readable source without inheriting strike-through from the old row.
-      check_completion(view, 2, "- [ ] new item", false)
+      -- The generated row keeps its list presentation while the edit is
+      -- pending, without inheriting strike-through from the old row.
+      check_completion(view, 2, "new item", false)
       local other = Editor(buffer)
       context.other_view = other
       other.size.x, other.size.y = view.size.x, view.size.y
@@ -104,6 +106,7 @@ test.describe("Markdown task completion during edits", function()
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(model.peek(buffer))
       ready(instance)
+      linewrapping.complete_async_reconstruction(view)
       check_completion(view, 1, "completed item", true)
       buffer:insert(1, 1, "- [ ] new item\n")
       test.equal(instance.status, "pending")

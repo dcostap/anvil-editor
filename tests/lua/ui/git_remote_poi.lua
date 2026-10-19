@@ -1,4 +1,5 @@
 local core = require "core"
+local config = require "core.config"
 local panes = require "core.panes"
 local poi = require "core.poi"
 local View = require "core.view"
@@ -8,6 +9,7 @@ local test = require "core.test"
 test.describe("Commit remote POIs", function()
   test.before_each(function(context)
     panes.reset_for_tests()
+    context.diff_layout = config.plugins.diffview.layout
     context.source = GitView(core.root_project(), {
       defer_refresh = true, tab_id = "test-commit",
       backend = {
@@ -30,9 +32,16 @@ test.describe("Commit remote POIs", function()
     source.model.tabs[#source.model.tabs + 1] = context.tab
     panes.create { factory = function() return source end }
     source:on_resume()
+    -- These cases read the new side through buffer_view_b. Let start-up
+    -- finish restoring the Project's saved layout before choosing one.
+    coroutine.yield(0.05)
+    config.plugins.diffview.layout = "side-by-side"
   end)
 
-  test.after_each(function() panes.reset_for_tests() end)
+  test.after_each(function(context)
+    panes.reset_for_tests()
+    config.plugins.diffview.layout = context.diff_layout
+  end)
 
   for _, source_kind in ipairs { "Commit Diff View", "Git Log" } do
   test.it("continues local changes across files from " .. source_kind, function(context)
@@ -149,7 +158,8 @@ test.describe("Commit remote POIs", function()
       tree.size.x, tree.size.y = 600, 400
       tree.scroll.x, tree.scroll.y = 0, 0
       tree.scroll.to.x, tree.scroll.to.y = 0, 0
-      local x, y = tree:get_line_screen_position(tree.buffer:get_selection())
+      -- The row selection puts the caret after the text. Click the row's text.
+      local x, y = tree:get_line_screen_position((tree.buffer:get_selection()), 1)
       x, y = x + 8, y + tree:get_line_height() / 2
       test.ok(source:on_mouse_pressed("left", x, y, 2))
       test.ok(source:on_mouse_released("left", x, y))
