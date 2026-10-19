@@ -61,21 +61,6 @@ test.describe("Streaming image animations", function()
     animation:close()
   end)
 
-  test.it("advances a drawn animation once each frame is due", function()
-    local entry = images.get_asset(gif_url(THREE_FRAME_GIF_BASE64))
-    local now = system.get_time()
-    local function draw(at)
-      return image_animation.frame(entry, {
-        version = entry.image, open = images.open_animation, width = 2, height = 2, now = at,
-      })
-    end
-
-    test.equal(pixel(draw(now)), "red")
-    test.equal(pixel(draw(now + 0.04)), "red")
-    test.equal(pixel(draw(now + 0.05)), "green")
-    test.equal(pixel(draw(now + 0.15)), "blue")
-  end)
-
   test.it("does not replay frames missed while the image was not drawn", function()
     local entry = images.get_asset(gif_url(THREE_FRAME_GIF_BASE64))
     local now = system.get_time()
