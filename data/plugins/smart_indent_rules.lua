@@ -364,14 +364,89 @@ function smart_indent.indent_for_line(buffer, line, context)
   return nil, "no-match", "unavailable"
 end
 
+local block_openers = { ["("] = ")", ["["] = "]", ["{"] = "}" }
+local block_closers = { [")"] = "(", ["]"] = "[", ["}"] = "{" }
+local block_scan_line_limit = 3000
+
+local function is_code_token(token_type)
+  return not (token_type:find("^string") or token_type:find("^comment"))
+end
+
+-- Returns the bracket characters outside strings and comments on `line`,
+-- as a list of { col, char }.
+local function line_brackets(buffer, line)
+  local brackets = {}
+  local col = 1
+  for _, token_type, text in buffer.highlighter:each_token(line) do
+    if is_code_token(token_type) then
+      for i = 1, #text do
+        local ch = text:sub(i, i)
+        if block_openers[ch] or block_closers[ch] then
+          brackets[#brackets + 1] = { col + i - 1, ch }
+        end
+      end
+    end
+    col = col + #text
+  end
+  return brackets
+end
+
+local function innermost_open_bracket(buffer, line)
+  local depth = 0
+  local first_line = math.max(1, line - block_scan_line_limit)
+  for scan_line = line - 1, first_line, -1 do
+    local brackets = line_brackets(buffer, scan_line)
+    for i = #brackets, 1, -1 do
+      local ch = brackets[i][2]
+      if block_closers[ch] then
+        depth = depth + 1
+      elseif depth > 0 then
+        depth = depth - 1
+      else
+        return scan_line, brackets[i][1], ch
+      end
+    end
+  end
+  return nil, first_line == 1
+end
+
+---Returns the indentation that the block structure gives `line` in languages
+---whose blocks open and close with brackets. `context.line_text` replaces the
+---line's current text, such as a line with a closer about to be typed.
+function smart_indent.block_indent(buffer, line, context)
+  local rule = smart_indent.rule_for_buffer(buffer)
+  if not rule or rule.outdent_before ~= brace_outdent_before then
+    return nil, "no-brace-blocks", "unavailable"
+  end
+  local text = (context and context.line_text) or buffer.lines[line] or ""
+  local closer = text:match("^[\t ]*([%)%]}])")
+  local open_line, open_col, opener = innermost_open_bracket(buffer, line)
+  if not open_line then
+    if open_col then return "", nil, "fresh" end
+    return nil, "scan-limit", "unavailable"
+  end
+  local open_text = buffer.lines[open_line] or ""
+  local open_indent = open_text:match("^[\t ]*")
+  if closer then
+    if block_closers[closer] ~= opener then return nil, "mismatched-closer", "unavailable" end
+    return open_indent, nil, "fresh"
+  end
+  -- An opener followed by code, such as `call(a,`, aligns its arguments by
+  -- style rather than by block depth.
+  local trailing = trim_right(code_before_line_comment(open_text:sub(open_col + 1), rule))
+  if trailing ~= "" then return nil, "opener-has-content", "unavailable" end
+  return open_indent .. one_indent(buffer), nil, "fresh"
+end
+
 intelligence.register_provider({
   id = "smart-indent-rules",
   kind = "syntactic-current-buffer",
   priority = 20,
   indent_for_line = smart_indent.indent_for_line,
   newline_continuation = smart_indent.newline_continuation,
+  block_indent = smart_indent.block_indent,
   is_available = function(buffer, feature)
-    return (feature == "indent_for_line" or feature == "newline_continuation")
+    return (feature == "indent_for_line" or feature == "newline_continuation" or feature == "block_indent")
       and smart_indent.rule_for_buffer(buffer) ~= nil
   end,
 })

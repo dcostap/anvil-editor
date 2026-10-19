@@ -7119,7 +7119,50 @@ function TextView:on_text_input(text)
       return true
     end
   end
+  if self:dedent_typed_closer(text) then return true end
   self.buffer:text_input(text)
+  return true
+end
+
+
+local typed_closers = { [")"] = true, ["]"] = true, ["}"] = true }
+
+---Types a closing bracket that starts its line at its opener's indentation.
+---Returns false when any caret is not at the start of a line's content, so
+---the caller types the text normally.
+---@param text string
+---@return boolean
+function TextView:dedent_typed_closer(text)
+  local buffer = self.buffer
+  if not typed_closers[text] or buffer.overwrite then return false end
+  local edits, final_by_idx, changed = {}, {}, false
+  for idx, line1, col1, line2, col2 in buffer:get_selections(true) do
+    if line1 ~= line2 or col1 ~= col2 then return false end
+    local line_text = buffer.lines[line1] or ""
+    local before = line_text:sub(1, col1 - 1)
+    if not before:match("^[\t ]*$") then return false end
+    local indent = language_intelligence.block_indent(
+      buffer, line1, { line_text = before .. text .. line_text:sub(col1) }
+    )
+    if type(indent) ~= "string" then return false end
+    changed = changed or indent ~= before
+    edits[#edits + 1] = {
+      line1 = line1, col1 = 1, line2 = line1, col2 = col1,
+      text = indent .. text, idx = idx,
+    }
+    final_by_idx[idx] = "end"
+  end
+  if not changed then return false end
+  local selections, last_selection = buffer:selections_after_edits(
+    edits, final_by_idx, buffer.last_selection
+  )
+  buffer:apply_edits(edits, {
+    type = "insert",
+    selections = selections,
+    last_selection = last_selection,
+    merge_cursors = false,
+  })
+  core.log_quiet("Typed %s at its opener's indentation in %s", text, buffer:get_name())
   return true
 end
 

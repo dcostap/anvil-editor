@@ -625,4 +625,181 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "call(\n  \n)\n")
     test.same(view:get_selection_state().selections, { 2, 3, 2, 3 })
   end)
+  test.it("typing a closing brace on a blank line aligns it with its opener", function(context)
+    local buffer, view = new_editor(context, "f {\n  x\n      ", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(3, 7, 3, 7)
+
+    test.ok(view:on_text_input("}"))
+
+    test.equal(text(buffer), "f {\n  x\n}\n")
+    test.same(view:get_selection_state().selections, { 3, 2, 3, 2 })
+  end)
+
+  test.it("typing a closing brace after code leaves the line's indentation alone", function(context)
+    local buffer, view = new_editor(context, "f {\n      x ", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 9, 2, 9)
+
+    test.ok(view:on_text_input("}"))
+
+    test.equal(text(buffer), "f {\n      x }\n")
+  end)
+
+  test.it("Backspace on an over-indented blank line goes to the block's indentation", function(context)
+    local buffer, view = new_editor(context, "f {\n  x\n      \n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(3, 7, 3, 7)
+
+    test.ok(command.perform("core:backspace"))
+
+    test.equal(text(buffer), "f {\n  x\n  \n}\n")
+    test.same(view:get_selection_state().selections, { 3, 3, 3, 3 })
+  end)
+
+  test.it("Backspace on a blank line at the block's indentation removes the line", function(context)
+    local buffer, view = new_editor(context, "f {\n  x\n  \n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(3, 3, 3, 3)
+
+    test.ok(command.perform("core:backspace"))
+
+    test.equal(text(buffer), "f {\n  x\n}\n")
+    test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
+  end)
+
+  test.it("Backspace at a correctly indented line's indentation joins it to the previous line", function(context)
+    local buffer, view = new_editor(context, "x := [\n  1,\n  2,\n]", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(3, 3, 3, 3)
+
+    test.ok(command.perform("core:backspace"))
+
+    test.equal(text(buffer), "x := [\n  1, 2,\n]\n")
+    test.same(view:get_selection_state().selections, { 2, 6, 2, 6 })
+  end)
+
+  test.it("Backspace in indentation without block structure still removes one indent level", function(context)
+    local buffer, view = new_editor(context, "if ok:\n    x\n    ", "sample.py")
+    core.set_active_view(view)
+    buffer:set_selection(3, 5, 3, 5)
+
+    test.ok(command.perform("core:backspace"))
+
+    test.equal(text(buffer), "if ok:\n    x\n  \n")
+  end)
+
+  test.it("End on a blank line moves to the block's indentation", function(context)
+    local buffer, view = new_editor(context, "f {\n  g {\n    x\n\n  }\n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(4, 1, 4, 1)
+
+    test.ok(command.perform("core:move_to_end_of_line"))
+
+    test.equal(text(buffer), "f {\n  g {\n    x\n    \n  }\n}\n")
+    test.same(view:get_selection_state().selections, { 4, 5, 4, 5 })
+  end)
+
+  test.it("End on a line with text still moves to the line end", function(context)
+    local buffer, view = new_editor(context, "f {\n  x\n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 1, 2, 1)
+
+    test.ok(command.perform("core:move_to_end_of_line"))
+
+    test.equal(text(buffer), "f {\n  x\n}\n")
+    test.same(view:get_selection_state().selections, { 2, 4, 2, 4 })
+  end)
+
+  test.it("multi-line paste inside a line comment keeps every line commented", function(context)
+    local buffer, view = new_editor(context, "f {\n  // note: \n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 12, 2, 12)
+    system.set_clipboard("first\n  second\n\nthird\n")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n  // note: first\n  //   second\n  //\n  // third\n}\n")
+  end)
+
+  test.it("paste inside a string literal escapes quotes and backslashes", function(context)
+    local buffer, view = new_editor(context, 'p := ""', "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(1, 7, 1, 7)
+    system.set_clipboard('say "hi" C:\\tmp')
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), 'p := "say \\"hi\\" C:\\\\tmp"\n')
+  end)
+
+  test.it("text copied from inside a string pastes into another string unchanged", function(context)
+    local buffer, view = new_editor(context, 'a := "x\\"y"\nb := ""', "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(1, 7, 1, 11)
+    test.ok(command.perform("core:copy"))
+    buffer:set_selection(2, 7, 2, 7)
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), 'a := "x\\"y"\nb := "x\\"y"\n')
+  end)
+
+  test.it("paste inside a triple-quoted string does not escape", function(context)
+    local buffer, view = new_editor(context, 'x = """', "sample.py")
+    core.set_active_view(view)
+    buffer:set_selection(1, 8, 1, 8)
+    system.set_clipboard('say "hi"')
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), 'x = """say "hi"\n')
+  end)
+
+  test.it("paste outside a string literal does not escape", function(context)
+    local buffer, view = new_editor(context, "p := ", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(1, 6, 1, 6)
+    system.set_clipboard('"a\\b"')
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), 'p := "a\\b"\n')
+  end)
+
+  test.it("multi-line paste converts space indentation to the Buffer's tabs", function(context)
+    config.tab_type = "hard"
+    config.indent_size = 4
+    local buffer, view = new_editor(context, "f {\n\t\n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 2, 2, 2)
+    system.set_clipboard("g {\n    x\n}")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n\tg {\n\t\tx\n\t}\n}\n")
+  end)
+
+  test.it("multi-line paste converts tab indentation to the Buffer's spaces", function(context)
+    local buffer, view = new_editor(context, "f {\n  \n}", "sample.odin")
+    core.set_active_view(view)
+    buffer:set_selection(2, 3, 2, 3)
+    system.set_clipboard("g {\n\tx\n}")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "f {\n  g {\n    x\n  }\n}\n")
+  end)
 end)
