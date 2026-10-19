@@ -2033,18 +2033,21 @@ local function resolve_composed_metric_lines(view, cache)
   cache.pending_lines = nil
   local old = cache.composed_rows
   local line_count = #view.buffer.lines
-  if not old or #old.entries ~= cache.row_count or cache.line_count ~= line_count
-    or not view:has_composed_visual_rows()
-    or cache.signature ~= view:get_visual_metric_signature(
-      cache.wrap_layout_generation, cache.row_count, cache.text_revision)
+  if not old then return false, "unmeasured composition" end
+  if #old.entries ~= cache.row_count or cache.line_count ~= line_count then
+    return false, "row count"
+  end
+  if not view:has_composed_visual_rows() then return false, "no composed rows" end
+  if cache.signature ~= view:get_visual_metric_signature(
+    cache.wrap_layout_generation, cache.row_count, cache.text_revision)
   then
-    return false
+    return false, "signature"
   end
   local composed = current_composed_rows(view)
   local entries = composed.entries
   -- Rows are measured through the current UI snapshot. Resolve only when that
   -- snapshot already shows the current composition.
-  if view:composed_visual_rows() ~= entries then return false end
+  if view:composed_visual_rows() ~= entries then return false, "snapshot" end
   local row_count = #entries
 
   local spans = {}
@@ -2082,10 +2085,10 @@ local function resolve_composed_metric_lines(view, cache)
     return true
   end
   for _, span in ipairs(merged) do
-    if not gap_matches(span.n1 - 1, span.o1 - 1) then return false end
+    if not gap_matches(span.n1 - 1, span.o1 - 1) then return false, "rows" end
     previous_new, previous_old = span.n2, span.o2
   end
-  if not gap_matches(row_count, cache.row_count) then return false end
+  if not gap_matches(row_count, cache.row_count) then return false, "rows" end
 
   if same then
     for _, span in ipairs(merged) do invalidate_visual_metric_rows(view, cache, span.n1, span.n2) end
@@ -2245,6 +2248,13 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
         return
       end
     end
+  end
+  if cache then
+    core.log_quiet(
+      "Text View drops %d measured rows: provider=%s lines=%s-%s revision=%d path=%s",
+      cache.row_count, tostring(_provider_id or "unknown"), tostring(line1 or "all"),
+      tostring(line2 or line1 or "all"), self.buffer.text_revision or 0, self.buffer:get_name()
+    )
   end
   clear_visual_metric_cache(self)
 end
@@ -3284,6 +3294,9 @@ function TextView:add_fold_region(opts)
     -- The marker's byte length tells an edit before the fold from one inside it.
     span = marker.end_offset - marker.start_offset,
   }
+  -- Take the marker's clamped columns now, so an edit before the fold does
+  -- not first report them as a change of the fold's range.
+  self:refresh_fold_region(fold)
   self.fold_regions[#self.fold_regions + 1] = fold
   table.sort(self.fold_regions, function(a, b)
     if a.line1 == b.line1 then return a.line2 < b.line2 end
@@ -4142,9 +4155,12 @@ function TextView:get_visual_row_metric_cache()
   local pending_cache = self.__visual_metric_cache
   if pending_cache and pending_cache.pending_lines then
     local resolve_start = perf_active and system.get_time()
-    if not resolve_composed_metric_lines(self, pending_cache)
-      and self.__visual_metric_cache == pending_cache
-    then
+    local resolved, reason = resolve_composed_metric_lines(self, pending_cache)
+    if not resolved and self.__visual_metric_cache == pending_cache then
+      core.log_quiet(
+        "Text View remeasures every row: changed lines did not resolve (%s) revision=%d path=%s",
+        reason, self.buffer.text_revision or 0, self.buffer:get_name()
+      )
       clear_visual_metric_cache(self)
     end
     perf_elapsed("textview_visual_metric_resolve_ms", resolve_start)

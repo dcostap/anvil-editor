@@ -135,6 +135,20 @@ test.describe("Markdown wrapped metrics after edits", function()
     end
   end)
 
+  test.it("keeps unrelated heights on the first edit above an expanded callout", function(context)
+    local view, buffer = make_view(context,
+      "Paragraph\n\n> [!tip]+ Open\n> shown body\n\n" .. FOLDED_NOTE)
+    core.active_view = view
+    test.ok(view:has_collapsed_folds(), "the folded callout must start collapsed")
+    view:with_selection_state(function() buffer:set_selection(1, #buffer.lines[1]) end)
+    geometry(view)
+    local rebuilds = view:get_render_cache_diagnostics().metric_full_rebuilds
+    view:on_text_input(" more")
+    geometry(view)
+    test.equal(view:get_render_cache_diagnostics().metric_full_rebuilds, rebuilds,
+      "an edit above the folds must not rebuild every row height")
+  end)
+
   test.it("keeps unrelated heights when the caret moves past a collapsed callout", function(context)
     local view, buffer = make_view(context, FOLDED_NOTE)
     core.active_view = view
