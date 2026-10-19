@@ -52,6 +52,8 @@
  * the shell stops showing the old Project. A Project that is not loaded yet usually presents within a second. */
 #define SHELL_SELECTION_HOLD_MS 1500
 #define SHELL_SELECTION_HOLD_TIMER 0x8100u
+#define SHELL_NOTICE_MS 5000
+#define SHELL_NOTICE_TIMER 0x8103u
 /* A new Window stays cloaked until it can show its Project, Sidebar and Color Theme. If they take longer than this,
  * it shows what it has. */
 #define SHELL_REVEAL_MS 2000
@@ -224,6 +226,7 @@ struct ShellWindow {
   bool close_entry_valid;
   AnvilShellWindowState close_entry;
   char notice[256];
+  Uint64 notice_until;
   unsigned resolve_revision;
   uint64_t close_generation;
   ShellPresentation project_presentation, sidebar_presentation;
@@ -433,8 +436,19 @@ static void apply_background(ShellWindow *window, uint32_t background) {
   window->ui_dirty = true;
   SDL_Log("Shell Window background: id=%u color=%06x", window->id, (unsigned)color);
 }
+static void clear_window_notice(ShellWindow *window) {
+  KillTimer(window->hwnd, SHELL_NOTICE_TIMER);
+  window->notice_until = 0;
+  if (!window->notice[0]) return;
+  window->notice[0] = 0;
+  window->ui_dirty = true;
+  SDL_Log("Shell Window status cleared: id=%u", window->id);
+  if (window->shown) composite_and_present(window);
+}
 static void window_notice(ShellWindow *window, const char *text) {
   SDL_strlcpy(window->notice, text, sizeof(window->notice));
+  window->notice_until = SDL_GetTicks() + SHELL_NOTICE_MS;
+  SetTimer(window->hwnd, SHELL_NOTICE_TIMER, SHELL_NOTICE_MS, NULL);
   window->ui_dirty = true;
   SDL_Log("Shell Window status: id=%u %s", window->id, text);
   if (window->shown) composite_and_present(window);
@@ -4350,6 +4364,14 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   if (!window)
     return DefWindowProcW(hwnd, msg, wparam, lparam);
   ShellProject *project = window->selected;
+  if (msg == WM_TIMER && wparam == SHELL_NOTICE_TIMER) {
+    Uint64 now = SDL_GetTicks();
+    if (now >= window->notice_until)
+      clear_window_notice(window);
+    else
+      SetTimer(hwnd, SHELL_NOTICE_TIMER, (UINT)(window->notice_until - now), NULL);
+    return 0;
+  }
   if (msg == WM_TIMER && wparam == SHELL_REVEAL_TIMER) {
     reveal_window(window, "timed out");
     return 0;
@@ -4419,8 +4441,11 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   }
   if (msg == SHELL_MODEL_MESSAGE) {
     const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
-    if (probe && !strcmp(probe, "1"))
+    if (probe && !strcmp(probe, "1")) {
+      /* Read the visible Window status in an isolated lifecycle check. */
+      if (wparam == 3) return window->notice[0] != 0;
       probe_sidebar_model(window, wparam, lparam);
+    }
     return 0;
   }
   if (anvil_routing_probe_message(window->window, msg, wparam, lparam)) return 0;
@@ -5053,6 +5078,7 @@ static void finish_launch(ShellProject *project) {
 static void select_project(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
+  clear_window_notice(window);
   if (project == window->selected)
     return;
   ShellProject *previous = window->selected;
@@ -5150,8 +5176,7 @@ static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
   project->window_id = target->id;
   /* Window identity is part of layout identity, even for equal-sized targets. */
   select_project(project);
-  requester->notice[0] = 0;
-  requester->ui_dirty = true;
+  clear_window_notice(requester);
   /* A Window that the Move left without a Project closes. Dormant Projects belong to no Window. */
   bool emptied = true;
   for (ShellProject *item = shell.projects; item; item = item->next)
@@ -5191,8 +5216,7 @@ static bool open_project_window(ShellWindow *window, const char *path) {
     window_notice(window, "Cannot submit the Open Project request.");
     return false;
   }
-  window->notice[0] = 0;
-  window->ui_dirty = true;
+  clear_window_notice(window);
   return true;
 }
 
@@ -5357,9 +5381,11 @@ static void finish_resolutions(void) {
       project->failed_close = true;
     } else if (!job->initial && (window->closing || job->close_generation != window->close_generation)) {
       SDL_Log("Shell discarded Project identity result after its requesting Window began Close: Window=%u", job->window_id);
+    } else if (!job->initial && !job->new_window && !job->unload && job->revision != window->resolve_revision) {
+      SDL_Log("Shell discarded outdated Project selection result: Window=%u path=%s", window->id, job->path);
     } else if (!job->success) {
-      SDL_Log("Shell rejected Project identity: Windows error=%lu",
-              (unsigned long)job->error);
+      SDL_Log("Shell rejected Project identity: Windows error=%lu path=%s",
+              (unsigned long)job->error, job->path);
       if (job->restored) {
         /* The Window stays, empty. Its Project Sidebar entry comes from recent Projects and stays too. */
         SDL_Log("Shell restored Window has no Project: Window=%u path=%s", window->id, job->path);
@@ -5369,8 +5395,7 @@ static void finish_resolutions(void) {
       } else if (job->initial)
         fail_connection(project, "Initial Project identity resolution failed");
       else window_notice(window, "Cannot open Project. Check the directory path.");
-    } else if (job->initial ||
-               (!window->closing && (job->new_window || job->unload || job->revision == window->resolve_revision))) {
+    } else {
       if (!job->initial) project = loaded_project(job->identity);
       if (job->unload) {
         if (project)

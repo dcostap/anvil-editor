@@ -43,6 +43,15 @@ if directory:match("/driver$") then
       subject = assert(process.start(args, {cwd = root .. "/Project",
         stdin = process.REDIRECT_DISCARD, stdout = process.REDIRECT_DISCARD, stderr = process.REDIRECT_DISCARD}))
       local initial = wait_for(function() return read("initial") end, 15)
+      if action:match("^identity%-notice") then
+        save("requests", {count = 0})
+        local checked = wait_for(function() return read("notice-checked") end, 20)
+        assert(checked.ok, checked.error)
+        save("finish", {continue = true})
+        wait_for(function() return not subject:running() end, 10)
+        assert(subject:returncode() == 0)
+        return
+      end
       if action == "identity-allocation" then
         local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
         local text = file:read("*a"); file:close()
@@ -83,6 +92,43 @@ else
     if read("initial") then save("duplicate", {pid = pid}); return end
     save("initial", {pid = pid, shell_pid = system.get_window_process_id()})
     local requests = wait_for(function() return read("requests") end, 5)
+    if action:match("^identity%-notice") then
+      local ok, err = pcall(function()
+        local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+        local text = file:read("*a"); file:close()
+        local hex = assert(text:match("shell%[" .. system.get_window_process_id() .. "%] Shell window hwnd=(%x+)"))
+        local window = ffi.cast("void *", tonumber(hex, 16))
+        local function notice() return user32.SendMessageW(window, 0x804d, 3, 0) ~= 0 end
+        assert(system.select_project(root .. "/missing-project"))
+        if action == "identity-notice-stale" then
+          wait_for(function()
+            local log = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
+            local contents = log:read("*a"); log:close()
+            return contents:find("Shell paused the owned Project identity worker", 1, true)
+          end, 5, "identity worker did not pause")
+          -- Keep the newer request pending when the older failed request completes.
+          coroutine.yield(1)
+          assert(system.select_project(root .. "/Project"))
+          local deadline = system.get_time() + 9
+          repeat
+            assert(not notice(), "outdated selection showed an error over the selected Project")
+            coroutine.yield(.01)
+          until system.get_time() >= deadline
+          return
+        end
+        wait_for(notice, 5, "missing Project did not show an error")
+        assert(system.window_should_render(core.window), "failed selection hid the open Project")
+        if action == "identity-notice" then
+          -- Selecting the same loaded Project must clear the error too.
+          assert(system.select_project(root .. "/Project"))
+          wait_for(function() return not notice() end, 2, "successful selection left the old error visible")
+        else
+          wait_for(function() return not notice() end, 12, "Project error stayed visible without further input")
+        end
+        assert(system.window_should_render(core.window), "clearing the error hid the open Project")
+      end)
+      save("notice-checked", {ok = ok, error = ok and nil or tostring(err)})
+    end
     for index = 1, requests.count do
       local request = wait_for(function() return read("go-" .. index) end, 12)
       assert(system.select_project(request.path))

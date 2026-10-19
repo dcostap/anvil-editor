@@ -141,7 +141,7 @@ def main() -> int:
         "probe-exit-error", "startup-reader", "startup-writer", "startup-timer", "restart-startup-timer",
         "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel",
         "loaded-switch", "loaded-launch", "loaded-restart", "identity-trailing", "identity-cwd",
-        "identity-alias", "loaded-focus", "loaded-quit", "loaded-resolve", "identity-allocation",
+        "identity-alias", "loaded-focus", "loaded-quit", "loaded-resolve", "identity-allocation", "identity-notice", "identity-notice-expiry", "identity-notice-stale",
         "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart", "sidebar-model", "sidebar-worker", "sidebar-demand", "sidebar-process", "sidebar-log", "sidebar-recovery", "sidebar-recovery-reset", "sidebar-idle", "dormant-terminal-sidebar"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
@@ -272,7 +272,7 @@ def main() -> int:
                         length = get_short_path(native_path(case_dir / "Project"), short_path, len(short_path))
                         if length and short_path.value.casefold() != native_path(case_dir / "Project").casefold():
                             config["environment"]["ANVIL_PROJECT_SHORT_PATH"] = short_path.value
-                    if action == "loaded-resolve":
+                    if action in ("loaded-resolve", "identity-notice-stale"):
                         config["environment"]["ANVIL_SURFACE_FAULT_IDENTITY_DELAY"] = "1"
                     if action == "sidebar-worker":
                         config["environment"]["ANVIL_SIDEBAR_SCAN_DELAY"] = "1"
