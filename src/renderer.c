@@ -3013,19 +3013,84 @@ void raster_span(int y, int count, const FT_Span *spans, void *user) {
   }
 }
 
+typedef struct { double x, y; } PolyVertex;
+
+// FreeType's gray rasterizer multiplies subpixel deltas in a C long, which is
+// 32 bits on Windows. An edge longer than about 32768 pixels overflows it and
+// the rasterizer never finishes. Polygons that reach this far past the clip
+// are clipped to it first.
+#define POLY_SAFE_MARGIN 8192.0
+
+// Keeps the part of a straight-edged polygon on the inner side of one clip edge.
+// The output has at most twice as many vertices as the input.
+static int clip_poly_edge(const PolyVertex *in, int n, PolyVertex *out,
+                          bool vertical, double limit, bool keep_greater) {
+  int count = 0;
+  for (int i = 0; i < n; i++) {
+    PolyVertex a = in[i], b = in[(i + 1) % n];
+    double da = (vertical ? a.y : a.x) - limit;
+    double db = (vertical ? b.y : b.x) - limit;
+    if (!keep_greater) { da = -da; db = -db; }
+    if (da >= 0) out[count++] = a;
+    if ((da >= 0) != (db >= 0)) {
+      double t = da / (da - db);
+      out[count++] = (PolyVertex) { a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t };
+    }
+  }
+  return count;
+}
+
 static bool render_poly_spans(RenPoint *points, unsigned short npoints,
                              float scale_x, float scale_y, RenPolyParams *params) {
   FT_Outline outline;
   if (npoints == 0) return true;
   if (npoints > MAX_POLY_POINTS) return false;
-  if (FT_Outline_New(library, npoints, 1, &outline) != 0) return false;
+  double min_x = params->clip.x, min_y = params->clip.y;
+  double max_x = min_x + params->clip.w, max_y = min_y + params->clip.h;
+  double box_x1 = INFINITY, box_y1 = INFINITY, box_x2 = -INFINITY, box_y2 = -INFINITY;
+  bool straight = true;
   for (int i = 0; i < npoints; i++) {
-    // this is undocumented, but freetype seems to expect 26.6 fixed point numbers
-    outline.points[i].x = points[i].x * scale_x * 64;
-    outline.points[i].y = points[i].y * scale_y * 64;
-    outline.tags[i] = points[i].tag;
+    double x = points[i].x * scale_x, y = points[i].y * scale_y;
+    box_x1 = fmin(box_x1, x); box_x2 = fmax(box_x2, x);
+    box_y1 = fmin(box_y1, y); box_y2 = fmax(box_y2, y);
+    if (points[i].tag != POLY_NORMAL) straight = false;
   }
-  outline.contours[0] = npoints - 1;
+  // Curves stay inside their control points, so this box bounds the whole shape.
+  if (box_x2 < min_x || box_x1 > max_x || box_y2 < min_y || box_y1 > max_y) return true;
+
+  PolyVertex *clipped = NULL;
+  int count = npoints;
+  if (box_x1 < min_x - POLY_SAFE_MARGIN || box_x2 > max_x + POLY_SAFE_MARGIN
+      || box_y1 < min_y - POLY_SAFE_MARGIN || box_y2 > max_y + POLY_SAFE_MARGIN) {
+    // Curve control points cannot be clipped like vertices. No Anvil curve reaches this far.
+    if (!straight) return true;
+    // Four passes can each double the vertex count.
+    clipped = malloc(sizeof(PolyVertex) * (size_t) npoints * 32);
+    if (!clipped) return false;
+    PolyVertex *a = clipped, *b = clipped + (size_t) npoints * 16;
+    for (int i = 0; i < npoints; i++) a[i] = (PolyVertex) { points[i].x * scale_x, points[i].y * scale_y };
+    // One pixel outside the clip keeps antialiased coverage on its edges unchanged.
+    count = clip_poly_edge(a, count, b, false, min_x - 1, true);
+    count = clip_poly_edge(b, count, a, false, max_x + 1, false);
+    count = clip_poly_edge(a, count, b, true, min_y - 1, true);
+    count = clip_poly_edge(b, count, a, true, max_y + 1, false);
+    if (count < 3 || count > MAX_POLY_POINTS) { free(clipped); return true; }
+  }
+  if (FT_Outline_New(library, count, 1, &outline) != 0) { free(clipped); return false; }
+  for (int i = 0; i < count; i++) {
+    // this is undocumented, but freetype seems to expect 26.6 fixed point numbers
+    if (clipped) {
+      outline.points[i].x = (FT_Pos) lround(clipped[i].x * 64);
+      outline.points[i].y = (FT_Pos) lround(clipped[i].y * 64);
+      outline.tags[i] = POLY_NORMAL;
+    } else {
+      outline.points[i].x = points[i].x * scale_x * 64;
+      outline.points[i].y = points[i].y * scale_y * 64;
+      outline.tags[i] = points[i].tag;
+    }
+  }
+  free(clipped);
+  outline.contours[0] = count - 1;
   FT_Error error = FT_Outline_Render(library, &outline, &(FT_Raster_Params) {
     .target = NULL,
     .flags = FT_RASTER_FLAG_AA | FT_RASTER_FLAG_DIRECT | FT_RASTER_FLAG_CLIP,
