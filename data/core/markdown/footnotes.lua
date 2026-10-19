@@ -982,19 +982,21 @@ end
 -- Inline rows -------------------------------------------------------------
 
 -- A block is a run of non-blank lines. A heading is a block of its own.
+-- The row provider asks about every line, so these read the raw lines: a
+-- trailing newline changes neither the blank nor the heading test.
 local function is_block_end(buffer, line)
-  local text = line_text(buffer, line)
+  local text = buffer.lines[line] or ""
   if is_blank(text) then return false end
   if line >= #buffer.lines or is_heading(text) then return true end
-  local next_text = line_text(buffer, line + 1)
+  local next_text = buffer.lines[line + 1] or ""
   return is_blank(next_text) or is_heading(next_text)
 end
 
 local function block_start(buffer, line)
-  if is_heading(line_text(buffer, line)) then return line end
+  if is_heading(buffer.lines[line] or "") then return line end
   local first = line
   while first > 1 and line - first < MAX_BLOCK_LINES do
-    local text = line_text(buffer, first - 1)
+    local text = buffer.lines[first - 1] or ""
     if is_blank(text) or is_heading(text) then break end
     first = first - 1
   end
