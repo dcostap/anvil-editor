@@ -7655,51 +7655,11 @@ local function open_link_resolution(resolution, target)
   return target_view ~= nil
 end
 
-local function open_ambiguous_picker(view, link, resolution)
-  local index = view.__markdown_live_owner and view.__markdown_live_owner.link_index
-  if not (index and core.global_prompt_bar) then return false end
-  local suggestions = {}
-  for _, entry in ipairs(resolution.candidates or {}) do
-    suggestions[#suggestions + 1] = { text = entry.rel_path, entry = entry }
-  end
-  table.sort(suggestions, function(a, b) return a.text < b.text end)
-  local function exact_suggestion(text)
-    for _, suggestion in ipairs(suggestions) do
-      if suggestion.text == text then return suggestion end
-    end
-  end
-  core.global_prompt_bar:enter("Open Markdown Link", {
-    text = "",
-    suggest = function(text)
-      local needle = tostring(text or ""):lower()
-      if needle == "" then return suggestions end
-      local filtered = {}
-      for _, suggestion in ipairs(suggestions) do
-        if suggestion.text:lower():find(needle, 1, true) then filtered[#filtered + 1] = suggestion end
-      end
-      return filtered
-    end,
-    validate = function(text, suggestion)
-      return (suggestion and suggestion.entry ~= nil) or exact_suggestion(text) ~= nil
-    end,
-    submit = function(text, suggestion)
-      suggestion = suggestion and suggestion.entry and suggestion or exact_suggestion(text)
-      if not suggestion then return end
-      local selected = index:resolve_entry_result(suggestion.entry, link, link.raw_target or link.path)
-      open_link_resolution(selected, link.raw_target)
-    end,
-  })
-  return true
-end
-
 function live.open_link(view, opts)
   opts = opts or live.link_at_caret(view)
   if not opts then return false, "no link at caret" end
   local link = opts.link
   local resolution = opts.resolution or resolve_live_link(view, link)
-  if resolution.status == "ambiguous" then
-    return open_ambiguous_picker(view, link, resolution), resolution.status
-  end
   if resolution.status == "missing" then
     local offered, reason = live.create_link_target(view, { link = link, resolution = resolution }, true)
     if not offered then
@@ -7768,29 +7728,17 @@ function live.create_link_target(view, target, confirm)
   local resolution = target.resolution
   if resolution.status ~= "missing" then return false, resolution.status end
   local link_path = (target.link.path or ""):match("^[^#?]*") or ""
-  local ext = extension(link_path)
-  if target.link.kind == "image" or (ext and not MARKDOWN_EXTENSIONS[ext]) then
-    return false, "not a note"
-  end
-  if link_path == "" or common.is_absolute_path(link_path)
-    or link_path:match("^[%a][%w+.-]*:")
+  if target.link.kind == "image" then return false, "not a note" end
+  if link_path == "" or link_path:match("^[%a][%w+.-]*:")
+    or (common.is_absolute_path(link_path) and not link_path:match("^/[^/]"))
   then
     return false, "unsupported target"
   end
   local owner = view.__markdown_live_owner
   local index = owner and owner.link_index
   if not index then return false, "index unavailable" end
-  local source_relative = link_path:find("/", 1, true) ~= nil
-    or link_path:find("\\", 1, true) ~= nil
-    or link_path:sub(1, 1) == "."
-  local path = link_path:gsub("[/\\]", PATHSEP)
-  if not extension(path) then path = path .. ".md" end
-  local base = source_relative and view.buffer.abs_filename
-    and common.dirname(view.buffer.abs_filename) or index.root
-  local normalized, abs = pcall(common.normalize_path, base .. PATHSEP .. path)
-  if not normalized or not abs or not common.path_belongs_to(abs, index.root) then
-    return false, "outside Project"
-  end
+  local abs, reason = index:new_note_path(link_path, view.buffer.abs_filename)
+  if not abs then return false, reason end
   local function create()
     local info = system.get_file_info(abs)
     if info and info.type ~= "file" then return false, "target is not a file" end

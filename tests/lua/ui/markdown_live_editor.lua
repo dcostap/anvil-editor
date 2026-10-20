@@ -2331,80 +2331,92 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("offers explicit create and ambiguity-picker link actions", function()
+  test.it("creates missing link notes where Obsidian would and opens duplicate names directly", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-link-actions-" .. system.get_process_id()
+    local nested = root .. PATHSEP .. "PROYECTOS" .. PATHSEP .. "Castrosua IA"
     test.ok(common.mkdirp(root .. PATHSEP .. "a"))
-    test.ok(common.mkdirp(root .. PATHSEP .. "b"))
-    test.ok(common.mkdirp(root .. PATHSEP .. "notes"))
+    test.ok(common.mkdirp(root .. PATHSEP .. "long" .. PATHSEP .. "b"))
+    test.ok(common.mkdirp(nested))
     local function write(path, text)
       local fp = test.not_nil(io.open(path, "wb")); fp:write(text); fp:close()
     end
     write(root .. PATHSEP .. "a" .. PATHSEP .. "Note.md", "# A\n")
-    write(root .. PATHSEP .. "b" .. PATHSEP .. "Note.md", "# B\n")
+    write(root .. PATHSEP .. "long" .. PATHSEP .. "b" .. PATHSEP .. "Note.md", "# B\n")
     local old_projects = core.projects
     core.projects = { Project(root) }
     markdown.vault_index.get_index(root):rebuild("ui-link-actions")
     local old_active, old_open_file = core.active_view, core.open_file
-    local old_enter = core.global_prompt_bar.enter
-    local opened, picker
+    local opened
     core.open_file = function(path) opened = path return {} end
-    core.global_prompt_bar.enter = function(_, label, opts) picker = { label = label, opts = opts } end
     local ok, err = pcall(function()
-      local missing_view, missing_buffer = make_view(
-        "[[folder/New]]\nplain", root .. PATHSEP .. "notes" .. PATHSEP .. "MissingSource.md"
-      )
-      missing_buffer:set_selection(1, 5)
-      refresh(missing_view)
-      core.active_view = missing_view
-      test.equal(command.perform("markdown:create_link_target"), true)
-      test.equal(opened, common.normalize_path(
-        root .. PATHSEP .. "notes" .. PATHSEP .. "folder" .. PATHSEP .. "New.md"
-      ))
+      local function create_from(text, col)
+        opened = nil
+        local view, buffer = make_view(text .. "\nplain", nested .. PATHSEP .. "Tareas.md")
+        buffer:set_selection(1, col)
+        refresh(view)
+        core.active_view = view
+        test.equal(command.perform("markdown:create_link_target"), true)
+        return opened
+      end
+      local function at(...)
+        return common.normalize_path(table.concat({ root, ... }, PATHSEP))
+      end
+
+      test.equal(create_from("[[PROYECTOS\\zabbix.md]]", 5), at("PROYECTOS", "zabbix.md"))
+      test.equal(create_from("[[folder/New]]", 5), at("folder", "New.md"))
+      test.equal(create_from("[[NewRoot]]", 4), at("NewRoot.md"))
+      test.equal(create_from("[[Meeting 2024.01.05]]", 4), at("Meeting 2024.01.05.md"))
+      test.equal(create_from("[[folder/Query.md?download]]", 5), at("folder", "Query.md"))
+      test.equal(create_from("[[./Local]]", 5), at("PROYECTOS", "Castrosua IA", "Local.md"))
+      test.equal(create_from("[[../../../../../../Outside]]", 5), nil)
 
       opened = nil
-      local root_view, root_buffer = make_view("[[NewRoot]]\nplain", root .. PATHSEP .. "notes" .. PATHSEP .. "RootSource.md")
-      root_buffer:set_selection(1, 4)
-      refresh(root_view)
-      core.active_view = root_view
-      test.equal(command.perform("markdown:create_link_target"), true)
-      test.equal(opened, common.normalize_path(root .. PATHSEP .. "NewRoot.md"))
-
-      opened = nil
-      local query_view, query_buffer = make_view(
-        "[[folder/Query.md?download]]\nplain",
-        root .. PATHSEP .. "notes" .. PATHSEP .. "QuerySource.md"
-      )
-      query_buffer:set_selection(1, 5)
-      refresh(query_view)
-      core.active_view = query_view
-      test.equal(command.perform("markdown:create_link_target"), true)
-      test.equal(opened, common.normalize_path(
-        root .. PATHSEP .. "notes" .. PATHSEP .. "folder" .. PATHSEP .. "Query.md"
-      ))
-
-      opened = nil
-      local outside_view, outside_buffer = make_view(
-        "[[../../../../../../Outside]]\nplain",
-        root .. PATHSEP .. "notes" .. PATHSEP .. "OutsideSource.md"
-      )
-      outside_buffer:set_selection(1, 5)
-      refresh(outside_view)
-      core.active_view = outside_view
-      test.equal(command.perform("markdown:create_link_target"), true)
-      test.equal(opened, nil)
-
-      local ambiguous_view, ambiguous_buffer = make_view("[[Note]]\nplain", root .. PATHSEP .. "AmbiguousSource.md")
-      ambiguous_buffer:set_selection(1, 4)
-      refresh(ambiguous_view)
-      core.active_view = ambiguous_view
+      local duplicate_view, duplicate_buffer = make_view("[[Note]]\nplain", root .. PATHSEP .. "DuplicateSource.md")
+      duplicate_buffer:set_selection(1, 4)
+      refresh(duplicate_view)
+      core.active_view = duplicate_view
       test.equal(command.perform("markdown:open_link"), true)
-      test.equal(picker.label, "Open Markdown Link")
-      test.equal(#picker.opts.suggest(""), 2)
-      local filtered = picker.opts.suggest("b/Note")
-      test.equal(#filtered, 1)
-      test.equal(filtered[1].text, "b/Note.md")
+      test.equal(opened, at("a", "Note.md"))
     end)
-    core.global_prompt_bar.enter = old_enter
+    core.open_file, core.active_view = old_open_file, old_active
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("creates bare-name link notes in Obsidian's configured new-note folder", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-new-note-folder-" .. system.get_process_id()
+    test.ok(common.mkdirp(root .. PATHSEP .. ".obsidian"))
+    test.ok(common.mkdirp(root .. PATHSEP .. "notes"))
+    test.ok(common.mkdirp(root .. PATHSEP .. "Inbox"))
+    local function write(path, text)
+      local fp = test.not_nil(io.open(path, "wb")); fp:write(text); fp:close()
+    end
+    local settings = root .. PATHSEP .. ".obsidian" .. PATHSEP .. "app.json"
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    local old_active, old_open_file = core.active_view, core.open_file
+    local opened
+    core.open_file = function(path) opened = path return {} end
+    local ok, err = pcall(function()
+      local function create_with(app_json, text)
+        write(settings, app_json)
+        markdown.vault_index.get_index(root):rebuild("ui-new-note-folder")
+        opened = nil
+        local view, buffer = make_view(text .. "\nplain", root .. PATHSEP .. "notes" .. PATHSEP .. "Source.md")
+        buffer:set_selection(1, 4)
+        refresh(view)
+        core.active_view = view
+        test.equal(command.perform("markdown:create_link_target"), true)
+        return opened
+      end
+      test.equal(create_with('{"newFileLocation":"current"}', "[[Here]]"),
+        common.normalize_path(root .. PATHSEP .. "notes" .. PATHSEP .. "Here.md"))
+      test.equal(create_with('{"newFileLocation":"folder","newFileFolderPath":"Inbox"}', "[[Filed]]"),
+        common.normalize_path(root .. PATHSEP .. "Inbox" .. PATHSEP .. "Filed.md"))
+      test.equal(create_with('{"newFileLocation":"folder","newFileFolderPath":"Inbox"}', "[[sub/Pathed]]"),
+        common.normalize_path(root .. PATHSEP .. "sub" .. PATHSEP .. "Pathed.md"))
+    end)
     core.open_file, core.active_view = old_open_file, old_active
     core.projects = old_projects
     common.rm(root, true)

@@ -125,8 +125,10 @@ bool anvil_markdown_vault_note_at(const AnvilMarkdownVaultSnapshot *snapshot, ui
 bool anvil_markdown_vault_attachment_at(const AnvilMarkdownVaultSnapshot *snapshot, uint32_t index, AnvilMarkdownVaultAttachmentView *view);
 bool anvil_markdown_vault_note_lookup(const AnvilMarkdownVaultSnapshot *snapshot, const char *path, uint32_t *index);
 bool anvil_markdown_vault_attachment_lookup(const AnvilMarkdownVaultSnapshot *snapshot, const char *path, uint32_t *index);
-uint32_t anvil_markdown_vault_resolve_notes(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity);
-uint32_t anvil_markdown_vault_resolve_attachments(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity);
+/* Files whose name, including its extension, equals the name without regard to ASCII case. */
+uint32_t anvil_markdown_vault_notes_named(const AnvilMarkdownVaultSnapshot *snapshot, const char *name, uint32_t *indices, uint32_t capacity);
+uint32_t anvil_markdown_vault_attachments_named(const AnvilMarkdownVaultSnapshot *snapshot, const char *name, uint32_t *indices, uint32_t capacity);
+/* Notes with a link whose file stem matches the target's; callers resolve each link. */
 uint32_t anvil_markdown_vault_linked_notes(const AnvilMarkdownVaultSnapshot *snapshot, const char *target, uint32_t *indices, uint32_t capacity);
 uint32_t anvil_markdown_vault_completion_candidates(const AnvilMarkdownVaultSnapshot *snapshot,
   AnvilMarkdownVaultCompletionKind kind, const char *query, uint32_t offset, uint32_t *indices, uint32_t capacity);

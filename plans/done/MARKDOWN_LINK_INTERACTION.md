@@ -33,12 +33,12 @@ Commands are tested by name rather than by configurable key bindings.
   system application, matching other attachment activation.
 - External targets use the system launcher.
 - Pending and missing targets are never opened implicitly.
-- Missing targets require the explicit create command, remain inside the owning Project, create parent directories only when absent, strip query/fragment suffixes, default extensionless targets to `.md`, and follow resolver semantics: path-like targets are source-directory-relative while bare names are Project-root-relative. Invalid normalization and parent traversal fail safely at the Project boundary.
+- Missing targets require the explicit create command, remain inside the owning Project, create parent directories only when absent, and strip query/fragment suffixes. As in Obsidian, a target with a folder is created from the Project root. A bare name uses the vault's `.obsidian/app.json` `newFileLocation`: the root by default, the note's folder for `current`, or an existing `newFileFolderPath` for `folder`. Anvil creates `./` and `../` targets from the note's folder, so the new link resolves. A name without a Markdown extension gets `.md` appended, so `[[Meeting 2024.01.05]]` creates `Meeting 2024.01.05.md`. Image and other attachment extensions are refused. Parent traversal fails safely at the Project boundary.
 - Resolved disk targets are revalidated as regular files at activation so stale index entries cannot implicitly create a missing file or open a replacement directory. A still-tracked open Document remains a valid overlay.
-- Ambiguous targets open a deterministic, typed-input-filterable picker sorted by Project-relative path.
+- Duplicate file names open the first candidate in resolver order; there is no picker.
 
 Before navigation, the optional first-party Navigation History integration records the origin. Link actions consume the same semantic link and index resolution already presented by the renderer; they do not rescan source text.
 
 ## Regression evidence
 
-Focused tests cover generic fragment hover/click routing, command opening to heading locations, Ctrl/Command modifier-click, generic semantic POI navigation/activation with code suppression, source-relative and root-relative missing-note creation, existing parent directories, query stripping, traversal rejection, stale deleted/replaced targets, typed ambiguity filtering, command registration, wrapped whitespace hit rejection through source mapping, and all existing semantic link/image behavior.
+Focused tests cover generic fragment hover/click routing, command opening to heading locations, Ctrl/Command modifier-click, generic semantic POI navigation/activation with code suppression, Obsidian-placed missing-note creation, configured new-note folders, existing parent directories, query stripping, traversal rejection, stale deleted/replaced targets, command registration, wrapped whitespace hit rejection through source mapping, and all existing semantic link/image behavior.

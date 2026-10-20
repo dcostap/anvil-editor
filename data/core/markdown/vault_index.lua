@@ -112,14 +112,8 @@ local function is_markdown(path)
   return MARKDOWN_EXTENSIONS[extension(path) or ""] == true
 end
 
-local function note_entry_for_explicit_path(index, abs)
-  local entry = index:note(abs)
-  if entry then return entry end
-  if extension(abs) then return nil end
-  for _, ext in ipairs(MARKDOWN_EXTENSION_LIST) do
-    entry = index:note(abs .. "." .. ext)
-    if entry then return entry end
-  end
+local function name_key(path)
+  return display_basename(path):lower()
 end
 
 local function is_attachment(path)
@@ -173,31 +167,18 @@ local function remove_from_multi(map, key, value)
   end
 end
 
-local function add_unique(items, seen, key)
-  if key and key ~= "" and not seen[key] then
-    seen[key] = true
-    items[#items + 1] = key
-  end
-end
-
-local function unique_item(item)
-  if not item then return nil end
-  if item[1] then
-    if #item == 1 then return item[1] end
-    return nil, item
-  end
-  return item
-end
+local OBSIDIAN_LINK_FORMATS = {
+  shortest = "shortest_unique",
+  relative = "relative",
+  absolute = "root",
+}
 
 local Index = {}
 Index.__index = Index
 
 function Index:new(root)
-  local obsidian_settings = read_obsidian_app_settings(root)
-  return setmetatable({
+  local index = setmetatable({
     root = common.normalize_path(root),
-    link_path_policy = link_path_policies[path_key(root)] or config.markdown_live_link_path_policy
-      or "shortest_unique",
     generation = 0,
     status = "cold",
     reason = "not indexed",
@@ -205,10 +186,7 @@ function Index:new(root)
     listeners = {},
     notes_by_abs = {},
     attachments_by_abs = {},
-    note_keys = {},
-    note_keys_ci = {},
-    attachment_keys = {},
-    attachment_keys_ci = {},
+    files_by_name = {},
     buffer_listeners = setmetatable({}, { __mode = "k" }),
     buffer_overlays = setmetatable({}, { __mode = "k" }),
     buffer_overlay_jobs = setmetatable({}, { __mode = "k" }),
@@ -221,7 +199,6 @@ function Index:new(root)
     -- untrack never matches a request made after the Buffer is tracked again.
     buffer_overlay_serial = 0,
     watcher_mode = "stopped",
-    show_unsupported_files = obsidian_settings.showUnsupportedFiles == true,
     diagnostics = {
       buffer_updates = 0,
       buffer_updates_coalesced = 0,
@@ -230,13 +207,19 @@ function Index:new(root)
     removed_paths = {},
     dirty_manifest_scopes = {},
   }, self)
+  index:refresh_obsidian_settings()
+  return index
 end
 
+---Returns true when the attachment classification changed.
 function Index:refresh_obsidian_settings()
   local settings = read_obsidian_app_settings(self.root)
   local show_unsupported_files = settings.showUnsupportedFiles == true
-  local changed = show_unsupported_files ~= self.show_unsupported_files
+  local changed = self.show_unsupported_files ~= nil and show_unsupported_files ~= self.show_unsupported_files
   self.show_unsupported_files = show_unsupported_files
+  self.link_path_policy = link_path_policies[path_key(self.root)]
+    or OBSIDIAN_LINK_FORMATS[settings.newLinkFormat]
+    or config.markdown_live_link_path_policy or "shortest_unique"
   return changed
 end
 
@@ -270,10 +253,7 @@ end
 function Index:clear()
   self.notes_by_abs = {}
   self.attachments_by_abs = {}
-  self.note_keys = {}
-  self.note_keys_ci = {}
-  self.attachment_keys = {}
-  self.attachment_keys_ci = {}
+  self.files_by_name = {}
 end
 
 local function release_vault_snapshot(snapshot)
@@ -314,78 +294,25 @@ end
 
 function Index:remove_path_entry(path)
   local key = path_key(path)
-  local note = self.notes_by_abs[key]
-  if note then
-    for _, item_key in ipairs(note.note_keys or {}) do
-      remove_from_multi(self.note_keys, item_key, note)
-    end
-    for _, item_key in ipairs(note.note_keys_ci or {}) do
-      remove_from_multi(self.note_keys_ci, item_key, note)
-    end
-    self.notes_by_abs[key] = nil
+  local entry = self.notes_by_abs[key] or self.attachments_by_abs[key]
+  if entry then
+    remove_from_multi(self.files_by_name, name_key(entry.rel_path), entry)
   end
-
-  local attachment = self.attachments_by_abs[key]
-  if attachment then
-    for _, item_key in ipairs(attachment.attachment_keys or {}) do
-      remove_from_multi(self.attachment_keys, item_key, attachment)
-    end
-    for _, item_key in ipairs(attachment.attachment_keys_ci or {}) do
-      remove_from_multi(self.attachment_keys_ci, item_key, attachment)
-    end
-    self.attachments_by_abs[key] = nil
-  end
-  return note or attachment
+  self.notes_by_abs[key] = nil
+  self.attachments_by_abs[key] = nil
+  return entry
 end
 
 function Index:add_note_entry(entry)
-  local abs_key = path_key(entry.abs_path)
   self:remove_path_entry(entry.abs_path)
-  self.notes_by_abs[abs_key] = entry
-
-  local keys, seen = {}, {}
-  local rel = entry.rel_path
-  local rel_no_ext = strip_markdown_extension(rel)
-  local base = display_basename(rel_no_ext)
-  for _, key in ipairs({ rel, rel_no_ext, base, entry.display_name }) do
-    add_unique(keys, seen, key)
-  end
-  for _, alias in ipairs(entry.aliases or {}) do
-    add_unique(keys, seen, alias)
-  end
-
-  entry.note_keys = keys
-  entry.note_keys_ci = {}
-  local seen_ci = {}
-  for _, key in ipairs(keys) do
-    add_to_multi(self.note_keys, key, entry)
-    add_unique(entry.note_keys_ci, seen_ci, key:lower())
-  end
-  for _, key in ipairs(entry.note_keys_ci) do
-    add_to_multi(self.note_keys_ci, key, entry)
-  end
+  self.notes_by_abs[path_key(entry.abs_path)] = entry
+  add_to_multi(self.files_by_name, name_key(entry.rel_path), entry)
 end
 
 function Index:add_attachment_entry(entry)
-  local abs_key = path_key(entry.abs_path)
   self:remove_path_entry(entry.abs_path)
-  self.attachments_by_abs[abs_key] = entry
-  local rel = entry.rel_path
-  local base = display_basename(rel)
-  local keys, seen = {}, {}
-  for _, key in ipairs({ rel, base }) do
-    add_unique(keys, seen, key)
-  end
-  entry.attachment_keys = keys
-  entry.attachment_keys_ci = {}
-  local seen_ci = {}
-  for _, key in ipairs(keys) do
-    add_to_multi(self.attachment_keys, key, entry)
-    add_unique(entry.attachment_keys_ci, seen_ci, key:lower())
-  end
-  for _, key in ipairs(entry.attachment_keys_ci) do
-    add_to_multi(self.attachment_keys_ci, key, entry)
-  end
+  self.attachments_by_abs[path_key(entry.abs_path)] = entry
+  add_to_multi(self.files_by_name, name_key(entry.rel_path), entry)
 end
 
 function Index:remove_path(path)
@@ -659,8 +586,7 @@ function Index:rebuild_async(reason, opts)
           local overlays = {}
           for _, entry in pairs(self.notes_by_abs) do if entry.buffer then overlays[#overlays + 1] = entry end end
           self.notes_by_abs, self.attachments_by_abs = {}, {}
-          self.note_keys, self.note_keys_ci = {}, {}
-          self.attachment_keys, self.attachment_keys_ci = {}, {}
+          self.files_by_name = {}
           for _, entry in ipairs(overlays) do self:add_note_entry(entry) end
           release_vault_snapshot(self.disk_snapshot)
           self.disk_snapshot = snapshot
@@ -849,43 +775,156 @@ function Index:set_link_path_policy(policy)
   return true
 end
 
-local function canonical_note_target(index, entry, source_path)
-  local rel_no_ext = strip_markdown_extension(entry.rel_path)
-  if index.link_path_policy == "root" then return rel_no_ext end
-  if index.link_path_policy == "relative" and source_path then
-    local relative = strip_markdown_extension(display_path(
-      common.relative_path(common.dirname(source_path), entry.abs_path)
-    ))
-    if not relative:find("/", 1, true) then relative = "./" .. relative end
-    return relative
+local LINK_NAME_EXTENSIONS = { "", ".md", ".markdown", ".mdown" }
+
+---Returns the indexed files named `name` (lowercase, with extension), Buffer overlays included.
+function Index:files_named(name)
+  local files, seen = {}, {}
+  local item = self.files_by_name[name]
+  if item then
+    for _, entry in ipairs(item[1] and item or { item }) do
+      seen[path_key(entry.abs_path)] = true
+      files[#files + 1] = entry
+    end
   end
-  local base = display_basename(rel_no_ext)
-  for _, target in ipairs({ base, rel_no_ext, entry.rel_path }) do
-    local unique = unique_item(index.note_keys[target])
-    if unique == entry then return target end
+  for _, file in ipairs(self.disk_snapshot and self.disk_snapshot:files_named(name) or {}) do
+    local key = path_key(file.abs_path)
+    if not (seen[key] or self.removed_paths[key] or self.notes_by_abs[key] or self.attachments_by_abs[key]) then
+      files[#files + 1] = file
+    end
   end
-  return entry.rel_path
+  return files
 end
 
-local function rename_note_target(index, old_entry, new_path, source_path)
-  local rel = index:relative_path(new_path)
-  local replacement = {
-    abs_path = common.normalize_path(new_path),
-    rel_path = rel,
-    display_name = display_basename(strip_markdown_extension(rel)),
-  }
-  if index.link_path_policy == "root" then return strip_markdown_extension(rel) end
-  if index.link_path_policy == "relative" then
-    local relative = strip_markdown_extension(display_path(
-      common.relative_path(common.dirname(source_path), replacement.abs_path)
-    ))
-    return relative:find("/", 1, true) and relative or "./" .. relative
+local function source_folder(index, source_path)
+  if not source_path then return "" end
+  return index:relative_path(source_path):lower():match("^(.*)/[^/]*$") or ""
+end
+
+local function join_link_path(folder, path)
+  local parts = {}
+  for part in (folder ~= "" and folder .. "/" .. path or path):gmatch("[^/]+") do
+    if part == ".." then
+      if #parts == 0 then return nil end
+      parts[#parts] = nil
+    elseif part ~= "." then
+      parts[#parts + 1] = part
+    end
   end
-  local base = replacement.display_name
-  local existing = index.note_keys[base]
-  local unique = unique_item(existing)
-  if not existing or unique == old_entry then return base end
-  return strip_markdown_extension(rel)
+  return table.concat(parts, "/")
+end
+
+---Returns the files a link path can name, best first, in the order of Obsidian's getLinkpathDest.
+---Backslashes count as separators, and path endings match only at a "/" boundary.
+function Index:link_destinations(target, source_path)
+  local linkpath = display_path(target):lower()
+  local name = linkpath:match("[^/]*$")
+  if name == "" then return {} end
+  local files = {}
+  for i, ext in ipairs(LINK_NAME_EXTENSIONS) do
+    if i > 1 or name:find(".", 1, true) then
+      files = self:files_named(name .. ext)
+      if #files > 0 then linkpath = linkpath .. ext; break end
+    end
+  end
+  if #files == 0 then return {} end
+  if #files == 1 and not linkpath:find("/", 1, true) then return files end
+  local function path_of(file) return display_path(file.rel_path):lower() end
+  local folder = source_folder(self, source_path)
+
+  if linkpath:match("^%.%.?/") then
+    local wanted = join_link_path(folder, linkpath)
+    for _, file in ipairs(files) do
+      if path_of(file) == wanted then return { file } end
+    end
+    return {}
+  end
+
+  local rooted = linkpath:sub(1, 1) == "/"
+  linkpath = linkpath:gsub("^/+", "")
+  for _, file in ipairs(files) do
+    if path_of(file) == linkpath then return { file } end
+  end
+  if rooted then return {} end
+
+  local matches, suffix = {}, "/" .. linkpath
+  for _, file in ipairs(files) do
+    local path = path_of(file)
+    if path == linkpath or path:sub(-#suffix) == suffix then
+      matches[#matches + 1] = { file = file, path = path,
+        local_file = folder == "" or path:sub(1, #folder + 1) == folder .. "/" }
+    end
+  end
+  table.sort(matches, function(a, b)
+    if a.local_file ~= b.local_file then return a.local_file end
+    if #a.path ~= #b.path then return #a.path < #b.path end
+    return a.path < b.path
+  end)
+  for i, match in ipairs(matches) do matches[i] = match.file end
+  return matches
+end
+
+---Writes a link to `entry` in the Project's link format.
+---Wiki links drop a note's ".md"; `opts.markdown` keeps it for Markdown links.
+---`opts.renamed_from` names the file that `entry` replaces while `entry` is not indexed yet.
+function Index:link_text(entry, source_path, opts)
+  opts = opts or {}
+  local rel = display_path(entry.rel_path)
+  local function finish(path)
+    if opts.markdown then return path end
+    return (path:gsub("%.[mM][dD]$", ""))
+  end
+  if self.link_path_policy == "relative" and source_path then
+    local relative = display_path(common.relative_path(common.dirname(source_path), entry.abs_path))
+    if not relative:match("^%.%./") then relative = "./" .. relative end
+    return finish(relative)
+  end
+  if self.link_path_policy ~= "root" then
+    local short = finish(display_basename(rel))
+    local others = 0
+    for _, file in ipairs(self:link_destinations(short, nil)) do
+      if not (common.path_equals(file.abs_path, entry.abs_path)
+        or (opts.renamed_from and common.path_equals(file.abs_path, opts.renamed_from)))
+      then
+        others = others + 1
+      end
+    end
+    if others == 0 then return short end
+  end
+  return finish(rel)
+end
+
+---Returns where Obsidian would create the note for a missing link target, or nil and a reason.
+---Paths with a folder start at the Project root; "./" and "../" paths start at the note's folder.
+---Bare names follow the vault's new-note location.
+function Index:new_note_path(target, source_path)
+  local path = display_path(strip_target_fragment(target)):gsub("/+$", "")
+  if path == "" then return nil, "empty target" end
+  local ext = extension(path)
+  if ext and not MARKDOWN_EXTENSIONS[ext] and is_attachment(path) then return nil, "not a note" end
+  if not (ext and MARKDOWN_EXTENSIONS[ext]) then path = path .. ".md" end
+  local source_dir = source_path and common.dirname(source_path)
+  local base = self.root
+  if path:match("^%.%.?/") then
+    base = source_dir or self.root
+  elseif path:find("/", 1, true) then
+    path = path:gsub("^/+", "")
+  else
+    local settings = read_obsidian_app_settings(self.root)
+    if settings.newFileLocation == "current" and source_dir then
+      base = source_dir
+    elseif settings.newFileLocation == "folder" and type(settings.newFileFolderPath) == "string" then
+      local folder = display_path(settings.newFileFolderPath):gsub("^/+", ""):gsub("/+$", "")
+      local folder_path = absolute_path(join_path(self.root, folder))
+      local info = folder_path and system.get_file_info(folder_path)
+      if info and info.type == "dir" and common.path_belongs_to(folder_path, self.root) then base = folder_path end
+    end
+    core.log_quiet("Markdown new note location %s for %s: %s",
+      tostring(settings.newFileLocation or "root"), path, base)
+  end
+  local abs = absolute_path(join_path(base, path))
+  if not abs or not common.path_belongs_to(abs, self.root) then return nil, "outside the Project" end
+  return abs
 end
 
 local function subtarget_suffix(link)
@@ -939,8 +978,8 @@ end
 function Index:plan_note_rename(old_path, new_path)
   old_path, new_path = absolute_path(old_path), absolute_path(new_path)
   if not (old_path and new_path and is_markdown(old_path) and is_markdown(new_path)) then return nil end
-  local old_entry = self:note(old_path)
-  if not old_entry then return nil end
+  if not self:note(old_path) then return nil end
+  local replacement = { abs_path = new_path, rel_path = self:relative_path(new_path) }
   local files = {}
   local entries, seen_entries = {}, {}
   for _, entry in pairs(self.notes_by_abs) do
@@ -959,12 +998,10 @@ function Index:plan_note_rename(old_path, new_path)
       for _, link in ipairs(entry.outbound_links or {}) do
         local resolution = self:resolve(link, entry.abs_path)
         if resolution.status == "resolved" and common.path_equals(resolution.path, old_path) then
-          local base
-          if link.kind == "wiki" or link.kind == "embed" then
-            base = rename_note_target(self, old_entry, new_path, source_path)
-          else
-            base = display_path(common.relative_path(common.dirname(source_path), new_path))
-          end
+          local base = self:link_text(replacement, source_path, {
+            renamed_from = old_path,
+            markdown = link.kind == "markdown" or link.kind == "image",
+          })
           local edit = target_edit_for_link(lines[link.source_line] or "", link,
             base .. subtarget_suffix(link))
           if edit then edits[#edits + 1] = edit end
@@ -1042,14 +1079,14 @@ function Index:completion_candidates(mode, query, source_path, limit)
   local source_entry = source_path and self.notes_by_abs[path_key(source_path)] or nil
   if mode == "note" then
     for _, entry in pairs(self.notes_by_abs) do
-      local target = canonical_note_target(self, entry, source_path)
+      local target = self:link_text(entry, source_path)
       add(entry.display_name, target, "note", entry, 1, entry.rel_path)
       for _, alias in ipairs(entry.aliases or {}) do
         add(alias, target .. "|" .. alias, "alias", entry, 1, entry.rel_path)
       end
     end
     for _, entry in pairs(self.attachments_by_abs) do
-      add(entry.display_name, entry.rel_path, "attachment", entry, 1, entry.rel_path)
+      add(entry.display_name, self:link_text(entry, source_path), "attachment", entry, 1, entry.rel_path)
     end
   elseif mode == "current_heading" and source_entry then
     for _, heading in ipairs(source_entry.headings or {}) do
@@ -1058,7 +1095,7 @@ function Index:completion_candidates(mode, query, source_path, limit)
     end
   elseif mode == "global_heading" then
     for _, entry in pairs(self.notes_by_abs) do
-      local note_target = canonical_note_target(self, entry, source_path)
+      local note_target = self:link_text(entry, source_path)
       for _, heading in ipairs(entry.headings or {}) do
         local heading_target = heading.path_text or heading.text
         add(heading_target, note_target .. "#" .. heading_target,
@@ -1071,7 +1108,7 @@ function Index:completion_candidates(mode, query, source_path, limit)
     end
   elseif mode == "global_block" then
     for _, entry in pairs(self.notes_by_abs) do
-      local note_target = canonical_note_target(self, entry, source_path)
+      local note_target = self:link_text(entry, source_path)
       for _, block in ipairs(entry.blocks or {}) do
         add(block.id, note_target .. "#^" .. block.id,
           "block", entry, block.line, entry.rel_path)
@@ -1263,10 +1300,6 @@ local function missing(target, reason)
   return { status = "missing", target = target, reason = reason or "not found" }
 end
 
-local function ambiguous(target, candidates)
-  return { status = "ambiguous", target = target, candidates = candidates, reason = "ambiguous target" }
-end
-
 local function resolved(kind, entry, extra)
   local result = { status = "resolved", kind = kind, path = entry.abs_path, entry = entry }
   if extra then for key, value in pairs(extra) do result[key] = value end end
@@ -1310,60 +1343,11 @@ function Index:resolve_entry_result(entry, link, target)
   return resolved(entry.kind, entry)
 end
 
-function Index:resolve_note_entry(target)
-  local exact = self.note_keys[target]
-  local entry, candidates = unique_item(exact)
-  if entry then return entry end
-  if candidates then return nil, candidates end
-
-  local ci = self.note_keys_ci[target:lower()]
-  entry, candidates = unique_item(ci)
-  if entry then return entry end
-  if candidates then return nil, candidates end
-
-  if self.disk_snapshot then
-    local native, filtered = self.disk_snapshot:resolve_notes(target), {}
-    for _, candidate in ipairs(native) do
-      local key = path_key(candidate.abs_path)
-      if not self.removed_paths[key] and not self.notes_by_abs[key] then filtered[#filtered + 1] = candidate end
-    end
-    native = filtered
-    if #native == 1 then return native[1] end
-    if #native > 1 then return nil, native end
-  end
-
-end
-
-function Index:resolve_attachment_entry(target)
-  local exact = self.attachment_keys[target]
-  local entry, candidates = unique_item(exact)
-  if entry then return entry end
-  if candidates then return nil, candidates end
-
-  local ci = self.attachment_keys_ci[target:lower()]
-  entry, candidates = unique_item(ci)
-  if entry then return entry end
-  if candidates then return nil, candidates end
-
-  if self.disk_snapshot then
-    local native, filtered = self.disk_snapshot:resolve_attachments(target), {}
-    for _, candidate in ipairs(native) do
-      local key = path_key(candidate.abs_path)
-      if not self.removed_paths[key] and not self.attachments_by_abs[key] then filtered[#filtered + 1] = candidate end
-    end
-    native = filtered
-    if #native == 1 then return native[1] end
-    if #native > 1 then return nil, native end
-  end
-end
-
 function Index:resolve(link_or_target, source_path)
   local link = type(link_or_target) == "table" and link_or_target or links.find_links("[[" .. tostring(link_or_target or "") .. "]]", 1)[1]
   local target = strip_target_fragment(
     link.path ~= nil and link.path or link.raw_target or ""
   )
-  local source_dir = source_path and common.dirname(source_path)
-
   if target == "" and link.subtarget then
     if source_path then target = self:relative_path(source_path) else return missing(target, "current note is unknown") end
   end
@@ -1374,44 +1358,25 @@ function Index:resolve(link_or_target, source_path)
     return { status = "external", target = target, path = target, reason = "URI scheme" }
   end
 
+  -- Obsidian reads a leading "/" as the vault root, so only other outside paths are external.
   if common.is_absolute_path(target) then
     local abs = common.normalize_path(target)
-    if not common.path_belongs_to(abs, self.root) then
+    if common.path_belongs_to(abs, self.root) then
+      local entry = self:note(abs) or self:attachment(abs)
+      if not entry then return missing(target) end
+      return self:resolve_entry_result(entry, link, target)
+    elseif not target:match("^/[^/]") then
       return { status = "external", target = target, path = abs, reason = "outside vault" }
     end
-    local entry = self:note(abs) or self:attachment(abs)
-    if not entry then return missing(target) end
-    return self:resolve_entry_result(entry, link, target)
   end
 
-  local explicit_path = target:find("/", 1, true) or target:find("\\", 1, true) or target:find("^%.") ~= nil
-  if explicit_path and source_dir then
-    local abs = absolute_path(join_path(source_dir, target))
-    if abs and common.path_belongs_to(abs, self.root) then
-      local entry = note_entry_for_explicit_path(self, abs) or self:attachment(abs)
-      if entry then
-        return self:resolve_entry_result(entry, link, target)
-      end
-    end
-  end
-
-  local root_abs = absolute_path(join_path(self.root, target))
-  local root_entry = root_abs and note_entry_for_explicit_path(self, root_abs)
-  if root_entry then return self:resolve_entry_result(root_entry, link, target) end
-
-  local target_ext = extension(target)
-  local entry, candidates
-  if target_ext and not MARKDOWN_EXTENSIONS[target_ext] then
-    entry, candidates = self:resolve_attachment_entry(display_path(target))
-  else
-    entry, candidates = self:resolve_note_entry(display_path(target))
-  end
-  if candidates then
-    core.log_quiet("Markdown vault link ambiguous %s", target)
-    return ambiguous(target, candidates)
-  end
+  local destinations = self:link_destinations(target, source_path)
+  local destination = destinations[1]
+  local entry = destination and (self:note(destination.abs_path) or self:attachment(destination.abs_path))
   if not entry then return missing(target) end
-
+  if #destinations > 1 then
+    core.log_quiet("Markdown link %s matched %d files; chose %s", target, #destinations, entry.rel_path)
+  end
   return self:resolve_entry_result(entry, link, target)
 end
 
@@ -1420,25 +1385,25 @@ function Index:resolve_preview(link, source_path)
   local files = project_files.cached(self.root)
   if not files then return { status = "pending", reason = "listing files" } end
 
-  -- Reuse normal path precedence and ambiguity checks without parsing every note.
+  -- Reuse normal link precedence without parsing every note.
   -- This temporary lookup never replaces the complete index or its Buffer overlays.
   local paths = Index:new(self.root)
   for _, file in ipairs(files) do
+    local entry = { abs_path = file.path, rel_path = display_path(file.relative) }
     if is_markdown(file.path) then
-      paths:add_note_entry({
-        kind = "note", abs_path = file.path, rel_path = display_path(file.relative),
-        display_name = display_basename(strip_markdown_extension(file.relative)),
-      })
+      entry.kind = "note"
+      entry.display_name = display_basename(strip_markdown_extension(file.relative))
+      paths:add_note_entry(entry)
+    elseif paths:is_attachment(file.path) then
+      entry.kind = "attachment"
+      entry.display_name = display_basename(file.relative)
+      paths:add_attachment_entry(entry)
     end
   end
   local target = link.path or link.raw_target or ""
   if target == "" and link.subtarget then target = source_path or "" end
   local result = paths:resolve({ path = target }, source_path)
-  if result.status == "missing" then
-    -- An alias needs note metadata. Do not guess while the full index is pending.
-    return { status = "pending", reason = "indexing aliases" }
-  end
-  if result.status ~= "resolved" then return result end
+  if result.status ~= "resolved" or result.kind ~= "note" then return result end
   core.log_quiet("Markdown preview resolved one note before vault publication: %s", result.path)
   if not link.subtarget then return result end
 

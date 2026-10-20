@@ -1126,26 +1126,37 @@ static int markdown_vault_attachment(lua_State *L) {
   push_markdown_vault_attachment(L, &entry); return 1;
 }
 
-static int markdown_vault_resolve(lua_State *L, bool attachments) {
-  LuaMarkdownVaultSnapshot *snapshot = check_markdown_vault_snapshot(L, 1); const char *target = luaL_checkstring(L, 2);
-  uint32_t total = attachments ? anvil_markdown_vault_resolve_attachments(snapshot->snapshot, target, NULL, 0)
-    : anvil_markdown_vault_resolve_notes(snapshot->snapshot, target, NULL, 0);
-  uint32_t count = total > 64 ? 64 : total; uint32_t *indices = count ? (uint32_t *)SDL_malloc((size_t)count * sizeof(*indices)) : NULL;
-  if (count) {
-    if (attachments) anvil_markdown_vault_resolve_attachments(snapshot->snapshot, target, indices, count);
-    else anvil_markdown_vault_resolve_notes(snapshot->snapshot, target, indices, count);
-  }
-  lua_createtable(L, (int)count, 2);
-  for (uint32_t i = 0; i < count; i++) {
-    if (attachments) { AnvilMarkdownVaultAttachmentView entry; anvil_markdown_vault_attachment_at(snapshot->snapshot, indices[i], &entry); push_markdown_vault_attachment(L, &entry); }
-    else { AnvilMarkdownVaultNoteView note; anvil_markdown_vault_note_at(snapshot->snapshot, indices[i], &note); push_markdown_vault_note(L, &note); }
+static void push_markdown_vault_file_ref(lua_State *L, const char *kind, const char *absolute_path, const char *relative_path) {
+  lua_createtable(L, 0, 3);
+  lua_pushstring(L, kind); lua_setfield(L, -2, "kind");
+  lua_pushstring(L, absolute_path); lua_setfield(L, -2, "abs_path");
+  lua_pushstring(L, relative_path); lua_setfield(L, -2, "rel_path");
+}
+
+/* Returns path-only records; resolution loads the full entry only for the file it chooses. */
+static int markdown_vault_files_named_lua(lua_State *L) {
+  LuaMarkdownVaultSnapshot *snapshot = check_markdown_vault_snapshot(L, 1); const char *name = luaL_checkstring(L, 2);
+  uint32_t notes = anvil_markdown_vault_notes_named(snapshot->snapshot, name, NULL, 0);
+  uint32_t attachments = anvil_markdown_vault_attachments_named(snapshot->snapshot, name, NULL, 0);
+  if ((uint64_t)notes + attachments > INT_MAX) return luaL_error(L, "Markdown file-name result exceeds Lua table capacity");
+  uint32_t total = notes + attachments;
+  uint32_t *indices = total ? (uint32_t *)SDL_malloc((size_t)total * sizeof(*indices)) : NULL;
+  if (total && !indices) return luaL_error(L, "out of memory reading Markdown file names");
+  anvil_markdown_vault_notes_named(snapshot->snapshot, name, indices, notes);
+  anvil_markdown_vault_attachments_named(snapshot->snapshot, name, indices + notes, attachments);
+  lua_createtable(L, (int)total, 0);
+  for (uint32_t i = 0; i < total; i++) {
+    if (i < notes) {
+      AnvilMarkdownVaultNoteView note; anvil_markdown_vault_note_at(snapshot->snapshot, indices[i], &note);
+      push_markdown_vault_file_ref(L, "note", note.absolute_path, note.relative_path);
+    } else {
+      AnvilMarkdownVaultAttachmentView entry; anvil_markdown_vault_attachment_at(snapshot->snapshot, indices[i], &entry);
+      push_markdown_vault_file_ref(L, "attachment", entry.absolute_path, entry.relative_path);
+    }
     lua_rawseti(L, -2, (int)i + 1);
   }
-  lua_pushinteger(L, total); lua_setfield(L, -2, "total"); lua_pushboolean(L, total > count); lua_setfield(L, -2, "truncated");
   SDL_free(indices); return 1;
 }
-static int markdown_vault_resolve_notes_lua(lua_State *L) { return markdown_vault_resolve(L, false); }
-static int markdown_vault_resolve_attachments_lua(lua_State *L) { return markdown_vault_resolve(L, true); }
 
 static int markdown_vault_linked_notes_lua(lua_State *L) {
   LuaMarkdownVaultSnapshot *snapshot = check_markdown_vault_snapshot(L, 1); const char *target = luaL_checkstring(L, 2);
@@ -1169,12 +1180,13 @@ static bool markdown_completion_matches(const char *text, const char *query) {
   return score != INT_MIN;
 }
 
-static char *lua_strip_markdown_extension(const char *path) {
-  size_t len = strlen(path); const char *dot = strrchr(path, '.');
-  if (dot && (SDL_strcasecmp(dot, ".md") == 0 || SDL_strcasecmp(dot, ".markdown") == 0 || SDL_strcasecmp(dot, ".mdown") == 0)) len = (size_t)(dot - path);
+static char *lua_strip_md_extension(const char *path) {
+  size_t len = strlen(path);
+  if (len >= 3 && SDL_strcasecmp(path + len - 3, ".md") == 0) len -= 3;
   char *copy = (char *)SDL_malloc(len + 1); if (!copy) return NULL; memcpy(copy, path, len); copy[len] = '\0'; return copy;
 }
 
+/* Obsidian's relative format; a "./" prefix keeps descendants from matching a root path first. */
 static char *lua_relative_markdown_target(const char *source_path, const char *target_path) {
   char *source = SDL_strdup(source_path ? source_path : ""), *target = SDL_strdup(target_path ? target_path : "");
   if (!source || !target) { SDL_free(source); SDL_free(target); return NULL; }
@@ -1193,31 +1205,42 @@ static char *lua_relative_markdown_target(const char *source_path, const char *t
   size_t bytes = ups * 3 + strlen(remainder) + 3;
   char *result = (char *)SDL_calloc(bytes, 1);
   if (result) {
+    if (!ups) strcat(result, "./");
     for (size_t i = 0; i < ups; i++) strcat(result, "../");
     strcat(result, remainder);
-    char *without = lua_strip_markdown_extension(result);
-    if (without) { SDL_free(result); result = without; }
-    if (!strchr(result, '/') && strncmp(result, "..", 2) != 0) {
-      char *local = (char *)SDL_malloc(strlen(result) + 3); if (local) { strcpy(local, "./"); strcat(local, result); SDL_free(result); result = local; }
-    }
   }
   SDL_free(source); SDL_free(target); return result;
 }
 
-static char *markdown_completion_note_target(AnvilMarkdownVaultSnapshot *snapshot,
-  const AnvilMarkdownVaultNoteView *note, const char *policy, const char *source_path) {
-  char *rel = lua_strip_markdown_extension(note->relative_path);
-  if (!rel) return NULL;
-  if (policy && strcmp(policy, "root") == 0) return rel;
-  if (policy && strcmp(policy, "relative") == 0 && source_path && source_path[0]) {
-    SDL_free(rel); return lua_relative_markdown_target(source_path, note->absolute_path);
+/* Mirrors the Lua resolver's candidate names for a bare link: the name itself when it has a dot, then Markdown extensions. */
+static bool markdown_bare_name_links_only(AnvilMarkdownVaultSnapshot *snapshot, const char *text, bool attachment, uint32_t index) {
+  static const char *extensions[] = { "", ".md", ".markdown", ".mdown" };
+  for (uint32_t e = 0; e < 4; e++) {
+    if (e == 0 && !strchr(text, '.')) continue;
+    char *name = NULL; if (SDL_asprintf(&name, "%s%s", text, extensions[e]) < 0 || !name) return false;
+    uint32_t note = UINT32_MAX, file = UINT32_MAX;
+    uint32_t notes = anvil_markdown_vault_notes_named(snapshot, name, &note, 1);
+    uint32_t attachments = anvil_markdown_vault_attachments_named(snapshot, name, &file, 1);
+    SDL_free(name);
+    if (!notes && !attachments) continue;
+    return notes + attachments == 1 && (attachment ? file == index : note == index);
   }
-  uint32_t matches[2];
-  uint32_t count = anvil_markdown_vault_resolve_notes(snapshot, note->display_name, matches, 2);
-  if (count == 1) { SDL_free(rel); return SDL_strdup(note->display_name); }
-  count = anvil_markdown_vault_resolve_notes(snapshot, rel, matches, 2);
-  if (count == 1) return rel;
-  SDL_free(rel); return SDL_strdup(note->relative_path);
+  return false;
+}
+
+/* Obsidian's link formats: "root" is its absolute format and "shortest_unique" its shortest format. */
+static char *markdown_completion_file_target(AnvilMarkdownVaultSnapshot *snapshot, const char *absolute_path,
+  const char *relative_path, const char *name, bool attachment, uint32_t index, const char *policy, const char *source_path) {
+  if (policy && strcmp(policy, "relative") == 0 && source_path && source_path[0]) {
+    char *relative = lua_relative_markdown_target(source_path, absolute_path); if (!relative) return NULL;
+    if (attachment) return relative;
+    char *stripped = lua_strip_md_extension(relative); SDL_free(relative); return stripped;
+  }
+  bool shortest = !policy || strcmp(policy, "root") != 0;
+  if (shortest && markdown_bare_name_links_only(snapshot, name, attachment, index)) return SDL_strdup(name);
+  char *rel = attachment ? SDL_strdup(relative_path) : lua_strip_md_extension(relative_path);
+  if (rel) for (char *c = rel; *c; c++) if (*c == '\\') *c = '/';
+  return rel;
 }
 
 static void push_completion_candidate(lua_State *L, const char *text, const char *target, const char *kind,
@@ -1258,7 +1281,7 @@ static int markdown_vault_completion(lua_State *L) {
     AnvilMarkdownVaultNoteView note; if (!anvil_markdown_vault_note_at(snapshot, i, &note)) continue;
     bool current = has_source && i == source_index;
     if (strcmp(mode, "note") == 0) {
-      char *target = markdown_completion_note_target(snapshot, &note, policy, source);
+      char *target = markdown_completion_file_target(snapshot, note.absolute_path, note.relative_path, note.display_name, false, i, policy, source);
       if (target && (markdown_completion_matches(note.display_name, query) || markdown_completion_matches(target, query) || markdown_completion_matches(note.relative_path, query))) {
         push_completion_candidate(L, note.display_name, target, "note", note.absolute_path, note.relative_path, 1, note.relative_path); lua_rawseti(L, -2, ++out);
       }
@@ -1268,7 +1291,7 @@ static int markdown_vault_completion(lua_State *L) {
       }
       SDL_free(target);
     } else if ((strcmp(mode, "current_heading") == 0 && current) || strcmp(mode, "global_heading") == 0) {
-      char *note_target = markdown_completion_note_target(snapshot, &note, policy, source);
+      char *note_target = markdown_completion_file_target(snapshot, note.absolute_path, note.relative_path, note.display_name, false, i, policy, source);
       for (uint32_t h = 0; note_target && out < limit && h < note.heading_count; h++) {
         const AnvilMarkdownVaultHeadingView *heading = &note.headings[h]; const char *heading_text = heading->path_text[0] ? heading->path_text : heading->text;
         if (!markdown_completion_matches(heading_text, query)) continue;
@@ -1282,7 +1305,7 @@ static int markdown_vault_completion(lua_State *L) {
       }
       SDL_free(note_target);
     } else if ((strcmp(mode, "current_block") == 0 && current) || strcmp(mode, "global_block") == 0) {
-      char *note_target = markdown_completion_note_target(snapshot, &note, policy, source);
+      char *note_target = markdown_completion_file_target(snapshot, note.absolute_path, note.relative_path, note.display_name, false, i, policy, source);
       for (uint32_t b = 0; note_target && out < limit && b < note.block_count; b++) {
         const AnvilMarkdownVaultBlockView *block = &note.blocks[b]; if (!markdown_completion_matches(block->id, query)) continue;
         size_t bytes = strlen(note_target) + strlen(block->id) + 3; char *target = (char *)SDL_malloc(bytes); if (!target) continue;
@@ -1306,7 +1329,8 @@ static int markdown_vault_completion(lua_State *L) {
     uint32_t i = candidate_indices[candidate % 4096];
     AnvilMarkdownVaultAttachmentView entry; if (!anvil_markdown_vault_attachment_at(snapshot, i, &entry)) continue;
     if (markdown_completion_matches(entry.display_name, query) || markdown_completion_matches(entry.relative_path, query)) {
-      push_completion_candidate(L, entry.display_name, entry.relative_path, "attachment", entry.absolute_path, entry.relative_path, 1, entry.relative_path); lua_rawseti(L, -2, ++out);
+      char *target = markdown_completion_file_target(snapshot, entry.absolute_path, entry.relative_path, entry.display_name, true, i, policy, source);
+      if (target) { push_completion_candidate(L, entry.display_name, target, "attachment", entry.absolute_path, entry.relative_path, 1, entry.relative_path); lua_rawseti(L, -2, ++out); SDL_free(target); }
     }
   }
   return 1;
@@ -2502,8 +2526,7 @@ static const luaL_Reg markdown_vault_snapshot_methods[] = {
   { "summary", markdown_vault_summary },
   { "note", markdown_vault_note },
   { "attachment", markdown_vault_attachment },
-  { "resolve_notes", markdown_vault_resolve_notes_lua },
-  { "resolve_attachments", markdown_vault_resolve_attachments_lua },
+  { "files_named", markdown_vault_files_named_lua },
   { "linked_notes", markdown_vault_linked_notes_lua },
   { "completion", markdown_vault_completion },
   { "close", markdown_vault_close },

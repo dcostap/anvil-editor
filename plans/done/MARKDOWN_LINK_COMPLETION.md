@@ -22,9 +22,13 @@ Matching is case-insensitive substring search over display text, serialized targ
 
 Generated note targets use a per-link-root policy:
 
-- `shortest_unique` (the first-party default) — basename when unique, otherwise the shortest unique Project-relative form, retaining the Markdown extension only when needed to distinguish a root note;
-- `relative` — explicit source-note-relative paths (`./` is retained for same-directory targets); and
-- `root` — extensionless Project-root-relative paths.
+- `shortest_unique` (the first-party default, Obsidian's "shortest") — the file name when no other file has that name, otherwise the Project-root path;
+- `relative` — source-note-relative paths; Anvil adds `./` unless the path starts with `../`, so a path inside the note's folder never matches a root path first; and
+- `root` (Obsidian's "absolute") — Project-root paths.
+
+Note targets drop `.md`; attachment targets keep their extension. A vault's
+`.obsidian/app.json` `newLinkFormat` selects the policy unless Project
+configuration sets one.
 
 Project configuration can call:
 
@@ -32,7 +36,7 @@ Project configuration can call:
 require("core.markdown.vault_index").set_link_path_policy(project_root, "relative")
 ```
 
-The policy is retained for that normalized link root and updates any live index generation. Resolution remains syntax-compatible with all policies and gives an exact root note precedence over ambiguous nested basenames. Alias suggestions serialize canonical destination plus alias (`[[Canonical|Alias]]`) instead of treating the alias as the destination.
+The policy is retained for that normalized link root and updates any live index generation. Every generated target resolves back to its own file. Alias suggestions serialize canonical destination plus alias (`[[Canonical|Alias]]`) instead of treating the alias as the destination.
 
 ## Regression evidence
 

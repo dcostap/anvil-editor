@@ -44,8 +44,10 @@ int main(void) {
   CHECK(note.headings[4].line == 11);
   CHECK(note.block_count == 1 && strcmp(note.blocks[0].id, "block-id") == 0);
   uint32_t matches[4];
-  CHECK(anvil_markdown_vault_resolve_notes(snapshot, "Alias, One", matches, 4) == 1);
-  CHECK(anvil_markdown_vault_resolve_attachments(snapshot, "image.png", matches, 4) == 1);
+  CHECK(anvil_markdown_vault_notes_named(snapshot, "NOTE.md", matches, 4) == 1 && matches[0] == index);
+  CHECK(anvil_markdown_vault_notes_named(snapshot, "Note", matches, 4) == 0);
+  CHECK(anvil_markdown_vault_notes_named(snapshot, "Alias, One", matches, 4) == 0);
+  CHECK(anvil_markdown_vault_attachments_named(snapshot, "Image.PNG", matches, 4) == 1);
   CHECK(anvil_markdown_vault_linked_notes(snapshot, "Note.md", matches, 4) == 1);
   CHECK(anvil_markdown_vault_completion_candidates(snapshot,
     ANVIL_MARKDOWN_VAULT_COMPLETION_NOTES, "Alias", 0, matches, 4) == 1);
