@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Meson can start Git's bash with MSYS2's tools first on PATH. Tools from the
+# other runtime can fail to start under load, drop environment variables and
+# rewrite arguments, so this bash's own tools come first.
+PATH="/usr/bin:$PATH"
+
 if [ "$#" -lt 5 ]; then
   echo "usage: $0 <build-dir> <source-dir> <anvil-exe> <test-path> <run-name>" >&2
   exit 2
@@ -26,7 +31,15 @@ esac
 # saves and deletes in the tests. Anvil's default ignore rules also ignore
 # build*/ roots, which some UI tests open files from. ANVIL_TEST_RUNS_ROOT
 # picks another folder.
-runs_root="${ANVIL_TEST_RUNS_ROOT:-${TMPDIR:-/tmp}/anvil-lua-tests}"
+# Bash rewrites TEMP to /tmp, and Git's and MSYS2's bash map /tmp to different
+# folders. LOCALAPPDATA keeps its Windows form.
+if [ -n "${LOCALAPPDATA:-}" ]; then
+  backslash='\'
+  temp_root="${LOCALAPPDATA//"$backslash"//}/Temp"
+else
+  temp_root=${TMPDIR:-/tmp}
+fi
+runs_root="${ANVIL_TEST_RUNS_ROOT:-$temp_root/anvil-lua-tests}"
 mkdir -p "$runs_root"
 
 # Remove folders that earlier runs could not delete. No run lasts this long,
@@ -152,13 +165,15 @@ jobs=${ANVIL_TEST_JOBS:-4}
 file_timeout=${ANVIL_TEST_FILE_TIMEOUT:-300}
 
 run_file() {
-  local index=$1 file=$2
+  local index=$1 file=$2 status=0
   local file_userdir="$userdir/$index"
-  mkdir -p "$file_userdir"
-  local status=0
-  ANVIL_USERDIR="$file_userdir" USERPROFILE="$file_userdir" \
-    timeout --kill-after=10 "$file_timeout" "$bindir/$exe_name" test "$file" \
-    >"$logdir/$index.log" 2>&1 || status=$?
+  if mkdir -p "$file_userdir"; then
+    ANVIL_USERDIR="$file_userdir" USERPROFILE="$file_userdir" \
+      timeout --kill-after=10 "$file_timeout" "$bindir/$exe_name" test "$file" \
+      >"$logdir/$index.log" 2>&1 || status=$?
+  else
+    status=255
+  fi
   echo "$status" >"$logdir/$index.status"
 }
 
@@ -168,19 +183,26 @@ started_at=$SECONDS
 
 # Print finished files in file order, so the output reads the same at any job
 # count.
+summary_pattern='Ran ([0-9]+) tests in [0-9]+ files: ([0-9]+) passed, ([0-9]+) failed, ([0-9]+) skipped'
+
 report_finished() {
-  local index file status summary counts
+  local index file status line summary f
   while [ "$next_report" -lt "${#files[@]}" ] && [ -f "$logdir/$next_report.status" ]; do
     index=$next_report
     file=${files[$index]}
-    status=$(cat "$logdir/$index.status")
+    status=$(cat "$logdir/$index.status" 2>/dev/null || true)
+    [[ $status =~ ^[0-9]+$ ]] || status=255
+    [ -f "$logdir/$index.log" ] || : >"$logdir/$index.log"
     cat "$logdir/$index.log"
-    summary=$(sed 's/\x1b\[[0-9;]*m//g' "$logdir/$index.log" \
-      | grep -a -E '^Ran [0-9]+ tests in [0-9]+ files: ' | tail -n 1 || true)
-    if [ -n "$summary" ]; then
-      counts=$(echo "$summary" | sed -E 's/^Ran ([0-9]+) tests in [0-9]+ files: ([0-9]+) passed, ([0-9]+) failed, ([0-9]+) skipped.*/\1 \2 \3 \4/')
-      read -r t p f s <<<"$counts"
-      total=$((total + t)) passed=$((passed + p)) failed=$((failed + f)) skipped=$((skipped + s))
+    summary=
+    while IFS= read -r line || [ -n "$line" ]; do
+      [[ $line =~ $summary_pattern ]] && summary=$line
+    done <"$logdir/$index.log"
+    f=0
+    if [[ $summary =~ $summary_pattern ]]; then
+      f=${BASH_REMATCH[3]}
+      total=$((total + BASH_REMATCH[1])) passed=$((passed + BASH_REMATCH[2]))
+      failed=$((failed + f)) skipped=$((skipped + BASH_REMATCH[4]))
     fi
     if [ -z "$summary" ] || { [ "$status" -ne 0 ] && [ "$f" -eq 0 ]; }; then
       # The process ended without a result for every test: a crash, a timeout,
@@ -206,6 +228,10 @@ for index in "${!files[@]}"; do
   running=$((running + 1))
 done
 wait || true
+# A file whose status was never written still counts as a failed file.
+for index in "${!files[@]}"; do
+  [ -f "$logdir/$index.status" ] || echo 255 >"$logdir/$index.status"
+done
 report_finished
 
 echo ""
