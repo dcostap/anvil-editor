@@ -1975,8 +1975,18 @@ end
 
 function M.reset_for_tests()
   closed_panes = {}
+  -- Close Views like a real close does, so File Trees, Terminals and other
+  -- Views stop their watchers and threads instead of outliving the test.
+  local seen = {}
   for _, pane in ipairs(M.ordered()) do
-    for _, view in ipairs(collect_owned_views(pane)) do release_view(pane, view) end
+    for _, view in ipairs(collect_owned_views(pane)) do
+      release_view(pane, view)
+      if not seen[view] then
+        seen[view] = true
+        local ok, err = pcall(call_lifecycle, view, "on_close")
+        if not ok then core.log_quiet("Panes reset: closing a View failed: %s", tostring(err)) end
+      end
+    end
   end
   M.groups = {}
   M.panes_by_id = {}
