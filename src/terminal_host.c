@@ -46,6 +46,8 @@ typedef struct {
   char last_cwd[32768], interrupted_command[16384], agent_report_path[32768];
   /* The busy child that interrupted_command came from. An agent report names it. */
   DWORD interrupted_pid;
+  /* The last older process that named the shell's reused ID as its parent. It is logged once. */
+  DWORD ignored_child_pid;
   bool explicit_close, shell_ended;
   /* The live title the Project Sidebar shows, and the last activity in Unix seconds. */
   char title[1024];
@@ -161,8 +163,12 @@ static bool write_registry(TerminalHost *host) {
   FILE *file = temp ? _wfopen(temp, L"wb") : NULL;
   bool ok = path && file;
   if (ok) {
+    /* A detach is complete only after disconnect_client saved the screen. The
+       client thread clears attached first, and a title or busy write before the
+       disconnect would otherwise report a detach whose snapshot is still old. */
+    bool attached = host->attached || host->client || host->writer;
     fprintf(file, "return {\n  version = 1,\n  host_pid = %lu,\n  attached = %s,\n",
-      (unsigned long)GetCurrentProcessId(), host->attached ? "true" : "false");
+      (unsigned long)GetCurrentProcessId(), attached ? "true" : "false");
     fprintf(file, "  busy = %s,\n", host->busy ? "true" : "false");
     registry_string(file, "session_id", host->id);
     registry_string(file, "host_creation_time", created);
@@ -180,7 +186,18 @@ static bool write_registry(TerminalHost *host) {
     ok = !ferror(file);
   }
   if (file && fclose(file) != 0) ok = false;
-  if (ok) ok = MoveFileExW(temp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+  if (ok) {
+    /* Antivirus scanners open the record right after each write. A replace during
+       that scan is denied, and the caller does not repeat a lost change. */
+    static const DWORD retry_delays_ms[] = { 5, 10, 20, 40, 75, 100 };
+    ok = MoveFileExW(temp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    for (size_t i = 0; !ok && i < sizeof(retry_delays_ms) / sizeof(retry_delays_ms[0]); i++) {
+      DWORD error = GetLastError();
+      if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION && error != ERROR_LOCK_VIOLATION) break;
+      Sleep(retry_delays_ms[i]);
+      ok = MoveFileExW(temp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    }
+  }
   if (!ok && temp) DeleteFileW(temp);
   free(path); free(temp);
   if (!ok) host_log(host, "failure: registry write Windows error=%lu", (unsigned long)GetLastError());
@@ -494,20 +511,39 @@ static void join_reader(TerminalHost *host) {
 }
 
 /* Unknown process state is busy: do not end a shell on a failed probe. */
-static bool shell_busy(DWORD pid, char *command, size_t capacity, DWORD *command_pid) {
+static bool shell_busy(TerminalHost *host, char *command, size_t capacity, DWORD *command_pid) {
   command[0] = 0; *command_pid = 0;
+  DWORD pid = GetProcessId(host->pty.process);
+  FILETIME shell_created, unused;
+  bool shell_time = GetProcessTimes(host->pty.process, &shell_created, &unused, &unused, &unused) != FALSE;
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   if (snapshot == INVALID_HANDLE_VALUE) return true;
   PROCESSENTRY32W entry = { .dwSize = sizeof(entry) };
   bool busy = false;
   if (!Process32FirstW(snapshot, &entry)) busy = true;
   else do { if (entry.th32ParentProcessID == pid) {
+      HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+      /* Windows reuses process IDs. A process whose parent ended before the shell
+         started can name the shell's ID as its parent. A child is never older. */
+      FILETIME created;
+      if (process && shell_time && GetProcessTimes(process, &created, &unused, &unused, &unused) &&
+          CompareFileTime(&created, &shell_created) < 0) {
+        if (host->ignored_child_pid != entry.th32ProcessID) {
+          host->ignored_child_pid = entry.th32ProcessID;
+          host_log(host, "ignored process %lu: it predates the shell whose reused ID it names as parent",
+            (unsigned long)entry.th32ProcessID);
+        }
+        CloseHandle(process);
+        continue;
+      }
       busy = true;
       /* A prompt helper is a child, but not a command worth offering again.
          Keep scanning: another child can hold the interrupted command. */
-      if (!_wcsicmp(entry.szExeFile, L"oh-my-posh.exe") || !_wcsicmp(entry.szExeFile, L"starship.exe")) continue;
+      if (!_wcsicmp(entry.szExeFile, L"oh-my-posh.exe") || !_wcsicmp(entry.szExeFile, L"starship.exe")) {
+        if (process) CloseHandle(process);
+        continue;
+      }
       *command_pid = entry.th32ProcessID;
-      HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
       typedef LONG (WINAPI *QueryProcess)(HANDLE, ULONG, void *, ULONG, ULONG *);
       QueryProcess query = (QueryProcess)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess");
       ULONG needed = 0;
@@ -798,7 +834,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
       DWORD command_pid = 0;
       /* A child process covers any shell. The integrated shell's marks also cover
          commands that run inside the shell, such as PowerShell's Start-Sleep. */
-      bool busy = shell_busy(GetProcessId(host.pty.process), command, sizeof(command), &command_pid);
+      bool busy = shell_busy(&host, command, sizeof(command), &command_pid);
       busy = busy || InterlockedCompareExchange(&host.command_running, 0, 0);
       bool command_changed = strcmp(command, host.interrupted_command) != 0 || command_pid != host.interrupted_pid;
       if (command_changed) { strcpy(host.interrupted_command, command); host.interrupted_pid = command_pid; }

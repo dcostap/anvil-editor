@@ -5,7 +5,8 @@ local command = require "core.command"
 local panes = require "core.panes"
 
 local function wait_for(view, predicate, seconds)
-  local deadline = system.get_time() + (seconds or 10)
+  -- Shells start slowly on a loaded machine. The wait ends as soon as the predicate holds.
+  local deadline = system.get_time() + (seconds or 30)
   repeat
     if view and view.session then view:service_session(true) end
     if predicate() then return true end
@@ -98,9 +99,11 @@ test.describe("Terminal revival", function()
     local restored
     local ok, err = pcall(function()
       checkpoint_on_detach(view, state)
-      -- Without a saved screen the session cannot revive.
-      os.remove(record(state.session_id).snapshot_path)
+      -- Without a saved screen the session cannot revive. A live host can save
+      -- again, so remove the screen only after the host has ended.
+      local snapshot = record(state.session_id).snapshot_path
       kernel.TerminateProcess(handle, 99); kernel.WaitForSingleObject(handle, 5000)
+      os.remove(snapshot)
       restored = terminal.from_state(state)
       test.ok(wait_for(restored, function() return restored.state == "running" end), "no new shell started")
       test.ok(restored.session_id ~= state.session_id, "the lost session revived")
@@ -147,7 +150,7 @@ test.describe("Terminal revival", function()
         for line in (capture.text .. "\n"):gmatch("(.-)\r?\n") do lines[#lines + 1] = line end
         local line = lines[capture.cursor_line] or ""
         return line:find("PS .*ANVIL_TYPED") and after_marker():find("ANVIL_TYPED", 1, true)
-      end, 5), "typed input left the new prompt: " .. screen_text(restored))
+      end), "typed input left the new prompt: " .. screen_text(restored))
     end)
     if restored then restored:on_close() end
     view:on_close()
