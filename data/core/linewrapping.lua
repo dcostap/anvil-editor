@@ -1757,7 +1757,8 @@ function LineWrapping.draw_guide(textview)
     local guide_x = x + gw + textview.wrapped_settings.width
     local scrollbar_width = textview.v_scrollbar.expanded_size or style.expanded_scrollbar_size
     local content_left = textview.position.x + gw
-    local content_right = textview.position.x + textview.size.x - scrollbar_width
+    local content_right = textview.position.x + textview:get_presentation_viewport_width()
+      - scrollbar_width
     if guide_x <= content_left or guide_x + guide_width >= content_right then return end
     renderer.draw_rect(
       guide_x,

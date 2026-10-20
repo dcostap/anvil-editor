@@ -92,6 +92,15 @@ local function set_pane_membership(view, is_member)
   end
 end
 
+-- The view's own rect. A geometry scope substitutes `position.x` and
+-- `size.x` and keeps the view's own values for full-width highlights.
+local function host_rect(view)
+  if view.__centered_editor_in_geometry then
+    return view.__full_width_highlight_position_x, view.__full_width_highlight_size_x
+  end
+  return view.position.x, view.size.x
+end
+
 function M.should_center(view)
   perf_frame_add("centered_editor_should_center_calls", 1)
   local cfg = settings()
@@ -120,7 +129,7 @@ function M.should_center(view)
     return false
   end
   local centered = view.size
-    and view.size.x > max_width + (tonumber(cfg.min_margin) or 0) * 2
+    and select(2, host_rect(view)) > max_width + (tonumber(cfg.min_margin) or 0) * 2
   perf_frame_add(
     centered and "centered_editor_should_center_true"
       or "centered_editor_should_center_too_narrow",
@@ -142,28 +151,22 @@ function M.get_scaled_max_width(view)
   return max_width
 end
 
-local function get_base_lane_rect(view)
+-- The lane comes from the view's own rect, so it stays the same inside a
+-- geometry scope. Wide lines use horizontal scrolling instead of moving it.
+function M.get_lane_rect(view)
+  local host_x, host_width = host_rect(view)
   local cfg = settings()
   local max_width = M.get_scaled_max_width(view)
-  if max_width <= 0 then max_width = view.size.x end
+  if max_width <= 0 then max_width = host_width end
   local min_margin = tonumber(cfg.min_margin) or 0
   if cfg.scale_width ~= false then min_margin = min_margin * SCALE end
-  local available = math.max(0, view.size.x - min_margin * 2)
+  local available = math.max(0, host_width - min_margin * 2)
   local lane_width = math.min(
-    view.size.x,
+    host_width,
     math.max(0, math.min(max_width, available))
   )
-  local lane_x = view.position.x + math.floor((view.size.x - lane_width) / 2)
+  local lane_x = host_x + math.floor((host_width - lane_width) / 2)
   return lane_x, lane_width
-end
-
-function M.get_lane_rect(view)
-  -- Keep the lane stable while the Text View measures unwrapped content.
-  -- Wide lines use horizontal scrolling instead of moving the editor.
-  if view.__centered_editor_in_lane_geometry then
-    return view.position.x, view.size.x
-  end
-  return get_base_lane_rect(view)
 end
 
 function M.wrapping_limits_to_lane(view)
@@ -174,15 +177,26 @@ end
 
 function M.get_shifted_full_rect(view)
   local lane_x = M.get_lane_rect(view)
-  local view_right = view.position.x + view.size.x
-  return lane_x, math.max(0, view_right - lane_x)
+  local host_x, host_width = host_rect(view)
+  return lane_x, math.max(0, host_x + host_width - lane_x)
 end
 
-function M.get_editor_rect(view)
+-- The rect that content lays out in.
+function M.get_layout_rect(view)
   if M.wrapping_limits_to_lane(view) then
     return M.get_lane_rect(view)
   end
   return M.get_shifted_full_rect(view)
+end
+
+-- The rect the Text View draws and takes mouse input in. Markdown Live
+-- Preview reaches the view's right edge, so wide tables can use the free
+-- space right of the lane.
+function M.get_editor_rect(view)
+  if view.__markdown_live_attached then
+    return M.get_shifted_full_rect(view)
+  end
+  return M.get_layout_rect(view)
 end
 
 local function editor_contains_x(view, x)
@@ -263,9 +277,8 @@ function TextView:get_presentation_viewport_width(...)
   if not supports_centering(self) then
     return originals.textview.get_presentation_viewport_width(self, ...)
   end
-  if self.__centered_editor_in_geometry then return self.size.x end
   if M.should_center(self) then
-    local _, width = M.get_editor_rect(self)
+    local _, width = M.get_layout_rect(self)
     return width
   end
   return originals.textview.get_presentation_viewport_width(self, ...)

@@ -912,8 +912,10 @@ local function layout_width_key(view)
   local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
   -- The layout generation stays stable while a reading lane substitutes its
   -- draw geometry. The raw view width alternates between update and draw.
-  return string.format("%s:%s:%s:%s", view:get_presentation_viewport_width(),
-    view:get_gutter_width(), scrollbar_width, tostring(view:get_presentation_layout_generation()))
+  -- Tables also change width when footnote cards appear beside them.
+  return string.format("%s:%s:%s:%s:%s", view:get_presentation_viewport_width(),
+    view:get_gutter_width(), scrollbar_width, tostring(view:get_presentation_layout_generation()),
+    select(2, footnotes.table_span(view)))
 end
 
 local function image_available_width(view)
@@ -2194,7 +2196,8 @@ local function table_row_fragments(view, table_node, line, allow_pending)
 end
 
 function live.thematic_break_fragment(view, col1, col2, semantic_id)
-  local width = table_presentation.available_width(view)
+  -- A rule spans the prose lane. Only tables use the free space beside it.
+  local width = math.max(1, image_available_width(view) - style.padding.x)
   return {
     source_col1 = col1, source_col2 = col2,
     text = "", width = width,

@@ -4,6 +4,7 @@
 local core = require "core"
 local common = require "core.common"
 local keymap = require "core.keymap"
+local footnotes = require "core.markdown.footnotes"
 local live_fonts = require "core.markdown.live_fonts"
 local markdown_tables = require "core.markdown.tables"
 local style = require "core.style"
@@ -617,14 +618,11 @@ function table_presentation.remap_scroll_states(view, ranges)
 end
 
 function table_presentation.available_width(view)
-  -- Tables may use the full editor viewport even when prose has a narrower
-  -- configured wrap column. This matches reading-mode table layout and avoids
-  -- wrapping an otherwise fitting grid merely because of the prose guide.
+  -- Tables may use the free space right of the prose: past a narrower wrap
+  -- column or reading lane, up to the footnote cards or the view's edge.
   -- Live Preview rebuilds the lines that read this width when it changes.
   view.__markdown_layout_width_read = true
-  local scrollbar_width = view.v_scrollbar.expanded_size or style.expanded_scrollbar_size
-  local width = view:get_presentation_viewport_width()
-    - view:get_gutter_width() - scrollbar_width - style.padding.x
+  local _, width = footnotes.table_span(view)
   return math.max(math.floor(SCALE * 160), width)
 end
 

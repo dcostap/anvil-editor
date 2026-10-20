@@ -224,6 +224,13 @@ so that the cards have some room to settle beside their references.
 Here a footnote[^4] sits in the sentence, and ==an aside==^[A Text Note keeps its text in the line.] follows it.
 
 [^4]: Footnotes can hold *inline* Markdown.
+
+A wide table uses the free space right of the lane and stops before the cards.
+
+| Status | Functions | Share | Bytes | Byte share | Meaning |
+|---|--:|--:|--:|--:|---|
+| matching | 5,013 | 92.39% | 871.04 KB | 68.81% | byte for byte identical to the original build output |
+| drift | 140 | 2.58% | 59.00 KB | 4.66% | almost identical, with small differences in register use |
 """
 OPEN_NOTE_SECTION = """## Section {index}
 

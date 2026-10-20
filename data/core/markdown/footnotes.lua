@@ -846,15 +846,19 @@ local function text_column(view)
   return lane_x + gutter, math.max(0, width)
 end
 
----The margin column in the free space right of the text column, or nil
----when that space cannot hold a card. Notes then show inline.
+-- The right edge of the free space beside the text column.
+local function free_right(view)
+  return view.position.x + view.size.x - scrollbar_width(view) - scaled(EDGE_GAP)
+end
+
+---The margin column at the right edge of the free space right of the text
+---column, or nil when that space cannot hold a card. Notes then show inline.
 function footnotes.column_rect(view)
   local text_x, text_width = text_column(view)
-  local x = text_x + text_width + scaled(MARGIN_GAP)
-  local right = view.position.x + view.size.x - scrollbar_width(view) - scaled(EDGE_GAP)
-  local width = math.min(scaled(CARD_WIDTH), right - x)
+  local right = free_right(view)
+  local width = math.min(scaled(CARD_WIDTH), right - (text_x + text_width + scaled(MARGIN_GAP)))
   if width < scaled(MIN_CARD_WIDTH) then return nil end
-  return x, width
+  return right - width, width
 end
 
 local function close_displays(view)
@@ -1053,6 +1057,16 @@ local inline_metric_provider = {
 local function wants_notes(view)
   return (document_has_notes(view) or edit_state(view) ~= nil)
     and footnotes.presents_formatting(view)
+end
+
+---The span a table may fill: from the text column's left edge to the margin
+---cards, or to the right edge of the free space when no cards show there.
+function footnotes.table_span(view)
+  local x = text_column(view)
+  local right = free_right(view)
+  local column_x = wants_notes(view) and footnotes.column_rect(view)
+  if column_x then right = column_x - scaled(MARGIN_GAP) end
+  return x, math.max(0, right - x)
 end
 
 -- Inline rows exist only while a view without margin space shows notes.
