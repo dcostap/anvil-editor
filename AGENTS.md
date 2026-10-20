@@ -439,7 +439,11 @@ meson test -C build-windows-x86_64 anvil:lua-runtime
 meson test -C build-windows-x86_64 anvil:lua-ui
 ```
 
-The Lua Meson tests use `tests/run-lua-tests.sh`, which prepares an isolated `.run-meson-tests/<suite>` app/user/test tree, sets `SDL_VIDEO_DRIVER=dummy`, and runs `anvil test` internally. This avoids source-tree test pollution and means agents usually do not need to call `./scripts/run-local ... test ...` directly.
+The Lua Meson tests use `tests/run-lua-tests.sh`, which prepares an isolated `.run-meson-tests/<suite>.XXXXXX` app/user/test tree, sets `SDL_VIDEO_DRIVER=dummy`, and runs `anvil test` internally. This avoids source-tree test pollution and means agents usually do not need to call `./scripts/run-local ... test ...` directly.
+
+Each run gets its own folder, so several agents can run the same suite at once. The runner deletes the folder when the run ends. Set `ANVIL_TEST_KEEP_RUN=1` to keep it for inspection; the runner prints its path. Each run also deletes folders older than 12 hours.
+
+With `--verbose` on Windows, set `PYTHONIOENCODING=utf-8`. Otherwise Meson crashes when it prints a test name that has non-ASCII characters.
 
 On Windows, Anvil Meson test targets use `anvil_test_env` with a sanitized `PATH` so Meson can print failure logs reliably even if the inherited user environment contains non-ASCII/hidden characters. Add future Anvil Meson tests to this environment unless they explicitly need something else.
 

@@ -9,7 +9,7 @@ Automated and diagnostic tests for Anvil.
 - `native/` — native C/C++ tests wired into Meson.
 - `tools/` — programmatic harness tests, including hidden-desktop watchdog and
   process-tree integration coverage on Windows.
-- `run-lua-tests.sh` — Meson helper that builds an isolated `.run-meson-tests/<suite>` app/user/test tree and invokes `anvil test` internally.
+- `run-lua-tests.sh` — Meson helper that builds an isolated `.run-meson-tests/<suite>.XXXXXX` app/user/test tree for each run, invokes `anvil test` internally, and deletes the tree afterwards. Set `ANVIL_TEST_KEEP_RUN=1` to keep it.
 
 ## Main test command
 

@@ -756,6 +756,10 @@ local function run_sync(path, options)
     duration = 0
   }
 
+  -- Project switches and some tests change the working directory. Restore it
+  -- after each file so later files resolve relative paths the same way.
+  local working_dir = system.getcwd()
+
   for _, file in ipairs(files) do
     local file_result = {
       path = file,
@@ -783,6 +787,12 @@ local function run_sync(path, options)
       run_suite_node(suite, file_result, {}, {}, {}, options.on_result)
     end
     yield_to_ui()
+    local current_dir = system.getcwd()
+    if current_dir ~= working_dir then
+      core.log_quiet("Test file %s left the working directory at %s; restoring %s",
+        file_result.relative_path, current_dir, working_dir)
+      system.chdir(working_dir)
+    end
 
     for _, item in ipairs(file_result.items) do
       table.insert(results.items, item)

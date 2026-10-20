@@ -24,19 +24,40 @@ esac
 # Keep the project path outside build*/ directories because Anvil's default
 # ignore rules intentionally ignore build roots, and some UI tests exercise
 # project-relative file opening.
-rundir="$sourcedir/.run-meson-tests/$run_name"
+runs_root="$sourcedir/.run-meson-tests"
+mkdir -p "$runs_root"
+
+# Remove folders that earlier runs could not delete. No run lasts this long,
+# so another active run never loses its folder.
+find "$runs_root" -mindepth 1 -maxdepth 1 -type d -mmin +720 \
+  -exec rm -rf {} + 2>/dev/null || true
+
+# Each run gets its own folder, so concurrent runs of one suite do not delete
+# each other's files.
+rundir=$(mktemp -d "$runs_root/$run_name.XXXXXX")
 bindir="$rundir/bin"
 datadir="$rundir/share/anvil"
 workdir="$rundir/work"
 userdir="$rundir/user"
 
-# A Terminal Session host from the previous run can hold its files for a few
-# seconds after the editor exits.
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-  rm -rf "$rundir" 2>/dev/null && break
-  sleep 0.5
-done
-rm -rf "$rundir"
+# Set ANVIL_TEST_KEEP_RUN=1 to keep the folder for inspection.
+cleanup() {
+  local status=$?
+  cd "$sourcedir"
+  if [ -n "${ANVIL_TEST_KEEP_RUN:-}" ]; then
+    echo "Kept test run folder: $rundir" >&2
+    return "$status"
+  fi
+  # A Terminal Session host can hold its files for a few seconds after the
+  # editor exits. The next run removes a folder that is still held.
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    rm -rf "$rundir" 2>/dev/null && break
+    sleep 0.5
+  done
+  return "$status"
+}
+trap cleanup EXIT
+
 mkdir -p "$bindir" "$datadir" "$datadir/core" "$workdir/tests" "$userdir"
 
 if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "mingw"* || "$OSTYPE" == "cygwin"* ]]; then
