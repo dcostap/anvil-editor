@@ -1137,7 +1137,7 @@ load_recent_commands()
 local function parse_query(s)
   local modifiers = fuzzy_searcher.modifiers.parse(s)
   s = modifiers.text
-  if modifiers.mode == "!" or modifiers.mode == ">" or modifiers.mode == "^" or modifiers.mode == "º" then return s end
+  if modifiers.mode == ">" or modifiers.mode == "^" or modifiers.mode == "º" then return s end
   local before, grep, symbol = s, nil, nil
   local marker = fuzzy_searcher.modifiers.parse(s)
   local grep_pos = marker.mode == "#" and marker.marker_first
@@ -1173,7 +1173,7 @@ function fuzzy_searcher.path_match_query(query)
 end
 
 fuzzy_searcher.mode_prefixes = {
-  ["#"] = true, ["@"] = true, [">"] = true, ["!"] = true,
+  ["#"] = true, ["@"] = true, [">"] = true,
   ["$"] = true, ["$$"] = true,
   ["^"] = true,
   ["º"] = true,
@@ -1272,7 +1272,6 @@ function fuzzy_searcher.record_prompt_history_text(text)
   text = tostring(text or "")
 
   local mode = fuzzy_searcher.prompt_mode(text)
-  if mode == "!" then return end
   local history = fuzzy_searcher.prompt_history_for_mode(mode)
   for i = #history, 1, -1 do
     if history[i] == text then table.remove(history, i) end
@@ -1288,7 +1287,6 @@ function fuzzy_searcher.restored_prompt_text(text)
   local mode = leading_mode ~= "" and leading_mode or fuzzy_searcher.prompt_mode(text)
   if mode == "" then return "", false end
   if mode == "@" then return "@", false end
-  if mode == "!" then return "!", false end
   if mode == "^" then return "^", false end
   if mode == "º" then return "º", false end
   local latest = fuzzy_searcher.prompt_history_for_mode(mode)[1]
@@ -2363,9 +2361,6 @@ local function result_list_label_and_spans(r)
   if r.kind == "command" then
     return r.label or r.command or "", r.match_spans or {}, ""
   end
-  if r.kind == "shell_command" then
-    return r.label or "Run shell command", {}, "! "
-  end
   if r.kind == "project" then
     local text = r.label or r.project or ""
     return display_root(text), r.match_spans or {}, "@ "
@@ -3316,16 +3311,6 @@ function path_search.everything_scope_term(scope)
   return 'ancestor:"' .. scope:gsub('"', '""') .. '"'
 end
 
-function fuzzy_searcher.draw_shell_command_result_row(font, r, x, y, width)
-  local label, spans, prefix = result_list_label_and_spans(r)
-  local cwd = "Working directory: " .. tostring(r.cwd or "")
-  local metadata_w = math.min(width * 0.55, font:get_width(cwd))
-  local gap = style.padding.x
-  local label_w = math.max(0, width - metadata_w - gap)
-  draw_prefixed_highlighted_text(font, prefix, label, x, y, label_w, style.text, spans)
-  renderer.draw_text(font, truncate_text(font, cwd, metadata_w), x + label_w + gap, y, style.dim)
-end
-
 function path_search.everything_scoped_query(query, scope)
   local scope_term = path_search.everything_scope_term(scope)
   if not scope_term then return query end
@@ -3880,12 +3865,6 @@ function FSView:is_path_search()
     and not project_paths.resolve(trim_query(query))
 end
 
-function FSView:is_shell_mode()
-  if self.static_mode then return false end
-  local text = self.input and self.input:get_text() or ""
-  return text:sub(1, 1) == "!"
-end
-
 function FSView:is_deep_code_mode()
   if self.static_mode then
     local r = self:selected_result()
@@ -3906,7 +3885,7 @@ function FSView:is_bookmark_mode()
 end
 
 function FSView:is_full_width_mode()
-  return self:is_command_mode() or self:is_shell_mode()
+  return self:is_command_mode()
 end
 
 function FSView:uses_vertical_preview(width)
@@ -5648,18 +5627,6 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
   if mode == ">" then
     kill_file_search()
     add_command_results(base, limit)
-  elseif mode == "!" then
-    kill_file_search()
-    local shell_text = trim_query(base)
-    if shell_text ~= "" then
-      out[1] = {
-        kind = "shell_command",
-        label = "Run shell command",
-        shell_command = shell_text,
-        cwd = file_context.source_directory(self.source_view) or system.getcwd(),
-        match_spans = {},
-      }
-    end
   elseif mode == "$" then
     kill_file_search()
     self:start_symbol_search(base, reset_selection)
@@ -5741,10 +5708,7 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
   out = path_search.prepend_direct(out, direct)
   out = path_search.filter_file_picker_results(out, self.file_picker)
 
-  if mode == "!" then
-    local cwd = file_context.source_directory(self.source_view) or system.getcwd()
-    self.status = "Shell Command — Working directory: " .. cwd .. " — Output: new Command Output View"
-  elseif path_plan.external then
+  if path_plan.external then
     if bare_path_search then
       self.status = string.format("%d recent Projects", #get_recent_projects())
     else
@@ -7753,8 +7717,7 @@ function FSView:confirm(new_group)
 end
 
 function FSView:can_toggle_case_sensitive()
-  if self.static_mode then return false end
-  return fuzzy_searcher.prompt_mode(self.input and self.input:get_text() or "") ~= "!"
+  return not self.static_mode
 end
 
 function FSView:toggle_case_sensitive()
@@ -7874,14 +7837,6 @@ function FSView:activate_selected_result(new_group)
         pane.id, pane.history.index)
     end
     return true
-  end
-  if r.kind == "shell_command" then
-    local text = trim_query(r.shell_command)
-    if text == "" then return end
-    local cwd = r.cwd or file_context.source_directory(self.source_view) or system.getcwd()
-    if not new_group then self:close() end
-    require("plugins.command_slots").run_once(text, { cwd = cwd, focus = true })
-    return
   end
   if r.kind == "command" then
     local cmd = r.command
@@ -8364,9 +8319,6 @@ function FSView:draw_open_content()
       elseif r.kind == "command" then
         reset_rendered_file_group()
         draw_command_result_row(font, r, x + pad, row_y, row_text_w)
-      elseif r.kind == "shell_command" then
-        reset_rendered_file_group()
-        fuzzy_searcher.draw_shell_command_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "project" and r.path_search then
         reset_rendered_file_group()
         draw_path_result_row(font, r, x + pad, row_y, row_text_w)
@@ -8426,12 +8378,6 @@ function FSView:draw_open_content()
       if info and info ~= "" then
         renderer.draw_text(font, info, px, py + lh * 2, style.dim)
       end
-      core.pop_clip_rect()
-    elseif r and r.kind == "shell_command" then
-      core.push_clip_rect(px, py, preview_w, preview_h)
-      renderer.draw_text(font, "Shell Command", px, py, style.accent)
-      renderer.draw_text(font, "Working directory: " .. tostring(r.cwd or ""), px, py + lh, style.dim)
-      renderer.draw_text(font, "Output opens in a new Command Output View.", px, py + lh * 2, style.dim)
       core.pop_clip_rect()
     elseif r and r.kind == "create_path" then
       core.push_clip_rect(px, py, preview_w, preview_h)
@@ -8787,16 +8733,6 @@ command.add(nil, {
     perform = function() open(">") end,
     metadata = { record_last = false },
   },
-  ["command_output:run_shell_command"] = command.palette(function()
-    local context = command.get_invocation_context() or {}
-    return open("!", {
-      source_view = context.source_view,
-      source_pane = context.source_pane,
-    })
-  end, {
-    keywords = { "command output", "process", "terminal" },
-    opens_view = true,
-  }),
 })
 
 command.add(picker_active, {

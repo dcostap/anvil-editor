@@ -106,6 +106,31 @@ test.describe("DiffModel", function()
     end
   end)
 
+  test.it("aligns each changed value with its own line when lines share long repeated runs", function()
+    local tail = " 0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,1,1,1,1"
+    local function weights(values)
+      local names = { "000001750", "V2_000003000", "V3_000002250", "V4_000001250" }
+      local out = {}
+      for index, value in ipairs(values) do
+        out[index] = "<lora:krea2\\carmen_krea2_" .. names[index] .. ":0." .. value .. ">" .. tail .. "\n"
+      end
+      return out
+    end
+    local old_values, new_values = { "15", "15", "25", "7" }, { "25", "75", "5", "5" }
+    local before, after = weights(old_values), weights(new_values)
+    local m = model.compute(before, after)
+    for _, side in ipairs { { "a", before, old_values }, { "b", after, new_values } } do
+      for line, text in ipairs(side[2]) do
+        local highlighted = {}
+        for _, range in ipairs(m:inline_ranges(side[1], line) or {}) do
+          highlighted[#highlighted + 1] = text:sub(range.col1, range.col2 - 1)
+        end
+        test.same(highlighted, { side[3][line] })
+        test.same(m:inline_markers(side[1], line), {})
+      end
+    end
+  end)
+
   test.it("computes equal text", function()
     local m = model.compute(lines("a\nb"), lines("a\nb"))
     test.equal(m:line_state("a", 1), "equal")

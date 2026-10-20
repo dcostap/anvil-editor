@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -124,5 +125,42 @@ test.describe("Global Prompt Bar typeahead", function()
     bar:exit(true)
     if previous_view then core.set_active_view(previous_view) end
     if not ok then error(err, 0) end
+  end)
+end)
+
+-- Seam: core:paste and typing into the Global Prompt Bar, then its caret's screen position.
+test.describe("Global Prompt Bar long and multiline text", function()
+  local function with_prompt(fn)
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+    local previous_view = core.active_view
+    local clipboard = system.get_clipboard()
+    local ok, err = pcall(function()
+      bar:enter("Command", { show_suggestions = false })
+      fn(bar)
+    end)
+    bar:exit(true)
+    system.set_clipboard(clipboard or "")
+    if previous_view then core.set_active_view(previous_view) end
+    if not ok then error(err, 0) end
+  end
+
+  test.it("pastes several lines as one line with a space between them", function()
+    with_prompt(function(bar)
+      system.set_clipboard("SELECT a,\n       b\r\nFROM t\n")
+      test.ok(command.perform("core:paste"))
+      test.equal(bar:get_text(), "SELECT a, b FROM t")
+    end)
+  end)
+
+  test.it("keeps the caret inside the bar at the end of long text", function()
+    with_prompt(function(bar)
+      bar.position.x, bar.position.y, bar.size.x = 0, 500, 400
+      bar:on_text_input(string.rep("word ", 400))
+      for _ = 1, 3 do bar:update(); coroutine.yield() end
+      local x = bar:get_line_screen_position(1, #bar:get_text() + 1)
+      test.ok(x > bar.position.x + bar:get_gutter_width() and x < bar.position.x + bar.size.x,
+        "caret x " .. x .. " is outside the bar")
+    end)
   end)
 end)

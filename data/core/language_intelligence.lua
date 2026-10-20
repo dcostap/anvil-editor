@@ -265,6 +265,10 @@ function intelligence.indent_for_line(buffer, line, context, opts)
   return first_value("indent_for_line", nil, buffer, line, context or {}, opts)
 end
 
+function intelligence.block_indent(buffer, line, context, opts)
+  return first_value("block_indent", nil, buffer, line, context or {}, opts)
+end
+
 function intelligence.newline_continuation(buffer, line, context, opts)
   return first_value("newline_continuation", nil, buffer, line, context or {}, opts)
 end

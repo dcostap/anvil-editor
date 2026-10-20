@@ -61,6 +61,7 @@ static HostedView first_view = {.last_cursor = -1};
 static HostedView *view = &first_view, *views = &first_view;
 static void release_memory_frame(SharedMemoryFrame *memory);
 static void remove_view(HostedView *item);
+static void send_message(uint16_t type, const void *payload, uint32_t size);
 
 static struct {
   bool active;
@@ -515,6 +516,11 @@ static void dispatch_message(HostedMessage *message) {
     }
     goto complete;
   }
+  if (type == ANVIL_SURFACE_MSG_PING) {
+    /* Dispatch runs on the UI thread, so the answer shows that thread still runs. */
+    send_message(ANVIL_SURFACE_MSG_PONG, payload, sizeof(AnvilSurfaceInt));
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED) {
     /* The Color Theme belongs to the whole process, not to one Sidebar surface. */
     CustomEvent event = {0};
@@ -712,6 +718,7 @@ static int SDLCALL reader_thread(void *data) {
         break;
       }
       case ANVIL_SURFACE_MSG_FOCUS:
+      case ANVIL_SURFACE_MSG_PING:
         if (size != sizeof(AnvilSurfaceInt)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_CLOSE:

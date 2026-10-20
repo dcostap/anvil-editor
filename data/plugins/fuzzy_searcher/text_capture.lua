@@ -11,7 +11,6 @@ local MODE_LABELS = {
   ["$$"] = "Current Buffer Symbol Search",
   ["^"] = "Navigation History Search",
   [">"] = "Command Palette",
-  ["!"] = "Shell Command Mode",
 }
 
 local function add_part(parts, value)
@@ -63,9 +62,6 @@ local function result_text(result, support)
     end
     add_part(parts, result.info)
     add_part(parts, result.command and keymap.get_binding(result.command))
-  elseif result.kind == "shell_command" then
-    add_part(parts, result.command or main)
-    add_part(parts, result.cwd and ("Working directory: " .. result.cwd))
   elseif result.kind == "file" then
     add_part(parts, result.file or main)
     local edited = require("plugins.file_metadata").format_age(result.last_edited)

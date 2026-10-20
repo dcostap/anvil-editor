@@ -202,6 +202,54 @@ function prompt_save_as(dv, text)
   })
 end
 
+-- A syntax escapes with a backslash inside `quote` when it declares that
+-- quote's string pattern with a backslash escape, as in { '"', '"', '\\' }.
+local function syntax_escapes_quote(syntax, quote)
+  for _, rule in ipairs(syntax and syntax.patterns or {}) do
+    local pattern = rule.pattern
+    if type(pattern) == "table" and pattern[1] == quote and pattern[2] == quote and pattern[3] == "\\" then
+      return true
+    end
+  end
+  return false
+end
+
+local function token_type_at(buffer, line, col)
+  local token_col = 1
+  for _, token_type, token_text in buffer.highlighter:each_token(line) do
+    if col < token_col + #token_text then return token_type end
+    token_col = token_col + #token_text
+  end
+end
+
+-- Returns the quote of the single-line string literal that contains the
+-- position before `col`, or nil outside such a string.
+local function string_quote_at(buffer, line, col)
+  if col <= 1 then return nil end
+  local token_type = token_type_at(buffer, line, col - 1)
+  if not token_type or not token_type:find("^string") then return nil end
+  local text = buffer.lines[line] or ""
+  local quote, escaped
+  for i = 1, col - 1 do
+    local ch = text:sub(i, i)
+    if escaped then
+      escaped = false
+    elseif quote then
+      if ch == "\\" then
+        escaped = true
+      elseif ch == quote then
+        quote = nil
+      end
+    elseif ch == '"' or ch == "'" then
+      quote = ch
+    end
+  end
+  -- Triple-quoted strings take text as written.
+  if not quote or not syntax_escapes_quote(buffer.syntax, quote) then return nil end
+  if text:sub(1, col - 1):find(quote:rep(3), 1, true) then return nil end
+  return quote
+end
+
 local function cut_or_copy(dv, delete)
   if delete and not can_edit(dv, "cut") then return end
   -- A view can copy text that it shows between Buffer lines.
@@ -216,11 +264,20 @@ local function cut_or_copy(dv, delete)
   local full_text = ""
   local text = ""
   local copied_ranges = {}
-  core.cursor_clipboard = {}
+  core.cursor_clipboard = { sources = {} }
   core.cursor_clipboard_whole_line = {}
   for idx, line1, col1, line2, col2 in target_buffer:get_selections(true, true) do
     if line1 ~= line2 or col1 ~= col2 then
       text = target_buffer:get_text(line1, col1, line2, col2)
+      -- A selection that starts after its line's indentation copies a first
+      -- line without it. Paste needs that indentation to keep the block's shape.
+      local source_indent = target_buffer.lines[line1]:match("^[\t ]*")
+      core.cursor_clipboard.sources[idx] = {
+        first_indent = source_indent:sub(1, math.min(col1 - 1, #source_indent)),
+        from_string = line1 == line2
+          and string_quote_at(target_buffer, line1, col1) ~= nil
+          and string_quote_at(target_buffer, line2, col2) ~= nil,
+      }
       full_text = full_text == "" and text or (text .. "\n" .. full_text)
       core.cursor_clipboard_whole_line[idx] = false
       copied_ranges[#copied_ranges + 1] = { line1, col1, line2, col2 }
@@ -493,6 +550,11 @@ local function syntax_line_indent(buffer, line, col, line_text)
     current_line_text = line_text,
     previous_line_text = line > 1 and buffer.lines[line - 1] or "",
   })
+  return type(indent) == "string" and indent or nil
+end
+
+local function block_indent(buffer, line)
+  local indent = intelligence.block_indent(buffer, line)
   return type(indent) == "string" and indent or nil
 end
 
@@ -914,13 +976,72 @@ local function remove_indent_prefix(line, indent)
   return line
 end
 
-local function smart_paste_text(buffer, line, col, text)
+local function opens_block(line)
+  return line:find("[{%(%[]%s*$") ~= nil
+end
+
+local function closes_block(line)
+  return line:find("^[\t ]*[}%)%]]") ~= nil
+end
+
+local function escape_for_string(text, quote)
+  return (text:gsub("\\", "\\\\"):gsub(quote, "\\" .. quote):gsub("\n", "\\n"):gsub("\t", "\\t"))
+end
+
+-- Returns the text that starts each line of a line comment at `col`, such as
+-- `  // `, or nil when `col` is not inside a line comment's text.
+local function line_comment_lead(buffer, line, col)
+  local marker = buffer.syntax and buffer.syntax.comment
+  if type(marker) ~= "string" or marker == "" then return nil end
+  local line_text = buffer.lines[line] or ""
+  local indent = leading_whitespace(line_text)
+  if line_text:sub(#indent + 1, #indent + #marker) ~= marker then return nil end
+  if col < #indent + #marker + 1 then return nil end
+  return indent .. marker
+end
+
+-- Rewrites leading whitespace in the Buffer's indentation type. A tab counts
+-- as one indentation level.
+local function convert_indentation(buffer, text)
+  local indent = leading_whitespace(text)
+  if indent == "" then return text end
+  local tab_type, indent_size = buffer:get_indent_info()
+  local width = indent_visual_width(indent, indent_size)
+  local converted
+  if tab_type == "hard" then
+    converted = string.rep("\t", math.floor(width / indent_size)) .. string.rep(" ", width % indent_size)
+  else
+    converted = string.rep(" ", width)
+  end
+  return converted .. text:sub(#indent + 1)
+end
+
+-- `source.first_indent` is the indentation that preceded the copied text on
+-- its source line. `source.from_string` marks text copied from inside a
+-- string literal, which is already escaped. `source` is nil for text copied
+-- outside Anvil.
+local function smart_paste_text(buffer, line, col, text, source)
   text = tostring(text or "")
+  source = source or {}
+  local quote = string_quote_at(buffer, line, col)
+  if quote then
+    if source.from_string then return text end
+    local escaped = escape_for_string(text, quote)
+    if escaped ~= text then
+      core.log_quiet("Escaped pasted text for a %s string in %s", quote, buffer:get_name())
+    end
+    return escaped
+  end
   if not text:find("\n", 1, true) then return text end
   local line_text = buffer.lines[line] or ""
   local before = line_text:sub(1, col - 1)
   local target_indent = before:match("^[\t ]*$") and before or leading_whitespace(line_text)
-  if target_indent == "" then return text end
+  local comment_lead = line_comment_lead(buffer, line, col)
+  if comment_lead then
+    text = text:gsub("\n+$", "")
+    target_indent = comment_lead
+  end
+  local first_indent = source.first_indent
 
   local parts = {}
   local start = 1
@@ -933,17 +1054,34 @@ local function smart_paste_text(buffer, line, col, text)
     parts[#parts + 1] = text:sub(start, nl - 1)
     start = nl + 1
   end
-  local common_indent = common_leading_indent(parts)
-  if common_indent == "" and parts[1] and parts[1]:find("%S") then
-    common_indent = leading_whitespace(parts[1])
+
+  if not first_indent and leading_whitespace(parts[1]) == "" and opens_block(parts[1])
+  and closes_block(parts[#parts]) then
+    -- A block copied from after its indentation ends with a closing line at
+    -- the block's own indentation.
+    first_indent = leading_whitespace(parts[#parts])
+  end
+  first_indent = first_indent or ""
+  -- Text pasted at column one with its own indentation keeps its shape.
+  local reindent = target_indent ~= "" or first_indent ~= ""
+
+  parts[1] = first_indent .. parts[1]
+  local common_indent = ""
+  if reindent then
+    common_indent = common_leading_indent(parts)
+    if common_indent == "" and parts[1]:find("%S") then
+      common_indent = leading_whitespace(parts[1])
+    end
   end
 
   for i, part in ipairs(parts) do
-    local stripped = remove_indent_prefix(part, common_indent)
+    local stripped = convert_indentation(buffer, remove_indent_prefix(part, common_indent))
     if i == 1 then
       parts[i] = stripped
     elseif stripped == "" then
-      parts[i] = ""
+      parts[i] = comment_lead or ""
+    elseif comment_lead then
+      parts[i] = comment_lead .. " " .. stripped
     else
       parts[i] = target_indent .. stripped
     end
@@ -1137,6 +1275,78 @@ local function paste_matching_whole_lines(buffer, text_by_idx)
   return paste_whole_lines_by_selection(buffer, function(idx) return text_by_idx[idx] end)
 end
 
+local function single_caret(buffer)
+  if #buffer.selections ~= 4 then return nil end
+  local line1, col1, line2, col2 = buffer:get_selection()
+  if line1 ~= line2 or col1 ~= col2 then return nil end
+  return line1, col1
+end
+
+local function joined_lines_spacing(before, after)
+  if before:find("[%(%[]$") or after:find("^[%)%]},;%.]") then return "" end
+  return " "
+end
+
+-- Backspace in a line's indentation first moves the line to its block's
+-- indentation. At or before that indentation it joins the line to the
+-- previous one.
+local function smart_indent_backspace(buffer)
+  local line, col = single_caret(buffer)
+  if not line or col == 1 or line == 1 then return false end
+  local line_text = buffer.lines[line] or ""
+  local leading = leading_indent(line_text)
+  if col > #leading + 1 then return false end
+  local expected = block_indent(buffer, line)
+  if not expected then return false end
+
+  local _, indent_size = buffer:get_indent_info()
+  local edit, caret_line, caret_col, action
+  if indent_visual_width(leading, indent_size) > indent_visual_width(expected, indent_size) then
+    edit = { line1 = line, col1 = 1, line2 = line, col2 = #leading + 1, text = expected }
+    caret_line, caret_col, action = line, #expected + 1, "reindent"
+  else
+    local previous = (buffer.lines[line - 1] or ""):gsub("\n$", "")
+    local previous_end = #(previous:gsub("[\t ]+$", "")) + 1
+    local content = line_text:sub(#leading + 1):gsub("\n$", "")
+    if previous_end == 1 then
+      edit = { line1 = line - 1, col1 = 1, line2 = line, col2 = #leading + 1, text = expected }
+      caret_line, caret_col, action = line - 1, #expected + 1, "remove-blank-previous"
+    else
+      local spacing = content == "" and "" or joined_lines_spacing(previous:sub(1, previous_end - 1), content)
+      edit = { line1 = line - 1, col1 = previous_end, line2 = line, col2 = #leading + 1, text = spacing }
+      caret_line, caret_col, action = line - 1, previous_end + #spacing, "join"
+    end
+  end
+  buffer:apply_edits({ edit }, {
+    type = "remove",
+    selections = { caret_line, caret_col, caret_line, caret_col },
+    last_selection = 1,
+    merge_cursors = false,
+  })
+  core.log_quiet("Smart Backspace %s at %s:%d", action, buffer:get_name(), line)
+  return true
+end
+
+-- End on a blank line moves to the block's indentation.
+local function smart_end_on_blank_line(buffer)
+  local line = single_caret(buffer)
+  if not line then return false end
+  local leading = (buffer.lines[line] or ""):gsub("\n$", "")
+  if not leading:match("^[\t ]*$") then return false end
+  local expected = block_indent(buffer, line)
+  if not expected or expected == leading then return false end
+  buffer:apply_edits({
+    { line1 = line, col1 = 1, line2 = line, col2 = #leading + 1, text = expected },
+  }, {
+    type = "insert",
+    selections = { line, #expected + 1, line, #expected + 1 },
+    last_selection = 1,
+    merge_cursors = false,
+  })
+  core.log_quiet("Smart End indented blank line %s:%d", buffer:get_name(), line)
+  return true
+end
+
 local function previous_indent_stop_start_col(buffer, line, col, indent_size)
   if col <= 1 then return nil end
   indent_size = math.max(1, tonumber(indent_size) or 1)
@@ -1282,7 +1492,10 @@ local commands = {
           transaction = paste_matching_whole_lines(dv.buffer, core.cursor_clipboard)
         else
           transaction = dv.buffer:text_input_by_selection(function(idx, line1, col1)
-            return smart_paste_text(dv.buffer, line1, col1, tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""))
+            local sources = core.cursor_clipboard.sources
+            return smart_paste_text(dv.buffer, line1, col1,
+              tostring(core.cursor_clipboard[idx] or ""):gsub("\r", ""),
+              sources and sources[idx])
           end, nil, { type = "paste" })
         end
       else
@@ -1796,6 +2009,7 @@ local commands = {
       end
       return
     end
+    if smart_indent_backspace(dv.buffer) then return end
     local _, indent_size = dv.buffer:get_indent_info()
     local fallback = false
     for _, line1, col1, line2, col2 in dv.buffer:get_selections(true, true) do
@@ -3454,6 +3668,7 @@ commands["core:delete_to_start_of_indentation"] = function(dv)
   return wrapped_delete_to(dv, "core:delete_to_start_of_indentation", move_to_wrapped_start_of_indentation, dv)
 end
 commands["core:move_to_end_of_line"] = function(dv)
+  if smart_end_on_blank_line(dv.buffer) then return end
   return wrapped_move_to(dv, "core:move_to_end_of_line", move_to_wrapped_end_of_line, dv)
 end
 commands["core:select_to_end_of_line"] = function(dv)

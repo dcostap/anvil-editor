@@ -125,12 +125,6 @@ plugin_defaults("centered_editor", {
   min_margin = 0,
   pane_views_only = true,
 })
-plugin_defaults("command_slots", {
-  max_output_bytes = 10 * 1024 * 1024,
-  max_output_history = 100,
-  max_history = 100,
-  strip_ansi = true,
-})
 plugin_defaults("terminal", {
   shell = nil,
   cwd_mode = "project",

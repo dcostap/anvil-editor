@@ -375,12 +375,12 @@ end
 
 local function symbol_buffer_view_predicate(value)
   local ok, view = buffer_view_predicate(value)
-  if not ok or view.command_output_view then return false end
+  if not ok then return false end
   return symbol_text_at_buffer_selection(view.buffer) ~= nil, view
 end
 
 function language.symbol_at_view(view)
-  if not view or view.context == "application" or view.command_output_view or not view.buffer
+  if not view or view.context == "application" or not view.buffer
       or view.buffer.git_view_pane_read_only then return nil end
   return symbol_text_at_buffer_selection(view.buffer)
 end

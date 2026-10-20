@@ -153,6 +153,6 @@ Unknown modifier names remain ordinary search text.
 Incomplete or invalid values show a message instead of running a different search.
 Conflicting `sort:` or `commit:` values also show a message.
 
-Shell Command Mode and the Command Palette keep their text literal.
+The Command Palette keeps its text literal.
 Symbol searches do not support Search Modifiers.
 File Pickers keep their fixed path input rules.

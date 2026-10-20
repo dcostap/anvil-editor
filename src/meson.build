@@ -339,6 +339,7 @@ if host_machine.system() == 'windows'
     test('hosted-routing', hosted_routing_test, env: anvil_test_env, suite: 'anvil')
     test('hosted-motion-stall', hosted_routing_test, args: ['motion'], env: anvil_test_env, suite: 'anvil')
     test('hosted-dialogs', hosted_routing_test, args: ['dialogs'], env: anvil_test_env, suite: 'anvil')
+    test('hosted-ping', hosted_routing_test, args: ['ping'], env: anvil_test_env, suite: 'anvil')
     test('sidebar-page-drop', hosted_routing_test, args: ['sidebar-drop'], env: anvil_test_env, suite: 'anvil')
     test('sidebar-change-drop', hosted_routing_test, args: ['sidebar-change-drop'], env: anvil_test_env, suite: 'anvil')
     test('sidebar-arguments', hosted_routing_test, args: ['sidebar-arguments'], env: anvil_test_env, suite: 'anvil')

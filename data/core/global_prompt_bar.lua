@@ -18,12 +18,14 @@ local SingleLineBuffer = Buffer:extend()
 
 function SingleLineBuffer:__tostring() return "SingleLineBuffer" end
 
----Insert text, stripping any newlines to maintain single-line constraint.
----@param line integer Line number
----@param col integer Column number
----@param text string Text to insert (newlines will be removed)
+---Keep inserted text on one line. A line break and the indentation around it become one space, so pasted lines
+---stay separate words. Line breaks at either end of the inserted text are dropped.
+---@param text string Text to insert
 function SingleLineBuffer:normalize_edit_text(text, edit, opts)
-  return tostring(text or ""):gsub("[\r\n]", "")
+  text = tostring(text or "")
+  if not text:find("[\r\n]") then return text end
+  text = text:gsub("^[ \t]*[\r\n]%s*", ""):gsub("%s*[\r\n]%s*$", "")
+  return (text:gsub("[ \t]*[\r\n]%s*", " "))
 end
 
 function SingleLineBuffer:insert(line, col, text)
@@ -118,6 +120,8 @@ function GlobalPromptBar:new()
   self.size.y = 0
   self.label = ""
   self.mouse_position = {x = 0, y = 0}
+  -- Scrollbar presses and wheel scrolling do not apply to the bar.
+  self.scrollable = false
 end
 
 
@@ -162,17 +166,15 @@ function GlobalPromptBar:get_scrollable_size()
 end
 
 
----Get horizontal scrollable size (disabled for the Global Prompt Bar).
----@return integer size Always returns 0
-function GlobalPromptBar:get_h_scrollable_size()
-  return 0
+---Scroll horizontally so the caret stays visible in text wider than the bar. The bar never scrolls vertically.
+function GlobalPromptBar:scroll_to_make_visible(line, col, instant, opts)
+  opts = common.merge(opts or {}, { vertical = false })
+  return GlobalPromptBar.super.scroll_to_make_visible(self, 1, col, instant, opts)
 end
 
 
----Scroll to make position visible (no-op for the Global Prompt Bar).
-function GlobalPromptBar:scroll_to_make_visible()
-  -- no-op function to disable this functionality
-end
+---The one-line bar shows no scrollbars; the caret position drives its scrolling.
+function GlobalPromptBar:draw_scrollbar() end
 
 
 ---Get the current input text.
@@ -354,6 +356,7 @@ function GlobalPromptBar:exit(submitted, inexplicit)
   local cancel = self.state.cancel
   self.state = default_state
   self.buffer:reset()
+  self.scroll.x, self.scroll.to.x = 0, 0
   self.suggestions = {}
   self.notified_suggestion = nil
   if not submitted then cancel(not inexplicit) end

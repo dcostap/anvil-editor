@@ -152,7 +152,7 @@ local function changed_target_spans(from, target)
     end
     first, last, source_first, source_last = nil, nil, nil, nil
   end
-  for edit in diff.diff_iter(from, target) do
+  for edit in diff.diff_iter(from, target, "minimal") do
     if edit.tag == "equal" or edit.tag == "modify" then
       flush()
       pairs[#pairs + 1] = { a = source_index, b = target_index }
@@ -214,7 +214,7 @@ local function changed_token_contents(from_segments, target_segments)
   local from_values, from_owners = characters(from_segments)
   local target_values, target_owners = characters(target_segments)
   local from_changed, target_changed, ai, bi = {}, {}, 1, 1
-  for edit in diff.diff_iter(from_values, target_values) do
+  for edit in diff.diff_iter(from_values, target_values, "minimal") do
     if edit.tag ~= "equal" then
       if edit.a then from_changed[from_owners[ai]] = true end
       if edit.b then target_changed[target_owners[bi]] = true end
