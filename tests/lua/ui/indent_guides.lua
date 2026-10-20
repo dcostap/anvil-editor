@@ -159,9 +159,6 @@ test.describe("indent guide drawing", function()
 
   test.after_each(function(context)
     if context.view then context.view:on_close() end
-    if context.root and system.get_file_info(context.root) then
-      local ok, err = common.rm(context.root, true)
-      test.ok(ok, err)
-    end
+    if context.root then test.ok(test.remove_tree(context.root)) end
   end)
 end)

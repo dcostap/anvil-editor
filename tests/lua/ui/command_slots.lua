@@ -41,10 +41,7 @@ test.describe("Command Slots", function()
   test.after_each(function(context)
     shell.capture = context.original_capture
     if context.original_root_project then core.root_project = context.original_root_project end
-    if context.link_root and system.get_file_info(context.link_root) then
-      local ok, err = common.rm(context.link_root, true)
-      test.ok(ok, err)
-    end
+    if context.link_root then test.ok(test.remove_tree(context.link_root)) end
     panes.reset_for_tests()
     command_slots._reset_for_tests()
     storage.clear("command-slots")

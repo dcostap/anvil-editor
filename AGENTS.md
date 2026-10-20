@@ -345,6 +345,10 @@ Avoid tests that:
 
 Use fakes/mocks mainly at true external or nondeterministic boundaries: filesystem temp roots, LSP transports/servers, processes, network/http, timers/threads, renderer/window boundaries, and platform integrations.
 
+Give each test its own temp folder under `USERDIR`, and remove it with `test.ok(test.remove_tree(path))`. Child processes, folder watchers and virus scanners can hold a new folder for a moment; the helper retries until they let go.
+
+When a test waits for a real process or background work, give the wait a generous deadline that ends as soon as the condition holds. A loaded machine can take several times longer than an idle one.
+
 #### Durable behavior vs. implementation and tuning details
 
 A user-requested value is not automatically a testable contract. Before adding a

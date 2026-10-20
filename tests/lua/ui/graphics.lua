@@ -45,14 +45,8 @@ test.describe("graphics apis", function()
   test.after_each(function(context)
     panes.reset_for_tests()
 
-    if context.temp_root and system.get_file_info(context.temp_root) then
-      local ok, err = common.rm(context.temp_root, true)
-      test.ok(ok, err)
-    end
-    if context.project_temp_root and system.get_file_info(context.project_temp_root) then
-      local ok, err = common.rm(context.project_temp_root, true)
-      test.ok(ok, err)
-    end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
+    if context.project_temp_root then test.ok(test.remove_tree(context.project_temp_root)) end
   end)
 
   test.test("loads fonts and exposes font metadata", function()

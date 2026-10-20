@@ -88,10 +88,7 @@ test.describe("File Tree Project Path Roles", function()
     end
     core.projects = context.original_projects
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
-    if context.temp_root and system.get_file_info(context.temp_root) then
-      local ok, err = common.rm(context.temp_root, true)
-      test.ok(ok, err)
-    end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
   test.it("shows vendored and external Project Directory sections after Root Project rows", function(context)

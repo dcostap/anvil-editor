@@ -736,18 +736,6 @@ test.describe("plugins.git.backend", function()
   end)
 
   test.after_each(function(context)
-    if context.root and system.get_file_info(context.root) then
-      if PLATFORM == "Windows" then
-        os.execute('attrib -R /S /D "' .. context.root .. '\\*" >NUL 2>NUL')
-      end
-      local ok, err
-      local deadline = system.get_time() + 2
-      repeat
-        ok, err = common.rm(context.root, true)
-        if ok or not system.get_file_info(context.root) then return end
-        coroutine.yield(0.05)
-      until system.get_time() >= deadline
-      test.ok(ok, err)
-    end
+    if context.root then test.ok(test.remove_tree(context.root)) end
   end)
 end)

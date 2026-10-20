@@ -483,6 +483,38 @@ function test.skip_if(condition, reason)
   end
 end
 
+---Remove a folder that a test created, with everything in it.
+---
+---Child processes that run in the folder, folder watchers and virus scanners
+---can hold a new folder for a moment, so removal is retried for up to
+---`timeout` seconds. Call it from a test or hook, which can yield.
+---@param path string
+---@param timeout? number seconds, 10 by default
+---@return boolean removed
+---@return string? errmsg
+function test.remove_tree(path, timeout)
+  local deadline = system.get_time() + (timeout or 10)
+  local attempts, cleared_read_only = 0, false
+  while system.get_file_info(path) do
+    attempts = attempts + 1
+    local removed, err, failed_path = common.rm(path, true)
+    if removed or not system.get_file_info(path) then break end
+    if system.get_time() >= deadline then
+      return false, string.format("%s: %s", tostring(failed_path or path), tostring(err))
+    end
+    if PLATFORM == "Windows" and not cleared_read_only then
+      -- Git writes its object files read-only.
+      cleared_read_only = true
+      os.execute('attrib -R /S /D "' .. path:gsub("/", "\\") .. '\\*" >NUL 2>NUL')
+    end
+    coroutine.yield(0.05)
+  end
+  if attempts > 1 then
+    core.log_quiet("Test folder %s needed %d removal attempts", path, attempts)
+  end
+  return true
+end
+
 ---Fail the current test.
 ---@param message? string
 ---@param level? integer

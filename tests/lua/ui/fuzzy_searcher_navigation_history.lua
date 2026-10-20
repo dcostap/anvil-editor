@@ -86,8 +86,9 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     context.buffers = {}
     context.active_view = core.active_view
     context.projects, context.cwd = core.projects, system.getcwd()
-    context.root = USERDIR .. PATHSEP .. "navigation-search-project"
-    common.rm(context.root, true)
+    -- A folder watcher can still hold the previous test's folder.
+    context.root = USERDIR .. PATHSEP .. "navigation-search-project-"
+      .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.root))
     core.projects = { Project(context.root) }
     system.chdir(context.root)
@@ -111,9 +112,9 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     project_paths.configure_workspace {}
     core.projects = context.projects
     system.chdir(context.cwd)
-    common.rm(context.root, true)
     config.plugins.navigation_history = context.navigation
     core.active_view = context.active_view
+    test.ok(test.remove_tree(context.root))
   end)
 
   test.it("lists only the source Pane's places and selects its current entry", function()

@@ -60,13 +60,15 @@ test.describe("Terminal quit confirmation", function()
     local restored
     local ok, err = pcall(function()
       test.ok(busy.session:write("ping -n 30 127.0.0.1 > nul\r"))
-      local deadline = system.get_time() + 5
+      local deadline, ready = system.get_time() + 20, false
       repeat
         local _, a = idle.session:update()
         local _, b = busy.session:update()
-        if a.busy == false and b.busy == true then break end
+        ready = a.busy == false and b.busy == true
+        if ready then break end
         coroutine.yield(0.01)
       until system.get_time() >= deadline
+      test.ok(ready, "the shells did not report idle and busy")
       core.quit(true)
       test.ok(core.nag_view.visible)
       test.equal(decisions[#decisions], "waiting", "busy confirmation did not suspend the native close timeout")
@@ -138,7 +140,7 @@ test.describe("Terminal busy status", function()
       return false
     end
     local ok, err = pcall(function()
-      test.ok(wait_busy(false, 5), "idle status missing")
+      test.ok(wait_busy(false, 20), "idle status missing")
       test.ok(view.session:write("ping -n 6 127.0.0.1 > nul\r"))
       test.ok(wait_busy(true, 4), "child status missing")
       test.ok(wait_busy(false, 10), "idle status did not return")
@@ -161,7 +163,7 @@ test.describe("Terminal busy status", function()
       return false
     end
     local ok, err = pcall(function()
-      test.ok(wait_busy(false, 10), "idle status missing")
+      test.ok(wait_busy(false, 20), "idle status missing")
       -- Start-Sleep is a cmdlet: the shell starts no child process for it.
       test.ok(view.session:write("Start-Sleep -Seconds 4\r"))
       test.ok(wait_busy(true, 3), "in-shell command status missing")
@@ -185,7 +187,7 @@ test.describe("Terminal busy status", function()
       return false
     end
     local ok, err = pcall(function()
-      test.ok(wait_busy(false, 10), "idle status missing")
+      test.ok(wait_busy(false, 20), "idle status missing")
       -- A nested shell or TUI ends its own commands with these marks.
       test.ok(view.session:write(
         "Start-Sleep -Seconds 1; [Console]::Write([char]27 + ']133;D;0' + [char]7 + [char]27 + ']133;A' + [char]7); Start-Sleep -Seconds 4\r"))

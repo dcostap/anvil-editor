@@ -115,10 +115,7 @@ test.describe("File Tree Sorting", function()
       end
       context.filetree:refresh(false, false)
     end
-    if context.temp_root and system.get_file_info(context.temp_root) then
-      local ok, err = common.rm(context.temp_root, true)
-      test.ok(ok, err)
-    end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
   test.it("sorts by name or newest modified time while keeping folders before files", function(context)

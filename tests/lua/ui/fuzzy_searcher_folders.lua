@@ -87,10 +87,7 @@ test.describe("Project File Search folders", function()
     core.open_project_in_new_window = context.open_project_in_new_window
     if context.is_hosted_surface then system.is_hosted_surface = context.is_hosted_surface end
     if context.cwd then pcall(system.chdir, context.cwd) end
-    if context.root and system.get_file_info(context.root) then
-      local ok, err, path = common.rm(context.root, true)
-      test.ok(ok, string.format("%s: %s", tostring(path), tostring(err)))
-    end
+    if context.root then test.ok(test.remove_tree(context.root)) end
   end)
 
   test.it("finds empty folders and stops at ignored folder roots", function(context)

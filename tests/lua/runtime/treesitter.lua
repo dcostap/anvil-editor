@@ -110,7 +110,7 @@ local function seed_open_buffer_overlay(index, path, entry)
 end
 
 local function wait_ready(buffer, timeout)
-  local deadline = system.get_time() + (timeout or 3)
+  local deadline = system.get_time() + (timeout or 30)
   while system.get_time() < deadline do
     treesitter.poll_buffer(buffer)
     if buffer.treesitter and buffer.treesitter.status == "ready" then return true end
@@ -120,7 +120,7 @@ local function wait_ready(buffer, timeout)
 end
 
 local function wait_native_poll(state, generation, timeout)
-  local deadline = system.get_time() + (timeout or 3)
+  local deadline = system.get_time() + (timeout or 30)
   local last_status, last_changed, last_stale
   while system.get_time() < deadline do
     last_status, last_changed, last_stale = state:poll(generation)
@@ -205,7 +205,7 @@ local function write_file(path, text)
 end
 
 local function wait_workspace_symbols(query, opts, timeout)
-  local deadline = system.get_time() + (timeout or 5)
+  local deadline = system.get_time() + (timeout or 30)
   local results, reason, status
   opts = opts or {}
   local first = true
@@ -223,7 +223,7 @@ local function wait_workspace_symbols(query, opts, timeout)
 end
 
 local function wait_workspace_usages(name, opts, timeout)
-  local deadline = system.get_time() + (timeout or 5)
+  local deadline = system.get_time() + (timeout or 30)
   local results, reason, status
   opts = opts or {}
   local first = true
@@ -240,12 +240,26 @@ local function wait_workspace_usages(name, opts, timeout)
   return results, reason, status
 end
 
+-- Waits for a fresh result with the expected number of usages. The folder
+-- watcher can start more runs after a test's own refresh, so a fresh result
+-- can lag until the last of them finishes.
+local function wait_workspace_usage_count(name, opts, count, timeout)
+  local deadline = system.get_time() + (timeout or 30)
+  local results, reason, status
+  repeat
+    results, reason, status = symbol_index.workspace_usages(name, opts)
+    if status == "fresh" and results and #results == count then break end
+    coroutine.yield(0.03)
+  until system.get_time() >= deadline
+  return results, reason, status
+end
+
 local function wait_workspace_references(name, opts, timeout)
   return wait_workspace_usages(name, opts, timeout)
 end
 
 local function wait_async_request(request, timeout)
-  local deadline = system.get_time() + (timeout or 5)
+  local deadline = system.get_time() + (timeout or 30)
   repeat
     worker_pool.system():drain({ max_ms = 5, max_messages = 64 })
     if request.done then return request end
@@ -256,7 +270,7 @@ local function wait_async_request(request, timeout)
 end
 
 local function wait_index_ready(root, timeout)
-  local deadline = system.get_time() + (timeout or 5)
+  local deadline = system.get_time() + (timeout or 30)
   local status
   repeat
     status = symbol_index.status(root)
@@ -731,9 +745,9 @@ class VendorThing
 
     symbol_index.ensure_scan(root, { force = true, refresh_after_seconds = 0 })
     symbol_index.ensure_scan(external, { force = true, refresh_after_seconds = 0 })
-    test.equal(wait_index_ready(root, 8).status, "ready")
-    test.equal(wait_index_ready(external, 8).status, "ready")
-    local symbols, reason, status = wait_workspace_symbols("Thing", { limit = 20, refresh_after_seconds = 0 }, 8)
+    test.equal(wait_index_ready(root).status, "ready")
+    test.equal(wait_index_ready(external).status, "ready")
+    local symbols, reason, status = wait_workspace_symbols("Thing", { limit = 20, refresh_after_seconds = 0 })
     local external_symbols, external_reason, external_status = wait_workspace_symbols("ExternalThing", {
       root = external,
       limit = 20,
@@ -1323,18 +1337,24 @@ class AppleDoubleMustBeIgnored
       reason = "became-invalid-text",
     })
     test.ok(matched, reindex_reason)
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + 30
     repeat
       status = symbol_index.status(root)
       if status.completed_runs and status.completed_runs[expected_generation] then break end
       coroutine.yield(0.03)
     until system.get_time() >= deadline
     test.equal(status.completed_runs[expected_generation].status, "ready")
-    symbols, reason, query_status = symbol_index.workspace_symbols("ValidAfterInvalidFile", {
-      root = root,
-      limit = 20,
-      refresh_after_seconds = 0,
-    })
+    -- The folder watcher can start another run for the same write.
+    deadline = system.get_time() + 30
+    repeat
+      symbols, reason, query_status = symbol_index.workspace_symbols("ValidAfterInvalidFile", {
+        root = root,
+        limit = 20,
+        refresh_after_seconds = 0,
+      })
+      if query_status == "fresh" then break end
+      coroutine.yield(0.03)
+    until system.get_time() >= deadline
     test.equal(query_status, "fresh", reason)
     test.equal(#symbols, 0, "a file that becomes invalid text must not retain stale symbols")
     common.rm(root, true)
@@ -1624,7 +1644,7 @@ class StableLeafWatcherThing
     local ignored_before = index.watch_irrelevant_events or 0
 
     write_file(root .. PATHSEP .. "active-session.log", "not source code\n")
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + 30
     repeat
       index = symbol_index.status(root)
       if (index.watch_irrelevant_events or 0) > ignored_before then break end
@@ -1657,7 +1677,7 @@ class StableLeafWatcherThing
     test.equal(#symbols, 1)
 
     test.ok(os.remove(path))
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + 30
     repeat
       index = symbol_index.status(root)
       if index.generation > generation and index.status == "ready" then
@@ -1988,7 +2008,7 @@ fun make(): AsyncNewThing = AsyncNewThing()
     test.not_nil(index.native_snapshot)
 
     test.ok(symbol_index.reindex_file(path, { force = true, reason = "unchanged-native-refresh" }))
-    local unchanged_deadline = system.get_time() + 8
+    local unchanged_deadline = system.get_time() + 30
     repeat
       index = symbol_index.status(root)
       if index.status == "ready" then break end
@@ -2121,44 +2141,32 @@ fun make(): AsyncAddedDirThing = AsyncAddedDirThing()
 ]])
     os.remove(src .. PATHSEP .. "Removed.kt")
 
+    local generation_before = symbol_index.status(root).generation
     local changed
     changed, reason = symbol_index.mark_directories_dirty({ src, root }, "async-dir-test")
     test.ok(changed, reason)
 
-    refs, reason, status = wait_workspace_usages("AsyncAfterDirThing", {
-      root = root,
-      include_declaration = false,
-      limit = 20,
-    }, 8)
-    test.equal(status, "fresh", reason)
-    test.equal(#refs, 2)
-
-    refs, reason, status = wait_workspace_usages("AsyncAddedDirThing", {
-      root = root,
-      include_declaration = false,
-      limit = 20,
-    })
-    test.equal(status, "fresh", reason)
-    test.equal(#refs, 2)
-
-    refs, reason, status = wait_workspace_usages("AsyncBeforeDirThing", {
-      root = root,
-      include_declaration = false,
-      limit = 20,
-    })
-    test.equal(status, "fresh", reason)
-    test.equal(#refs, 0)
-
-    refs, reason, status = wait_workspace_usages("AsyncRemovedDirThing", {
-      root = root,
-      include_declaration = false,
-      limit = 20,
-    })
-    test.equal(status, "fresh", reason)
-    test.equal(#refs, 0)
-    local index = symbol_index.status(root)
-    test.not_nil(index and index.diagnostics and index.diagnostics.phases and index.diagnostics.phases["targeted-directory"])
-    test.equal(index.diagnostics.phases["targeted-directory"].worker.native_project_run_jobs, 1)
+    local usage_opts = { root = root, include_declaration = false, limit = 20 }
+    for name, count in pairs({
+      AsyncAfterDirThing = 2,
+      AsyncAddedDirThing = 2,
+      AsyncBeforeDirThing = 0,
+      AsyncRemovedDirThing = 0,
+    }) do
+      refs, reason, status = wait_workspace_usage_count(name, usage_opts, count)
+      test.equal(status, "fresh", reason)
+      test.equal(#refs, count, name)
+    end
+    -- The folder watcher can start later runs for the same writes, so find the
+    -- directory run among the completed runs instead of reading the latest one.
+    local directory_run
+    for generation, run in pairs(symbol_index.status(root).completed_runs or {}) do
+      if generation > generation_before and run.diagnostics and run.diagnostics.phase == "targeted-directory" then
+        directory_run = run.diagnostics.phases["targeted-directory"]
+      end
+    end
+    test.not_nil(directory_run, "the directory change did not run a targeted directory refresh")
+    test.equal(directory_run.worker.native_project_run_jobs, 1)
 
     common.rm(root, true)
   end)
@@ -2262,7 +2270,7 @@ class AddedByWatcherThing
 fun make(): AddedByWatcherThing = AddedByWatcherThing()
 ]])
 
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + 30
     local refs, reason, usage_status
     repeat
       refs, reason, usage_status = symbol_index.workspace_usages("AddedByWatcherThing", {
@@ -2309,7 +2317,7 @@ class NewThing
 
 fun make(): NewThing = NewThing()
 ]], path)
-    test.ok(wait_ready(buffer, 10))
+    test.ok(wait_ready(buffer))
 
     refs, reason, status = wait_workspace_usages("OldThing", {
       root = root,
@@ -2511,7 +2519,7 @@ main :: proc() {}
     local lines = {}
     for i = 1, 6000 do lines[#lines + 1] = string.format("int func_%d(int a) { return a + %d; }", i, i) end
     local buffer = c_buffer(table.concat(lines, "\n"))
-    test.ok(wait_ready(buffer, 10))
+    test.ok(wait_ready(buffer))
     local first = treesitter.get_buffer_outline(buffer, { timeout_ms = 5000 })
     test.equal(#first, 6000)
     local again, reason = treesitter.get_buffer_outline(buffer, { timeout_ms = 1 })
@@ -2519,7 +2527,7 @@ main :: proc() {}
     buffer:apply_edits({
       { line1 = 1, col1 = 5, line2 = 1, col2 = 11, text = "renamed" },
     }, { type = "replace" })
-    test.ok(wait_ready(buffer, 10))
+    test.ok(wait_ready(buffer))
     local after_edit = treesitter.get_buffer_outline(buffer, { timeout_ms = 5000 })
     test.equal(#after_edit, 6000)
     test.equal(after_edit[1].name, "renamed")

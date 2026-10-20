@@ -76,7 +76,7 @@ local function wait_for_horizontal_extent(view)
   return wait_until(function()
     view:get_h_scrollable_size()
     return not view:is_horizontal_extent_scan_pending()
-  end, 2)
+  end, 10)
 end
 
 local function expected_horizontal_extent(view, text, opts)

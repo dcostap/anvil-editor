@@ -38,10 +38,7 @@ test.describe("untitled recovery helpers", function()
         test.ok(ok, err)
       end
     end
-    if context.temp_root and system.get_file_info(context.temp_root) then
-      local ok, err = common.rm(context.temp_root, true)
-      test.ok(ok, err)
-    end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
   test.test("project keys are stable fixed-width hex and distinct for same-basename projects", function(context)

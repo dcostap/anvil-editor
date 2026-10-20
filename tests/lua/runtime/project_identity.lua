@@ -32,10 +32,7 @@ test.describe("Project path identity", function()
     core.buffer_registry = context.original_buffer_registry
     core.visited_files = context.original_visited_files
     config.max_visited_files = context.original_max_visited_files
-    if context.temp_root and system.get_file_info(context.temp_root) then
-      local ok, err = common.rm(context.temp_root, true)
-      test.ok(ok, err)
-    end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
   test.test("preserves Windows UNC share roots as Project paths", function()

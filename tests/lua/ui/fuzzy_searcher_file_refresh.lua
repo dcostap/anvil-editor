@@ -56,14 +56,8 @@ test.describe("Fuzzy Searcher file refresh", function()
     core.visited_files = context.original_visited_files
     helpers.set_everything_state(context.everything_state)
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
-    if context.root and system.get_file_info(context.root) then
-      local ok, err = common.rm(context.root, true)
-      test.ok(ok, err)
-    end
-    if context.secondary_root and system.get_file_info(context.secondary_root) then
-      local ok, err = common.rm(context.secondary_root, true)
-      test.ok(ok, err)
-    end
+    if context.root then test.ok(test.remove_tree(context.root)) end
+    if context.secondary_root then test.ok(test.remove_tree(context.secondary_root)) end
   end)
 
   test.it("refreshes external filesystem changes when the picker is reopened", function(context)

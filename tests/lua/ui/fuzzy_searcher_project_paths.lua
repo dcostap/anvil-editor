@@ -67,10 +67,7 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     core.projects = context.original_projects
     core.visited_files = context.original_visited_files
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
-    if context.temp_root and system.get_file_info(context.temp_root) then
-      local ok, err = common.rm(context.temp_root, true)
-      test.ok(ok, err)
-    end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
   test.it("renders external and vendored files with role labels and keeps absolute activation paths", function(context)

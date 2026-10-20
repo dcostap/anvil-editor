@@ -45,10 +45,11 @@ test.describe("Fuzzy Searcher current file query", function()
     context.cwd = system.getcwd()
     context.clipboard = system.get_clipboard()
     panes.reset_for_tests()
-    context.root = join_path(system.absolute_path("."), "fuzzy-current-file-query")
-    context.external = join_path(system.absolute_path("."), "fuzzy-current-file-external")
-    common.rm(context.root, true)
-    common.rm(context.external, true)
+    -- Each test gets its own folders: a folder watcher or child process can
+    -- still hold the previous test's folders.
+    local suffix = math.floor(system.get_time() * 1000000)
+    context.root = join_path(USERDIR, "fuzzy-current-file-query-" .. suffix)
+    context.external = join_path(USERDIR, "fuzzy-current-file-external-" .. suffix)
     assert(common.mkdirp(context.root))
     assert(common.mkdirp(context.external))
     core.projects = { Project(context.root) }
@@ -65,8 +66,8 @@ test.describe("Fuzzy Searcher current file query", function()
     core.active_view = context.active_view
     system.chdir(context.cwd)
     system.set_clipboard(context.clipboard or "")
-    common.rm(context.root, true)
-    common.rm(context.external, true)
+    test.ok(test.remove_tree(context.root))
+    test.ok(test.remove_tree(context.external))
   end)
 
   local function perform_for(path)

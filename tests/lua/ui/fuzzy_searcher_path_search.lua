@@ -85,20 +85,8 @@ test.describe("Fuzzy Searcher Path Search", function()
     core.recent_projects = context.original_recent_projects
     core.open_file = context.original_open_file
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
-    if context.temp_root and system.get_file_info(context.temp_root) then
-      -- A Project folder watcher can hold a new folder briefly after the picker closes.
-      local ok, err
-      local deadline = system.get_time() + 2
-      repeat
-        ok, err = common.rm(context.temp_root, true)
-        if not ok then coroutine.yield(0.05) end
-      until ok or system.get_time() >= deadline
-      test.ok(ok, err)
-    end
-    if context.home_root and system.get_file_info(context.home_root) then
-      local ok, err = common.rm(context.home_root, true)
-      test.ok(ok, err)
-    end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
+    if context.home_root then test.ok(test.remove_tree(context.home_root)) end
   end)
 
   test.it("keeps absolute paths inside the Project in Project File Search", function(context)

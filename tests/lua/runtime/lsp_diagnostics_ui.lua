@@ -100,10 +100,7 @@ test.describe("core.lsp.diagnostics UI/navigation helpers", function()
     if context.clients then
       for _, client in ipairs(context.clients) do diagnostics.clear_client(client) end
     end
-    if context.temp_root and system.get_file_info(context.temp_root) then
-      local ok, err = common.rm(context.temp_root, true)
-      test.ok(ok, err)
-    end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
   local function track_buffer(context, buffer)

@@ -57,14 +57,8 @@ test.describe("Command Palette View launchers", function()
     project_paths.configure_workspace {}
     core.projects = context.projects
     if context.cwd then pcall(system.chdir, context.cwd) end
-    if system.get_file_info(context.root) then
-      local ok, err = common.rm(context.root, true)
-      test.ok(ok, err)
-    end
-    if system.get_file_info(context.detached) then
-      local ok, err = common.rm(context.detached, true)
-      test.ok(ok, err)
-    end
+    test.ok(test.remove_tree(context.root))
+    test.ok(test.remove_tree(context.detached))
   end)
 
   test.it("shows raw launcher identifiers in the Command Palette", function()

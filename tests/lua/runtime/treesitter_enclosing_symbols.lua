@@ -16,8 +16,9 @@ end
 test.describe("Project enclosing symbols", function()
   test.before_each(function(context)
     context.projects, context.cwd = core.projects, system.getcwd()
-    context.root = USERDIR .. PATHSEP .. "enclosing-symbols"
-    common.rm(context.root, true)
+    -- An index worker can still hold the previous test's folder.
+    context.root = USERDIR .. PATHSEP .. "enclosing-symbols-"
+      .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.root))
     context.path = context.root .. PATHSEP .. "main.c"
     local file = assert(io.open(context.path, "wb"))
@@ -46,7 +47,7 @@ test.describe("Project enclosing symbols", function()
     project_paths.configure_workspace {}
     core.projects = context.projects
     system.chdir(context.cwd)
-    common.rm(context.root, true)
+    test.ok(test.remove_tree(context.root))
   end)
 
   test.it("returns one result per location, including missing and invalid locations", function(context)

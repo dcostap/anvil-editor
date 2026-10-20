@@ -277,6 +277,12 @@ test.describe("http", function()
       if proc and proc:running() then
         proc:terminate()
         proc:wait(2, 0.01)
+        -- On Windows a graceful terminate posts WM_CLOSE, which the console
+        -- server ignores.
+        if proc:running() then
+          proc:kill()
+          proc:wait(2, 0.01)
+        end
       end
     end
 
@@ -288,10 +294,7 @@ test.describe("http", function()
       end
     end
 
-    if context.temp_root and system.get_file_info(context.temp_root) then
-      local ok, err = common.rm(context.temp_root, true)
-      test.ok(ok, err)
-    end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
   test.test("follows redirects and handles request helpers", function(context)

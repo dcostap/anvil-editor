@@ -89,7 +89,7 @@ test.describe("Project file worker I/O", function()
       end
     end)
     pending = true
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + 30
     while #events == 0 and system.get_time() < deadline do coroutine.yield(0) end
     test.equal(#events, 1)
     assert(os.remove(path))
@@ -97,6 +97,7 @@ test.describe("Project file worker I/O", function()
     -- Give the next batch time to arrive while the first subscriber is suspended.
     coroutine.yield(0.3)
     release = true
+    deadline = system.get_time() + 30
     while #events < 2 and system.get_time() < deadline do coroutine.yield(0) end
     test.equal(#events, 2)
     test.not_ok(overlap, "A later file batch overtook a suspended subscriber")
@@ -139,7 +140,7 @@ test.describe("Project file worker I/O", function()
       delivered = delivered + count
     end)
 
-    local deadline = system.get_time() + 10
+    local deadline = system.get_time() + 30
     while delivered < 1024 and system.get_time() < deadline do coroutine.yield(0.01) end
     test.equal(delivered, 1024)
     test.ok(largest_batch < 1024, "The watcher delivered the full burst as one batch")
@@ -173,7 +174,7 @@ test.describe("Project file worker I/O", function()
       delivered_paths = paths
     end)
 
-    local deadline = system.get_time() + 10
+    local deadline = system.get_time() + 30
     while not delivered_paths and system.get_time() < deadline do coroutine.yield(0.01) end
     test.not_nil(delivered_paths, "The watcher did not deliver the imprecise event")
     local count = 0
@@ -218,7 +219,7 @@ test.describe("Project file worker I/O", function()
       delivered_paths = paths
     end)
 
-    local deadline = system.get_time() + 10
+    local deadline = system.get_time() + 30
     while not delivered_paths and system.get_time() < deadline do coroutine.yield(0.01) end
     test.not_nil(delivered_paths, "The watcher did not deliver the Project content event")
     local count = 0

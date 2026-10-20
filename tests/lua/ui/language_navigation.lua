@@ -96,18 +96,7 @@ test.describe("language navigation", function()
       if context.original_cwd then pcall(system.chdir, context.original_cwd) end
       symbol_index.reset_for_tests()
       coroutine.yield(0.05)
-      if system.get_file_info(context.temp_root) then
-        if PLATFORM == "Windows" and system.get_file_info(join_path(context.temp_root, ".git")) then
-          os.execute('attrib -R /S /D "' .. context.temp_root:gsub("/", "\\") .. '\\*" >NUL 2>NUL')
-        end
-        local ok, err
-        local deadline = system.get_time() + 1
-        repeat
-          ok, err = common.rm(context.temp_root, true)
-          if not ok and system.get_time() < deadline then coroutine.yield(0.05) end
-        until ok or system.get_time() >= deadline
-        test.ok(ok, err)
-      end
+      test.ok(test.remove_tree(context.temp_root))
     end
     core.projects = context.original_projects
     core.active_view = context.original_active_view

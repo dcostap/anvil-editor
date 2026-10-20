@@ -72,10 +72,7 @@ test.describe("Fuzzy Searcher exact grep", function()
     project_paths.configure_workspace {}
     core.projects = context.original_projects
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
-    if context.root and system.get_file_info(context.root) then
-      local ok, err = common.rm(context.root, true)
-      test.ok(ok, err)
-    end
+    if context.root then test.ok(test.remove_tree(context.root)) end
   end)
 
   test.it("returns one result for each matching line", function(context)
