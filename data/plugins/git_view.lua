@@ -529,10 +529,13 @@ command.add(nil, {
       local session, view = git_view.open_log(project, { focus = false })
       when_model_ready(view, function(v)
         v.model.repo = repo
-        local tab, tab_err = v.model:open_working_tree_diff(function() core.redraw = true end, {
+        local tab, tab_err = v.model:open_working_tree_diff(function(_, _, ready)
+          -- Select the loaded row before the list takes focus.
+          git_view.ensure_tab_view(v.git_session, ready, true)
+          core.redraw = true
+        end, {
           selected_file_path = repo.relpath,
         })
-        if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
         if not tab and tab_err then core.warn("Git View: Cannot open the current file in a Project Diff: %s", tab_err.message or tab_err.kind) end
       end)
     end)
