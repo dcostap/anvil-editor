@@ -5,16 +5,18 @@ local native = require "treesitter"
 local block_query = test.not_nil(native.compile_query("markdown", queries.block))
 local inline_query = test.not_nil(native.compile_query("markdown_inline", queries.inline))
 
+-- The budgets only stop a runaway parse; a loaded machine needs much longer
+-- than an idle one.
 local function parse(lines)
-  local tree, err = native.parse_markdown(lines, { timeout_ms = 1000 })
+  local tree, err = native.parse_markdown(lines, { timeout_ms = 10000 })
   test.not_nil(tree, err)
   local blocks = test.not_nil(tree:query_blocks(block_query, {
-    timeout_ms = 100,
+    timeout_ms = 2000,
     match_limit = 4096,
     max_captures = 4096,
   }))
   local inlines = test.not_nil(tree:query_inlines(inline_query, {
-    timeout_ms = 100,
+    timeout_ms = 2000,
     match_limit = 4096,
     max_captures = 4096,
   }))

@@ -254,6 +254,19 @@ local function wait_workspace_usage_count(name, opts, count, timeout)
   return results, reason, status
 end
 
+-- Waits for a fresh result with the expected number of symbols, for the same
+-- reason as wait_workspace_usage_count.
+local function wait_workspace_symbol_count(name, opts, count, timeout)
+  local deadline = system.get_time() + (timeout or 30)
+  local results, reason, status
+  repeat
+    results, reason, status = symbol_index.workspace_symbols(name, opts)
+    if status == "fresh" and results and #results == count then break end
+    coroutine.yield(0.03)
+  until system.get_time() >= deadline
+  return results, reason, status
+end
+
 local function wait_workspace_references(name, opts, timeout)
   return wait_workspace_usages(name, opts, timeout)
 end
@@ -1268,10 +1281,9 @@ fun make(): EagerThing = EagerThing()
       [root .. PATHSEP .. ".gitignore"] = true,
     }, "ignore-rules-changed")
     test.ok(matched, watch_reason)
-    status = wait_index_ready(root)
-    local newly_included = assert(symbol_index.workspace_symbols("ChangedGitIgnoredProjectSymbol", {
+    local newly_included = assert(wait_workspace_symbol_count("ChangedGitIgnoredProjectSymbol", {
       root = root, limit = 20, refresh_after_seconds = 0,
-    }))
+    }, 1))
     test.equal(#newly_included, 1)
 
     write_file(root .. PATHSEP .. ".gitignore", "build/\n")
@@ -1279,10 +1291,9 @@ fun make(): EagerThing = EagerThing()
       [root .. PATHSEP .. ".gitignore"] = true,
     }, "ignore-rules-changed")
     test.ok(matched, watch_reason)
-    status = wait_index_ready(root)
-    local newly_excluded = assert(symbol_index.workspace_symbols("ChangedGitIgnoredProjectSymbol", {
+    local newly_excluded = assert(wait_workspace_symbol_count("ChangedGitIgnoredProjectSymbol", {
       root = root, limit = 20, refresh_after_seconds = 0,
-    }))
+    }, 0))
     test.equal(#newly_excluded, 0)
     common.rm(root, true)
   end)

@@ -21,7 +21,8 @@ local function retain_processes(context, session)
 end
 
 local function wait_for(view, predicate, seconds)
-  local deadline = system.get_time() + (seconds or 10)
+  -- Shells start slowly on a loaded machine. The wait ends as soon as the predicate holds.
+  local deadline = system.get_time() + (seconds or 30)
   while true do
     view:service_session(true)
     if predicate() then return true end

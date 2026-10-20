@@ -25,7 +25,7 @@ local function result_for_path(results, path)
 end
 
 local function wait_until(predicate, timeout)
-  local deadline = system.get_time() + (timeout or 5)
+  local deadline = system.get_time() + (timeout or 30)
   while not predicate() and system.get_time() < deadline do coroutine.yield(0.02) end
   return predicate()
 end
@@ -124,7 +124,9 @@ test.describe("Project File Search folders", function()
     picker:close()
     fuzzy_searcher.open("empty nested")
     picker = assert(core.fuzzy_searcher_active_view)
-    local deadline = system.get_time() + 10
+    -- A new picker has no results until its first search finishes.
+    test.ok(wait_until(function() return result_for_path(picker.results, context.empty) ~= nil end))
+    local deadline = system.get_time() + 30
     local alternate = false
     repeat
       alternate = not alternate

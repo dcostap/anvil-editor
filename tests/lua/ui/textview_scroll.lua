@@ -302,7 +302,9 @@ test.describe("TextView selection scrolling", function()
     test.ok(wait_for_horizontal_extent(view))
     local old_max = view:get_h_scrollable_size() - view.size.x
 
-    buffer:remove(1, 21, 1, #buffer.lines[1])
+    -- Keep the line wider than the view, so the target below stays valid in
+    -- the provisional range while the next scan is pending.
+    buffer:remove(1, 301, 1, #buffer.lines[1])
     view:get_h_scrollable_size()
     view.scroll.to.x = old_max
     test.ok(wait_for_horizontal_extent(view))
