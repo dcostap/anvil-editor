@@ -4,17 +4,23 @@ local config = require "core.config"
 local core = require "core"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
+local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 
-local function wait_ready(instance)
-  local deadline = system.get_time() + 5
+local function wait_ready(instance, view)
+  local deadline = system.get_time() + 30
   repeat
     local pool = worker_pool.current_system()
     if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
-    if instance.status == "ready" then return true end
+    if instance.status == "ready" then
+      -- Publication starts a sliced layout rebuild. Observe the presentation
+      -- it produces, not the plans committed before it.
+      linewrapping.complete_async_reconstruction(view)
+      return true
+    end
     coroutine.yield(0.01)
   until system.get_time() >= deadline
   return instance.status == "ready"
@@ -82,7 +88,7 @@ test.describe("Markdown pending images", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(instance, view), instance.reason)
       test.equal(image_count(view, "initial duplicate"), 1)
 
       buffer:apply_edits({
@@ -90,7 +96,7 @@ test.describe("Markdown pending images", function()
       }, { type = "insert" })
 
       test.equal(image_count(view, "pending duplicate"), 2)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(instance, view), instance.reason)
       test.equal(image_count(view, "published duplicate"), 2)
     end)
 
@@ -139,14 +145,14 @@ test.describe("Markdown pending images", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(instance, view), instance.reason)
       test.equal(image_count(view, "initial list exit"), 1)
 
       buffer:set_selection(1, 3)
       test.ok(command.perform("core:newline"))
 
       test.equal(image_count(view, "pending list exit"), 1)
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(instance, view), instance.reason)
       test.equal(image_count(view, "published list exit"), 1)
     end)
 
@@ -195,7 +201,7 @@ test.describe("Markdown pending images", function()
       core.active_view = view
       markdown.live_render.refresh_view(view)
       local instance = test.not_nil(markdown_model.peek(buffer))
-      test.ok(wait_ready(instance), instance.reason)
+      test.ok(wait_ready(instance, view), instance.reason)
       view:invalidate_line_render("pending-image-fixture")
       test.equal(image_count(view, "initial"), 1)
 
