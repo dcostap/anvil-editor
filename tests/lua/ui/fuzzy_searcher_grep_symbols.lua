@@ -32,8 +32,10 @@ end
 test.describe("Text Search prepared symbol context", function()
   test.before_each(function(context)
     context.projects, context.cwd = core.projects, system.getcwd()
-    context.root = USERDIR .. PATHSEP .. "grep-symbol-context"
-    common.rm(context.root, true)
+    -- An index worker can still hold the previous test's file, so each test
+    -- gets its own folder.
+    context.root = USERDIR .. PATHSEP .. "grep-symbol-context-"
+      .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.root))
     context.path = context.root .. PATHSEP .. "main.c"
     local file = assert(io.open(context.path, "wb"))
