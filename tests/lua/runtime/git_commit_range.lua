@@ -27,12 +27,7 @@ end
 test.describe("Commit Range Diff", function()
   test.after_each(function(context)
     if context.model then context.model:cancel_jobs() end
-    if context.root then
-      if PLATFORM == "Windows" then
-        os.execute('attrib -R /S /D "' .. context.root .. '\\*" >NUL 2>NUL')
-      end
-      common.rm(context.root, true)
-    end
+    if context.root then test.ok(test.remove_tree(context.root)) end
   end)
 
   test.it("shows net file changes across commits, including a range from the root", function(context)

@@ -503,9 +503,16 @@ function test.remove_tree(path, timeout)
       return false, string.format("%s: %s", tostring(failed_path or path), tostring(err))
     end
     if PLATFORM == "Windows" and not cleared_read_only then
-      -- Git writes its object files read-only.
+      -- Git writes its object files read-only. os.execute would flash a
+      -- console window; process.start runs attrib without one.
       cleared_read_only = true
-      os.execute('attrib -R /S /D "' .. path:gsub("/", "\\") .. '\\*" >NUL 2>NUL')
+      local process = require "core.process"
+      local proc = process.start({ "attrib", "-R", "/S", "/D", path:gsub("/", "\\") .. "\\*" }, {
+        stdin = process.REDIRECT_DISCARD,
+        stdout = process.REDIRECT_DISCARD,
+        stderr = process.REDIRECT_DISCARD,
+      })
+      if proc then proc:wait(10000, 0.01) end
     end
     coroutine.yield(0.05)
   end

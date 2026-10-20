@@ -1035,11 +1035,7 @@ test.describe("plugins.git.model", function()
     end)
     wait_until(function() return preview_done end, 10, "real Git history preview did not finish")
     test.equal(tab.preview_left_text, "same content\n")
-    if PLATFORM == "Windows" then
-      os.execute('attrib -R /S /D "' .. root .. '\\*" >NUL 2>NUL')
-    end
-    local removed, remove_err = common.rm(root, true)
-    test.ok(removed, remove_err)
+    test.ok(test.remove_tree(root))
   end)
 
   test.test("bounds staged rename fallback when the old HEAD path is missing", function()

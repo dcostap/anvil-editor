@@ -90,12 +90,7 @@ test.describe("Copy range patch", function()
     config.plugins.git.max_output = context.max_output
     panes.reset_for_tests()
     core.active_view = context.active_view
-    if context.root then
-      if PLATFORM == "Windows" then
-        os.execute('attrib -R /S /D "' .. context.root .. '\\*" >NUL 2>NUL')
-      end
-      common.rm(context.root, true)
-    end
+    if context.root then test.ok(test.remove_tree(context.root)) end
   end)
 
   test.it("copies an applicable net patch, including binary changes", function(context)

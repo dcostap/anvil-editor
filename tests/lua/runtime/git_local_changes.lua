@@ -69,10 +69,7 @@ test.describe("Git Log local changes", function()
       model:cancel_jobs()
       for _, tab in ipairs(model.tabs) do model:dispose_tab(tab) end
     end
-    if PLATFORM == "Windows" then
-      os.execute('attrib -R /S /D "' .. root .. '\\*" >NUL 2>NUL')
-    end
-    common.rm(root, true)
+    test.ok(test.remove_tree(root))
   end)
 
   test.it("compares each part of a partially staged file against its own base", function()
