@@ -698,7 +698,7 @@ _Avoid_: diffviewer
 **Unified Diff**:
 A single text surface showing unchanged lines once, with removed lines before added lines in each change block.
 It shows line numbers from both sources and permits selection and copying.
-It edits one editable Diff Side, the new side unless only the old side is editable. Lines shown from the other Diff Side are read-only.
+It edits one editable Diff Side, the new side unless only the old side is editable. Lines shown from the other Diff Side are read-only, but the caret moves through them as through any other line.
 
 **Image Comparison View**:
 A visual before-and-after comparison of two image revisions. It presents images directly instead of treating their bytes as text.

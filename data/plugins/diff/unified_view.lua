@@ -643,6 +643,220 @@ function UnifiedView:on_mouse_released(...)
   return UnifiedView.super.on_mouse_released(self, ...)
 end
 
+local function position_buffer(view, pos)
+  return pos.other and view.other_surface.buffer or view.buffer
+end
+
+local function position_lines(view, pos)
+  return position_buffer(view, pos).lines
+end
+
+local function source_index(view, pos)
+  return pos.other and view.other_index or view.base_index
+end
+
+-- The line drawn next to `pos`'s line in `direction`, or nil at either end of
+-- the Unified Diff.
+local function adjacent_line(view, pos, direction)
+  local groups = view.projection.groups
+  local count = #view.buffer.lines
+  if pos.other then
+    local group = view.other_lines[pos.line].group
+    local lines = group.lines
+    if direction > 0 then
+      if pos.line < lines[#lines] then return { line = pos.line + 1, other = true } end
+      if group.boundary <= count then return { line = group.boundary } end
+    else
+      if pos.line > lines[1] then return { line = pos.line - 1, other = true } end
+      if group.boundary > 1 then return { line = group.boundary - 1 } end
+    end
+    return nil
+  end
+  local group = groups[direction > 0 and pos.line + 1 or pos.line]
+  if group then return { line = group.lines[direction > 0 and 1 or #group.lines], other = true } end
+  local line = pos.line + direction
+  if line >= 1 and line <= count then return { line = line } end
+end
+
+local function line_edge(view, pos, direction)
+  local text = position_lines(view, pos)[pos.line]
+  return { line = pos.line, col = direction > 0 and #text or 1, other = pos.other }
+end
+
+-- Move by a Buffer translation such as a character or word step. A step that
+-- leaves its lines for the other kind stops at the edge of the first line drawn there.
+local function translate_step(view, pos, translation, direction)
+  local lines = position_lines(view, pos)
+  local line, col = translation(position_buffer(view, pos), pos.line, pos.col)
+  local moved = line ~= pos.line or col ~= pos.col
+  local function enter(neighbor)
+    if not neighbor then return line_edge(view, pos, direction) end
+    neighbor.col = line_edge(view, neighbor, -direction).col
+    return neighbor
+  end
+  if pos.other then
+    local group_lines = view.other_lines[pos.line].group.lines
+    if moved and line >= group_lines[1] and line <= group_lines[#group_lines] then
+      return { line = line, col = common.clamp(col, 1, #lines[line]), other = true }
+    end
+    local last = { line = group_lines[direction > 0 and #group_lines or 1], other = true }
+    return enter(adjacent_line(view, last, direction))
+  end
+  local groups = view.projection.groups
+  if direction > 0 then
+    -- A step that cannot pass the end of the Buffer can still enter lines after it.
+    local stop = moved and line or (pos.line == #lines and #lines + 1 or pos.line)
+    for boundary = pos.line + 1, stop do
+      if groups[boundary] then return enter({ line = groups[boundary].lines[1], other = true }) end
+    end
+  else
+    local stop = moved and line + 1 or (pos.line == 1 and 1 or pos.line + 1)
+    for boundary = pos.line, stop, -1 do
+      if groups[boundary] then return enter({ line = groups[boundary].lines[#groups[boundary].lines], other = true }) end
+    end
+  end
+  return { line = line, col = col }
+end
+
+local function text_origin_x(view)
+  local x = view:get_content_offset()
+  return x + view:get_gutter_width()
+end
+
+-- The text offset vertical moves keep, shared with TextView's own line moves.
+local function goal_x(view, pos, x)
+  local goal = view.unified_goal
+  if goal and goal.line == pos.line and goal.col == pos.col and goal.other == pos.other then return goal.x end
+  local xo = view.last_x_offset
+  if not pos.other and xo and xo.line == pos.line and xo.col == pos.col and xo.offset then return xo.offset end
+  return x - text_origin_x(view)
+end
+
+-- Move by `distance` pixels through the drawn rows. Returns the target and the
+-- goal offset to keep. A move past the first or last row goes to the start or end of its line.
+local function vertical_step(view, pos, distance)
+  local x, y = view:get_source_screen_position(source_index(view, pos), pos.line, pos.col)
+  if not y then return nil end
+  local offset = goal_x(view, pos, x)
+  local target = view:resolve_unified_position(text_origin_x(view) + offset, y + distance + view:get_line_height() / 2)
+  local _, target_y = view:get_source_screen_position(source_index(view, target), target.line, target.col)
+  if not target_y or (distance < 0 and target_y >= y) or (distance > 0 and target_y <= y) then
+    target = line_edge(view, pos, distance)
+  end
+  return target, offset
+end
+
+local function step(translation, direction)
+  return function(view, pos) return translate_step(view, pos, translation, direction) end
+end
+
+local function rows(direction, page)
+  return function(view, pos)
+    local line_height = view:get_line_height()
+    local distance = page and math.max(line_height, view.size.y - line_height * 2) or line_height
+    return vertical_step(view, pos, direction * distance)
+  end
+end
+
+local motions = {
+  previous_char = step(translate.previous_char, -1),
+  next_char = step(translate.next_char, 1),
+  previous_word_start = step(translate.previous_word_start, -1),
+  next_word_end = step(translate.next_word_end, 1),
+  previous_line = rows(-1),
+  next_line = rows(1),
+  previous_page = rows(-1, true),
+  next_page = rows(1, true),
+  start_of_buffer = function(view)
+    local group = view.projection.groups[1]
+    if group then return { line = group.lines[1], col = 1, other = true } end
+    return { line = 1, col = 1 }
+  end,
+  end_of_buffer = function(view)
+    local lines = view.buffer.lines
+    local group = view.projection.groups[#lines + 1]
+    if group then return line_edge(view, { line = group.lines[#group.lines], other = true }, 1) end
+    return { line = #lines, col = #lines[#lines] }
+  end,
+}
+
+-- Home and End stay within the line the caret is on.
+for _, name in ipairs { "start_of_line", "start_of_indentation", "end_of_line" } do
+  motions[name] = function(view, pos)
+    local _, col = translate[name](position_buffer(view, pos), pos.line, pos.col)
+    return { line = pos.line, col = common.clamp(col, 1, #position_lines(view, pos)[pos.line]), other = pos.other }
+  end
+end
+
+-- Arrow, word, line, page and Buffer-edge moves reach the other side's lines as
+-- well. Moves that stay in Buffer text are left to TextView.
+function UnifiedView:handle_selection_command(name)
+  local kind, target = name:match("^core:(%a+)_to_(.+)$")
+  local motion = motions[target]
+  if not motion or (kind ~= "move" and kind ~= "select") then return false end
+  local selection = self.other_selection
+  local caret, anchor
+  if selection then
+    caret, anchor = selection.caret, selection.anchor
+  else
+    local state = self:get_selection_state().selections
+    -- Several carets keep the Buffer's own moves.
+    if #state ~= 4 then return false end
+    caret, anchor = { line = state[1], col = state[2] }, { line = state[3], col = state[4] }
+  end
+  local extend = kind == "select"
+  local pos, goal
+  if not extend and selection and (target == "previous_char" or target == "next_char")
+      and compare_positions(self, caret, anchor) ~= 0 then
+    -- A character move collapses a selection to its start or end, as in the Buffer.
+    local start, finish = ordered_positions(self, anchor, caret)
+    pos = target == "previous_char" and start or finish
+  else
+    pos, goal = motion(self, caret)
+  end
+  if not pos or not (selection or pos.other) then return false end
+  if goal then
+    self.unified_goal = { line = pos.line, col = pos.col, other = pos.other, x = goal }
+    if not pos.other then self.last_x_offset = { line = pos.line, col = pos.col, offset = goal } end
+  end
+  if extend and pos.other and not anchor.other then
+    local lines = self.buffer.lines
+    local group = self.other_lines[pos.line].group
+    if group.boundary > #lines and anchor.line == #lines and anchor.col >= #lines[#lines] then
+      -- The end of the Buffer sorts after lines placed below the last line, so
+      -- a selection that starts there and moves down starts at those lines.
+      anchor = { line = group.lines[1], col = 1, other = true }
+    end
+  end
+  if caret.other ~= pos.other then
+    core.log_quiet("Unified Diff caret moved into %s line %d by %s",
+      pos.other and (self.other_index == 1 and "removed" or "added") or "Buffer", pos.line, name)
+  end
+  self:select_unified(extend and anchor or pos, pos)
+  self:reveal_unified_position(pos)
+  core.blink_reset()
+  return true
+end
+
+---Scroll so a Unified Position is visible, with the usual context rows.
+function UnifiedView:reveal_unified_position(pos)
+  local x, y = self:get_source_screen_position(source_index(self, pos), pos.line, pos.col)
+  if not y then return end
+  local line_height = self:get_line_height()
+  local context = line_height * self:get_visible_scroll_context_lines()
+  local top = y - self.position.y + self.scroll.y
+  local above = top - style.padding.y - context
+  local below = top + line_height + context - self.size.y + self:get_horizontal_scrollbar_height()
+  self.scroll.to.y = math.max(0, common.clamp(self.scroll.to.y, below, above))
+  if not self.wrapping_enabled then
+    local text_x = x - text_origin_x(self)
+    local _, _, scroll_w = self.v_scrollbar:get_track_rect()
+    local width = math.max(0, self.size.x - scroll_w - self:get_gutter_width())
+    local margin = self:get_font():get_width(" ") * 4
+    self.scroll.to.x = math.max(0, common.clamp(self.scroll.to.x, text_x + margin - width, text_x - margin))
+  end
+end
+
 ---Return the Diff Side index, line and column of the caret.
 function UnifiedView:source_position()
   local selection = self.other_selection
