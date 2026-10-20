@@ -5215,15 +5215,18 @@ function TextView:get_render_fragment_at_position(x, y)
     local next_line, row_end = linewrapping.get_idx_line_col(self, idx + 1)
     if next_line ~= line then row_end = #(self.buffer.lines[line] or "") end
     local line_x, line_y = self:get_line_screen_position(line)
-    local first_idx = self:get_visual_row(line, 1, false)
-    local row_y = line_y + self:get_visual_row_y_offset(idx)
-      - self:get_visual_row_y_offset(first_idx)
-    local row_height = self:get_visual_row_height(idx)
+    -- Wrapped indices locate source ranges. Display rows include folds and
+    -- provider rows, so only display rows can address screen metrics.
+    local first_row = self:get_visual_row(line, 1, false)
+    local row = self:get_visual_row(line, row_start, false)
+    local row_y = line_y + self:get_visual_row_y_offset(row)
+      - self:get_visual_row_y_offset(first_row)
+    local row_height = self:get_visual_row_height(row)
     if not (type(render_line.position_rows) == "table"
       and #render_line.position_rows > 0)
     then
       local content_y_offset, content_height = line_render_content_geometry(
-        render_line, row_height, idx == first_idx
+        render_line, row_height, row == first_row
       )
       if y < row_y + content_y_offset
       or y >= row_y + content_y_offset + content_height
@@ -5388,12 +5391,13 @@ function TextView:get_render_widget_at_position(x, y)
     local last_row = next_line ~= line
     if last_row then row_end = #(self.buffer.lines[line] or "") end
     local line_x, line_y = self:get_line_screen_position(line)
-    local first_idx = self:get_visual_row(line, 1, false)
-    local row_height = self:get_visual_row_height(idx)
-    local row_y = line_y + self:get_visual_row_y_offset(idx)
-      - self:get_visual_row_y_offset(first_idx)
+    local first_row = self:get_visual_row(line, 1, false)
+    local row = self:get_visual_row(line, row_start, false)
+    local row_height = self:get_visual_row_height(row)
+    local row_y = line_y + self:get_visual_row_y_offset(row)
+      - self:get_visual_row_y_offset(first_row)
     local content_y_offset, content_height = line_render_content_geometry(
-      render_line, row_height, idx == first_idx
+      render_line, row_height, row == first_row
     )
     local begin_width = row_start ~= 1 and (self.wrapped_line_offsets[line] or 0) or 0
     local row_render_x = self:get_line_render_col_x_offset(render_line, row_start)
