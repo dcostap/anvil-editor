@@ -139,6 +139,8 @@ static const char *get_key_name(const SDL_Event *e, char *buf) {
        and others, are masked with SDLK_SCANCODE_MASK, which moves them outside
        the unicode range (>0x10FFFF). Users can remap these buttons, so we need
        to return the correct name, not scancode based. */
+    if (key_name_from_ascii_keycode(e->key.key, buf))
+      return buf;
     if ((e->key.key < 128) || (e->key.key & SDLK_SCANCODE_MASK))
       strcpy(buf, SDL_GetKeyName(e->key.key));
     else

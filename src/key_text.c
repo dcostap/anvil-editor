@@ -9,3 +9,12 @@ bool key_text_from_keycode(SDL_Keycode key, char out[5]) {
   *end = '\0';
   return true;
 }
+
+bool key_name_from_ascii_keycode(SDL_Keycode key, char out[2]) {
+  /* SDL names letters from the layout's shifted character. A stale Windows
+   * keymap can return an invalid one, which SDL names U+FFFD. */
+  if (key <= 0x20 || key >= 0x7f) return false;
+  out[0] = (char)SDL_tolower((int)key);
+  out[1] = '\0';
+  return true;
+}
