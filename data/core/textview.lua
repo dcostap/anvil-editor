@@ -2255,6 +2255,10 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
       cache.row_count, tostring(_provider_id or "unknown"), tostring(line1 or "all"),
       tostring(line2 or line1 or "all"), self.buffer.text_revision or 0, self.buffer:get_name()
     )
+    -- Keep the viewport's place for the rebuild that replaces these rows.
+    if not self.__pending_viewport_anchor then
+      self.__pending_viewport_anchor = self:capture_viewport_anchor()
+    end
   end
   clear_visual_metric_cache(self)
 end
@@ -3929,7 +3933,11 @@ function TextView:capture_viewport_anchor()
   if not cache
     or cache.wrap_layout_generation ~= (self.__wrap_layout_generation or 0)
     or cache.text_revision ~= (self.buffer.text_revision or 0)
-  then return nil end
+  then
+    core.log_quiet("Viewport anchor unavailable for %s: %s", self.buffer:get_name(),
+      cache and "row measurements are stale" or "no row measurements")
+    return nil
+  end
   local jump = current_line_scroll_anchor(self)
   if jump then
     local row = common.clamp(self:get_visual_row(jump.line, 1), 1, cache.row_count)
@@ -3986,7 +3994,8 @@ end
 
 ---Restore an anchor when the replacement row measurements become available.
 function TextView:restore_viewport_anchor(anchor)
-  self.__pending_viewport_anchor = anchor
+  -- A capture without row measurements keeps the anchor already waiting.
+  self.__pending_viewport_anchor = anchor or self.__pending_viewport_anchor
   self.__visual_metric_snapshot_kind = nil
   self.__visual_metric_snapshot_id = nil
 end
