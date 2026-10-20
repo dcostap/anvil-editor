@@ -1361,6 +1361,18 @@ static int f_sync_file(lua_State *L) {
 }
 
 
+#ifdef _WIN32
+/* Antivirus scanners and indexers open a file right after it is written. A
+   rename or replace during that scan fails although both files keep their
+   names, so these errors are retried for a short time. */
+static bool replace_error_is_transient(DWORD error) {
+  return error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION
+    || error == ERROR_ACCESS_DENIED || error == ERROR_UNABLE_TO_REMOVE_REPLACED;
+}
+
+static const Uint32 replace_retry_delays_ms[] = { 5, 10, 20, 40, 75, 100 };
+#endif
+
 static int f_atomic_replace_file(lua_State *L) {
   const char *source = luaL_checkstring(L, 1);
   const char *target = luaL_checkstring(L, 2);
@@ -1424,7 +1436,14 @@ static int f_atomic_replace_file(lua_State *L) {
           CloseHandle(handle);
         }
       }
-      if (replaced) replaced = ReplaceFileW(wtarget, wsource, NULL, 0, NULL, NULL);
+      if (replaced) {
+        replaced = ReplaceFileW(wtarget, wsource, NULL, 0, NULL, NULL);
+        for (size_t i = 0; !replaced && i < SDL_arraysize(replace_retry_delays_ms); i++) {
+          if (!replace_error_is_transient(GetLastError())) break;
+          SDL_Delay(replace_retry_delays_ms[i]);
+          replaced = ReplaceFileW(wtarget, wsource, NULL, 0, NULL, NULL);
+        }
+      }
     }
   } else {
     DWORD error = GetLastError();
@@ -1445,6 +1464,11 @@ static int f_atomic_replace_file(lua_State *L) {
       SetLastError(ERROR_FILE_NOT_FOUND);
     } else {
       replaced = MoveFileExW(wsource, wtarget, MOVEFILE_WRITE_THROUGH);
+      for (size_t i = 0; !replaced && i < SDL_arraysize(replace_retry_delays_ms); i++) {
+        if (!replace_error_is_transient(GetLastError())) break;
+        SDL_Delay(replace_retry_delays_ms[i]);
+        replaced = MoveFileExW(wsource, wtarget, MOVEFILE_WRITE_THROUGH);
+      }
     }
   }
   DWORD error = replaced ? ERROR_SUCCESS
