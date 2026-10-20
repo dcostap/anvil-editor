@@ -824,6 +824,16 @@ function Buffer:clean()
 end
 
 
+---Represent a saved file whose disk copy is gone. The Buffer stays clean, so
+---nothing recreates the file until the user edits or saves it.
+function Buffer:mark_file_missing()
+  self.new_file = false
+  self.file_missing = true
+  self:clean()
+  core.log_quiet("Buffer restored for missing file: %s", self.abs_filename)
+end
+
+
 function Buffer:get_indent_info()
   if not self.indent_info then return config.tab_type, config.indent_size, false end
   return self.indent_info.type or config.tab_type,

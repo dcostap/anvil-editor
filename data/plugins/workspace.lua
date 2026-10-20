@@ -236,7 +236,8 @@ local function load_view(t)
       close_unattached_view_buffer(view)
       return nil
     end
-    if view and view.buffer and view.buffer.filename and view.buffer.new_file and not view.buffer.intellij_untitled then
+    if view and view.buffer and view.buffer.filename and (view.buffer.file_missing
+        or (view.buffer.new_file and not view.buffer.intellij_untitled)) then
       if core.log_quiet then core.log_quiet("Workspace: skipped missing named file from saved state %q", view.buffer.filename) end
       close_unattached_view_buffer(view)
       return nil

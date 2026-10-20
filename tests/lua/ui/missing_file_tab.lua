@@ -117,6 +117,25 @@ test.describe("Missing file Tab feedback", function()
       "The file must remain monitored after restoration")
   end)
 
+  test.it("keeps the warning when a Pane with a deleted file is reopened", function(c)
+    assert(os.remove(c.path))
+    test.ok(wait_for(function() return tab_render(c.title, c.view).struck end))
+    test.ok(panes.close(c.pane, { force = true }))
+    test.ok(wait_for(function() return not core.buffer_registry:find(c.path) end),
+      "Closing the only View must close its Buffer")
+    local restored = test.not_nil(panes.reopen_last_closed())
+    c.view = restored.current_view
+    test.ok(wait_for(function() return tab_render(c.title, c.view).struck end),
+      "A reopened Tab must still show that its file was deleted")
+    test.not_ok(c.view.buffer:is_dirty(), "Autosave must not recreate the deleted file")
+    -- Let the restored View attach the file monitor before the file returns.
+    coroutine.yield(0.05)
+    write_file(c.path, "restored contents\n")
+    test.ok(wait_for(function() return not tab_render(c.title, c.view).struck end),
+      "The warning must clear when the file returns")
+    test.equal(table.concat(c.view.buffer.lines), "restored contents\n")
+  end)
+
   test.it("does not mark Untitled Buffers or files that have not been saved", function(c)
     local buffer = Buffer(c.path .. ".new", c.path .. ".new", true)
     panes.replace_view(c.pane, function() return Editor(buffer) end)

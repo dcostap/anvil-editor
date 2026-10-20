@@ -172,12 +172,24 @@ end)
 -- patch `Buffer.save|load` to store modified time
 local load = Buffer.load
 local save = Buffer.save
+local mark_file_missing = Buffer.mark_file_missing
 local on_close = Buffer.on_close
 
 Buffer.load = function(self, ...)
   local res = load(self, ...)
   core.add_thread(function()
     -- apply autoreload only to Buffers loaded in the UI
+    if #core.get_views_referencing_buffer(self) > 0 then
+      update_time(self)
+    end
+  end)
+  return res
+end
+
+Buffer.mark_file_missing = function(self, ...)
+  local res = mark_file_missing(self, ...)
+  core.add_thread(function()
+    -- watch for the file's return once the restored View holds this Buffer
     if #core.get_views_referencing_buffer(self) > 0 then
       update_time(self)
     end

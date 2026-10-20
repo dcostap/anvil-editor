@@ -151,6 +151,11 @@ function Editor.from_state(state)
     editor = Editor(core.open_buffer())
   else
     local ok, buffer = pcall(core.open_buffer, state.filename)
+    -- Only new files save their text. A saved file that opens as new was deleted.
+    if ok and buffer.new_file and not state.text
+        and core.buffer_registry:reference_count(buffer) == 0 then
+      buffer:mark_file_missing()
+    end
     if ok then editor = Editor(buffer) end
   end
 
