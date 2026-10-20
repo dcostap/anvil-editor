@@ -119,6 +119,28 @@ test.describe("Pane Workspace state", function()
     test.equal(panes.forward(pane).name, "third")
   end)
 
+  test.it("restores the current location in a Constrained Pane without a navigation stop", function()
+    local view = SavedView("comparison")
+    view.pane_constraint = "comparison-owner"
+    local pane = panes.create { factory = function() return view end }
+    view.location = "jump destination"
+    panes.record_location(pane)
+    -- Scrolling changes the current place without adding a history entry.
+    view.location = "scrolled destination"
+
+    local state = panes.save_workspace_state(save_view)
+    test.ok(panes.restore_workspace_state(state, function(saved)
+      local restored = load_view(saved)
+      restored.pane_constraint = "comparison-owner"
+      return restored
+    end))
+
+    pane = panes.active()
+    test.equal(pane.current_view.location, "scrolled destination")
+    test.equal(panes.back(pane).location, "start")
+    test.equal(panes.forward(pane).location, "scrolled destination")
+  end)
+
   test.it("prunes a Pane whose Current View cannot restore", function()
     local state = {
       version = 1,

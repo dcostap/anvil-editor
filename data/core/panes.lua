@@ -1754,6 +1754,7 @@ function M.save_workspace_state(save_view)
     if ok and saved then
       valid[pane] = true
       local record = { id = pane.id, view = saved, history_limit = pane.history.limit }
+      local current_state = capture_navigation_state(pane.current_view)
       if M.constraint(pane) then
         -- Keep the owner when a related capture is current at shutdown.
         record.related_views = {}
@@ -1769,7 +1770,9 @@ function M.save_workspace_state(save_view)
         for index, entry in ipairs(pane.history.entries) do
           if indices[entry.view] then
             record.history[#record.history + 1] = {
-              view_index = indices[entry.view], state = entry.state, kind = entry.kind,
+              view_index = indices[entry.view],
+              state = copy_saved_data(index == pane.history.index and current_state or entry.state),
+              kind = entry.kind,
             }
             if index == pane.history.index then record.history_index = #record.history end
           end
@@ -1790,7 +1793,6 @@ function M.save_workspace_state(save_view)
             end
           end
         end
-        local current_state = capture_navigation_state(pane.current_view)
         for index, entry in ipairs(pane.history.entries) do
           local view_index = indices[entry.view]
           if view_index then
