@@ -21,10 +21,12 @@ case "$test_path" in
     ;;
 esac
 
-# Keep the project path outside build*/ directories because Anvil's default
-# ignore rules intentionally ignore build roots, and some UI tests exercise
-# project-relative file opening.
-runs_root="$sourcedir/.run-meson-tests"
+# Runs live in the temp folder, outside the source tree. Editors and tools
+# that watch the repo can hold new files open there, and a held file fails
+# saves and deletes in the tests. Anvil's default ignore rules also ignore
+# build*/ roots, which some UI tests open files from. ANVIL_TEST_RUNS_ROOT
+# picks another folder.
+runs_root="${ANVIL_TEST_RUNS_ROOT:-${TMPDIR:-/tmp}/anvil-lua-tests}"
 mkdir -p "$runs_root"
 
 # Remove folders that earlier runs could not delete. No run lasts this long,
@@ -39,6 +41,7 @@ bindir="$rundir/bin"
 datadir="$rundir/share/anvil"
 workdir="$rundir/work"
 userdir="$rundir/user"
+logdir="$rundir/logs"
 
 # Set ANVIL_TEST_KEEP_RUN=1 to keep the folder for inspection.
 cleanup() {
@@ -58,7 +61,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$bindir" "$datadir" "$datadir/core" "$workdir/tests" "$userdir"
+mkdir -p "$bindir" "$datadir" "$datadir/core" "$workdir/tests" "$userdir" "$logdir"
 
 if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "mingw"* || "$OSTYPE" == "cygwin"* ]]; then
   exe_name="anvil.exe"
@@ -124,9 +127,91 @@ fi
 cd "$workdir"
 export SDL_VIDEO_DRIVER="${SDL_VIDEO_DRIVER:-dummy}"
 export ANVIL_HEADLESS_TEST=1
-export ANVIL_USERDIR="$userdir"
-if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "mingw"* || "$OSTYPE" == "cygwin"* ]]; then
-  export USERPROFILE="$userdir"
+
+# Each test file runs in its own editor process with its own user folder.
+# State that one file leaves behind, such as open Views, watchers, worker jobs
+# or Terminal Sessions, cannot change the result of a later file.
+files=()
+if [ -d "$test_path" ]; then
+  while IFS= read -r file; do files+=("$file"); done \
+    < <(find "$test_path" -type f -name '*.lua' | LC_ALL=C sort)
+elif [ -f "$test_path" ]; then
+  files=("$test_path")
+else
+  echo "Test path '$test_path' was not found." >&2
+  exit 1
+fi
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "No Lua test files in '$test_path'." >&2
+  exit 1
 fi
 
-"$bindir/$exe_name" test "$test_path"
+# ANVIL_TEST_JOBS sets how many files run at once. ANVIL_TEST_FILE_TIMEOUT
+# stops a file that hangs, so the rest of the run still reports.
+jobs=${ANVIL_TEST_JOBS:-4}
+file_timeout=${ANVIL_TEST_FILE_TIMEOUT:-300}
+
+run_file() {
+  local index=$1 file=$2
+  local file_userdir="$userdir/$index"
+  mkdir -p "$file_userdir"
+  local status=0
+  ANVIL_USERDIR="$file_userdir" USERPROFILE="$file_userdir" \
+    timeout --kill-after=10 "$file_timeout" "$bindir/$exe_name" test "$file" \
+    >"$logdir/$index.log" 2>&1 || status=$?
+  echo "$status" >"$logdir/$index.status"
+}
+
+total=0 passed=0 failed=0 skipped=0 broken_files=()
+next_report=0
+started_at=$SECONDS
+
+# Print finished files in file order, so the output reads the same at any job
+# count.
+report_finished() {
+  local index file status summary counts
+  while [ "$next_report" -lt "${#files[@]}" ] && [ -f "$logdir/$next_report.status" ]; do
+    index=$next_report
+    file=${files[$index]}
+    status=$(cat "$logdir/$index.status")
+    cat "$logdir/$index.log"
+    summary=$(sed 's/\x1b\[[0-9;]*m//g' "$logdir/$index.log" \
+      | grep -a -E '^Ran [0-9]+ tests in [0-9]+ files: ' | tail -n 1 || true)
+    if [ -n "$summary" ]; then
+      counts=$(echo "$summary" | sed -E 's/^Ran ([0-9]+) tests in [0-9]+ files: ([0-9]+) passed, ([0-9]+) failed, ([0-9]+) skipped.*/\1 \2 \3 \4/')
+      read -r t p f s <<<"$counts"
+      total=$((total + t)) passed=$((passed + p)) failed=$((failed + f)) skipped=$((skipped + s))
+    fi
+    if [ -z "$summary" ] || { [ "$status" -ne 0 ] && [ "$f" -eq 0 ]; }; then
+      # The process ended without a result for every test: a crash, a timeout,
+      # or an error outside a test.
+      local reason="exited with status $status"
+      [ "$status" -eq 124 ] && reason="timed out after ${file_timeout}s"
+      echo "FAIL $file > the test process $reason"
+      broken_files+=("$file")
+      total=$((total + 1)) failed=$((failed + 1))
+    fi
+    next_report=$((next_report + 1))
+  done
+}
+
+running=0
+for index in "${!files[@]}"; do
+  if [ "$running" -ge "$jobs" ]; then
+    wait -n || true
+    running=$((running - 1))
+    report_finished
+  fi
+  run_file "$index" "${files[$index]}" &
+  running=$((running + 1))
+done
+wait || true
+report_finished
+
+echo ""
+echo "Ran $total tests in ${#files[@]} files: $passed passed, $failed failed, $skipped skipped ($((SECONDS - started_at))s, $jobs at once)"
+if [ "${#broken_files[@]}" -gt 0 ]; then
+  echo "Files that ended without results:"
+  printf '  %s\n' "${broken_files[@]}"
+fi
+[ "$failed" -eq 0 ]

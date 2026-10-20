@@ -69,10 +69,10 @@ test.describe("untitled recovery integration", function()
     context.original_active_view = core.active_view
     context.original_nag_view = core.nag_view
     context.original_add_thread = core.add_thread
+    -- Storage keys encode the whole Project path, so a long folder name can
+    -- push the storage file past the Windows path limit.
     context.temp_root = USERDIR
-      .. PATHSEP .. "untitled-recovery-ui-"
-      .. system.get_process_id() .. "-"
-      .. math.floor(system.get_time() * 1000000)
+      .. PATHSEP .. "ur-" .. math.floor(system.get_time() * 1000000)
     context.project_dir = join_path(context.temp_root, "project")
     test.ok(common.mkdirp(context.project_dir))
     core.projects = { Project(context.project_dir) }

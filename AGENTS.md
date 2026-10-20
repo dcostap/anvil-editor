@@ -439,9 +439,11 @@ meson test -C build-windows-x86_64 anvil:lua-runtime
 meson test -C build-windows-x86_64 anvil:lua-ui
 ```
 
-The Lua Meson tests use `tests/run-lua-tests.sh`, which prepares an isolated `.run-meson-tests/<suite>.XXXXXX` app/user/test tree, sets `SDL_VIDEO_DRIVER=dummy`, and runs `anvil test` internally. This avoids source-tree test pollution and means agents usually do not need to call `./scripts/run-local ... test ...` directly.
+The Lua Meson tests use `tests/run-lua-tests.sh`, which prepares an isolated app/user/test tree in `%TEMP%/anvil-lua-tests/<suite>.XXXXXX`, sets `SDL_VIDEO_DRIVER=dummy`, and runs `anvil test` internally. This avoids source-tree test pollution and means agents usually do not need to call `./scripts/run-local ... test ...` directly.
 
-Each run gets its own folder, so several agents can run the same suite at once. The runner deletes the folder when the run ends. Set `ANVIL_TEST_KEEP_RUN=1` to keep it for inspection; the runner prints its path. Each run also deletes folders older than 12 hours.
+Each test file runs in its own editor process with its own user folder, so state that one file leaves behind cannot break a later file. Four files run at once by default. Set `ANVIL_TEST_JOBS` to change that. A file that runs longer than `ANVIL_TEST_FILE_TIMEOUT` seconds (default 300) is stopped and reported as failed.
+
+Each run gets its own folder, so several agents can run the same suite at once. The folder is outside the repo because editors and tools that watch the repo can hold new files open. The runner deletes the folder when the run ends. Set `ANVIL_TEST_KEEP_RUN=1` to keep it for inspection; the runner prints its path. Set `ANVIL_TEST_RUNS_ROOT` to use another parent folder. Each run also deletes folders older than 12 hours.
 
 With `--verbose` on Windows, set `PYTHONIOENCODING=utf-8`. Otherwise Meson crashes when it prints a test name that has non-ASCII characters.
 
