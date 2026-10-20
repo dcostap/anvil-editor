@@ -153,6 +153,39 @@ class NoteSpec:
         return "notes/start.md"
 
 
+@dataclass(frozen=True)
+class VaultSpec:
+    """A Markdown vault: a short task note to type into and longer notes that link to each other.
+
+    Task items and wikilinks put `[` on most lines of each note, as in a
+    to-do vault. The first project note links to the task note.
+    """
+    name: str
+    projects: int = 8
+    project_lines: int = 300
+    task_lines: int = 95
+    seed: int = 1
+
+    @property
+    def key(self) -> str:
+        payload = json.dumps({"version": GENERATOR_VERSION, "kind": "vault", **asdict(self)},
+                             sort_keys=True)
+        return f"{self.name}-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+
+    @property
+    def note(self) -> str:
+        return "notes/tasks.md"
+
+    @property
+    def project_notes(self) -> list[str]:
+        return [f"notes/project-{index:02d}.md" for index in range(self.projects)]
+
+    @property
+    def typing_line(self) -> int:
+        # A task item in the middle of the note, with a wikilink after the typed text.
+        return self.task_lines // 2
+
+
 def default_cache_root() -> Path:
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".cache")
     # Projects report long paths. A short 8.3 name would not match them.
@@ -380,6 +413,32 @@ def build_note(spec: NoteSpec, root: Path) -> None:
     write_text(root / spec.start_note, "# Start\n\nA short note to open first.\n")
 
 
+def vault_line(rng: random.Random, index: int, projects: int) -> str:
+    def words(count: int) -> str:
+        return " ".join(WORDS[rng.randrange(len(WORDS))] for _ in range(count))
+    if index % 12 == 0:
+        return f"## {WORDS[rng.randrange(len(WORDS))].title()} {index}"
+    if index % 4 == 0:
+        return f"- [ ] {words(5)} [[project-{rng.randrange(projects):02d}]] {words(4)}"
+    if index % 4 == 2:
+        return f"- [x] {words(9)}"
+    return words(14) + "."
+
+
+def build_vault(spec: VaultSpec, root: Path) -> None:
+    rng = random.Random(spec.seed)
+    tasks = ["# Tasks", ""] + [vault_line(rng, index, spec.projects)
+                               for index in range(1, spec.task_lines - 1)]
+    tasks[spec.typing_line - 1] = f"- [ ] Call about the {WORDS[0]} [[project-01]] before Friday"
+    write_text(root / spec.note, "\n".join(tasks) + "\n")
+    for number, path in enumerate(spec.project_notes):
+        lines = [f"# Project {number:02d}", ""]
+        if number == 0:
+            lines += ["Open items live in [[tasks]].", ""]
+        lines += [vault_line(rng, index, spec.projects) for index in range(1, spec.project_lines)]
+        write_text(root / path, "\n".join(lines) + "\n")
+
+
 def pathspec(root: Path, command: str, paths: list[str], *options: str) -> None:
     if paths:
         # Large lists exceed the Windows command-line limit.
@@ -480,7 +539,8 @@ def members(spec: ProjectSetSpec) -> list[tuple[str, RepoSpec]]:
             for index in range(spec.projects)]
 
 
-def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | NoteSpec, cache_root: Path | None = None,
+def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | NoteSpec | VaultSpec,
+                cache_root: Path | None = None,
                 rebuild: bool = False, touched: list[str] | None = None) -> Path:
     """Return a ready fixture root, building it into the cache when needed.
 
@@ -503,6 +563,8 @@ def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | No
             build_markdown(spec, root)
         elif isinstance(spec, NoteSpec):
             build_note(spec, root)
+        elif isinstance(spec, VaultSpec):
+            build_vault(spec, root)
         else:
             build_repo(spec, root)
         marker.write_text(json.dumps(asdict(spec), indent=2), encoding="utf-8")

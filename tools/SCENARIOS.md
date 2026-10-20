@@ -8,7 +8,7 @@ change with a baseline and to check pixels.
 ```sh
 python tools/run_scenarios.py                    # smoke suite, 3 scoring runs each
 python tools/run_scenarios.py --suite scale      # 100,000-file repository
-python tools/run_scenarios.py --suite markdown   # the 19,000-line Markdown gallery
+python tools/run_scenarios.py --suite markdown   # the 19,000-line gallery and a linked vault
 python tools/run_scenarios.py --list
 python tools/run_scenarios.py --scenario filetree-scroll-folder --runs 1 --no-build
 ```
@@ -29,6 +29,7 @@ A scenario names four things:
   - `MarkdownSpec`: a generated note with an embedded image and tables.
   - `NoteSpec`: a checked-in note from `tests/fixtures`, for a hand-written
     specimen that a generator cannot reproduce.
+  - `VaultSpec`: a Markdown vault of linked notes with task lists.
 - **Scene**: a Lua module in `tests/scenes`. It sets up the editor, reports
   when the setup is ready, and dispatches each action.
 - **Launch mode**: `direct` runs one Project process. `shell` runs the native
@@ -65,6 +66,12 @@ each action's p95 latency.
 `editor-type-baseline` types short lines into a small file after the
 Project's startup scans and indexes finish. It shows the cost of the cheapest
 real input frame. `editor-type-startup` types while that startup work runs.
+
+`markdown-vault-type` types into a task note while 8 other notes from the
+vault stay open. Each other note is shown once first, as a user visits it, so
+it holds a laid-out presentation. Each keystroke waits until the vault index
+publishes the edited note. Compare it with the same scene and no other notes:
+the other notes should add almost no frame time.
 
 When a scenario is over budget, one more run records the per-frame detail
 timers (`ANVIL_DOCVIEW_STATS`). The report lists the costliest timers per

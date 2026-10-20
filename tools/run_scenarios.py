@@ -31,7 +31,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import perf_diagnostics  # noqa: E402
 import perf_fixtures  # noqa: E402
-from perf_fixtures import FolderSpec, MarkdownSpec, NoteSpec, ProjectSetSpec, RepoSpec  # noqa: E402
+from perf_fixtures import FolderSpec, MarkdownSpec, NoteSpec, ProjectSetSpec, RepoSpec, VaultSpec  # noqa: E402
 import run_render_perf_gate as gate  # noqa: E402
 
 RESULTS_ROOT = gate.ROOT / "tools" / "perf-results" / "scenarios"
@@ -58,12 +58,14 @@ MARKDOWN_GALLERY = NoteSpec("markdown-gallery", "tests/fixtures/markdown/gallery
 GALLERY_SETTINGS = {"note": MARKDOWN_GALLERY.note, "start_note": MARKDOWN_GALLERY.start_note}
 # A prose line in the middle copy of the gallery.
 GALLERY_MIDDLE_LINE = 8736
+# A to-do vault: a task note and 8 linked project notes of 300 lines each.
+MARKDOWN_VAULT = VaultSpec("markdown-vault")
 
 
 @dataclass(frozen=True)
 class Scenario:
     scene: str
-    fixture: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | NoteSpec
+    fixture: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | NoteSpec | VaultSpec
     actions: int
     suites: tuple[str, ...]
     settings: dict[str, Any] = field(default_factory=dict)
@@ -153,6 +155,12 @@ SCENARIOS: dict[str, Scenario] = {
     "markdown-gallery-type": Scenario(
         "markdown_gallery", MARKDOWN_GALLERY, actions=60, suites=("markdown",),
         settings=dict(GALLERY_SETTINGS, mode="type", line=GALLERY_MIDDLE_LINE)),
+    # Type into a task note with the vault's other notes open. Each keystroke
+    # publishes the note to the vault index, which the other notes listen to.
+    "markdown-vault-type": Scenario(
+        "markdown_vault_type", MARKDOWN_VAULT, actions=40, suites=("markdown",),
+        settings={"note": MARKDOWN_VAULT.note, "notes": MARKDOWN_VAULT.project_notes,
+                  "line": MARKDOWN_VAULT.typing_line}),
     "fuzzy-files-medium": Scenario(
         "fuzzy_files", REPO_MEDIUM, actions=24, suites=("smoke",), targets=24,
         action_budgets={"first-query": 1000.0}),
