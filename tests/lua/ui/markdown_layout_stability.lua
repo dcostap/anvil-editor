@@ -179,7 +179,7 @@ test.describe("Markdown layout stability", function()
     view:on_text_input("x")
     local owner = view.__markdown_live_owner
     test.equal(owner.link_targets_changed_revision, buffer.text_revision)
-    owner.link_index:notify("buffer-updated", buffer)
+    owner.link_index:notify("buffer-updated", { buffer = buffer, path = buffer.abs_filename })
 
     test.equal(
       view.__async_wrap_reconstruction, nil,

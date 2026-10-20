@@ -1199,6 +1199,11 @@ function Index:update_buffer(buffer, opts)
       entry.buffer = buffer
       local previous_entry = self.notes_by_abs[path_key(path)]
       local facts_changed = not previous_entry or previous_entry.fact_signature ~= entry.fact_signature
+      -- Other notes reach this note by its name or an alias. Only an alias
+      -- change can make their links to other names resolve differently.
+      local known_entry = previous_entry or (self.disk_snapshot and self.disk_snapshot:note(path))
+      local aliases_changed = not known_entry
+        or table.concat(known_entry.aliases or {}, "\0") ~= table.concat(entry.aliases or {}, "\0")
       local previous_overlay = self.buffer_overlays[buffer]
       self.buffer_overlays[buffer] = { snapshot = snapshot, path = path, serial = serial }
       self:add_note_entry(entry)
@@ -1208,10 +1213,10 @@ function Index:update_buffer(buffer, opts)
       self.diagnostics.buffer_updates = self.diagnostics.buffer_updates + 1
       if not opts.rebuilding and facts_changed then
         self.generation = self.generation + 1
-        self:notify("buffer-updated", buffer)
+        self:notify("buffer-updated", { buffer = buffer, path = path, aliases_changed = aliases_changed })
       end
-      core.log_quiet("Markdown vault native overlay published: path=%s generation=%d bytes=%d shallow=%s",
-        path, serial, #text, tostring(entry.shallow == true))
+      core.log_quiet("Markdown vault native overlay published: path=%s generation=%d bytes=%d shallow=%s facts_changed=%s aliases_changed=%s",
+        path, serial, #text, tostring(entry.shallow == true), tostring(facts_changed), tostring(aliases_changed))
     end,
   }
   if not handle then

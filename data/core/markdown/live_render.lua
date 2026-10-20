@@ -7098,6 +7098,28 @@ local function unbind_semantic_model(view)
   view.__markdown_live_semantic_line_cache = nil
 end
 
+-- The lowercase names a link can use for a note: its file name without the
+-- extension, then its aliases. Links match names without regard to case.
+local function note_link_names(index, path)
+  local file_name = common.basename(path or "")
+  local names = { (file_name:match("^(.*)%.[^.]+$") or file_name):lower() }
+  local entry = path and index:note(path)
+  for _, alias in ipairs(entry and entry.aliases or {}) do names[#names + 1] = alias:lower() end
+  return names
+end
+
+-- Markdown links may percent-encode a name, such as `My%20Note.md`.
+local function mentions_link_name(source, names)
+  source = source:lower()
+  if source:find("%", 1, true) then
+    source = source:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
+  end
+  for _, name in ipairs(names) do
+    if name ~= "" and source:find(name, 1, true) then return true end
+  end
+  return false
+end
+
 local function bind_link_index(view)
   local owner = view.__markdown_live_owner
   local path = view.buffer.abs_filename or view.buffer.filename
@@ -7122,9 +7144,8 @@ local function bind_link_index(view)
       core.log_quiet("Markdown Live Preview deferred link refresh until vault publication")
       return
     end
-    if reason == "buffer-updated" and detail == view.buffer
-      and owner.link_targets_changed_revision ~= view.buffer.text_revision
-    then
+    local own_update = reason == "buffer-updated" and detail.buffer == view.buffer
+    if own_update and owner.link_targets_changed_revision ~= view.buffer.text_revision then
       core.log_quiet(
         "Markdown Live Preview skipped self-overlay link refresh for ordinary edit revision=%d",
         view.buffer.text_revision
@@ -7141,6 +7162,10 @@ local function bind_link_index(view)
       )
       return
     end
+    -- Another note's edit only changes links that reach that note. They
+    -- name it by file name or alias, unless its aliases changed.
+    local names = reason == "buffer-updated" and not own_update and not detail.aliases_changed
+      and note_link_names(index, detail.path)
     local refresh_started = system.get_time()
     perf_frame_add("markdown_live_link_index_invalidations", 1)
     perf_detail(
@@ -7160,7 +7185,7 @@ local function bind_link_index(view)
       local dependent = source:find("[", 1, true) ~= nil
         or source:find("](", 1, true) ~= nil
         or source:find("<http", 1, true) ~= nil
-      if dependent then
+      if dependent and (not names or mentions_link_name(source, names)) then
         if line2 and line == line2 + 1 then
           line2 = line
         else
@@ -7183,8 +7208,9 @@ local function bind_link_index(view)
       view:invalidate_visual_metrics(PROVIDER_ID, range.line1, range.line2)
     end
     core.log_quiet(
-      "Markdown Live Preview refreshed %d link-dependent range(s) after vault %s in %.1fms",
+      "Markdown Live Preview refreshed %d link-dependent range(s) after vault %s%s in %.1fms",
       #ranges, tostring(reason or "change"),
+      names and (" of " .. tostring(detail.path)) or "",
       (system.get_time() - refresh_started) * 1000
     )
     core.redraw = true
