@@ -652,7 +652,7 @@ function Model:open_commit_diff(commit, callback, opts)
     tab.commit = commit
   end
   local selected_path = opts.selected_file_path
-    and changed_file_path({ path = opts.selected_file_path })
+    and opts.selected_file_path:gsub("\\", "/")
   local listed_file = selected_path and changed_file_index_by_path(commit.changed_files, selected_path)
   if listed_file and not tab.loading then
     -- Opening a listed file needs current content, not another repository listing.
@@ -1386,6 +1386,8 @@ function Model:load_changed_files(tab, callback)
     end
     if tab.selected_file_path then
       local selected_file = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
+      core.log_quiet("Git Diff requested file: path=%s found=%s changed_files=%d",
+        tab.selected_file_path, tostring(selected_file ~= nil), #tab.changed_files)
       tab.selected_file = selected_file or math.min(tab.selected_file or 1, math.max(1, #tab.changed_files))
       if not selected_file then tab.selected_file_path = nil end
     else

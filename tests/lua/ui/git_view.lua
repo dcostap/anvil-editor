@@ -228,9 +228,9 @@ test.describe("Git View command", function()
     test.equal(parent_log.model.repo.root, "C:/repo")
   end)
 
-  test.it("selects the requested file when the current-file Diff loads asynchronously", function(context)
+  test.it("selects a nested file from a Windows path when the current-file Diff loads asynchronously", function(context)
     local target = View()
-    target.get_path_target = function() return { path = "C:/repo/z-current.lua" } end
+    target.get_path_target = function() return { path = "C:/repo/src/main/z-current.lua" } end
     core.active_view = target
     core.projects = { context.project }
     local complete_files
@@ -243,7 +243,7 @@ test.describe("Git View command", function()
     use_fake_command_git_views(context, backend)
     local old_lookup = real_backend.repo_for_path_async
     real_backend.repo_for_path_async = function(path, callback)
-      callback({ root = "C:/repo", relpath = "z-current.lua" }, nil)
+      callback({ root = "C:/repo", relpath = "src\\main\\z-current.lua" }, nil)
     end
 
     local performed = command.perform("git:open_current_file_in_project_diff")
@@ -252,7 +252,7 @@ test.describe("Git View command", function()
     test.not_nil(complete_files)
     complete_files({
       { status = "modified", old_path = "a.lua", new_path = "a.lua" },
-      { status = "modified", old_path = "z-current.lua", new_path = "z-current.lua" },
+      { status = "modified", old_path = "src/main/z-current.lua", new_path = "src/main/z-current.lua" },
     }, nil)
 
     local view = panes.active().current_view
@@ -261,7 +261,7 @@ test.describe("Git View command", function()
 
     test.equal(core.active_view.git_pane, "file-list")
     local selected = test.not_nil(file_context.view_path_target(core.active_view))
-    test.equal(selected.path, common.normalize_path("C:/repo/z-current.lua"))
+    test.equal(selected.path, common.normalize_path("C:/repo/src/main/z-current.lua"))
   end)
 
   test.test("opening a Git Pane Tab focuses the visible list TextView", function(context)
