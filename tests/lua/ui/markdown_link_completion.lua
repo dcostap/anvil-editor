@@ -133,6 +133,15 @@ test.describe("Markdown link completion", function()
     test.equal(table.concat(context.buffer.lines), "# Alta de usuarios\n[[#Alta de usuarios]]\n")
   end)
 
+  test.it("offers link targets after a query is pasted into the link", function(context)
+    core.root_panel:on_text_input("[[#")
+    autocomplete.close()
+    system.set_clipboard("Alta")
+    command.perform("core:paste")
+    test.ok(wait_until(autocomplete.is_open), "pasting the query did not open link completion")
+    test.equal(autocomplete.get_selected_suggestion().text, "Alta de usuarios")
+  end)
+
   test.it("completes a heading from a named note", function(context)
     local path = context.root .. PATHSEP .. "Project Notes.md"
     write_file(path, "# Setup details\n")

@@ -525,6 +525,7 @@ local last_line, last_col
 local last_buffer
 local pending_tree_sitter_completion
 local pending_deletion_buffer
+local pending_paste_buffer
 
 local function display_info(suggestion)
   local info = suggestion and suggestion.info
@@ -2164,6 +2165,7 @@ RootPanel.on_mouse_wheel = function(self, y, x)
 end
 
 Buffer.register_text_transaction_handler("autocomplete", function(buffer, transaction)
+  if transaction and transaction.type == "paste" then pending_paste_buffer = buffer end
   if buffer ~= last_buffer or #suggestions == 0 then return end
 
   local deleted = transaction and transaction.edits and #transaction.edits > 0
@@ -2193,8 +2195,18 @@ RootPanel.update = function(...)
     local line, col = av.buffer:get_selection()
     local deleted = pending_deletion_buffer == av.buffer and #suggestions > 0
     pending_deletion_buffer = nil
+    -- A paste opens completion only where a provider owns the caret, such as a Markdown link target.
+    local pasted = pending_paste_buffer == av.buffer
+    pending_paste_buffer = nil
+    if pasted then
+      refresh_providers(av)
+      pasted = provider_completion ~= nil
+      if pasted then core.log_quiet("Autocomplete: opening provider completion after paste in %s", av.buffer:get_name()) end
+    end
 
-    if deleted and line == last_line and col <= last_col then
+    if pasted then
+      show_autocomplete()
+    elseif deleted and line == last_line and col <= last_col then
       show_autocomplete({ keep_open = true })
     elseif not triggered_manually then
       if line ~= last_line or col ~= last_col then
