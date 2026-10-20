@@ -327,12 +327,12 @@ local function show_git_progress(message)
   end
 end
 
-local function active_or_open_view()
+local function active_or_open_view(opts)
   local view = active_git_view()
   if view then
     return view.git_session, view
   end
-  return git_view.open_log(current_project())
+  return git_view.open_log(current_project(), opts)
 end
 
 local function when_model_ready(view, action)
@@ -423,10 +423,22 @@ command.add(nil, {
   },
 
   ["git:open_working_tree_diff"] = command.palette(function()
-    local session, view = active_or_open_view()
+    local filename = active_file_path()
+    local session, view = active_or_open_view({ focus = false })
     when_model_ready(view, function(v)
-      local tab, err = v.model:open_working_tree_diff(function() core.redraw = true end)
-      if tab then git_view.ensure_tab_view(v.git_session, tab, true) end
+      local repo = v.model.repo
+      local path = filename and repo and common.path_belongs_to(filename, repo.root)
+        and common.relative_path(common.normalize_path(repo.root), filename)
+      local tab, err = v.model:open_working_tree_diff(function(_, _, ready)
+        local opened = git_view.ensure_tab_view(v.git_session, ready, false)
+        if ready.selected_file_path then
+          opened:select_changed_file_point({
+            index = ready.selected_file, record = ready.changed_files[ready.selected_file],
+          })
+        end
+        git_view.ensure_tab_view(v.git_session, ready, true)
+        core.redraw = true
+      end, { selected_file_path = path })
       if not tab and err then core.warn("Git View: Cannot open the Local Changes Diff: %s", err.message or err.kind) end
     end)
   end, { opens_view = true }),
@@ -513,30 +525,46 @@ command.add(nil, {
     end)
   end, { opens_view = true }),
 
-  ["git:open_current_file_in_project_diff"] = command.palette(function()
+  ["git:open_file_working_tree_diff"] = command.palette(function()
     local filename = active_file_path()
-    if not filename then
-      core.warn("Git View: Project Diff requires a file-backed View")
+    local info = filename and system.get_file_info(filename)
+    if not filename or info and info.type == "dir" then
+      core.warn("Git View: File Diff requires a file-backed View")
       return
     end
+    local target_pane = panes.active()
     show_git_progress("Loading Current File Diff…")
     backend.repo_for_path_async(filename, function(repo, err)
       if not repo then
-        core.warn("Git View: Cannot open the current file in a Project Diff: %s", err and (err.message or err.kind) or "repository not found")
+        core.warn("Git View: Cannot open File Diff: %s", err and (err.message or err.kind) or "repository not found")
         return
       end
       local project = project_for_repo(repo)
       local session, view = git_view.open_log(project, { focus = false })
       when_model_ready(view, function(v)
         v.model.repo = repo
-        local tab, tab_err = v.model:open_working_tree_diff(function(_, _, ready)
-          -- Select the loaded row before the list takes focus.
-          git_view.ensure_tab_view(v.git_session, ready, true)
+        local path = repo.relpath:gsub("\\", "/")
+        local tab, tab_err = v.model:open_working_tree_diff(function(_, load_err, ready)
+          if load_err then
+            core.warn("Git View: Cannot open File Diff: %s", load_err.message or load_err.kind)
+            return
+          end
+          if ready.selected_file_path ~= path then
+            core.warn("Git View: No Local Changes for %s", path)
+            return
+          end
+          local source = git_view.ensure_tab_view(v.git_session, ready, false)
+          source:open_file_comparison(source:pane_view("file-list"), function(done)
+            done(ready)
+            return true
+          end, function()
+            return ready.selected_file_path == path
+          end, { pane = target_pane })
           core.redraw = true
         end, {
-          selected_file_path = repo.relpath,
+          selected_file_path = path,
         })
-        if not tab and tab_err then core.warn("Git View: Cannot open the current file in a Project Diff: %s", tab_err.message or tab_err.kind) end
+        if not tab and tab_err then core.warn("Git View: Cannot open File Diff: %s", tab_err.message or tab_err.kind) end
       end)
     end)
   end, { opens_view = true }),

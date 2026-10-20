@@ -1483,6 +1483,11 @@ function GitView:select_changed_file_point(point)
   list.git_changed_file_tree_cache = nil
   self:update_pane_buffers(true)
   point.line = list.git_file_index_to_line[point.index] or point.line
+  if point.line then
+    list.buffer:set_selection(point.line, 1)
+    list:scroll_to_make_visible(point.line, 1, false)
+    tab.file_scroll = list.scroll.to.y
+  end
 end
 
 local function selected_file_is_image(tab)

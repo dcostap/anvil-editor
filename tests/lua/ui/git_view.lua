@@ -117,6 +117,8 @@ test.describe("Git View command", function()
   end)
 
   test.after_each(function(context)
+    if context.file_diff then context.file_diff:on_close() end
+    if context.file_buffer then context.file_buffer:on_close() end
     panes.reset_for_tests()
     core.projects = context.original_projects
     core.active_view = context.original_active_view
@@ -169,12 +171,12 @@ test.describe("Git View command", function()
 
     command.perform("git:show_file_history")
     command.perform("git:show_selection_history")
-    command.perform("git:open_current_file_in_project_diff")
+    command.perform("git:open_file_working_tree_diff")
 
     test.equal(#messages, 3)
     test.ok(messages[1].text:find("File History", 1, true))
     test.ok(messages[2].text:find("Selection History", 1, true))
-    test.ok(messages[3].text:find("Project Diff", 1, true))
+    test.ok(messages[3].text:find("File Diff", 1, true))
     for _, message in ipairs(messages) do
       test.equal(message.icon, style.log.WARN.icon)
       test.equal(message.color, style.log.WARN.color)
@@ -206,29 +208,59 @@ test.describe("Git View command", function()
     test.equal(calls, 1)
   end)
 
-  test.it("uses a nested repository session for the current-file Diff", function(context)
-    local parent_session, parent_log = open_fake_git_view(context.project)
-    local target = View()
-    target.get_path_target = function() return { path = "C:/repo/vendor/src/app.lua" } end
-    core.active_view = target
-    core.projects = { context.project }
-    use_fake_command_git_views(context)
-    local old_lookup = real_backend.repo_for_path_async
-    real_backend.repo_for_path_async = function(path, callback)
-      callback({ root = "C:/repo/vendor", relpath = "src/app.lua" }, nil)
+  test.it("opens a file's HEAD comparison directly without presenting Git lists", function(context)
+    local root = USERDIR .. PATHSEP .. "direct-file-diff"
+    test.ok(common.mkdirp(root .. PATHSEP .. "src"))
+    local function git(args)
+      local done, result, err
+      real_backend.run_git(root, args, {}, function(value, failure)
+        result, err, done = value, failure, true
+      end)
+      wait_until(function() return done end, 10, "Git fixture command did not finish")
+      test.not_nil(result, err and err.message)
     end
+    local path = root .. PATHSEP .. "src" .. PATHSEP .. "app.lua"
+    local function write_text(text)
+      local file = assert(io.open(path, "wb"))
+      file:write(text)
+      file:close()
+    end
+    git({ "init" })
+    git({ "config", "user.email", "anvil@example.test" })
+    git({ "config", "user.name", "Anvil Test" })
+    write_text("committed\n")
+    git({ "add", "src/app.lua" })
+    git({ "commit", "-m", "Initial content" })
+    write_text("staged\n")
+    git({ "add", "src/app.lua" })
 
-    command.perform("git:open_current_file_in_project_diff")
-    real_backend.repo_for_path_async = old_lookup
+    -- The file belongs to a repository below the loaded Project root.
+    core.projects = { require("core.project")(USERDIR) }
+    local buffer = Buffer(path, path)
+    context.file_buffer = buffer
+    core.buffer_registry:register(buffer, path)
+    buffer:insert(1, 1, "unsaved ")
+    local editor = Editor(buffer)
+    panes.create { factory = function() return editor end }
 
-    local nested_session = panes.active().current_view.git_session
-    test.equal(nested_session.project_key, "C:/repo/vendor")
-    test.ok(nested_session ~= parent_session)
-    test.equal(parent_session.git_model.repo.root, "C:/repo")
-    test.equal(parent_log.model.repo.root, "C:/repo")
+    test.ok(command.perform("git:open_file_working_tree_diff"))
+    test.equal(panes.active().current_view, editor)
+    wait_until(function() return panes.active().current_view.buffer_view_b ~= nil end,
+      30, "File Diff did not open")
+
+    local diff = panes.active().current_view
+    context.file_diff = diff
+    test.equal(buffer_text(diff.buffer_view_a.buffer), "committed\n")
+    test.equal(diff.buffer_view_b.buffer, buffer)
+    test.equal(buffer_text(diff.buffer_view_b.buffer), "unsaved staged\n")
+    for _, pane in ipairs(panes.ordered()) do
+      for _, view in ipairs(panes.views(pane)) do
+        test.not_ok(view:extends(git_view.View), "File Diff must not open a Git list")
+      end
+    end
   end)
 
-  test.it("selects a nested file from a Windows path when the current-file Diff loads asynchronously", function(context)
+  test.it("selects the focused nested file when the working-tree Diff loads asynchronously", function(context)
     local target = View()
     target.get_path_target = function() return { path = "C:/repo/src/main/z-current.lua" } end
     core.active_view = target
@@ -241,13 +273,7 @@ test.describe("Git View command", function()
       end,
     }, { __index = fake_backend })
     use_fake_command_git_views(context, backend)
-    local old_lookup = real_backend.repo_for_path_async
-    real_backend.repo_for_path_async = function(path, callback)
-      callback({ root = "C:/repo", relpath = "src\\main\\z-current.lua" }, nil)
-    end
-
-    local performed = command.perform("git:open_current_file_in_project_diff")
-    real_backend.repo_for_path_async = old_lookup
+    local performed = command.perform("git:open_working_tree_diff")
     test.ok(performed)
     test.not_nil(complete_files)
     complete_files({
@@ -263,6 +289,35 @@ test.describe("Git View command", function()
     local selected = test.not_nil(file_context.view_path_target(core.active_view))
     test.equal(selected.path, common.normalize_path("C:/repo/src/main/z-current.lua"))
   end)
+
+  for _, case in ipairs {
+    { name = "no file is focused" },
+    { name = "the focused file is outside the repository", path = "C:/elsewhere/app.lua" },
+    { name = "the focused file has no Local Changes", path = "C:/repo/unchanged.lua" },
+  } do
+    test.it("opens the working-tree Diff when " .. case.name, function(context)
+      local target = View()
+      target.get_path_target = function() return case.path and { path = case.path } end
+      core.active_view = target
+      core.projects = { context.project }
+      use_fake_command_git_views(context, setmetatable({
+        changed_files = function(repo, left, right, opts, callback)
+          callback({
+            { status = "modified", old_path = "root.lua", new_path = "root.lua" },
+            { status = "modified", old_path = "src/changed.lua", new_path = "src/changed.lua" },
+          })
+        end,
+      }, { __index = fake_backend }))
+
+      test.ok(command.perform("git:open_working_tree_diff"))
+
+      local view = panes.active().current_view
+      view:update()
+      test.equal(core.active_view.git_pane, "file-list")
+      local selected = test.not_nil(file_context.view_path_target(core.active_view))
+      test.equal(selected.path, common.normalize_path("C:/repo/src/changed.lua"))
+    end)
+  end
 
   test.test("opening a Git Pane Tab focuses the visible list TextView", function(context)
     local session, view = open_fake_git_view(context.project)
@@ -2296,7 +2351,8 @@ test.describe("Git View command", function()
     test.not_nil(command.map["git:open_working_tree_diff"])
     test.not_nil(command.map["git:show_file_history"])
     test.is_nil(command.map["git:show_history"])
-    test.not_nil(command.map["git:open_current_file_in_project_diff"])
+    test.is_nil(command.map["git:open_current_file_in_project_diff"])
+    test.not_nil(command.map["git:open_file_working_tree_diff"])
     test.is_nil(command.map["git:open_current_file_diff"])
     test.not_nil(command.map["git:copy_selected_commit_hash"])
     test.not_nil(command.map["git:copy_selected_commit_message"])
@@ -2315,7 +2371,7 @@ test.describe("Git View command", function()
       "git:open_working_tree_diff",
       "git:show_file_history",
       "git:show_selection_history",
-      "git:open_current_file_in_project_diff",
+      "git:open_file_working_tree_diff",
       "git:open_selected_historical_buffer",
     } do
       test.ok(command.get_metadata(name).opens_view, name)

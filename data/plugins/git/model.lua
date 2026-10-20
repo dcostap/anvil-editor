@@ -661,7 +661,6 @@ function Model:open_commit_diff(commit, callback, opts)
     listed_file = nil
   end
   if selected_path then
-    tab.select_first_file = nil
     tab.selected_file_path = selected_path
     local selected = changed_file_index_by_path(tab.changed_files, tab.selected_file_path)
     if selected then tab.selected_file = selected end
