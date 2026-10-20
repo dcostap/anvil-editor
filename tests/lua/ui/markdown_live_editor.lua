@@ -2331,6 +2331,34 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("opens a link while the note index is still building", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-link-cold-" .. system.get_process_id()
+    test.ok(common.mkdirp(root .. PATHSEP .. "Notes"))
+    local target_path = root .. PATHSEP .. "Notes" .. PATHSEP .. "Target.md"
+    local fp = test.not_nil(io.open(target_path, "wb"))
+    fp:write("# Heading\n")
+    fp:close()
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    test.not_nil(require("core.project_files").list(root))
+    local old_active, old_open_file = core.active_view, core.open_file
+    local opened
+    core.open_file = function(path) opened = path return {} end
+    local ok, err = pcall(function()
+      local view, buffer = make_view("[[Target.md]]\nplain", root .. PATHSEP .. "Source.md")
+      buffer:set_selection(1, 5)
+      refresh(view)
+      test.equal(markdown.vault_index.get_index(root):can_resolve(), false)
+      core.active_view = view
+      test.equal(command.perform("markdown:open_link"), true)
+      test.equal(opened, common.normalize_path(target_path))
+    end)
+    core.open_file, core.active_view = old_open_file, old_active
+    core.projects = old_projects
+    common.rm(root, true)
+    if not ok then error(err, 0) end
+  end)
+
   test.it("creates missing link notes where Obsidian would and opens duplicate names directly", function()
     local root = USERDIR .. PATHSEP .. "markdown-live-link-actions-" .. system.get_process_id()
     local nested = root .. PATHSEP .. "PROYECTOS" .. PATHSEP .. "Castrosua IA"

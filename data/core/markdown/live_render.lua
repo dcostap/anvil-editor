@@ -7655,11 +7655,39 @@ local function open_link_resolution(resolution, target)
   return target_view ~= nil
 end
 
+-- Without a Project file list there is nothing to resolve against yet; open once the index is ready.
+local function open_when_indexed(view, link, index)
+  core.log_quiet("Markdown link waits for the note index: %s", tostring(link.raw_target))
+  core.add_thread(function()
+    local deadline = system.get_time() + 30
+    while not index:can_resolve() and index.status ~= "error" and system.get_time() < deadline do
+      coroutine.yield(0.05)
+    end
+    if not index:can_resolve() then
+      core.warn("Markdown link not opened because the note index is not ready: %s", tostring(link.raw_target))
+      return
+    end
+    live.open_link(view, { link = link, resolution = index:resolve(link, view.buffer.abs_filename) })
+  end)
+  return true
+end
+
 function live.open_link(view, opts)
   opts = opts or live.link_at_caret(view)
   if not opts then return false, "no link at caret" end
   local link = opts.link
   local resolution = opts.resolution or resolve_live_link(view, link)
+  if resolution.status == "pending" then
+    -- Link paths need only file names, so the Project file list resolves them before notes are parsed.
+    local owner = view.__markdown_live_owner
+    local index = owner and owner.link_index
+    if index then
+      resolution = index:resolve_preview(link, view.buffer.abs_filename)
+      if resolution.status == "pending" then return open_when_indexed(view, link, index), "pending" end
+      core.log_quiet("Markdown link resolved from the Project file list: status=%s target=%s",
+        resolution.status, tostring(link.raw_target))
+    end
+  end
   if resolution.status == "missing" then
     local offered, reason = live.create_link_target(view, { link = link, resolution = resolution }, true)
     if not offered then
