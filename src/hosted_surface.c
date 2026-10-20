@@ -441,6 +441,10 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
   if (previous.display_scale != view->config.display_scale) {
     push_window_event(SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED);
   }
+  /* A remote session can change the rate without a move or a scale change. */
+  if (previous.refresh_hz != view->config.refresh_hz) {
+    push_window_event(SDL_EVENT_WINDOW_DISPLAY_CHANGED);
+  }
   if (previous.window_mode != view->config.window_mode) {
     switch (view->config.window_mode) {
       case ANVIL_SURFACE_WINDOW_MINIMIZED: push_window_event(SDL_EVENT_WINDOW_MINIMIZED); break;

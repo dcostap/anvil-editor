@@ -265,6 +265,8 @@ top:
       }
 
     case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+    /* The display under the window can change its refresh rate in place. */
+    case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
       {
         lua_pushstring(L, "displaychanged");
         return 1;

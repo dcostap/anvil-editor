@@ -489,6 +489,9 @@ end
 function core.refresh_display_timing(reason)
   local hz = core.window and core.window:get_refresh_rate() or DEFAULT_FPS
   if hz and hz >= 30 then
+    if hz ~= DEFAULT_FPS and core.log_quiet then
+      core.log_quiet("Display refresh rate %.2f Hz -> %.2f Hz (%s)", DEFAULT_FPS, hz, tostring(reason))
+    end
     DEFAULT_FPS = hz
     if config.auto_fps then config.fps = DEFAULT_FPS end
     core.fps = config.fps

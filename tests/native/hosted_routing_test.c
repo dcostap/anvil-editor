@@ -113,6 +113,7 @@ static int SDLCALL server(void *data) {
   AnvilSurfaceConfigure old = config;
   config.configuration++;
   config.display_scale = 1.5f;
+  config.refresh_hz = 60;
   config.origin_x = 48;
   config.origin_y = 24;
   anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0);
@@ -235,7 +236,7 @@ int main(int test_argc, char **test_argv) {
   CHECK(handle != INVALID_HANDLE_VALUE);
   CHECK(anvil_ipc_pipe_init(&pipe, handle, ANVIL_SURFACE_PROTOCOL_VERSION, ANVIL_SURFACE_MAX_PAYLOAD));
   config = (AnvilSurfaceConfigure){.configuration = 7, .pixel_w = 320, .pixel_h = 240, .window_w = 400, .window_h = 300,
-    .render_enabled = 1, .display_scale = 1.25f, .controls_x = 182, .controls_w = 138, .controls_h = 32};
+    .render_enabled = 1, .display_scale = 1.25f, .refresh_hz = 32, .controls_x = 182, .controls_w = 138, .controls_h = 32};
   SDL_Thread *thread = SDL_CreateThread(server, "test-shell", NULL);
   CHECK(thread);
   char argument[256];
@@ -322,9 +323,16 @@ int main(int test_argc, char **test_argv) {
   }
   CHECK(anvil_hosted_surface_display_scale() == 1.25f);
   unsigned text_count = 0;
+  /* A refresh rate change alone must reach the editor, or its FPS target stays stale. */
+  float display_rate = 0;
+  unsigned display_changes = 0;
   for (;;) {
     anvil_hosted_surface_poll();
     if (!system_event_pop(&event)) break;
+    if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED) {
+      display_rate = anvil_hosted_surface_refresh_rate();
+      display_changes++;
+    }
     const char *text = event.type == SDL_EVENT_TEXT_INPUT ? event.text.text
                      : event.type == SDL_EVENT_TEXT_EDITING ? event.edit.text
                      : event.type == SDL_EVENT_DROP_TEXT ? event.drop.data : NULL;
@@ -336,6 +344,7 @@ int main(int test_argc, char **test_argv) {
     }
   }
   CHECK(text_count == 4);
+  CHECK(display_changes == 1 && display_rate == 60);
   CHECK(anvil_hosted_surface_display_scale() == 1.5f);
   SDL_Surface *surface = SDL_CreateSurface(320, 240, SDL_PIXELFORMAT_BGRA32);
   CHECK(surface);

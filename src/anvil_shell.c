@@ -4123,6 +4123,12 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     }
     return SDL_APP_CONTINUE;
   }
+  /* A remote session can change a display's refresh rate under an open Window. */
+  if (event->type == SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED || event->type == SDL_EVENT_DISPLAY_DESKTOP_MODE_CHANGED) {
+    for (ShellWindow *item = shell.windows; item; item = item->next)
+      if (item->selected) send_configure(item->selected);
+    return SDL_APP_CONTINUE;
+  }
   SDL_Window *native = SDL_GetWindowFromEvent(event);
   if (!native) return SDL_APP_CONTINUE;
   HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(native),
@@ -4176,6 +4182,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
   case SDL_EVENT_WINDOW_RESIZED:
   case SDL_EVENT_WINDOW_MOVED:
+  case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
   case SDL_EVENT_WINDOW_MINIMIZED:
   case SDL_EVENT_WINDOW_MAXIMIZED:
   case SDL_EVENT_WINDOW_RESTORED:
