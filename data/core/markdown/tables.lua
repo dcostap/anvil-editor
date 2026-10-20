@@ -1767,14 +1767,18 @@ local function parse_tsv(text)
 end
 
 ---Return clipboard text as a grid of Markdown cell sources when it is
----tab-separated with more than one cell, or nil.
+---tab-separated with more than one cell, or nil. `ragged` is true when rows
+---have different cell counts, which a spreadsheet copy never produces.
 function tables.spreadsheet_grid(text)
   text = tostring(text or "")
   if #text > MAX_GRID_PASTE_BYTES or not text:find("\t", 1, true) then return nil end
   text = text:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("\n+$", "")
   local rows = parse_tsv(text)
-  local columns = 0
-  for _, cells in ipairs(rows) do columns = math.max(columns, #cells) end
+  local columns, ragged = 0, false
+  for _, cells in ipairs(rows) do
+    ragged = ragged or (columns > 0 and #cells ~= columns)
+    columns = math.max(columns, #cells)
+  end
   if columns > tables.MAX_PRESENTATION_COLUMNS
   or #rows > tables.MAX_PRESENTATION_ROWS
   or #rows * columns < 2
@@ -1787,7 +1791,7 @@ function tables.spreadsheet_grid(text)
       cells[column] = tables.normalize_cell_input(value)
     end
   end
-  return { rows = rows, columns = columns }
+  return { rows = rows, columns = columns, ragged = ragged }
 end
 
 local function paste_grid(view, context, grid)
@@ -1832,14 +1836,15 @@ function tables.paste(view)
 end
 
 ---Return whether the clipboard should paste as a new table at the caret:
----spreadsheet rows outside any table, with no selection to replace.
+---spreadsheet rows outside any table, with no selection to replace. Ragged
+---rows are text with tabs in it, such as indented notes or code.
 function tables.can_paste_table(view)
   if not (view and view.buffer) or view.buffer:has_any_selection() then return false end
   if #view.buffer.selections ~= 4 then return false end
   -- The clipboard check is cheap and usually fails; the table and fence
   -- checks scan the Buffer.
   local grid = tables.spreadsheet_grid(system.get_clipboard())
-  return grid ~= nil and #grid.rows >= 2 and grid.columns >= 2
+  return grid ~= nil and not grid.ragged and #grid.rows >= 2 and grid.columns >= 2
     and tables.can_insert_table(view)
 end
 
