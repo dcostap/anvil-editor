@@ -131,7 +131,7 @@ def main() -> int:
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
     parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
-        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "recovery", "shell-empty", "shell-sidebar",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -218,6 +218,9 @@ def main() -> int:
                         (case_dir / "user/appstate.lua").write_text(
                             'return {recents={' + ','.join(json.dumps(str(case_dir / name).replace("\\", "/"))
                                 for name in ("Project", "Recent", "Replacement")) + '}}', encoding="utf-8")
+                    if action == "launch-link":
+                        subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", native_path(case_dir / "app-link"),
+                                        native_path(work / "app")], check=True, capture_output=True)
                     if action in ("identity-alias", "launch-forward"):
                         subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", native_path(case_dir / "alias"),
                                         native_path(case_dir / "Project")], check=True, capture_output=True)
@@ -232,7 +235,8 @@ def main() -> int:
                     namespace = "anvil-test-" + work.name.rsplit("-", 1)[-1] + "-" + action
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
-                    if action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch"):
+                    # A hand-off needs the IPC check that finds the Project in another instance.
+                    if action != "launch-handoff" and (action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch")):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     if action in ("theme-global", "theme-empty", "reveal"):
@@ -257,6 +261,8 @@ def main() -> int:
                             "ANVIL_SURFACE_LOG": native_path(case_dir / "surface.log"),
                         }, "startup_timeout_seconds": 0, "stable_ui_scheduling": False,
                     }
+                    if action == "launch-link":
+                        config["environment"]["ANVIL_PROBE_LINKED_EXE"] = native_path(case_dir / "app-link/bin/anvil.exe")
                     if action == "project-menu":
                         config["environment"]["ANVIL_SHELL_MENU_PROBE"] = native_path(case_dir / "menu-choice.txt")
                     if action == "dialog-error":

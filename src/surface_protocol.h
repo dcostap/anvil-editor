@@ -91,6 +91,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW = 99,
   /* The UI thread's answer to ANVIL_SURFACE_MSG_PING. Payload: the ping's AnvilSurfaceInt. */
   ANVIL_SURFACE_MSG_PONG = 100,
+  /* Another instance shows this Project, so this Project exits. Its Window stays open. No payload. */
+  ANVIL_SURFACE_MSG_HAND_OFF = 101,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */

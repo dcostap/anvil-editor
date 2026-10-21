@@ -1860,9 +1860,10 @@ static int f_get_startup_path_arguments(lua_State *L) {
   return 1;
 }
 
-static int f_prepare_project_exit(lua_State *L) {
+/* Call before an exit that leaves this Project to another instance. A shell keeps the Window open. */
+static int f_hand_off_project(lua_State *L) {
   (void)L;
-  anvil_hosted_surface_exit_intent(false);
+  anvil_hosted_surface_hand_off();
   return 0;
 }
 
@@ -2694,7 +2695,7 @@ static const luaL_Reg lib[] = {
   { "set_surface_overlay",   f_set_surface_overlay },
   { "is_surface_transparent", f_is_surface_transparent },
   { "get_startup_path_arguments", f_get_startup_path_arguments },
-  { "prepare_project_exit",  f_prepare_project_exit  },
+  { "hand_off_project",      f_hand_off_project      },
   { "project_close_decision", f_project_close_decision },
   { "test_surface_failure", f_test_surface_failure },
   { "sleep",                 f_sleep                 },

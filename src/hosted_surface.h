@@ -39,6 +39,8 @@ bool anvil_hosted_surface_update_event(Uint32 type);
 /* Applies the adopting shell's configuration on the UI thread and sends it this Project's window state. */
 void anvil_hosted_surface_finish_adoption(void);
 void anvil_hosted_surface_exit_intent(bool restart);
+/* This Project exits because another instance shows it. The shell keeps its Window open. */
+void anvil_hosted_surface_hand_off(void);
 void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision);
 void anvil_hosted_surface_dialog_result_failed(void);
 void anvil_hosted_surface_test_packet(bool stale);

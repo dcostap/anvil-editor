@@ -979,7 +979,7 @@ system.get_time = function()
       end
       ipc:wait_for_messages()
       if not open_directory then
-        system.prepare_project_exit()
+        system.hand_off_project()
         os.exit()
       end
       -- revert chdir to core.init_working_dir

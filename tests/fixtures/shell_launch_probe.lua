@@ -175,6 +175,40 @@ if path:match("/driver$") then
     return close_shell(shell, "resumed")
    end
 
+   if action == "launch-link" then
+    -- C:\Projects can be a link to D:\Projects. A launch through a link to the app reaches the running shell.
+    local shell = launch(root .. "/Project")
+    wait(function() return ready("a")[1] end, 20)
+    local linked = assert(require("core.process").start(
+     {os.getenv("ANVIL_PROBE_LINKED_EXE"), "--shell", root .. "/Replacement"}, options))
+    launched[#launched + 1] = linked
+    assert(exits(linked, 20, "linked") == 0, "linked launch failed")
+    local b = wait(function() return ready("b")[1] end, 20, "linked launch did not load its Project")
+    assert(b.shell_pid == shell:pid(), "linked launch started a second shell")
+    return close_shell(shell, "linked")
+   end
+
+   if action == "launch-handoff" then
+    -- An instance outside this shell shows Project. Selecting Project in a shell Window raises that
+    -- instance. The Window keeps its other Project.
+    local direct = assert(require("core.process").start({EXEFILE, "--direct", root .. "/Project"}, options))
+    launched[#launched + 1] = direct
+    wait(function() return ready("a")[1] end, 20, "direct instance did not load Project")
+    local shell = launch(root .. "/Replacement")
+    local b = wait(function() return ready("b")[1] end, 20)
+    local exits_before = select(2, trace():gsub("Anvil shell surface process exited", ""))
+    save("select", {path = root .. "/Project"})
+    wait(function() return select(2, trace():gsub("Anvil shell surface process exited", "")) > exits_before end,
+     20, "hand-off Project did not exit")
+    coroutine.yield(2)
+    assert(shell:running(), "hand-off ended the shell")
+    assert(kernel.WaitForSingleObject(open(b.pid), 0) == 258, "hand-off closed the Window's other Project")
+    assert(select(2, windows(shell:pid())) == 1, "hand-off closed the Window")
+    assert(direct:running(), "hand-off ended the instance that shows Project")
+    assert(#ready("a") == 1, "hand-off started a duplicate Project runtime")
+    return close_shell(shell, "hand-off")
+   end
+
    if action == "launch-userdir" then
     -- Another user directory has its own shell, even for the same Project.
     local shell = launch(root .. "/Project")
@@ -208,5 +242,9 @@ elseif names[path] then
   coroutine.yield(.2)
   save(names[path] .. "-ready-" .. pid, {pid=pid, shell_pid=system.get_window_process_id(),
    window_id=system.get_anvil_window_id()})
+  if action == "launch-handoff" and names[path] == "b" then
+   local request = wait(function() return load("select") end, 30)
+   assert(system.select_project(request.path), "Replacement could not select Project")
+  end
  end)
 end

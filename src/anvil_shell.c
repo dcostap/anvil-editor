@@ -386,6 +386,7 @@ static bool start_project(ShellProject *project, int argc, char **argv);
 static void composite_and_present(ShellWindow *window);
 static void reveal_when_ready(ShellWindow *window);
 static void request_close(ShellProject *project);
+static bool mark_unloading(ShellProject *project);
 static void cancel_input(ShellWindow *window);
 static void set_state(ShellProject *project, ShellState state);
 static void shell_send(ShellProject *project, uint16_t type, const void *payload, uint32_t size,
@@ -1025,6 +1026,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_RAISE:
   case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
+  case ANVIL_SURFACE_MSG_HAND_OFF:
   case ANVIL_SURFACE_MSG_RESTART:
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
@@ -3308,6 +3310,12 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       SDL_Log("Project exit accepted by shell");
     }
     break;
+  case ANVIL_SURFACE_MSG_HAND_OFF:
+    /* Another instance shows this Project. It becomes Dormant here, and its Window keeps its other Projects. */
+    project->intentional_exit = project->exit_announced = true;
+    if (!project->unloading && project->identity && project->project_path) mark_unloading(project);
+    SDL_Log("Project handed off to another instance: id=%u Dormant=%d", project->id, project->unloading);
+    break;
   case ANVIL_SURFACE_MSG_RESTART:
     /* A Project restarts as itself. Its current directory follows the focused file and can be another folder. */
     if (project->project_path) {
@@ -5336,16 +5344,22 @@ static void begin_unload(ShellProject *project) {
     request_close(project);
     return;
   }
+  if (!mark_unloading(project)) return;
+  SDL_Log("Shell requested Project unload: id=%u connection=%u", project->id, project->connection);
+  request_close(project);
+}
+
+/* The Project becomes Dormant when its process exits. Its exit then closes no Window. */
+static bool mark_unloading(ShellProject *project) {
   DormantProject *dormant = calloc(1, sizeof(*dormant));
   if (!dormant) {
     SDL_Log("Shell rejected Project unload: allocation failed");
-    return;
+    return false;
   }
   project->dormant = dormant;
   project->unloading = true;
   discard_deferred_dialogs(project);
-  SDL_Log("Shell requested Project unload: id=%u connection=%u", project->id, project->connection);
-  request_close(project);
+  return true;
 }
 
 static ShellProject *loaded_project(const wchar_t *identity) {
