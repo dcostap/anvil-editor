@@ -155,6 +155,14 @@ SCENARIOS: dict[str, Scenario] = {
     "markdown-gallery-type": Scenario(
         "markdown_gallery", MARKDOWN_GALLERY, actions=60, suites=("markdown",),
         settings=dict(GALLERY_SETTINGS, mode="type", line=GALLERY_MIDDLE_LINE)),
+    # A narrow window has no margin for footnote cards, so they show as inline rows.
+    "markdown-gallery-type-narrow": Scenario(
+        "markdown_gallery", MARKDOWN_GALLERY, actions=60, suites=("markdown",), window=(780, 900),
+        settings=dict(GALLERY_SETTINGS, mode="type", line=GALLERY_MIDDLE_LINE)),
+    # Each line break moves every later line down by one.
+    "markdown-gallery-newline": Scenario(
+        "markdown_gallery", MARKDOWN_GALLERY, actions=30, suites=("markdown",),
+        settings=dict(GALLERY_SETTINGS, mode="newline", line=GALLERY_MIDDLE_LINE)),
     # Type into a task note with the vault's other notes open. Each keystroke
     # publishes the note to the vault index, which the other notes listen to.
     "markdown-vault-type": Scenario(

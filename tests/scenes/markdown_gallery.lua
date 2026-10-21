@@ -4,6 +4,7 @@
 -- `wheel` scrolls down from the top, `settings.ticks` wheel ticks per action.
 -- `caret` moves the caret down one line per action from `settings.line`.
 -- `type` types into the end of `settings.line`.
+-- `newline` inserts a line break at the caret, from the end of `settings.line`.
 local core = require "core"
 local command = require "core.command"
 local support = require "scenes.support"
@@ -65,6 +66,9 @@ function scene.dispatch(context, index)
     context.revision = view.buffer.text_revision
     local offset = (index - 1) % #TYPED_TEXT + 1
     core.on_event("textinput", TYPED_TEXT:sub(offset, offset))
+  elseif settings.mode == "newline" then
+    context.revision = view.buffer.text_revision
+    assert(command.perform("core:newline"), "the editor did not insert a line break")
   end
 end
 
@@ -85,7 +89,7 @@ function scene.action_ready(context)
     if not support.scroll_settled(view) then return false end
     return true, string.format("line=%d col=%d", line, col)
   end
-  -- Typing completes when Live Preview shows the edited text.
+  -- Typing and line breaks complete when Live Preview shows the edited text.
   if view.buffer.text_revision == context.revision or not preview_ready(view) then return false end
   return true, "typed"
 end
@@ -97,6 +101,9 @@ function scene.state(context)
     line = (view.buffer:get_selection()),
     scroll_y = math.floor(view.scroll.y + 0.5),
     rows = require("core.linewrapping").get_total_wrapped_lines(view),
+    -- Footnotes show as inline rows when the margin has no space for cards.
+    inline_footnotes = view.visual_row_providers ~= nil
+      and view.visual_row_providers["markdown.footnotes"] ~= nil,
   }
 end
 
