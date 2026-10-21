@@ -295,6 +295,9 @@ end
 -- unconstrained popup does not truncate text because of rounding.
 local TEXT_FIT_RESERVE = 1
 local TEXT_OVERFLOW_TOLERANCE = 0.5
+local MIN_POPUP_COLUMNS = 32
+local MAX_POPUP_COLUMNS = 72
+local MAX_POPUP_ROWS = 8
 
 local function max_symbol_length()
   return math.max(1, tonumber(config.plugins.autocomplete.max_symbol_length) or 256)
@@ -566,21 +569,6 @@ local function draw_display_icon(suggestion, x, y, width, row_height)
   local color = type(registered.color) == "string" and style.syntax[registered.color] or registered.color
   common.draw_text(registered.font, color or style.dim, registered.char, "center", x, y, width, row_height)
   return true
-end
-
-local function row_text_width(font, info_font, suggestion, hide_info)
-  local width, info
-  if suggestion.preview_text then
-    width = style.get_small_font(font):get_width(tostring(suggestion.preview_text))
-    info = suggestion.preview_show_info and not hide_info and display_info(suggestion) or nil
-  else
-    width = font:get_width(tostring(suggestion.text or ""))
-    info = not hide_info and display_info(suggestion) or nil
-  end
-  if info and info ~= "" then
-    width = width + style.padding.x + info_font:get_width(tostring(info))
-  end
-  return width
 end
 
 local update_suggestions
@@ -1563,7 +1551,7 @@ end
 
 local function get_suggestions_rect(av)
   if #suggestions == 0 then
-    return 0, 0, 0, 0
+    return 0, 0, 0, 0, 0, 0
   end
 
   local _, partial_line, partial_col, caret_line, caret_col = autocomplete.get_partial_symbol()
@@ -1575,13 +1563,24 @@ local function get_suggestions_rect(av)
   local th = font:get_height()
   local lh = th + style.padding.y
   local icon_column_width = 0
-  local hide_info = config.plugins.autocomplete.hide_info
   local hide_icons = config.plugins.autocomplete.hide_icons
 
-  local window_width = system.get_window_size(core.window)
+  local window_width, window_height = system.get_window_size(core.window)
+  local view_left = math.max(style.padding.x, av.position.x + style.padding.x)
+  local view_right = math.min(window_width - style.padding.x, av.position.x + av.size.x - style.padding.x)
+  local view_top = math.max(0, av.position.y)
+  local view_bottom = math.min(window_height - style.padding.y, av.position.y + av.size.y)
+  if view_right <= view_left or view_bottom <= view_top
+    or row_y >= view_bottom or row_y + row_height <= view_top
+  then
+    return 0, 0, 0, 0, 0, 0
+  end
+
   local content_width = 0
   for _, s in ipairs(suggestions) do
-    local w = row_text_width(font, style.font, s, hide_info)
+    -- Names determine the width. Clip signatures and other details to fit.
+    local label_font = s.preview_text and style.get_small_font(font) or font
+    local w = label_font:get_width(tostring(s.text or ""))
     if not hide_icons then
       local icon_width = display_icon_width(s, lh)
       if icon_width > 0 then
@@ -1591,34 +1590,32 @@ local function get_suggestions_rect(av)
     content_width = math.max(content_width, w)
   end
 
-  local view_top = av.position.y
-  local view_bottom = av.position.y + av.size.y
-  local _, window_height = system.get_window_size(core.window)
-  view_bottom = math.min(view_bottom, window_height - style.padding.y)
-
-  local below_rect_y = row_y + row_height
-  local above_bottom = row_y
+  local below_rect_y = math.max(view_top, row_y + row_height)
+  local above_bottom = math.min(view_bottom, row_y)
+  local item_limit = math.min(#suggestions, MAX_POPUP_ROWS)
 
   local function visible_count_for(available_height)
-    return math.max(1, math.min(#suggestions, math.floor((available_height - style.padding.y) / lh)))
+    return math.max(0, math.min(item_limit, math.floor((available_height - style.padding.y) / lh)))
   end
 
   local below_count = visible_count_for(view_bottom - below_rect_y)
   local above_count = visible_count_for(above_bottom - view_top)
   local max_items = below_count
   local rect_y = below_rect_y
-  if below_count < #suggestions and above_count > below_count then
+  if below_count < item_limit and above_count > below_count then
     max_items = above_count
     rect_y = above_bottom - (max_items * lh + style.padding.y)
   end
+  if max_items == 0 then return 0, 0, 0, 0, 0, 0 end
 
   local desired_width = math.ceil(
     content_width + icon_column_width + style.padding.x * 2 + TEXT_FIT_RESERVE
   )
-  -- Near the right edge, shift the popup left instead of shrinking it.
-  local max_width = math.max(1, window_width - style.padding.x * 2)
-  local rect_width = math.min(math.max(150, desired_width), max_width)
-  rect_x = math.max(style.padding.x, math.min(rect_x, window_width - style.padding.x - rect_width))
+  local column_width = font:get_width("M")
+  local max_width = math.min(view_right - view_left, column_width * MAX_POPUP_COLUMNS)
+  local rect_width = math.min(math.max(column_width * MIN_POPUP_COLUMNS, desired_width), max_width)
+  -- Keep the natural width near the right edge, but never leave this Editor.
+  rect_x = common.clamp(rect_x, view_left, view_right - rect_width)
 
   return
     rect_x,
@@ -1627,6 +1624,14 @@ local function get_suggestions_rect(av)
     max_items * lh + style.padding.y,
     icon_column_width,
     max_items
+end
+
+local function log_popup_layout(av)
+  local x, y, w, h, _, visible = get_suggestions_rect(av)
+  core.log_quiet(
+    "Autocomplete: %d suggestions, %d visible; popup=(%.1f,%.1f,%.1f,%.1f) Editor=(%.1f,%.1f,%.1f,%.1f)",
+    #suggestions, visible, x, y, w, h, av.position.x, av.position.y, av.size.x, av.size.y
+  )
 end
 
 local function get_visible_suggestion_count(av)
@@ -1944,6 +1949,9 @@ local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_
     local preview_font = style.get_small_font(font)
     local preview_y = y + math.max(0, math.floor((lh - preview_font:get_height()) / 2))
     local preview_info = suggestion.preview_show_info and not hide_info and display_info(suggestion) or nil
+    local name_width = preview_font:get_width(tostring(suggestion.text or ""))
+    local info_budget = math.max(0, math.min(text_width * 0.4, text_width - name_width - style.padding.x))
+    preview_info = fit_info(preview_info, info_budget)
     local info_width = preview_info and preview_info ~= "" and style.font:get_width(preview_info) or 0
     local info_gap = info_width > 0 and style.padding.x or 0
     local preview_width = math.max(0, text_width - info_width - info_gap)
@@ -1982,8 +1990,9 @@ function autocomplete.draw(av)
   end
 
   local rx, ry, rw, rh, icon_column_width, visible_count = get_suggestions_rect(av)
-  renderer.draw_rect(rx, ry, rw, rh, style.background3)
   desc_rect = nil
+  if visible_count == 0 then return end
+  renderer.draw_rect(rx, ry, rw, rh, style.background3)
 
   local font = av:get_font()
   local lh = font:get_height() + style.padding.y
@@ -2020,6 +2029,7 @@ local function show_autocomplete(opts)
   opts = opts or {}
   local av = get_active_view()
   if av then
+    local was_open = #suggestions > 0
     refresh_providers(av, opts)
     -- update partial symbol and suggestions
     partial = autocomplete.get_partial_symbol()
@@ -2066,13 +2076,7 @@ local function show_autocomplete(opts)
     else
       reset_suggestions()
     end
-
-    -- scroll if rect is out of bounds of view
-    local _, y, _, h = get_suggestions_rect(av)
-    local limit = av.position.y + av.size.y
-    if y + h > limit then
-      av.scroll.to.y = av.scroll.y + y + h - limit
-    end
+    if not was_open and #suggestions > 0 then log_popup_layout(av) end
   end
 end
 
@@ -2272,6 +2276,7 @@ function autocomplete.open(on_close, opts)
     last_buffer = av.buffer
     if not provider_completion then request_lsp_completion(av, { manual = true }) end
     update_suggestions()
+    if #suggestions > 0 then log_popup_layout(av) end
   end
 end
 
