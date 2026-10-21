@@ -395,6 +395,21 @@ test.describe("Native terminal session", function()
       unshifted_codepoint = string.byte("o"),
       consumed_modifiers = caps_lock,
     }))
+    -- Layout text, not a US key name, determines whether a key types text.
+    for _, key in ipairs({
+      { "+", 48, "+", 0x2b },
+      { "@", 31, "@", 0x40 },
+      { "semicolon", 51, "\195\177", 0xf1 }, -- Spanish ñ
+      -- Cached keymap text must not replace the actual text-input event.
+      { "+", 48, "\239\191\189", 0xfffd },
+    }) do
+      test.not_ok(session:key(key[1], { raw = num_lock }, "press", {
+        scancode = key[2],
+        text = key[3],
+        unshifted_codepoint = key[4],
+        consumed_modifiers = 0,
+      }), "text input should own " .. key[1])
+    end
     session:close()
   end)
 

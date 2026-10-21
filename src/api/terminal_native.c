@@ -2091,7 +2091,12 @@ static int f_terminal_key(lua_State *L) {
     }
     lua_pop(L, 1);
     lua_getfield(L, 5, "text");
-    if (lua_isstring(L, -1)) event_text = lua_tolstring(L, -1, &event_text_length);
+    if (lua_isstring(L, -1)) {
+      event_text = lua_tolstring(L, -1, &event_text_length);
+      /* Layout text determines printability, not the US key-name fallback.
+       * Unmodified text must come from SDL text input, not its cached keymap. */
+      printable = event_text_length > 0;
+    }
     lua_pop(L, 1);
     lua_getfield(L, 5, "unshifted_codepoint");
     if (lua_isnumber(L, -1)) unshifted_codepoint = (uint32_t)lua_tointeger(L, -1);
