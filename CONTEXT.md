@@ -123,6 +123,9 @@ An existing file without a useful Git comparison uses its contents at first open
 The Changes Baseline remains available after Anvil restarts and after an Untitled Buffer becomes file-backed.
 The user can set or replace the Changes Baseline with the Buffer's current contents at any time.
 The user can clear it to return a tracked file to its Git comparison.
+Project-wide set applies to text files in Project Search Scope and open editable Buffers belonging to that Project.
+Open Buffers supply their current text. Unopened files supply their saved text.
+Project-wide clear removes the Project's retained Changes Baselines, including those for unopened files.
 _Avoid_: local commit, fake Git state
 
 **Autosave**:

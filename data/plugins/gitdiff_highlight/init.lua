@@ -13,6 +13,10 @@ local file_context = require "core.file_context"
 local ranges = require "plugins.gitdiff_highlight.ranges"
 local git_backend = require "plugins.git.backend"
 local git_status = require "plugins.file_git_status"
+local baseline_store = require "plugins.gitdiff_highlight.baseline_store"
+local project_paths = require "core.project_paths"
+local project_files = require "core.project_files"
+local worker_pool = require "core.worker_pool"
 
 local unpack = table.unpack or unpack
 local function pack_results(...)
@@ -46,43 +50,10 @@ local git_missing_warned = false
 local CHANGES_BASELINE_DIR = USERDIR .. PATHSEP .. "changes-baselines"
 local AUTOMATIC_PASTE_MIN_CHARACTERS = 100
 
-local bit_ok, bit = pcall(require, "bit")
-local function u32(n)
-	n = tonumber(n) or 0
-	if n < 0 then n = n + 4294967296 end
-	return n % 4294967296
-end
-
-local function hash_text(text)
-	local h1, h2 = 2166136261, 5381
-	for i = 1, #text do
-		local byte = text:byte(i)
-		if bit_ok and bit then
-			h1 = bit.tobit(bit.bxor(h1, byte) * 16777619)
-			h2 = bit.tobit(h2 * 33 + byte)
-		else
-			h1 = (h1 * 16777619 + byte) % 4294967296
-			h2 = (h2 * 33 + byte) % 4294967296
-		end
-	end
-	return string.format("%08x%08x", u32(h1), u32(h2))
-end
-
-local function baseline_identity(buffer)
-	if buffer.abs_filename then
-		local path = common.normalize_path(buffer.abs_filename)
-		if PLATFORM == "Windows" then path = path:lower() end
-		return "file:" .. path
-	end
-	if buffer.intellij_untitled_id then
-		local project = common.normalize_path(buffer.intellij_untitled_project_path or "default")
-		if PLATFORM == "Windows" then project = project:lower() end
-		return "untitled:" .. project .. ":" .. tostring(buffer.intellij_untitled_id)
-	end
-end
+local baseline_identity = baseline_store.identity
 
 local function baseline_path(identity)
-	return identity and (CHANGES_BASELINE_DIR .. PATHSEP .. hash_text(identity) .. ".json")
+	return baseline_store.path(CHANGES_BASELINE_DIR, identity)
 end
 
 local function current_file_id(buffer)
@@ -134,19 +105,8 @@ local function write_persisted_baseline(buffer, text, origin)
 	local identity = baseline_identity(buffer)
 	local path = baseline_path(identity)
 	if not path then return false end
-	local info = system.get_file_info(CHANGES_BASELINE_DIR)
-	if not (info and info.type == "dir") then
-		local ok, err = common.mkdirp(CHANGES_BASELINE_DIR)
-		if not ok then
-			core.log_quiet("File changes: could not create Changes Baseline directory: %s", tostring(err))
-			return false
-		end
-	end
-	local body = json.encode({
-		version = 1, identity = identity, origin = origin, text = text,
-		file_id = current_file_id(buffer),
-	})
-	local ok, err = pcall(Buffer.write_text_safely, path, body)
+	local ok, err = baseline_store.write(CHANGES_BASELINE_DIR, identity, text, origin,
+		current_file_id(buffer), Buffer.write_text_safely)
 	if not ok then
 		core.log_quiet("File changes: could not save Changes Baseline %s: %s", path, tostring(err))
 		return false
@@ -1141,10 +1101,109 @@ function TextView:get_points_of_interest(opts)
 	return file_change_points or provider_points, unavailable or provider_unavailable
 end
 
+local project_baseline_busy = false
+
+local function project_baseline(operation)
+	local roots = {}
+	for _, root in ipairs(project_paths.search_roots()) do roots[#roots + 1] = root.path end
+	local revision = project_paths.generation()
+	project_baseline_busy = true
+	core.log_quiet("File changes: Project Changes Baseline %s started", operation)
+	core.add_background_thread(function()
+		local ok, err = pcall(function()
+			local entries, seen, captured = {}, {}, {}
+			local open_count, open_failed = 0, 0
+			if operation == "set" then
+				-- Set open Buffers first. Never save their text to the source files.
+				for _, buffer in ipairs(core.buffers) do
+					local identity = baseline_identity(buffer)
+					if baseline_store.in_roots(identity, roots) then
+						seen[identity] = true
+						if not buffer_gitdiff_disabled(buffer) and not buffer.binary and not buffer.read_only then
+							local text = table.concat(buffer.lines)
+							if #text <= plugin_config.max_file_size then
+								local _, persisted = activate_changes_baseline(buffer, text, "manual", true)
+								captured[buffer] = identity
+								if persisted then open_count = open_count + 1
+								else open_failed = open_failed + 1 end
+							end
+						end
+					end
+					coroutine.yield(0)
+				end
+				for _, root in ipairs(roots) do
+					local files, scan_error = project_files.list(root, { refresh = true })
+					assert(files, scan_error)
+					for index, file in ipairs(files) do
+						local identity = baseline_identity({ abs_filename = file.path })
+						if not seen[identity] then
+							seen[identity] = true
+							entries[#entries + 1] = { identity = identity, path = file.path }
+						end
+						if index % 128 == 0 then coroutine.yield(0) end
+					end
+				end
+			end
+			local done, result, failure
+			local handle, submit_error = worker_pool.system():submit {
+				kind = "core.workers.changes_baseline", priority = "background",
+				payload = { operation = operation, roots = roots, entries = entries,
+					directory = CHANGES_BASELINE_DIR, max_file_size = plugin_config.max_file_size },
+				on_result = function(message) result = message.payload end,
+				on_complete = function() done = true end,
+				on_error = function(message) failure, done = message.error, true end,
+				on_cancelled = function() failure, done = "Changes Baseline worker cancelled", true end,
+			}
+			assert(handle, submit_error)
+			while not done do coroutine.yield(0.01) end
+			-- Apply only to the same loaded Project. The retained files also serve later opens.
+			if revision == project_paths.generation() then
+				for _, buffer in ipairs(core.buffers) do
+					if not buffer_gitdiff_disabled(buffer)
+						and baseline_store.in_roots(baseline_identity(buffer), roots) then
+						if operation == "clear" then
+							clear_changes_baseline(buffer, true)
+						elseif captured[buffer] ~= baseline_identity(buffer) then
+							local text, origin = read_persisted_baseline(buffer)
+							if text then activate_changes_baseline(buffer, text, origin, false) end
+						end
+					end
+					coroutine.yield(0)
+				end
+			end
+			assert(not failure, failure)
+			assert(result, "Changes Baseline worker returned no result")
+			result.count, result.failed = result.count + open_count, result.failed + open_failed
+			if open_failed > 0 then result.error = result.error or "Could not save an open Buffer's Changes Baseline" end
+			core.log_quiet("File changes: Project Changes Baseline %s: %d files, %d skipped, %d failed",
+				operation, result.count, result.skipped, result.failed)
+			if result.failed > 0 then
+				core.warn("Project Changes Baseline: %d files failed: %s", result.failed, result.error)
+			end
+		end)
+		project_baseline_busy = false
+		if not ok then core.error("Project Changes Baseline %s failed: %s", operation, tostring(err)) end
+	end)
+end
+
 command.add(function()
+	return not project_baseline_busy and core.projects and core.projects[1] ~= nil
+end, {
+	["project:set_changes_baseline"] = command.palette(function() project_baseline("set") end,
+		{ keywords = { "change", "markers", "snapshot", "diff", "all" } }),
+	["project:clear_changes_baseline"] = command.palette(function() project_baseline("clear") end,
+		{ keywords = { "change", "markers", "git", "reset", "all" } }),
+})
+
+local function changes_editor()
 	local view = core.active_view
 	return file_context.is_editor_view(view) and view:supports_text_input()
 		and not buffer_gitdiff_disabled(view.buffer), view
+end
+
+command.add(function()
+	local valid, view = changes_editor()
+	return valid and not project_baseline_busy, view
 end, {
 	["editor:set_changes_baseline"] = command.palette(function(view)
 		local text = table.concat(view.buffer.lines or {})
@@ -1157,6 +1216,9 @@ end, {
 			core.log_quiet("File changes: cleared Changes Baseline for %s", view.buffer:get_name())
 		end
 	end, { keywords = { "change", "markers", "git", "reset" } }),
+})
+
+command.add(changes_editor, {
 	["editor:revert_file_change"] = function(view)
 		local buffer = view.buffer
 		local state = get_state(buffer)
