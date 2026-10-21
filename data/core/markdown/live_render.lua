@@ -7657,6 +7657,38 @@ function live.preview_link(view, link, source_line)
   })
 end
 
+---Present baseline `texts` as rows of the presented table at `line`.
+---`pairs[i]` is the current line that text i replaces, if any. Return nil
+---outside a presented table. Otherwise return the table's lines, its rows
+---when every text fits the grid, and the changed cells of lines
+---`current_line1` to `current_line2`.
+function live.table_baseline_preview(view, line, texts, pairs, current_line1, current_line2)
+  if not live.is_live_mode(view) or not table_for_line(view, line) then return nil end
+  local function layout_of()
+    local table_node = table_for_line(view, line)
+    if not table_node then return nil end
+    local instance = render_semantic_model(view, table_node.source.line1)
+      or markdown_model.peek(view.buffer)
+    return instance and table_presentation.layout(view, table_node, instance)
+  end
+  local layout = layout_of()
+  if not layout then return nil end
+  local rows, current_cells = table_presentation.baseline_rows(
+    view, layout_of, texts, pairs, current_line1, current_line2
+  )
+  core.log_quiet("Markdown table baseline preview at %s:%d: %s", view.buffer:get_name(),
+    line, rows and "in grid" or "after table")
+  return {
+    line1 = layout.line1, line2 = layout.line2,
+    rows = rows, current_cells = current_cells,
+    -- Row heights follow the table's column widths.
+    generation = function()
+      return table_presentation.geometry_signature(view) .. ":"
+        .. tostring(view.buffer.text_revision or 0)
+    end,
+  }
+end
+
 local function record_navigation_origin()
   require("core.panes").record_location()
 end

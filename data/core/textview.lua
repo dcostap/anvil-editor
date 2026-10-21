@@ -8014,6 +8014,9 @@ local function draw_render_text_runs(runs, x, y, reference_font, default_color)
   end
 end
 
+---Draw one line of presentation runs, as a rendered line draws them.
+TextView.draw_text_runs = draw_render_text_runs
+
 local function draw_render_fragment_text(
   fragment, font, text, x, y, color, opts, background_y, background_height
 )
@@ -9042,6 +9045,20 @@ local function draw_decoration_inline_ranges(view, line, x, y, method)
   for _, entry in ipairs(view:decoration_provider_entries()) do
     local ranges = provider_call(view, entry, method, view, line)
     for _, range in ipairs(ranges or {}) do
+      if range.table_cell then
+        -- A table cell range fills the whole cell, including an empty one.
+        local rows = render_line and render_line.position_rows
+        for _, row in ipairs(type(rows) == "table" and rows or {}) do
+          if row.table_cell == range.table_cell and row.selection_full_cell then
+            local x1, x2 = x + (row.selection_x1 or 0), x + (row.selection_x2 or 0)
+            if x2 > x1 and range.color then
+              renderer.draw_rect(x1, y + (row.selection_y or 0), x2 - x1,
+                row.selection_height or view:get_line_height(), range.color)
+            end
+          end
+        end
+        goto continue_range
+      end
       local col1 = math.max(1, math.floor(tonumber(range.col1 or range[1]) or 1))
       local col2 = math.max(col1, math.floor(tonumber(range.col2 or range[2]) or col1))
       local color = range.color or range[3]
@@ -9111,6 +9128,7 @@ local function draw_decoration_inline_ranges(view, line, x, y, method)
           end
         end
       end
+      ::continue_range::
     end
   end
 end

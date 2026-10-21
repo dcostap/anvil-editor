@@ -1357,6 +1357,41 @@ local function record_video()
       end
     end
     for _ = 1, 2 do capture("wide-scrollbar-hover") end
+    do
+      -- File change previews of table rows, with the caret on the changed row.
+      local gitdiff = require "plugins.gitdiff_highlight"
+      local preview = require "core.poi_preview"
+      local function preview_change(line, base_text, col)
+        local base = {}
+        for index, text in ipairs(view.buffer.lines) do
+          base[index] = index == line and base_text or text
+        end
+        gitdiff._set_state_for_tests(view.buffer, {
+          is_in_repo = true, base_lines = base, line_index = {},
+          ranges = {{ type = "modification", current_start = line, current_end = line + 1,
+            base_start = line, base_end = line + 1 }},
+        })
+        view.buffer:set_selection(line, col or 1)
+        view:scroll_to_make_visible(line, col or 1, true)
+        for _, point in ipairs(view:get_points_of_interest() or {}) do
+          if point.kind == "file-change" then point.preview(view, point) end
+        end
+        settle_semantics()
+      end
+      view:on_mouse_moved(1, 1, 0, 0)
+      local grid = find_line("Draw the grid")
+      preview_change(grid, "| Draw the grid | *Bo* | blocked | 4 d |\n")
+      for _ = 1, 2 do capture("file-change-row") end
+      preview_change(find_line("^| Task "), "| Task | Lead | Status | Estimate |\n")
+      for _ = 1, 2 do capture("file-change-header") end
+      local hero = find_line("HeroA")
+      preview_change(hero, "| 2025 | HeroA | 90 | 195.000 | 17.550.000 | 35 | 11.400.000 | ok |\n",
+        view.buffer.lines[hero]:find("ok"))
+      for _ = 1, 2 do capture("file-change-wide") end
+      preview_change(grid, "| Draw the grid | Bo |\n")
+      for _ = 1, 2 do capture("file-change-unfit") end
+      preview.dismiss(view)
+    end
     benchmark.action_count = 1
     benchmark.video_reproduced = true
   else

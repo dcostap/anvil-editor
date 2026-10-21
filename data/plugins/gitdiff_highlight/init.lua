@@ -1023,8 +1023,15 @@ local function preview_file_change(view, point)
     current[#current + 1] = view.buffer.lines[line] or ""
   end
   local model = require("plugins.diff.model").compute(lines, current)
+  -- Each baseline line that the diff pairs with a current line.
+  local pairs = {}
+  for line, change in ipairs(model.a_changes) do
+    if change.tag == "modify" or change.tag == "equal" then
+      pairs[line] = range.current_start + model.a_to_b[line] - 1
+    end
+  end
   return preview.show(view, point, "Baseline code", lines, {
-    code = true, changes = model.a_changes,
+    code = true, changes = model.a_changes, pairs = pairs,
     current_changes = model.b_changes, current_start = range.current_start,
     placement = placement,
   })

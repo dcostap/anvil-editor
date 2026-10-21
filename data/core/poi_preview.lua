@@ -34,7 +34,7 @@ local draw_overlay = TextView.draw_overlay
 function TextView:draw_overlay(...)
   local result = draw_overlay(self, ...)
   local preview = previews[self]
-  if not preview then return result end
+  if not preview or preview.table_rows then return result end
   -- Draw after all text rows so adjacent line backgrounds cannot erase the shadow.
   for entry in self:iter_visible_visual_rows() do
     local row = entry.provider_row
@@ -104,25 +104,59 @@ local function draw_row(view, row, x, y, width, height)
   end
 end
 
+local function draw_table_row(_, row, x, y, _, height)
+  row.table_row.draw(x, y, height)
+end
+
+-- A code preview of Markdown table rows takes the table's presentation.
+local function table_preview(view, preview, lines, options)
+  local current_start = options.current_start or preview.line
+  local tabular = require("core.markdown.live_render").table_baseline_preview(
+    view, preview.line, lines, options.pairs or {},
+    current_start, current_start + #(options.current_changes or {}) - 1
+  )
+  if not tabular then return nil end
+  if tabular.rows then
+    -- Removed rows come before the rows that replace them, but the header
+    -- row stays first in the frame.
+    if preview.line ~= tabular.line1 then
+      preview.placement = "before"
+    elseif preview.placement == "before" then
+      return nil
+    end
+    preview.table_rows = tabular.rows
+  elseif preview.placement == "after" and preview.line < tabular.line2
+  or preview.placement == "before" and preview.line > tabular.line1 then
+    -- A source card must not split the table's frame.
+    preview.row_line, preview.placement = tabular.line2, "after"
+  end
+  return tabular
+end
+
 -- All content shares the card frame and lifetime. Custom content supplies
 -- layout(width, max_height), draw(x, y, width, height), and on_close().
 function M.show(view, point, title, lines, options)
   M.dismiss(view)
-  local preview = { line = point.line, title = title, lines = lines,
-    content = options and options.content,
-    placement = options and options.placement or "after" }
+  options = options or {}
+  local preview = { line = point.line, row_line = point.line, title = title, lines = lines,
+    content = options.content, placement = options.placement or "after" }
   previews[view] = preview
-  local rows = options and options.code and {} or {
+  local tabular = options.code and table_preview(view, preview, lines, options)
+  local current_cells = tabular and tabular.current_cells or {}
+  local rows = options.code and {} or {
     { id = "title", title = true, text = title, draw = draw_row },
   }
   local token_state
-  for index, text in ipairs(lines) do
+  for index, table_row in ipairs(preview.table_rows or {}) do
+    rows[index] = { id = "table:" .. index, table_row = table_row, draw = draw_table_row }
+  end
+  for index, text in ipairs(preview.table_rows and {} or lines) do
     if index > 24 then
       rows[#rows + 1] = { id = "more", text = "...", draw = draw_row }
       break
     end
     local row = { id = tostring(index), text = text:gsub("[\r\n]+$", ""), draw = draw_row }
-    if options and options.code then
+    if options.code then
       row.tokens, token_state = tokenizer.tokenize(view.buffer.syntax, row.text .. "\n", token_state)
       -- Keep newline tokens out of the renderer without changing lexer state.
       for i = 2, #row.tokens, 2 do row.tokens[i] = row.tokens[i]:gsub("[\r\n]+$", "") end
@@ -142,6 +176,7 @@ function M.show(view, point, title, lines, options)
     row.preview, row.index = preview, index
   end
   local function layout()
+    if tabular and preview.table_rows then return tabular.generation() end
     if not preview.content then return 0 end
     -- Measurement and drawing must use the same centered content width.
     local width = math.max(1,
@@ -154,10 +189,10 @@ function M.show(view, point, title, lines, options)
   view:add_visual_row_provider(provider_id, {
     generation = layout,
     visual_rows = function(_, _, line, placement)
-      if line == preview.line and placement == preview.placement then return rows end
+      if line == preview.row_line and placement == preview.placement then return rows end
     end,
   })
-  if preview.content then
+  if preview.content or preview.table_rows then
     view:add_visual_metric_provider(provider_id, {
       -- Card rows own their height, regardless of the source line's presentation.
       priority = 100,
@@ -165,19 +200,33 @@ function M.show(view, point, title, lines, options)
       line_height = function(_, _, _, entry)
         local row = entry.provider_row
         if row and row.preview == preview then
+          if row.table_row then return row.table_row.height() end
           return row.height or (style.font:get_height() + style.padding.y)
         end
       end,
     })
   end
   view:add_owned_feature(provider_id, { on_release = function() M.dismiss(view) end })
-  if options and options.current_changes then
+  if options.current_changes then
     view:add_decoration_provider(provider_id, {
       line_background = function(_, _, line)
+        if current_cells[line] then return nil end
         local change = options.current_changes[line - options.current_start + 1]
         if change and change.tag ~= "equal" then return style.diff_insert_background end
       end,
       inline_ranges = function(_, _, line)
+        local cells = current_cells[line]
+        if cells then
+          -- Table cells cover the line background. Mark each cell instead.
+          local ranges = {}
+          for column, changed in ipairs(cells) do
+            ranges[#ranges + 1] = { table_cell = column, color = style.diff_insert_background }
+            if changed then
+              ranges[#ranges + 1] = { table_cell = column, color = style.diff_insert_inline }
+            end
+          end
+          return ranges
+        end
         local change = options.current_changes[line - options.current_start + 1]
         if not change or not change.inline_ranges then return nil end
         local ranges = {}

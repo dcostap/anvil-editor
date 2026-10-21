@@ -1743,6 +1743,182 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
   return fragments, layout, position_rows, row_height, extras
 end
 
+-- Baseline rows -------------------------------------------------------------
+-- A file change preview shows the baseline text of changed rows as rows of
+-- the same grid, so the table keeps one frame and its columns line up. The
+-- cell is the unit of change.
+
+---Return the trimmed cell texts of a header or body row, or nil.
+local function row_cell_texts(text)
+  text = tostring(text or ""):gsub("[\r\n]+$", "")
+  local row = table_source_row(text)
+  if not row or #row.cells == 0 then return nil end
+  local cells, delimiter = {}, true
+  for column, cell in ipairs(row.cells) do
+    cells[column] = table_cell_text(text, cell)
+    delimiter = delimiter and cells[column]:match("^:?%-+:?$") ~= nil
+  end
+  if delimiter then return nil end
+  return cells, row, text
+end
+
+local function changed_cells(base, current)
+  local changed = {}
+  for column = 1, #current do
+    changed[column] = not base or base[column] ~= current[column]
+  end
+  return changed
+end
+
+---An unchanged cell of the row at `pair` shows that row's presentation. The
+---other cells show their text without inline formatting.
+local function measure_baseline_row(view, layout, text, header, pair, changed)
+  local _, row = row_cell_texts(text)
+  text = text:gsub("[\r\n]+$", "")
+  local presentations = pair and layout.presentations[pair]
+  local cells, max_lines = {}, 1
+  for column, cell in ipairs(row.cells) do
+    local presentation, wrapped
+    if presentations and changed[column] == false then
+      presentation = presentations[column]
+      wrapped = layout.wrapped_cells[pair][column]
+    else
+      local content, col1, col2 = table_cell_content(text, cell)
+      presentation = table_cell_presentation(view, content, col1, col2, header)
+      wrapped = presentation_lines(
+        presentation, layout.widths[column] - layout.padding * 2
+      )
+    end
+    cells[column] = { presentation = presentation, wrapped = wrapped }
+    max_lines = math.max(max_lines, #wrapped)
+  end
+  return cells, max_lines * layout.text_line_height + layout.vertical_padding * 2
+end
+
+local function draw_baseline_row(layout, cells, header, changed, x, y, height)
+  local line_width = math.max(1, math.floor(SCALE))
+  local separator = layout.separator_width
+  local left = x + layout.handle_size
+  local function fill(x1, width, color)
+    if color then renderer.draw_rect(x1, y, width, height, color) end
+  end
+  fill(left, layout.total_width, style.markdown_live_table_background)
+  if header then fill(left, layout.total_width, style.markdown_live_table_header_background) end
+  fill(left, layout.total_width, style.diff_delete_background)
+  local cell_x = left
+  for column, cell in ipairs(cells) do
+    renderer.draw_rect(
+      cell_x + math.floor((separator - line_width) / 2), y, line_width, height,
+      style.markdown_live_table_separator
+    )
+    cell_x = cell_x + separator
+    local width = layout.widths[column]
+    if changed[column] then fill(cell_x, width, style.diff_delete_inline) end
+    local presentation = cell.presentation
+    local font, alignment = presentation.font, layout.alignments[column]
+    local line_y = y + layout.vertical_padding
+    for _, wrapped in ipairs(cell.wrapped) do
+      local text = wrapped.text or ""
+      local text_width = wrapped.runs and wrapped.width or font:get_width(text)
+      local offset = alignment == "right"
+        and math.max(layout.padding, width - text_width - layout.padding)
+        or alignment == "center"
+        and math.max(layout.padding, (width - text_width) / 2)
+        or layout.padding
+      if wrapped.runs then
+        require("core.textview").draw_text_runs(
+          wrapped.runs, cell_x + offset, line_y, font, presentation.color
+        )
+      elseif text ~= "" then
+        if presentation.background then
+          local padding = math.max(1, SCALE * 2)
+          renderer.draw_rect(cell_x + offset - padding, line_y,
+            text_width + padding * 2, layout.text_line_height, presentation.background)
+        end
+        renderer.draw_text(font, text, cell_x + offset, line_y, presentation.color)
+      end
+      line_y = line_y + layout.text_line_height
+    end
+    cell_x = cell_x + width
+  end
+  renderer.draw_rect(
+    cell_x + math.floor((separator - line_width) / 2), y, line_width, height,
+    style.markdown_live_table_separator
+  )
+  -- A header row's grid line runs along its top; a body row's along its bottom.
+  renderer.draw_rect(left, header and y or y + height - line_width,
+    layout.total_width, line_width, style.markdown_live_table_separator)
+end
+
+---Present baseline `texts` as rows of a table. `layout_of()` returns the
+---table's current layout. `pairs[i]` is the current line that text i
+---replaces, if any. Return the rows, or nil when a text does not fit the
+---grid, and the changed cells of each current line from `line1` to `line2`.
+function table_presentation.baseline_rows(view, layout_of, texts, pairs, line1, line2)
+  local layout = layout_of()
+  if not layout then return nil, {} end
+  local base_cells, base_of = {}, {}
+  for index, text in ipairs(texts) do
+    base_cells[index] = row_cell_texts(text)
+    if pairs[index] then base_of[pairs[index]] = index end
+  end
+
+  local current_cells = {}
+  for line = math.max(line1 or 1, layout.line1), math.min(line2 or 0, layout.line2) do
+    local cells = line ~= layout.delimiter_line
+      and row_cell_texts(view.buffer.lines[line])
+    if cells then
+      local base = base_cells[base_of[line]]
+      current_cells[line] = changed_cells(base and #base == #cells and base, cells)
+    end
+  end
+
+  local rows = {}
+  for index, text in ipairs(texts) do
+    local cells = base_cells[index]
+    if not cells or #cells ~= layout.columns then
+      core.log_quiet("Markdown table baseline row %d does not fit the grid of %s:%d",
+        index, view.buffer:get_name(), layout.line1)
+      return nil, current_cells
+    end
+    local current = pairs[index] and row_cell_texts(view.buffer.lines[pairs[index]])
+    local changed = current and #current == #cells and changed_cells(cells, current) or {}
+    local header = pairs[index] == layout.line1
+    local cache = {}
+    local function measure()
+      local current_layout = layout_of()
+      if not current_layout or current_layout.columns ~= #cells then return nil end
+      if cache.layout ~= current_layout then
+        cache.layout = current_layout
+        cache.cells, cache.height = measure_baseline_row(
+          view, current_layout, text, header, pairs[index], changed
+        )
+      end
+      return cache
+    end
+    rows[index] = {
+      height = function()
+        local measured = measure()
+        return measured and measured.height
+      end,
+      draw = function(x, y, height)
+        local measured = measure()
+        if not measured then return end
+        local current_layout = measured.layout
+        -- Draw inside the table's frame at its Table Scroll offset.
+        local scroll = current_layout.scroll_max > 0
+          and table_presentation.scroll_state(view, current_layout.line1).x or 0
+        core.push_clip_rect(x, y, current_layout.viewport_width, height)
+        local ok, err = pcall(draw_baseline_row, current_layout, measured.cells,
+          header, changed, x - math.min(scroll, current_layout.scroll_max), y, height)
+        core.pop_clip_rect()
+        if not ok then error(err, 0) end
+      end,
+    }
+  end
+  return rows, current_cells
+end
+
 function table_presentation.geometry_signature(view)
   local font = live_fonts.body(view)
   return table.concat({
