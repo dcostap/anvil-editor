@@ -45,6 +45,8 @@ Visual-row invalidation identifies a provider but does not provide its affected 
 
 Buffer edit events already provide edit positions. Verify their timing and coordinate semantics before reusing them.
 
+The Markdown model publishes from a worker. During typing, most publications describe an older text revision than the buffer.
+
 Previous gallery measurements reported approximately 84 ms median typing latency and 20–24 seconds from open to ready.
 These are historical observations, not a reproducible baseline for this work.
 
@@ -57,9 +59,10 @@ Do not create a separate provider contract after implementing text-edit updates.
 
 ### Position mapping
 
-Position mapping describes how a text replacement moves existing content.
+Position mapping describes how a text replacement moves existing lines.
 
-Preserve old and new coordinates, source revision, and destination revision. Retain columns where consumers require them.
+Layout uses line granularity: `{first_line, old_last_line, new_last_line}`.
+Range markers and folds keep their own column-level mapping. Do not add columns or revision pairs to the layout contract until a layout consumer needs them.
 
 Use existing buffer events as the source. Normalize them at the layout boundary only when necessary.
 
@@ -67,24 +70,22 @@ Specify these rules before implementation:
 
 - Whether each event occurs before or after the buffer changes.
 - Whether ranges include or exclude their end positions.
-- How insertions and deletions map boundary positions.
-- How multiple edits compose within a transaction.
+- How insertions and deletions map boundary lines.
 - How undo, redo, and multi-caret edits enter the same path.
 
 Do not introduce a new public buffer API unless existing events cannot express these requirements.
 
 ### Layout invalidation
 
-Layout invalidation describes content whose rows, measurements, or drawing data may have changed.
+Layout invalidation describes lines whose rows, measurements, or drawing data may have changed.
 
 Support multiple affected ranges and an explicit full-invalidation operation.
-Define invalidation ranges in the destination revision after position mapping.
+Define invalidation ranges in the current revision after position mapping.
 
-Distinguish the minimum required effects:
+Use two kinds of effect:
 
-- Row structure changed.
-- Measurement changed.
-- Drawing changed without a geometry change.
+- Geometry: rebuild rows and measurements for these lines. Wrapping can change their row count.
+- Drawing: repaint these lines without a geometry change.
 
 A text replacement and its layout invalidation are not necessarily the same range.
 
@@ -107,7 +108,9 @@ Preserve row identity where practical. Track content or measurement changes sepa
 
 Do not use table identity alone as proof that a row's height remains valid.
 
-Async results must identify their source revision. Reject stale results unless the code can map them safely.
+Stale async output is the normal case during typing. A provider keeps its last output and maps it through position mapping until a newer publication arrives.
+When a publication arrives, the provider compares it with its mapped output and reports only the changed ranges.
+Each publication must identify its source revision. Reject a result only when the provider cannot map it safely, and log the reason.
 
 During migration, unmigrated providers may request full invalidation. Log the reason so this path remains visible.
 
@@ -115,11 +118,17 @@ During migration, unmigrated providers may request full invalidation. Log the re
 
 Introduce one coordinator for applying layout updates. Keep each cache responsible for its own representation.
 
-The coordinator must prevent readers from observing partially updated layout.
+Updates are lazy:
+
+- At edit time, the coordinator records mapped line deltas and invalidation ranges. It does not update caches.
+- On the first layout read after a change, the coordinator applies all pending changes in one pass, then answers the read.
+
+Multi-caret edits, undo groups, and several provider reports therefore produce one update.
+Readers cannot observe partially updated layout, because every layout read goes through the coordinator.
 
 Establish the update order from actual dependencies, including:
 
-1. Map existing positions through text changes.
+1. Map existing positions through pending text changes.
 2. Collect provider and fold invalidation.
 3. Update affected wrapping and composed rows.
 4. Update height aggregates and invalidate affected render data.
@@ -133,9 +142,9 @@ Maintain the existing flat lists initially. Measure suffix movement and renumber
 
 ## Correctness reference
 
-Add a debug/test mode that compares incremental layout with a fresh full rebuild.
+Add a debug/test mode that compares the current layout with a fresh full rebuild.
 
-The reference build must not modify the incremental result or share mutable cache state with it.
+The reference build must not modify the layout under test or share mutable cache state with it.
 
 Compare observable results:
 
@@ -155,6 +164,20 @@ Enable comparison in focused correctness tests and correctness scenarios. Disabl
 Use deterministic provider inputs when comparing both paths. Do not publish async results between the two builds.
 
 ## Implementation milestones
+
+### Milestone 0: Correctness reference
+
+Build the comparison mode against the current layout code, before any refactor code exists.
+
+Run it across the existing layout, folding, footnote, and Markdown tests and the correctness scenarios.
+Record every mismatch it finds as the baseline. The collapsed Callout header that is 6 px short until redraw is a known candidate.
+
+Do not fix baseline mismatches in this milestone unless the fix is trivial. List them so later milestones can tell old drift from new drift.
+
+Deliverables:
+
+- The isolated full-rebuild comparison mode, committed alone.
+- A list of baseline mismatches with reproduction steps.
 
 ### Milestone 1: Establish the baseline and contract
 
@@ -177,24 +200,22 @@ Deliverables:
 - A documented update contract with worked edit examples.
 - An invalidation and ownership inventory.
 - Baseline measurements with commands and environment details.
-- The isolated full-rebuild comparison mode.
 
 ### Milestone 2: Complete one provider-aware path
 
 Implement one local edit path through providers, wrapping, composed rows, heights, and render invalidation.
 
 Use a wrapped view with inline footnotes. This tests the provider dependency that motivates the refactor.
+The same path must also work for a plain wrapped file without providers.
 
 Reuse unrelated rows and measurements. Do not rebuild all rows and then compare them to recover reuse.
 
 Keep explicit full invalidation for unsupported paths during this milestone.
 
-Start with one targeted regression test. Confirm its expected failure before changing implementation.
-Then apply the smallest complete change and confirm that the test passes.
-
 Add cases incrementally for:
 
 - A local edit with unchanged footnote output.
+- An edit while the Markdown model is still publishing an older revision.
 - An edit that changes a displayed footnote's content or height.
 - A definition edit that affects distant footnote references.
 - A newline insertion and deletion above inserted rows.
@@ -280,19 +301,11 @@ Use worker jobs only with copied inputs that do not access live UI objects.
 
 Estimated heights require a separate decision and plan. Do not add them implicitly during this refactor.
 
-## Validation rules
+## Validation
 
-Test through public Document/View methods, commands, event handlers, and observable geometry.
-Do not test exact keyboard bindings, cosmetic constants, or internal helper call counts.
+Follow the testing and commit rules in `AGENTS.md`.
 
-Use focused tests for each milestone. Run broader tests only when the completed migration crosses their boundaries.
-
-Validate changed Lua files with the repository's LuaJIT syntax checker.
-Run Lua tests through the applicable Meson target and focused file filters.
-
-Use the existing scenario and render-verification tools. Do not inspect or manipulate the user's windows.
-
-Record known baseline failures separately. Do not attribute them to this refactor without evidence.
+Record known baseline failures and Milestone 0 mismatches separately. Do not attribute them to this refactor without evidence.
 
 Keep performance thresholds out of ordinary correctness tests. Report repeated latency measurements and work counts separately.
 
@@ -300,26 +313,23 @@ Keep performance thresholds out of ordinary correctness tests. Report repeated l
 
 The refactor is complete when:
 
-- Supported local edits update affected layout without a whole-document row rebuild.
+- Supported local edits produce zero whole-document row rebuilds per keystroke. Check this with the existing rebuild counters in these scenarios:
+  - typing in a plain wrapped file
+  - typing in the gallery with inline footnotes
+  - an edit above an expanded Callout
 - Unchanged provider output does not cause global invalidation.
+- Stale async provider output is mapped, not rejected or globally invalidated.
 - Position shifts preserve unrelated measurements when their inputs remain unchanged.
 - Distant provider effects invalidate all affected ranges correctly.
-- Incremental geometry agrees with fresh layout across the supported scenarios.
+- Incremental geometry agrees with fresh layout across the supported scenarios, apart from recorded baseline mismatches.
 - Caret movement, hit testing, folding, and viewport anchoring retain their behavior.
 - Obsolete matching and signature-recovery paths are removed.
 - Remaining full invalidations have explicit reasons.
-- Repeatable measurements show the resulting latency and allocation changes.
 
+Report latency and allocation changes from repeated measurements. They are a report, not a gate.
 Do not promise a 16 ms typing budget from this change alone. Report any remaining dominant cost.
 
-## Delivery and decision gates
-
-Commit each complete milestone after its applicable checks. Keep unrelated changes out of those commits.
-
-For small implementation slices, commit each tested complete change rather than waiting for the full migration.
-
-Refresh the dev portable app when required by repository instructions for non-Lua changes.
-Do not restart the daily app for plan-only changes.
+## Decision gates
 
 Do not attach a fixed schedule to the current line-count estimate.
 Estimate the remaining work after the first provider-aware path exposes the actual migration cost.
@@ -327,4 +337,5 @@ Estimate the remaining work after the first provider-aware path exposes the actu
 Add a tree only if measured suffix updates remain a material cost.
 Merge structures only if separate ownership still causes demonstrated consistency problems.
 Add marker indexing only if marker work becomes a measured bottleneck.
+Add column-level or revision-pair mapping to the layout contract only when a layout consumer needs it.
 Choose estimated heights only through the separate opening-performance decision.
