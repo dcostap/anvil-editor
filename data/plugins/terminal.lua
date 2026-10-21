@@ -2254,6 +2254,14 @@ function M.session_available(id)
   return session_record(id) ~= nil
 end
 
+-- Opens a Terminal Session that the Project Sidebar lists. A session that cannot reattach or
+-- revive opens nothing, because a new shell under that row would hide the lost session.
+function M.open_session(id)
+  local record, err = session_record(id)
+  if not record then return nil, err end
+  return M.open { session_id = id, focus = true, placement = "current", reason = "sidebar-terminal-focus" }
+end
+
 -- Focuses the open view of a Terminal Session. Returns false when no view shows it.
 function M.focus_session(id)
   for _, view in ipairs(M.open_views()) do
@@ -2303,8 +2311,12 @@ if system.is_hosted_surface() then
         core.log_quiet("Terminal Session %s focused for the Sidebar after Workspace restore", id)
         return
       end
-      local view = M.open { session_id = id, focus = true, placement = "current", reason = "sidebar-terminal-focus" }
-      core.log_quiet("Terminal Session %s opened for the Sidebar: %s", id, view and "ok" or "failed")
+      local view, err = M.open_session(id)
+      if view then
+        core.log_quiet("Terminal Session %s opened for the Sidebar", id)
+      else
+        core.warn("Cannot open Terminal Session %s: %s", id, tostring(err))
+      end
     end)
     return true
   end

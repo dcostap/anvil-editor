@@ -111,6 +111,15 @@ test.describe("Terminal Session restoration", function()
     test.ok(wait_for(restored, function() return printed(restored, "other_spelling_marker") end))
   end)
 
+  test.it("opens no new shell for a listed session that cannot reattach", function(context)
+    local before = #terminal.open_views()
+    local view, err = terminal.open_session(string.rep("0", 32))
+    if view then context.views[#context.views + 1] = view end
+    test.equal(view, nil)
+    test.ok(err, "no reason for the failed open")
+    test.equal(#terminal.open_views(), before)
+  end)
+
   test.it("rejects a second client while the shell has an attached client", function(context)
     local view = open(context)
     mark(view, "single_client_marker")
