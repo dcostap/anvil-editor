@@ -1587,7 +1587,6 @@ local function get_suggestions_rect(av)
   local hide_icons = config.plugins.autocomplete.hide_icons
 
   local window_width = system.get_window_size(core.window)
-  local available_width = math.max(1, window_width - rect_x - style.padding.x)
   local content_width = 0
   for _, s in ipairs(suggestions) do
     local w = row_text_width(font, style.font, s, hide_info, ROW_PREVIEW_MAX_CHARS)
@@ -1624,8 +1623,10 @@ local function get_suggestions_rect(av)
   local desired_width = math.ceil(
     content_width + icon_column_width + style.padding.x * 2 + TEXT_FIT_RESERVE
   )
-  local rect_width = math.max(150, desired_width)
-  rect_width = math.min(rect_width, available_width)
+  -- Near the right edge, shift the popup left instead of shrinking it.
+  local max_width = math.max(1, window_width - style.padding.x * 2)
+  local rect_width = math.min(math.max(150, desired_width), max_width)
+  rect_x = math.max(style.padding.x, math.min(rect_x, window_width - style.padding.x - rect_width))
 
   return
     rect_x,

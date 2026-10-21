@@ -361,6 +361,31 @@ test.describe("autocomplete batch behavior", function()
     test.ok(not autocomplete.is_open(), "expected oversized suggestion to be ignored")
   end)
 
+  test.it("keeps the popup's width when the word is near the right window edge", function(context)
+    local items = { foo_completion_with_a_readable_long_name = "" }
+    local view, buffer = open_editor(context, "foo")
+    core.root_panel:update()
+    autocomplete.complete({ name = "test-autocomplete-edge-width", files = ".*", items = items })
+    test.ok(autocomplete.is_open(), "expected autocomplete at the line start")
+    local _, _, natural_width = autocomplete._test.get_suggestions_rect(view)
+    autocomplete.close()
+
+    local window_width = system.get_window_size(core.window)
+    local start_x = view:get_line_screen_position(1, 1)
+    local char_width = view:get_font():get_width("a")
+    local pad = math.ceil((window_width - start_x - natural_width / 2) / char_width)
+    buffer:set_selection(1, 1)
+    buffer:text_input(string.rep(" ", pad))
+    buffer:set_selection(1, #buffer.lines[1])
+    core.root_panel:update()
+    autocomplete.complete({ name = "test-autocomplete-edge-width", files = ".*", items = items })
+    test.ok(autocomplete.is_open(), "expected autocomplete near the right edge")
+
+    local x, _, width = autocomplete._test.get_suggestions_rect(view)
+    test.equal(width, natural_width)
+    test.ok(x + width <= window_width, "the popup must stay inside the window")
+  end)
+
   test.it("completes matching partials at multiple carets in one buffer change", function(context)
     local view, buffer = open_editor(context, "fo\nfo")
     set_view_selections(view, {
