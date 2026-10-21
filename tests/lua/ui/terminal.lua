@@ -114,6 +114,7 @@ local function fake_native()
         self.key_failures = self.key_failures - 1
         return false, "queue_full"
       end
+      if self.key_result ~= nil then return self.key_result end
       return true
     end
     function session:paste(text, allow_unsafe)
@@ -698,38 +699,85 @@ test.describe("Terminal View", function()
     test.equal(session.keys[2][3], "release")
   end)
 
-  test.it("does not send shifted layout text twice after encoding its key", function(context)
+  test.it("encodes a text key with its text input, not the keymap text", function(context)
     local view = terminal.open()
+    local session = context.sessions[1]
+    -- A stale SDL keymap can hold U+FFFD for Shift+8 on a Spanish layout.
     local event = {
-      shift = true,
-      modifiers = 1,
-      scancode = 36,
-      text = "/",
-      unshifted_codepoint = string.byte("7"),
-      consumed_modifiers = 1,
+      shift = true, modifiers = 1, scancode = 37, text = "\239\191\189",
+      unshifted_codepoint = string.byte("8"), consumed_modifiers = 1,
     }
-    test.ok(view:on_key_pressed("/", event))
-    test.ok(view:on_text_input("/"))
-    test.equal(#context.sessions[1].writes, 0)
+    test.not_ok(view:on_key_pressed("8", event))
+    test.equal(#session.keys, 0)
+    test.ok(view:on_text_input("("))
+    test.equal(session.keys[1][1], "8")
+    test.equal(session.keys[1][3], "press")
+    test.equal(session.keys[1][4].text, "(")
+    test.equal(session.keys[1][4].scancode, 37)
+
+    event["repeat"] = true
+    test.not_ok(view:on_key_pressed("8", event))
+    test.ok(view:on_text_input("("))
+    test.equal(session.keys[2][3], "repeat")
+    test.equal(session.keys[2][4].text, "(")
+    test.equal(#session.writes, 0)
   end)
 
-  test.it("keeps encoded text ownership when another text event arrives first", function(context)
+  test.it("types the text of a key that the terminal does not encode", function(context)
     local view = terminal.open()
-    test.ok(view:on_key_pressed("/", {
-      shift = true, modifiers = 1, scancode = 36, text = "/",
-      unshifted_codepoint = string.byte("7"), consumed_modifiers = 1,
+    local session = context.sessions[1]
+    session.key_result = false
+    test.not_ok(view:on_key_pressed("8", {
+      shift = true, modifiers = 1, scancode = 37, text = "(",
     }))
-    test.ok(view:on_text_input("x"))
-    test.ok(view:on_text_input("/"))
-    test.same({ "x" }, context.sessions[1].writes)
+    test.ok(view:on_text_input("("))
+    test.same({ "(" }, session.writes)
   end)
 
-  test.it("expires encoded text ownership when its key is released", function(context)
+  test.it("sends no key for a dead key and encodes the composed character once", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    test.not_ok(view:on_key_pressed("[", { modifiers = 0, scancode = 40, text = "\194\180" }))
+    test.not_ok(view:on_key_pressed("e", { modifiers = 0, scancode = 18, text = "e" }))
+    test.ok(view:on_text_input("\195\169"))
+    test.equal(#session.keys, 1)
+    test.equal(session.keys[1][1], "e")
+    test.equal(session.keys[1][4].text, "\195\169")
+    test.equal(#session.writes, 0)
+  end)
+
+  test.it("gives a key to the IME composition that it starts", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    test.not_ok(view:on_key_pressed("a", { modifiers = 0, scancode = 4, text = "a" }))
+    view:on_ime_text_editing("\227\129\130", 3, 0)
+    test.ok(view:on_text_input("\227\129\130"))
+    test.equal(#session.keys, 0)
+    test.same({ "\227\129\130" }, session.writes)
+  end)
+
+  test.it("drops the text of a key that the terminal encoded with Alt", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    local event = {
+      alt = true, modifiers = 0x100, scancode = 4, text = "a",
+      unshifted_codepoint = string.byte("a"), consumed_modifiers = 0,
+    }
+    test.ok(view:on_key_pressed("a", event))
+    test.ok(view:on_text_input("\195\165"))
+    test.equal(#session.writes, 0)
+    test.ok(view:on_key_released("a", event))
+    test.ok(view:on_text_input("x"))
+    test.same({ "x" }, session.writes)
+  end)
+
+  test.it("types text that arrives after its key was released", function(context)
     local view = terminal.open()
     local event = { modifiers = 0, scancode = 36, text = "/" }
-    test.ok(view:on_key_pressed("/", event))
+    test.not_ok(view:on_key_pressed("/", event))
     test.ok(view:on_key_released("/", event))
     test.ok(view:on_text_input("/"))
+    test.equal(#context.sessions[1].keys, 0)
     test.same({ "/" }, context.sessions[1].writes)
   end)
 
@@ -857,13 +905,14 @@ test.describe("Terminal View", function()
   test.it("clears transient input state when it restarts", function(context)
     local view = terminal.open()
     view.key_owners = { stale = "ghostty" }
-    view.encoded_text_queue = { "stale" }
+    test.ok(view:on_key_pressed("a", { alt = true, modifiers = 0x100, scancode = 4, text = "a" }))
     view.composition = { text = "stale", start = 0, length = 0 }
     view.state = "exited"
     test.ok(view:restart())
     test.same({}, view.key_owners)
-    test.same({}, view.encoded_text_queue)
     test.equal(view.composition, nil)
+    test.ok(view:on_text_input("x"))
+    test.same({ "x" }, context.sessions[#context.sessions].writes)
   end)
 
   test.it("does not restart a running terminal", function(context)

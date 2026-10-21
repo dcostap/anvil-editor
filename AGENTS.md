@@ -603,8 +603,9 @@ SDL3 dead-key reset patch:
 
 Run `anvil:keymap-layout` after SDL3 updates. Keep this patch unless upstream clears dead keys the same way.
 
-Terminal Views do not use SDL's keymap text for a text key that has only Shift.
-SDL text input types that key. Run `runtime/terminal_native.lua` after key input changes.
+A Terminal View pairs each text key with its SDL text input. A text key has layout text and no Ctrl, Alt, or Super.
+The view encodes the key with the text that the OS typed, not SDL's keymap text. Kitty mode then gets both.
+Run `runtime/terminal_native.lua` and `ui/terminal.lua` after key input changes.
 
 Current Anvil Ghostty patch:
 

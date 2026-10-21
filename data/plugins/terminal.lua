@@ -636,7 +636,7 @@ function TerminalView:adopt_session(session)
   self.search_query = nil
   self.search_state = nil
   self.key_owners = {}
-  self.encoded_text_queue = {}
+  self.text_owner = nil
   self.pending_key_releases = {}
   self.composition = nil
   self.focused = nil
@@ -910,7 +910,7 @@ function TerminalView:sync_focus()
       end
     end
     self.key_owners = {}
-    self.encoded_text_queue = {}
+    self.text_owner = nil
   end
   if not focus_changed then return false end
   self.session:focus(focused)
@@ -1383,20 +1383,40 @@ function TerminalView:draw()
   perf_scope_end(draw_scope)
 end
 
+-- The OS sends the text of a key press before the next key event.
+-- `text_owner` is the key that owns that text:
+-- - A waiting text key has no Ctrl, Alt, or Super. Its text completes it, so the
+--   terminal encodes the text that the OS typed, not SDL's cached keymap text.
+-- - Any other owner is a key that the terminal already encoded. Its text is dropped.
+-- The next key event or IME composition ends the ownership. A waiting key that
+-- typed no text, such as a dead key, sends nothing.
 function TerminalView:on_text_input(text)
   if not self.session or self.running == false then return false end
   self.composition = nil
   core.blink_reset()
   self.session:scroll("bottom")
-  local encoded = self.encoded_text_queue and self.encoded_text_queue[1]
-  if encoded and text == encoded.text then
-    table.remove(self.encoded_text_queue, 1)
-    return true
+  local owner = self.text_owner
+  if owner and not owner.waiting then return true end
+  self.text_owner = nil
+  if owner then
+    local event = common.merge(owner.event, { text = text })
+    local encoded, reason = self.session:key(owner.key, owner.modifiers, owner.action, event)
+    if encoded then
+      self.key_owners[owner.key_id] = {
+        owner = "ghostty", key = owner.key, modifiers = owner.modifiers, event = event,
+      }
+      return true
+    end
+    if reason == "queue_full" then
+      core.log_quiet("Terminal session %d input queue is full", self.log_id)
+      return false
+    end
   end
   return self.session:write(text) == true
 end
 
 function TerminalView:on_ime_text_editing(text, start, length)
+  self.text_owner = nil
   if not text or text == "" then
     self.composition = nil
   else
@@ -1481,14 +1501,6 @@ local function physical_key_id(key, event)
   return "key:" .. tostring(key)
 end
 
-local function remove_encoded_key(view, key_id)
-  local kept = {}
-  for _, encoded in ipairs(view.encoded_text_queue or {}) do
-    if encoded.key_id ~= key_id then kept[#kept + 1] = encoded end
-  end
-  view.encoded_text_queue = kept
-end
-
 function TerminalView:send_key_release(owned)
   local ok, reason = self.session:key(
     owned.key, owned.modifiers, "release", owned.event
@@ -1517,7 +1529,7 @@ function TerminalView:on_key_pressed(key, event)
   self:sync_focus()
   self:retry_pending_key_releases()
   self.key_owners = self.key_owners or {}
-  self.encoded_text_queue = self.encoded_text_queue or {}
+  self.text_owner = nil
   local key_id = physical_key_id(key, event)
   if event and event.altgr and (#key == 1 or key == "space") then
     self.key_owners[key_id] = { owner = "text" }
@@ -1544,7 +1556,17 @@ function TerminalView:on_key_pressed(key, event)
     self.session:scroll("bottom")
   end
   local action = event and event["repeat"] and "repeat" or "press"
-  local encoded, reason = self.session:key(key, key_modifiers(event), action, event)
+  local modifiers = key_modifiers(event)
+  local text_key = event and type(event.text) == "string" and event.text ~= ""
+  if text_key and not (event.ctrl or event.alt or event.super) then
+    self.key_owners[key_id] = { owner = "text" }
+    self.text_owner = {
+      waiting = true, key_id = key_id, key = key, modifiers = modifiers,
+      action = action, event = event,
+    }
+    return false
+  end
+  local encoded, reason = self.session:key(key, modifiers, action, event)
   encoded = encoded == true
   if reason == "queue_full" then
     core.log_quiet("Terminal session %d input queue is full", self.log_id)
@@ -1552,15 +1574,10 @@ function TerminalView:on_key_pressed(key, event)
   self.key_owners[key_id] = {
     owner = encoded and "ghostty" or "text",
     key = key,
-    modifiers = key_modifiers(event),
+    modifiers = modifiers,
     event = event,
   }
-  if encoded and event and type(event.text) == "string" and event.text ~= "" then
-    self.encoded_text_queue[#self.encoded_text_queue + 1] = {
-      text = event.text,
-      key_id = key_id,
-    }
-  end
+  if encoded and text_key then self.text_owner = { waiting = false } end
   return encoded
 end
 
@@ -1570,7 +1587,7 @@ function TerminalView:on_key_released(key, event)
   local key_id = physical_key_id(key, event)
   local owned = self.key_owners[key_id]
   self.key_owners[key_id] = nil
-  remove_encoded_key(self, key_id)
+  self.text_owner = nil
   local owner = type(owned) == "table" and owned.owner or owned
   if key == "left ctrl" or key == "right ctrl" then self:clear_point_hover() end
   if owner ~= "ghostty" then return true end

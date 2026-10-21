@@ -2091,11 +2091,7 @@ static int f_terminal_key(lua_State *L) {
     }
     lua_pop(L, 1);
     lua_getfield(L, 5, "text");
-    if (lua_isstring(L, -1)) {
-      event_text = lua_tolstring(L, -1, &event_text_length);
-      /* Layout text determines printability, not the US key-name fallback. */
-      printable = event_text_length > 0;
-    }
+    if (lua_isstring(L, -1)) event_text = lua_tolstring(L, -1, &event_text_length);
     lua_pop(L, 1);
     lua_getfield(L, 5, "unshifted_codepoint");
     if (lua_isnumber(L, -1)) unshifted_codepoint = (uint32_t)lua_tointeger(L, -1);
@@ -2116,14 +2112,9 @@ static int f_terminal_key(lua_State *L) {
   const char *action_name = luaL_optstring(L, 4, "press");
   if (strcmp(action_name, "repeat") == 0) action = GHOSTTY_KEY_ACTION_REPEAT;
   else if (strcmp(action_name, "release") == 0) action = GHOSTTY_KEY_ACTION_RELEASE;
-  GhosttyMods encoding_mods = mods & (
-    GHOSTTY_MODS_SHIFT | GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT | GHOSTTY_MODS_SUPER
-  );
-  /* A text key with only Shift types through SDL text input, which carries the
-   * real text. SDL's cached keymap can hold U+FFFD or another layout's text. */
-  if (key == GHOSTTY_KEY_UNIDENTIFIED ||
-      (printable && (encoding_mods & ~GHOSTTY_MODS_SHIFT) == 0 &&
-        action != GHOSTTY_KEY_ACTION_RELEASE)) {
+  /* The Terminal View pairs a text key with its text input before it calls
+   * this function, so event text is the text that the key typed. */
+  if (key == GHOSTTY_KEY_UNIDENTIFIED) {
     lua_pushboolean(L, false);
     return 1;
   }

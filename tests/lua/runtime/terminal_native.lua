@@ -26,6 +26,28 @@ local function wait_for_text(session, expected, timeout)
   return text, snapshot
 end
 
+-- A PowerShell that reads raw input bytes until `terminator` and prints them in hex.
+-- `kitty_flags` pushes Kitty keyboard flags before ANVIL_KEYS_READY.
+local function key_bytes_shell(kitty_flags, terminator)
+  local push = kitty_flags and ("[Console]::Write($e+'[>" .. kitty_flags .. "u'); ") or ""
+  return [[powershell.exe -NoLogo -NoProfile -Command "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class AnvilConsoleMode { [DllImport(\"kernel32.dll\")] public static extern IntPtr GetStdHandle(int n); [DllImport(\"kernel32.dll\")] public static extern bool GetConsoleMode(IntPtr h, out uint m); [DllImport(\"kernel32.dll\")] public static extern bool SetConsoleMode(IntPtr h, uint m); }'; $h=[AnvilConsoleMode]::GetStdHandle(-10); $m=0; [AnvilConsoleMode]::GetConsoleMode($h,[ref]$m)|Out-Null; [AnvilConsoleMode]::SetConsoleMode($h,($m -band (-bnot 7)) -bor 0x200)|Out-Null; $e=[char]27; ]]
+    .. push .. [[[Console]::Write('ANVIL_KEYS_READY'); $s=[Console]::OpenStandardInput(); $bytes=New-Object 'System.Collections.Generic.List[byte]'; do { $v=$s.ReadByte(); if ($v -lt 0) { break }; $bytes.Add([byte]$v) } while ($v -ne ]]
+    .. terminator .. [[); [Console]::WriteLine('ANVIL_KEYS='+(($bytes | ForEach-Object { $_.ToString('X2') }) -join '-'))"]]
+end
+
+local function start_key_reader(kitty_flags, terminator)
+  local terminal_native = require "terminal_native"
+  local session, start_error = terminal_native.new({
+    cols = 80, rows = 8, cell_width = 8, cell_height = 16,
+    cwd = system.getcwd(),
+    shell = key_bytes_shell(kitty_flags, terminator),
+  })
+  test.ok(session, start_error)
+  local text = wait_for_text(session, "ANVIL_KEYS_READY", 5)
+  test.ok(text:find("ANVIL_KEYS_READY", 1, true), text)
+  return session
+end
+
 test.describe("Native terminal session", function()
   test.it("applies configured default and ANSI colors", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
@@ -363,99 +385,57 @@ test.describe("Native terminal session", function()
     test.ok(text:find("ANVIL_TERMINAL_INPUT", 1, true), text)
   end)
 
-  test.it("lets text input handle keys with only Shift or lock modifiers", function()
+  test.it("encodes text keys with the text they receive", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
-    local terminal_native = require "terminal_native"
-    local session, start_error = terminal_native.new({
-      cols = 80,
-      rows = 8,
-      cell_width = 8,
-      cell_height = 16,
-      cwd = system.getcwd(),
-    })
-    test.ok(session, start_error)
-
-    local num_lock = 0x1000
-    local caps_lock = 0x2000
-    test.not_ok(session:key("o", { raw = num_lock }, "press", {
-      scancode = 18,
-      text = "o",
-      unshifted_codepoint = string.byte("o"),
-      consumed_modifiers = 0,
-    }))
-    test.not_ok(session:key("space", { raw = num_lock }, "press", {
-      scancode = 44,
-      text = " ",
-      unshifted_codepoint = string.byte(" "),
-      consumed_modifiers = 0,
-    }))
-    test.not_ok(session:key("o", { raw = caps_lock }, "press", {
-      scancode = 18,
-      text = "O",
-      unshifted_codepoint = string.byte("o"),
-      consumed_modifiers = caps_lock,
-    }))
-    -- Layout text, not a US key name, determines whether a key types text.
+    local session = start_key_reader(nil, 0x29)
+    local num_lock, caps_lock = 0x1000, 0x2000
     for _, key in ipairs({
-      { "+", 48, "+", 0x2b },
-      { "@", 31, "@", 0x40 },
-      { "semicolon", 51, "\195\177", 0xf1 }, -- Spanish ñ
-      -- Cached keymap text must not replace the actual text-input event.
-      { "+", 48, "\239\191\189", 0xfffd },
+      { "o", num_lock, 18, "o", 0 },
+      { "o", caps_lock, 18, "O", caps_lock },
+      { "semicolon", 0, 51, "m", 0 }, -- French layout text, not the US key name
+      { "8", 0x0001, 37, "(", 0x0001 },
+      { "9", 0x0002 + caps_lock, 38, ")", 0x0002 },
     }) do
-      test.not_ok(session:key(key[1], { raw = num_lock }, "press", {
-        scancode = key[2],
-        text = key[3],
-        unshifted_codepoint = key[4],
-        consumed_modifiers = 0,
-      }), "text input should own " .. key[1])
+      test.ok(session:key(key[1], { raw = key[2] }, "press", {
+        scancode = key[3],
+        text = key[4],
+        unshifted_codepoint = string.byte(key[1]),
+        consumed_modifiers = key[5],
+      }), "the terminal should encode " .. key[4])
     end
-    -- Shift only selects the text. The keymap can hold stale text for it.
-    for _, shift in ipairs({ 0x0001, 0x0002 }) do
-      for _, locks in ipairs({ 0, num_lock, caps_lock, num_lock + caps_lock }) do
-        for _, action in ipairs({ "press", "repeat" }) do
-          for _, key in ipairs({
-            { "8", 37, "(" },
-            { "9", 38, ")" },
-            { "+", 48, "*" },
-            { "l", 15, "L" },
-          }) do
-            for _, text in ipairs({ key[3], "\239\191\189", "x" }) do
-              test.not_ok(session:key(key[1], { raw = shift + locks }, action, {
-                scancode = key[2],
-                text = text,
-                unshifted_codepoint = string.byte(key[1]),
-                consumed_modifiers = shift,
-              }), "text input should own Shift+" .. key[1] .. " " .. action)
-            end
-          end
-        end
-      end
-    end
+    local text = wait_for_text(session, "ANVIL_KEYS=", 5)
     session:close()
+    test.ok(text:find("ANVIL_KEYS=6F-4F-6D-28-29", 1, true), text)
+  end)
+
+  test.it("reports Shift text keys with their text through the Kitty keyboard protocol", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local session = start_key_reader(31, 0x75)
+    test.ok(session:key("8", { raw = 0x0001 }, "press", {
+      scancode = 37,
+      text = "(",
+      unshifted_codepoint = string.byte("8"),
+      consumed_modifiers = 0x0001,
+    }))
+    local text = wait_for_text(session, "ANVIL_KEYS=", 5)
+    session:close()
+    -- CSI 56:40;2;40u is key 8 with shifted key (, Shift, and the text (.
+    test.ok(text:find("ANVIL_KEYS=1B-5B-35-36-3A-34-30-3B-32-3B-34-30-75", 1, true), text)
   end)
 
   test.it("reports the shifted layout key with Alt through the Kitty keyboard protocol", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
-    local terminal_native = require "terminal_native"
-    local session, start_error = terminal_native.new({
-      cols = 80, rows = 8, cell_width = 8, cell_height = 16,
-      cwd = system.getcwd(),
-      shell = [[powershell.exe -NoLogo -NoProfile -Command "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class AnvilConsoleMode { [DllImport(\"kernel32.dll\")] public static extern IntPtr GetStdHandle(int n); [DllImport(\"kernel32.dll\")] public static extern bool GetConsoleMode(IntPtr h, out uint m); [DllImport(\"kernel32.dll\")] public static extern bool SetConsoleMode(IntPtr h, uint m); }'; $h=[AnvilConsoleMode]::GetStdHandle(-10); $m=0; [AnvilConsoleMode]::GetConsoleMode($h,[ref]$m)|Out-Null; [AnvilConsoleMode]::SetConsoleMode($h,($m -band (-bnot 7)) -bor 0x200)|Out-Null; $e=[char]27; [Console]::Write($e+'[>31uANVIL_KITTY_READY'); $s=[Console]::OpenStandardInput(); $bytes=New-Object 'System.Collections.Generic.List[byte]'; do { $v=$s.ReadByte(); if ($v -lt 0) { break }; $bytes.Add([byte]$v) } while ($v -ne 117); [Console]::WriteLine('ANVIL_KITTY_KEYS='+(($bytes | ForEach-Object { $_.ToString('X2') }) -join '-'))"]],
-    })
-    test.ok(session, start_error)
-    local text = wait_for_text(session, "ANVIL_KITTY_READY", 5)
-    test.ok(text:find("ANVIL_KITTY_READY", 1, true), text)
+    local session = start_key_reader(31, 0x75)
     test.ok(session:key("/", { shift = true, alt = true }, "press", {
       scancode = 36,
       text = "/",
       unshifted_codepoint = string.byte("7"),
       consumed_modifiers = 1,
     }))
-    text = wait_for_text(session, "ANVIL_KITTY_KEYS=", 5)
+    local text = wait_for_text(session, "ANVIL_KEYS=", 5)
     session:close()
     -- CSI 55:47;4u is key 7 with shifted key /, Shift and Alt.
-    test.ok(text:find("ANVIL_KITTY_KEYS=1B-5B-35-35-3A-34-37-3B-34-75", 1, true), text)
+    test.ok(text:find("ANVIL_KEYS=1B-5B-35-35-3A-34-37-3B-34-75", 1, true), text)
   end)
 
   test.it("searches repeated matches in terminal output", function()
