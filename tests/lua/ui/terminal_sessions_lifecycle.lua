@@ -31,10 +31,12 @@ test.describe("Terminal Session lifecycle", function()
     context.views = {}
     context.processes = {}
     context.restart_request = core.restart_request
+    context.quit_request = core.quit_request
   end)
 
   test.after_each(function(context)
     core.restart_request = context.restart_request
+    core.quit_request = context.quit_request
     if context.project and not common.path_equals(core.root_project().path, context.project) then
       core.set_project(context.project)
     end
@@ -162,6 +164,21 @@ test.describe("Terminal Session lifecycle", function()
     test.equal(restored.session:stats().host_pid, stats.host_pid)
     test.ok(wait_for(restored, function() return printed(restored, "restart_marker") end))
     mark(restored, "restart_reattach_marker")
+  end)
+
+  test.it("keeps the same shell when an update closes the editor", function(context)
+    local view = open(context)
+    mark(view, "before_update_marker")
+    local state, stats = view:get_state(), view.session:stats()
+    core.on_event("prepareupdate")
+    local requested = core.quit_request
+    core.quit_request = context.quit_request -- Keep the isolated test app running.
+    test.ok(requested, "update did not save and exit the Project")
+    test.equal(view.session, nil)
+    local restored = open(context, state)
+    test.equal(restored.session:stats().host_pid, stats.host_pid)
+    test.equal(restored.session:stats().shell_pid, stats.shell_pid)
+    mark(restored, "after_update_marker")
   end)
 
   test.it("reattaches the saved Terminal Session after switching Projects", function(context)

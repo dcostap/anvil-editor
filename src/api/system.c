@@ -554,6 +554,9 @@ top:
       if (anvil_hosted_surface_gone_event(e.type)) {
         lua_pushliteral(L, "shellgone"); return 1;
       }
+      if (anvil_hosted_surface_update_event(e.type)) {
+        lua_pushliteral(L, "prepareupdate"); return 1;
+      }
       if (anvil_hosted_surface_configuration_event(e.type)) {
         lua_pushliteral(L, "windowconfiguration"); return 1;
       }

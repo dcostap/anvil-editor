@@ -1072,6 +1072,16 @@ function core.restart()
   end)
 end
 
+function core.prepare_update()
+  core.log_quiet("Update requested: save Workspace and keep Terminal Sessions")
+  -- Use Workspace exit, not the remembered End/Keep policy for a normal quit.
+  if not core.begin_quit() then return end
+  core.confirm_close_buffers(core.buffers, core.exit, core.cancel_quit, function()
+    core.window:_persist()
+    core.quit_request = true
+  end, true)
+end
+
 
 local function require_lua_plugin(plugin)
   return require("plugins." .. plugin.name)
@@ -2331,6 +2341,7 @@ end
 function core.on_event(type, ...)
   if type == "shelllost" then core.on_shell_lost(); return true end
   if type == "shellgone" then core.on_shell_gone(); return true end
+  if type == "prepareupdate" then core.prepare_update(); return true end
   if type == "shelladopted" then core.on_shell_adopted(); return true end
   if core.shell_lost and (type == "quit" or type == "windowclosed") then return true end
   core.current_event_context = event_summary(type, ...)

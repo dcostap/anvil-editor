@@ -76,7 +76,7 @@ static struct {
   char *project_path;
   AnvilAdoptionOffer *offer;
   HANDLE adoption_ready;
-  Uint32 adopted_event, gone_event;
+  Uint32 adopted_event, gone_event, update_event;
   bool lost, writing;
   SDL_AtomicInt adopting, reader_running;
   /* Set when this Project's own rendering failed. No shell can adopt a broken surface. */
@@ -318,6 +318,7 @@ bool anvil_hosted_surface_await_adoption(void) {
 }
 bool anvil_hosted_surface_adopted_event(Uint32 type) { return hosted.active && type == hosted.adopted_event; }
 bool anvil_hosted_surface_gone_event(Uint32 type) { return hosted.active && type == hosted.gone_event; }
+bool anvil_hosted_surface_update_event(Uint32 type) { return hosted.active && type == hosted.update_event; }
 
 static void signal_loss(const char *cause, uint16_t type, size_t bytes) {
   if (SDL_GetAtomicInt(&hosted.intentional_exit)) return;
@@ -599,6 +600,9 @@ static void dispatch_message(HostedMessage *message) {
     case ANVIL_SURFACE_MSG_CLOSE:
       push_window_event(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
       break;
+    case ANVIL_SURFACE_MSG_PREPARE_UPDATE:
+      push_window_event(hosted.update_event);
+      break;
     case ANVIL_SURFACE_MSG_DIALOG_RESULT: {
       AnvilSurfaceDialogResult *result = (AnvilSurfaceDialogResult *)payload;
       size_t index = 0;
@@ -722,6 +726,7 @@ static int SDLCALL reader_thread(void *data) {
         if (size != sizeof(AnvilSurfaceInt)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_CLOSE:
+      case ANVIL_SURFACE_MSG_PREPARE_UPDATE:
       case ANVIL_SURFACE_MSG_SIDEBAR_CHANGED:
       case ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED:
         if (size) goto failed;
@@ -1117,9 +1122,11 @@ bool anvil_hosted_surface_connect(void) {
   hosted.geometry_event = SDL_RegisterEvents(1);
   hosted.adopted_event = SDL_RegisterEvents(1);
   hosted.gone_event = SDL_RegisterEvents(1);
+  hosted.update_event = SDL_RegisterEvents(1);
   if (!hosted.queue_lock || !hosted.queue_condition || !hosted.loss_signal || !hosted.exit_sent ||
       !hosted.adoption_ready || hosted.loss_event == (Uint32)-1 || hosted.receive_event == (Uint32)-1 ||
-      hosted.geometry_event == (Uint32)-1 || hosted.adopted_event == (Uint32)-1 || hosted.gone_event == (Uint32)-1)
+      hosted.geometry_event == (Uint32)-1 || hosted.adopted_event == (Uint32)-1 || hosted.gone_event == (Uint32)-1 ||
+      hosted.update_event == (Uint32)-1)
     return false;
   SDL_Thread *writer = SDL_CreateThread(writer_thread, "anvil-project-writer", NULL);
   SDL_Thread *watchdog = SDL_CreateThread(loss_watchdog, "anvil-project-deadline", NULL);
@@ -1440,6 +1447,7 @@ bool anvil_hosted_surface_restarted(void) { return false; }
 bool anvil_hosted_surface_loss_event(Uint32 type) { (void)type; return false; }
 bool anvil_hosted_surface_adopted_event(Uint32 type) { (void)type; return false; }
 bool anvil_hosted_surface_gone_event(Uint32 type) { (void)type; return false; }
+bool anvil_hosted_surface_update_event(Uint32 type) { (void)type; return false; }
 bool anvil_hosted_surface_await_adoption(void) { return false; }
 void anvil_hosted_surface_finish_adoption(void) {}
 void anvil_hosted_surface_exit_intent(bool restart) { (void)restart; }

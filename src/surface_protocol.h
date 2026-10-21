@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 25u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 26u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -42,6 +42,8 @@ typedef enum {
   /* Answer with ANVIL_SURFACE_MSG_PONG from the UI thread. A Project whose UI thread is stuck does not answer.
    * Payload: AnvilSurfaceInt, returned unchanged. */
   ANVIL_SURFACE_MSG_PING = 11,
+  /* Save the Workspace and exit, leaving Terminal Sessions running. No payload. */
+  ANVIL_SURFACE_MSG_PREPARE_UPDATE = 12,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,

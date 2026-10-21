@@ -23,13 +23,14 @@ if not exist "%BASH%" (
 
 cd /d "%REPO%" || exit /b 1
 
-echo Closing running Anvil processes before updating...
-call :KillAnvil
-if errorlevel 1 exit /b 1
-
 echo.
 echo === Building Anvil incrementally ===
 "%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && zig_dir=$(./scripts/ensure-zig.sh) && export PATH=$zig_dir:$PATH && ./scripts/ensure-luajit-cli.sh && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi"
+if errorlevel 1 exit /b 1
+
+echo.
+echo === Saving Anvil and keeping Terminal Sessions running ===
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPO%\scripts\prepare-dev-update.ps1" -AppRoot "%DEST%"
 if errorlevel 1 exit /b 1
 
 echo.
@@ -82,16 +83,6 @@ if exist "%~1\src\api\api.h" (
   set "REPO_BASH=%~3"
   set "DEST_BASH=%~4"
 )
-exit /b 0
-
-:KillAnvil
-rem Close all Anvil processes, including Terminal Session hosts, before install.
-rem Try graceful termination first, then force anything left behind.
-taskkill /IM anvil.exe /T >nul 2>nul
-taskkill /IM anvil.com /T >nul 2>nul
-timeout /T 1 /NOBREAK >nul 2>nul
-taskkill /F /IM anvil.exe /T >nul 2>nul
-taskkill /F /IM anvil.com /T >nul 2>nul
 exit /b 0
 
 :RemoveLink

@@ -363,6 +363,7 @@ typedef struct {
   Uint32 next_window, sidebar_window_id;
   HWND service_hwnd;
   bool shutting_down;
+  bool updating;
   ShellPicker *pickers;
   Uint32 event_type;
   SDL_Cursor *cursors[ANVIL_SURFACE_CURSOR_COUNT];
@@ -3066,6 +3067,11 @@ static void close_decision(ShellProject *project, int decision) {
     return;
   }
   if (decision == ANVIL_SURFACE_CLOSE_CANCELLED) {
+    if (shell.updating) {
+      shell.updating = false;
+      shell.state_enabled = true;
+      SDL_Log("Shell update cancelled; keep the editor and all Terminal Sessions");
+    }
     if (project == window->selected)
       window->closing = false;
     if (project->intentional_exit)
@@ -3957,7 +3963,8 @@ static void request_close(ShellProject *project) {
   }
   set_state(project, SHELL_CLOSING);
   composite_and_present(window);
-  shell_send(project, ANVIL_SURFACE_MSG_CLOSE, NULL, 0, NULL, 0);
+  shell_send(project, shell.updating ? ANVIL_SURFACE_MSG_PREPARE_UPDATE : ANVIL_SURFACE_MSG_CLOSE,
+             NULL, 0, NULL, 0);
 }
 
 static void handle_connected(ShellProject *project) {
@@ -3992,7 +3999,8 @@ static void handle_connected(ShellProject *project) {
                   (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS) != 0);
   shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS, focused ? 1 : 0);
   if (project->close_requested_ns)
-    shell_send(project, ANVIL_SURFACE_MSG_CLOSE, NULL, 0, NULL, 0);
+    shell_send(project, shell.updating ? ANVIL_SURFACE_MSG_PREPARE_UPDATE : ANVIL_SURFACE_MSG_CLOSE,
+               NULL, 0, NULL, 0);
 }
 
 /* Runs on the launch server thread. */
@@ -4006,7 +4014,23 @@ static bool notify_external(AnvilShellLaunchRequest *request) {
 static void accept_external(AnvilShellLaunchRequest *request) {
   SDL_Log("Shell external launch received: pid=%lu arguments=%d",
           (unsigned long)anvil_shell_launch_client_pid(request), anvil_shell_launch_argc(request) - 2);
-  if (shell.shutting_down ||
+  if (anvil_shell_launch_argc(request) == 3 &&
+      !strcmp(anvil_shell_launch_argv(request)[2], "--prepare-update")) {
+    if (!shell.updating) {
+      /* Keep the complete Window layout, not the empty layout left by Close. */
+      save_windows(true);
+      shell.state_enabled = false;
+      shell.updating = true;
+      SDL_Log("Shell update: save Workspaces and detach Terminal Sessions");
+      for (ShellWindow *item = shell.windows; item; item = item->next) {
+        begin_window_close(item);
+        request_close(item->selected);
+      }
+    }
+    anvil_shell_launch_finish(request, ANVIL_SHELL_LAUNCH_ACCEPTED);
+    return;
+  }
+  if (shell.shutting_down || shell.updating ||
       !queue_resolution(NULL, anvil_shell_launch_cwd(request), anvil_shell_launch_argc(request),
                         anvil_shell_launch_argv(request), false, false, true, request))
     anvil_shell_launch_finish(request, ANVIL_SHELL_LAUNCH_BUSY);
@@ -6531,6 +6555,10 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   if (launch == ANVIL_SHELL_LAUNCH_FAILED) {
     fprintf(stderr, "Anvil: the running Anvil did not accept this launch. Try again.\n");
     shell_exit(1);
+  }
+  if (argc == 3 && !strcmp(argv[2], "--prepare-update")) {
+    anvil_shell_launch_stop();
+    shell_exit(0); /* There is no running shell to prepare. */
   }
   anvil_latency_probe_init("shell");
 

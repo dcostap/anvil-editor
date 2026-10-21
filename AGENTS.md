@@ -127,10 +127,12 @@ Use the BAT files in the repo root
   - default finalization step only when non-Lua files were edited
   - use after C/C++, build-system, asset, or other non-Lua source/default-data changes so the dev portable app is refreshed consistently
   - skip for edits under junctioned data directories; reload or restart Anvil instead
-  - close Anvil first if binaries may be replaced
   - rebuilds and updates the dev portable app
   - restores the source-data junctions
-  - ends all Anvil processes, including Terminal Session hosts; running shells end too
+  - builds first, then asks the running editor to save its Workspaces and detach Terminal Sessions
+  - Terminal Session hosts and their shells keep running; the restarted editor reconnects to them
+  - moves the old `anvil.exe` and ConPTY files into `anvil-portable\retired`, because running hosts lock them
+  - stops if the editor does not close, for example at an unsaved-file prompt; it never force-stops a process
 
 - `launch-anvil-debug.bat`
   - explicitly launches the unstripped `build-windows-x86_64\src\anvil.exe`
@@ -528,7 +530,6 @@ From the agent/MSYS bash, use the `cmd.exe` double-slash form documented below.
 
 C/C++ edits require a rebuild and restart. For edits under junctioned data directories, validate syntax and reload or restart Anvil.
 
-Close Anvil before running the BAT if binaries may be replaced, because the exe may be locked.
 
 ### Running BAT files from the agent/MSYS bash
 
