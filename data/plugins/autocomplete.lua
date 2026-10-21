@@ -295,8 +295,8 @@ end
 -- unconstrained popup does not truncate text because of rounding.
 local TEXT_FIT_RESERVE = 1
 local TEXT_OVERFLOW_TOLERANCE = 0.5
-local MIN_POPUP_COLUMNS = 32
-local MAX_POPUP_COLUMNS = 72
+local MIN_POPUP_COLUMNS = 56
+local MAX_POPUP_COLUMNS = 88
 local MAX_POPUP_ROWS = 8
 
 local function max_symbol_length()
