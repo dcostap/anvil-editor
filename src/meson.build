@@ -324,6 +324,11 @@ launch_mode_test = executable('launch_mode_test',
 test('launch-mode', launch_mode_test, env: anvil_test_env, suite: 'anvil')
 
 if host_machine.system() == 'windows'
+    keymap_layout_test = executable('keymap_layout_test',
+        ['../tests/native/keymap_layout_test.c'],
+        include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
+    test('keymap-layout', keymap_layout_test, env: anvil_test_env, suite: 'anvil')
+
     sidebar_scan_test = executable('sidebar_scan_test',
         ['../tests/native/project_sidebar_scan_test.c', 'project_sidebar.c', 'project_sidebar_scan.c'],
         include_directories: anvil_includes, dependencies: [sdl_dep, lua_dep], c_args: anvil_cargs)

@@ -363,7 +363,7 @@ test.describe("Native terminal session", function()
     test.ok(text:find("ANVIL_TERMINAL_INPUT", 1, true), text)
   end)
 
-  test.it("lets text input handle keys with only lock modifiers", function()
+  test.it("lets text input handle keys with only Shift or lock modifiers", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
     local session, start_error = terminal_native.new({
@@ -410,10 +410,20 @@ test.describe("Native terminal session", function()
         consumed_modifiers = 0,
       }), "text input should own " .. key[1])
     end
+    -- Shift only selects the text. The keymap can hold stale text for it.
+    local shift = 0x1001
+    for _, text in ipairs({ "(", "\239\191\189" }) do
+      test.not_ok(session:key("8", { raw = shift }, "press", {
+        scancode = 37,
+        text = text,
+        unshifted_codepoint = string.byte("8"),
+        consumed_modifiers = 1,
+      }), "text input should own shift+8")
+    end
     session:close()
   end)
 
-  test.it("reports shifted layout text through the Kitty keyboard protocol", function()
+  test.it("reports the shifted layout key with Alt through the Kitty keyboard protocol", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
     local session, start_error = terminal_native.new({
@@ -424,7 +434,7 @@ test.describe("Native terminal session", function()
     test.ok(session, start_error)
     local text = wait_for_text(session, "ANVIL_KITTY_READY", 5)
     test.ok(text:find("ANVIL_KITTY_READY", 1, true), text)
-    test.ok(session:key("/", { shift = true }, "press", {
+    test.ok(session:key("/", { shift = true, alt = true }, "press", {
       scancode = 36,
       text = "/",
       unshifted_codepoint = string.byte("7"),
@@ -432,7 +442,8 @@ test.describe("Native terminal session", function()
     }))
     text = wait_for_text(session, "ANVIL_KITTY_KEYS=", 5)
     session:close()
-    test.ok(text:find("ANVIL_KITTY_KEYS=1B-5B-35-35-3A-34-37-3B-32-3B-34-37-75", 1, true), text)
+    -- CSI 55:47;4u is key 7 with shifted key /, Shift and Alt.
+    test.ok(text:find("ANVIL_KITTY_KEYS=1B-5B-35-35-3A-34-37-3B-34-75", 1, true), text)
   end)
 
   test.it("searches repeated matches in terminal output", function()

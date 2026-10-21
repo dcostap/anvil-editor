@@ -591,6 +591,21 @@ The materialized copy stays on disk for the session. An edit writes to that copy
 Use Save As to keep a separate version. Keep this patch when updating SDL3 unless
 upstream materializes virtual files itself.
 
+SDL3 dead-key reset patch:
+
+- `subprojects/packagefiles/sdl3-dead-key-reset.patch`
+- listed by `diff_files` in `subprojects/sdl3.wrap`
+- SDL builds its keymap when the input language changes, often while Ctrl+Shift is held
+- the build presses each dead key, then presses Space to clear it
+- SDL pressed Space with the live modifiers. With Ctrl held, Space types nothing
+- the next key then got two characters, and SDL cached U+FFFD for it, such as Spanish `+`
+- the patch presses Space without modifiers
+
+Run `anvil:keymap-layout` after SDL3 updates. Keep this patch unless upstream clears dead keys the same way.
+
+Terminal Views do not use SDL's keymap text for a text key that has only Shift.
+SDL text input types that key. Run `runtime/terminal_native.lua` after key input changes.
+
 Current Anvil Ghostty patch:
 
 - `subprojects/packagefiles/ghostty-semantic-prompt-fresh-line-option.patch`

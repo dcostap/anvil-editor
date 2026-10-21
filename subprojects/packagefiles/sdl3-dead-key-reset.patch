@@ -1,0 +1,22 @@
+diff --git a/src/video/windows/SDL_windowskeyboard.c b/src/video/windows/SDL_windowskeyboard.c
+index 67cae22..27f9d2a 100644
+--- a/src/video/windows/SDL_windowskeyboard.c
++++ b/src/video/windows/SDL_windowskeyboard.c
+@@ -254,14 +254,12 @@ void WIN_ResetDeadKeys(void)
+     this tries to undo the effect pressing the deadkey.
+     see: http://archives.miloush.net/michkap/archive/2006/09/10/748775.html
+     */
+-    BYTE keyboardState[256];
++    // Anvil: press Space without modifiers. With Ctrl held, such as during
++    // the Ctrl+Shift layout hotkey, Space types nothing and the dead key stays.
++    BYTE keyboardState[256] = { 0 };
+     WCHAR buffer[16];
+     int vk, sc, result, i;
+ 
+-    if (!GetKeyboardState(keyboardState)) {
+-        return;
+-    }
+-
+     vk = VK_SPACE;
+     sc = MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+     if (sc == 0) {

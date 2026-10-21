@@ -2093,8 +2093,7 @@ static int f_terminal_key(lua_State *L) {
     lua_getfield(L, 5, "text");
     if (lua_isstring(L, -1)) {
       event_text = lua_tolstring(L, -1, &event_text_length);
-      /* Layout text determines printability, not the US key-name fallback.
-       * Unmodified text must come from SDL text input, not its cached keymap. */
+      /* Layout text determines printability, not the US key-name fallback. */
       printable = event_text_length > 0;
     }
     lua_pop(L, 1);
@@ -2120,8 +2119,11 @@ static int f_terminal_key(lua_State *L) {
   GhosttyMods encoding_mods = mods & (
     GHOSTTY_MODS_SHIFT | GHOSTTY_MODS_CTRL | GHOSTTY_MODS_ALT | GHOSTTY_MODS_SUPER
   );
+  /* A text key with only Shift types through SDL text input, which carries the
+   * real text. SDL's cached keymap can hold U+FFFD or another layout's text. */
   if (key == GHOSTTY_KEY_UNIDENTIFIED ||
-      (printable && encoding_mods == 0 && action != GHOSTTY_KEY_ACTION_RELEASE)) {
+      (printable && (encoding_mods & ~GHOSTTY_MODS_SHIFT) == 0 &&
+        action != GHOSTTY_KEY_ACTION_RELEASE)) {
     lua_pushboolean(L, false);
     return 1;
   }
