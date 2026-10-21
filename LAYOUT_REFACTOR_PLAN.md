@@ -48,9 +48,10 @@ Buffer edit events already provide edit positions. Verify their timing and coord
 The Markdown model publishes from a worker. During typing, most publications describe an older text revision than the buffer.
 
 Previous gallery measurements reported approximately 84 ms median typing latency and 20–24 seconds from open to ready.
-These are historical observations, not a reproducible baseline for this work.
+These are historical observations. Milestone 1 recorded a reproducible baseline. It agrees: 89 ms and 21.7 s.
 
-Allocation, measurement, provider work, and suffix updates must be measured separately. Their relative costs are not yet established.
+The Milestone 1 baseline shows that whole-document rebuilds from provider reports cause most of the cost.
+It did not isolate suffix updates. They are part of the rewrap time, about 6 ms for each letter in the gallery.
 
 ## Update contract
 
@@ -66,14 +67,17 @@ Range markers and folds keep their own column-level mapping. Do not add columns 
 
 Use existing buffer events as the source. Normalize them at the layout boundary only when necessary.
 
-Specify these rules before implementation:
+The Milestone 1 audit resolved these rules. The existing events express them, so no new Buffer API is necessary.
 
-- Whether each event occurs before or after the buffer changes.
-- Whether ranges include or exclude their end positions.
-- How insertions and deletions map boundary lines.
-- How undo, redo, and multi-caret edits enter the same path.
-
-Do not introduce a new public buffer API unless existing events cannot express these requirements.
+- **Source.** Use the `changed_ranges` of each Buffer transaction. All edit paths make them: `apply_edits` (typing, multi-caret edits, batch undo and redo, load), `raw_insert`, and `raw_remove`.
+- **Timing.** Transaction handlers run after the Buffer changes and after `text_revision` increments. `before` text listeners see the old text. `after` text listeners run after all transaction handlers.
+- **Range shape.** Each range has `old_line1..old_line2` in the old text and `new_line1..new_line2` in the new text. Both ranges include their end lines. `line_delta` is the new line count minus the old line count.
+- **Several ranges.** The ranges of one transaction are sorted and do not overlap. Their `new_line` values already include the deltas of earlier ranges.
+- **Mapping.** To map an old line, go through the ranges in order and add the deltas of the ranges before the line. A line inside an old range has no mapping. Its content changed.
+- **Boundary lines.** The range always includes the edited lines, also when their text stays the same. A line break at the end of line 100 gives `100..100 -> 100..101`, but line 100 keeps its text. Layout can keep the rows of a line whose source text and provider output did not change.
+- **Undo and redo.** One undo applies all merged steps. Each step is a separate transaction. Batch undo and redo use `apply_edits`. So several transactions can occur before one layout read. The coordinator composes their mappings in order.
+- **Multi-caret edits.** One transaction has one range for each caret.
+- **Load.** A `load` transaction replaces all text. It is a full invalidation.
 
 ### Layout invalidation
 
@@ -97,6 +101,52 @@ Examples:
 - Toggling a fold changes visible rows without changing buffer text.
 
 Width and font changes can invalidate measurements globally. A color-only theme change need not invalidate geometry.
+
+Today, a wrapped view has no drawing-only effect. `invalidate_line_render` also rewraps the lines.
+
+### Worked examples
+
+The examples use the gallery. Today's cost comes from the Milestone 1 baseline.
+
+1. **Type one letter on line 100 of a wrapped file without providers.**
+   - Mapping: `100..100 -> 100..100`, delta 0.
+   - Geometry: line 100. Its row count can change. Rows after it move by that change.
+   - Measure line 100 only. Keep all other rows and heights.
+2. **Type one letter on line 8736 of the gallery in Live Preview.**
+   - Mapping and text geometry: as in example 1.
+   - The Markdown provider reports geometry for line 8736 after the publication. It reports more lines only if the parse changed them.
+   - Today: each keystroke rebuilds all composed rows, about 27 ms. Each visible line renders and wraps two times: once at the edit and once at the publication.
+3. **Insert a line break at the end of line 8736.**
+   - Mapping: `8736..8736 -> 8736..8737`, delta +1. Every later line moves down one line.
+   - Geometry: lines 8736 and 8737. Line 8736 keeps its rows, because its text did not change.
+   - Move the later rows and their heights. Do not measure them again.
+   - Today: 2.2 s. The view drops all measured rows, and the next read renders all 19,185 lines again.
+4. **Type `# ` at the start of a paragraph line.**
+   - Mapping: delta 0.
+   - Geometry: the line becomes a heading, so its height changes. The provider can also report the lines before and after it, if their block spacing changes.
+5. **Change a fence opener that starts a 60-line code block.**
+   - Mapping: delta 0.
+   - Geometry: the complete block. The fence service reports the block range. The provider passes it on.
+6. **Edit a footnote definition on line 900 that line 120 references.**
+   - Mapping: delta 0 at line 900.
+   - Geometry: line 900, and the inserted card rows after the block that ends near line 120.
+   - The footnote provider reports the reference block. It does not report the whole file.
+7. **Collapse a fold of lines 300 to 320.**
+   - No text change and no mapping.
+   - Geometry: lines 300 to 320 become one fold row. Rows after it move up.
+8. **Insert three line breaks above off-screen headings before the parse publishes.**
+   - Mappings: three transactions with delta +1 each. They compose to delta +3.
+   - While the parse is pending, the provider keeps its last output and maps it down three lines.
+   - At publication, the provider reports each line whose output changed, including lines that it showed as raw source while the parse was pending.
+   - Today, these headings keep the 24 px body height after the publication. A fresh view gives 46 px. See baseline mismatch 1.
+9. **Undo a group of three merged steps.**
+   - Three transactions. The coordinator composes them and updates layout one time, at the next read.
+10. **Type with carets on lines 10, 50, and 90.**
+    - One transaction with three ranges, each with delta 0. Geometry: three lines.
+11. **Change the window width of a wrapped view.**
+    - Full geometry invalidation. This is a global change.
+12. **Change only theme colors.**
+    - Drawing invalidation for the visible lines. No geometry change.
 
 ### Provider obligations
 
@@ -230,6 +280,7 @@ Layout drift:
    - Result: Each off-screen heading from line 28 keeps the body row height, 24 px. A fresh view gives 46 px. One newline does not cause it. With wrapping on, the view matches.
    - A second view of the Buffer also loses the headings above the edit, and its visible rows move.
    - Test: `ui/markdown_layout_stability.lua` > "keeps measurements across consecutive edits without wrapping".
+   - Cause, confirmed in Milestone 1: each line break drops the measured rows while the parse is pending. The rebuild measures the lines below the edit as raw source, so a heading gets the body height. The publication invalidates only the ranges that the parse changed. The edited view has the same problem off-screen.
 
 Not explained:
 
@@ -271,6 +322,180 @@ Deliverables:
 - A documented update contract with worked edit examples.
 - An invalidation and ownership inventory.
 - Baseline measurements with commands and environment details.
+
+#### Result
+
+The update contract and its worked examples are in [Update contract](#update-contract).
+
+##### Layout caches
+
+Each Text View has these caches. The owner is the module that writes the cache.
+
+| Cache | Owner | Valid while | Update paths |
+| --- | --- | --- | --- |
+| Wrap map: `wrapped_lines`, `wrapped_line_to_idx`, `wrapped_line_offsets`, `wrapped_presentations` | `linewrapping.lua` | wrap settings, `wrapped_text_revision`, line count | Line update with suffix renumbering, full rebuild, sliced rebuild with rebase |
+| Composed rows: `__composed_visual_row_cache` | `textview.lua` | `visual_row_cache_signature` | Full rebuild only |
+| Row heights: `__visual_metric_cache`, a Fenwick tree | `textview.lua` | `get_visual_metric_signature` | Dirty rows, wrap splice, composed pending lines, full rebuild |
+| Render plans: `__line_render_cache`, keyed by line number | `textview.lua` | Line source text and line signature | Line range, full clear |
+| Line widths: `__line_width_cache` | `textview.lua` | Line render generation | Line range, full clear |
+| Line packets: `__line_packet_cache` | `textview_line_packets.lua` | Packet signature | Moves entries through the edit ranges |
+| Folds: `fold_regions`, range markers | `textview.lua`, `range_marker.lua` | `fold_generation` | Each fold change increments the generation |
+
+The composed-row signature includes `text_revision`. So each edit rebuilds all composed rows.
+Composed rows exist when a fold is collapsed or an inserted-row provider is active. The gallery has collapsed Callouts and footnote definitions, so it always has composed rows.
+
+The render-plan cache does not move entries when lines move. After a line break, each later line misses the cache, because its source text differs.
+The line packet cache already moves its entries. It is a working example of the mapping in the contract. It is off for Markdown views and for views with variable row heights.
+
+The row-height cache also has a frozen copy for an external reload. Composed rows, row heights, and render plans each have a copy for one UI frame.
+
+##### Invalidation entry points
+
+| Entry point | Range | Effect today |
+| --- | --- | --- |
+| `invalidate_line_render(id, line1, line2)` | Lines or all | Clears render plans. A wrapped view also rewraps the lines at once. A large range starts a sliced rebuild. |
+| `invalidate_visual_metrics(id, line1, line2)` | Lines or all | Marks rows dirty, splices rows, defers composed lines, or drops all rows |
+| `invalidate_visual_rows(id)` | All only | Increments the fold generation, so composed rows rebuild |
+| `bump_fold_generation(reason)` | All only | Clears fold caches and composed rows |
+| `clear_composed_visual_row_cache()` | All only | Wrapping calls it after each wrap update |
+| Adding or removing a provider | All only | Full invalidation of its kind |
+
+Wrapping gives its row change to the next `invalidate_visual_metrics` call through one field, `__line_render_wrap_change`. The next call reads and clears it. This hand-off is order-dependent.
+
+##### Edit handlers
+
+The Buffer calls each transaction handler in `pairs` order over a table with string keys. No order is defined between these handlers:
+
+- `range_marker`, which moves folds
+- `markdown-semantic-model`, which starts a parse
+- `markdown-fence-highlight`
+- `textview-render-caches`, which updates wrapping, render plans, and row heights at once
+
+`textview-render-caches` updates each view eagerly, once for each transaction. An undo of three merged steps updates layout three times.
+If no line-render provider says that it handles line shifts, a line break invalidates render plans and heights to the end of the file.
+The Markdown provider says that it handles line shifts.
+
+Other handlers and wrappers of `Buffer.on_text_transaction` do not change layout: Tree-sitter, LSP documents, autocomplete, local find, POIs, navigation history, LSP diagnostics, and the vault index.
+
+##### Providers
+
+| Provider | File | Kinds | Reports changes as |
+| --- | --- | --- | --- |
+| `markdown-live` | `markdown/live_render.lua` | render, height, decoration | Line ranges for edits, publications, fences, links, and Callouts. Full for Source Mode, typography, and attach. |
+| `markdown.footnotes` inline rows | `markdown/footnotes.lua` | inserted rows, height | A generation that includes the Markdown `published_revision`. No ranges. |
+| Footnote editor format | `markdown/footnotes.lua` | render | Full |
+| POI preview | `poi_preview.lua` | inserted rows, height, decoration | A generation from the card layout. No ranges. |
+| Unified diff other rows | `plugins/diff/unified_view.lua` | inserted rows, height, decoration | `invalidate_visual_rows` and full height invalidation |
+| Diff view gaps | `plugins/diffview.lua` | inserted rows by count | The provider is added again for each alignment |
+| File Tree path separators | `plugins/filetree/init.lua` | inserted rows | `invalidate_visual_rows` |
+| Git commit line, path tree file icons, Terminal | `plugins/git/view.lua`, `plugins/path_tree.lua`, `plugins/terminal.lua` | render | Full |
+| Copy feedback, reload flash, diff colors | several | decoration | Drawing only |
+
+The reported list of inserted-row providers is correct and complete.
+`set_visual_row_extension` has no callers. Remove it when Milestone 3 changes inserted rows.
+
+The Markdown provider has three generations:
+
+- `generation` includes `semantic_pending_line` and the adoption generation. A line break sets `semantic_pending_line`.
+- `line_generation` includes `generation`. So a line break changes the render signature of every line, above the edit too.
+- `metric_generation` includes only typography and width.
+
+The Markdown provider keeps its own projected renders of the visible lines while a parse is pending. It also reads `__line_render_cache` and `__visual_metric_cache` directly.
+
+##### Recovery paths
+
+These paths repair layout that no provider reported. Milestone 4 removes them.
+
+- `reconcile_visible_line_layout` remeasures each visible line whose render plan is not the plan that wrapping or heights measured. It does not repair lines off-screen.
+- `resolve_composed_metric_lines` compares old and new composed rows to keep heights. It fails when a row outside the edit is a new table, because it compares footnote rows by table identity.
+- The signature checks in `invalidate_visual_metrics` keep rows when only `text_revision` changed.
+
+##### External readers
+
+These modules read layout fields directly instead of through Text View methods:
+
+| Module | Fields |
+| --- | --- |
+| `lsp/diagnostic_underlines.lua` | `wrapped_lines`, `wrapped_line_to_idx` |
+| `plugins/diffview.lua` | `wrapped_lines`, `wrapped_line_to_idx`, `__wrap_layout_generation`, `fold_regions` |
+| `plugins/drawwhitespace.lua` | `wrapped_line_to_idx` |
+| `plugins/intellij_find/overview.lua` | `wrapped_lines`, `wrapped_line_to_idx`, `__wrap_layout_generation`, `fold_generation`, `__async_wrap_reconstruction` |
+| `plugins/sticky_scroll.lua` | `wrapped_line_to_idx` |
+| `textview_line_packets.lua` | `wrapped_line_offsets` |
+| `markdown/live_render.lua` | `__line_render_cache`, `__visual_metric_cache` |
+| `editor.lua`, `plugins/diff/unified_view.lua` | `fold_regions` |
+| `plugins/perf_benchmark.lua`, `perf_workloads.lua` | `wrapped_line_to_idx`, `__async_wrap_reconstruction` |
+
+With a lazy coordinator, a direct field read can see layout before the coordinator applies pending changes.
+Each reader must read through a coordinator method, or run after a layout read in the same frame. Milestone 4 checks each one.
+
+##### Baseline measurements
+
+Environment:
+
+- Build: `69f010a6` with the scenario changes of this milestone. `debugoptimized` build in `build-windows-x86_64`, D3D11 renderer.
+- Machine: Intel Core i7-14700, 16 GB, Windows 11 Pro 26200.
+- File: `tests/fixtures/markdown/gallery-benchmark.md`, 19,185 lines, wrapped, in Live Preview.
+- Window: 1400 x 900. The narrow case uses 780 x 900. There, footnotes show as inline rows.
+
+Commands:
+
+```sh
+python tools/run_scenarios.py --suite markdown --no-build --attribute
+python tools/run_scenarios.py --scenario markdown-gallery-newline --no-build --attribute
+python tools/run_scenarios.py --scenario markdown-gallery-type-narrow --no-build --attribute
+```
+
+This milestone added `markdown-gallery-newline` and `markdown-gallery-type-narrow`.
+The counters come from `<run>/<scenario>/attribution/details.csv`. The rebuild reasons come from the log in `<run>/<scenario>/run-1-user/logs`.
+
+Latency is the median and p95 of each run's actions, from three scoring runs:
+
+| Scenario | Actions | p50 ms | p95 ms | Frame work p95 ms |
+| --- | ---: | ---: | ---: | ---: |
+| `markdown-gallery-open` | 1 | 21,736 | 21,736 | 14.7 |
+| `markdown-gallery-wheel` | 60 | 86 | 93 | 8.0 |
+| `markdown-gallery-caret` | 80 | 82 | 88 | 6.9 |
+| `markdown-gallery-type` | 60 | 89 | 281 | 135 |
+| `markdown-gallery-type-narrow` | 60 | 1,388 | 1,564 | 941 |
+| `markdown-gallery-newline` | 30 | 2,236 | 2,469 | 2,398 |
+| `markdown-vault-type` | 40 | 62 | 99 | 27 |
+
+Wheel and caret latency includes the smooth-scroll animation.
+
+Layout work in the attribution run:
+
+| Scenario | Full height rebuilds | Rows in full rebuilds | Composed-row builds | Render-plan misses | Rewrapped lines |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| type, 60 letters | 0 | 0 | 57 | 3,471 | 3,471 |
+| type-narrow, 60 letters | 114 | 2,237,550 | 57 | 26,030 | 3,672 |
+| newline, 30 line breaks | 32 | 623,260 | 30 | 576,184 | 2,048 |
+| caret, 80 moves | 0 | 0 | 5 | 0 | 0 |
+| wheel, 60 scrolls | 0 | 0 | 0 | 208 | 227 |
+| open, 1 open | 3 | 58,900 | 59 | 21,330 | 19,185 |
+
+Time in the attribution run:
+
+- **type:** composed-row builds take 27 ms on average and 147 ms at most. Resolving composed lines takes 29 ms for each letter, which includes the build. Rendering takes 7 ms and rewrapping 6 ms for each letter.
+- **type-narrow:** each full height rebuild takes about 650 ms. Each letter causes two:
+  - "signature": the footnote generation changes at each publication.
+  - "rows": `resolve_composed_metric_lines` compares footnote rows by table identity. The provider makes new tables.
+- **newline:** each line break drops all heights with reason `text-change`. Composed lines cannot defer a change of line count. The next read renders every line again, because each line signature changed. Full rebuilds take 2.2 s each. Rendering is 1.6 s of that, about 84 us for each line.
+- **open:** a synchronous full wrap takes 1.0 s. The publication starts a second full wrap in 4 ms slices. That wrap takes 5.1 s over 1,113 frames. Three full height rebuilds take 0.6 s. Composed-row builds take 1.4 s. The open waits for paced work over about 3,200 frames. No single pass explains the 21.7 s.
+
+The runner records the Lua heap size: 204 to 258 MiB in the suite run, 286 MiB for type-narrow, and 362 MiB for newline. It does not record allocation for each action. Add that only if a later milestone needs it.
+
+##### Consequences for Milestone 2
+
+The causes are provider reports, not walks of the flat lists. Fix them inside the provider-aware path:
+
+1. Report footnote changes as ranges. Do not put `published_revision` in the footnote generation.
+2. Compare inserted rows by provider row ID and content, not by table identity.
+3. Remove `semantic_pending_line` from the Markdown view generation. Report pending lines through ranges.
+4. Move render plans and heights through a line break instead of dropping them.
+5. Stop rebuilding composed rows because `text_revision` changed.
+
+Run `markdown-gallery-type-narrow` and `markdown-gallery-newline` before and after each change. The completion criteria use the rebuild counters above.
 
 ### Milestone 2: Complete one provider-aware path
 
