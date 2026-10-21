@@ -393,10 +393,17 @@ local function get_wrapped_segment_bounds(view, line, col1, col2, idx1, idx2, id
   return x1, x2
 end
 
+-- `first_idx` and `idx` are Wrapped Visual Row indexes of one line. Composed
+-- rows, such as Footnote rows, shift the line's rows in the visual-row
+-- metrics, but its rows stay contiguous there.
 local function wrapped_row_geometry(view, y, first_idx, idx)
-  local first_y_offset = view:get_visual_row_y_offset(first_idx)
-  local row_y = y + view:get_visual_row_y_offset(idx) - first_y_offset
-  return row_y, view:get_visual_row_height(idx)
+  local first_row = first_idx
+  if view:has_composed_visual_rows() then
+    first_row = view:get_visual_row((linewrapping.get_idx_line_col(view, first_idx)), 1)
+  end
+  local row = first_row + idx - first_idx
+  local row_y = y + view:get_visual_row_y_offset(row) - view:get_visual_row_y_offset(first_row)
+  return row_y, view:get_visual_row_height(row)
 end
 
 local function draw_wrapped_search_match(view, line, col1, col2, x, y, idx0, primary, outline, visible_idx1, visible_idx2)
@@ -9473,11 +9480,8 @@ function TextView:draw_line_body(line, x, y)
       local viewport_y2 = self.position.y + self.size.y
       if metric_cache then
         first_row, last_row = count + 1, 0
-        local row0_y_offset = self:get_visual_row_y_offset(idx0)
         for row = 1, count do
-          local idx = idx0 + row - 1
-          local row_y = y + self:get_visual_row_y_offset(idx) - row0_y_offset
-          local row_height = self:get_visual_row_height(idx)
+          local row_y, row_height = wrapped_row_geometry(self, y, idx0, idx0 + row - 1)
           if row_y + row_height >= viewport_y1 and row_y <= viewport_y2 then
             first_row = math.min(first_row, row)
             last_row = math.max(last_row, row)
@@ -9490,10 +9494,8 @@ function TextView:draw_line_body(line, x, y)
     end
     if last_row < first_row then
       if metric_cache then
-        local height = 0
-        for row = 1, count do
-          height = height + self:get_visual_row_height(idx0 + row - 1)
-        end
+        local last_y, last_height = wrapped_row_geometry(self, y, idx0, idx0 + count - 1)
+        local height = last_y + last_height - y
         perf_scope_end(body_phase_scope)
         perf_scope_end(wrapped_body_scope)
         return line_packets.finish_line_body(self, line, x, y, height)
