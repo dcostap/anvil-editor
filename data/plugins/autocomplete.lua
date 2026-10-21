@@ -819,6 +819,7 @@ local function sort_display_matches(items, needle)
       local bl = completion_sort_text(b)
       if #al ~= #bl then return #al < #bl end
       if #at ~= #bt then return #at < #bt end
+      if at ~= bt then return at < bt end
     elseif am or bm then
       return am ~= nil
     end
@@ -875,6 +876,41 @@ local function code_symbol_chunk_query(text)
   return table.concat(chunks, " "), chunks
 end
 
+local function completion_matches(text, needle)
+  needle = tostring(needle or ""):lower()
+  if needle == "" or text:lower():find(needle, 1, true) then return true end
+
+  -- Each gap must lead to another word's prefix, such as al-li-ca for
+  -- AlmacenLineCard. Keep all prefix lengths: a greedy match can consume
+  -- too much of one word and miss a valid abbreviation in later words.
+  local positions = { [1] = true }
+  for _, chunk in ipairs(code_symbol_chunks(text)) do
+    local next_positions = {}
+    for pos in pairs(positions) do
+      next_positions[pos] = true -- Words can be skipped.
+      for i = 1, math.min(#chunk, #needle - pos + 1) do
+        if chunk:byte(i) ~= needle:byte(pos + i - 1) then break end
+        if pos + i > #needle then return true end
+        next_positions[pos + i] = true
+      end
+    end
+    positions = next_positions
+  end
+  return false
+end
+
+local function match_completion_items(items, needle)
+  if needle == "" then return common.fuzzy_match(items, needle, false) end
+  local matches = {}
+  for _, item in ipairs(items) do
+    local text = type(item) == "table" and item.text or item
+    if completion_matches(tostring(text or ""), needle) then
+      matches[#matches + 1] = item
+    end
+  end
+  return sort_display_matches(matches, needle)
+end
+
 local function score_code_chunk_match(query_chunk, candidate_chunk)
   query_chunk = tostring(query_chunk or "")
   candidate_chunk = tostring(candidate_chunk or "")
@@ -890,28 +926,7 @@ local function score_code_chunk_match(query_chunk, candidate_chunk)
     return 850 + #query_chunk * 45 - (pos - 1) * 40 - math.max(0, #candidate_chunk - #query_chunk) * 4
   end
 
-  if #query_chunk < 3 then return nil end
-  local positions = {}
-  local scan = 1
-  for i = 1, #query_chunk do
-    local p = candidate_chunk:find(query_chunk:sub(i, i), scan, true)
-    if not p then return nil end
-    positions[#positions + 1] = p
-    scan = p + 1
-  end
-
-  local longest_run, current_run, max_gap = 1, 1, 0
-  for i = 2, #positions do
-    local gap = positions[i] - positions[i - 1] - 1
-    max_gap = math.max(max_gap, gap)
-    if gap == 0 then current_run = current_run + 1 else current_run = 1 end
-    longest_run = math.max(longest_run, current_run)
-  end
-  local span = positions[#positions] - positions[1] + 1
-  if longest_run < math.ceil(#query_chunk / 2) and (span > #query_chunk * 2 + 2 or max_gap > math.max(4, #query_chunk)) then
-    return nil
-  end
-  return 450 + #query_chunk * 35 + longest_run * 60 - span * 10 - max_gap * 15
+  return nil
 end
 
 local function code_symbol_chunk_match_score(candidate, query_chunks)
@@ -1437,12 +1452,12 @@ function update_suggestions()
 
   -- we prioritize the manually added symbols
   if #manual_items > 0 then
-    local matched = common.fuzzy_match(manual_items, partial, false)
+    local matched = match_completion_items(manual_items, partial)
     local filtered = {}
     for _, item in ipairs(matched or {}) do
       if not is_noop_completion(item) then filtered[#filtered + 1] = item end
     end
-    manual_items = sort_display_matches(annotate_matches(filtered, partial), partial)
+    manual_items = annotate_matches(filtered, partial)
     for i = 1, max_items do
       suggestions[i] = manual_items[i]
     end
@@ -1450,7 +1465,7 @@ function update_suggestions()
     si = #suggestions
   end
 
-  -- fuzzy match, remove duplicates and store. If the current partial looks like
+  -- Match word prefixes, remove duplicates and store. If the partial looks like
   -- a code symbol with separators or camel-case chunks, append a lower-priority
   -- pass that searches those chunks independently; for example, `text_draw`
   -- also tries `text draw`, which can find `draw_text` after the direct matches.
@@ -1459,7 +1474,7 @@ function update_suggestions()
     for _, item in ipairs(suggestions) do seen[suggestion_text(item)] = item end
     local matchable_items = items
     -- Automatic Buffer Word Completion is deliberately conservative. A
-    -- manual invocation keeps the full fuzzy set, including short words.
+    -- manual invocation also allows substrings and short words.
     if not triggered_manually then
       matchable_items = {}
       for _, item in ipairs(items) do
@@ -1481,7 +1496,7 @@ function update_suggestions()
       end
     end
 
-    append_matches(sort_display_matches(common.fuzzy_match(matchable_items, partial, false), partial), partial)
+    append_matches(match_completion_items(matchable_items, partial), partial)
 
     local chunk_query, query_chunks = code_symbol_chunk_query(partial)
     if chunk_query and chunk_query ~= partial then
