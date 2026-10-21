@@ -179,6 +179,77 @@ Deliverables:
 - The isolated full-rebuild comparison mode, committed alone.
 - A list of baseline mismatches with reproduction steps.
 
+#### Result
+
+`data/core/layout_reference.lua` compares a view with a fresh Editor on the same Buffer.
+`reference.compare(view)` returns a report. `tests/lua/ui/layout_reference.lua` tests it.
+
+The fresh Editor gets the same presentation inputs as the view under test:
+
+- size, position, scroll, and the scroll of each wide Markdown table
+- selection, focus, and Pane membership
+- wrapping, Live Preview, owned feature state, folds, and providers
+
+The report compares row keys, row positions, row heights, y offsets, line-to-row mapping, scrollable size, and a hit test in each visible row.
+It does not compare horizontal extent or drawn pixels.
+
+The reference skips a view in these conditions:
+
+- The Markdown model has not published the current text.
+- A Live Preview view has no Markdown model.
+- A footnote editor is open. Its card height comes from text that is not in the Buffer.
+
+Set `ANVIL_LAYOUT_REFERENCE=1` to compare the Editors that each Lua test opens, after the test passes:
+
+```sh
+PYTHONIOENCODING=utf-8 ANVIL_LAYOUT_REFERENCE=1 meson test -C build-windows-x86_64 anvil:lua-ui --timeout-multiplier 6 --verbose
+```
+
+The check lets the UI run frames for async work only when the test yielded.
+A test that never yields can leave UI state that a frame must not see.
+The check fails when the view under test changes during the comparison, because a change would hide drift.
+
+The Markdown layout oracle in `tests/fixtures/markdown/layout_oracle.lua` stays.
+It builds a new Buffer, so it also checks the incremental Markdown parser.
+The layout reference shares the Buffer and checks only the view.
+
+The repository has no correctness scenarios. `tools/run_scenarios.py` measures performance only.
+
+The reference compares settled layout. It cannot find a mismatch that the next frame corrects.
+It did not find the collapsed Callout header that is 6 px short until redraw.
+A collapse and an expand of a Callout, with and without wrapping, matched a fresh view.
+
+#### Baseline mismatches
+
+The last full `anvil:lua-ui` run with the reference ran 2906 tests. 10 failed.
+
+Layout drift:
+
+1. Off-screen headings lose their height after consecutive edits in an unwrapped Live Preview view.
+   - Steps: Open a 150-line note with a `##` heading on every eighth line. Turn wrapping off. Put the caret on line 10. Type three newlines, and update the view after each one, before the parse publishes. Wait for publication.
+   - Result: Each off-screen heading from line 28 keeps the body row height, 24 px. A fresh view gives 46 px. One newline does not cause it. With wrapping on, the view matches.
+   - A second view of the Buffer also loses the headings above the edit, and its visible rows move.
+   - Test: `ui/markdown_layout_stability.lua` > "keeps measurements across consecutive edits without wrapping".
+
+Not explained:
+
+2. `ui/markdown_live_editor.lua` > "toggles and persists view-local Source Mode without moving editor state" reports a scrollable size of 209 px. A fresh view gives 200 px. The row is off-screen.
+   - This occurs only when the complete file runs. The same steps in a separate file match, in both comparison orders.
+   - A state change from an earlier test in the file is the probable cause. Not examined further.
+
+Not layout drift. These tests change an input of the view and restore it in the test body, before the check:
+
+- `ui/markdown_live_editor.lua` > "honors disabled live image rendering" restores `markdown_live_render_images`.
+- `ui/markdown_live_editor.lua` > "presents resolved note, heading, and block embeds as bounded visual rows" restores `core.projects` and deletes the embedded files.
+- `ui/markdown_live_editor.lua` > "moves down onto implicit task content without revealing its prefix" and "reveals a marker-only task after moving left from implicit content" write `core.active_view` directly. No focus event gets to the view, so it keeps the revealed task prefix.
+
+These tests fail without the reference too:
+
+- `ui/linewrap_toggle_scroll.lua` > "keeps the top visible text fixed when enabling wrapping": `-6.500000000003` against `-6.5000000000027`.
+- `ui/textview_scroll.lua` > "limits scroll-past-end to the final line's scroll context boundary": 120 against 120.5.
+- `ui/markdown_heading_leading_gap.lua` > "keeps a heading fixed when its preceding blank line becomes text" fails in 5 of 10 runs without the reference.
+- `ui/line_hints.lua` and `ui/fuzzy_searcher_preview.lua` fail under load and pass alone.
+
 ### Milestone 1: Establish the baseline and contract
 
 Audit edit listeners, invalidation paths, provider APIs, and external readers of layout fields.
