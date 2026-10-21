@@ -28,6 +28,8 @@ bool anvil_shell_launch_start(bool (*notify)(AnvilShellLaunchRequest *request));
 /* Stops accepting launches and releases shell ownership. Call on the thread that took ownership. */
 void anvil_shell_launch_stop(void);
 
+/* Names one shell's mutex and pipe. Linked spellings of one executable and user directory share a key. */
+uint32_t anvil_shell_launch_key(const wchar_t *exe, const wchar_t *userdir);
 /* The user directory that keys this shell, without a trailing separator. NULL when the key is unavailable. */
 const wchar_t *anvil_shell_launch_user_directory(void);
 

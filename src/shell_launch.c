@@ -86,14 +86,60 @@ bool anvil_shell_user_directory(wchar_t *out, DWORD size) {
   return true;
 }
 
+/* A link, such as C:\Projects to D:\Projects, gives one file several spellings. This returns the
+ * resolved spelling without the \\?\ prefix, so a launch without a link keeps its spelling. */
+static void resolved_path(const wchar_t *path, wchar_t *out, DWORD size) {
+  HANDLE file = CreateFileW(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  DWORD length = 0;
+  if (file != INVALID_HANDLE_VALUE) {
+    length = GetFinalPathNameByHandleW(file, out, size, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    CloseHandle(file);
+  }
+  if (!length || length >= size) {
+    _snwprintf(out, size, L"%ls", path);
+    out[size - 1] = 0;
+    return;
+  }
+  if (!wcsncmp(out, L"\\\\?\\UNC\\", 8)) {
+    memmove(out + 2, out + 8, (wcslen(out + 8) + 1) * sizeof(wchar_t));
+  } else if (!wcsncmp(out, L"\\\\?\\", 4)) {
+    memmove(out, out + 4, (wcslen(out + 4) + 1) * sizeof(wchar_t));
+  }
+}
+
+#define RESOLVED_PATH_CHARS 32768
+
+/* Compares two spellings of files as one file, without case. */
+static bool same_file(const wchar_t *a, const wchar_t *b) {
+  wchar_t *first = malloc(2 * RESOLVED_PATH_CHARS * sizeof(wchar_t));
+  if (!first) return false;
+  wchar_t *second = first + RESOLVED_PATH_CHARS;
+  resolved_path(a, first, RESOLVED_PATH_CHARS);
+  resolved_path(b, second, RESOLVED_PATH_CHARS);
+  bool same = CompareStringOrdinal(first, -1, second, -1, TRUE) == CSTR_EQUAL;
+  free(first);
+  return same;
+}
+
+uint32_t anvil_shell_launch_key(const wchar_t *exe, const wchar_t *userdir) {
+  wchar_t *resolved = malloc(RESOLVED_PATH_CHARS * sizeof(wchar_t));
+  if (!resolved) return 0;
+  resolved_path(exe, resolved, RESOLVED_PATH_CHARS);
+  uint32_t hash = hash_text(hash_text(2166136261u, resolved), L"\n");
+  resolved_path(userdir, resolved, RESOLVED_PATH_CHARS);
+  hash = hash_text(hash, resolved);
+  free(resolved);
+  return hash;
+}
+
 static bool init_names(void) {
   if (mutex_name[0]) return true;
   wchar_t exe[32768], *userdir = user_dir;
   DWORD length = GetModuleFileNameW(NULL, exe, SDL_arraysize(exe));
   if (!length || length >= SDL_arraysize(exe) || !anvil_shell_user_directory(userdir, SDL_arraysize(user_dir)))
     return false;
-  uint32_t hash = hash_text(hash_text(2166136261u, exe), L"\n");
-  hash = hash_text(hash, userdir);
+  uint32_t hash = anvil_shell_launch_key(exe, userdir);
   DWORD session = 0;
   ProcessIdToSessionId(GetCurrentProcessId(), &session);
   _snwprintf(mutex_name, SDL_arraysize(mutex_name), L"Local\\AnvilShell-%08x", hash);
@@ -122,8 +168,8 @@ bool anvil_shell_same_identity(DWORD pid) {
     return false;
   HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
   if (!process) return false;
-  bool ok = QueryFullProcessImageNameW(process, 0, other, &other_size) &&
-            CompareStringOrdinal(own, -1, other, -1, TRUE) == CSTR_EQUAL;
+  /* The module name keeps a launch through a link. The image name of the other process is resolved. */
+  bool ok = QueryFullProcessImageNameW(process, 0, other, &other_size) && same_file(own, other);
   HANDLE token = NULL;
   union { TOKEN_USER user; BYTE bytes[256]; } info;
   DWORD size = 0;

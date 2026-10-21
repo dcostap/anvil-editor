@@ -1,5 +1,6 @@
 #include "shell_state.h"
 #include "shell_adoption.h"
+#include "shell_launch.h"
 #include <SDL3/SDL.h>
 #include <windows.h>
 #include <stdio.h>
@@ -163,14 +164,55 @@ static void adoption_records(void) {
   CHECK(!anvil_adoption_encode(&empty, &size), "record without a Project encoded");
 }
 
+static bool run_wait(wchar_t *command, DWORD *exit_code) {
+  STARTUPINFOW startup = {sizeof(startup)};
+  PROCESS_INFORMATION process;
+  if (!CreateProcessW(NULL, command, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &startup, &process))
+    return false;
+  WaitForSingleObject(process.hProcess, 10000);
+  GetExitCodeProcess(process.hProcess, exit_code);
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return true;
+}
+
+/* C:\Projects can be a link to D:\Projects. Both spellings of one install share one shell. */
+static void linked_spellings(void) {
+  wchar_t exe[MAX_PATH], dir[MAX_PATH], temp[MAX_PATH], link[MAX_PATH], linked_exe[MAX_PATH], command[MAX_PATH * 3];
+  GetModuleFileNameW(NULL, exe, MAX_PATH);
+  wcscpy(dir, exe);
+  wchar_t *slash = wcsrchr(dir, L'\\');
+  CHECK(slash, "test executable has no folder");
+  if (!slash) return;
+  *slash = 0;
+  GetTempPathW(MAX_PATH, temp);
+  _snwprintf(link, MAX_PATH, L"%lsanvil-shell-link-%lu", temp, GetCurrentProcessId());
+  _snwprintf(linked_exe, MAX_PATH, L"%ls\\%ls", link, wcsrchr(exe, L'\\') + 1);
+  _snwprintf(command, SDL_arraysize(command), L"cmd.exe /D /C mklink /J \"%ls\" \"%ls\" >NUL", link, dir);
+  DWORD code = 1;
+  CHECK(run_wait(command, &code) && code == 0, "could not create the folder link");
+  if (code) return;
+  CHECK(anvil_shell_launch_key(exe, dir) == anvil_shell_launch_key(linked_exe, link),
+        "linked spelling has another shell key");
+  /* A launcher started through the link checks the shell that runs from the resolved folder. */
+  _snwprintf(command, SDL_arraysize(command), L"\"%ls\" identity %lu", linked_exe, GetCurrentProcessId());
+  code = 1;
+  CHECK(run_wait(command, &code), "could not start the test executable through the link");
+  CHECK(code == 0, "linked spelling is not the same shell identity");
+  /* Removes the link only, never the folder it points to. */
+  CHECK(RemoveDirectoryW(link), "could not remove the folder link");
+}
+
 int main(int argc, char **argv) {
-  (void)argc; (void)argv;
+  if (argc > 2 && !strcmp(argv[1], "identity"))
+    return anvil_shell_same_identity(strtoul(argv[2], NULL, 10)) ? 0 : 1;
   round_trip();
   project_activity();
   sidebar_layout();
   rejects();
   writer();
   adoption_records();
+  linked_spellings();
   if (failures) return 1;
   printf("shell state: ok\n");
   return 0;
