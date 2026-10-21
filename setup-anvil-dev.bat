@@ -69,7 +69,9 @@ echo.
 echo Launching Anvil...
 rem Prefer Git's Windows command wrappers over extensionless MSYS scripts.
 if exist "%ProgramFiles%\Git\cmd\gitk.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
-start "Anvil" "%APP%"
+rem Start Anvil without inherited handles. A caller that reads this script's output through a pipe
+rem would otherwise wait until Anvil exits.
+powershell -NoProfile -Command "Start-Process -FilePath $env:APP"
 exit /b 0
 
 :UseLayout
