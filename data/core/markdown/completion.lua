@@ -133,6 +133,8 @@ function completion.get_completions(view)
     end
     candidates = index:completion_candidates(context.mode, context.query, target_path, 200)
   end
+  -- These modes search one note that the link already names, so the file adds nothing.
+  local one_note = context.mode == "current_heading" or context.mode == "current_block"
 
   for _, candidate in ipairs(candidates) do
     if context.note_target then
@@ -142,7 +144,8 @@ function completion.get_completions(view)
     context.items[#context.items + 1] = {
       text = candidate.text,
       name_span = candidate.name and { #candidate.text - #candidate.name + 1, #candidate.text },
-      info = candidate.line and candidate.rel_path .. ":" .. candidate.line or candidate.kind,
+      info = candidate.line and (one_note and "line " .. candidate.line or candidate.rel_path .. ":" .. candidate.line)
+        or candidate.kind,
       icon = candidate.kind,
       file_icon_path = file_result_kinds[candidate.kind] and candidate.path or nil,
       data = candidate,
