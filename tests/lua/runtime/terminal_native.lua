@@ -411,14 +411,26 @@ test.describe("Native terminal session", function()
       }), "text input should own " .. key[1])
     end
     -- Shift only selects the text. The keymap can hold stale text for it.
-    local shift = 0x1001
-    for _, text in ipairs({ "(", "\239\191\189" }) do
-      test.not_ok(session:key("8", { raw = shift }, "press", {
-        scancode = 37,
-        text = text,
-        unshifted_codepoint = string.byte("8"),
-        consumed_modifiers = 1,
-      }), "text input should own shift+8")
+    for _, shift in ipairs({ 0x0001, 0x0002 }) do
+      for _, locks in ipairs({ 0, num_lock, caps_lock, num_lock + caps_lock }) do
+        for _, action in ipairs({ "press", "repeat" }) do
+          for _, key in ipairs({
+            { "8", 37, "(" },
+            { "9", 38, ")" },
+            { "+", 48, "*" },
+            { "l", 15, "L" },
+          }) do
+            for _, text in ipairs({ key[3], "\239\191\189", "x" }) do
+              test.not_ok(session:key(key[1], { raw = shift + locks }, action, {
+                scancode = key[2],
+                text = text,
+                unshifted_codepoint = string.byte(key[1]),
+                consumed_modifiers = shift,
+              }), "text input should own Shift+" .. key[1] .. " " .. action)
+            end
+          end
+        end
+      end
     end
     session:close()
   end)
