@@ -276,6 +276,8 @@ local function format_routine_error(cr, err)
   return debug.traceback(cr, tostring(err)):gsub("\t", "")
 end
 
+---Run `fn` in a coroutine. Each yield lets the UI run a frame.
+---@return boolean ok, any err, integer frames The frames the routine let the UI run
 local function run_routine(fn, ...)
   local args = table.pack(...)
   local cr = coroutine.create(function()
@@ -284,17 +286,19 @@ local function run_routine(fn, ...)
     end, run_error_handler)
   end)
 
+  local frames = 0
   while true do
     local ok, value, extra = coroutine.resume(cr)
     if not ok then
-      return false, format_routine_error(cr, value)
+      return false, format_routine_error(cr, value), frames
     end
     if coroutine.status(cr) == "dead" then
       if not value then
-        return false, extra
+        return false, extra, frames
       end
-      return true, extra
+      return true, extra, frames
     end
+    frames = frames + 1
     yield_to_ui(value)
   end
 end
@@ -355,9 +359,21 @@ local function run_case(node, file_result, names, before_hooks, after_hooks, on_
     return
   end
 
+  -- Compare only the Editors this case opens. An earlier case checked its own.
+  local layout_reference = os.getenv("ANVIL_LAYOUT_REFERENCE") == "1"
+    and require("core.layout_reference")
+  local earlier_views = layout_reference and layout_reference.open_editors()
   local ok, err = run_hooks(before_hooks, context)
+  local frames = 0
   if ok then
-    ok, err = run_routine(node.fn, context)
+    ok, err, frames = run_routine(node.fn, context)
+  end
+  if ok and layout_reference then
+    ok, err = run_routine(function()
+      -- A case that never yields can leave UI state that a frame must not see.
+      local failure = layout_reference.check_open_views(earlier_views, { ui_frames = frames > 0 })
+      if failure then error(failure, 0) end
+    end)
   end
   local after_ok, after_err = run_after_hooks(after_hooks, context)
 

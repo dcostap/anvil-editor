@@ -622,7 +622,7 @@ test.describe("TextView selection scrolling", function()
     local long = string.rep("wrapped words ", 12)
     local view, buffer = open_editor(context, "one\n" .. long .. "\ntail\n")
     view.__test_force_line_packets = true
-    view:update_wrap_cache()
+    view:set_wrapping_enabled(true)
     draw_lines(view, 3)
     local builds = line_packets.diagnostics(view).builds
 
