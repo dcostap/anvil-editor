@@ -1886,12 +1886,27 @@ static bool valid_terminal_id(const char *id, size_t size) {
   return size == 32 && strspn(id, "0123456789abcdef") == 32;
 }
 
-/* nil or "" when the active view shows no Terminal Session. */
-static int f_set_focused_terminal(lua_State *L) {
+/* The Project's Pane report as Lua table text. Returns false outside a shell or when the shell cannot take it. */
+static int f_set_project_panes(lua_State *L) {
   size_t size = 0;
-  const char *id = luaL_optlstring(L, 1, "", &size);
-  luaL_argcheck(L, size == 0 || valid_terminal_id(id, size), 1, "invalid Terminal Session id");
-  lua_pushboolean(L, anvil_hosted_surface_focused_terminal(id));
+  const char *panes = luaL_checklstring(L, 1, &size);
+  luaL_argcheck(L, size < ANVIL_SURFACE_PANES_MAX && !memchr(panes, 0, size), 1, "invalid Pane report");
+  lua_pushboolean(L, anvil_hosted_surface_set_panes(panes));
+  return 1;
+}
+
+/* The Sidebar's Pane row action: "focus" or "close". The shell selects the Project first. */
+static int f_pane_action(lua_State *L) {
+  size_t path_size = 0, id_size = 0;
+  const char *path = luaL_checklstring(L, 1, &path_size);
+  const char *id = luaL_checklstring(L, 2, &id_size);
+  static const char *const actions[] = {"focus", "close", NULL};
+  AnvilSurfacePaneAction action = {.action = (uint32_t)luaL_checkoption(L, 3, NULL, actions)};
+  luaL_argcheck(L, path_size > 0 && path_size < 32767 && !memchr(path, 0, path_size), 1, "invalid Project path");
+  luaL_argcheck(L, id_size < sizeof(action.pane), 2, "invalid Pane id");
+  memcpy(action.pane, id, id_size);
+  luaL_argcheck(L, anvil_surface_pane_action_valid(&action), 2, "invalid Pane id");
+  lua_pushboolean(L, anvil_hosted_surface_pane_request(path, &action));
   return 1;
 }
 
@@ -2037,6 +2052,13 @@ static int focusterminal_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, event->user.data1);
   free(event->user.data1);
   return 2;
+}
+static int paneaction_callback(lua_State *L, SDL_Event *event) {
+  lua_pushstring(L, "paneaction");
+  lua_pushstring(L, event->user.code == ANVIL_SURFACE_PANE_CLOSE ? "close" : "focus");
+  lua_pushstring(L, event->user.data1);
+  free(event->user.data1);
+  return 3;
 }
 static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   (void)event;
@@ -2671,7 +2693,8 @@ static const luaL_Reg lib[] = {
   { "is_hosted_surface",     f_is_hosted_surface     },
   { "await_shell_adoption",  f_await_shell_adoption  },
   { "select_project",        f_select_project        },
-  { "set_focused_terminal",  f_set_focused_terminal  },
+  { "set_project_panes",     f_set_project_panes     },
+  { "pane_action",           f_pane_action           },
   { "select_terminal",       f_select_terminal       },
   { "toggle_project_sidebar", f_toggle_project_sidebar },
   { "show_project_menu",     f_show_project_menu     },
@@ -2735,6 +2758,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Color Theme preview event: %s", SDL_GetError());
   if (!register_custom_event("focusterminal", focusterminal_callback))
     return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
+  if (!register_custom_event("paneaction", paneaction_callback))
+    return luaL_error(L, "Unable to register the Pane action event: %s", SDL_GetError());
   luaL_newmetatable(L, API_TYPE_NATIVE_PLUGIN);
   lua_pushcfunction(L, f_library_gc);
   lua_setfield(L, -2, "__gc");

@@ -78,8 +78,10 @@ bool anvil_hosted_surface_open_project_picker(void);
 /* Sends a Color Theme preview for the Sidebar to draw, or "" to draw the saved Color Theme again. */
 bool anvil_hosted_surface_preview_color_theme(const char *preview);
 bool anvil_hosted_surface_unload_project(const char *path);
-/* id is a Terminal Session id, or empty when the active view shows none. The shell keeps it across adoption. */
-bool anvil_hosted_surface_focused_terminal(const char *id);
+/* Sends this Project's Pane report for the Project Sidebar. The shell gets it again after an adoption. */
+bool anvil_hosted_surface_set_panes(const char *panes);
+/* The Sidebar asks the shell to select a Project and act on one of its Panes. */
+bool anvil_hosted_surface_pane_request(const char *path, const AnvilSurfacePaneAction *action);
 /* The Sidebar asks the shell to select a Project and focus one of its Terminal Sessions. */
 bool anvil_hosted_surface_select_terminal(const char *path, const char *id);
 /* The Sidebar asks the shell for a row's Project actions menu at a point in Sidebar surface pixels. */

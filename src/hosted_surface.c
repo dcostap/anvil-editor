@@ -85,7 +85,7 @@ static struct {
   /* Window state the next shell does not know. */
   char title[4097];
   bool has_title, has_hit_test, has_shell_colors;
-  char focused_terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
+  char *panes;
   AnvilSurfaceHitTest hit_test;
   AnvilSurfaceShellColors shell_colors;
   int bordered, visible;
@@ -547,6 +547,16 @@ static void dispatch_message(HostedMessage *message) {
     }
     goto complete;
   }
+  if (type == ANVIL_SURFACE_MSG_PANE_ACTION) {
+    const AnvilSurfacePaneAction *action = (const void *)payload;
+    CustomEvent event = {.code = (int32_t)action->action};
+    event.data1 = _strdup(action->pane);
+    if (!event.data1 || !push_custom_event("paneaction", &event)) {
+      free(event.data1);
+      SDL_Log("Pane action dropped: copy or event delivery failed");
+    }
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
     const AnvilSidebarSurfacePacket *packet = (const void *)payload;
     type = packet->type;
@@ -646,7 +656,12 @@ void anvil_hosted_surface_finish_adoption(void) {
   if (hosted.has_title) anvil_hosted_surface_set_title(hosted.title);
   if (hosted.has_hit_test) anvil_hosted_surface_set_hit_test(&hosted.hit_test);
   if (hosted.has_shell_colors) anvil_hosted_surface_set_shell_colors(&hosted.shell_colors);
-  if (!hosted.sidebar) anvil_hosted_surface_focused_terminal(hosted.focused_terminal);
+  if (!hosted.sidebar && hosted.panes) {
+    char *panes = hosted.panes;
+    hosted.panes = NULL;
+    anvil_hosted_surface_set_panes(panes);
+    free(panes);
+  }
   if (hosted.bordered >= 0) anvil_hosted_surface_set_bordered(hosted.bordered);
   if (hosted.visible >= 0) anvil_hosted_surface_set_visible(hosted.visible);
   SDL_SetAtomicInt(&hosted.adopting, 0);
@@ -748,6 +763,11 @@ static int SDLCALL reader_thread(void *data) {
         break;
       case ANVIL_SURFACE_MSG_SIDEBAR_REMOVE:
         if (!hosted.sidebar || size != sizeof(uint32_t) || !*(uint32_t *)body) goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_PANE_ACTION:
+        if (hosted.sidebar || size != sizeof(AnvilSurfacePaneAction) ||
+            !anvil_surface_pane_action_valid((const AnvilSurfacePaneAction *)body))
+          goto failed;
         break;
       default:
         continue;
@@ -971,12 +991,30 @@ bool anvil_hosted_surface_unload_project(const char *path) {
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
-bool anvil_hosted_surface_focused_terminal(const char *id) {
-  size_t size = strlen(id);
-  if (hosted.sidebar || (size && size != ANVIL_SURFACE_TERMINAL_ID_LEN)) return false;
-  memcpy(hosted.focused_terminal, id, size + 1);
+bool anvil_hosted_surface_set_panes(const char *panes) {
+  size_t size = strlen(panes) + 1;
+  if (hosted.sidebar || size > ANVIL_SURFACE_PANES_MAX) return false;
+  char *copy = _strdup(panes);
+  if (!copy) return false;
+  free(hosted.panes);
+  hosted.panes = copy;
   if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
-  send_message(ANVIL_SURFACE_MSG_FOCUSED_TERMINAL, id, (uint32_t)size + 1);
+  send_message(ANVIL_SURFACE_MSG_PANES, panes, (uint32_t)size);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_pane_request(const char *path, const AnvilSurfacePaneAction *action) {
+  size_t path_size = strlen(path) + 1;
+  if (!hosted.active || !hosted.sidebar || !anvil_surface_pane_action_valid(action) || path_size < 2 ||
+      path_size >= 32768 || SDL_GetAtomicInt(&hosted.loss_cause))
+    return false;
+  size_t size = sizeof(*action) + path_size;
+  char *request = malloc(size);
+  if (!request) { signal_loss("Pane request allocation failed", ANVIL_SURFACE_MSG_PANE_REQUEST, size); return false; }
+  memcpy(request, action, sizeof(*action));
+  memcpy(request + sizeof(*action), path, path_size);
+  send_message(ANVIL_SURFACE_MSG_PANE_REQUEST, request, (uint32_t)size);
+  free(request);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1498,7 +1536,10 @@ bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return 
 bool anvil_hosted_surface_color_theme_saved(void) { return false; }
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }
 bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y) { (void)row_id; (void)x; (void)y; return false; }
-bool anvil_hosted_surface_focused_terminal(const char *id) { (void)id; return false; }
+bool anvil_hosted_surface_set_panes(const char *panes) { (void)panes; return false; }
+bool anvil_hosted_surface_pane_request(const char *path, const AnvilSurfacePaneAction *action) {
+  (void)path; (void)action; return false;
+}
 bool anvil_hosted_surface_select_terminal(const char *path, const char *id) { (void)path; (void)id; return false; }
 bool anvil_hosted_surface_set_shell_colors(const AnvilSurfaceShellColors *colors) {
   (void)colors;

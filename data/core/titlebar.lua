@@ -5,7 +5,7 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local color_theme = require "core.color_theme"
-local view_icons = require "core.view_icons"
+local tab = require "core.tab"
 local View = require "core.view"
 
 local TitleBar = View:extend()
@@ -179,80 +179,29 @@ function TitleBar.pane_marker_font()
   return style.get_scaled_font(style.prose_heading_font, size)
 end
 
-local function pane_number_gap()
-  return math.max(3 * SCALE, style.padding.x / 3)
-end
-
-local function pane_icon(pane)
-  return view_icons.for_view(pane.current_view)
-end
-
-local function pane_icon_gap()
-  return math.max(4 * SCALE, style.padding.x / 2)
-end
-
-local function pane_label_metrics(number, pane, row_height)
-  local icon = pane_icon(pane)
-  local number_font = style.font
-  local name_font = style.view_text_font
-  local number_text = tostring(number)
-  local name = pane_name(pane)
-  local number_width = number_font:get_width(number_text)
-  local icon_width = icon and view_icons.width(icon, row_height) or 0
-  local width = number_width + pane_number_gap()
-    + icon_width + (icon and pane_icon_gap() or 0)
-    + name_font:get_width(name)
-  return {
-    icon = icon,
-    icon_width = icon_width,
-    number_font = number_font,
-    number_text = number_text,
-    number_width = number_width,
-    name_font = name_font,
-    name = name,
-    width = width,
-  }
+-- Title Bar Tabs draw the Pane number in the interface font and the name in the View text font.
+local function tab_fonts()
+  return {number_font = style.font, name_font = style.view_text_font}
 end
 
 local function draw_pane_label(number, pane, rect, name_color)
-  local x = rect.x
-  local metrics = pane_label_metrics(number, pane, rect.h)
-  renderer.draw_text(
-    metrics.number_font, metrics.number_text, x,
-    rect.y + math.floor((rect.h - metrics.number_font:get_height()) / 2),
-    style.titlebar_pane_number
-  )
-  x = x + metrics.number_width + pane_number_gap()
-  if metrics.icon then
-    view_icons.draw(metrics.icon, x, rect.y, rect.h, name_color)
-    x = x + metrics.icon_width + pane_icon_gap()
-  end
-  local name = fit_text(metrics.name_font, metrics.name,
-    math.max(0, rect.x + rect.w - x))
-  local path_tree = require "plugins.path_tree"
-  local path = require("core.file_context").view_file_path(pane.current_view)
-  local git = path_tree.git_info_for_file(path)
-  name_color = path_tree.git_text_color(git and git.kind) or name_color
-  local buffer = pane.current_view.buffer
-  local missing = buffer and buffer.file_missing
-  if missing then name_color = style.tab_file_missing end
-  local name_y = rect.y + math.floor((rect.h - metrics.name_font:get_height()) / 2)
-  renderer.draw_text(
-    metrics.name_font, name, x, name_y, name_color
-  )
-  if missing and name ~= "" then
-    renderer.draw_rect(x, name_y + math.floor(metrics.name_font:get_height() / 2),
-      metrics.name_font:get_width(name), math.max(1, SCALE), name_color)
-  end
+  local opts = tab_fonts()
+  opts.name_color, opts.clock = name_color, system.get_time()
+  tab.draw(tab.describe(pane, number), rect.x, rect.y, rect.w, rect.h, opts)
 end
 
 local function preferred_tab_width(number, pane, row_height)
   local min_width = config.integrated_titlebar_tab_min_width or 80 * SCALE
   local max_width = config.integrated_titlebar_tab_max_width or style.tab_width
   local width = math.ceil(
-    pane_label_metrics(number, pane, row_height).width + style.padding.x * 2
+    tab.width(tab.describe(pane, number), row_height, tab_fonts()) + style.padding.x * 2
   )
   return common.clamp(width, min_width, math.max(min_width, max_width))
+end
+
+-- The Project Sidebar lists the Tabs while it shows. The Title Bar shows them while no Sidebar does.
+local function tabs_shown()
+  return system.get_window_content_x() <= 0
 end
 
 local function draw_tab_tile(x, y, w, h, color)
@@ -341,7 +290,7 @@ function TitleBar:update_geometry()
   local start_x = self.project_rect.x + self.project_rect.w
   local available = math.max(0, caption_start - start_x)
   self.tab_lane = { x = start_x, y = self.position.y, w = available, h = h }
-  local ordered = panes().ordered()
+  local ordered = tabs_shown() and panes().ordered() or {}
   local count = #ordered
   self.entries = {}
   if count > 0 and available > 0 then

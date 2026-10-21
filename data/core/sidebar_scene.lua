@@ -15,9 +15,21 @@ local function terminal(id, title, age, fields)
   return item
 end
 
-local function project(row_id, path, state, age, window_id, terminals, focused_terminal)
+local function project(row_id, path, state, age, window_id, terminals, panes)
   return {row_id = row_id, id = row_id, path = path, state = state, exists = true, window_id = window_id or 0,
-    activity = os.time() - age, terminals = terminals or {}, focused_terminal = focused_terminal}
+    activity = os.time() - age, terminals = terminals or {}, panes = panes or {}}
+end
+
+local function editor(number, group, name, fields)
+  local item = {id = "pane-" .. number, number = number, group = group, name = name,
+    icon = {kind = "file", path = name}}
+  for key, value in pairs(fields or {}) do item[key] = value end
+  return item
+end
+
+local function terminal_tab(number, group, session, title, age, busy)
+  return {id = "pane-" .. number, number = number, group = group, name = title,
+    terminal = {session = session, state = "running", busy = busy, activity = os.time() - age}}
 end
 
 function Scene:new()
@@ -32,11 +44,20 @@ function Scene:new()
       terminal("e", "build log", 10 * DAY),
       terminal("f", "ssh server", 40 * DAY, {bell = 1}),
       terminal("g", "old shell", 45 * DAY),
-    }, "b"),
+    }, {active = 2, visible = 1,
+      editor(1, 1, "init.lua"),
+      editor(2, 1, "sidebar_view.lua", {color = {0xe2, 0xc0, 0x8d, 255}}),
+      terminal_tab(3, 2, "a", "[40 s] \u{03C0} - GLP4", 30, true),
+      terminal_tab(4, 3, "b", "pwsh - anvil-editor", 20 * MINUTE, false),
+      editor(5, 4, "removed.md", {missing = true}),
+    }),
     project(2, "D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas", "ready", 2 * 60 * 60, 2, {
       terminal("h", "\u{03C0} - Israel Mallo Mart\u{00ED}nez", 5 * MINUTE),
+    }, {active = 1, visible = 1, terminal_tab(1, 1, "h", "\u{03C0} - Israel Mallo Mart\u{00ED}nez", 5 * MINUTE)}),
+    project(3, "C:/Projects/notes", "dormant", 2 * DAY, 0, {
+      terminal("i", "pi", 3 * 60 * 60, {busy = 1}),
+      terminal("j", "pwsh", 5 * 60 * 60),
     }),
-    project(3, "C:/Projects/notes", "dormant", 2 * DAY),
     project(4, "C:/Projects/website", "dormant", 12 * DAY),
     project(5, "C:/Projects/scratch", "dormant", 20 * DAY),
     project(6, "C:/Projects/old-tool", "dormant", 60 * DAY),

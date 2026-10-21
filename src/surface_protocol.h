@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 26u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 27u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -44,6 +44,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_PING = 11,
   /* Save the Workspace and exit, leaving Terminal Sessions running. No payload. */
   ANVIL_SURFACE_MSG_PREPARE_UPDATE = 12,
+  /* Focus or close one of this Project's Panes. Payload: AnvilSurfacePaneAction. */
+  ANVIL_SURFACE_MSG_PANE_ACTION = 13,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -78,8 +80,9 @@ typedef enum {
   /* This Project saved a Color Theme. The shell tells every other Project and the Sidebar. No payload. */
   ANVIL_SURFACE_MSG_COLOR_THEME_SAVED = 93,
   ANVIL_SURFACE_MSG_SHELL_COLORS = 94,
-  /* The Terminal Session this Project's active view shows. Payload: id + NUL, or only NUL for none. */
-  ANVIL_SURFACE_MSG_FOCUSED_TERMINAL = 95,
+  /* This Project's Panes for the Project Sidebar, as Lua table text. The shell forwards it unread.
+   * Payload: the text + NUL, at most ANVIL_SURFACE_PANES_MAX bytes. */
+  ANVIL_SURFACE_MSG_PANES = 95,
   /* Select a Project and focus one of its Terminal Sessions. Payload: id + NUL + Project path + NUL. */
   ANVIL_SURFACE_MSG_SELECT_TERMINAL = 96,
   /* Hide the Project Sidebar in every Window, or show it again. No payload. */
@@ -93,6 +96,9 @@ typedef enum {
   ANVIL_SURFACE_MSG_PONG = 100,
   /* Another instance shows this Project, so this Project exits. Its Window stays open. No payload. */
   ANVIL_SURFACE_MSG_HAND_OFF = 101,
+  /* A Sidebar Pane row action: select the Project, then act on the Pane. Payload: AnvilSurfacePaneAction +
+   * Project path + NUL. */
+  ANVIL_SURFACE_MSG_PANE_REQUEST = 102,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */
@@ -107,6 +113,16 @@ typedef struct { uint32_t row_id; int32_t x, y; } AnvilSurfaceProjectMenu;
 typedef struct {
   uint32_t userdir_size;
 } AnvilSurfaceSidebarSource;
+
+#define ANVIL_SURFACE_PANES_MAX (16u * 1024u)
+#define ANVIL_SURFACE_PANE_ID_MAX 64
+typedef enum { ANVIL_SURFACE_PANE_FOCUS, ANVIL_SURFACE_PANE_CLOSE } AnvilSurfacePaneActionKind;
+/* pane is a NUL-terminated Pane id. */
+typedef struct {
+  uint32_t action;
+  char pane[ANVIL_SURFACE_PANE_ID_MAX];
+} AnvilSurfacePaneAction;
+bool anvil_surface_pane_action_valid(const AnvilSurfacePaneAction *action);
 
 typedef enum {
   ANVIL_SURFACE_WINDOW_NORMAL = 0,

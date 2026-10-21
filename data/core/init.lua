@@ -2535,6 +2535,11 @@ function core.on_event(type, ...)
       for _, item in ipairs(request.items) do
         if item.kind == "project" then
           item.terminals = {}
+          -- The Project's own Pane report. A report that does not load shows no Tabs.
+          local panes_chunk = _G.type(item.panes) == "string" and item.panes ~= ""
+            and load("return " .. item.panes, "=Pane report", "t", {})
+          local panes_ok, panes = pcall(panes_chunk or function() return {} end)
+          item.panes = panes_ok and _G.type(panes) == "table" and panes or {}
           projects[#projects + 1], by_id[item.row_id] = item, item
         elseif item.kind == "terminal" and by_id[item.row_id] then
           local terminals = by_id[item.row_id].terminals
@@ -2545,6 +2550,8 @@ function core.on_event(type, ...)
       projects.windows = request.windows
       core.project_sidebar, core.project_sidebar_request = projects, nil
     end
+  elseif type == "paneaction" then
+    require("core.pane_report").perform(...)
   elseif type == "dialogfinished" then
     local id, status, result, filter = ...
     local callback = core.active_file_dialogs[id]
@@ -3048,6 +3055,7 @@ function core.step(next_frame_time, options)
     end
   end
   step_stats.update_ms = (system.get_time() - update_start_time) * 1000
+  if core.redraw or event_received then require("core.pane_report").publish(not render_enabled) end
 
   if not render_enabled then
     render_resume_pending = true

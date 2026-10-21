@@ -36,6 +36,17 @@ test.describe("Project Sidebar snapshots", function()
     test.not_ok(project.terminals[1].attached)
     test.ok(core.project_sidebar.status_limited)
   end)
+  test.it("reads each loaded Project's Pane report and ignores a broken one", function()
+    test.ok(core.request_project_sidebar())
+    core.on_event("projectsidebar", [[return {revision=1,offset=0,next=2,total=2,items={
+      {kind="project",row_id=1,path="C:/A",state="ready",panes="{active=1,visible=1,{id=\034pane-1\034,number=1,group=1,name=\034a.lua\034}}"},
+      {kind="project",row_id=2,path="C:/B",state="ready",panes="{broken"}
+    }}]])
+    local a, b = core.project_sidebar[1], core.project_sidebar[2]
+    test.equal(a.panes.active, 1)
+    test.equal(a.panes[1].name, "a.lua")
+    test.equal(#b.panes, 0)
+  end)
   test.it("does not combine pages from different model revisions", function()
     test.ok(core.request_project_sidebar())
     core.on_event("projectsidebar", [[return {revision=1,offset=0,next=1,total=2,items={

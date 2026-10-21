@@ -139,13 +139,12 @@ test.describe("Sidebar list actions", function()
     test.equal(view.hover.terminal.id, "session")
   end)
 
-  test.it("highlights the focused Terminal Session of the Window's Selected Project instead of the Project", function()
+  test.it("highlights the active Tab of the Window's Selected Project instead of the Project", function()
     local style = require "core.style"
-    local function model(focused)
+    local function model(active)
       return {
-        {row_id=1,id=11,path="C:/A",state="ready",window_id=7,focused_terminal=focused,terminals={
-          {id="a",title="first",cwd="C:/A",state="running",busy=0,bell=0,activity=os.time()},
-          {id="b",title="second",cwd="C:/A",state="running",busy=0,bell=0,activity=os.time()}}},
+        {row_id=1,id=11,path="C:/A",state="ready",window_id=7,terminals={},panes={active=active,visible=1,
+          {id="pane-1",number=1,group=1,name="first.lua"},{id="pane-2",number=2,group=1,name="second.lua"}}},
         windows={{id=7,selected_project=11},{id=9,selected_project=0}},
       }
     end
@@ -157,10 +156,10 @@ test.describe("Sidebar list actions", function()
       renderer.draw_rounded_rect = function(_, y, _, h, _, color)
         if color == style.selection then selected[#selected + 1] = {y, y + h} end
       end
-      -- Each highlighted row's first label is its name.
+      -- Each highlighted row's name is its last label before the next row. Collect every label in the band.
       renderer.draw_text = function(_, text, _, y)
         for _, band in ipairs(selected) do
-          if y >= band[1] and y < band[2] and not band.named then titles[#titles + 1], band.named = text, true end
+          if y >= band[1] and y < band[2] then titles[#titles + 1] = text end
         end
       end
       view:draw(600, 1000)
@@ -168,19 +167,56 @@ test.describe("Sidebar list actions", function()
     end
     local ok, err = pcall(function()
       local view = SidebarView(function() end)
-      view:set_model(model("b"), 7)
-      test.equal(highlighted(view), "second")
-      -- No focused Terminal Session: the Project row shows the selection.
-      view:set_model(model(""), 7)
+      view:set_model(model(2), 7)
+      test.equal(highlighted(view), "2,second.lua")
+      -- No active Tab: the Project row shows the selection.
+      view:set_model(model(nil), 7)
       test.equal(highlighted(view), "A")
       -- Another Window's Sidebar highlights neither.
       local other = SidebarView(function() end)
-      other:set_model(model("b"), 9)
+      other:set_model(model(2), 9)
       test.equal(highlighted(other), "")
     end)
     renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
       old_rect, old_rounded, old_text, old_clip
     if not ok then error(err) end
+  end)
+
+  test.it("lists a loaded Project's Tabs in Pane order and acts on a clicked Tab", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={},panes={active=1,visible=1,
+      {id="pane-4",number=1,group=1,name="init.lua"},{id="pane-9",number=2,group=2,name="notes.md"}}}}, 5)
+    local names = {}
+    for _, row in ipairs(view.rows) do
+      if row.kind == "tab" then names[#names + 1] = row.tab.name end
+    end
+    test.same(names, {"init.lua", "notes.md"})
+    view:on_mouse_pressed("left", 20, row_y(view, "tab", 2), 240)
+    test.same(actions, {{"pane", 7, "pane-9", "focus"}})
+    -- A middle-click closes the Tab at its release over the same Tab.
+    local y = row_y(view, "tab", 1)
+    view:on_mouse_pressed("middle", 20, y, 240)
+    test.equal(#actions, 1)
+    view:on_mouse_released("middle", 20, y)
+    test.same(actions[2], {"pane", 7, "pane-4", "close"})
+    view:on_mouse_pressed("middle", 20, y, 240)
+    view:on_mouse_released("middle", 20, row_y(view, "tab", 2))
+    test.equal(#actions, 2)
+  end)
+
+  test.it("shows a Terminal Session that a Tab shows only as that Tab", function()
+    local view = SidebarView(function() end)
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,activity=os.time(),terminals={
+      {id="shown",title="pwsh",cwd="C:/A",state="running",busy=0,bell=-1,activity=os.time()},
+      {id="detached",title="server",cwd="C:/A",state="running",busy=1,bell=-1,activity=os.time()}},
+      panes={active=1,visible=1,{id="pane-1",number=1,group=1,name="pwsh",
+        terminal={session="shown",state="running",busy=false,activity=os.time()}}}}}, 5)
+    test.equal(count(view, "tab"), 1)
+    test.equal(count(view, "terminal"), 1)
+    for _, row in ipairs(view.rows) do
+      if row.kind == "terminal" then test.equal(row.terminal.id, "detached") end
+    end
   end)
 
   test.it("tracks the hovered row and clears it when the pointer leaves", function()
@@ -226,23 +262,23 @@ test.describe("Sidebar age groups", function()
       activity=age and now - age or 0,terminals=terminals or {}}
   end
 
-  test.it("keeps recent and loaded Projects on top and groups older Projects at the bottom", function()
+  test.it("keeps loaded Projects on top and groups unloaded Projects by age at the bottom", function()
     local view = SidebarView(function() end)
     view:set_size(240, 800)
     view:set_model({project(1, "C:/Week", DAY), project(2, "C:/Month", 10 * DAY), project(3, "C:/Old", 60 * DAY),
       project(4, "C:/Loaded", 90 * DAY, "ready"), project(5, "C:/Unknown")})
-    test.same(paths(view, "main"), {"C:/Week", "C:/Loaded"})
-    -- Both groups start open.
-    test.same(paths(view, "bottom"), {"C:/Month", "C:/Old", "C:/Unknown"})
+    test.same(paths(view, "main"), {"C:/Loaded"})
+    -- Every group starts open.
+    test.same(paths(view, "bottom"), {"C:/Week", "C:/Month", "C:/Old", "C:/Unknown"})
     local index = row_index(view, function(row) return row.kind == "group" and row.bucket == "older" end)
     view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 240)
-    test.same(paths(view, "bottom"), {"C:/Month"})
+    test.same(paths(view, "bottom"), {"C:/Week", "C:/Month"})
   end)
 
   test.it("aligns the groups to the bottom, below a gap after the main list", function()
     local view = SidebarView(function() end)
     view:set_size(240, 800)
-    view:set_model({project(1, "C:/Week", DAY), project(2, "C:/Month", 10 * DAY)})
+    view:set_model({project(1, "C:/Loaded", DAY, "ready"), project(2, "C:/Month", 10 * DAY)})
     local main_index = row_index(view, function(row) return row.area == "main" end)
     local last_main = view:row_y(main_index) + view.rows[main_index].h
     local first_bottom, last_bottom = math.huge, 0
@@ -258,7 +294,7 @@ test.describe("Sidebar age groups", function()
   test.it("gives the groups at most part of the height and scrolls them on their own", function()
     local view = SidebarView(function() end)
     view:set_size(240, 600)
-    local model = {project(100, "C:/Week", DAY)}
+    local model = {project(100, "C:/Loaded", DAY, "ready")}
     for i = 1, 40 do model[#model + 1] = project(i, "C:/Month" .. i, 10 * DAY) end
     view:set_model(model)
     local top = math.huge
@@ -332,6 +368,28 @@ test.describe("Sidebar age groups", function()
     local index = row_index(view, function(row) return row.kind == "terminal_group" and row.bucket == "older" end)
     view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 240)
     test.same(titles(view), {"recent", "days", "bell", "month"})
+  end)
+
+  test.it("shows an unloaded Project's running Terminal Sessions as a hint on its row", function()
+    local view = SidebarView(function() end)
+    view:set_size(400, 800)
+    local function terminal(id, state, busy)
+      return {id=id,title=id,cwd="C:/P",state=state,busy=busy,bell=-1,activity=now}
+    end
+    view:set_model({project(1, "C:/P", DAY, "dormant", {terminal("a", "running", 1), terminal("b", "running", 0),
+      terminal("c", "exited", 0)})})
+    test.equal(count(view, "terminal"), 0, "An unloaded Project lists its Terminal Sessions")
+    local old_rect, old_rounded, old_text, old_clip =
+      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
+    local labels = {}
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
+    renderer.draw_text = function(_, text) labels[#labels + 1] = text end
+    local ok, err = pcall(view.draw, view, 400, 800)
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
+      old_rect, old_rounded, old_text, old_clip
+    if not ok then error(err) end
+    local text = table.concat(labels, "\n")
+    test.ok(text:find("2 terminals, 1 busy", 1, true), "The hint is missing: " .. text)
   end)
 
   test.it("restores collapsed groups and reports changes for the next Sidebar", function()

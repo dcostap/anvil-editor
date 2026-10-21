@@ -68,6 +68,7 @@ static void free_terminals(AnvilSidebarProject *project) {
 }
 static void free_project(AnvilSidebarProject *project) {
   free_terminals(project);
+  free(project->panes);
   free(project->path);
   free(project->identity);
   free(project);
@@ -162,10 +163,19 @@ void anvil_sidebar_set_runtime(AnvilSidebarModel *model, AnvilSidebarProject *pr
   project->deferred_dialog = deferred_dialog;
   project->close_choice = close_choice;
 }
-void anvil_sidebar_set_focused_terminal(AnvilSidebarModel *model, AnvilSidebarProject *project, const char *id) {
-  if (!strcmp(project->focused_terminal, id)) return;
-  snprintf(project->focused_terminal, sizeof(project->focused_terminal), "%s", id);
+bool anvil_sidebar_set_panes(AnvilSidebarModel *model, AnvilSidebarProject *project, const char *panes) {
+  if (!strcmp(project->panes ? project->panes : "", panes)) return true;
+  /* A snapshot record never spans pages, so the quoted report must leave room for the rest of its record. */
+  size_t quoted_size = 0;
+  for (const unsigned char *p = (const unsigned char *)panes; *p; p++)
+    quoted_size += *p < 32 || *p == '\\' || *p == '"' ? 4 : 1;
+  if (quoted_size > ANVIL_SIDEBAR_PANES_QUOTED_LIMIT) return false;
+  char *copy = NULL;
+  if (*panes && !(copy = strdup(panes))) return false;
+  free(project->panes);
+  project->panes = copy;
   model->revision++;
+  return true;
 }
 void anvil_sidebar_destroy(AnvilSidebarModel *model) {
   for (size_t i = 0; i < model->count; i++)
@@ -270,11 +280,11 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
       if (!j) {
         append(&item,
                "{kind=\"project\",row_id=%u,id=%u,pid=%u,window_id=%u,state=\"%s\",selected=%s,exists=%s,"
-               "deferred_dialog=%s,close_choice=%s,activity=%lld,focused_terminal=",
+               "deferred_dialog=%s,close_choice=%s,activity=%lld,panes=",
                row->row_id, row->id, row->pid, row->window_id, states[row->state], row->selected ? "true" : "false",
                row->exists ? "true" : "false", row->deferred_dialog ? "true" : "false",
                row->close_choice ? "true" : "false", (long long)row->activity);
-        quoted(&item, row->focused_terminal);
+        quoted(&item, row->panes ? row->panes : "");
         append(&item, ",path=");
         quoted(&item, row->path);
         append(&item, "},");

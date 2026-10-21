@@ -8,6 +8,8 @@
 #define ANVIL_SIDEBAR_PROJECT_LIMIT 256
 #define ANVIL_SIDEBAR_TERMINAL_LIMIT 32
 #define ANVIL_SIDEBAR_WINDOW_LIMIT 64
+/* The largest Pane report after snapshot quoting. */
+#define ANVIL_SIDEBAR_PANES_QUOTED_LIMIT (32 * 1024)
 
 typedef struct { uint32_t id, selected_project; } AnvilSidebarWindow;
 
@@ -42,8 +44,8 @@ typedef struct {
   bool exists, selected, deferred_dialog, close_choice;
   /* The last time the user worked in it, in Unix seconds; 0 means unknown. The shell sets and saves it. */
   int64_t activity;
-  /* The Terminal Session the Project's active view shows, or empty. */
-  char focused_terminal[33];
+  /* The Project's own Pane report: Lua table text, or empty while it has not reported. */
+  char *panes;
   AnvilSidebarTerminal *terminals;
   size_t terminal_count;
 } AnvilSidebarProject;
@@ -66,8 +68,9 @@ const AnvilSidebarProject *anvil_sidebar_at(const AnvilSidebarModel *model, size
 void anvil_sidebar_set_runtime(AnvilSidebarModel *model, AnvilSidebarProject *project, uint32_t id,
                                uint32_t pid, uint32_t window_id, AnvilSidebarState state, bool selected,
                                bool deferred_dialog, bool close_choice);
-/* id is a Terminal Session id, or empty when the Project shows no Terminal Session. */
-void anvil_sidebar_set_focused_terminal(AnvilSidebarModel *model, AnvilSidebarProject *project, const char *id);
+/* panes is the Project's Pane report, or empty. Returns false and keeps the old report when it cannot store
+ * the new one, for example when it exceeds ANVIL_SIDEBAR_PANES_QUOTED_LIMIT after quoting. */
+bool anvil_sidebar_set_panes(AnvilSidebarModel *model, AnvilSidebarProject *project, const char *panes);
 bool anvil_sidebar_set_terminals(AnvilSidebarModel *model, AnvilSidebarProject *project,
                                  const AnvilSidebarTerminal *terminals, size_t count);
 /* Pages contain Project records followed by their Terminal records. */

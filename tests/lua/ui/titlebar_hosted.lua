@@ -22,6 +22,24 @@ test.describe("Hosted Title Bar ownership", function()
     test.equal(title:caption_at(720, 20), nil, "Lua retains a native control target")
     test.equal(title:get_external_drop_target(720, 20), nil, "native controls accept Project drops")
   end)
+  test.it("shows Tabs only while the Project Sidebar is hidden", function()
+    local panes = require "core.panes"
+    local content_x = system.get_window_content_x
+    local sidebar_width = 240
+    system.get_window_content_x = function() return sidebar_width end
+    local ok, err = pcall(function()
+      local title = TitleBar()
+      title.size.x = 800
+      title:update()
+      test.ok(panes.count() > 0)
+      test.is_nil(next(title.entries), "the Title Bar shows Tabs beside the Project Sidebar")
+      sidebar_width = 0
+      title:update()
+      test.not_nil(title.entries[1], "the Title Bar hides Tabs without the Project Sidebar")
+    end)
+    system.get_window_content_x = content_x
+    assert(ok, err)
+  end)
   test.it("clears Title Bar hover when the pointer leaves the Project", function()
     local title = TitleBar()
     core.title_bar = title

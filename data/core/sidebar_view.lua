@@ -1,12 +1,14 @@
 local Object = require "core.object"
 local style = require "core.style"
+local tab = require "core.tab"
 
--- The shell owns identity and lifecycle. This view sends only Project and Terminal Session actions. A right-click on
--- a Project asks the shell for its native actions menu: Move, Unload and the rest.
+-- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions. A
+-- right-click on a Project asks the shell for its native actions menu: Move, Unload and the rest.
 -- The menu opens at the button's release. A menu opened at the press takes the release into its own loop, and the
 -- shell then reports a stray left press that selects the Project.
--- Layout: the main list holds loaded Projects and Projects used in the last week. Older Projects sit in
--- collapsible age groups aligned to the bottom, which take at most part of the height and scroll on their own.
+-- Layout: the main list holds loaded Projects with their Tabs, one for each Pane, and the Terminal Sessions that
+-- no Pane shows. Unloaded Projects sit in collapsible age groups aligned to the bottom, which take at most part of
+-- the height and scroll on their own. Their rows count their running Terminal Sessions.
 -- Each area that overflows shows a scrollbar; its thumb drags and its track pages.
 -- Inside a Project, older Terminal Sessions fold into collapsible groups the same way.
 -- Rows keep the shell's order. Age only chooses a row's group, so rows never swap places under the pointer.
@@ -14,18 +16,16 @@ local SidebarView = Object:extend()
 
 local DAY = 24 * 60 * 60
 local WEEK, MONTH = 7 * DAY, 30 * DAY
--- The groups below the main list. Each starts open or collapsed as given here unless saved otherwise.
+-- The groups. Each starts open or collapsed as given here unless saved otherwise. Unloaded Projects use every
+-- group; a loaded Project's older Terminal Sessions use the groups with a terminal label.
 local GROUPS = {
+  {bucket = "week", label = "Last week", collapsed = false},
   {bucket = "month", label = "Last month", terminal_label = "Older than a week", collapsed = false},
   {bucket = "older", label = "Older", terminal_label = "Older than a month", collapsed = false},
 }
 -- The groups take at most this part of the height below the list top, and at most this many Project rows.
 local GROUPS_HEIGHT = 0.5
 local GROUPS_ROWS = 16
--- Programs such as Pi lead their title with a braille spinner frame while they work. The Terminal host reports
--- titles at most once a second, so the Sidebar turns a leading spinner itself.
-local SPINNER = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-local SPINNER_FRAME = 0.08
 
 ---@param action fun(name: string, ...)
 ---@param collapsed table<string, boolean>? Saved collapse state, shared by every Sidebar surface.
@@ -60,11 +60,11 @@ local function metrics()
   }
 end
 
--- "month" for 7 to 30 days, "older" beyond that or when unknown, nil when recent.
+-- "week" for up to 7 days, "month" for 7 to 30 days, "older" beyond that or when unknown.
 local function age_bucket(activity, now)
   if not activity or activity <= 0 then return "older" end
   local age = now - activity
-  if age < WEEK then return nil end
+  if age < WEEK then return "week" end
   return age < MONTH and "month" or "older"
 end
 
@@ -104,30 +104,38 @@ function SidebarView:rebuild_rows()
   for _, window in ipairs(projects.windows or {}) do
     if window.id == window_id then selected = window.selected_project end
   end
-  local function add_terminal(project, terminal, depth, focused)
+  local function add_terminal(project, terminal, depth)
     add({kind = "terminal", project = project, terminal = terminal, depth = depth,
-      selected = focused == terminal.id}, m.terminal)
+      tab = tab.describe_session(terminal)}, m.terminal)
   end
-  local function add_project(project)
+  local function add_loaded(project)
     local is_selected = window_id and selected ~= 0 and project.id == selected or not window_id and project.selected
-    -- The Selected Project's focused Terminal Session takes the highlight. It always shows, even when old.
-    local focused
-    if is_selected and project.focused_terminal and project.focused_terminal ~= "" then
-      for _, terminal in ipairs(project.terminals or {}) do
-        if terminal.id == project.focused_terminal then focused = terminal.id end
-      end
+    local panes = project.panes or {}
+    -- The Selected Project's active Tab takes the highlight.
+    local active = is_selected and panes[panes.active or 0] and panes.active
+    add({kind = "project", project = project, selected = is_selected and not active}, m.project)
+    local shown, sizes = {}, {}
+    for _, item in ipairs(panes) do sizes[item.group or 0] = (sizes[item.group or 0] or 0) + 1 end
+    for index, item in ipairs(panes) do
+      if item.terminal and item.terminal.session then shown[item.terminal.session] = true end
+      local group = item.group or 0
+      -- A Pane Group with several Panes joins its Tabs with a line.
+      local bracket = sizes[group] > 1 and {first = (panes[index - 1] or {}).group ~= group,
+        last = (panes[index + 1] or {}).group ~= group, visible = group == panes.visible} or nil
+      add({kind = "tab", project = project, tab = item, selected = index == active, bracket = bracket}, m.terminal)
     end
-    add({kind = "project", project = project, selected = is_selected and not focused}, m.project)
-    -- Recent and ringing Terminal Sessions show directly, and so do those from hosts that do not report
-    -- activity. Older ones fold into groups.
+    -- Terminal Sessions that no Pane shows. Recent and ringing ones show directly, and so do those from hosts that
+    -- do not report activity. Older ones fold into groups.
     local older = {}
     for _, terminal in ipairs(project.terminals or {}) do
       local bucket = (terminal.activity or 0) > 0 and age_bucket(terminal.activity, now)
-      if bucket and not (terminal.bell and terminal.bell ~= 0) and terminal.id ~= focused then
+      if shown[terminal.id] then
+        -- Its Tab shows it.
+      elseif bucket and bucket ~= "week" and not ((terminal.bell or 0) > 0) then
         older[bucket] = older[bucket] or {}
         table.insert(older[bucket], terminal)
       else
-        add_terminal(project, terminal, 1, focused)
+        add_terminal(project, terminal, 1)
       end
     end
     for _, group in ipairs(GROUPS) do
@@ -138,7 +146,7 @@ function SidebarView:rebuild_rows()
         add({kind = "terminal_group", project = project, bucket = group.bucket, label = group.terminal_label,
           count = #terminals, key = key, collapsed = collapsed}, m.terminal)
         if not collapsed then
-          for _, terminal in ipairs(terminals) do add_terminal(project, terminal, 2, focused) end
+          for _, terminal in ipairs(terminals) do add_terminal(project, terminal, 2) end
         end
       end
     end
@@ -146,16 +154,16 @@ function SidebarView:rebuild_rows()
   area = "main"
   local grouped = {}
   for _, project in ipairs(projects) do
-    local bucket = project.state == "dormant" and age_bucket(project_activity(project), now)
-    if bucket then
+    if project.state == "dormant" then
+      local bucket = age_bucket(project_activity(project), now)
       grouped[bucket] = grouped[bucket] or {}
       table.insert(grouped[bucket], project)
     else
-      add_project(project)
+      add_loaded(project)
     end
   end
   if #rows == 0 then
-    add({kind = "empty", label = #projects > 0 and "No recent Projects" or "No Projects yet"}, m.project)
+    add({kind = "empty", label = #projects > 0 and "No loaded Projects" or "No Projects yet"}, m.project)
   end
   area = "bottom"
   for _, group in ipairs(GROUPS) do
@@ -166,7 +174,7 @@ function SidebarView:rebuild_rows()
       add({kind = "group", bucket = group.bucket, label = group.label, count = #members, key = key,
         collapsed = collapsed}, m.group)
       if not collapsed then
-        for _, project in ipairs(members) do add_project(project) end
+        for _, project in ipairs(members) do add({kind = "project", project = project}, m.project) end
       end
     end
   end
@@ -286,6 +294,14 @@ function SidebarView:on_mouse_pressed(button, x, y)
     if button == "left" then self.action("select_terminal", row.project.row_id, row.terminal.id) end
     return
   end
+  if row.kind == "tab" then
+    if button == "left" then
+      self.action("pane", row.project.row_id, row.tab.id, "focus")
+    elseif button == "middle" then
+      self.click_row = {button = button, row_id = row.project.row_id, pane = row.tab.id}
+    end
+    return
+  end
   if row.kind ~= "project" then return end
   if button == "right" or button == "middle" then
     -- The release acts, so the menu's loop never takes the press's own release.
@@ -301,6 +317,12 @@ function SidebarView:on_mouse_released(button, x, y)
   self.click_row = nil
   if not pressed or pressed.button ~= button then return end
   local row = self:row_at(y)
+  if pressed.pane then
+    if row and row.kind == "tab" and row.tab.id == pressed.pane and row.project.row_id == pressed.row_id then
+      self.action("pane", pressed.row_id, pressed.pane, "close")
+    end
+    return
+  end
   if not (row and row.kind == "project" and row.project.row_id == pressed.row_id) then return end
   if button == "right" then
     self.action("menu", pressed.row_id, x, y)
@@ -365,19 +387,6 @@ local function name_of(path)
   return path:match("([^/\\]+)[/\\]*$") or path
 end
 
--- A short age such as "5m", "3h", "2d", "3w" or "4mo".
-local function age_text(activity, now)
-  if not activity or activity <= 0 then return nil end
-  local age = math.max(0, now - activity)
-  if age < 60 then return "now" end
-  if age < 60 * 60 then return math.floor(age / 60) .. "m" end
-  if age < DAY then return math.floor(age / (60 * 60)) .. "h" end
-  if age < WEEK then return math.floor(age / DAY) .. "d" end
-  if age < MONTH then return math.floor(age / WEEK) .. "w" end
-  if age < 365 * DAY then return math.floor(age / MONTH) .. "mo" end
-  return math.floor(age / (365 * DAY)) .. "y"
-end
-
 local function project_status(project)
   if project.state == "failed" then return style.error, "failed" end
   if project.state == "dormant" then
@@ -388,14 +397,6 @@ local function project_status(project)
   if project.state == "starting" then return style.warn, "starting" end
   if project.state == "closing" then return style.warn, "closing" end
   return style.good
-end
-
-local function terminal_status(terminal)
-  if terminal.state ~= "running" then return tint(style.dim, 120), terminal.state end
-  if terminal.bell and terminal.bell ~= 0 then return style.warn end
-  if terminal.busy == 1 then return style.accent end
-  if terminal.busy == 0 then return style.good end
-  return style.dim
 end
 
 local function dot(x, cy, radius, color)
@@ -421,37 +422,45 @@ local function text(label, x, y, color)
   renderer.draw_text(style.font, label, x, y, color)
 end
 
--- Shortens a label with an ellipsis until it fits in `width`.
-local function fit(label, width)
-  if style.font:get_width(label) <= width then return label end
-  local ellipsis = "\u{2026}"
-  while label ~= "" and style.font:get_width(label .. ellipsis) > width do
-    label = label:gsub("[%z\1-\127\194-\244][\128-\191]*$", "")
-  end
-  return label .. ellipsis
-end
-
--- The title with its leading braille character (U+2800 to U+28FF) swapped for the spinner frame at `clock`, or nil.
-local function spinner_title(title, clock)
-  local first, second = title:byte(1, 2)
-  if first ~= 0xE2 or not second or second < 0xA0 or second > 0xA3 then return nil end
-  return SPINNER[math.floor(clock / SPINNER_FRAME) % #SPINNER + 1] .. title:sub(4)
-end
-
 -- Seconds until a drawn spinner shows its next frame, or nil when the last draw showed none.
 function SidebarView:animation_delay(clock)
   if not self.spinning then return nil end
-  return SPINNER_FRAME - clock % SPINNER_FRAME
+  return tab.spinner_delay(clock)
+end
+
+-- The running Terminal Sessions of an unloaded Project, such as "3 terminals, 1 busy", or nil when none run.
+-- The second result leaves out the busy count for a narrow Sidebar.
+local function terminal_hint(project)
+  local running, busy = 0, 0
+  for _, terminal in ipairs(project.terminals or {}) do
+    if terminal.state == "running" then
+      running = running + 1
+      if terminal.busy == 1 then busy = busy + 1 end
+    end
+  end
+  if running == 0 then return nil end
+  local hint = running .. (running == 1 and " terminal" or " terminals")
+  return busy > 0 and hint .. ", " .. busy .. " busy" or hint, hint
 end
 
 -- Draws a label shortened before a right-aligned note, then the note. The note keeps the same inset from the
--- row highlight's right edge as the row's content keeps from its left edge.
-function SidebarView:label_with_note(label, color, note, x, y, row, right)
+-- row highlight's right edge as the row's content keeps from its left edge. The first hint that fits follows the
+-- label in the dim colour.
+function SidebarView:label_with_note(label, color, note, x, y, row, right, hints)
   local ty = y + (row.h - style.font:get_height()) / 2
   right = right - 8 * SCALE
   local note_w = note and style.font:get_width(note) + 8 * SCALE or 0
   if note_w > (right - x) / 2 then note, note_w = nil, 0 end
-  text(fit(label, math.max(0, right - x - note_w)), x, ty, color)
+  local available = math.max(0, right - x - note_w)
+  label = tab.fit(style.font, label, available)
+  text(label, x, ty, color)
+  local hint_x = x + style.font:get_width(label) + 8 * SCALE
+  for _, hint in ipairs(hints or {}) do
+    if hint_x + style.font:get_width(hint) <= x + available then
+      text(hint, hint_x, ty, style.dim)
+      break
+    end
+  end
   if note then text(note, right - note_w + 8 * SCALE, ty, style.dim) end
 end
 
@@ -482,17 +491,21 @@ function SidebarView:draw_row(row, y, width, now)
       x, y, row, right)
     return
   end
-  if row.kind == "terminal" then
-    local terminal = row.terminal
-    local color, note = terminal_status(terminal)
-    local x = left + 22 * SCALE + row.depth * m.indent
-    dot(x - 8 * SCALE, cy, 3 * SCALE, color)
-    local title = terminal.title ~= "" and terminal.title or "Terminal"
-    local spinning = terminal.state == "running" and spinner_title(title, self.clock)
-    if spinning then title, self.spinning = spinning, true end
-    self:label_with_note(title,
-      terminal.state == "running" and style.text or style.dim, note or age_text(terminal.activity, now),
-      x, y, row, right)
+  if row.kind == "tab" or row.kind == "terminal" then
+    if row.bracket then
+      -- The visible Pane Group's line stands out, as its Title Bar underline does.
+      local inset = 4 * SCALE
+      local top = y + (row.bracket.first and inset or 0)
+      local bottom = y + row.h - (row.bracket.last and inset or 0)
+      local line = math.max(2, math.floor(2 * SCALE))
+      renderer.draw_rect(left + 12 * SCALE - line / 2, top, line, bottom - top,
+        row.bracket.visible and style.titlebar_group_indicator or style.divider)
+    end
+    local x = left + 24 * SCALE + ((row.depth or 1) - 1) * m.indent
+    if tab.draw(row.tab, x, y, right - 8 * SCALE - x, row.h,
+        {name_color = style.text, now = now, clock = self.clock}) then
+      self.spinning = true
+    end
     return
   end
   local project = row.project
@@ -503,9 +516,13 @@ function SidebarView:draw_row(row, y, width, now)
     and project.window_id ~= self.window_id then
     note = "Window " .. project.window_id
   end
-  if not note and project.state == "dormant" then note = age_text(project_activity(project), now) end
+  local hints
+  if project.state == "dormant" then
+    note = note or tab.age_text(project_activity(project), now)
+    hints = {terminal_hint(project)}
+  end
   local dim_name = project.state == "dormant" and not project.exists
-  self:label_with_note(name_of(project.path), dim_name and style.dim or style.text, note, x, y, row, right)
+  self:label_with_note(name_of(project.path), dim_name and style.dim or style.text, note, x, y, row, right, hints)
 end
 
 function SidebarView:draw(width, height)

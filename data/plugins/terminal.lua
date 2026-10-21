@@ -385,6 +385,8 @@ function TerminalView:new(options)
     return
   end
   self.session = session
+  -- A revived session keeps the activity time its host recorded.
+  self.activity = record and tonumber(record.activity) or os.time()
   local attaching = session:stats().attach_count == 0
   if not attaching then self:log_session_attach() end
   self.session_cell_width = self.native_cell_width
@@ -618,6 +620,7 @@ end
 
 function TerminalView:adopt_session(session)
   self.session = session
+  self.activity = self.activity or os.time()
   local attaching = session:stats().attach_count == 0
   if not attaching then self:log_session_attach() end
   self.session_cell_width = self.native_cell_width
@@ -835,6 +838,8 @@ end
 
 function TerminalView:apply_status(status)
   if type(status) ~= "table" then return false end
+  -- A command started or ended.
+  if status.busy ~= self.busy then self.activity = os.time() end
   -- nil while the host has not reported whether the shell runs a command.
   self.busy = status.busy
   local revision = tonumber(status.revision)
@@ -1390,8 +1395,20 @@ end
 -- - Any other owner is a key that the terminal already encoded. Its text is dropped.
 -- The next key event or IME composition ends the ownership. A waiting key that
 -- typed no text, such as a dead key, sends nothing.
+-- The last time the user typed into it, a command started or ended, or its title changed, in Unix seconds. The
+-- host keeps the same time for its Terminal Session record.
+function TerminalView:get_activity()
+  local title = self.snapshot and self.snapshot.title
+  if title ~= self.activity_title then
+    if self.activity_title ~= nil then self.activity = os.time() end
+    self.activity_title = title
+  end
+  return self.activity
+end
+
 function TerminalView:on_text_input(text)
   if not self.session or self.running == false then return false end
+  self.activity = os.time()
   self.composition = nil
   core.blink_reset()
   self.session:scroll("bottom")
@@ -1428,6 +1445,7 @@ end
 
 function TerminalView:paste(text, allow_unsafe)
   if not self.session or self.running == false or not text or text == "" then return false end
+  self.activity = os.time()
   local ok, reason = self.session:paste(text, allow_unsafe == true)
   if ok then return true end
   if reason == "queue_full" then
@@ -1526,6 +1544,7 @@ end
 
 function TerminalView:on_key_pressed(key, event)
   if not self.session or self.running == false then return false end
+  self.activity = os.time()
   self:sync_focus()
   self:retry_pending_key_releases()
   self.key_owners = self.key_owners or {}
@@ -2290,29 +2309,8 @@ function M.focus_session(id)
   return false
 end
 
--- In a shell, the Project Sidebar highlights the Terminal Session the active view shows, and its Terminal
--- Session rows ask this Project to focus one.
+-- In a shell, the Project Sidebar's rows for Terminal Sessions that no Pane shows ask this Project to focus one.
 if system.is_hosted_surface() then
-  local reported
-  local function report_focused_terminal()
-    local view = core.active_view
-    local id = view and view.terminal_view and view.session_id or ""
-    if #id ~= 32 or id:find("[^0-9a-f]") then id = "" end
-    if id == reported then return end
-    reported = id
-    local delivered = system.set_focused_terminal(id)
-    core.log_quiet("Terminal Session focus reported to the shell: %s delivered=%s", id ~= "" and id or "none",
-      tostring(delivered))
-  end
-  local function after_step(...)
-    report_focused_terminal()
-    return ...
-  end
-  local step = core.step
-  function core.step(...)
-    return after_step(step(...))
-  end
-
   local on_event = core.on_event
   function core.on_event(type, ...)
     if type ~= "focusterminal" then return on_event(type, ...) end

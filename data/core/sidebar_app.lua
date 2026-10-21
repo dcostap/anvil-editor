@@ -78,12 +78,19 @@ local function add_surface(id, window)
       end
       return
     end
-    if action == "select_terminal" then
+    if action == "select_terminal" or action == "pane" then
       for _, project in ipairs(core.project_sidebar or {}) do
         if project.row_id == row_id then
-          local sent = system.select_terminal(project.path, target)
-          core.log_quiet("Sidebar Terminal Session selection: Window=%d Project=%d session=%s sent=%s", id,
-            project.id or 0, target, tostring(sent))
+          if action == "pane" then
+            local pane_action = ...
+            local sent = system.pane_action(project.path, target, pane_action)
+            core.log_quiet("Sidebar Pane %s: Window=%d Project=%d pane=%s sent=%s", pane_action, id,
+              project.id or 0, target, tostring(sent))
+          else
+            local sent = system.select_terminal(project.path, target)
+            core.log_quiet("Sidebar Terminal Session selection: Window=%d Project=%d session=%s sent=%s", id,
+              project.id or 0, target, tostring(sent))
+          end
           return
         end
       end

@@ -148,6 +148,14 @@ oversized:
   return packet;
 }
 
+/* Pane ids such as "pane-3" use letters, digits, '-' and '_'. */
+bool anvil_surface_pane_action_valid(const AnvilSurfacePaneAction *action) {
+  if (action->action != ANVIL_SURFACE_PANE_FOCUS && action->action != ANVIL_SURFACE_PANE_CLOSE) return false;
+  size_t length = strnlen(action->pane, sizeof(action->pane));
+  return length && length < sizeof(action->pane) &&
+         strspn(action->pane, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") == length;
+}
+
 bool anvil_surface_dialog_result_valid(const void *packet, uint32_t size) {
   if (size < sizeof(AnvilSurfaceDialogResult) || size > ANVIL_SURFACE_MAX_PAYLOAD)
     return false;

@@ -175,18 +175,19 @@ static void pages(void) {
   lua_close(L);
   anvil_sidebar_destroy(&model);
 }
-/* The Sidebar highlights the Terminal Session the Project reports as focused. */
-static void focused_terminal(void) {
+/* The Sidebar shows the Pane report a Project sends, unchanged. */
+static void panes(void) {
   AnvilSidebarModel model = {0};
   const char *paths[] = {"C:/B"};
   CHECK(anvil_sidebar_merge_recents(&model, paths, 1), "Recent source failed");
   AnvilSidebarProject *b = anvil_sidebar_find(&model, "C:/B");
   uint32_t revision = model.revision;
-  anvil_sidebar_set_focused_terminal(&model, b, "0123456789abcdef0123456789abcdef");
-  CHECK(model.revision != revision, "A focus change did not publish a revision");
+  const char *report = "{active=1,{id=\"pane-1\",group=1,name=\"init \\\"λ\\\".lua\"}}";
+  CHECK(anvil_sidebar_set_panes(&model, b, report) && model.revision != revision,
+        "A Pane report did not publish a revision");
   revision = model.revision;
-  anvil_sidebar_set_focused_terminal(&model, b, "0123456789abcdef0123456789abcdef");
-  CHECK(model.revision == revision, "An unchanged focus published a revision");
+  CHECK(anvil_sidebar_set_panes(&model, b, report) && model.revision == revision,
+        "An unchanged Pane report published a revision");
   char *page = anvil_sidebar_snapshot(&model, 0);
   CHECK(page, "Snapshot failed");
   lua_State *L = luaL_newstate();
@@ -195,12 +196,19 @@ static void focused_terminal(void) {
   free(page);
   lua_getfield(L, 1, "items");
   lua_rawgeti(L, -1, 1);
-  lua_getfield(L, -1, "focused_terminal");
-  CHECK(lua_isstring(L, -1) && !strcmp(lua_tostring(L, -1), "0123456789abcdef0123456789abcdef"),
-        "The snapshot omitted the focused Terminal Session");
+  lua_getfield(L, -1, "panes");
+  CHECK(lua_isstring(L, -1) && !strcmp(lua_tostring(L, -1), report), "The snapshot changed the Pane report");
   lua_close(L);
-  anvil_sidebar_set_focused_terminal(&model, b, "");
-  CHECK(model.revision != revision && !b->focused_terminal[0], "Clearing the focus did not publish");
+  /* A report that cannot fit one snapshot page leaves the last one. */
+  char *oversized = malloc(ANVIL_SIDEBAR_PANES_QUOTED_LIMIT / 4 + 2);
+  CHECK(oversized, "Allocation failed");
+  memset(oversized, '"', ANVIL_SIDEBAR_PANES_QUOTED_LIMIT / 4 + 1);
+  oversized[ANVIL_SIDEBAR_PANES_QUOTED_LIMIT / 4 + 1] = 0;
+  CHECK(!anvil_sidebar_set_panes(&model, b, oversized) && !strcmp(b->panes, report) && model.revision == revision,
+        "An oversized Pane report replaced the last one");
+  free(oversized);
+  CHECK(anvil_sidebar_set_panes(&model, b, "") && model.revision != revision && !b->panes,
+        "Clearing the Pane report did not publish");
   anvil_sidebar_destroy(&model);
 }
 static void trailing_separator(void) {
@@ -220,7 +228,7 @@ static void trailing_separator(void) {
 }
 int main(void) {
   trailing_separator();
-  focused_terminal();
+  panes();
   order();
   capacity();
   lifecycle();

@@ -292,7 +292,7 @@ command.add(function() return system.is_hosted_surface() end, {
   ["core:toggle_project_sidebar"] = command.palette(function()
     core.log_quiet("Project Sidebar toggle requested")
     return system.toggle_project_sidebar()
-  end),
+  end, { keywords = { "show", "hide", "panel", "tabs" } }),
 })
 
 command.add(nil, {
