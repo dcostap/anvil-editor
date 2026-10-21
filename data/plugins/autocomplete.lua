@@ -290,7 +290,6 @@ end
 ---@param col integer
 ---@return integer line
 ---@return integer col
-local ROW_PREVIEW_MAX_CHARS = 90
 -- Text metrics and clip rectangles use fractional and pixel-aligned geometry,
 -- respectively. Keep a physical pixel outside the measured content so an
 -- unconstrained popup does not truncate text because of rounding.
@@ -569,39 +568,17 @@ local function draw_display_icon(suggestion, x, y, width, row_height)
   return true
 end
 
-local function row_text_parts(suggestion, hide_info, max_chars)
-  local label = tostring(suggestion and suggestion.text or "")
-  local info = not hide_info and display_info(suggestion) or nil
-  info = info and tostring(info) or nil
-  if max_chars then
-    if info and info ~= "" then
-      local sep_len = 1
-      local info_len = max_chars - #label - sep_len
-      if info_len > 0 then
-        info = display_text(info, info_len)
-      else
-        label = display_text(label, max_chars)
-        info = nil
-      end
-    else
-      label = display_text(label, max_chars)
-    end
+local function row_text_width(font, info_font, suggestion, hide_info)
+  local width, info
+  if suggestion.preview_text then
+    width = style.get_small_font(font):get_width(tostring(suggestion.preview_text))
+    info = suggestion.preview_show_info and not hide_info and display_info(suggestion) or nil
+  else
+    width = font:get_width(tostring(suggestion.text or ""))
+    info = not hide_info and display_info(suggestion) or nil
   end
-  return label, info
-end
-
-local function row_text_width(font, info_font, suggestion, hide_info, max_chars)
-  if suggestion and suggestion.preview_text then
-    local width = style.get_small_font(font):get_width(display_text(suggestion.preview_text, max_chars))
-    local info = suggestion.preview_show_info and not hide_info and display_info(suggestion) or nil
-    if info and info ~= "" then width = width + style.padding.x + info_font:get_width(info) end
-    return width
-  end
-
-  local label, info = row_text_parts(suggestion, hide_info, max_chars)
-  local width = font:get_width(label)
   if info and info ~= "" then
-    width = width + style.padding.x + info_font:get_width(info)
+    width = width + style.padding.x + info_font:get_width(tostring(info))
   end
   return width
 end
@@ -1589,7 +1566,7 @@ local function get_suggestions_rect(av)
   local window_width = system.get_window_size(core.window)
   local content_width = 0
   for _, s in ipairs(suggestions) do
-    local w = row_text_width(font, style.font, s, hide_info, ROW_PREVIEW_MAX_CHARS)
+    local w = row_text_width(font, style.font, s, hide_info)
     if not hide_icons then
       local icon_width = display_icon_width(s, lh)
       if icon_width > 0 then
@@ -2017,20 +1994,8 @@ function autocomplete.draw(av)
     y = y + lh
   end
 
-  if selected_item then
-    -- Contextual rows keep one detail-column edge, including the selected row.
-    if not provider_completion then
-      local full_width = row_text_width(font, style.font, selected_item, config.plugins.autocomplete.hide_info)
-      local ww = system.get_window_size(core.window)
-      local desired_overlay_width = math.ceil(
-        full_width + icon_column_width + style.padding.x * 2 + TEXT_FIT_RESERVE
-      )
-      local overlay_width = math.min(math.max(rw, desired_overlay_width), math.max(rw, ww - rx - style.padding.x))
-      draw_suggestion_row(font, selected_item, rx, selected_y, overlay_width, lh, icon_column_width, true)
-    end
-    if selected_desc and #selected_desc > 0 then
-      draw_description_box(selected_desc, rx, ry, rw, rh)
-    end
+  if selected_item and selected_desc and #selected_desc > 0 then
+    draw_description_box(selected_desc, rx, ry, rw, rh)
   end
 
   draw_box_border(rx, ry, rw, rh)

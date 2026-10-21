@@ -318,6 +318,23 @@ test.describe("Markdown link completion", function()
     test.contains(table.concat(visible), "C# LeafTarget")
   end)
 
+  test.it("widens the popup to show a long heading path in full when the window has room", function(context)
+    local parent = string.rep("Parent heading ", 7)
+    write_file(context.root .. PATHSEP .. "Guide.md", "# " .. parent .. "\n## LeafTarget\n")
+    context.index:rebuild("completion-wide-row")
+    core.root_panel:on_text_input("[[Guide#leaftarget")
+    test.ok(autocomplete.is_open(), "the heading had no suggestion")
+    local label = autocomplete.get_selected_suggestion().text
+    test.contains(label, "LeafTarget")
+
+    local old_size = system.get_window_size
+    system.get_window_size = function() return 3000, 800 end
+    local ok, _, _, width = pcall(autocomplete._test.get_suggestions_rect, context.view)
+    system.get_window_size = old_size
+    test.ok(ok)
+    test.ok(width > context.view:get_font():get_width(label), "the popup must fit the whole row")
+  end)
+
   test.it("aligns file details to one right edge across completion rows", function(context)
     write_file(context.root .. PATHSEP .. "A.md", "# First\n")
     write_file(context.root .. PATHSEP .. "Bigger Name.md", "# Second\n")
