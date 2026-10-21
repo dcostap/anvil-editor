@@ -182,6 +182,10 @@ void anvil_sidebar_destroy(AnvilSidebarModel *model) {
     free_project(model->projects[i]);
   *model = (AnvilSidebarModel){0};
 }
+static bool agent_equal(const AnvilSidebarAgent *a, const AnvilSidebarAgent *b) {
+  return !strcmp(a->state, b->state) && !strcmp(a->kind, b->kind) && !strcmp(a->message, b->message) &&
+         !strcmp(a->step, b->step) && a->since == b->since && a->step_since == b->step_since;
+}
 bool anvil_sidebar_set_terminals(AnvilSidebarModel *model, AnvilSidebarProject *project,
                                  const AnvilSidebarTerminal *terminals, size_t count) {
   if (count > ANVIL_SIDEBAR_TERMINAL_LIMIT)
@@ -192,7 +196,7 @@ bool anvil_sidebar_set_terminals(AnvilSidebarModel *model, AnvilSidebarProject *
     changed = strcmp(a->id, b->id) || strcmp(a->title, b->title ? b->title : "") ||
               strcmp(a->cwd, b->cwd ? b->cwd : "") || a->busy != b->busy || a->bell != b->bell ||
               a->state != b->state || a->attached != b->attached || a->host_pid != b->host_pid ||
-              a->activity != b->activity;
+              a->activity != b->activity || !agent_equal(&a->agent, &b->agent);
   }
   if (!changed)
     return true;
@@ -299,6 +303,21 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
         quoted(&item, terminal->title);
         append(&item, ",cwd=");
         quoted(&item, terminal->cwd);
+        const AnvilSidebarAgent *agent = &terminal->agent;
+        if (agent->state[0]) {
+          append(&item, ",agent_state=");
+          quoted(&item, agent->state);
+          append(&item, ",agent_kind=");
+          quoted(&item, agent->kind);
+          append(&item, ",agent_message=");
+          quoted(&item, agent->message);
+          append(&item, ",agent_since=%lld", (long long)agent->since);
+        }
+        if (agent->step[0]) {
+          append(&item, ",agent_step=");
+          quoted(&item, agent->step);
+          append(&item, ",agent_step_since=%lld", (long long)agent->step_since);
+        }
         append(&item, "},");
       }
       if (item.failed)

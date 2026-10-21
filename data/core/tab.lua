@@ -73,26 +73,78 @@ function tab.describe_session(terminal)
   local busy
   if terminal.busy == 1 then busy = true elseif terminal.busy == 0 then busy = false end
   return {name = name, terminal = {session = terminal.id, state = terminal.state, busy = busy,
-    bell = (terminal.bell or 0) > 0, activity = terminal.activity}}
+    bell = (terminal.bell or 0) > 0, activity = terminal.activity},
+    agent = terminal.state == "running" and tab.agent(terminal) or nil}
 end
 
 local function tint(color, alpha)
   return {color[1], color[2], color[3], alpha}
 end
 
--- The Terminal status dot's colour: dim when it does not run, warn after a bell, accent while a command runs.
+-- A short duration such as "8s", "3m 05s" or "1h 20m".
+function tab.duration_text(seconds)
+  seconds = math.max(0, math.floor(seconds))
+  if seconds < 60 then return seconds .. "s" end
+  if seconds < 60 * 60 then return string.format("%dm %02ds", math.floor(seconds / 60), seconds % 60) end
+  return string.format("%dh %02dm", math.floor(seconds / 3600), math.floor(seconds % 3600 / 60))
+end
+
+-- The agent status of a Terminal Session record, or nil when no agent reports one. An agent such as Pi reports
+-- its state (idle, working, blocked, done or error) with a message, and Anvil's Pi extension reports its step,
+-- such as "Thinking" or "bash: npm test".
+function tab.agent(record)
+  local state, step = record.agent_state, record.agent_step
+  if (type(state) ~= "string" or state == "") and (type(step) ~= "string" or step == "") then return nil end
+  return {state = state ~= "" and state or "working", kind = record.agent_kind, message = record.agent_message or "",
+    since = record.agent_since, step = step ~= "" and step or nil, step_since = record.agent_step_since}
+end
+
+-- The Terminal status dot's colour: dim when it does not run, warn after a bell or while an agent needs an answer,
+-- error after an agent failed, accent while a command or an agent works.
 function tab.status_color(item)
-  local terminal = item.terminal
+  local terminal, agent = item.terminal, item.agent
   if terminal.state ~= "running" and terminal.state ~= "reconnecting" then return tint(style.dim, 120) end
   if terminal.bell then return style.warn end
+  if agent then
+    if agent.state == "blocked" then return style.warn end
+    if agent.state == "error" then return style.error end
+    if agent.state == "working" or agent.step then return style.accent end
+    return style.good
+  end
   if terminal.busy == true then return style.accent end
   if terminal.busy == false then return style.good end
   return style.dim
 end
 
--- The right-aligned note: a Terminal's age since its last activity.
+-- The right-aligned note: a Terminal's age since its last activity. An agent's own line shows its times instead.
 function tab.note(item, now)
-  return item.terminal and tab.age_text(item.terminal.activity, now) or nil
+  return item.terminal and not item.agent and tab.age_text(item.terminal.activity, now) or nil
+end
+
+-- The agent's line: its text, its time, and its tone: "warn", "error" or "result" for a result not seen yet.
+-- A time under an hour counts seconds, so `ticking` tells the caller to draw again each second.
+function tab.agent_line(agent, now, seen)
+  local text, since, tone = nil, agent.since, nil
+  if agent.step and agent.state ~= "blocked" then
+    text, since = agent.step, agent.step_since
+  elseif agent.state == "blocked" then
+    text, tone = agent.message ~= "" and "Needs you: " .. agent.message or "Needs you", "warn"
+  elseif agent.state == "error" then
+    text, tone = agent.message ~= "" and "Error: " .. agent.message or "Error", "error"
+  elseif agent.state == "done" then
+    text, tone = "Done", not seen and "result" or nil
+  elseif agent.state == "idle" then
+    text = "Idle"
+  else
+    text = "Working"
+  end
+  if not since or since <= 0 then return text, nil, tone, false end
+  if agent.state == "done" or agent.state == "error" or agent.state == "idle" then
+    local age = tab.age_text(since, now)
+    return text, age ~= "now" and age .. " ago" or age, tone, false
+  end
+  local elapsed = now - since
+  return text, tab.duration_text(elapsed), tone, elapsed < 60 * 60
 end
 
 -- Shortens text with an ellipsis until it fits in `width`.
@@ -131,7 +183,7 @@ function tab.width(item, row_height, opts)
 end
 
 -- Draws the Tab's content in the rectangle. `name_color` colours a name without a Git or missing-file colour.
--- Returns true when it drew a spinner frame, so the caller can draw the next one.
+-- Returns true when it drew a spinner frame, so the caller can draw the next one, and the name's left edge.
 ---@param opts {name_color: renderer.color, number_font: renderer.font?, name_font: renderer.font?, now: number?, clock: number?}
 function tab.draw(item, x, y, w, h, opts)
   local number_font, name_font = opts.number_font or style.font, opts.name_font or style.font
@@ -167,7 +219,22 @@ function tab.draw(item, x, y, w, h, opts)
       math.max(1, SCALE), color)
   end
   if note then renderer.draw_text(style.font, note, right - style.font:get_width(note), middle(style.font), style.dim) end
-  return spinning
+  return spinning, x
+end
+
+-- Draws the agent's line at the left edge of the Tab's name. Returns true when the time counts seconds.
+---@param opts {now: number, seen: boolean?}
+function tab.draw_agent(agent, x, y, w, h, opts)
+  local text, time, tone, ticking = tab.agent_line(agent, opts.now, opts.seen)
+  local font, right = style.font, x + w
+  local ty = y + math.floor((h - font:get_height()) / 2)
+  local time_w = time and font:get_width(time) + gap() * 2 or 0
+  if time_w > w / 2 then time, time_w = nil, 0 end
+  local color = tone == "warn" and style.warn or tone == "error" and style.error or tone == "result" and style.accent
+    or style.dim
+  renderer.draw_text(font, tab.fit(font, text, math.max(0, w - time_w)), x, ty, color)
+  if time then renderer.draw_text(font, time, right - font:get_width(time), ty, style.dim) end
+  return ticking and time ~= nil
 end
 
 return tab

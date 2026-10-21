@@ -37,8 +37,9 @@ function Scene:new()
   self.sidebar = SidebarView(function() end, {})
   self.sidebar:set_model({
     project(1, "C:/Projects/anvil-editor", "ready", MINUTE, 1, {
-      terminal("a", "[40 s] \u{03C0} - GLP4", 30, {busy = 1}),
-      terminal("b", "pwsh - anvil-editor", 20 * MINUTE),
+      terminal("a", "[40 s] \u{03C0} - GLP4", 30, {busy = 1, agent_state = "working", agent_since = os.time() - 400,
+        agent_step = "bash: npm test -- --watch=false", agent_step_since = os.time() - 42}),
+      terminal("b", "pwsh - anvil-editor", 20 * MINUTE, {agent_state = "done", agent_since = os.time() - 5 * MINUTE}),
       terminal("c", "npm run dev", 3 * DAY),
       terminal("d", "", 2 * DAY, {state = "exited"}),
       terminal("e", "build log", 10 * DAY),
@@ -52,7 +53,8 @@ function Scene:new()
       editor(5, 4, "removed.md", {missing = true}),
     }),
     project(2, "D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas", "ready", 2 * 60 * 60, 2, {
-      terminal("h", "\u{03C0} - Israel Mallo Mart\u{00ED}nez", 5 * MINUTE),
+      terminal("h", "\u{03C0} - Israel Mallo Mart\u{00ED}nez", 5 * MINUTE, {agent_state = "blocked",
+        agent_kind = "permission", agent_message = "Allow write to src/main.c?", agent_since = os.time() - 90}),
     }, {active = 1, visible = 1, terminal_tab(1, 1, "h", "\u{03C0} - Israel Mallo Mart\u{00ED}nez", 5 * MINUTE)}),
     project(3, "C:/Projects/notes", "dormant", 2 * DAY, 0, {
       terminal("i", "pi", 3 * 60 * 60, {busy = 1}),

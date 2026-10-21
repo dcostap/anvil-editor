@@ -558,6 +558,10 @@ _Avoid_: PTY, terminal process, shell instance
 A coding agent's saved conversation, such as a Pi session. When a Terminal Session revives after its shell ended, it resumes the Agent Session that its agent had open.
 _Avoid_: agent conversation, Pi session file
 
+**Agent Status**:
+What a coding agent in a Terminal Session reports about itself: working, waiting for an answer, done, failed, or idle. While it works, it also reports its current step, such as thinking or running a command. The Project Sidebar shows the Agent Status on a second line of the agent's Tab. The status ends when the agent ends.
+_Avoid_: agent state, program status, agent activity
+
 **Terminal Text Capture**:
 A Text Capture containing stable text from a Terminal View while that terminal continues to run.
 _Avoid_: terminal buffer, copy mode

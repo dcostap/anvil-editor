@@ -485,3 +485,88 @@ test.describe("Sidebar Terminal spinners", function()
     test.equal(view:animation_delay(100), nil)
   end)
 end)
+
+test.describe("Sidebar agent status", function()
+  local style = require "core.style"
+  local now = os.time()
+
+  -- Each text the view draws, with its colour.
+  local function drawn(view)
+    local old_rect, old_rounded, old_text, old_clip =
+      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
+    local texts = {}
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
+    renderer.draw_text = function(_, text, _, _, color) texts[#texts + 1] = {text = text, color = color} end
+    local ok, err = pcall(view.draw, view, 400, 800)
+    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
+      old_rect, old_rounded, old_text, old_clip
+    if not ok then error(err) end
+    return texts
+  end
+
+  local function find(texts, text)
+    for _, item in ipairs(texts) do if item.text == text then return item end end
+  end
+
+  local function joined(texts)
+    local parts = {}
+    for _, item in ipairs(texts) do parts[#parts + 1] = item.text end
+    return table.concat(parts, " | ")
+  end
+
+  -- A loaded Project whose second Pane shows the Terminal Session "a". The first Pane is active.
+  local function model(agent, active)
+    local session = {id="a",title="\u{03C0} - GLP4",cwd="C:/P",state="running",busy=1,bell=-1,activity=now}
+    for key, value in pairs(agent) do session[key] = value end
+    return {{row_id=1,id=1,path="C:/P",state="ready",window_id=1,exists=true,activity=now,terminals={session},
+      panes={active=active or 1,visible=1,
+        {id="pane-1",number=1,group=1,name="init.lua"},
+        {id="pane-2",number=2,group=2,name="\u{03C0} - GLP4",terminal={session="a",state="running",busy=true}}}},
+      windows={{id=1,selected_project=1}}}
+  end
+
+  test.it("shows the agent's current step and how long it runs below its Tab", function()
+    local view = SidebarView(function() end)
+    view:set_model(model({agent_state="working",agent_message="GLP4",agent_since=now-300,
+      agent_step="bash: npm test",agent_step_since=now-42}), 1)
+    local texts = drawn(view)
+    test.ok(find(texts, "bash: npm test"), "The step is missing: " .. joined(texts))
+    test.ok(find(texts, "42s"), "The step's time is missing: " .. joined(texts))
+    test.not_nil(view:animation_delay(0), "The step's time does not count on")
+  end)
+
+  test.it("shows what a waiting agent asks for", function()
+    local view = SidebarView(function() end)
+    view:set_model(model({agent_state="blocked",agent_kind="permission",agent_message="Allow write?",agent_since=now}), 1)
+    local item = find(drawn(view), "Needs you: Allow write?")
+    test.not_nil(item, "The question is missing")
+    test.same(item.color, style.warn)
+  end)
+
+  test.it("marks an agent's result until its Tab was active", function()
+    local view = SidebarView(function() end)
+    local result = {agent_state="done",agent_message="GLP4",agent_since=now-120}
+    view:set_model(model(result, 1), 1)
+    local unseen = test.not_nil(find(drawn(view), "Done"), "The result is missing")
+    view:set_model(model(result, 2), 1)
+    view:set_model(model(result, 1), 1)
+    local seen = test.not_nil(find(drawn(view), "Done"), "The seen result is missing")
+    test.ok(unseen.color ~= seen.color, "The result looks the same before and after its Tab was active")
+    test.same(seen.color, style.dim)
+  end)
+
+  test.it("counts agents that need an answer in an unloaded Project's hint", function()
+    local view = SidebarView(function() end)
+    local function terminal(id, fields)
+      local item = {id=id,title=id,cwd="C:/P",state="running",busy=1,bell=-1,activity=now}
+      for key, value in pairs(fields) do item[key] = value end
+      return item
+    end
+    view:set_model({{row_id=1,path="C:/P",state="dormant",exists=true,activity=now,terminals={
+      terminal("a", {agent_state="blocked",agent_since=now}),
+      terminal("b", {agent_state="working",agent_since=now}),
+      terminal("c", {agent_state="idle",agent_since=now})}}})
+    local texts = drawn(view)
+    test.ok(find(texts, "3 terminals, 1 busy, 1 needs you"), "The hint is wrong: " .. joined(texts))
+  end)
+end)

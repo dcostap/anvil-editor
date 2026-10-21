@@ -16,6 +16,9 @@
 #define CLIENT_QUEUE_LIMIT (8u * 1024u * 1024u)
 #define CLIENT_STALL_TIMEOUT_MS 10000u
 #define ORPHAN_GRACE_MS (10u * 60u * 1000u)
+/* The longest agent status text the registry keeps, in bytes. Program status messages can be 2048 bytes. */
+#define ANVIL_TERMINAL_AGENT_TEXT_MAX 256
+#define AGENT_MESSAGE_MAX 2048
 
 typedef struct HostRecord {
   struct HostRecord *next;
@@ -23,6 +26,12 @@ typedef struct HostRecord {
   uint16_t type;
   uint8_t bytes[];
 } HostRecord;
+
+/* One program status record (OSC 7501). An empty state means no record. */
+typedef struct {
+  char state[8], kind[16], message[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1];
+  int64_t since;
+} AgentRecord;
 
 typedef struct {
   AnvilConPTY pty;
@@ -61,7 +70,11 @@ typedef struct {
   int mark_state;
   size_t mark_length;
   bool mark_overflow;
-  char mark[128];
+  char mark[4096];
+  /* An agent's program status: the root record and the "step" child record that Anvil's Pi extension sends.
+     The reader thread changes them under lock; the monitor writes them to the registry. */
+  AgentRecord agent, step;
+  volatile LONG agent_revision;
 } TerminalHost;
 
 static wchar_t *wide_string(const char *text) {
@@ -182,6 +195,19 @@ static bool write_registry(TerminalHost *host) {
     registry_string(file, "snapshot_path", host->snapshot_path);
     registry_string(file, "interrupted_command", host->interrupted_command);
     fprintf(file, "  interrupted_pid = %lu,\n", (unsigned long)host->interrupted_pid);
+    EnterCriticalSection(&host->lock);
+    AgentRecord agent = host->agent, step = host->step;
+    LeaveCriticalSection(&host->lock);
+    if (agent.state[0]) {
+      registry_string(file, "agent_state", agent.state);
+      registry_string(file, "agent_kind", agent.kind);
+      registry_string(file, "agent_message", agent.message);
+      fprintf(file, "  agent_since = %lld,\n", (long long)agent.since);
+    }
+    if (step.state[0]) {
+      registry_string(file, "agent_step", step.message);
+      fprintf(file, "  agent_step_since = %lld,\n", (long long)step.since);
+    }
     fputs("}\n", file);
     ok = !ferror(file);
   }
@@ -269,11 +295,117 @@ static bool queue_record(TerminalHost *host, uint16_t type, const void *bytes, u
   return true;
 }
 
+/* Standard base64 with optional padding. Returns the decoded length, or -1. */
+static int base64_decode(const char *text, size_t length, char *out, size_t capacity) {
+  uint32_t bits = 0; int count = 0; size_t used = 0;
+  for (size_t i = 0; i < length; i++) {
+    char ch = text[i]; int value;
+    if (ch >= 'A' && ch <= 'Z') value = ch - 'A';
+    else if (ch >= 'a' && ch <= 'z') value = ch - 'a' + 26;
+    else if (ch >= '0' && ch <= '9') value = ch - '0' + 52;
+    else if (ch == '+') value = 62;
+    else if (ch == '/') value = 63;
+    else if (ch == '=') break;
+    else return -1;
+    bits = (bits << 6) | (uint32_t)value; count += 6;
+    if (count >= 8) {
+      count -= 8;
+      if (used >= capacity) return -1;
+      out[used++] = (char)((bits >> count) & 0xff);
+    }
+  }
+  return (int)used;
+}
+
+/* Agent records end when the program that sent them ends. Caller holds lock. */
+static void clear_agent(TerminalHost *host) {
+  if (!host->agent.state[0] && !host->step.state[0]) return;
+  host->agent = (AgentRecord){0}; host->step = (AgentRecord){0};
+  InterlockedIncrement(&host->agent_revision);
+}
+
+/* Applies one Program Status Protocol report (OSC 7501): key=value pairs joined by ':'. A malformed report
+   changes nothing. Pi reports the root record; Anvil's Pi extension reports the "step" record. */
+static void apply_status(TerminalHost *host, const char *pairs) {
+  char state[8] = "", kind[16] = "", id[33] = "", message[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1] = "";
+  for (const char *pair = pairs; *pair;) {
+    size_t length = strcspn(pair, ":");
+    const char *equals = memchr(pair, '=', length);
+    if (equals) {
+      size_t key = (size_t)(equals - pair), size = length - key - 1;
+      const char *value = equals + 1;
+      if (size > (AGENT_MESSAGE_MAX + 2) / 3 * 4) return;
+      for (size_t i = 0; i < size; i++)
+        if (!strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.,+/=-", value[i])) return;
+      if (key == 5 && !memcmp(pair, "state", 5) && size < sizeof(state)) {
+        memcpy(state, value, size); state[size] = 0;
+      } else if (key == 4 && !memcmp(pair, "kind", 4) && size < sizeof(kind)) {
+        memcpy(kind, value, size); kind[size] = 0;
+      } else if (key == 2 && !memcmp(pair, "id", 2)) {
+        if (size >= sizeof(id)) return;
+        memcpy(id, value, size); id[size] = 0;
+      } else if (key == 3 && !memcmp(pair, "msg", 3)) {
+        char decoded[AGENT_MESSAGE_MAX + 3];
+        int count = base64_decode(value, size, decoded, sizeof(decoded));
+        if (count < 0) return;
+        /* One line of text: no C0 or C1 controls. */
+        for (int i = 0; i < count; i++) {
+          unsigned char ch = (unsigned char)decoded[i];
+          if (ch < 32 || ch == 127 || (ch == 0xc2 && i + 1 < count && (unsigned char)decoded[i + 1] < 0xa0)) return;
+        }
+        size_t keep = (size_t)count < ANVIL_TERMINAL_AGENT_TEXT_MAX ? (size_t)count : ANVIL_TERMINAL_AGENT_TEXT_MAX;
+        while (keep < (size_t)count && keep && ((unsigned char)decoded[keep] & 0xc0) == 0x80) keep--;
+        memcpy(message, decoded, keep); message[keep] = 0;
+      }
+    }
+    pair += length;
+    if (*pair == ':') pair++;
+  }
+  bool root = !id[0], step = !strcmp(id, "step"), clear = !strcmp(state, "clear");
+  if (!clear && strcmp(state, "idle") && strcmp(state, "working") && strcmp(state, "done") &&
+      strcmp(state, "blocked") && strcmp(state, "error")) return;
+  if (!root && !step) return;
+  EnterCriticalSection(&host->lock);
+  if (clear && root) clear_agent(host);
+  else {
+    AgentRecord *record = root ? &host->agent : &host->step, next = {0};
+    if (!clear) {
+      snprintf(next.state, sizeof(next.state), "%s", state);
+      if (!strcmp(state, "blocked")) snprintf(next.kind, sizeof(next.kind), "%s", kind);
+      snprintf(next.message, sizeof(next.message), "%s", message);
+      /* A repeated state keeps its start time. A step starts again when its text changes. */
+      bool same = !strcmp(record->state, next.state) && (root || !strcmp(record->message, next.message));
+      next.since = same ? record->since : (int64_t)time(NULL);
+    }
+    if (strcmp(record->state, next.state) || strcmp(record->kind, next.kind) ||
+        strcmp(record->message, next.message) || record->since != next.since) {
+      *record = next;
+      InterlockedIncrement(&host->agent_revision);
+    }
+  }
+  LeaveCriticalSection(&host->lock);
+}
+
+/* A trusted prompt mark ends a working or blocked program, but its result stays. Caller holds lock. */
+static void end_running_agent(TerminalHost *host) {
+  AgentRecord *records[] = { &host->agent, &host->step };
+  for (size_t i = 0; i < 2; i++)
+    if (!strcmp(records[i]->state, "working") || !strcmp(records[i]->state, "blocked")) {
+      *records[i] = (AgentRecord){0};
+      InterlockedIncrement(&host->agent_revision);
+    }
+}
+
 /* Only marks that carry this session's nonce count. A nested shell or a TUI
    cannot fake the integrated shell's prompt and hide a running command. */
 static void apply_mark(TerminalHost *host) {
   const char *text = host->mark;
-  if (host->mark_overflow || strncmp(text, "133;", 4) || !strchr("ABCD", text[4]) || !text[4] ||
+  if (host->mark_overflow) return;
+  if (!strncmp(text, "7501;", 5)) {
+    if (text[5] != '?') apply_status(host, text + 5);
+    return;
+  }
+  if (!host->pty.shell_integration || strncmp(text, "133;", 4) || !strchr("ABCD", text[4]) || !text[4] ||
       (text[5] && text[5] != ';')) return;
   char tag[48]; int tag_length = snprintf(tag, sizeof(tag), "anvil=%s", host->nonce);
   bool trusted = false;
@@ -284,6 +416,11 @@ static void apply_mark(TerminalHost *host) {
     field += length;
   }
   if (!trusted) return;
+  if (text[4] == 'A') {
+    EnterCriticalSection(&host->lock);
+    end_running_agent(host);
+    LeaveCriticalSection(&host->lock);
+  }
   LONG running = text[4] == 'C';
   if (InterlockedExchange(&host->command_running, running) != running)
     host_log(host, running ? "shell integration: command started" : "shell integration: command finished");
@@ -316,7 +453,7 @@ static DWORD WINAPI host_reader(void *userdata) {
   while (!InterlockedCompareExchange(&host->reader_stop, 0, 0)) {
     DWORD read = 0;
     if (!ReadFile(host->pty.output_read, bytes, sizeof(bytes), &read, NULL) || !read) break;
-    if (host->pty.shell_integration) scan_marks(host, bytes, read);
+    scan_marks(host, bytes, read);
     EnterCriticalSection(&host->lock);
     while (host->replaying && !host->stop && !host->reader_stop)
       SleepConditionVariableCS(&host->space, &host->lock, INFINITE);
@@ -676,6 +813,9 @@ static void append_environment_option(const wchar_t *name, const wchar_t *option
 static void set_agent_environment(TerminalHost *host, const char *datadir) {
   static wchar_t option[32800], short_path[32768];
   char script[32768];
+  /* Pi sends program status (OSC 7501) only to a terminal that answers its query, and only the editor answers
+     queries. The host reads the reports, so Pi may send them without asking. A value the user set stays. */
+  if (!GetEnvironmentVariableW(L"PI_PROGRAM_STATUS", NULL, 0)) SetEnvironmentVariableW(L"PI_PROGRAM_STATUS", L"1");
   snprintf(script, sizeof(script), "%s/tools/agent-sessions/pi.cjs", datadir);
   wchar_t *report = wide_string(host->agent_report_path), *path = wide_string(script);
   DWORD attrs = path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
@@ -775,6 +915,10 @@ int anvil_terminal_host_main(int argc, char **argv) {
   uint64_t title_probe_at = 0, title_written_at = 0, input_seen = 0;
   int64_t activity_written = host.activity;
   bool title_pending = false;
+  /* Agent status reaches the record at most every 200 ms. */
+  LONG agent_written = 0;
+  uint64_t agent_written_at = 0;
+  char agent_logged[sizeof(host.agent.state)] = "";
   bool exit_queued = false, final_snapshot_saved = false;
   while (!host.stop) {
     uint64_t now = GetTickCount64();
@@ -844,6 +988,8 @@ int anvil_terminal_host_main(int argc, char **argv) {
         host.busy = busy;
         host.status_pending = true;
       }
+      /* The agent's records end with the program, as at a prompt. Pi clears them when it quits normally. */
+      if (!busy) clear_agent(&host);
       LeaveCriticalSection(&host.lock);
       if (busy_changed) host.activity = (int64_t)time(NULL);
       if (command_changed || busy_changed) {
@@ -891,6 +1037,19 @@ int anvil_terminal_host_main(int argc, char **argv) {
         title_pending = false;
         title_written_at = now;
         activity_written = host.activity;
+      }
+    }
+    LONG agent_revision = InterlockedCompareExchange(&host.agent_revision, 0, 0);
+    if (agent_revision != agent_written && now - agent_written_at >= 200) {
+      agent_written = agent_revision;
+      agent_written_at = now;
+      write_registry(&host);
+      EnterCriticalSection(&host.lock);
+      char state[sizeof(host.agent.state)]; strcpy(state, host.agent.state);
+      LeaveCriticalSection(&host.lock);
+      if (strcmp(state, agent_logged)) {
+        host_log(&host, "agent status: %s", state[0] ? state : "none");
+        strcpy(agent_logged, state);
       }
     }
     uint64_t revision = InterlockedCompareExchange64(&host.model_revision, 0, 0);

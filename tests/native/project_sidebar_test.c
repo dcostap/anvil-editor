@@ -211,6 +211,38 @@ static void panes(void) {
         "Clearing the Pane report did not publish");
   anvil_sidebar_destroy(&model);
 }
+static void agent_status(void) {
+  AnvilSidebarModel model = {0};
+  const char *paths[] = {"C:/B"};
+  CHECK(anvil_sidebar_merge_recents(&model, paths, 1), "Recent source failed");
+  AnvilSidebarProject *b = anvil_sidebar_find(&model, "C:/B");
+  AnvilSidebarTerminal session = {.id = "0123456789abcdef0123456789abcdef", .title = "pi", .cwd = "C:/B",
+                                  .busy = 1, .bell = -1};
+  CHECK(anvil_sidebar_set_terminals(&model, b, &session, 1), "Terminal source failed");
+  uint32_t revision = model.revision;
+  snprintf(session.agent.state, sizeof(session.agent.state), "working");
+  snprintf(session.agent.step, sizeof(session.agent.step), "bash: npm \"test\"");
+  session.agent.since = 100;
+  session.agent.step_since = 120;
+  CHECK(anvil_sidebar_set_terminals(&model, b, &session, 1) && model.revision != revision,
+        "A new agent step did not publish a revision");
+  char *page = anvil_sidebar_snapshot(&model, 0);
+  CHECK(page, "Snapshot failed");
+  lua_State *L = luaL_newstate();
+  CHECK(L && !luaL_loadbuffer(L, page, strlen(page), "=Sidebar page") && !lua_pcall(L, 0, 1, 0),
+        "Invalid snapshot encoding");
+  free(page);
+  lua_getfield(L, 1, "items");
+  lua_rawgeti(L, -1, 2);
+  lua_getfield(L, -1, "agent_state");
+  lua_getfield(L, -2, "agent_step");
+  lua_getfield(L, -3, "agent_step_since");
+  CHECK(!strcmp(lua_tostring(L, -3), "working") && !strcmp(lua_tostring(L, -2), "bash: npm \"test\"") &&
+            lua_tonumber(L, -1) == 120,
+        "The snapshot changed the agent status");
+  lua_close(L);
+  anvil_sidebar_destroy(&model);
+}
 static void trailing_separator(void) {
   AnvilSidebarModel model = {0};
   const char *paths[] = {"C:\\Projects\\GLP4", "C:\\"};
@@ -229,6 +261,7 @@ static void trailing_separator(void) {
 int main(void) {
   trailing_separator();
   panes();
+  agent_status();
   order();
   capacity();
   lifecycle();

@@ -56,6 +56,8 @@ local function metrics()
     group = h + 12 * SCALE,
     project = h + 14 * SCALE,
     terminal = h + 8 * SCALE,
+    -- An agent's Tab adds a line for what the agent does.
+    agent = 2 * h + 10 * SCALE,
     indent = 14 * SCALE,
   }
 end
@@ -104,9 +106,20 @@ function SidebarView:rebuild_rows()
   for _, window in ipairs(projects.windows or {}) do
     if window.id == window_id then selected = window.selected_project end
   end
+  -- An agent's result counts as seen once its Tab was the Window's active Tab.
+  self.seen = self.seen or {}
+  local function add_tab(row, agent)
+    row.agent = agent
+    if agent and (agent.state == "done" or agent.state == "error") then
+      local session = row.tab.terminal.session
+      if row.selected then self.seen[session] = agent.since end
+      row.seen = self.seen[session] == agent.since
+    end
+    add(row, agent and m.agent or m.terminal)
+  end
   local function add_terminal(project, terminal, depth)
-    add({kind = "terminal", project = project, terminal = terminal, depth = depth,
-      tab = tab.describe_session(terminal)}, m.terminal)
+    local item = tab.describe_session(terminal)
+    add_tab({kind = "terminal", project = project, terminal = terminal, depth = depth, tab = item}, item.agent)
   end
   local function add_loaded(project)
     local is_selected = window_id and selected ~= 0 and project.id == selected or not window_id and project.selected
@@ -114,15 +127,25 @@ function SidebarView:rebuild_rows()
     -- The Selected Project's active Tab takes the highlight.
     local active = is_selected and panes[panes.active or 0] and panes.active
     add({kind = "project", project = project, selected = is_selected and not active}, m.project)
-    local shown, sizes = {}, {}
+    local shown, sizes, records = {}, {}, {}
     for _, item in ipairs(panes) do sizes[item.group or 0] = (sizes[item.group or 0] or 0) + 1 end
+    for _, terminal in ipairs(project.terminals or {}) do records[terminal.id] = terminal end
     for index, item in ipairs(panes) do
+      -- A Terminal Tab takes its agent's status from the Terminal Session record.
+      local record = item.terminal and records[item.terminal.session]
+      local agent = record and record.state == "running" and tab.agent(record)
+      if agent then
+        local copy = {agent = agent}
+        for key, value in pairs(item) do copy[key] = value end
+        item = copy
+      end
       if item.terminal and item.terminal.session then shown[item.terminal.session] = true end
       local group = item.group or 0
       -- A Pane Group with several Panes joins its Tabs with a line.
       local bracket = sizes[group] > 1 and {first = (panes[index - 1] or {}).group ~= group,
         last = (panes[index + 1] or {}).group ~= group, visible = group == panes.visible} or nil
-      add({kind = "tab", project = project, tab = item, selected = index == active, bracket = bracket}, m.terminal)
+      add_tab({kind = "tab", project = project, tab = item, selected = index == active, bracket = bracket},
+        item.agent)
     end
     -- Terminal Sessions that no Pane shows. Recent and ringing ones show directly, and so do those from hosts that
     -- do not report activity. Older ones fold into groups.
@@ -422,25 +445,33 @@ local function text(label, x, y, color)
   renderer.draw_text(style.font, label, x, y, color)
 end
 
--- Seconds until a drawn spinner shows its next frame, or nil when the last draw showed none.
+-- Seconds until a drawn spinner shows its next frame or a drawn agent time its next second, or nil when the last
+-- draw showed neither.
 function SidebarView:animation_delay(clock)
-  if not self.spinning then return nil end
-  return tab.spinner_delay(clock)
+  local delay = self.spinning and tab.spinner_delay(clock) or nil
+  if self.ticking then delay = math.min(delay or 1, 1 - clock % 1) end
+  return delay
 end
 
--- The running Terminal Sessions of an unloaded Project, such as "3 terminals, 1 busy", or nil when none run.
--- The second result leaves out the busy count for a narrow Sidebar.
+-- The running Terminal Sessions of an unloaded Project, such as "3 terminals, 1 busy, 1 needs you", or nil when
+-- none run. An agent that waits at its prompt is not busy. Shorter forms follow for a narrow Sidebar.
 local function terminal_hint(project)
-  local running, busy = 0, 0
+  local running, busy, blocked = 0, 0, 0
   for _, terminal in ipairs(project.terminals or {}) do
     if terminal.state == "running" then
       running = running + 1
-      if terminal.busy == 1 then busy = busy + 1 end
+      local agent = tab.agent(terminal)
+      if agent and agent.state == "blocked" then
+        blocked = blocked + 1
+      elseif agent and (agent.state == "working" or agent.step) or not agent and terminal.busy == 1 then
+        busy = busy + 1
+      end
     end
   end
   if running == 0 then return nil end
-  local hint = running .. (running == 1 and " terminal" or " terminals")
-  return busy > 0 and hint .. ", " .. busy .. " busy" or hint, hint
+  local count = running .. (running == 1 and " terminal" or " terminals")
+  local needs = blocked > 0 and ", " .. blocked .. " needs you" or ""
+  return count .. (busy > 0 and ", " .. busy .. " busy" or "") .. needs, count .. needs, count
 end
 
 -- Draws a label shortened before a right-aligned note, then the note. The note keeps the same inset from the
@@ -502,9 +533,12 @@ function SidebarView:draw_row(row, y, width, now)
         row.bracket.visible and style.titlebar_group_indicator or style.divider)
     end
     local x = left + 24 * SCALE + ((row.depth or 1) - 1) * m.indent
-    if tab.draw(row.tab, x, y, right - 8 * SCALE - x, row.h,
-        {name_color = style.text, now = now, clock = self.clock}) then
-      self.spinning = true
+    local spinning, name_x = tab.draw(row.tab, x, y, right - 8 * SCALE - x, m.terminal,
+      {name_color = style.text, now = now, clock = self.clock})
+    if spinning then self.spinning = true end
+    if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - 8 * SCALE - name_x,
+        m.terminal, {now = now, seen = row.seen}) then
+      self.ticking = true
     end
     return
   end
@@ -528,7 +562,7 @@ end
 function SidebarView:draw(width, height)
   if width ~= self.width or height ~= self.view_h then self:set_size(width, height) end
   local now = os.time()
-  self.clock, self.spinning = system.get_time(), false
+  self.clock, self.spinning, self.ticking = system.get_time(), false, false
   renderer.set_clip_rect(0, 0, width, height)
   -- On a transparent surface the shell blends the panel over the Project's backdrop and wallpaper.
   renderer.draw_rect(0, 0, width, height,

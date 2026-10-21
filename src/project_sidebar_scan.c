@@ -88,6 +88,29 @@ static const char *string_field(lua_State *L, const char *key) {
   lua_pop(L, 1);
   return text;
 }
+/* Unix seconds, or 0 when absent or out of range. */
+static int64_t time_field(lua_State *L, const char *key) {
+  lua_getfield(L, 1, key);
+  double value = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0;
+  lua_pop(L, 1);
+  return isfinite(value) && value > 0 && value < 1e12 ? (int64_t)value : 0;
+}
+/* Copies one line of text, shortened at a UTF-8 boundary. Text with control characters copies as empty. */
+static void text_field(lua_State *L, const char *key, char *out, size_t capacity) {
+  const char *text = string_field(L, key);
+  out[0] = 0;
+  if (!text)
+    return;
+  for (const unsigned char *p = (const unsigned char *)text; *p; p++)
+    if (*p < 32 || *p == 127)
+      return;
+  size_t size = SDL_min(strlen(text), capacity - 1);
+  if (size < strlen(text))
+    while (size && ((unsigned char)text[size] & 0xc0) == 0x80)
+      size--;
+  memcpy(out, text, size);
+  out[size] = 0;
+}
 static bool boolean_field(lua_State *L, const char *key, bool *value) {
   lua_getfield(L, 1, key);
   bool valid = lua_isboolean(L, -1);
@@ -301,11 +324,19 @@ static void terminal_records(AnvilSidebarScan *job, lua_State *L) {
       terminal.busy = -1;
     }
     const char *cwd = string_field(L, "cwd"), *title = string_field(L, "title");
-    lua_getfield(L, 1, "activity");
-    double activity = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0;
-    lua_pop(L, 1);
-    if (isfinite(activity) && activity > 0 && activity < 1e12)
-      terminal.activity = (int64_t)activity;
+    terminal.activity = time_field(L, "activity");
+    if (terminal.state == ANVIL_SIDEBAR_TERMINAL_RUNNING) {
+      AnvilSidebarAgent *agent = &terminal.agent;
+      text_field(L, "agent_state", agent->state, sizeof(agent->state));
+      if (agent->state[0]) {
+        text_field(L, "agent_kind", agent->kind, sizeof(agent->kind));
+        text_field(L, "agent_message", agent->message, sizeof(agent->message));
+        agent->since = time_field(L, "agent_since");
+      }
+      text_field(L, "agent_step", agent->step, sizeof(agent->step));
+      if (agent->step[0])
+        agent->step_since = time_field(L, "agent_step_since");
+    }
     /* Cwd is a path, not an arbitrary control payload. */
     if (cwd)
       for (const unsigned char *p = (const unsigned char *)cwd; *p; p++)

@@ -20,6 +20,15 @@ typedef enum {
   ANVIL_SIDEBAR_CLOSING,
   ANVIL_SIDEBAR_FAILED
 } AnvilSidebarState;
+/* The longest agent status text, in bytes. */
+#define ANVIL_SIDEBAR_AGENT_TEXT_MAX 256
+/* An agent's program status from its Terminal Session record: the state that the agent reports and the step that
+ * Anvil's Pi extension reports. An empty state or step means none. Times are Unix seconds. */
+typedef struct {
+  char state[8], kind[16];
+  char message[ANVIL_SIDEBAR_AGENT_TEXT_MAX + 1], step[ANVIL_SIDEBAR_AGENT_TEXT_MAX + 1];
+  int64_t since, step_since;
+} AnvilSidebarAgent;
 typedef struct {
   char id[33];
   char *title, *cwd;
@@ -30,6 +39,7 @@ typedef struct {
   /* The last time the user typed into it, or a command started or ended, or its title changed. Unix seconds; 0 means
    * unknown. */
   int64_t activity;
+  AnvilSidebarAgent agent;
   enum {
     ANVIL_SIDEBAR_TERMINAL_RUNNING,
     ANVIL_SIDEBAR_TERMINAL_EXITED,
