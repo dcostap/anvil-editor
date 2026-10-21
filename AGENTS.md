@@ -165,6 +165,12 @@ These launches run the Lua application without a shell:
 Tools that measure the Lua application alone pass `--direct`.
 Other platforms have no shell and always run the Lua application.
 
+One shell runs for each executable and user folder. The shell key uses resolved paths.
+A launch through `C:\Projects`, a link to `D:\Projects`, reaches the same shell.
+A different executable with the same user folder, such as `launch-anvil-debug.bat`, starts a second shell.
+If a Project is open in another instance, selecting it raises that instance.
+The Window keeps its other Projects. The `launch-link` and `launch-handoff` shell launch probes cover this.
+
 ## Renderer selection
 
 The dev portable build defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.
