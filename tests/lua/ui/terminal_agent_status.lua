@@ -48,6 +48,26 @@ test.describe("Terminal agent status", function()
     test.ok(ok, err)
   end)
 
+  test.it("ends a step when its program reports that it rests", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local ok, err = pcall(function()
+      test.ok(wait_for(view, function(value) return value.busy == false end, 20), "idle shell missing")
+      -- "Thinking" in base64. The program reports "done" but does not clear its step.
+      test.ok(view.session:write(
+        "$e=[char]27; [Console]::Write(\"$e]7501;state=working$e\\\");" ..
+        " [Console]::Write(\"$e]7501;state=working:id=step:msg=VGhpbmtpbmc=$e\\\"); Start-Sleep 1;" ..
+        " [Console]::Write(\"$e]7501;state=done$e\\\"); Start-Sleep 4\r"))
+      test.ok(wait_for(view, function(value) return value.agent_step == "Thinking" end, 4), "step missing")
+      local done = wait_for(view, function(value) return value.agent_state == "done" end, 4)
+      test.equal(done and done.agent_state, "done")
+      test.equal(done and done.agent_step, nil, "The step outlived its run")
+    end)
+    view:on_close()
+    test.ok(ok, err)
+  end)
+
   test.it("ignores a malformed report", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)

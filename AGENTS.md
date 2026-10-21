@@ -62,6 +62,17 @@ The record's `interrupted_pid` must match the report, so an old report cannot re
 Both option parsers treat backslashes as escapes, and Bun has no quoting, so the host passes forward slashes and a short path to Bun.
 Run `ui/terminal_agent_resume.lua` after changes. It runs a fake Pi on Node and on Bun when they are installed.
 
+The host reads program status reports (OSC 7501) and keeps the Agent Status in the session record.
+It sets `PI_PROGRAM_STATUS=1`, so Pi reports without a query.
+In an interactive Pi, `pi.cjs` also adds `--extension` for `data/tools/agent-sessions/pi-status.cjs`.
+The extension only listens. It reports Pi's current step as the `step` child record.
+It adds no tools, commands or session entries. `ANVIL_PI_STATUS=0` turns it off.
+Pi subcommands, such as `pi update`, get no `--extension`, because they read it as a package to install.
+The extension uses `.cjs`, because a `package.json` with `"type": "module"` above it makes Node read `.js` as ESM.
+The host puts its preload first in `NODE_OPTIONS` and `BUN_OPTIONS`.
+An Anvil that a Terminal Session started inherits the older preload, and the first preload claims Pi.
+Run `ui/terminal_agent_status.lua` and `ui/terminal_agent_resume.lua` after changes.
+
 The standalone option is `-Dembedded_runtime=true`. It is off by default.
 `scripts\build-standalone-windows.sh` enables it, strips the executable, runs
 the standalone smoke test, and promotes the result only after the test passes.

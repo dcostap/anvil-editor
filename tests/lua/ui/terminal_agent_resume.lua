@@ -60,6 +60,16 @@ local function launches(dir)
   return result
 end
 
+-- A launch's arguments without the status extension that Anvil's preload adds.
+local function without_extension(args)
+  local result = {}
+  local i = 1
+  while args[i] do
+    if args[i] == "--extension" then i = i + 2 else result[#result + 1] = args[i]; i = i + 1 end
+  end
+  return result
+end
+
 local function session_file_name(dir)
   for _, entry in ipairs(system.list_dir(dir) or {}) do
     if entry:find("%.jsonl$") then return entry end
@@ -100,7 +110,7 @@ test.describe("Terminal agent resume", function()
         restored = panes.place(function() return terminal.from_state(state) end, { placement = "current" })
         test.ok(wait_for(restored, function() return #launches(dir) == 2 end, 15),
           "revival did not resume Pi: " .. screen_text(restored))
-        local resumed = launches(dir)[2]
+        local resumed = without_extension(launches(dir)[2])
         test.equal(#resumed, 2)
         test.equal(resumed[1], "--session")
         test.equal(resumed[2]:match("[^/\\]+$"), session_file_name(dir))
@@ -116,5 +126,58 @@ test.describe("Terminal agent resume", function()
       kernel.CloseHandle(handle)
       test.ok(ok, err)
     end)
+
+    test.it("reports the step of a Pi on " .. runtime .. " but gives a Pi subcommand no extension", function()
+      test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+      local exe = find_runtime(runtime)
+      test.skip_if(not exe, runtime .. " is not installed")
+      terminal._set_native_for_tests(nil)
+      local dir = USERDIR .. "/pi status " .. runtime
+      system.mkdir(dir)
+      local cli = system.getcwd() .. "/tests/fixtures/fake-pi/dist/cli.js"
+      local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+      local state = view:get_state()
+      local ok, err = pcall(function()
+        -- `pi update` reads --extension as a package to install.
+        test.ok(view.session:write(string.format('"%s" "%s" update --session-dir "%s"\r', exe, cli, dir)))
+        test.ok(wait_for(view, function() return #launches(dir) == 1 end), "pi update did not run")
+        test.same(launches(dir)[1], {"update", "--session-dir", dir})
+        test.ok(view.session:write(string.format('"%s" "%s" --session-dir "%s"\r', exe, cli, dir)))
+        local saved
+        test.ok(wait_for(view, function()
+          saved = record(state.session_id)
+          return saved.agent_step ~= nil
+        end, 15), "Pi's step is missing: " .. screen_text(view))
+        test.equal(saved.agent_step, "bash: npm test")
+        test.equal(saved.agent_state, "working")
+        local args = launches(dir)[2]
+        test.equal(args[1], "--extension")
+        test.equal(args[2]:match("[^/\\]+$"), "pi-status.cjs")
+      end)
+      view:on_close()
+      test.ok(ok, err)
+    end)
   end
+
+  test.it("reports Pi's step in an Anvil that a Terminal Session started", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local exe = find_runtime("node")
+    test.skip_if(not exe, "node is not installed")
+    terminal._set_native_for_tests(nil)
+    local dir = USERDIR .. "/pi nested"
+    system.mkdir(dir)
+    local fixtures = system.getcwd() .. "/tests/fixtures/fake-pi"
+    local inherited = os.getenv("NODE_OPTIONS") or ""
+    system.setenv("NODE_OPTIONS", string.format('--require "%s/inherited-preload.cjs"', (fixtures:gsub("\\", "/"))))
+    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    system.setenv("NODE_OPTIONS", inherited)
+    local state = view:get_state()
+    local ok, err = pcall(function()
+      test.ok(view.session:write(string.format('"%s" "%s/dist/cli.js" --session-dir "%s"\r', exe, fixtures, dir)))
+      test.ok(wait_for(view, function() return record(state.session_id).agent_step ~= nil end, 15),
+        "Pi's step is missing: " .. screen_text(view))
+    end)
+    view:on_close()
+    test.ok(ok, err)
+  end)
 end)

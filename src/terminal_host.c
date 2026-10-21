@@ -382,6 +382,11 @@ static void apply_status(TerminalHost *host, const char *pairs) {
       *record = next;
       InterlockedIncrement(&host->agent_revision);
     }
+    /* A step belongs to a run. It ends when the agent rests, even if the agent did not clear it. */
+    if (root && host->step.state[0] && (!strcmp(state, "idle") || !strcmp(state, "done") || !strcmp(state, "error"))) {
+      host->step = (AgentRecord){0};
+      InterlockedIncrement(&host->agent_revision);
+    }
   }
   LeaveCriticalSection(&host->lock);
 }
@@ -798,13 +803,15 @@ static bool prepare_revival(GhosttyTerminal model, uint16_t rows) {
   return true;
 }
 
-static void append_environment_option(const wchar_t *name, const wchar_t *option) {
+/* The option goes first. An Anvil that a Terminal Session started inherits that session's preload, and the
+   runtime runs preloads in order. The first preload claims Pi, so this Anvil's own preload must run first. */
+static void prepend_environment_option(const wchar_t *name, const wchar_t *option) {
   static wchar_t current[32768], value[32768];
   DWORD length = GetEnvironmentVariableW(name, current, 32768);
   if (length >= 32768) return;
   if (!length) current[0] = 0;
   if (wcsstr(current, option)) return;
-  int count = _snwprintf(value, 32768, current[0] ? L"%ls %ls" : L"%ls%ls", current, option);
+  int count = _snwprintf(value, 32768, current[0] ? L"%ls %ls" : L"%ls%ls", option, current);
   if (count > 0 && count < 32768) SetEnvironmentVariableW(name, value);
 }
 
@@ -829,10 +836,10 @@ static void set_agent_environment(TerminalHost *host, const char *datadir) {
     DWORD length = GetShortPathNameW(path, short_path, 32768);
     for (wchar_t *p = path; *p; p++) if (*p == L'\\') *p = L'/';
     for (wchar_t *p = short_path; length && length < 32768 && *p; p++) if (*p == L'\\') *p = L'/';
-    if (_snwprintf(option, 32800, L"--require \"%ls\"", path) > 0) append_environment_option(L"NODE_OPTIONS", option);
+    if (_snwprintf(option, 32800, L"--require \"%ls\"", path) > 0) prepend_environment_option(L"NODE_OPTIONS", option);
     /* Bun splits BUN_OPTIONS at spaces and has no quoting, so it gets the short path. */
     if (length && length < 32768 && !wcschr(short_path, L' ') &&
-        _snwprintf(option, 32800, L"--preload %ls", short_path) > 0) append_environment_option(L"BUN_OPTIONS", option);
+        _snwprintf(option, 32800, L"--preload %ls", short_path) > 0) prepend_environment_option(L"BUN_OPTIONS", option);
     else host_log(host, "agent preload: no path without spaces; Bun agents are not tracked");
   }
   free(report); free(path);

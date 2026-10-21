@@ -1,7 +1,8 @@
 // Terminal Sessions load this file into every Node and Bun process they start,
 // through NODE_OPTIONS and BUN_OPTIONS. In Pi, it reports which session file Pi
-// writes, so a revived Terminal Session can resume that Agent Session. Pi does
-// not know about Anvil. Every other program returns at the package check.
+// writes, so a revived Terminal Session can resume that Agent Session. It also
+// loads pi-status.cjs into an interactive Pi, which reports Pi's current step to
+// the Terminal Session. Every other program returns at the package check.
 "use strict";
 // A failure here must never stop the program that loaded this file.
 try { (() => {
@@ -27,6 +28,22 @@ try { (() => {
   // A Pi that this Pi starts, such as a subagent, is not the terminal's Pi.
   if (process.env.ANVIL_TERMINAL_AGENT_OWNER) return;
   process.env.ANVIL_TERMINAL_AGENT_OWNER = String(process.pid);
+
+  // Pi reads its arguments after this file runs. In every runtime, including Pi's
+  // compiled build, they start at process.argv[2]. A subcommand such as
+  // `pi update` reads --extension as a package to install, so it gets none, and
+  // neither does a run that prints data or turns extensions off.
+  // ANVIL_PI_STATUS=0 turns the extension off.
+  const subcommands = new Set(["install", "remove", "uninstall", "update", "list", "config", "auth", "mcp"]);
+  const skip = new Set(["-p", "--print", "--mode", "-h", "--help", "-v", "--version", "-ne",
+    "--no-extensions", "--export", "--list-models"]);
+  const given = process.argv.slice(2);
+  const options = given.indexOf("--") >= 0 ? given.slice(0, given.indexOf("--")) : given;
+  const extension = path.join(__dirname, "pi-status.cjs");
+  if (process.env.ANVIL_PI_STATUS !== "0" && !subcommands.has(given[0]) &&
+      !options.some((arg) => skip.has(arg.split("=")[0])) && fs.existsSync(extension)) {
+    process.argv.splice(2, 0, "--extension", extension);
+  }
 
   const { writeFileSync, renameSync, openSync, appendFileSync } = fs;
   const args = process.argv.slice(script ? 2 : 1);
