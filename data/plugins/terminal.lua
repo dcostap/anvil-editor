@@ -252,10 +252,12 @@ local function session_record(id)
       or record.host_creation_time:find("[^0-9a-f]")
       or record.pipe_name ~= "\\\\.\\pipe\\anvil-terminal-" .. id
       or type(record.project_path) ~= "string" or type(record.cwd) ~= "string"
-      or type(record.shell) ~= "string" or (record.status ~= "running" and record.status ~= "exited")
-      or record.snapshot_path ~= USERDIR .. "/terminal-sessions/" .. id .. ".snapshot" then
+      or type(record.shell) ~= "string" or (record.status ~= "running" and record.status ~= "exited") then
     return nil, "invalid session record"
   end
+  -- The host writes the user folder as its own launch spelled it, such as C:\Projects through a
+  -- link to D:\Projects. Derive the path from the session ID, as the native revival check does.
+  record.snapshot_path = USERDIR .. "/terminal-sessions/" .. id .. ".snapshot"
   return record
 end
 

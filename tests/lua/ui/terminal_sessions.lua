@@ -92,6 +92,25 @@ test.describe("Terminal Session restoration", function()
     mark(restored, "after_reattach_marker")
   end)
 
+  test.it("reattaches a session that another spelling of the user folder started", function(context)
+    -- A launch through C:\Projects, a link to D:\Projects, spells the same user folder differently.
+    local userdir = USERDIR
+    USERDIR = userdir:gsub("^%a", function(drive)
+      return drive == drive:upper() and drive:lower() or drive:upper()
+    end)
+    local ok, view = pcall(open, context)
+    USERDIR = userdir
+    assert(ok, view)
+    mark(view, "other_spelling_marker")
+    local state = view:get_state()
+    local stats = view.session:stats()
+    view:detach_session()
+    local restored = open(context, state)
+    test.equal(restored.session:stats().host_pid, stats.host_pid)
+    test.equal(restored:get_state().session_id, state.session_id)
+    test.ok(wait_for(restored, function() return printed(restored, "other_spelling_marker") end))
+  end)
+
   test.it("rejects a second client while the shell has an attached client", function(context)
     local view = open(context)
     mark(view, "single_client_marker")
