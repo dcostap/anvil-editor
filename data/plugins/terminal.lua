@@ -881,7 +881,9 @@ function TerminalView:service_session(include_rows)
   -- when no more output arrives.
   if status and status.render_pending then core.redraw = true end
   if changed then
-    self:clear_point_hover()
+    -- Output can move or replace the link under a still pointer.
+    local cell = self.hover_cell
+    if cell then self:hover_point_at(cell.col, cell.row) end
     if not include_rows then self.rows_dirty = true end
   end
   local needs_snapshot = changed or state_changed or (include_rows and self.rows_dirty)
@@ -1160,16 +1162,21 @@ local function draw_text_run(view, run, origin_x, y, blink_on, foreground)
   end
 end
 
-local function draw_hover_line(view, origin_x, origin_y, foreground)
+-- A hovered link gets the hover background of other clickable text. An underline would not show on a
+-- link that its program already underlines.
+local function draw_hover_background(view, origin_x, origin_y)
   local hover = view.hover_point
   if not (hover and hover.row ~= nil and hover.col ~= nil) then return end
-  renderer.draw_rect(
-    origin_x + hover.col * view.cell_width,
-    origin_y + hover.row * view.cell_height + view.cell_height - math.max(1, common.round(SCALE)),
-    math.max(view.cell_width,
-      ((hover.end_col or hover.col) - hover.col + 1) * view.cell_width),
-    math.max(1, common.round(SCALE)), foreground or style.link or style.text
-  )
+  local end_row = hover.end_row or hover.row
+  for row = hover.row, end_row do
+    local first = row == hover.row and hover.col or 0
+    local last = row == end_row and (hover.end_col or hover.col) or view.cols - 1
+    renderer.draw_rect(
+      origin_x + first * view.cell_width, origin_y + row * view.cell_height,
+      (last - first + 1) * view.cell_width, view.cell_height,
+      style.interactive_hover_background
+    )
+  end
 end
 
 local function cursor_foreground(color)
@@ -1217,7 +1224,6 @@ function TerminalView:draw_block_cursor(x, y, width, height, color, blink_on)
         draw_text_run(self, run, origin_x, row_y, blink_on, foreground)
       end
     end
-    draw_hover_line(self, origin_x, origin_y, foreground)
   end
   if self.composition and self.composition.text ~= "" then
     -- Composition replaces grid text in the input row, including during movement.
@@ -1282,6 +1288,7 @@ function TerminalView:draw()
       )
     end
   end
+  draw_hover_background(self, origin_x, origin_y)
   perf_scope_end(phase_scope)
 
   phase_scope = perf_scope_begin("text_runs")
@@ -1297,8 +1304,6 @@ function TerminalView:draw()
     end
   end
   perf_scope_end(phase_scope)
-
-  draw_hover_line(self, origin_x, origin_y)
 
   phase_scope = perf_scope_begin("cursor")
   local cursor = snapshot.cursor
@@ -1667,15 +1672,34 @@ function TerminalView:activate_uri(uri)
   return false
 end
 
+-- An OSC 8 link is the run of cells around a cell that have its URI, in reading order.
+-- A label that wraps continues on the next row.
+function TerminalView:hyperlink_extent(col, row, uri)
+  local cols, session = self.cols, self.session
+  local function linked(index)
+    return session:hyperlink(index % cols, math.floor(index / cols)) == uri
+  end
+  local first = row * cols + col
+  local last = first
+  while first > 0 and linked(first - 1) do first = first - 1 end
+  while last + 1 < self.rows * cols and linked(last + 1) do last = last + 1 end
+  return {
+    col = first % cols, row = math.floor(first / cols),
+    end_col = last % cols, end_row = math.floor(last / cols),
+  }
+end
+
 function TerminalView:point_of_interest_at(col, row)
   local uri = self.session:hyperlink(col, row)
   local scheme = supported_uri_scheme(uri)
+  local point
   if scheme == "file" then
     local path = local_file_from_uri(uri)
-    if path then return { kind = "terminal-location", path = path, col = col, row = row } end
+    if path then point = { kind = "terminal-location", path = path } end
   elseif scheme then
-    return { kind = "uri", uri = uri, col = col, row = row }
+    point = { kind = "uri", uri = uri }
   end
+  if point then return common.merge(point, self:hyperlink_extent(col, row, uri)) end
   if not self.session.row_text then return nil end
   local data = self.session:row_text(row)
   if type(data) ~= "table" or type(data.text) ~= "string" then return nil end
@@ -1723,7 +1747,27 @@ local function same_point(a, b)
     and a.generation == b.generation and a.col == b.col and a.row == b.row
 end
 
+-- With Ctrl held, the pointer shows the link or file location under it. The status bar shows its target,
+-- because an OSC 8 link shows only its label.
+function TerminalView:hover_point_at(col, row)
+  self.hover_cell = { col = col, row = row }
+  self.hover_point = self:point_of_interest_at(col, row)
+  self.cursor = self.hover_point and "hand" or "arrow"
+  local point = self.hover_point
+  local target = point and (point.uri or (point.target_line
+    and string.format("%s:%d", point.path, point.target_line) or point.path))
+  if target then
+    core.status_bar:show_tooltip(target)
+  elseif self.showing_target then
+    core.status_bar:remove_tooltip()
+  end
+  self.showing_target = target ~= nil
+  core.redraw = true
+end
+
 function TerminalView:clear_point_hover()
+  if self.showing_target then core.status_bar:remove_tooltip() end
+  self.showing_target = nil
   if not self.hover_point and not self.hover_cell and self.cursor == "arrow" then return false end
   self.hover_point = nil
   self.hover_cell = nil
@@ -1851,13 +1895,8 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
   end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
   if keymap.modkeys.ctrl then
-    local cell = string.format("%d:%d", col, row)
-    if cell ~= self.hover_cell then
-      self.hover_cell = cell
-      self.hover_point = self:point_of_interest_at(col, row)
-      self.cursor = self.hover_point and "hand" or "arrow"
-      core.redraw = true
-    end
+    local cell = self.hover_cell
+    if not (cell and cell.col == col and cell.row == row) then self:hover_point_at(col, row) end
     return self.hover_point ~= nil
   elseif self.hover_point then
     self:clear_point_hover()

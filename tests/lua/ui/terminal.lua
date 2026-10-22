@@ -511,7 +511,7 @@ test.describe("Terminal View", function()
     session.snapshot_requests = {}
     session.next_changed = true
     view.hover_point = { uri = "https://old.test" }
-    view.hover_cell = "0:0"
+    view.hover_cell = { col = 0, row = 0 }
     view.cursor = "hand"
     view.snapshot.events = { { type = "bell", count = 2 } }
     view:service_session(false)
@@ -1225,6 +1225,49 @@ test.describe("Terminal View", function()
     view:on_key_released("left ctrl", { scancode = 224 })
     test.equal(view.hover_point, nil)
     test.equal(view.cursor, normal_cursor)
+  end)
+
+  test.it("covers every cell of a hyperlink that wraps to the next row", function(context)
+    local view = terminal.open()
+    local uri = "https://example.test/wrapped"
+    -- The label fills the last 3 cells of row 0 and the first 5 cells of row 1.
+    context.sessions[1].hyperlink = function(_, col, row)
+      if (row == 0 and col >= view.cols - 3) or (row == 1 and col <= 4) then return uri end
+    end
+    local point = view:point_of_interest_at(2, 1)
+    test.equal(point.uri, uri)
+    test.same({ point.col, point.row, point.end_col, point.end_row }, { view.cols - 3, 0, 4, 1 })
+    test.same(view:point_of_interest_at(view.cols - 1, 0), point)
+  end)
+
+  test.it("shows the target of a hovered link until Ctrl is released", function(context)
+    local view = terminal.open()
+    context.sessions[1].hyperlink_uri = "https://example.test/hidden-target"
+    keymap.modkeys.ctrl = true
+    view:on_mouse_moved(7, 7, 0, 0)
+    test.ok(core.status_bar.tooltip_mode)
+    test.ok(table.concat(core.status_bar.tooltip):find("https://example.test/hidden-target", 1, true))
+    keymap.modkeys.ctrl = false
+    view:on_key_released("left ctrl", { scancode = 224 })
+    test.ok(not core.status_bar.tooltip_mode)
+  end)
+
+  test.it("keeps the link hover while terminal output changes", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    session.hyperlink_uri = "https://example.test/path"
+    keymap.modkeys.ctrl = true
+    view:on_mouse_moved(7, 7, 0, 0)
+    session.next_changed = true
+    view:service_session(true)
+    test.equal(view.hover_point and view.hover_point.uri, "https://example.test/path")
+    session.hyperlink_uri = nil
+    session.next_changed = true
+    view:service_session(true)
+    test.equal(view.hover_point, nil)
+    test.ok(not core.status_bar.tooltip_mode)
+    keymap.modkeys.ctrl = false
+    view:clear_point_hover()
   end)
 
   test.it("cancels URI activation when the pointer leaves terminal cells", function(context)

@@ -700,6 +700,20 @@ test.describe("Native terminal session", function()
     test.ok(text:find("|xterm-256color|truecolor", 1, true), text)
   end)
 
+  test.it("lets Pi send hyperlinks", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 100, rows = 8, cell_width = 8, cell_height = 16,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::Write('hyperlinks=' + $env:PI_HYPERLINKS + '|')"]],
+    })
+    test.ok(session, start_error)
+    local text = wait_for_text(session, "|", 8)
+    session:close()
+    test.ok(text:find("hyperlinks=1|", 1, true), text)
+  end)
+
   test.it("repeatedly starts and closes native sessions", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"

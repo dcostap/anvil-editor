@@ -823,6 +823,9 @@ static void set_agent_environment(TerminalHost *host, const char *datadir) {
   /* Pi sends program status (OSC 7501) only to a terminal that answers its query, and only the editor answers
      queries. The host reads the reports, so Pi may send them without asking. A value the user set stays. */
   if (!GetEnvironmentVariableW(L"PI_PROGRAM_STATUS", NULL, 0)) SetEnvironmentVariableW(L"PI_PROGRAM_STATUS", L"1");
+  /* Pi sends OSC 8 hyperlinks only to terminals that it knows. Without them, it prints each link's URL after
+     its label. The Terminal View opens OSC 8 links. */
+  if (!GetEnvironmentVariableW(L"PI_HYPERLINKS", NULL, 0)) SetEnvironmentVariableW(L"PI_HYPERLINKS", L"1");
   snprintf(script, sizeof(script), "%s/tools/agent-sessions/pi.cjs", datadir);
   wchar_t *report = wide_string(host->agent_report_path), *path = wide_string(script);
   DWORD attrs = path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
