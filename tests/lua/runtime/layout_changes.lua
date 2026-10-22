@@ -59,4 +59,14 @@ test.describe("Layout changes", function()
       region(70, 70, 71, 71), region(90, 90, 91, 91),
     })
   end)
+
+  test.it("maps a position past the regions before it", function()
+    -- Rows 5..6 become one row, and rows 20..20 become three rows.
+    local changes = { region(5, 6, 5, 5), region(20, 20, 19, 21) }
+    test.equal(layout_changes.map(changes, 4), 4)
+    test.equal(layout_changes.map(changes, 6), nil)
+    test.equal(layout_changes.map(changes, 10), 9)
+    test.equal(layout_changes.map(changes, 20), nil)
+    test.equal(layout_changes.map(changes, 30), 31)
+  end)
 end)

@@ -156,7 +156,7 @@ test.describe("Markdown live layout benchmark", function()
     print(string.format(
       "Markdown cold metric benchmark: bytes=%d lines=%d metric_ms=%.3f post_metric_render_60_ms=%.3f total_height=%.1f provider_queries=%d sparse_skips=%d",
       #table.concat(metric_buffer.lines), #metric_buffer.lines, metric_ms,
-      post_metric_render_ms, metric_cache.total_height,
+      post_metric_render_ms, metric_cache.heights:total(),
       metric_view:get_render_cache_diagnostics().metric_provider_queries,
       metric_view:get_render_cache_diagnostics().metric_sparse_skips
     ))

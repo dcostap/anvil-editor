@@ -8,6 +8,7 @@ local tokenizer = require "core.tokenizer"
 local ime = require "core.ime"
 local linewrapping = require "core.linewrapping"
 local layout_changes = require "core.layout_changes"
+local layout_rows = require "layout_rows"
 local line_packets = require "core.textview_line_packets"
 local language_intelligence = require "core.language_intelligence"
 local range_marker = require "core.range_marker"
@@ -1258,7 +1259,7 @@ function TextView:get_scrollable_size()
   local cache = self:get_visual_row_metric_cache()
   if cache then
     local h_scroll = self:get_horizontal_scrollbar_height()
-    local text_height = cache.total_height + style.padding.y * 2
+    local text_height = cache.heights:total() + style.padding.y * 2
     local content_height = text_height + h_scroll
     if config.scroll_past_end then
       local pad = self:get_scroll_past_end_context_lines()
@@ -1898,11 +1899,24 @@ function TextView:remove_visual_metric_provider(id)
   return true
 end
 
-local metric_tree_add
-local metric_tree_row_at_y
-local metric_tree_build
--- Marks a row whose height no provider measured from a render plan.
-local UNMEASURED_ROW = {}
+-- The row heights store the ID of the render plan that each row measured.
+-- ID 0 marks a row that no provider measured. ID 1 marks a row without a plan.
+local plan_id
+do
+  local ids = setmetatable({}, { __mode = "k" })
+  local next_id = 2
+  plan_id = function(plan)
+    if plan == nil then return 0 end
+    if plan == false then return 1 end
+    local id = ids[plan]
+    if not id then
+      id = next_id
+      next_id = next_id + 1
+      ids[plan] = id
+    end
+    return id
+  end
+end
 local compute_visual_row_height
 local current_composed_rows
 local add_composed_changes
@@ -1915,82 +1929,6 @@ local function invalidate_visual_metric_rows(view, cache, row1, row2)
   cache.invalidated_rows = (cache.invalidated_rows or 0) + row2 - row1 + 1
   view.render_cache_diagnostics.metric_invalidations =
     view.render_cache_diagnostics.metric_invalidations + row2 - row1 + 1
-end
-
----Replace metric rows `old_row1..old_row2` with freshly measured rows
----`new_row1..new_row2`. Every other row keeps its measured height.
-local function splice_visual_metric_rows(view, cache, old_row1, old_row2, new_row1, new_row2, row_count)
-  local current_wrap_generation = view.__wrap_layout_generation or 0
-  local remove_count = math.max(0, old_row2 - old_row1 + 1)
-  local insert_count = math.max(0, new_row2 - new_row1 + 1)
-  -- Reconstructing a line render can leave the wrapped-row topology
-  -- unchanged. Keep the last resolved heights in that case: replacing
-  -- them with base-line placeholders makes the viewport anchor resolve
-  -- against a transient, internally inconsistent metric tree.
-  if old_row1 == new_row1 and remove_count == insert_count then
-    invalidate_visual_metric_rows(view, cache, new_row1, new_row2)
-    cache.wrap_layout_generation = current_wrap_generation
-    cache.text_revision = view.buffer.text_revision or 0
-    cache.signature = view:get_visual_metric_signature()
-    return
-  end
-  local old_anchor = metric_tree_row_at_y(
-    cache.height_tree, cache.row_count, math.max(0, view.scroll and view.scroll.y or 0)
-  )
-  local removed_height = 0
-  for row = old_row1, old_row2 do
-    removed_height = removed_height + (cache.heights[row] or 0)
-  end
-  local default_height = view:get_line_height()
-  local providers = view:visual_metric_provider_entries()
-  local inserted = {}
-  local inserted_plans = {}
-  local inserted_height = 0
-  local line_metrics_cache = {}
-  -- Measure the replacement slice before publishing the new metric tree.
-  -- A tree containing the new row mapping but temporary base heights can
-  -- map the old scroll offset to the wrong anchor row, causing the later
-  -- dirty pass to apply the same height change as a viewport correction.
-  for offset = 0, insert_count - 1 do
-    local height, plan = compute_visual_row_height(
-      view, new_row1 + offset, providers, default_height,
-      nil, false, line_metrics_cache
-    )
-    inserted[offset + 1] = height
-    inserted_plans[offset + 1] = plan == nil and UNMEASURED_ROW or plan
-    inserted_height = inserted_height + height
-  end
-  common.splice(cache.heights, old_row1, remove_count, inserted)
-  common.splice(cache.row_plans, old_row1, remove_count, inserted_plans)
-
-  local shifted_dirty = {}
-  local row_delta = insert_count - remove_count
-  for row in pairs(cache.dirty_rows or {}) do
-    if row < old_row1 then
-      shifted_dirty[row] = true
-    elseif row > old_row2 then
-      shifted_dirty[row + row_delta] = true
-    end
-  end
-  cache.dirty_rows = next(shifted_dirty) and shifted_dirty or nil
-  cache.row_count = row_count
-  cache.total_height = cache.total_height - removed_height + inserted_height
-  cache.height_tree = metric_tree_build(cache.heights, cache.row_count)
-  if old_row2 < old_anchor and view.scroll and not view.__pending_viewport_anchor then
-    local delta = inserted_height - removed_height
-    view.scroll.y = view.scroll.y + delta
-    view.scroll.to.y = view.scroll.to.y + delta
-  end
-  cache.invalidated_rows = (cache.invalidated_rows or 0) + insert_count
-  cache.wrap_layout_generation = current_wrap_generation
-  cache.text_revision = view.buffer.text_revision or 0
-  cache.signature = view:get_visual_metric_signature()
-  view.render_cache_diagnostics.metric_invalidations =
-    view.render_cache_diagnostics.metric_invalidations + insert_count
-  view.render_cache_diagnostics.metric_row_splices =
-    view.render_cache_diagnostics.metric_row_splices + 1
-  perf_frame_add("textview_visual_metric_row_splices", 1)
-  perf_frame_add("textview_visual_metric_row_splice_rows", insert_count)
 end
 
 ---Apply row changes to the row metrics. Keep the height of every other row.
@@ -2006,60 +1944,47 @@ local function update_metric_rows(view, cache, changes, row_count)
   then
     return false, "signature"
   end
-  local old_heights, old_plans = cache.heights, cache.row_plans
-  local old_dirty = cache.dirty_rows or {}
-  local old_anchor = metric_tree_row_at_y(
-    cache.height_tree, cache.row_count, math.max(0, view.scroll and view.scroll.y or 0)
-  )
+  local heights = cache.heights
+  local old_anchor = heights:row_at_y(math.max(0, view.scroll and view.scroll.y or 0))
   local default_height = view:get_line_height()
   local providers = view:visual_metric_provider_entries()
   local line_metrics_cache = {}
-  local heights, plans, dirty = {}, {}, {}
-  local total, anchor_delta, touched_rows, measured_rows = 0, 0, 0, 0
-  local new_row, old_row = 0, 0
-  local function keep(old_end, mark_dirty)
-    while old_row < old_end do
-      old_row, new_row = old_row + 1, new_row + 1
-      heights[new_row] = old_heights[old_row]
-      plans[new_row] = old_plans[old_row]
-      total = total + heights[new_row]
-      if mark_dirty or old_dirty[old_row] then dirty[new_row] = true end
-    end
-  end
+  local dirty = {}
+  local anchor_delta, touched_rows, measured_rows = 0, 0, 0
   for _, change in ipairs(changes) do
-    keep(change.old1 - 1, false)
+    local old_count = change.old2 - change.old1 + 1
     local new_count = change.new2 - change.new1 + 1
     touched_rows = touched_rows + new_count
-    if new_count == change.old2 - change.old1 + 1 then
+    if new_count == old_count then
       -- Same rows: keep the last resolved heights until the dirty pass.
-      keep(change.old2, true)
+      for row = change.new1, change.new2 do dirty[row] = true end
     else
-      -- Measure a changed row count before publishing the new metric tree,
-      -- so the old scroll offset still maps to its anchor row.
-      local removed_height, inserted_height = 0, 0
-      for row = change.old1, change.old2 do removed_height = removed_height + old_heights[row] end
+      -- Measure a changed row count before the replacement, so the old
+      -- scroll offset still maps to its anchor row.
+      local inserted, plans = {}, {}
+      local inserted_height = 0
       for row = change.new1, change.new2 do
         local height, plan = compute_visual_row_height(
           view, row, providers, default_height, nil, false, line_metrics_cache
         )
-        heights[row] = height
-        plans[row] = plan == nil and UNMEASURED_ROW or plan
+        inserted[#inserted + 1] = height
+        plans[#plans + 1] = plan_id(plan)
         inserted_height = inserted_height + height
       end
-      total = total + inserted_height
+      -- The rows before this change already have their new positions.
+      local removed_height = heights:replace(change.new1, old_count, inserted, plans)
       measured_rows = measured_rows + new_count
       if change.old2 < old_anchor then
         anchor_delta = anchor_delta + inserted_height - removed_height
       end
-      new_row, old_row = change.new2, change.old2
     end
   end
-  keep(cache.row_count, false)
-  cache.heights, cache.row_plans = heights, plans
+  for row in pairs(cache.dirty_rows or {}) do
+    local new_row = layout_changes.map(changes, row)
+    if new_row then dirty[new_row] = true end
+  end
   cache.dirty_rows = next(dirty) and dirty or nil
-  cache.row_count = new_row
-  cache.total_height = total
-  cache.height_tree = metric_tree_build(heights, new_row)
+  cache.row_count = heights:count()
   if anchor_delta ~= 0 and view.scroll and not view.__pending_viewport_anchor then
     view.scroll.y = view.scroll.y + anchor_delta
     view.scroll.to.y = view.scroll.to.y + anchor_delta
@@ -2142,9 +2067,11 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
       and current_row_count == wrap_change.new_row_count
       and cache.wrap_layout_generation == wrap_change.old_wrap_generation
     then
-      splice_visual_metric_rows(self, cache, wrap_change.old_row1, wrap_change.old_row2,
-        wrap_change.new_row1, wrap_change.new_row2, current_row_count)
-      return
+      local changes = { {
+        old1 = wrap_change.old_row1, old2 = wrap_change.old_row2,
+        new1 = wrap_change.new_row1, new2 = wrap_change.new_row2,
+      } }
+      if update_metric_rows(self, cache, changes, current_row_count) then return end
     end
     if cache.row_count == current_row_count and self.wrapped_line_to_idx
       and unchanged_except_wrap
@@ -3962,32 +3889,6 @@ function TextView:get_visual_metric_signature(
   return signature
 end
 
-metric_tree_add = function(tree, row_count, row, delta)
-  while row <= row_count do
-    tree[row] = (tree[row] or 0) + delta
-    row = row + bit.band(row, -row)
-  end
-end
-
-metric_tree_build = function(heights, row_count)
-  local tree = {}
-  for row = 1, row_count do
-    tree[row] = (tree[row] or 0) + (heights[row] or 0)
-    local parent = row + bit.band(row, -row)
-    if parent <= row_count then tree[parent] = (tree[parent] or 0) + tree[row] end
-  end
-  return tree
-end
-
-local function metric_tree_sum(tree, row)
-  local total = 0
-  while row > 0 do
-    total = total + (tree[row] or 0)
-    row = row - bit.band(row, -row)
-  end
-  return total
-end
-
 local function current_line_scroll_anchor(view)
   local jump = view.__line_scroll_anchor
   if not jump then return nil end
@@ -4015,15 +3916,13 @@ function TextView:capture_viewport_anchor()
   local jump = current_line_scroll_anchor(self)
   if jump then
     local row = common.clamp(self:get_visual_row(jump.line, 1), 1, cache.row_count)
-    return { line = jump.line, col = 1,
-      content_y = metric_tree_sum(cache.height_tree, row - 1), jump = jump }
+    return { line = jump.line, col = 1, content_y = cache.heights:y_offset(row), jump = jump }
   end
   if self.scroll.y <= 0 then return nil end
-  local row = metric_tree_row_at_y(cache.height_tree, cache.row_count,
-    math.max(0, self.scroll.y - style.padding.y))
+  local row = cache.heights:row_at_y(math.max(0, self.scroll.y - style.padding.y))
   local line, col = self:get_visual_row_line_col(row)
   if not line then return nil end
-  return { line = line, col = col or 1, content_y = metric_tree_sum(cache.height_tree, row - 1) }
+  return { line = line, col = col or 1, content_y = cache.heights:y_offset(row) }
 end
 
 local function viewport_center_scroll_y(view, anchor)
@@ -4081,7 +3980,7 @@ local function apply_viewport_anchor(view, cache)
   if anchor.jump and current_line_scroll_anchor(view) ~= anchor.jump then return end
   local row = view:get_visual_row(anchor.line, anchor.col)
   row = common.clamp(row, 1, cache.row_count)
-  local delta = metric_tree_sum(cache.height_tree, row - 1) - anchor.content_y
+  local delta = cache.heights:y_offset(row) - anchor.content_y
   view.scroll.y = math.max(0, view.scroll.y + delta)
   view.scroll.to.y = math.max(0, view.scroll.to.y + delta)
   if anchor.jump then
@@ -4091,22 +3990,6 @@ local function apply_viewport_anchor(view, cache)
         view.buffer:get_name(), anchor.line, delta)
     end
   end
-end
-
-metric_tree_row_at_y = function(tree, row_count, y)
-  local index, accumulated = 0, 0
-  local step = 1
-  while step * 2 <= row_count do step = step * 2 end
-  while step > 0 do
-    local next_index = index + step
-    local next_total = accumulated + (tree[next_index] or 0)
-    if next_index <= row_count and next_total <= y then
-      index = next_index
-      accumulated = next_total
-    end
-    step = math.floor(step / 2)
-  end
-  return common.clamp(index + 1, 1, row_count)
 end
 
 local function prepare_sparse_visual_metrics(view, providers, default_height, row_count)
@@ -4285,9 +4168,7 @@ function TextView:get_visual_row_metric_cache()
         self.render_cache_diagnostics.metric_dirty_rows + dirty_rows
       perf_frame_add("textview_visual_metric_dirty_passes", 1)
       perf_frame_add("textview_visual_metric_dirty_rows", dirty_rows)
-      local anchor_row = metric_tree_row_at_y(
-        cache.height_tree, cache.row_count, math.max(0, self.scroll and self.scroll.y or 0)
-      )
+      local anchor_row = cache.heights:row_at_y(math.max(0, self.scroll and self.scroll.y or 0))
       local anchor_delta = 0
       local line_metrics_cache = {}
       for row in pairs(cache.dirty_rows) do
@@ -4295,14 +4176,8 @@ function TextView:get_visual_row_metric_cache()
           self, row, providers, cache.default_height or default_height,
           cache.sparse_metrics, true, line_metrics_cache
         )
-        cache.row_plans[row] = plan == nil and UNMEASURED_ROW or plan
-        local delta = height - cache.heights[row]
-        if delta ~= 0 then
-          cache.heights[row] = height
-          cache.total_height = cache.total_height + delta
-          metric_tree_add(cache.height_tree, cache.row_count, row, delta)
-          if row < anchor_row then anchor_delta = anchor_delta + delta end
-        end
+        local delta = height - cache.heights:set(row, height, plan_id(plan))
+        if delta ~= 0 and row < anchor_row then anchor_delta = anchor_delta + delta end
       end
       cache.dirty_rows = nil
       if anchor_delta ~= 0 and self.scroll and not self.__pending_viewport_anchor then
@@ -4344,20 +4219,18 @@ function TextView:get_visual_row_metric_cache()
     self.render_cache_diagnostics.metric_full_rebuild_rows + row_count
   perf_frame_add("textview_visual_metric_full_rebuilds", 1)
   perf_frame_add("textview_visual_metric_full_rebuild_rows", row_count)
-  local heights = {}
-  local row_plans = {}
+  local row_heights, plans = {}, {}
   local line_metrics_cache = {}
-  local total = 0
   for row = 1, row_count do
     local height, plan = compute_visual_row_height(
       self, row, providers, default_height, sparse_metrics, false,
       line_metrics_cache
     )
-    heights[row] = height
-    row_plans[row] = plan == nil and UNMEASURED_ROW or plan
-    total = total + height
+    row_heights[row] = height
+    plans[row] = plan_id(plan)
   end
-  local height_tree = metric_tree_build(heights, row_count)
+  local heights = layout_rows.heights()
+  heights:replace(1, 0, row_heights, plans)
   -- These heights measure the current composed rows, so their earlier row
   -- changes do not apply.
   local composed
@@ -4370,9 +4243,6 @@ function TextView:get_visual_row_metric_cache()
     wrap_layout_generation = self.__wrap_layout_generation or 0,
     text_revision = self.buffer.text_revision or 0,
     heights = heights,
-    row_plans = row_plans,
-    height_tree = height_tree,
-    total_height = total,
     row_count = row_count,
     invalidated_rows = 0,
     default_height = default_height,
@@ -4404,7 +4274,8 @@ end
 
 function TextView:get_visual_row_height(row)
   local cache = self:get_visual_row_metric_cache()
-  return cache and cache.heights[common.clamp(row, 1, cache.row_count)] or self:get_line_height()
+  if not cache or cache.row_count < 1 then return self:get_line_height() end
+  return (cache.heights:get(common.clamp(row, 1, cache.row_count)))
 end
 
 ---Returns the resolved visual-row height for a Buffer position.
@@ -4445,8 +4316,7 @@ end
 function TextView:get_visual_row_y_offset(row)
   local cache = self:get_visual_row_metric_cache()
   if cache then
-    row = common.clamp(row, 1, cache.row_count + 1)
-    return metric_tree_sum(cache.height_tree, row - 1)
+    return cache.heights:y_offset(row)
   end
   return math.max(0, row - 1) * self:get_line_height()
 end
@@ -4456,7 +4326,7 @@ function TextView:get_visual_row_at_y(y)
   if not cache then
     return common.clamp(math.floor(y / self:get_line_height()) + 1, 1, self:get_scrollable_line_count())
   end
-  return metric_tree_row_at_y(cache.height_tree, cache.row_count, y)
+  return cache.heights:row_at_y(y)
 end
 
 local function overscan_metric_rows(cache, first, last, total)
@@ -4941,8 +4811,8 @@ function TextView:get_committed_visible_line_range()
   if not cache then return nil end
   local top = math.max(0, self.scroll.y - style.padding.y)
   local bottom = top + self.size.y
-  local first_row = metric_tree_row_at_y(cache.height_tree, cache.row_count, top)
-  local last_row = metric_tree_row_at_y(cache.height_tree, cache.row_count, bottom)
+  local first_row = cache.heights:row_at_y(top)
+  local last_row = cache.heights:row_at_y(bottom)
   first_row, last_row = overscan_metric_rows(cache, first_row, last_row, cache.row_count)
   local first = self:get_metric_row_entry(first_row)
   local last = self:get_metric_row_entry(last_row)
@@ -5074,7 +4944,8 @@ local function each_visible_metric_row(view, fn)
   for row = first_row, last_row do
     local entry = view:get_metric_row_entry(row)
     if entry and entry.line and entry.row_in_line then
-      fn(row, entry.line, cache.row_plans and cache.row_plans[row])
+      local _, plan = cache.heights:get(row)
+      fn(row, entry.line, plan)
     end
   end
 end
@@ -5132,7 +5003,7 @@ function TextView:reconcile_visible_line_layout()
       end
       each_visible_metric_row(self, function(_, line, measured)
         if not wrap_lines[line]
-          and measured ~= (self:get_line_render(line) or false)
+          and measured ~= plan_id(self:get_line_render(line) or false)
         then
           metric_lines[line] = true
           found = true

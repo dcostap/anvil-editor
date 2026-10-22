@@ -91,6 +91,18 @@ function layout_changes.spans(spans)
   return result
 end
 
+---The new position of the old position `position`, or nil when a region
+---replaced it.
+function layout_changes.map(changes, position)
+  local shift = 0
+  for _, region in ipairs(changes or {}) do
+    if position < region.old1 then break end
+    if position <= region.old2 then return nil end
+    shift = shift + delta(region)
+  end
+  return position + shift
+end
+
 ---The sum of the size changes.
 function layout_changes.total_delta(changes)
   local total = 0
