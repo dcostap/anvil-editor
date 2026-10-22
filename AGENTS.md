@@ -194,6 +194,11 @@ Shutdown captures their paths before closing the hosted processes. Dormant Proje
 Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.
 Run `anvil:shell-state` and the `restore-loaded` shell launch probe after changes.
 
+The Project Sidebar reports a Project ready after Lua startup and Workspace restore finish.
+Hosted processes report this separately from their first frame and repeat the report after adoption.
+Background Projects do not render. Keep the shell's first-frame guards separate from this status.
+The `restore-loaded` probe checks readiness without selecting the restored background Project.
+
 ## Renderer selection
 
 The dev portable build defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.

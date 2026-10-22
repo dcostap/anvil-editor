@@ -188,6 +188,7 @@ if path:match("/driver$") then
     assert(#ready("a", second:pid()) == 1 and #ready("b", second:pid()) == 1, "restore duplicated a Project")
     local selected = wait(function() return load("loaded-selection-" .. second:pid()) end, 15)
     assert(selected.path == root .. "/Replacement", "restore changed the Selected Project")
+    assert(selected.background_state == "ready", "restored background Project reports " .. tostring(selected.background_state))
     assert(selected.dormant == "dormant" and #ready("c", second:pid()) == 0, "restore loaded a Dormant Project")
     return close_shell(second, "restored")
    end
@@ -494,6 +495,7 @@ elseif names[path] then
    for _, project in ipairs(model) do
     local folder = project.path:gsub("\\", "/")
     if project.selected then selection.path = folder end
+    if folder == root .. "/Project" then selection.background_state = project.state end
     if folder == root .. "/Other" then selection.dormant = project.state end
    end
    save("loaded-selection-" .. system.get_window_process_id(), selection)

@@ -80,6 +80,8 @@ bool anvil_hosted_surface_preview_color_theme(const char *preview);
 bool anvil_hosted_surface_unload_project(const char *path);
 /* Sends this Project's Pane report for the Project Sidebar. The shell gets it again after an adoption. */
 bool anvil_hosted_surface_set_panes(const char *panes);
+/* Reports successful Lua startup, including Workspace restore. Replayed after adoption. */
+void anvil_hosted_surface_runtime_ready(void);
 /* The Sidebar asks the shell to select a Project and act on one of its Panes. */
 bool anvil_hosted_surface_pane_request(const char *path, const AnvilSurfacePaneAction *action);
 /* The Sidebar asks the shell to select a Project and focus one of its Terminal Sessions. */

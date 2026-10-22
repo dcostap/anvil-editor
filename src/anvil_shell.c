@@ -188,6 +188,9 @@ typedef struct ShellProject {
   SDL_AtomicInt references;
   SDL_AtomicInt transport_failure, inbound_bytes, reader_done, writer_done;
   ShellState state;
+  /* Startup can finish without a frame: an unselected Project does not render.
+   * `state` keeps the first-frame guards; the Sidebar reports runtime readiness separately. */
+  bool runtime_ready;
   bool sidebar;
   /* The Project's latest Pane report, or NULL before its first one. */
   char *panes;
@@ -1036,6 +1039,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_RESTART:
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
+  case ANVIL_SURFACE_MSG_RUNTIME_READY:
     return size == 0;
   case ANVIL_SURFACE_MSG_TITLE:
     return !memchr(payload, 0, size);
@@ -3190,6 +3194,14 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   if (!window) return;
   if (project->state == SHELL_FAILED)
     return;
+  if (message->type == ANVIL_SURFACE_MSG_RUNTIME_READY && !project->sidebar) {
+    if (!project->runtime_ready) {
+      project->runtime_ready = true;
+      SDL_Log("Shell Project runtime ready: Project=%u background=%d", project->id, project != window->selected);
+      notify_sidebar_changes();
+    }
+    return;
+  }
   const void *payload = message->payload;
   if ((message->type == ANVIL_SURFACE_MSG_NEW_WINDOW ||
        message->type == ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW ||
@@ -5162,6 +5174,7 @@ static bool start_project(ShellProject *project, int argc, char **argv) {
   SDL_SetAtomicInt(&project->writer_done, 0);
   project->connection = ++shell.next_connection;
   project->launch_attempt++;
+  project->runtime_ready = false;
   set_state(project, SHELL_STARTING);
   window->ui_dirty = true;
   project->failed_close = false;
@@ -5768,6 +5781,7 @@ static void sync_sidebar_model(void) {
                                         ANVIL_SIDEBAR_CLOSING, ANVIL_SIDEBAR_FAILED,
                                         ANVIL_SIDEBAR_DORMANT};
     AnvilSidebarState state = states[project->state];
+    if (project->state == SHELL_STARTING && project->runtime_ready) state = ANVIL_SIDEBAR_READY;
     if (project->failed_close && !live && !project->unloading)
       state = ANVIL_SIDEBAR_DORMANT;
     anvil_sidebar_set_runtime(&shell.sidebar, row, project->id,
@@ -6505,7 +6519,8 @@ static void advance_restore(void) {
   if (!shell.restore_timer) shell.restore_timer = SetTimer(shell.service_hwnd, 0x8007, 100, NULL);
   /* Duplicate saved entries resolve to one identity. Start nothing until each restored identity is known. */
   if (initial_resolution_pending()) return;
-  if (active && active->state == SHELL_STARTING && SDL_GetTicks() < shell.restore_active_since + RESTORE_STAGGER_MS &&
+  if (active && active->state == SHELL_STARTING && !active->runtime_ready &&
+      SDL_GetTicks() < shell.restore_active_since + RESTORE_STAGGER_MS &&
       (!active->process.hProcess || WaitForSingleObject(active->process.hProcess, 0) == WAIT_TIMEOUT))
     return;
   if (next->resolving) return;

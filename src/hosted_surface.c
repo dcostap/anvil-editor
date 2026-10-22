@@ -66,6 +66,7 @@ static void send_message(uint16_t type, const void *payload, uint32_t size);
 static struct {
   bool active;
   bool valid, restarted, sidebar, sidebar_query_needed;
+  bool runtime_ready;
   DWORD shell_pid;
   HANDLE shell_process, loss_signal, exit_sent;
   /* Set for each inbound shell message, so an idle UI thread wakes for a resize or input at once. */
@@ -664,6 +665,7 @@ void anvil_hosted_surface_finish_adoption(void) {
   }
   if (hosted.bordered >= 0) anvil_hosted_surface_set_bordered(hosted.bordered);
   if (hosted.visible >= 0) anvil_hosted_surface_set_visible(hosted.visible);
+  if (hosted.runtime_ready) anvil_hosted_surface_runtime_ready();
   SDL_SetAtomicInt(&hosted.adopting, 0);
   push_window_event(SDL_EVENT_WINDOW_EXPOSED);
   anvil_hosted_surface_poll();
@@ -989,6 +991,12 @@ bool anvil_hosted_surface_unload_project(const char *path) {
   if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_UNLOAD_PROJECT, path, (uint32_t)strlen(path) + 1);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+void anvil_hosted_surface_runtime_ready(void) {
+  if (!hosted.active || hosted.sidebar) return;
+  hosted.runtime_ready = true;
+  send_message(ANVIL_SURFACE_MSG_RUNTIME_READY, NULL, 0);
 }
 
 bool anvil_hosted_surface_set_panes(const char *panes) {
@@ -1537,6 +1545,7 @@ bool anvil_hosted_surface_color_theme_saved(void) { return false; }
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }
 bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y) { (void)row_id; (void)x; (void)y; return false; }
 bool anvil_hosted_surface_set_panes(const char *panes) { (void)panes; return false; }
+void anvil_hosted_surface_runtime_ready(void) {}
 bool anvil_hosted_surface_pane_request(const char *path, const AnvilSurfacePaneAction *action) {
   (void)path; (void)action; return false;
 }
