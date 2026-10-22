@@ -98,7 +98,6 @@ function Model:new(buffer)
     changed_ranges = {},
     semantic_id_by_source = {},
     semantic_id_by_native = {},
-    previous_semantic_id_by_source = {},
     previous_semantic_id_by_native = {},
     listeners = {},
     diagnostics = {
@@ -254,7 +253,6 @@ function Model:publish(result, revision, signature, generation, changed_range)
 
   local state_started = perf and system.get_time()
   local previous_result = self.result
-  self.previous_semantic_id_by_source = self.semantic_id_by_source
   self.previous_semantic_id_by_native = self.semantic_id_by_native
   self.semantic_id_by_source = {}
   self.semantic_id_by_native = {}
@@ -699,7 +697,8 @@ function Model:stabilize_node_ids(nodes)
     }, ":")
     local stable_id = self.semantic_id_by_source[source_key]
       or self.semantic_id_by_native[native_id]
-      or self.previous_semantic_id_by_source[source_key]
+      -- Old source positions can now belong to different nodes after an edit.
+      -- Only native identities can link nodes across publications.
       or self.previous_semantic_id_by_native[native_id]
       or native_id
     node.id = stable_id

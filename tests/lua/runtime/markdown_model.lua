@@ -96,6 +96,40 @@ test.describe("Markdown semantic model", function()
     test.equal(pcall(function() published_result:summary() end), false)
   end)
 
+  test.it("keeps identities with shifted nodes when another node takes their old range", function()
+    local buffer = make_buffer("**one**\n\n**two**\n\n**end**\n")
+    local instance = markdown_model.get(buffer)
+    test.ok(wait_status(instance, "ready", 30), instance.reason)
+    local before = test.not_nil(instance:nodes_for_lines(1, 6))
+    local old_ids = {}
+    for _, node in ipairs(before) do
+      if node.type == "strong" then old_ids[node.source.line1] = node.id end
+    end
+    test.not_nil(old_ids[1])
+    test.not_nil(old_ids[3])
+    test.not_nil(old_ids[5])
+    buffer:insert(1, 1, "**add**\n\n")
+    test.ok(wait_status(instance, "ready", 30), instance.reason)
+    local after = test.not_nil(instance:nodes_for_lines(1, 8))
+    local seen = {}
+    for _, node in ipairs(after) do
+      test.ok(not seen[node.id], "duplicate identity: " .. node.id)
+      seen[node.id] = true
+      if node.type == "strong" then
+        if node.source.line1 == 1 then
+          for _, old_id in pairs(old_ids) do test.ok(node.id ~= old_id) end
+        elseif node.source.line1 == 3 then
+          -- The worker's byte diff includes the common opening marker of the first node.
+          -- That node can get a new identity, but it cannot take an unrelated identity.
+          test.ok(node.id ~= old_ids[3] and node.id ~= old_ids[5])
+        else
+          test.equal(node.id, old_ids[node.source.line1 - 2], "identity moved to a different node")
+        end
+      end
+    end
+    markdown_model.close(buffer, "test")
+  end)
+
   test.it("dispatches edits immediately after a fast publication", function()
     local buffer = make_buffer("# Heading\n\nBody\n")
     local instance = markdown_model.get(buffer)
