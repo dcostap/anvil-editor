@@ -463,7 +463,9 @@ function footnotes.notes_for_lines(view, line1, line2)
   local notes = {}
   if not (footnotes.nodes_for_line and document_has_notes(view)) then return notes end
   local definitions = definition_lines(view)
-  local numbers = footnote_numbers(view)
+  -- The numbers cover the whole document. Most blocks have no note, so get
+  -- them only when a note needs one.
+  local numbers
   local buffer = view.buffer
   local lines = buffer.lines
   for line = math.max(1, line1), math.min(line2, #lines) do
@@ -476,6 +478,7 @@ function footnotes.notes_for_lines(view, line1, line2)
           and inline_note(buffer, node, anchors[node.source.col1])
           or numbered_note(buffer, node, definitions)
         if note then
+          numbers = numbers or footnote_numbers(view)
           note.number = numbers[line .. ":" .. note.col1]
           notes[#notes + 1] = note
         end
