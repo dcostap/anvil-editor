@@ -4,8 +4,8 @@ local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
 local keymap = require "core.keymap"
-local storage = require "core.storage"
 local style = require "core.style"
+local zoom = require "core.zoom"
 
 ---Configuration options for `scale` plugin.
 ---@class config.plugins.scale
@@ -21,9 +21,6 @@ local FONT_ZOOM_STEP = 1
 local current_scale = SCALE
 local current_code_scale = SCALE
 local configured_scale = tonumber(os.getenv("ANVIL_SCALE"))
--- Zoom is one setting for every Project. USERDIR keeps it as ratios over the base scale, so each process
--- applies it over its own display scale.
-local ZOOM_STORAGE, ZOOM_KEY = "zoom", "global"
 local base_font_size = style.font:get_size() / SCALE
 
 local function scale_font_once(font, factor, seen)
@@ -108,18 +105,16 @@ local function show_zoom_message()
   end
 end
 
--- Other Projects apply the saved Zoom when the shell reports the change.
+-- Other Projects and the Sidebar apply the saved Zoom when the shell reports the change.
 local function save_zoom()
   local interface, code = zoom_ratio(current_scale), zoom_ratio(current_code_scale)
-  storage.save(ZOOM_STORAGE, ZOOM_KEY, { interface = interface, code = code })
+  zoom.save(interface, code)
   local shared = system.zoom_saved()
   core.log_quiet("Zoom saved: interface=%.4f code=%.4f shared=%s", interface, code, tostring(shared))
 end
 
 local function apply_saved_zoom(reason)
-  local saved = storage.load(ZOOM_STORAGE, ZOOM_KEY)
-  local interface = type(saved) == "table" and tonumber(saved.interface) or 1
-  local code = type(saved) == "table" and tonumber(saved.code) or interface
+  local interface, code = zoom.load()
   local base = base_scale()
   scale.set(common.clamp(base * interface, MIN_SCALE, MAX_SCALE))
   scale.set_code(common.clamp(base * code, MIN_SCALE, MAX_SCALE))

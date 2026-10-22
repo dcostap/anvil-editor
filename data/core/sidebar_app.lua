@@ -6,6 +6,13 @@ local SidebarView, font, base_font_size
 local fonts, style = {}, nil
 local color_theme = require "core.color_theme"
 local storage = require "core.storage"
+local zoom = require "core.zoom"
+-- The Sidebar draws at each Window's display scale times the interface Zoom that Projects save.
+local interface_zoom = 1
+local function load_zoom()
+  interface_zoom = zoom.load()
+  core.log_quiet("Sidebar Zoom: interface=%.4f", interface_zoom)
+end
 
 -- Which Sidebar groups are collapsed. Every surface shares it, and the next Sidebar process restores it.
 local collapsed = {}
@@ -50,11 +57,7 @@ local function activate(id)
   core.window, core.active_window = surface.window, surface.window
   core.project_sidebar, core.project_sidebar_request = surface.model, surface.request
   core.redraw = surface.redraw
-  local scale = system.get_scale(surface.window)
-  if surface.scale ~= scale then
-    surface.view.scroll = surface.view.scroll * scale / surface.scale
-    surface.scale, core.redraw = scale, true
-  end
+  local scale = system.get_scale(surface.window) * interface_zoom
   SCALE = scale
   if font then
     if not fonts[scale] then
@@ -62,6 +65,15 @@ local function activate(id)
       core.log_quiet("Sidebar font created: scale=%g", scale)
     end
     style.font = fonts[scale]
+  end
+  if surface.scale ~= scale then
+    surface.view.scroll = surface.view.scroll * scale / surface.scale
+    surface.scale, core.redraw = scale, true
+    -- Row heights follow the font and SCALE.
+    surface.view:rebuild_rows()
+    core.log_quiet("Sidebar scale: Window=%d scale=%g", id, scale)
+    -- The Sidebar can wait a minute for its next event. Scale changes are rare, so the log shows them at once.
+    if core.session_log then core.session_log:flush() end
   end
   return true
 end
@@ -172,6 +184,7 @@ function core.init()
   core.window, core.active_window = window, window
   SCALE = system.get_scale(window)
   load_collapsed()
+  load_zoom()
   apply_color_theme()
   SidebarView = require "core.sidebar_view"
   style = require "core.style"
@@ -250,6 +263,9 @@ function core.run_step()
       theme_change = {}
     elseif event[1] == "colorthemepreview" then
       theme_change = {preview = event[2] ~= "" and event[2] or nil}
+    elseif event[1] == "zoomchanged" then
+      -- Each surface takes the new scale when it next activates.
+      load_zoom()
     elseif event[1] == "projectsidebarchanged" and not native_id then
       for _, surface in pairs(surfaces) do surface.request, surface.query_needed = nil, true end
       core.project_sidebar_request = nil

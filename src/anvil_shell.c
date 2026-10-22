@@ -6051,7 +6051,7 @@ static void broadcast_color_theme(ShellProject *source) {
   SDL_Log("Shell Color Theme saved by Project %u; notified %d processes", source->id, count);
 }
 
-/* The Zoom is one setting for every Project. The saving Project already shows it. */
+/* The Zoom is one setting for every Project and the Sidebar. The saving Project already shows it. */
 static void broadcast_zoom(ShellProject *source) {
   int count = 0;
   for (ShellProject *item = shell.projects; item; item = item->next)
@@ -6059,6 +6059,10 @@ static void broadcast_zoom(ShellProject *source) {
       shell_send(item, ANVIL_SURFACE_MSG_ZOOM_CHANGED, NULL, 0, NULL, 0);
       count++;
     }
+  if (shell.sidebar_process && shell.sidebar_process->connected) {
+    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_ZOOM_CHANGED, NULL, 0, NULL, 0);
+    count++;
+  }
   SDL_Log("Shell Zoom saved by Project %u; notified %d processes", source->id, count);
 }
 

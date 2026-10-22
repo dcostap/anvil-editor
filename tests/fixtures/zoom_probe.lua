@@ -1,6 +1,7 @@
 -- mod-version:3
--- Seam: an owned shell Window with two loaded Projects. The Zoom is one saved setting: a Project that starts
--- after a Zoom change starts at that Zoom, and a Zoom change in one Project reaches the other Project.
+-- Seam: an owned shell Window with two loaded Projects and the Sidebar. The Zoom is one saved setting: a Project
+-- that starts after a Zoom change starts at that Zoom, and a Zoom change in one Project reaches the other Project
+-- and the Sidebar. The Sidebar reports each scale that it draws at in its session log.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "zoom-global" then return end
 local core, common = require "core", require "core.common"
@@ -52,6 +53,17 @@ if path:match("/driver$") then
    b = wait(function() return load("b-zoomed") end, 10, "Project B did not zoom")
    local other = wait(function() return load("a-changed") end, 10, "Project A kept its old Zoom")
    assert(same(other, b), "Project A applied " .. show(other) .. ", not Project B's " .. show(b))
+   local expected = DEFAULT_SCALE * b.interface
+   wait(function()
+    for _, name in ipairs(system.list_dir(USERDIR .. "/logs") or {}) do
+     local file = io.open(USERDIR .. "/logs/" .. name, "rb")
+     local text = file and file:read("*a") or ""
+     if file then file:close() end
+     for scale in text:gmatch("Sidebar scale: Window=%d+ scale=([%d%.]+)") do
+      if math.abs(tonumber(scale) - expected) < 1e-3 then return true end
+     end
+    end
+   end, 10, string.format("the Sidebar did not draw at scale %.4f", expected))
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})

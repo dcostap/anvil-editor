@@ -92,7 +92,7 @@ bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y);
 bool anvil_hosted_surface_toggle_sidebar(void);
 /* Tells the shell that this Project saved a Color Theme, so other processes reload it. */
 bool anvil_hosted_surface_color_theme_saved(void);
-/* Tells the shell that this Project saved the Zoom, so other Projects apply it. */
+/* Tells the shell that this Project saved the Zoom, so other Projects and the Sidebar apply it. */
 bool anvil_hosted_surface_zoom_saved(void);
 /* The shell draws this Project's Window controls in these colours while the Project is selected. */
 bool anvil_hosted_surface_set_shell_colors(const AnvilSurfaceShellColors *colors);

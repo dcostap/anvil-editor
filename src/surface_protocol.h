@@ -103,7 +103,7 @@ typedef enum {
   ANVIL_SURFACE_MSG_PANE_REQUEST = 102,
   /* Lua startup and Workspace restore finished. Independent of rendering. No payload. */
   ANVIL_SURFACE_MSG_RUNTIME_READY = 103,
-  /* This Project saved the Zoom. The shell tells every other Project. No payload. */
+  /* This Project saved the Zoom. The shell tells every other Project and the Sidebar. No payload. */
   ANVIL_SURFACE_MSG_ZOOM_SAVED = 104,
 } AnvilSurfaceMessageType;
 
