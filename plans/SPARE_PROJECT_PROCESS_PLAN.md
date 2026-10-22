@@ -3,6 +3,7 @@
 ## Status
 
 Plan, not started. This review changes the plan only, not the runtime.
+No runtime measurements or fault probes were run for this review.
 
 Commits `01900a24` and `5cd9f77f` come before this plan. The first stops the picker from leaving a half-closed
 frame on screen. The second trims cold Project startup. The measurements below do not establish a percentage improvement.
@@ -61,6 +62,12 @@ Keep the conservative gate if the deeper gate adds substantial complexity for li
   A recursive watch on a junction parent also needs verification against the dev directory layout.
 - One ready flag does not prevent two launch workers from claiming the same spare.
   Timeout after acceptance can also create duplicate Project runtimes without explicit ownership rules.
+- `core.init` reads App State and cleans recent Projects before `parse_startup_arguments`.
+  Moving argument parsing alone leaves stale state in a waiting spare.
+- Confirming process exit prevents concurrent runtimes, but cannot undo Workspace restore or other startup side effects.
+  Automatic cold fallback needs a boundary before Project work starts.
+- A spare prepared past plugin loading cannot return to the conservative gate.
+  Choose its preparation depth before startup, not during assignment.
 
 ## Design
 
@@ -92,7 +99,8 @@ Use explicit states: absent, starting, ready, and claimed. A failed process leav
 The shell thread owns this record. It transfers the handle to one launch worker before dispatching that worker.
 Other launches start cold. They never wait for a starting or claimed spare.
 
-The spare reports ready only after preparation and input validation succeed.
+The spare reports ready only after preparation and preparation-input validation succeed.
+Validate assignment inputs later, when they exist.
 It sends this report on the offer channel, not the Project surface channel.
 Bound preparation time as well as assignment time.
 
@@ -108,6 +116,10 @@ Spare rules:
 - If assignment times out, terminate the claimed spare and confirm its exit before starting cold.
   If exit cannot be confirmed, report the launch failure rather than start a duplicate runtime.
   Measure the whole fallback delay, including termination. Do not promise that it equals the pipe timeout.
+  This automatic fallback applies only before the shell authorizes Project startup, as defined below.
+
+Do not start a replacement while the claimed process still belongs to an unfinished assignment.
+After transfer to normal Project ownership, schedule replacement preparation through the same quiet-period rule.
 
 ### Assignment contract
 
@@ -117,6 +129,13 @@ Encode argument lengths explicitly. Reject malformed, oversized, or unsupported 
 Authenticate both pipe peers and bind the spare to its owning shell, including its user-directory identity.
 
 Acceptance consumes the spare permanently. A refusal also discards it for the first implementation.
+Acceptance does not authorize Project work. The spare first attaches to the assigned surface transport.
+The shell then records normal Project ownership and authorizes continuation from the gate.
+Record ownership before sending authorization. Once sending begins, assume Project work can start, even without a reply.
+Reuse an existing transport handshake if it can enforce this boundary; otherwise add one explicit continuation message.
+Before authorization, cancellation can terminate the spare and retry cold after confirmed exit.
+After authorization, use normal Project startup failure handling, not automatic spare fallback.
+A lost authorization reply must not trigger a second Workspace restore or duplicate Terminal Session creation.
 Match replies and surface connections to the current launch connection and assignment.
 Ignore late replies after cancellation. Never return a claimed process to the ready state.
 Cover shell exit and Project removal during assignment. A selection change alone follows existing background-load behavior.
@@ -138,6 +157,8 @@ assignment adds the argument list that `build_child_command_line` now puts on th
 After assignment, update both native argument storage and Lua `ARGS`, plus the existing native Project and restart state.
 Remove spare-only arguments. Preserve argument ownership for the process lifetime.
 Resolve relative paths using the launch working directory, not the spare's preparation directory.
+Set the process working directory and `core.init_working_dir` before Project startup.
+Audit other cached launch state. Replacing arguments alone does not update cached paths or native launch flags.
 Test both Lua restart and shell-managed restart against the assigned Project.
 
 Before assignment, the spare sends only lifecycle messages on its offer channel.
@@ -158,6 +179,8 @@ The gate splits startup into two parts:
 Use explicit preparation and Project-start calls. Do not locate the boundary through `core.run` wrapper order.
 A normal launch retains its current ordering and behavior. A spare waits between the explicit phases.
 Move Workspace restore and Project-dependent settings reload into the assigned phase without changing normal launch semantics.
+Move App State reads and recent-Project cleanup there too, including the initial Project choice derived from recents.
+Do not retain the preparation-time `app_state` table for later restore or saving.
 Ensure native hosted mode supports a hidden window before transport attachment; adoption alone does not prove this works.
 
 Two facts determine where the gate can be:
@@ -180,6 +203,12 @@ Rules that follow:
   Initially use the conservative gate when such code is present. Deeper preparation requires a separate compatibility decision.
   Any preparation failure discards the spare; never assign a partly initialized runtime.
 
+Choose one preparation depth for each spare. Initially, use only the conservative gate.
+If deeper preparation is approved, use it only when the user-code check permits it before preparation starts.
+Record that depth with the spare. Never try to undo plugin loading during assignment.
+A new incompatible input invalidates the spare; start the requested Project cold.
+Prepare the replacement at the newly eligible depth. Keep one spare, not one spare for each depth.
+
 ### Stale spare
 
 A spare loads code, settings and fonts when it starts. A spare that waits for a long time can become stale:
@@ -193,6 +222,7 @@ Do not accept a generation that changed while preparing. Discard on watch failur
 Keep assignment checks bounded; do not scan the runtime tree on selection.
 
 Track saved settings, user modules, plugin files, themes, and font files that preparation actually uses.
+Also watch creation of previously absent user modules and plugin directories that determine deeper-gate eligibility.
 Include user theme and font directories, not only `USERDIR\plugins`.
 Watch actual junction targets in the dev install, and verify nested edits and atomic replacements.
 Directory timestamps alone are insufficient. Settings migrations during preparation must not cause an endless replacement loop.
@@ -208,12 +238,16 @@ path can replace this rule.
 ## Milestones
 
 Each milestone is its own commit, with red-green tests where a durable behavior exists.
+Milestones 3 and 4 are optional. Proceed only after Milestone 2 shows that deeper preparation merits its added cost.
+Do not build a general plugin lifecycle framework or a configurable process pool for this feature.
 
 ### Milestone 0: measure
 
 - Find the private memory of a process that stops at the gate, both with the conservative gate and with the
   gate after plugins. Use a temporary environment switch. Do not commit the switch.
 - Find the time from the gate to the first frame for 3 real Projects with different Workspace sizes.
+  Use isolated copies of their Workspace state and the existing private-desktop runner.
+  Do not measure through the daily portable app or change its user state.
 - Check whether the runtime scale change path works for a spare that moves to a Window with a different
   scale.
 - Write the numbers in this plan. Stop if the memory cost is too high, and ask the user.
@@ -221,6 +255,9 @@ Each milestone is its own commit, with red-green tests where a durable behavior 
 - Compare cold, conservative-spare, and deep-spare paths on the same build, Project, Workspace, and display.
   Use repeated runs; report sample count, median, p95, and range.
   Record selection, acceptance, transport connection, first presented frame, and Project-ready timestamps.
+  Use a common monotonic clock across processes. Measure presentation at the shell, not at frame submission.
+  Identify the agreed small-Workspace fixture before evaluating the 150 ms target.
+  Record cache conditions and alternate run order so filesystem warming does not favor the spare path.
 - Compare foreground latency with spare preparation enabled and disabled.
   Report fallback latency and ready-spare hit rate separately from successful spare latency.
 - Treat the deep-gate measurement as a disposable feasibility experiment, not proof that the startup split is safe.
@@ -229,6 +266,8 @@ Each milestone is its own commit, with red-green tests where a durable behavior 
 
 - Move `parse_startup_arguments` and everything from `resolve_initial_project_path` to the end of startup into
   a Project start function. Put the gate before it, so plugins still load after the Project.
+- Move App State reads, recent-Project cleanup, and their derived initial Project choice after the gate.
+  Keep only verified Project-independent state and panel construction before it.
 - A normal launch calls both parts in sequence, with no change in behavior.
 - Add focused startup-order tests for normal, hosted, and restart paths.
   Check the `switch`, `loaded-switch`, `restore-loaded` and `select-hold` shell probes.
@@ -247,10 +286,14 @@ Each milestone is its own commit, with red-green tests where a durable behavior 
   - `spare-project-module`: a Project with `.anvil_project.lua` starts cold.
   - `spare-race`: concurrent launches cannot consume one spare twice.
   - `spare-timeout`: lost acceptance and late replies never leave two runtimes for one Project.
+    Cover both sides of startup authorization. After authorization, a transport failure must not repeat Workspace restore.
   - `spare-owner-exit`: owner death during preparation or assignment leaves no unassigned process.
   - `spare-restart`: assigned arguments and paths survive restart, including spaces and non-ASCII text.
+  - `spare-current-state`: assignment reads Workspace and App State changes made while the spare waited.
+    Include relative startup paths resolved from a working directory different from the preparation directory.
 - Add native protocol tests for malformed messages and peer validation.
 - This milestone saves only stages before the conservative gate. Measure the saving before proceeding.
+  Stop here if its measured benefit is sufficient. Record that decision instead of implementing the deeper gate by default.
 
 ### Milestone 3: move the gate after plugins
 
@@ -260,7 +303,10 @@ Each milestone is its own commit, with red-green tests where a durable behavior 
   Use Project API guards where practical. Move required Project work into the assigned phase.
 - Add a UI test for the durable rule: a plugin load with no Project loaded completes, and the Project start
   then sets up the Project.
-- Check observable ordering: Workspace restore occurs once, startup files resolve correctly, and no Project state changes before assignment.
+- Check observable ordering: Workspace restore occurs once and startup files resolve correctly.
+  No Project state changes before startup authorization.
+  Preserve User Module, Project Module, mandatory defaults, and saved-settings precedence on cold launches.
+  Test settings-enabled plugins as well as plugins enabled by default.
 - Run focused startup scenarios and shell probes. Use the existing private-desktop runner for native verification.
 
 ### Milestone 4: stale spare
@@ -279,6 +325,7 @@ Each milestone is its own commit, with red-green tests where a durable behavior 
 - Update `AGENTS.md`: spare lifecycle, gate rule, probes to run.
 - Deploy with `update-anvil-dev-build.bat`. Compare selection-to-first-frame times with the measurements in
   this plan.
+  This applies to runtime implementation, not this plan-only review.
 
 ## Open questions
 
