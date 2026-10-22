@@ -26,7 +26,7 @@ test.describe("Terminal Windows Rerun", function()
         local deadline = system.get_time() + 1.5
         repeat view:service_session(true); coroutine.yield(.01) until system.get_time() >= deadline
         local record = assert(load(assert(native.read_session_record(view.session_id)), "record", "t", {}))()
-        test.equal(record.interrupted_command or "", "", "prompt helper became a Rerun command")
+        test.equal(record.interrupted_command or "", "", "a prompt helper became the interrupted command")
       end)
       view:on_close()
       native.finish_close_commands()
@@ -49,8 +49,8 @@ test.describe("Terminal Windows Rerun", function()
         view:service_session(true)
         coroutine.yield(.01)
       until view.state == "running" and view.session:text_capture() or system.get_time() >= deadline
-      view.interrupted_command = string.format('"%s/tests/fixtures/terminal argv\'s.exe" "%s/tests/fixtures/terminal_rerun_arguments.lua" "%s" "%s" "" "quote\\\"value"', root, root, output, literal)
-      test.ok(view:rerun_interrupted_command())
+      local line = string.format('"%s/tests/fixtures/terminal argv\'s.exe" "%s/tests/fixtures/terminal_rerun_arguments.lua" "%s" "%s" "" "quote\\\"value"', root, root, output, literal)
+      test.ok(view:run_command_line(line))
       local actual
       deadline = system.get_time() + 15
       repeat
@@ -67,7 +67,7 @@ test.describe("Terminal Windows Rerun", function()
     test.ok(ok, err)
   end)
 
-  test.it("reruns an approved command in a Terminal that uses the default shell", function()
+  test.it("runs a command line in a Terminal that uses the default shell", function()
     test.skip_if(PLATFORM ~= "Windows", "Windows command lines are Windows-specific")
     terminal._set_native_for_tests(nil)
     local root = system.getcwd()
@@ -82,9 +82,9 @@ test.describe("Terminal Windows Rerun", function()
         view:service_session(true)
         coroutine.yield(.01)
       until view.state == "running" and view.session:text_capture() or system.get_time() >= deadline
-      view.interrupted_command = string.format('"%s/tests/fixtures/terminal argv\'s.exe" "%s/tests/fixtures/terminal_rerun_arguments.lua" "%s" default',
+      local line = string.format('"%s/tests/fixtures/terminal argv\'s.exe" "%s/tests/fixtures/terminal_rerun_arguments.lua" "%s" default',
         root, root, output)
-      test.ok(view:rerun_interrupted_command())
+      test.ok(view:run_command_line(line))
       local actual
       deadline = system.get_time() + 15
       repeat

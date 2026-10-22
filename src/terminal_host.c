@@ -69,6 +69,8 @@ typedef struct {
   volatile LONG command_running;
   int64_t command_started, command_finished;
   int command_exit;
+  /* The line the shell submitted for the running command. Revival types it at the new prompt. */
+  char interrupted_input[4096];
   int mark_state;
   size_t mark_length;
   bool mark_overflow;
@@ -199,6 +201,7 @@ static bool write_registry(TerminalHost *host) {
     fprintf(file, "  interrupted_pid = %lu,\n", (unsigned long)host->interrupted_pid);
     EnterCriticalSection(&host->lock);
     AgentRecord agent = host->agent, step = host->step;
+    registry_string(file, "interrupted_input", host->interrupted_input);
     fprintf(file, "  command_started = %lld,\n  command_finished = %lld,\n  command_exit = %d,\n",
       (long long)host->command_started, (long long)host->command_finished, host->command_exit);
     LeaveCriticalSection(&host->lock);
@@ -418,10 +421,13 @@ static void apply_mark(TerminalHost *host) {
       (text[5] && text[5] != ';')) return;
   char tag[48]; int tag_length = snprintf(tag, sizeof(tag), "anvil=%s", host->nonce);
   bool trusted = false;
-  for (const char *field = text + 5; *field == ';' && !trusted;) {
+  const char *cmdline = NULL;
+  size_t cmdline_length = 0;
+  for (const char *field = text + 5; *field == ';';) {
     field++;
     size_t length = strcspn(field, ";");
-    trusted = length == (size_t)tag_length && !memcmp(field, tag, length);
+    if (length == (size_t)tag_length && !memcmp(field, tag, length)) trusted = true;
+    else if (length > 12 && !memcmp(field, "cmdline_url=", 12)) { cmdline = field + 12; cmdline_length = length - 12; }
     field += length;
   }
   if (!trusted) return;
@@ -432,9 +438,19 @@ static void apply_mark(TerminalHost *host) {
       host->command_finished = 0;
       host->command_exit = 0;
       clear_agent(host);
+      /* Percent-decode the submitted line. A malformed escape drops it. */
+      size_t count = 0;
+      for (size_t i = 0; cmdline && i < cmdline_length; i++) {
+        unsigned ch = (unsigned char)cmdline[i];
+        if (ch == '%' && (i + 2 >= cmdline_length || sscanf(cmdline + i + 1, "%2x", &ch) != 1)) { count = 0; break; }
+        if (cmdline[i] == '%') i += 2;
+        host->interrupted_input[count++] = (char)ch;
+      }
+      host->interrupted_input[count] = 0;
     } else {
       host->command_finished = (int64_t)time(NULL);
       host->command_exit = atoi(text + 6);
+      host->interrupted_input[0] = 0;
     }
     InterlockedIncrement(&host->agent_revision);
     LeaveCriticalSection(&host->lock);

@@ -648,8 +648,8 @@ function TerminalView:adopt_session(session)
   core.redraw = true
 end
 
-function TerminalView:rerun_interrupted_command()
-  local text = self.interrupted_command
+-- Runs a process command line, such as an agent resume command, in the shell.
+function TerminalView:run_command_line(text)
   if self.state ~= "running" or not self.session or type(text) ~= "string" or
       text == "" or #text > 16384 or text:find("[%z\r\n]") then return false end
   local shell = (self.launch_options.shell or ""):lower()
@@ -663,43 +663,28 @@ function TerminalView:rerun_interrupted_command()
     text = "Start-Process -FilePath " .. quote(exe)
       .. (args ~= "" and " -ArgumentList " .. quote(args) or "") .. " -NoNewWindow -Wait"
   end
-  local ok = self.session:write(text .. "\r")
-  if ok then
-    self.interrupted_command = nil
-    core.log_quiet("Terminal Session %s interrupted command rerun accepted", tostring(self.session_id))
-  end
-  return ok
+  return self.session:write(text .. "\r")
 end
 
 function TerminalView:restore_interrupted_command(record)
-  self.interrupted_command = record.interrupted_command
+  self.interrupted_input = record.interrupted_input
   self.agent_resume_command = agent_resume_command(record)
 end
 
 -- Resuming an Agent Session runs nothing new: the agent waits for its next prompt.
--- Any other interrupted command waits for approval.
-function TerminalView:offer_interrupted_command()
-  local resume = self.agent_resume_command
-  if resume and not self.rerun_offered then
-    self.agent_resume_command = nil
-    local original = self.interrupted_command
-    self.interrupted_command = resume
-    if self:rerun_interrupted_command() then
-      self.rerun_offered = true
-      core.log_quiet("Terminal Session %s resumed its Pi session", tostring(self.session_id))
-      return
-    end
-    self.interrupted_command = original
+-- Any other interrupted command returns to the new prompt as typed input. Enter runs it again.
+function TerminalView:return_interrupted_command()
+  local resume, text = self.agent_resume_command, self.interrupted_input
+  self.agent_resume_command, self.interrupted_input = nil, nil
+  if resume and self:run_command_line(resume) then
+    core.log_quiet("Terminal Session %s resumed its Pi session", tostring(self.session_id))
+    return
   end
-  local text = self.interrupted_command
-  if self.rerun_offered or type(text) ~= "string" or text == "" or text:find("[%z\r\n]") or #text > 16384 then return end
-  self.rerun_offered = true
-  core.nag_view:show("Restored Terminal", "The previous shell ended. The interrupted command has not run.", {
-    { text = "Rerun " .. text, rerun = true }, { text = "Discard" },
-  }, function(option)
-    if option.rerun then self:rerun_interrupted_command() else self.interrupted_command = nil end
-  end)
-  core.log_quiet("Terminal Session %s interrupted command offered; no automatic rerun", tostring(self.session_id))
+  -- A control character, such as a line break or Tab, would act as a key at the prompt.
+  if type(text) ~= "string" or text == "" or text:find("%c") then return end
+  local ok = self.session:write(text)
+  core.log_quiet("Terminal Session %s interrupted command returned to the prompt: %s",
+    tostring(self.session_id), ok and "typed" or "write failed")
 end
 
 function TerminalView:revive_lost_host()
@@ -876,7 +861,7 @@ function TerminalView:service_session(include_rows)
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end
   local state_changed = self:apply_status(status)
-  if status.revived and status.kind == "running" and not status.replaying then self:offer_interrupted_command() end
+  if status.revived and status.kind == "running" and not status.replaying then self:return_interrupted_command() end
   -- The native session may hold a screen update briefly (cursor repaint,
   -- synchronized output). Keep stepping so the held update is published even
   -- when no more output arrives.

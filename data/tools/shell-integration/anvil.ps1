@@ -40,8 +40,12 @@ if ($Global:__AnvilShellIntegration.ReadLine) {
       $length = if ([char]::IsHighSurrogate($title[239])) { 239 } else { 240 }
       $title = $title.Substring(0, $length) + '...'
     }
+    # The host offers the submitted line again if the Terminal Session revives.
+    # A longer line would overflow the host's mark buffer, which then ignores the mark.
+    $cmdline = if ($line.Length -le 3800) { [Uri]::EscapeDataString($line) } else { "" }
+    $cmdline = if ($cmdline -and $cmdline.Length -le 3800) { ";cmdline_url=$cmdline" } else { "" }
     $state.Running = $true
-    [Console]::Write("$([char]27)]2;$title$([char]7)$([char]27)]133;C;anvil=$($state.Nonce)$([char]7)")
+    [Console]::Write("$([char]27)]2;$title$([char]7)$([char]27)]133;C;anvil=$($state.Nonce)$cmdline$([char]7)")
     $line
   }
 }

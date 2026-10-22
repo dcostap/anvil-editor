@@ -1,7 +1,6 @@
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 local core = require "core"
-local command = require "core.command"
 local panes = require "core.panes"
 
 local function wait_for(view, predicate, seconds)
@@ -189,12 +188,12 @@ test.describe("Terminal revival", function()
     test.ok(ok, err)
   end)
 
-  test.it("offers the interrupted child command without running it until approval", function()
+  test.it("returns the interrupted command to the revived prompt and runs it only on Enter", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
     local counter = USERDIR .. "/rerun-count.txt"
     local script = system.getcwd() .. "/tests/fixtures/terminal_interrupted_command.ps1"
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
     local state = view:get_state()
     local kernel = require("ffi").load("kernel32")
     local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
@@ -204,27 +203,31 @@ test.describe("Terminal revival", function()
       if not file then return nil end
       local value = file:read("*a"); file:close(); return value
     end
+    local typed = string.format("powershell.exe -NoProfile -File '%s' -CounterPath '%s'", script, counter)
     local ok, err = pcall(function()
-      test.ok(view.session:write(string.format('powershell.exe -NoProfile -File "%s" -CounterPath "%s"\r', script, counter)))
+      test.ok(wait_for(view, function() return screen_text(view):find("PS ", 1, true) end), "no first prompt")
+      test.ok(view.session:write(typed .. "\r"))
       test.ok(wait_for(view, function()
-        local saved = record(state.session_id)
-        return count() == "1" and saved.interrupted_command and saved.interrupted_command:find("terminal_interrupted_command", 1, true)
-      end), "busy child command was not saved")
+        return count() == "1" and record(state.session_id).interrupted_input == typed
+      end), "the typed command was not saved")
       checkpoint_on_detach(view, state)
       kernel.TerminateProcess(handle, 99); kernel.WaitForSingleObject(handle, 5000)
       restored = panes.place(function() return terminal.from_state(state) end, { placement = "current" })
+      -- The new prompt follows the marker. A narrow View wraps the long command.
+      local function new_prompt()
+        local text = screen_text(restored)
+        local marker = text:find("Restored session", 1, true)
+        return marker and text:sub(marker):gsub("\r?\n", "") or ""
+      end
       test.ok(wait_for(restored, function()
-        local option = core.nag_view.options and core.nag_view.options[1]
-        return option and option.text:find("Rerun ", 1, true) == 1
-      end), "revival did not offer the interrupted command")
-      test.equal(count(), "1", "revival reran the command without approval")
-      core.nag_view.hovered_item = 1
-      test.ok(command.perform("core:select_dialog_entry"))
-      test.ok(wait_for(restored, function() return count() == "2" end), "approved command did not run")
+        return new_prompt():find("PS .*" .. typed:gsub("%p", "%%%0"))
+      end), "the command did not return to the revived prompt: " .. screen_text(restored))
+      test.ok(not core.nag_view.visible, "revival asked about the command")
+      wait_for(restored, function() return false end, 1)
+      test.equal(count(), "1", "revival ran the command without Enter")
+      test.ok(restored.session:write("\r"))
+      test.ok(wait_for(restored, function() return count() == "2" end), "Enter did not run the command")
     end)
-    if core.nag_view.options and core.nag_view.options[1] and core.nag_view.options[1].rerun then
-      core.nag_view.hovered_item = 2; command.perform("core:select_dialog_entry")
-    end
     if restored then restored:on_close() end
     view:on_close()
     if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end
@@ -352,9 +355,6 @@ test.describe("Terminal revival", function()
         return restored.state == "running" and old and marker and old < marker
       end), "visible alternate screen was lost during revival")
     end)
-    if core.nag_view.options and core.nag_view.options[1] and core.nag_view.options[1].rerun then
-      core.nag_view.hovered_item = 2; command.perform("core:select_dialog_entry")
-    end
     if restored then restored:on_close() end
     view:on_close()
     if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end

@@ -60,6 +60,12 @@ The host records its start, finish, and exit status from the trusted OSC 133 mar
 Without Agent Status, the Project Sidebar shows the command's elapsed time or completed duration.
 Run `ui/terminal_command_status.lua` after changes. Existing hosts keep their loaded integration until their shells restart.
 
+A revived Terminal Session types the interrupted command at its new prompt. It does not press Enter.
+The PowerShell integration sends the submitted line as `cmdline_url` in the OSC 133 C mark.
+The host keeps that line in the record as `interrupted_input` until the command finishes.
+Without the integration, the host has no submitted line, and revival types nothing.
+Run `ui/terminal_revival.lua` after changes.
+
 A revived Terminal Session resumes the Pi session that its Pi had open. Pi needs no change.
 The host loads `data/tools/agent-sessions/pi.cjs` into Node and Bun through `NODE_OPTIONS` and `BUN_OPTIONS`.
 In Pi, the script writes `terminal-sessions/<id>.agent` with Pi's executable and the session file it writes.
