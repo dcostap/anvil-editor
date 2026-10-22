@@ -30,11 +30,13 @@ test.describe("Terminal program icons", function()
 end)
 
 test.describe("Pi model badges", function()
-  test.it("matches GPT, Claude and Fable names without case sensitivity", function()
+  test.it("matches supported model names without case sensitivity", function()
     local icons = require "core.agent_icons"
     test.equal(icons.provider("gPt-5"), "openai")
     test.equal(icons.provider("Claude Sonnet"), "anthropic")
     test.equal(icons.provider("FABLE 5"), "anthropic")
+    test.equal(icons.provider("DeepSeek-V3"), "deepseek")
+    test.equal(icons.provider("DEEPSEEK R1"), "deepseek")
     test.equal(icons.provider("Gemini Pro"), nil)
     test.equal(icons.provider(nil), nil)
   end)
@@ -48,7 +50,7 @@ test.describe("Pi model badges", function()
     local ok, err = pcall(function()
       local session = {id="pi",title="Task",state="running",busy=1,agent_app="pi",agent_state="working"}
       local plain = tab.width(tab.describe_session(session), 28 * SCALE)
-      for _, model in ipairs {"GPT Test", "Claude Test", "Fable Test"} do
+      for _, model in ipairs {"GPT Test", "Claude Test", "Fable Test", "DeepSeek Test"} do
         session.agent_model = model
         local item = tab.describe_session(session)
         images, dots = {}, {}

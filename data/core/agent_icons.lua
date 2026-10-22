@@ -9,15 +9,14 @@ function agent_icons.provider(model)
   local name = type(model) == "string" and model:lower() or ""
   if name:find("gpt", 1, true) then return "openai" end
   if name:find("claude", 1, true) or name:find("fable", 1, true) then return "anthropic" end
+  if name:find("deepseek", 1, true) then return "deepseek" end
 end
 
 local function dimensions(app, row_height, model)
   if app ~= "pi" then return 0, 0 end
   local size = file_icons.size_for_row(row_height)
   if not agent_icons.provider(model) then return size, 0 end
-  -- Keep the complete diagonal pair inside the row, including at small interface sizes.
-  if row_height then size = math.min(size, math.max(1, math.floor((row_height - 2 * SCALE) / 1.6))) end
-  return size, math.floor(size * 0.6 + 0.5)
+  return size, size + math.max(1, math.floor(3 * SCALE + 0.5))
 end
 
 function agent_icons.width(app, row_height, model)
@@ -29,7 +28,7 @@ local function image(name, size)
   local background = style.background
   if type(background[1]) == "table" then background = background[1] end
   local dark = background[1] * 0.2126 + background[2] * 0.7152 + background[3] * 0.0722 < 145
-  local variant = dark and name ~= "claude" and "_dark" or ""
+  local variant = dark and (name == "pi" or name == "openai") and "_dark" or ""
   local key = name .. variant .. ":" .. size
   if cache[key] == nil then
     local path = DATADIR .. PATHSEP .. "icons" .. PATHSEP .. "agents" .. PATHSEP .. name .. variant .. ".svg"
@@ -44,13 +43,13 @@ function agent_icons.draw(app, x, y, row_height, model)
   local size, offset = dimensions(app, row_height, model)
   if size == 0 then return end
   local mark = image(app, size)
-  local top = math.floor(y + (row_height - size - offset) / 2)
+  local top = math.floor(y + (row_height - size) / 2)
   if mark then renderer.draw_canvas(mark, math.floor(x), top) end
   if offset == 0 then return end
   local maker = agent_icons.provider(model)
   local provider = image(maker == "anthropic" and "claude" or maker, size)
   if not provider then return end
-  renderer.draw_canvas(provider, math.floor(x + offset), top + offset)
+  renderer.draw_canvas(provider, math.floor(x + offset), top)
 end
 
 return agent_icons

@@ -12,4 +12,8 @@ Claude's starburst comes from [Simple Icons](https://github.com/simple-icons/sim
 Its paths remain unchanged. It uses Claude's orange on both light and dark backgrounds.
 Both sources were retrieved on 2026-10-22.
 
+DeepSeek's whale comes from [Simple Icons](https://github.com/simple-icons/simple-icons/blob/develop/icons/deepseek.svg), under CC0.
+Its paths remain unchanged. It uses DeepSeek's blue on both light and dark backgrounds.
+The source was retrieved on 2026-10-22.
+
 These marks identify Pi and the selected model's family or maker. They do not imply endorsement of Anvil.

@@ -92,8 +92,9 @@ They do not infer the program from its title. Older running hosts need a new Ter
 Run `ui/terminal_icons.lua` and `ui/terminal_agent_status.lua` after icon or identity changes.
 The Pi extension also reports the selected model's display name, or its ID when no name exists.
 Model changes update the badge without a new agent turn. GPT names use OpenAI's knot; Claude and Fable names use Claude's starburst.
+DeepSeek names use DeepSeek's whale. Name matching ignores case.
 The badge stays while Pi is idle and ends when Pi ends. Unknown models show only Pi's icon.
-The model logo has the same size as Pi's icon and sits at its bottom-right. Both logos have transparent backgrounds.
+The model logo follows Pi's icon on the same row, with the same size. Both logos have transparent backgrounds.
 Run `ui/terminal_agent_resume.lua` after model-report changes. It checks startup and model changes on Node and Bun.
 
 The standalone option is `-Dembedded_runtime=true`. It is off by default.

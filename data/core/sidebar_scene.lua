@@ -41,6 +41,8 @@ function Scene:new()
       terminal("a", "[40 s] \u{03C0} - GLP4", 30, {busy = 1, agent_app = "pi", agent_model = "GPT Test", agent_state = "working", agent_since = os.time() - 400,
         agent_step = "bash: npm test -- --watch=false", agent_step_since = os.time() - 42}),
       terminal("b", POWERSHELL, 20 * MINUTE),
+      terminal("deepseek", "DeepSeek", 30, {agent_app = "pi", agent_model = "DeepSeek-V3", agent_state = "idle",
+        agent_since = os.time() - MINUTE}),
       terminal("build", [[.\gradlew.bat runAppiDesktop --console=rich --info]], 30,
         {command_started=os.time() - 180, command_finished=os.time() - 30, command_exit=0}),
       terminal("c", "npm run dev", 3 * DAY),
