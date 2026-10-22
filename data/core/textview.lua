@@ -1987,13 +1987,10 @@ local function splice_visual_metric_rows(view, cache, old_row1, old_row2, new_ro
   perf_frame_add("textview_visual_metric_row_splice_rows", insert_count)
 end
 
----Apply the row changes of the composed rows to their row metrics. Keep the
----height of every other row. Return false and a reason when the metrics
----need a full rebuild.
-local function update_composed_metric_rows(view, cache, composed)
-  local changes = composed.row_changes
-  composed.row_changes = nil
-  if #composed.entries ~= cache.row_count + layout_changes.total_delta(changes) then
+---Apply row changes to the row metrics. Keep the height of every other row.
+---Return false and a reason when the metrics need a full rebuild.
+local function update_metric_rows(view, cache, changes, row_count)
+  if row_count ~= cache.row_count + layout_changes.total_delta(changes) then
     return false, "row count"
   end
   -- Only the text, the wrapping, and the row count may differ from the
@@ -2077,6 +2074,14 @@ local function update_composed_metric_rows(view, cache, composed)
   return true
 end
 
+---Record the line changes of a text transaction for unwrapped row metrics
+---without composed rows. Each of their rows is one line.
+local function add_metric_transaction(view, transaction)
+  local cache = view.__visual_metric_cache
+  if not cache or cache.composed or view.wrapped_settings or transaction.type == "load" then return end
+  cache.line_changes = layout_changes.compose(cache.line_changes, layout_changes.from_transaction(transaction))
+end
+
 local function clear_visual_metric_cache(view)
   local cache = view.__visual_metric_cache
   if cache then
@@ -2105,17 +2110,11 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   elseif line1 and not self:has_composed_visual_rows() then
     if not cache then return end
     if not self.wrapped_settings then
-      invalidate_visual_metric_rows(self, cache, line1, line2)
-      -- Keep unchanged rows when only the Buffer revision changed. The dirty
-      -- rows still measure the current render plans. A row-count, provider,
-      -- or geometry change keeps the full-rebuild path.
-      local revision = self.buffer.text_revision or 0
-      if cache.text_revision ~= revision
-        and cache.signature == self:get_visual_metric_signature(nil, nil, cache.text_revision)
-      then
-        cache.text_revision = revision
-        cache.signature = self:get_visual_metric_signature()
-      end
+      -- Each row is one line. The next read measures these lines again.
+      local line_count = #self.buffer.lines
+      line1 = common.clamp(math.floor(line1), 1, line_count)
+      line2 = common.clamp(math.floor(line2 or line1), line1, line_count)
+      cache.line_changes = layout_changes.compose(cache.line_changes, layout_changes.span(line1, line2))
       return
     end
 
@@ -4231,14 +4230,26 @@ function TextView:get_visual_row_metric_cache()
   local lookup_start = perf_active and system.get_time()
   perf_frame_add("textview_visual_metric_cache_calls", 1)
   local pending_cache = self.__visual_metric_cache
-  if pending_cache and pending_cache.composed then
+  if pending_cache and (pending_cache.composed or pending_cache.line_changes) then
     local resolve_start = perf_active and system.get_time()
-    local composed = self:has_composed_visual_rows() and current_composed_rows(self)
     local updated, reason = true, nil
-    if composed ~= pending_cache.composed then
-      updated, reason = false, "composed rows rebuilt"
-    elseif composed.row_changes then
-      updated, reason = update_composed_metric_rows(self, pending_cache, composed)
+    if pending_cache.composed then
+      local composed = self:has_composed_visual_rows() and current_composed_rows(self)
+      if composed ~= pending_cache.composed then
+        updated, reason = false, "composed rows rebuilt"
+      elseif composed.row_changes then
+        local changes = composed.row_changes
+        composed.row_changes = nil
+        updated, reason = update_metric_rows(self, pending_cache, changes, #composed.entries)
+      end
+    else
+      local changes = pending_cache.line_changes
+      pending_cache.line_changes = nil
+      if self.wrapped_settings or self:has_composed_visual_rows() then
+        updated, reason = false, "line changes no longer map to rows"
+      else
+        updated, reason = update_metric_rows(self, pending_cache, changes, #self.buffer.lines)
+      end
     end
     if not updated and self.__visual_metric_cache == pending_cache then
       core.log_quiet(
@@ -10446,6 +10457,7 @@ Buffer.register_text_transaction_handler("textview-render-caches", function(buff
       view.__composed_visual_row_snapshot_id = nil
       view.__composed_visual_row_snapshot_rows = nil
       add_composed_transaction(view, transaction)
+      add_metric_transaction(view, transaction)
       line_packets.apply_transaction(view, transaction)
       local invalid_line1, invalid_line2 = line1, line2
       local provider_entries = view:line_render_provider_entries()

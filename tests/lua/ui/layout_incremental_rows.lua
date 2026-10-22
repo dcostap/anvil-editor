@@ -214,4 +214,29 @@ test.describe("Incremental layout rows", function()
     test.equal(counts(view).heights, before.heights)
     same_as_fresh_view(view)
   end)
+
+  test.it("keeps off-screen heading heights through line breaks without wrapping", function(context)
+    local lines = {}
+    for line = 1, 150 do
+      lines[line] = line % 8 == 4 and ("## Heading " .. line) or ("Body line " .. line)
+    end
+    local view, buffer = make_view(context, "unwrapped-breaks.md", table.concat(lines, "\n"), 600)
+    view.size.y = 400
+    view:set_wrapping_enabled(false)
+    ready(view)
+    read_layout(view)
+    view:with_selection_state(function() buffer:set_selection(10, 1) end)
+    local before = counts(view)
+    -- Each line break shows before the parse publishes.
+    for _ = 1, 3 do
+      view:on_text_input("\n")
+      view:update()
+      read_layout(view)
+    end
+    ready(view)
+    view:update()
+    read_layout(view)
+    test.equal(counts(view).heights, before.heights)
+    same_as_fresh_view(view)
+  end)
 end)
