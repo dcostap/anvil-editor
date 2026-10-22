@@ -2233,7 +2233,6 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
         if not rebased or opts.on_wrapped_reconstructed then
           linewrapping.reconstruct_breaks_async(
             self, self:get_font(), self:compute_wrap_width(), {
-              budget_ms = opts.wrapped_reconstruction_budget_ms,
               on_complete = opts.on_wrapped_reconstructed,
               update_visible = opts.update_visible,
             }
@@ -2268,7 +2267,6 @@ function TextView:invalidate_line_render(_provider_id, line1, line2, opts)
       perf_frame_add("linewrapping_async_line_render_invalidation_calls", 1)
       linewrapping.reconstruct_breaks_async(
         self, self:get_font(), self:compute_wrap_width(), {
-          budget_ms = opts.wrapped_reconstruction_budget_ms,
           on_complete = opts.on_wrapped_reconstructed,
           update_visible = opts.update_visible,
         }
@@ -8963,19 +8961,22 @@ local function draw_decoration_line_backgrounds(view, line, x, y)
     end
     local color = provider_call(view, entry, "line_background", view, line)
     if color then
+      -- A reading lane can draw wider than it lays out. Keep the row
+      -- background with the content, such as a Markdown code block.
+      local width = view:get_presentation_viewport_width()
       if view.wrapped_settings and view.__wrapped_draw_first_idx then
         local first_idx = view.wrapped_line_to_idx and view.wrapped_line_to_idx[line]
         if first_idx then
           for idx = view.__wrapped_draw_first_idx, view.__wrapped_draw_last_idx do
             local row_y, row_height = wrapped_row_geometry(view, y, first_idx, idx)
             renderer.draw_rect(
-              view.position.x, row_y, view.size.x, row_height, color
+              view.position.x, row_y, width, row_height, color
             )
           end
         end
       else
         renderer.draw_rect(
-          view.position.x, y, view.size.x,
+          view.position.x, y, width,
           view:get_position_visual_row_height(line, 1), color
         )
       end

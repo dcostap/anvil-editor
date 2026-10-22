@@ -6,6 +6,7 @@ local markdown = require "core.markdown"
 local footnotes = require "core.markdown.footnotes"
 local model = require "core.markdown.model"
 local panes = require "core.panes"
+local style = require "core.style"
 local workers = require "core.worker_pool"
 local test = require "core.test"
 
@@ -100,6 +101,35 @@ test.describe("Markdown tables wider than the reading lane", function()
     test.equal(view:get_line_render(body).horizontal_scroll, nil,
       "the table scrolls instead of using the free space")
     test.ok(cell.x2 <= view.position.x + view.size.x, "the table leaves the view")
+  end)
+
+  test.it("keeps a code block's background inside the lane", function(context)
+    local view = open_view(context, "Some prose.\n\n```\nplain code\n```\n\nend", 2000)
+    local code_rects = {}
+    local old_rect, old_rounded = renderer.draw_rect, renderer.draw_rounded_rect
+    local old_text = renderer.draw_text
+    local old_push, old_pop = core.push_clip_rect, core.pop_clip_rect
+    local function record(x, _, w, _, _, color)
+      if color == style.markdown_live_code_background then
+        code_rects[#code_rects + 1] = { x = x, w = w }
+      end
+    end
+    renderer.draw_rect = function(x, y, w, h, color) record(x, y, w, h, nil, color) end
+    renderer.draw_rounded_rect = record
+    renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
+    core.push_clip_rect, core.pop_clip_rect = function() end, function() end
+    local ok, err = pcall(view.draw, view)
+    renderer.draw_rect, renderer.draw_rounded_rect = old_rect, old_rounded
+    renderer.draw_text = old_text
+    core.push_clip_rect, core.pop_clip_rect = old_push, old_pop
+    if not ok then error(err, 0) end
+    test.ok(#code_rects > 0, "the code block has no background")
+    for _, rect in ipairs(code_rects) do
+      test.ok(rect.x + rect.w <= lane_right(view), string.format(
+        "the code background ends at %d, past the lane at %d",
+        rect.x + rect.w, lane_right(view)
+      ))
+    end
   end)
 
   test.it("stops a wide table before the footnote cards", function(context)
