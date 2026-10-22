@@ -21,6 +21,7 @@ local native_override
 local next_log_id = 0
 
 local PADDING = 6
+local PASTE_CONFIRM_CHARACTERS = 5000
 
 function M.cleanup_records(id)
   if PLATFORM ~= "Windows" then return end
@@ -1448,31 +1449,31 @@ function TerminalView:on_ime_text_editing(text, start, length)
   return true
 end
 
-function TerminalView:paste(text, allow_unsafe)
+function TerminalView:paste(text, confirmed)
   if not self.session or self.running == false or not text or text == "" then return false end
   self.activity = os.time()
-  local ok, reason = self.session:paste(text, allow_unsafe == true)
+  if not confirmed and text:ulen(nil, nil, true) > PASTE_CONFIRM_CHARACTERS then
+    core.log_quiet("Terminal session %d requested large paste confirmation", self.log_id)
+    core.nag_view:show(
+      "Paste Large Text Into Terminal",
+      "This text contains more than 5,000 characters. Paste it?",
+      {
+        { text = "Paste", default_yes = true },
+        { text = "Cancel", default_no = true },
+      },
+      function(item)
+        if item.text == "Paste" then self:paste(text, true) end
+      end
+    )
+    return true
+  end
+
+  local ok, reason = self.session:paste(text, true)
   if ok then return true end
   if reason == "queue_full" then
     core.error("The terminal input queue is full. Try the paste again.")
-    return false
   end
-  if reason ~= "unsafe" then return false end
-
-  core.nag_view:show(
-    "Paste Multiple Lines Into Terminal",
-    "This text contains a newline. It can run one or more commands. Paste it?",
-    {
-      { text = "Paste", default_yes = false },
-      { text = "Cancel", default_no = true },
-    },
-    function(item)
-      if item.text == "Paste" and self.session and self.running ~= false then
-        self.session:paste(text, true)
-      end
-    end
-  )
-  return true
+  return false
 end
 
 function TerminalView:search(query, reverse)

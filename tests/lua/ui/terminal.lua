@@ -4,6 +4,7 @@ local core = require "core"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local keymap = require "core.keymap"
+local NagView = require "core.nagview"
 local panes = require "core.panes"
 local style = require "core.style"
 local test = require "core.test"
@@ -118,6 +119,7 @@ local function fake_native()
       return true
     end
     function session:paste(text, allow_unsafe)
+      if not allow_unsafe and text:find("[\r\n]") then return false, "unsafe" end
       self.pastes[#self.pastes + 1] = { text, allow_unsafe }
       return true
     end
@@ -207,6 +209,10 @@ test.describe("Terminal View", function()
       system.set_clipboard(context.previous_clipboard)
     end
     if context.previous_nag_show then core.nag_view.show = context.previous_nag_show end
+    if context.previous_nag_view then
+      if core.nag_view.visible then core.nag_view:next() end
+      core.nag_view = context.previous_nag_view
+    end
     for _, view in ipairs(terminal.open_views()) do
       local pane = panes.pane_for_view(view)
       if pane then panes.close(pane, { force = true }) else view:on_close() end
@@ -961,9 +967,49 @@ test.describe("Terminal View", function()
     local view = terminal.open()
 
     test.ok(command.perform("terminal:paste"))
-    test.same({ "terminal paste", false }, context.sessions[1].pastes[1])
+    test.equal(context.sessions[1].pastes[1][1], "terminal paste")
 
     system.set_clipboard(previous or "")
+  end)
+
+  test.it("pastes ordinary multiline Unicode text without confirmation", function(context)
+    local view = terminal.open()
+    context.previous_nag_view = core.nag_view
+    core.nag_view = NagView()
+    local text = string.rep("é\n", 2000)
+
+    test.ok(view:paste(text))
+
+    test.not_ok(core.nag_view.visible)
+    test.equal(context.sessions[1].pastes[1][1], text)
+  end)
+
+  test.it("waits for confirmation of a large single-line paste and accepts by default", function(context)
+    local view = terminal.open()
+    context.previous_nag_view = core.nag_view
+    core.nag_view = NagView()
+    local text = string.rep("x", 6000)
+
+    test.ok(view:paste(text))
+
+    test.ok(core.nag_view.visible)
+    test.equal(#context.sessions[1].pastes, 0)
+    test.ok(command.perform("core:select_dialog_entry"))
+    test.not_ok(core.nag_view.visible)
+    test.equal(context.sessions[1].pastes[1][1], text)
+  end)
+
+  test.it("does not send a large paste when confirmation is cancelled", function(context)
+    local view = terminal.open()
+    context.previous_nag_view = core.nag_view
+    core.nag_view = NagView()
+
+    test.ok(view:paste(string.rep("line\n", 1200)))
+    test.ok(core.nag_view.visible)
+    test.ok(command.perform("core:select_dialog_no"))
+
+    test.not_ok(core.nag_view.visible)
+    test.equal(#context.sessions[1].pastes, 0)
   end)
 
   test.it("selects visible cells and copies the selected terminal text", function(context)
