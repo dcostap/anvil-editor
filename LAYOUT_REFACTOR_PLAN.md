@@ -642,6 +642,59 @@ Costs that remain, each frame while typing:
 
 ### Milestone 4: Native fragment wrapping
 
+#### Publication profile at `d2f12698`
+
+Line rebuilding, not range overhead, dominates semantic publication during gallery typing.
+No invalidation change followed this profile. The task required a stop when rebuilding dominated.
+The publication still rebuilds the same lines, including kept plans, footnotes, and comments.
+
+Two consecutive runs used the frozen `d2f12698` executable and the same Lua source.
+Both measured `markdown-gallery-type` and `markdown-gallery-newline` with `--attribute`, one scoring run each.
+Both used scale 1 and the normal scenario lock. The wrapper extended process deadlines to 900 seconds.
+All workloads completed. Both runs exceeded the latency budget.
+
+| Scenario | First publication p50 / p95, ms | Repeat publication p50 / p95, ms | First visible p50 / p95, ms | Repeat visible p50 / p95, ms |
+|---|---:|---:|---:|---:|
+| type | 78.5 / 196.0 | 77.1 / 162.1 | 30.3 / 152.1 | 29.3 / 149.1 |
+| newline | 82.2 / 197.1 | 55.5 / 141.5 | 32.3 / 112.1 | 26.2 / 130.7 |
+
+These are repeated baselines, not a before-and-after improvement.
+Typing attribution measured 934.17 ms of publication line invalidation first, then 1018.49 ms.
+Each run wrapped 2006 lines across 60 keys. Newline wrapped 1255 and 1257 lines across 30 keys.
+
+Temporary probes in the repeat measured publication only, excluding dispatch and later reconciliation.
+Typing publication invalidated 180 ranges and 1886 lines: three ranges and 31.43 lines per key.
+The total wrap count also includes dispatch and reconciliation work.
+
+| Typing publication work | Total, ms | ms/key | ms/range | ms/line |
+|---|---:|---:|---:|---:|
+| Line invalidation | 1018.493 | 16.975 | 5.658 | 0.5400 |
+| Render resolution and wrapping | 1001.650 | 16.694 | 5.565 | 0.5311 |
+| Render resolution, included above | 631.815 | 10.530 | 3.510 | 0.3350 |
+| Wrapping, excluding render resolution | 369.835 | 6.164 | 2.055 | 0.1961 |
+| Wrap setup | 7.685 | 0.128 | 0.043 | 0.0041 |
+| Wrap commit and row-map updates | 4.607 | 0.077 | 0.026 | 0.0024 |
+| Render cache clearing | 1.063 | 0.018 | 0.006 | 0.0006 |
+| Width cache scans | 0.123 | 0.002 | 0.001 | 0.0001 |
+
+Line rebuilding accounts for 98.3% of line invalidation.
+Image pruning adds 0.062 ms/key; metric invalidation adds 0.068 ms/key.
+The composed-row update remains deferred until a layout read. Attribution reports 0.658 ms/key across all composed-row updates.
+Batching ranges cannot remove the dominant render and wrap work.
+
+Newline publication invalidated one range and two lines per key.
+Its line invalidation took 0.751 ms/key: 0.450 ms render resolution, 0.181 ms wrapping, and 0.121 ms other work.
+Later reconciliation wrapped 1017 lines, or 33.9 lines per key. That work is outside this publication timer.
+
+The local reports are `tools/perf-results/scenarios/20261022-171706/report.md` and `20261022-171941/report.md`.
+Temporary probes were removed. No new dependency rule or native implementation was added.
+
+All six requested layout-reference files passed: 506 tests, including footnote renumbering and multi-line comments.
+The full UI run passed 2986 tests, failed five, and skipped three.
+Failures were in formatting, language detection, line hints, link completion, and Sidebar status.
+Separate file runs passed line hints but repeated the other failures. Formatting also showed an intermittent output failure.
+This worktree lacks the optional Go and TOML language plugins. No runtime source changed during these checks.
+
 The renderer already measures widths and wraps plain text in C.
 Extend that wrap to lines with hidden spans, remapped text, and fixed-width widgets.
 Lua resolves the fragments of a line. C finds the breaks for many lines in one call.
