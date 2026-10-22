@@ -414,6 +414,7 @@ static void drain_retired_projects(void);
 static void service_sidebar(void);
 static void notify_sidebar_changes(void);
 static void broadcast_color_theme(ShellProject *source);
+static void broadcast_zoom(ShellProject *source);
 static void preview_color_theme(ShellProject *source, const char *preview, uint32_t size);
 static void end_color_theme_preview(ShellProject *source);
 static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size);
@@ -1038,6 +1039,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_HAND_OFF:
   case ANVIL_SURFACE_MSG_RESTART:
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
+  case ANVIL_SURFACE_MSG_ZOOM_SAVED:
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
   case ANVIL_SURFACE_MSG_RUNTIME_READY:
     return size == 0;
@@ -3267,6 +3269,9 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
     broadcast_color_theme(project);
+    break;
+  case ANVIL_SURFACE_MSG_ZOOM_SAVED:
+    broadcast_zoom(project);
     break;
   case ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW:
     preview_color_theme(project, (const char *)payload, message->size);
@@ -6044,6 +6049,17 @@ static void broadcast_color_theme(ShellProject *source) {
     count++;
   }
   SDL_Log("Shell Color Theme saved by Project %u; notified %d processes", source->id, count);
+}
+
+/* The Zoom is one setting for every Project. The saving Project already shows it. */
+static void broadcast_zoom(ShellProject *source) {
+  int count = 0;
+  for (ShellProject *item = shell.projects; item; item = item->next)
+    if (item != source && item->connected) {
+      shell_send(item, ANVIL_SURFACE_MSG_ZOOM_CHANGED, NULL, 0, NULL, 0);
+      count++;
+    }
+  SDL_Log("Shell Zoom saved by Project %u; notified %d processes", source->id, count);
 }
 
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value) {

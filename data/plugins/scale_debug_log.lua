@@ -27,14 +27,13 @@ end
 
 local function log_state(reason, extra)
   append_log(string.format(
-    "%s SCALE=%s DEFAULT_SCALE=%s ui_font=%s code_font=%s env_scale=%s env_code=%s%s",
+    "%s SCALE=%s DEFAULT_SCALE=%s ui_font=%s code_font=%s env_scale=%s%s",
     reason,
     tostring(SCALE),
     tostring(DEFAULT_SCALE),
     tostring(ui_font_size()),
     tostring(code_font_size()),
-    tostring(os.getenv("ANVIL_SCALE_RESTART") or os.getenv("ANVIL_SCALE")),
-    tostring(os.getenv("ANVIL_SCALE_CODE_RESTART")),
+    tostring(os.getenv("ANVIL_SCALE")),
     extra and (" " .. extra) or ""
   ))
 end

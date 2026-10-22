@@ -39,7 +39,6 @@ test.describe("Zoom caret centering", function()
       coroutine.yield(0.05)
       local old_live, old_active = config.markdown_live_editor, core.active_view
       local old_scale, old_code = scale.get(), scale.get_code()
-      local zoom_state = scale.save_workspace_state() or false
       local old_width, old_height = core.root_panel.size.x, core.root_panel.size.y
       panes.reset_for_tests()
       core.root_panel.size.x, core.root_panel.size.y = 600, 500
@@ -91,7 +90,6 @@ test.describe("Zoom caret centering", function()
       core.active_view = old_active
       panes.reset_for_tests()
       view:on_close()
-      scale.load_workspace_state(zoom_state)
       scale.set(old_scale)
       scale.set_code(old_code)
       config.markdown_live_editor = old_live

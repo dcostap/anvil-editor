@@ -6,7 +6,6 @@ local storage = require "core.storage"
 local project_paths = require "core.project_paths"
 local language_mode = require "core.language_mode"
 local panes = require "core.panes"
-local scale = require "plugins.scale"
 local diffview = require "plugins.diffview"
 local untitled_recovery = require "plugins.untitled_recovery"
 
@@ -317,7 +316,6 @@ local function save_workspace(during_use)
     project_paths = project_paths.save_workspace_state(),
     language_modes = language_mode.save_workspace_state(),
     visited_files = core.prune_visited_files and core.prune_visited_files() or core.visited_files,
-    zoom = scale.save_workspace_state(),
     diff_layout = diffview.save_workspace_state(),
   }
   local snapshot_ended = system.get_time()
@@ -397,7 +395,6 @@ local function load_workspace()
     local function restore_workspace_state()
       if empty_window_requested() then
         core.visited_files = {}
-        scale.load_workspace_state(nil)
         diffview.load_workspace_state(nil)
         language_mode.load_workspace_state(nil)
         project_paths.load_workspace_state(nil)
@@ -407,7 +404,6 @@ local function load_workspace()
       end
 
       local workspace = consume_workspace(core.root_project().path)
-      scale.load_workspace_state(workspace and workspace.zoom)
       diffview.load_workspace_state(workspace and workspace.diff_layout)
       language_mode.load_workspace_state(workspace and workspace.language_modes)
       local _, project_paths_changed = project_paths.load_workspace_state(

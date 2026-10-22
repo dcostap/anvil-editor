@@ -530,6 +530,12 @@ static void dispatch_message(HostedMessage *message) {
       SDL_Log("Color Theme change event dropped: %s", SDL_GetError());
     goto complete;
   }
+  if (type == ANVIL_SURFACE_MSG_ZOOM_CHANGED) {
+    CustomEvent event = {0};
+    if (!push_custom_event("zoomchanged", &event))
+      SDL_Log("Zoom change event dropped: %s", SDL_GetError());
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEWED) {
     CustomEvent event = {0};
     event.data1 = _strdup((const char *)payload);
@@ -746,6 +752,7 @@ static int SDLCALL reader_thread(void *data) {
       case ANVIL_SURFACE_MSG_PREPARE_UPDATE:
       case ANVIL_SURFACE_MSG_SIDEBAR_CHANGED:
       case ANVIL_SURFACE_MSG_COLOR_THEME_CHANGED:
+      case ANVIL_SURFACE_MSG_ZOOM_CHANGED:
         if (size) goto failed;
         break;
       case ANVIL_SURFACE_MSG_DIALOG_RESULT:
@@ -1057,6 +1064,12 @@ bool anvil_hosted_surface_toggle_sidebar(void) {
 bool anvil_hosted_surface_color_theme_saved(void) {
   if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_COLOR_THEME_SAVED, NULL, 0);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_zoom_saved(void) {
+  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  send_message(ANVIL_SURFACE_MSG_ZOOM_SAVED, NULL, 0);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1542,6 +1555,7 @@ bool anvil_hosted_surface_open_project_picker(void) { return false; }
 bool anvil_hosted_surface_preview_color_theme(const char *preview) { (void)preview; return false; }
 bool anvil_hosted_surface_unload_project(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_color_theme_saved(void) { return false; }
+bool anvil_hosted_surface_zoom_saved(void) { return false; }
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }
 bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y) { (void)row_id; (void)x; (void)y; return false; }
 bool anvil_hosted_surface_set_panes(const char *panes) { (void)panes; return false; }

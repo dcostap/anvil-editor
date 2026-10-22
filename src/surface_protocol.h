@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 28u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 29u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -46,6 +46,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_PREPARE_UPDATE = 12,
   /* Focus or close one of this Project's Panes. Payload: AnvilSurfacePaneAction. */
   ANVIL_SURFACE_MSG_PANE_ACTION = 13,
+  /* Another process saved the Zoom; apply the saved one. No payload. */
+  ANVIL_SURFACE_MSG_ZOOM_CHANGED = 14,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -101,6 +103,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_PANE_REQUEST = 102,
   /* Lua startup and Workspace restore finished. Independent of rendering. No payload. */
   ANVIL_SURFACE_MSG_RUNTIME_READY = 103,
+  /* This Project saved the Zoom. The shell tells every other Project. No payload. */
+  ANVIL_SURFACE_MSG_ZOOM_SAVED = 104,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */

@@ -4,6 +4,7 @@ local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
 local keymap = require "core.keymap"
+local storage = require "core.storage"
 local style = require "core.style"
 
 ---Configuration options for `scale` plugin.
@@ -20,9 +21,9 @@ local FONT_ZOOM_STEP = 1
 local current_scale = SCALE
 local current_code_scale = SCALE
 local configured_scale = tonumber(os.getenv("ANVIL_SCALE"))
-local restart_scale = tonumber(os.getenv("ANVIL_SCALE_RESTART"))
-local user_scale = restart_scale or configured_scale
-local project_zoom_modified = false
+-- Zoom is one setting for every Project. USERDIR keeps it as ratios over the base scale, so each process
+-- applies it over its own display scale.
+local ZOOM_STORAGE, ZOOM_KEY = "zoom", "global"
 local base_font_size = style.font:get_size() / SCALE
 
 local function scale_font_once(font, factor, seen)
@@ -67,7 +68,7 @@ end
 ---@class plugins.scale
 local scale = {}
 
-local function project_default_scale()
+local function base_scale()
   if configured_scale then return common.clamp(configured_scale, MIN_SCALE, MAX_SCALE) end
   if config.plugins.scale.autodetect == false
   and type(config.plugins.scale.default_scale) == "number" then
@@ -77,7 +78,7 @@ local function project_default_scale()
 end
 
 local function zoomed_scale(current, direction)
-  local default = project_default_scale()
+  local default = base_scale()
   local current_size = common.round(current / default * base_font_size)
   local min_size = math.ceil(MIN_SCALE / default * base_font_size)
   local max_size = math.floor(MAX_SCALE / default * base_font_size)
@@ -87,12 +88,16 @@ local function zoomed_scale(current, direction)
   local target = common.clamp(
     default * target_size / base_font_size, MIN_SCALE, MAX_SCALE
   )
-  -- Keep generated Project Zoom values stable after Lua serialization.
+  -- Keep generated Zoom values stable after Lua serialization.
   return math.floor(target * 1000000000000 + 0.5) / 1000000000000
 end
 
+local function zoom_ratio(scale)
+  return math.floor(scale / base_scale() * 1000000000000 + 0.5) / 1000000000000
+end
+
 local function logical_font_size(scale)
-  return common.round(scale / project_default_scale() * base_font_size)
+  return common.round(scale / base_scale() * base_font_size)
 end
 
 local function show_zoom_message()
@@ -103,19 +108,26 @@ local function show_zoom_message()
   end
 end
 
-local function at_project_default_zoom()
-  local default = project_default_scale()
-  return math.abs(current_scale - default) < 0.000001
-    and math.abs(current_code_scale - default) < 0.000001
+-- Other Projects apply the saved Zoom when the shell reports the change.
+local function save_zoom()
+  local interface, code = zoom_ratio(current_scale), zoom_ratio(current_code_scale)
+  storage.save(ZOOM_STORAGE, ZOOM_KEY, { interface = interface, code = code })
+  local shared = system.zoom_saved()
+  core.log_quiet("Zoom saved: interface=%.4f code=%.4f shared=%s", interface, code, tostring(shared))
 end
 
-local function mark_project_zoom_changed()
-  project_zoom_modified = not at_project_default_zoom()
+local function apply_saved_zoom(reason)
+  local saved = storage.load(ZOOM_STORAGE, ZOOM_KEY)
+  local interface = type(saved) == "table" and tonumber(saved.interface) or 1
+  local code = type(saved) == "table" and tonumber(saved.code) or interface
+  local base = base_scale()
+  scale.set(common.clamp(base * interface, MIN_SCALE, MAX_SCALE))
+  scale.set_code(common.clamp(base * code, MIN_SCALE, MAX_SCALE))
+  core.log_quiet("Zoom applied (%s): interface=%.4f code=%.4f base=%.4f", reason, interface, code, base)
 end
 
 function scale.set(scale)
   if current_scale == scale then return end
-  system.setenv("ANVIL_SCALE_RESTART", scale)
 
   scale = common.clamp(scale, MIN_SCALE, MAX_SCALE)
 
@@ -200,7 +212,6 @@ end
 
 function scale.set_code(scale)
   if current_code_scale == scale then return end
-  system.setenv("ANVIL_SCALE_CODE_RESTART", scale)
 
   scale = common.clamp(scale, MIN_SCALE, MAX_SCALE)
 
@@ -231,25 +242,25 @@ end
 
 function scale.reset()
   local reset_code = current_scale == current_code_scale
-  scale.set(project_default_scale())
+  scale.set(base_scale())
   if reset_code then
-    scale.set_code(project_default_scale())
+    scale.set_code(base_scale())
   end
-  mark_project_zoom_changed()
+  save_zoom()
   show_zoom_message()
 end
 
 function scale.increase()
   scale.set(zoomed_scale(current_scale, 1))
   scale.set_code(zoomed_scale(current_code_scale, 1))
-  mark_project_zoom_changed()
+  save_zoom()
   show_zoom_message()
 end
 
 function scale.decrease()
   scale.set(zoomed_scale(current_scale, -1))
   scale.set_code(zoomed_scale(current_code_scale, -1))
-  mark_project_zoom_changed()
+  save_zoom()
   show_zoom_message()
 end
 
@@ -257,64 +268,33 @@ function scale.get_code()
   return current_code_scale
 end
 
-function scale.save_workspace_state()
-  if not project_zoom_modified or at_project_default_zoom() then
-    project_zoom_modified = false
-    return nil
-  end
-  return { interface = current_scale, code = current_code_scale }
-end
-
-function scale.load_workspace_state(state)
-  local interface, code
-  if type(state) == "table" then
-    interface = tonumber(state.interface)
-    code = tonumber(state.code) or interface
-  elseif type(state) == "number" then
-    interface, code = state, state
-  end
-  local explicit = interface ~= nil
-  if explicit then
-    interface = common.clamp(interface, MIN_SCALE, MAX_SCALE)
-    code = common.clamp(code or interface, MIN_SCALE, MAX_SCALE)
-  else
-    interface = project_default_scale()
-    code = interface
-  end
-  scale.set(interface)
-  scale.set_code(code)
-  project_zoom_modified = explicit and not at_project_default_zoom()
-  core.log_quiet(
-    "Project Zoom: %s interface=%.4f code=%.4f",
-    project_zoom_modified and "restored" or "default",
-    current_scale,
-    current_code_scale
-  )
-end
-
 function scale.reset_code()
-  scale.set_code(DEFAULT_SCALE)
+  scale.set_code(base_scale())
+  save_zoom()
   show_zoom_message()
 end
 
 function scale.increase_code()
   scale.set_code(zoomed_scale(current_code_scale, 1))
+  save_zoom()
   show_zoom_message()
 end
 
 function scale.decrease_code()
   scale.set_code(zoomed_scale(current_code_scale, -1))
+  save_zoom()
   show_zoom_message()
 end
 
-if DEFAULT_SCALE ~= config.plugins.scale.default_scale then
-  if type(config.plugins.scale.default_scale) == "number" then
-    scale.set(config.plugins.scale.default_scale)
-  end
+local on_event = core.on_event
+function core.on_event(type, ...)
+  if type ~= "zoomchanged" then return on_event(type, ...) end
+  apply_saved_zoom("another Project saved it")
+  return true
 end
 
 local scale_set_by_user = 0
-local first_on_apply_scale = user_scale and true or false
+local first_on_apply_scale = configured_scale and true or false
 
 -- The config specification used by gui generators
 config.plugins.scale.config_spec = {
@@ -327,13 +307,7 @@ config.plugins.scale.config_spec = {
     default = true,
     on_apply = function(enabled)
       if not first_on_apply_scale then
-        if not enabled then
-          scale.set(config.plugins.scale.default_scale)
-          scale.set_code(config.plugins.scale.default_scale)
-        else
-          scale.set(DEFAULT_SCALE)
-          scale.set_code(DEFAULT_SCALE)
-        end
+        apply_saved_zoom(enabled and "display scale" or "default scale")
       end
     end
   },
@@ -357,10 +331,7 @@ config.plugins.scale.config_spec = {
         if scale_set_by_user == 0 then return end
       end
       if config.plugins.scale.autodetect then return end
-      if value ~= current_scale then
-        scale.set(value)
-        scale.set_code(value)
-      end
+      apply_saved_zoom("default scale")
     end
   },
   {
@@ -415,17 +386,8 @@ if config.plugins.scale.use_mousewheel then
   }
 end
 
--- Apply previous scale on restart set on ANVIL_SCALE_RESTART and
--- ANVIL_SCALE_CODE_RESTART or custom ANVIL_SCALE if set by user
-if user_scale then
-  -- to prevent issues on restart we defer it
-  core.add_thread(function()
-    scale.set(user_scale)
-    scale.set_code(
-      tonumber(os.getenv("ANVIL_SCALE_CODE_RESTART")) or user_scale
-    )
-  end)
-end
+-- Defer the saved Zoom until startup configuration has loaded its fonts.
+core.add_thread(function() apply_saved_zoom("startup") end)
 
 
 return scale

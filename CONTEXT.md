@@ -255,6 +255,7 @@ _Avoid_: Raw source selection
 
 **Zoom**:
 The user-facing way to make Anvil's interface and Buffer text larger or smaller without changing Buffer contents.
+One Zoom applies to every Project.
 _Avoid_: Scale in user-facing command names
 
 **Image Zoom**:

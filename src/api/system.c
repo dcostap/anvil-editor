@@ -1937,6 +1937,12 @@ static int f_color_theme_saved(lua_State *L) {
   return 1;
 }
 
+/* Returns false outside a shell, where no other Project shows this Zoom. */
+static int f_zoom_saved(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_zoom_saved());
+  return 1;
+}
+
 /* Each field is an {r, g, b[, a]} colour; alpha defaults to 255. */
 static uint32_t check_shell_color(lua_State *L, int table, const char *field) {
   lua_getfield(L, table, field);
@@ -2059,6 +2065,11 @@ static int paneaction_callback(lua_State *L, SDL_Event *event) {
 static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   (void)event;
   lua_pushstring(L, "colorthemechanged");
+  return 1;
+}
+static int zoomchanged_callback(lua_State *L, SDL_Event *event) {
+  (void)event;
+  lua_pushstring(L, "zoomchanged");
   return 1;
 }
 static int colorthemepreview_callback(lua_State *L, SDL_Event *event) {
@@ -2696,6 +2707,7 @@ static const luaL_Reg lib[] = {
   { "show_project_menu",     f_show_project_menu     },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
+  { "zoom_saved",            f_zoom_saved            },
   { "set_shell_colors", f_set_shell_colors },
   { "preview_color_theme", f_preview_color_theme },
   { "get_anvil_window_id",   f_get_anvil_window_id   },
@@ -2752,6 +2764,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Color Theme event: %s", SDL_GetError());
   if (!register_custom_event("colorthemepreview", colorthemepreview_callback))
     return luaL_error(L, "Unable to register the Color Theme preview event: %s", SDL_GetError());
+  if (!register_custom_event("zoomchanged", zoomchanged_callback))
+    return luaL_error(L, "Unable to register the Zoom event: %s", SDL_GetError());
   if (!register_custom_event("focusterminal", focusterminal_callback))
     return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
   if (!register_custom_event("paneaction", paneaction_callback))

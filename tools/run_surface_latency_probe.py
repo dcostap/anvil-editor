@@ -132,7 +132,7 @@ def main() -> int:
     parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
         "restore-loaded",
-        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "recovery", "shell-empty", "shell-sidebar",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -200,6 +200,8 @@ def main() -> int:
                         fixture = "shell_hang_probe.lua"
                     if action in ("theme-global", "theme-empty", "reveal"):
                         fixture = "color_theme_probe.lua"
+                    if action == "zoom-global":
+                        fixture = "zoom_probe.lua"
                     if action == "select-hold":
                         fixture = "shell_selection_probe.lua"
                     if action == "terminal-focus":
@@ -237,7 +239,7 @@ def main() -> int:
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
                     # A hand-off needs the IPC check that finds the Project in another instance.
-                    if action != "launch-handoff" and (action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch")):
+                    if action != "launch-handoff" and (action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch")):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     if action in ("theme-global", "theme-empty", "reveal"):

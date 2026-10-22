@@ -8,28 +8,47 @@ test.describe("font scaling", function()
     if context.original_status_message then
       core.status_bar.show_message = context.original_status_message
     end
-    if context.project_zoom_state ~= nil then
-      scale.load_workspace_state(context.project_zoom_state)
-    end
+    if context.default_scale then DEFAULT_SCALE = context.default_scale end
     if context.interface_scale then scale.set(context.interface_scale) end
     if context.code_scale then scale.set_code(context.code_scale) end
   end)
 
-  test.it("stores Project Zoom only after a user change", function(context)
-    context.project_zoom_state = scale.save_workspace_state() or false
+  test.it("applies a Zoom that another process saved", function(context)
     context.interface_scale = scale.get()
     context.code_scale = scale.get_code()
-
-    scale.load_workspace_state(nil)
-    test.is_nil(scale.save_workspace_state())
-
+    scale.set(DEFAULT_SCALE)
+    scale.set_code(DEFAULT_SCALE)
     scale.increase()
-    local saved = test.not_nil(scale.save_workspace_state())
-    test.equal(saved.interface, scale.get())
-    test.equal(saved.code, scale.get_code())
+    scale.increase_code()
+    local interface, code = scale.get(), scale.get_code()
 
-    scale.reset()
-    test.is_nil(scale.save_workspace_state())
+    -- Another process starts at the display scale, then the shell reports the saved Zoom.
+    scale.set(DEFAULT_SCALE)
+    scale.set_code(DEFAULT_SCALE)
+    core.on_event("zoomchanged")
+
+    test.near(scale.get(), interface, 0.000001)
+    test.near(scale.get_code(), code, 0.000001)
+  end)
+
+  test.it("keeps a saved Zoom relative to the display scale", function(context)
+    context.interface_scale = scale.get()
+    context.code_scale = scale.get_code()
+    context.default_scale = DEFAULT_SCALE
+    DEFAULT_SCALE = 1
+    scale.set(1)
+    scale.set_code(1)
+    scale.increase()
+    local ratio = scale.get()
+
+    -- A process on a display at twice the scale.
+    DEFAULT_SCALE = 2
+    scale.set(2)
+    scale.set_code(2)
+    core.on_event("zoomchanged")
+
+    test.near(scale.get(), 2 * ratio, 0.000001)
+    test.near(scale.get_code(), 2 * ratio, 0.000001)
   end)
 
   test.it("scales shared interface fallbacks once", function(context)
