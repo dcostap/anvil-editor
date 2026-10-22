@@ -279,6 +279,22 @@ For output that must stream while the process runs, such as ripgrep, use `core.p
 Cancel each stream you stop reading; an unread stream holds its worker once its output window fills.
 The UI loop drains named pools and shuts them down with the system pool.
 
+## Native code for hot loops
+
+Keep editor behavior in Lua by default. This includes providers, Markdown semantics, and plugin logic.
+
+An agent may suggest that a hot loop move to C. Suggest it only when all of these are true:
+
+- A measurement shows that the loop has a material cost, for example in a profile or a scenario counter.
+- The loop works on plain data, such as arrays of rows, heights, or text positions.
+- Lua can call the C code once for each edit, batch, or frame.
+  A LuaJIT trace stops at each C call, so a call for each item can be slower than Lua.
+
+Do not move code to C without the user's permission.
+In the suggestion, give the measurement, the size of the C change, and the Lua code that it removes.
+
+Add native modules under `src/api` with the portable Lua C API, not FFI. The PUC Lua build must still work.
+
 ## Tree-sitter language support
 
 Read [Tree-sitter language maps](data/treesitter/languages/README.md) before adding a language or changing symbol selection.
