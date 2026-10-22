@@ -369,7 +369,8 @@ The MP4 doubles pixel size to make the caret easier to see. The PNG frames keep 
 The terminal reports whether the captured state matches the test failure.
 Do not call a captured edit a reproduced visual bug when it reports `no`.
 
-The callout replay pauses worker result delivery for four frames.
+The callout replay pauses worker result delivery and input-thread settling for four frames.
+It checks that the Markdown parse stays pending during each capture.
 This shows the pending presentation that its in-process test inspects.
 The task replay moves the caret away, then opens Markdown Source Mode to show the changed indentation.
 Capture and encoding can change timing. Use the PNG frames and `frames.csv` to inspect each stage.

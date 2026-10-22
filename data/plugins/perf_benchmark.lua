@@ -1431,16 +1431,24 @@ local function record_video()
     )
     benchmark.video_reproduced = (view:get_line_render(1) or {}).markdown_provenance ~= "current"
   elseif benchmark.scenario == "markdown-callout-shift" then
-    -- The in-process test inspects pending presentation before worker delivery.
+    -- Pause both publication paths so each pending capture sees the same state.
     local drain_limit = config.worker_pool_drain_max_messages
+    local settle_pending = model.settle_pending
     config.worker_pool_drain_max_messages = 0
+    model.settle_pending = function() end
+    core.log_quiet("Markdown pending replay paused worker delivery and input-thread settling")
     assert(command.perform("core:newline"), "newline action failed")
     assert(view.buffer.lines[2] == "> [!NOTE] Callout words that wrap across several visual rows\n",
       "the callout did not move to line two")
     assert(model.peek(view.buffer).status == "pending", "Markdown did not enter pending state")
     benchmark.action_count = 1
-    for _ = 1, 4 do capture("after-edit") end
+    for _ = 1, 4 do
+      capture("after-edit")
+      assert(model.peek(view.buffer).status == "pending", "Markdown published during the pending capture")
+    end
     config.worker_pool_drain_max_messages = drain_limit
+    model.settle_pending = settle_pending
+    core.log_quiet("Markdown pending replay resumed worker delivery and input-thread settling")
     local deadline = system.get_time() + 5
     while model.peek(view.buffer).status ~= "ready" and system.get_time() < deadline do
       capture("after-edit")
