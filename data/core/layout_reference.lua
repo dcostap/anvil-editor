@@ -6,6 +6,7 @@
 --
 -- This is a debug and test tool. Set ANVIL_LAYOUT_REFERENCE=1 to compare the
 -- Editors that each Lua test opens, after the test passes.
+-- Pending horizontal extent scans skip only the scrollable size comparison.
 local core = require "core"
 local style = require "core.style"
 local linewrapping = require "core.linewrapping"
@@ -74,6 +75,7 @@ function reference.capture(view)
     rows = rows,
     lines = lines,
     scrollable_size = view:get_scrollable_size(),
+    horizontal_extent_pending = view:is_horizontal_extent_scan_pending(),
     scroll_y = view.scroll.y,
     height = view.size.y,
   }
@@ -147,7 +149,11 @@ local function diff(actual, expected, points, actual_hits, expected_hits)
         "line %d: row %d, reference %d", line, actual.lines[line], row)
     end
   end
-  if actual.scrollable_size ~= expected.scrollable_size then
+  -- Pending widths retain the earlier extent and horizontal scroll target.
+  -- A fresh view has no earlier extent. Compare size only after both scans finish.
+  if actual.horizontal_extent_pending or expected.horizontal_extent_pending then
+    report.skipped_size = "horizontal extent scan"
+  elseif actual.scrollable_size ~= expected.scrollable_size then
     add("size", false, "scrollable size %s, reference %s", actual.scrollable_size, expected.scrollable_size)
   end
   for i, point in ipairs(points) do
@@ -253,7 +259,9 @@ local function prepare(view, ref, focused)
 end
 
 local function same_snapshot(a, b)
-  if #a.rows ~= #b.rows or a.scrollable_size ~= b.scrollable_size then return false end
+  if #a.rows ~= #b.rows then return false end
+  if not (a.horizontal_extent_pending or b.horizontal_extent_pending)
+    and a.scrollable_size ~= b.scrollable_size then return false end
   for row = 1, #a.rows do
     local ra, rb = a.rows[row], b.rows[row]
     if ra.key ~= rb.key or ra.height ~= rb.height or ra.y ~= rb.y then return false end
@@ -319,7 +327,7 @@ end
 ---`opts.ui_frames`, the caller must let async work finish first; see pending_reason.
 ---@param view core.textview
 ---@param opts? { ui_frames: boolean? } Let the UI run frames for async work. Call from a coroutine.
----@return table report { ok, count, visible, kinds, mismatches, summary }
+---@return table report { ok, count, visible, kinds, mismatches, summary, skipped_size? }
 function reference.compare(view, opts)
   local ui_frames = opts and opts.ui_frames
   -- Earlier work, such as a style change, settles before the first measurement.
@@ -374,6 +382,10 @@ function reference.compare(view, opts)
     end
   end
   core.log_quiet("Layout reference for %s: %s", view_name(view), report.summary)
+  if report.skipped_size then
+    core.log_quiet("Layout reference skips scrollable size for %s: %s",
+      view_name(view), report.skipped_size)
+  end
   for _, line in ipairs(report.mismatches) do
     core.log_quiet("Layout reference mismatch: %s", line)
   end

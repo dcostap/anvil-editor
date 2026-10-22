@@ -268,6 +268,8 @@ The fresh Editor gets the same presentation inputs as the view under test:
 
 The report compares row keys, row positions, row heights, y offsets, line-to-row mapping, scrollable size, and a hit test in each visible row.
 It does not compare horizontal extent or drawn pixels.
+Pending horizontal extent scans skip only the scrollable size comparison. Row comparisons still run.
+The report sets `skipped_size`, and a quiet log records the reason.
 
 The reference skips a view in these conditions:
 
@@ -308,11 +310,15 @@ Layout drift:
    - Test: `ui/markdown_layout_stability.lua` > "keeps measurements across consecutive edits without wrapping".
    - Cause, confirmed in Milestone 1: each line break drops the measured rows while the parse is pending. The rebuild measures the lines below the edit as raw source, so a heading gets the body height. The publication invalidates only the ranges that the parse changed. The edited view has the same problem off-screen.
 
-Not explained:
+Reference error, now fixed:
 
-2. `ui/markdown_live_editor.lua` > "toggles and persists view-local Source Mode without moving editor state" reports a scrollable size of 209 px. A fresh view gives 200 px. The row is off-screen.
-   - This occurs only when the complete file runs. The same steps in a separate file match, in both comparison orders.
-   - A state change from an earlier test in the file is the probable cause. Not examined further.
+2. `ui/markdown_live_editor.lua` > "toggles and persists view-local Source Mode without moving editor state" reports 209 px against 200 px.
+   - No row differs. Both views give heights of 57, 24, and 24 px.
+   - Both horizontal extent scans are pending. The toggled view retains a required width for its horizontal scroll target.
+   - Its provisional content width is 507 px, with a 13 px horizontal scrollbar. The fresh view has no scrollbar.
+   - The scroll context calculation gives 209 px against 200 px. The report's `offscreen` label describes size, not a row.
+   - The reference now compares scrollable size only after both extent scans finish. It still compares every row while scans run.
+   - The mixed-row Source Mode test checks both modes, with wrapping on and off, before and after the scans finish.
 
 Not layout drift. These tests change an input of the view and restore it in the test body, before the check:
 

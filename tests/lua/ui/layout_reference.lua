@@ -110,4 +110,21 @@ test.describe("Layout reference", function()
     buffer:insert(1, 1, "x")
     test.equal(layout_reference.pending_reason(view), "Markdown model publication")
   end)
+
+  test.it("checks off-screen row heights while horizontal extent scans are pending", function(context)
+    local view = make_view(context, "pending-width.txt", string.rep("line\n", 40))
+    view:set_wrapping_enabled(false)
+    local heights = {}
+    view:add_visual_metric_provider("test.heights", {
+      line_height = function(_, _, line) return heights[line] end,
+    })
+    view:update()
+    view:get_scrollable_size()
+    heights[30] = view:get_line_height() * 3
+    local report = layout_reference.compare(view)
+    heights[30] = nil
+    test.equal(report.skipped_size, "horizontal extent scan")
+    test.not_ok(report.ok, "pending widths must not hide stale row heights")
+    test.ok((report.kinds.height or 0) >= 1, report.summary)
+  end)
 end)

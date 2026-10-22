@@ -50,10 +50,11 @@ local function counts(view)
   return { composed = diagnostics.composed_row_builds, heights = diagnostics.metric_full_rebuilds }
 end
 
-local function same_as_fresh_view(view)
-  local report = layout_reference.compare(view)
+local function same_as_fresh_view(view, opts)
+  local report = layout_reference.compare(view, opts)
   test.ok(not report.skipped, "the view must be compared: " .. report.summary)
   test.ok(report.ok, report.summary .. "\n" .. table.concat(report.mismatches or {}, "\n"))
+  return report
 end
 
 local FOLDED_NOTE = "Paragraph\n\n> [!note]- Folded\n> hidden body\n> second body line\n\n"
@@ -124,6 +125,30 @@ test.describe("Incremental layout rows", function()
     read_layout(view)
     test.same(counts(view), before)
     same_as_fresh_view(view)
+  end)
+
+  test.it("matches a fresh layout after Source Mode changes with off-screen Markdown rows", function(context)
+    local view, buffer = make_view(context, "source-mode.md", table.concat({
+      "# Title", "", string.rep("Long paragraph with words that wrap. ", 30), "",
+      "## Heading below the viewport", "", "```lua", "print('hello')", "```", "",
+      "| Name | Value |", "| --- | --- |", "| first | second |", "", "Last paragraph.",
+    }, "\n"), 420)
+    view.size.y = 200
+    view:with_selection_state(function() buffer:set_selection(1, 1) end)
+    for _, wrapped in ipairs({ true, false }) do
+      view:set_wrapping_enabled(wrapped)
+      ready(view)
+      read_layout(view)
+      if not wrapped then view.scroll.x, view.scroll.to.x = 7, 7 end
+      for _, source in ipairs({ true, false }) do
+        test.ok(markdown.live_render.set_source_mode(view, source, "test-layout"))
+        ready(view)
+        read_layout(view)
+        same_as_fresh_view(view)
+        local report = same_as_fresh_view(view, { ui_frames = true })
+        test.equal(report.skipped_size, nil, "settled extents must be compared")
+      end
+    end
   end)
 
   test.it("updates only the edited line's rows below a collapsed Callout", function(context)
