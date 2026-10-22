@@ -218,8 +218,11 @@ test.describe("Terminal View", function()
       if pane then panes.close(pane, { force = true }) else view:on_close() end
     end
     panes.reset_for_tests()
+    if context.link_buffer then core.buffer_registry:remove(context.link_buffer, true) end
+    if context.link_cwd then system.chdir(context.link_cwd) end
     if context.activation_path then os.remove(context.activation_path) end
     if context.drop_folder then test.ok(test.remove_tree(context.drop_folder)) end
+    if context.link_folder then test.ok(test.remove_tree(context.link_folder)) end
     if context.backpressure_path then
       local deadline = system.get_time() + 5
       while not os.remove(context.backpressure_path) and system.get_time() < deadline do
@@ -1277,6 +1280,41 @@ test.describe("Terminal View", function()
     test.equal(#opened, 2)
     keymap.modkeys.ctrl = false
     system.open_in_system = previous_open
+  end)
+
+  test.it("opens a relative hyperlink from its label using the terminal directory", function(context)
+    context.link_cwd = system.getcwd()
+    local folder = USERDIR .. PATHSEP .. "terminal-relative-link"
+    context.link_folder = folder
+    test.ok(common.mkdirp(folder .. PATHSEP .. "plans"))
+    local path = folder .. PATHSEP .. "plans" .. PATHSEP .. "SPARE_PROJECT_PROCESS_PLAN.md"
+    local file = assert(io.open(path, "wb"))
+    file:write("# Spare Project process\n")
+    file:close()
+    local view = terminal.open { cwd = folder, focus = true }
+    local session = context.sessions[1]
+    session.hyperlink = function(_, col, row)
+      if row == 0 and col >= 9 and col <= 16 then
+        return "plans/SPARE_PROJECT_PROCESS_PLAN.md"
+      end
+    end
+    view.snapshot.mouse_tracking = true
+    keymap.modkeys.ctrl = true
+    local x, y = 7 + view.cell_width * 10, 7
+    view:on_mouse_moved(x, y, 0, 0)
+    local cursor, point = view.cursor, view.hover_point
+    view:on_mouse_pressed("left", x, y)
+    view:on_mouse_released("left", x, y)
+    keymap.modkeys.ctrl = false
+    view:clear_point_hover()
+    context.link_buffer = core.active_view.buffer
+
+    test.equal(cursor, "hand")
+    test.ok(point and common.path_equals(point.path, path))
+    test.same({ point.col, point.end_col, point.row }, { 9, 16, 0 })
+    test.equal(#session.mouse_events, 0)
+    test.ok(core.active_view.buffer)
+    test.ok(common.path_equals(core.active_view.buffer.abs_filename, path))
   end)
 
   test.it("accepts URI schemes without case-sensitive matching", function(context)

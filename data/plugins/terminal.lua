@@ -1750,6 +1750,11 @@ function TerminalView:point_of_interest_at(col, row)
     if path then point = { kind = "terminal-location", path = path } end
   elseif scheme then
     point = { kind = "uri", uri = uri }
+  elseif type(uri) == "string" and uri ~= "" and #uri <= 32768 and not uri:find("[%z%c]") then
+    -- Markdown links can name a local file without a URI scheme. Resolve the hidden target,
+    -- not its visible label, from the Terminal Session's directory.
+    local path = text_poi_locations.resolve_path(uri, self:get_cwd())
+    if path then point = { kind = "terminal-location", path = path } end
   end
   if point then return common.merge(point, self:hyperlink_extent(col, row, uri)) end
   if not self.session.row_text then return nil end
