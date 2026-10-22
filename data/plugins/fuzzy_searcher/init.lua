@@ -7276,7 +7276,9 @@ end
 function FSView:close(reason)
   if self.closed or self.closing then return end
   self.closing = true
-  local animate = reason ~= "replaced"
+  -- A Project switch closes the picker at once. The shell shows this Window's last frame until the selected
+  -- Project presents, so that frame must not show a half-closed picker.
+  local animate = reason ~= "replaced" and reason ~= "project_switch"
     and fuzzy_searcher.open_transition.begin_close(self)
   if self:is_preview_focused() then self:set_preview_interactive(false) end
   local cancel
@@ -7604,9 +7606,13 @@ function FSView:activate_create_path(r, new_group)
   local info = path and system.get_file_info(path)
   if info then
     if info.type == "dir" then
-      if not new_group then self:close() end
-      if new_group then core.open_project_in_new_window(path)
-      else core.open_project_in_same_window(path) end
+      if new_group then
+        core.open_project_in_new_window(path)
+        return
+      end
+      self:close("project_switch")
+      -- Request the Project after the next frame, which no longer shows the picker.
+      core.add_thread(function() core.open_project_in_same_window(path) end)
       return
     end
     return self:open_file_result({ kind = "path", file = path, abs_path = path, line = r.line }, new_group)
@@ -7657,7 +7663,7 @@ function FSView:confirm_folder_open(r, new_group)
   local shell = system.is_hosted_surface()
   if shell and (r.kind == "project" or r.kind == "new_project") then
     core.log_quiet("Fuzzy Searcher: opening Project in this Anvil Window without a prompt")
-    if not new_group then self:close() end
+    if not new_group then self:close("project_switch") end
     core.add_thread(function()
       core.open_project_in_same_window(path)
       self:restore_activation_focus(new_group)

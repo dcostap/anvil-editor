@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
+local config = require "core.config"
 local panes = require "core.panes"
 local project_files = require "core.project_files"
 local project_paths = require "core.project_paths"
@@ -86,6 +87,7 @@ test.describe("Project File Search folders", function()
     core.open_project_in_same_window = context.open_project_in_same_window
     core.open_project_in_new_window = context.open_project_in_new_window
     if context.is_hosted_surface then system.is_hosted_surface = context.is_hosted_surface end
+    if context.transitions ~= nil then config.transitions, core.fps = context.transitions, context.fps end
     if context.cwd then pcall(system.chdir, context.cwd) end
     if context.root then test.ok(test.remove_tree(context.root)) end
   end)
@@ -282,16 +284,23 @@ test.describe("Project File Search folders", function()
   end)
 
   test.it("opens a Project result in this Anvil Window without asking under the shell", function(context)
-    local opened, new_window
+    local opened, new_window, picker, picker_closed
+    context.transitions, context.fps = config.transitions, core.fps
+    config.transitions, core.fps = true, 60
     context.is_hosted_surface = system.is_hosted_surface
     system.is_hosted_surface = function() return true end
-    core.open_project_in_same_window = function(path) opened = path; return true end
+    core.open_project_in_same_window = function(path)
+      opened, picker_closed = path, picker.closed
+      return true
+    end
     core.open_project_in_new_window = function(path) new_window = path; return true end
 
     fuzzy_searcher.open_static_results("Projects", {
       { kind = "project", label = context.empty, project = context.empty },
     })
-    local picker = assert(core.fuzzy_searcher_active_view)
+    picker = assert(core.fuzzy_searcher_active_view)
+    -- The user sees the picker before choosing a Project.
+    coroutine.yield(0.2)
     picker.selected = 1
     picker:confirm(false)
 
@@ -299,6 +308,9 @@ test.describe("Project File Search folders", function()
     test.ok(wait_until(function() return opened ~= nil end))
     test.ok(common.path_equals(opened, context.empty))
     test.is_nil(new_window)
+    -- The shell keeps this Window's last frame until the selected Project presents. That frame must not show a
+    -- half-closed picker.
+    test.ok(picker_closed, "expected the picker to close before the Project request")
   end)
 
   test.it("offers a folder as a File Tree or Project in this Anvil Window under the shell", function(context)
