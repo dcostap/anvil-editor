@@ -994,6 +994,25 @@ test.describe("Markdown Live Preview", function()
     test.equal(decoration:line_background(view, 3), background)
   end)
 
+  test.it("keeps an unchanged published footnote plan after ordinary typing publishes", function()
+    local view, buffer = make_view(
+      "A plain paragraph\n\nB[^b] second\n\n[^b]: two\n\nplain",
+      "kept-footnote-plan.md"
+    )
+    buffer:set_selection(7, 1)
+    refresh(view)
+    view:update()
+    for line = 1, #buffer.lines do view:get_line_screen_position(line, 1) end
+    local plan = test.not_nil(view:get_line_render(3))
+
+    buffer:insert(1, 2, " word")
+
+    test.equal(view:get_line_render(3), plan, "typing replaced an unchanged published plan")
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), instance.reason)
+    test.equal(view:get_line_render(3), plan, "publication replaced a plan with unchanged inputs")
+  end)
+
   test.it("renumbers the footnote of another line after a typed reference publishes", function()
     local view, buffer = make_view(
       "A[^a] first\n\nB[^b] second\n\n[^a]: one\n\n[^b]: two\n\nplain",
@@ -1018,6 +1037,155 @@ test.describe("Markdown Live Preview", function()
     test.ok(wait_status(instance, "ready"), instance.reason)
     view:update()
     test.equal(badges(3), "1")
+  end)
+
+  test.it("keeps a resolved reference plan after ordinary typing publishes", function()
+    local view, buffer = make_view(
+      "A paragraph\n\n[Alias][ref]\n\n[ref]: Target.md\n\nplain",
+      "kept-reference-plan.md"
+    )
+    buffer:set_selection(7, 1)
+    refresh(view)
+    test.ok(wait_until(function() return visible_render_text(view, 3) == "Alias" end, 15))
+    view:update()
+    for line = 1, #buffer.lines do view:get_line_screen_position(line, 1) end
+    local plan = test.not_nil(view:get_line_render(3))
+
+    buffer:insert(1, 2, " word")
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), instance.reason)
+    test.equal(visible_render_text(view, 3), "Alias")
+    test.equal(view:get_line_render(3), plan)
+  end)
+
+  test.it("resolves a distant reference when a definition publishes", function()
+    local view, buffer = make_view("[Alias][ref]\n\nplaceholder\n\nplain", "new-reference.md")
+    buffer:set_selection(5, 1)
+    refresh(view)
+    view:update()
+    test.equal(visible_render_text(view, 1), "[Alias][ref]")
+
+    buffer:apply_edits({
+      { line1 = 3, col1 = 1, line2 = 3, col2 = #buffer.lines[3], text = "[ref]: Target.md" },
+    })
+    test.equal(visible_render_text(view, 1), "[Alias][ref]")
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), instance.reason)
+    test.ok(wait_until(function() return visible_render_text(view, 1) == "Alias" end, 15))
+    local link
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      if fragment.link then link = fragment.link end
+    end
+    test.equal(test.not_nil(link).raw_target, "Target.md")
+  end)
+
+  test.it("removes a distant reference resolution when its definition publishes", function()
+    local view, buffer = make_view("[Alias][ref]\n\n[ref]: Target.md\n\nplain", "removed-reference.md")
+    buffer:set_selection(5, 1)
+    refresh(view)
+    test.ok(wait_until(function() return visible_render_text(view, 1) == "Alias" end, 15))
+    view:update()
+
+    buffer:remove(3, 1, 3, #buffer.lines[3])
+    test.equal(visible_render_text(view, 1), "Alias")
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), instance.reason)
+    test.equal(visible_render_text(view, 1), "[Alias][ref]")
+    for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+      test.equal(fragment.link, nil)
+    end
+  end)
+
+  test.it("updates distant list numbers when the first number publishes", function()
+    local view, buffer = make_view("1. first\n1. second\n1. third\n\nplain", "changed-list-number.md")
+    buffer:set_selection(5, 1)
+    refresh(view)
+    view:update()
+    local function marker(line)
+      for _, fragment in ipairs(view:get_line_render(line).fragments or {}) do
+        if fragment.ordered_list_marker then return fragment.text end
+      end
+    end
+    test.equal(marker(3), "3.")
+
+    buffer:apply_edits({ { line1 = 1, col1 = 1, line2 = 1, col2 = 2, text = "9" } })
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), instance.reason)
+    test.equal(marker(3), "11.")
+  end)
+
+  test.it("updates a list continuation when its parent marker becomes wider", function()
+    local view, buffer = make_view("1. parent\n   continuation\n\nplain", "changed-list-prefix.md")
+    buffer:set_selection(4, 1)
+    refresh(view)
+    view:update()
+    local before = view:get_col_x_offset(2, 4)
+
+    buffer:insert(1, 1, "1000")
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), instance.reason)
+    test.ok(view:get_col_x_offset(2, 4) > before,
+      "the continuation did not follow its parent's wider marker")
+    test.equal(view:get_col_x_offset(2, 4), view:get_col_x_offset(1, 8))
+  end)
+
+  test.it("updates a callout body when its header type publishes", function()
+    local view, buffer = make_view(
+      "> [!note] Title\n> body\n> more body\n\nplain", "changed-callout-header.md"
+    )
+    buffer:set_selection(5, 1)
+    refresh(view)
+    view:update()
+    test.equal(test.not_nil(view:get_line_render(3).callout_record).canonical_type, "note")
+
+    buffer:apply_edits({ { line1 = 1, col1 = 5, line2 = 1, col2 = 9, text = "warning" } })
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), instance.reason)
+    test.equal(test.not_nil(view:get_line_render(3).callout_record).canonical_type, "warning")
+  end)
+
+  test.it("updates a self-link when its heading target changes", function(context)
+    local root = USERDIR .. PATHSEP .. "markdown-kept-link-target-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local old_projects = core.projects
+    local views = {}
+    context.cleanup = function()
+      for _, view in ipairs(views) do markdown.live_render.release(view, "test-cleanup") end
+      core.projects = old_projects
+      test.ok(test.remove_tree(root))
+    end
+    core.projects = { Project(root) }
+    markdown.vault_index.get_index(root):rebuild("kept-link-target-test")
+    for _, heading in ipairs({ "# Before", "Before\n------" }) do
+      local view, buffer = make_view(heading .. "\n\n[[#Before|Alias]]\n\nplain",
+        root .. PATHSEP .. "Source" .. (#views + 1) .. ".md")
+      views[#views + 1] = view
+      local link_line = #buffer.lines - 2
+      buffer:set_selection(#buffer.lines, 1)
+      refresh(view)
+      view:update()
+      local function resolution()
+        for _, fragment in ipairs(view:get_line_render(link_line).fragments or {}) do
+          if fragment.link_resolution then return fragment.link_resolution end
+        end
+      end
+      test.ok(wait_until(function()
+        local value = resolution()
+        return value and value.status == "resolved" and not value.subtarget_missing
+      end, 15))
+
+      buffer:insert(1, #buffer.lines[1], " changed")
+
+      local instance = test.not_nil(markdown_model.peek(buffer))
+      test.ok(wait_status(instance, "ready", 15), instance.reason)
+      test.ok(wait_until(function() return test.not_nil(resolution()).subtarget_missing end, 15))
+    end
   end)
 
   test.it("invalidates fence-dependent suffix rendering when an opener is broken", function()
