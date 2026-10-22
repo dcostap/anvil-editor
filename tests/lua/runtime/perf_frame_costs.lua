@@ -93,6 +93,43 @@ test.describe("performance frame cost report", function()
     test.match(text, "2.000 diffview_right_draw_ms")
   end)
 
+  test.it("counts scheduled work in the frame that follows it", function()
+    frames = perf.start_recording { quiet = true, instruction_samples = false }
+    -- Let the run loop start a frame with recording enabled.
+    coroutine.yield(0.01)
+    local submitted = false
+    core.add_thread(function()
+      perf.frame_add("buffer_apply_edits_calls", 7)
+      submitted = true
+      core.redraw = true
+    end)
+    local deadline = system.get_time() + 10
+    repeat
+      test.ok(system.get_time() < deadline, "Scheduled counter did not run")
+      coroutine.yield(0.01)
+    until submitted
+    coroutine.yield(0.01)
+    perf.stop_recording()
+    local file = assert(io.open(frames, "rb"))
+    local column
+    local index = 0
+    for key in file:read("*l"):gmatch("[^,]+") do
+      index = index + 1
+      if key == "buffer_apply_edits_calls" then column = index end
+    end
+    test.ok(column, "Frame report omitted the counter")
+    local total = 0
+    for line in file:lines() do
+      index = 0
+      for value in (line .. ","):gmatch("(.-),") do
+        index = index + 1
+        if index == column then total = total + (tonumber(value) or 0) end
+      end
+    end
+    file:close()
+    test.equal(total, 7)
+  end)
+
   test.it("keeps draw scope reports balanced while drawing unwrapped text", function()
     local buffer = Buffer(nil, nil, true)
     buffer:insert(1, 1, "first line\nsecond line\nthird line")

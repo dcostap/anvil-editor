@@ -1648,12 +1648,15 @@ def markdown_report(report: dict[str, Any]) -> str:
                     for action, values in case.get("actions", {}).items()]
     if action_cases:
         lines.extend(["", "## Action latency (unprofiled)", "",
-                      "| Scenario | Action | Count | Dispatch p95 | Ready p95 | Completed p50 | Completed p95 | Completed max |",
-                      "|---|---|---:|---:|---:|---:|---:|---:|"])
+                      "| Scenario | Action | Count | Dispatch p95 | Ready p95 | Completed p50 | Completed p95 | Visible p50 | Visible p95 | Completed max |",
+                      "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"])
         for name, action, values in action_cases:
+            visible = [f"{values[key]:.3f}" if key in values else "—"
+                       for key in ("visible_ms_p50", "visible_ms_p95")]
             lines.append(f"| {name} | {action} | {values['latency_ms_count']:.0f} | "
                          f"{values['dispatch_ms_p95']:.3f} | {values['ready_ms_p95']:.3f} | "
                          f"{values['latency_ms_p50']:.3f} | {values['latency_ms_p95']:.3f} | "
+                         f"{visible[0]} | {visible[1]} | "
                          f"{values['latency_ms_max']:.3f} |")
     flags = [dict(scenario=name, **flag) for name, case in report["scenarios"].items()
              for flag in case.get("red_flags", [])]

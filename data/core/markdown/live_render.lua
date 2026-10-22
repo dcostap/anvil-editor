@@ -944,7 +944,8 @@ end
 
 local function active_perf()
   local perf = package.loaded["core.perf"]
-  return perf and perf.is_recording and perf.is_recording() and perf or nil
+  return perf and (core.perf_frame_stats or (perf.is_recording and perf.is_recording()))
+    and perf or nil
 end
 
 local function elapsed_ms(started)

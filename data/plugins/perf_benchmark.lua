@@ -236,6 +236,12 @@ local function add_frame_details()
   end
   local stats = core.perf_frame_stats
   if not stats then return end
+  -- Scripted input runs after the preceding snapshot. Count it with the next frame,
+  -- as metric_row already does for dispatch time.
+  for key, value in pairs(benchmark.pending_action_details or {}) do
+    if type(value) == "number" then stats[key] = (stats[key] or 0) + value end
+  end
+  benchmark.pending_action_details = nil
   for key, value in pairs(stats) do
     if type(value) == "number" and value ~= 0 then add_detail(key, value) end
   end
@@ -257,7 +263,7 @@ end
 
 local function write_actions()
   if benchmark.actions_file == "" then return true end
-  local fields = { "id", "name", "start_ms", "dispatch_ms", "ready_ms", "latency_ms", "redraws", "result" }
+  local fields = { "id", "name", "start_ms", "dispatch_ms", "ready_ms", "latency_ms", "visible_ms", "redraws", "result" }
   local lines = { table.concat(fields, ",") }
   for _, row in ipairs(benchmark.action_rows) do
     local values = {}
@@ -900,10 +906,21 @@ local function perform_action()
   if benchmark.workload then
     if benchmark.phase == "measure" then
       local index = benchmark.workload.completed + 1
+      local frame_stats = core.perf_frame_stats
+      if frame_stats and benchmark.details_file ~= "" then
+        local dispatch_stats = {}
+        for key, value in pairs(frame_stats) do
+          dispatch_stats[key] = type(value) == "number" and 0 or value
+        end
+        core.perf_frame_stats = dispatch_stats
+        benchmark.pending_action_details = dispatch_stats
+      end
       benchmark.actions:start(benchmark.workload:action_name(index), function()
         benchmark.workload:dispatch(index)
         benchmark.view = benchmark.workload.view
-      end, function() return benchmark.workload:action_ready() end)
+      end, function() return benchmark.workload:action_ready() end,
+        benchmark.workload.action_visible and function() return benchmark.workload:action_visible() end)
+      core.perf_frame_stats = frame_stats
       benchmark.pending_action_ms = benchmark.actions.pending.dispatch_ms
       benchmark.action_count = index
     end

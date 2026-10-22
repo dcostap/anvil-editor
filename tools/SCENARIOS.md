@@ -63,6 +63,14 @@ Each scoring run records frames without detail instrumentation. The verdict
 uses the median of each run's p95 frame work time (frame time minus sleep) and
 each action's p95 latency.
 
+The gallery typing and newline scenes report two latencies:
+
+- **Completed** (`latency_ms`): input dispatch to the redraw that shows the current semantic publication. This metric is unchanged.
+- **Visible** (`visible_ms`): input dispatch to the end of the first redraw that draws the edited line.
+
+The scene observes text drawing. It does not wait for the semantic worker to measure visible latency.
+Both metrics exclude OS input delivery and physical display scanout. The report gives p50 and p95 for each.
+
 `editor-type-baseline` types short lines into a small file after the
 Project's startup scans and indexes finish. It shows the cost of the cheapest
 real input frame. `editor-type-startup` types while that startup work runs.
@@ -80,6 +88,9 @@ threads appear as `thread <file>:<line>_ms`, named by the code that started
 them. `--attribute`
 records them for passing scenarios too. `--diagnose` adds a LuaJIT sampling
 run with draw scopes and a Speedscope profile.
+
+Frame details include worker-result callbacks before the UI step. Scripted input runs after a frame snapshot.
+The next measured frame includes its counters and dispatch time. Each dispatch counts once, including the first one.
 
 ## Scenes are shared with Lua tests
 
@@ -100,6 +111,8 @@ A scene module returns a table with these functions:
 - `dispatch(context, index)` performs one action.
 - `action_ready(context, index)` returns `true, result` when the action's
   effect is visible.
+- `action_visible(context)` is optional. It returns true after the scene observes the first draw of the edited text.
+  Return false while waiting, or nil for actions without this measurement. Completion still uses `action_ready`.
 - `state(context)` is optional. Its values appear in the report state.
 - `run(context)` replaces `dispatch` and `action_ready` in a self-driven
   scene. See [Shell scenarios](#shell-scenarios).

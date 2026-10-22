@@ -95,6 +95,28 @@ class DiagnosticReportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 diagnostics.read_actions(path, expected=1)
 
+    def test_reports_visible_latency_separately_from_publication_latency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "actions.csv"
+            self.write_csv(path, [dict(id=1, name="type", start_ms=0, dispatch_ms=2,
+                                      ready_ms=50, latency_ms=60, visible_ms=30,
+                                      redraws=3, result="typed")])
+            summary = diagnostics.read_actions(path, expected=1)["summary"]["type"]
+            self.assertEqual(summary["visible_ms_p50"], 30)
+            self.assertEqual(summary["visible_ms_p95"], 30)
+            self.assertEqual(summary["latency_ms_p50"], 60)
+
+    def test_rejects_visible_latency_outside_the_action(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "actions.csv"
+            for visible in (-1, 1, 61, "nan"):
+                with self.subTest(visible=visible):
+                    self.write_csv(path, [dict(id=1, name="type", start_ms=0, dispatch_ms=2,
+                                              ready_ms=50, latency_ms=60, visible_ms=visible,
+                                              redraws=3, result="typed")])
+                    with self.assertRaises(ValueError):
+                        diagnostics.read_actions(path, expected=1)
+
     def test_aligns_actions_and_file_open_stages_with_lifecycle_time(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

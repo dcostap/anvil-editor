@@ -30,6 +30,16 @@ function scene.setup(context)
   local settings = context.settings
   if settings.mode == "open" then return open(context, settings.start_note) end
   local view = open(context, settings.note)
+  if settings.mode == "type" or settings.mode == "newline" then
+    local draw_line_text = view.draw_line_text
+    view.draw_line_text = function(self, line, ...)
+      local height = draw_line_text(self, line, ...)
+      if line == context.edited_line and self.buffer.text_revision ~= context.revision then
+        context.drawn_revision = self.buffer.text_revision
+      end
+      return height
+    end
+  end
   local line = settings.line or 1
   view:with_selection_state(function() view.buffer:set_selection(line, math.huge) end)
   view:scroll_to_line(line, false, true)
@@ -70,6 +80,17 @@ function scene.dispatch(context, index)
     context.revision = view.buffer.text_revision
     assert(command.perform("core:newline"), "the editor did not insert a line break")
   end
+  if settings.mode == "type" or settings.mode == "newline" then
+    context.edited_line = view.buffer:get_selection()
+    context.drawn_revision = nil
+  end
+end
+
+-- The scene observes the edited line's draw, even while the parse is pending.
+function scene.action_visible(context)
+  local mode = context.settings.mode
+  if mode ~= "type" and mode ~= "newline" then return nil end
+  return context.drawn_revision == context.view.buffer.text_revision
 end
 
 function scene.action_ready(context)
@@ -89,7 +110,7 @@ function scene.action_ready(context)
     if not support.scroll_settled(view) then return false end
     return true, string.format("line=%d col=%d", line, col)
   end
-  -- Typing and line breaks complete when Live Preview shows the edited text.
+  -- Completion keeps the publication latency; visible latency stops at the earlier text draw.
   if view.buffer.text_revision == context.revision or not preview_ready(view) then return false end
   return true, "typed"
 end

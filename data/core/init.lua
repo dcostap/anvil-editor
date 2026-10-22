@@ -2925,7 +2925,7 @@ local function drain_input_trace()
   end
 end
 
-function core.step(next_frame_time, options)
+function core.step(next_frame_time, options, frame_stats)
   options = options or {}
   local session_log = core.session_log
   if session_log and session_log.pending_bytes > 0
@@ -2944,7 +2944,7 @@ function core.step(next_frame_time, options)
     event_count = 0,
   }
   last_core_step_stats = step_stats
-  core.perf_frame_stats = perf_stats_enabled() and new_perf_frame_stats() or nil
+  core.perf_frame_stats = frame_stats or (perf_stats_enabled() and new_perf_frame_stats() or nil)
   core.textview_frame_stats = nil
   core.render_frame_active = false
 
@@ -3657,6 +3657,8 @@ function core.run_step(options)
   core.in_live_resize_frame = immediate and options.live_resize or false
   if core.in_live_resize_frame then core.last_live_resize_frame_at = system.get_time() end
   local run_step_start = system.get_time()
+  -- Worker callbacks and coroutine work belong to this frame, before core.step.
+  core.perf_frame_stats = perf_stats_enabled() and new_perf_frame_stats() or nil
   local startup_run_step = startup and startup.run_step_begin(options) or nil
   local sleep_requested_ms = 0
   local sleep_actual_ms = 0
@@ -3837,7 +3839,7 @@ function core.run_step(options)
     if immediate or not run_next_step or now >= run_next_step then
       local core_step_start = system.get_time()
       did_core_step = true
-      did_redraw    = core.step(run_next_frame_time, options)
+      did_redraw    = core.step(run_next_frame_time, options, core.perf_frame_stats)
       core_step_ms  = (system.get_time() - core_step_start) * 1000
       now           = system.get_time()
       run_next_step = nil
@@ -3963,12 +3965,8 @@ function core.run_step(options)
     total_ms = (system.get_time() - run_step_start) * 1000,
     run_mode = run_threads_mode,
   }
-  -- Frame/update counters belong to the core.step() that produced them. Do
-  -- not repeat the previous step's nonzero counters across scheduler-only
-  -- iterations; that made idle captures report phantom Root Panel updates.
-  local textview_stats = did_core_step
-    and (core.perf_frame_stats or core.textview_frame_stats or {})
-    or {}
+  -- Each iteration has fresh counters, including iterations without a UI step.
+  local textview_stats = core.perf_frame_stats or {}
   local total_ms = (system.get_time() - run_step_start) * 1000
   if did_redraw then
     local t = system.get_time()

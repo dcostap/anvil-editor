@@ -9,13 +9,13 @@ function Actions:new(clock, timeout)
   self.sequence = 0
 end
 
-function Actions:start(name, dispatch, ready)
+function Actions:start(name, dispatch, ready, visible)
   assert(not self.pending, "benchmark action is still pending")
   self.sequence = self.sequence + 1
   local start = self.clock()
   self.pending = {
     id = self.sequence, name = name, started = start,
-    start_ms = (start - self.origin) * 1000, redraws = 0, ready = ready,
+    start_ms = (start - self.origin) * 1000, redraws = 0, ready = ready, visible = visible,
   }
   dispatch()
   self.pending.dispatch_ms = (self.clock() - start) * 1000
@@ -46,12 +46,20 @@ function Actions:after_frame(did_redraw)
   local pending = self.pending
   if not pending or not did_redraw then return end
   pending.redraws = pending.redraws + 1
+  -- The scene must observe drawing, not just a changed Buffer revision.
+  -- A nil result means that this action has no separate visible measurement.
+  local visible = pending.visible and pending.visible()
+  if not pending.visible_ms and visible then
+    pending.visible_ms = (self.clock() - pending.started) * 1000
+  end
   if not pending.draw_ready then return end
+  assert(visible == nil or pending.visible_ms, "completed action has no visible redraw")
   self.pending = nil
   return {
     id = pending.id, name = pending.name, start_ms = pending.start_ms,
     dispatch_ms = pending.dispatch_ms, ready_ms = pending.ready_ms,
     latency_ms = (self.clock() - pending.started) * 1000,
+    visible_ms = pending.visible_ms,
     redraws = pending.redraws, result = pending.result,
   }
 end
