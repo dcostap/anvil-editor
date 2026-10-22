@@ -1001,6 +1001,8 @@ test.describe("Markdown Live Preview", function()
     )
     buffer:set_selection(9, 1)
     refresh(view)
+    view:update()
+    for line = 1, #buffer.lines do view:get_line_screen_position(line, 1) end
     local function badges(line)
       local numbers = {}
       for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
