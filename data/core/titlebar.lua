@@ -356,8 +356,9 @@ function TitleBar:configure_hit_test(enabled)
   }, ":")
   if signature == self.hit_test_signature then return end
   self.hit_test_signature = signature
-  system.set_window_hit_test(core.window, self.size.y, caption_width() * CAPTION_COUNT,
-    math.floor(resize_border or 8 * SCALE), interactive_x, interactive_width, toggle_x, toggle_width)
+  system.set_window_hit_test(core.window, math.floor(self.size.y), caption_width() * CAPTION_COUNT,
+    math.floor(resize_border or 8 * SCALE), math.floor(interactive_x), math.floor(interactive_width),
+    math.floor(toggle_x), math.floor(toggle_width))
 end
 
 -- The shell draws the Window controls, so it needs the Color Theme's colours. Sends them when they change.
