@@ -6,6 +6,10 @@
 local Object = {}
 Object.__index = Object
 
+-- The PUC Lua build (-Djit=false) has no table.new and grows tables instead.
+local has_table_new, table_new = pcall(require, "table.new")
+if not has_table_new then table_new = function() return {} end end
+
 ---Constructor called when creating new instances.
 ---Override in subclasses to initialize state. Always call super first:
 ---`MyClass.super.new(self)`
@@ -100,7 +104,8 @@ end
 ---Automatically creates instance and calls new() with provided arguments.
 ---@return core.object obj The new instance of the class
 function Object:__call(...)
-  local obj = setmetatable({}, self)
+  -- A class can set `__instance_hash_size` to start each instance with that many hash slots.
+  local obj = setmetatable(table_new(0, self.__instance_hash_size or 0), self)
   obj:new(...)
   -- allow automatic calling of __gc on objects for older lua versions
   if LUA_VERSION == 5.1 then

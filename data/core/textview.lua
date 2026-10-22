@@ -53,6 +53,12 @@ local IME_STATE = {line1 = 0, col1 = 0, line2 = 0, col2 = 0, w = 0, h = 0}
 ---@field render_content_interactions_enabled? boolean Set false for display-only rendered content
 local TextView = View:extend()
 
+-- A Text View has about 120 fields, and many of them change between nil and a value.
+-- In a full 128-slot hash, such a field forces a rehash that moves every slot.
+-- LuaJIT traces then fail their slot guards, and the trace cache flushes again and again.
+-- This made the open of a large Markdown file two times slower. 256 slots give spare room.
+TextView.__instance_hash_size = 256
+
 function TextView:__tostring() return "TextView" end
 
 TextView.context = "workspace"
