@@ -3389,6 +3389,8 @@ end
 local function clone_render_line(render_line)
   local clone = {}
   for key, value in pairs(render_line or {}) do clone[key] = value end
+  -- A caller can change the copy, so it claims no geometry of its own.
+  clone.layout_source = nil
   clone.on_mouse_selection = nil
   clone.on_text_input = nil
   clone.on_ime_text_editing = nil
@@ -4421,6 +4423,7 @@ local function capture_pre_edit_renders(view, change)
       source_line = line,
       source_text = source_text,
       render_line = render and clone_render_line(render) or nil,
+      plan = render,
       raw_passthrough = raw_passthrough,
       raw_source_removed = raw_source_removed,
       fenced = fenced,
@@ -4568,13 +4571,20 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     return captured.raw_passthrough or captured.indented or false
   end
 
-  local function retain(old_line, render_line, fenced, background)
+  -- `measured_plan` is the plan that `render_line` copies. The copy has its
+  -- geometry, so Text View keeps the rows that it measured for that plan.
+  local function retain(old_line, render_line, fenced, background, measured_plan)
     local new_line = edit_projection.map_unchanged_line(ranges, old_line)
     if not new_line or next_lines[new_line] then return end
-    render_line = render_line or cached_render_line(view, old_line)
+    if not render_line then
+      render_line = cached_render_line(view, old_line)
+      measured_plan = render_line
+    end
     local source = source_line_text(view, new_line)
     if render_line and render_line.source_text == source then
       local retained_render = clone_render_line(render_line)
+      retained_render.layout_source = measured_plan
+        and (measured_plan.layout_source or measured_plan) or nil
       retained_render.markdown_pending_code_background =
         fenced or retained_render.markdown_code_block or nil
       local entry = pending_entry(
@@ -4604,14 +4614,11 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     if new_line then kept_lines[new_line] = true end
   end
   owner.kept_plan_lines = kept_lines
-  local lines_in_place = owner.link_targets_changed_revision ~= view.buffer.text_revision
-  for _, edit in ipairs(transaction.edits or {}) do
-    if edit.line1 ~= edit.line2 or (edit.text or ""):find("\n", 1, true) then
-      lines_in_place = false
-    end
-  end
-  for _, range in ipairs(ranges) do
-    if (range.line_delta or 0) ~= 0 then lines_in_place = false end
+  -- A line that an edit moves gets a retained copy instead. Its plan holds
+  -- callbacks for its old line number, such as a task toggle.
+  local targets_unchanged = owner.link_targets_changed_revision ~= view.buffer.text_revision
+  local function in_place(line)
+    return targets_unchanged and edit_projection.map_unchanged_line(ranges, line) == line
   end
   local previous_pending = owner.pending_lines or {}
   local line_cache = view.__line_render_cache
@@ -4622,7 +4629,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   -- entry supplies the line background and the plan when a fence or a
   -- selection change invalidates the line before the publication.
   local function kept_entry(line, captured)
-    if not lines_in_place then return nil end
+    if not in_place(line) then return nil end
     local previous = previous_pending[line]
     if previous and not previous.kept then return nil end
     if owner.semantic_pending_line and line >= owner.semantic_pending_line then return nil end
@@ -4647,7 +4654,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     else
       retain(
         old_line, captured.render_line, captured.fenced,
-        captured.background
+        captured.background, captured.plan
       )
     end
   end
@@ -4664,7 +4671,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     if retain(
       old_line, entry.render_line,
       entry.render_line and entry.render_line.markdown_pending_code_background,
-      entry.background
+      entry.background, entry.render_line
     ) then retained_rows = retained_rows + 1 end
   end
   if retained_rows > 0 then
@@ -6715,6 +6722,7 @@ function provider:render_line(view, line, context)
     local copy = {}
     for key, value in pairs(render_line) do copy[key] = value end
     copy.final_row_spacing = spacing
+    copy.layout_source = nil
     render_line = copy
   end
   return render_line
@@ -6981,7 +6989,13 @@ local function invalidate_semantic_publication(view, instance, reason)
   -- The sync path also rebuilds the lines that kept their plans while the
   -- parse was pending. The other paths rebuild every line. Kept lines are
   -- visible lines, so they do not count toward the deferred threshold.
-  if ranges and #ranges > 0 and not deferred_wrapped_invalidation then
+  -- After a line change, the new adoption generation changes the signature
+  -- of every line. Each kept line then rebuilds when a frame reads it.
+  if pending_line and next(kept_lines or {}) then
+    core.log_quiet("Markdown publication rebuilds kept lines on read after a line change: revision=%d pending_from=%d",
+      view.buffer.text_revision, pending_line)
+  end
+  if ranges and #ranges > 0 and not deferred_wrapped_invalidation and not pending_line then
     local covered, kept = {}, {}
     for _, range in ipairs(ranges) do
       for line = range.line1 or 1, range.line2 or range.line1 or 1 do covered[line] = true end

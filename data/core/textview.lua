@@ -1901,6 +1901,8 @@ end
 
 -- The row heights store the ID of the render plan that each row measured.
 -- ID 0 marks a row that no provider measured. ID 1 marks a row without a plan.
+-- A plan with a `layout_source` has the geometry of that plan, so it has the
+-- same ID. A provider sets it on a copy of a plan, such as a line that moved.
 local plan_id
 do
   local ids = setmetatable({}, { __mode = "k" })
@@ -1908,6 +1910,7 @@ do
   plan_id = function(plan)
     if plan == nil then return 0 end
     if plan == false then return 1 end
+    plan = plan.layout_source or plan
     local id = ids[plan]
     if not id then
       id = next_id
@@ -4962,7 +4965,8 @@ end
 ---render plan that drawing uses. Wrapping and row metrics record the plan
 ---they measured. Provider state, such as a Markdown parse publication, can
 ---replace a line's plan without a text edit. Remeasure each visible line
----whose recorded plan differs before the frame draws it.
+---whose recorded plan differs before the frame draws it. A plan whose
+---`layout_source` is the measured geometry keeps the rows of that plan.
 function TextView:reconcile_visible_line_layout()
   if self.__reconciling_line_layout or self.__presentation_reload_frozen
     or not self:has_line_render_providers()
@@ -4979,18 +4983,32 @@ function TextView:reconcile_visible_line_layout()
       -- A sliced rebuild publishes its plans and rows together.
       local check_wrap = self.wrapped_settings and self.wrapped_presentations
         and not self.__async_wrap_reconstruction
+      local adopted = 0
       if check_wrap then
         local first, last = self:get_visible_line_range()
         for line = first, last do
           local plan = self:get_line_render(line) or false
           local measured = self.wrapped_presentations[line]
-          if not measured or measured.render_line ~= plan
-            or measured.source_line ~= self.buffer.lines[line]
+          local source_line = self.buffer.lines[line]
+          if measured and measured.render_line ~= plan
+            and measured.source_line == source_line
+            and plan and plan.layout_source
+            and plan_id(measured.render_line) == plan_id(plan)
+          then
+            self.wrapped_presentations[line] = { source_line = source_line, render_line = plan }
+            adopted = adopted + 1
+          elseif not measured or measured.render_line ~= plan
+            or measured.source_line ~= source_line
           then
             wrap_lines[line] = true
             found = true
           end
         end
+      end
+      if adopted > 0 then
+        perf_frame_add("textview_layout_reconcile_adopted_lines", adopted)
+        core.log_quiet("Text View kept the rows of %d line(s) whose new plan has the measured geometry: revision=%d path=%s",
+          adopted, self.buffer.text_revision or 0, self.buffer:get_name())
       end
       each_visible_metric_row(self, function(_, line, measured)
         if not wrap_lines[line]
