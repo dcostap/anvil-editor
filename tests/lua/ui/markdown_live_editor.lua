@@ -1118,6 +1118,35 @@ test.describe("Markdown Live Preview", function()
     test.equal(marker(3), "11.")
   end)
 
+  test.it("matches fresh list numbering after control whitespace publishes", function(context)
+    local view, buffer = make_view("9.foo\n\n1. one\n1. two\n\nplain", "control-list-number.md")
+    buffer:set_selection(6, 1)
+    refresh(view)
+    view:update()
+    for line = 1, #buffer.lines do view:get_line_screen_position(line, 1) end
+    local function marker(owner, line)
+      for _, fragment in ipairs(owner:get_line_render(line).fragments or {}) do
+        if fragment.ordered_list_marker then return fragment.text end
+      end
+    end
+    test.equal(marker(view, 3), "1.")
+    test.equal(marker(view, 4), "2.")
+
+    buffer:insert(1, 3, "\v")
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), instance.reason)
+    local fresh = Editor(buffer)
+    context.cleanup = function() markdown.live_render.release(fresh, "test-cleanup") end
+    fresh.size.x, fresh.size.y = view.size.x, view.size.y
+    fresh:set_wrapping_enabled(false)
+    refresh(fresh)
+    test.equal(marker(fresh, 3), "10.")
+    test.equal(marker(fresh, 4), "11.")
+    test.equal(marker(view, 3), marker(fresh, 3))
+    test.equal(marker(view, 4), marker(fresh, 4))
+  end)
+
   test.it("updates a list continuation when its parent marker becomes wider", function()
     local view, buffer = make_view("1. parent\n   continuation\n\nplain", "changed-list-prefix.md")
     buffer:set_selection(4, 1)

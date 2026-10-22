@@ -6043,7 +6043,9 @@ function provider:on_text_transaction(view, transaction, line1, line2)
         do last_old, last_new = last_old - 1, last_new - 1 end
         local boundary = old:sub(math.max(1, first - 1), last_old + 1)
           .. current:sub(math.max(1, first - 1), last_new + 1)
-        local_input = not boundary:find("[^%w%s%.,!?;:'\"%-]")
+        -- Only space and tab are plain whitespace. Other whitespace can
+        -- change ordered numbering without matching a source list prefix.
+        local_input = not boundary:find("[^%w \t%.,!?;:'\"%-]")
           and old:match("^[ \t]*") == current:match("^[ \t]*")
           and not old:match("^%s*$") and not current:match("^%s*$")
           and not edit_visual_projection.source_list_prefix(old)
