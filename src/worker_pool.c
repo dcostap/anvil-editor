@@ -161,6 +161,7 @@ typedef struct AnvilWorkerTreeSitterCapture {
   uint32_t pattern_index;
   uint32_t capture_index;
   uint32_t order;
+  bool reused_semantic_id;
   uint64_t node_id;
 } AnvilWorkerTreeSitterCapture;
 
@@ -899,6 +900,18 @@ static uint32_t markdown_map_old_end_byte(uint32_t byte, const TSInputEdit *edit
   return edit->new_end_byte;
 }
 
+static TSPoint markdown_map_old_point(TSPoint point, uint32_t byte,
+  const TSInputEdit *edit, bool end_point) {
+  if (byte < edit->start_byte || (byte == edit->start_byte &&
+      (end_point || edit->old_end_byte > edit->start_byte))) return point;
+  if (byte < edit->old_end_byte) return edit->new_end_point;
+  if (point.row == edit->old_end_point.row) {
+    point.column = edit->new_end_point.column + point.column - edit->old_end_point.column;
+  }
+  point.row = edit->new_end_point.row + point.row - edit->old_end_point.row;
+  return point;
+}
+
 static uint64_t next_markdown_semantic_id(void) {
   return (uint64_t)(uint32_t)(SDL_AddAtomicInt(&markdown_semantic_id_sequence, 1) + 1);
 }
@@ -908,39 +921,46 @@ static void reconcile_markdown_query_identities(
   const AnvilWorkerTreeSitterQueryResult *previous,
   const TSInputEdit *edit
 ) {
-  for (uint32_t i = 0; i < current->count; i++) current->captures[i].node_id = next_markdown_semantic_id();
-  if (!previous || previous->count == 0 || !edit) return;
+  uint32_t unmatched = 0;
+  for (uint32_t i = 0; i < current->count; i++) {
+    if (current->captures[i].reused_semantic_id) continue;
+    current->captures[i].node_id = next_markdown_semantic_id();
+    unmatched++;
+  }
+  if (!unmatched || !previous || previous->count == 0 || !edit) return;
 
   uint32_t capacity = 1;
-  while (capacity < previous->count * 2 && capacity < UINT32_MAX / 2) capacity <<= 1;
+  while (capacity < unmatched * 2 && capacity < UINT32_MAX / 2) capacity <<= 1;
   MarkdownIdentitySlot *slots = (MarkdownIdentitySlot *)SDL_calloc(capacity, sizeof(*slots));
   if (!slots) return;
   uint32_t mask = capacity - 1;
-  for (uint32_t i = 0; i < previous->count; i++) {
-    const AnvilWorkerTreeSitterCapture *capture = &previous->captures[i];
-    uint32_t start = markdown_map_old_start_byte(capture->start_byte, edit);
-    uint32_t end = markdown_map_old_end_byte(capture->end_byte, edit);
-    uint64_t hash = markdown_capture_hash(capture->name, capture->name_len, start, end);
+  /* Reused captures already have their identities. Match only new captures,
+   * then scan the previous records once to supply their old identities. */
+  for (uint32_t i = 0; i < current->count; i++) {
+    const AnvilWorkerTreeSitterCapture *capture = &current->captures[i];
+    if (capture->reused_semantic_id) continue;
+    uint64_t hash = markdown_capture_hash(capture->name, capture->name_len,
+      capture->start_byte, capture->end_byte);
     uint32_t slot = (uint32_t)hash & mask;
     while (slots[slot].index_plus_one) slot = (slot + 1) & mask;
     slots[slot] = (MarkdownIdentitySlot) { .hash = hash, .index_plus_one = i + 1 };
   }
-  for (uint32_t i = 0; i < current->count; i++) {
-    AnvilWorkerTreeSitterCapture *capture = &current->captures[i];
-    uint64_t hash = markdown_capture_hash(
-      capture->name, capture->name_len, capture->start_byte, capture->end_byte
-    );
+  for (uint32_t i = 0; i < previous->count && unmatched; i++) {
+    const AnvilWorkerTreeSitterCapture *candidate = &previous->captures[i];
+    uint32_t start = markdown_map_old_start_byte(candidate->start_byte, edit);
+    uint32_t end = markdown_map_old_end_byte(candidate->end_byte, edit);
+    uint64_t hash = markdown_capture_hash(candidate->name, candidate->name_len, start, end);
     uint32_t slot = (uint32_t)hash & mask;
     while (slots[slot].index_plus_one) {
-      const AnvilWorkerTreeSitterCapture *candidate =
-        &previous->captures[slots[slot].index_plus_one - 1];
+      AnvilWorkerTreeSitterCapture *capture =
+        &current->captures[slots[slot].index_plus_one - 1];
       if (!slots[slot].consumed && slots[slot].hash == hash &&
         candidate->name_len == capture->name_len &&
         memcmp(candidate->name, capture->name, capture->name_len) == 0 &&
-        markdown_map_old_start_byte(candidate->start_byte, edit) == capture->start_byte &&
-        markdown_map_old_end_byte(candidate->end_byte, edit) == capture->end_byte) {
+        start == capture->start_byte && end == capture->end_byte) {
         capture->node_id = candidate->node_id;
         slots[slot].consumed = true;
+        unmatched--;
         break;
       }
       slot = (slot + 1) & mask;
@@ -984,14 +1004,42 @@ static int capture_source_compare(const void *left, const void *right) {
   return 0;
 }
 
-static void normalize_capture_order(AnvilWorkerTreeSitterQueryResult *query, bool sort_by_source) {
-  if (!query) return;
-  if (sort_by_source && query->count > 1) {
-    qsort(query->captures, query->count, sizeof(*query->captures), capture_source_compare);
+static void merge_capture_order(AnvilWorkerTreeSitterQueryResult *query, uint32_t prefix) {
+  /* Edits retain the sorted prefix. Only the new query's captures need a sort. */
+  for (uint32_t i = 1; i < prefix; i++) {
+    if (capture_source_compare(&query->captures[i - 1], &query->captures[i]) > 0) {
+      qsort(query->captures, query->count, sizeof(*query->captures), capture_source_compare);
+      return;
+    }
   }
+  if (prefix == query->count) return;
+  qsort(query->captures + prefix, query->count - prefix,
+    sizeof(*query->captures), capture_source_compare);
+  AnvilWorkerTreeSitterCapture *merged = SDL_malloc(sizeof(*merged) * query->count);
+  if (!merged) {
+    qsort(query->captures, query->count, sizeof(*query->captures), capture_source_compare);
+    return;
+  }
+  uint32_t left = 0, right = prefix, count = 0;
+  while (left < prefix && right < query->count) {
+    bool take_left = capture_source_compare(&query->captures[left], &query->captures[right]) <= 0;
+    merged[count++] = query->captures[take_left ? left++ : right++];
+  }
+  if (left < prefix) memcpy(merged + count, query->captures + left,
+    sizeof(*merged) * (prefix - left));
+  else if (right < query->count) memcpy(merged + count, query->captures + right,
+    sizeof(*merged) * (query->count - right));
+  SDL_free(query->captures);
+  query->captures = merged;
+  query->capacity = query->count;
+}
+
+static void normalize_capture_order(AnvilWorkerTreeSitterQueryResult *query, uint32_t reused_count) {
+  if (!query) return;
+  if (reused_count && query->count > 1) merge_capture_order(query, reused_count);
   for (uint32_t i = 0; i < query->count; i++) {
     query->captures[i].order = i;
-    if (sort_by_source) query->captures[i].match_id = i;
+    if (reused_count) query->captures[i].match_id = i;
   }
 }
 
@@ -2066,7 +2114,6 @@ static bool copy_reused_inline_captures(
   AnvilWorkerTreeSitterQueryResult *query_result,
   const AnvilWorkerTreeSitterQueryResult *previous,
   const AnvilMarkdownTree *tree,
-  const AnvilTSSnapshot *snapshot,
   const TSInputEdit *edit,
   uint32_t max_captures
 ) {
@@ -2085,8 +2132,8 @@ static bool copy_reused_inline_captures(
       .name_len = capture->name_len,
       .start_byte = start,
       .end_byte = end,
-      .start_point = markdown_snapshot_point(snapshot, start),
-      .end_point = markdown_snapshot_point(snapshot, end),
+      .start_point = markdown_map_old_point(capture->start_point, capture->start_byte, edit, false),
+      .end_point = markdown_map_old_point(capture->end_point, capture->end_byte, edit, true),
       .priority = capture->priority,
       .match_id = capture->match_id,
       .pattern_index = capture->pattern_index,
@@ -2095,6 +2142,7 @@ static bool copy_reused_inline_captures(
       .node_id = capture->node_id,
     };
     if (!collect_treesitter_index_capture(&mapped, query_result)) return false;
+    query_result->captures[query_result->count - 1].reused_semantic_id = true;
   }
   return true;
 }
@@ -2102,7 +2150,6 @@ static bool copy_reused_inline_captures(
 static bool copy_reused_block_captures(
   AnvilWorkerTreeSitterQueryResult *query_result,
   const AnvilWorkerTreeSitterQueryResult *previous,
-  const AnvilTSSnapshot *snapshot,
   const TSInputEdit *edit,
   uint32_t changed_start,
   uint32_t changed_end
@@ -2121,8 +2168,8 @@ static bool copy_reused_block_captures(
       .name_len = capture->name_len,
       .start_byte = start,
       .end_byte = end,
-      .start_point = markdown_snapshot_point(snapshot, start),
-      .end_point = markdown_snapshot_point(snapshot, end),
+      .start_point = markdown_map_old_point(capture->start_point, capture->start_byte, edit, false),
+      .end_point = markdown_map_old_point(capture->end_point, capture->end_byte, edit, true),
       .priority = capture->priority,
       .match_id = capture->match_id,
       .pattern_index = capture->pattern_index,
@@ -2131,6 +2178,7 @@ static bool copy_reused_block_captures(
       .node_id = capture->node_id,
     };
     if (!collect_treesitter_index_capture(&mapped, query_result)) return false;
+    query_result->captures[query_result->count - 1].reused_semantic_id = true;
   }
   return true;
 }
@@ -2193,7 +2241,7 @@ static bool run_markdown_block_query(
   AnvilWorkerTreeSitterQueryResult *query_result = &index_result->outline;
   uint32_t count_before_reuse = query_result->count;
   if (!copy_reused_block_captures(
-      query_result, &previous_result->outline, snapshot, edit,
+      query_result, &previous_result->outline, edit,
       changed_start, changed_end)) {
     pool_set_error(fatal_error, "out of memory reusing Markdown block captures");
     return false;
@@ -2212,7 +2260,6 @@ static bool run_markdown_inline_query(
   const char *source,
   uint32_t source_len,
   AnvilMarkdownTree *tree,
-  const AnvilTSSnapshot *snapshot,
   const TSInputEdit *edit,
   AnvilWorkerTSParseRun *run,
   TSQueryCursor *cursor,
@@ -2240,7 +2287,6 @@ static bool run_markdown_inline_query(
     query_result,
     previous_result ? &previous_result->usage : NULL,
     tree,
-    snapshot,
     edit,
     max_captures
   );
@@ -2269,8 +2315,9 @@ static bool run_markdown_inline_query(
     bool exceeded = false;
     char *query_error = NULL;
     uint32_t remaining_timeout = timeout_ms > 0 ? timeout_ms - (uint32_t) elapsed : 0;
+    TSTree *inline_tree = anvil_markdown_tree_copy_inline_tree(tree, i);
     ok = anvil_ts_query_captures_in_tree_with_cursor(
-      anvil_markdown_tree_inline_tree(tree, i),
+      inline_tree,
       anvil_markdown_tree_snapshot(tree),
       query,
       cursor,
@@ -2286,6 +2333,7 @@ static bool run_markdown_inline_query(
       &exceeded,
       &query_error
     );
+    ts_tree_delete(inline_tree);
     exceeded_any = exceeded_any || exceeded;
     if (!ok) {
       query_result->error = query_error ? pool_strdup(query_error) : pool_strdup("Markdown inline query failed");
@@ -2459,7 +2507,6 @@ static AnvilWorkerTreeSitterIndexResult *execute_markdown_parse(
       job->usage_query,
       (uint32_t)job->usage_query_len,
       tree,
-      snapshot,
       have_identity_edit ? &identity_edit : NULL,
       &run,
       *query_cursor,
@@ -2527,9 +2574,9 @@ static AnvilWorkerTreeSitterIndexResult *execute_markdown_parse(
   }
 
   normalize_capture_order(
-    &index_result->outline, index_result->reused_block_capture_count > 0
+    &index_result->outline, index_result->reused_block_capture_count
   );
-  normalize_capture_order(&index_result->usage, false);
+  normalize_capture_order(&index_result->usage, 0);
   if (!enforce_query_capture_limit(
       &index_result->outline, job->max_captures ? job->max_captures : 50000
     )) {

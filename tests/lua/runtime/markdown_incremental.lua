@@ -73,6 +73,8 @@ test.describe("Markdown incremental semantic publication", function()
       { "- one\n- two", "- one\n\n- two" },
       { "> quote\n> tail", "> quote\ntail" },
       { "| - | - |", "| -- | -- |" },
+      { "| a | b |", "| α longer | b |" },
+      { "| α longer | b |", "| α longer | **b** |" },
       { "```lua", "``lua" },
       { "``lua", "```lua" },
       { "title: Note\n---", "title: Note\n--" },

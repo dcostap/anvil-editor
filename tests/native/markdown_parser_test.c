@@ -237,7 +237,7 @@ static int test_composite_parser(void) {
   bool found_emphasis = false;
   bool found_table_cell = false;
   for (uint32_t i = 0; i < inline_count; i++) {
-    TSTree *inline_tree = anvil_markdown_tree_inline_tree(tree, i);
+    TSTree *inline_tree = anvil_markdown_tree_copy_inline_tree(tree, i);
     TSRange source_range = anvil_markdown_tree_inline_source_range(tree, i);
     CHECK(inline_tree != NULL);
     CHECK(source_range.end_byte > source_range.start_byte);
@@ -247,6 +247,7 @@ static int test_composite_parser(void) {
       found_emphasis = true;
     }
     if (source_range.start_point.row >= 3) found_table_cell = true;
+    ts_tree_delete(inline_tree);
   }
   CHECK(found_emphasis);
   CHECK(found_table_cell);

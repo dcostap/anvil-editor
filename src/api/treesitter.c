@@ -1082,9 +1082,6 @@ static int markdown_tree_query(lua_State *L, bool inline_trees) {
   uint64_t query_started_ticks = SDL_GetTicks();
   uint32_t tree_count = inline_trees ? anvil_markdown_tree_inline_count(tree_userdata->tree) : 1;
   for (uint32_t i = 0; i < tree_count; i++) {
-    TSTree *tree = inline_trees
-      ? anvil_markdown_tree_inline_tree(tree_userdata->tree, i)
-      : anvil_markdown_tree_block_tree(tree_userdata->tree);
     TSRange range = inline_trees
       ? anvil_markdown_tree_inline_source_range(tree_userdata->tree, i)
       : (TSRange) { .start_byte = 0, .end_byte = snapshot->byte_len };
@@ -1103,6 +1100,9 @@ static int markdown_tree_query(lua_State *L, bool inline_trees) {
       return 2;
     }
     uint32_t remaining_timeout_ms = timeout_ms > 0 ? timeout_ms - (uint32_t) elapsed_ms : 0;
+    TSTree *tree = inline_trees
+      ? anvil_markdown_tree_copy_inline_tree(tree_userdata->tree, i)
+      : anvil_markdown_tree_block_tree(tree_userdata->tree);
     bool ok = anvil_ts_query_captures_in_tree(
       tree,
       snapshot,
@@ -1119,6 +1119,7 @@ static int markdown_tree_query(lua_State *L, bool inline_trees) {
       &exceeded,
       &error
     );
+    if (inline_trees) ts_tree_delete(tree);
     exceeded_any = exceeded_any || exceeded;
     if (!ok) {
       lua_pushnil(L);
