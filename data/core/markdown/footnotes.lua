@@ -966,15 +966,23 @@ local function margin_layout(view, column_x, column_width, caret_note)
   return cards
 end
 
+local block_notes
+
 -- Inline cards fill the rows that the row provider adds below each block.
+-- A row can stay from an earlier layout, so each card takes the current note
+-- of its block.
 local function inline_layout(view, caret_note)
   local cards = {}
   local x, width = text_column(view)
   local edit = edit_state(view)
+  local notes_by_line = {}
   for entry in view:iter_visible_visual_rows() do
     local row = entry.provider_row
     if row and row.footnote then
-      local note = edit and same_note(row.footnote, edit.note) and edit.note or row.footnote
+      local notes = notes_by_line[entry.line] or block_notes(view, entry.line)
+      notes_by_line[entry.line] = notes
+      local note = notes[entry.row_in_provider] or row.footnote
+      note = edit and same_note(note, edit.note) and edit.note or note
       local y = entry.y + scaled(INLINE_TOP)
       local height = place_text(text_view_for(view, note), note, x, y, width, INLINE_PAD_X, INLINE_PAD_Y)
       cards[#cards + 1] = new_card(view, note, x, y, width, height, "up", caret_note)
@@ -1007,11 +1015,15 @@ local function block_start(buffer, line)
   return first
 end
 
+-- The notes shown below the block that ends on `line`.
+function block_notes(view, line)
+  local first = block_start(view.buffer, line)
+  return notes_with_edit(view, footnotes.notes_for_lines(view, first, line), first, line)
+end
+
 local function inline_rows(view, line)
-  local buffer = view.buffer
-  if not is_block_end(buffer, line) then return nil end
-  local first = block_start(buffer, line)
-  local notes = notes_with_edit(view, footnotes.notes_for_lines(view, first, line), first, line)
+  if not is_block_end(view.buffer, line) then return nil end
+  local notes = block_notes(view, line)
   if #notes == 0 then return nil end
   local _, width = text_column(view)
   local rows = {}
@@ -1019,7 +1031,8 @@ local function inline_rows(view, line)
     local text_view = text_view_for(view, note)
     local text_height = text_view:measure(text_width(text_view, note, width, INLINE_PAD_X))
     rows[#rows + 1] = {
-      id = note.line .. ":" .. note.col1,
+      -- Relative to the row's line, so the ID stays when the block moves.
+      id = (note.line - line) .. ":" .. note.col1,
       footnote = note,
       height = scaled(INLINE_TOP) + text_height + scaled(INLINE_PAD_Y) * 2 + scaled(INLINE_BOTTOM),
     }
@@ -1027,12 +1040,13 @@ local function inline_rows(view, line)
   return rows
 end
 
+-- A publication reports its changed lines, and an edit reports its own
+-- lines. So the generation holds only inputs that change every row.
 local function inline_generation(_, view)
   local _, width = text_column(view)
   local edit = edit_state(view)
-  local instance = markdown_model.peek(view.buffer)
   return table.concat({
-    width, view:get_line_height(), instance and instance.published_revision or 0,
+    width, view:get_line_height(),
     edit and (edit.note.line .. ":" .. edit.note.col1 .. ":" .. edit.input:get_total_visual_lines()) or "",
   }, ":")
 end
@@ -1041,6 +1055,19 @@ local inline_row_provider = {
   generation = inline_generation,
   visual_rows = function(_, view, line, placement)
     if placement == "after" then return inline_rows(view, line) end
+  end,
+  -- Rows follow the block end. A change can make the line above a block end
+  -- or stop it from being one, and it can change the notes of its block.
+  dependent_lines = function(_, view, line1, line2)
+    local buffer = view.buffer
+    local last = line2
+    local limit = math.min(#buffer.lines, line2 + MAX_BLOCK_LINES)
+    while last < limit and not is_blank(buffer.lines[last] or "")
+      and not is_block_end(buffer, last)
+    do
+      last = last + 1
+    end
+    return math.max(1, line1 - 1), last
   end,
 }
 
@@ -1069,11 +1096,48 @@ function footnotes.table_span(view)
   return x, math.max(0, right - x)
 end
 
+-- Definition texts and the order of references, from a current publication.
+local function note_summary(view, instance)
+  local buffer = view.buffer
+  local definitions = instance:footnote_definitions()
+  local parts = {}
+  for label, line in pairs(definitions) do parts[#parts + 1] = label .. "=" .. line_text(buffer, line) end
+  table.sort(parts)
+  parts[#parts + 1] = "references"
+  for _, line in ipairs(instance:footnote_lines()) do
+    if not is_definition(line_text(buffer, line)) then
+      for _, node in ipairs(footnote_nodes(view, line)) do
+        parts[#parts + 1] = node.type == "footnote_inline" and "^" or tostring(reference_label(buffer, node))
+      end
+    end
+  end
+  return table.concat(parts, "\n")
+end
+
+-- Rebuild the rows of every reference when a publication changes the notes
+-- outside the edited blocks.
+local function sync_published_notes(view)
+  if not view.__footnote_inline then return end
+  local instance = published_model(view)
+  if not (instance and instance.status == "ready") then return end
+  local state = view.__footnote_publication
+  if state and state.generation == instance.generation then return end
+  local summary = note_summary(view, instance)
+  view.__footnote_publication = { generation = instance.generation, summary = summary }
+  if state and state.summary == summary then return end
+  local lines = {}
+  for _, line in ipairs(instance:footnote_lines()) do lines[#lines + 1] = line end
+  core.log_quiet("Footnote rows follow a publication with changed notes: %d reference line(s), %s",
+    #lines, view.buffer:get_name())
+  view:invalidate_visual_rows(ROW_PROVIDER, lines)
+end
+
 -- Inline rows exist only while a view without margin space shows notes.
 local function sync_inline_rows(view)
   local inline = wants_notes(view) and not footnotes.column_rect(view)
   if inline == (view.__footnote_inline or false) then return inline end
   view.__footnote_inline = inline or nil
+  view.__footnote_publication = nil
   if inline then
     view:add_visual_row_provider(ROW_PROVIDER, inline_row_provider)
     view:add_visual_metric_provider(ROW_PROVIDER, inline_metric_provider)
@@ -1339,6 +1403,7 @@ local function update(view)
     end
   end
   sync_inline_rows(view)
+  sync_published_notes(view)
   sync_definition_folds(view)
 end
 

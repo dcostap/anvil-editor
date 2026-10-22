@@ -2030,10 +2030,14 @@ function callout_runtime.reconcile_folds(view, reason)
   for _ in pairs(wanted) do wanted_count = wanted_count + 1 end
   phase_started = system.get_time()
 
+  -- A header's padding follows its fold. Render it again after the fold is
+  -- stored, so the render sees the fold.
+  local changed_headers = {}
   for semantic_id, fold in pairs(owner.callout_folds) do
     if not wanted[semantic_id] then
       view:remove_fold_region(fold, "markdown-callout-stale")
       owner.callout_folds[semantic_id] = nil
+      if fold.collapsed then changed_headers[#changed_headers + 1] = fold.line1 end
     end
   end
 
@@ -2058,6 +2062,9 @@ function callout_runtime.reconcile_folds(view, reason)
       and fold.line1 == callout.line1 and fold.line2 == callout.line2
     if not valid then
       if fold then view:remove_fold_region(fold, "markdown-callout-range-change") end
+      if (fold and fold.collapsed) or state.collapsed then
+        changed_headers[#changed_headers + 1] = callout.line1
+      end
       local added, err = view:add_fold_region {
         id = "markdown-callout:" .. semantic_id,
         line1 = callout.line1,
@@ -2108,11 +2115,15 @@ function callout_runtime.reconcile_folds(view, reason)
       owner.callout_fold_position_states[position_key] = nil
     end
   end
+  for _, line in ipairs(changed_headers) do
+    view:invalidate_line_render(PROVIDER_ID, line, line)
+    view:invalidate_visual_metrics(PROVIDER_ID, line, line)
+  end
   local folds_ms = elapsed_ms(phase_started)
   phase_started = system.get_time()
   core.log_quiet(
-    "Markdown Callout folds reconciled for %s: %d foldable callout(s), reason=%s",
-    view.buffer:get_name(), wanted_count, tostring(reason or "semantic publication")
+    "Markdown Callout folds reconciled for %s: %d foldable callout(s), %d changed header(s), reason=%s",
+    view.buffer:get_name(), wanted_count, #changed_headers, tostring(reason or "semantic publication")
   )
   local log_ms = elapsed_ms(phase_started)
   phase_started = system.get_time()

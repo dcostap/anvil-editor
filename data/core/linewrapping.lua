@@ -1486,7 +1486,7 @@ function LineWrapping.update_multiple_nonstructural_breaks(textview, ranges)
   textview.wrapped_buffer_line_count = line_count
   textview.wrapped_text_revision = revision
   textview.__wrap_layout_generation = old_wrap_generation + 1
-  textview:clear_composed_visual_row_cache()
+  for _, line in ipairs(affected_lines) do textview:invalidate_composed_rows(line, line) end
   textview.__line_render_wrap_change = {
     old_row_count = old_row_count,
     new_row_count = new_row_count,
@@ -1589,7 +1589,7 @@ function LineWrapping.update_same_line_suffix_breaks(textview, range, transactio
   textview.wrapped_buffer_line_count = #textview.buffer.lines
   textview.wrapped_text_revision = textview.buffer.text_revision or 0
   textview.__wrap_layout_generation = old_wrap_generation + 1
-  textview:clear_composed_visual_row_cache()
+  textview:invalidate_composed_rows(line, line)
   textview.__line_render_wrap_change = {
     old_row_count = total,
     new_row_count = new_total,
@@ -1724,7 +1724,7 @@ function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines, o
   textview.wrapped_buffer_line_count = #textview.buffer.lines
   textview.wrapped_text_revision = textview.buffer.text_revision or 0
   textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
-  textview:clear_composed_visual_row_cache()
+  textview:invalidate_composed_rows(new_line1, new_line2)
   local new_row_count = LineWrapping.get_total_wrapped_lines(textview)
   textview.__line_render_wrap_change = {
     old_row_count = old_row_count,

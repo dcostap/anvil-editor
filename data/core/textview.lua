@@ -7,6 +7,7 @@ local translate = require "core.buffer.translate"
 local tokenizer = require "core.tokenizer"
 local ime = require "core.ime"
 local linewrapping = require "core.linewrapping"
+local layout_changes = require "core.layout_changes"
 local line_packets = require "core.textview_line_packets"
 local language_intelligence = require "core.language_intelligence"
 local range_marker = require "core.range_marker"
@@ -916,7 +917,6 @@ function TextView:new(buffer)
   self.fold_regions = {}
   self.fold_generation = 0
   self.__fold_next_id = 0
-  self.visual_row_extensions = {}
   self.visual_row_providers = {}
   self.visual_metric_providers = {}
   self.__visual_metric_generation = 0
@@ -939,6 +939,8 @@ function TextView:new(buffer)
     metric_signature_changes = 0,
     metric_full_rebuilds = 0,
     metric_full_rebuild_rows = 0,
+    composed_row_builds = 0,
+    composed_row_updates = 0,
     metric_dirty_passes = 0,
     metric_dirty_rows = 0,
     metric_row_splices = 0,
@@ -1897,6 +1899,7 @@ local metric_tree_build
 local UNMEASURED_ROW = {}
 local compute_visual_row_height
 local current_composed_rows
+local add_composed_changes
 
 local function invalidate_visual_metric_rows(view, cache, row1, row2)
   row1 = common.clamp(math.floor(row1), 1, cache.row_count)
@@ -1984,191 +1987,90 @@ local function splice_visual_metric_rows(view, cache, old_row1, old_row2, new_ro
   perf_frame_add("textview_visual_metric_row_splice_rows", insert_count)
 end
 
----Record changed lines of a view whose rows are composed from collapsed folds
----and provider rows. The next metric lookup measures them all at once, so a
----batch of ranged invalidations compares the composed rows only once.
-local function defer_composed_metric_lines(view, cache, line1, line2, wrap_change)
-  local line_count = #view.buffer.lines
-  -- Pending lines keep their numbers only while no line is added or removed.
-  if not cache.composed_rows or cache.line_count ~= line_count then return false end
-  line1 = common.clamp(math.floor(line1), 1, line_count)
-  line2 = common.clamp(math.floor(line2 or line1), line1, line_count)
-  if wrap_change and wrap_change.line1 and wrap_change.line2 then
-    line1 = math.max(1, math.min(line1, wrap_change.line1))
-    line2 = math.min(line_count, math.max(line2, wrap_change.line2))
-  end
-  local pending = cache.pending_lines or {}
-  pending[#pending + 1] = { line1 = line1, line2 = line2 }
-  cache.pending_lines = pending
-  return true
-end
-
--- Rows that show lines `line1..line2`. They start at the previous line's rows,
--- because provider rows placed before a line follow the previous line.
-local function composed_row_span(position_rows, row_count, line_count, line1, line2)
-  local row1 = position_rows[math.max(1, line1 - 1)] or 1
-  local last_row = position_rows[line2] or row1
-  for line = line2 + 1, line_count do
-    local row = position_rows[line]
-    if row and row > last_row then return row1, row - 1 end
-  end
-  return row1, row_count
-end
-
--- Two composed rows match when a metric height measured for one fits the other.
-local function same_composed_row(a, b)
-  if a.type ~= b.type or a.line ~= b.line or a.row_in_line ~= b.row_in_line then
-    return false
-  end
-  if a.type == "fold" then return a.fold == b.fold end
-  if a.type == "provider" then
-    return a.provider_id == b.provider_id and a.placement == b.placement
-      and a.provider_row == b.provider_row
-  end
-  if a.type == "extra" then
-    return a.provider_id == b.provider_id and a.placement == b.placement
-      and a.row_in_extra == b.row_in_extra
-  end
-  return true
-end
-
----Measure the pending lines of a composed-row metric cache. Return false
----unless every other row matches a row the cache measured; the caller then
----rebuilds every row.
-local function resolve_composed_metric_lines(view, cache)
-  local pending = cache.pending_lines
-  cache.pending_lines = nil
-  local old = cache.composed_rows
-  local line_count = #view.buffer.lines
-  if not old then return false, "unmeasured composition" end
-  if #old.entries ~= cache.row_count or cache.line_count ~= line_count then
+---Apply the row changes of the composed rows to their row metrics. Keep the
+---height of every other row. Return false and a reason when the metrics
+---need a full rebuild.
+local function update_composed_metric_rows(view, cache, composed)
+  local changes = composed.row_changes
+  composed.row_changes = nil
+  if #composed.entries ~= cache.row_count + layout_changes.total_delta(changes) then
     return false, "row count"
   end
-  if not view:has_composed_visual_rows() then return false, "no composed rows" end
+  -- Only the text, the wrapping, and the row count may differ from the
+  -- measured state. Any other input change remeasures every row.
   if cache.signature ~= view:get_visual_metric_signature(
     cache.wrap_layout_generation, cache.row_count, cache.text_revision)
   then
     return false, "signature"
   end
-  local composed = current_composed_rows(view)
-  local entries = composed.entries
-  -- Rows are measured through the current UI snapshot. Resolve only when that
-  -- snapshot already shows the current composition.
-  if view:composed_visual_rows() ~= entries then return false, "snapshot" end
-  local row_count = #entries
-
-  local spans = {}
-  for _, range in ipairs(pending) do
-    local n1, n2 = composed_row_span(
-      composed.position_rows, row_count, line_count, range.line1, range.line2)
-    local o1, o2 = composed_row_span(
-      old.position_rows, cache.row_count, line_count, range.line1, range.line2)
-    spans[#spans + 1] = { n1 = n1, n2 = n2, o1 = o1, o2 = o2 }
+  local old_heights, old_plans = cache.heights, cache.row_plans
+  local old_dirty = cache.dirty_rows or {}
+  local old_anchor = metric_tree_row_at_y(
+    cache.height_tree, cache.row_count, math.max(0, view.scroll and view.scroll.y or 0)
+  )
+  local default_height = view:get_line_height()
+  local providers = view:visual_metric_provider_entries()
+  local line_metrics_cache = {}
+  local heights, plans, dirty = {}, {}, {}
+  local total, anchor_delta, touched_rows, measured_rows = 0, 0, 0, 0
+  local new_row, old_row = 0, 0
+  local function keep(old_end, mark_dirty)
+    while old_row < old_end do
+      old_row, new_row = old_row + 1, new_row + 1
+      heights[new_row] = old_heights[old_row]
+      plans[new_row] = old_plans[old_row]
+      total = total + heights[new_row]
+      if mark_dirty or old_dirty[old_row] then dirty[new_row] = true end
+    end
   end
-  table.sort(spans, function(a, b) return a.n1 < b.n1 end)
-  local merged = {}
-  for _, span in ipairs(spans) do
-    local last = merged[#merged]
-    if last and span.n1 <= last.n2 + 1 then
-      last.n2 = math.max(last.n2, span.n2)
-      last.o1 = math.min(last.o1, span.o1)
-      last.o2 = math.max(last.o2, span.o2)
+  for _, change in ipairs(changes) do
+    keep(change.old1 - 1, false)
+    local new_count = change.new2 - change.new1 + 1
+    touched_rows = touched_rows + new_count
+    if new_count == change.old2 - change.old1 + 1 then
+      -- Same rows: keep the last resolved heights until the dirty pass.
+      keep(change.old2, true)
     else
-      merged[#merged + 1] = span
-    end
-  end
-
-  -- Every row between the spans must be a row the cache measured.
-  local same = composed == old
-  local previous_new, previous_old = 0, 0
-  local function gap_matches(new_end, old_end)
-    if new_end - previous_new ~= old_end - previous_old then return false end
-    if same then return true end
-    for offset = 1, new_end - previous_new do
-      if not same_composed_row(entries[previous_new + offset], old.entries[previous_old + offset]) then
-        return false
+      -- Measure a changed row count before publishing the new metric tree,
+      -- so the old scroll offset still maps to its anchor row.
+      local removed_height, inserted_height = 0, 0
+      for row = change.old1, change.old2 do removed_height = removed_height + old_heights[row] end
+      for row = change.new1, change.new2 do
+        local height, plan = compute_visual_row_height(
+          view, row, providers, default_height, nil, false, line_metrics_cache
+        )
+        heights[row] = height
+        plans[row] = plan == nil and UNMEASURED_ROW or plan
+        inserted_height = inserted_height + height
       end
-    end
-    return true
-  end
-  for _, span in ipairs(merged) do
-    if not gap_matches(span.n1 - 1, span.o1 - 1) then return false, "rows" end
-    previous_new, previous_old = span.n2, span.o2
-  end
-  if not gap_matches(row_count, cache.row_count) then return false, "rows" end
-
-  if same then
-    for _, span in ipairs(merged) do invalidate_visual_metric_rows(view, cache, span.n1, span.n2) end
-  else
-    local old_heights, old_plans = cache.heights, cache.row_plans
-    local old_dirty = cache.dirty_rows or {}
-    local old_anchor = metric_tree_row_at_y(
-      cache.height_tree, cache.row_count, math.max(0, view.scroll and view.scroll.y or 0)
-    )
-    local default_height = view:get_line_height()
-    local providers = view:visual_metric_provider_entries()
-    local line_metrics_cache = {}
-    local heights, plans, dirty = {}, {}, {}
-    local total, anchor_delta, touched_rows, measured_rows = 0, 0, 0, 0
-    local new_row, old_row = 0, 0
-    local function keep(old_end, mark_dirty)
-      while old_row < old_end do
-        old_row, new_row = old_row + 1, new_row + 1
-        heights[new_row] = old_heights[old_row]
-        plans[new_row] = old_plans[old_row]
-        total = total + heights[new_row]
-        if mark_dirty or old_dirty[old_row] then dirty[new_row] = true end
+      total = total + inserted_height
+      measured_rows = measured_rows + new_count
+      if change.old2 < old_anchor then
+        anchor_delta = anchor_delta + inserted_height - removed_height
       end
-    end
-    for _, span in ipairs(merged) do
-      keep(span.o1 - 1, false)
-      local new_count = span.n2 - span.n1 + 1
-      touched_rows = touched_rows + new_count
-      if new_count == span.o2 - span.o1 + 1 then
-        -- Same rows: keep the last resolved heights until the dirty pass.
-        keep(span.o2, true)
-      else
-        -- Measure a changed row count before publishing the new metric tree,
-        -- so the old scroll offset still maps to its anchor row.
-        local removed_height, inserted_height = 0, 0
-        for row = span.o1, span.o2 do removed_height = removed_height + old_heights[row] end
-        for row = span.n1, span.n2 do
-          local height, plan = compute_visual_row_height(
-            view, row, providers, default_height, nil, false, line_metrics_cache
-          )
-          heights[row] = height
-          plans[row] = plan == nil and UNMEASURED_ROW or plan
-          inserted_height = inserted_height + height
-        end
-        total = total + inserted_height
-        measured_rows = measured_rows + new_count
-        if span.o2 < old_anchor then
-          anchor_delta = anchor_delta + inserted_height - removed_height
-        end
-        new_row, old_row = span.n2, span.o2
-      end
-    end
-    keep(cache.row_count, false)
-    cache.heights, cache.row_plans = heights, plans
-    cache.dirty_rows = next(dirty) and dirty or nil
-    cache.row_count = row_count
-    cache.total_height = total
-    cache.height_tree = metric_tree_build(heights, row_count)
-    if anchor_delta ~= 0 and view.scroll and not view.__pending_viewport_anchor then
-      view.scroll.y = view.scroll.y + anchor_delta
-      view.scroll.to.y = view.scroll.to.y + anchor_delta
-    end
-    cache.invalidated_rows = (cache.invalidated_rows or 0) + touched_rows
-    view.render_cache_diagnostics.metric_invalidations =
-      view.render_cache_diagnostics.metric_invalidations + touched_rows
-    if measured_rows > 0 then
-      view.render_cache_diagnostics.metric_row_splices =
-        view.render_cache_diagnostics.metric_row_splices + 1
-      perf_frame_add("textview_visual_metric_row_splices", 1)
-      perf_frame_add("textview_visual_metric_row_splice_rows", measured_rows)
+      new_row, old_row = change.new2, change.old2
     end
   end
-  cache.composed_rows = composed
+  keep(cache.row_count, false)
+  cache.heights, cache.row_plans = heights, plans
+  cache.dirty_rows = next(dirty) and dirty or nil
+  cache.row_count = new_row
+  cache.total_height = total
+  cache.height_tree = metric_tree_build(heights, new_row)
+  if anchor_delta ~= 0 and view.scroll and not view.__pending_viewport_anchor then
+    view.scroll.y = view.scroll.y + anchor_delta
+    view.scroll.to.y = view.scroll.to.y + anchor_delta
+  end
+  cache.invalidated_rows = (cache.invalidated_rows or 0) + touched_rows
+  view.render_cache_diagnostics.metric_invalidations =
+    view.render_cache_diagnostics.metric_invalidations + touched_rows
+  if measured_rows > 0 then
+    view.render_cache_diagnostics.metric_row_splices =
+      view.render_cache_diagnostics.metric_row_splices + 1
+    perf_frame_add("textview_visual_metric_row_splices", 1)
+    perf_frame_add("textview_visual_metric_row_splice_rows", measured_rows)
+  end
+  cache.line_count = #view.buffer.lines
   cache.wrap_layout_generation = view.__wrap_layout_generation or 0
   cache.text_revision = view.buffer.text_revision or 0
   cache.signature = view:get_visual_metric_signature()
@@ -2193,11 +2095,14 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   local cache = self.__visual_metric_cache
   local wrap_change = self.__line_render_wrap_change
   self.__line_render_wrap_change = nil
-  if line1 and cache and self:has_composed_visual_rows() then
-    if defer_composed_metric_lines(self, cache, line1, line2, wrap_change) then return end
-  elseif line1 and not self:has_composed_visual_rows()
-    and not (cache and cache.pending_lines)
+  if line1 and cache and cache.composed
+    and cache.composed == self.__composed_visual_row_cache
   then
+    -- The composed rows of these lines rebuild at the next read. Their row
+    -- changes then reach these metrics.
+    self:invalidate_composed_rows(line1, line2)
+    return
+  elseif line1 and not self:has_composed_visual_rows() then
     if not cache then return end
     if not self.wrapped_settings then
       invalidate_visual_metric_rows(self, cache, line1, line2)
@@ -2954,7 +2859,27 @@ function TextView:remove_visual_row_provider(id)
   return true
 end
 
-function TextView:invalidate_visual_rows(provider_id)
+---Rebuild the rows of a visual row provider. With `lines`, rebuild the rows
+---of these lines and of every line where the provider has rows now. Without
+---`lines`, rebuild every composed row.
+function TextView:invalidate_visual_rows(provider_id, lines)
+  if lines and provider_id and self.__composed_visual_row_cache then
+    local spans = {}
+    local line_count = #self.buffer.lines
+    for _, line in ipairs(lines) do
+      line = common.clamp(math.floor(line), 1, line_count)
+      spans[#spans + 1] = { line, line }
+    end
+    -- Rows of earlier edits must have their current lines first.
+    for _, entry in ipairs(current_composed_rows(self).entries) do
+      if entry.provider_id == provider_id then spans[#spans + 1] = { entry.line, entry.line } end
+    end
+    if #spans > 0 then add_composed_changes(self, layout_changes.spans(spans)) end
+    core.redraw = true
+    core.log_quiet("Text View rebuilds the rows of %s on %d line span(s), path=%s",
+      provider_id, #spans, self.buffer:get_name())
+    return
+  end
   self.__visual_row_invalidation_generation = (self.__visual_row_invalidation_generation or 0) + 1
   if provider_id then
     self.__visual_row_provider_invalidations = self.__visual_row_provider_invalidations or {}
@@ -2972,24 +2897,7 @@ function TextView:visual_row_provider_entries()
   return self.__visual_row_provider_entries
 end
 
-function TextView:set_visual_row_extension(id, extension)
-  assert(type(id) == "string" and id ~= "", "visual row extension id must be a non-empty string")
-  self.visual_row_extensions = self.visual_row_extensions or {}
-  self.visual_row_extensions[id] = extension
-  self:bump_fold_generation("visual-row-extension")
-end
-
-function TextView:clear_visual_row_extension(id)
-  if not self.visual_row_extensions or not self.visual_row_extensions[id] then return false end
-  self.visual_row_extensions[id] = nil
-  self:bump_fold_generation("visual-row-extension-clear")
-  return true
-end
-
 function TextView:has_extra_visual_rows()
-  for _, extension in pairs(self.visual_row_extensions or {}) do
-    if extension then return true end
-  end
   for _, entry in pairs(self.visual_row_providers or {}) do
     if entry then return true end
   end
@@ -3031,14 +2939,6 @@ end
 
 function TextView:get_extra_visual_rows_before_line(line)
   local total = 0
-  for _, extension in pairs(self.visual_row_extensions or {}) do
-    local before = extension.before
-    if type(before) == "function" then
-      total = total + math.max(0, math.floor(tonumber(before(line, self)) or 0))
-    elseif before then
-      total = total + math.max(0, math.floor(tonumber(before[line]) or 0))
-    end
-  end
   for _, entry in ipairs(self:visual_row_provider_entries()) do
     total = total + visual_row_count_from_provider(self, entry, "rows_before", line)
   end
@@ -3047,14 +2947,6 @@ end
 
 function TextView:get_extra_visual_rows_after_line(line)
   local total = 0
-  for _, extension in pairs(self.visual_row_extensions or {}) do
-    local after = extension.after
-    if type(after) == "function" then
-      total = total + math.max(0, math.floor(tonumber(after(line, self)) or 0))
-    elseif after then
-      total = total + math.max(0, math.floor(tonumber(after[line]) or 0))
-    end
-  end
   for _, entry in ipairs(self:visual_row_provider_entries()) do
     total = total + visual_row_count_from_provider(self, entry, "rows_after", line)
   end
@@ -3276,10 +3168,11 @@ function TextView:add_fold_region(opts)
           self:refresh_fold_region(fold)
           fold.span = marker.end_offset - marker.start_offset
           self:notify_fold_listeners("change", fold, reason)
-          -- An edit on an earlier line only shifts the fold's offsets. Its
-          -- lines, columns, and text are unchanged, so its layout is too.
-          if fold.span == span and fold.line1 == line1 and fold.col1 == col1
-            and fold.line2 == line2 and fold.col2 == col2
+          -- An expanded fold has no rows of its own. An edit before a
+          -- collapsed fold only moves it; its columns and text are unchanged,
+          -- so the composed rows move it with the edit's line changes.
+          if not fold.collapsed or fold.span == span and fold.col1 == col1
+            and fold.col2 == col2 and fold.line2 - fold.line1 == line2 - line1
           then
             return
           end
@@ -3472,12 +3365,11 @@ local function provider_generation_value(view, entry)
 end
 
 function TextView:visual_row_cache_signature()
+  -- Text edits and line wrapping update the composed rows through their line
+  -- changes. The signature holds only the inputs that change every row.
   local parts = {
     tostring(self.fold_generation or 0),
-    tostring(self.buffer.text_revision or 0),
-    tostring(#self.buffer.lines),
-    tostring(self.wrapped_settings and linewrapping.get_total_wrapped_lines(self) or 0),
-    tostring(self.__wrap_layout_generation or 0),
+    tostring(self.wrapped_settings ~= nil),
     tostring(self.__visual_row_invalidation_generation or 0),
   }
   for _, entry in ipairs(self:visual_row_provider_entries()) do
@@ -3572,129 +3464,299 @@ function TextView:append_legacy_provider_rows(entries, provider_id, line, placem
   end
 end
 
-function TextView:build_composed_visual_rows()
-  local entries = {}
-  local folds = self:get_collapsed_folds()
-  local fidx = 1
-  local provider_entries = self:visual_row_provider_entries()
+-- The collapsed fold whose row group holds `line`. The row walk takes the
+-- first fold that starts on a visible line and skips the folds inside it.
+local function fold_row_group_at(folds, line)
+  local covered = 0
+  for _, fold in ipairs(folds) do
+    if fold.line1 > line then return nil end
+    if fold.line1 > covered then
+      if fold.line2 >= line then return fold end
+      covered = fold.line2
+    end
+  end
+end
+
+-- Append the rows of lines `line1..line2`. `line1` must start a row group,
+-- and `line2` must end one.
+local function append_line_rows(view, entries, line1, line2, folds)
+  local provider_entries = view:visual_row_provider_entries()
+  -- A legacy `rows_before` count is cumulative. The rows before a line are
+  -- the increase from the line that starts the previous row group.
   local previous_before = {}
+  if line1 > 1 and #provider_entries > 0 then
+    local fold = fold_row_group_at(folds, line1 - 1)
+    local previous = fold and fold.line1 or line1 - 1
+    for _, provider_entry in ipairs(provider_entries) do
+      local _, total = legacy_visual_row_count(view, provider_entry, "rows_before", previous, 0)
+      previous_before[provider_entry.id] = total
+    end
+  end
 
   local function append_provider_placement(line, placement)
     for _, provider_entry in ipairs(provider_entries) do
       local previous_total = previous_before[provider_entry.id] or 0
-      self:append_provider_rows(entries, provider_entry, line, placement, previous_total)
+      view:append_provider_rows(entries, provider_entry, line, placement, previous_total)
       local method = placement == "before" and "rows_before" or "rows_after"
-      local count, total = legacy_visual_row_count(self, provider_entry, method, line, previous_total)
+      local count, total = legacy_visual_row_count(view, provider_entry, method, line, previous_total)
       if placement == "before" then previous_before[provider_entry.id] = total end
-      self:append_legacy_provider_rows(entries, provider_entry.id, line, placement, count)
+      view:append_legacy_provider_rows(entries, provider_entry.id, line, placement, count)
     end
   end
 
-  local extension_previous_before = 0
-  local function extension_count(line, placement)
-    local total = 0
-    for _, extension in pairs(self.visual_row_extensions or {}) do
-      local source = placement == "before" and extension.before or extension.after
-      local count = 0
-      if type(source) == "function" then
-        count = math.max(0, math.floor(tonumber(source(line, self)) or 0))
-      elseif source then
-        count = math.max(0, math.floor(tonumber(source[line]) or 0))
+  local function append_text_rows(line, collapsed_fold)
+    for row_in_line = 1, view:get_line_visual_row_count(line) do
+      local wrapped_idx
+      if view.wrapped_settings then
+        wrapped_idx = (view.wrapped_line_to_idx[line] or 1) + row_in_line - 1
       end
-      total = total + count
+      append_composed_entry(entries, {
+        type = "line", line = line, row_in_line = row_in_line,
+        wrapped_idx = wrapped_idx, collapsed_fold = collapsed_fold,
+      })
     end
-    if placement == "before" then
-      local delta = math.max(0, total - extension_previous_before)
-      extension_previous_before = total
-      return delta
-    end
-    return total
   end
 
-  local line = 1
-  while line <= #self.buffer.lines do
+  local fidx = 1
+  while folds[fidx] and folds[fidx].line1 < line1 do fidx = fidx + 1 end
+  local line = line1
+  while line <= line2 do
     while folds[fidx] and folds[fidx].line1 < line do fidx = fidx + 1 end
-    self:append_legacy_provider_rows(entries, "visual-row-extension", line, "before", extension_count(line, "before"))
     append_provider_placement(line, "before")
-
     local fold = folds[fidx]
     if fold and line == fold.line1 then
       if fold.show_widget == false then
-        local count = self:get_line_visual_row_count(line)
-        for row_in_line = 1, count do
-          local wrapped_idx
-          if self.wrapped_settings then
-            wrapped_idx = (self.wrapped_line_to_idx[line] or 1) + row_in_line - 1
-          end
-          append_composed_entry(entries, {
-            type = "line", line = line, row_in_line = row_in_line,
-            wrapped_idx = wrapped_idx, collapsed_fold = fold,
-          })
-        end
+        append_text_rows(line, fold)
       else
         append_composed_entry(entries, {
           type = "fold", fold = fold, line = fold.line1, row_in_line = 1,
         })
       end
       append_provider_placement(line, "after")
-      self:append_legacy_provider_rows(entries, "visual-row-extension", line, "after", extension_count(line, "after"))
       line = fold.line2 + 1
       fidx = fidx + 1
     else
-      local count = self:get_line_visual_row_count(line)
-      for row_in_line = 1, count do
-        local wrapped_idx
-        if self.wrapped_settings then
-          wrapped_idx = (self.wrapped_line_to_idx[line] or 1) + row_in_line - 1
-        end
-        append_composed_entry(entries, { type = "line", line = line, row_in_line = row_in_line, wrapped_idx = wrapped_idx })
-      end
+      append_text_rows(line)
       append_provider_placement(line, "after")
-      self:append_legacy_provider_rows(entries, "visual-row-extension", line, "after", extension_count(line, "after"))
       line = line + 1
     end
   end
+end
 
+function TextView:build_composed_visual_rows()
+  local entries = {}
+  append_line_rows(self, entries, 1, #self.buffer.lines, self:get_collapsed_folds())
   if #entries == 0 then append_composed_entry(entries, { type = "line", line = 1, row_in_line = 1 }) end
   return entries
+end
+
+local function composed_position_rows(view, entries)
+  local position_rows = {}
+  for index, entry in ipairs(entries) do
+    if entry.type == "line" then
+      position_rows[entry.line] = position_rows[entry.line] or index
+    elseif entry.type == "fold" then
+      for line = entry.fold.line1, entry.fold.line2 do
+        position_rows[line] = index
+      end
+    end
+  end
+  -- A body-only fold keeps its first line as an ordinary rendered line.
+  -- Hidden positions still map to that visible header row so navigation and
+  -- reveal operations have a deterministic visual anchor.
+  for _, fold in ipairs(view:get_collapsed_folds()) do
+    if fold.show_widget == false then
+      local header_row = position_rows[fold.line1]
+      if header_row then
+        for line = fold.line1 + 1, fold.line2 do
+          if not position_rows[line] then position_rows[line] = header_row end
+        end
+      end
+    end
+  end
+  return position_rows
+end
+
+-- Extend each change to whole row groups. A collapsed fold is one group, so
+-- a change to one of its lines replaces all its rows.
+local function cover_row_groups(folds, changes)
+  if #folds == 0 then return changes end
+  while true do
+    local spans = {}
+    for _, change in ipairs(changes) do
+      local first = fold_row_group_at(folds, change.new1)
+      local last = fold_row_group_at(folds, change.new2)
+      local line1 = first and math.min(first.line1, change.new1) or change.new1
+      local line2 = last and math.max(last.line2, change.new2) or change.new2
+      if line1 ~= change.new1 or line2 ~= change.new2 then spans[#spans + 1] = { line1, line2 } end
+    end
+    if #spans == 0 then return changes end
+    changes = layout_changes.compose(changes, layout_changes.spans(spans))
+  end
+end
+
+-- Apply the pending line changes of the composed rows. Keep the rows of
+-- every other line, and move them by the lines added or removed before them.
+-- Return false and a reason when the changes do not describe the current text.
+local function update_composed_rows(view, cache)
+  local changes = cache.changes
+  cache.changes = nil
+  local line_count = #view.buffer.lines
+  if cache.line_count + layout_changes.total_delta(changes) ~= line_count then
+    return false, "line count"
+  end
+  local folds = view:get_collapsed_folds()
+  changes = cover_row_groups(folds, changes)
+  local old = cache.entries
+  local wrap_map = view.wrapped_settings and view.wrapped_line_to_idx
+  local entries, row_changes = {}, {}
+  local index, delta = 1, 0
+  local function keep(limit)
+    while index <= #old and old[index].line < limit do
+      local entry = old[index]
+      entry.line = entry.line + delta
+      if wrap_map and entry.wrapped_idx then
+        entry.wrapped_idx = (wrap_map[entry.line] or entry.wrapped_idx) + entry.row_in_line - 1
+      end
+      entries[#entries + 1] = entry
+      entry.absolute_row, entry.row = #entries, #entries
+      index = index + 1
+    end
+  end
+  for _, change in ipairs(changes) do
+    keep(change.old1)
+    local old1 = index
+    while index <= #old and old[index].line <= change.old2 do index = index + 1 end
+    local new1 = #entries + 1
+    append_line_rows(view, entries, change.new1, change.new2, folds)
+    if index == old1 or #entries < new1 then return false, "empty row span" end
+    row_changes[#row_changes + 1] = { old1 = old1, old2 = index - 1, new1 = new1, new2 = #entries }
+    delta = delta + (change.new2 - change.new1) - (change.old2 - change.old1)
+  end
+  keep(math.huge)
+  local position_rows = composed_position_rows(view, entries)
+  if not position_rows[line_count] then return false, "last line has no row" end
+  cache.entries = entries
+  cache.position_rows = position_rows
+  cache.line_count = line_count
+  -- The row metrics read these row changes. Nothing else reads them.
+  local metrics = view.__visual_metric_cache
+  if metrics and metrics.composed == cache then
+    cache.row_changes = layout_changes.compose(cache.row_changes, row_changes)
+  end
+  view.render_cache_diagnostics.composed_row_updates =
+    view.render_cache_diagnostics.composed_row_updates + 1
+  return true
+end
+
+-- The lines whose provider rows can change when the lines of `changes` change.
+local function dependent_spans(view, changes)
+  local spans = {}
+  local line_count = #view.buffer.lines
+  for _, entry in ipairs(view:visual_row_provider_entries()) do
+    local provider = entry.provider
+    if provider.dependent_lines then
+      for _, change in ipairs(changes) do
+        local ok, line1, line2 = pcall(provider.dependent_lines, provider, view, change.new1, change.new2)
+        if not ok then
+          core.log_quiet("TextView visual row provider %s.dependent_lines failed for %s: %s",
+            tostring(entry.id), view.buffer:get_name(), tostring(line1))
+        elseif line1 then
+          line1 = common.clamp(math.floor(line1), 1, line_count)
+          line2 = common.clamp(math.floor(line2 or line1), line1, line_count)
+          if line1 < change.new1 or line2 > change.new2 then spans[#spans + 1] = { line1, line2 } end
+        end
+      end
+    end
+  end
+  return spans
+end
+
+---Record line changes for the composed rows. The next read applies them.
+function add_composed_changes(view, changes)
+  local cache = view.__composed_visual_row_cache
+  if not cache then return end
+  cache.changes = layout_changes.compose(cache.changes, changes)
+  local spans = dependent_spans(view, changes)
+  if #spans > 0 then
+    cache.changes = layout_changes.compose(cache.changes, layout_changes.spans(spans))
+  end
+  view.__composed_visual_row_snapshot_kind = nil
+  view.__composed_visual_row_snapshot_id = nil
+  view.__composed_visual_row_snapshot_rows = nil
+  view.__visual_metric_snapshot_kind = nil
+  view.__visual_metric_snapshot_id = nil
+  view.__visual_metric_snapshot_cache = nil
+end
+
+---Rebuild the composed rows of lines `line1..line2` at the next read.
+---Without lines, rebuild every composed row.
+function TextView:invalidate_composed_rows(line1, line2)
+  if not line1 then
+    self:clear_composed_visual_row_cache()
+    return
+  end
+  local line_count = #self.buffer.lines
+  line1 = common.clamp(math.floor(line1), 1, line_count)
+  line2 = common.clamp(math.floor(line2 or line1), line1, line_count)
+  add_composed_changes(self, layout_changes.span(line1, line2))
+end
+
+---Record a text transaction for the composed rows. A visual row provider
+---without `dependent_lines` cannot say which rows an edit changes, so the
+---next read rebuilds every composed row.
+local function add_composed_transaction(view, transaction)
+  if not view.__composed_visual_row_cache then return end
+  if transaction.type == "load" then
+    view:clear_composed_visual_row_cache()
+    return
+  end
+  for _, entry in ipairs(view:visual_row_provider_entries()) do
+    if not entry.provider.dependent_lines then
+      core.log_quiet("Text View rebuilds every composed row: provider %s has no dependent_lines, path=%s",
+        tostring(entry.id), view.buffer:get_name())
+      view:clear_composed_visual_row_cache()
+      return
+    end
+  end
+  add_composed_changes(view, layout_changes.from_transaction(transaction))
+  view.__composed_visual_row_cache.text_revision = view.buffer.text_revision
 end
 
 ---Return the composed rows for the current state, ignoring any UI snapshot.
 function current_composed_rows(view)
   local signature = view:visual_row_cache_signature()
   local cache = view.__composed_visual_row_cache
+  -- Each Buffer transaction records its changes. A text revision without one
+  -- comes from code that replaced the lines directly.
+  if cache and cache.text_revision ~= view.buffer.text_revision then
+    core.log_quiet("Text View rebuilds every composed row: text changed outside a transaction, path=%s",
+      view.buffer:get_name())
+    cache = nil
+  end
+  if cache and cache.signature == signature and cache.changes then
+    local update_start = system.get_time()
+    local updated, reason = update_composed_rows(view, cache)
+    perf_frame_add("textview_composed_row_update_ms", (system.get_time() - update_start) * 1000)
+    if not updated then
+      core.log_quiet("Text View rebuilds every composed row: %s, path=%s",
+        reason, view.buffer:get_name())
+      cache = nil
+    end
+  end
   if not cache or cache.signature ~= signature then
     local build_start = system.get_time()
     local entries = view:build_composed_visual_rows()
-    local position_rows = {}
-    for index, entry in ipairs(entries) do
-      if entry.type == "line" then
-        position_rows[entry.line] = position_rows[entry.line] or index
-      elseif entry.type == "fold" then
-        for line = entry.fold.line1, entry.fold.line2 do
-          position_rows[line] = index
-        end
-      end
-    end
-    -- A body-only fold keeps its first line as an ordinary rendered line.
-    -- Hidden positions still map to that visible header row so navigation and
-    -- reveal operations have a deterministic visual anchor.
-    for _, fold in ipairs(view:get_collapsed_folds()) do
-      if fold.show_widget == false then
-        local header_row = position_rows[fold.line1]
-        if header_row then
-          for line = fold.line1 + 1, fold.line2 do
-            if not position_rows[line] then position_rows[line] = header_row end
-          end
-        end
-      end
-    end
     cache = {
       signature = signature,
       entries = entries,
-      position_rows = position_rows,
+      position_rows = composed_position_rows(view, entries),
+      line_count = #view.buffer.lines,
+      text_revision = view.buffer.text_revision,
     }
     view.__composed_visual_row_cache = cache
+    view.render_cache_diagnostics.composed_row_builds =
+      view.render_cache_diagnostics.composed_row_builds + 1
     perf_frame_add("textview_composed_row_builds", 1)
     local build_ms = (system.get_time() - build_start) * 1000
     perf_frame_add("textview_composed_row_build_ms", build_ms)
@@ -4169,12 +4231,18 @@ function TextView:get_visual_row_metric_cache()
   local lookup_start = perf_active and system.get_time()
   perf_frame_add("textview_visual_metric_cache_calls", 1)
   local pending_cache = self.__visual_metric_cache
-  if pending_cache and pending_cache.pending_lines then
+  if pending_cache and pending_cache.composed then
     local resolve_start = perf_active and system.get_time()
-    local resolved, reason = resolve_composed_metric_lines(self, pending_cache)
-    if not resolved and self.__visual_metric_cache == pending_cache then
+    local composed = self:has_composed_visual_rows() and current_composed_rows(self)
+    local updated, reason = true, nil
+    if composed ~= pending_cache.composed then
+      updated, reason = false, "composed rows rebuilt"
+    elseif composed.row_changes then
+      updated, reason = update_composed_metric_rows(self, pending_cache, composed)
+    end
+    if not updated and self.__visual_metric_cache == pending_cache then
       core.log_quiet(
-        "Text View remeasures every row: changed lines did not resolve (%s) revision=%d path=%s",
+        "Text View remeasures every row: %s, revision=%d path=%s",
         reason, self.buffer.text_revision or 0, self.buffer:get_name()
       )
       clear_visual_metric_cache(self)
@@ -4273,11 +4341,12 @@ function TextView:get_visual_row_metric_cache()
     total = total + height
   end
   local height_tree = metric_tree_build(heights, row_count)
-  local composed_rows
+  -- These heights measure the current composed rows, so their earlier row
+  -- changes do not apply.
+  local composed
   if self:has_composed_visual_rows() then
-    local rows = self:composed_visual_rows()
-    composed_rows = self.__composed_visual_row_cache
-    if composed_rows and composed_rows.entries ~= rows then composed_rows = nil end
+    composed = current_composed_rows(self)
+    composed.row_changes = nil
   end
   cache = {
     signature = signature,
@@ -4292,8 +4361,8 @@ function TextView:get_visual_row_metric_cache()
     default_height = default_height,
     sparse_metrics = sparse_metrics,
     line_count = #self.buffer.lines,
-    -- The composed rows these heights measure, compared when changed lines are resolved.
-    composed_rows = composed_rows,
+    -- The composed rows these heights measure. Their row changes update the heights.
+    composed = composed,
   }
   self.__visual_metric_cache = cache
   apply_viewport_anchor(self, cache)
@@ -10376,6 +10445,7 @@ Buffer.register_text_transaction_handler("textview-render-caches", function(buff
       view.__composed_visual_row_snapshot_kind = nil
       view.__composed_visual_row_snapshot_id = nil
       view.__composed_visual_row_snapshot_rows = nil
+      add_composed_transaction(view, transaction)
       line_packets.apply_transaction(view, transaction)
       local invalid_line1, invalid_line2 = line1, line2
       local provider_entries = view:line_render_provider_entries()
