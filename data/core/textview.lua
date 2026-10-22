@@ -6004,64 +6004,32 @@ function TextView:get_line_render_col_x_cursor(render_line)
   end
 end
 
----Use retained native UTF-8 advances when a rendered line consists of one or
----more contiguous source-preserving text runs. Hidden, widget, remapped, and
----explicit-width fragments keep the general rendered-column mapping path.
-function TextView:get_line_render_native_wrap(render_line, width, mode, start_col, begin_width)
+---Return the fragments of a rendered line for `renderer.wrap_fragment_lines`:
+---7 numbers for each fragment, and the text layout of each text fragment.
+function TextView:get_line_render_wrap_fragments(render_line)
   get_line_render_raw_col_x_offset(self, render_line, 1)
   local cache = render_line.__native_text_layout_cache
-  if not cache or #cache.entries == 0 then return nil end
-  local source_text = render_line.source_text or ""
-  if #cache.entries == 1 then
-    local entry = cache.entries[1]
-    local fragment = entry.fragment
-    if fragment.hidden or fragment.widget or not entry.text_layout
-      or (fragment.source_col1 or 1) ~= 1
-      or (fragment.source_col2 or 1) ~= #source_text + 1
-      or fragment.text ~= source_text
-      or fragment.text_source_col1 or fragment.text_source_col2
-    then
-      return nil
+  if not cache.wrap_fragments then
+    -- Fragment kinds: 0 is text, 1 is hidden source, 2 is a widget.
+    local records, layouts = {}, {}
+    for index, entry in ipairs(cache.entries) do
+      local fragment = entry.fragment
+      local col1 = fragment.source_col1 or 1
+      local text_col1, text_col2 = fragment.text_source_col1, fragment.text_source_col2
+      if not (text_col1 and text_col2) then text_col1, text_col2 = 0, 0 end
+      local base = (index - 1) * 7
+      records[base + 1] = fragment.hidden and 1 or fragment.widget and 2 or 0
+      records[base + 2] = col1
+      records[base + 3] = fragment.source_col2 or col1
+      records[base + 4] = entry.width
+      records[base + 5] = fragment.text_x_offset or 0
+      records[base + 6] = text_col1
+      records[base + 7] = text_col2
+      layouts[index] = entry.text_layout or false
     end
-    local zero_breaks = entry.text_layout:wrap(
-      width, mode, math.max(0, (start_col or 1) - 1),
-      render_line.x_offset or 0,
-      (render_line.x_offset or 0) + (begin_width or 0)
-    )
-    local splits = {}
-    for index, byte_offset in ipairs(zero_breaks) do splits[index] = byte_offset + 1 end
-    return splits
+    cache.wrap_fragments, cache.wrap_layouts = records, layouts
   end
-
-  if not renderer.wrap_text_layouts then return nil end
-  local layouts = {}
-  local expected_col = 1
-  for index, entry in ipairs(cache.entries) do
-    local fragment = entry.fragment
-    local text = fragment.text or ""
-    local col1 = fragment.source_col1 or expected_col
-    local col2 = fragment.source_col2 or col1
-    if fragment.hidden or fragment.widget or fragment.width ~= nil
-      or not entry.text_layout or fragment.text_x_offset
-      or fragment.text_source_col1 or fragment.text_source_col2
-      or col1 ~= expected_col or col2 ~= col1 + #text
-      or source_text:find(text, col1, true) ~= col1
-    then
-      return nil
-    end
-    layouts[index] = entry.text_layout
-    expected_col = col2
-  end
-  if expected_col ~= #source_text + 1 then return nil end
-  local zero_breaks = renderer.wrap_text_layouts(
-    layouts,
-    width, mode, math.max(0, (start_col or 1) - 1),
-    render_line.x_offset or 0,
-    (render_line.x_offset or 0) + (begin_width or 0)
-  )
-  local splits = {}
-  for index, byte_offset in ipairs(zero_breaks) do splits[index] = byte_offset + 1 end
-  return splits
+  return cache.wrap_fragments, cache.wrap_layouts
 end
 
 ---Return the x offset of `col` within a position row drawn as styled runs.

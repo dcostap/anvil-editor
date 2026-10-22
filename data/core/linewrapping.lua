@@ -597,12 +597,13 @@ local function clamp_continuation_indent_width(indent_width, wrap_width)
   return math.min(indent_width or 0, wrap_width * 0.5)
 end
 
-local function compute_rendered_line_breaks(
-  textview, render_line, default_font, line, width, mode, start_col,
+-- Prepares a rendered line for `renderer.wrap_fragment_lines`.
+-- Returns the line record and the continuation indent width.
+local function prepare_rendered_line(
+  textview, render_line, default_font, line, width, start_col,
   initial_begin_width, measurement
 )
   local text = textview.buffer:get_utf8_line(line)
-  local visible_end = #text - (text:sub(-1) == "\n" and 1 or 0)
   local begin_width = initial_begin_width
   local continuation_font = render_line.continuation_indent_font or default_font
   if begin_width == nil then
@@ -611,11 +612,6 @@ local function compute_rendered_line_breaks(
     )
   end
   begin_width = clamp_continuation_indent_width(begin_width or 0, width)
-  local splits = { start_col }
-  local row_start = start_col
-  local row_start_x
-  local last_opportunity
-  local last_opportunity_next_x
   local line_x_offset = render_line.x_offset or 0
   if render_line.continuation_indent_col then
     begin_width = textview:get_line_render_col_x_offset(
@@ -624,56 +620,18 @@ local function compute_rendered_line_breaks(
       + continuation_indent_width(continuation_font, "", measurement)
     begin_width = clamp_continuation_indent_width(begin_width, width)
   end
-  local rendered_x = textview.get_line_render_col_x_cursor
-    and textview:get_line_render_col_x_cursor(render_line)
-    or function(col) return textview:get_line_render_col_x_offset(render_line, col) end
-  row_start_x = rendered_x(row_start)
-  if textview.get_line_render_native_wrap then
-    local native_splits = textview:get_line_render_native_wrap(
-      render_line, width, mode, start_col, begin_width
-    )
-    if native_splits then return native_splits, begin_width, "rendered_native" end
-  end
-  local col = start_col
-  local col_x = row_start_x
-  for char in common.utf8_chars(text:sub(start_col, visible_end)) do
-    local next_col = col + #char
-    local next_x = rendered_x(next_col)
-    local leading = line_x_offset + (row_start > 1 and begin_width or 0)
-    local row_width = leading + next_x - row_start_x
-    if row_width > width and col > row_start then
-      local split = col
-      if mode == "word" and last_opportunity and last_opportunity >= row_start then
-        split = last_opportunity + 1
-      end
-      if split <= row_start then split = col end
-      if split > splits[#splits] then splits[#splits + 1] = split end
-      row_start = split
-      row_start_x = split == col and col_x or last_opportunity_next_x or col_x
-      if last_opportunity and last_opportunity < row_start then last_opportunity = nil end
-      leading = line_x_offset + (row_start > 1 and begin_width or 0)
-      row_width = leading + next_x - row_start_x
-      if row_width > width and col > row_start then
-        splits[#splits + 1] = col
-        row_start = col
-        row_start_x = col_x
-      end
-    elseif mode == "word"
-      and is_word_wrap_opportunity(text, col, char:byte())
-    then
-      last_opportunity = col
-      last_opportunity_next_x = next_x
-    end
-    col_x = next_x
-    col = next_col
-  end
-  return splits, begin_width, "rendered_cursor"
+  local fragments, layouts = textview:get_line_render_wrap_fragments(render_line)
+  return {
+    text = text, start_col = start_col, x_offset = line_x_offset,
+    begin_width = begin_width, fragments = fragments, layouts = layouts,
+  }, begin_width
 end
 
 -- Computes the breaks for a line suffix. `start_col` must be a valid byte
 -- column, normally an existing cached visual-row start. Returns row starts for
 -- the suffix, including `start_col`, plus the line continuation indent width.
-function LineWrapping.compute_line_breaks_from_col(
+-- A rendered line returns no row starts, but a record for the native batch.
+local function compute_line(
   buffer, default_font, line, width, mode, start_col, initial_begin_width,
   textview, measurement
 )
@@ -702,13 +660,15 @@ function LineWrapping.compute_line_breaks_from_col(
   local line_text = buffer:get_utf8_line(line)
   local visible_end_col = #line_text
   if line_text:sub(-1) == "\n" then visible_end_col = visible_end_col - 1 end
-  local function finish(result_splits, result_begin_width, branch)
-    if not perf_active then return result_splits, result_begin_width end
+  local function finish(result_splits, result_begin_width, branch, rendered_line)
+    if not perf_active then return result_splits, result_begin_width, rendered_line end
     local perf_elapsed_ms = perf_start and ((system.get_time() - perf_start) * 1000) or 0
     local branch_key = tostring(branch or perf_branch or "empty"):gsub("[^%w_]", "_")
     perf_frame_add("linewrapping_compute_line_breaks_calls", 1)
     perf_frame_add("linewrapping_compute_line_breaks_bytes", perf_bytes)
-    perf_frame_add("linewrapping_compute_line_breaks_splits", #result_splits)
+    if result_splits then
+      perf_frame_add("linewrapping_compute_line_breaks_splits", #result_splits)
+    end
     perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_calls", 1)
     perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_bytes", perf_bytes)
     perf_frame_add("linewrapping_compute_branch_" .. branch_key .. "_ms", perf_elapsed_ms)
@@ -719,7 +679,7 @@ function LineWrapping.compute_line_breaks_from_col(
         line = line,
         bytes = #line_text,
         visible_bytes = perf_bytes,
-        splits = #result_splits,
+        splits = result_splits and #result_splits or 0,
         width = width,
         mode = mode,
         tokenized = require_tokenization,
@@ -731,7 +691,7 @@ function LineWrapping.compute_line_breaks_from_col(
       })
     end
     perf_frame_add("linewrapping_compute_line_breaks_ms", perf_elapsed_ms)
-    return result_splits, result_begin_width
+    return result_splits, result_begin_width, rendered_line
   end
   local may_have_render_line = textview and textview.get_line_render
     and (not measurement or measurement.has_line_render_providers)
@@ -762,11 +722,11 @@ function LineWrapping.compute_line_breaks_from_col(
         perf_has_non_ascii = visible_text:find("[\128-\255]") ~= nil
         perf_ascii = not perf_has_non_ascii
       end
-      local rendered_splits, rendered_begin_width, rendered_branch = compute_rendered_line_breaks(
-        textview, render_line, default_font, line, width, mode,
+      local rendered_line, rendered_begin_width = prepare_rendered_line(
+        textview, render_line, default_font, line, width,
         start_col, begin_width, measurement
       )
-      return finish(rendered_splits, rendered_begin_width, rendered_branch)
+      return finish(nil, rendered_begin_width, "rendered", rendered_line)
     end
   end
   begin_width = clamp_continuation_indent_width(begin_width or 0, width)
@@ -953,6 +913,56 @@ function LineWrapping.compute_line_breaks_from_col(
   return finish(splits, begin_width)
 end
 
+---Compute the breaks of several lines. Rendered lines wrap in one native call.
+---`opts.start_cols` and `opts.begin_widths` give the first column and the
+---continuation indent width of a line suffix, by index. With `opts.deadline`,
+---stop after the line at which `system.get_time()` reaches the deadline.
+---Returns the row starts and the continuation indent widths by index, and
+---the count of lines that it computed.
+function LineWrapping.compute_lines_breaks(
+  buffer, default_font, lines, width, mode, textview, measurement, opts
+)
+  opts = opts or {}
+  local start_cols, begin_widths = opts.start_cols, opts.begin_widths
+  local breaks, line_begin_widths = {}, {}
+  local rendered, rendered_indexes = {}, {}
+  local count = 0
+  for index, line in ipairs(lines) do
+    local splits, begin_width, rendered_line = compute_line(
+      buffer, default_font, line, width, mode,
+      start_cols and start_cols[index] or 1, begin_widths and begin_widths[index],
+      textview, measurement
+    )
+    breaks[index], line_begin_widths[index] = splits, begin_width
+    if rendered_line then
+      rendered[#rendered + 1] = rendered_line
+      rendered_indexes[#rendered] = index
+    end
+    count = index
+    if opts.deadline and system.get_time() >= opts.deadline then break end
+  end
+  if #rendered > 0 then
+    local perf_start = perf_diagnostics_active() and system.get_time()
+    local results = renderer.wrap_fragment_lines(rendered, width, mode)
+    for index, splits in ipairs(results) do breaks[rendered_indexes[index]] = splits end
+    perf_frame_add("linewrapping_fragment_wrap_calls", 1)
+    perf_frame_add("linewrapping_fragment_wrap_lines", #rendered)
+    perf_elapsed("linewrapping_fragment_wrap_ms", perf_start)
+  end
+  return breaks, line_begin_widths, count
+end
+
+function LineWrapping.compute_line_breaks_from_col(
+  buffer, default_font, line, width, mode, start_col, initial_begin_width,
+  textview, measurement
+)
+  local breaks, begin_widths = LineWrapping.compute_lines_breaks(
+    buffer, default_font, { line }, width, mode, textview, measurement,
+    { start_cols = { start_col }, begin_widths = { initial_begin_width } }
+  )
+  return breaks[1], begin_widths[1]
+end
+
 function LineWrapping.compute_line_breaks(
   buffer, default_font, line, width, mode, textview, measurement
 )
@@ -1059,15 +1069,17 @@ function LineWrapping.reconstruct_breaks(textview, default_font, width)
     textview.wrapped_buffer_line_count = #buffer.lines
     textview.wrapped_text_revision = buffer.text_revision or 0
     local wrapped_row_count = 0
+    local lines = {}
+    for i = 1, #buffer.lines do lines[i] = i end
+    local line_breaks, offsets = LineWrapping.compute_lines_breaks(
+      buffer, default_font, lines, width, measurement.mode,
+      textview, measurement
+    )
     for i = 1, #buffer.lines do
       reconstructed_lines = reconstructed_lines + 1
-      local breaks, offset = LineWrapping.compute_line_breaks(
-        buffer, default_font, i, width, measurement.mode,
-        textview, measurement
-      )
-      textview.wrapped_line_offsets[i] = offset
+      textview.wrapped_line_offsets[i] = offsets[i]
       textview.wrapped_line_to_idx[i] = wrapped_row_count + 1
-      for _, col in ipairs(breaks) do
+      for _, col in ipairs(line_breaks[i]) do
         wrapped_row_count = wrapped_row_count + 1
         local row_offset = wrapped_row_count * 2
         textview.wrapped_lines[row_offset - 1] = i
@@ -1273,25 +1285,39 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     end
     token.measurement.perf_active = perf_diagnostics_active()
     local started = system.get_time()
+    local deadline = started + budget_ms / 1000
     local lines = 0
     while token.next_line <= token.line_count or next(token.dirty_lines) do
       -- Finish the forward pass before repairs. A changing early line must
       -- not consume every slice and prevent later lines from being prepared.
-      local dirty_line = token.next_line > token.line_count and next(token.dirty_lines) or nil
-      local line = dirty_line or token.next_line
-      local breaks, offset = LineWrapping.compute_line_breaks(
-        buffer, default_font, line, width, token.measurement.mode,
-        textview, token.measurement
-      )
-      token.line_breaks[line] = breaks
-      token.wrapped_line_offsets[line] = offset
-      if dirty_line then
-        token.dirty_lines[line] = nil
+      local forward = token.next_line <= token.line_count
+      local batch = {}
+      if forward then
+        for line = token.next_line, math.min(token.line_count, token.next_line + 255) do
+          batch[#batch + 1] = line
+        end
       else
-        token.next_line = line + 1
+        for line in pairs(token.dirty_lines) do
+          batch[#batch + 1] = line
+          if #batch >= 256 then break end
+        end
       end
-      lines = lines + 1
-      if (system.get_time() - started) * 1000 >= budget_ms then break end
+      local line_breaks, offsets, done = LineWrapping.compute_lines_breaks(
+        buffer, default_font, batch, width, token.measurement.mode,
+        textview, token.measurement, { deadline = deadline }
+      )
+      for index = 1, done do
+        local line = batch[index]
+        token.line_breaks[line] = line_breaks[index]
+        token.wrapped_line_offsets[line] = offsets[index]
+        if forward then
+          token.next_line = line + 1
+        else
+          token.dirty_lines[line] = nil
+        end
+      end
+      lines = lines + done
+      if system.get_time() >= deadline then break end
     end
     local work_ms = (system.get_time() - started) * 1000
     token.work_ms = token.work_ms + work_ms
@@ -1435,14 +1461,14 @@ function LineWrapping.update_multiple_nonstructural_breaks(textview, ranges)
   local replacement_breaks = {}
   local replacement_offsets = {}
 
-  for _, line in ipairs(affected_lines) do
-    local breaks, begin_width = LineWrapping.compute_line_breaks(
-      buffer, textview.wrapped_settings.font, line,
-      textview.wrapped_settings.width, measurement.mode,
-      textview, measurement
-    )
-    replacement_breaks[line] = breaks
-    replacement_offsets[line] = begin_width
+  local line_breaks, offsets = LineWrapping.compute_lines_breaks(
+    buffer, textview.wrapped_settings.font, affected_lines,
+    textview.wrapped_settings.width, measurement.mode,
+    textview, measurement
+  )
+  for index, line in ipairs(affected_lines) do
+    replacement_breaks[line] = line_breaks[index]
+    replacement_offsets[line] = offsets[index]
   end
 
   -- Build one replacement row map instead of repeatedly splicing and
@@ -1640,15 +1666,17 @@ function LineWrapping.update_breaks(textview, old_line1, old_line2, net_lines, o
     textview.buffer, opts.font or textview.wrapped_settings.font, textview
   )
 
-  for line = new_line1, new_line2 do
+  local lines = {}
+  for line = new_line1, new_line2 do lines[#lines + 1] = line end
+  local line_breaks, offsets = LineWrapping.compute_lines_breaks(
+    textview.buffer, opts.font or textview.wrapped_settings.font, lines,
+    opts.width or textview.wrapped_settings.width, measurement.mode,
+    textview, measurement
+  )
+  for index, line in ipairs(lines) do
     perf_lines = perf_lines + 1
-    local breaks, begin_width = LineWrapping.compute_line_breaks(
-      textview.buffer, opts.font or textview.wrapped_settings.font, line,
-      opts.width or textview.wrapped_settings.width, measurement.mode,
-      textview, measurement
-    )
-    new_offsets[#new_offsets + 1] = begin_width
-    for _, b in ipairs(breaks) do
+    new_offsets[#new_offsets + 1] = offsets[index]
+    for _, b in ipairs(line_breaks[index]) do
       new_pairs[#new_pairs + 1] = line
       new_pairs[#new_pairs + 1] = b
     end
