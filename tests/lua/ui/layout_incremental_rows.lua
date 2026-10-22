@@ -249,6 +249,47 @@ test.describe("Incremental layout rows", function()
     same_as_fresh_view(view)
   end)
 
+  test.it("keeps the rows of the lines that a line break moves until the parse publishes", function(context)
+    local view, buffer = make_view(context, "newline-plans.md", table.concat({
+      "## Heading above",
+      "",
+      "Text with *emphasis* and a [link](https://example.com).",
+      "",
+      "The edited paragraph.",
+      "",
+      string.rep("A long paragraph with **strong** words that wraps. ", 8),
+      "",
+      "- [ ] A task item",
+      "",
+      "## Heading below",
+    }, "\n"), 500)
+    view:with_selection_state(function() buffer:set_selection(5, #buffer.lines[5]) end)
+    view:update()
+    read_layout(view)
+    local above = { 1, 3 }
+    local plans = {}
+    for _, line in ipairs(above) do plans[line] = test.not_nil(view:get_line_render(line)) end
+    local wrapped_rows = view:get_line_visual_row_count(7)
+    test.ok(wrapped_rows > 1, "line 7 must wrap")
+    local reconciled = view:get_render_cache_diagnostics().layout_reconciled_lines or 0
+
+    view:on_text_input("\n")
+    test.equal(model.peek(buffer).status, "pending")
+    view:update()
+    read_layout(view)
+    -- Only the edited lines measure again. The moved lines keep their rows.
+    test.equal((view:get_render_cache_diagnostics().layout_reconciled_lines or 0) - reconciled, 0)
+    for _, line in ipairs(above) do
+      test.equal(view:get_line_render(line), plans[line], "line " .. line .. " changed while pending")
+    end
+    test.equal(view:get_line_visual_row_count(8), wrapped_rows)
+    test.equal(test.not_nil(view:get_line_render(12)).markdown_heading_level, 2)
+    ready(view)
+    view:update()
+    read_layout(view)
+    same_as_fresh_view(view)
+  end)
+
   test.it("keeps off-screen heading heights through line breaks without wrapping", function(context)
     local lines = {}
     for line = 1, 150 do
