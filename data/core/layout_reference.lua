@@ -248,6 +248,19 @@ local function prepare(view, ref, focused)
   if view.__markdown_live_attached then
     require("core.markdown.live_render").refresh_view(ref)
   end
+  -- A task prefix can stay revealed at the implicit content position.
+  -- This caret input is not part of the selection coordinates.
+  local affinity = view.__markdown_task_source_affinity
+  if affinity then
+    local positions = {}
+    for key, value in pairs(affinity.positions) do positions[key] = value end
+    ref.__markdown_task_source_affinity = {
+      text_revision = affinity.text_revision,
+      selection_key = affinity.selection_key,
+      positions = positions,
+    }
+    ref:invalidate_line_render("markdown-task-source-affinity")
+  end
   ref:set_wrapping_enabled(view:is_wrapping_enabled())
   with_focus(ref, focused, settle_reference, view, ref)
 end
