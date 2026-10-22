@@ -78,6 +78,10 @@ static TSTree *parse_with_ranges(
 static TSPoint snapshot_point_for_byte(const AnvilTSSnapshot *snapshot, uint32_t byte) {
   if (!snapshot || snapshot->line_count == 0) return (TSPoint) {0};
   if (byte > snapshot->byte_len) byte = snapshot->byte_len;
+  if (byte == snapshot->byte_len && byte > 0 && snapshot->bytes[byte - 1] == '\n' &&
+      snapshot->line_starts[snapshot->line_count - 1] < byte) {
+    return (TSPoint) { .row = snapshot->line_count, .column = 0 };
+  }
   uint32_t low = 0;
   uint32_t high = snapshot->line_count;
   while (low + 1 < high) {

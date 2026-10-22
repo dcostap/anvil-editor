@@ -1607,6 +1607,9 @@ static AnvilMarkdownExclusion *markdown_exclusions_build(
 
 static TSPoint markdown_snapshot_point(const AnvilTSSnapshot *snapshot, uint32_t byte) {
   if (byte > snapshot->byte_len) byte = snapshot->byte_len;
+  if (byte == snapshot->byte_len && byte > 0 && snapshot->bytes[byte - 1] == '\n') {
+    return (TSPoint) { .row = snapshot->line_count, .column = 0 };
+  }
   uint32_t low = 0, high = snapshot->line_count;
   while (low + 1 < high) {
     uint32_t mid = low + (high - low) / 2;
