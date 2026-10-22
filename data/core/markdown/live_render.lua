@@ -4618,17 +4618,32 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   local cached_lines = line_cache
     and line_cache.generation == (view.__line_render_generation or 0)
     and line_cache.lines or {}
-  local function keeps_cached_plan(line)
-    if not lines_in_place or previous_pending[line] then return false end
-    if owner.semantic_pending_line and line >= owner.semantic_pending_line then return false end
+  -- A kept line gets a pending entry that holds the same plan object. The
+  -- entry supplies the line background and the plan when a fence or a
+  -- selection change invalidates the line before the publication.
+  local function kept_entry(line, captured)
+    if not lines_in_place then return nil end
+    local previous = previous_pending[line]
+    if previous and not previous.kept then return nil end
+    if owner.semantic_pending_line and line >= owner.semantic_pending_line then return nil end
     local cached = cached_lines[line]
-    return cached ~= nil and cached.source_line == view.buffer.lines[line]
+    if not cached or cached.source_line ~= view.buffer.lines[line] or not cached.render_line then
+      return nil
+    end
+    local entry = pending_entry(view, cached.render_line, source_line_text(view, line), "retained")
+    if entry then
+      entry.kept = true
+      entry.background = captured.background
+    end
+    return entry
   end
   local kept = 0
   for old_line, captured in pairs(pre_edit_lines) do
-    if keeps_cached_plan(old_line) then
+    local entry = kept_entry(old_line, captured)
+    if entry then
       kept = kept + 1
       kept_lines[old_line] = true
+      next_lines[old_line] = entry
     else
       retain(
         old_line, captured.render_line, captured.fenced,
@@ -5859,7 +5874,7 @@ function provider:line_generation(view, line)
   return "font:" .. self:generation(view)
     .. fence_generation
     .. semantic_state
-    .. (pending and ":pending:" .. tostring(pending.revision) or "")
+    .. (pending and not pending.kept and ":pending:" .. tostring(pending.revision) or "")
 end
 
 function provider:on_text_transaction(view, transaction, line1, line2)
@@ -6946,12 +6961,6 @@ local function invalidate_semantic_publication(view, instance, reason)
     end
     ranges = expanded
   end
-  if ranges and #ranges > 0 then
-    local line_count = #view.buffer.lines
-    for line in pairs(kept_lines or {}) do
-      if line <= line_count then ranges[#ranges + 1] = { line1 = line, line2 = line } end
-    end
-  end
   local publication_lines = 0
   for _, range in ipairs(ranges or {}) do
     publication_lines = publication_lines
@@ -6969,6 +6978,27 @@ local function invalidate_semantic_publication(view, instance, reason)
   local deferred_wrapped_invalidation = ranges and #ranges > 0
     and view.wrapped_settings ~= nil
     and publication_lines > 128
+  -- The sync path also rebuilds the lines that kept their plans while the
+  -- parse was pending. The other paths rebuild every line. Kept lines are
+  -- visible lines, so they do not count toward the deferred threshold.
+  if ranges and #ranges > 0 and not deferred_wrapped_invalidation then
+    local covered, kept = {}, {}
+    for _, range in ipairs(ranges) do
+      for line = range.line1 or 1, range.line2 or range.line1 or 1 do covered[line] = true end
+    end
+    for line in pairs(kept_lines or {}) do
+      if line <= #view.buffer.lines and not covered[line] then kept[#kept + 1] = line end
+    end
+    table.sort(kept)
+    for _, line in ipairs(kept) do
+      local last = ranges[#ranges]
+      if last.kept and last.line2 + 1 == line then
+        last.line2 = line
+      else
+        ranges[#ranges + 1] = { line1 = line, line2 = line, kept = true }
+      end
+    end
+  end
   view:restore_viewport_anchor(viewport_anchor)
   if ranges and #ranges > 0 and not deferred_wrapped_invalidation then
     for _, range in ipairs(ranges) do

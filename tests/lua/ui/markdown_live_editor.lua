@@ -949,6 +949,73 @@ test.describe("Markdown Live Preview", function()
     test.equal(visible_render_text(view, 4), "Following heading")
   end)
 
+  test.it("keeps the presentation of fenced code while its info string changes", function()
+    local view, buffer = make_view("```lua\n# code\n```\n\nplain", "info-string-body.md")
+    buffer:set_selection(5, 1)
+    refresh(view)
+    view:update()
+    for line = 1, #buffer.lines do view:get_line_screen_position(line, 1) end
+    local function presentation(line)
+      local parts = { visible_render_text(view, line) }
+      for _, fragment in ipairs(view:iter_line_render_fragments(test.not_nil(view:get_line_render(line)))) do
+        if not fragment.hidden then parts[#parts + 1] = tostring(fragment.font) end
+      end
+      return table.concat(parts, "|")
+    end
+    local body = presentation(2)
+    buffer:set_selection(1, #buffer.lines[1])
+
+    view:on_text_input("x")
+
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
+    test.equal(presentation(2), body, "the code line changed before the publication")
+  end)
+
+  test.it("keeps the quote background of other lines while typing on a quote line", function()
+    local view, buffer = make_view("> first\n> second\n> third\n\nplain", "quote-typing.md")
+    buffer:set_selection(5, 1)
+    refresh(view)
+    view:update()
+    for line = 1, #buffer.lines do view:get_line_screen_position(line, 1) end
+    local decoration
+    for _, entry in ipairs(view:decoration_provider_entries()) do
+      if entry.id == "markdown-live" then decoration = entry.provider end
+    end
+    decoration = test.not_nil(decoration)
+    local background = test.not_nil(decoration:line_background(view, 2))
+    buffer:set_selection(1, #buffer.lines[1])
+
+    view:on_text_input("x")
+
+    test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
+    test.equal(decoration:line_background(view, 2), background)
+    test.equal(decoration:line_background(view, 3), background)
+  end)
+
+  test.it("renumbers the footnote of another line after a typed reference publishes", function()
+    local view, buffer = make_view(
+      "A[^a] first\n\nB[^b] second\n\n[^a]: one\n\n[^b]: two\n\nplain",
+      "typed-footnote.md"
+    )
+    buffer:set_selection(9, 1)
+    refresh(view)
+    local function badges(line)
+      local numbers = {}
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(line)).fragments or {}) do
+        if fragment.widget and fragment.footnote then numbers[#numbers + 1] = fragment.footnote end
+      end
+      return table.concat(numbers, ",")
+    end
+    test.equal(badges(3), "2")
+
+    buffer:insert(1, 1, "X[^b] ")
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready"), instance.reason)
+    view:update()
+    test.equal(badges(3), "1")
+  end)
+
   test.it("invalidates fence-dependent suffix rendering when an opener is broken", function()
     local view, buffer = make_view("```\n# code\n```\n# after", "note.md")
     buffer:set_selection(4, 1)
