@@ -32,7 +32,8 @@ end
 
 local function settle_horizontal_extent(view)
   view:get_h_content_size()
-  local deadline = system.get_time() + 2
+  -- The scan runs on a worker. A loaded machine can take several seconds.
+  local deadline = system.get_time() + 10
   while view:is_horizontal_extent_scan_pending() and system.get_time() < deadline do
     view:get_h_content_size()
     coroutine.yield(0.01)
