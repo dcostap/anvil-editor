@@ -3,6 +3,7 @@ local command = require "core.command"
 local common = require "core.common"
 local file_context = require "core.file_context"
 local layout = require "core.pane_layout"
+local markdown = require "core.markdown"
 local panes = require "core.panes"
 local View = require "core.view"
 local test = require "core.test"
@@ -205,6 +206,21 @@ test.describe("File Tree instances", function()
     test.equal(panes.active(), source)
     test.equal(core.active_view, tree)
     test.ok(common.path_equals(destination.current_view.buffer.abs_filename, file))
+  end)
+
+  test.it("shows a Markdown file opened in the right Pane in Live Preview", function()
+    local note = folder .. PATHSEP .. "note.md"
+    write_file(note, "# Title\n\nSome **bold** text.\n")
+    local tree = assert(filetree.new(note))
+    local source = panes.create { factory = function() return tree end }
+    layout.update_rects(source.group.root, { x = 0, y = 0, w = 300, h = 200 })
+
+    test.ok(command.perform("filetree:open_selected_right"))
+
+    test.equal(core.active_view, tree)
+    layout.update_rects(source.group.root, { x = 0, y = 0, w = 300, h = 200 })
+    local destination = test.not_nil(panes.neighbor(source, "right"))
+    test.ok(markdown.live_render.is_live_mode(destination.current_view))
   end)
 
   test.it("keeps pending edits when parent navigation is requested", function()

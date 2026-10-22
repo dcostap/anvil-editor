@@ -446,6 +446,13 @@ local function prepare_file_destination(view, opts)
   return view
 end
 
+-- Show Live Preview from the first frame, also when another view keeps focus.
+local function new_file_editor(buffer, opts)
+  local editor = require("core.editor")(buffer)
+  require("core.markdown.live_render").refresh_view(editor)
+  return prepare_file_destination(editor, opts)
+end
+
 function RootPanel:open_buffer(buffer, opts)
   opts = opts or {}
   local Editor = require "core.editor"
@@ -459,7 +466,7 @@ function RootPanel:open_buffer(buffer, opts)
       end
     end
   end
-  return panes().place(function() return prepare_file_destination(Editor(buffer), opts) end, {
+  return panes().place(function() return new_file_editor(buffer, opts) end, {
     pane = opts.pane,
     placement = opts.placement or "current",
     direction = opts.direction,
@@ -490,10 +497,9 @@ function RootPanel:open_file(filename, opts)
     return view
   end
 
-  local Editor = require "core.editor"
   local place_stage = file_open_stage_begin("root_panel_place_editor")
   local view = panes().place(function()
-    return prepare_file_destination(Editor(core.open_buffer(filename)), opts)
+    return new_file_editor(core.open_buffer(filename), opts)
   end, {
     pane = opts.pane,
     placement = opts.placement or "current",
