@@ -1123,6 +1123,10 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
   if textview.wrapped_settings and (opts.update_visible
     or not same_wrap_settings(textview.wrapped_settings, settings)) then
     visible_line1, visible_line2 = textview:get_committed_visible_line_range()
+    if not visible_line1 and opts.update_visible then
+      -- No rows are shown yet, such as at the first wrap of a document.
+      visible_line1, visible_line2 = textview:get_visible_line_range()
+    end
   end
   if visible_line1 then
     -- Font and width changes must appear in the first redraw. Keep only the
@@ -1804,6 +1808,32 @@ function LineWrapping.compute_wrap_width(textview)
     or (textview.size.x - textview:get_gutter_width() - scrollbar_width)
 end
 
+---Show each line as one provisional row until the wrap of the document
+---commits. A provisional line has no render plan, so row metrics do not
+---build a plan for each line. The Text View wraps a provisional line before
+---it draws it.
+local function set_provisional_rows(textview, settings)
+  local buffer = textview.buffer
+  local wrapped_lines, wrapped_line_to_idx, wrapped_line_offsets = {}, {}, {}
+  local presentations = {}
+  for line = 1, #buffer.lines do
+    wrapped_lines[line * 2 - 1] = line
+    wrapped_lines[line * 2] = 1
+    wrapped_line_to_idx[line] = line
+    wrapped_line_offsets[line] = 0
+    presentations[line] = { source_line = buffer.lines[line], render_line = false, provisional = true }
+  end
+  textview.wrapped_lines = wrapped_lines
+  textview.wrapped_line_to_idx = wrapped_line_to_idx
+  textview.wrapped_line_offsets = wrapped_line_offsets
+  textview.wrapped_presentations = presentations
+  textview.wrapped_settings = settings
+  textview.wrapped_buffer_line_count = #buffer.lines
+  textview.wrapped_text_revision = buffer.text_revision or 0
+  textview.__wrap_layout_generation = (textview.__wrap_layout_generation or 0) + 1
+  textview:clear_composed_visual_row_cache()
+end
+
 function LineWrapping.update_textview_breaks(textview, width)
   -- A reload retains one committed presentation, including its wrap map.
   -- Do not combine frozen row heights with breaks from the new source.
@@ -1838,6 +1868,14 @@ function LineWrapping.update_textview_breaks(textview, width)
       LineWrapping.reconstruct_breaks_async(textview, settings.font, width, {
         on_complete = pending.on_complete,
       })
+    elseif not textview.wrapped_settings and textview:has_line_render_providers()
+      and #textview.buffer.lines > LineWrapping.MAX_SYNC_WRAP_LINES
+    then
+      -- The first wrap of a long document. Its render plans cost most of the
+      -- time, so wrap the viewport in this frame and the rest in slices.
+      perf_frame_add("linewrapping_update_textview_breaks_first_sliced", 1)
+      set_provisional_rows(textview, settings)
+      LineWrapping.reconstruct_breaks_async(textview, settings.font, width, { update_visible = true })
     elseif textview.wrapped_settings and not stale_line_count and not stale_text
       and #textview.buffer.lines > LineWrapping.MAX_SYNC_WRAP_LINES
     then

@@ -4935,11 +4935,20 @@ local function line_render_signature(view, line, snapshot_provider_generations)
   return table.concat(parts, "\0")
 end
 
+---The committed plan that display reads instead of current provider output.
+---A sliced rebuild measures new provider output without publishing it, and a
+---provisional row has no plan until its line wraps.
+local function committed_presentation(view, line)
+  local presentation = not view.__resolving_line_render
+    and view.wrapped_presentations and view.wrapped_presentations[line]
+  if presentation and (view.__async_wrap_reconstruction or presentation.provisional) then
+    return presentation
+  end
+end
+
 function TextView:get_line_render(line)
-  -- A sliced rebuild measures new provider output without publishing it.
   -- Drawing, hit testing and row metrics keep using the committed plan.
-  local committed = not self.__resolving_line_render and self.__async_wrap_reconstruction
-    and self.wrapped_presentations and self.wrapped_presentations[line]
+  local committed = committed_presentation(self, line)
   if committed and committed.source_line == self.buffer.lines[line] then
     return committed.render_line or nil
   end
@@ -4951,8 +4960,7 @@ end
 ---source. Return nil when no plan is known. `false` means "no render plan".
 function TextView:peek_line_render(line)
   local source_line = self.buffer.lines[line]
-  local committed = not self.__resolving_line_render and self.__async_wrap_reconstruction
-    and self.wrapped_presentations and self.wrapped_presentations[line]
+  local committed = committed_presentation(self, line)
   if committed and committed.source_line == source_line then
     return committed.render_line or false
   end
@@ -5004,9 +5012,36 @@ end
 ---replace a line's plan without a text edit. Remeasure each visible line
 ---whose recorded plan differs before the frame draws it. A plan whose
 ---`layout_source` is the measured geometry keeps the rows of that plan.
+---Wrap each visible line that still has its provisional row. The first
+---sliced wrap of a long document gives these rows to the lines that it has
+---not measured yet.
+local function wrap_visible_provisional_lines(view)
+  for _ = 1, 4 do
+    local presentations = view.wrapped_presentations
+    if not presentations then return end
+    local lines, found = {}, false
+    local first, last = view:get_visible_line_range()
+    for line = first, last do
+      if presentations[line] and presentations[line].provisional then
+        lines[line], found = true, true
+      end
+    end
+    if not found then return end
+    each_line_range(lines, function(line1, line2)
+      linewrapping.update_breaks(view, line1, line2, 0)
+      view:invalidate_visual_metrics("provisional-wrap", line1, line2)
+    end)
+  end
+end
+
 function TextView:reconcile_visible_line_layout()
   if self.__reconciling_line_layout or self.__presentation_reload_frozen
-    or not self:has_line_render_providers()
+    or self.size.x <= 0 or self.size.y <= 0
+  then
+    return
+  end
+  wrap_visible_provisional_lines(self)
+  if not self:has_line_render_providers()
     or not self:has_visual_metric_providers()
     or self.size.x <= 0 or self.size.y <= 0
   then
