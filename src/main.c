@@ -388,12 +388,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     fprintf(stderr, "Invalid Project mode or hosted connection arguments\n");
     return SDL_APP_FAILURE;
   }
-  if (hosted) anvil_surface_log_init("hosted");
-  else {
-    const char *diagnostics = SDL_getenv("ANVIL_INPUT_LATENCY_DIAGNOSTICS");
-    if (diagnostics && SDL_strcmp(diagnostics, "1") == 0)
-      anvil_surface_log_init("direct");
-  }
+  anvil_surface_log_init(hosted ? "hosted" : "direct");
   anvil_latency_probe_init(hosted ? "hosted" : "direct");
 #ifdef _WIN32
   if (!hosted && anvil_single_instance_forward_or_own(argc, argv)) {

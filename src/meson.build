@@ -284,6 +284,10 @@ if host_machine.system() == 'windows'
         ['../tests/native/shell_state_test.c', 'shell_state.c', 'shell_adoption.c', 'shell_launch.c'],
         include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
     test('shell-state', shell_state_test, env: anvil_test_env, suite: 'anvil')
+    surface_log_test = executable('surface_log_test',
+        ['../tests/native/surface_log_test.c', 'surface_protocol.c', 'shell_launch.c'],
+        include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
+    test('surface-log', surface_log_test, env: anvil_test_env, suite: 'anvil')
     test('terminal-replay', terminal_replay_test, env: anvil_test_env, suite: 'anvil')
 endif
 test('fuzzy', fuzzy_test, env: anvil_test_env)

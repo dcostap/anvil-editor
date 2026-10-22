@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include "shell_launch.h"
+#endif
 
 static char log_role[16];
 
@@ -238,27 +241,78 @@ void anvil_surface_translate_input(const AnvilSurfaceConfigure *config, SDL_Even
   }
 }
 
+#ifdef _WIN32
+static struct {
+  HANDLE file;
+  SRWLOCK lock;
+  wchar_t path[32768], previous[32768];
+  uint64_t bytes;
+  bool owned;
+} native_log = {.file = INVALID_HANDLE_VALUE, .lock = SRWLOCK_INIT};
+
+static HANDLE open_native_log(void) {
+  /* Keep active default logs out of the session log cleaner's deletions. */
+  return CreateFileW(native_log.path, FILE_APPEND_DATA,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | (native_log.owned ? 0 : FILE_SHARE_DELETE),
+    NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+}
+
+static bool default_native_log(void) {
+  wchar_t userdir[32768], directory[32768];
+  char utf8[32768 * 4];
+  if (!anvil_shell_user_directory(userdir, SDL_arraysize(userdir)) ||
+      _snwprintf(directory, SDL_arraysize(directory), L"%ls\\logs", userdir) < 0 ||
+      !WideCharToMultiByte(CP_UTF8, 0, directory, -1, utf8, sizeof(utf8), NULL, NULL) ||
+      !SDL_CreateDirectory(utf8)) return false;
+  SYSTEMTIME now;
+  GetLocalTime(&now);
+  /* The existing session log cleaner recognizes this name and its rotated part. */
+  if (_snwprintf(native_log.path, SDL_arraysize(native_log.path),
+      L"%ls\\anvil-%04u%02u%02u-%02u%02u%02u-p%lu-native.log", directory,
+      now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
+      (unsigned long)GetCurrentProcessId()) < 0) return false;
+  size_t length = wcslen(native_log.path);
+  return _snwprintf(native_log.previous, SDL_arraysize(native_log.previous), L"%.*ls-part02.log",
+                   (int)(length - 4), native_log.path) > 0;
+}
+#endif
+
 static void SDLCALL write_surface_log(void *userdata, int category, SDL_LogPriority priority,
                                       const char *message) {
   (void)category;
   (void)priority;
 #ifdef _WIN32
-  const char *path = userdata;
-  int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
-  wchar_t *wide = count > 0 ? malloc(count * sizeof(*wide)) : NULL;
-  if (!wide) return;
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, count);
-  HANDLE file = CreateFileW(wide, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-    NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-  free(wide);
-  if (file == INVALID_HANDLE_VALUE) return;
+  (void)userdata;
   char line[4096];
-  int length = SDL_snprintf(line, sizeof(line), "%10.3f %s[%lu] %s\n", (double)SDL_GetTicksNS() / 1e9,
-    log_role, (unsigned long)GetCurrentProcessId(), message);
+  SYSTEMTIME now;
+  GetLocalTime(&now);
+  int length;
+  if (native_log.owned) {
+    length = SDL_snprintf(line, sizeof(line),
+      "%04u-%02u-%02u %02u:%02u:%02u.%03u %10.3f %s[%lu] thread=%lu priority=%d %s\n",
+      now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond, now.wMilliseconds,
+      (double)SDL_GetTicksNS() / 1e9, log_role, (unsigned long)GetCurrentProcessId(),
+      (unsigned long)GetCurrentThreadId(), (int)priority, message);
+  } else {
+    /* Keep the shared probe log's format and append behavior. */
+    length = SDL_snprintf(line, sizeof(line), "%10.3f %s[%lu] %s\n", (double)SDL_GetTicksNS() / 1e9,
+      log_role, (unsigned long)GetCurrentProcessId(), message);
+  }
+  DWORD size = (DWORD)SDL_min(length, (int)sizeof(line) - 1);
+  line[size - 1] = '\n';
+  AcquireSRWLockExclusive(&native_log.lock);
+  /* Bound each process to the current part and one previous part. */
+  if (native_log.owned && native_log.bytes + size > 10 * 1024 * 1024) {
+    CloseHandle(native_log.file);
+    if (MoveFileExW(native_log.path, native_log.previous, MOVEFILE_REPLACE_EXISTING))
+      native_log.bytes = 0;
+    native_log.file = open_native_log();
+  }
   DWORD written;
   /* One append-only write keeps concurrent process diagnostics separate. */
-  WriteFile(file, line, (DWORD)SDL_min(length, (int)sizeof(line) - 1), &written, NULL);
-  CloseHandle(file);
+  if (WriteFile(native_log.file, line, size, &written, NULL)) native_log.bytes += written;
+  else OutputDebugStringA(line);
+  ReleaseSRWLockExclusive(&native_log.lock);
 #else
   FILE *file = fopen((const char *)userdata, "ab");
   if (!file) return;
@@ -275,7 +329,29 @@ static void SDLCALL write_surface_log(void *userdata, int category, SDL_LogPrior
 
 void anvil_surface_log_init(const char *role) {
   const char *path = SDL_getenv("ANVIL_SURFACE_LOG");
+#ifdef _WIN32
+  if (native_log.file != INVALID_HANDLE_VALUE) return;
+  native_log.owned = !path || !path[0];
+  if (native_log.owned ? !default_native_log() :
+      !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, native_log.path,
+                          SDL_arraysize(native_log.path))) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Cannot resolve the native diagnostic log path: %s", SDL_GetError());
+    return;
+  }
+  native_log.file = open_native_log();
+  if (native_log.file == INVALID_HANDLE_VALUE) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Cannot open the native diagnostic log: Windows error %lu",
+                 (unsigned long)GetLastError());
+    return;
+  }
+  LARGE_INTEGER size;
+  if (GetFileSizeEx(native_log.file, &size)) native_log.bytes = size.QuadPart;
+  SDL_strlcpy(log_role, role, sizeof(log_role));
+  SDL_SetLogOutputFunction(write_surface_log, NULL);
+  if (native_log.owned) SDL_Log("Native diagnostics started");
+#else
   if (!path || !path[0]) return;
   SDL_strlcpy(log_role, role, sizeof(log_role));
   SDL_SetLogOutputFunction(write_surface_log, SDL_strdup(path));
+#endif
 }

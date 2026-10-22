@@ -262,9 +262,8 @@ typedef struct {
   uint32_t close_hover, close_pressed, close_text;
 } AnvilSurfaceShellColors;
 
-/* Appends SDL_Log output from the shell and hosted processes to the file named
- * by ANVIL_SURFACE_LOG. Both processes can share the file. Startup failures
- * happen before Lua logging exists, so this is the only record of them. */
+/* Windows always records SDL_Log output under USERDIR/logs, before Lua starts.
+ * ANVIL_SURFACE_LOG selects a shared file for probes. Other platforms use that override only. */
 void anvil_surface_log_init(const char *role);
 
 #include "ipc_pipe.h"

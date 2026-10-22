@@ -247,6 +247,15 @@ C:\Projects\c_projects\anvil-portable\user\logs\anvil-*.log
 
 Check the newest file first when you investigate a crash or unexpected behavior. These logs are machine-local state and must stay outside the repo.
 
+Windows also writes native diagnostics before Lua starts. These logs are always on:
+
+`USERDIR/logs/anvil-<date>-<time>-p<pid>-native.log`
+
+Check the shell and hosted process logs for connection failures, rendering failures, and shell loss.
+Each record includes local time, elapsed time, process ID, thread ID, and priority.
+Each process keeps two parts, with up to 10 MiB per part. The session log cleaner removes old native logs.
+`ANVIL_SURFACE_LOG` selects an explicit shared file for probes. It does not control normal logging.
+
 Keyboard events include an always-on `Input trace:` diagnostic. See [keyboard input trace](tools/INPUT_TRACE.md) for stages and limits.
 
 Accepted exits also write `anvil-<date>-<time>-p<pid>-shutdown.log` beside the matching session log.
