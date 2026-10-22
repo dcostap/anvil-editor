@@ -594,7 +594,7 @@ static int f_pending_event_count(lua_State *L) {
   return 1;
 }
 
-/* Ends a hosted Sidebar's long event wait. Poll skips the event because it has no callback. */
+/* Ends a hosted Sidebar's timed event wait. Poll skips the event because it has no callback. */
 static SDL_TimerID sidebar_wake_timer;
 static Uint32 SDLCALL sidebar_wake(void *userdata, SDL_TimerID id, Uint32 interval) {
   (void)userdata; (void)id; (void)interval;
@@ -610,20 +610,16 @@ bool system_wait_event(double seconds) {
   if (system_has_pending_events()) return true;
 
   if (anvil_hosted_surface_sidebar()) {
-    /* Return to SDL. Its callback loop owns the blocking event wait. Short waits poll at a fixed rate. Long waits
-     * still wake for each event, and a timer ends them. A fixed rate below one per second would delay input. */
+    /* Return to SDL. Its callback loop owns the blocking event wait, so each event wakes it, and a timer ends a
+     * timed wait. A fixed callback rate would read input only at that rate. A spinner's or an agent's clock waits
+     * under one second, and hover then trailed the pointer at a few frames a second. */
     if (sidebar_wake_timer) {
       SDL_RemoveTimer(sidebar_wake_timer);
       sidebar_wake_timer = 0;
     }
-    if (seconds >= 0 && seconds < 1) {
-      char rate[32];
-      SDL_snprintf(rate, sizeof(rate), "%d", (int)fmin(1000, fmax(1, ceil(1 / fmax(.001, seconds)))));
-      SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, rate);
-    } else {
-      SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "waitevent");
-      if (seconds >= 1) sidebar_wake_timer = SDL_AddTimer((Uint32)fmin(seconds * 1000, 86400000), sidebar_wake, NULL);
-    }
+    SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "waitevent");
+    if (seconds >= 0)
+      sidebar_wake_timer = SDL_AddTimer((Uint32)fmin(86400000, fmax(1, ceil(seconds * 1000))), sidebar_wake, NULL);
     return false;
   }
 
