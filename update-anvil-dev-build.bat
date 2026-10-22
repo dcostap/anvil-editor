@@ -74,7 +74,9 @@ rem Prefer Git's Windows command wrappers over extensionless MSYS scripts.
 if exist "%ProgramFiles%\Git\cmd\gitk.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
 rem Start Anvil without inherited handles. A caller that reads this script's output through a pipe
 rem would otherwise wait until Anvil exits.
-powershell -NoProfile -Command "Start-Process -FilePath $env:APP"
+rem Anvil and its Terminal Sessions inherit this environment, so remove this script's variables.
+rem This also removes copies that an older script left in the caller. LINK breaks the MSVC linker.
+powershell -NoProfile -Command "$app = $env:APP; 'APP','BASH','CHERE_INVOKING','DEST','DEST_BASH','LINK','MSYS_ENV','MSYSTEM','REPO','REPO_BASH','TARGET' | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction SilentlyContinue }; Start-Process -FilePath $app"
 exit /b 0
 
 :UseLayout
