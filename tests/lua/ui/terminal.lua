@@ -219,6 +219,7 @@ test.describe("Terminal View", function()
     end
     panes.reset_for_tests()
     if context.activation_path then os.remove(context.activation_path) end
+    if context.drop_folder then test.ok(test.remove_tree(context.drop_folder)) end
     if context.backpressure_path then
       local deadline = system.get_time() + 5
       while not os.remove(context.backpressure_path) and system.get_time() < deadline do
@@ -997,6 +998,47 @@ test.describe("Terminal View", function()
     test.ok(command.perform("core:select_dialog_entry"))
     test.not_ok(core.nag_view.visible)
     test.equal(context.sessions[1].pastes[1][1], text)
+  end)
+
+  test.it("pastes dropped file paths instead of opening the files", function(context)
+    local view = terminal.open { focus = true }
+    local pane = panes.pane_for_view(view)
+    core.root_panel:update()
+    local folder = USERDIR .. PATHSEP .. "terminal-drop-" .. system.get_process_id()
+    context.drop_folder = folder
+    test.ok(common.mkdirp(folder))
+    local spaced, plain = folder .. PATHSEP .. "my shot.png", folder .. PATHSEP .. "plain.txt"
+    for _, path in ipairs({ spaced, plain }) do
+      local file = assert(io.open(path, "wb")); file:write("x"); file:close()
+    end
+    local x, y = pane.position.x + 20, pane.position.y + 20
+
+    core.on_event("dropbegin")
+    core.on_event("dropmoved", x, y)
+    core.on_event("filedropped", spaced, x, y)
+    core.on_event("filedropped", plain, x, y)
+    core.on_event("dropcomplete")
+
+    test.equal(pane.current_view, view)
+    test.equal(panes.count(), 1)
+    test.equal(#context.sessions[1].pastes, 1)
+    test.equal(context.sessions[1].pastes[1][1],
+      '"' .. system.absolute_path(spaced) .. '" ' .. system.absolute_path(plain))
+  end)
+
+  test.it("pastes dropped text", function(context)
+    local view = terminal.open { focus = true }
+    local pane = panes.pane_for_view(view)
+    core.root_panel:update()
+    local x, y = pane.position.x + 20, pane.position.y + 20
+
+    core.on_event("dropbegin")
+    core.on_event("dropmoved", x, y)
+    core.on_event("textdropped", "echo one\r\necho two", x, y)
+    core.on_event("dropcomplete")
+
+    test.equal(pane.current_view, view)
+    test.equal(context.sessions[1].pastes[1][1], "echo one\necho two")
   end)
 
   test.it("does not send a large paste when confirmation is cancelled", function(context)

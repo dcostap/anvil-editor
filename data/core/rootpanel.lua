@@ -900,6 +900,12 @@ function RootPanel:on_drop_complete()
   end
   core.log_quiet("External drop: completed target=%s files=%d text_parts=%d",
     target.kind, #drop.files, #drop.text)
+  local text = table.concat(drop.text):gsub("\r\n", "\n"):gsub("\r", "\n")
+  if target.kind == "current" and self:deliver_drop_to_view(target.pane, {
+    files = drop.files, text = text, x = drop.x, y = drop.y,
+  }) then
+    return
+  end
   local opened, failed = 0, 0
   for _, filename in ipairs(drop.files) do
     if self:open_dropped_file(filename, drop.x, drop.y, target) then
@@ -908,8 +914,7 @@ function RootPanel:on_drop_complete()
       failed = failed + 1
     end
   end
-  if target.kind == "new" and #drop.text > 0 then
-    local text = table.concat(drop.text):gsub("\r\n", "\n"):gsub("\r", "\n")
+  if target.kind == "new" then
     if text ~= "" then
       local Buffer = require "core.buffer"
       local buffer = Buffer(nil, nil, true)
@@ -942,7 +947,23 @@ function RootPanel:on_file_dropped(filename, x, y)
     if not target then return false end
     return self:open_dropped_file(filename, x, y, target)
   end
+  local group = panes().visible_group()
+  local pane = group and x and y and layout.pane_at(group.root, x, y)
+  if pane and self:deliver_drop_to_view(pane, {
+    files = { system.absolute_path(filename) or filename }, text = "", x = x, y = y,
+  }) then
+    return true
+  end
   return self:open_dropped_file(filename, x, y)
+end
+
+function RootPanel:deliver_drop_to_view(pane, drop)
+  local view = pane.current_view
+  if not call_view(view, "on_drop", drop) then return false end
+  core.log_quiet("External drop: consumed by %s files=%d text_bytes=%d",
+    tostring(view), #drop.files, #drop.text)
+  panes().focus(pane)
+  return true
 end
 
 function RootPanel:open_dropped_file(filename, x, y, target)
@@ -967,10 +988,6 @@ function RootPanel:open_dropped_file(filename, x, y, target)
   local group = panes().visible_group()
   local hit_pane = target and target.pane or (group and x and y and layout.pane_at(group.root, x, y))
   local target_pane = hit_pane or panes().active()
-  local consumed = hit_pane and call_view(
-    hit_pane.current_view, "on_file_dropped", filename, x, y
-  )
-  if consumed then return consumed end
   local info = system.get_file_info(filename)
   if info and info.type == "dir" then
     local path = system.absolute_path(filename) or filename

@@ -134,6 +134,17 @@ test.describe("External Title Bar drops", function()
     test.equal(original.current_view.buffer.abs_filename, system.absolute_path(path))
   end)
 
+  test.it("inserts dropped text into an Editor at the drop point", function()
+    local view = original.current_view
+    local x, y = view:get_line_screen_position(1, 5)
+    core.on_event("dropbegin")
+    core.on_event("dropmoved", x + 1, y + 1)
+    core.on_event("textdropped", " own\r\n", x + 1, y + 1)
+    core.on_event("dropcomplete")
+    test.equal(panes.count(), 1)
+    test.equal(view.buffer:get_text(1, 1, math.huge, math.huge), "Keep own\n my work")
+  end)
+
   test.it("accepts a Title Bar drop when no Panes are open", function()
     panes.reset_for_tests()
     title:update()

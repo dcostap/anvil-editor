@@ -17,11 +17,6 @@ local function extension(path)
   return ext and ext:lower() or nil
 end
 
-local function is_file(path)
-  local info = path and system.get_file_info(path)
-  return info and info.type == "file"
-end
-
 local function copy_file(source, destination)
   local input, err = io.open(source, "rb")
   if not input then return false, err end
@@ -75,27 +70,34 @@ local function serialized_link(target, is_image, format)
   return (is_image and "!" or "") .. "[[" .. target .. "]]"
 end
 
+---Insert a link to `source` at the selection. Copy files outside the Project into its
+---attachment folder. `opts.absolute` links any existing file or folder by file URI.
+---`opts.prefix` is inserted before the link.
 function attachments.import_file(view, source, opts)
   opts = opts or {}
-  if not (view and view.buffer and view.buffer.abs_filename and is_file(source)) then
-    return false, "source file unavailable"
+  local prefix = opts.prefix or ""
+  local source_info = source and system.get_file_info(source)
+  if not (view and view.buffer and view.buffer.abs_filename and source_info) then
+    return false, "source path unavailable"
   end
   if view.can_edit and not view:can_edit("markdown-attachment", { warn = true }) then
     return false, "Buffer is not editable"
   end
+  local target = system.absolute_path(source) or common.normalize_path(source)
+
+  if opts.absolute then
+    local text = serialized_link(file_uri(target), IMAGE_EXTENSIONS[extension(target) or ""] == true, "markdown")
+    view:with_selection_state(function() view.buffer:text_input(prefix .. text) end)
+    return true, { path = target, text = text, copied = false, absolute = true }
+  end
+
+  if source_info.type ~= "file" then return false, "source is not a file" end
   local project = core.current_project(view.buffer.abs_filename)
   if not project then return false, "Project unavailable" end
   local project_root = system.absolute_path(project.path) or common.normalize_path(project.path)
   local source_note = system.absolute_path(view.buffer.abs_filename)
     or common.normalize_path(view.buffer.abs_filename)
-  local target = system.absolute_path(source) or common.normalize_path(source)
   local copied = false
-
-  if opts.absolute then
-    local text = serialized_link(file_uri(target), IMAGE_EXTENSIONS[extension(target) or ""] == true, "markdown")
-    view:with_selection_state(function() view.buffer:text_input(text) end)
-    return true, { path = target, text = text, copied = false, absolute = true }
-  end
 
   if not common.path_belongs_to(target, project_root) then
     local directory = images.attachment_directory({
@@ -123,7 +125,7 @@ function attachments.import_file(view, source, opts)
   local relative_base = format == "markdown" and common.dirname(source_note) or project_root
   local rel = display_path(common.relative_path(relative_base, target))
   local text = serialized_link(rel, IMAGE_EXTENSIONS[extension(target) or ""] == true, format)
-  view:with_selection_state(function() view.buffer:text_input(text) end)
+  view:with_selection_state(function() view.buffer:text_input(prefix .. text) end)
   vault_index.index_for_path(view.buffer.abs_filename):update_path(target, { cooperative = true })
   core.log_quiet("Markdown attachment %s %s -> %s", copied and "copied" or "linked", source, target)
   return true, { path = target, text = text, copied = copied }
@@ -184,15 +186,30 @@ end
 
 function attachments.drop_provider()
   return {
-    on_file_dropped = function(_, view, filename, x, y)
+    on_files_dropped = function(_, view, files, x, y)
+      if view.can_edit and not view:can_edit("markdown-attachment", { warn = true }) then
+        return false
+      end
       if type(x) == "number" and type(y) == "number" then
         local line, col = view:resolve_screen_position(x, y)
         view:set_selection_state({ selections = { line, col, line, col }, last_selection = 1 })
       end
       local absolute = keymap.modkeys["alt"] == true
-      local ok, err = attachments.import_file(view, filename, { absolute = absolute })
-      if not ok then core.log_quiet("Markdown attachment drop declined: %s", tostring(err)) end
-      return ok
+      local linked = 0
+      for _, filename in ipairs(files) do
+        local prefix = linked > 0 and "\n" or nil
+        local ok, err = attachments.import_file(view, filename, { absolute = absolute, prefix = prefix })
+        if not ok and not absolute then
+          core.log_quiet("Markdown attachment drop links %s by absolute path: %s", filename, tostring(err))
+          ok, err = attachments.import_file(view, filename, { absolute = true, prefix = prefix })
+        end
+        if ok then
+          linked = linked + 1
+        else
+          core.log_quiet("Markdown attachment drop declined %s: %s", filename, tostring(err))
+        end
+      end
+      return linked > 0
     end,
   }
 end

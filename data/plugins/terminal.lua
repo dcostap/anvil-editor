@@ -1465,6 +1465,26 @@ function TerminalView:paste(text, confirmed)
   return false
 end
 
+-- cmd.exe lists these characters as the ones that need quotes in a path.
+local function shell_path(path)
+  if path:find("[%s&()%[%]{}^=;!'+,`~]") then return '"' .. path .. '"' end
+  return path
+end
+
+-- A drop types its paths, or else its text, at the prompt. It never opens a file here.
+function TerminalView:on_drop(drop)
+  local text = drop.text
+  if #drop.files > 0 then
+    local paths = {}
+    for i, path in ipairs(drop.files) do paths[i] = shell_path(path) end
+    text = table.concat(paths, " ")
+  end
+  local pasted = text ~= "" and self:paste(text)
+  core.log_quiet("Terminal session %s drop: files=%d text_bytes=%d pasted=%s",
+    tostring(self.log_id), #drop.files, #drop.text, tostring(pasted))
+  return true
+end
+
 function TerminalView:search(query, reverse)
   if not self.session then return false end
   if not query or query == "" then

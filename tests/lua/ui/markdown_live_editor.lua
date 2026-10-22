@@ -4459,7 +4459,7 @@ test.describe("Markdown Live Preview", function()
       test.ok(result.path:match("photo%-1%.png$"))
 
       local x, y = view:get_line_screen_position(1)
-      test.equal(view:on_file_dropped(image_source, x + 2, y + 2), true)
+      test.equal(view:on_drop({ files = { image_source }, text = "", x = x + 2, y = y + 2 }), true)
       test.ok(buffer.lines[1]:find("![[media/photo-2.png]]", 1, true) ~= nil)
 
       config.markdown_live_attachment_link_format = "markdown"
@@ -4479,6 +4479,49 @@ test.describe("Markdown Live Preview", function()
     core.projects = old_projects
     common.rm(root, true)
     common.rm(outside, true)
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("inserts each file of one drop in order at the drop point", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-multi-drop-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local first, second = root .. PATHSEP .. "first.png", root .. PATHSEP .. "second.png"
+    for _, path in ipairs({ first, second }) do
+      local fp = test.not_nil(io.open(path, "wb")); fp:write("png"); fp:close()
+    end
+    local old_projects = core.projects
+    local old_format = config.markdown_live_attachment_link_format
+    core.projects = { Project(root) }
+    config.markdown_live_attachment_link_format = "wikilink"
+    local view, buffer = make_view("", root .. PATHSEP .. "Source.md")
+    refresh(view)
+    local ok, err = pcall(function()
+      local x, y = view:get_line_screen_position(1, 1)
+      test.equal(view:on_drop({ files = { first, second }, text = "", x = x + 1, y = y + 1 }), true)
+      test.equal(buffer:get_text(1, 1, math.huge, math.huge), "![[first.png]]\n![[second.png]]")
+    end)
+    config.markdown_live_attachment_link_format = old_format
+    core.projects = old_projects
+    test.ok(test.remove_tree(root))
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("links a dropped folder by absolute path", function()
+    local root = USERDIR .. PATHSEP .. "markdown-live-folder-drop-" .. system.get_process_id()
+    local folder = root .. PATHSEP .. "assets"
+    test.ok(common.mkdirp(folder))
+    local old_projects = core.projects
+    core.projects = { Project(root) }
+    local view, buffer = make_view("", root .. PATHSEP .. "Source.md")
+    refresh(view)
+    local ok, err = pcall(function()
+      local x, y = view:get_line_screen_position(1, 1)
+      test.equal(view:on_drop({ files = { folder }, text = "", x = x + 1, y = y + 1 }), true)
+      test.equal(buffer:get_text(1, 1, math.huge, math.huge),
+        "[assets](file:///" .. folder:gsub("\\", "/") .. ")")
+    end)
+    core.projects = old_projects
+    test.ok(test.remove_tree(root))
     if not ok then error(err, 0) end
   end)
 

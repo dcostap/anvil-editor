@@ -226,14 +226,14 @@ test.describe("TextView decoration providers", function()
     local view = make_view("alpha")
     local dropped
     view:add_file_drop_provider("test", {
-      on_file_dropped = function(_, owner, filename, x, y)
+      on_files_dropped = function(_, owner, files, x, y)
         test.equal(owner, view)
-        dropped = { filename, x, y }
+        dropped = { files, x, y }
         return true
       end,
     })
-    test.equal(view:on_file_dropped("asset.png", 10, 20), true)
-    test.same(dropped, { "asset.png", 10, 20 })
+    test.equal(view:on_drop({ files = { "a.png", "b.png" }, text = "", x = 10, y = 20 }), true)
+    test.same(dropped, { { "a.png", "b.png" }, 10, 20 })
     test.equal(view:remove_file_drop_provider("test"), true)
   end)
 

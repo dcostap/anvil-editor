@@ -3153,12 +3153,18 @@ function FileTreeView:get_point_of_interest_at(line)
   }
 end
 
-function FileTreeView:on_file_dropped(filename)
-  if type(filename) ~= "string" or filename == "" then return false end
-  local path = common.normalize_path(system.absolute_path(common.home_expand(filename)) or common.home_expand(filename))
-  local info = system.get_file_info(path)
-  if not (info and info.type == "dir") then return false end
-  command.perform("project_paths:add_external_directory", path)
+function FileTreeView:on_drop(drop)
+  if #drop.files == 0 then return false end
+  local folders = {}
+  for _, filename in ipairs(drop.files) do
+    local path = common.normalize_path(filename)
+    local info = system.get_file_info(path)
+    if not (info and info.type == "dir") then return false end
+    folders[#folders + 1] = path
+  end
+  for _, path in ipairs(folders) do
+    command.perform("project_paths:add_external_directory", path)
+  end
   return true
 end
 

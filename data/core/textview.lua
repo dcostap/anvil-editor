@@ -2570,20 +2570,29 @@ function TextView:remove_file_drop_provider(id)
   return true
 end
 
-function TextView:on_file_dropped(filename, x, y)
-  for _, entry in ipairs(sorted_provider_entries(self.file_drop_providers)) do
-    local fn = entry.provider.on_file_dropped
-    if fn then
-      local ok, handled = pcall(fn, entry.provider, self, filename, x, y)
-      if not ok then
-        core.log_quiet("TextView file-drop provider %s failed for %s: %s",
-          tostring(entry.id), self.buffer:get_name(), tostring(handled))
-      elseif handled then
-        return true
+function TextView:on_drop(drop)
+  if #drop.files > 0 then
+    for _, entry in ipairs(sorted_provider_entries(self.file_drop_providers)) do
+      local fn = entry.provider.on_files_dropped
+      if fn then
+        local ok, handled = pcall(fn, entry.provider, self, drop.files, drop.x, drop.y)
+        if not ok then
+          core.log_quiet("TextView file-drop provider %s failed for %s: %s",
+            tostring(entry.id), self.buffer:get_name(), tostring(handled))
+        elseif handled then
+          return true
+        end
       end
     end
+    return false
   end
-  return TextView.super.on_file_dropped(self, filename, x, y)
+  if drop.text == "" or not self:can_edit("drop", { warn = true }) then return false end
+  if drop.x and drop.y then
+    local line, col = self:resolve_screen_position(drop.x, drop.y)
+    self:set_selection_state({ selections = { line, col, line, col }, last_selection = 1 })
+  end
+  self:with_selection_state(function() self.buffer:text_input(drop.text) end)
+  return true
 end
 
 function TextView:add_poi_provider(id, provider, opts)

@@ -50,7 +50,7 @@ end
 function FakeView:scrollbar_overlaps_point()
   return self.scrollbar_hit == true
 end
-function FakeView:on_file_dropped()
+function FakeView:on_drop()
   self.drops = self.drops + 1
   return self.consume_drop == true
 end

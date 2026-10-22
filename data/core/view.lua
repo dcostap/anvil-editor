@@ -486,13 +486,17 @@ function View:on_mouse_left()
 end
 
 
----Handle file drop events (drag and drop from OS).
----Override to handle dropped files. Return true to consume event.
----@param filename string Absolute path to dropped file
----@param x number Screen x where file was dropped
----@param y number Screen y where file was dropped
----@return boolean consumed True to consume event, false to propagate
-function View:on_file_dropped(filename, x, y)
+---@class core.view.drop
+---@field files string[] Absolute paths in drop order; empty for a text drop
+---@field text string Dropped text with LF line endings; empty when none
+---@field x number? Screen x of the drop
+---@field y number? Screen y of the drop
+
+---Handle one complete drop from another application.
+---Return true to consume it. Otherwise Anvil opens the dropped files in this Pane.
+---@param drop core.view.drop
+---@return boolean consumed
+function View:on_drop(drop)
   return false
 end
 
