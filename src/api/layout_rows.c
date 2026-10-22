@@ -385,10 +385,27 @@ static int f_rows_replace(lua_State *L) {
   return 1;
 }
 
+// rows:payload_lines() -> { payload, line, payload, line, ... } for each row
+// with a payload, in row order.
+static int f_rows_payload_lines(lua_State *L) {
+  Rows *r = check_rows(L);
+  lua_createtable(L, 0, 0);
+  int n = 0;
+  for (int i = 0; i < r->count; i++) {
+    if (r->rows[i].payload == 0) continue;
+    lua_pushinteger(L, r->rows[i].payload);
+    lua_rawseti(L, -2, ++n);
+    lua_pushinteger(L, r->rows[i].line);
+    lua_rawseti(L, -2, ++n);
+  }
+  return 1;
+}
+
 static const luaL_Reg rows_methods[] = {
   { "__gc", f_rows_gc },
   { "count", f_rows_count },
   { "get", f_rows_get },
+  { "payload_lines", f_rows_payload_lines },
   { "first_row", f_rows_first_row },
   { "position_row", f_rows_position_row },
   { "replace", f_rows_replace },

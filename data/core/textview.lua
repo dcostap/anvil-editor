@@ -2776,7 +2776,7 @@ function TextView:clear_composed_visual_row_cache()
   self.__composed_visual_row_cache = nil
   self.__composed_visual_row_snapshot_kind = nil
   self.__composed_visual_row_snapshot_id = nil
-  self.__composed_visual_row_snapshot_rows = nil
+  self.__composed_visual_row_snapshot_cache = nil
   -- A changed row map also ends any metric snapshot in this UI phase.
   self.__visual_metric_snapshot_kind = nil
   self.__visual_metric_snapshot_id = nil
@@ -2803,8 +2803,13 @@ function TextView:invalidate_visual_rows(provider_id, lines)
       spans[#spans + 1] = { line, line }
     end
     -- Rows of earlier edits must have their current lines first.
-    for _, entry in ipairs(current_composed_rows(self).entries) do
-      if entry.provider_id == provider_id then spans[#spans + 1] = { entry.line, entry.line } end
+    local cache = current_composed_rows(self)
+    local payload_lines = cache.rows:payload_lines()
+    for i = 1, #payload_lines, 2 do
+      if cache.payloads[payload_lines[i]].provider_id == provider_id then
+        local line = payload_lines[i + 1]
+        spans[#spans + 1] = { line, line }
+      end
     end
     if #spans > 0 then add_composed_changes(self, layout_changes.spans(spans)) end
     core.redraw = true
@@ -3482,31 +3487,33 @@ function TextView:build_composed_visual_rows()
   return entries
 end
 
-local function composed_position_rows(view, entries)
-  local position_rows = {}
-  for index, entry in ipairs(entries) do
+-- Native row kinds. A text row or a fold row is the position of its lines.
+local ROW_TEXT, ROW_FOLD, ROW_OTHER = 0, 1, 2
+
+-- The native records of `entries`. A plain text row needs no Lua table. Each
+-- other row keeps its entry as the payload of its record.
+local function row_records(cache, entries)
+  local records, n = {}, 0
+  for _, entry in ipairs(entries) do
+    local kind, last_line = ROW_OTHER, entry.line
     if entry.type == "line" then
-      position_rows[entry.line] = position_rows[entry.line] or index
+      kind = ROW_TEXT
+      -- The first line of a body-only fold is the position of its hidden lines.
+      if entry.collapsed_fold then last_line = entry.collapsed_fold.line2 end
     elseif entry.type == "fold" then
-      for line = entry.fold.line1, entry.fold.line2 do
-        position_rows[line] = index
-      end
+      kind, last_line = ROW_FOLD, entry.fold.line2
     end
-  end
-  -- A body-only fold keeps its first line as an ordinary rendered line.
-  -- Hidden positions still map to that visible header row so navigation and
-  -- reveal operations have a deterministic visual anchor.
-  for _, fold in ipairs(view:get_collapsed_folds()) do
-    if fold.show_widget == false then
-      local header_row = position_rows[fold.line1]
-      if header_row then
-        for line = fold.line1 + 1, fold.line2 do
-          if not position_rows[line] then position_rows[line] = header_row end
-        end
-      end
+    local payload = 0
+    if kind ~= ROW_TEXT or entry.collapsed_fold then
+      payload = cache.next_payload
+      cache.next_payload = payload + 1
+      cache.payloads[payload] = entry
     end
+    records[n + 1], records[n + 2], records[n + 3] = kind, entry.line, last_line
+    records[n + 4], records[n + 5] = entry.row_in_line or 1, payload
+    n = n + 5
   end
-  return position_rows
+  return records
 end
 
 -- Extend each change to whole row groups. A collapsed fold is one group, so
@@ -3539,37 +3546,28 @@ local function update_composed_rows(view, cache)
   end
   local folds = view:get_collapsed_folds()
   changes = cover_row_groups(folds, changes)
-  local old = cache.entries
-  local wrap_map = view.wrapped_settings and view.wrapped_line_to_idx
-  local entries, row_changes = {}, {}
-  local index, delta = 1, 0
-  local function keep(limit)
-    while index <= #old and old[index].line < limit do
-      local entry = old[index]
-      entry.line = entry.line + delta
-      if wrap_map and entry.wrapped_idx then
-        entry.wrapped_idx = (wrap_map[entry.line] or entry.wrapped_idx) + entry.row_in_line - 1
-      end
-      entries[#entries + 1] = entry
-      entry.absolute_row, entry.row = #entries, #entries
-      index = index + 1
-    end
-  end
+  local rows, payloads = cache.rows, cache.payloads
+  local row_changes = {}
+  local row_shift = 0
   for _, change in ipairs(changes) do
-    keep(change.old1)
-    local old1 = index
-    while index <= #old and old[index].line <= change.old2 do index = index + 1 end
-    local new1 = #entries + 1
+    -- The earlier changes moved these rows to their new lines already.
+    local line_shift = change.new1 - change.old1
+    local first = rows:first_row(change.old1 + line_shift)
+    local after = rows:first_row(change.old2 + line_shift + 1)
+    local entries = {}
     append_line_rows(view, entries, change.new1, change.new2, folds)
-    if index == old1 or #entries < new1 then return false, "empty row span" end
-    row_changes[#row_changes + 1] = { old1 = old1, old2 = index - 1, new1 = new1, new2 = #entries }
-    delta = delta + (change.new2 - change.new1) - (change.old2 - change.old1)
+    if after == first or #entries == 0 then return false, "empty row span" end
+    local line_delta = (change.new2 - change.new1) - (change.old2 - change.old1)
+    for _, payload in ipairs(rows:replace(first, after - first, row_records(cache, entries), line_delta)) do
+      payloads[payload] = nil
+    end
+    row_changes[#row_changes + 1] = {
+      old1 = first - row_shift, old2 = after - 1 - row_shift,
+      new1 = first, new2 = first + #entries - 1,
+    }
+    row_shift = row_shift + #entries - (after - first)
   end
-  keep(math.huge)
-  local position_rows = composed_position_rows(view, entries)
-  if not position_rows[line_count] then return false, "last line has no row" end
-  cache.entries = entries
-  cache.position_rows = position_rows
+  if not rows:position_row(line_count) then return false, "last line has no row" end
   cache.line_count = line_count
   -- The row metrics read these row changes. Nothing else reads them.
   local metrics = view.__visual_metric_cache
@@ -3615,7 +3613,7 @@ function add_composed_changes(view, changes)
   end
   view.__composed_visual_row_snapshot_kind = nil
   view.__composed_visual_row_snapshot_id = nil
-  view.__composed_visual_row_snapshot_rows = nil
+  view.__composed_visual_row_snapshot_cache = nil
   view.__visual_metric_snapshot_kind = nil
   view.__visual_metric_snapshot_id = nil
   view.__visual_metric_snapshot_cache = nil
@@ -3681,11 +3679,13 @@ function current_composed_rows(view)
     local entries = view:build_composed_visual_rows()
     cache = {
       signature = signature,
-      entries = entries,
-      position_rows = composed_position_rows(view, entries),
+      rows = layout_rows.rows(),
+      payloads = {},
+      next_payload = 1,
       line_count = #view.buffer.lines,
       text_revision = view.buffer.text_revision,
     }
+    cache.rows:replace(1, 0, row_records(cache, entries))
     view.__composed_visual_row_cache = cache
     view.render_cache_diagnostics.composed_row_builds =
       view.render_cache_diagnostics.composed_row_builds + 1
@@ -3702,67 +3702,58 @@ function current_composed_rows(view)
   return cache
 end
 
-function TextView:composed_visual_rows()
+---Return the composed rows. One UI phase observes one set of rows.
+local function composed_rows(view)
   local snapshot_kind = core.ui_snapshot_active and "ui"
     or core.render_frame_active and "frame" or nil
   local snapshot_id = snapshot_kind == "ui" and core.ui_snapshot_id
     or snapshot_kind == "frame" and core.render_frame_id or nil
-  if snapshot_id and self.__composed_visual_row_snapshot_kind == snapshot_kind
-    and self.__composed_visual_row_snapshot_id == snapshot_id
+  if snapshot_id and view.__composed_visual_row_snapshot_kind == snapshot_kind
+    and view.__composed_visual_row_snapshot_id == snapshot_id
   then
-    return self.__composed_visual_row_snapshot_rows
+    return view.__composed_visual_row_snapshot_cache
   end
-  local cache = current_composed_rows(self)
+  local cache = current_composed_rows(view)
   if snapshot_id then
-    self.__composed_visual_row_snapshot_kind = snapshot_kind
-    self.__composed_visual_row_snapshot_id = snapshot_id
-    self.__composed_visual_row_snapshot_rows = cache.entries
+    view.__composed_visual_row_snapshot_kind = snapshot_kind
+    view.__composed_visual_row_snapshot_id = snapshot_id
+    view.__composed_visual_row_snapshot_cache = cache
   end
-  return cache.entries
+  return cache
 end
 
 function TextView:get_composed_visual_row_count()
-  return #self:composed_visual_rows()
+  return composed_rows(self).rows:count()
 end
 
 function TextView:get_composed_visual_row_for_position(line, col, line_end)
   line = common.clamp(line or 1, 1, #self.buffer.lines)
-  local rows = self:composed_visual_rows()
-  local indexed_row = self.__composed_visual_row_cache.position_rows[line]
-  if indexed_row then
-    local entry = rows[indexed_row]
-    if entry.type == "line" and self.wrapped_settings then
-      local idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
-      local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[line] or idx
-      return common.clamp(
-        indexed_row + math.max(0, idx - first_idx),
-        indexed_row,
-        indexed_row + self:get_line_visual_row_count(line) - 1
-      )
-    end
-    return indexed_row
+  local rows = composed_rows(self).rows
+  local row = rows:position_row(line)
+  -- A line without a text row or a fold row maps to the last row at or before it.
+  if not row then return math.max(1, rows:first_row(line + 1) - 1) end
+  if self.wrapped_settings and rows:get(row) == ROW_TEXT then
+    local idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
+    local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[line] or idx
+    return common.clamp(
+      row + math.max(0, idx - first_idx), row, row + self:get_line_visual_row_count(line) - 1
+    )
   end
-  local fallback = 1
-  for i, entry in ipairs(rows) do
-    if entry.type == "line" and entry.line == line then
-      if self.wrapped_settings then
-        local idx = linewrapping.get_line_idx_col_count(self, line, col, line_end)
-        local first_idx = self.wrapped_line_to_idx and self.wrapped_line_to_idx[line] or idx
-        return common.clamp(i + math.max(0, idx - first_idx), i, i + self:get_line_visual_row_count(line) - 1)
-      end
-      return i
-    elseif entry.type == "fold" and line >= entry.fold.line1 and line <= entry.fold.line2 then
-      return i
-    elseif entry.line and entry.line <= line then
-      fallback = i
-    end
-  end
-  return fallback
+  return row
 end
 
+---Return the entry of a composed row. A plain text row gets a new table.
 function TextView:get_visual_row_entry(target_row)
-  target_row = common.clamp(math.floor(target_row or 1), 1, self:get_composed_visual_row_count())
-  return self:composed_visual_rows()[target_row]
+  local cache = composed_rows(self)
+  target_row = common.clamp(math.floor(target_row or 1), 1, cache.rows:count())
+  local _, line, row_in_line, payload = cache.rows:get(target_row)
+  local entry = payload ~= 0 and cache.payloads[payload] or { type = "line" }
+  entry.line, entry.row_in_line = line, row_in_line
+  entry.absolute_row, entry.row = target_row, target_row
+  if entry.type == "line" and self.wrapped_settings then
+    entry.wrapped_idx = (self.wrapped_line_to_idx[line] or 1) + row_in_line - 1
+  end
+  return entry
 end
 
 function TextView:get_metric_row_entry(row)
@@ -4129,7 +4120,7 @@ function TextView:get_visual_row_metric_cache()
       elseif composed.row_changes then
         local changes = composed.row_changes
         composed.row_changes = nil
-        updated, reason = update_metric_rows(self, pending_cache, changes, #composed.entries)
+        updated, reason = update_metric_rows(self, pending_cache, changes, composed.rows:count())
       end
     else
       local changes = pending_cache.line_changes
@@ -10332,7 +10323,7 @@ Buffer.register_text_transaction_handler("textview-render-caches", function(buff
     if view and view.buffer == buffer then
       view.__composed_visual_row_snapshot_kind = nil
       view.__composed_visual_row_snapshot_id = nil
-      view.__composed_visual_row_snapshot_rows = nil
+      view.__composed_visual_row_snapshot_cache = nil
       add_composed_transaction(view, transaction)
       add_metric_transaction(view, transaction)
       line_packets.apply_transaction(view, transaction)

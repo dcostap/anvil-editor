@@ -84,7 +84,8 @@ end
 
 local function footnote_row_heights(view)
   local heights = {}
-  for row, entry in ipairs(view:composed_visual_rows()) do
+  for row = 1, view:get_composed_visual_row_count() do
+    local entry = view:get_visual_row_entry(row)
     if entry.provider_id == "markdown.footnotes" then
       heights[#heights + 1] = view:get_visual_row_height(row)
     end

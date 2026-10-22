@@ -78,11 +78,11 @@ test.describe("TextView cache hot-path benchmark", function()
       end,
       visual_rows = function() end,
     })
-    view:composed_visual_rows()
+    view:get_composed_visual_row_count()
     visual_row_generation_calls = 0
     core.render_frame_id = core.render_frame_id + 1
     local visual_rows_ms = elapsed_ms(function()
-      for _ = 1, 200000 do view:composed_visual_rows() end
+      for _ = 1, 200000 do view:get_composed_visual_row_count() end
     end)
 
     view:add_decoration_provider("benchmark", {})

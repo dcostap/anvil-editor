@@ -155,7 +155,8 @@ test.describe("File Tree Project Path Roles", function()
     test.equal(err, nil)
 
     local found_provider_row = false
-    for _, row in ipairs(filetree:composed_visual_rows()) do
+    for index = 1, filetree:get_composed_visual_row_count() do
+      local row = filetree:get_visual_row_entry(index)
       if row.type == "provider"
           and row.line == vendored_section
           and row.placement == "before"

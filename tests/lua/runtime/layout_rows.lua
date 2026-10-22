@@ -83,6 +83,16 @@ test.describe("Layout rows", function()
     test.equal(rows:position_row(8), nil)
   end)
 
+  test.it("lists the payloads with their current lines", function()
+    local rows = layout_rows.rows()
+    rows:replace(1, 0, records {
+      { OTHER, 1, 1, 1, 4 }, { TEXT, 1, 1, 1, 0 }, { TEXT, 2, 2, 1, 0 }, { OTHER, 2, 2, 1, 9 },
+    })
+    -- Two lines before line 2 move its provider row to line 4.
+    rows:replace(3, 0, records { { TEXT, 2, 2, 1, 0 }, { TEXT, 3, 3, 1, 0 } }, 2)
+    test.same(rows:payload_lines(), { 4, 1, 9, 4 })
+  end)
+
   test.it("changes nothing for an incomplete record", function()
     local rows = layout_rows.rows()
     rows:replace(1, 0, records { { TEXT, 1, 1, 1, 0 } })
