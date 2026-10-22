@@ -1,6 +1,7 @@
 -- Work in a long, feature-dense Markdown note in Live Preview.
 -- `settings.mode` picks the workflow:
--- `open` opens the note from a short note and waits until Live Preview is ready.
+-- `open` opens the note from `settings.start_note` and waits until Live Preview is ready.
+-- A start note that is not Markdown leaves the vault index unbuilt until the open.
 -- `wheel` scrolls down from the top, `settings.ticks` wheel ticks per action.
 -- `caret` moves the caret down one line per action from `settings.line`.
 -- `type` types into the end of `settings.line`.
@@ -12,12 +13,14 @@ local support = require "scenes.support"
 local scene = {}
 local TYPED_TEXT = "a b c d e f g h i j "
 
--- Live Preview is ready when the published parse matches the text and wrapping is complete.
+-- Live Preview is ready when the published parse matches the text, wrapping is complete,
+-- and the vault index can resolve the note's links.
 local function preview_ready(view)
   local model = require("core.markdown.model").peek(view.buffer)
   return view.__markdown_live_attached and model and model.status == "ready"
     and model.published_revision == view.buffer.text_revision
     and view.wrapped_settings ~= nil and view.__async_wrap_reconstruction == nil
+    and require("core.markdown.vault_index").index_for_path(view.buffer.abs_filename):can_resolve()
 end
 
 local function open(context, path)
@@ -47,7 +50,10 @@ function scene.setup(context)
 end
 
 function scene.ready(context)
-  return preview_ready(context.view) and support.background_settled(context)
+  local settings = context.settings
+  local path = settings.mode == "open" and settings.start_note or settings.note
+  -- Only a Markdown start note has Live Preview.
+  return (not path:match("%.md$") or preview_ready(context.view)) and support.background_settled(context)
 end
 
 function scene.action_name(context)

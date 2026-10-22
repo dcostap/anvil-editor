@@ -143,6 +143,12 @@ SCENARIOS: dict[str, Scenario] = {
     "markdown-gallery-open": Scenario(
         "markdown_gallery", MARKDOWN_GALLERY, actions=1, suites=("markdown",),
         settings=dict(GALLERY_SETTINGS, mode="open"), action_budget_ms=500.0),
+    # Open the gallery before the vault index exists, as at the first open of a vault.
+    # Live Preview starts the index, and its first publication refreshes every link line.
+    "markdown-gallery-open-cold": Scenario(
+        "markdown_gallery", MARKDOWN_GALLERY, actions=1, suites=("markdown",),
+        settings=dict(GALLERY_SETTINGS, mode="open", start_note="notes/scratch.txt"),
+        action_budget_ms=500.0),
     # Each action scrolls three wheel ticks, including the smooth-scroll animation.
     "markdown-gallery-wheel": Scenario(
         "markdown_gallery", MARKDOWN_GALLERY, actions=60, suites=("markdown",),
