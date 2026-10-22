@@ -1328,6 +1328,32 @@ test.describe("Terminal View", function()
     test.same(view:point_of_interest_at(view.cols - 1, 0), point)
   end)
 
+  test.it("covers a hyperlink that its program wraps inside padded rows", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    local uri = "https://example.test/wrapped-label"
+    -- Like Pi, the program ends the link at each row end and pads each row by 2 blank cells.
+    local label_end = { [0] = view.cols - 3, [1] = 6, [2] = 6 }
+    local text = { [2] = "x" }
+    session.hyperlink = function(_, col, row)
+      if label_end[row] and col >= 2 and col <= label_end[row] then return uri end
+    end
+    session.row_text = function(_, row)
+      if not label_end[row] then return { text = "", columns = {}, generation = 1 } end
+      local value = "  " .. string.rep("a", label_end[row] - 1)
+      if text[row] then value = text[row] .. value:sub(2) end
+      local columns = {}
+      for index = 1, #value do columns[index] = index - 1 end
+      return { text = value, columns = columns, generation = 1 }
+    end
+    local point = view:point_of_interest_at(3, 1)
+    test.same({ point.col, point.row, point.end_col, point.end_row }, { 2, 0, 6, 1 })
+    test.same(view:point_of_interest_at(5, 0), point)
+    -- Text in the padding ends the link, so row 2 is a separate link.
+    point = view:point_of_interest_at(3, 2)
+    test.same({ point.col, point.row, point.end_col, point.end_row }, { 2, 2, 6, 2 })
+  end)
+
   test.it("shows the target of a hovered link until Ctrl is released", function(context)
     local view = terminal.open()
     context.sessions[1].hyperlink_uri = "https://example.test/hidden-target"

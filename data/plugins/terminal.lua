@@ -1687,16 +1687,54 @@ function TerminalView:activate_uri(uri)
 end
 
 -- An OSC 8 link is the run of cells around a cell that have its URI, in reading order.
--- A label that wraps continues on the next row.
+-- A label that wraps continues on the next row. A program that wraps the label itself, such as Pi,
+-- ends the link at each row end and starts it again on the next row. Blank cells, such as box
+-- padding, can be between the two parts.
 function TerminalView:hyperlink_extent(col, row, uri)
   local cols, session = self.cols, self.session
   local function linked(index)
     return session:hyperlink(index % cols, math.floor(index / cols)) == uri
   end
+  local filled = {}
+  local function blank(index)
+    local cell_row = math.floor(index / cols)
+    if filled[cell_row] == nil then
+      local data = session.row_text and session:row_text(cell_row)
+      -- Without the row text, no cell counts as blank.
+      filled[cell_row] = false
+      if type(data) == "table" and type(data.text) == "string" then
+        filled[cell_row] = {}
+        for position, char_col in pairs(data.columns or {}) do
+          if data.text:sub(position, position) ~= " " then filled[cell_row][char_col] = true end
+        end
+      end
+    end
+    return filled[cell_row] and not filled[cell_row][index % cols] or false
+  end
+  -- The next linked cell in one direction, over blank cells into the adjacent row only.
+  local function next_linked(index, step)
+    local limit = (math.floor(index / cols) + step) * cols + (step > 0 and cols - 1 or 0)
+    limit = math.max(0, math.min(limit, self.rows * cols - 1))
+    for probe = index + step, limit, step do
+      if linked(probe) then
+        return (probe == index + step or math.floor(probe / cols) ~= math.floor(index / cols))
+          and probe or nil
+      end
+      if not blank(probe) then return nil end
+    end
+  end
   local first = row * cols + col
   local last = first
-  while first > 0 and linked(first - 1) do first = first - 1 end
-  while last + 1 < self.rows * cols and linked(last + 1) do last = last + 1 end
+  while true do
+    local previous = next_linked(first, -1)
+    if not previous then break end
+    first = previous
+  end
+  while true do
+    local following = next_linked(last, 1)
+    if not following then break end
+    last = following
+  end
   return {
     col = first % cols, row = math.floor(first / cols),
     end_col = last % cols, end_row = math.floor(last / cols),
