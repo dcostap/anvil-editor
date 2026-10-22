@@ -86,6 +86,11 @@ The host puts its preload first in `NODE_OPTIONS` and `BUN_OPTIONS`.
 An Anvil that a Terminal Session started inherits the older preload, and the first preload claims Pi.
 Run `ui/terminal_agent_status.lua` and `ui/terminal_agent_resume.lua` after changes.
 
+Terminal Tabs use the reported OSC 7501 `app` field to select Pi's official icon.
+The Title Bar and Project Sidebar keep the status dot beside that icon.
+They do not infer the program from its title. Older running hosts need a new Terminal Session to report program identity.
+Run `ui/terminal_icons.lua` and `ui/terminal_agent_status.lua` after icon or identity changes.
+
 The standalone option is `-Dembedded_runtime=true`. It is off by default.
 `scripts\build-standalone-windows.sh` enables it, strips the executable, runs
 the standalone smoke test, and promotes the result only after the test passes.

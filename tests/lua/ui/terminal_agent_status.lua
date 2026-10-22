@@ -16,7 +16,8 @@ end
 local function wait_for(view, predicate, seconds)
   local deadline = system.get_time() + seconds
   repeat
-    view.session:update()
+    local _, status = view.session:update()
+    view:apply_status(status)
     local value = record(view)
     if value and predicate(value) then return value end
     coroutine.yield(0.05)
@@ -37,12 +38,25 @@ test.describe("Terminal agent status", function()
         " [Console]::Write(\"$e]7501;state=working:id=step:msg=YmFzaDogbnBtIHRlc3Q=$e\\\"); Start-Sleep 4\r"))
       local running = wait_for(view, function(value) return value.agent_step ~= nil end, 4)
       test.equal(running and running.agent_state, "working")
+      test.equal(running and running.agent_app, "pi")
+      local deadline = system.get_time() + 5
+      while view.agent_app ~= "pi" and system.get_time() < deadline do
+        local _, status = view.session:update()
+        view:apply_status(status)
+        coroutine.yield(0.05)
+      end
+      local item = require("core.tab").describe({current_view = view}, 1)
+      test.equal(item.terminal.app, "pi", "The Tab lost its program identity")
       test.equal(running and running.agent_message, "my session")
       test.equal(running and running.agent_step, "bash: npm test")
       test.ok(running and running.agent_since > 0 and running.agent_step_since >= running.agent_since)
-      local ended = wait_for(view, function(value) return value.busy == false and not value.agent_state end, 10)
+      local ended = wait_for(view, function(value)
+        return value.busy == false and not value.agent_state and not view.agent_app
+      end, 10)
       test.equal(ended and ended.agent_state, nil, "The status outlived its program")
       test.equal(ended and ended.agent_step, nil)
+      test.equal(ended and ended.agent_app, nil)
+      test.equal(view.agent_app, nil, "The Tab kept an ended program's identity")
     end)
     view:on_close()
     test.ok(ok, err)

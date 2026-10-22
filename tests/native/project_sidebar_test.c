@@ -221,6 +221,7 @@ static void agent_status(void) {
   CHECK(anvil_sidebar_set_terminals(&model, b, &session, 1), "Terminal source failed");
   uint32_t revision = model.revision;
   snprintf(session.agent.state, sizeof(session.agent.state), "working");
+  snprintf(session.agent.app, sizeof(session.agent.app), "pi");
   snprintf(session.agent.step, sizeof(session.agent.step), "bash: npm \"test\"");
   session.agent.since = 100;
   session.agent.step_since = 120;
@@ -240,6 +241,8 @@ static void agent_status(void) {
   CHECK(!strcmp(lua_tostring(L, -3), "working") && !strcmp(lua_tostring(L, -2), "bash: npm \"test\"") &&
             lua_tonumber(L, -1) == 120,
         "The snapshot changed the agent status");
+  lua_getfield(L, -4, "agent_app");
+  CHECK(lua_isstring(L, -1) && !strcmp(lua_tostring(L, -1), "pi"), "The snapshot lost the program identity");
   lua_close(L);
   anvil_sidebar_destroy(&model);
 }

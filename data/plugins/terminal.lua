@@ -828,6 +828,10 @@ function TerminalView:apply_status(status)
   if status.busy ~= self.busy then self.activity = os.time() end
   -- nil while the host has not reported whether the shell runs a command.
   self.busy = status.busy
+  if self.agent_app ~= status.agent_app then
+    core.log_quiet("Terminal Session %s program identity: %s", tostring(self.session_id), status.agent_app or "none")
+  end
+  self.agent_app = status.agent_app
   local revision = tonumber(status.revision)
   local kind = type(status.kind) == "string" and status.kind or self.state
   local changed = kind ~= self.state or revision ~= self.status_revision

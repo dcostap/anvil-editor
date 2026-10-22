@@ -25,7 +25,7 @@ typedef enum {
 /* An agent's program status from its Terminal Session record: the state that the agent reports and the step that
  * Anvil's Pi extension reports. An empty state or step means none. Times are Unix seconds. */
 typedef struct {
-  char state[8], kind[16];
+  char state[8], kind[16], app[32];
   char message[ANVIL_SIDEBAR_AGENT_TEXT_MAX + 1], step[ANVIL_SIDEBAR_AGENT_TEXT_MAX + 1];
   int64_t since, step_since;
 } AnvilSidebarAgent;

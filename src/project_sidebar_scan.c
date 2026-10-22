@@ -335,6 +335,7 @@ static void terminal_records(AnvilSidebarScan *job, lua_State *L) {
       text_field(L, "agent_state", agent->state, sizeof(agent->state));
       if (agent->state[0]) {
         text_field(L, "agent_kind", agent->kind, sizeof(agent->kind));
+        text_field(L, "agent_app", agent->app, sizeof(agent->app));
         text_field(L, "agent_message", agent->message, sizeof(agent->message));
         agent->since = time_field(L, "agent_since");
       }

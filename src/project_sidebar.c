@@ -183,8 +183,9 @@ void anvil_sidebar_destroy(AnvilSidebarModel *model) {
   *model = (AnvilSidebarModel){0};
 }
 static bool agent_equal(const AnvilSidebarAgent *a, const AnvilSidebarAgent *b) {
-  return !strcmp(a->state, b->state) && !strcmp(a->kind, b->kind) && !strcmp(a->message, b->message) &&
-         !strcmp(a->step, b->step) && a->since == b->since && a->step_since == b->step_since;
+  return !strcmp(a->state, b->state) && !strcmp(a->kind, b->kind) && !strcmp(a->app, b->app) &&
+         !strcmp(a->message, b->message) && !strcmp(a->step, b->step) &&
+         a->since == b->since && a->step_since == b->step_since;
 }
 bool anvil_sidebar_set_terminals(AnvilSidebarModel *model, AnvilSidebarProject *project,
                                  const AnvilSidebarTerminal *terminals, size_t count) {
@@ -313,6 +314,8 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
           quoted(&item, agent->state);
           append(&item, ",agent_kind=");
           quoted(&item, agent->kind);
+          append(&item, ",agent_app=");
+          quoted(&item, agent->app);
           append(&item, ",agent_message=");
           quoted(&item, agent->message);
           append(&item, ",agent_since=%lld", (long long)agent->since);

@@ -29,7 +29,7 @@ typedef struct HostRecord {
 
 /* One program status record (OSC 7501). An empty state means no record. */
 typedef struct {
-  char state[8], kind[16], message[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1];
+  char state[8], kind[16], app[32], message[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1];
   int64_t since;
 } AgentRecord;
 
@@ -208,6 +208,7 @@ static bool write_registry(TerminalHost *host) {
     if (agent.state[0]) {
       registry_string(file, "agent_state", agent.state);
       registry_string(file, "agent_kind", agent.kind);
+      registry_string(file, "agent_app", agent.app);
       registry_string(file, "agent_message", agent.message);
       fprintf(file, "  agent_since = %lld,\n", (long long)agent.since);
     }
@@ -328,13 +329,14 @@ static int base64_decode(const char *text, size_t length, char *out, size_t capa
 static void clear_agent(TerminalHost *host) {
   if (!host->agent.state[0] && !host->step.state[0]) return;
   host->agent = (AgentRecord){0}; host->step = (AgentRecord){0};
+  host->status_pending = true;
   InterlockedIncrement(&host->agent_revision);
 }
 
 /* Applies one Program Status Protocol report (OSC 7501): key=value pairs joined by ':'. A malformed report
    changes nothing. Pi reports the root record; Anvil's Pi extension reports the "step" record. */
 static void apply_status(TerminalHost *host, const char *pairs) {
-  char state[8] = "", kind[16] = "", id[33] = "", message[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1] = "";
+  char state[8] = "", kind[16] = "", app[32] = "", id[33] = "", message[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1] = "";
   for (const char *pair = pairs; *pair;) {
     size_t length = strcspn(pair, ":");
     const char *equals = memchr(pair, '=', length);
@@ -348,6 +350,9 @@ static void apply_status(TerminalHost *host, const char *pairs) {
         memcpy(state, value, size); state[size] = 0;
       } else if (key == 4 && !memcmp(pair, "kind", 4) && size < sizeof(kind)) {
         memcpy(kind, value, size); kind[size] = 0;
+      } else if (key == 3 && !memcmp(pair, "app", 3)) {
+        if (size >= sizeof(app)) return;
+        memcpy(app, value, size); app[size] = 0;
       } else if (key == 2 && !memcmp(pair, "id", 2)) {
         if (size >= sizeof(id)) return;
         memcpy(id, value, size); id[size] = 0;
@@ -378,15 +383,17 @@ static void apply_status(TerminalHost *host, const char *pairs) {
     AgentRecord *record = root ? &host->agent : &host->step, next = {0};
     if (!clear) {
       snprintf(next.state, sizeof(next.state), "%s", state);
+      if (root) snprintf(next.app, sizeof(next.app), "%s", app);
       if (!strcmp(state, "blocked")) snprintf(next.kind, sizeof(next.kind), "%s", kind);
       snprintf(next.message, sizeof(next.message), "%s", message);
       /* A repeated state keeps its start time. A step starts again when its text changes. */
       bool same = !strcmp(record->state, next.state) && (root || !strcmp(record->message, next.message));
       next.since = same ? record->since : (int64_t)time(NULL);
     }
-    if (strcmp(record->state, next.state) || strcmp(record->kind, next.kind) ||
+    if (strcmp(record->state, next.state) || strcmp(record->kind, next.kind) || strcmp(record->app, next.app) ||
         strcmp(record->message, next.message) || record->since != next.since) {
       *record = next;
+      if (root) host->status_pending = true;
       InterlockedIncrement(&host->agent_revision);
     }
     /* A step belongs to a run. It ends when the agent rests, even if the agent did not clear it. */
@@ -404,6 +411,7 @@ static void end_running_agent(TerminalHost *host) {
   for (size_t i = 0; i < 2; i++)
     if (!strcmp(records[i]->state, "working") || !strcmp(records[i]->state, "blocked")) {
       *records[i] = (AgentRecord){0};
+      host->status_pending = true;
       InterlockedIncrement(&host->agent_revision);
     }
 }
@@ -659,6 +667,7 @@ static bool attach_client(TerminalHost *host) {
     }
     ok = ok && queue_record(host, ANVIL_TERMINAL_REPLAY_END, NULL, 0);
     AnvilTerminalStatus status = { host->busy };
+    snprintf(status.agent_app, sizeof(status.agent_app), "%s", host->agent.app);
     ok = ok && queue_record(host, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
     host->status_pending = false;
   }
@@ -1052,6 +1061,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
     if (host.attached && !host.replaying && !host.client_stop && host.status_pending &&
         host.queued + sizeof(HostRecord) + sizeof(AnvilTerminalStatus) <= CLIENT_QUEUE_LIMIT) {
       AnvilTerminalStatus status = { host.busy };
+      snprintf(status.agent_app, sizeof(status.agent_app), "%s", host.agent.app);
       if (queue_record(&host, ANVIL_TERMINAL_STATUS, &status, sizeof(status))) host.status_pending = false;
     }
     LeaveCriticalSection(&host.lock);

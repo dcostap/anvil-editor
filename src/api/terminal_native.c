@@ -68,6 +68,7 @@ typedef struct {
   volatile LONG host_exited;
   volatile LONG busy;
   LONG reported_busy;
+  char agent_app[32], reported_agent_app[32]; /* Protected by read_lock while the reader runs. */
   HANDLE reader_thread;
   HANDLE writer_thread;
   CRITICAL_SECTION read_lock;
@@ -317,12 +318,17 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       InterlockedExchange(&session->host_exited, 1);
       break;
     }
-    if (header.type == ANVIL_TERMINAL_STATUS && !replaying && header.size == sizeof(AnvilTerminalStatus)) {
-      AnvilTerminalStatus status; memcpy(&status, buffer, sizeof(status));
-      if (status.busy > 1) {
+    /* Detached hosts survive editor updates. Older hosts send only the busy field. */
+    if (header.type == ANVIL_TERMINAL_STATUS && !replaying &&
+        (header.size == sizeof(uint32_t) || header.size == sizeof(AnvilTerminalStatus))) {
+      AnvilTerminalStatus status = {0}; memcpy(&status, buffer, header.size);
+      if (status.busy > 1 || !memchr(status.agent_app, 0, sizeof(status.agent_app))) {
         session->read_error = ERROR_INVALID_DATA; InterlockedExchange(&session->read_failed, 1); break;
       }
       InterlockedExchange(&session->busy, status.busy);
+      EnterCriticalSection(&session->read_lock);
+      memcpy(session->agent_app, status.agent_app, sizeof(session->agent_app));
+      LeaveCriticalSection(&session->read_lock);
       wake_for_terminal_output(session);
       continue;
     }
@@ -1416,6 +1422,14 @@ static bool output_drained(TerminalSession *session) {
 static void push_status(lua_State *L, TerminalSession *session) {
   LONG busy = InterlockedCompareExchange(&session->busy, 0, 0);
   if (busy != session->reported_busy) { session->reported_busy = busy; session->state_revision++; }
+  char app[sizeof(session->agent_app)];
+  if (session->read_lock_initialized) EnterCriticalSection(&session->read_lock);
+  memcpy(app, session->agent_app, sizeof(app));
+  if (session->read_lock_initialized) LeaveCriticalSection(&session->read_lock);
+  if (strcmp(app, session->reported_agent_app)) {
+    memcpy(session->reported_agent_app, app, sizeof(app));
+    session->state_revision++;
+  }
   bool read_failed = InterlockedCompareExchange(&session->read_failed, 0, 0) != 0;
   bool write_failed = InterlockedCompareExchange(&session->write_failed, 0, 0) != 0;
   lua_createtable(L, 0, 5);
@@ -1430,6 +1444,10 @@ static void push_status(lua_State *L, TerminalSession *session) {
     (session->state == TERMINAL_STATE_RUNNING && !session->replay_finished));
   set_boolean_field(L, "replaying", !session->replay_finished);
   if (busy >= 0) set_boolean_field(L, "busy", busy != 0);
+  if (app[0] && session->state == TERMINAL_STATE_RUNNING) {
+    lua_pushstring(L, app);
+    lua_setfield(L, -2, "agent_app");
+  }
   if (session->state == TERMINAL_STATE_EXITED && session->exit_code_known) {
     lua_pushinteger(L, session->exit_code);
     lua_setfield(L, -2, "exit_code");
