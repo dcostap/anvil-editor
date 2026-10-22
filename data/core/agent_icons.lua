@@ -12,16 +12,9 @@ function agent_icons.provider(model)
   if name:find("deepseek", 1, true) then return "deepseek" end
 end
 
-local function dimensions(app, row_height, model)
-  if app ~= "pi" then return 0, 0 end
-  local size = file_icons.size_for_row(row_height)
-  if not agent_icons.provider(model) then return size, 0 end
-  return size, size + math.max(1, math.floor(3 * SCALE + 0.5))
-end
-
-function agent_icons.width(app, row_height, model)
-  local size, offset = dimensions(app, row_height, model)
-  return size + offset
+function agent_icons.width(app, row_height)
+  if app ~= "pi" then return 0 end
+  return file_icons.size_for_row(row_height)
 end
 
 local function image(name, size)
@@ -40,16 +33,12 @@ local function image(name, size)
 end
 
 function agent_icons.draw(app, x, y, row_height, model)
-  local size, offset = dimensions(app, row_height, model)
+  local size = agent_icons.width(app, row_height)
   if size == 0 then return end
-  local mark = image(app, size)
+  local maker = agent_icons.provider(model)
+  local mark = image(maker == "anthropic" and "claude" or maker or app, size)
   local top = math.floor(y + (row_height - size) / 2)
   if mark then renderer.draw_canvas(mark, math.floor(x), top) end
-  if offset == 0 then return end
-  local maker = agent_icons.provider(model)
-  local provider = image(maker == "anthropic" and "claude" or maker, size)
-  if not provider then return end
-  renderer.draw_canvas(provider, math.floor(x + offset), top)
 end
 
 return agent_icons

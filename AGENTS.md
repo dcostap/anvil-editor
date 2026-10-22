@@ -86,15 +86,15 @@ The host puts its preload first in `NODE_OPTIONS` and `BUN_OPTIONS`.
 An Anvil that a Terminal Session started inherits the older preload, and the first preload claims Pi.
 Run `ui/terminal_agent_status.lua` and `ui/terminal_agent_resume.lua` after changes.
 
-Terminal Tabs use the reported OSC 7501 `app` field to select Pi's official icon.
+Terminal Tabs use the reported OSC 7501 `app` field to identify Pi.
 The Title Bar and Project Sidebar keep the status dot beside that icon.
 They do not infer the program from its title. Older running hosts need a new Terminal Session to report program identity.
 Run `ui/terminal_icons.lua` and `ui/terminal_agent_status.lua` after icon or identity changes.
 The Pi extension also reports the selected model's display name, or its ID when no name exists.
-Model changes update the badge without a new agent turn. GPT names use OpenAI's knot; Claude and Fable names use Claude's starburst.
+Model changes update the icon without a new agent turn. GPT names use OpenAI's knot; Claude and Fable names use Claude's starburst.
 DeepSeek names use DeepSeek's whale. Name matching ignores case.
-The badge stays while Pi is idle and ends when Pi ends. Unknown models show only Pi's icon.
-The model logo follows Pi's icon on the same row, with the same size. Both logos have transparent backgrounds.
+The icon stays while Pi is idle and ends when Pi ends. Unknown or missing models show Pi's icon.
+Show only one logo: the detected model provider or Pi as the fallback. Logos have transparent backgrounds.
 Run `ui/terminal_agent_resume.lua` after model-report changes. It checks startup and model changes on Node and Bun.
 
 The standalone option is `-Dembedded_runtime=true`. It is off by default.

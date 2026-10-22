@@ -29,7 +29,7 @@ test.describe("Terminal program icons", function()
   end)
 end)
 
-test.describe("Pi model badges", function()
+test.describe("Pi model icons", function()
   test.it("matches supported model names without case sensitivity", function()
     local icons = require "core.agent_icons"
     test.equal(icons.provider("gPt-5"), "openai")
@@ -41,7 +41,7 @@ test.describe("Pi model badges", function()
     test.equal(icons.provider(nil), nil)
   end)
 
-  test.it("draws both logos without hiding the status dot or the name", function()
+  test.it("replaces Pi's logo with the model provider and falls back for unknown models", function()
     local old_canvas, old_dot, old_text = renderer.draw_canvas, renderer.draw_rounded_rect, renderer.draw_text
     local images, dots = {}, {}
     renderer.draw_canvas = function(image) images[#images + 1] = image end
@@ -50,20 +50,28 @@ test.describe("Pi model badges", function()
     local ok, err = pcall(function()
       local session = {id="pi",title="Task",state="running",busy=1,agent_app="pi",agent_state="working"}
       local plain = tab.width(tab.describe_session(session), 28 * SCALE)
+      tab.draw(tab.describe_session(session), 0, 0, 400, 28 * SCALE, {name_color=style.text})
+      test.equal(#images, 1)
+      local pi = images[1]
+      local claude
       for _, model in ipairs {"GPT Test", "Claude Test", "Fable Test", "DeepSeek Test"} do
         session.agent_model = model
         local item = tab.describe_session(session)
         images, dots = {}, {}
         tab.draw(item, 0, 0, 400, 28 * SCALE, {name_color=style.text})
-        test.equal(#images, 2, model .. " has no provider badge")
+        test.equal(#images, 1, model .. " must show only the provider icon")
+        test.ok(images[1] ~= pi, model .. " kept Pi's logo")
+        if model == "Claude Test" then claude = images[1] end
+        if model == "Fable Test" then test.equal(images[1], claude) end
         test.equal(dots[1], style.accent)
-        test.ok(tab.width(item, 28 * SCALE) > plain, "The name has no space for the badge")
+        test.equal(tab.width(item, 28 * SCALE), plain, "The replaced icon changed the name's space")
       end
       for _, model in ipairs {"Other Model", ""} do
         session.agent_model = model
         images = {}
         tab.draw(tab.describe_session(session), 0, 0, 400, 28 * SCALE, {name_color=style.text})
-        test.equal(#images, 1, "An unknown model kept the previous badge")
+        test.equal(#images, 1)
+        test.equal(images[1], pi, "An unknown model did not restore Pi's logo")
       end
     end)
     renderer.draw_canvas, renderer.draw_rounded_rect, renderer.draw_text = old_canvas, old_dot, old_text

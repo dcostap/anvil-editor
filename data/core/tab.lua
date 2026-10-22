@@ -221,8 +221,8 @@ local function prefix_width(item, row_height, opts)
   if item.number then width = (opts.number_font or style.font):get_width(tostring(item.number)) + number_gap() end
   if item.terminal then
     width = width + dot_radius() * 2 + gap()
-    local app, model = program_identity(item)
-    local size = agent_icons.width(app, row_height, model)
+    local app = program_identity(item)
+    local size = agent_icons.width(app, row_height)
     if size > 0 then width = width + size + gap() end
   elseif item.icon then
     width = width + view_icons.width(item.icon, row_height) + gap()
@@ -268,7 +268,7 @@ function tab.draw(item, x, y, w, h, opts)
     renderer.draw_rounded_rect(x, y + h / 2 - radius, radius * 2, radius * 2, radius, tab.status_color(item))
     x = x + radius * 2 + gap()
     local app, model = program_identity(item)
-    local size = agent_icons.width(app, h, model)
+    local size = agent_icons.width(app, h)
     if size > 0 then
       agent_icons.draw(app, x, y, h, model)
       x = x + size + gap()
