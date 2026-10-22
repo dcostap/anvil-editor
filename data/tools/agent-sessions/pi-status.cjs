@@ -1,6 +1,6 @@
 // A Pi extension that reports what Pi does, such as "Thinking" or "bash: npm test", to the Anvil Terminal Session
 // it runs in. The pi.cjs preload loads it into an interactive Pi in an Anvil Terminal Session.
-// It sends a "step" child record of the Program Status Protocol (OSC 7501) beside Pi's own status. It only
+// It sends "step" and "model" child records of the Program Status Protocol (OSC 7501) beside Pi's own status. It only
 // listens: it adds no tools, commands or session entries, and it does not change what the model sees.
 "use strict";
 
@@ -40,6 +40,17 @@ module.exports = function (pi) {
   };
   const on = (event, handler) => pi.on(event, (...args) => { try { handler(...args); } catch {} });
 
+  let currentModel;
+  const reportModel = (model) => {
+    const name = model && (model.name || model.id) || null;
+    if (name === currentModel || !process.stdout.isTTY) return;
+    currentModel = name;
+    process.stdout.write(name === null ? "\x1b]7501;state=clear:id=model\x1b\\"
+      : `\x1b]7501;state=idle:id=model:msg=${Buffer.from(name, "utf8").toString("base64")}\x1b\\`);
+  };
+  on("session_start", (_, ctx) => reportModel(ctx.model));
+  on("model_select", (event) => reportModel(event.model));
+
   on("turn_start", () => report(newestTool() || "Waiting for the model"));
   on("message_update", (event) => {
     if (tools.size) return;
@@ -58,5 +69,5 @@ module.exports = function (pi) {
     report(newestTool() || "Waiting for the model");
   });
   on("agent_end", () => { tools.clear(); report(null); });
-  on("session_shutdown", () => { tools.clear(); report(null); });
+  on("session_shutdown", () => { tools.clear(); report(null); reportModel(null); });
 };

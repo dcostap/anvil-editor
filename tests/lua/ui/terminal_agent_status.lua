@@ -35,27 +35,32 @@ test.describe("Terminal agent status", function()
       -- "my session" and "bash: npm test" in base64.
       test.ok(view.session:write(
         "$e=[char]27; [Console]::Write(\"$e]7501;state=working:app=pi:msg=bXkgc2Vzc2lvbg==$e\\\");" ..
-        " [Console]::Write(\"$e]7501;state=working:id=step:msg=YmFzaDogbnBtIHRlc3Q=$e\\\"); Start-Sleep 4\r"))
-      local running = wait_for(view, function(value) return value.agent_step ~= nil end, 4)
+        " [Console]::Write(\"$e]7501;state=working:id=step:msg=YmFzaDogbnBtIHRlc3Q=$e\\\");" ..
+        " [Console]::Write(\"$e]7501;state=idle:id=model:msg=R1BUIFRlc3Q=$e\\\"); Start-Sleep 4\r"))
+      local running = wait_for(view, function(value) return value.agent_step ~= nil and value.agent_model ~= nil end, 4)
       test.equal(running and running.agent_state, "working")
       test.equal(running and running.agent_app, "pi")
+      test.equal(running and running.agent_model, "GPT Test")
       local deadline = system.get_time() + 5
-      while view.agent_app ~= "pi" and system.get_time() < deadline do
+      while (view.agent_app ~= "pi" or view.agent_model ~= "GPT Test") and system.get_time() < deadline do
         local _, status = view.session:update()
         view:apply_status(status)
         coroutine.yield(0.05)
       end
       local item = require("core.tab").describe({current_view = view}, 1)
       test.equal(item.terminal.app, "pi", "The Tab lost its program identity")
+      test.equal(item.terminal.model, "GPT Test")
       test.equal(running and running.agent_message, "my session")
       test.equal(running and running.agent_step, "bash: npm test")
       test.ok(running and running.agent_since > 0 and running.agent_step_since >= running.agent_since)
       local ended = wait_for(view, function(value)
-        return value.busy == false and not value.agent_state and not view.agent_app
+        return value.busy == false and not value.agent_state and not view.agent_app and not view.agent_model
       end, 10)
       test.equal(ended and ended.agent_state, nil, "The status outlived its program")
       test.equal(ended and ended.agent_step, nil)
       test.equal(ended and ended.agent_app, nil)
+      test.equal(ended and ended.agent_model, nil)
+      test.equal(view.agent_model, nil, "The Tab kept an ended program's model")
       test.equal(view.agent_app, nil, "The Tab kept an ended program's identity")
     end)
     view:on_close()

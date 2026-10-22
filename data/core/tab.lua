@@ -54,7 +54,7 @@ function tab.describe(pane, number)
     if has_spinner(item.name) then item.name = SPINNER[1] .. item.name:sub(4) end
     item.terminal = {session = view.session_id, state = view.state, busy = view.busy,
       activity = view.get_activity and view:get_activity() or nil,
-      app = view.state == "running" and view.agent_app or nil}
+      app = view.state == "running" and view.agent_app or nil, model = view.agent_model}
     return item
   end
   local icon = view_icons.for_view(view)
@@ -76,7 +76,7 @@ function tab.describe_session(terminal)
   if terminal.busy == 1 then busy = true elseif terminal.busy == 0 then busy = false end
   return {name = name, terminal = {session = terminal.id, state = terminal.state, busy = busy,
     bell = (terminal.bell or 0) > 0, activity = terminal.activity,
-    app = terminal.state == "running" and terminal.agent_app or nil},
+    app = terminal.state == "running" and terminal.agent_app or nil, model = terminal.agent_model},
     agent = terminal.state == "running" and tab.agent(terminal) or nil}
 end
 
@@ -103,7 +103,7 @@ function tab.agent(record)
     return { state = finished and (record.command_exit == 0 and "done" or "error") or "working",
       message = "", command = true, since = record.command_started, finished = finished }
   end
-  return {state = state ~= "" and state or "working", kind = record.agent_kind, app = record.agent_app,
+  return {state = state ~= "" and state or "working", kind = record.agent_kind, app = record.agent_app, model = record.agent_model,
     message = record.agent_message or "",
     since = record.agent_since, step = step ~= "" and step or nil, step_since = record.agent_step_since}
 end
@@ -180,9 +180,9 @@ local function gap() return math.max(4 * SCALE, style.padding.x / 2) end
 local function number_gap() return math.max(3 * SCALE, style.padding.x / 3) end
 local function dot_radius() return 3 * SCALE end
 
-local function program_app(item)
+local function program_identity(item)
   if not item.terminal or item.terminal.state ~= "running" then return nil end
-  return item.agent and item.agent.app or item.terminal.app
+  return item.agent and item.agent.app or item.terminal.app, item.agent and item.agent.model or item.terminal.model
 end
 
 -- Remove executable-path noise only for Terminal Tabs. Keep the original name for hover and persistence.
@@ -224,7 +224,8 @@ function tab.width(item, row_height, opts)
   if item.number then width = (opts.number_font or style.font):get_width(tostring(item.number)) + number_gap() end
   if item.terminal then
     width = width + dot_radius() * 2 + gap()
-    local size = agent_icons.size(program_app(item), row_height)
+    local app, model = program_identity(item)
+    local size = agent_icons.width(app, row_height, model)
     if size > 0 then width = width + size + gap() end
   elseif item.icon then
     width = width + view_icons.width(item.icon, row_height) + gap()
@@ -252,10 +253,10 @@ function tab.draw(item, x, y, w, h, opts)
     local radius = dot_radius()
     renderer.draw_rounded_rect(x, y + h / 2 - radius, radius * 2, radius * 2, radius, tab.status_color(item))
     x = x + radius * 2 + gap()
-    local app = program_app(item)
-    local size = agent_icons.size(app, h)
+    local app, model = program_identity(item)
+    local size = agent_icons.width(app, h, model)
     if size > 0 then
-      agent_icons.draw(app, x, y, h)
+      agent_icons.draw(app, x, y, h, model)
       x = x + size + gap()
     end
     if item.terminal.state ~= "running" and item.terminal.state ~= "reconnecting" then color = style.dim end

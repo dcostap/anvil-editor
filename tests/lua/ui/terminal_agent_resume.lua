@@ -142,7 +142,7 @@ test.describe("Terminal agent resume", function()
         test.ok(view.session:write(string.format('"%s" "%s" update --session-dir "%s"\r', exe, cli, dir)))
         test.ok(wait_for(view, function() return #launches(dir) == 1 end), "pi update did not run")
         test.same(launches(dir)[1], {"update", "--session-dir", dir})
-        test.ok(view.session:write(string.format('"%s" "%s" --session-dir "%s"\r', exe, cli, dir)))
+        test.ok(view.session:write(string.format('"%s" "%s" --session-dir "%s" --model-events\r', exe, cli, dir)))
         local saved
         test.ok(wait_for(view, function()
           saved = record(state.session_id)
@@ -150,6 +150,24 @@ test.describe("Terminal agent resume", function()
         end, 15), "Pi's step is missing: " .. screen_text(view))
         test.equal(saved.agent_step, "bash: npm test")
         test.equal(saved.agent_state, "working")
+        test.ok(wait_for(view, function()
+          saved = record(state.session_id)
+          return saved.agent_model == "GPT Test" and view.agent_model == "GPT Test"
+        end, 15), "Pi's selected model is missing")
+        for _, name in ipairs {"Claude Test", "Fable Test", "Other Model"} do
+          test.ok(view.session:write(name .. "\r"))
+          test.ok(wait_for(view, function()
+            saved = record(state.session_id)
+            return saved.agent_model == name and view.agent_model == name
+          end, 15), "Pi's selected model did not change to " .. name)
+          test.equal(saved.agent_state, "working", "A model change changed Pi's run status")
+          test.equal(saved.agent_step, "bash: npm test")
+          local item = require("core.tab").describe({current_view=view}, 1)
+          test.equal(item.terminal.model, name)
+        end
+        test.ok(view.session:write("idle\r"))
+        test.ok(wait_for(view, function() return record(state.session_id).agent_state == "idle" end, 15))
+        test.equal(record(state.session_id).agent_model, "Other Model", "An idle Pi lost its selected model")
         local args = launches(dir)[2]
         test.equal(args[1], "--extension")
         test.equal(args[2]:match("[^/\\]+$"), "pi-status.cjs")

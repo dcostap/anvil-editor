@@ -832,6 +832,10 @@ function TerminalView:apply_status(status)
     core.log_quiet("Terminal Session %s program identity: %s", tostring(self.session_id), status.agent_app or "none")
   end
   self.agent_app = status.agent_app
+  if self.agent_model ~= status.agent_model then
+    core.log_quiet("Terminal Session %s selected model: %s", tostring(self.session_id), status.agent_model or "none")
+  end
+  self.agent_model = status.agent_model
   local revision = tonumber(status.revision)
   local kind = type(status.kind) == "string" and status.kind or self.state
   local changed = kind ~= self.state or revision ~= self.status_revision

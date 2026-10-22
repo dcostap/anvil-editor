@@ -26,8 +26,30 @@ for (let i = 0; i + 1 < args.length; i++) {
   const factory = require(args[i + 1]);
   (factory.default || factory)(pi);
 }
-const emit = (name, event) => (handlers[name] || []).forEach((handler) => handler(event, {}));
+let model = { id: "gpt-test", name: "GPT Test" };
+const emit = (name, event) => (handlers[name] || []).forEach((handler) => handler(event, {model}));
 if (process.env.PI_PROGRAM_STATUS === "1") process.stdout.write("\x1b]7501;state=working:app=pi\x1b\\");
+emit("session_start", { type: "session_start" });
+if (args.includes("--model-events")) {
+  process.stdin.setRawMode(true);
+  let input = "";
+  process.stdin.on("data", (data) => {
+    input += data.toString();
+    let end;
+    while ((end = input.search(/[\r\n]/)) >= 0) {
+      const name = input.slice(0, end);
+      input = input.slice(end + 1);
+      if (!name) continue;
+      if (name === "idle") {
+        emit("agent_end", { type: "agent_end" });
+        process.stdout.write("\x1b]7501;state=idle:app=pi\x1b\\");
+      } else {
+        model = {id: "selected-model", name};
+        emit("model_select", {type: "model_select", model, source: "set"});
+      }
+    }
+  });
+}
 emit("turn_start", { type: "turn_start" });
 emit("message_update", { type: "message_update", assistantMessageEvent: { type: "thinking_start" } });
 emit("tool_execution_start", { type: "tool_execution_start", toolCallId: "1", toolName: "bash",

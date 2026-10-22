@@ -75,9 +75,10 @@ typedef struct {
   size_t mark_length;
   bool mark_overflow;
   char mark[4096];
-  /* An agent's program status: the root record and the "step" child record that Anvil's Pi extension sends.
+  /* An agent's program status: the root record and the step and model that Anvil's Pi extension sends.
      The reader thread changes them under lock; the monitor writes them to the registry. */
   AgentRecord agent, step;
+  char agent_model[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1];
   volatile LONG agent_revision;
 } TerminalHost;
 
@@ -201,6 +202,8 @@ static bool write_registry(TerminalHost *host) {
     fprintf(file, "  interrupted_pid = %lu,\n", (unsigned long)host->interrupted_pid);
     EnterCriticalSection(&host->lock);
     AgentRecord agent = host->agent, step = host->step;
+    char model[sizeof(host->agent_model)];
+    memcpy(model, host->agent_model, sizeof(model));
     registry_string(file, "interrupted_input", host->interrupted_input);
     fprintf(file, "  command_started = %lld,\n  command_finished = %lld,\n  command_exit = %d,\n",
       (long long)host->command_started, (long long)host->command_finished, host->command_exit);
@@ -216,6 +219,7 @@ static bool write_registry(TerminalHost *host) {
       registry_string(file, "agent_step", step.message);
       fprintf(file, "  agent_step_since = %lld,\n", (long long)step.since);
     }
+    if (model[0]) registry_string(file, "agent_model", model);
     fputs("}\n", file);
     ok = !ferror(file);
   }
@@ -327,14 +331,15 @@ static int base64_decode(const char *text, size_t length, char *out, size_t capa
 
 /* Agent records end when the program that sent them ends. Caller holds lock. */
 static void clear_agent(TerminalHost *host) {
-  if (!host->agent.state[0] && !host->step.state[0]) return;
+  if (!host->agent.state[0] && !host->step.state[0] && !host->agent_model[0]) return;
   host->agent = (AgentRecord){0}; host->step = (AgentRecord){0};
+  host->agent_model[0] = 0;
   host->status_pending = true;
   InterlockedIncrement(&host->agent_revision);
 }
 
 /* Applies one Program Status Protocol report (OSC 7501): key=value pairs joined by ':'. A malformed report
-   changes nothing. Pi reports the root record; Anvil's Pi extension reports the "step" record. */
+   changes nothing. Pi reports the root record; Anvil's Pi extension reports the "step" and "model" records. */
 static void apply_status(TerminalHost *host, const char *pairs) {
   char state[8] = "", kind[16] = "", app[32] = "", id[33] = "", message[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1] = "";
   for (const char *pair = pairs; *pair;) {
@@ -373,12 +378,19 @@ static void apply_status(TerminalHost *host, const char *pairs) {
     pair += length;
     if (*pair == ':') pair++;
   }
-  bool root = !id[0], step = !strcmp(id, "step"), clear = !strcmp(state, "clear");
+  bool root = !id[0], step = !strcmp(id, "step"), model = !strcmp(id, "model"), clear = !strcmp(state, "clear");
   if (!clear && strcmp(state, "idle") && strcmp(state, "working") && strcmp(state, "done") &&
       strcmp(state, "blocked") && strcmp(state, "error")) return;
-  if (!root && !step) return;
+  if (!root && !step && !model) return;
   EnterCriticalSection(&host->lock);
-  if (clear && root) clear_agent(host);
+  if (model) {
+    const char *name = clear ? "" : message;
+    if (strcmp(host->agent_model, name)) {
+      snprintf(host->agent_model, sizeof(host->agent_model), "%s", name);
+      host->status_pending = true;
+      InterlockedIncrement(&host->agent_revision);
+    }
+  } else if (clear && root) clear_agent(host);
   else {
     AgentRecord *record = root ? &host->agent : &host->step, next = {0};
     if (!clear) {
@@ -407,6 +419,11 @@ static void apply_status(TerminalHost *host, const char *pairs) {
 
 /* A trusted prompt mark ends a working or blocked program, but its result stays. Caller holds lock. */
 static void end_running_agent(TerminalHost *host) {
+  if (host->agent_model[0]) {
+    host->agent_model[0] = 0;
+    host->status_pending = true;
+    InterlockedIncrement(&host->agent_revision);
+  }
   AgentRecord *records[] = { &host->agent, &host->step };
   for (size_t i = 0; i < 2; i++)
     if (!strcmp(records[i]->state, "working") || !strcmp(records[i]->state, "blocked")) {
@@ -668,6 +685,7 @@ static bool attach_client(TerminalHost *host) {
     ok = ok && queue_record(host, ANVIL_TERMINAL_REPLAY_END, NULL, 0);
     AnvilTerminalStatus status = { host->busy };
     snprintf(status.agent_app, sizeof(status.agent_app), "%s", host->agent.app);
+    snprintf(status.agent_model, sizeof(status.agent_model), "%s", host->agent_model);
     ok = ok && queue_record(host, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
     host->status_pending = false;
   }
@@ -1062,6 +1080,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
         host.queued + sizeof(HostRecord) + sizeof(AnvilTerminalStatus) <= CLIENT_QUEUE_LIMIT) {
       AnvilTerminalStatus status = { host.busy };
       snprintf(status.agent_app, sizeof(status.agent_app), "%s", host.agent.app);
+      snprintf(status.agent_model, sizeof(status.agent_model), "%s", host.agent_model);
       if (queue_record(&host, ANVIL_TERMINAL_STATUS, &status, sizeof(status))) host.status_pending = false;
     }
     LeaveCriticalSection(&host.lock);

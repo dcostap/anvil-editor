@@ -4,27 +4,55 @@ local file_icons = require "core.file_icons"
 local agent_icons = {}
 local cache = {}
 
-function agent_icons.size(app, row_height)
-  return app == "pi" and file_icons.size_for_row(row_height) or 0
+-- The selected model's name determines its maker, not the API service that hosts it.
+function agent_icons.provider(model)
+  local name = type(model) == "string" and model:lower() or ""
+  if name:find("gpt", 1, true) then return "openai" end
+  if name:find("claude", 1, true) or name:find("fable", 1, true) then return "anthropic" end
 end
 
-function agent_icons.draw(app, x, y, row_height)
-  local size = agent_icons.size(app, row_height)
-  if size == 0 then return end
+local function dimensions(app, row_height, model)
+  if app ~= "pi" then return 0 end
+  local size = file_icons.size_for_row(row_height)
+  if not agent_icons.provider(model) then return size end
+  return size, math.max(1, math.floor(size * 0.75 + 0.5)), math.floor(size * 0.65 + 0.5),
+    math.floor(size * 0.25 + 0.5)
+end
+
+function agent_icons.width(app, row_height, model)
+  local size, badge, offset = dimensions(app, row_height, model)
+  return badge and math.max(size, offset + badge + math.max(1, SCALE)) or size
+end
+
+local function image(name, size)
   local background = style.background
   if type(background[1]) == "table" then background = background[1] end
   local dark = background[1] * 0.2126 + background[2] * 0.7152 + background[3] * 0.0722 < 145
   local variant = dark and "_dark" or ""
-  local key = app .. variant .. ":" .. size
+  local key = name .. variant .. ":" .. size
   if cache[key] == nil then
-    local path = DATADIR .. PATHSEP .. "icons" .. PATHSEP .. "agents" .. PATHSEP .. app .. variant .. ".svg"
-    local image, err = canvas.load_svg_image(path, size, size)
-    cache[key] = image or false
-    if not image then require("core").log_quiet("Agent icon load failed: %s: %s", path, tostring(err)) end
+    local path = DATADIR .. PATHSEP .. "icons" .. PATHSEP .. "agents" .. PATHSEP .. name .. variant .. ".svg"
+    local value, err = canvas.load_svg_image(path, size, size)
+    cache[key] = value or false
+    if not value then require("core").log_quiet("Agent icon load failed: %s: %s", path, tostring(err)) end
   end
-  if cache[key] then
-    renderer.draw_canvas(cache[key], math.floor(x), math.floor(y + (row_height - size) / 2))
-  end
+  return cache[key]
+end
+
+function agent_icons.draw(app, x, y, row_height, model)
+  local size, badge, offset, rise = dimensions(app, row_height, model)
+  if size == 0 then return end
+  local mark = image(app, size)
+  local top = math.floor(y + (row_height - size) / 2)
+  if mark then renderer.draw_canvas(mark, math.floor(x), top) end
+  if not badge then return end
+  local provider = image(agent_icons.provider(model), badge)
+  if not provider then return end
+  local bx, by, padding = math.floor(x + offset), top - rise, math.max(1, SCALE)
+  -- A small background keeps the two marks readable where they overlap.
+  renderer.draw_rounded_rect(bx - padding, by - padding, badge + padding * 2, badge + padding * 2,
+    padding * 2, style.background)
+  renderer.draw_canvas(provider, bx, by)
 end
 
 return agent_icons
