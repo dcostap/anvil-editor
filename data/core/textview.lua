@@ -11,6 +11,8 @@ local layout_changes = require "core.layout_changes"
 local layout_rows = require "layout_rows"
 local line_packets = require "core.textview_line_packets"
 local language_intelligence = require "core.language_intelligence"
+-- Submit Markdown parses before view observers build their edit projections.
+require "core.markdown.model"
 local range_marker = require "core.range_marker"
 local copy_feedback = require "core.copy_feedback"
 local Buffer = require "core.buffer"

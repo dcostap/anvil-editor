@@ -2737,21 +2737,34 @@ end
 
 ---Register a batch-aware buffer transaction observer.
 ---Handlers are called from Buffer:on_text_transaction after text has been applied.
+---Call handlers in registration order. Replacing a handler keeps its position.
 ---@param id string
 ---@param fn function
 function Buffer.register_text_transaction_handler(id, fn)
   assert(type(id) == "string" and id ~= "", "text transaction handler id must be a non-empty string")
   assert(type(fn) == "function", "text transaction handler must be a function")
-  text_transaction_handlers[id] = fn
+  for _, entry in ipairs(text_transaction_handlers) do
+    if entry.id == id then
+      entry.fn = fn
+      return
+    end
+  end
+  text_transaction_handlers[#text_transaction_handlers + 1] = { id = id, fn = fn }
 end
 
 function Buffer.unregister_text_transaction_handler(id)
-  text_transaction_handlers[id] = nil
+  for index, entry in ipairs(text_transaction_handlers) do
+    if entry.id == id then
+      table.remove(text_transaction_handlers, index)
+      return
+    end
+  end
 end
 
 -- Internal transaction hook for batch-aware buffer change observers.
 function Buffer:on_text_transaction(transaction)
-  for id, handler in pairs(text_transaction_handlers) do
+  for _, entry in ipairs(text_transaction_handlers) do
+    local id, handler = entry.id, entry.fn
     local started = system.get_time()
     local ok, err = pcall(handler, self, transaction)
     local elapsed = (system.get_time() - started) * 1000
