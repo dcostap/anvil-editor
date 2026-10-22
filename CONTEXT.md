@@ -568,7 +568,7 @@ A Text Capture containing stable text from a Terminal View while that terminal c
 _Avoid_: terminal buffer, copy mode
 
 **Quick Command**:
-A shell command assigned to one of the Project's key slots A, S, D, and F and to one Terminal Session. It can run with or without moving focus to that Terminal View. A busy Terminal Session does not receive it. The file locations in its latest output are the Project's remote Points of Interest.
+A shell command assigned to one of the Project's key slots A, S, D, and F and to one Terminal Session. It saves modified file-backed Buffers first. A disk conflict or save failure cancels the run. It can run with or without moving focus to that Terminal View. A busy Terminal Session does not receive it. The file locations in its latest output are the Project's remote Points of Interest.
 _Avoid_: Command Slot, command preset, command macro, run configuration
 
 **Text View Prompt Bar**:

@@ -136,6 +136,23 @@ local function ready(view)
   return view.session ~= nil and view.state == "running" and view.busy ~= nil
 end
 
+local function save_modified_buffers(def)
+  for _, buffer in ipairs(core.buffers) do
+    if buffer.filename and buffer:is_dirty() then
+      -- Use normal save hooks, including the disk conflict guard. A synchronous
+      -- save also cancels an older background save and writes the current text.
+      local ok, err = pcall(buffer.save, buffer)
+      if not ok or buffer:is_dirty() then
+        core.warn("Quick Command %s cancelled: could not save %s", def.label, buffer.filename)
+        core.log_quiet("Quick Command %s save failed: file=%s error=%s",
+          def.label, buffer.filename, tostring(err or "Buffer still has unsaved edits"))
+        return false
+      end
+    end
+  end
+  return true
+end
+
 function M.run(index, opts)
   local focus = not opts or opts.focus ~= false
   local def = SLOTS[index]
@@ -145,13 +162,12 @@ function M.run(index, opts)
     return false
   end
   local view = open_view(slot.session_id)
-  if view then
-    if focus then terminal.focus_session(slot.session_id) end
-  elseif terminal.session_available(slot.session_id) then
-    -- Keep the current View when reattaching a session without moving focus.
+  if not view and terminal.session_available(slot.session_id) then
+    if not save_modified_buffers(def) then return false end
+    -- Keep the current View until the session is ready and all saves succeed.
     view = terminal.open {
-      session_id = slot.session_id, focus = focus,
-      placement = focus and "current" or "new", preserve_focus = not focus,
+      session_id = slot.session_id, focus = false,
+      placement = "new", preserve_focus = true,
       reason = "quick-command",
     }
   end
@@ -161,14 +177,20 @@ function M.run(index, opts)
     return false
   end
   core.log_quiet("Quick Command %s target: session=%s focus=%s", def.label, slot.session_id, tostring(focus))
-  if ready(view) then return enter_command(view, def, slot) end
+  local function run_ready()
+    -- Edits can arrive while the terminal reconnects. Save again before input.
+    if not save_modified_buffers(def) then return false end
+    if focus then terminal.focus_session(slot.session_id) end
+    return enter_command(view, def, slot)
+  end
+  if ready(view) then return run_ready() end
   core.log_quiet("Quick Command %s waits for its terminal: state=%s", def.label, tostring(view.state))
   core.add_thread(function()
     local deadline = system.get_time() + READY_TIMEOUT
     while not ready(view) and view.state ~= "failed" and view.state ~= "closed" and system.get_time() < deadline do
       coroutine.yield(0.05)
     end
-    if ready(view) then return enter_command(view, def, slot) end
+    if ready(view) then return run_ready() end
     core.warn("Quick Command %s did not run: its terminal is not ready", def.label)
   end)
   return true
