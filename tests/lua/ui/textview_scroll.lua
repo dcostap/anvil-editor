@@ -147,7 +147,8 @@ test.describe("TextView selection scrolling", function()
     test.equal(view.scroll.y, view:get_scrollable_size() - view.size.y)
     test.equal(view.v_scrollbar.percent, 1)
     local _, last_y = view:get_line_screen_position(#buffer.lines)
-    test.equal(last_y + lh, view.position.y + view.size.y - config.scroll_context_lines * lh)
+    -- Screen positions round the content origin to the nearest pixel.
+    test.near(last_y + lh, view.position.y + view.size.y - config.scroll_context_lines * lh, 0.5)
   end)
 
   test.it("defers line centering until the view has a layout", function(context)
