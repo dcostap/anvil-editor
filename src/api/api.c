@@ -16,6 +16,7 @@ int luaopen_canvas(lua_State* L);
 int luaopen_tokenizer(lua_State *L);
 int luaopen_treesitter(lua_State *L);
 int luaopen_fuzzy(lua_State *L);
+int luaopen_layout_rows(lua_State *L);
 int luaopen_worker_pool_native(lua_State *L);
 
 #ifdef _WIN32
@@ -90,6 +91,7 @@ static const luaL_Reg libs[] = {
   { "canvas",     luaopen_canvas     },
   { "tokenizer",  luaopen_tokenizer  },
   { "fuzzy",      luaopen_fuzzy      },
+  { "layout_rows", luaopen_layout_rows },
   { "worker_pool_native", luaopen_worker_pool_native },
   LUA_TERMINAL
   LUA_NET

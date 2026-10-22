@@ -15,6 +15,7 @@ anvil_sources = [
     'api/tokenizer.c',
     'api/treesitter.c',
     'api/fuzzy.c',
+    'api/layout_rows.c',
     'api/worker_pool.c',
     'fuzzy.c',
     'git_status_index.c',
