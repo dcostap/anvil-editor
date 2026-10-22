@@ -678,156 +678,268 @@ static int f_text_layout_wrap(lua_State *L) {
   return 1;
 }
 
-/* Wrap a source-preserving sequence of independently shaped text layouts.
- * Fragment styling often splits one logical source line into several runs;
- * scanning their retained native advances here avoids a Lua callback for
- * every UTF-8 boundary while preserving shaping boundaries exactly. */
-static int f_wrap_text_layouts(lua_State *L) {
+/* Wrap rendered lines. Lua resolves the fragments of each line; C finds the
+ * row starts of many lines in one call.
+ *
+ * Each line is a table with these fields:
+ *   text         the source line. A last "\n" is not wrapped.
+ *   start_col    the first source column to wrap.
+ *   x_offset     the x of the first fragment.
+ *   begin_width  the indent of a row that starts after column 1.
+ *   fragments    7 numbers for each fragment: kind, source_col1, source_col2,
+ *                width, text_x_offset, text_source_col1, text_source_col2.
+ *                A fragment without text columns has 0 for both.
+ *   layouts      the text layout of each text fragment, false for others.
+ *
+ * The x of a source column follows TextView:get_line_render_col_x_cursor:
+ * hidden source has no width, a widget has its width, and text in a fragment
+ * maps its source offset into the displayed text. Returns one array of
+ * 1-based row starts for each line. */
+enum { WRAP_TEXT = 0, WRAP_HIDDEN = 1, WRAP_WIDGET = 2 };
+#define WRAP_FRAGMENT_FIELDS 7
+
+typedef struct {
+  int kind;
+  lua_Integer col1, col2, text_col1, text_col2;
+  double width, text_x_offset;
+  const LuaTextLayout *layout;
+} WrapFragment;
+
+typedef struct {
+  const char *text;
+  size_t text_len, visible_len, start_col;
+  double x_offset, begin_width;
+  size_t first_fragment, fragment_count;
+} WrapLine;
+
+typedef struct {
+  const WrapFragment *fragments;
+  size_t count, index, boundary;
+  double x;
+} WrapCursor;
+
+static double wrap_layout_width_at(WrapCursor *cursor, const LuaTextLayout *layout, lua_Integer offset) {
+  if (layout->count == 0) return 0;
+  size_t byte_offset = offset <= 0 ? 0 : (size_t)offset;
+  if (byte_offset > layout->text_len) byte_offset = layout->text_len;
+  size_t index = cursor->boundary;
+  if (index >= layout->count || layout->byte_offsets[index] > byte_offset) {
+    index = text_layout_boundary_at_or_before(layout, byte_offset);
+  } else {
+    while (index + 1 < layout->count && layout->byte_offsets[index + 1] <= byte_offset) index++;
+  }
+  cursor->boundary = index;
+  return layout->advances[index];
+}
+
+static void wrap_cursor_next(WrapCursor *cursor) {
+  cursor->index++;
+  cursor->boundary = 0;
+}
+
+/* Return the x of `col`. Columns must not decrease between calls. */
+static double wrap_cursor_x(WrapCursor *cursor, lua_Integer col) {
+  if (col < 1) col = 1;
+  while (cursor->index < cursor->count) {
+    const WrapFragment *f = &cursor->fragments[cursor->index];
+    // A widget with an empty span comes before its anchor column.
+    bool widget_before_anchor = f->kind == WRAP_WIDGET && f->col1 == f->col2;
+    if (col < f->col1 || (col == f->col1 && !widget_before_anchor)) return cursor->x;
+    if (f->kind == WRAP_HIDDEN) {
+      if (col <= f->col2) return cursor->x;
+    } else if (col < f->col2) {
+      if (f->kind == WRAP_WIDGET) {
+        cursor->x += f->width;
+        wrap_cursor_next(cursor);
+        return cursor->x;
+      }
+      if (f->text_col1 > 0 && f->text_col2 > 0) {
+        if (col <= f->text_col1) return cursor->x + f->text_x_offset;
+        if (col <= f->text_col2)
+          return cursor->x + f->text_x_offset
+            + wrap_layout_width_at(cursor, f->layout, col - f->text_col1);
+        return cursor->x + f->width;
+      }
+      return cursor->x + f->text_x_offset
+        + wrap_layout_width_at(cursor, f->layout, col - f->col1);
+    }
+    if (f->kind != WRAP_HIDDEN) cursor->x += f->width;
+    wrap_cursor_next(cursor);
+  }
+  return cursor->x;
+}
+
+static void wrap_push_split(lua_State *L, int table, int *count, lua_Integer col) {
+  lua_pushinteger(L, col);
+  lua_rawseti(L, table, ++*count);
+}
+
+/* Push the row starts of one line. A row is too wide when its leading width
+ * and its content are wider than `width`. Word mode breaks after the last
+ * word-wrap opportunity in the row; a word wider than the row breaks at a
+ * character. */
+static void wrap_fragment_line(
+  lua_State *L, const WrapLine *line, const WrapFragment *fragments,
+  double width, bool word_mode
+) {
+  const unsigned char *text = (const unsigned char *)line->text;
+  WrapCursor cursor = { fragments + line->first_fragment, line->fragment_count, 0, 0, line->x_offset };
+  lua_createtable(L, 4, 0);
+  int table = lua_absindex(L, -1);
+  int count = 0;
+  lua_Integer row_start = (lua_Integer)line->start_col;
+  lua_Integer last_split = row_start;
+  wrap_push_split(L, table, &count, row_start);
+  double row_start_x = wrap_cursor_x(&cursor, row_start);
+  lua_Integer last_opportunity = 0;
+  double last_opportunity_next_x = 0;
+  bool has_opportunity_x = false;
+  lua_Integer col = row_start;
+  double col_x = row_start_x;
+  lua_Integer visible_end = (lua_Integer)line->visible_len;
+  while (col <= visible_end) {
+    // A character is a byte and its continuation bytes.
+    lua_Integer next_col = col + 1;
+    while (next_col <= visible_end && (text[next_col - 1] & 0xc0) == 0x80) next_col++;
+    double next_x = wrap_cursor_x(&cursor, next_col);
+    double leading = line->x_offset + (row_start > 1 ? line->begin_width : 0);
+    double row_width = leading + next_x - row_start_x;
+    if (row_width > width && col > row_start) {
+      lua_Integer split = col;
+      if (word_mode && last_opportunity > 0 && last_opportunity >= row_start)
+        split = last_opportunity + 1;
+      if (split <= row_start) split = col;
+      if (split > last_split) {
+        wrap_push_split(L, table, &count, split);
+        last_split = split;
+      }
+      row_start = split;
+      row_start_x = split == col || !has_opportunity_x ? col_x : last_opportunity_next_x;
+      if (last_opportunity > 0 && last_opportunity < row_start) last_opportunity = 0;
+      leading = line->x_offset + (row_start > 1 ? line->begin_width : 0);
+      row_width = leading + next_x - row_start_x;
+      if (row_width > width && col > row_start) {
+        wrap_push_split(L, table, &count, col);
+        last_split = col;
+        row_start = col;
+        row_start_x = col_x;
+      }
+    } else if (word_mode && text[col - 1] < 0x80) {
+      size_t at = (size_t)col - 1;
+      if (ren_text_wrap_opportunity_after(
+        text[at], at > 0 ? text[at - 1] : -1,
+        at + 1 < line->text_len ? text[at + 1] : -1
+      )) {
+        last_opportunity = col;
+        last_opportunity_next_x = next_x;
+        has_opportunity_x = true;
+      }
+    }
+    col_x = next_x;
+    col = next_col;
+  }
+}
+
+static lua_Integer wrap_field_integer(lua_State *L, int line, const char *name) {
+  lua_getfield(L, line, name);
+  int ok;
+  lua_Integer value = lua_tointegerx(L, -1, &ok);
+  if (!ok) luaL_error(L, "wrapped line needs an integer %s", name);
+  lua_pop(L, 1);
+  return value;
+}
+
+static double wrap_field_number(lua_State *L, int line, const char *name) {
+  lua_getfield(L, line, name);
+  int ok;
+  double value = lua_tonumberx(L, -1, &ok);
+  if (!ok) luaL_error(L, "wrapped line needs a number %s", name);
+  lua_pop(L, 1);
+  return value;
+}
+
+static double wrap_record_number(lua_State *L, int records, size_t index) {
+  lua_rawgeti(L, records, (lua_Integer)index);
+  int ok;
+  double value = lua_tonumberx(L, -1, &ok);
+  if (!ok) luaL_error(L, "fragment record %d is not a number", (int)index);
+  lua_pop(L, 1);
+  return value;
+}
+
+static int f_wrap_fragment_lines(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
-  size_t layout_count = lua_rawlen(L, 1);
-  double wrap_width = luaL_checknumber(L, 2);
+  double width = luaL_checknumber(L, 2);
   const char *mode = luaL_optstring(L, 3, "letter");
   bool word_mode = strcmp(mode, "word") == 0;
-  lua_Integer raw_start = luaL_optinteger(L, 4, 0);
-  double first_leading = luaL_optnumber(L, 5, 0);
-  double continuation_leading = luaL_optnumber(L, 6, 0);
+  size_t line_count = lua_rawlen(L, 1);
 
-  size_t total_len = 0;
-  for (size_t item = 1; item <= layout_count; item++) {
+  // Count the fragments, then read the whole input before the first result.
+  size_t fragment_count = 0;
+  for (size_t item = 1; item <= line_count; item++) {
     lua_rawgeti(L, 1, (lua_Integer)item);
-    LuaTextLayout *layout = check_text_layout(L, -1);
-    if (SIZE_MAX - total_len < layout->text_len) {
-      return luaL_error(L, "text layout sequence is too large");
-    }
-    total_len += layout->text_len;
+    luaL_argcheck(L, lua_istable(L, -1), 1, "each wrapped line must be a table");
+    lua_getfield(L, -1, "fragments");
+    luaL_argcheck(L, lua_istable(L, -1), 1, "each wrapped line needs fragments");
+    size_t numbers = lua_rawlen(L, -1);
+    luaL_argcheck(L, numbers % WRAP_FRAGMENT_FIELDS == 0, 1, "incomplete fragment record");
+    fragment_count += numbers / WRAP_FRAGMENT_FIELDS;
+    lua_pop(L, 2);
+  }
+  // Userdata memory stays valid on an error and the collector frees it.
+  WrapLine *lines = lua_newuserdata(L, sizeof(WrapLine) * (line_count ? line_count : 1));
+  WrapFragment *fragments = lua_newuserdata(L, sizeof(WrapFragment) * (fragment_count ? fragment_count : 1));
+  size_t next_fragment = 0;
+  for (size_t item = 1; item <= line_count; item++) {
+    lua_rawgeti(L, 1, (lua_Integer)item);
+    int line_index = lua_absindex(L, -1);
+    WrapLine *line = &lines[item - 1];
+    lua_getfield(L, line_index, "text");
+    if (!lua_isstring(L, -1)) luaL_error(L, "wrapped line needs a text");
+    // The input table keeps the string alive during this call.
+    line->text = lua_tolstring(L, -1, &line->text_len);
     lua_pop(L, 1);
-  }
-
-  size_t requested_start = raw_start <= 0 ? 0 : (size_t)raw_start;
-  if (requested_start > total_len) requested_start = total_len;
-  size_t start_byte = 0;
-  double start_advance = 0;
-  size_t byte_base = 0;
-  double advance_base = 0;
-  bool found_start = false;
-  for (size_t item = 1; item <= layout_count; item++) {
-    lua_rawgeti(L, 1, (lua_Integer)item);
-    LuaTextLayout *layout = check_text_layout(L, -1);
-    if (!found_start && requested_start <= byte_base + layout->text_len) {
-      size_t local_start = requested_start - byte_base;
-      size_t boundary = text_layout_boundary_at_or_before(layout, local_start);
-      start_byte = byte_base + (layout->count ? layout->byte_offsets[boundary] : 0);
-      start_advance = advance_base + (layout->count ? layout->advances[boundary] : 0);
-      found_start = true;
-    }
-    byte_base += layout->text_len;
-    advance_base += layout->count ? layout->advances[layout->count - 1] : 0;
-    lua_pop(L, 1);
-  }
-  if (!found_start) {
-    start_byte = total_len;
-    start_advance = advance_base;
-  }
-
-  int output_index = 1;
-  lua_createtable(L, 8, 0);
-  int output_table = lua_absindex(L, -1);
-  lua_pushinteger(L, (lua_Integer)start_byte);
-  lua_rawseti(L, output_table, output_index++);
-
-  size_t row_start_byte = start_byte;
-  double row_start_advance = start_advance;
-  size_t last_opportunity_start = SIZE_MAX;
-  size_t last_opportunity_next = SIZE_MAX;
-  double last_opportunity_next_advance = 0;
-  byte_base = 0;
-  advance_base = 0;
-  int previous_layout_byte = -1;
-  bool pending_opportunity = false;
-  unsigned int pending_codepoint = 0;
-  int pending_previous_byte = -1;
-  size_t pending_start = 0;
-  size_t pending_next = 0;
-  double pending_next_advance = 0;
-  for (size_t item = 1; item <= layout_count; item++) {
-    lua_rawgeti(L, 1, (lua_Integer)item);
-    LuaTextLayout *layout = check_text_layout(L, -1);
-    if (word_mode && pending_opportunity && layout->text_len > 0) {
-      if (ren_text_wrap_opportunity_after(
-        pending_codepoint, pending_previous_byte,
-        (unsigned char)layout->text[0]
-      )) {
-        last_opportunity_start = pending_start;
-        last_opportunity_next = pending_next;
-        last_opportunity_next_advance = pending_next_advance;
-      }
-      pending_opportunity = false;
-    }
-    for (size_t index = 1; index < layout->count; index++) {
-      size_t local_start = layout->byte_offsets[index - 1];
-      size_t local_end = layout->byte_offsets[index];
-      size_t char_start = byte_base + local_start;
-      size_t boundary_byte = byte_base + local_end;
-      double previous_advance = advance_base + layout->advances[index - 1];
-      double boundary_advance = advance_base + layout->advances[index];
-      if (boundary_byte <= start_byte) continue;
-      double leading = row_start_byte == start_byte
-        ? first_leading : continuation_leading;
-      double row_width = leading + boundary_advance - row_start_advance;
-      if (wrap_width > 0 && row_width > wrap_width && char_start > row_start_byte) {
-        size_t split_byte = char_start;
-        double split_advance = previous_advance;
-        if (word_mode && last_opportunity_start != SIZE_MAX
-            && last_opportunity_start >= row_start_byte) {
-          split_byte = last_opportunity_next;
-          split_advance = last_opportunity_next_advance;
-        }
-        if (split_byte <= row_start_byte) {
-          split_byte = char_start;
-          split_advance = previous_advance;
-        }
-        lua_pushinteger(L, (lua_Integer)split_byte);
-        lua_rawseti(L, output_table, output_index++);
-        row_start_byte = split_byte;
-        row_start_advance = split_advance;
-        if (last_opportunity_next <= row_start_byte) {
-          last_opportunity_start = SIZE_MAX;
-          last_opportunity_next = SIZE_MAX;
-        }
-      } else if (word_mode) {
-        unsigned int codepoint = local_end == local_start + 1
-          ? (unsigned char)layout->text[local_start] : 0;
-        int previous_byte = local_start > 0
-          ? (unsigned char)layout->text[local_start - 1] : previous_layout_byte;
-        if (local_end < layout->text_len) {
-          if (ren_text_wrap_opportunity_after(
-            codepoint, previous_byte, (unsigned char)layout->text[local_end]
-          )) {
-            last_opportunity_start = char_start;
-            last_opportunity_next = boundary_byte;
-            last_opportunity_next_advance = boundary_advance;
-          }
-        } else if (codepoint == '.' || codepoint == '-') {
-          pending_opportunity = true;
-          pending_codepoint = codepoint;
-          pending_previous_byte = previous_byte;
-          pending_start = char_start;
-          pending_next = boundary_byte;
-          pending_next_advance = boundary_advance;
-        } else if (ren_text_wrap_opportunity_after(
-          codepoint, previous_byte, -1
-        )) {
-          last_opportunity_start = char_start;
-          last_opportunity_next = boundary_byte;
-          last_opportunity_next_advance = boundary_advance;
-        }
+    line->visible_len = line->text_len;
+    if (line->visible_len > 0 && line->text[line->visible_len - 1] == '\n') line->visible_len--;
+    lua_Integer start_col = wrap_field_integer(L, line_index, "start_col");
+    line->start_col = start_col < 1 ? 1 : (size_t)start_col;
+    line->x_offset = wrap_field_number(L, line_index, "x_offset");
+    line->begin_width = wrap_field_number(L, line_index, "begin_width");
+    lua_getfield(L, line_index, "fragments");
+    int records = lua_absindex(L, -1);
+    lua_getfield(L, line_index, "layouts");
+    int layouts = lua_absindex(L, -1);
+    if (!lua_istable(L, layouts)) luaL_error(L, "wrapped line needs layouts");
+    size_t count = lua_rawlen(L, records) / WRAP_FRAGMENT_FIELDS;
+    line->first_fragment = next_fragment;
+    line->fragment_count = count;
+    for (size_t index = 0; index < count; index++) {
+      WrapFragment *f = &fragments[next_fragment++];
+      size_t base = index * WRAP_FRAGMENT_FIELDS;
+      f->kind = (int)wrap_record_number(L, records, base + 1);
+      f->col1 = (lua_Integer)wrap_record_number(L, records, base + 2);
+      f->col2 = (lua_Integer)wrap_record_number(L, records, base + 3);
+      f->width = wrap_record_number(L, records, base + 4);
+      f->text_x_offset = wrap_record_number(L, records, base + 5);
+      f->text_col1 = (lua_Integer)wrap_record_number(L, records, base + 6);
+      f->text_col2 = (lua_Integer)wrap_record_number(L, records, base + 7);
+      f->layout = NULL;
+      if (f->kind != WRAP_TEXT && f->kind != WRAP_HIDDEN && f->kind != WRAP_WIDGET)
+        luaL_error(L, "unknown fragment kind %d", f->kind);
+      if (f->kind == WRAP_TEXT) {
+        lua_rawgeti(L, layouts, (lua_Integer)index + 1);
+        f->layout = check_text_layout(L, -1);
+        lua_pop(L, 1);
       }
     }
-    if (layout->text_len > 0)
-      previous_layout_byte = (unsigned char)layout->text[layout->text_len - 1];
-    byte_base += layout->text_len;
-    advance_base += layout->count ? layout->advances[layout->count - 1] : 0;
-    lua_pop(L, 1);
+    lua_pop(L, 3);
+  }
+
+  lua_createtable(L, (int)(line_count < INT_MAX ? line_count : INT_MAX), 0);
+  int output = lua_absindex(L, -1);
+  for (size_t item = 0; item < line_count; item++) {
+    wrap_fragment_line(L, &lines[item], fragments, width, word_mode);
+    lua_rawseti(L, output, (lua_Integer)item + 1);
   }
   return 1;
 }
@@ -1666,7 +1778,7 @@ static const luaL_Reg lib[] = {
   { "draw_text",          f_draw_text          },
   { "draw_text_known_bounds", f_draw_text_known_bounds },
   { "draw_text_cells", f_draw_text_cells },
-  { "wrap_text_layouts",  f_wrap_text_layouts  },
+  { "wrap_fragment_lines", f_wrap_fragment_lines },
   { "draw_poly",          f_draw_poly          },
   { "draw_canvas",        f_draw_canvas        },
   { "draw_canvas_scaled", f_draw_canvas_scaled },

@@ -37,17 +37,6 @@ test.describe("Native text layout", function()
     test.equal(text:sub(breaks[2] + 1, breaks[3]), "beta ")
   end)
 
-  test.it("wraps separately shaped source-preserving layout runs", function()
-    local font = test.not_nil(style.code_font or style.font)
-    local parts = { "alpha ", "beta ", "gamma" }
-    local layouts = {}
-    for index, part in ipairs(parts) do layouts[index] = font:text_layout(part) end
-    local breaks = renderer.wrap_text_layouts(
-      layouts, font:get_width("alpha b"), "word"
-    )
-    test.same(breaks, { 0, 6, 11 })
-  end)
-
   test.it("uses punctuation separators as word-wrap opportunities", function()
     local font = test.not_nil(style.code_font or style.font)
     local delimiters = { ",", ";", "(", "[", "{", "/", "\\", ".", ":", "-" }
@@ -67,16 +56,6 @@ test.describe("Native text layout", function()
     local text = "12.34567"
     local breaks = font:wrap_text(text, font:get_width("12.3"), "word")
     test.same(breaks, { 0, 4 })
-
-    local layouts = {
-      font:text_layout("12"),
-      font:text_layout("."),
-      font:text_layout("34567"),
-    }
-    test.same(
-      renderer.wrap_text_layouts(layouts, font:get_width("12.3"), "word"),
-      { 0, 4 }
-    )
   end)
 
   test.it("does not use arithmetic minus signs as word-wrap opportunities", function()
@@ -93,16 +72,6 @@ test.describe("Native text layout", function()
     local text = "alpha,beta,gamma"
     local layout = font:text_layout(text)
     test.same(layout:wrap(font:get_width("alpha,b"), "word"), { 0, 6, 11 })
-
-    local layouts = {
-      font:text_layout("alpha,"),
-      font:text_layout("beta,"),
-      font:text_layout("gamma"),
-    }
-    test.same(
-      renderer.wrap_text_layouts(layouts, font:get_width("alpha,b"), "word"),
-      { 0, 6, 11 }
-    )
   end)
 
   test.it("does not keep an overflowing delimiter on the previous row", function()
@@ -113,11 +82,6 @@ test.describe("Native text layout", function()
 
     test.same(font:wrap_text(text, width, "word"), expected)
     test.same(font:text_layout(text):wrap(width, "word"), expected)
-    test.same(renderer.wrap_text_layouts({
-      font:text_layout("aaa"),
-      font:text_layout(","),
-      font:text_layout("bbb"),
-    }, width, "word"), expected)
   end)
 
   test.it("wraps UTF-8 directly without retaining a text layout", function()
