@@ -237,7 +237,7 @@ static int test_composite_parser(void) {
   bool found_emphasis = false;
   bool found_table_cell = false;
   for (uint32_t i = 0; i < inline_count; i++) {
-    TSTree *inline_tree = anvil_markdown_tree_inline_tree(tree, i);
+    TSTree *inline_tree = anvil_markdown_tree_copy_inline_tree(tree, i);
     TSRange source_range = anvil_markdown_tree_inline_source_range(tree, i);
     CHECK(inline_tree != NULL);
     CHECK(source_range.end_byte > source_range.start_byte);
@@ -247,6 +247,7 @@ static int test_composite_parser(void) {
       found_emphasis = true;
     }
     if (source_range.start_point.row >= 3) found_table_cell = true;
+    ts_tree_delete(inline_tree);
   }
   CHECK(found_emphasis);
   CHECK(found_table_cell);
@@ -329,6 +330,80 @@ static double elapsed_ms(clock_t start) {
   return (double) (clock() - start) * 1000.0 / (double) CLOCKS_PER_SEC;
 }
 
+static int test_owned_shifted_inline_copies(void) {
+  /* Change bytes, rows, and columns before the same inline source.
+   * Each owned copy must survive all source trees and later shifts. */
+  const char *sources[][6] = {
+    { "Prefix.\n", "\n", "# *word* [link](target) `code`\n" },
+    { "Longer prefix.\n", "\n", "# *word* [link](target) `code`\n" },
+    { "Longer prefix.\n", "\n", "Extra.\n", "\n", "# *word* [link](target) `code`\n" },
+    { "Longer prefix.\n", "\n", "Extra.\n", "\n", "### *word* [link](target) `code`\n" },
+    { "P.\n", "\n", "## *word* [link](target) `code`\n" },
+  };
+  const uint32_t counts[] = { 3, 3, 5, 5, 3 };
+  const uint32_t starts[] = { 11, 18, 26, 28, 7 };
+  const uint32_t rows[] = { 2, 2, 4, 4, 2 };
+  const uint32_t columns[] = { 2, 2, 2, 4, 3 };
+  enum { STEPS = sizeof(counts) / sizeof(counts[0]) };
+  TSTree *copies[STEPS] = {0};
+  AnvilMarkdownTree *previous = NULL;
+  char *error = NULL;
+  for (unsigned step = 0; step < STEPS; step++) {
+    uint32_t lengths[6];
+    for (uint32_t i = 0; i < counts[step]; i++) lengths[i] = (uint32_t)strlen(sources[step][i]);
+    AnvilTSSnapshot *snapshot = anvil_ts_snapshot_new_from_lines(
+      sources[step], lengths, counts[step], &error
+    );
+    CHECK(snapshot != NULL);
+    AnvilMarkdownTree *tree = anvil_markdown_tree_parse_incremental(
+      snapshot, previous, 750, NULL, NULL, &error
+    );
+    CHECK(tree != NULL);
+    if (previous) CHECK(anvil_markdown_tree_was_incremental(tree));
+    anvil_markdown_tree_free(previous);
+    anvil_ts_snapshot_free(snapshot);
+    previous = tree;
+    bool found = false;
+    for (uint32_t i = 0; i < anvil_markdown_tree_inline_count(tree); i++) {
+      TSRange range = anvil_markdown_tree_inline_source_range(tree, i);
+      if (range.start_point.row != rows[step]) continue;
+      CHECK(range.start_byte == starts[step]);
+      CHECK(range.start_point.column == columns[step]);
+      if (step) CHECK(anvil_markdown_tree_inline_was_reused(tree, i));
+      copies[step] = anvil_markdown_tree_copy_inline_tree(tree, i);
+      CHECK(copies[step] != NULL);
+      found = true;
+      break;
+    }
+    CHECK(found);
+  }
+  anvil_markdown_tree_free(previous);
+
+  /* Read only after every composite tree and snapshot has been freed. */
+  const char *types[] = { "emphasis", "inline_link", "code_span" };
+  const char *texts[] = { "*word*", "[link](target)", "`code`" };
+  const uint32_t offsets[] = { 0, 7, 22 };
+  for (unsigned step = 0; step < STEPS; step++) {
+    TSNode root = ts_tree_root_node(copies[step]);
+    CHECK(!ts_node_has_error(root));
+    for (unsigned i = 0; i < 3; i++) {
+      TSNode node = find_descendant(root, types[i]);
+      CHECK(!ts_node_is_null(node));
+      CHECK(ts_node_start_byte(node) == starts[step] + offsets[i]);
+      CHECK(ts_node_end_byte(node) == starts[step] + offsets[i] + strlen(texts[i]));
+      CHECK(ts_node_start_point(node).row == rows[step]);
+      CHECK(ts_node_end_point(node).row == rows[step]);
+      CHECK(ts_node_start_point(node).column == columns[step] + offsets[i]);
+      CHECK(ts_node_end_point(node).column == columns[step] + offsets[i] + strlen(texts[i]));
+      const char *line = sources[step][counts[step] - 1];
+      CHECK(memcmp(line + ts_node_start_point(node).column, texts[i], strlen(texts[i])) == 0);
+    }
+    ts_tree_delete(copies[step]);
+  }
+  free(error);
+  return 0;
+}
+
 static int test_bounded_large_parse(void) {
   const char *line = "## Heading with **bold**, *italic*, [link](note.md), and `code`.\n";
   size_t line_len = strlen(line);
@@ -380,6 +455,7 @@ int main(void) {
   if (test_composite_parser() != 0) return 1;
   if (test_incremental_composite_parser() != 0) return 1;
   if (test_incremental_utf8_width_change() != 0) return 1;
+  if (test_owned_shifted_inline_copies() != 0) return 1;
   if (test_bounded_large_parse() != 0) return 1;
   return 0;
 }

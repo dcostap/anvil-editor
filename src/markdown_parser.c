@@ -3,14 +3,21 @@
 #include "treesitter/languages.h"
 
 #include <SDL3/SDL_timer.h>
+#include <SDL3/SDL_atomic.h>
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct AnvilMarkdownInlineTree {
+typedef struct MarkdownInlineSource {
+  SDL_AtomicInt refs;
   TSTree *tree;
+  TSRange range;
+} MarkdownInlineSource;
+
+typedef struct AnvilMarkdownInlineTree {
+  MarkdownInlineSource *source;
   TSRange source_range;
   bool reused;
 } AnvilMarkdownInlineTree;
@@ -78,6 +85,10 @@ static TSTree *parse_with_ranges(
 static TSPoint snapshot_point_for_byte(const AnvilTSSnapshot *snapshot, uint32_t byte) {
   if (!snapshot || snapshot->line_count == 0) return (TSPoint) {0};
   if (byte > snapshot->byte_len) byte = snapshot->byte_len;
+  if (byte == snapshot->byte_len && byte > 0 && snapshot->bytes[byte - 1] == '\n' &&
+      snapshot->line_starts[snapshot->line_count - 1] < byte) {
+    return (TSPoint) { .row = snapshot->line_count, .column = 0 };
+  }
   uint32_t low = 0;
   uint32_t high = snapshot->line_count;
   while (low + 1 < high) {
@@ -152,7 +163,7 @@ static bool is_inline_region(TSNode node) {
 
 static bool append_inline_tree(
   AnvilMarkdownTree *result,
-  TSTree *tree,
+  MarkdownInlineSource *source,
   TSRange source_range,
   bool reused
 ) {
@@ -167,11 +178,45 @@ static bool append_inline_tree(
     result->inline_capacity = next_capacity;
   }
   result->inline_trees[result->inline_count++] = (AnvilMarkdownInlineTree) {
-    .tree = tree,
+    .source = source,
     .source_range = source_range,
     .reused = reused,
   };
   return true;
+}
+
+static void release_inline_source(MarkdownInlineSource *source) {
+  if (!source || SDL_AddAtomicInt(&source->refs, -1) != 1) return;
+  ts_tree_delete(source->tree);
+  free(source);
+}
+
+static bool append_reused_inline(
+  AnvilMarkdownTree *result, const AnvilMarkdownInlineTree *previous, TSRange range
+) {
+  if (!append_inline_tree(result, previous->source, range, true)) return false;
+  SDL_AddAtomicInt(&previous->source->refs, 1);
+  result->reused_inline_count++;
+  return true;
+}
+
+/* The stored tree keeps its original coordinates. Only a caller that reads
+ * that tree needs a shifted copy. Reused query captures need no tree copy. */
+TSTree *anvil_markdown_tree_copy_inline_tree(const AnvilMarkdownTree *tree, uint32_t index) {
+  if (!tree || index >= tree->inline_count) return NULL;
+  const AnvilMarkdownInlineTree *region = &tree->inline_trees[index];
+  TSTree *copy = ts_tree_copy(region->source->tree);
+  TSRange old = region->source->range, current = region->source_range;
+  if (copy && (old.start_byte != current.start_byte ||
+      old.start_point.row != current.start_point.row ||
+      old.start_point.column != current.start_point.column)) {
+    TSInputEdit shift = {
+      .old_end_byte = old.start_byte, .old_end_point = old.start_point,
+      .new_end_byte = current.start_byte, .new_end_point = current.start_point,
+    };
+    ts_tree_edit(copy, &shift);
+  }
+  return copy;
 }
 
 static bool range_nonempty(TSRange range) {
@@ -247,8 +292,6 @@ static bool parse_inline_region(
     };
     uint32_t cursor_before_match = *previous_cursor;
     TSTree *old_tree = NULL;
-    bool reused = false;
-    bool old_range_affected = true;
     if (previous && edit) {
       uint32_t old_index = *previous_cursor;
       while (old_index < previous->inline_count) {
@@ -256,13 +299,18 @@ static bool parse_inline_region(
         uint32_t mapped_start = map_old_start_byte(old_range.start_byte, edit);
         uint32_t mapped_end = map_old_end_byte(old_range.end_byte, edit);
         if (mapped_range_matches(old_range, source_range, edit)) {
-          old_tree = ts_tree_copy(previous->inline_trees[old_index].tree);
-          if (old_tree && edit->start_byte < old_range.end_byte) ts_tree_edit(old_tree, edit);
           bool insertion = edit->old_end_byte == edit->start_byte;
-          old_range_affected = insertion
+          bool old_range_affected = insertion
             ? (edit->start_byte > old_range.start_byte && edit->start_byte < old_range.end_byte)
             : (edit->start_byte < old_range.end_byte && edit->old_end_byte > old_range.start_byte);
           *previous_cursor = old_index + 1;
+          if (!old_range_affected) {
+            if (append_reused_inline(result, &previous->inline_trees[old_index], source_range)) return true;
+            if (error) *error = parser_strdup("out of memory storing Markdown inline tree");
+            return false;
+          }
+          old_tree = anvil_markdown_tree_copy_inline_tree(previous, old_index);
+          if (old_tree) ts_tree_edit(old_tree, edit);
           break;
         }
         if (mapped_end <= source_range.start_byte) {
@@ -276,12 +324,7 @@ static bool parse_inline_region(
       }
     }
     TSTree *tree = NULL;
-    if (old_tree && !old_range_affected) {
-      /* An unaffected region keeps its tree, so it needs no included ranges. */
-      tree = old_tree;
-      old_tree = NULL;
-      reused = true;
-    } else {
+    {
       TSRange *ranges = NULL;
       uint32_t range_count = 0;
       if (!build_region_ranges(node, &ranges, &range_count)) {
@@ -298,7 +341,7 @@ static bool parse_inline_region(
       tree = parse_with_ranges(inline_parser, result->snapshot, ranges, range_count, old_tree, run);
       free(ranges);
     }
-    if (tree && (old_tree || reused)) result->reused_inline_count++;
+    if (tree && old_tree) result->reused_inline_count++;
     if (old_tree) ts_tree_delete(old_tree);
     if (!tree) {
       if (error) *error = parser_strdup(run->cancelled
@@ -306,7 +349,14 @@ static bool parse_inline_region(
         : (run->timed_out ? "Markdown inline parse timed out" : "Markdown inline parse failed"));
       return false;
     }
-    if (!append_inline_tree(result, tree, source_range, reused)) {
+    MarkdownInlineSource *source = malloc(sizeof(*source));
+    if (source) {
+      SDL_SetAtomicInt(&source->refs, 1);
+      source->tree = tree;
+      source->range = source_range;
+    }
+    if (!source || !append_inline_tree(result, source, source_range, false)) {
+      free(source);
       ts_tree_delete(tree);
       if (error) *error = parser_strdup("out of memory storing Markdown inline tree");
       return false;
@@ -315,8 +365,47 @@ static bool parse_inline_region(
   }
 }
 
-/* Visits inline regions in document order. A cursor walk visits each node
- * once; indexed child lookups rescan siblings and cost O(n^2) per parent. */
+static TSPoint shift_point(TSPoint point, const TSInputEdit *edit) {
+  if (point.row == edit->old_end_point.row) {
+    point.column = edit->new_end_point.column + point.column - edit->old_end_point.column;
+  }
+  point.row = edit->new_end_point.row + point.row - edit->old_end_point.row;
+  return point;
+}
+
+/* A block subtree outside the edit and structural changes has the same
+ * inline regions. Copy their ranges without walking its block nodes. */
+static int reuse_inline_subtree(
+  AnvilMarkdownTree *result, const AnvilMarkdownTree *previous,
+  const TSInputEdit *edit, uint32_t start, uint32_t end, uint32_t *previous_cursor
+) {
+  uint32_t first = *previous_cursor;
+  while (first < previous->inline_count &&
+      map_old_end_byte(previous->inline_trees[first].source_range.end_byte, edit) <= start) first++;
+  uint32_t last = first;
+  for (; last < previous->inline_count; last++) {
+    TSRange range = previous->inline_trees[last].source_range;
+    uint32_t mapped_start = map_old_start_byte(range.start_byte, edit);
+    if (mapped_start >= end) break;
+    if (mapped_start < start || map_old_end_byte(range.end_byte, edit) > end ||
+        (range.start_byte < edit->old_end_byte && range.end_byte > edit->start_byte)) return 0;
+  }
+  for (uint32_t i = first; i < last; i++) {
+    TSRange range = previous->inline_trees[i].source_range;
+    if (range.start_byte >= edit->old_end_byte && range.end_byte > edit->start_byte) {
+      range.start_byte = map_old_start_byte(range.start_byte, edit);
+      range.end_byte = map_old_end_byte(range.end_byte, edit);
+      range.start_point = shift_point(range.start_point, edit);
+      range.end_point = shift_point(range.end_point, edit);
+    }
+    if (!append_reused_inline(result, &previous->inline_trees[i], range)) return -1;
+  }
+  *previous_cursor = last;
+  return 1;
+}
+
+/* Walk changed block subtrees in source order. Keep flat inline records for
+ * the rest; moving their offsets does not require editing their trees. */
 static bool parse_inline_regions(
   AnvilMarkdownTree *result,
   TSParser *inline_parser,
@@ -327,11 +416,31 @@ static bool parse_inline_regions(
   ParseRun *run,
   char **error
 ) {
+  uint32_t changed_start = edit ? edit->start_byte : 0;
+  uint32_t changed_end = edit ? edit->new_end_byte : result->snapshot->byte_len;
+  for (uint32_t i = 0; i < result->changed_range_count; i++) {
+    TSRange range = result->changed_ranges[i];
+    if (range.start_byte < changed_start) changed_start = range.start_byte;
+    if (range.end_byte > changed_end) changed_end = range.end_byte;
+  }
   TSTreeCursor cursor = ts_tree_cursor_new(root);
   bool ok = true;
   for (;;) {
     TSNode node = ts_tree_cursor_current_node(&cursor);
-    if (is_inline_region(node)) {
+    int reused = 0;
+    if (previous && edit &&
+        (ts_node_end_byte(node) < changed_start || ts_node_start_byte(node) > changed_end)) {
+      reused = reuse_inline_subtree(result, previous, edit,
+        ts_node_start_byte(node), ts_node_end_byte(node), previous_cursor);
+      if (reused < 0) {
+        if (error) *error = parser_strdup("out of memory storing Markdown inline tree");
+        ok = false;
+        break;
+      }
+    }
+    if (reused) {
+      /* The next cursor step skips this complete subtree. */
+    } else if (is_inline_region(node)) {
       if (!parse_inline_region(
         result, inline_parser, node, previous, edit, previous_cursor, run, error
       )) {
@@ -479,7 +588,7 @@ AnvilMarkdownTree *anvil_markdown_tree_parse_incremental(
 void anvil_markdown_tree_free(AnvilMarkdownTree *tree) {
   if (!tree) return;
   for (uint32_t i = 0; i < tree->inline_count; i++) {
-    if (tree->inline_trees[i].tree) ts_tree_delete(tree->inline_trees[i].tree);
+    release_inline_source(tree->inline_trees[i].source);
   }
   free(tree->inline_trees);
   free(tree->changed_ranges);
@@ -498,11 +607,6 @@ TSTree *anvil_markdown_tree_block_tree(const AnvilMarkdownTree *tree) {
 
 uint32_t anvil_markdown_tree_inline_count(const AnvilMarkdownTree *tree) {
   return tree ? tree->inline_count : 0;
-}
-
-TSTree *anvil_markdown_tree_inline_tree(const AnvilMarkdownTree *tree, uint32_t index) {
-  if (!tree || index >= tree->inline_count) return NULL;
-  return tree->inline_trees[index].tree;
 }
 
 TSRange anvil_markdown_tree_inline_source_range(const AnvilMarkdownTree *tree, uint32_t index) {

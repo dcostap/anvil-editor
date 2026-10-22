@@ -35,7 +35,8 @@ void anvil_markdown_tree_free(AnvilMarkdownTree *tree);
 const AnvilTSSnapshot *anvil_markdown_tree_snapshot(const AnvilMarkdownTree *tree);
 TSTree *anvil_markdown_tree_block_tree(const AnvilMarkdownTree *tree);
 uint32_t anvil_markdown_tree_inline_count(const AnvilMarkdownTree *tree);
-TSTree *anvil_markdown_tree_inline_tree(const AnvilMarkdownTree *tree, uint32_t index);
+/* Returns an owned tree in current source coordinates. Delete it after use. */
+TSTree *anvil_markdown_tree_copy_inline_tree(const AnvilMarkdownTree *tree, uint32_t index);
 TSRange anvil_markdown_tree_inline_source_range(const AnvilMarkdownTree *tree, uint32_t index);
 bool anvil_markdown_tree_inline_was_reused(const AnvilMarkdownTree *tree, uint32_t index);
 uint32_t anvil_markdown_tree_changed_range_count(const AnvilMarkdownTree *tree);
