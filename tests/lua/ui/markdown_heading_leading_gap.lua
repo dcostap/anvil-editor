@@ -6,6 +6,7 @@ local Editor = require "core.editor"
 local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
+local panes = require "core.panes"
 local style = require "core.style"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
@@ -92,6 +93,12 @@ end
 
 test.describe("Markdown heading leading spacing", function()
   test.before_each(function(context)
+    -- The startup Workspace applies fonts before it opens its first Pane.
+    local deadline = system.get_time() + 15
+    while #panes.ordered() == 0 and system.get_time() < deadline do
+      coroutine.yield(0.01)
+    end
+    test.ok(#panes.ordered() > 0, "expected the startup Workspace to open its first Pane")
     created_views = {}
     context.old_markdown_live_editor = config.markdown_live_editor
     context.old_active_view = core.active_view

@@ -168,6 +168,8 @@ test.describe("Markdown Live Preview", function()
   test.after_each(function(context)
     config.markdown_live_editor = context.old_markdown_live_editor
     config.markdown_live_interactive_tables = context.old_markdown_live_interactive_tables
+    -- Keep presentation inputs alive until the layout reference has checked them.
+    if context.cleanup then context.cleanup() end
   end)
 
   test.it("attaches only to Markdown Editors", function()
@@ -4065,8 +4067,13 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("presents resolved note, heading, and block embeds as bounded visual rows", function()
+  test.it("presents resolved note, heading, and block embeds as bounded visual rows", function(context)
     local root = USERDIR .. PATHSEP .. "markdown-live-note-embeds-" .. system.get_process_id()
+    local old_projects = core.projects
+    context.cleanup = function()
+      core.projects = old_projects
+      test.ok(test.remove_tree(root))
+    end
     test.ok(common.mkdirp(root))
     local function write(path, text)
       local fp = test.not_nil(io.open(path, "wb")); fp:write(text); fp:close()
@@ -4075,7 +4082,6 @@ test.describe("Markdown Live Preview", function()
     write(target, "# Target\nfirst\nsecond\n\n## Child\nchild text\n\nblock content ^block-id\n")
     local source = root .. PATHSEP .. "Source.md"
     write(source, "![[Target]]\n![[Target#Child]]\n![[Target#^block-id]]\nplain\n")
-    local old_projects = core.projects
     core.projects = { Project(root) }
     local index = markdown.vault_index.get_index(root):rebuild("embed-ui-test")
     local view, buffer = make_view("![[Target]]\n![[Target#Child]]\n![[Target#^block-id]]\nplain", source)
@@ -4101,8 +4107,6 @@ test.describe("Markdown Live Preview", function()
       test.equal(preview(4), nil)
       test.equal(index.status, "ready")
     end)
-    core.projects = old_projects
-    common.rm(root, true)
     if not ok then error(err, 0) end
   end)
 
@@ -5064,15 +5068,15 @@ test.describe("Markdown Live Preview", function()
     os.remove(image_path)
   end)
 
-  test.it("honors disabled live image rendering", function()
+  test.it("honors disabled live image rendering", function(context)
     local old = config.markdown_live_render_images
+    context.cleanup = function() config.markdown_live_render_images = old end
     config.markdown_live_render_images = false
     local view, buffer = make_view("![Alt](image.png)\nother", "note.md")
     buffer:set_selection(2, 1)
     refresh(view)
     local link_width = live_body_font(view):get_width("Alt")
     test.equal(view:get_col_x_offset(1, #"![Alt](image.png)" + 1), link_width)
-    config.markdown_live_render_images = old
   end)
 
   test.it("owns lifecycle independently for split views of one Buffer", function()

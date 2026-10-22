@@ -64,7 +64,8 @@ test.describe("Line wrapping toggle scroll position", function()
     view:update()
 
     test.ok(view:is_wrapping_enabled())
-    test.equal(select(2, view:get_line_screen_position(45, 1)), before)
+    -- Wrapping changes the sums used for the same fractional screen position.
+    test.near(select(2, view:get_line_screen_position(45, 1)), before, 1e-9)
     test.equal(view.scroll.to.y, view.scroll.y)
   end)
 
@@ -79,7 +80,7 @@ test.describe("Line wrapping toggle scroll position", function()
     view:update()
 
     test.ok(not view:is_wrapping_enabled())
-    test.equal(select(2, view:get_line_screen_position(45, 17)), before)
+    test.near(select(2, view:get_line_screen_position(45, 17)), before, 1e-9)
     test.equal(view.scroll.to.y, view.scroll.y)
   end)
 

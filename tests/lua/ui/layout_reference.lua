@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local config = require "core.config"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
@@ -53,11 +54,13 @@ local NOTE = table.concat({
 test.describe("Layout reference", function()
   test.before_each(function(context)
     context.views = {}
+    context.active_view = core.active_view
     context.live = config.markdown_live_editor
     config.markdown_live_editor = true
   end)
 
   test.after_each(function(context)
+    core.active_view = context.active_view
     for _, view in ipairs(context.views) do
       view.discard_buffer_on_close = true
       view:on_close()
@@ -101,6 +104,31 @@ test.describe("Layout reference", function()
     heights[5] = nil
     test.not_ok(report.ok, "a stale row height must be reported")
     test.ok((report.kinds.height or 0) >= 1, report.summary)
+  end)
+
+  test.it("preserves a revealed task prefix at implicit content", function(context)
+    local view, buffer = make_view(context, "task-affinity.md",
+      "- [ ] parent\n    - [ ]\nplain")
+    view:set_wrapping_enabled(false)
+    buffer:set_selection(3, 1)
+    markdown.live_render.refresh_view(view)
+    markdown_ready(view)
+    core.set_active_view(view)
+    buffer:set_selection(2, 10)
+    test.ok(command.perform("core:move_to_previous_char"))
+    test.same({ buffer:get_selection() }, { 2, 10, 2, 10 })
+    local function has_source_marker()
+      for _, fragment in ipairs(view:get_line_render(2).fragments) do
+        if fragment.markdown_task_source_marker then return true end
+      end
+      return false
+    end
+    test.ok(has_source_marker(), "moving left must reveal the task prefix")
+
+    local report = layout_reference.compare(view)
+    test.not_ok(report.skipped, "a settled task must be compared")
+    test.ok(report.ok, report.summary .. "\n" .. table.concat(report.mismatches or {}, "\n"))
+    test.ok(has_source_marker(), "the comparison must keep the task prefix revealed")
   end)
 
   test.it("leaves a view whose Markdown publication is pending for later", function(context)
