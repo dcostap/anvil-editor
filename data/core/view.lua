@@ -500,6 +500,14 @@ function View:on_drop(drop)
   return false
 end
 
+---Return the caret rectangle `{ x, y, w, h }` where a drop at this point inserts,
+---or nil when the drop point does not matter. Drop feedback then marks the whole Pane.
+---@param x number
+---@param y number
+function View:get_drop_caret(x, y)
+  return nil
+end
+
 
 ---Handle text input events (typing, IME composition).
 ---Override for text editing. Called after IME composition completes.

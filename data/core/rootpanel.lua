@@ -868,7 +868,11 @@ end
 function RootPanel:get_external_drop_target()
   local drop = self.external_drop
   if not drop then return end
-  return self:resolve_external_drop_target(drop.x, drop.y)
+  local target = self:resolve_external_drop_target(drop.x, drop.y)
+  if target and target.kind == "current" then
+    target.caret = call_view(target.pane.current_view, "get_drop_caret", drop.x, drop.y)
+  end
+  return target
 end
 
 function RootPanel:on_drop_begin()
@@ -1125,7 +1129,14 @@ function RootPanel:draw()
   local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")
   self:draw_active_app_overlay()
   local drop_target = self:get_external_drop_target()
-  if drop_target and drop_target.area ~= "titlebar" then
+  local drop_caret = drop_target and drop_target.caret
+  if drop_caret then
+    local view = drop_target.pane.current_view
+    core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
+    renderer.draw_rect(drop_caret.x, drop_caret.y, math.max(drop_caret.w, common.round(2 * SCALE)),
+      drop_caret.h, style.drop_target_accent)
+    core.pop_clip_rect()
+  elseif drop_target and drop_target.area ~= "titlebar" then
     local pane = drop_target.pane
     local rect = drop_target.rect or {
       x = pane.position.x, y = pane.position.y, w = pane.size.x, h = pane.size.y,

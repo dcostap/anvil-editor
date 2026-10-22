@@ -8486,15 +8486,12 @@ function TextView:draw_line_text(line, x, y)
 end
 
 
----Draw the caret at a position.
----@param x number Screen x coordinate
----@param y number Screen y coordinate
----@param line integer Line number (for overwrite mode char width)
----@param col integer Column number (for overwrite mode char width)
-function TextView:draw_caret(x, y, line, col, caret_idx, color)
-  color = color or style.caret
-  local stats = core.textview_frame_stats
-  if stats then stats.caret_draw_calls = stats.caret_draw_calls + 1 end
+---Return the screen rectangle of a bar caret at a position, or nil when the
+---line's horizontal clip hides it.
+---@param x number Screen x coordinate from `get_caret_screen_position`
+---@param y number Screen y coordinate from `get_caret_screen_position`
+---@return number? x, number y, number width, number height
+function TextView:get_caret_rect(x, y, line, col)
   local line_end = self.wrapped_settings
     and linewrapping.has_wrapped_line_end_affinity(self, line, col)
     or false
@@ -8516,17 +8513,38 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
     )
     y = y + content_y_offset
   end
-
-  local caret_x, caret_y = x, y
-  local caret_width, caret_height
   -- Scaling can leave a fractional thickness. Round it before placing the edges.
-  local thickness = math.max(1, common.round(style.caret_width))
+  return x, y, math.max(1, common.round(style.caret_width)), lh
+end
+
+---Return the insertion caret of a drop at a screen point, or nil when the
+---drop does not insert there. A view with a file drop provider inserts both
+---files and text at the drop point. Other views open dropped files instead.
+---@return {x: number, y: number, w: number, h: number}?
+function TextView:get_drop_caret(x, y)
+  if not next(self.file_drop_providers or {}) or not self:can_edit("drop") then return end
+  local line, col = self:resolve_screen_position(x, y)
+  local screen_x, screen_y = self:get_caret_screen_position(line, col)
+  local caret_x, caret_y, w, h = self:get_caret_rect(screen_x, screen_y, line, col)
+  if caret_x then return { x = caret_x, y = caret_y, w = w, h = h } end
+end
+
+---Draw the caret at a position.
+---@param x number Screen x coordinate
+---@param y number Screen y coordinate
+---@param line integer Line number (for overwrite mode char width)
+---@param col integer Column number (for overwrite mode char width)
+function TextView:draw_caret(x, y, line, col, caret_idx, color)
+  color = color or style.caret
+  local stats = core.textview_frame_stats
+  if stats then stats.caret_draw_calls = stats.caret_draw_calls + 1 end
+  local caret_x, caret_y, caret_width, caret_height = self:get_caret_rect(x, y, line, col)
+  if not caret_x then return end
+  local lh = caret_height
   if self.buffer.overwrite then
-    caret_y = y + lh
+    caret_y = caret_y + lh
+    caret_height = caret_width * 2
     caret_width = self:get_font():get_width(self.buffer:get_char(line, col))
-    caret_height = thickness * 2
-  else
-    caret_width, caret_height = thickness, lh
   end
 
   local active_line, active_col = self.buffer:get_selection(false)

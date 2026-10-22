@@ -820,6 +820,18 @@ local function setup_scenario()
   if benchmark.scenario:find("wrapped%-document", 1, false) then
     view:set_wrapping_enabled(true)
     linewrapping.update_textview_breaks(view)
+  elseif benchmark.scenario == "markdown-file-drop" then
+    assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
+    core.on_event("dropbegin")
+    -- Place the hover after the window reaches its final layout.
+    core.add_thread(function()
+      coroutine.yield(0.3)
+      local x, y = view:get_line_screen_position(3, 10)
+      core.on_event("dropmoved", x + 1, y + 1)
+      local target = core.root_panel:get_external_drop_target()
+      core.log_quiet("Benchmark drop hover: x=%.1f y=%.1f target=%s caret=%s", x + 1, y + 1,
+        tostring(target and target.kind), tostring(target and target.caret ~= nil))
+    end)
   elseif benchmark.scenario:find("^markdown%-footnotes") then
     assert(view.__markdown_live_attached, "Markdown Live Preview did not attach")
     view:set_wrapping_enabled(true)
