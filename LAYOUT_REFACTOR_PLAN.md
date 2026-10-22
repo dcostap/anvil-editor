@@ -599,6 +599,41 @@ Deliverables:
 - Composed-row and height work below 1 ms for each edit in `markdown-gallery-type-narrow`.
 - A PUC Lua build that compiles.
 
+#### Result
+
+Commits `fb779c3c`, `1b610a18`, `14618fd8`, and `1d57dced`.
+
+- `src/api/layout_rows.c` has two objects: `rows()` and `heights()`. They are separate, because a view without composed rows still has heights.
+- `rows()` keeps one record for each row: kind, line, last line, row in line, and payload handle. A plain text row has no payload, so it has no Lua table.
+- `heights()` keeps the height and the render plan ID of each row, and lazy prefix sums.
+- One `replace` call splices the rows of a change and moves the lines of later rows. It reads the whole batch before it changes a row.
+- `composed_visual_rows()` is gone. Callers read one row with `get_visual_row_entry`.
+- The layout tests have the same results as before, with `ANVIL_LAYOUT_REFERENCE=1`.
+- `layout_rows.c` compiles with no warnings against the Lua 5.4 headers. A full PUC Lua build was not run.
+
+The last 4.3 ms of each 5.1 ms update in the narrow window was not row bookkeeping.
+Inline footnote rows parsed every footnote line again at each block end. Commit `1d57dced` gets the numbers only for a block that has a note.
+
+| `markdown-gallery-*`, ms | Before | After |
+|---|---:|---:|
+| `type-narrow` composed-row update, each frame | 7.23 | 0.37 |
+| `type-narrow` metric resolution, each frame | 9.11 | 0.58 |
+| `type` composed-row update, each frame | 3.30 | 0.29 |
+| `newline` composed-row update, each frame | 4.95 | 0.24 |
+| `type-narrow` p50 / p95 latency | 92 / 280 | 61–66 / 151–162 |
+| `newline` p50 / p95 latency | 92 / 267 | 60–71 / 171–202 |
+| `open` | 18,100–19,800 | 19,300–20,100 |
+
+Each edit now takes 0.38–0.61 ms of composed-row work. The open runs overlap. Three runs cannot show if the difference is real.
+
+Deferred: a native call that returns the visible rows of a frame. A frame reads about 60 rows, and that cost is not measurable now.
+
+Costs that remain, each frame while typing:
+
+- Reconcile takes 6.5–8.5 ms. Each keystroke wraps 30–35 lines again, because their render plans change.
+- The line render cache lookup takes 3.7–5.6 ms, and the line render build takes 1.8–3.1 ms.
+- Line wrapping takes 1.6–2.2 ms.
+
 ### Milestone 4: Native fragment wrapping
 
 The renderer already measures widths and wraps plain text in C.
