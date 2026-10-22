@@ -216,10 +216,7 @@ function tab.display_name(item)
   return name .. arguments
 end
 
--- The width the Tab's content needs at its full display name.
----@param opts {number_font: renderer.font?, name_font: renderer.font?, now: number?}?
-function tab.width(item, row_height, opts)
-  opts = opts or {}
+local function prefix_width(item, row_height, opts)
   local width = 0
   if item.number then width = (opts.number_font or style.font):get_width(tostring(item.number)) + number_gap() end
   if item.terminal then
@@ -230,10 +227,27 @@ function tab.width(item, row_height, opts)
   elseif item.icon then
     width = width + view_icons.width(item.icon, row_height) + gap()
   end
-  width = width + (opts.name_font or style.font):get_width(tab.display_name(item))
+  return width
+end
+
+-- The width the Tab's content needs at its full display name.
+---@param opts {number_font: renderer.font?, name_font: renderer.font?, now: number?}?
+function tab.width(item, row_height, opts)
+  opts = opts or {}
+  local width = prefix_width(item, row_height, opts) + (opts.name_font or style.font):get_width(tab.display_name(item))
   local note = tab.note(item, opts.now or os.time())
   if note then width = width + gap() * 2 + style.font:get_width(note) end
   return width
+end
+
+-- The space for the name, and the note that fits beside it.
+function tab.name_width(item, width, row_height, opts)
+  opts = opts or {}
+  local available = width - prefix_width(item, row_height, opts)
+  local note = tab.note(item, opts.now or os.time())
+  local note_w = note and style.font:get_width(note) + gap() * 2 or 0
+  if note_w > available / 2 then note, note_w = nil, 0 end
+  return math.max(0, available - note_w), note
 end
 
 -- Draws the Tab's content in the rectangle. `name_color` colours a name without a Git or missing-file colour.
@@ -265,13 +279,11 @@ function tab.draw(item, x, y, w, h, opts)
     x = x + view_icons.width(item.icon, h) + gap()
   end
   color = item.missing and style.tab_file_missing or item.color or color
-  local note = tab.note(item, opts.now or os.time())
-  local note_w = note and style.font:get_width(note) + gap() * 2 or 0
-  if note_w > (right - x) / 2 then note, note_w = nil, 0 end
+  local name_width, note = tab.name_width(item, w, h, opts)
   local name, spinning = tab.display_name(item), false
   local spun = item.terminal and item.terminal.state == "running" and tab.spinner_title(name, opts.clock or 0)
   if spun then name, spinning = spun, true end
-  name = tab.fit(name_font, name, math.max(0, right - x - note_w))
+  name = tab.fit(name_font, name, name_width)
   local name_y = middle(name_font)
   renderer.draw_text(name_font, name, x, name_y, color)
   if item.missing and name ~= "" then

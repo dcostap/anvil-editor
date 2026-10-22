@@ -63,6 +63,12 @@ local function metrics()
   }
 end
 
+local function tab_bounds(row, width)
+  local m = metrics()
+  local x = m.pad + 24 * SCALE + ((row.depth or 1) - 1) * m.indent
+  return x, width - m.pad - 8 * SCALE - x
+end
+
 -- "week" for up to 7 days, "month" for 7 to 30 days, "older" beyond that or when unknown.
 local function age_bucket(activity, now)
   if not activity or activity <= 0 then return "older" end
@@ -371,11 +377,16 @@ function SidebarView:update_hover()
   return changed
 end
 
--- The original Terminal title remains available even when its display label is shorter.
+-- Show the original Terminal title only when the Tab hides part of it.
 function SidebarView:get_tooltip()
   if self.scroll_drag then return nil end
-  local item = self.hover and self.hover.tab
-  return item and item.terminal and item.name or nil
+  local row = self.hover
+  local item = row and row.tab
+  if not item or not item.terminal then return nil end
+  local name = tab.display_name(item)
+  local _, width = tab_bounds(row, self.width)
+  local available = tab.name_width(item, width, metrics().terminal)
+  if name ~= item.name or tab.fit(style.font, name, available) ~= name then return item.name end
 end
 
 -- Returns true when the hover or a dragged scrollbar changed and the view needs a redraw.
@@ -386,7 +397,8 @@ function SidebarView:on_mouse_moved(x, y)
     self:update_hover()
     return true
   end
-  return self:update_hover()
+  local changed = self:update_hover()
+  return changed or self.tooltip_text ~= nil
 end
 
 function SidebarView:on_mouse_left()
@@ -548,8 +560,8 @@ function SidebarView:draw_row(row, y, width, now)
       renderer.draw_rect(left + 12 * SCALE - line / 2, top, line, bottom - top,
         row.bracket.visible and style.titlebar_group_indicator or style.divider)
     end
-    local x = left + 24 * SCALE + ((row.depth or 1) - 1) * m.indent
-    local spinning, name_x = tab.draw(row.tab, x, y, right - 8 * SCALE - x, m.terminal,
+    local x, tab_width = tab_bounds(row, width)
+    local spinning, name_x = tab.draw(row.tab, x, y, tab_width, m.terminal,
       {name_color = style.text, now = now, clock = self.clock})
     if spinning then self.spinning = true end
     if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - 8 * SCALE - name_x,
@@ -589,7 +601,7 @@ function SidebarView:draw_tooltip(width, height)
     text_width = math.max(text_width, font:get_width(line))
   end
   local w, h = text_width + padding * 2, #lines * font:get_height() + padding * 2
-  local x = margin
+  local x = math.max(margin, math.min(self.hover_x + margin, width - w - margin))
   local y = math.max(margin, math.min(self.hover_y + font:get_height(), height - h - margin))
   renderer.draw_rounded_rect(x - 1, y - 1, w + 2, h + 2, margin + 1, style.divider)
   renderer.draw_rounded_rect(x, y, w, h, margin, style.background3)

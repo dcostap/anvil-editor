@@ -25,6 +25,64 @@ local function recorder()
   return actions, function(...) actions[#actions + 1] = {...} end
 end
 
+test.describe("Sidebar title tooltips", function()
+  local function sidebar(name, width)
+    local view = SidebarView(function() end)
+    view:set_size(width or 500, 800)
+    view:set_model({{row_id=1,path="C:/A",state="ready",terminals={
+      {id="detached",title=name,state="running"}},panes={
+      {id="pane-1",number=1,name=name,terminal={session="shown",state="running"}}}}})
+    return view
+  end
+
+  test.it("does not repeat a fully visible Terminal title", function()
+    local view = sidebar("π - .pi")
+    for _, kind in ipairs({"tab", "terminal"}) do
+      view:on_mouse_moved(100, row_y(view, kind))
+      test.equal(view:get_tooltip(), nil, "A visible title has a redundant tooltip")
+    end
+  end)
+
+  test.it("keeps the full title available when the Tab hides part of it", function()
+    local original = [[C:\Program Files\PowerShell\7\pwsh.exe]]
+    local view = sidebar(original)
+    view:on_mouse_moved(100, row_y(view, "tab"))
+    test.equal(view:get_tooltip(), original)
+    local long = "a terminal command with arguments that do not fit in this narrow Sidebar"
+    view = sidebar(long, 180)
+    view:on_mouse_moved(100, row_y(view, "terminal"))
+    test.equal(view:get_tooltip(), long)
+    view:set_size(1200, 800)
+    test.equal(view:get_tooltip(), nil, "Resizing leaves a redundant tooltip")
+  end)
+
+  test.it("places the tooltip near the pointer and keeps it inside the Sidebar", function()
+    local view = sidebar([[C:\tools\tool.exe]])
+    local old_rounded, old_text = renderer.draw_rounded_rect, renderer.draw_text
+    local boxes = {}
+    renderer.draw_rounded_rect = function(x, y, w, h) boxes[#boxes + 1] = {x=x,y=y,w=w,h=h} end
+    renderer.draw_text = function() end
+    local function draw_at(x, y)
+      view:on_mouse_moved(x, y)
+      view.clock = system.get_time() + 10
+      boxes = {}
+      view:draw_tooltip(view.width, view.view_h)
+      return test.not_nil(boxes[2], "The hidden title has no tooltip")
+    end
+    local ok, err = pcall(function()
+      local y = row_y(view, "tab")
+      local box = draw_at(180, y)
+      test.ok(box.x >= 180, "The tooltip does not follow the pointer")
+      test.ok(box.y > y, "The tooltip covers the pointer")
+      test.ok(view:on_mouse_moved(200, y), "Tooltip motion does not request a redraw")
+      box = draw_at(view.width - 1, y)
+      test.ok(box.x >= 0 and box.x + box.w <= view.width, "The tooltip leaves the Sidebar")
+    end)
+    renderer.draw_rounded_rect, renderer.draw_text = old_rounded, old_text
+    if not ok then error(err) end
+  end)
+end)
+
 test.describe("Sidebar list actions", function()
   test.it("asks the shell for a Project's actions menu when a right-click releases on it", function()
     local actions, action = recorder()
