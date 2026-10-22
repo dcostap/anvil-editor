@@ -1989,6 +1989,32 @@ function callout_runtime.remove_folds(view, reason)
   end
 end
 
+function callout_runtime.publication_affects_folds(view, instance)
+  local ranges = instance.changed_ranges
+  -- An initial publication or an unknown range needs a complete reconciliation.
+  if not ranges or #ranges == 0 then return true end
+  for _, fold in pairs(view.__markdown_live_owner.callout_folds) do
+    -- A removed marker can no longer report its old range.
+    if not view:refresh_fold_region(fold) then return true end
+    for _, range in ipairs(ranges) do
+      if fold.line1 <= (range.line2 or range.line1)
+        and fold.line2 >= range.line1
+      then
+        return true
+      end
+    end
+  end
+  for _, range in ipairs(ranges) do
+    -- This includes new Callouts and quotes whose header became a Callout.
+    -- Parser ranges also include semantic changes outside the edited line.
+    local nodes, reason = instance:quote_nodes_for_lines(
+      range.line1, range.line2 or range.line1, { limit = 1 }
+    )
+    if not nodes or reason == "limit" or #nodes > 0 then return true end
+  end
+  return false
+end
+
 function callout_runtime.reconcile_folds(view, reason)
   local owner = view and view.__markdown_live_owner
   if not (owner and view.__markdown_live_attached) then return end
@@ -2001,6 +2027,13 @@ function callout_runtime.reconcile_folds(view, reason)
   end
   local instance = current_semantic_model(view)
   if not instance then return end
+  if reason == "published" and not callout_runtime.publication_affects_folds(view, instance) then
+    core.log_quiet(
+      "Markdown Callout fold reconciliation skipped for %s: publication does not touch quotes or folds",
+      view.buffer:get_name()
+    )
+    return
+  end
   local started = system.get_time()
   -- Callouts are quotes; querying only quotes avoids building every node.
   local nodes, query_reason = instance:quote_nodes_for_lines(1, #view.buffer.lines, {
