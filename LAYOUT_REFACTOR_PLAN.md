@@ -643,6 +643,60 @@ Lua resolves the fragments of a line. C finds the breaks for many lines in one c
 Use the same call for edits and for the sliced wrap when a file opens.
 Measure `markdown-gallery-open` and `markdown-gallery-newline` before and after.
 
+#### Result
+
+Implementation commit `898f4129`.
+
+- `renderer.wrap_fragment_lines` wraps rendered lines in one native call per batch.
+- Lua prepares fragments. C handles hidden spans, remapped text, widgets, and word breaks.
+- Edits and sliced opening use the same batch API. The old Lua character loop is gone.
+- The focused fragment tests pass: eight cases with independent expected breaks.
+
+Measurements alternated before and after on October 22, with three attempts per version.
+Two before newline runs completed. Two after scoring runs and one after attribution run completed.
+Other attempts failed during setup. The last pair allowed 600 seconds for newline setup instead of 240.
+Temporary `probe_` timers used matching scopes. No probes remain in the implementation.
+
+| `markdown-gallery-newline`, ms | Before | After |
+|---|---:|---:|
+| Wrap update, each frame | 5.72–7.41 | 2.36 |
+| Wrap compute, each frame, including native calls | 4.57–7.02 | 2.15 |
+| Wrap compute, each line | 0.170–0.244 | 0.075 |
+| Rendered break loops, each frame | 2.78–2.80 | 0.064 |
+| Rendered break loops, each rendered line | 0.098–0.106 | 0.0023 |
+| Fragment layout preparation, each frame | 0.89–2.15 | 1.05 |
+| p50 / p95 latency, first completed scoring run | 177 / 661 | 214 / 896 |
+| p50 / p95 latency, second completed scoring run | 315 / 1520 | 131 / 444 |
+
+Before, the Lua cursor alone took 0.261–0.293 ms per cursor line.
+The rendered-loop comparison includes both old paths: the Lua cursor and native plain-text wrapping.
+After, the native batch handles both groups. The compute timer includes preparation, not only break selection.
+Load varied greatly. These samples show lower loop cost, but cannot establish an end-to-end latency improvement.
+
+Both before `markdown-gallery-open` attempts timed out at the 60-second action limit.
+Two after attempts also timed out; the last after scoring run completed in 58.5 seconds.
+These results do not give a reliable open-latency comparison.
+The following table uses the first committed sliced wrap during newline setup, from scoring and attribution runs.
+
+| Sliced opening work, seconds | Before | After |
+|---|---:|---:|
+| Total slice work | 12.51–15.58 | 7.35–11.75 |
+| Resolve line render plans | 8.18–10.54 | 5.85–9.35 |
+| Lua cursor | 1.59–2.23 | removed |
+| Native break loops | 0.14–0.20 | 0.082–0.373 |
+| Fragment layout preparation | 1.23–1.55 | 0.65–0.97 |
+
+An earlier comparison reported 9.5 seconds of resolution against 9.4 seconds of sliced work.
+Those scopes differed: resolution included all process calls. New counters include only calls inside each slice.
+Render-plan resolution accounts for 79–83% of the measured after slice work.
+Building Markdown render plans remains the main opening cost, not native break selection.
+
+Costs that remain:
+
+- Lua builds text layouts with one `font:text_layout` call per fragment. This is the largest remaining measured wrap part.
+- Render-plan resolution dominates sliced opening. It belongs to the separate opening-performance workstream.
+- Reconcile and render-cache lookup still dominate the measured newline frames.
+
 ### Milestone 5: Migrate remaining paths
 
 Migrate providers and layout consumers in small complete changes.
