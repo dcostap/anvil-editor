@@ -21,6 +21,33 @@ static AnvilShellProjectActivity activity[] = {
   {"D:\\x\\\xc3\xa9t\xc3\xa9", 1750000000},
 };
 
+static void loaded_projects(void) {
+  char *background[] = {"C:\\Projects\\Background", "D:\\x\\\xc3\xa9t\xc3\xa9"};
+  AnvilShellWindowState windows[] = {
+    {3, 0, 0, 900, 700, false, "C:\\Projects\\Selected", background, 2},
+    {7, 0, 0, 900, 700, false, "C:\\Projects\\Other"},
+  };
+  AnvilShellState state = {windows, 2, activity, 2}, decoded = {0};
+  size_t size = 0;
+  char *data = anvil_shell_state_encode(&state, &size);
+  CHECK(data && anvil_shell_state_decode(data, size, &decoded), "loaded Projects did not round-trip");
+  CHECK(decoded.count == 2 && decoded.windows[0].project_count == 2,
+        "the Window lost its background Projects");
+  if (decoded.count == 2) {
+    CHECK(!strcmp(decoded.windows[0].path, "C:\\Projects\\Selected"), "Selected Project changed");
+    CHECK(decoded.windows[1].project_count == 0, "background Projects moved to another Window");
+    for (size_t i = 0; i < decoded.windows[0].project_count && i < 2; i++)
+      CHECK(!strcmp(decoded.windows[0].projects[i], background[i]), "background Project path changed");
+  }
+  anvil_shell_state_free(&decoded);
+  free(data);
+  const char *old = "anvil-shell-windows 4\nwindow 1 0 0 10 10 0 3 abc\n";
+  CHECK(anvil_shell_state_decode(old, strlen(old), &decoded) && decoded.count == 1 &&
+        decoded.windows[0].project_count == 0 && !strcmp(decoded.windows[0].path, "abc"),
+        "existing Selected Project state did not restore");
+  anvil_shell_state_free(&decoded);
+}
+
 /* The Project Sidebar groups Projects by the last time the user worked in them. */
 static void project_activity(void) {
   AnvilShellState state = {sample, 3, activity, 2}, decoded;
@@ -86,7 +113,10 @@ static void rejects(void) {
   AnvilShellState decoded;
   const char *bad[] = {
     "anvil-shell-windows 1\nwindow 0 0 10 10 0 0 \n",
-    "anvil-shell-windows 5\n",
+    "anvil-shell-windows 6\n",
+    "anvil-shell-windows 5\nloaded 1 3 abc\n",
+    "anvil-shell-windows 5\nwindow 1 0 0 10 10 0 3 abc\nloaded 2 3 def\n",
+    "anvil-shell-windows 5\nwindow 1 0 0 10 10 0 3 abc\nloaded 1 0 \n",
     "anvil-shell-windows 4\nsidebar 0 0\n",
     "anvil-shell-windows 4\nsidebar 240 2\n",
     "anvil-shell-windows 4\nsidebar 240 0\nsidebar 240 0\n",
@@ -204,6 +234,7 @@ static void linked_spellings(void) {
 }
 
 int main(int argc, char **argv) {
+  loaded_projects();
   if (argc > 2 && !strcmp(argv[1], "identity"))
     return anvil_shell_same_identity(strtoul(argv[2], NULL, 10)) ? 0 : 1;
   round_trip();

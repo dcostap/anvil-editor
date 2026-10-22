@@ -515,13 +515,13 @@ static void check_liveness(ShellWindow *window) {
   if (next) SetTimer(window->hwnd, SHELL_LIVENESS_TIMER, (UINT)next, NULL);
 }
 static void window_entry(ShellWindow *window, AnvilShellWindowState *entry);
+static bool window_snapshot(ShellWindow *window, AnvilShellWindowState *entry);
 static void windows_changed(void);
 static void begin_window_close(ShellWindow *window) {
   if (!window->closing) {
-    free(window->close_entry.path);
-    window_entry(window, &window->close_entry);
-    window->close_entry.path = window->close_entry.path ? _strdup(window->close_entry.path) : NULL;
-    window->close_entry_valid = true;
+    anvil_shell_window_state_free(&window->close_entry);
+    window->close_entry_valid = window_snapshot(window, &window->close_entry);
+    if (!window->close_entry_valid) SDL_Log("Shell could not save the closing Window's loaded Projects");
     window->closing = true;
     window->close_generation++;
     window->resolve_revision++;
@@ -5654,6 +5654,7 @@ static void complete_unload(ShellProject *project) {
   while (*link != project)
     link = &(*link)->next;
   *link = project->next;
+  windows_changed();
   if (window->selected == project) {
     ShellProject *next = NULL;
     for (ShellProject *item = shell.projects; item; item = item->next)
@@ -6365,6 +6366,7 @@ static BOOL CALLBACK cancel_owned_dialog(HWND hwnd, LPARAM parent) {
 
 /* The Window's current App State entry. The path is borrowed from its Selected Project. */
 static void window_entry(ShellWindow *window, AnvilShellWindowState *entry) {
+  *entry = (AnvilShellWindowState){0};
   WINDOWPLACEMENT placement = {.length = sizeof(placement)};
   GetWindowPlacement(window->hwnd, &placement);
   RECT bounds = placement.rcNormalPosition;
@@ -6379,6 +6381,29 @@ static void window_entry(ShellWindow *window, AnvilShellWindowState *entry) {
   entry->path = project && project != window->empty ? project->project_path : NULL;
 }
 
+/* Owns every path, so shutdown can remove runtimes without changing the saved loaded list. */
+static bool window_snapshot(ShellWindow *window, AnvilShellWindowState *entry) {
+  window_entry(window, entry);
+  const char *selected = entry->path;
+  entry->path = selected ? _strdup(selected) : NULL;
+  if (selected && !entry->path) return false;
+  for (ShellProject *project = shell.projects; project; project = project->next) {
+    if (project->window_id != window->id || project == window->selected || project->unloading ||
+        !project->project_path) continue;
+    if (entry->project_count >= ANVIL_SHELL_STATE_MAX_PROJECTS) goto failed;
+    char **paths = realloc(entry->projects, (entry->project_count + 1) * sizeof(*paths));
+    if (!paths) goto failed;
+    entry->projects = paths;
+    paths[entry->project_count] = _strdup(project->project_path);
+    if (!paths[entry->project_count]) goto failed;
+    entry->project_count++;
+  }
+  return true;
+failed:
+  anvil_shell_window_state_free(entry);
+  return false;
+}
+
 /* `final` keeps Windows that are being removed, because the shell is ending with them. */
 static void save_windows(bool final) {
   if (shell.state_timer) {
@@ -6387,7 +6412,8 @@ static void save_windows(bool final) {
   }
   if (!shell.state_enabled) return;
   ShellWindow *order[ANVIL_SHELL_STATE_MAX_WINDOWS];
-  AnvilShellWindowState entries[ANVIL_SHELL_STATE_MAX_WINDOWS];
+  AnvilShellWindowState entries[ANVIL_SHELL_STATE_MAX_WINDOWS] = {0};
+  bool owned[ANVIL_SHELL_STATE_MAX_WINDOWS] = {0};
   size_t count = 0;
   for (ShellWindow *window = shell.windows; window && count < ANVIL_SHELL_STATE_MAX_WINDOWS; window = window->next)
     if (final || !window->removing) order[count++] = window;
@@ -6398,8 +6424,19 @@ static void save_windows(bool final) {
       order[j - 1] = swap;
     }
   for (size_t i = 0; i < count; i++) {
-    if (order[i]->closing && order[i]->close_entry_valid) entries[i] = order[i]->close_entry;
-    else window_entry(order[i], &entries[i]);
+    bool ok;
+    if (order[i]->closing) {
+      ok = order[i]->close_entry_valid;
+      if (ok) entries[i] = order[i]->close_entry;
+    } else {
+      owned[i] = true;
+      ok = window_snapshot(order[i], &entries[i]);
+    }
+    if (!ok) {
+      for (size_t j = 0; j <= i; j++) if (owned[j]) anvil_shell_window_state_free(&entries[j]);
+      SDL_Log("Shell could not snapshot loaded Projects; keep the previous state file");
+      return;
+    }
   }
   /* Most recent first, so the bound drops the oldest. */
   static AnvilShellProjectActivity activity[ANVIL_SHELL_STATE_MAX_PROJECTS];
@@ -6419,6 +6456,7 @@ static void save_windows(bool final) {
   AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.sidebar_hidden};
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
+  for (size_t i = 0; i < count; i++) if (owned[i]) anvil_shell_window_state_free(&entries[i]);
   if (!data) {
     SDL_Log("Shell Window state exceeds its bounds; keep the previous file");
     return;
@@ -6519,12 +6557,14 @@ static size_t restore_windows(AnvilShellState *saved, AnvilAdoptionRecord *adopt
     if (!window) continue;
     restored++;
     front = window;
-    if (entry->path) {
-      ShellProject *project = restored_project(window, entry->path, (int)i);
-      if (project) select_project(project);
-      for (size_t j = 0; project && j < adoptable_count; j++)
-        if (adoptable[j].pid && adoptable[j].window_id == entry->id && !strcmp(adoptable[j].path, entry->path)) {
-          adopt_record(project, &adoptable[j]);
+    for (size_t j = 0; j <= entry->project_count; j++) {
+      const char *path = j == 0 ? entry->path : entry->projects[j - 1];
+      if (!path) continue;
+      ShellProject *project = restored_project(window, path, j == 0 ? (int)i : rank++);
+      if (project && j == 0) select_project(project);
+      for (size_t k = 0; project && k < adoptable_count; k++)
+        if (adoptable[k].pid && adoptable[k].window_id == entry->id && !strcmp(adoptable[k].path, path)) {
+          adopt_record(project, &adoptable[k]);
           break;
         }
     }
@@ -6596,7 +6636,7 @@ static bool destroy_window(ShellWindow *window) {
   *link = window->next;
   release_project(window->empty);
   release_project(window->sidebar_client);
-  free(window->close_entry.path);
+  anvil_shell_window_state_free(&window->close_entry);
   free(window);
   if (!last) windows_changed();
   return true;

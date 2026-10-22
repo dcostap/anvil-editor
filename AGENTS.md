@@ -189,6 +189,11 @@ A different executable with the same user folder, such as `launch-anvil-debug.ba
 If a Project is open in another instance, selecting it raises that instance.
 The Window keeps its other Projects. The `launch-link` and `launch-handoff` shell launch probes cover this.
 
+Shell App State keeps each Window's loaded Projects and Selected Project.
+Shutdown captures their paths before closing the hosted processes. Dormant Projects stay dormant.
+Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.
+Run `anvil:shell-state` and the `restore-loaded` shell launch probe after changes.
+
 ## Renderer selection
 
 The dev portable build defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.

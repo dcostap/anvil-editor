@@ -110,6 +110,7 @@ end
 local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b", [root .. "/Other"] = "c"}
 -- Cases that seed their own state file start without a first run.
 local seeded = action == "restore-crash" or action == "restore-sequential" or action == "restore-argument"
+ or action == "restore-loaded"
 -- Writes the shell's Window state, front to back, before the first shell starts.
 local function write_state(entries)
  local lines = {"anvil-shell-windows 2\n"}
@@ -169,6 +170,27 @@ if path:match("/driver$") then
    assert(trace():find("Shell Window state queued: Windows=" .. count, 1, true))
   end
   local ok, err = pcall(function()
+   if action == "restore-loaded" then
+    local state = assert(io.open(root .. "/user/appstate.lua", "wb"))
+    state:write("return ", common.serialize{recents={root .. "/Other"}}); state:close()
+    local first = launch(root .. "/Project")
+    local a = wait(function() return ready("a", first:pid())[1] end, 30)
+    local b = wait(function() return ready("b", first:pid())[1] end, 30)
+    assert(a.window_id == b.window_id, "Projects did not share one Window")
+    close_shell(first, "first")
+    local second = launch()
+    local b2 = wait(function() return ready("b", second:pid())[1] end, 30, "Selected Project did not return")
+    local a2 = wait(function() return ready("a", second:pid())[1] end, 30, "background Project did not return")
+    assert(a2.window_id == b2.window_id and select(2, windows(second:pid())) == 1,
+     "loaded Projects did not return to the same Window")
+    assert(a2.active and a2.active:gsub("\\", "/"):match("/Project/edited%.txt$"),
+     "background Project lost its Workspace")
+    assert(#ready("a", second:pid()) == 1 and #ready("b", second:pid()) == 1, "restore duplicated a Project")
+    local selected = wait(function() return load("loaded-selection-" .. second:pid()) end, 15)
+    assert(selected.path == root .. "/Replacement", "restore changed the Selected Project")
+    assert(selected.dormant == "dormant" and #ready("c", second:pid()) == 0, "restore loaded a Dormant Project")
+    return close_shell(second, "restored")
+   end
    if action == "restore-crash" then
     -- A crash or reboot keeps every Window from the last write.
     local first = launch(root .. "/Project")
@@ -435,7 +457,8 @@ elseif names[path] then
    save("a-seeded", true)
    core.set_active_view(core.open_file(path .. "/edited.txt"))
    core.save_workspace()
-   if action ~= "restore-argument" then assert(core.open_project_in_new_window(root .. "/Replacement")) end
+   if action == "restore-loaded" then assert(core.open_project_in_same_window(root .. "/Replacement"))
+   elseif action ~= "restore-argument" then assert(core.open_project_in_new_window(root .. "/Replacement")) end
   end
   local editor, session
   if action == "adopt-return" and name == "a" then
@@ -462,5 +485,18 @@ elseif names[path] then
   save(name .. "-ready-" .. pid, {pid=pid, shell_pid=system.get_window_process_id(),
    window_id=system.get_anvil_window_id(), active=view and view.buffer and view.buffer.abs_filename,
    host_pid=session and session:stats().host_pid})
+  if action == "restore-loaded" and name == "a" and #ready("a") > 1 then
+   wait(function() return ready("b", system.get_window_process_id())[1] end, 30)
+   local previous = core.project_sidebar
+   assert(core.request_project_sidebar(true))
+   local model = wait(function() return core.project_sidebar ~= previous and core.project_sidebar end, 15)
+   local selection = {}
+   for _, project in ipairs(model) do
+    local folder = project.path:gsub("\\", "/")
+    if project.selected then selection.path = folder end
+    if folder == root .. "/Other" then selection.dormant = project.state end
+   end
+   save("loaded-selection-" .. system.get_window_process_id(), selection)
+  end
  end)
 end

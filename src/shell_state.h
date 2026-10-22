@@ -20,6 +20,9 @@ typedef struct {
   bool maximized;
   /* The Selected Project's path, or NULL for an empty Window. */
   char *path;
+  /* Other loaded Projects in this Window. The Selected Project is already in `path`. */
+  char **projects;
+  size_t project_count;
 } AnvilShellWindowState;
 
 /* The last time the user worked in a Project, in Unix seconds. The Project Sidebar groups Projects by it. */
@@ -44,6 +47,8 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size);
 /* Decodes a complete file. Returns false for an unknown version, malformed data, or exceeded bounds. */
 bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *state);
 void anvil_shell_state_free(AnvilShellState *state);
+/* Frees the owned paths in one Window snapshot. */
+void anvil_shell_window_state_free(AnvilShellWindowState *window);
 
 /* Replaces `file` atomically through a temporary file beside it. */
 bool anvil_shell_file_replace(const wchar_t *file, const char *data, size_t size);

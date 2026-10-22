@@ -13,7 +13,8 @@ A top-level application window that presents one Selected Project beside the Pro
 _Avoid_: Host window, Project window
 
 **App State**:
-Global editor state that persists across launches, such as recent projects, window placement, and previous find/replace text.
+Global editor state that persists across launches, including recent Projects, Window placement, and previous find/replace text.
+It includes each Window's loaded Projects and Selected Project; Dormant Projects remain dormant.
 _Avoid_: Session
 
 **Project**:
