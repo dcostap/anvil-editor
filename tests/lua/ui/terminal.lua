@@ -547,17 +547,71 @@ test.describe("Terminal View", function()
     test.not_ok(core.redraw)
   end)
 
-  test.it("allows Pane history to discard an exited Terminal", function(context)
+  test.it("replaces an exited Terminal with a blank Editor in the same Pane", function(context)
     local view = terminal.open()
+    local pane = panes.pane_for_view(view)
     local session = view.session
     session.next_running = false
     session.next_status = { exit_code = 0 }
+    view:update()
+
+    test.equal(panes.count(), 1)
+    test.equal(panes.active(), pane)
+    test.ok(pane.current_view:extends(Editor))
+    test.is_nil(pane.current_view.buffer.filename)
+    test.same(pane.current_view.buffer.lines, { "\n" })
+    test.equal(core.active_view, pane.current_view)
+    test.is_nil(panes.pane_for_view(view))
+    test.is_nil(view.session)
+    test.ok(session.closed)
+    test.equal(panes.history_length(pane), 1)
+    test.ok(panes.validate())
+  end)
+
+  test.it("replaces a hidden exited Terminal without changing focus or Pane Group", function(context)
+    local view = terminal.open()
+    local pane = panes.pane_for_view(view)
+    local session = view.session
+    local other = panes.create { factory = function() return View() end }
+    session.next_status = { kind = "exited", exit_code = 7 }
+
     view:update_suspended()
 
-    test.not_ok(view.running)
-    test.ok(view:can_discard_from_history())
-    test.equal(view.exit_code, 0)
+    test.ok(panes.contains(pane))
+    test.ok(pane.current_view:extends(Editor))
+    test.equal(panes.active(), other)
+    test.equal(panes.visible_group(), other.group)
+    test.equal(core.active_view, other.current_view)
+    test.ok(session.closed)
+    test.is_nil(panes.pane_for_view(view))
+    test.ok(panes.validate())
   end)
+
+  for _, show_terminal in ipairs { true, false } do
+    test.it(show_terminal and "reveals retained text when the current Terminal exits"
+      or "keeps current text when its suspended Terminal exits", function(context)
+      local view = terminal.open()
+      local pane = panes.pane_for_view(view)
+      local session = view.session
+      session.capture = { text = "retained output", cursor_line = 1, cursor_col = 1, viewport_line = 1 }
+      test.ok(command.perform("core:open_text_capture"))
+      local capture = pane.current_view
+      if show_terminal then test.equal(panes.back(pane), view) end
+      session.next_status = { kind = "exited", exit_code = 0 }
+
+      if show_terminal then view:update() else view:update_suspended() end
+
+      test.equal(panes.count(), 1)
+      test.equal(panes.active(), pane)
+      test.equal(pane.current_view, capture)
+      test.equal(core.active_view, capture)
+      test.contains(table.concat(capture.buffer.lines), "retained output")
+      test.equal(panes.history_length(pane), 1)
+      test.is_nil(panes.pane_for_view(view))
+      test.ok(session.closed)
+      test.ok(panes.validate())
+    end)
+  end
 
   test.it("keeps Terminal sessions in separate Panes and closes only the selected session", function(context)
     local first = terminal.open()
@@ -895,14 +949,14 @@ test.describe("Terminal View", function()
     test.ok(context.sessions[1].cleared)
   end)
 
-  test.it("restarts an exited terminal with the same launch options", function(context)
+  test.it("restarts a failed terminal with the same launch options", function(context)
     local view = terminal.open({ cwd = "C:/terminal-test", shell = "cmd.exe" })
     context.sessions[1].update = function()
-      return false, { kind = "exited", revision = 2, exit_code = 7 }
+      return false, { kind = "failed", revision = 2 }
     end
     view:update()
 
-    test.equal(view:get_name(), "Terminal (exit 7)")
+    test.equal(view:get_name(), "Terminal (failed)")
     test.ok(command.perform("terminal:restart"))
     test.equal(#context.sessions, 2)
     test.equal(context.sessions[2].options.cwd, "C:/terminal-test")
@@ -933,11 +987,11 @@ test.describe("Terminal View", function()
     test.not_ok(session.closed)
   end)
 
-  test.it("keeps the exited session when restart fails", function(context)
+  test.it("keeps the failed session when restart fails", function(context)
     local view = terminal.open()
     local previous = context.sessions[1]
     previous.update = function()
-      return false, { kind = "exited", revision = 2, exit_code = 2 }
+      return false, { kind = "failed", revision = 2 }
     end
     view:update()
     context.native.next_error = "missing shell"
@@ -947,12 +1001,14 @@ test.describe("Terminal View", function()
     core.error = previous_error
     test.equal(restarted, false)
     test.ok(view.session == previous)
-    test.equal(view:get_name(), "Terminal (exit 2)")
+    test.equal(view:get_name(), "Terminal (failed)")
     test.equal(previous.closed, false)
   end)
 
   test.it("shows terminal transport failures once", function(context)
     local view = terminal.open()
+    local pane = panes.pane_for_view(view)
+    local session = view.session
     context.sessions[1].update = function()
       return false, { kind = "failed", revision = 2, error = "ConPTY input failed" }
     end
@@ -962,6 +1018,9 @@ test.describe("Terminal View", function()
     view:update()
     view:update()
     core.error = previous_error
+    test.equal(pane.current_view, view)
+    test.equal(view.session, session)
+    test.not_ok(session.closed)
     test.same({ "ConPTY input failed" }, errors)
   end)
 
@@ -1767,6 +1826,29 @@ test.describe("Terminal View", function()
     if kernel.WaitForSingleObject(process, 6000) == 258 then kernel.TerminateProcess(process, 1) end
     kernel.CloseHandle(process)
     if not ok then error(failure) end
+  end)
+
+  test.it("keeps the Pane as a blank Editor after typing exit in a real shell", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" }
+    test.ok(view and view.session)
+    local pane = panes.pane_for_view(view)
+    test.ok(view.session:write("exit\r"))
+    local deadline = system.get_time() + 20
+    repeat
+      view:update()
+      if pane.current_view ~= view then break end
+      coroutine.yield(0.01)
+    until system.get_time() >= deadline
+
+    test.ok(panes.contains(pane))
+    test.equal(panes.active(), pane)
+    test.ok(pane.current_view:extends(Editor), "the exited Terminal stayed in its Pane")
+    test.same(pane.current_view.buffer.lines, { "\n" })
+    test.is_nil(view.session)
+    test.is_nil(panes.pane_for_view(view))
+    test.ok(panes.validate())
   end)
 
   test.it("renders real ConPTY output through Terminal View", function(context)

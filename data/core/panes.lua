@@ -1509,12 +1509,13 @@ function M.is_forward_available(target)
   return pane ~= nil and pane.history.index < #pane.history.entries
 end
 
+---With keep_pane, close only this View and use a blank Editor if no View remains.
 function M.close_view(target, opts)
   opts = opts or {}
   local pane = M.find(target or M.active_pane)
   if not pane then return false end
   local view = opts.view or pane.current_view
-  if M.pane_for_view(view) == pane
+  if not opts.keep_pane and M.pane_for_view(view) == pane
       and (view.owns_pane_constraint or M.view_constraint(view) == view)
       and #collect_owned_views(pane) > 1 then
     return M.close(pane, opts)
@@ -1524,10 +1525,18 @@ function M.close_view(target, opts)
     if candidate == view then found = true else other_view = true end
   end
   if not found then return false end
-  if not other_view then return M.close(pane, opts) end
+  if not other_view and not opts.keep_pane then return M.close(pane, opts) end
 
-  local committed = false
+  local committed, failure = false, nil
   local function approved()
+    if not other_view then
+      local replacement, err = make_view()
+      if not replacement then failure = err; return end
+      unretain_view(pane, view)
+      commit_replacement(pane, view, replacement, opts)
+      committed = true
+      return
+    end
     local was_current = pane.current_view == view
     if was_current then call_lifecycle(view, "on_suspend") end
     unretain_view(pane, view)
@@ -1538,6 +1547,10 @@ function M.close_view(target, opts)
       release_view(pane, view)
       call_lifecycle(view, "on_close")
     end
+    if #pane.history.entries == 0 then
+      local retained = table.remove(pane.retained_views)
+      pane.history.entries[1] = { view = retained, state = capture_navigation_state(retained) }
+    end
     pane.history.index = common.clamp(pane.history.index, 1, #pane.history.entries)
     pane.current_view = pane.history.entries[pane.history.index].view
     if was_current then call_lifecycle(pane.current_view, "on_resume") end
@@ -1546,7 +1559,7 @@ function M.close_view(target, opts)
     committed = true
   end
   if opts.force or not view.can_close then approved() else view:can_close(approved) end
-  return committed
+  return committed, failure
 end
 
 local function nearest_after_removal(old_order, old_index)

@@ -892,6 +892,19 @@ function TerminalView:service_session(include_rows)
     end
     if include_rows then core.redraw = true end
   end
+  if self.state == "exited" then
+    local pane = panes.pane_for_view(self)
+    if pane then
+      core.log_quiet("Terminal session %d exited: removing View from %s (exit %s)",
+        self.log_id, pane.id, tostring(self.exit_code))
+      local closed, err = panes.close_view(pane, {
+        view = self, force = true, keep_pane = true, focus = core.active_view == self,
+      })
+      if not closed then
+        core.log_quiet("Terminal session %d View removal failed: %s", self.log_id, tostring(err))
+      end
+    end
+  end
   return needs_snapshot
 end
 
@@ -980,6 +993,7 @@ function TerminalView:update()
   self:sync_geometry()
 
   self:service_session(true)
+  if not self.session then return end
 
   if self.search_pending then
     self:search(self.search_pending.query, self.search_pending.reverse)
