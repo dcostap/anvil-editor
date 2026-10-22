@@ -2,7 +2,13 @@
 
 ## Decision
 
-Refactor layout updates and provider invalidation together. Keep the current flat data structures initially.
+Refactor layout updates and provider invalidation together. Then move the hot layout loops over plain data into C.
+
+Keep behavior in Lua: providers, Markdown semantics, folds, and plugin logic.
+Move a loop to C only when a measurement shows that it is hot and it works on plain data.
+The target is a small amount of C that removes most of the hot-loop cost.
+
+Keep flat data structures. In C, a splice of a flat array is fast enough for the measured documents.
 
 Reuse existing buffer edit events. Add a clear contract for position mapping and layout invalidation.
 
@@ -32,6 +38,8 @@ Full invalidation remains correct for genuinely global changes or changes whose 
 - Stable identities for every Markdown syntax node.
 - Estimated off-screen heights.
 - An unrelated renderer or highlighting rewrite.
+- A C rewrite of behavior code, providers, or the Markdown renderer.
+- Lua-to-C calls for each row. Each native module has a coarse API.
 
 Reconsider these only when measurements identify a remaining cost that requires them.
 
@@ -189,6 +197,24 @@ Resolve any dependency cycles before implementation. Do not assume this list rep
 Keep global revisions for consistency checks and genuine global changes. Stop using them as the sole invalidation decision.
 
 Maintain the existing flat lists initially. Measure suffix movement and renumbering as part of the complete update.
+
+## Native layout core
+
+LuaJIT costs more than the Lua code shows:
+
+- In the open profiles, the JIT compiler has 23–40% of the samples. GC has 7–10%.
+- While typing, GC has about 24% of the measured samples.
+- A Text View near a 128-slot hash limit made open two times slower. Commit `782d3f36` fixed it with a larger start size.
+  Small changes can move other tables to such a limit again.
+
+Loops over plain data in C have none of these costs. Follow these rules for native modules:
+
+- C owns the arrays. Lua keeps its row tables in a Lua array, and C stores an integer handle into that array.
+- Lua calls C once for each edit, publication, or frame, with a batch. A LuaJIT trace stops at each C function call.
+- Use the portable Lua C API, not FFI. The PUC Lua build (`-Djit=false`) must still work.
+- Add the module under `src/api`, as `fuzzy.c` and `line_search.c` do.
+- The layout reference compares the native result with a fresh build. Also add tests with independent expected values,
+  because a fresh build uses the same native code.
 
 ## Correctness reference
 
@@ -392,7 +418,7 @@ Other handlers and wrappers of `Buffer.on_text_transaction` do not change layout
 | Copy feedback, reload flash, diff colors | several | decoration | Drawing only |
 
 The reported list of inserted-row providers is correct and complete.
-`set_visual_row_extension` has no callers. Remove it when Milestone 3 changes inserted rows.
+`set_visual_row_extension` had no callers. Milestone 2 removed it.
 
 The Markdown provider has three generations:
 
@@ -404,7 +430,7 @@ The Markdown provider keeps its own projected renders of the visible lines while
 
 ##### Recovery paths
 
-These paths repair layout that no provider reported. Milestone 4 removes them.
+These paths repair layout that no provider reported. Milestone 6 removes them.
 
 - `reconcile_visible_line_layout` remeasures each visible line whose render plan is not the plan that wrapping or heights measured. It does not repair lines off-screen.
 - `resolve_composed_metric_lines` compares old and new composed rows to keep heights. It fails when a row outside the edit is a new table, because it compares footnote rows by table identity.
@@ -427,7 +453,7 @@ These modules read layout fields directly instead of through Text View methods:
 | `plugins/perf_benchmark.lua`, `perf_workloads.lua` | `wrapped_line_to_idx`, `__async_wrap_reconstruction` |
 
 With a lazy coordinator, a direct field read can see layout before the coordinator applies pending changes.
-Each reader must read through a coordinator method, or run after a layout read in the same frame. Milestone 4 checks each one.
+Each reader must read through a coordinator method, or run after a layout read in the same frame. Milestone 6 checks each one.
 
 ##### Baseline measurements
 
@@ -526,7 +552,63 @@ Deliverables:
 
 Do not expand the migration until this path proves both correctness and reduced work.
 
-### Milestone 3: Migrate remaining paths
+#### Result
+
+Commits `b6ac5349`, `48227deb`, and `782d3f36`.
+
+- Composed rows and row heights update from line changes. Row providers report their dependent lines.
+- Footnote rows change only when the definitions or the reference order change.
+- An unwrapped view without composed rows maps its heights through line changes. This fixed baseline mismatch 1.
+- Text that changes outside a transaction rebuilds every composed row, and the log tells why.
+
+| Scenario | Before (ms) | After (ms) |
+|---|---:|---:|
+| `markdown-gallery-type-narrow` p50 | 1388 | about 88 |
+| `markdown-gallery-newline` p50 | 2236 | about 78 |
+| `markdown-gallery-open` | 21,700 | 19,000–21,000 |
+
+Costs that remain:
+
+- Each edit copies and renumbers every composed row, and builds the line-to-row map again.
+  This takes 3–11 ms for each frame while typing, and 20–37 ms for each edit in the gallery.
+- Each edit copies every row height and builds the height tree again, also when no row count changes.
+- A Markdown line wraps through a Lua cursor, one character at a time. This is about 75% of the wrapping time.
+- A newline still wraps about 35 lines again.
+
+Milestones 3 and 4 move the first three costs to C. Do not tune them in Lua first, because the native code replaces that Lua code.
+
+### Milestone 3: Native row index
+
+Move the composed rows and the row heights into one native index.
+
+- C stores one record for each row: kind, line, row in line, payload handle, and height.
+- C keeps the line-to-row map and the height prefix sums.
+- A splice moves the records after the change with one `memmove`, and updates the sums.
+- Lua still builds the rows of the changed lines with `append_line_rows`. C receives them as one batch.
+- Each frame, Lua gets the visible rows with their y and height in one call.
+
+Start with flat arrays. Use block sums only if a measurement shows that the flat splice costs too much.
+
+Delete the Lua renumbering, the full `position_rows` build, the metric copies, and the Lua height tree.
+Keep `layout_changes`, `dependent_lines`, and fold expansion in Lua.
+
+Deliverables:
+
+- The native index and its Lua API, with tests that use independent expected values.
+- Layout tests that pass with `ANVIL_LAYOUT_REFERENCE=1`.
+- Composed-row and height work below 1 ms for each edit in `markdown-gallery-type-narrow`.
+- A PUC Lua build that compiles.
+
+### Milestone 4: Native fragment wrapping
+
+The renderer already measures widths and wraps plain text in C.
+Extend that wrap to lines with hidden spans, remapped text, and fixed-width widgets.
+Lua resolves the fragments of a line. C finds the breaks for many lines in one call.
+
+Use the same call for edits and for the sliced wrap when a file opens.
+Measure `markdown-gallery-open` and `markdown-gallery-newline` before and after.
+
+### Milestone 5: Migrate remaining paths
 
 Migrate providers and layout consumers in small complete changes.
 
@@ -548,7 +630,7 @@ Preserve viewport anchoring and hit testing when content moves above the visible
 Do not require a wholesale Markdown parser rewrite. Providers may derive affected output ranges from existing models initially.
 Measure that derivation cost before introducing stable syntax-node identities.
 
-### Milestone 4: Remove obsolete recovery paths
+### Milestone 6: Remove obsolete recovery paths
 
 Remove `resolve_composed_metric_lines` and old/new row matching after the new contract covers their supported paths.
 
@@ -631,6 +713,9 @@ Do not attach a fixed schedule to the current line-count estimate.
 Estimate the remaining work after the first provider-aware path exposes the actual migration cost.
 
 Add a tree only if measured suffix updates remain a material cost.
+Use block sums in the native row index only if measured flat splices cost too much.
+Move visible-row geometry for drawing to C only if it is still a measured cost after Milestone 3.
+Stop the global `ipairs` wrapper in `data/compat/module.lua` only after an audit shows that no caller needs it.
 Merge structures only if separate ownership still causes demonstrated consistency problems.
 Add marker indexing only if marker work becomes a measured bottleneck.
 Add column-level or revision-pair mapping to the layout contract only when a layout consumer needs it.
