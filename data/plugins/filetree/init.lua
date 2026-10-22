@@ -746,7 +746,7 @@ local PROJECT_PATH_SEPARATOR_PROVIDER = {
   end,
   visual_rows = function(_, view, line, placement)
     if placement ~= "before" then return nil end
-    local meta = view.line_meta and view.line_meta[line]
+    local meta = view:current_line_meta()[line]
     if not (type(meta) == "table" and meta.project_path_separator_before) then return nil end
     return {
       {
@@ -757,6 +757,11 @@ local PROJECT_PATH_SEPARATOR_PROVIDER = {
         end,
       },
     }
+  end,
+  -- The rows of a line come from its own metadata. An edit changes only the
+  -- metadata of its lines, and a refresh rebuilds every row.
+  dependent_lines = function(_, _, line1, line2)
+    return line1, line2
   end,
 }
 
@@ -1136,27 +1141,16 @@ function FileTreeView:snapshot_lines()
   self:invalidate_entry_snapshots()
 end
 
-function FileTreeView:sync_meta()
-  if self.last_lines and self.last_change_id == self.buffer:get_change_id() then return end
-  if not self.last_lines then
-    self:snapshot_lines()
-    return
-  end
-
-  local old_lines, old_meta = self.last_lines, self.line_meta
-  local new_lines = {}
-  for i, line in ipairs(self.buffer.lines) do new_lines[i] = line_text(line) end
-
+-- Give the metadata of the old lines to the new lines, from their text.
+-- Return nil when the text is the same.
+local function map_line_meta(view, old_lines, old_meta, new_lines)
   local same = #old_lines == #new_lines
   if same then
     for i = 1, #old_lines do
       if old_lines[i] ~= new_lines[i] then same = false; break end
     end
   end
-  if same then
-    self.last_change_id = self.buffer:get_change_id()
-    return
-  end
+  if same then return nil end
 
   local prefix = 0
   while prefix < #old_lines and prefix < #new_lines
@@ -1207,7 +1201,7 @@ function FileTreeView:sync_meta()
     -- metadata. Preserve unchanged lines inside the changed block by matching
     -- their text in order, and use structured filetree clipboard metadata for
     -- genuinely inserted rows when available.
-    local inserted_meta = filetree_clipboard_metas_for_lines(self, new_lines, prefix + 1, new_count)
+    local inserted_meta = filetree_clipboard_metas_for_lines(view, new_lines, prefix + 1, new_count)
     for i = 1, new_count do
       local text = new_lines[prefix + i]
       local list = old_by_text[text]
@@ -1222,6 +1216,44 @@ function FileTreeView:sync_meta()
   local suffix_count = #new_lines - new_tail
   for i = 0, suffix_count - 1 do
     new_meta[new_tail + 1 + i] = old_meta[old_tail + 1 + i] or NO_META
+  end
+  return new_meta
+end
+
+local function current_line_texts(view)
+  local lines = {}
+  for i, line in ipairs(view.buffer.lines) do lines[i] = line_text(line) end
+  return lines
+end
+
+---Return the metadata of the current lines. sync_meta moves line_meta to
+---the current lines at the next command or draw. Until then, line_meta has
+---the positions of the old lines. This function does not change line_meta.
+function FileTreeView:current_line_meta()
+  if not self.last_lines or self.last_change_id == self.buffer:get_change_id() then
+    return self.line_meta
+  end
+  local revision = self.buffer.text_revision
+  local cache = self.mapped_line_meta
+  if not (cache and cache.revision == revision and cache.source == self.line_meta) then
+    local meta = map_line_meta(self, self.last_lines, self.line_meta, current_line_texts(self))
+    cache = { revision = revision, source = self.line_meta, meta = meta or self.line_meta }
+    self.mapped_line_meta = cache
+  end
+  return cache.meta
+end
+
+function FileTreeView:sync_meta()
+  if self.last_lines and self.last_change_id == self.buffer:get_change_id() then return end
+  if not self.last_lines then
+    self:snapshot_lines()
+    return
+  end
+
+  local new_meta = map_line_meta(self, self.last_lines, self.line_meta, current_line_texts(self))
+  if not new_meta then
+    self.last_change_id = self.buffer:get_change_id()
+    return
   end
 
   self.line_meta = new_meta

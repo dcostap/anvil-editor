@@ -39,6 +39,39 @@ local function find_section_start(view, role)
   end
 end
 
+local SEPARATOR_PROVIDER = "filetree-project-path-separators"
+
+local function composed_rows(view)
+  local rows = {}
+  for index = 1, view:get_composed_visual_row_count() do
+    local row = view:get_visual_row_entry(index)
+    rows[index] = table.concat({
+      row.type, row.line, row.row_in_line or 1, row.provider_id or "", row.placement or "",
+    }, ":")
+  end
+  return rows
+end
+
+local function separator_lines(view)
+  local lines = {}
+  for index = 1, view:get_composed_visual_row_count() do
+    local row = view:get_visual_row_entry(index)
+    if row.provider_id == SEPARATOR_PROVIDER then lines[#lines + 1] = row.line end
+  end
+  return lines
+end
+
+local function composed_row_builds(view)
+  return view:get_render_cache_diagnostics().composed_row_builds
+end
+
+-- The rows after an edit must be the rows that a full rebuild makes.
+local function same_as_full_rebuild(view)
+  local rows = composed_rows(view)
+  view:invalidate_composed_rows()
+  test.same(rows, composed_rows(view))
+end
+
 local function setup_project_paths(context)
   context.original_projects = core.projects
   context.original_cwd = system.getcwd()
@@ -166,6 +199,39 @@ test.describe("File Tree Project Path Roles", function()
       end
     end
     test.ok(found_provider_row, "expected separator to be a visual row, not a buffer row")
+  end)
+
+  test.it("keeps the separator rows while a row name is typed", function(context)
+    local filetree = setup_project_paths(context)
+    filetree.size.x, filetree.size.y = 400, 600
+    local readme_line = find_line(filetree, "README.md")
+    local sections = separator_lines(filetree)
+    test.equal(#sections, 2)
+    filetree:with_selection_state(function() filetree.buffer:set_selection(readme_line, 7) end)
+    local builds = composed_row_builds(filetree)
+    filetree:on_text_input("-old")
+    test.equal(line_text(filetree.buffer.lines[readme_line]), "README-old.md")
+    test.same(separator_lines(filetree), sections)
+    test.equal(composed_row_builds(filetree), builds)
+    same_as_full_rebuild(filetree)
+  end)
+
+  test.it("keeps each separator before its section after a new row above it", function(context)
+    local filetree = setup_project_paths(context)
+    filetree.size.x, filetree.size.y = 400, 600
+    local vendored_root = find_line(filetree, "library1/")
+    local external_root = find_line(filetree, "jdk-src/")
+    test.same(separator_lines(filetree), { vendored_root, external_root })
+    local above = vendored_root - 1
+    filetree:with_selection_state(function()
+      filetree.buffer:set_selection(above, #filetree.buffer.lines[above])
+    end)
+    local builds = composed_row_builds(filetree)
+    filetree:on_text_input("\nnotes.txt")
+    test.equal(find_line(filetree, "library1/"), vendored_root + 1)
+    test.same(separator_lines(filetree), { vendored_root + 1, external_root + 1 })
+    test.equal(composed_row_builds(filetree), builds)
+    same_as_full_rebuild(filetree)
   end)
 
   test.it("rejects new rows typed under browse-only Project Directory sections", function(context)
