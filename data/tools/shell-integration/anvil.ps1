@@ -33,8 +33,15 @@ if ($Global:__AnvilShellIntegration.ReadLine) {
   function Global:PSConsoleHostReadLine {
     $state = $Global:__AnvilShellIntegration
     $line = & $state.ReadLine
+    if ([string]::IsNullOrWhiteSpace($line)) { return $line }
+    # OSC titles must not contain terminal controls. Keep the full command in the shell only.
+    $title = ($line -replace '[\p{Cc}\p{Zl}\p{Zp}]+', ' ').Trim()
+    if ($title.Length -gt 240) {
+      $length = if ([char]::IsHighSurrogate($title[239])) { 239 } else { 240 }
+      $title = $title.Substring(0, $length) + '...'
+    }
     $state.Running = $true
-    [Console]::Write("$([char]27)]133;C;anvil=$($state.Nonce)$([char]7)")
+    [Console]::Write("$([char]27)]2;$title$([char]7)$([char]27)]133;C;anvil=$($state.Nonce)$([char]7)")
     $line
   }
 }

@@ -91,10 +91,15 @@ end
 
 -- The agent status of a Terminal Session record, or nil when no agent reports one. An agent such as Pi reports
 -- its state (idle, working, blocked, done or error) with a message, and Anvil's Pi extension reports its step,
--- such as "Thinking" or "bash: npm test".
+-- such as "Thinking" or "bash: npm test". Without an agent, show the shell command's status.
 function tab.agent(record)
   local state, step = record.agent_state, record.agent_step
-  if (type(state) ~= "string" or state == "") and (type(step) ~= "string" or step == "") then return nil end
+  if (type(state) ~= "string" or state == "") and (type(step) ~= "string" or step == "") then
+    if not record.command_started or record.command_started <= 0 then return nil end
+    local finished = record.command_finished and record.command_finished > 0 and record.command_finished or nil
+    return { state = finished and (record.command_exit == 0 and "done" or "error") or "working",
+      message = "", command = true, since = record.command_started, finished = finished }
+  end
   return {state = state ~= "" and state or "working", kind = record.agent_kind, message = record.agent_message or "",
     since = record.agent_since, step = step ~= "" and step or nil, step_since = record.agent_step_since}
 end
@@ -124,6 +129,12 @@ end
 -- The agent's line: its text, its time, and its tone: "warn", "error" or "result" for a result not seen yet.
 -- A time under an hour counts seconds, so `ticking` tells the caller to draw again each second.
 function tab.agent_line(agent, now, seen)
+  if agent.command then
+    local elapsed = math.max(0, (agent.finished or now) - agent.since)
+    local text = agent.finished and (agent.state == "error" and "Failed" or "Done") or "Running"
+    local tone = agent.state == "error" and "error" or (agent.finished and not seen and "result" or nil)
+    return text, tab.duration_text(elapsed), tone, not agent.finished and elapsed < 60 * 60
+  end
   local text, since, tone = nil, agent.since, nil
   if agent.step and agent.state ~= "blocked" then
     text, since = agent.step, agent.step_since

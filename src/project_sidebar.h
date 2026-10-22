@@ -39,6 +39,8 @@ typedef struct {
   /* The last time the user typed into it, or a command started or ended, or its title changed. Unix seconds; 0 means
    * unknown. */
   int64_t activity;
+  int64_t command_started, command_finished;
+  int command_exit;
   AnvilSidebarAgent agent;
   enum {
     ANVIL_SIDEBAR_TERMINAL_RUNNING,

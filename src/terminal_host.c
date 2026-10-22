@@ -67,6 +67,8 @@ typedef struct {
      whether a command runs between its C and D marks, and the reader's OSC scanner. */
   char nonce[33];
   volatile LONG command_running;
+  int64_t command_started, command_finished;
+  int command_exit;
   int mark_state;
   size_t mark_length;
   bool mark_overflow;
@@ -197,6 +199,8 @@ static bool write_registry(TerminalHost *host) {
     fprintf(file, "  interrupted_pid = %lu,\n", (unsigned long)host->interrupted_pid);
     EnterCriticalSection(&host->lock);
     AgentRecord agent = host->agent, step = host->step;
+    fprintf(file, "  command_started = %lld,\n  command_finished = %lld,\n  command_exit = %d,\n",
+      (long long)host->command_started, (long long)host->command_finished, host->command_exit);
     LeaveCriticalSection(&host->lock);
     if (agent.state[0]) {
       registry_string(file, "agent_state", agent.state);
@@ -421,6 +425,20 @@ static void apply_mark(TerminalHost *host) {
     field += length;
   }
   if (!trusted) return;
+  if (text[4] == 'C' || (text[4] == 'D' && host->command_running)) {
+    EnterCriticalSection(&host->lock);
+    if (text[4] == 'C') {
+      host->command_started = (int64_t)time(NULL);
+      host->command_finished = 0;
+      host->command_exit = 0;
+      clear_agent(host);
+    } else {
+      host->command_finished = (int64_t)time(NULL);
+      host->command_exit = atoi(text + 6);
+    }
+    InterlockedIncrement(&host->agent_revision);
+    LeaveCriticalSection(&host->lock);
+  }
   if (text[4] == 'A') {
     EnterCriticalSection(&host->lock);
     end_running_agent(host);

@@ -324,6 +324,11 @@ static void terminal_records(AnvilSidebarScan *job, lua_State *L) {
       terminal.busy = -1;
     }
     const char *cwd = string_field(L, "cwd"), *title = string_field(L, "title");
+    terminal.command_started = time_field(L, "command_started");
+    terminal.command_finished = time_field(L, "command_finished");
+    lua_getfield(L, 1, "command_exit");
+    terminal.command_exit = lua_isnumber(L, -1) && lua_tonumber(L, -1) != 0;
+    lua_pop(L, 1);
     terminal.activity = time_field(L, "activity");
     if (terminal.state == ANVIL_SIDEBAR_TERMINAL_RUNNING) {
       AnvilSidebarAgent *agent = &terminal.agent;
