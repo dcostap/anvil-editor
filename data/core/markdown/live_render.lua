@@ -4648,6 +4648,12 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     if new_line then kept_lines[new_line] = true end
   end
   owner.kept_plan_lines = kept_lines
+  local projected_lines = {}
+  for line in pairs(owner.projected_plan_lines or {}) do
+    local new_line = edit_projection.map_unchanged_line(ranges, line)
+    if new_line then projected_lines[new_line] = true end
+  end
+  owner.projected_plan_lines = projected_lines
   -- A line that an edit moves gets a retained copy instead. Its plan holds
   -- callbacks for its old line number, such as a task toggle.
   local targets_unchanged = owner.link_targets_changed_revision ~= view.buffer.text_revision
@@ -6319,6 +6325,8 @@ end
 
 local sparse_metric_node_types = {
   heading = true,
+  frontmatter = true,
+  quote = true,
   code_fenced = true,
   code_indented = true,
   html = true,
@@ -6683,6 +6691,13 @@ function provider:render_line(view, line, context)
   local published = markdown_model.peek(view.buffer)
   render_line.markdown_projected = not view_in_source_mode(view)
     and current_semantic_model(view) == nil
+  if render_line.markdown_projected then
+    local owner = view.__markdown_live_owner
+    if owner then
+      owner.projected_plan_lines = owner.projected_plan_lines or {}
+      owner.projected_plan_lines[line] = true
+    end
+  end
   render_line.markdown_semantic_revision = published and published.published_revision or nil
   if render_line.raw_passthrough then return render_line end
   render_line.markdown_typography_generation = provider_generation_state(view).typography_generation
@@ -6923,6 +6938,7 @@ local function invalidate_semantic_publication(view, instance, reason)
   local pending_line = owner and owner.semantic_pending_line
   local pending_wrap_line = owner and owner.semantic_pending_wrap_line
   local kept_lines = owner and owner.kept_plan_lines
+  local projected_lines = owner and owner.projected_plan_lines or {}
   if owner then
     local fence_presentations = {}
     for line, pending in pairs(owner.pending_lines or {}) do
@@ -6955,6 +6971,7 @@ local function invalidate_semantic_publication(view, instance, reason)
     end
     owner.pending_lines = nil
     owner.kept_plan_lines = nil
+    owner.projected_plan_lines = nil
     owner.pending_indented_lines = nil
     owner.pending_indented_sources = nil
     owner.pending_callouts = nil
@@ -7029,12 +7046,21 @@ local function invalidate_semantic_publication(view, instance, reason)
     core.log_quiet("Markdown publication rebuilds kept lines on read after a line change: revision=%d pending_from=%d",
       view.buffer.text_revision, pending_line)
   end
-  if ranges and #ranges > 0 and not deferred_wrapped_invalidation and not pending_line then
+  -- A projected row can have different geometry even outside parser changes.
+  -- Restore its published measurement when the pending presentation ends.
+  if next(projected_lines) then
+    core.log_quiet("Markdown publication restores projected row geometry: revision=%d",
+      view.buffer.text_revision)
+  end
+  if ranges and #ranges > 0 and not deferred_wrapped_invalidation then
     local covered, kept = {}, {}
     for _, range in ipairs(ranges) do
       for line = range.line1 or 1, range.line2 or range.line1 or 1 do covered[line] = true end
     end
-    for line in pairs(kept_lines or {}) do
+    if not pending_line then
+      for line in pairs(kept_lines or {}) do projected_lines[line] = true end
+    end
+    for line in pairs(projected_lines) do
       if line <= #view.buffer.lines and not covered[line] then kept[#kept + 1] = line end
     end
     table.sort(kept)
