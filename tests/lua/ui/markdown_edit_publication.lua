@@ -34,6 +34,25 @@ test.describe("Markdown edit publication", function()
     core.active_view, config.markdown_live_editor = context.active, context.live
   end)
 
+  test.it("keeps unwrapped front matter and Callout heights outside the viewport", function(context)
+    local buffer = Buffer("offscreen.md", nil, true)
+    buffer:insert(1, 1, "---\ntitle: Test\n---\n\n> [!note]+ Title\n> Body\n\n"
+      .. string.rep("Paragraph\n\n", 20))
+    local view = Editor(buffer)
+    context.view = view
+    view.size.x, view.size.y = 420, 380
+    view:set_wrapping_enabled(false)
+    core.active_view = view
+    markdown.live_render.refresh_view(view)
+    ready(view)
+    view:reconcile_visible_line_layout()
+    view:with_selection_state(function() buffer:set_selection(#buffer.lines, 1) end)
+    view:scroll_to_line(#buffer.lines, false, true)
+    view:update()
+    local report = reference.compare(view)
+    test.ok(report.ok, report.summary .. "\n" .. table.concat(report.mismatches or {}, "\n"))
+  end)
+
   for _, wrapped in ipairs({ false, true }) do
     test.it("restores off-screen front matter geometry after pending edits / " .. tostring(wrapped), function(context)
       local buffer = Buffer("publication.md", nil, true)

@@ -6291,6 +6291,8 @@ end
 
 local sparse_metric_node_types = {
   heading = true,
+  frontmatter = true,
+  quote = true,
   code_fenced = true,
   code_indented = true,
   html = true,
