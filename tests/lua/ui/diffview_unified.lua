@@ -76,6 +76,44 @@ test.describe("Unified Diff View", function()
     system.get_clipboard, system.set_clipboard = context.get_clipboard, context.set_clipboard
   end)
 
+  test.it("keeps scrolled gutter colors below the comparison header", function(context)
+    local view, surface = open(context, "", string.rep("added line\n", 100))
+    surface.scroll.y = surface:get_line_height() * 20.5
+    surface.scroll.to.y = surface.scroll.y
+    local renderer = require "renderer"
+    local draw_rect = renderer.draw_rect
+    local draw_rounded_rect = renderer.draw_rounded_rect
+    renderer.draw_rounded_rect = function() end
+    local draw_text, set_clip_rect = renderer.draw_text, renderer.set_clip_rect
+    local clip_stack = core.clip_rect_stack
+    core.clip_rect_stack = {{ view.position.x, view.position.y, view.size.x, view.size.y }}
+    renderer.set_clip_rect = function() end
+    renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
+    local painted, leaked = false, false
+    local header_bottom = surface.position.y
+    renderer.draw_rect = function(x, y, w, h, color)
+      if color == style.diff_insert_background and x == surface.position.x then
+        local clip = core.clip_rect_stack[#core.clip_rect_stack]
+        local top = math.max(y, clip[2])
+        local bottom = math.min(y + h, clip[2] + clip[4])
+        if bottom > top then
+          painted = true
+          if top < header_bottom then leaked = true end
+        end
+      end
+    end
+    core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
+    local ok, err = pcall(view.draw, view)
+    core.pop_clip_rect()
+    renderer.draw_rect = draw_rect
+    renderer.draw_rounded_rect = draw_rounded_rect
+    renderer.draw_text, renderer.set_clip_rect = draw_text, set_clip_rect
+    core.clip_rect_stack = clip_stack
+    test.ok(ok, err)
+    test.ok(painted, "the changed gutter must be visible")
+    test.ok(not leaked, "gutter color must not cover the comparison header")
+  end)
+
   test.it("uses Unified Diff at every width until the Project layout is toggled", function(context)
     local view, surface = open(context, "top\nold\nbottom\n", "top\nnew\nbottom\n")
     view.size.x = 2400

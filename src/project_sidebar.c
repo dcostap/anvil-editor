@@ -196,7 +196,9 @@ bool anvil_sidebar_set_terminals(AnvilSidebarModel *model, AnvilSidebarProject *
     changed = strcmp(a->id, b->id) || strcmp(a->title, b->title ? b->title : "") ||
               strcmp(a->cwd, b->cwd ? b->cwd : "") || a->busy != b->busy || a->bell != b->bell ||
               a->state != b->state || a->attached != b->attached || a->host_pid != b->host_pid ||
-              a->activity != b->activity || !agent_equal(&a->agent, &b->agent);
+              a->activity != b->activity || !agent_equal(&a->agent, &b->agent) ||
+              a->command_started != b->command_started || a->command_finished != b->command_finished ||
+              a->command_exit != b->command_exit;
   }
   if (!changed)
     return true;
@@ -304,6 +306,8 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
         append(&item, ",cwd=");
         quoted(&item, terminal->cwd);
         const AnvilSidebarAgent *agent = &terminal->agent;
+        append(&item, ",command_started=%lld,command_finished=%lld,command_exit=%d",
+          (long long)terminal->command_started, (long long)terminal->command_finished, terminal->command_exit);
         if (agent->state[0]) {
           append(&item, ",agent_state=");
           quoted(&item, agent->state);

@@ -13,6 +13,7 @@ local tab = require "core.tab"
 -- Inside a Project, older Terminal Sessions fold into collapsible groups the same way.
 -- Rows keep the shell's order. Age only chooses a row's group, so rows never swap places under the pointer.
 local SidebarView = Object:extend()
+local TOOLTIP_DELAY = 0.4
 
 local DAY = 24 * 60 * 60
 local WEEK, MONTH = 7 * DAY, 30 * DAY
@@ -362,7 +363,19 @@ function SidebarView:update_hover()
   scrollbar = scrollbar and scrollbar.field
   local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover
   self.hover, self.scrollbar_hover = hover, scrollbar
+  local tooltip = self:get_tooltip()
+  if tooltip ~= self.tooltip_text then
+    self.tooltip_text, self.tooltip_started = tooltip, system.get_time()
+    changed = true
+  end
   return changed
+end
+
+-- The original Terminal title remains available even when its display label is shorter.
+function SidebarView:get_tooltip()
+  if self.scroll_drag then return nil end
+  local item = self.hover and self.hover.tab
+  return item and item.terminal and item.name or nil
 end
 
 -- Returns true when the hover or a dragged scrollbar changed and the view needs a redraw.
@@ -445,11 +458,14 @@ local function text(label, x, y, color)
   renderer.draw_text(style.font, label, x, y, color)
 end
 
--- Seconds until a drawn spinner shows its next frame or a drawn agent time its next second, or nil when the last
--- draw showed neither.
+-- Seconds until the next spinner frame, elapsed-time update, or hover tooltip.
 function SidebarView:animation_delay(clock)
   local delay = self.spinning and tab.spinner_delay(clock) or nil
   if self.ticking then delay = math.min(delay or 1, 1 - clock % 1) end
+  if self.tooltip_text then
+    local remaining = TOOLTIP_DELAY - (clock - self.tooltip_started)
+    if remaining > 0 then delay = math.min(delay or remaining, remaining) end
+  end
   return delay
 end
 
@@ -559,6 +575,29 @@ function SidebarView:draw_row(row, y, width, now)
   self:label_with_note(name_of(project.path), dim_name and style.dim or style.text, note, x, y, row, right, hints)
 end
 
+function SidebarView:draw_tooltip(width, height)
+  local label = self.tooltip_text
+  if not label or self.clock - self.tooltip_started < TOOLTIP_DELAY then return end
+  local font, padding, margin = style.font, style.padding.x, 4 * SCALE
+  local available = width - 2 * (padding + margin)
+  if available <= 0 then return end
+  local starts = font:text_layout(label):wrap(available, "word")
+  local lines, text_width = {}, 0
+  for index, first in ipairs(starts) do
+    local line = label:sub(first + 1, starts[index + 1] or #label)
+    lines[#lines + 1] = line
+    text_width = math.max(text_width, font:get_width(line))
+  end
+  local w, h = text_width + padding * 2, #lines * font:get_height() + padding * 2
+  local x = margin
+  local y = math.max(margin, math.min(self.hover_y + font:get_height(), height - h - margin))
+  renderer.draw_rounded_rect(x - 1, y - 1, w + 2, h + 2, margin + 1, style.divider)
+  renderer.draw_rounded_rect(x, y, w, h, margin, style.background3)
+  for index, line in ipairs(lines) do
+    renderer.draw_text(font, line, x + padding, y + padding + (index - 1) * font:get_height(), style.text)
+  end
+end
+
 function SidebarView:draw(width, height)
   if width ~= self.width or height ~= self.view_h then self:set_size(width, height) end
   local now = os.time()
@@ -595,6 +634,7 @@ function SidebarView:draw(width, height)
       renderer.draw_rounded_rect(width - bar_w - 4 * SCALE, top, bar_w, h, bar_w / 2, color)
     end
   end
+  self:draw_tooltip(width, height)
 end
 
 return SidebarView

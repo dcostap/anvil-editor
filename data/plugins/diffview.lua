@@ -2479,6 +2479,12 @@ function DiffView:draw()
     return
   end
   perf_end("diffview_draw_chrome", chrome_started, chrome_scope)
+  -- Scrolled rows and gutters must not paint over the comparison header.
+  local header_height = self.diff_header_height or 0
+  core.push_clip_rect(
+    self.position.x, self.position.y + header_height,
+    self.size.x, math.max(0, self.size.y - header_height)
+  )
   if self.unified then
     profile_textview_method(self.unified_view, self.unified_view.draw, "diffview_unified_draw")
   else
@@ -2487,6 +2493,7 @@ function DiffView:draw()
     self:draw_divider_changes()
     self:draw_scrollbar()
   end
+  core.pop_clip_rect()
   perf_end("diffview_draw", started, scope)
   local user_data = self.request and self.request.user_data
   if user_data and user_data.transition_trace then

@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 27u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 28u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -99,6 +99,8 @@ typedef enum {
   /* A Sidebar Pane row action: select the Project, then act on the Pane. Payload: AnvilSurfacePaneAction +
    * Project path + NUL. */
   ANVIL_SURFACE_MSG_PANE_REQUEST = 102,
+  /* Lua startup and Workspace restore finished. Independent of rendering. No payload. */
+  ANVIL_SURFACE_MSG_RUNTIME_READY = 103,
 } AnvilSurfaceMessageType;
 
 /* Sidebar surface traffic shares one authenticated transport. */

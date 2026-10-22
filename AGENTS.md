@@ -55,6 +55,11 @@ The host also reports a command that runs inside the shell, such as `Start-Sleep
 It ignores marks without the nonce, so a nested shell or TUI cannot end a running command.
 Run the `Terminal busy status` tests in `ui/terminal_quit.lua` after changes.
 
+The PowerShell integration sets the Terminal title to the submitted command.
+The host records its start, finish, and exit status from the trusted OSC 133 marks.
+Without Agent Status, the Project Sidebar shows the command's elapsed time or completed duration.
+Run `ui/terminal_command_status.lua` after changes. Existing hosts keep their loaded integration until their shells restart.
+
 A revived Terminal Session resumes the Pi session that its Pi had open. Pi needs no change.
 The host loads `data/tools/agent-sessions/pi.cjs` into Node and Bun through `NODE_OPTIONS` and `BUN_OPTIONS`.
 In Pi, the script writes `terminal-sessions/<id>.agent` with Pi's executable and the session file it writes.
@@ -183,6 +188,16 @@ A launch through `C:\Projects`, a link to `D:\Projects`, reaches the same shell.
 A different executable with the same user folder, such as `launch-anvil-debug.bat`, starts a second shell.
 If a Project is open in another instance, selecting it raises that instance.
 The Window keeps its other Projects. The `launch-link` and `launch-handoff` shell launch probes cover this.
+
+Shell App State keeps each Window's loaded Projects and Selected Project.
+Shutdown captures their paths before closing the hosted processes. Dormant Projects stay dormant.
+Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.
+Run `anvil:shell-state` and the `restore-loaded` shell launch probe after changes.
+
+The Project Sidebar reports a Project ready after Lua startup and Workspace restore finish.
+Hosted processes report this separately from their first frame and repeat the report after adoption.
+Background Projects do not render. Keep the shell's first-frame guards separate from this status.
+The `restore-loaded` probe checks readiness without selecting the restored background Project.
 
 ## Renderer selection
 

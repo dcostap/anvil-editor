@@ -6,21 +6,33 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STATE_HEADER "anvil-shell-windows 4\n"
+#define STATE_HEADER "anvil-shell-windows 5\n"
+/* Version 4 kept only the Selected Project in each Window. */
+#define STATE_HEADER_4 "anvil-shell-windows 4\n"
 /* Version 3 had no Sidebar layout, and version 2 no Project activity. Their Windows still restore. */
 #define STATE_HEADER_3 "anvil-shell-windows 3\n"
 #define STATE_HEADER_2 "anvil-shell-windows 2\n"
 
 /* Each Window is one line: `window <id> <x> <y> <w> <h> <maximized> <path bytes> <path>`.
  * Each Project activity is one line: `project <unix seconds> <path bytes> <path>`.
+ * Other loaded Projects follow their Window: `loaded <window id> <path bytes> <path>`.
  * The Sidebar layout is one optional line: `sidebar <points> <hidden>`. */
 char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   if (state->count > ANVIL_SHELL_STATE_MAX_WINDOWS) return NULL;
   size_t capacity = sizeof(STATE_HEADER) + 32;
+  size_t loaded = 0;
   for (size_t i = 0; i < state->count; i++) {
     size_t length = state->windows[i].path ? strlen(state->windows[i].path) : 0;
     if (length > ANVIL_SHELL_STATE_MAX_PATH) return NULL;
     capacity += length + 96;
+    const AnvilShellWindowState *window = &state->windows[i];
+    if (window->project_count > ANVIL_SHELL_STATE_MAX_PROJECTS - loaded) return NULL;
+    loaded += window->project_count;
+    for (size_t j = 0; j < window->project_count; j++) {
+      length = window->projects[j] ? strlen(window->projects[j]) : 0;
+      if (!length || length > ANVIL_SHELL_STATE_MAX_PATH) return NULL;
+      capacity += length + 48;
+    }
   }
   if (capacity > ANVIL_SHELL_STATE_MAX_BYTES) return NULL;
   /* Project activity is best effort. Entries that do not fit are left out; Windows always fit. */
@@ -42,6 +54,9 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
     n += (size_t)snprintf(data + n, capacity - n, "window %lu %ld %ld %ld %ld %d %zu %s\n",
                           (unsigned long)window->id, (long)window->x, (long)window->y, (long)window->w, (long)window->h, window->maximized ? 1 : 0,
                           strlen(path), path);
+    for (size_t j = 0; j < window->project_count; j++)
+      n += (size_t)snprintf(data + n, capacity - n, "loaded %lu %zu %s\n", (unsigned long)window->id,
+                            strlen(window->projects[j]), window->projects[j]);
   }
   for (size_t i = 0; i < projects; i++) {
     const AnvilShellProjectActivity *project = &state->projects[i];
@@ -52,8 +67,15 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   return data;
 }
 
+void anvil_shell_window_state_free(AnvilShellWindowState *window) {
+  free(window->path);
+  for (size_t i = 0; i < window->project_count; i++) free(window->projects[i]);
+  free(window->projects);
+  *window = (AnvilShellWindowState){0};
+}
+
 void anvil_shell_state_free(AnvilShellState *state) {
-  for (size_t i = 0; i < state->count; i++) free(state->windows[i].path);
+  for (size_t i = 0; i < state->count; i++) anvil_shell_window_state_free(&state->windows[i]);
   free(state->windows);
   state->windows = NULL;
   state->count = 0;
@@ -100,8 +122,9 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
   size_t header = strlen(STATE_HEADER);
   bool version_2 = size >= header && !memcmp(data, STATE_HEADER_2, header);
   bool version_3 = size >= header && !memcmp(data, STATE_HEADER_3, header);
+  bool version_4 = size >= header && !memcmp(data, STATE_HEADER_4, header);
   if (size > ANVIL_SHELL_STATE_MAX_BYTES || size < header ||
-      (memcmp(data, STATE_HEADER, header) && !version_2 && !version_3))
+      (memcmp(data, STATE_HEADER, header) && !version_2 && !version_3 && !version_4))
     return false;
   const char *cursor = data + header, *end = data + size;
   state->windows = calloc(ANVIL_SHELL_STATE_MAX_WINDOWS, sizeof(*state->windows));
@@ -111,9 +134,28 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
     return false;
   }
   bool complete = true;
+  size_t loaded = 0;
   while (cursor < end) {
     long values[7];
     complete = false;
+    if (!version_2 && !version_3 && !version_4 && end - cursor >= 7 && !memcmp(cursor, "loaded ", 7)) {
+      cursor += 7;
+      long id, length;
+      if (loaded >= ANVIL_SHELL_STATE_MAX_PROJECTS || !read_long(&cursor, end, &id) || id <= 0 ||
+          !read_long(&cursor, end, &length) || length <= 0) break;
+      AnvilShellWindowState *window = NULL;
+      for (size_t i = 0; i < state->count; i++)
+        if (state->windows[i].id == (uint32_t)id) { window = &state->windows[i]; break; }
+      if (!window) break;
+      char **paths = realloc(window->projects, (window->project_count + 1) * sizeof(*paths));
+      if (!paths) break;
+      window->projects = paths;
+      if (!read_path(&cursor, end, length, &paths[window->project_count])) break;
+      window->project_count++;
+      loaded++;
+      complete = true;
+      continue;
+    }
     if (!version_2 && !version_3 && end - cursor >= 8 && !memcmp(cursor, "sidebar ", 8)) {
       cursor += 8;
       long points;
