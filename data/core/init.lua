@@ -2696,25 +2696,13 @@ end
 ---@type number
 local rendering_speed = 0.004
 
----Each second there is time assigned to drawing the amount of config.fps
----and for executing the coroutine tasks, this value represents the time
----that coroutines should not exceed for each 1s cycle.
+---End of the current run loop cycle. The loop polls window focus once per cycle.
 ---@type number
 local cycle_end_time = 0
 
 ---Keep track of frame drops in order to decide if we should adjust the timings.
 ---@type integer
 local fps_drops = 0
-
----Maximum amount of coroutines to execute on a frame iteration that not exceed
----the maximum allowed time. Value is adjusted on each run_threads as needed.
----@type integer
-local max_coroutines = 1000
-
----Amount of time spent running the main loop without the time it takes to
----run the coroutines. (resets at very cycle end)
----@type number
-local main_loop_time = 0
 
 local function env_truthy(name)
   local value = os.getenv(name)
@@ -3187,7 +3175,6 @@ function core.step(next_frame_time, options, frame_stats)
     core.co_max_time = math.max(0.001, math.min(0.004, frame_budget * 0.25))
     core.fps = config.fps
     fps_drops = 0
-    max_coroutines = 1000
   else
     local meets_fps = rendering_speed * config.fps < 1
 
@@ -3202,7 +3189,6 @@ function core.step(next_frame_time, options, frame_stats)
       else
         fps_drops = fps_drops + 1
         core.co_max_time = rendering_speed / 3
-        max_coroutines = 1
       end
     else
       -- If fps rendering dropped from config target we set the max time to
@@ -3212,7 +3198,6 @@ function core.step(next_frame_time, options, frame_stats)
       -- maximum time for coroutines of 0.013333333333333 per iteration.
       -- verbose formula: (rendering_speed * (fps / 4)) / (fps - (fps / 4))
       core.co_max_time = rendering_speed / 3
-      max_coroutines = 1
 
       -- current frames per second substracting portion given to coroutines
       core.fps = 1 / (rendering_speed + core.co_max_time)
@@ -3271,7 +3256,6 @@ local run_threads = coroutine.wrap(function()
     local earliest_wake = math.huge
     -- a count on the amount of threads that ran
     local runs = 0
-    local pass_runs = 0
     local slowest_loc = ""
     local slowest_time = 0
     for k, thread in pairs(core.threads) do
@@ -3283,16 +3267,6 @@ local run_threads = coroutine.wrap(function()
           if core.startup_trace_active and startup then
             startup.thread_started(k, thread.loc, thread.background)
           end
-          -- if the avg time of running the thread exceeds cycle_end_time
-          -- execute the thread on next run
-          if
-            thread.avg_time
-            and
-            start_time + thread.avg_time > cycle_end_time - main_loop_time
-          then
-              coroutine.yield(thread.avg_time)
-              start_time = system.get_time()
-          end
           local _, wait = assert(coroutine.resume(thread.cr))
           end_time = system.get_time() - start_time
           if core.startup_trace_active and startup then
@@ -3302,7 +3276,6 @@ local run_threads = coroutine.wrap(function()
             )
           end
           runs = runs + 1
-          pass_runs = pass_runs + 1
           local thread_times = core.thread_time_stats
           if thread_times then thread_times[thread.loc] = (thread_times[thread.loc] or 0) + end_time end
           if end_time > slowest_time then
@@ -3320,27 +3293,10 @@ local run_threads = coroutine.wrap(function()
               core.background_threads = core.background_threads - 1
             end
           else
-            -- store coroutine stats
-            if not thread.time then
-              thread.time = end_time
-              thread.calls = 1
-              thread.avg_time = end_time
-            else
-              -- keep numbers small
-              thread.time = thread.calls < 1000
-                and thread.time + end_time
-                or end_time
-              thread.calls = thread.calls < 1000 and thread.calls + 1 or 1
-              thread.avg_time = thread.calls > 1
-                and thread.time / thread.calls
-                or thread.avg_time
-            end
-            -- Slow work can extend a delay, but must not shorten a caller's delay.
-            if not wait or wait < 0 then
-              wait = math.max(end_time, 0.002)
-            elseif end_time > wait then
-              wait = end_time
-            end
+            -- Honor the requested delay. The frame budget check below keeps
+            -- slow threads from delaying the UI; when the UI is idle, sliced
+            -- work that yields 0 continues at once.
+            if not wait or wait < 0 then wait = 0.002 end
             thread.wake = system.get_time() + wait
             earliest_wake = math.min(earliest_wake, thread.wake)
             if config.log_slow_threads and end_time > core.co_max_time then
@@ -3355,26 +3311,13 @@ local run_threads = coroutine.wrap(function()
         end
       end
 
-      -- stop running threads if we're about to hit the end of frame
-      local yield_time = system.get_time()
-      if yield_time - core.frame_start > core.co_max_time then
-        -- set the maximum amount of coroutines to prevent exceeding max_time
-        if max_coroutines > 1 then
-          max_coroutines = math.max(runs-1, 1)
-        end
+      -- The frame's thread budget is the only limit. Continue this traversal
+      -- in the next loop iteration, so each due thread gets its turn.
+      if system.get_time() - core.frame_start > core.co_max_time then
         last_run_threads_slowest_loc = slowest_loc
         last_run_threads_slowest_ms = slowest_time * 1000
         last_run_threads_runs = runs
         coroutine.yield(0)
-        runs, slowest_loc, slowest_time = 0, "", 0
-      elseif runs >= max_coroutines then
-        last_run_threads_slowest_loc = slowest_loc
-        last_run_threads_slowest_ms = slowest_time * 1000
-        last_run_threads_runs = runs
-        coroutine.yield(math.max(0, earliest_wake - system.get_time()))
-        -- The coroutine resumes in the middle of this table traversal. Start
-        -- a fresh per-callback budget; retaining the previous run count made
-        -- every remaining sleeping thread trigger another immediate yield.
         runs, slowest_loc, slowest_time = 0, "", 0
       end
     end
@@ -3382,10 +3325,6 @@ local run_threads = coroutine.wrap(function()
     last_run_threads_slowest_loc = slowest_loc
     last_run_threads_slowest_ms = slowest_time * 1000
     last_run_threads_runs = runs
-
-    -- if we reached here it means it was able to run coroutines without
-    -- slow downs so we reset the maximum coroutines to amount it ran
-    max_coroutines = math.max(max_coroutines, pass_runs)
 
     coroutine.yield(math.max(0, earliest_wake - system.get_time()))
   end
@@ -3716,7 +3655,6 @@ function core.run_step(options)
   -- start a new 1s cycle
   if core.frame_start >= cycle_end_time then
     cycle_end_time  = core.frame_start + (core.co_max_time * core.fps)
-    main_loop_time  = 0
     local had_focus = run_has_focus
     run_has_focus   = system.window_has_focus(core.window)
     if had_focus and not run_has_focus then
@@ -3936,11 +3874,6 @@ function core.run_step(options)
     gc_ms = (system.get_time() - gc_start) * 1000
     core.collect_garbage = false
   end
-
-  -- Update the loop run time
-  main_loop_time = main_loop_time + (
-    (system.get_time() - core.frame_start) - threads_end_time
-  )
 
   local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   local step_stats = did_core_step and last_core_step_stats or {}

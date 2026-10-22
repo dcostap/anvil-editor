@@ -7378,6 +7378,12 @@ local function bind_fence_service(view, instance)
     if view.__markdown_live_owner ~= owner or not view.__markdown_live_attached then return end
     line1 = common.clamp(line1 or 1, 1, #view.buffer.lines)
     line2 = common.clamp(line2 or line1, line1, #view.buffer.lines)
+    -- A visible fence line reads its new tokens at the next draw. Off-screen
+    -- fences wait for the coalesced invalidation below, so a long note does
+    -- not redraw for each batch that the fence worker finishes. The shown
+    -- range does not resolve pending row changes in this callback.
+    local visible1, visible2 = view:get_committed_visible_line_range()
+    if not visible1 or (line1 <= visible2 and line2 >= visible1) then core.redraw = true end
     owner.fence_invalidation_ranges = owner.fence_invalidation_ranges or {}
     local ranges = owner.fence_invalidation_ranges
     ranges[#ranges + 1] = { line1 = line1, line2 = line2 }
@@ -7567,13 +7573,22 @@ local function bind_link_index(view)
     for _, range in ipairs(ranges) do
       prune_image_references(view, range.line1, range.line2)
     end
+    -- Wrap a few dependent lines in this frame. When a long note has many,
+    -- such as at the first vault publication, update the visible rows now
+    -- and wrap the rest in slices.
+    local dependent_lines = 0
+    for _, range in ipairs(ranges) do
+      dependent_lines = dependent_lines + range.line2 - range.line1 + 1
+    end
+    local invalidate_opts = dependent_lines > linewrapping.MAX_SYNC_WRAP_LINES
+      and { defer_wrapped_reconstruction = true, update_visible = true } or nil
     for _, range in ipairs(ranges) do
       -- Keep the committed rows for unrelated text. A full wrapped rebuild
       -- made each edited heading reconstruct the complete document when its
       -- vault target changed.
-      view:invalidate_line_render(PROVIDER_ID, range.line1, range.line2)
-      view:invalidate_visual_metrics(PROVIDER_ID, range.line1, range.line2)
+      view:invalidate_line_render(PROVIDER_ID, range.line1, range.line2, invalidate_opts)
     end
+    view:invalidate_visual_metric_ranges(PROVIDER_ID, ranges)
     core.log_quiet(
       "Markdown Live Preview refreshed %d link-dependent range(s) after vault %s%s in %.1fms",
       #ranges, tostring(reason or "change"),

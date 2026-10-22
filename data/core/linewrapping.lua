@@ -136,9 +136,7 @@ function LineWrapping.notify_textview_text_transaction(textview, transaction)
         "Preparing wrapped layout after loaded snapshot for %s revision=%d",
         buffer:get_name(), buffer.text_revision or 0
       )
-      LineWrapping.reconstruct_breaks_async(
-        textview, settings.font, settings.width, { budget_ms = 4 }
-      )
+      LineWrapping.reconstruct_breaks_async(textview, settings.font, settings.width)
     end)
     return
   end
@@ -1251,7 +1249,6 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     return true
   end
 
-  local budget_ms = math.max(1, tonumber(opts.budget_ms) or 4)
   local function advance()
     if not current() then
       if textview.__async_wrap_reconstruction == token
@@ -1285,7 +1282,9 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
     end
     token.measurement.perf_active = perf_diagnostics_active()
     local started = system.get_time()
-    local deadline = started + budget_ms / 1000
+    -- Fit one slice in the scheduler's thread budget for a frame. When the UI
+    -- is idle, the scheduler runs the next slice at once.
+    local deadline = started + math.max(0.001, core.co_max_time or 0.004)
     local lines = 0
     while token.next_line <= token.line_count or next(token.dirty_lines) do
       -- Finish the forward pass before repairs. A changing early line must
@@ -1338,8 +1337,8 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
   token.advance = advance
   if status == "pending" then
     core.log_quiet(
-      "Continuing wrapped layout in slices for %s: lines=%d budget_ms=%.1f",
-      buffer:get_name(), token.line_count, budget_ms
+      "Continuing wrapped layout in slices for %s: lines=%d slice_ms=%.1f",
+      buffer:get_name(), token.line_count, math.max(0.001, core.co_max_time or 0.004) * 1000
     )
     core.add_thread(function()
       while true do
@@ -1347,7 +1346,7 @@ function LineWrapping.reconstruct_breaks_async(textview, default_font, width, op
           if textview.__async_wrap_reconstruction ~= token then return end
           coroutine.yield(0.02)
         elseif advance() == "pending" then
-          coroutine.yield(0.005)
+          coroutine.yield(0)
         else
           return
         end

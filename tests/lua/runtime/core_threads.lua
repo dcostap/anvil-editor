@@ -25,6 +25,22 @@ test.describe("core scheduler threads", function()
       "slow work shortened the requested delay")
   end)
 
+  test.it("resumes a thread that asks to continue without waiting out its slow work", function()
+    -- Sliced background work yields 0 between slices. When the UI is idle,
+    -- the next slice must not wait as long as the previous one ran.
+    local finished_at, resumed_at
+    core.add_thread(function()
+      system.sleep(0.2)
+      finished_at = system.get_time()
+      coroutine.yield(0)
+      resumed_at = system.get_time()
+    end)
+    test.ok(wait_until(function() return resumed_at ~= nil end, 2),
+      "slow thread did not resume")
+    test.ok(resumed_at - finished_at < 0.15,
+      string.format("slow work delayed the next slice by %.3fs", resumed_at - finished_at))
+  end)
+
   test.it("wakes a sleeping thread immediately by its stable key", function()
     local key = {}
     local runs = 0

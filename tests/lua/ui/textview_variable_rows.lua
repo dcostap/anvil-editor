@@ -179,6 +179,52 @@ test.describe("TextView variable visual row metrics", function()
     test.equal(view:get_composed_visual_row_count(), 3)
   end)
 
+  test.it("rebuilds the composed rows of each invalidated range", function()
+    local view = make_view("one\ntwo\nthree\nfour")
+    local rows_after = { [1] = 1, [2] = 1, [3] = 1 }
+    view:add_visual_row_provider("external", {
+      dependent_lines = function() end,
+      visual_rows = function(_, _, line, placement)
+        if placement ~= "after" or not rows_after[line] then return end
+        local rows = {}
+        for index = 1, rows_after[line] do rows[index] = { id = line .. ":" .. index } end
+        return rows
+      end,
+    })
+    -- Measured rows follow the composed rows.
+    view:add_visual_metric_provider("heights", { line_height = function() end })
+    test.equal(view:get_composed_visual_row_count(), 7)
+    view:get_visual_row_height(1)
+
+    rows_after[1], rows_after[2], rows_after[3] = 3, 2, nil
+    view:invalidate_visual_metric_ranges("external", {
+      { line1 = 3, line2 = 3 }, { line1 = 1, line2 = 1 },
+    })
+    -- Line 2 was not invalidated, so it keeps its one inserted row.
+    test.equal(view:get_composed_visual_row_count(), 4 + 3 + 1)
+    view:get_visual_row_height(1)
+    view:invalidate_visual_metric_ranges("external", { { line1 = 2, line2 = 2 } })
+    test.equal(view:get_composed_visual_row_count(), 4 + 3 + 2)
+  end)
+
+  test.it("remeasures the rows of each invalidated range", function()
+    local view = make_view("one\ntwo\nthree")
+    local lh = view:get_line_height()
+    local scale = { 1, 1, 1 }
+    view:add_visual_metric_provider("heights", {
+      line_height = function(_, _, line) return lh * scale[line] end,
+    })
+    test.equal(view:get_visual_row_height(3), lh)
+
+    scale[1], scale[3] = 2, 3
+    view:invalidate_visual_metric_ranges("heights", {
+      { line1 = 1, line2 = 1 }, { line1 = 3, line2 = 3 },
+    })
+    test.equal(view:get_visual_row_height(1), lh * 2)
+    test.equal(view:get_visual_row_height(2), lh)
+    test.equal(view:get_visual_row_height(3), lh * 3)
+  end)
+
   test.it("invalidates metrics after legacy raw text edits", function()
     local view, buffer = make_view("plain")
     local lh = view:get_line_height()

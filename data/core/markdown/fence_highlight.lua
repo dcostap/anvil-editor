@@ -1071,8 +1071,8 @@ function Service:start_worker()
         processed = processed + 1
         if reason == "resume" or processed >= BATCH_LINES then
           processed = 0
+          -- Listeners request a redraw for ready lines that they show.
           self:flush_ready_notifications()
-          core.redraw = true
           coroutine.yield(0)
           if self.closed or self.generation ~= worker_generation then break end
         end
@@ -1081,7 +1081,6 @@ function Service:start_worker()
     end
     self:flush_ready_notifications()
     self.worker_running = false
-    core.redraw = true
     if not self.closed and #self.queue > 0 then self:start_worker() end
   end, self)
 end

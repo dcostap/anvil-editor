@@ -2028,6 +2028,35 @@ local function clear_visual_metric_cache(view)
   view.__visual_metric_cache = nil
 end
 
+local function metrics_follow_composed_rows(view)
+  local cache = view.__visual_metric_cache
+  return cache and cache.composed and cache.composed == view.__composed_visual_row_cache
+end
+
+---Invalidate the rows of several line ranges `{ line1 = , line2 = }`.
+---Composed rows take all ranges as one change, so many small ranges, such as
+---every link line of a long note, cost one pass.
+function TextView:invalidate_visual_metric_ranges(provider_id, ranges)
+  if #ranges == 0 then return end
+  if not metrics_follow_composed_rows(self) or self.__presentation_reload_frozen then
+    for _, range in ipairs(ranges) do
+      self:invalidate_visual_metrics(provider_id, range.line1, range.line2)
+    end
+    return
+  end
+  self.__visual_metric_snapshot_kind = nil
+  self.__visual_metric_snapshot_id = nil
+  self.__visual_metric_snapshot_cache = nil
+  self.__line_render_wrap_change = nil
+  local line_count = #self.buffer.lines
+  local spans = {}
+  for _, range in ipairs(ranges) do
+    local line1 = common.clamp(math.floor(range.line1), 1, line_count)
+    spans[#spans + 1] = { line1, common.clamp(math.floor(range.line2 or line1), line1, line_count) }
+  end
+  add_composed_changes(self, layout_changes.spans(spans))
+end
+
 function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   self.__visual_metric_snapshot_kind = nil
   self.__visual_metric_snapshot_id = nil
@@ -2036,9 +2065,7 @@ function TextView:invalidate_visual_metrics(_provider_id, line1, line2)
   local cache = self.__visual_metric_cache
   local wrap_change = self.__line_render_wrap_change
   self.__line_render_wrap_change = nil
-  if line1 and cache and cache.composed
-    and cache.composed == self.__composed_visual_row_cache
-  then
+  if line1 and metrics_follow_composed_rows(self) then
     -- The composed rows of these lines rebuild at the next read. Their row
     -- changes then reach these metrics.
     self:invalidate_composed_rows(line1, line2)
