@@ -5,6 +5,10 @@ local style = require "core.style"
 local fonts = {}
 local cache = setmetatable({}, {__mode = "k"})
 local applied_size_modifiers = setmetatable({}, {__mode = "k"})
+-- The family that apply last set for each category, and the first role's font it made. Startup applies the
+-- default families, then the saved choices. A saved choice that equals the default keeps the loaded fonts.
+local applied_choice = {}
+local applied_font = setmetatable({}, {__mode = "v"})
 
 -- A bundled family's optional size modifier calibrates body text, not heading levels.
 -- Slight hinting keeps small serif glyphs from snapping unevenly to the pixel grid.
@@ -105,6 +109,11 @@ end
 function fonts.apply(id, choice)
   local category, family = category_for(id), families[choice]
   if not category or not family then return false end
+  local first_role = category.roles[1]
+  if applied_choice[id] == choice and applied_font[id] == style[first_role] then
+    core.log_quiet("Global %s font already set: %s", category.name, family.name)
+    return true
+  end
 
   for _, role in ipairs(category.roles) do
     local filename, bold, italic = file_for(role, family)
@@ -125,6 +134,7 @@ function fonts.apply(id, choice)
       style["terminal_" .. variant .. "_font"] = style.terminal_font:copy(size, options)
     end
   end
+  applied_choice[id], applied_font[id] = choice, style[first_role]
   core.color_theme_generation = (core.color_theme_generation or 0) + 1
   core.bump_render_style_generation("global-font-selection")
   core.log_quiet("Global %s font: %s", category.name, family.name)

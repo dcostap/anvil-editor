@@ -170,6 +170,8 @@ typedef struct D3D11Stats {
 
 typedef struct D3D11State {
   bool attempted_init;
+  /* Creates the device while Lua starts. The first device use waits for it. */
+  SDL_Thread *prewarm;
   bool available;
   bool device_is_warp;
   D3D_FEATURE_LEVEL feature_level;
@@ -638,10 +640,7 @@ static HWND hwnd_from_sdl_window(SDL_Window *window) {
   return (HWND) SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
 }
 
-static bool d3d11_init(void) {
-  if (g_d3d11.attempted_init) return g_d3d11.available;
-  g_d3d11.attempted_init = true;
-
+static bool d3d11_create_device(void) {
   D3D_FEATURE_LEVEL levels[] = {
     D3D_FEATURE_LEVEL_11_1,
     D3D_FEATURE_LEVEL_11_0,
@@ -695,12 +694,42 @@ static bool d3d11_init(void) {
   SAFE_RELEASE(dxgi_device);
 
   if (FAILED(hr) || !g_d3d11.factory) {
-    anvil_d3d11_shutdown();
+    /* No other device object exists yet. */
+    SAFE_RELEASE(g_d3d11.factory);
+    SAFE_RELEASE(g_d3d11.context);
+    SAFE_RELEASE(g_d3d11.device);
     return false;
   }
 
   g_d3d11.available = true;
   return true;
+}
+
+static int d3d11_prewarm_thread(void *data) {
+  (void)data;
+  d3d11_create_device();
+  return 0;
+}
+
+/* Device creation takes about 200 ms. A Project process starts it before Lua loads, so the first frame does
+ * not wait for it. */
+void anvil_d3d11_prewarm(void) {
+  if (!anvil_d3d11_enabled() || g_d3d11.attempted_init) return;
+  g_d3d11.prewarm = SDL_CreateThread(d3d11_prewarm_thread, "anvil-d3d11-prewarm", NULL);
+  g_d3d11.attempted_init = g_d3d11.prewarm != NULL;
+}
+
+static void d3d11_join_prewarm(void) {
+  if (!g_d3d11.prewarm) return;
+  SDL_WaitThread(g_d3d11.prewarm, NULL);
+  g_d3d11.prewarm = NULL;
+}
+
+static bool d3d11_init(void) {
+  d3d11_join_prewarm();
+  if (g_d3d11.attempted_init) return g_d3d11.available;
+  g_d3d11.attempted_init = true;
+  return d3d11_create_device();
 }
 
 static bool d3d11_ensure_common_pipeline(void) {
@@ -2245,6 +2274,7 @@ bool anvil_d3d11_present(SDL_Window *window, SDL_Surface *surface,
 }
 
 void anvil_d3d11_shutdown(void) {
+  d3d11_join_prewarm();
   D3D11Window *w = g_d3d11.windows;
   while (w) {
     D3D11Window *next = w->next;

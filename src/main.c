@@ -19,6 +19,7 @@
 #endif
 #include "api/terminal_native.h"
 #include "hosted_surface.h"
+#include "d3d11_backend.h"
 #include "launch_mode.h"
 #include "input_latency_probe.h"
 #include "surface_protocol.h"
@@ -444,6 +445,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     fprintf(stderr, "Error connecting to the Anvil shell\n");
     return SDL_APP_FAILURE;
   }
+  /* A Project that the shell shows renders soon. Its GPU device is ready by its first frame. */
+  if (hosted && anvil_hosted_surface_should_render()) anvil_d3d11_prewarm();
   SDL_SetEventEnabled(SDL_EVENT_DROP_FILE, true);
   SDL_SetEventEnabled(SDL_EVENT_DROP_TEXT, true);
   SDL_SetEventEnabled(SDL_EVENT_DROP_BEGIN, true);

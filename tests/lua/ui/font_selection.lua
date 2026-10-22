@@ -71,6 +71,16 @@ test.describe("global font selection", function()
     test.equal(previous.code_font, style.code_font)
   end)
 
+  test.it("keeps a category's fonts when it applies the family that the category shows", function()
+    local font_categories = require "core.font_categories"
+    test.ok(font_categories.apply("prose", "inter"))
+    local body = style.markdown_body_font
+    test.ok(font_categories.apply("prose", "inter"))
+    test.equal(style.markdown_body_font, body)
+    test.ok(font_categories.apply("prose", "crimson_pro"))
+    test.ok(primary_path(style.markdown_body_font):find("CrimsonPro-Regular.ttf", 1, true))
+  end)
+
   test.it("previews a Markdown Prose font and restores it on cancel", function()
     test.ok(command.perform("editor:select_font"))
     local bar = core.global_prompt_bar

@@ -14,6 +14,8 @@ enum { ANVIL_D3D11_IMAGE_TEXTURE = 3 };
    Default/unset: D3D11 command renderer. Set ANVIL_RENDERER=software
    or ANVIL_RENDERER=sdl to force the SDL/software fallback. */
 bool anvil_d3d11_enabled(void);
+/* Starts device creation on a thread. The first frame waits for it. */
+void anvil_d3d11_prewarm(void);
 void anvil_d3d11_test_sync_failure(bool release);
 bool anvil_d3d11_is_present_paced(void);
 double anvil_d3d11_last_present_ms(void);
@@ -69,6 +71,7 @@ void anvil_d3d11_note_surface_generation(void);
 void anvil_d3d11_shutdown(void);
 #else
 static inline bool anvil_d3d11_enabled(void) { return false; }
+static inline void anvil_d3d11_prewarm(void) {}
 static inline void anvil_d3d11_test_sync_failure(bool release) { (void)release; }
 static inline bool anvil_d3d11_is_present_paced(void) { return false; }
 static inline double anvil_d3d11_last_present_ms(void) { return 0.0; }
