@@ -8,7 +8,10 @@ function Scene.new(settings, root)
   local module = require("scenes." .. settings.scene)
   local context = require("scenes.support").context(settings, root)
   return setmetatable({ settings = settings, root = root, completed = 0,
-                        module = module, context = context }, Scene)
+                        module = module, context = context,
+                        action_visible = module.action_visible and function()
+                          return module.action_visible(context)
+                        end }, Scene)
 end
 
 function Scene:setup()

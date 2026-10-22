@@ -50,13 +50,20 @@ def read_actions(path: Path, expected: int) -> dict[str, Any]:
                 or row["latency_ms"] < row["ready_ms"]
                 or row["ready_ms"] < row["dispatch_ms"]):
             raise ValueError(f"invalid action completion evidence: {path}")
+        if row.get("visible_ms") not in (None, ""):
+            row["visible_ms"] = float(row["visible_ms"])
+            if (not math.isfinite(row["visible_ms"])
+                    or not row["dispatch_ms"] <= row["visible_ms"] <= row["latency_ms"]):
+                raise ValueError(f"invalid action visible_ms: {path}")
+        else:
+            row.pop("visible_ms", None)
         grouped[row["name"]].append(row)
     summaries = {}
     for name, actions in grouped.items():
         summaries[name] = {
             f"{key}_{stat}": value
-            for key in ("dispatch_ms", "ready_ms", "latency_ms", "redraws")
-            for stat, value in distribution([row[key] for row in actions]).items()
+            for key in ("dispatch_ms", "ready_ms", "latency_ms", "visible_ms", "redraws")
+            for stat, value in distribution([row[key] for row in actions if key in row]).items()
         }
     return {"summary": summaries, "rows": captured,
             "sequence": [[row["name"], row["result"]] for row in captured]}

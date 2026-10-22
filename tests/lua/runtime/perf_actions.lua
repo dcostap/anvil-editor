@@ -34,4 +34,27 @@ test.describe("benchmark action completion", function()
     test.equal(ok, false)
     test.match(tostring(err), "missing result")
   end)
+
+  test.it("keeps the first visible redraw separate from the published redraw", function()
+    local now, ready, visible = 0, false, false
+    local actions = Actions(function() return now end, 1)
+    actions:start("type", function() now = 0.002 end,
+      function() return ready end, function() return visible end)
+    now = 0.010
+    actions:before_draw()
+    test.is_nil(actions:after_frame(true))
+    visible = true -- The scene observed the edited line during drawing.
+    now = 0.020
+    test.is_nil(actions:after_frame(false))
+    now = 0.030
+    test.is_nil(actions:after_frame(true))
+    ready = true
+    now = 0.050
+    actions:before_draw()
+    now = 0.060
+    local row = actions:after_frame(true)
+    test.equal(row.visible_ms, 30)
+    test.equal(row.ready_ms, 50)
+    test.equal(row.latency_ms, 60)
+  end)
 end)

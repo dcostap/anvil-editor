@@ -298,6 +298,10 @@ def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
         values = [run["actions"][action] for run in runs if action in run.get("actions", {})]
         actions[action] = {key: median([value[key] for value in values])
                            for key in ("latency_ms_p50", "latency_ms_p95", "latency_ms_max", "redraws_p50")}
+        for key in ("visible_ms_p50", "visible_ms_p95"):
+            samples = [value[key] for value in values if key in value]
+            if samples:
+                actions[action][key] = median(samples)
     findings = []
     if frame and frame["work_ms_p95"] > scenario.frame_budget_ms:
         findings.append({"metric": "frame work_ms p95", "value": frame["work_ms_p95"],
@@ -333,13 +337,23 @@ def markdown(report: dict[str, Any]) -> str:
                          f"max {case['frame_spike_ms']:.1f}). "
                          f"Lua heap {frame['lua_heap_kib_avg'] / 1024:.1f} MiB.")
             lines.append("")
-        lines.append("| Action | p50 ms | p95 ms | max ms | budget ms | redraws |")
-        lines.append("| --- | ---: | ---: | ---: | ---: | ---: |")
+        publication = case["scene"] == "markdown_gallery" and any(
+            action in ("type", "newline") for action in case["actions"])
+        completion = "Publication" if publication else "Completed"
+        lines.append(f"| Action | {completion} p50 ms | {completion} p95 ms | Visible p50 ms | Visible p95 ms | {completion} max ms | budget ms | redraws |")
+        lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
         for action, values in case["actions"].items():
+            visible = [f"{values[key]:.1f}" if key in values else "—"
+                       for key in ("visible_ms_p50", "visible_ms_p95")]
             lines.append(f"| {action} | {values['latency_ms_p50']:.1f} | {values['latency_ms_p95']:.1f} "
+                         f"| {visible[0]} | {visible[1]} "
                          f"| {values['latency_ms_max']:.1f} | {values['budget_ms']:.0f} "
                          f"| {values['redraws_p50']:.0f} |")
         lines.append("")
+        if publication:
+            lines += ["Publication waits for the semantic publication and its redraw. "
+                      "Visible stops at the first redraw of the edited line. "
+                      "Neither includes display scanout or OS input delivery.", ""]
         for finding in case["findings"]:
             lines.append(f"- Over budget: {finding['metric']} {finding['value']:.2f} ms "
                          f"> {finding['budget']:.2f} ms ({finding['ratio']:.1f}x)")
@@ -377,8 +391,11 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
             log(f"  run {index + 1}: work p95 {run['metrics']['work_ms_p95']:.2f} ms, "
                 f"{int(run['metrics']['frames'])} frames")
         for action, values in run.get("actions", {}).items():
-            log(f"  run {index + 1}: {action} p50 {values['latency_ms_p50']:.1f} ms, "
-                f"p95 {values['latency_ms_p95']:.1f} ms")
+            completion = "publication" if scenario.scene == "markdown_gallery" and action in ("type", "newline") else "completed"
+            visible = (f", visible p50 {values['visible_ms_p50']:.1f} ms, "
+                       f"p95 {values['visible_ms_p95']:.1f} ms") if "visible_ms_p50" in values else ""
+            log(f"  run {index + 1}: {action} {completion} p50 {values['latency_ms_p50']:.1f} ms, "
+                f"p95 {values['latency_ms_p95']:.1f} ms{visible}")
         runs.append(run)
     case.update(score(scenario, runs))
     case["verdict"] = "over budget" if case["findings"] else "passed"
