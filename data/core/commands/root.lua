@@ -221,6 +221,11 @@ local commands = {
   ["pane:copy_view_to"] = command.palette(function(pane)
     return copy_view_to(pane)
   end, { keywords = { "duplicate", "split", "pane", "group" } }),
+  ["pane:copy_view_to_new_group"] = command.palette(function(pane)
+    local result, err = panes.create { factory = view_copy_factory(pane.current_view) }
+    report_failure("copy Current View", result, err)
+    return result
+  end, { keywords = { "duplicate", "current" } }),
   ["pane:move_view_to"] = command.palette(function(pane)
     return move_view_to(pane)
   end, { keywords = { "pane", "group" } }),

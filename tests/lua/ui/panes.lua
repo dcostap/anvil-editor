@@ -165,6 +165,28 @@ test.describe("Pane manager", function()
     test.equal(source.current_view:get_name(), "source")
   end)
 
+  test.it("copies the Current View into a new Pane Group without copying history", function()
+    local source = panes.create { factory = factory("previous") }
+    local original = FakeView("current")
+    original.copy_name = "current copy"
+    original.place = 42
+    panes.present(original, { pane = source })
+
+    test.ok(command.perform("pane:copy_view_to_new_group"))
+
+    local destination = panes.active()
+    test.equal(panes.count(), 2)
+    test.not_equal(destination.group, source.group)
+    test.equal(panes.visible_group(), destination.group)
+    test.equal(source.current_view, original)
+    test.not_equal(destination.current_view, original)
+    test.equal(destination.current_view:get_name(), "current copy")
+    test.equal(destination.current_view.place, 42)
+    test.equal(panes.history_length(source), 2)
+    test.equal(panes.history_length(destination), 1)
+    test.ok(panes.validate())
+  end)
+
   test.it("moves the Current View to a new split and keeps the source Pane", function()
     local source = panes.create { factory = factory("source") }
     local moved = source.current_view
