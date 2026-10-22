@@ -39,10 +39,10 @@ test.describe("Pi model badges", function()
     test.equal(icons.provider(nil), nil)
   end)
 
-  test.it("draws the model badge above and right of Pi without hiding the status dot", function()
+  test.it("draws both logos without hiding the status dot or the name", function()
     local old_canvas, old_dot, old_text = renderer.draw_canvas, renderer.draw_rounded_rect, renderer.draw_text
     local images, dots = {}, {}
-    renderer.draw_canvas = function(image, x, y) images[#images + 1] = {image=image,x=x,y=y} end
+    renderer.draw_canvas = function(image) images[#images + 1] = image end
     renderer.draw_rounded_rect = function(_, _, _, _, _, color) dots[#dots + 1] = color end
     renderer.draw_text = function() end
     local ok, err = pcall(function()
@@ -54,7 +54,6 @@ test.describe("Pi model badges", function()
         images, dots = {}, {}
         tab.draw(item, 0, 0, 400, 28 * SCALE, {name_color=style.text})
         test.equal(#images, 2, model .. " has no provider badge")
-        test.ok(images[2].x > images[1].x and images[2].y < images[1].y)
         test.equal(dots[1], style.accent)
         test.ok(tab.width(item, 28 * SCALE) > plain, "The name has no space for the badge")
       end

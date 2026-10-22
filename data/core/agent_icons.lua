@@ -12,23 +12,24 @@ function agent_icons.provider(model)
 end
 
 local function dimensions(app, row_height, model)
-  if app ~= "pi" then return 0 end
+  if app ~= "pi" then return 0, 0 end
   local size = file_icons.size_for_row(row_height)
-  if not agent_icons.provider(model) then return size end
-  return size, math.max(1, math.floor(size * 0.75 + 0.5)), math.floor(size * 0.65 + 0.5),
-    math.floor(size * 0.25 + 0.5)
+  if not agent_icons.provider(model) then return size, 0 end
+  -- Keep the complete diagonal pair inside the row, including at small interface sizes.
+  if row_height then size = math.min(size, math.max(1, math.floor((row_height - 2 * SCALE) / 1.6))) end
+  return size, math.floor(size * 0.6 + 0.5)
 end
 
 function agent_icons.width(app, row_height, model)
-  local size, badge, offset = dimensions(app, row_height, model)
-  return badge and math.max(size, offset + badge + math.max(1, SCALE)) or size
+  local size, offset = dimensions(app, row_height, model)
+  return size + offset
 end
 
 local function image(name, size)
   local background = style.background
   if type(background[1]) == "table" then background = background[1] end
   local dark = background[1] * 0.2126 + background[2] * 0.7152 + background[3] * 0.0722 < 145
-  local variant = dark and "_dark" or ""
+  local variant = dark and name ~= "claude" and "_dark" or ""
   local key = name .. variant .. ":" .. size
   if cache[key] == nil then
     local path = DATADIR .. PATHSEP .. "icons" .. PATHSEP .. "agents" .. PATHSEP .. name .. variant .. ".svg"
@@ -40,19 +41,16 @@ local function image(name, size)
 end
 
 function agent_icons.draw(app, x, y, row_height, model)
-  local size, badge, offset, rise = dimensions(app, row_height, model)
+  local size, offset = dimensions(app, row_height, model)
   if size == 0 then return end
   local mark = image(app, size)
-  local top = math.floor(y + (row_height - size) / 2)
+  local top = math.floor(y + (row_height - size - offset) / 2)
   if mark then renderer.draw_canvas(mark, math.floor(x), top) end
-  if not badge then return end
-  local provider = image(agent_icons.provider(model), badge)
+  if offset == 0 then return end
+  local maker = agent_icons.provider(model)
+  local provider = image(maker == "anthropic" and "claude" or maker, size)
   if not provider then return end
-  local bx, by, padding = math.floor(x + offset), top - rise, math.max(1, SCALE)
-  -- A small background keeps the two marks readable where they overlap.
-  renderer.draw_rounded_rect(bx - padding, by - padding, badge + padding * 2, badge + padding * 2,
-    padding * 2, style.background)
-  renderer.draw_canvas(provider, bx, by)
+  renderer.draw_canvas(provider, math.floor(x + offset), top + offset)
 end
 
 return agent_icons

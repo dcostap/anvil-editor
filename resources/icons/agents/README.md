@@ -8,8 +8,8 @@ Pi's source: <https://github.com/earendil-works/pi>.
 OpenAI's Blossom comes from its [official logo download](https://cdn.openai.com/brand/OpenAI-Logos-2025.zip).
 The SVG viewBox removes outer blank space. The paths and colors remain unchanged.
 
-Anthropic's mark comes from [Simple Icons](https://github.com/simple-icons/simple-icons/blob/develop/icons/anthropic.svg), under [CC0](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md).
-Its paths remain unchanged. The fills match the light and dark Pi marks.
+Claude's starburst comes from [Simple Icons](https://github.com/simple-icons/simple-icons/blob/develop/icons/claude.svg), under [CC0](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md).
+Its paths remain unchanged. It uses Claude's orange on both light and dark backgrounds.
 Both sources were retrieved on 2026-10-22.
 
-These marks identify Pi and the selected model's maker. They do not imply endorsement of Anvil.
+These marks identify Pi and the selected model's family or maker. They do not imply endorsement of Anvil.
