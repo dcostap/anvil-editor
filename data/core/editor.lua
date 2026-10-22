@@ -182,6 +182,12 @@ function Editor.from_state(state)
   local scroll = state.scroll or { x = 0, y = 0 }
   editor.scroll.x, editor.scroll.to.x = scroll.x or 0, scroll.x or 0
   editor.scroll.y, editor.scroll.to.y = scroll.y or 0, scroll.y or 0
+  -- The saved top line keeps its place when the restored rows have other
+  -- heights, such as the provisional rows of a long document's first wrap.
+  local anchor = state.scroll_anchor
+  if anchor and anchor.line and anchor.line <= #editor.buffer.lines then
+    editor:restore_viewport_anchor({ line = anchor.line, col = anchor.col or 1, content_y = anchor.content_y })
+  end
   editor.needs_initial_scroll_validation = true
   -- Restore presentation before feature state, even when another Pane keeps focus.
   require("core.markdown.live_render").refresh_view(editor)

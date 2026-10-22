@@ -1869,10 +1869,12 @@ function LineWrapping.update_textview_breaks(textview, width)
         on_complete = pending.on_complete,
       })
     elseif not textview.wrapped_settings and textview:has_line_render_providers()
+      and textview:has_visual_metric_providers()
       and #textview.buffer.lines > LineWrapping.MAX_SYNC_WRAP_LINES
     then
-      -- The first wrap of a long document. Its render plans cost most of the
-      -- time, so wrap the viewport in this frame and the rest in slices.
+      -- The first wrap of a long rendered document. Its render plans cost most
+      -- of the time, so wrap the viewport in this frame and the rest in slices.
+      -- Row metrics keep a restored viewport anchor on its line.
       perf_frame_add("linewrapping_update_textview_breaks_first_sliced", 1)
       set_provisional_rows(textview, settings)
       LineWrapping.reconstruct_breaks_async(textview, settings.font, width, { update_visible = true })

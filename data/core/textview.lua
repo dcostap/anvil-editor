@@ -1042,11 +1042,14 @@ end
 
 function TextView:get_state()
   local selection_state = self:get_selection_state()
+  -- A View without row metrics restores its scroll offset alone.
+  local anchor = self.__visual_metric_cache and self:capture_viewport_anchor()
   return {
     filename = self.buffer.filename,
     selection = copy_array(selection_state.selections),
     selection_state = selection_state,
     scroll = { x = self.scroll.to.x, y = self.scroll.to.y },
+    scroll_anchor = anchor and { line = anchor.line, col = anchor.col, content_y = anchor.content_y },
     crlf = self.buffer.crlf,
     text = self.buffer.new_file and self.buffer:get_text(1, 1, math.huge, math.huge),
     language_mode = self.buffer.language_mode_override,

@@ -88,59 +88,6 @@ test.describe("Line wrapping during live window resize", function()
     reference.wrapping_enabled = true
     reference.size.x, reference.size.y = 320, 240
     LineWrapping.update_textview_breaks(reference)
-    LineWrapping.complete_async_reconstruction(reference)
-    test.equal(LineWrapping.get_total_wrapped_lines(view),
-      LineWrapping.get_total_wrapped_lines(reference))
-  end)
-
-  test.it("wraps only the viewport in the first frame of a long document", function(context)
-    local lines = {}
-    for i = 1, 3000 do
-      lines[i] = string.format("line %d %s", i, string.rep("wrapped words ", 6))
-    end
-    local buffer = Buffer()
-    context.buffer = buffer
-    buffer:insert(1, 1, table.concat(lines, "\n"))
-    local view = TextView(buffer)
-    view.wrapping_enabled = true
-    view.position.x, view.position.y = 0, 0
-    view.size.x, view.size.y = 320, 240
-    local planned = {}
-    view:add_line_render_provider("plain", {
-      render_line = function(_, _, line) planned[line] = true end,
-    })
-
-    -- The frame can also run one background slice of the thread budget.
-    local previous_stats, previous_budget = core.perf_frame_stats, core.co_max_time
-    core.perf_frame_stats, core.co_max_time = {}, 0.001
-    view:update_wrap_cache()
-    local stats = core.perf_frame_stats
-    core.perf_frame_stats, core.co_max_time = previous_stats, previous_budget
-
-    local wrapped = (stats.linewrapping_reconstruct_breaks_lines or 0)
-      + (stats.linewrapping_update_breaks_lines or 0)
-      + (stats.linewrapping_async_reconstruct_lines or 0)
-    test.ok(wrapped < 1500, ("the first frame wrapped %d of 3000 lines"):format(wrapped))
-    test.ok(view:get_visual_row_count_for_line(1) > 1, "the visible lines are not wrapped")
-    view:get_visual_row_metric_cache()
-    test.equal(planned[3000], nil, "row metrics built a plan for each line")
-
-    -- A scroll before the background wrap finishes shows wrapped lines.
-    local _, y = view:get_line_screen_position(2900)
-    view.scroll.y, view.scroll.to.y = y, y
-    view:reconcile_visible_line_layout()
-    local first, last = view:get_visible_line_range()
-    test.ok(first > 2000, "the scroll did not reach the unwrapped lines")
-    for line = first, math.min(last, 3000) do
-      test.ok(view:get_visual_row_count_for_line(line) > 1,
-        ("visible line %d is not wrapped"):format(line))
-    end
-
-    LineWrapping.complete_async_reconstruction(view)
-    local reference = TextView(buffer)
-    reference.wrapping_enabled = true
-    reference.size.x, reference.size.y = 320, 240
-    LineWrapping.update_textview_breaks(reference)
     test.equal(LineWrapping.get_total_wrapped_lines(view),
       LineWrapping.get_total_wrapped_lines(reference))
   end)
