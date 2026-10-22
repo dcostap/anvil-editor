@@ -312,11 +312,12 @@ function CaretRenderer:draw(
   local jumped = false
   if #self.corners == 0 or not self.previous_target then
     self:reset_to_target(target)
-  elseif target.revision ~= nil and self.previous_target.revision ~= nil
+  elseif target.owner == self.previous_target.owner
+    and target.revision ~= nil and self.previous_target.revision ~= nil
     and target.revision ~= self.previous_target.revision
   then
-    -- Text edits replace the caret's coordinate space. Do not animate
-    -- through positions that belong to different document revisions.
+    -- Text edits replace this View's coordinate space. Revisions from
+    -- different Views do not identify an edit and must not stop focus trails.
     self:reset_to_target(target)
   elseif not same_location(self.previous_target, target)
     or not same_shape(self.previous_target, target)

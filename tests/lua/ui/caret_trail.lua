@@ -235,6 +235,35 @@ test.describe("caret trail", function()
     end)
   end
 
+  test.it("follows focus between Buffers with different text revisions", function()
+    with_caret_settings(function()
+      local first, second = make_view(), make_view()
+      first.buffer:insert(1, 1, "# Heading\n")
+      test.ok(first.buffer.text_revision ~= second.buffer.text_revision)
+
+      local root = RootPanel()
+      core.root_panel = root
+      local now = 15
+      local polygon
+      system.get_time = function() return now end
+      renderer.draw_rect = function() end
+      renderer.draw_poly = function(points) polygon = points end
+      config.animated_caret = true
+      config.animated_caret_animation_length = 0.15
+      config.animated_caret_min_animation_length = 0.025
+      config.animated_caret_trail_size = 1
+
+      draw_frame(root, first, 10, 20)
+      now = now + 0.01
+      draw_frame(root, second, 210, 200)
+
+      test.ok(polygon, "expected a trail between Buffers with unrelated revisions")
+      local min_x, max_x = x_bounds(polygon)
+      test.ok(min_x < 210, "expected the trail to start toward the previous caret")
+      test.ok(max_x >= 210, "expected the trail to reach the focused caret")
+    end)
+  end)
+
   test.it("uses the old smooth caret without a horizontal trail", function()
     with_caret_settings(function()
       local view = make_view()
