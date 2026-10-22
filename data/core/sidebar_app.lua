@@ -9,9 +9,14 @@ local storage = require "core.storage"
 local zoom = require "core.zoom"
 -- The Sidebar draws at each Window's display scale times the interface Zoom that Projects save.
 local interface_zoom = 1
-local function load_zoom()
-  interface_zoom = zoom.load()
+local function set_zoom(interface)
+  interface_zoom = interface
   core.log_quiet("Sidebar Zoom: interface=%.4f", interface_zoom)
+end
+-- Storage reports a failed read through core.log, which needs editor styles that the Sidebar does not load.
+local function load_zoom()
+  local ok, interface = pcall(zoom.load)
+  if ok then set_zoom(interface) else core.log_quiet("Sidebar Zoom not loaded: %s", tostring(interface)) end
 end
 
 -- Which Sidebar groups are collapsed. Every surface shares it, and the next Sidebar process restores it.
@@ -265,7 +270,7 @@ function core.run_step()
       theme_change = {preview = event[2] ~= "" and event[2] or nil}
     elseif event[1] == "zoomchanged" then
       -- Each surface takes the new scale when it next activates.
-      load_zoom()
+      set_zoom(event[2])
     elseif event[1] == "projectsidebarchanged" and not native_id then
       for _, surface in pairs(surfaces) do surface.request, surface.query_needed = nil, true end
       core.project_sidebar_request = nil

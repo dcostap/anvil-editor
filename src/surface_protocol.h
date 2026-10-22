@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 29u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 30u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -46,7 +46,7 @@ typedef enum {
   ANVIL_SURFACE_MSG_PREPARE_UPDATE = 12,
   /* Focus or close one of this Project's Panes. Payload: AnvilSurfacePaneAction. */
   ANVIL_SURFACE_MSG_PANE_ACTION = 13,
-  /* Another process saved the Zoom; apply the saved one. No payload. */
+  /* Another process saved the Zoom. Payload: AnvilSurfaceZoom. */
   ANVIL_SURFACE_MSG_ZOOM_CHANGED = 14,
 
   /* Surface process to shell. */
@@ -103,7 +103,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_PANE_REQUEST = 102,
   /* Lua startup and Workspace restore finished. Independent of rendering. No payload. */
   ANVIL_SURFACE_MSG_RUNTIME_READY = 103,
-  /* This Project saved the Zoom. The shell tells every other Project and the Sidebar. No payload. */
+  /* This Project saved the Zoom. The shell sends it to every other Project and the Sidebar.
+   * Payload: AnvilSurfaceZoom. */
   ANVIL_SURFACE_MSG_ZOOM_SAVED = 104,
 } AnvilSurfaceMessageType;
 
@@ -113,6 +114,9 @@ typedef struct {
   uint32_t type;
 } AnvilSidebarSurfacePacket;
 typedef struct { uint32_t project_id, target_window_id; } AnvilSurfaceMoveProject;
+/* The Zoom as ratios over the base scale. The message carries it, so receivers never read a file that a
+ * Project replaces during a fast Zoom. */
+typedef struct { double interface_zoom, code_zoom; } AnvilSurfaceZoom;
 /* A Sidebar row id and the pointer position in Sidebar surface pixels. */
 typedef struct { uint32_t row_id; int32_t x, y; } AnvilSurfaceProjectMenu;
 

@@ -414,7 +414,7 @@ static void drain_retired_projects(void);
 static void service_sidebar(void);
 static void notify_sidebar_changes(void);
 static void broadcast_color_theme(ShellProject *source);
-static void broadcast_zoom(ShellProject *source);
+static void broadcast_zoom(ShellProject *source, const AnvilSurfaceZoom *zoom);
 static void preview_color_theme(ShellProject *source, const char *preview, uint32_t size);
 static void end_color_theme_preview(ShellProject *source);
 static void sidebar_source(const AnvilSurfaceSidebarSource *source, uint32_t size);
@@ -1033,13 +1033,14 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size == sizeof(AnvilSurfaceBounds);
   case ANVIL_SURFACE_MSG_OPACITY:
     return size == sizeof(float);
+  case ANVIL_SURFACE_MSG_ZOOM_SAVED:
+    return size == sizeof(AnvilSurfaceZoom);
   case ANVIL_SURFACE_MSG_RAISE:
   case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
   case ANVIL_SURFACE_MSG_HAND_OFF:
   case ANVIL_SURFACE_MSG_RESTART:
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
-  case ANVIL_SURFACE_MSG_ZOOM_SAVED:
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
   case ANVIL_SURFACE_MSG_RUNTIME_READY:
     return size == 0;
@@ -3271,7 +3272,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     broadcast_color_theme(project);
     break;
   case ANVIL_SURFACE_MSG_ZOOM_SAVED:
-    broadcast_zoom(project);
+    broadcast_zoom(project, (const AnvilSurfaceZoom *)payload);
     break;
   case ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW:
     preview_color_theme(project, (const char *)payload, message->size);
@@ -6052,15 +6053,15 @@ static void broadcast_color_theme(ShellProject *source) {
 }
 
 /* The Zoom is one setting for every Project and the Sidebar. The saving Project already shows it. */
-static void broadcast_zoom(ShellProject *source) {
+static void broadcast_zoom(ShellProject *source, const AnvilSurfaceZoom *zoom) {
   int count = 0;
   for (ShellProject *item = shell.projects; item; item = item->next)
     if (item != source && item->connected) {
-      shell_send(item, ANVIL_SURFACE_MSG_ZOOM_CHANGED, NULL, 0, NULL, 0);
+      shell_send(item, ANVIL_SURFACE_MSG_ZOOM_CHANGED, zoom, sizeof(*zoom), NULL, 0);
       count++;
     }
   if (shell.sidebar_process && shell.sidebar_process->connected) {
-    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_ZOOM_CHANGED, NULL, 0, NULL, 0);
+    shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_ZOOM_CHANGED, zoom, sizeof(*zoom), NULL, 0);
     count++;
   }
   SDL_Log("Shell Zoom saved by Project %u; notified %d processes", source->id, count);

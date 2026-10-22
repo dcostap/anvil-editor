@@ -105,16 +105,15 @@ local function show_zoom_message()
   end
 end
 
--- Other Projects and the Sidebar apply the saved Zoom when the shell reports the change.
+-- The shell sends the Zoom to the other Projects and the Sidebar. New processes read the saved Zoom.
 local function save_zoom()
   local interface, code = zoom_ratio(current_scale), zoom_ratio(current_code_scale)
   zoom.save(interface, code)
-  local shared = system.zoom_saved()
+  local shared = system.zoom_saved(interface, code)
   core.log_quiet("Zoom saved: interface=%.4f code=%.4f shared=%s", interface, code, tostring(shared))
 end
 
-local function apply_saved_zoom(reason)
-  local interface, code = zoom.load()
+local function apply_zoom(reason, interface, code)
   local base = base_scale()
   scale.set(common.clamp(base * interface, MIN_SCALE, MAX_SCALE))
   scale.set_code(common.clamp(base * code, MIN_SCALE, MAX_SCALE))
@@ -284,7 +283,7 @@ end
 local on_event = core.on_event
 function core.on_event(type, ...)
   if type ~= "zoomchanged" then return on_event(type, ...) end
-  apply_saved_zoom("another Project saved it")
+  apply_zoom("another Project saved it", ...)
   return true
 end
 
@@ -302,7 +301,7 @@ config.plugins.scale.config_spec = {
     default = true,
     on_apply = function(enabled)
       if not first_on_apply_scale then
-        apply_saved_zoom(enabled and "display scale" or "default scale")
+        apply_zoom(enabled and "display scale" or "default scale", zoom.load())
       end
     end
   },
@@ -326,7 +325,7 @@ config.plugins.scale.config_spec = {
         if scale_set_by_user == 0 then return end
       end
       if config.plugins.scale.autodetect then return end
-      apply_saved_zoom("default scale")
+      apply_zoom("default scale", zoom.load())
     end
   },
   {
@@ -382,7 +381,7 @@ if config.plugins.scale.use_mousewheel then
 end
 
 -- Defer the saved Zoom until startup configuration has loaded its fonts.
-core.add_thread(function() apply_saved_zoom("startup") end)
+core.add_thread(function() apply_zoom("startup", zoom.load()) end)
 
 
 return scale

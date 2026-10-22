@@ -1939,7 +1939,7 @@ static int f_color_theme_saved(lua_State *L) {
 
 /* Returns false outside a shell, where no other Project shows this Zoom. */
 static int f_zoom_saved(lua_State *L) {
-  lua_pushboolean(L, anvil_hosted_surface_zoom_saved());
+  lua_pushboolean(L, anvil_hosted_surface_zoom_saved(luaL_checknumber(L, 1), luaL_checknumber(L, 2)));
   return 1;
 }
 
@@ -2068,9 +2068,13 @@ static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   return 1;
 }
 static int zoomchanged_callback(lua_State *L, SDL_Event *event) {
-  (void)event;
+  AnvilSurfaceZoom zoom;
+  memcpy(&zoom, event->user.data1, sizeof(zoom));
+  free(event->user.data1);
   lua_pushstring(L, "zoomchanged");
-  return 1;
+  lua_pushnumber(L, zoom.interface_zoom);
+  lua_pushnumber(L, zoom.code_zoom);
+  return 3;
 }
 static int colorthemepreview_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, "colorthemepreview");

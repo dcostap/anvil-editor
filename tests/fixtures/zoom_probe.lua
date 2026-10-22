@@ -1,7 +1,8 @@
 -- mod-version:3
 -- Seam: an owned shell Window with two loaded Projects and the Sidebar. The Zoom is one saved setting: a Project
 -- that starts after a Zoom change starts at that Zoom, and a Zoom change in one Project reaches the other Project
--- and the Sidebar. The Sidebar reports each scale that it draws at in its session log.
+-- and the Sidebar. A fast burst of Zoom steps, as from a mouse wheel, ends at the last step in every process, and
+-- the Sidebar keeps running. The Sidebar reports each scale that it draws at in its session log.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "zoom-global" then return end
 local core, common = require "core", require "core.common"
@@ -37,6 +38,11 @@ local function zoom()
 end
 local function same(a, b) return math.abs(a.interface - b.interface) < 1e-6 and math.abs(a.code - b.code) < 1e-6 end
 local function show(state) return string.format("interface=%.4f code=%.4f", state.interface, state.code) end
+local function trace()
+ local file = io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb")
+ if not file then return "" end
+ local text = file:read("*a"); file:close(); return text
+end
 
 if path:match("/driver$") then
  core.add_background_thread(function()
@@ -64,6 +70,7 @@ if path:match("/driver$") then
      end
     end
    end, 10, string.format("the Sidebar did not draw at scale %.4f", expected))
+   assert(not trace():find("Shell Sidebar automatic restart", 1, true), "the Sidebar stopped during the Zoom burst")
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})
@@ -84,7 +91,8 @@ elseif path:match("/Project$") then
   save("a-zoomed", zoomed)
   wait(function() return load("select-b") end, 60)
   assert(core.open_project_in_same_window(root .. "/Replacement"))
-  wait(function() return not same(zoom(), zoomed) end, 60)
+  local b = wait(function() return load("b-zoomed") end, 60)
+  wait(function() return same(zoom(), b) end, 10)
   save("a-changed", zoom())
  end)
 elseif path:match("/Replacement$") then
@@ -92,7 +100,9 @@ elseif path:match("/Replacement$") then
   coroutine.yield(.5)
   save("b-ready", zoom())
   wait(function() return load("b-zoom") end, 60)
-  require("plugins.scale").increase()
+  local scale = require "plugins.scale"
+  for _ = 1, 20 do scale.increase() end
+  for _ = 1, 10 do scale.decrease() end
   save("b-zoomed", zoom())
  end)
 end

@@ -13,7 +13,7 @@ test.describe("font scaling", function()
     if context.code_scale then scale.set_code(context.code_scale) end
   end)
 
-  test.it("applies a Zoom that another process saved", function(context)
+  test.it("applies a Zoom that another Project reports", function(context)
     context.interface_scale = scale.get()
     context.code_scale = scale.get_code()
     scale.set(DEFAULT_SCALE)
@@ -25,7 +25,7 @@ test.describe("font scaling", function()
     -- Another process starts at the display scale, then the shell reports the saved Zoom.
     scale.set(DEFAULT_SCALE)
     scale.set_code(DEFAULT_SCALE)
-    core.on_event("zoomchanged")
+    core.on_event("zoomchanged", interface / DEFAULT_SCALE, code / DEFAULT_SCALE)
 
     test.near(scale.get(), interface, 0.000001)
     test.near(scale.get_code(), code, 0.000001)
@@ -45,7 +45,7 @@ test.describe("font scaling", function()
     DEFAULT_SCALE = 2
     scale.set(2)
     scale.set_code(2)
-    core.on_event("zoomchanged")
+    core.on_event("zoomchanged", ratio, ratio)
 
     test.near(scale.get(), 2 * ratio, 0.000001)
     test.near(scale.get_code(), 2 * ratio, 0.000001)
