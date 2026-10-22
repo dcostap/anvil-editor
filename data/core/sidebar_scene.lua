@@ -7,6 +7,7 @@ local Scene = View:extend()
 function Scene:get_name() return "Project Sidebar" end
 
 local MINUTE, DAY = 60, 24 * 60 * 60
+local POWERSHELL = [[C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.6.0_x64__package\pwsh.exe]]
 
 local function terminal(id, title, age, fields)
   local item = {id = id, title = title, cwd = "C:/Projects/anvil-editor", state = "running", busy = 0, bell = 0,
@@ -39,7 +40,9 @@ function Scene:new()
     project(1, "C:/Projects/anvil-editor", "ready", MINUTE, 1, {
       terminal("a", "[40 s] \u{03C0} - GLP4", 30, {busy = 1, agent_state = "working", agent_since = os.time() - 400,
         agent_step = "bash: npm test -- --watch=false", agent_step_since = os.time() - 42}),
-      terminal("b", "pwsh - anvil-editor", 20 * MINUTE, {agent_state = "done", agent_since = os.time() - 5 * MINUTE}),
+      terminal("b", POWERSHELL, 20 * MINUTE),
+      terminal("build", [[.\gradlew.bat runAppiDesktop --console=rich --info]], 30,
+        {command_started=os.time() - 180, command_finished=os.time() - 30, command_exit=0}),
       terminal("c", "npm run dev", 3 * DAY),
       terminal("d", "", 2 * DAY, {state = "exited"}),
       terminal("e", "build log", 10 * DAY),
@@ -49,7 +52,7 @@ function Scene:new()
       editor(1, 1, "init.lua"),
       editor(2, 1, "sidebar_view.lua", {color = {0xe2, 0xc0, 0x8d, 255}}),
       terminal_tab(3, 2, "a", "[40 s] \u{03C0} - GLP4", 30, true),
-      terminal_tab(4, 3, "b", "pwsh - anvil-editor", 20 * MINUTE, false),
+      terminal_tab(4, 3, "b", POWERSHELL, 20 * MINUTE, false),
       editor(5, 4, "removed.md", {missing = true}),
     }),
     project(2, "D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas", "ready", 2 * 60 * 60, 2, {

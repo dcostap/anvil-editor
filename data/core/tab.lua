@@ -176,7 +176,38 @@ local function gap() return math.max(4 * SCALE, style.padding.x / 2) end
 local function number_gap() return math.max(3 * SCALE, style.padding.x / 3) end
 local function dot_radius() return 3 * SCALE end
 
--- The width the Tab's content needs at its full name.
+-- Remove executable-path noise only for Terminal Tabs. Keep the original name for hover and persistence.
+function tab.display_name(item)
+  local title = item.name
+  if not item.terminal then return title end
+  local source = title:gsub("^&%s+", "")
+  local executable, arguments
+  local quote = source:sub(1, 1)
+  if quote == '"' or quote == "'" then
+    local ending = source:find(quote, 2, true)
+    if not ending then return title end
+    executable, arguments = source:sub(2, ending - 1), source:sub(ending + 1)
+  elseif source:match("^%a:[/\\]") or source:match("^\\\\") then
+    -- Windows can use an unquoted executable path, including spaces, as the entire window title.
+    executable, arguments = source:match("^(.-%.[%a]+)(%s.*)$")
+    if not executable then executable, arguments = source, "" end
+  else
+    executable, arguments = source:match("^(%S+)(.*)$")
+  end
+  if not executable then return title end
+  local name = executable:match("([^/\\]+)$")
+  if not name then return title end
+  local stem, extension = name:match("^(.+)%.([^.]+)$")
+  extension = extension and extension:lower()
+  local is_executable = extension == "exe" or extension == "cmd" or extension == "bat"
+  if is_executable then name = stem end
+  local lower = name:lower()
+  if lower == "pwsh" or lower == "powershell" then name = "PowerShell"
+  elseif not is_executable and lower ~= "gradlew" then return title end
+  return name .. arguments
+end
+
+-- The width the Tab's content needs at its full display name.
 ---@param opts {number_font: renderer.font?, name_font: renderer.font?, now: number?}?
 function tab.width(item, row_height, opts)
   opts = opts or {}
@@ -187,7 +218,7 @@ function tab.width(item, row_height, opts)
   elseif item.icon then
     width = width + view_icons.width(item.icon, row_height) + gap()
   end
-  width = width + (opts.name_font or style.font):get_width(item.name)
+  width = width + (opts.name_font or style.font):get_width(tab.display_name(item))
   local note = tab.note(item, opts.now or os.time())
   if note then width = width + gap() * 2 + style.font:get_width(note) end
   return width
@@ -219,7 +250,7 @@ function tab.draw(item, x, y, w, h, opts)
   local note = tab.note(item, opts.now or os.time())
   local note_w = note and style.font:get_width(note) + gap() * 2 or 0
   if note_w > (right - x) / 2 then note, note_w = nil, 0 end
-  local name, spinning = item.name, false
+  local name, spinning = tab.display_name(item), false
   local spun = item.terminal and item.terminal.state == "running" and tab.spinner_title(name, opts.clock or 0)
   if spun then name, spinning = spun, true end
   name = tab.fit(name_font, name, math.max(0, right - x - note_w))
