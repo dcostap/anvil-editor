@@ -4591,11 +4591,54 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
     end
   end
 
+  -- An edit inside one line leaves every other line in place. Such a line
+  -- keeps its cached plan when it has no pending row. A pending copy gave
+  -- every visible line a new plan, so each keystroke wrapped and measured
+  -- them all again. If the line must rebuild before the publication, it
+  -- projects from the published model like an uncaptured line. The
+  -- publication rebuilds the kept lines, because an edit can change how
+  -- other lines render, such as a comment delimiter or a footnote number.
+  local kept_lines = {}
+  for line in pairs(owner.kept_plan_lines or {}) do
+    local new_line = edit_projection.map_unchanged_line(ranges, line)
+    if new_line then kept_lines[new_line] = true end
+  end
+  owner.kept_plan_lines = kept_lines
+  local lines_in_place = owner.link_targets_changed_revision ~= view.buffer.text_revision
+  for _, edit in ipairs(transaction.edits or {}) do
+    if edit.line1 ~= edit.line2 or (edit.text or ""):find("\n", 1, true) then
+      lines_in_place = false
+    end
+  end
+  for _, range in ipairs(ranges) do
+    if (range.line_delta or 0) ~= 0 then lines_in_place = false end
+  end
+  local previous_pending = owner.pending_lines or {}
+  local line_cache = view.__line_render_cache
+  local cached_lines = line_cache
+    and line_cache.generation == (view.__line_render_generation or 0)
+    and line_cache.lines or {}
+  local function keeps_cached_plan(line)
+    if not lines_in_place or previous_pending[line] then return false end
+    if owner.semantic_pending_line and line >= owner.semantic_pending_line then return false end
+    local cached = cached_lines[line]
+    return cached ~= nil and cached.source_line == view.buffer.lines[line]
+  end
+  local kept = 0
   for old_line, captured in pairs(pre_edit_lines) do
-    retain(
-      old_line, captured.render_line, captured.fenced,
-      captured.background
-    )
+    if keeps_cached_plan(old_line) then
+      kept = kept + 1
+      kept_lines[old_line] = true
+    else
+      retain(
+        old_line, captured.render_line, captured.fenced,
+        captured.background
+      )
+    end
+  end
+  if kept > 0 then
+    core.log_quiet("Markdown pending presentation: kept the cached plans of %d row(s) at revision %d",
+      kept, view.buffer.text_revision)
   end
   -- Pending edits can outlive a viewport change. Keep their presentation
   -- until publication, even when the next pre-edit capture cannot see them.
@@ -6822,6 +6865,7 @@ local function invalidate_semantic_publication(view, instance, reason)
   view.__markdown_live_reference_prepare_pending = nil
   local pending_line = owner and owner.semantic_pending_line
   local pending_wrap_line = owner and owner.semantic_pending_wrap_line
+  local kept_lines = owner and owner.kept_plan_lines
   if owner then
     local fence_presentations = {}
     for line, pending in pairs(owner.pending_lines or {}) do
@@ -6853,6 +6897,7 @@ local function invalidate_semantic_publication(view, instance, reason)
       fence_reconcile_ms = elapsed_ms(reconcile_started)
     end
     owner.pending_lines = nil
+    owner.kept_plan_lines = nil
     owner.pending_indented_lines = nil
     owner.pending_indented_sources = nil
     owner.pending_callouts = nil
@@ -6900,6 +6945,12 @@ local function invalidate_semantic_publication(view, instance, reason)
       expanded[#expanded + 1] = { line1 = line1, line2 = line2 }
     end
     ranges = expanded
+  end
+  if ranges and #ranges > 0 then
+    local line_count = #view.buffer.lines
+    for line in pairs(kept_lines or {}) do
+      if line <= line_count then ranges[#ranges + 1] = { line1 = line, line2 = line } end
+    end
   end
   local publication_lines = 0
   for _, range in ipairs(ranges or {}) do

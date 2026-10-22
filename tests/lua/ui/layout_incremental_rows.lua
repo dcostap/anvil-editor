@@ -216,6 +216,39 @@ test.describe("Incremental layout rows", function()
     same_as_fresh_view(view)
   end)
 
+  test.it("keeps the render plans of other lines until the typed text publishes", function(context)
+    local view, buffer = make_view(context, "type-plans.md", table.concat({
+      "## Heading above",
+      "",
+      "Text with *emphasis* and a [link](https://example.com).",
+      "",
+      "The edited paragraph.",
+      "",
+      "Text with **strong** words and `code`.",
+      "",
+      "## Heading below",
+    }, "\n"))
+    view:with_selection_state(function() buffer:set_selection(5, #buffer.lines[5]) end)
+    view:update()
+    read_layout(view)
+    local others = { 1, 3, 7, 9 }
+    local plans = {}
+    for _, line in ipairs(others) do plans[line] = test.not_nil(view:get_line_render(line)) end
+
+    view:on_text_input(" More words.")
+    test.equal(model.peek(buffer).status, "pending")
+    view:update()
+    read_layout(view)
+    for _, line in ipairs(others) do
+      test.equal(view:get_line_render(line), plans[line], "line " .. line .. " changed while pending")
+    end
+    -- The publication rebuilds them, because an edit can change other lines.
+    ready(view)
+    view:update()
+    read_layout(view)
+    same_as_fresh_view(view)
+  end)
+
   test.it("keeps off-screen heading heights through line breaks without wrapping", function(context)
     local lines = {}
     for line = 1, 150 do

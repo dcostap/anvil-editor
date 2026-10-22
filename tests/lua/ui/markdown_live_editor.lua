@@ -1882,13 +1882,13 @@ test.describe("Markdown Live Preview", function()
     buffer:set_selection(2, 1)
     refresh(view)
     test.equal(visible_render_text(view, 13), "Unrelated heading")
+    local before = test.not_nil(view:get_line_render(13))
 
     buffer:remove(2, 1, 2, #buffer.lines[2])
 
     test.equal(test.not_nil(markdown_model.peek(buffer)).status, "pending")
-    local heading = test.not_nil(view:get_line_render(13))
+    test.equal(view:get_line_render(13), before)
     test.equal(visible_render_text(view, 13), "Unrelated heading")
-    test.equal(heading.markdown_provenance, "retained")
   end)
 
   test.it("retains prose until new fence semantics publish", function()
