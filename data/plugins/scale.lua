@@ -17,7 +17,6 @@ local zoom = require "core.zoom"
 ---@field use_mousewheel boolean
 local MIN_SCALE = 0.25
 local MAX_SCALE = 6
-local FONT_ZOOM_STEP = 1
 local current_scale = SCALE
 local current_code_scale = SCALE
 local configured_scale = tonumber(os.getenv("ANVIL_SCALE"))
@@ -74,14 +73,26 @@ local function base_scale()
   return DEFAULT_SCALE
 end
 
+-- A Zoom step adds one point near the default size. A large size adds about the same fraction as one point at
+-- the default size, so a large Zoom does not need more and more steps.
+local function font_step(size)
+  return math.max(1, common.round(size / base_font_size))
+end
+
+-- Zoom out goes back along the sizes that Zoom in goes through.
+local function next_font_size(size, direction)
+  if direction > 0 then return size + font_step(size) end
+  local previous = size - 1
+  while previous > 1 and previous + font_step(previous) > size do previous = previous - 1 end
+  return previous
+end
+
 local function zoomed_scale(current, direction)
   local default = base_scale()
   local current_size = common.round(current / default * base_font_size)
   local min_size = math.ceil(MIN_SCALE / default * base_font_size)
   local max_size = math.floor(MAX_SCALE / default * base_font_size)
-  local target_size = common.clamp(
-    current_size + direction * FONT_ZOOM_STEP, min_size, max_size
-  )
+  local target_size = common.clamp(next_font_size(current_size, direction), min_size, max_size)
   local target = common.clamp(
     default * target_size / base_font_size, MIN_SCALE, MAX_SCALE
   )

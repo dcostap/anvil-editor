@@ -96,6 +96,34 @@ test.describe("font scaling", function()
     test.near(style.code_font:get_size(), code_size + DEFAULT_SCALE, 0.001)
   end)
 
+  test.it("takes larger Zoom steps at large font sizes", function(context)
+    context.interface_scale = scale.get()
+    context.code_scale = scale.get_code()
+    scale.set(DEFAULT_SCALE * 3)
+    scale.set_code(DEFAULT_SCALE * 3)
+    local size = style.code_font:get_size()
+
+    scale.increase()
+    test.ok(style.code_font:get_size() - size >= 2 * DEFAULT_SCALE - 0.001,
+      "a step at three times the default size added only one point")
+    scale.decrease()
+
+    test.near(style.code_font:get_size(), size, 0.001)
+  end)
+
+  test.it("returns to the default size after the same number of Zoom steps out", function(context)
+    context.interface_scale = scale.get()
+    context.code_scale = scale.get_code()
+    scale.set(DEFAULT_SCALE)
+    scale.set_code(DEFAULT_SCALE)
+    local size = style.code_font:get_size()
+
+    for _ = 1, 15 do scale.increase() end
+    for _ = 1, 15 do scale.decrease() end
+
+    test.near(style.code_font:get_size(), size, 0.001)
+  end)
+
   test.it("reports the new font size after global zoom", function(context)
     context.interface_scale = scale.get()
     context.code_scale = scale.get_code()
