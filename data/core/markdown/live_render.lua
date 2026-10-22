@@ -2523,13 +2523,15 @@ local function line_has_publication_input(view, line)
   for _, node in ipairs(nodes) do
     local kind = node.type
     -- Setext headings and frontmatter can change the vault's targets.
-    -- HTML can change exclusions outside the edited line. Rebuild when
-    -- the exact input signature does not cover the context.
-    if kind == "heading" or kind == "frontmatter" or kind == "html" then return "unknown" end
+    -- HTML changes exclusions. Quotes can contain nested list prefixes.
+    -- Rebuild when the exact signature does not cover the context.
+    if kind == "heading" or kind == "frontmatter" or kind == "html"
+      or kind == "quote"
+    then return "unknown" end
     if kind == "link_reference" or kind == "comment"
       or kind == "footnote_reference" or kind == "footnote_inline"
       or kind == "footnote_definition"
-      or (kind == "quote" or kind == "list_item" or kind == "list"
+      or (kind == "list_item" or kind == "list"
         or kind == "code_fenced") and node.source.line1 == line
     then
       return true
@@ -6028,7 +6030,9 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       end
       local current = line and source_line_text(view, range.new_line1 or line)
       local local_input = previous and not previous.publication_input
+        and owner.link_targets_changed_revision == nil
         and range.old_line2 == line and (range.line_delta or 0) == 0
+        and #previous.source_text < LONG_SOURCE_LINE and #current < LONG_SOURCE_LINE
       if local_input then
         local old = previous.source_text
         local first, last_old, last_new = 1, #old, #current
@@ -6999,9 +7003,9 @@ local function publication_input_key(view, instance)
   if instance.status ~= "ready" then return nil end
   -- Measuring a full gallery signature cost more than rebuilding its kept
   -- rows. Bound this check; uncertain large edits keep the old rebuild rule.
-  if #view.buffer.lines > 512 then
-    core.log_quiet("Markdown publication input check uses conservative rebuild: lines=%d",
-      #view.buffer.lines)
+  if #view.buffer.lines > 512 or instance.published_byte_len > 65536 then
+    core.log_quiet("Markdown publication input check uses conservative rebuild: lines=%d bytes=%d",
+      #view.buffer.lines, instance.published_byte_len)
     return nil
   end
   local parts, seen = {}, {}
@@ -7109,6 +7113,18 @@ local function invalidate_semantic_publication(view, instance, reason)
   local pending_wrap_line = owner and owner.semantic_pending_wrap_line
   local kept_lines = owner and owner.kept_plan_lines
   local projected_lines = owner and owner.projected_plan_lines or {}
+  -- A self-embed reads body text outside its own semantic nodes. The vault
+  -- overlay publishes separately, so retain the old rebuild rule here.
+  if not inputs_changed then
+    for _, pending in pairs(owner and owner.pending_lines or {}) do
+      if pending.kept then
+        for _, fragment in ipairs(pending.render_line.fragments or {}) do
+          if fragment.embed_preview then inputs_changed = true break end
+        end
+      end
+      if inputs_changed then break end
+    end
+  end
   if owner then
     local fence_presentations = {}
     for line, pending in pairs(owner.pending_lines or {}) do
@@ -7232,7 +7248,9 @@ local function invalidate_semantic_publication(view, instance, reason)
     end
     local reused = 0
     for line in pairs(kept_lines or {}) do
-      if not covered[line] and not projected_lines[line] then reused = reused + 1 end
+      if not pending_line and not covered[line] and not projected_lines[line] then
+        reused = reused + 1
+      end
     end
     perf_frame_add("markdown_live_publication_kept_lines_reused", reused)
     core.log_quiet("Markdown publication kept plans: revision=%d reused=%d inputs_changed=%s",

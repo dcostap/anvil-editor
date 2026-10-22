@@ -1188,6 +1188,39 @@ test.describe("Markdown Live Preview", function()
     end
   end)
 
+  test.it("updates a self-embed preview after ordinary body typing publishes", function(context)
+    local root = USERDIR .. PATHSEP .. "markdown-kept-self-embed-" .. system.get_process_id()
+    test.ok(common.mkdirp(root))
+    local old_projects = core.projects
+    local view
+    context.cleanup = function()
+      if view then markdown.live_render.release(view, "test-cleanup") end
+      core.projects = old_projects
+      test.ok(test.remove_tree(root))
+    end
+    core.projects = { Project(root) }
+    markdown.vault_index.get_index(root):rebuild("kept-self-embed-test")
+    local buffer
+    view, buffer = make_view("# Section\n\nbody\n\n![[#Section]]\n\nplain", root .. PATHSEP .. "Source.md")
+    buffer:set_selection(7, 1)
+    refresh(view)
+    view:update()
+    local function preview()
+      for _, fragment in ipairs(view:get_line_render(5).fragments or {}) do
+        if fragment.embed_preview then return table.concat(fragment.preview_lines, "\n") end
+      end
+      return ""
+    end
+    test.ok(wait_until(function() return preview():find("body", 1, true) end, 15))
+
+    buffer:insert(3, #buffer.lines[3], " changed")
+
+    local instance = test.not_nil(markdown_model.peek(buffer))
+    test.ok(wait_status(instance, "ready", 15), instance.reason)
+    test.ok(wait_until(function() return preview():find("body changed", 1, true) end, 15),
+      "the kept self-embed preview did not follow its source")
+  end)
+
   test.it("invalidates fence-dependent suffix rendering when an opener is broken", function()
     local view, buffer = make_view("```\n# code\n```\n# after", "note.md")
     buffer:set_selection(4, 1)
