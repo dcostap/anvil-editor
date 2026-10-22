@@ -90,6 +90,16 @@ test.describe("Layout reference", function()
     test.ok(report.ok, report.summary .. "\n" .. table.concat(report.mismatches or {}, "\n"))
   end)
 
+  test.it("matches unchanged wrapped rows after a local edit", function(context)
+    local view, buffer = make_view(context, "edited.txt",
+      string.rep(string.rep("words that wrap ", 12) .. "\n", 10), 500)
+    view:update()
+    buffer:insert(2, 1, "x")
+    view:update()
+    local report = layout_reference.compare(view)
+    test.ok(report.ok, report.summary .. "\n" .. table.concat(report.mismatches or {}, "\n"))
+  end)
+
   test.it("reports a row height that a provider changed without invalidation", function(context)
     local view = make_view(context, "heights.txt", string.rep("line\n", 30))
     local heights = {}
@@ -99,7 +109,7 @@ test.describe("Layout reference", function()
     view:update()
     view:get_scrollable_size()
     -- The provider does not report this change, so the view keeps its old row height.
-    heights[5] = view:get_line_height() * 3
+    heights[5] = view:get_line_height() + 0.5
     local report = layout_reference.compare(view)
     heights[5] = nil
     test.not_ok(report.ok, "a stale row height must be reported")

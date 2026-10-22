@@ -3833,7 +3833,8 @@ function TextView:get_visual_metric_signature(
   end
 
   local parts = {
-    tostring(row_count),
+    -- Native counts are integers; Lua wrap counts can be integral floats.
+    string.format("%d", row_count),
     tostring(line_height),
     tostring(text_revision),
     tostring(fold_generation),

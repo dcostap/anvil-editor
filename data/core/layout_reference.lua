@@ -16,13 +16,20 @@ local reference = {}
 
 local MAX_REPORTED = 12
 
+local function key_part(value)
+  if type(value) == "number" and value % 1 == 0 then
+    return string.format("%d", value)
+  end
+  return tostring(value)
+end
+
 local function row_key(entry)
   local fold = entry.type == "fold" and entry.fold
   return table.concat({
-    tostring(entry.type), tostring(entry.line), tostring(entry.row_in_line),
+    tostring(entry.type), key_part(entry.line), key_part(entry.row_in_line),
     tostring(entry.placement or ""), tostring(entry.provider_id or ""),
-    tostring(entry.provider_row_id or ""),
-    fold and (fold.line1 .. "-" .. fold.line2) or "",
+    key_part(entry.provider_row_id or ""),
+    fold and (key_part(fold.line1) .. "-" .. key_part(fold.line2)) or "",
   }, "|")
 end
 
