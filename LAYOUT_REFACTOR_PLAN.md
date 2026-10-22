@@ -756,6 +756,73 @@ Costs that remain:
 - Render-plan resolution dominates sliced opening. It belongs to the separate opening-performance workstream.
 - Reconcile and render-cache lookup still dominate the measured newline frames.
 
+#### Kept plan publication inputs
+
+Implementation commit `01cea529` keeps published plans when their inputs cannot change.
+Parser changes still invalidate their ranges. Projected plans still rebuild at publication.
+No dependency graph or native code was added.
+
+The check covers footnote numbers, footnote definitions, reference destinations, and comment ranges.
+It also covers ordered markers, list prefixes, and Callout headers.
+List continuations read their parent's measured prefix. Callout bodies read their header and effective end line.
+Table expansion already covers table geometry and its following-line spacing.
+Vault, image, fence-token, selection, typography, width, and fold changes retain their separate invalidation paths.
+Embed previews can read this Buffer's body text. A kept preview retains the previous publication rebuild rule.
+
+Tree-sitter reports block change ranges, not extension comment changes.
+Four comment probes, including a comment across blank lines, reported only line `1-1` after delimiter edits.
+The existing multi-line comment regressions therefore need more than parser ranges.
+
+A plain-text edit outside shared inputs retains the input signature without reading the document again.
+The proof checks the old semantic context, both edit boundaries, indentation, blank lines, list prefixes, and link-target changes.
+Known shared-input edits compare the old and new values. Unknown contexts rebuild kept plans.
+Headings, frontmatter, HTML, and quotes use that conservative path.
+Quotes can contain nested list prefixes that the flat prefix signature does not cover.
+Link-target changes accumulate until publication. Reference caches advance only from the preceding publication.
+Stale asynchronous reference preparation cannot replace a newer result.
+
+Reading every input at each gallery publication was too expensive: 172.25 ms/key in the rejected attempt.
+The retained signature reduced that input read to less than 0.002 ms/key during ordinary gallery typing.
+The exact check stops above 512 lines or 64 KiB. An uncertain large edit uses the previous kept-plan rebuild rule.
+The local proof also stops at the existing long-line boundary. It does not scan long encoded lines in Lua.
+Line changes retain the previous adoption-generation rebuild. This change targets ordinary typing, not moved suffixes.
+
+Two pairs used the frozen integration executable, scale 1, `--no-build --attribute`, and the normal scenario lock.
+The second baseline copied `b6e3fecb`'s `live_render.lua` into the isolated measurement app only.
+The source worktree stayed unchanged. The second pair ran consecutively at 18:05 and 18:08 on October 22.
+
+| Work across 60 typing keys | Before, first / second pair | After, first / second pair |
+|---|---:|---:|
+| Publication line invalidation, total ms | 1162.17 / 653.71 | 207.57 / 168.23 |
+| Publication line invalidation, ms/key | 19.37 / 10.90 | 3.46 / 2.80 |
+| Wrapped lines, all frames | 2342 / 2006 | 180 / 180 |
+| Kept plans reused | not counted | 1826 / 1826 |
+
+| Scenario latency, p50 / p95 ms | Before, first pair | After, first pair | Before, second pair | After, second pair |
+|---|---:|---:|---:|---:|
+| Type publication | 37.2 / 106.6 | 41.3 / 117.2 | 48.6 / 121.3 | 36.5 / 71.1 |
+| Type visible | 22.3 / 106.6 | 27.9 / 114.7 | 28.8 / 113.0 | 23.2 / 52.1 |
+| Newline publication | 98.0 / 248.6 | 58.2 / 214.4 | 45.8 / 115.9 | 47.0 / 142.8 |
+| Newline visible | 65.9 / 244.7 | 36.3 / 161.0 | 27.6 / 105.3 | 29.4 / 110.6 |
+
+Typing wraps fell by 91–92%. Publication rebuilding fell in both pairs. End-to-end latency remains noisy.
+The second newline pair wrapped 1255 / 1263 lines and spent 6.85 / 9.39 ms/key in publication line invalidation.
+An earlier after newline run wrapped 3376 lines, including one 2142-line frame. No newline benefit is established.
+Reports: `20261022-174143`, `20261022-175902`, `20261022-180557`, and `20261022-180807` under `tools/perf-results/scenarios`.
+A later typing confirmation, `20261022-182956`, again wrapped 180 lines and reused 1826 plans.
+It spent 2.54 ms/key in publication line invalidation after the kept-preview and long-line guards.
+Publication p50 / p95 was 35.3 / 110.7 ms. Visible p50 / p95 was 23.6 / 91.0 ms.
+
+The public plan-identity test failed before the fix and passed afterward.
+All eight focused layout-reference files passed: 534 tests.
+Expanded fuzz runs passed seeds 1, 31, and 991 with 48 edits per case: 24 cases.
+Seed 1 first exposed a stale reference cache at edit 34. The preceding-generation cache check fixed it.
+The full UI run of the main implementation passed 3013 tests, failed five, and skipped three.
+The later conservative guards passed focused checks.
+An earlier run also failed Diff View decorations and fuzzy preview. Both files passed alone and in the later full run.
+Formatting, language detection, link completion, Sidebar status, and Terminal Session reattachment repeated known failures.
+The worktree lacks the optional language plugins needed by formatting and language detection.
+
 ### Milestone 5: Migrate remaining paths
 
 Migrate providers and layout consumers in small complete changes.

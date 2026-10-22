@@ -1215,10 +1215,14 @@ local function reference_definitions(view)
   local cache = view.__markdown_live_reference_cache
   if cache and cache.generation == instance.generation then return cache.definitions end
   if not view.__markdown_live_reference_prepare_pending then
-    view.__markdown_live_reference_prepare_pending = instance.generation
+    local generation = instance.generation
+    view.__markdown_live_reference_prepare_pending = generation
     core.add_thread(function()
       coroutine.yield(0)
-      if view.__markdown_live_attached and current_semantic_model(view) == instance then
+      if view.__markdown_live_attached and current_semantic_model(view) == instance
+        and instance.generation == generation
+        and view.__markdown_live_reference_prepare_pending == generation
+      then
         local definitions = prepare_reference_definitions(view, instance)
         -- The pending lookup already returns an empty set. With no old or new
         -- definitions, publication cannot change any reference presentation.
@@ -1227,7 +1231,7 @@ local function reference_definitions(view)
           core.redraw = true
         end
       end
-      if view.__markdown_live_reference_prepare_pending == instance.generation then
+      if view.__markdown_live_reference_prepare_pending == generation then
         view.__markdown_live_reference_prepare_pending = nil
       end
     end)
@@ -2471,7 +2475,7 @@ local function markdown_visual_indent_width(source_width)
   return math.floor(source_width / 4) * visual_step + source_width % 4
 end
 
-local function ordered_list_display_marker(view, line, ordered)
+local function ordered_list_markers(view)
   local revision = view.buffer.text_revision or view.buffer:get_change_id()
   local cache = view.__markdown_live_ordered_marker_cache
   if not cache or cache.revision ~= revision then
@@ -2508,7 +2512,36 @@ local function ordered_list_display_marker(view, line, ordered)
     end
     view.__markdown_live_ordered_marker_cache = cache
   end
-  return cache.lines[line] or ordered
+  return cache.lines
+end
+
+-- Prove the common prose case before re-reading document-wide inputs.
+-- Unknown or source-sensitive contexts keep the full publication check.
+local function line_has_publication_input(view, line)
+  local nodes = semantic_line(view, line)
+  if not nodes then return "unknown" end
+  for _, node in ipairs(nodes) do
+    local kind = node.type
+    -- Setext headings and frontmatter can change the vault's targets.
+    -- HTML changes exclusions. Quotes can contain nested list prefixes.
+    -- Rebuild when the exact signature does not cover the context.
+    if kind == "heading" or kind == "frontmatter" or kind == "html"
+      or kind == "quote"
+    then return "unknown" end
+    if kind == "link_reference" or kind == "comment"
+      or kind == "footnote_reference" or kind == "footnote_inline"
+      or kind == "footnote_definition"
+      or (kind == "list_item" or kind == "list"
+        or kind == "code_fenced") and node.source.line1 == line
+    then
+      return true
+    end
+  end
+  return false
+end
+
+local function ordered_list_display_marker(view, line, ordered)
+  return ordered_list_markers(view)[line] or ordered
 end
 
 local function list_item_content_col(line_text, marker, task)
@@ -4458,6 +4491,7 @@ local function capture_pre_edit_renders(view, change)
       source_text = source_text,
       render_line = render and clone_render_line(render) or nil,
       plan = render,
+      publication_input = line_has_publication_input(view, line),
       raw_passthrough = raw_passthrough,
       raw_source_removed = raw_source_removed,
       fenced = fenced,
@@ -4640,8 +4674,7 @@ local function build_edit_projection(view, transaction, pre_edit_lines)
   -- every visible line a new plan, so each keystroke wrapped and measured
   -- them all again. If the line must rebuild before the publication, it
   -- projects from the published model like an uncaptured line. The
-  -- publication rebuilds the kept lines, because an edit can change how
-  -- other lines render, such as a comment delimiter or a footnote number.
+  -- publication checks the cross-line inputs before rebuilding kept lines.
   local kept_lines = {}
   for line in pairs(owner.kept_plan_lines or {}) do
     local new_line = edit_projection.map_unchanged_line(ranges, line)
@@ -5985,6 +6018,51 @@ function provider:on_text_transaction(view, transaction, line1, line2)
       edit_projection.transaction_changes_link_targets(
         view.buffer, transaction, pre_edit_lines
       ) and view.buffer.text_revision or nil
+    owner.publication_link_targets_changed = owner.publication_link_targets_changed
+      or owner.link_targets_changed_revision ~= nil
+    -- A letter edit outside a shared input cannot change its signature.
+    -- Check both boundaries: removing a letter can join two delimiters.
+    for _, range in ipairs(transaction and transaction.changed_ranges or {}) do
+      local line = range.old_line1
+      local previous = pre_edit_lines and pre_edit_lines[line]
+      if previous and previous.publication_input == "unknown" then
+        owner.publication_inputs_uncertain = true
+      end
+      local current = line and source_line_text(view, range.new_line1 or line)
+      local local_input = previous and not previous.publication_input
+        and owner.link_targets_changed_revision == nil
+        and range.old_line2 == line and (range.line_delta or 0) == 0
+        and #previous.source_text < LONG_SOURCE_LINE and #current < LONG_SOURCE_LINE
+      if local_input then
+        local old = previous.source_text
+        local first, last_old, last_new = 1, #old, #current
+        while first <= last_old and first <= last_new
+          and old:byte(first) == current:byte(first) do first = first + 1 end
+        while last_old >= first and last_new >= first
+          and old:byte(last_old) == current:byte(last_new)
+        do last_old, last_new = last_old - 1, last_new - 1 end
+        local boundary = old:sub(math.max(1, first - 1), last_old + 1)
+          .. current:sub(math.max(1, first - 1), last_new + 1)
+        -- Only space and tab are plain whitespace. Other whitespace can
+        -- change ordered numbering without matching a source list prefix.
+        local_input = not boundary:find("[^%w \t%.,!?;:'\"%-]")
+          and old:match("^[ \t]*") == current:match("^[ \t]*")
+          and not old:match("^%s*$") and not current:match("^%s*$")
+          and not edit_visual_projection.source_list_prefix(old)
+          and not edit_visual_projection.source_list_prefix(current)
+          and not current:match("^%s*%[")
+      end
+      if not local_input then
+        owner.publication_inputs_dirty = true
+        if not previous or previous.publication_input ~= true then
+          owner.publication_inputs_uncertain = true
+        end
+      end
+    end
+    if not (transaction and next(transaction.changed_ranges or {})) then
+      owner.publication_inputs_dirty = true
+      owner.publication_inputs_uncertain = true
+    end
   end
   local line_structure_changed = false
   for _, edit in ipairs(transaction and transaction.edits or {}) do
@@ -6921,6 +6999,80 @@ local function ensure_owner(view)
   return true
 end
 
+-- These inputs can change a plan outside the parser's changed ranges.
+-- Keep values, not generations: a new publication need not change a plan.
+local function publication_input_key(view, instance)
+  if instance.status ~= "ready" then return nil end
+  -- Measuring a full gallery signature cost more than rebuilding its kept
+  -- rows. Bound this check; uncertain large edits keep the old rebuild rule.
+  if #view.buffer.lines > 512 or instance.published_byte_len > 65536 then
+    core.log_quiet("Markdown publication input check uses conservative rebuild: lines=%d bytes=%d",
+      #view.buffer.lines, instance.published_byte_len)
+    return nil
+  end
+  local parts, seen = {}, {}
+  local function add(...)
+    local values = {}
+    for index = 1, select("#", ...) do
+      local value = tostring(select(index, ...))
+      values[#values + 1] = #value .. ":" .. value
+    end
+    local record = table.concat(values)
+    if not seen[record] then
+      seen[record] = true
+      parts[#parts + 1] = record
+    end
+  end
+  for label, line in pairs(instance:footnote_definitions()) do
+    add("definition", label, view.buffer.lines[line])
+  end
+  for _, line in ipairs(instance:footnote_lines()) do
+    local nodes, reason = instance:nodes_for_lines(line, line, { limit = 512 })
+    if not nodes or reason then return nil end
+    for _, node in ipairs(nodes) do
+      if node.type == "footnote_reference" or node.type == "footnote_inline" then
+        add("number", line, node.source.col1,
+          footnotes.number_at(view, line, node.source.col1))
+      end
+    end
+  end
+  -- Prepare this generation before rebuilding any reference line. Otherwise
+  -- the asynchronous lookup temporarily returns an empty definition set.
+  for label, definition in pairs(prepare_reference_definitions(view, instance)) do
+    add("reference", label, definition.destination)
+  end
+  for line, marker in pairs(ordered_list_markers(view)) do
+    add("ordered", line, marker)
+  end
+  for line, raw in ipairs(view.buffer.lines) do
+    local prefix = edit_visual_projection.source_list_prefix(raw)
+    if prefix then
+      -- A continuation reads its parent's measured marker and task prefix.
+      add("list-prefix", line, raw:sub(1, prefix.content_col - 1))
+    end
+    if raw:find("%%", 1, true) or raw:find("[!", 1, true) then
+      local nodes, reason = instance:nodes_for_lines(line, line, { limit = 512 })
+      if not nodes or reason then return nil end
+      for _, node in ipairs(nodes) do
+        if node.type == "comment" then
+          -- Extension comments cross CommonMark parser regions. A delimiter
+          -- edit can change a distant line without a parser range there.
+          local source = node.source
+          add("comment", source.line1, source.col1, source.line2, source.col2)
+        elseif node.type == "quote" then
+          local callout = callout_runtime.from_quote(view, node)
+          if callout then
+            add("callout", callout.line1, callout.line2, callout.col1, callout.nesting_depth,
+              source_line_text(view, callout.line1))
+          end
+        end
+      end
+    end
+  end
+  table.sort(parts)
+  return table.concat(parts)
+end
+
 local function invalidate_semantic_publication(view, instance, reason)
   local owner = view.__markdown_live_owner
   local viewport_anchor = owner and owner.reload_viewport_anchor
@@ -6935,10 +7087,46 @@ local function invalidate_semantic_publication(view, instance, reason)
   local previous_table_cache = view.__markdown_live_table_layout_cache
   view.__markdown_live_semantic_line_cache = nil
   view.__markdown_live_reference_prepare_pending = nil
+  local input_started = system.get_time()
   local pending_line = owner and owner.semantic_pending_line
+  local input_key = owner and owner.publication_input_key
+  local inputs_changed = not owner
+  if not owner or owner.publication_inputs_dirty then
+    -- A moved suffix already rebuilds through its adoption generation.
+    -- Do not read global inputs when that result cannot retain kept plans.
+    input_key = not pending_line and not (owner and owner.publication_inputs_uncertain)
+      and publication_input_key(view, instance) or nil
+    inputs_changed = input_key == nil or not owner or owner.publication_input_key ~= input_key
+  elseif view.__markdown_live_reference_cache
+    and view.__markdown_live_reference_cache.generation == instance.generation - 1
+  then
+    -- The definitions and their positions did not change. Keep resolution
+    -- ready instead of scheduling an empty-set lookup and a full refresh.
+    view.__markdown_live_reference_cache.generation = instance.generation
+  end
+  inputs_changed = inputs_changed or owner and owner.publication_link_targets_changed == true
+  if owner then
+    owner.publication_input_key = input_key
+    owner.publication_link_targets_changed = nil
+    owner.publication_inputs_dirty = nil
+    owner.publication_inputs_uncertain = nil
+  end
+  perf_frame_add("markdown_live_publication_inputs_ms", elapsed_ms(input_started))
   local pending_wrap_line = owner and owner.semantic_pending_wrap_line
   local kept_lines = owner and owner.kept_plan_lines
   local projected_lines = owner and owner.projected_plan_lines or {}
+  -- A self-embed reads body text outside its own semantic nodes. The vault
+  -- overlay publishes separately, so retain the old rebuild rule here.
+  if not inputs_changed then
+    for _, pending in pairs(owner and owner.pending_lines or {}) do
+      if pending.kept then
+        for _, fragment in ipairs(pending.render_line.fragments or {}) do
+          if fragment.embed_preview then inputs_changed = true break end
+        end
+      end
+      if inputs_changed then break end
+    end
+  end
   if owner then
     local fence_presentations = {}
     for line, pending in pairs(owner.pending_lines or {}) do
@@ -7037,8 +7225,8 @@ local function invalidate_semantic_publication(view, instance, reason)
   local deferred_wrapped_invalidation = ranges and #ranges > 0
     and view.wrapped_settings ~= nil
     and publication_lines > 128
-  -- The sync path also rebuilds the lines that kept their plans while the
-  -- parse was pending. The other paths rebuild every line. Kept lines are
+  -- The sync path rebuilds kept plans only when cross-line inputs changed.
+  -- The other paths rebuild every line. Kept lines are
   -- visible lines, so they do not count toward the deferred threshold.
   -- After a line change, the new adoption generation changes the signature
   -- of every line. Each kept line then rebuilds when a frame reads it.
@@ -7057,9 +7245,18 @@ local function invalidate_semantic_publication(view, instance, reason)
     for _, range in ipairs(ranges) do
       for line = range.line1 or 1, range.line2 or range.line1 or 1 do covered[line] = true end
     end
-    if not pending_line then
+    if not pending_line and inputs_changed then
       for line in pairs(kept_lines or {}) do projected_lines[line] = true end
     end
+    local reused = 0
+    for line in pairs(kept_lines or {}) do
+      if not pending_line and not covered[line] and not projected_lines[line] then
+        reused = reused + 1
+      end
+    end
+    perf_frame_add("markdown_live_publication_kept_lines_reused", reused)
+    core.log_quiet("Markdown publication kept plans: revision=%d reused=%d inputs_changed=%s",
+      view.buffer.text_revision, reused, tostring(inputs_changed))
     for line in pairs(projected_lines) do
       if line <= #view.buffer.lines and not covered[line] then kept[#kept + 1] = line end
     end
@@ -7254,6 +7451,7 @@ local function bind_semantic_model(view)
     invalidate_semantic_publication(view, published, reason)
   end)
   if instance.status == "ready" then
+    owner.publication_input_key = publication_input_key(view, instance)
     callout_runtime.reconcile_folds(view, "bind-semantic-model")
   end
 end
