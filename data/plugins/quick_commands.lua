@@ -136,7 +136,8 @@ local function ready(view)
   return view.session ~= nil and view.state == "running" and view.busy ~= nil
 end
 
-function M.run(index)
+function M.run(index, opts)
+  local focus = not opts or opts.focus ~= false
   local def = SLOTS[index]
   local slot = M.get(index)
   if not slot then
@@ -145,15 +146,21 @@ function M.run(index)
   end
   local view = open_view(slot.session_id)
   if view then
-    terminal.focus_session(slot.session_id)
+    if focus then terminal.focus_session(slot.session_id) end
   elseif terminal.session_available(slot.session_id) then
-    view = terminal.open { session_id = slot.session_id, focus = true, placement = "current", reason = "quick-command" }
+    -- Keep the current View when reattaching a session without moving focus.
+    view = terminal.open {
+      session_id = slot.session_id, focus = focus,
+      placement = focus and "current" or "new", preserve_focus = not focus,
+      reason = "quick-command",
+    }
   end
   if not view then
     core.warn("Quick Command %s did not run: its terminal was closed. Set it again from a terminal.", def.label)
     core.log_quiet("Quick Command %s session is gone: %s", def.label, slot.session_id)
     return false
   end
+  core.log_quiet("Quick Command %s target: session=%s focus=%s", def.label, slot.session_id, tostring(focus))
   if ready(view) then return enter_command(view, def, slot) end
   core.log_quiet("Quick Command %s waits for its terminal: state=%s", def.label, tostring(view.state))
   core.add_thread(function()
@@ -198,10 +205,16 @@ for index, def in ipairs(SLOTS) do
     keywords = { "terminal", "run", "shell" },
     opens_view = true,
   })
+  run_commands["quick_command:run_" .. def.key .. "_without_moving_focus"] = command.palette(function()
+    return M.run(index, { focus = false })
+  end, {
+    keywords = { "terminal", "run", "shell" },
+  })
   set_commands["quick_command:set_" .. def.key] = command.palette(function(view) return M.prompt(index, view) end, {
     keywords = { "terminal", "shell" },
   })
   bindings["alt+" .. def.key] = "quick_command:run_" .. def.key
+  bindings["alt+shift+" .. def.key] = "quick_command:run_" .. def.key .. "_without_moving_focus"
 end
 
 command.add(nil, run_commands)

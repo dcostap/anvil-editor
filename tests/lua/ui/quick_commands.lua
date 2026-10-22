@@ -14,11 +14,11 @@ local next_session = 0
 
 local function fake_native(context)
   local native = {}
-  function native.read_session_record() return nil, 2 end
-  function native.new()
+  function native.read_session_record(id) return context.records[id], 2 end
+  function native.new(options)
     next_session = next_session + 1
     local session = {
-      id = string.format("%032x", next_session),
+      id = options.session_id or string.format("%032x", next_session),
       writes = {},
       busy = false,
       capture = "",
@@ -69,6 +69,7 @@ test.describe("Quick Commands", function()
     panes.reset_for_tests()
     storage.clear("quick-commands")
     context.sessions = {}
+    context.records = {}
     terminal._set_native_for_tests(fake_native(context))
     context.warn = core.warn
     context.warnings = {}
@@ -116,6 +117,84 @@ test.describe("Quick Commands", function()
     test.equal(#context.warnings, 1)
   end)
 
+  for _, slot in ipairs { "a", "s", "d", "f" } do
+    test.it("runs Quick Command " .. slot:upper() .. " without changing focus or Pane Group", function(context)
+      local shell = open_terminal("current")
+      set_quick_command(shell, slot, "make build")
+      local editor = open_editor("new")
+      local pane, group = panes.active(), panes.visible_group()
+      test.ok(group ~= panes.pane_for_view(shell).group)
+
+      test.ok(command.perform("quick_command:run_" .. slot .. "_without_moving_focus"))
+
+      test.equal(core.active_view, editor)
+      test.equal(panes.active(), pane)
+      test.equal(panes.visible_group(), group)
+      test.same(context.sessions[1].writes, { "make build\r" })
+    end)
+  end
+
+  test.it("keeps the editor focused when its terminal is visible in another Pane", function(context)
+    local shell = open_terminal("current")
+    set_quick_command(shell, "a", "make build")
+    local editor = open_editor("split")
+    local pane = panes.active()
+    local group = panes.visible_group()
+    test.equal(panes.pane_for_view(shell).group, group)
+
+    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+
+    test.equal(core.active_view, editor)
+    test.equal(panes.active(), pane)
+    test.equal(panes.visible_group(), group)
+    test.equal(pane.current_view, editor)
+    test.same(context.sessions[1].writes, { "make build\r" })
+  end)
+
+  test.it("reattaches an unseen Terminal Session without replacing the editor or moving focus", function(context)
+    local shell = open_terminal("current")
+    set_quick_command(shell, "a", "make build")
+    local id = shell.session_id
+    local editor = open_editor("new")
+    panes.close(panes.pane_for_view(shell), { force = true })
+    local pane, group = panes.active(), panes.visible_group()
+    context.records[id] = string.format([[return {
+      version = 1, session_id = %q, host_pid = 1, host_creation_time = "0000000000000001",
+      pipe_name = %q, project_path = %q, cwd = %q, shell = "", status = "running",
+    }]], id, "\\\\.\\pipe\\anvil-terminal-" .. id, USERDIR, USERDIR)
+
+    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    local attached = terminal.open_views()[1]
+    test.ok(attached)
+    test.equal(attached.session_id, id)
+    attached:service_session(true)
+    local deadline = system.get_time() + 10
+    while #context.sessions[2].writes == 0 and system.get_time() < deadline do coroutine.yield(0.01) end
+
+    test.equal(core.active_view, editor)
+    test.equal(panes.active(), pane)
+    test.equal(panes.visible_group(), group)
+    test.equal(pane.current_view, editor)
+    test.same(context.sessions[2].writes, { "make build\r" })
+  end)
+
+  test.it("keeps focus and warns when a keep-focus command targets a busy terminal", function(context)
+    local shell = open_terminal("current")
+    set_quick_command(shell, "s", "make test")
+    local editor = open_editor("new")
+    local pane, group = panes.active(), panes.visible_group()
+    context.sessions[1].busy = true
+    shell:service_session(true)
+
+    test.ok(command.perform("quick_command:run_s_without_moving_focus"))
+
+    test.equal(core.active_view, editor)
+    test.equal(panes.active(), pane)
+    test.equal(panes.visible_group(), group)
+    test.same(context.sessions[1].writes, {})
+    test.equal(#context.warnings, 1)
+  end)
+
   test.it("warns when the slot has no command", function(context)
     open_terminal("current")
     command.perform("quick_command:run_d")
@@ -149,7 +228,8 @@ test.describe("Quick Commands", function()
     local shell = open_terminal("current")
     set_quick_command(shell, "a", "make build")
     local editor = open_editor("new")
-    test.ok(command.perform("quick_command:run_a"))
+    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    test.equal(core.active_view, editor)
     context.sessions[1].capture = table.concat({
       "PS> make build",
       "quick-command-old.txt:1: error: old",
@@ -157,8 +237,6 @@ test.describe("Quick Commands", function()
       "quick-command-new.txt:3: error: new",
       "PS> ",
     }, "\n")
-    core.set_active_view(editor)
-
     test.ok(command.perform("core:next_remote_point_of_interest"))
 
     test.equal(common.normalize_path(core.active_view.buffer.abs_filename), common.normalize_path(new_path))
