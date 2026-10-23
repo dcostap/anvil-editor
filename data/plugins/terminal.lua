@@ -1963,16 +1963,17 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
     end
   end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
-  if button == "left" and keymap.modkeys.ctrl and self:contains_terminal_cell(x, y) then
-    local point = self:point_of_interest_at(col, row)
+  self.pending_selection_drag = nil
+  -- Explicit links open on click. Plain-text targets still need Ctrl.
+  if button == "left" and self:contains_terminal_cell(x, y) then
+    local point = self:point_of_interest_at(col, row, not keymap.modkeys.ctrl)
     if point then
       self.uri_gesture = { point = point, col = col, row = row, cancelled = false }
-      return true
+      if keymap.modkeys.ctrl then return true end
     end
   end
-  self.pending_selection_drag = nil
   local tracking = self.snapshot and self.snapshot.mouse_tracking
-  if tracking and not keymap.modkeys.shift then
+  if tracking and not keymap.modkeys.shift and not self.uri_gesture then
     self.selection_start = nil
     self.selection_autoscroll = nil
     self.session:reset_selection_gesture()
@@ -1995,16 +1996,17 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
   if self.uri_gesture then
     if not self:contains_terminal_cell(x, y) then
       self.uri_gesture.cancelled = true
-      return true
+    else
+      local col, row = self:mouse_position(x, y)
+      local point = self:point_of_interest_at(col, row)
+      local target = self.uri_gesture.point
+      if col ~= self.uri_gesture.col or row ~= self.uri_gesture.row
+          or not same_point(point, target) then
+        self.uri_gesture.cancelled = true
+      end
     end
-    local col, row = self:mouse_position(x, y)
-    local point = self:point_of_interest_at(col, row)
-    local target = self.uri_gesture.point
-    if col ~= self.uri_gesture.col or row ~= self.uri_gesture.row
-        or not same_point(point, target) then
-      self.uri_gesture.cancelled = true
-    end
-    return true
+    -- A normal link press also starts selection, so dragging keeps selecting text.
+    if not self.selection_start then return true end
   end
   local scrollbar = self.v_scrollbar:on_mouse_moved(x, y, dx or 0, dy or 0)
   if scrollbar then
@@ -2037,6 +2039,14 @@ end
 
 function TerminalView:on_mouse_released(button, x, y)
   if not self.session then return false end
+  local selected = self.selection_start and button == "left"
+  if selected then
+    self:apply_selection_drag()
+    local col, row = self:mouse_position(x, y)
+    self.session:selection_gesture("release", col, row, 0, 0, 1, false)
+    self.selection_start = nil
+    self.selection_autoscroll = nil
+  end
   if self.uri_gesture and button == "left" then
     local gesture = self.uri_gesture
     self.uri_gesture = nil
@@ -2046,7 +2056,8 @@ function TerminalView:on_mouse_released(button, x, y)
     local target = gesture.point
     if inside and not gesture.cancelled and col == gesture.col and row == gesture.row
         and same_point(point, target) then
-      self:activate_point_of_interest(target)
+      local opened = self:activate_point_of_interest(target)
+      core.log_quiet("Terminal link %s: %s", opened and "opened" or "failed", target.uri or target.path)
     end
     return true
   end
@@ -2055,14 +2066,7 @@ function TerminalView:on_mouse_released(button, x, y)
     return true
   end
   local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
-  if self.selection_start and button == "left" then
-    self:apply_selection_drag()
-    local col, row = self:mouse_position(x, y)
-    self.session:selection_gesture("release", col, row, 0, 0, 1, false)
-    self.selection_start = nil
-    self.selection_autoscroll = nil
-    return true
-  end
+  if selected then return true end
   if self.v_scrollbar.dragging then
     self.v_scrollbar:on_mouse_released(button, x, y)
     return true

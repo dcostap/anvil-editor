@@ -1406,7 +1406,7 @@ test.describe("Terminal View", function()
     system.open_in_system = previous_open
   end)
 
-  test.it("opens a relative hyperlink from its label using the terminal directory", function(context)
+  test.it("opens a relative hyperlink with a normal click using the terminal directory", function(context)
     context.link_cwd = system.getcwd()
     local folder = USERDIR .. PATHSEP .. "terminal-relative-link"
     context.link_folder = folder
@@ -1423,7 +1423,7 @@ test.describe("Terminal View", function()
       end
     end
     view.snapshot.mouse_tracking = true
-    keymap.modkeys.ctrl = true
+    keymap.modkeys.ctrl = false
     local x, y = 7 + view.cell_width * 10, 7
     view:on_mouse_moved(x, y, 0, 0)
     local cursor, point = view.cursor, view.hover_point
@@ -1436,7 +1436,7 @@ test.describe("Terminal View", function()
     test.equal(cursor, "hand")
     test.ok(point and common.path_equals(point.path, path))
     test.same({ point.col, point.end_col, point.row }, { 9, 16, 0 })
-    test.equal(#session.mouse_events, 0)
+    for _, event in ipairs(session.mouse_events) do test.equal(event[1], "motion") end
     test.ok(core.active_view.buffer)
     test.ok(common.path_equals(core.active_view.buffer.abs_filename, path))
   end)
@@ -1516,7 +1516,10 @@ test.describe("Terminal View", function()
     test.same({ point.col, point.row, point.end_col, point.end_row }, { 2, 2, 6, 2 })
   end)
 
-  test.it("shows explicit links without Ctrl and leaves mouse input with the program", function(context)
+  test.it("opens explicit links without Ctrl instead of sending the click to the program", function(context)
+    local previous_open = system.open_in_system
+    local opened = {}
+    system.open_in_system = function(uri) opened[#opened + 1] = uri; return true end
     local view = terminal.open()
     local session = context.sessions[1]
     session.hyperlink_uri = "https://example.test/hidden-target"
@@ -1526,10 +1529,12 @@ test.describe("Terminal View", function()
     test.equal(view.cursor, "hand")
     test.ok(table.concat(core.status_bar.tooltip):find(session.hyperlink_uri, 1, true))
     view:on_mouse_pressed("left", 7, 7)
+    local opened_on_press = #opened
     view:on_mouse_released("left", 7, 7)
-    test.equal(session.mouse_events[1][1], "motion")
-    test.equal(session.mouse_events[2][1], "press")
-    test.equal(session.mouse_events[3][1], "release")
+    system.open_in_system = previous_open
+    test.equal(opened_on_press, 0)
+    test.same(opened, { session.hyperlink_uri })
+    for _, event in ipairs(session.mouse_events) do test.equal(event[1], "motion") end
     session.hyperlink_uri = nil
     local text = "https://example.test/plain"
     local columns = {}
@@ -1540,6 +1545,29 @@ test.describe("Terminal View", function()
     test.equal(view.hover_point, nil)
     test.equal(view.cursor, "arrow")
     test.ok(not core.status_bar.tooltip_mode)
+  end)
+
+  test.it("selects text when dragging from an explicit link without opening it", function(context)
+    local previous_open = system.open_in_system
+    local opened = 0
+    system.open_in_system = function() opened = opened + 1; return true end
+    local view = terminal.open()
+    local session = context.sessions[1]
+    session.hyperlink_uri = "https://example.test/path"
+    view.snapshot.mouse_tracking = true
+    keymap.modkeys.ctrl = false
+    local x, y = 7, 7
+    local end_x = x + view.cell_width * 3
+    view:on_mouse_pressed("left", x, y)
+    view:on_mouse_moved(end_x, y, end_x - x, 0)
+    view:on_mouse_released("left", end_x, y)
+    system.open_in_system = previous_open
+    test.equal(opened, 0)
+    test.equal(#session.mouse_events, 0)
+    test.equal(session.gesture_events[1][1], "press")
+    test.equal(session.gesture_events[2][1], "drag")
+    test.equal(session.gesture_events[2][2], 3)
+    test.equal(session.gesture_events[3][1], "release")
   end)
 
   test.it("keeps an explicit link target after Ctrl is released and clears it on leave", function(context)
@@ -1632,14 +1660,19 @@ test.describe("Terminal View", function()
     context.sessions[1].row_text_data = {
       text = text, columns = columns, generation = 3,
     }
-    keymap.modkeys.ctrl = true
     local x, y = 6 + view.cell_width * 5 + 1, 7
+    keymap.modkeys.ctrl = false
+    view:on_mouse_pressed("left", x, y)
+    view:on_mouse_released("left", x, y)
+    local opened_without_ctrl = opened
+    keymap.modkeys.ctrl = true
     view:on_mouse_pressed("left", x, y)
     view:on_mouse_released("left", x, y)
     keymap.modkeys.ctrl = false
 
     core.open_file = previous_open
     system.get_file_info = previous_info
+    test.equal(opened_without_ctrl, nil)
     test.ok(opened)
     test.ok(common.path_equals(opened.path, target))
     test.equal(opened.options.line, 12)
