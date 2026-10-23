@@ -706,6 +706,42 @@ test.describe("Sidebar motion", function()
     end)
   end)
 
+  test.it("sweeps a glint across a working Terminal's row only", function()
+    with_clock(true, function(advance)
+      local function sidebar(busy, agent_state)
+        local view = SidebarView(function() end)
+        view:set_model({{row_id=1,id=1,path="C:/A",state="ready",window_id=1,
+          terminals={{id="s",title="pwsh",state="running",busy=busy and 1 or 0,agent_state=agent_state}},
+          panes={active=1,visible=1,{id="p",number=1,name="pwsh",group=1,
+            terminal={session="s",state="running",busy=busy}}}}, windows={{id=1,selected_project=1}}}, 1)
+        -- Let the rows arrive, then stop in the middle of a sweep.
+        for _ = 1, 90 do advance(1 / 30); drawn_texts(view) end
+        return view
+      end
+      local function glint_drawn(view)
+        local found = false
+        with_renderer({draw_rect = function(_, _, _, _, color)
+          local glint = style.sidebar_glint
+          if color[1] == glint[1] and color[2] == glint[2] and color[3] == glint[3] then found = true end
+        end}, function() view:draw(400, 800) end)
+        return found
+      end
+      local function in_sweep(view)
+        while system.get_time() % 1.8 > 0.5 or system.get_time() % 1.8 < 0.3 do advance(0.05) end
+        return glint_drawn(view), view:animation_delay(system.get_time())
+      end
+      local drawn, delay = in_sweep(sidebar(true))
+      test.ok(drawn, "A working Terminal shows no glint")
+      test.ok(delay and delay <= 1 / 30, "A working Terminal does not ask for the next frame")
+      drawn, delay = in_sweep(sidebar(false))
+      test.ok(not drawn, "An idle Terminal shows a glint")
+      test.is_nil(delay, "An idle Terminal keeps the Sidebar drawing")
+      -- An agent waiting at its prompt keeps its shell busy, but it does not work.
+      drawn = in_sweep(sidebar(true, "idle"))
+      test.ok(not drawn, "An agent at its prompt shows a glint")
+    end)
+  end)
+
   test.it("places rows at once when transitions are off", function()
     with_clock(false, function(advance)
       local view = SidebarView(function() end)

@@ -39,6 +39,8 @@ local MARK_MOVE_RATE, MARK_FADE_RATE = 28, 21
 local SELECTION_SPEED, HOVER_SPEED = 1.75, 3
 -- The search field opens and closes at this rate.
 local SEARCH_RATE = 30
+-- A working Terminal's row shows a glint that crosses it in GLINT_TRAVEL seconds, once each GLINT_PERIOD seconds.
+local GLINT_TRAVEL, GLINT_PERIOD, GLINT_FRAME = 1.1, 1.8, 1 / 60
 -- The longest step between two frames. After a pause, an animation starts where it stopped.
 local MAX_STEP = 1 / 30
 local FRAME = 1 / 120
@@ -1179,6 +1181,7 @@ end
 -- Seconds until the next spinner frame, elapsed-time update, animation frame or hover tooltip.
 function SidebarView:animation_delay(clock)
   local delay = self.spinning and tab.spinner_delay(clock) or nil
+  if self.glint_delay then delay = math.min(delay or math.huge, self.glint_delay) end
   if self.animating or self.focus_feedback:active(clock) then delay = math.min(delay or math.huge, FRAME) end
   if self.ticking then delay = math.min(delay or 1, 1 - clock % 1) end
   if self.tooltip_text then
@@ -1199,7 +1202,7 @@ local function terminal_hint(project)
       local agent = tab.agent(terminal)
       if agent and agent.state == "blocked" then
         blocked = blocked + 1
-      elseif agent and (agent.state == "working" or agent.step) or not agent and terminal.busy == 1 then
+      elseif tab.working(tab.describe_session(terminal).terminal, agent) then
         busy = busy + 1
       end
     end
@@ -1327,11 +1330,39 @@ function SidebarView:draw_row(row, y, width, now)
     return
   end
   if row.kind == "tab" or row.kind == "terminal" then
+    if tab.working(row.tab.terminal or {}, row.agent) then self:draw_glint(m.tab_left, y, right, row.h) end
     local x, tab_width = self:tab_bounds(row, width)
     self:draw_tab(row, x, y, tab_width, now)
     return
   end
   self:draw_project(row, y, width, now)
+end
+
+-- A soft band of light that sweeps from left to right across [left, right), then rests. It fades in and out at
+-- the edges, so it never ends at a hard line.
+function SidebarView:draw_glint(left, y, right, h)
+  if config.transitions == false then return end
+  local progress = (self.clock % GLINT_PERIOD) / GLINT_TRAVEL
+  -- The next frame comes at once while the band moves, or when the next sweep starts.
+  local wait = progress < 1 and GLINT_FRAME or GLINT_PERIOD - self.clock % GLINT_PERIOD
+  self.glint_delay = math.min(self.glint_delay or wait, wait)
+  if progress >= 1 then return end
+  local span = right - left
+  local band = common.clamp(span * 0.4, 40 * SCALE, 120 * SCALE)
+  local center = left - band / 2 + progress * (span + band)
+  local envelope = math.sin(math.pi * progress)
+  local color = style.sidebar_glint
+  local slices = 12
+  local slice = band / slices
+  for i = 0, slices - 1 do
+    local x0 = center - band / 2 + i * slice
+    local x1 = math.max(left, x0)
+    local x2 = math.min(right, x0 + slice)
+    if x2 > x1 then
+      local strength = math.sin(math.pi * (i + 0.5) / slices) ^ 2 * envelope
+      renderer.draw_rect(x1, y + 1, x2 - x1, h - 2, fade(color, strength))
+    end
+  end
 end
 
 -- A Tab's or Terminal Session's content in [x, x + width): its icon, name and status, and an agent's step below.
@@ -1508,7 +1539,7 @@ function SidebarView:draw(width, height)
   local now = os.time()
   local clock = system.get_time()
   local dt = self.last_clock and math.max(0, math.min(MAX_STEP, clock - self.last_clock)) or 0
-  self.clock, self.last_clock, self.spinning, self.ticking = clock, clock, false, false
+  self.clock, self.last_clock, self.spinning, self.ticking, self.glint_delay = clock, clock, false, false, nil
   self.animating = self:step(dt)
   self.drawn = true
   renderer.set_clip_rect(0, 0, width, height)

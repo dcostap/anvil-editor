@@ -108,6 +108,14 @@ function tab.agent(record)
     since = record.agent_since, step = step ~= "" and step or nil, step_since = record.agent_step_since}
 end
 
+-- Whether a Terminal Session works on something now: its agent works, or without an agent its shell runs a
+-- command. An agent that waits at its prompt or for an answer does not work.
+function tab.working(terminal, agent)
+  if terminal.state ~= "running" then return false end
+  if agent then return agent.state ~= "blocked" and (agent.state == "working" or agent.step ~= nil) end
+  return terminal.busy == true
+end
+
 -- The Terminal status dot's colour: dim when it does not run, warn after a bell or while an agent needs an answer,
 -- error after an agent failed, accent while a command or an agent works.
 function tab.status_color(item)
