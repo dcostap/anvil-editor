@@ -293,9 +293,8 @@ style.titlebar_pane_number = style.dim
 style.titlebar_group_indicator = { common.color "rgba(89, 160, 250, 0.60)" }
 style.drop_target_accent = p("ctrl_clickable")
 style.drop_target_background = { common.color "rgba(89, 160, 250, 0.12)" }
--- Project Sidebar: a row under the pointer, the glint on a working Terminal, and a dragged Tab with its shadow.
+-- Project Sidebar: a row under the pointer, and a dragged Tab with its shadow.
 style.sidebar_hover = { 255, 255, 255, 14 }
-style.sidebar_glint = { 255, 255, 255, 9 }
 
 style.sidebar_card = c("313338")
 style.sidebar_shadow = { 0, 0, 0, 110 }

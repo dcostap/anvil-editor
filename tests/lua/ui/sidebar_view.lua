@@ -718,46 +718,42 @@ test.describe("Sidebar motion", function()
     end)
   end)
 
-  test.it("sweeps a glint across a working Terminal's row only", function()
+  test.it("shimmers the status line of a working Terminal only", function()
     with_clock(true, function(advance)
-      local function sidebar(busy, agent_state)
+      local function sidebar(agent_state, step)
         local view = SidebarView(function() end)
         view:set_model({{row_id=1,id=1,path="C:/A",state="ready",window_id=1,
-          terminals={{id="s",title="pwsh",state="running",busy=busy and 1 or 0,agent_state=agent_state}},
+          terminals={{id="s",title="pwsh",state="running",busy=1,agent_state=agent_state,agent_step=step}},
           panes={active=1,visible=1,{id="p",number=1,name="pwsh",group=1,
-            terminal={session="s",state="running",busy=busy}}}}, windows={{id=1,selected_project=1}}}, 1)
-        -- Let the rows arrive, then stop in the middle of a sweep.
+            terminal={session="s",state="running",busy=true}}}}, windows={{id=1,selected_project=1}}}, 1)
+        -- Let the rows arrive.
         for _ = 1, 90 do advance(1 / 30); drawn_texts(view) end
         return view
       end
-      local function glint_drawn(view)
-        local found = false
-        with_renderer({draw_rect = function(_, _, _, _, color)
-          local glint = style.sidebar_glint
-          if color[1] == glint[1] and color[2] == glint[2] and color[3] == glint[3] then found = true end
-        end}, function() view:draw(400, 800) end)
-        return found
-      end
-      -- Watches five seconds of frames. Returns whether any frame drew the glint, and the shortest frame delay.
-      local function in_sweep(view)
-        local drawn, shortest = false, nil
+      -- Watches five seconds of frames. Returns the colours of the drawn parts of `line`, and the shortest frame delay.
+      local function watch(view, line)
+        local colors, shortest = {}, nil
         for _ = 1, 150 do
-          drawn = glint_drawn(view) or drawn
+          with_renderer({draw_text = function(_, text, _, _, color)
+            if text ~= "" and line:find(text, 1, true) then
+              colors[table.concat(color, ",")] = true
+            end
+          end}, function() view:draw(400, 800) end)
           local delay = view:animation_delay(advance(0))
           if delay then shortest = math.min(shortest or delay, delay) end
           advance(1 / 30)
         end
-        return drawn, shortest
+        local count = 0
+        for _ in pairs(colors) do count = count + 1 end
+        return count, shortest
       end
-      local drawn, delay = in_sweep(sidebar(true))
-      test.ok(drawn, "A working Terminal shows no glint")
-      test.ok(delay and delay <= 1 / 30, "A working Terminal does not ask for the next frame")
-      drawn, delay = in_sweep(sidebar(false))
-      test.ok(not drawn, "An idle Terminal shows a glint")
-      test.is_nil(delay, "An idle Terminal keeps the Sidebar drawing")
+      local count, delay = watch(sidebar("working", "Thinking"), "Thinking")
+      test.ok(count > 1, "A working agent's step does not shimmer")
+      test.ok(delay and delay <= 1 / 30, "A working agent does not ask for the next frame")
       -- An agent waiting at its prompt keeps its shell busy, but it does not work.
-      drawn = in_sweep(sidebar(true, "idle"))
-      test.ok(not drawn, "An agent at its prompt shows a glint")
+      count, delay = watch(sidebar("idle"), "Idle")
+      test.equal(count, 1, "An agent at its prompt shimmers")
+      test.is_nil(delay, "An agent at its prompt keeps the Sidebar drawing")
     end)
   end)
 

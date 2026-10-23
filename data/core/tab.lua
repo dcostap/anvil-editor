@@ -184,6 +184,23 @@ function tab.fit(font, text, width)
   return text:sub(1, ends[low] or 0) .. ELLIPSIS
 end
 
+-- Draws text with a soft light that passes through its letters from left to right. `phase` runs from 0 to 1 over
+-- one pass. Each letter brightens from `color` to `peak` while the light is on it.
+function tab.draw_shimmer(font, text, x, y, color, peak, phase)
+  local width = font:get_width(text)
+  local band = math.max(28 * SCALE, font:get_width("nnnn"))
+  local center = x - band + phase * (width + band * 2)
+  for start, stop in text:gmatch("()[%z\1-\127\194-\244][\128-\191]*()") do
+    local char = text:sub(start, stop - 1)
+    local cx = x + font:get_width(text:sub(1, start - 1))
+    local distance = math.abs(cx + font:get_width(char) / 2 - center) / band
+    local strength = distance < 1 and math.cos(distance * math.pi / 2) ^ 2 or 0
+    local mixed = {}
+    for i = 1, 4 do mixed[i] = color[i] + ((peak[i] or 255) - color[i]) * strength end
+    renderer.draw_text(font, char, cx, y, mixed)
+  end
+end
+
 local function gap() return math.max(4 * SCALE, style.padding.x / 2) end
 local function number_gap() return math.max(3 * SCALE, style.padding.x / 3) end
 local function dot_radius() return 3 * SCALE end
@@ -260,7 +277,8 @@ end
 
 -- Draws the Tab's content in the rectangle. `name_color` colours a name without a Git or missing-file colour.
 -- Returns true when it drew a spinner frame, so the caller can draw the next one, and the name's left edge.
----@param opts {name_color: renderer.color, number_font: renderer.font?, name_font: renderer.font?, now: number?, clock: number?}
+-- `shimmer` is the phase of a shimmer through the name, from 0 to 1.
+---@param opts {name_color: renderer.color, number_font: renderer.font?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?}
 function tab.draw(item, x, y, w, h, opts)
   local number_font, name_font = opts.number_font or style.font, opts.name_font or style.font
   local right = x + w
@@ -293,7 +311,11 @@ function tab.draw(item, x, y, w, h, opts)
   if spun then name, spinning = spun, true end
   name = tab.fit(name_font, name, name_width)
   local name_y = middle(name_font)
-  renderer.draw_text(name_font, name, x, name_y, color)
+  if opts.shimmer then
+    tab.draw_shimmer(name_font, name, x, name_y, color, style.accent, opts.shimmer)
+  else
+    renderer.draw_text(name_font, name, x, name_y, color)
+  end
   if item.missing and name ~= "" then
     renderer.draw_rect(x, name_y + math.floor(name_font:get_height() / 2), name_font:get_width(name),
       math.max(1, SCALE), color)
@@ -303,7 +325,8 @@ function tab.draw(item, x, y, w, h, opts)
 end
 
 -- Draws the agent's line at the left edge of the Tab's name. Returns true when the time counts seconds.
----@param opts {now: number, seen: boolean?}
+-- `shimmer` is the phase of a shimmer through the line's text, from 0 to 1.
+---@param opts {now: number, seen: boolean?, shimmer: number?}
 function tab.draw_agent(agent, x, y, w, h, opts)
   local text, time, tone, ticking = tab.agent_line(agent, opts.now, opts.seen)
   local font, right = style.font, x + w
@@ -312,7 +335,12 @@ function tab.draw_agent(agent, x, y, w, h, opts)
   if time_w > w / 2 then time, time_w = nil, 0 end
   local color = tone == "warn" and style.warn or tone == "error" and style.error or tone == "result" and style.accent
     or style.dim
-  renderer.draw_text(font, tab.fit(font, text, math.max(0, w - time_w)), x, ty, color)
+  text = tab.fit(font, text, math.max(0, w - time_w))
+  if opts.shimmer then
+    tab.draw_shimmer(font, text, x, ty, color, style.text, opts.shimmer)
+  else
+    renderer.draw_text(font, text, x, ty, color)
+  end
   if time then renderer.draw_text(font, time, right - font:get_width(time), ty, style.dim) end
   return ticking and time ~= nil
 end

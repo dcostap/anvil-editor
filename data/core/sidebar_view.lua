@@ -41,8 +41,9 @@ local SELECTION_SPEED, HOVER_SPEED = 1.75, 3
 local ROW_SPEED = 1.8
 -- The search field opens and closes at this rate.
 local SEARCH_RATE = 54
--- A working Terminal's row shows a glint that crosses it in GLINT_TRAVEL seconds, once each GLINT_PERIOD seconds.
-local GLINT_TRAVEL, GLINT_PERIOD, GLINT_FRAME = 1.1, 1.35, 1 / 60
+-- A working Terminal's status text shimmers: a light crosses it in SHIMMER_TRAVEL seconds, once each SHIMMER_PERIOD
+-- seconds. The colours change one letter at a time, so SHIMMER_FRAME can be longer than a display frame.
+local SHIMMER_TRAVEL, SHIMMER_PERIOD, SHIMMER_FRAME = 1.3, 1.9, 1 / 30
 -- The longest step between two frames. After a pause, an animation starts where it stopped.
 local MAX_STEP = 1 / 30
 local FRAME = 1 / 120
@@ -1207,7 +1208,7 @@ end
 -- Seconds until the next spinner frame, elapsed-time update, animation frame or hover tooltip.
 function SidebarView:animation_delay(clock)
   local delay = self.spinning and tab.spinner_delay(clock) or nil
-  if self.glint_delay then delay = math.min(delay or math.huge, self.glint_delay) end
+  if self.shimmer_delay then delay = math.min(delay or math.huge, self.shimmer_delay) end
   if self.animating or self.focus_feedback:active(clock) then delay = math.min(delay or math.huge, FRAME) end
   if self.ticking then delay = math.min(delay or 1, 1 - clock % 1) end
   if self.tooltip_text then
@@ -1356,7 +1357,6 @@ function SidebarView:draw_row(row, y, width, now)
     return
   end
   if row.kind == "tab" or row.kind == "terminal" then
-    if tab.working(row.tab.terminal or {}, row.agent) then self:draw_glint(m.tab_left, y, right, row.h) end
     local x, tab_width = self:tab_bounds(row, width)
     self:draw_tab(row, x, y, tab_width, now)
     return
@@ -1364,41 +1364,26 @@ function SidebarView:draw_row(row, y, width, now)
   self:draw_project(row, y, width, now)
 end
 
--- A soft band of light that sweeps from left to right across [left, right), then rests. It fades in and out at
--- the edges, so it never ends at a hard line.
-function SidebarView:draw_glint(left, y, right, h)
-  if config.transitions == false then return end
-  local progress = (self.clock % GLINT_PERIOD) / GLINT_TRAVEL
-  -- The next frame comes at once while the band moves, or when the next sweep starts.
-  local wait = progress < 1 and GLINT_FRAME or GLINT_PERIOD - self.clock % GLINT_PERIOD
-  self.glint_delay = math.min(self.glint_delay or wait, wait)
-  if progress >= 1 then return end
-  local span = right - left
-  local band = common.clamp(span * 0.12, 14 * SCALE, 36 * SCALE)
-  local center = left - band / 2 + progress * (span + band)
-  local envelope = math.sin(math.pi * progress)
-  local color = style.sidebar_glint
-  local slices = 12
-  local slice = band / slices
-  for i = 0, slices - 1 do
-    local x0 = center - band / 2 + i * slice
-    local x1 = math.max(left, x0)
-    local x2 = math.min(right, x0 + slice)
-    if x2 > x1 then
-      local strength = math.sin(math.pi * (i + 0.5) / slices) ^ 2 * envelope
-      renderer.draw_rect(x1, y + 1, x2 - x1, h - 2, fade(color, strength))
-    end
-  end
+-- The phase of the shimmer through a working Terminal's status text, from 0 to 1, or nil while the light rests.
+function SidebarView:shimmer_phase()
+  if config.transitions == false then return nil end
+  local progress = (self.clock % SHIMMER_PERIOD) / SHIMMER_TRAVEL
+  -- The next frame comes soon while the light moves, or when the next pass starts.
+  local wait = progress < 1 and SHIMMER_FRAME or SHIMMER_PERIOD - self.clock % SHIMMER_PERIOD
+  self.shimmer_delay = math.min(self.shimmer_delay or wait, wait)
+  return progress < 1 and progress or nil
 end
 
 -- A Tab's or Terminal Session's content in [x, x + width): its icon, name and status, and an agent's step below.
 function SidebarView:draw_tab(row, x, y, width, now)
   local m = self:metrics()
+  -- A working Terminal shimmers its agent's line, or its name when it has no such line.
+  local shimmer = tab.working(row.tab.terminal or {}, row.agent) and self:shimmer_phase() or nil
   local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal,
-    {name_color = style.text, now = now, clock = self.clock})
+    {name_color = style.text, now = now, clock = self.clock, shimmer = not row.agent and shimmer or nil})
   if spinning then self.spinning = true end
   if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, x + width - name_x,
-      m.terminal, {now = now, seen = row.seen}) then
+      m.terminal, {now = now, seen = row.seen, shimmer = shimmer}) then
     self.ticking = true
   end
 end
@@ -1564,7 +1549,7 @@ function SidebarView:draw(width, height)
   local now = os.time()
   local clock = system.get_time()
   local dt = self.last_clock and math.max(0, math.min(MAX_STEP, clock - self.last_clock)) or 0
-  self.clock, self.last_clock, self.spinning, self.ticking, self.glint_delay = clock, clock, false, false, nil
+  self.clock, self.last_clock, self.spinning, self.ticking, self.shimmer_delay = clock, clock, false, false, nil
   self.animating = self:step(dt)
   self.drawn = true
   renderer.set_clip_rect(0, 0, width, height)
