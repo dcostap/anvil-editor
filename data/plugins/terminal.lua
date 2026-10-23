@@ -2399,6 +2399,17 @@ command.add(nil, {
 
 command.add(function()
   local view = core.active_view
+  return view and view.terminal_text_capture == true, view
+end, {
+  ["terminal:close_text_capture"] = function(view)
+    local closed = panes.close_view(panes.pane_for_view(view), { view = view })
+    core.log_quiet("Terminal text capture closed: accepted=%s", tostring(closed))
+    return closed
+  end,
+})
+
+command.add(function()
+  local view = core.active_view
   return view and view.terminal_view == true, view
 end, {
   ["terminal:paste"] = function(view)
@@ -2434,6 +2445,7 @@ end, {
 })
 
 keymap.add({
+  ["escape"] = { "editor:find_close", "terminal:close_text_capture" },
   ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+v"] = "terminal:paste",
   ["ctrl+shift+v"] = "terminal:paste",

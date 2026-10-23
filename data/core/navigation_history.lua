@@ -52,6 +52,8 @@ local function current_recorded_position(pane)
 end
 
 local function record(view, state, opts, kind, record_opts)
+  -- Shared text commands also run in Views without restorable text locations.
+  if not view.get_navigation_state or not view.set_navigation_state then return false end
   local pane = panes.pane_for_view(view)
   if not pane or pane.current_view ~= view then return false end
   local inserted = panes.record_location(pane, {

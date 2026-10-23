@@ -400,6 +400,58 @@ test.describe("Terminal View", function()
     test.not_ok(session.closed)
   end)
 
+  test.it("returns directly to the terminal after navigating and searching captured text", function(context)
+    local source = terminal.open()
+    local pane = panes.active()
+    local session = context.sessions[1]
+    session.capture = { text = "first\n" .. string.rep("output\n", 30) .. "needle\nlast" }
+    context.previous_clipboard = system.get_clipboard()
+    test.ok(command.perform("core:open_text_capture"))
+    local capture = pane.current_view
+
+    test.ok(command.perform("core:move_to_end_of_buffer"))
+    test.ok(command.perform("core:move_to_start_of_buffer"))
+    test.ok(command.perform("editor:find"))
+    core.active_view:set_text("needle")
+    test.ok(command.perform("editor:find_close"))
+    test.equal(capture.buffer:get_selection(), 32)
+    test.ok(command.perform("core:copy"))
+    test.equal(system.get_clipboard(), "needle")
+
+    test.ok(command.perform("core:navigate_back"))
+    test.equal(pane.current_view, source)
+    test.equal(source.session, session)
+    test.not_ok(session.closed)
+    test.ok(command.perform("core:navigate_forward"))
+    test.equal(pane.current_view, capture)
+    test.equal(capture.buffer:get_selection(), 32)
+  end)
+
+  test.it("closes Terminal Text on Escape without closing its terminal session", function(context)
+    local source = terminal.open()
+    local pane = panes.active()
+    local session = context.sessions[1]
+    session.capture = { text = "first\nneedle\nlast" }
+    test.ok(command.perform("core:open_text_capture"))
+    local capture = pane.current_view
+    test.ok(command.perform("editor:find"))
+    core.active_view:set_text("needle")
+
+    -- The first Escape closes Find. The next closes the capture, even with selected text.
+    core.on_event("keypressed", "escape", {})
+    test.equal(core.active_view, capture)
+    test.equal(pane.current_view, capture)
+    core.on_event("keyreleased", "escape", {})
+    core.on_event("keypressed", "escape", {})
+    test.equal(pane.current_view, source)
+    test.equal(core.active_view, source)
+    test.equal(panes.pane_for_view(capture), nil)
+    test.not_ok(panes.is_forward_available(pane))
+    test.equal(source.session, session)
+    test.not_ok(session.closed)
+    test.equal(#session.keys, 0)
+  end)
+
   test.it("renders captured terminal text with its terminal colors and font style", function(context)
     local terminal_view = terminal.open()
     local session = context.sessions[1]
