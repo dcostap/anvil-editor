@@ -6,6 +6,15 @@ test.describe("Buffer snapshot replacement", function()
     if context.path then os.remove(context.path) end
   end)
 
+  test.it("reports normalized content changes independently of line endings", function()
+    local buffer = Buffer()
+    buffer:replace_snapshot("one\ntwo\n")
+    test.not_ok(buffer:replace_snapshot("one\r\ntwo\r\n").content_changed)
+    test.ok(buffer:replace_snapshot("one\ntoo\n").content_changed)
+    test.ok(buffer:replace_snapshot("one\ntoo\nthree\n").content_changed)
+    test.not_ok(buffer:replace_snapshot("one\ntoo\nthree").content_changed)
+  end)
+
   test.it("publishes loaded text without keeping editable undo history", function()
     local buffer = Buffer("snapshot.txt", "snapshot.txt", true)
     buffer:insert(1, 1, "old\ntext")

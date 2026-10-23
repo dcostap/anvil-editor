@@ -226,10 +226,19 @@ local copy_file, prompt_stale_backup
 ---@return table transaction
 function Buffer:replace_snapshot(text, opts)
   opts = opts or {}
+  local split_stage = file_open_stage_begin("buffer_split_lines")
   local lines, clean_lines, highlights, crlf, binary = encoding.split_lines(text)
+  file_open_stage_end(split_stage)
   if #lines == 0 then lines[1] = "\n" end
-  local old_text = table.concat(self.lines)
   local old_line_count = #self.lines
+  -- Source lines have normalized endings. Compare them without allocating and
+  -- hashing another complete copy of each Buffer.
+  local content_changed = old_line_count ~= #lines
+  if not content_changed then
+    for i = 1, #lines do
+      if self.lines[i] ~= lines[i] then content_changed = true; break end
+    end
+  end
   local selection_snapshots = snapshot_registered_selection_states(self)
   local old_metadata = metadata_snapshot(self)
   local transaction = {
@@ -237,7 +246,7 @@ function Buffer:replace_snapshot(text, opts)
     changed = true,
     type = "load",
     full_snapshot = true,
-    content_changed = old_text ~= table.concat(lines),
+    content_changed = content_changed,
     edits = {}, -- A snapshot requires a full parser refresh.
     changed_ranges = {
       {
@@ -1583,6 +1592,17 @@ local function line_offsets_for(lines)
   return { lines = lines, count = count, blocks = blocks, total = offset }
 end
 
+-- Share preparation within one input operation, not across Buffer edits.
+-- Recheck the source because a caller can keep a plan or a hook can edit it.
+local function edit_offsets(buffer, index)
+  if index and index.lines == buffer.lines and index.revision == buffer.text_revision then
+    return index
+  end
+  index = line_offsets_for(buffer.lines)
+  index.revision = buffer.text_revision
+  return index
+end
+
 local function sanitize_position_in_lines(lines, line, col)
   local nlines = #lines
   if line > nlines then
@@ -1787,7 +1807,7 @@ function Buffer:apply_edits(edits, opts)
   local time = opts.time or system.get_time()
   local owner_id = opts.owner_id or current_selection_owner_id(self)
   local old_lines = self.lines
-  local old_index = line_offsets_for(old_lines)
+  local old_index = edit_offsets(self, opts._offset_index)
   local old_selections = copy_array(self.selections)
   local old_last_selection = self.last_selection or 1
   local normalized = {}
@@ -2194,7 +2214,7 @@ end
 local function plan_normalized_edits(self, edits, opts)
   opts = opts or {}
   local old_lines = self.lines
-  local index = line_offsets_for(old_lines)
+  local index = edit_offsets(self)
   local normalized = {}
   for _, edit in ipairs(edits) do
     local line1, col1 = sanitize_position_in_lines(old_lines, edit.line1, edit.col1)
@@ -2213,11 +2233,11 @@ local function plan_normalized_edits(self, edits, opts)
     if a.start_offset == b.start_offset then return a.end_offset < b.end_offset end
     return a.start_offset < b.start_offset
   end)
-  return normalized
+  return normalized, index
 end
 
-local function final_selections_after_edits(self, normalized, final_by_idx, last_selection)
-  local position, map_position = edit_position_map(self.lines, normalized)
+local function final_selections_after_edits(self, normalized, final_by_idx, last_selection, index)
+  local position, map_position = edit_position_map(self.lines, normalized, edit_offsets(self, index))
   local final_offsets = {}
   local delta = 0
   local function final_offset_for(target, new_start, edit)
@@ -2270,14 +2290,14 @@ end
 
 function Buffer:selections_after_edits(edits, final_by_idx, last_selection, opts)
   opts = opts or {}
-  local normalized = opts.normalized and edits or plan_normalized_edits(self, edits, opts)
-  return final_selections_after_edits(self, normalized, final_by_idx, last_selection)
+  local normalized, index = edits, opts._offset_index
+  if not opts.normalized then normalized, index = plan_normalized_edits(self, edits, opts) end
+  return final_selections_after_edits(self, normalized, final_by_idx, last_selection, index)
 end
 
-local function clip_overlapping_edits_to_later_starts(self, normalized)
+local function clip_overlapping_edits_to_later_starts(self, normalized, index)
   if #normalized < 2 then return normalized end
-  local old_lines = self.lines
-  local index = line_offsets_for(old_lines)
+  index = edit_offsets(self, index)
   local clipped = {}
   local next_start
   for i = #normalized, 1, -1 do
@@ -2307,8 +2327,8 @@ local function clip_overlapping_edits_to_later_starts(self, normalized)
   return clipped
 end
 
-local function selection_ranges_after_edits(self, normalized, ranges_by_idx, last_selection)
-  local position, map_position = edit_position_map(self.lines, normalized)
+local function selection_ranges_after_edits(self, normalized, ranges_by_idx, last_selection, index)
+  local position, map_position = edit_position_map(self.lines, normalized, edit_offsets(self, index))
   local range_offsets = {}
   local delta = 0
   for _, edit in ipairs(normalized) do
@@ -2352,8 +2372,9 @@ end
 
 function Buffer:selection_ranges_after_edits(edits, ranges_by_idx, last_selection, opts)
   opts = opts or {}
-  local normalized = opts.normalized and edits or plan_normalized_edits(self, edits, opts)
-  return selection_ranges_after_edits(self, normalized, ranges_by_idx, last_selection)
+  local normalized, index = edits, opts._offset_index
+  if not opts.normalized then normalized, index = plan_normalized_edits(self, edits, opts) end
+  return selection_ranges_after_edits(self, normalized, ranges_by_idx, last_selection, index)
 end
 
 
@@ -2381,7 +2402,8 @@ function Buffer:text_input_by_selection(text_by_idx, idx, opts)
     final_by_idx[sidx] = "end"
   end
   if #edits == 0 then return end
-  local normalized = clip_overlapping_edits_to_later_starts(self, self:plan_edits(edits, opts))
+  local normalized, index = self:plan_edits(edits, opts)
+  normalized = clip_overlapping_edits_to_later_starts(self, normalized, index)
   if #normalized == 0 then return end
   local clipped_edits = {}
   local clipped_final_by_idx = {}
@@ -2396,12 +2418,15 @@ function Buffer:text_input_by_selection(text_by_idx, idx, opts)
     }
     clipped_final_by_idx[edit.idx] = final_by_idx[edit.idx]
   end
-  local new_selections, new_last_selection = self:selections_after_edits(normalized, clipped_final_by_idx, self.last_selection, { normalized = true })
+  local new_selections, new_last_selection = self:selections_after_edits(normalized, clipped_final_by_idx, self.last_selection, {
+    normalized = true, _offset_index = index,
+  })
   local result = self:apply_edits(clipped_edits, {
     type = opts.type or "insert",
     selections = new_selections,
     last_selection = new_last_selection,
     merge_cursors = opts.merge_cursors or false,
+    _offset_index = index,
   })
   linewrapping.notify_buffer_text_input(self, result)
   return result
@@ -2426,13 +2451,14 @@ function Buffer:ime_text_editing_by_selection(text_for_selection, idx)
     ranges_by_idx[sidx] = { "end", "start" }
   end
   if #edits == 0 then return end
-  local normalized = self:plan_edits(edits)
-  local selections, last_selection = selection_ranges_after_edits(self, normalized, ranges_by_idx, self.last_selection)
+  local normalized, index = self:plan_edits(edits)
+  local selections, last_selection = selection_ranges_after_edits(self, normalized, ranges_by_idx, self.last_selection, index)
   return self:apply_edits(edits, {
     type = "insert",
     selections = selections,
     last_selection = last_selection,
     merge_cursors = false,
+    _offset_index = index,
   })
 end
 
