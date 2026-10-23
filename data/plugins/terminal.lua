@@ -2274,7 +2274,18 @@ function TerminalView:on_mouse_wheel(delta_y)
 end
 
 function TerminalView:can_close(approve)
-  approve()
+  if not self.session then approve(); return end
+  local _, status = self.session:update()
+  local actions = M.quit_decision({ status })
+  if actions then approve(); return end
+  core.log_quiet("Terminal session %d requested close confirmation", self.log_id)
+  core.nag_view:show("Running Terminal", "End this Terminal Session and its running command?", {
+    { text = "End", action = "end" },
+    { text = "Cancel", action = "cancel", default_yes = true, default_no = true },
+  }, function(item)
+    core.log_quiet("Terminal session %d close decision: %s", self.log_id, item.action)
+    if item.action == "end" then approve() end
+  end)
 end
 
 function TerminalView:detach_session()
