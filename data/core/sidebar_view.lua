@@ -121,6 +121,8 @@ function SidebarView:metrics()
   -- Tabs sit under their Project's badge. A Pane Group's container starts at the badge's middle.
   m.tab_left = pad + 6 * SCALE + math.floor(badge / 2) - 4 * SCALE
   m.tab_x = m.tab_left + 10 * SCALE
+  -- Recent Pane numbers end here, left of their Tab's row and its Pane Group's rail.
+  m.number_gutter = m.tab_left - 3 * SCALE
   self.metrics_cache = m
   return m
 end
@@ -657,7 +659,7 @@ function SidebarView:get_tooltip()
   if not item or not item.terminal then return nil end
   local name = tab.display_name(item)
   local _, width = self:tab_bounds(row, self.width)
-  local available = tab.name_width(item, width, self:metrics().terminal, {number_column = true})
+  local available = tab.name_width(item, width, self:metrics().terminal, {number_gutter = self:metrics().number_gutter})
   if name ~= item.name or tab.fit(style.font, name, available) ~= name then return item.name end
 end
 
@@ -1445,7 +1447,7 @@ function SidebarView:draw_tab(row, x, y, width, now)
     name_font = font_variant("bold")
   end
   local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal, {name_color = style.text, now = now,
-    clock = self.clock, name_font = name_font, number_column = true, shimmer = not row.agent and shimmer or nil})
+    clock = self.clock, name_font = name_font, number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
   if spinning then self.spinning = true end
   local unread = row.attention == "done" or row.attention == "error"
   if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - name_x,

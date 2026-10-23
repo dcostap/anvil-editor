@@ -489,11 +489,11 @@ test.describe("Sidebar age groups", function()
 
   test.it("shows each Terminal Session's live title", function()
     local view = SidebarView(function() end)
-    view:set_size(300, 800)
+    view:set_size(240, 800)
     view:set_model({project(1, "C:/P", 60, "ready",
       {{id="a",title="[40 s] \u{03C0} - GLP4",cwd="C:/P",state="running",busy=1,activity=now},
        {id="b",title="",cwd="C:/P",state="running",busy=0,activity=now}})})
-    local text = joined(drawn_texts(view, 300, 800))
+    local text = joined(drawn_texts(view, 240, 800))
     test.ok(text:find("[40 s] \u{03C0} - GLP4", 1, true), "The live title is missing")
     test.ok(text:find("Terminal", 1, true), "An untitled Terminal Session has no label")
   end)
@@ -878,14 +878,20 @@ test.describe("Sidebar search editing", function()
 end)
 
 test.describe("Sidebar Recent Pane numbers", function()
+  -- Two Projects in two Windows. `stamped` gives the Panes the times they last had focus.
+  local function model(stamped)
+    local function at(time) return stamped and time or nil end
+    return {
+      {row_id=1,id=1,path="C:/A",state="ready",window_id=1,terminals={},panes={active=1,visible=1,
+        {id="a1",group=1,name="current.lua",focused=at(30)},{id="a2",group=2,name="never.lua"}}},
+      {row_id=2,id=2,path="C:/B",state="ready",window_id=2,terminals={},panes={active=1,visible=1,
+        {id="b1",group=1,name="older.lua",focused=at(10)},{id="b2",group=2,name="previous.lua",focused=at(20)}}},
+      windows={{id=1,selected_project=1},{id=2,selected_project=2}}}
+  end
+
   test.it("numbers the Tabs of the Panes that had focus before the current one, across Windows", function()
     local view = SidebarView(function() end)
-    view:set_model({
-      {row_id=1,id=1,path="C:/A",state="ready",window_id=1,terminals={},panes={active=1,visible=1,
-        {id="a1",group=1,name="current.lua",focused=30},{id="a2",group=2,name="never.lua"}}},
-      {row_id=2,id=2,path="C:/B",state="ready",window_id=2,terminals={},panes={active=1,visible=1,
-        {id="b1",group=1,name="older.lua",focused=10},{id="b2",group=2,name="previous.lua",focused=20}}},
-      windows={{id=1,selected_project=1},{id=2,selected_project=2}}}, 1)
+    view:set_model(model(true), 1)
     local texts = drawn_texts(view, 400, 800)
     local numbers = {}
     for _, item in ipairs(texts) do
@@ -897,8 +903,18 @@ test.describe("Sidebar Recent Pane numbers", function()
       end
     end
     test.same(numbers, {["previous.lua"] = "1", ["older.lua"] = "2"})
-    test.equal(find_text(texts, "never.lua").x, find_text(texts, "previous.lua").x,
-      "A Tab without a number does not align with a numbered Tab")
+  end)
+
+  test.it("draws the numbers beside the Tabs, so they move no row content", function()
+    local view = SidebarView(function() end)
+    view:set_model(model(false), 1)
+    local plain = drawn_texts(view, 400, 800)
+    view:set_model(model(true), 1)
+    local numbered = drawn_texts(view, 400, 800)
+    for _, name in ipairs {"current.lua", "never.lua", "older.lua", "previous.lua"} do
+      test.equal(find_text(numbered, name).x, find_text(plain, name).x, name .. " moved for the numbers")
+    end
+    test.ok(find_text(numbered, "1").right <= view:metrics().tab_left, "The number is inside its Tab's row")
   end)
 end)
 

@@ -242,12 +242,10 @@ function tab.display_name(item)
   return name .. arguments
 end
 
--- The space for the Recent Pane number. `number_column` keeps the space in Tabs without a number, so a list of Tabs
--- aligns its icons. Recent Pane numbers have one digit.
+-- The space for the Recent Pane number. A number in a gutter takes none.
 local function number_width(item, opts)
-  local font = opts.number_font or style.font
-  if opts.number_column then return font:get_width("0") + number_gap() end
-  return item.number and font:get_width(tostring(item.number)) + number_gap() or 0
+  if opts.number_gutter or not item.number then return 0 end
+  return (opts.number_font or style.font):get_width(tostring(item.number)) + number_gap()
 end
 
 local function prefix_width(item, row_height, opts)
@@ -262,7 +260,7 @@ local function prefix_width(item, row_height, opts)
 end
 
 -- The width the Tab's content needs at its full display name.
----@param opts {number_font: renderer.font?, number_column: boolean?, name_font: renderer.font?, now: number?}?
+---@param opts {number_font: renderer.font?, number_gutter: number?, name_font: renderer.font?, now: number?}?
 function tab.width(item, row_height, opts)
   opts = opts or {}
   local width = prefix_width(item, row_height, opts) + (opts.name_font or style.font):get_width(tab.display_name(item))
@@ -283,14 +281,17 @@ end
 
 -- Draws the Tab's content in the rectangle. `name_color` colours a name without a Git or missing-file colour.
 -- Returns true when it drew a spinner frame, so the caller can draw the next one, and the name's left edge.
--- `shimmer` is the phase of a shimmer through the name, from 0 to 1.
----@param opts {name_color: renderer.color, number_font: renderer.font?, number_column: boolean?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?}
+-- `shimmer` is the phase of a shimmer through the name, from 0 to 1. `number_gutter` is the right edge of a gutter
+-- left of the Tab. The number draws there, so Tabs with and without a number align.
+---@param opts {name_color: renderer.color, number_font: renderer.font?, number_gutter: number?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?}
 function tab.draw(item, x, y, w, h, opts)
   local number_font, name_font = opts.number_font or style.font, opts.name_font or style.font
   local right = x + w
   local function middle(font) return y + math.floor((h - font:get_height()) / 2) end
   if item.number then
-    renderer.draw_text(number_font, tostring(item.number), x, middle(number_font), style.titlebar_pane_number)
+    local text = tostring(item.number)
+    local number_x = opts.number_gutter and opts.number_gutter - number_font:get_width(text) or x
+    renderer.draw_text(number_font, text, number_x, middle(number_font), style.titlebar_pane_number)
   end
   x = x + number_width(item, opts)
   local color = opts.name_color
