@@ -48,6 +48,11 @@ Keep both files together. Do not fall back to the system console host.
 That host can drop Pi's mouse mode when Pi sets raw input during startup.
 Run `ui/terminal_mouse_wheel.lua` and the standalone smoke test after ConPTY updates.
 
+New Terminal Sessions start their host and shell on a background thread.
+They return in the reconnecting state, like restored sessions. Wait for running before sending input or reading the host ID.
+Startup copies the launch options and environment. Closing an unaccepted new session ends its shell, including during editor shutdown.
+Run `ui/terminal_startup.lua` after startup changes. Tests that need a live Terminal View use `tests/fixtures/terminal_ready.lua`.
+
 A Terminal Session is busy while its shell has a child process.
 An interactive PowerShell also runs `data/tools/shell-integration/anvil.ps1`.
 That script marks prompts and commands with OSC 133 and a per-session nonce.

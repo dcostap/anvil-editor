@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 local tab = require "core.tab"
@@ -24,7 +25,7 @@ test.describe("Terminal command status", function()
   test.it("shows the submitted command, elapsed time and completed duration", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
     local ok, err = pcall(function()
       wait_record(view, function(r) return r.busy == false end)
       test.ok(view.session:write("Start-Sleep -Seconds 4\r"))

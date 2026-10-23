@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 local core = require "core"
@@ -38,7 +39,7 @@ test.describe("Terminal revival", function()
   test.it("revives the latest disk screen after host loss and starts a usable new shell", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local state = view:get_state()
     local ffi = require "ffi"
     ffi.cdef [[
@@ -91,7 +92,7 @@ test.describe("Terminal revival", function()
   test.it("retires a lost session's record when a new shell replaces it", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local state = view:get_state()
     local kernel = require("ffi").load("kernel32")
     local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
@@ -123,7 +124,7 @@ test.describe("Terminal revival", function()
   test.it("keeps typed input on the revived shell's prompt", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
     local state = view:get_state()
     local kernel = require("ffi").load("kernel32")
     local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
@@ -161,7 +162,7 @@ test.describe("Terminal revival", function()
   test.it("gives the revived shell the restored screen size", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local state = view:get_state()
     local kernel = require("ffi").load("kernel32")
     local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
@@ -193,7 +194,7 @@ test.describe("Terminal revival", function()
     terminal._set_native_for_tests(nil)
     local counter = USERDIR .. "/rerun-count.txt"
     local script = system.getcwd() .. "/tests/fixtures/terminal_interrupted_command.ps1"
-    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
     local state = view:get_state()
     local kernel = require("ffi").load("kernel32")
     local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
@@ -242,7 +243,7 @@ test.describe("Terminal revival", function()
     local cwd = USERDIR .. "/revival cwd"
     system.mkdir(cwd)
     local uri = "file:///" .. cwd:gsub("\\", "/"):gsub(" ", "%%20")
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local previous_pid = view.session:stats().host_pid
     local kernel = require("ffi").load("kernel32")
     local handle = kernel.OpenProcess(0x100001, 0, previous_pid)
@@ -276,7 +277,7 @@ test.describe("Terminal revival", function()
   test.it("rejects a corrupt disk snapshot asynchronously without a replacement shell", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local state = view:get_state()
     local kernel = require("ffi").load("kernel32")
     local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
@@ -309,7 +310,7 @@ test.describe("Terminal revival", function()
   test.it("keeps the final shell output for revival after a normal shell exit", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local state = view:get_state()
     local kernel = require("ffi").load("kernel32")
     local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
@@ -336,15 +337,16 @@ test.describe("Terminal revival", function()
   test.it("keeps the visible alternate screen above the revival marker", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local state = view:get_state()
     local kernel = require("ffi").load("kernel32")
     local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
     local restored
     local ok, err = pcall(function()
-      local script = system.getcwd() .. "/tests/fixtures/terminal_alternate_snapshot.ps1"
+      local script = view:get_cwd() .. "/tests/fixtures/terminal_alternate_snapshot.ps1"
       test.ok(view.session:write(string.format('powershell.exe -NoProfile -File "%s"\r', script)))
-      test.ok(wait_for(view, function() return screen_text(view):find("ALTERNATE_SCREEN_SAVED", 1, true) end))
+      test.ok(wait_for(view, function() return screen_text(view):find("ALTERNATE_SCREEN_SAVED", 1, true) end),
+        "alternate screen did not arrive: " .. screen_text(view))
       checkpoint_on_detach(view, state)
       kernel.TerminateProcess(handle, 99); kernel.WaitForSingleObject(handle, 5000)
       restored = terminal.from_state(state)

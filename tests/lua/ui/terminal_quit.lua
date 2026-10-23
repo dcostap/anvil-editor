@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local core = require "core"
 local test = require "core.test"
 local terminal = require "plugins.terminal"
@@ -36,8 +37,8 @@ test.describe("Terminal quit confirmation", function()
     local storage = require "core.storage"
     storage.clear("plugins.terminal", "quit_choice")
     terminal._set_native_for_tests(nil)
-    local idle = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
-    local busy = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local idle = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
+    local busy = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local busy_state = busy:get_state()
     local busy_id = busy.session:stats().host_pid
     local previous_quit = core.quit_request
@@ -129,7 +130,7 @@ test.describe("Terminal busy status", function()
   test.it("reports a shell child while it runs and idle after it exits", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local function wait_busy(expected, seconds)
       local deadline = system.get_time() + seconds
       repeat
@@ -152,7 +153,7 @@ test.describe("Terminal busy status", function()
   test.it("reports a PowerShell command that runs inside the shell itself", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
     local function wait_busy(expected, seconds)
       local deadline = system.get_time() + seconds
       repeat
@@ -176,7 +177,7 @@ test.describe("Terminal busy status", function()
   test.it("keeps a command busy when a program inside it prints prompt marks", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
     local function wait_busy(expected, seconds)
       local deadline = system.get_time() + seconds
       repeat

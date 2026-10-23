@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 
@@ -29,7 +30,7 @@ test.describe("Terminal agent status", function()
   test.it("keeps a program's status and step while it runs and drops them when it ends", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
     local ok, err = pcall(function()
       test.ok(wait_for(view, function(value) return value.busy == false end, 20), "idle shell missing")
       -- "my session" and "bash: npm test" in base64.
@@ -70,7 +71,7 @@ test.describe("Terminal agent status", function()
   test.it("ends a step when its program reports that it rests", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
     local ok, err = pcall(function()
       test.ok(wait_for(view, function(value) return value.busy == false end, 20), "idle shell missing")
       -- "Thinking" in base64. The program reports "done" but does not clear its step.
@@ -90,7 +91,7 @@ test.describe("Terminal agent status", function()
   test.it("ignores a malformed report", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
     local ok, err = pcall(function()
       test.ok(wait_for(view, function(value) return value.busy == false end, 20), "idle shell missing")
       -- The second report's message is not base64, so the first report stays.

@@ -860,6 +860,7 @@ struct ReconnectJob {
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
   bool connected;
   char *userdir, *project, *shell, *cwd, *datadir, *revive_from;
+  wchar_t *environment;
   size_t scrollback_lines;
   bool has_scrollback_lines;
 };
@@ -869,6 +870,7 @@ static void release_reconnect(ReconnectJob *job) {
   anvil_ipc_pipe_close(&job->pipe);
   if (job->process) CloseHandle(job->process);
   free(job->userdir); free(job->project); free(job->shell); free(job->cwd); free(job->datadir); free(job->revive_from);
+  if (job->environment) FreeEnvironmentStringsW(job->environment);
   DeleteCriticalSection(&job->lock);
   free(job);
 }
@@ -876,13 +878,13 @@ static void release_reconnect(ReconnectJob *job) {
 static DWORD WINAPI reconnect_main(void *userdata) {
   ReconnectJob *job = userdata;
   uint64_t replay_bytes = 0;
-  bool connected = job->revive_from
+  bool connected = job->userdir
     ? anvil_terminal_host_launch(&job->pipe, &job->process, &job->host_pid, &job->shell_pid,
         &replay_bytes, job->id, job->userdir, job->project, job->shell, job->cwd, job->datadir,
-        job->revive_from, &job->size, job->has_scrollback_lines ? &job->scrollback_lines : NULL, &job->error)
+        job->revive_from, job->environment, &job->size, job->has_scrollback_lines ? &job->scrollback_lines : NULL, &job->error)
     : anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
         &job->shell_pid, job->id, &job->size, &job->error);
-  if (!connected && job->revive_from && job->process) TerminateProcess(job->process, 1);
+  if (!connected && job->userdir && job->process) TerminateProcess(job->process, 1);
   EnterCriticalSection(&job->lock);
   job->connected = connected;
   uint16_t final_type = job->final_type;
@@ -920,26 +922,30 @@ static bool start_reconnect(TerminalSession *session) {
   return true;
 }
 
-static bool start_revive(TerminalSession *session, const char *id, const char *path,
+static bool start_launch(TerminalSession *session, const char *id, const char *path,
                          const char *userdir, const char *project, const char *shell,
                          const char *cwd, const char *datadir) {
-  if (!anvil_terminal_id_valid(id)) return false;
-  char expected[32768]; snprintf(expected, sizeof(expected), "%s/terminal-sessions/%s.snapshot", userdir, id);
-  if (strcmp(expected, path)) return false;
+  if (path) {
+    if (!anvil_terminal_id_valid(id)) return false;
+    char expected[32768]; snprintf(expected, sizeof(expected), "%s/terminal-sessions/%s.snapshot", userdir, id);
+    if (strcmp(expected, path)) return false;
+  }
   ReconnectJob *job = calloc(1, sizeof(*job));
   if (!job) return false;
   InitializeCriticalSection(&job->lock); job->references = 2;
   job->userdir = _strdup(userdir); job->project = _strdup(project);
   job->shell = _strdup(shell ? shell : ""); job->cwd = _strdup(cwd ? cwd : "");
-  job->datadir = _strdup(datadir); job->revive_from = _strdup(path);
+  job->datadir = _strdup(datadir); job->revive_from = path ? _strdup(path) : NULL;
+  job->environment = GetEnvironmentStringsW();
   job->size = (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
   job->scrollback_lines = session->scrollback_lines; job->has_scrollback_lines = session->has_scrollback_lines;
-  memcpy(job->id, id, sizeof(job->id)); memcpy(session->id, id, sizeof(session->id));
-  HANDLE thread = job->userdir && job->project && job->shell && job->cwd && job->datadir && job->revive_from
+  if (id) { memcpy(job->id, id, sizeof(job->id)); memcpy(session->id, id, sizeof(session->id)); }
+  HANDLE thread = job->userdir && job->project && job->shell && job->cwd && job->datadir && job->environment && (!path || job->revive_from)
     ? CreateThread(NULL, 0, reconnect_main, job, 0, NULL) : NULL;
   if (!thread) { job->references = 1; release_reconnect(job); return false; }
   CloseHandle(thread); session->reconnect = job;
-  session->revived = session->initial_restore = session->transport_released = true;
+  session->revived = path != NULL;
+  session->initial_restore = session->transport_released = true;
   session->reconnect_started = GetTickCount64(); session->reconnect_delay = 250;
   return true;
 }
@@ -948,13 +954,23 @@ static bool cancel_reconnect(TerminalSession *session, uint16_t type) {
   ReconnectJob *job = session->reconnect;
   if (!job) return false;
   EnterCriticalSection(&job->lock);
+  /* A new shell that no view accepted must not survive as an unnamed session. */
+  if (job->userdir && !job->revive_from) type = ANVIL_TERMINAL_CLOSE;
   bool owns_command = !job->done;
   if (owns_command) {
     /* An unaccepted restore does not own another client's shell. */
-    if (session->initial_restore && !job->connected && !job->revive_from) type = ANVIL_TERMINAL_DETACH;
+    if (session->initial_restore && !job->connected && !job->userdir) type = ANVIL_TERMINAL_DETACH;
     job->final_type = type;
     if (type == ANVIL_TERMINAL_CLOSE) InterlockedIncrement(&pending_close_commands);
-  } else if (job->connected) session->attach_count = session->attach_count ? session->attach_count : 1;
+  } else if (job->connected) {
+    session->attach_count = session->attach_count ? session->attach_count : 1;
+    if (job->userdir) {
+      session->host_pid = job->host_pid;
+      memcpy(session->id, job->id, sizeof(session->id));
+      send_final_command(session, retain_handle(job->process), type);
+      owns_command = true;
+    }
+  }
   LeaveCriticalSection(&job->lock);
   session->reconnect = NULL;
   release_reconnect(job);
@@ -1323,15 +1339,13 @@ static int f_terminal_new(lua_State *L) {
   const char *revive_from = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
   lua_getfield(L, 1, "revive_session_id");
   const char *revive_id = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
-  AnvilTerminalSize size = { session->cols, session->rows, session->cell_width, session->cell_height };
   bool started = false;
   if (revive_from) {
     lua_getglobal(L, "DATADIR");
     const char *datadir = luaL_checkstring(L, -1);
-    started = start_revive(session, revive_id, revive_from, userdir ? userdir : ".", project, shell, cwd, datadir);
+    started = start_launch(session, revive_id, revive_from, userdir ? userdir : ".", project, shell, cwd, datadir);
     if (!started) error = ERROR_INVALID_DATA;
   } else if (id) {
-    if (!has_size) { size.cols = 0; size.rows = 0; }
     lua_getfield(L, 1, "host_pid");
     lua_Integer pid = lua_isnumber(L, -1) ? lua_tointeger(L, -1) : 0;
     lua_getfield(L, 1, "host_creation_time");
@@ -1360,10 +1374,8 @@ static int f_terminal_new(lua_State *L) {
   } else {
     lua_getglobal(L, "DATADIR");
     const char *datadir = luaL_checkstring(L, -1);
-    started = anvil_terminal_host_launch(&session->pipe, &session->process,
-      &session->host_pid, &session->shell_pid, &session->replay_bytes, session->id,
-      userdir ? userdir : ".", project, shell, cwd, datadir, NULL, &size,
-      has_scrollback_max_lines ? &scrollback_max_lines : NULL, &error);
+    started = start_launch(session, NULL, NULL, userdir ? userdir : ".", project, shell, cwd, datadir);
+    if (!started) error = ERROR_NOT_ENOUGH_MEMORY;
   }
   lua_settop(L, 2);
   if (!started) {
@@ -1375,21 +1387,9 @@ static int f_terminal_new(lua_State *L) {
     lua_pushinteger(L, error);
     return 3;
   }
-  bool asynchronous = id || revive_from;
-  set_terminal_state(session, asynchronous ? TERMINAL_STATE_RECONNECTING : TERMINAL_STATE_RUNNING);
-  if (!id) { session->cols = size.cols; session->rows = size.rows; }
-  session->cell_width = size.cell_width; session->cell_height = size.cell_height;
+  set_terminal_state(session, TERMINAL_STATE_RECONNECTING);
   session->attached_at = GetTickCount64();
-  session->attach_count = asynchronous ? 0 : 1;
-
-  if (!asynchronous && !start_terminal_io(session)) {
-    session->detached = id != NULL;
-    close_session(session);
-    lua_pop(L, 1);
-    lua_pushnil(L);
-    lua_pushliteral(L, "Could not start ConPTY input and output workers");
-    return 2;
-  }
+  session->attach_count = 0;
 
   if (!initialize_terminal(
       session, &colors,
@@ -1525,11 +1525,12 @@ static bool service_transport(TerminalSession *session) {
     DWORD error = job->error;
     HANDLE handle = NULL;
     if (connected) {
-      if (job->revive_from) {
+      if (job->userdir) {
         close_handle(&session->process);
         DuplicateHandle(GetCurrentProcess(), job->process, GetCurrentProcess(), &session->process,
           0, FALSE, DUPLICATE_SAME_ACCESS);
         session->host_pid = job->host_pid;
+        memcpy(session->id, job->id, sizeof(session->id));
       }
       handle = job->pipe.handle; job->pipe.handle = NULL;
       session->shell_pid = job->shell_pid;

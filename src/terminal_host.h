@@ -10,7 +10,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 const char *userdir, const char *project,
                                 const char *shell, const char *cwd,
                                 const char *datadir,
-                                const char *revive_from,
+                                const char *revive_from, const wchar_t *environment,
                                 AnvilTerminalSize *size, const size_t *scrollback_lines,
                                 DWORD *error);
 bool anvil_terminal_id_valid(const char *id);

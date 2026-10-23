@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local core = require "core"
 local test = require "core.test"
 local terminal = require "plugins.terminal"
@@ -6,7 +7,7 @@ test.describe("Terminal restore", function()
   test.it("returns without waiting for an attached client and fails without ending its shell", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local original = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local original = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local restored
     local ok, err = pcall(function()
       local started = system.get_time()

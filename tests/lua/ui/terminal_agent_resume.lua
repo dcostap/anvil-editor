@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 local core = require "core"
@@ -86,7 +87,7 @@ test.describe("Terminal agent resume", function()
       local dir = USERDIR .. "/pi sessions " .. runtime
       system.mkdir(dir)
       local cli = system.getcwd() .. "/tests/fixtures/fake-pi/dist/cli.js"
-      local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+      local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
       local state = view:get_state()
       local ffi = require "ffi"
       pcall(ffi.cdef, [[
@@ -135,7 +136,7 @@ test.describe("Terminal agent resume", function()
       local dir = USERDIR .. "/pi status " .. runtime
       system.mkdir(dir)
       local cli = system.getcwd() .. "/tests/fixtures/fake-pi/dist/cli.js"
-      local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+      local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
       local state = view:get_state()
       local ok, err = pcall(function()
         -- `pi update` reads --extension as a package to install.
@@ -187,7 +188,7 @@ test.describe("Terminal agent resume", function()
     local fixtures = system.getcwd() .. "/tests/fixtures/fake-pi"
     local inherited = os.getenv("NODE_OPTIONS") or ""
     system.setenv("NODE_OPTIONS", string.format('--require "%s/inherited-preload.cjs"', (fixtures:gsub("\\", "/"))))
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     system.setenv("NODE_OPTIONS", inherited)
     local state = view:get_state()
     local ok, err = pcall(function()

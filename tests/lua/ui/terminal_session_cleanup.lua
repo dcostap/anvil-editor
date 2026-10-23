@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local test = require "core.test"
 local system = require "system"
 local terminal = require "plugins.terminal"
@@ -23,7 +24,7 @@ test.describe("Terminal Session record cleanup", function()
       local file = assert(io.open(path, "wb")); file:write(text); file:close()
     end
     write(outside, "keep")
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local function saved_record()
       local file = assert(io.open(directory .. view.session_id .. ".lua", "rb"))
       local text = file:read("*a"); file:close()

@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 
@@ -12,7 +13,7 @@ test.describe("Terminal Windows Rerun", function()
       local source = assert(io.open(root .. "/tests/fixtures/terminal argv's.exe", "rb"))
       local file = assert(io.open(path, "wb"))
       file:write(source:read("*a")); source:close(); file:close()
-      local view = terminal.open { cwd = root, shell = "cmd.exe /D /Q" }
+      local view = ready(terminal.open { cwd = root, shell = "cmd.exe /D /Q" })
       local ok, err = pcall(function()
         test.ok(view.session:write(string.format('"%s" "%s/tests/fixtures/terminal_prompt_helper.lua"\r', path, root)))
         local ready, started = false, system.get_time()
@@ -41,7 +42,7 @@ test.describe("Terminal Windows Rerun", function()
     local root = system.getcwd()
     local output = USERDIR .. "/rerun-arguments.txt"
     os.remove(output)
-    local view = terminal.open { cwd = root, shell = "powershell.exe -NoLogo -NoProfile" }
+    local view = ready(terminal.open { cwd = root, shell = "powershell.exe -NoLogo -NoProfile" })
     local literal = "literal $env:ANVIL_RERUN_UNSET | & `t %TEMP% ' value"
     local ok, err = pcall(function()
       local deadline = system.get_time() + 10
@@ -74,7 +75,7 @@ test.describe("Terminal Windows Rerun", function()
     local output = USERDIR .. "/rerun-default-shell.txt"
     os.remove(output)
     -- Restored and revived Terminals keep the configured shell, which is unset by default.
-    local view = terminal.open { cwd = root }
+    local view = ready(terminal.open { cwd = root })
     local ok, err = pcall(function()
       test.is_nil(view:get_state().shell)
       local deadline = system.get_time() + 10

@@ -1,6 +1,16 @@
 local core = require "core"
 local test = require "core.test"
 
+local function wait_for_running(session)
+  local deadline = system.get_time() + 30
+  repeat
+    local _, status = session:update()
+    if status.kind == "running" then return end
+    coroutine.yield(0.01)
+  until system.get_time() >= deadline
+  test.fail("Terminal Session did not start")
+end
+
 local function snapshot_text(snapshot)
   local parts = {}
   for _, row in ipairs(snapshot.rows or {}) do
@@ -370,6 +380,7 @@ test.describe("Native terminal session", function()
       cwd = system.getcwd(),
     })
     test.ok(session, start_error)
+    wait_for_running(session)
     test.ok(session:paste("Write-Output ANVIL_TERMINAL_INPUT", false))
     test.ok(session:key("return", {}))
 
@@ -674,6 +685,7 @@ test.describe("Native terminal session", function()
       shell = [[powershell.exe -NoLogo -NoProfile -Command "Start-Sleep -Seconds 5"]],
     })
     test.ok(session, start_error)
+    wait_for_running(session)
     local ok, reason = session:write(string.rep("x", 4 * 1024 * 1024 + 1))
     test.not_ok(ok)
     test.equal(reason, "queue_full")

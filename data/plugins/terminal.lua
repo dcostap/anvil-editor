@@ -864,7 +864,7 @@ function TerminalView:service_session(include_rows)
   local update_started = record_perf and system.get_time()
   local changed, status = self.session:update()
   if status.kind == "failed" and status.host_gone and self:revive_lost_host() then return true end
-  if status.kind == "running" and status.attach_count ~= self.attach_count then self:log_session_attach() end
+  if (status.attach_count or 0) > 0 and status.attach_count ~= self.attach_count then self:log_session_attach() end
   if record_perf then
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end

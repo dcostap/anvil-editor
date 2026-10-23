@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 
@@ -16,7 +17,7 @@ test.describe("Terminal shutdown", function()
     local views, handles = {}, {}
     local ok, err = pcall(function()
       for _ = 1, 3 do
-        local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+        local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
         views[#views + 1] = view
         handles[#handles + 1] = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
       end

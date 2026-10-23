@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local command = require "core.command"
 local common = require "core.common"
 local core = require "core"
@@ -1747,7 +1748,7 @@ test.describe("Terminal View", function()
     local block = (string.rep("x", 78) .. "\r\n"):rep(1024)
     for _ = 1, 640 do assert(file:write(block)) end -- 50 MiB
     assert(file:close())
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" })
     test.ok(view and view.session)
     test.ok(view.session:write('type "' .. path .. '"\r'))
     local parsed_before = view.session:stats().output_bytes_parsed
@@ -1767,7 +1768,7 @@ test.describe("Terminal View", function()
   test.it("shows a failed terminal when its host process ends", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" })
     test.ok(view and view.session)
     local stats = view.session:stats()
     test.ok(stats.host_pid and stats.host_pid > 0, "session has no host PID")
@@ -1797,7 +1798,7 @@ test.describe("Terminal View", function()
   test.it("closes the client without waiting for or killing a suspended host", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" })
     test.ok(view and view.session)
     local ffi = require "ffi"
     ffi.cdef [[
@@ -1831,7 +1832,7 @@ test.describe("Terminal View", function()
   test.it("keeps the Pane as a blank Editor after typing exit in a real shell", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /d /q" })
     test.ok(view and view.session)
     local pane = panes.pane_for_view(view)
     test.ok(view.session:write("exit\r"))

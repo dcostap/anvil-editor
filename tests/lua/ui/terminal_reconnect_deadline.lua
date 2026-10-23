@@ -1,3 +1,4 @@
+local ready = dofile("tests/fixtures/terminal_ready.lua")
 local test = require "core.test"
 local terminal = require "plugins.terminal"
 
@@ -5,7 +6,7 @@ test.describe("Terminal reconnect deadline", function()
   test.it("fails within a bounded time without ending an unavailable live host", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
-    local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local ffi = require "ffi"
     ffi.cdef [[
       void * __stdcall OpenProcess(unsigned long access, int inherit, unsigned long pid);

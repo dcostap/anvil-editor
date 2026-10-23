@@ -1244,7 +1244,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 char id[ANVIL_TERMINAL_ID_LENGTH + 1],
                                 const char *userdir, const char *project, const char *shell, const char *cwd,
                                 const char *datadir,
-                                const char *revive_from,
+                                const char *revive_from, const wchar_t *environment,
                                 AnvilTerminalSize *size, const size_t *scrollback_lines, DWORD *error) {
   uint8_t random[16]; char name[128];
   bool random_ok = revive_from ? anvil_terminal_id_valid(id) : random_bytes(random, sizeof(random));
@@ -1270,13 +1270,14 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
     command[n++] = L' '; n += quote_arg(command + n, arg); free(arg);
   }
   STARTUPINFOW startup = { .cb = sizeof(startup) }; PROCESS_INFORMATION info = {0};
-  DWORD flags = CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW;
+  DWORD flags = CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT;
   wchar_t *first_command = _wcsdup(command);
   BOOL created = valid && first_command && CreateProcessW(exe, first_command, NULL, NULL, FALSE, flags,
-    NULL, NULL, &startup, &info);
+    (void *)environment, NULL, &startup, &info);
   DWORD launch_error = GetLastError(); free(first_command);
   if (!created && valid && launch_error == ERROR_ACCESS_DENIED) {
-    created = CreateProcessW(exe, command, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &startup, &info);
+    created = CreateProcessW(exe, command, NULL, NULL, FALSE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+      (void *)environment, NULL, &startup, &info);
     launch_error = GetLastError();
   }
   *error = valid ? launch_error : ERROR_INVALID_PARAMETER; free(command);
