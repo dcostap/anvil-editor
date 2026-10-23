@@ -78,6 +78,9 @@ function Scene:new(mode)
   if mode == "search" then
     self.sidebar:on_focus(true)
     self.sidebar:on_text_input("shell")
+    -- Part of the query is selected, so the scene shows the selection and a caret inside the text.
+    self.sidebar:edit("select_to_previous_char")
+    self.sidebar:edit("select_to_previous_char")
   end
   self.drag = mode == "drag"
 end

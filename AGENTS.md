@@ -124,6 +124,10 @@ The Sidebar ranks the stamps of all Projects. A Project fetches them when it tak
 A Title Bar in a Window without focus can show old numbers until its Window takes focus.
 Run `ui/recent_panes.lua`, `ui/titlebar.lua` and `ui/sidebar_view.lua` after changes.
 
+The Sidebar process has no Buffer or Text View. Its search field uses `core.line_input`.
+The Sidebar reads the user's bindings for the editor's line commands, such as `core:select_to_start_of_indentation`.
+Run `ui/sidebar_view.lua` and `ui/sidebar_navigation.lua` after changes.
+
 The standalone option is `-Dembedded_runtime=true`. It is off by default.
 `scripts\build-standalone-windows.sh` enables it, strips the executable, runs
 the standalone smoke test, and promotes the result only after the test passes.

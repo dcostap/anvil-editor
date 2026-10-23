@@ -4,6 +4,7 @@ local config = require "core.config"
 local tab = require "core.tab"
 local recent_panes = require "core.recent_panes"
 local common = require "core.common"
+local LineInput = require "core.line_input"
 local FocusFeedback = require "core.focus_feedback"
 
 -- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions. A
@@ -77,7 +78,8 @@ function SidebarView:new(action, collapsed, seen)
   self.opened, self.was_selected = {}, {}
   self.width, self.view_h = 240, 600
   self.main_h, self.bottom_h = 0, 0
-  self.query = ""
+  -- The search field's text, caret and selection. `query` is its text.
+  self.input, self.query, self.search_scroll = LineInput(), "", 0
   self.focus_feedback = FocusFeedback()
   -- Shown state. Each value moves toward its layout target as frames draw.
   self.visuals, self.leaving, self.marks, self.chevrons = {}, {}, {}, {}
@@ -140,7 +142,8 @@ end
 function SidebarView:on_focus(focused)
   self.focused = focused
   self.focus_feedback:update(focused and self or nil)
-  self.query, self.cursor = "", nil
+  self.input:set_text("")
+  self.query, self.cursor, self.selecting = "", nil, nil
   self:rebuild_rows()
   if focused then
     for index, row in ipairs(self.rows) do
@@ -150,10 +153,26 @@ function SidebarView:on_focus(focused)
   end
 end
 
+-- Filters the list again after the search field's text changed.
+function SidebarView:input_changed()
+  if self.input.text == self.query then return end
+  self.query, self.cursor = self.input.text, nil
+  self:rebuild_rows()
+end
+
 function SidebarView:on_text_input(text)
   if not self.focused then return end
-  self.query, self.cursor = self.query .. text, nil
-  self:rebuild_rows()
+  self.input:insert(text)
+  self:input_changed()
+end
+
+-- Performs the editor's line command `name` in the search field, such as "select_to_previous_word_start". Without a
+-- query it returns false, so the same keys move through the list. A paste can start a query.
+function SidebarView:edit(name)
+  if not self.focused or self.query == "" and name ~= "paste" then return false end
+  if not self.input:perform(name) then return false end
+  self:input_changed()
+  return true
 end
 
 function SidebarView:activate_row(row)
@@ -169,10 +188,6 @@ function SidebarView:on_key_pressed(key)
   local row = self:get_cursor()
   if key == "escape" then self.action("return_focus")
   elseif key == "return" or key == "keypad enter" then self:activate_row(row)
-  elseif key == "backspace" then
-    self.query = self.query:gsub("[%z\1-\127\194-\244][\128-\191]*$", "", 1)
-    self.cursor = nil
-    self:rebuild_rows()
   elseif key == "up" or key == "down" or key == "home" or key == "end" then
     local index = key == "home" and 1 or key == "end" and #self.rows
       or (self.cursor or 1) + (key == "up" and -1 or 1)
@@ -522,8 +537,34 @@ function SidebarView:drag_scrollbar(y)
   self.shown[area.field] = self[area.field]
 end
 
+-- The search field's text area: its left edge, top, width and height.
+function SidebarView:search_box()
+  local m = self:metrics()
+  local tx = m.pad + 16 * SCALE + style.icon_font:get_width("L")
+  return tx, m.search_y, math.max(0, self.width - m.pad - 12 * SCALE - tx), m.search
+end
+
+function SidebarView:in_search(x, y)
+  local m = self:metrics()
+  return self:search_open() and x >= m.pad and x < self.width - m.pad and y >= m.search_y
+    and y < m.search_y + m.search
+end
+
+-- The caret offset at the pointer's `x` in the search field.
+function SidebarView:search_offset(x)
+  return self.input:offset_at(style.font, x - self:search_box() + self.search_scroll)
+end
+
 function SidebarView:on_mouse_pressed(button, x, y)
   if button ~= "left" and button ~= "right" and button ~= "middle" then return end
+  if self:in_search(x, y) then
+    -- A press places the caret. A drag from it selects.
+    if button == "left" then
+      self.input:set_caret(self:search_offset(x))
+      self.selecting = true
+    end
+    return
+  end
   local area = button == "left" and self:scrollbar_at(x, y)
   if area then
     -- A press on the track centres the thumb there, then drags it.
@@ -568,7 +609,7 @@ end
 
 function SidebarView:on_mouse_released(button, x, y)
   if button == "left" then
-    self.scroll_drag, self.press = nil, nil
+    self.scroll_drag, self.press, self.selecting = nil, nil, nil
     if self.drag then self:finish_drag(x, y) end
     return
   end
@@ -623,6 +664,10 @@ end
 -- Returns true when the hover or a dragged scrollbar changed and the view needs a redraw.
 function SidebarView:on_mouse_moved(x, y)
   self.hover_x, self.hover_y = x, y
+  if self.selecting then
+    self.input:set_caret(self:search_offset(x), true)
+    return true
+  end
   if self.scroll_drag then
     self:drag_scrollbar(y)
     self:update_hover()
@@ -652,7 +697,7 @@ end
 -- leaves anyway cancels the drag.
 function SidebarView:on_mouse_left()
   self.hover_x, self.hover_y = nil, nil
-  self.scroll_drag, self.click_row, self.press = nil, nil, nil
+  self.scroll_drag, self.click_row, self.press, self.selecting = nil, nil, nil, nil
   if self.drag then self:end_drag(nil) end
   return self:update_hover()
 end
@@ -660,6 +705,7 @@ end
 -- The pointer's cursor: a hand over rows that act on a click.
 function SidebarView:pointer_cursor()
   if self.drag or self.scroll_drag or not self.hover_x then return "arrow" end
+  if self.selecting or self:in_search(self.hover_x, self.hover_y) then return "ibeam" end
   if self.press then return "hand" end
   if self:scrollbar_at(self.hover_x, self.hover_y) then return "arrow" end
   return self.hover and "hand" or "arrow"
@@ -1505,10 +1551,12 @@ end
 
 -- The search field shows only while a query is typed. It grows in and fades as it opens, and keeps the last query
 -- while it closes.
-function SidebarView:draw_search()
+function SidebarView:draw_search(width, height)
   local open = self.shown.search
-  if self:search_open() then self.shown_query = self.query end
-  if open <= 0.01 or not self.shown_query then return end
+  local input = self.input
+  if self:search_open() then self.shown_input = {text = input.text, caret = input.caret, anchor = input.anchor} end
+  local shown = self.shown_input
+  if open <= 0.01 or not shown then return end
   local m = self:metrics()
   local x, y, w, h = m.pad, m.search_y, self.width - 2 * m.pad, m.search
   local transformed = open < 0.999
@@ -1521,12 +1569,25 @@ function SidebarView:draw_search()
   local icon = style.icon_font
   local ix = x + 8 * SCALE
   text("L", ix, y + math.floor((h - icon:get_height()) / 2), style.accent, icon)
-  local tx = ix + icon:get_width("L") + 8 * SCALE
-  local ty = y + math.floor((h - style.font:get_height()) / 2)
-  local query = tab.fit(style.font, self.shown_query, math.max(0, x + w - 12 * SCALE - tx))
-  text(query, tx, ty, style.text)
-  local caret_x = tx + style.font:get_width(query)
-  renderer.draw_rect(caret_x + SCALE, ty, math.max(1, math.floor(1.5 * SCALE)), style.font:get_height(), style.accent)
+  local tx, _, available = self:search_box()
+  local font = style.font
+  local ty = y + math.floor((h - font:get_height()) / 2)
+  local caret_w = math.max(1, math.floor(1.5 * SCALE))
+  -- The text scrolls as little as it can to keep the caret in view.
+  local function offset_x(pos) return font:get_width(shown.text:sub(1, pos)) end
+  local caret_x = offset_x(shown.caret)
+  local scroll = math.min(self.search_scroll, math.max(0, offset_x(#shown.text) + SCALE + caret_w - available))
+  scroll = math.max(0, math.min(caret_x, math.max(scroll, caret_x + SCALE + caret_w - available)))
+  self.search_scroll = scroll
+  renderer.set_clip_rect(tx, y, available, h)
+  local first, last = math.min(shown.caret, shown.anchor), math.max(shown.caret, shown.anchor)
+  if first ~= last then
+    local left = offset_x(first)
+    renderer.draw_rect(tx - scroll + left, ty, offset_x(last) - left, font:get_height(), style.selection)
+  end
+  text(shown.text, tx - scroll, ty, style.text)
+  renderer.draw_rect(tx - scroll + caret_x + SCALE, ty, caret_w, font:get_height(), style.accent)
+  renderer.set_clip_rect(0, 0, width, height)
   if transformed then renderer.pop_transform() end
 end
 
@@ -1577,7 +1638,7 @@ function SidebarView:draw(width, height)
   renderer.draw_rect(0, 0, width, height,
     system.is_surface_transparent() and style.wallpaper_surface(style.background2) or style.background2)
   renderer.draw_rect(width - math.max(1, SCALE), 0, math.max(1, SCALE), height, style.divider)
-  self:draw_search()
+  self:draw_search(width, height)
   local top, main_bottom = self:shown_list_top(), self:main_bottom()
   local bottom_top = self:bottom_area()
   local active_color = self.focused and style.row_selection_inactive or style.row_selection

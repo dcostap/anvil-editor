@@ -728,11 +728,152 @@ test.describe("Sidebar search field", function()
     test.not_nil(search_icon(searching), "The search field does not show while a query is typed")
     test.not_nil(find_text(searching, "al"), "The query is not drawn")
     test.ok(test.not_nil(find_text(searching, "Alpha")).y > alpha_y, "The list does not make room for the field")
-    view:on_key_pressed("backspace")
-    view:on_key_pressed("backspace")
+    view:edit("backspace")
+    view:edit("backspace")
     local cleared = drawn_texts(view)
     test.is_nil(search_icon(cleared), "The search field stays after the query is erased")
     test.equal(test.not_nil(find_text(cleared, "Alpha")).y, alpha_y)
+  end)
+end)
+
+test.describe("Sidebar search editing", function()
+  local style = require "core.style"
+
+  local function searching(text)
+    local view = SidebarView(function() end)
+    view:set_model({{row_id=1,id=1,path="C:/Alpha",state="ready",terminals={}}})
+    view:on_focus(true)
+    if text then view:on_text_input(text) end
+    return view
+  end
+
+  -- Runs `fn` with a fake system clipboard, and returns what it holds afterwards.
+  local function with_clipboard(content, fn)
+    local get, set = system.get_clipboard, system.set_clipboard
+    system.get_clipboard = function() return content end
+    system.set_clipboard = function(text) content = text end
+    local ok, err = pcall(fn)
+    system.get_clipboard, system.set_clipboard = get, set
+    if not ok then error(err, 0) end
+    return content
+  end
+
+  test.it("replaces the selected part of the query with typed text", function()
+    local view = searching("alpha beta")
+    test.ok(view:edit("select_to_previous_word_start"))
+    view:on_text_input("gamma")
+    test.equal(view.query, "alpha gamma")
+    view:edit("move_to_start_of_indentation")
+    view:edit("select_to_next_word_end")
+    view:on_text_input("x")
+    test.equal(view.query, "x gamma")
+    view:edit("move_to_end_of_line")
+    view:edit("select_to_start_of_indentation")
+    view:on_text_input("y")
+    test.equal(view.query, "y")
+    view:edit("select_all")
+    view:edit("backspace")
+    test.equal(view.query, "")
+    test.not_ok(view:search_open(), "Erasing the selected query leaves the search field open")
+  end)
+
+  test.it("moves the caret and deletes around it a whole UTF-8 character at a time", function()
+    local view = searching("a\u{00E9}b")
+    view:edit("move_to_previous_char")
+    view:edit("backspace")
+    test.equal(view.query, "ab")
+    view:edit("delete")
+    test.equal(view.query, "a")
+    -- A caret move ends a selection at the selection's edge.
+    view = searching("abc")
+    view:edit("select_all")
+    view:edit("move_to_previous_char")
+    view:on_text_input("x")
+    test.equal(view.query, "xabc")
+  end)
+
+  test.it("deletes words with the editor's word rule", function()
+    local view = searching("foo.bar baz")
+    local steps = {}
+    for _ = 1, 4 do
+      view:edit("delete_to_previous_word_start")
+      steps[#steps + 1] = view.query
+    end
+    test.same(steps, {"foo.bar ", "foo.", "foo", ""})
+  end)
+
+  test.it("copies, cuts and pastes one line through the clipboard", function()
+    local clipboard = with_clipboard("", function()
+      local view = searching("alpha beta")
+      view:edit("select_to_previous_word_start")
+      view:edit("cut")
+      test.equal(view.query, "alpha ")
+      view:edit("move_to_start_of_indentation")
+      view:edit("paste")
+      test.equal(view.query, "betaalpha ")
+    end)
+    test.equal(clipboard, "beta")
+    with_clipboard("one\r\ntwo", function()
+      local view = searching("x")
+      view:edit("select_all")
+      view:edit("paste")
+      test.equal(view.query, "one two")
+    end)
+  end)
+
+  test.it("leaves caret keys to the list while no query is typed, and pastes to start a search", function()
+    local view = searching()
+    test.not_ok(view:edit("move_to_previous_char"))
+    test.not_ok(view:edit("move_to_start_of_indentation"))
+    test.not_ok(view:edit("backspace"))
+    with_clipboard("alp", function() test.ok(view:edit("paste")) end)
+    test.equal(view.query, "alp")
+  end)
+
+  test.it("places the caret and selects with the pointer in the search field", function()
+    local view = searching("alpha")
+    view:set_size(300, 600)
+    local m = view:metrics()
+    local y = m.search_y + m.search / 2
+    view:on_mouse_pressed("left", m.pad + 2, y)
+    view:on_text_input("x")
+    test.equal(view.query, "xalpha")
+    view:on_mouse_pressed("left", 300 - m.pad - 2, y)
+    view:on_mouse_moved(m.pad + 2, y)
+    view:on_mouse_released("left", m.pad + 2, y)
+    view:on_text_input("z")
+    test.equal(view.query, "z")
+  end)
+
+  test.it("scrolls a long query to keep the caret in the field", function()
+    local view = searching(string.rep("long query ", 8))
+    local function caret_x()
+      local x
+      with_renderer({draw_rect = function(left, y, w, h, color)
+        if color == style.accent and w < 4 * SCALE then x = left end
+      end}, function() view:draw(240, 600) end)
+      return x
+    end
+    local left, _, width = view:search_box()
+    local at_end = test.not_nil(caret_x())
+    test.ok(at_end >= left and at_end <= left + width, "The caret at the end is outside the field")
+    view:edit("move_to_start_of_indentation")
+    local at_start = test.not_nil(caret_x())
+    test.ok(at_start >= left and at_start < at_end, "The caret at the start is outside the field")
+  end)
+
+  test.it("highlights the selected text", function()
+    local view = searching("alpha")
+    local function highlights()
+      local found = 0
+      with_renderer({draw_rect = function(x, y, w, h, color)
+        if color == style.selection then found = found + 1 end
+      end}, function() view:draw(300, 600) end)
+      return found
+    end
+    test.equal(highlights(), 0)
+    view:edit("select_all")
+    test.equal(highlights(), 1)
   end)
 end)
 

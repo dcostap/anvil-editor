@@ -234,8 +234,11 @@ function core.init()
     if core.session_log then core.session_log:write("INFO", string.format(...), "Sidebar") end
   end
   core.log_quiet("Sidebar frontend started")
-  -- The Sidebar has no editor commands. Keep its focus shortcut and list commands only.
+  -- The Sidebar has no editor commands. Keep its focus shortcut, the Recent Pane shortcuts, the list commands, and
+  -- the editor's line editing shortcuts for the search field.
   local bindings = keymap.get_bindings("core:focus_project_sidebar") or {}
+  local LineInput, line_bindings = require "core.line_input", {}
+  for _, name in ipairs(LineInput.COMMANDS) do line_bindings[name] = keymap.get_bindings("core:" .. name) or {} end
   local recent_panes, recent_bindings = require "core.recent_panes", {}
   for number = 1, recent_panes.COUNT do
     recent_bindings[number] = keymap.get_bindings("pane:focus_recent_" .. number) or {}
@@ -261,10 +264,16 @@ function core.init()
     end})
     for _, binding in ipairs(recent_bindings[number]) do keymap.add {[binding] = name} end
   end
-  for _, key in ipairs {"up", "down", "left", "right", "home", "end", "return", "keypad enter", "escape", "backspace"} do
+  for _, key in ipairs {"up", "down", "left", "right", "home", "end", "return", "keypad enter", "escape"} do
     local name = "sidebar:" .. key:gsub(" ", "_")
     command.add(nil, {[name] = function() if current then current.view:on_key_pressed(key) end end})
     keymap.add {[key] = name}
+  end
+  -- Added last, so they go first. Without a query they decline, and Left, Right, Home and End move through the list.
+  for _, name in ipairs(LineInput.COMMANDS) do
+    local sidebar_name = "sidebar:" .. name
+    command.add(nil, {[sidebar_name] = function() return current ~= nil and current.view:edit(name) end})
+    for _, binding in ipairs(line_bindings[name]) do keymap.add {[binding] = sidebar_name} end
   end
   keymap.add {["alt+r"] = "sidebar:return"}
   if core.session_log then core.session_log:flush() end
