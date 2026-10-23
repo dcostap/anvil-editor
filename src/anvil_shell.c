@@ -6355,11 +6355,16 @@ static void service_sidebar(void) {
 }
 static void notify_sidebar_changes(void) {
   sync_sidebar_model();
-  if (shell.sidebar_process && shell.sidebar_process->connected &&
-      shell.sidebar_notified_revision != shell.sidebar.revision) {
-    for (ShellWindow *window = shell.windows; window; window = window->next)
-      if (window->sidebar_client && !window->closing)
+  if (shell.sidebar_notified_revision != shell.sidebar.revision) {
+    for (ShellWindow *window = shell.windows; window; window = window->next) {
+      if (window->closing) continue;
+      if (shell.sidebar_process && shell.sidebar_process->connected && window->sidebar_client)
         shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_SIDEBAR_CHANGED, NULL, 0, NULL, 0);
+      /* Numbered Pane commands need live state without a keyboard focus change.
+       * Other loaded Projects fetch it when they take keyboard focus. */
+      if (window->selected && window->selected->connected)
+        shell_send(window->selected, ANVIL_SURFACE_MSG_SIDEBAR_CHANGED, NULL, 0, NULL, 0);
+    }
     shell.sidebar_notified_revision = shell.sidebar.revision;
   }
 }

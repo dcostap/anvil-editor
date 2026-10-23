@@ -131,6 +131,8 @@ The Sidebar passes its shared seen times. Projects read the persisted seen times
 `core.recent_panes` retains focus-history numbering. Change the selection in `core.numbered_panes` to restore it; there is no setting.
 Each Project stamps its active Pane when the Pane takes keyboard focus. The Pane report sends the stamps.
 A Project fetches the reports when it takes keyboard focus. Focus-history numbering ranks these stamps across Projects.
+The shell also notifies each Window's Selected Project when the Sidebar model changes.
+Selected Projects fetch the changed state, so Pending Pane commands work without a keyboard focus change.
 `system.get_time()` reads one clock for all processes, so stamps from different Projects compare.
 A Title Bar in a Window without focus can show old numbers until its Window takes focus.
 Run `ui/pending_panes.lua`, `ui/recent_panes.lua`, `ui/titlebar.lua` and `ui/sidebar_view.lua` after changes.

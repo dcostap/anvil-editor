@@ -2530,6 +2530,11 @@ function core.on_event(type, ...)
       system.raise_window(core.window)
       core.open_file(filename)
     end
+  elseif type == "projectsidebarchanged" then
+    -- The selected Project uses the same live state as the Sidebar for numbered Pane commands.
+    if core.request_project_sidebar() then
+      core.log_quiet("Project Sidebar changed: refreshing numbered Pane state")
+    end
   elseif type == "projectsidebar" then
     local request = core.project_sidebar_request
     if not request then return end
@@ -2572,6 +2577,7 @@ function core.on_event(type, ...)
       projects.status_limited, projects.revision = page.status_limited, page.revision
       projects.windows = request.windows
       core.project_sidebar, core.project_sidebar_request = projects, nil
+      core.redraw = true
     end
   elseif type == "panerequest" then
     require("core.pane_requests").perform(...)

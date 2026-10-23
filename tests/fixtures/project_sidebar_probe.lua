@@ -97,6 +97,7 @@ local function wait_finish(seconds)
 end
 local function snapshot()
   assert(type(core.request_project_sidebar) == "function", "Project Sidebar snapshot API is unavailable")
+  wait(function() return not core.project_sidebar_request end, 5)
   local previous = core.project_sidebar
   assert(core.request_project_sidebar(true))
   return wait(function() return core.project_sidebar ~= previous and core.project_sidebar end, 5)
@@ -411,6 +412,13 @@ core.add_background_thread(function()
       if action == "sidebar-idle" then
         save("idle-ready", true)
         wait(function() return read("idle-finish") end, 30)
+        -- No explicit query or focus change: the shell must notify the selected Project too.
+        wait(function()
+          local recent = row(core.project_sidebar or {}, "Recent")
+          for _, terminal in ipairs(recent and recent.terminals or {}) do
+            if terminal.cwd == "REGISTRY_NOTIFICATION_CWD" then return true end
+          end
+        end, 10, "The Project kept old Terminal state without a focus change")
         quit()
         return
       end

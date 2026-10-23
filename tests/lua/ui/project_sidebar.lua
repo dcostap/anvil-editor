@@ -1,6 +1,9 @@
 local core = require "core"
 local test = require "core.test"
 
+-- End the isolated startup Terminal without a shutdown dialog.
+require("core.storage").save("plugins.terminal", "quit_choice", "end")
+
 -- Seam: asynchronous snapshots at the native Window event boundary.
 test.describe("Project Sidebar snapshots", function()
   local saved, offsets
@@ -62,6 +65,37 @@ test.describe("Project Sidebar snapshots", function()
     }}]])
     test.equal(#core.project_sidebar, 1)
     test.equal(core.project_sidebar[1].path, "C:/new")
+  end)
+  test.it("focuses a new Pending Pane without a keyboard focus change", function()
+    local numbered = require "core.numbered_panes"
+    local function reply(state, revision)
+      core.on_event("projectsidebar", string.format([[return {revision=%d,offset=0,next=2,total=2,items={
+        {kind="project",row_id=1,path="C:/pending-sidebar-test",state="ready",
+          panes="{{id='result',terminal={session='pending-sidebar-test',state='running'}}}"},
+        {kind="terminal",row_id=1,id="pending-sidebar-test",state="running",agent_state=%q,agent_since=%d}
+      }}]], revision, state, os.time() + 1))
+    end
+    test.ok(core.request_project_sidebar())
+    reply("working", 1)
+    test.is_nil(numbered.target(core.project_sidebar, 1, {}))
+
+    core.on_event("projectsidebarchanged")
+    reply("done", 2)
+    test.equal((numbered.target(core.project_sidebar, 1, {}) or {}).id, "result",
+      "A new result did not become a Pending Pane")
+
+    local saved_request, request = system.pane_request
+    system.pane_request = function(route, path, text)
+      request = {route = route, path = path, action = assert(loadstring("return " .. text))()}
+      return true
+    end
+    local ok, err = pcall(function()
+      test.ok(require("core.command").perform("pane:focus_number_1"))
+      test.same(request, {route = "select", path = "C:/pending-sidebar-test",
+        action = {action = "focus", pane = "result"}})
+    end)
+    system.pane_request = saved_request
+    test.ok(ok, err)
   end)
   test.it("publishes changed recent Projects but not an unchanged source", function()
     local recents, publish = core.recent_projects, system.publish_project_sidebar
