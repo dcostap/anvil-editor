@@ -121,6 +121,8 @@ function SidebarView:metrics()
   -- Tabs sit under their Project's badge. A Pane Group's container starts at the badge's middle.
   m.tab_left = pad + 6 * SCALE + math.floor(badge / 2) - 4 * SCALE
   m.tab_x = m.tab_left + 10 * SCALE
+  -- A Pane Group's rail and a pending Terminal's bar share one line, so a pending Tab's bar covers its group's rail.
+  m.rail_x, m.rail = m.tab_left + 3 * SCALE, math.max(2, math.floor(2 * SCALE))
   -- Pane numbers end here, left of their Tab's row and its Pane Group's rail.
   m.number_gutter = m.tab_left - 3 * SCALE
   self.metrics_cache = m
@@ -1461,16 +1463,15 @@ local ATTENTION_TINT, ATTENTION_SPAN = 0.14, 0.6
 function SidebarView:draw_attention(row, y, width)
   local m = self:metrics()
   local color = tab.attention_color(row.attention)
-  local x, h = m.tab_left, row.h - 2
-  local bar = math.max(2, math.floor(2 * SCALE))
+  local x, h = m.rail_x + m.rail, row.h - 2
   local span = (width - m.pad - x) * ATTENTION_SPAN
   local step = math.max(1, math.floor(3 * SCALE))
-  for offset = bar, span - 1, step do
+  for offset = 0, span - 1, step do
     local strength = 1 - offset / span
     renderer.draw_rect(x + offset, y + 1, math.min(step, span - offset), h,
       fade(color, ATTENTION_TINT * strength * strength))
   end
-  renderer.draw_rounded_rect(x, y + 1, bar, h, bar / 2, color)
+  renderer.draw_rounded_rect(m.rail_x, y + 1, m.rail, h, m.rail / 2, color)
 end
 
 -- A Tab's or Terminal Session's content in [x, x + width): its icon, name and status, and an agent's step below.
@@ -1513,12 +1514,11 @@ function SidebarView:draw_containers(area, width)
         local bottom = origin + row.shown.y + row.h
         local alpha = math.min(first.shown.alpha, row.shown.alpha)
         local x, w = m.tab_left, width - m.pad - m.tab_left
-        local rail = math.max(2, math.floor(2 * SCALE))
         if joined then
           renderer.draw_rounded_rect(x, top + 1, w, bottom - top - 2, m.radius,
             fade(style.drop_target_background, alpha * mark.alpha))
         end
-        renderer.draw_rect(x + 3 * SCALE, top + 6 * SCALE, rail, bottom - top - 12 * SCALE,
+        renderer.draw_rect(m.rail_x, top + 6 * SCALE, m.rail, bottom - top - 12 * SCALE,
           fade(row.bracket.visible and style.titlebar_group_indicator or style.divider, alpha))
         first = nil
       end
