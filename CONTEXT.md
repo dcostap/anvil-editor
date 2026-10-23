@@ -360,7 +360,7 @@ A work area that shows one Current View and owns one Navigation History. Each Pa
 _Avoid_: Left Pane, Right Pane, panel, split
 
 **Recent Pane**:
-One of the five Panes that had focus most recently before the current Pane, in any Project or Anvil Window. Recent Panes have the numbers 1 to 5, newest first, so number 1 is the previous Pane. The current Pane and older Panes have no number.
+One of the Panes that had focus most recently before the current Pane, in any Project or Anvil Window. Recent Panes fill unused numbers after Pending Panes, newest first. A Pane gets only one number. The current Pane gets no Recent Pane number.
 _Avoid_: Pane number, Tab number
 
 **Pending Pane**:

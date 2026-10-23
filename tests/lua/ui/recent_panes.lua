@@ -106,6 +106,20 @@ test.describe("Recent Panes in a Project", function()
     test.same(requests, {})
   end)
 
+  test.it("uses live local focus history when no Pane is pending", function()
+    local numbered = require "core.numbered_panes"
+    local one = panes.create { factory = factory("one") }
+    local two = panes.create { factory = factory("two") }
+    focus(one)
+    focus(two)
+    test.equal(numbered.local_numbers()[one.id], 1)
+    test.is_nil(numbered.local_numbers()[two.id])
+    test.ok(numbered.focus(1))
+    test.equal(panes.active(), one)
+    pane_report.publish()
+    test.equal(numbered.local_numbers()[two.id], 1)
+  end)
+
   test.it("asks the shell to focus a Recent Pane in another Project", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }

@@ -1,4 +1,4 @@
--- FIFO numbers for Panes with an Unread Result or an agent waiting for an answer.
+-- Pending Panes first, then Recent Panes in the remaining number slots.
 local core = require "core"
 local common = require "core.common"
 local tab = require "core.tab"
@@ -51,6 +51,19 @@ end
 
 function pending.numbers(projects, seen)
   local order, numbers = pending.order(projects, seen), {}
+  local included = {}
+  for _, item in ipairs(order) do included[pending.key(item.path, item.id)] = true end
+  -- Skip the current Pane before filtering duplicates. It can itself be pending.
+  local history = recent.order(projects)
+  for index = 2, #history do
+    if #order >= pending.COUNT then break end
+    local item = history[index]
+    local key = pending.key(item.path, item.id)
+    if not included[key] then
+      order[#order + 1] = item
+      included[key] = true
+    end
+  end
   for number = 1, math.min(pending.COUNT, #order) do
     local item = order[number]
     numbers[pending.key(item.path, item.id)] = number
@@ -75,7 +88,7 @@ local function model()
   local active = panes.active()
   for index, pane in ipairs(panes.ordered()) do
     local view = pane.current_view
-    items[index] = {id = pane.id}
+    items[index] = {id = pane.id, focused = recent.focused_at(pane)}
     if view.terminal_view then
       items[index].terminal = {session = view.session_id, state = view.state, bell = view.bell_at}
     end

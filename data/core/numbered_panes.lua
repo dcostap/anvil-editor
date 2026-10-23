@@ -1,2 +1,2 @@
--- Change this module to core.recent_panes to restore focus-history numbering.
+-- Pending Panes take priority; focus history fills the remaining slots.
 return require "core.pending_panes"

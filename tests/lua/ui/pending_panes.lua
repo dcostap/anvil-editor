@@ -7,6 +7,35 @@ require("core.storage").save("plugins.terminal", "quit_choice", "end")
 
 -- Seam: the shared numbering and navigation API consumes Project reports and seen times.
 test.describe("Pending Pane numbers", function()
+  test.it("fills spare numbers from focus history without repeating pending or current Panes", function()
+    local projects = {{path = "C:/A", panes = {
+      {id = "current", focused = 100},
+      {id = "pending", focused = 90, terminal = {session = "p", state = "running", bell = 10}},
+      {id = "recent", focused = 80},
+      {id = "older", focused = 70},
+      {id = "oldest", focused = 60},
+      {id = "last", focused = 50},
+      {id = "never"},
+    }}}
+    local function targets()
+      local result = {}
+      local numbers = numbered.numbers(projects, {})
+      for n = 1, numbered.COUNT do
+        local item = numbered.target(projects, n, {})
+        result[n] = item and item.id
+        if item then test.equal(numbers[numbered.key(item.path, item.id)], n) end
+      end
+      test.is_nil(numbers[numbered.key("C:/A", "current")])
+      test.is_nil(numbers[numbered.key("C:/A", "never")])
+      return result
+    end
+    test.same(targets(), {"pending", "recent", "older", "oldest", "last"})
+    projects[1].panes[4].focused = 85
+    test.same(targets(), {"pending", "older", "recent", "oldest", "last"})
+    projects[1].panes[2].terminal.bell = nil
+    test.same(targets(), {"pending", "older", "recent", "oldest", "last"})
+  end)
+
   test.it("numbers unread results and waiting agents FIFO across Projects", function()
     local projects = {
       {path = "C:/A", panes = {
@@ -41,6 +70,28 @@ test.describe("Pending Pane numbers", function()
     test.is_nil(numbered.target(projects, 1, {}))
     projects[1].terminals[1].agent_state = "blocked"
     test.equal(numbered.target(projects, 1, {}).id, "active")
+  end)
+
+  test.it("keeps a focused waiting agent ahead of history and caps navigation at five", function()
+    local projects = {{id = 1, path = "C:/A", panes = {active = 1,
+      {id = "active", focused = 100, terminal = {session = "s", state = "running"}},
+      {id = "previous", focused = 90}},
+      terminals = {{id = "s", state = "running", agent_state = "blocked", agent_since = 10}}},
+      {path = "C:/B", panes = {{id = "remote", focused = 80}}},
+      windows = {{selected_project = 1}}}
+    test.equal(numbered.target(projects, 1, {}).id, "active")
+    test.equal(numbered.target(projects, 2, {}).id, "previous")
+    test.equal(numbered.target(projects, 3, {}).id, "remote")
+    test.is_nil(numbered.target(projects, 4, {}))
+    for n = 1, 5 do
+      projects[2].panes[#projects[2].panes + 1] = {
+        id = "bell" .. n, terminal = {session = "b" .. n, state = "running", bell = 10 + n}}
+    end
+    test.equal(numbered.target(projects, 5, {}).id, "bell4")
+    test.is_nil(numbered.target(projects, 6, {}))
+    local numbers = numbered.numbers(projects, {})
+    test.is_nil(numbers[numbered.key("C:/A", "previous")])
+    test.is_nil(numbers[numbered.key("C:/B", "remote")])
   end)
 
   test.it("routes the numbered command to the oldest pending Pane in another Project", function()
