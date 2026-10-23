@@ -1713,7 +1713,7 @@ test.describe("Terminal View", function()
     test.same({ point.col, point.row, point.end_col, point.end_row }, { 2, 2, 6, 2 })
   end)
 
-  test.it("previews terminal images on click but preserves selection and program mouse input", function(context)
+  test.it("previews terminal images during mouse tracking but preserves drags and other program clicks", function(context)
     local overlay = require "core.markdown.image_overlay"
     local view = terminal.open()
     local session = context.sessions[1]
@@ -1722,14 +1722,18 @@ test.describe("Terminal View", function()
       { canvas = image, x = 0, y = 0, width = 80, height = 40,
         z = 1, id = 1, placement_id = 1 },
     }
+    view.snapshot.mouse_tracking = true
     keymap.modkeys.ctrl = false
     view:on_mouse_moved(7, 7, 0, 0)
     test.equal(view.cursor, "hand")
+    local mouse_events_before_click = #session.mouse_events
     view:on_mouse_pressed("left", 7, 7)
     test.ok(not overlay.visible())
     view:on_mouse_released("left", 7, 7)
     test.ok(overlay.visible())
     test.equal(overlay.get_view().image, image)
+    test.equal(#session.mouse_events, mouse_events_before_click,
+      "Image clicks must not reach the terminal program")
     overlay.close()
 
     view:on_mouse_pressed("left", 7, 7)
@@ -1738,11 +1742,11 @@ test.describe("Terminal View", function()
     test.ok(not overlay.visible())
     test.equal(session.gesture_events[#session.gesture_events - 1][1], "drag")
 
-    view.snapshot.mouse_tracking = true
-    view:on_mouse_moved(7, 7, 0, 0)
+    local outside_y = 7 + view.cell_height * 4
+    view:on_mouse_moved(7, outside_y, 0, 0)
     test.equal(view.cursor, "arrow")
-    view:on_mouse_pressed("left", 7, 7)
-    view:on_mouse_released("left", 7, 7)
+    view:on_mouse_pressed("left", 7, outside_y)
+    view:on_mouse_released("left", 7, outside_y)
     test.ok(not overlay.visible())
     test.equal(session.mouse_events[#session.mouse_events - 1][1], "press")
     test.equal(session.mouse_events[#session.mouse_events][1], "release")

@@ -1998,7 +1998,7 @@ function TerminalView:mouse_point_at(x, y)
   local col, row = self:mouse_position(x, y)
   local point = self:point_of_interest_at(col, row, not keymap.modkeys.ctrl)
   if point then return point end
-  if self.snapshot.mouse_tracking and not keymap.modkeys.ctrl then return nil end
+  -- Images own their clicks, like explicit links, even when the program tracks the mouse.
   local scale = self.cell_width / self.native_cell_width
   local px = x - self.position.x - PADDING
   local py = y - self.position.y - PADDING
