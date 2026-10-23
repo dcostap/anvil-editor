@@ -1453,7 +1453,7 @@ function SidebarView:shimmer_phase()
 end
 
 -- The strength of a pending row's tint at its left edge, and the part of the row that the tint fades out over.
-local ATTENTION_TINT, ATTENTION_SPAN = 0.3, 0.85
+local ATTENTION_TINT, ATTENTION_SPAN = 0.14, 0.6
 
 -- A Terminal that needs the user: a bar in its attention colour at the row's left edge, and a tint of that colour
 -- that fades out to the right. The renderer has no gradients, so thin strips with a falling alpha draw the fade.
@@ -1461,7 +1461,7 @@ function SidebarView:draw_attention(row, y, width)
   local m = self:metrics()
   local color = tab.attention_color(row.attention)
   local x, h = m.tab_left, row.h - 2
-  local bar = math.max(2, math.floor(3 * SCALE))
+  local bar = math.max(2, math.floor(2 * SCALE))
   local span = (width - m.pad - x) * ATTENTION_SPAN
   local step = math.max(1, math.floor(3 * SCALE))
   for offset = bar, span - 1, step do
