@@ -615,6 +615,7 @@ function SidebarView:on_mouse_moved(x, y)
   if self.drag then
     self.drag.x, self.drag.y = x, y
     self:update_drag()
+    if self.drag then self:send_work("move") end
     self:update_hover()
     return true
   end
@@ -769,9 +770,24 @@ function SidebarView:card_rect(drag)
   return rect
 end
 
+-- Right of the Sidebar the drag goes on over the Selected Project's work area. That Project shows its Pane drop
+-- overlay there and splits or swaps on the drop. A press on a Tab selects its Project, so the Tab is there.
+-- Returns true when the Tab dropped there.
+function SidebarView:send_work(phase)
+  local drag = self.drag
+  local over = drag.x and drag.x >= self.width
+  if not over and not drag.work then return false end
+  if not over then phase = "leave" end
+  drag.work = phase == "move"
+  self.action("request", "pointer", nil, {action = "drag", phase = phase, source = drag.row.project.path,
+    pane = drag.row.tab.id}, math.floor(drag.x or -1), math.floor(drag.y or -1))
+  return phase == "drop"
+end
+
 -- Ends the drag. The card grows back into a row at the target, or at its own row, and fades.
 function SidebarView:end_drag(target)
   local drag, card = self.drag, self.card
+  if drag.work then self:send_work("leave") end
   self.drag = nil
   if not card then return end
   if config.transitions == false or not drag.x then self.card = nil; return end
@@ -792,6 +808,10 @@ function SidebarView:finish_drag(x, y)
   drag.x, drag.y = x, y
   self:update_drag()
   if not self.drag then return end
+  if self:send_work("drop") then
+    self.drag, self.card = nil, nil
+    return
+  end
   local target, source = drag.target, drag.row
   self:end_drag(target)
   if not target then return end
@@ -896,6 +916,7 @@ function SidebarView:step(dt)
   local card = self.card
   if card and self.drag then
     card.lift = ease(card.lift, 1, FADE_RATE, 0.01)
+    card.alpha = ease(card.alpha, self.drag.work and 0 or 1, FADE_RATE, 0.02)
   elseif card then
     for key, value in pairs(card.to) do card.rect[key] = ease(card.rect[key], value, MOVE_RATE) end
     card.lift = ease(card.lift, 0, FADE_RATE, 0.01)

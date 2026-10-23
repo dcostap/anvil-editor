@@ -91,13 +91,11 @@ Project with the pointer position in that Project's coordinates. Bump the protoc
 ## Milestone 5: drag a Tab from the Sidebar into the work area
 
 - Over the work area, the Selected Project shows the same drop overlay as a Title Bar Pane drag.
-- A drop splits or swaps like a Title Bar Pane drag. A Tab from another Project moves to the Selected Project
-  through milestone 3.
+- A drop splits or swaps like a Title Bar Pane drag.
 
 ## Not in scope
 
 - Reordering Projects by drag, and moving a Project to another Window by drag.
-- Drops on Dormant Projects.
 - A Tab context menu.
 
 ## Status by milestone
@@ -108,7 +106,7 @@ Project with the pointer position in that Project's coordinates. Bump the protoc
   A dragged Tab becomes a chip below and right of the pointer, so the drop mark stays visible.
   The `project-sidebar-drag` and `project-sidebar-drag-dark` render scenarios show a drag over a Pane Group.
   The shell's pointer capture and drop routing still need a check in a live Window.
-- Milestone 5: not started.
+- Milestone 5: done. A press on a Tab selects its Project, so a work-area drag always stays in that Project.
 
 ## Tests
 

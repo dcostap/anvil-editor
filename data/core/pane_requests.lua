@@ -131,10 +131,13 @@ local function validate(request)
   return true
 end
 
-local function execute(request)
+local function execute(request, x, y)
   local action = request.action
   if action == "drag" then
-    core.log_quiet("Pane request: drag ignored")
+    -- A Tab of another Project has the same Pane IDs, so the source Project must be this one.
+    local project = core.root_project()
+    local own = project and common.path_equals(project.path, request.source)
+    core.title_bar:sidebar_pane_drag(own and panes.find(request.pane) or nil, request.phase, x, y)
     return true
   end
   if action == "export" or action == "import" or action == "transferred" then
@@ -195,12 +198,16 @@ function M.perform(text, x, y)
   local valid
   valid, err = validate(request)
   if not valid then return fail(err) end
-  core.log_quiet("Pane request: %s pointer=%s,%s", request.action, tostring(x), tostring(y))
+  -- A drag sends a request for each pointer move.
+  local quiet = request.phase == "move"
+  if not quiet then
+    core.log_quiet("Pane request: %s pointer=%s,%s", request.action, tostring(x), tostring(y))
+  end
   local called, result
-  called, result, err = pcall(execute, request)
+  called, result, err = pcall(execute, request, x, y)
   if not called then return fail(result) end
   if not result then return fail(err or "action failed") end
-  core.log_quiet("Pane request: completed %s", request.action)
+  if not quiet then core.log_quiet("Pane request: completed %s", request.action) end
   return true
 end
 

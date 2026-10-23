@@ -550,6 +550,27 @@ function TitleBar:apply_pane_drag_target(target)
   end
 end
 
+-- A Tab that the Project Sidebar drags over this Project: the same overlay and drop as a Tab dragged from here.
+-- `pane` is nil when the Tab belongs to another Project. `phase` is "move", "drop" or "leave".
+function TitleBar:sidebar_pane_drag(pane, phase, x, y)
+  if not pane or phase == "leave" then
+    if self.sidebar_dragging then
+      self.sidebar_dragging = false
+      self:clear_pane_drag("cancelled")
+    end
+    return
+  end
+  self.sidebar_dragging = true
+  self.dragged_pane, self.drag_x, self.drag_y = pane, x, y
+  self.drag_target = self:resolve_pane_drag_target(x, y)
+  core.redraw = true
+  if phase == "drop" then
+    local outcome = self:apply_pane_drag_target(self.drag_target)
+    self.sidebar_dragging = false
+    self:clear_pane_drag(outcome and "dropped" or "cancelled")
+  end
+end
+
 function TitleBar:clear_pane_drag(outcome)
   local dragged = self.dragged_pane
   self.pressed_pane = nil

@@ -2,14 +2,16 @@ local core = require "core"
 local common = require "core.common"
 local panes = require "core.panes"
 local RootPanel = require "core.rootpanel"
+local TitleBar = require "core.titlebar"
+local layout = require "core.pane_layout"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local View = require "core.view"
 local test = require "core.test"
 
 -- Seam: shell requests delivered through the public event handler.
-local function request(value)
-  core.on_event("panerequest", common.serialize(value, {escape = true}), -1, -1)
+local function request(value, x, y)
+  core.on_event("panerequest", common.serialize(value, {escape = true}), x or -1, y or -1)
 end
 local function create()
   return panes.create {factory = function() return View() end}
@@ -23,13 +25,15 @@ test.describe("Pane requests", function()
   local saved, folder
   test.before_each(function()
     panes.reset_for_tests()
-    saved = {root = core.root_panel, focus = core.set_active_view, active = core.active_view}
+    saved = {root = core.root_panel, focus = core.set_active_view, active = core.active_view,
+      title = core.title_bar, projects = core.projects}
     core.set_active_view = function(view) core.active_view = view end
     core.root_panel = RootPanel()
   end)
   test.after_each(function()
     panes.reset_for_tests()
     core.root_panel, core.set_active_view, core.active_view = saved.root, saved.focus, saved.active
+    core.title_bar, core.projects = saved.title, saved.projects
     if folder then test.ok(test.remove_tree(folder)); folder = nil end
   end)
 
@@ -58,6 +62,27 @@ test.describe("Pane requests", function()
     local a, b = create(), create()
     request {action = "move", pane = a.id, target = {mode = "group"}}
     test.same(panes.ordered(), {b, a})
+  end)
+
+  test.it("drops a Tab dragged from the Project Sidebar like a Title Bar Pane drag", function()
+    core.title_bar, core.projects = TitleBar(), {{path = "C:/Project"}}
+    local source, target = create(), create()
+    layout.update_rects(target.group.root, {x = 0, y = 50, w = 200, h = 100})
+    local function drag(phase, path)
+      request({action = "drag", phase = phase, source = path, pane = source.id}, 195, 100)
+    end
+    drag("drop", "C:/Other")
+    test.same(panes.ordered(), {source, target}, "A Tab of another Project has the same Pane IDs")
+    test.not_equal(source.group, target.group)
+    drag("move", "C:/Project")
+    test.equal(core.title_bar.dragged_pane, source)
+    drag("leave", "C:/Project")
+    test.is_nil(core.title_bar.dragged_pane)
+    drag("move", "C:/Project")
+    drag("drop", "C:/Project")
+    test.is_nil(core.title_bar.dragged_pane)
+    test.equal(source.group, target.group)
+    test.same(panes.ordered(), {target, source})
   end)
 
   test.it("joins groups and reorders their Panes before and after anchors", function()

@@ -129,7 +129,7 @@ After placement, P is the active Pane and its group is the visible group.
 | `export` | `pane`, `to` (Project path), `target`, `transfer` | direct to the source | See transfer. |
 | `import` | `snapshot`, `target`, `source` (Project path), `transfer` | select to the target | See transfer. |
 | `transferred` | `transfer`, `ok`, `error` | direct to the source | See transfer. |
-| `drag` | `phase` (`"move"`, `"drop"`, `"leave"`), `source` (Project path), `pane` | pointer | Milestone 5. The lead defines it later. Ignore it until then. |
+| `drag` | `phase` (`"move"`, `"drop"`, `"leave"`), `source` (Project path), `pane` | pointer | A Tab dragged right of the Sidebar. The Title Bar shows and applies it like its own Pane drag. A Project ignores a Tab of another Project. |
 
 `pane_requests.perform(text, x, y)` handles every action. It passes `export`, `import` and
 `transferred` to `pane_transfer.perform(request)`.

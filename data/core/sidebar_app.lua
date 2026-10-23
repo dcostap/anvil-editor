@@ -115,13 +115,16 @@ local function add_surface(id, window)
       return
     end
     if action == "request" then
-      local route, path, request = row_id, target, ...
+      local route, path, request, x, y = row_id, target, ...
       -- Focusing a Pane gives the keyboard back to the Project. The shell gets both messages in this order.
       if request.action == "focus" then system.focus_project_sidebar(false) end
       local text = common.serialize(request, {escape = true})
-      local sent = system.pane_request(route, path, text)
-      core.log_quiet("Sidebar Pane request: Window=%d route=%s Project=%s action=%s pane=%s bytes=%d sent=%s", id,
-        route, path, request.action, tostring(request.pane), #text, tostring(sent))
+      local sent = system.pane_request(route, path, text, x, y)
+      -- A drag over the work area sends a request for each pointer move. Log only its end.
+      if request.phase ~= "move" or not sent then
+        core.log_quiet("Sidebar Pane request: Window=%d route=%s Project=%s action=%s pane=%s bytes=%d sent=%s",
+          id, route, tostring(path), request.action, tostring(request.pane), #text, tostring(sent))
+      end
       return
     end
     if action == "select_terminal" then
