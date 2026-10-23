@@ -219,6 +219,21 @@ function keymap.on_key_pressed(k, ...)
       keymap.modkeys["ctrl"] = false
     end
   else
+    -- Focus changes clear our cached modifiers. A held key does not send another press to the new surface.
+    local event = ...
+    if type(event) == "table" and event.modifiers ~= nil and event.alt ~= nil then
+      keymap.modkeys.shift = event.shift == true
+      keymap.modkeys.ctrl = event.ctrl == true and not event.altgr
+      if macos then
+        keymap.modkeys.alt, keymap.modkeys.altgr = false, false
+        keymap.modkeys.option = event.alt == true
+        keymap.modkeys.cmd = event.super == true
+      else
+        keymap.modkeys.alt = event.alt == true and not event.altgr
+        keymap.modkeys.altgr = event.altgr == true
+        keymap.modkeys.super = event.super == true
+      end
+    end
     local stroke = key_to_stroke(k)
     local commands, performed = keymap.map[stroke], false
     core.log_quiet("Input trace: keymap stroke=%s candidates=%d", stroke, commands and #commands or 0)
