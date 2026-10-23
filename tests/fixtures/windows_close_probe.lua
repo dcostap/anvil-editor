@@ -3,6 +3,7 @@
 -- Window A holds Project and Other; Window B holds Replacement.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if not action or not action:match("^windows%-close") then return end
+local dirty = action == "windows-close-dirty" or action == "windows-close-cleanup-cancel"
 local core, common = require "core", require "core.common"
 local command = require "core.command"
 local ffi = require "ffi"
@@ -115,7 +116,7 @@ if path:match("/driver$") then
     controls(bw, "Window B")
     -- The last Window Close ends the shell through the normal shutdown.
     user32.PostMessageW(bw, 0x10, 0, 0)
-    if action == "windows-close-dirty" then
+    if dirty then
      wait(function() return load("nag-b-1") end, 8, "last Window Close did not ask its dirty Project")
      save("answer-b-1", "discard")
     end
@@ -140,19 +141,61 @@ if path:match("/driver$") then
    assert(c.window_id == a.window_id, "Other did not load into Window A")
    local pc = open(c.pid)
 
-   if action == "windows-close-dirty" then
+   if action == "windows-close-cleanup-unload" then
+    save("unload-c", true)
+    wait(function() return load("cleanup-c") end, 10, "Other did not reach cleanup")
+    wait(function()
+     local text = ffi.new("wchar_t[128]")
+     local length = user32.GetWindowTextW(aw, text, 128)
+     local label = {}; for i=0,length-1 do label[#label+1] = string.char(text[i] < 128 and text[i] or 63) end
+     return table.concat(label) == "Project"
+    end, 5, "Unload kept the closing Project selected during cleanup")
+    assert(running(pc) and running(pa), "Unload ended a Project before the cleanup check")
+    assert(user32.IsWindowVisible(aw) ~= 0, "Project unload hid its Window")
+    save("release-cleanup", true)
+    wait(function() return not running(pc) end, 10)
+    user32.PostMessageW(aw, 0x10, 0, 0)
+    wait(function() return count() == 1 end, 10)
+    return finish_b()
+   end
+
+   if action == "windows-close-cleanup" then
+    user32.PostMessageW(aw, 0x10, 0, 0)
+    wait(function() return load("cleanup-c") end, 10, "Other did not reach cleanup")
+    wait(function() return load("cleanup-a") end, 5, "Window Close waited for Other's cleanup before closing Project")
+    wait(function() return user32.IsWindowVisible(aw) == 0 end, 5, "Window stayed visible during cleanup")
+    assert(running(pa) and running(pc), "cleanup fixture did not keep both Projects alive")
+    assert(user32.IsWindowVisible(bw) ~= 0 and running(pb), "Close hid or ended the other Window")
+    save("release-cleanup", true)
+    wait(function() return count() == 1 end, 10, "Window cleanup did not finish")
+    return finish_b()
+   end
+
+   if dirty then
     -- Window A selects Other. Close asks it first, then Project. Cancel stops the remaining Close requests.
     user32.PostMessageW(aw, 0x10, 0, 0)
     wait(function() return load("nag-c-1") end, 8, "Window A Close did not ask its selected dirty Project")
     assert(not load("nag-a-1"), "Window A Close asked two Projects at once")
     save("answer-c-1", "discard")
-    wait(function() return not running(pc) end, 8, "accepted Close did not end Other")
+    if action == "windows-close-cleanup-cancel" then
+     wait(function() return load("cleanup-c") end, 8, "Other did not reach cleanup")
+    else
+     wait(function() return not running(pc) end, 8, "accepted Close did not end Other")
+    end
     wait(function() return load("nag-a-1") end, 8, "Window A Close did not ask its next dirty Project")
     save("answer-a-1", "cancel")
     wait(function() return load("cancelled-a-1") end, 5)
     coroutine.yield(1)
     assert(not load("nag-a-2"), "Cancel did not stop Window A's later Close requests")
     assert(running(pa) and count() == 2, "Cancel ended Project or removed Window A")
+    if action == "windows-close-cleanup-cancel" then
+     assert(running(pc), "cleanup fixture ended before cancellation")
+     assert(user32.IsWindowVisible(aw) ~= 0, "Close hid a Window with a cancelled Project")
+     save("release-cleanup", true)
+     wait(function() return not running(pc) end, 8)
+     coroutine.yield(.5)
+     assert(not load("nag-a-2") and running(pa), "completed cleanup restarted the cancelled Window Close")
+    end
     assert(not running(pc), "Cancel revived an accepted Close")
     assert(not load("nag-b-1") and running(pb), "Window A Close reached Window B")
     controls(aw, "Window A")
@@ -221,6 +264,7 @@ if path:match("/driver$") then
    end
    error("unknown Window Close probe " .. action)
   end)
+  save("release-cleanup", true)
   local file=assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"),"wb"))
   file:write("return ",common.serialize{ok=ok,error=ok and nil or tostring(err),action=action}); file:close()
   for _, handle in ipairs(handles) do ntdll.NtResumeProcess(handle); kernel.CloseHandle(handle) end
@@ -229,11 +273,22 @@ if path:match("/driver$") then
  end)
 elseif names[path] then
  local name = names[path]
+ if (action == "windows-close-cleanup" and name ~= "b")
+   or ((action == "windows-close-cleanup-cancel" or action == "windows-close-cleanup-unload") and name == "c") then
+  -- Hold final destruction at the process boundary, after normal saves and exit intent.
+  local guard = newproxy(true)
+  getmetatable(guard).__gc = function()
+   save("cleanup-" .. name, true)
+   local deadline = system.get_time() + 20
+   while not load("release-cleanup") and system.get_time() < deadline do system.sleep(.01) end
+  end
+  core.close_probe_guard = guard
+ end
  core.add_background_thread(function()
   -- Let first-run Workspace setup finish before editing.
   coroutine.yield(.2)
   local editor
-  if action == "windows-close-dirty" then
+  if dirty then
    editor = core.open_file(path .. "/edited.txt"); core.set_active_view(editor)
    editor.buffer:insert(1, 1, "DIRTY_" .. name .. "_")
   end
@@ -247,6 +302,7 @@ elseif names[path] then
   -- Answer each Close choice as the driver asks. Each choice is numbered per Project.
   local asked, pending = 0, false
   while true do
+   if load("unload-" .. name) then command.perform("core:unload_project"); return end
    if load("quit-" .. name) then quit(); return end
    local visible = core.nag_view.visible and core.nag_view:get_title() == "Unsaved Changes"
    if visible and not pending then asked = asked + 1; pending = true; save("nag-" .. name .. "-" .. asked, true) end

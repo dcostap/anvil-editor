@@ -237,6 +237,7 @@ struct ShellWindow {
   ShellProject *selected, *empty;
   ShellProject *sidebar_client; /* Surface state only; the shared record owns the transport. */
   bool closing;
+  Uint64 close_started_ns;
   bool removing;
   bool picker_pending;
   /* Front-to-back order for App State. A larger value was activated later. */
@@ -414,6 +415,7 @@ static bool select_project_path(ShellWindow *window, const char *path);
 static bool select_terminal_path(ShellWindow *window, const char *path, const char *id);
 static bool select_pane_path(ShellWindow *window, const char *path, const char *text, uint32_t size);
 static void select_project(ShellProject *project, bool keep_sidebar_focus);
+static void select_after_close(ShellProject *project);
 static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id);
 static void present_deferred_dialogs(ShellProject *project);
 static void finish_launch(ShellProject *project);
@@ -540,6 +542,8 @@ static void begin_window_close(ShellWindow *window) {
     window->close_entry_valid = window_snapshot(window, &window->close_entry);
     if (!window->close_entry_valid) SDL_Log("Shell could not save the closing Window's loaded Projects");
     window->closing = true;
+    window->close_started_ns = SDL_GetTicksNS();
+    SDL_Log("Shell Window Close begin: Window=%u", window->id);
     window->close_generation++;
     window->resolve_revision++;
   }
@@ -3515,7 +3519,11 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
     if (!message->size) {
       project->intentional_exit = project->exit_announced = true;
-      SDL_Log("Project exit accepted by shell");
+      if (!project->unloading) begin_window_close(window);
+      else select_after_close(project);
+      SDL_Log("Project exit accepted by shell: Project=%u Window=%u close_ms=%.3f; cleanup pending",
+              project->id, window->id, project->close_requested_ns
+                ? (SDL_GetTicksNS() - project->close_requested_ns) / 1000000.0 : 0.0);
     }
     break;
   case ANVIL_SURFACE_MSG_HAND_OFF:
@@ -4459,7 +4467,9 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         break;
       }
       stop_close_timer(project);
-      SDL_Log("Anvil shell surface process exited with code %d", (int)(intptr_t)event->user.data2);
+      SDL_Log("Anvil shell surface process exited with code %d: Project=%u Window=%u close_ms=%.3f",
+              (int)(intptr_t)event->user.data2, project->id, project->window_id,
+              project->close_requested_ns ? (SDL_GetTicksNS() - project->close_requested_ns) / 1000000.0 : 0.0);
       end_color_theme_preview(project);
       if (project->restart_path) {
         char *path = _strdup(project->restart_path);
@@ -4482,9 +4492,12 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         project->connected = false;
         project->failed_close = true;
         if (!project->unloading) {
-          begin_window_close(window);
-          if (project != window->selected)
+          /* Exit intent already started Close. A later Project may have cancelled it. */
+          if (!project->exit_announced) begin_window_close(window);
+          if (window->closing && project != window->selected && !window->selected->exit_announced)
             request_close(window->selected);
+          if (!window->closing && project->identity && project->project_path)
+            mark_unloading(project);
         }
         return SDL_APP_CONTINUE;
       }
@@ -5517,6 +5530,10 @@ static void finish_launch(ShellProject *project) {
 static void select_project(ShellProject *project, bool keep_sidebar_focus) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
+  if (project->exit_announced) {
+    window_notice(window, "Project cleanup is still running. Try again when it finishes.");
+    return;
+  }
   if (!keep_sidebar_focus) focus_sidebar(window, false);
   clear_window_notice(window);
   if (project->unresponsive) show_unresponsive_notice(window);
@@ -5946,9 +5963,26 @@ static void finish_resolutions(void) {
   }
 }
 
+/* Keep the closing Project's identity reserved until process exit. Select usable content now. */
+static void select_after_close(ShellProject *project) {
+  ShellWindow *window = window_for_id(project->window_id);
+  if (!window || window->selected != project) return;
+  for (ShellProject *item = shell.projects; item; item = item->next) {
+    if (item != project && item->window_id == window->id && !item->unloading &&
+        !item->exit_announced && !item->failed_close) {
+      select_project(item, false);
+      return;
+    }
+  }
+  free(window->empty->project_path);
+  window->empty->project_path = project->project_path ? _strdup(project->project_path) : NULL;
+  select_project(window->empty, false);
+}
+
 static void complete_unload(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
+  select_after_close(project);
   DormantProject *dormant = project->dormant;
   project->dormant = NULL;
   dormant->id = project->id;
@@ -5965,19 +5999,8 @@ static void complete_unload(ShellProject *project) {
     link = &(*link)->next;
   *link = project->next;
   windows_changed();
-  if (window->selected == project) {
-    ShellProject *next = NULL;
-    for (ShellProject *item = shell.projects; item; item = item->next)
-      if (item->window_id == window->id) { next = item; break; }
-    if (next)
-      select_project(next, false);
-    else {
-      free(window->empty->project_path);
-      window->empty->project_path = _strdup(dormant->path);
-      select_project(window->empty, false);
-      SDL_SetWindowTitle(window->window, "Anvil - Dormant Project");
-    }
-  }
+  if (window->selected == window->empty)
+    SDL_SetWindowTitle(window->window, "Anvil - Dormant Project");
   project->connected = false;
   stop_close_timer(project);
   if (project->startup_timer)
@@ -7115,19 +7138,28 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
     if (window->frame_busy) handle_frame(window);
     if (!window->closing) continue;
     if (!project->id) project->failed_close = true;
-    if (!project->failed_close) {
+    if (!project->failed_close && !project->exit_announced) {
       if (!project->close_requested_ns) request_close(project);
       continue;
     }
     if (project->resolving || (project->launch && !project->launch->taken)) continue;
     ShellProject *next = NULL;
     for (ShellProject *item = shell.projects; item; item = item->next)
-      if (item->window_id == window->id && item != project && !item->failed_close &&
+      if (item->window_id == window->id && item != project && !item->failed_close && !item->exit_announced &&
           ((item->launch && !item->launch->taken) || (item->process.hProcess &&
            WaitForSingleObject(item->process.hProcess, 0) == WAIT_TIMEOUT))) {
         next = item; break;
       }
     if (next) { select_project(next, false); request_close(next); continue; }
+    /* Every Project finished its saves and Close choices. Keep ownership until process exit,
+     * but do not keep the Window visible for Lua and renderer destruction. */
+    if (window->shown) {
+      SDL_HideWindow(window->window);
+      window->shown = false;
+      window->revealing = false;
+      SDL_Log("Shell Window hidden after Close: Window=%u elapsed_ms=%.3f; cleanup pending",
+              window->id, (SDL_GetTicksNS() - window->close_started_ns) / 1000000.0);
+    }
     bool assigned = false;
     for (ShellProject *item = shell.projects; item; item = item->next)
       assigned |= item->window_id == window->id;

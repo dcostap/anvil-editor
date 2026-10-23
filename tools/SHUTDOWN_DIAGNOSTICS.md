@@ -31,3 +31,23 @@ It stays open after the session log closes.
 `SDL_AppQuit complete` marks the end of Anvil cleanup, before SDL's final platform cleanup.
 
 These diagnostics do not change cancellation or shutdown waits.
+
+## Visible closure
+
+The shell's native log records `Shell Window Close begin` and `Shell Window hidden after Close`.
+The latter includes elapsed milliseconds from the shell's Close request to hiding the Window.
+`Project exit accepted by shell` records each Project's time to exit intent.
+`Anvil shell surface process exited` records its exit code and total time from the Project's Close request.
+
+Exit intent follows required saves, Close choices, and worker shutdown. Lua and renderer cleanup follow it.
+The shell hides a closing Window after every assigned Project reaches exit intent or finishes exiting.
+It can ask the next Project's Close choices while an earlier Project finishes cleanup.
+A cancelled Close keeps the Window visible. Earlier accepted Projects still finish closing.
+
+Project unload selects another available Project, or clears the content area, when exit intent arrives.
+The shell keeps the closing process and its Project identity until process exit.
+Selecting that Project during cleanup does not start a replacement process.
+Existing Close timeout warnings remain active during cleanup.
+
+Compare the native log with each Project's shutdown log to separate visible closure from final cleanup.
+The native elapsed time starts when the shell handles Close, not when Windows first receives the click.
