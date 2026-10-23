@@ -90,7 +90,10 @@ Run `ui/terminal_agent_resume.lua` after changes. It runs a fake Pi on Node and 
 The host reads program status reports (OSC 7501) and keeps the Agent Status in the session record.
 It sets `PI_PROGRAM_STATUS=1`, so Pi reports without a query.
 It also sets `PI_HYPERLINKS=1`, so Pi sends OSC 8 links and does not print each URL after its label.
-A value that the user set stays in both cases.
+It sets `PI_IMAGE_PROTOCOL=kitty`, so Pi displays inline images without recognizing Anvil's terminal name.
+A value that the user set stays in all three cases.
+Existing shells keep their environment. Open a new Terminal Session to get the image default.
+Run `runtime/terminal_image_environment.lua` after changes to that default.
 In an interactive Pi, `pi.cjs` also adds `--extension` for `data/tools/agent-sessions/pi-status.cjs`.
 The extension only listens. It reports Pi's current step as the `step` child record.
 It adds no tools, commands or session entries. `ANVIL_PI_STATUS=0` turns it off.

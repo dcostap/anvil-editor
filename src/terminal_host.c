@@ -914,6 +914,10 @@ static void set_agent_environment(TerminalHost *host, const char *datadir) {
   /* Pi sends OSC 8 hyperlinks only to terminals that it knows. Without them, it prints each link's URL after
      its label. The Terminal View opens OSC 8 links. */
   if (!GetEnvironmentVariableW(L"PI_HYPERLINKS", NULL, 0)) SetEnvironmentVariableW(L"PI_HYPERLINKS", L"1");
+  /* Pi does not recognize Anvil's image support. Keep any explicit user choice. */
+  wchar_t image_protocol[2];
+  if (!GetEnvironmentVariableW(L"PI_IMAGE_PROTOCOL", image_protocol, 2))
+    SetEnvironmentVariableW(L"PI_IMAGE_PROTOCOL", L"kitty");
   snprintf(script, sizeof(script), "%s/tools/agent-sessions/pi.cjs", datadir);
   wchar_t *report = wide_string(host->agent_report_path), *path = wide_string(script);
   DWORD attrs = path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;

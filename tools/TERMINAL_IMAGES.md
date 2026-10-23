@@ -15,6 +15,10 @@ Supported features:
 Programs can query Kitty graphics support through the protocol.
 `TERM_PROGRAM` remains `anvil`. Programs that check only known terminal names may need an explicit Kitty output option.
 
+New Terminal Sessions set `PI_IMAGE_PROTOCOL=kitty` for Pi unless the user already set a value.
+Existing shells keep their environment after an editor update. Open a new Terminal Session to get this default.
+Pi's explicit `terminal.images` setting takes precedence over this environment variable.
+
 ## Quick check
 
 Run this in a new Anvil PowerShell terminal. It displays a red rectangle:
