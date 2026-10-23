@@ -190,7 +190,7 @@ if host_machine.system() == 'windows'
     ]
     terminal_replay_test = executable('terminal_replay_test',
         '../tests/native/terminal_replay_test.c', 'terminal_model.c', 'terminal_snapshot.c', 'zig_abi_compat.c',
-        dependencies: ghostty_vt_dep,
+        dependencies: [ghostty_vt_dep, sdl_dep, sdl_image],
     )
     if embedded_runtime
         anvil_sources += 'embedded_runtime.c'

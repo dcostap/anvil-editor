@@ -697,6 +697,13 @@ A Terminal View pairs each text key with its SDL text input. A text key has layo
 The view encodes the key with the text that the OS typed, not SDL's keymap text. Kitty mode then gets both.
 Run `runtime/terminal_native.lua` and `ui/terminal.lua` after key input changes.
 
+Terminal Views display static Kitty graphics through Ghostty's image API.
+Only direct image transfers are enabled. File and shared-memory transfers remain disabled.
+The native bridge owns cropped image canvases and reuses them by image generation and source rectangle.
+Ghostty snapshots omit images, so programs must retransmit them after reconnect or restart.
+Run `runtime/terminal_graphics.lua` and the `terminal-images` render scenario after image changes.
+See [inline terminal images](tools/TERMINAL_IMAGES.md) for supported features and limits.
+
 Current Anvil Ghostty patch:
 
 - `subprojects/packagefiles/ghostty-semantic-prompt-fresh-line-option.patch`

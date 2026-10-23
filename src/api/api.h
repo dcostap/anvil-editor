@@ -27,5 +27,8 @@
 
 void api_load_libs(lua_State *L);
 void *api_regex_compiled(lua_State *L, int index);
+struct SDL_Surface;
+/* Takes ownership of the surface. Returns a Canvas, or nil and an error. */
+int api_canvas_push_image(lua_State *L, struct SDL_Surface *surface);
 
 #endif

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
@@ -3562,6 +3563,121 @@ static bool ensure_snapshot_text(TerminalSession *session) {
   return true;
 }
 
+static bool push_terminal_image(lua_State *L, GhosttyKittyGraphicsImage image,
+    const GhosttyKittyGraphicsPlacementRenderInfo *info) {
+  uint32_t width = 0, height = 0;
+  GhosttyKittyImageFormat format;
+  const uint8_t *pixels = NULL;
+  size_t length = 0;
+  GhosttyKittyGraphicsImageData keys[] = {
+    GHOSTTY_KITTY_IMAGE_DATA_WIDTH, GHOSTTY_KITTY_IMAGE_DATA_HEIGHT,
+    GHOSTTY_KITTY_IMAGE_DATA_FORMAT, GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR,
+    GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN,
+  };
+  void *values[] = { &width, &height, &format, &pixels, &length };
+  if (ghostty_kitty_graphics_image_get_multi(image, 5, keys, values, NULL) != GHOSTTY_SUCCESS)
+    return false;
+  unsigned channels = format == GHOSTTY_KITTY_IMAGE_FORMAT_RGBA ? 4 :
+    format == GHOSTTY_KITTY_IMAGE_FORMAT_RGB ? 3 :
+    format == GHOSTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA ? 2 :
+    format == GHOSTTY_KITTY_IMAGE_FORMAT_GRAY ? 1 : 0;
+  if (!channels || !width || !height || width > INT_MAX / 4 || height > INT_MAX ||
+      (uint64_t)width * height * channels != length ||
+      info->source_x > width || info->source_width > width - info->source_x ||
+      info->source_y > height || info->source_height > height - info->source_y) return false;
+  /* Crop before scaling so filtering cannot sample outside the source region. */
+  SDL_Surface *surface = SDL_CreateSurface(info->source_width, info->source_height, SDL_PIXELFORMAT_RGBA32);
+  if (!surface) return false;
+  for (uint32_t y = 0; y < info->source_height; y++) {
+    uint8_t *dst = (uint8_t *)surface->pixels + (size_t)y * surface->pitch;
+    const uint8_t *src = pixels + ((size_t)(y + info->source_y) * width + info->source_x) * channels;
+    for (uint32_t x = 0; x < info->source_width; x++, src += channels, dst += 4) {
+      dst[0] = src[0];
+      dst[1] = channels < 3 ? src[0] : src[1];
+      dst[2] = channels < 3 ? src[0] : src[2];
+      dst[3] = channels == 4 ? src[3] : channels == 2 ? src[1] : 255;
+    }
+  }
+  if (api_canvas_push_image(L, surface) == 1) return true;
+  lua_pop(L, 2);
+  return false;
+}
+
+/* Snapshot owns copied canvases, never pointers into Ghostty's mutable storage.
+ * Retain only visible images, and reuse pixels across placement/scroll changes. */
+static void push_terminal_images(lua_State *L, TerminalSession *session) {
+  int snapshot = lua_gettop(L);
+  lua_getfield(L, snapshot, "_image_canvases");
+  int previous = lua_gettop(L);
+  lua_newtable(L);
+  int cache = lua_gettop(L);
+  lua_newtable(L);
+  int placements = lua_gettop(L), count = 0;
+  size_t canvas_bytes = 0;
+  GhosttyKittyGraphics graphics = NULL;
+  GhosttyKittyGraphicsPlacementIterator iterator = NULL;
+  if (ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS,
+        &graphics) != GHOSTTY_SUCCESS ||
+      ghostty_kitty_graphics_placement_iterator_new(&terminal_allocator, &iterator) != GHOSTTY_SUCCESS)
+    goto done;
+  if (ghostty_kitty_graphics_get(graphics, GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
+        &iterator) != GHOSTTY_SUCCESS) goto done;
+  while (ghostty_kitty_graphics_placement_next(iterator)) {
+    uint32_t id = 0, placement_id = 0, offset_x = 0, offset_y = 0;
+    int32_t z = 0;
+    ghostty_kitty_graphics_placement_get(iterator, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID, &id);
+    GhosttyKittyGraphicsImage image = ghostty_kitty_graphics_image(graphics, id);
+    GhosttyKittyGraphicsPlacementRenderInfo info = GHOSTTY_INIT_SIZED(GhosttyKittyGraphicsPlacementRenderInfo);
+    if (!image || ghostty_kitty_graphics_placement_render_info(iterator, image, session->terminal,
+        &info) != GHOSTTY_SUCCESS || !info.viewport_visible || !info.source_width || !info.source_height)
+      continue;
+    uint64_t generation = 0;
+    ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_GENERATION, &generation);
+    char key[128];
+    snprintf(key, sizeof(key), "%llu:%u:%u:%u:%u", (unsigned long long)generation,
+      info.source_x, info.source_y, info.source_width, info.source_height);
+    lua_getfield(L, cache, key);
+    bool retained = !lua_isnil(L, -1);
+    size_t bytes = (size_t)info.source_width * info.source_height * 4;
+    if (!retained && bytes > 64u * 1024u * 1024u - canvas_bytes) {
+      lua_pop(L, 1);
+      continue;
+    }
+    if (lua_isnil(L, -1) && lua_istable(L, previous)) {
+      lua_pop(L, 1);
+      lua_getfield(L, previous, key);
+    }
+    if (lua_isnil(L, -1)) {
+      lua_pop(L, 1);
+      if (!push_terminal_image(L, image, &info)) continue;
+    }
+    if (!retained) canvas_bytes += bytes;
+    lua_pushvalue(L, -1);
+    lua_setfield(L, cache, key);
+    lua_createtable(L, 0, 8);
+    lua_pushvalue(L, -2);
+    lua_setfield(L, -2, "canvas");
+    ghostty_kitty_graphics_placement_get(iterator, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID, &placement_id);
+    ghostty_kitty_graphics_placement_get(iterator, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_X_OFFSET, &offset_x);
+    ghostty_kitty_graphics_placement_get(iterator, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Y_OFFSET, &offset_y);
+    ghostty_kitty_graphics_placement_get(iterator, GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z, &z);
+    set_integer_field(L, "id", id);
+    set_integer_field(L, "placement_id", placement_id);
+    set_integer_field(L, "z", z);
+    set_integer_field(L, "x", (lua_Integer)info.viewport_col * session->cell_width + offset_x);
+    set_integer_field(L, "y", (lua_Integer)info.viewport_row * session->cell_height + offset_y);
+    set_integer_field(L, "width", info.pixel_width);
+    set_integer_field(L, "height", info.pixel_height);
+    lua_rawseti(L, placements, ++count);
+    lua_pop(L, 1); /* canvas */
+  }
+done:
+  if (iterator) ghostty_kitty_graphics_placement_iterator_free(iterator);
+  lua_setfield(L, snapshot, "images");
+  lua_setfield(L, snapshot, "_image_canvases");
+  lua_pop(L, 1); /* previous cache */
+}
+
 static int f_terminal_snapshot(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   if (!session->render_state) {
@@ -3665,6 +3781,7 @@ static int f_terminal_snapshot(lua_State *L) {
   lua_setfield(L, -2, "cursor");
 
   if (include_rows) {
+    push_terminal_images(L, session);
     GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
     ghostty_render_state_get(
       session->render_state, GHOSTTY_RENDER_STATE_DATA_DIRTY, &dirty

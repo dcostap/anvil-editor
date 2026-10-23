@@ -486,6 +486,9 @@ Use `--scenario image-filtering --renderer d3d11` to check image sampling throug
 The check covers reduced fine detail, enlarged color transitions, transparent edges, and unchanged pixels at actual size.
 It uses independent expected colors, not a visual golden, to test filtering behavior.
 
+Use `--scenario terminal-images` on both renderers to check static inline terminal images.
+It checks transparency, crop edges, terminal bounds, and image layer order with independent expected pixels.
+
 Use `--scenario glyph-cache-growth --report-only` to check glyph atlas growth.
 The scene compares pixels from growing fonts with separate warm fonts.
 It allows one channel unit for GPU blend rounding at different screen positions.

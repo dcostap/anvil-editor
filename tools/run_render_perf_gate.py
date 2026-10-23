@@ -131,6 +131,7 @@ SCENARIOS["image-viewer"] = {
     "paced": False,
 }
 SCENARIOS["image-filtering"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["terminal-images"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["glyph-cache-growth"] = {
     "start_line": 1,
     "window_width": 1400,
@@ -1202,7 +1203,7 @@ def run_case(
                 if any(high > 1 for _, high in difference.getextrema()):
                     raise RuntimeError("glyph cache growth changed rendered pixels")
             result["glyph_cache_growth"] = "passed"
-        if scenario == "image-filtering":
+        if scenario in ("image-filtering", "terminal-images"):
             with Image.open(screenshot_file) as capture:
                 pixels = capture.convert("RGB")
                 with image_metadata_file.open(newline="", encoding="utf-8") as metadata:
@@ -1211,9 +1212,9 @@ def run_case(
                         expected = tuple(int(sample[channel]) for channel in ("r", "g", "b"))
                         if any(abs(a - e) > 3 for a, e in zip(actual, expected)):
                             raise RuntimeError(
-                                f"image filtering failed: {sample['name']}: expected {expected}, got {actual}"
+                                f"{scenario} failed: {sample['name']}: expected {expected}, got {actual}"
                             )
-            result["image_filtering"] = "passed"
+            result[scenario.replace("-", "_")] = "passed"
         if scenario == "terminal-blocks":
             with Image.open(screenshot_file) as capture:
                 pixels = capture.convert("RGB")

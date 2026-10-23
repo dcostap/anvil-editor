@@ -42,7 +42,7 @@ static int f_new(lua_State *L) {
 }
 
 
-static int push_image(lua_State *L, SDL_Surface *surface) {
+int api_canvas_push_image(lua_State *L, SDL_Surface *surface) {
   if (!surface) goto error;
 
   if (surface->format != SDL_PIXELFORMAT_RGBA32) {
@@ -70,7 +70,7 @@ error:
 
 static int f_load_image(lua_State *L) {
   const char *file = luaL_checkstring(L, 1);
-  return push_image(L, IMG_Load(file));
+  return api_canvas_push_image(L, IMG_Load(file));
 }
 
 
@@ -79,12 +79,12 @@ static int f_load_image_data(lua_State *L) {
   const char *data = luaL_checklstring(L, 1, &size);
   if (size == 0) {
     SDL_SetError("image data is empty");
-    return push_image(L, NULL);
+    return api_canvas_push_image(L, NULL);
   }
 
   SDL_IOStream *stream = SDL_IOFromConstMem(data, size);
-  if (!stream) return push_image(L, NULL);
-  return push_image(L, IMG_Load_IO(stream, true));
+  if (!stream) return api_canvas_push_image(L, NULL);
+  return api_canvas_push_image(L, IMG_Load_IO(stream, true));
 }
 
 
@@ -96,7 +96,7 @@ static int f_load_svg_image(lua_State *L) {
   SDL_IOStream *file = SDL_IOFromFile(path, "r");
   SDL_Surface *surface = IMG_LoadSizedSVG_IO(file, w, h);
   SDL_CloseIO(file);
-  return push_image(L, surface);
+  return api_canvas_push_image(L, surface);
 }
 
 
@@ -182,9 +182,9 @@ static int push_animation(lua_State *L, IMG_AnimationDecoder *decoder, void *dat
   }
   anim->duration_ms = (lua_Integer) duration;
 
-  /* push_image takes ownership of the first frame and leaves the canvas on
+  /* api_canvas_push_image takes ownership of the first frame and leaves the canvas on
   ** the stack. Later frames are copied into this same surface. */
-  if (push_image(L, first) != 1) {
+  if (api_canvas_push_image(L, first) != 1) {
     animation_close(anim);
     return 2;
   }

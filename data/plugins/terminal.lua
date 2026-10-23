@@ -928,6 +928,13 @@ function TerminalView:service_session(include_rows)
     local snapshot_started = record_perf and system.get_time()
     self.snapshot = self.session:snapshot(self.snapshot, include_rows)
     self:handle_events()
+    if include_rows then
+      local image_count = self.snapshot and self.snapshot.images and #self.snapshot.images or 0
+      if image_count ~= (self.visible_image_count or 0) then
+        core.log_quiet("Terminal Session %s visible images: %d", tostring(self.session_id), image_count)
+        self.visible_image_count = image_count
+      end
+    end
     if include_rows then self.rows_dirty = nil end
     if record_perf then
       perf_detail("terminal_snapshot_ms", (system.get_time() - snapshot_started) * 1000)
@@ -1304,6 +1311,29 @@ function TerminalView:draw_block_cursor(x, y, width, height, color, blink_on)
   core.pop_clip_rect()
 end
 
+local function image_order(a, b)
+  if a.z ~= b.z then return a.z < b.z end
+  if a.id ~= b.id then return a.id < b.id end
+  return a.placement_id < b.placement_id
+end
+
+function TerminalView:draw_images(layer, origin_x, origin_y)
+  local images = self.snapshot.images or {}
+  if #images == 0 then return end
+  if layer == 1 then table.sort(images, image_order) end
+  core.push_clip_rect(origin_x, origin_y,
+    self.snapshot.cols * self.cell_width, self.snapshot.row_count * self.cell_height)
+  for _, image in ipairs(images) do
+    local image_layer = image.z < -1073741824 and 1 or image.z < 0 and 2 or 3
+    if image_layer == layer then
+      local grid_scale = self.cell_width / self.native_cell_width
+      local x, y = origin_x + image.x * grid_scale, origin_y + image.y
+      renderer.draw_canvas_scaled(image.canvas, x, y, image.width * grid_scale, image.height)
+    end
+  end
+  core.pop_clip_rect()
+end
+
 function TerminalView:draw()
   local draw_scope = perf_scope_begin("terminal", true)
   local snapshot = self.snapshot
@@ -1329,6 +1359,7 @@ function TerminalView:draw()
 
   local origin_x = self.position.x + PADDING
   local origin_y = self.position.y + PADDING
+  self:draw_images(1, origin_x, origin_y)
   local phase_scope = perf_scope_begin("backgrounds")
   for row_index, row in ipairs(snapshot.rows or {}) do
     local y = origin_y + (row_index - 1) * self.cell_height
@@ -1348,6 +1379,7 @@ function TerminalView:draw()
   draw_hover_background(self, origin_x, origin_y)
   perf_scope_end(phase_scope)
 
+  self:draw_images(2, origin_x, origin_y)
   phase_scope = perf_scope_begin("text_runs")
   self.has_blinking_content = snapshot.cursor and snapshot.cursor.blinking or false
   local blink_on = config.disable_blink or
@@ -1362,6 +1394,7 @@ function TerminalView:draw()
   end
   perf_scope_end(phase_scope)
 
+  self:draw_images(3, origin_x, origin_y)
   phase_scope = perf_scope_begin("cursor")
   local cursor = snapshot.cursor
   local cursor_on = not (cursor and cursor.blinking) or blink_on

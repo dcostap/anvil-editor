@@ -1,6 +1,57 @@
 #include "terminal_model.h"
 #include <stdlib.h>
 #include <string.h>
+#include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
+
+/* Bound decoded pixels before SDL allocates a surface. File and shared-memory
+ * image transfers remain disabled; only bytes from the terminal are decoded. */
+#define TERMINAL_IMAGE_LIMIT (32u * 1024u * 1024u)
+
+static uint32_t png_u32(const uint8_t *p) {
+  return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+static bool terminal_decode_png(void *userdata, const GhosttyAllocator *allocator,
+    const uint8_t *data, size_t length, GhosttySysImage *out) {
+  (void)userdata;
+  if (length < 24 || memcmp(data, "\x89PNG\r\n\x1a\n", 8) ||
+      png_u32(data + 8) != 13 || memcmp(data + 12, "IHDR", 4)) return false;
+  uint32_t width = png_u32(data + 16), height = png_u32(data + 20);
+  if (!width || !height || width > TERMINAL_IMAGE_LIMIT / 4 / height) return false;
+  SDL_IOStream *stream = SDL_IOFromConstMem(data, length);
+  if (!stream) return false;
+  SDL_Surface *decoded = IMG_LoadPNG_IO(stream);
+  SDL_CloseIO(stream);
+  if (!decoded) return false;
+  SDL_Surface *rgba = SDL_ConvertSurface(decoded, SDL_PIXELFORMAT_RGBA32);
+  SDL_DestroySurface(decoded);
+  if (!rgba) return false;
+  if ((uint32_t)rgba->w != width || (uint32_t)rgba->h != height) {
+    SDL_DestroySurface(rgba);
+    return false;
+  }
+  size_t bytes = (size_t)width * height * 4;
+  uint8_t *pixels = ghostty_alloc(allocator, bytes);
+  if (pixels) {
+    for (uint32_t y = 0; y < height; y++)
+      memcpy(pixels + (size_t)y * width * 4,
+        (uint8_t *)rgba->pixels + (size_t)y * rgba->pitch, (size_t)width * 4);
+    *out = (GhosttySysImage){ .width = width, .height = height, .data = pixels, .data_len = bytes };
+  }
+  SDL_DestroySurface(rgba);
+  return pixels != NULL;
+}
+
+static BOOL CALLBACK init_terminal_images(PINIT_ONCE once, PVOID param, PVOID *context) {
+  (void)once; (void)param; (void)context;
+  return ghostty_sys_set(GHOSTTY_SYS_OPT_DECODE_PNG, (const void *)terminal_decode_png) == GHOSTTY_SUCCESS;
+}
+
+static bool terminal_images_init(void) {
+  static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
+  return InitOnceExecuteOnce(&once, init_terminal_images, NULL, NULL) != 0;
+}
 
 static void *terminal_alloc(
   void *ctx, size_t len, uint8_t alignment, uintptr_t ret_addr
@@ -57,6 +108,9 @@ const GhosttyAllocator terminal_allocator = {
 };
 
 bool anvil_terminal_model_options(GhosttyTerminal model, const size_t *scrollback_lines) {
+  uint64_t image_limit = TERMINAL_IMAGE_LIMIT;
+  if (!terminal_images_init() || ghostty_terminal_set(model,
+      GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &image_limit) != GHOSTTY_SUCCESS) return false;
   size_t max_bytes = 64u * 1024u * 1024u;
   if (scrollback_lines && (
       ghostty_terminal_set(model, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &max_bytes) != GHOSTTY_SUCCESS ||
@@ -74,7 +128,8 @@ bool anvil_terminal_model_options(GhosttyTerminal model, const size_t *scrollbac
 bool anvil_terminal_model_new(GhosttyTerminal *model, uint16_t cols, uint16_t rows,
                               uint32_t cell_width, uint32_t cell_height,
                               const size_t *scrollback_lines) {
-  return ghostty_terminal_new(&terminal_allocator, model, cols, rows) == GHOSTTY_SUCCESS &&
+  return terminal_images_init() &&
+    ghostty_terminal_new(&terminal_allocator, model, cols, rows) == GHOSTTY_SUCCESS &&
     anvil_terminal_model_options(*model, scrollback_lines) &&
     ghostty_terminal_resize(*model, cols, rows, cell_width, cell_height) == GHOSTTY_SUCCESS;
 }
