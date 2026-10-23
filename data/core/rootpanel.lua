@@ -5,6 +5,7 @@ local style = require "core.style"
 local View = require "core.view"
 local layout = require "core.pane_layout"
 local CaretRenderer = require "core.caret_renderer"
+local FocusFeedback = require "core.focus_feedback"
 local wallpaper_contrast = require "core.wallpaper_contrast"
 local wallpapers = require "core.wallpapers"
 
@@ -100,6 +101,7 @@ function RootPanel:new()
   self.modal_inputs = {}
   self.content_rect = { x = 0, y = 0, w = 0, h = 0 }
   self.caret_renderer = CaretRenderer.new()
+  self.focus_feedback = FocusFeedback()
 end
 
 ---Submit the focused keyboard caret for global drawing.
@@ -700,6 +702,15 @@ function RootPanel:update()
       end
     end
   end
+  local target = core.active_window == core.window and system.window_has_focus(core.window)
+    and self:keyboard_target() or nil
+  local pane = target and panes().pane_for_view(target)
+  -- A new file in the same Pane keeps the same focus region. Compound Views use their focused child.
+  local identity = pane and pane.current_view == target and pane or target
+  local active, changed, finished = self.focus_feedback:update(identity)
+  self.focus_feedback_view = target
+  if active or changed or finished then core.redraw = true end
+  if changed then core.log_quiet("Focus feedback: target=%s", tostring(target)) end
   perf_end("rootpanel_update", started, scope)
 end
 
@@ -1175,6 +1186,12 @@ function RootPanel:draw()
     item.fn(table.unpack(item, 1, #item))
   end
   perf_end("rootpanel_deferred_draw", deferred_started, deferred_scope)
+  local focused = self.focus_feedback_view
+  if focused then
+    core.push_clip_rect(focused.position.x, focused.position.y, focused.size.x, focused.size.y)
+    self.focus_feedback:draw(focused.position.x, focused.position.y, focused.size.x, focused.size.y)
+    core.pop_clip_rect()
+  end
   self:publish_surface_overlay()
   self:draw_keyboard_caret()
   self:draw_autoscroll()

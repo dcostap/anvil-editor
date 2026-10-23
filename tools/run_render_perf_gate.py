@@ -155,6 +155,7 @@ SCENARIOS["project-sidebar"] = {
     "paced": False,
 }
 SCENARIOS["project-sidebar-search"] = dict(SCENARIOS["project-sidebar"])
+SCENARIOS["focus-feedback"] = dict(SCENARIOS["project-sidebar"], window_height=500)
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,
     "tab_count": 8,

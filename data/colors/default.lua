@@ -109,6 +109,7 @@ style.caret_trail = { common.color "rgba(143, 199, 255, 0.35)" }
 style.navigation_history_feedback = { common.color "rgba(87, 196, 127, 0.10)" }
 style.bookmark = p("ctrl_clickable")
 style.accent = p("ctrl_clickable")
+style.focus_feedback = {style.accent[1], style.accent[2], style.accent[3], 120}
 style.dim = p("ignored")
 style.divider = p("tearline")
 style.selection = c("214283")

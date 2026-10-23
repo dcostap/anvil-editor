@@ -2,6 +2,7 @@ local Object = require "core.object"
 local style = require "core.style"
 local tab = require "core.tab"
 local common = require "core.common"
+local FocusFeedback = require "core.focus_feedback"
 
 -- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions. A
 -- right-click on a Project asks the shell for its native actions menu: Move, Unload and the rest.
@@ -41,6 +42,7 @@ function SidebarView:new(action, collapsed)
   self.width, self.view_h = 240, 600
   self.main_h, self.bottom_h = 0, 0
   self.query = ""
+  self.focus_feedback = FocusFeedback()
 end
 
 local function row_key(row)
@@ -65,6 +67,7 @@ end
 
 function SidebarView:on_focus(focused)
   self.focused = focused
+  self.focus_feedback:update(focused and self or nil)
   self.query, self.cursor = "", nil
   self:rebuild_rows()
   if focused then
@@ -587,6 +590,7 @@ end
 -- Seconds until the next spinner frame, elapsed-time update, or hover tooltip.
 function SidebarView:animation_delay(clock)
   local delay = self.spinning and tab.spinner_delay(clock) or nil
+  if self.focus_feedback:active(clock) then delay = math.min(delay or math.huge, 1 / 60) end
   if self.ticking then delay = math.min(delay or 1, 1 - clock % 1) end
   if self.tooltip_text then
     local remaining = TOOLTIP_DELAY - (clock - self.tooltip_started)
@@ -772,6 +776,7 @@ function SidebarView:draw(width, height)
       renderer.draw_rounded_rect(width - bar_w - 4 * SCALE, top, bar_w, h, bar_w / 2, color)
     end
   end
+  self.focus_feedback:draw(0, 0, width, height, self.clock)
   self:draw_tooltip(width, height)
 end
 
