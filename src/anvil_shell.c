@@ -2054,6 +2054,52 @@ static void sync_backdrop(ShellWindow *window) {
   apply_background(window, shell_colors(window).background);
 }
 
+static RECT control_rect(ShellWindow *window, int index) {
+  int width = (window->controls.right - window->controls.left) / 3;
+  return (RECT){window->controls.left + index * width, 0,
+                index == 2 ? window->controls.right : window->controls.left + (index + 1) * width,
+                window->controls.bottom};
+}
+
+/* Windows 11 draws its caption buttons with Segoe Fluent Icons at 10 px. Windows 10 has the same glyphs in
+ * Segoe MDL2 Assets. Each glyph's ink is centred in its button, as Windows does. */
+static void draw_window_controls(ShellWindow *window, HDC dc, COLORREF color) {
+  static const wchar_t *faces[] = {L"Segoe Fluent Icons", L"Segoe MDL2 Assets"};
+  int size = SDL_max(1, (int)(10 * window->scale + 0.5f));
+  HFONT font = NULL;
+  HGDIOBJ old_font = NULL;
+  for (int i = 0; i < 2 && !font; i++) {
+    font = CreateFontW(-size, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                       CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, faces[i]);
+    if (!font) continue;
+    old_font = SelectObject(dc, font);
+    wchar_t face[LF_FACESIZE];
+    if (i == 0 && (!GetTextFaceW(dc, LF_FACESIZE, face) || wcscmp(face, faces[0]))) {
+      SelectObject(dc, old_font);
+      DeleteObject(font);
+      font = NULL;
+    }
+  }
+  if (!font) return;
+  COLORREF old_color = SetTextColor(dc, color);
+  UINT old_align = SetTextAlign(dc, TA_BASELINE | TA_LEFT | TA_NOUPDATECP);
+  bool maximized = current_window_mode(window) == ANVIL_SURFACE_WINDOW_MAXIMIZED;
+  wchar_t glyphs[] = {0xE921, maximized ? 0xE923 : 0xE922, 0xE8BB};
+  for (int i = 0; i < 3; i++) {
+    RECT rect = control_rect(window, i);
+    GLYPHMETRICS metrics;
+    MAT2 identity = {{0, 1}, {0, 0}, {0, 0}, {0, 1}};
+    if (GetGlyphOutlineW(dc, glyphs[i], GGO_METRICS, &metrics, 0, NULL, &identity) == GDI_ERROR) continue;
+    int x = rect.left + (rect.right - rect.left - (int)metrics.gmBlackBoxX) / 2 - metrics.gmptGlyphOrigin.x;
+    int y = rect.top + (rect.bottom - rect.top - (int)metrics.gmBlackBoxY) / 2 + metrics.gmptGlyphOrigin.y;
+    TextOutW(dc, x, y, &glyphs[i], 1);
+  }
+  SetTextAlign(dc, old_align);
+  SetTextColor(dc, old_color);
+  SelectObject(dc, old_font);
+  DeleteObject(font);
+}
+
 static void paint_failed_window(ShellWindow *window, HDC dc) {
   client_pixel_size(window, &window->buffer_w, &window->buffer_h);
   controls_geometry(window);
@@ -2069,14 +2115,7 @@ static void paint_failed_window(ShellWindow *window, HDC dc) {
   draw_lifecycle_titlebar(window, dc, &colors);
   if (sidebar_restart_offered())
     draw_native_button(window, dc, &colors, sidebar_restart_rect(window), 5, L"Restart Sidebar", false);
-  const wchar_t *labels[] = {L"−", L"□", L"×"};
-  int width = (window->controls.right - window->controls.left) / 3;
-  for (int i = 0; i < 3; i++) {
-    RECT button = {window->controls.left + i * width, 0,
-                   i == 2 ? window->controls.right : window->controls.left + (i + 1) * width,
-                   window->controls.bottom};
-    DrawTextW(dc, labels[i], -1, &button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-  }
+  draw_window_controls(window, dc, colors.text & 0xffffff);
   SelectObject(dc, old);
   DeleteObject(font);
 }
@@ -2156,13 +2195,6 @@ static void round_notice(ShellWindow *window, const AnvilSurfaceShellColors *col
       pixel[3] = (uint8_t)(a + 0.5f);
     }
   }
-}
-
-static RECT control_rect(ShellWindow *window, int index) {
-  int width = (window->controls.right - window->controls.left) / 3;
-  return (RECT){window->controls.left + index * width, 0,
-                index == 2 ? window->controls.right : window->controls.left + (index + 1) * width,
-                window->controls.bottom};
 }
 
 static void update_ui(ShellWindow *window) {
@@ -2268,30 +2300,7 @@ static void update_ui(ShellWindow *window) {
                                               : L"\x2022",
             -1, &status, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
   /* Glyphs are white coverage here, and tint_coverage colours them. The composite draws hover backgrounds. */
-  HPEN pen = CreatePen(PS_SOLID, SDL_max(1, (int)window->scale), RGB(255, 255, 255));
-  HGDIOBJ old_pen = SelectObject(dc, pen);
-  for (int i = 0; i < 3; i++) {
-    RECT rect = control_rect(window, i);
-    int x = (rect.left + rect.right) / 2, y = rect.bottom / 2,
-        r = SDL_max(3, (int)(5 * window->scale));
-    if (i == 0) {
-      MoveToEx(dc, x - r, y + 2, NULL);
-      LineTo(dc, x + r, y + 2);
-    } else if (i == 1) {
-      HGDIOBJ brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-      if (current_window_mode(window) == ANVIL_SURFACE_WINDOW_MAXIMIZED)
-        Rectangle(dc, x - r + 2, y - r - 2, x + r + 2, y + r - 2);
-      Rectangle(dc, x - r, y - r, x + r, y + r);
-      SelectObject(dc, brush);
-    } else {
-      MoveToEx(dc, x - r, y - r, NULL);
-      LineTo(dc, x + r, y + r);
-      MoveToEx(dc, x + r, y - r, NULL);
-      LineTo(dc, x - r, y + r);
-    }
-  }
-  SelectObject(dc, old_pen);
-  DeleteObject(pen);
+  draw_window_controls(window, dc, RGB(255, 255, 255));
   draw_lifecycle(window, dc, &colors);
   draw_lifecycle_titlebar(window, dc, &colors);
   GdiFlush();

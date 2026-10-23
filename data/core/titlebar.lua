@@ -79,9 +79,10 @@ local function get_caption_font()
   if caption_font == false and caption_font_size == size then return nil end
   if caption_font and caption_font_size == size then return caption_font end
   caption_font, caption_font_size = nil, size
+  -- Windows 11 draws its caption buttons with Segoe Fluent Icons. Windows 10 only has Segoe MDL2 Assets.
   for _, path in ipairs {
-    "C:/Windows/Fonts/segmdl2.ttf",
     "C:/Windows/Fonts/SegoeIcons.ttf",
+    "C:/Windows/Fonts/segmdl2.ttf",
   } do
     local ok, font = pcall(renderer.font.load, path, size, {
       antialiasing = "grayscale", hinting = "full"
