@@ -858,6 +858,13 @@ test.describe("Sidebar drag and drop", function()
       {move("pane-1", {mode = "group", anchor = "pane-3", side = "after"})})
   end)
 
+  test.it("places a Tab dropped below a Project's last Tab after it", function()
+    local view, actions = sidebar()
+    local gap_y = tab_y(view, "pane-5", 1) + view:metrics().project_gap / 2
+    test.same(drag(view, actions, "pane-1", gap_y),
+      {move("pane-1", {mode = "group", anchor = "pane-5", side = "after"})})
+  end)
+
   test.it("moves a Tab out of its Pane Group into a group of its own", function()
     local view, actions = sidebar()
     test.same(drag(view, actions, "pane-3", tab_y(view, "pane-3", 0.95)),

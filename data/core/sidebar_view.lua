@@ -695,10 +695,16 @@ end
 function SidebarView:drop_target_at(x, y, source)
   if not x or x < 0 or x >= self.width then return nil end
   local row, index = self:row_at(y)
-  if not row or not row.project or not accepts(row.project, source) then return nil end
-  local part = (y - self:row_y(index)) / row.h
   -- Search hides Tabs, so a line between the shown ones has no clear place.
   local lines = self.query == ""
+  if not row then
+    -- Just below a Project's last Tab: in the gap before the next Project, or below the list.
+    local above = lines and self:tab_above(y)
+    if not above or not accepts(above.project, source) then return nil end
+    return self:line_target(above, "after", true, source)
+  end
+  if not row.project or not accepts(row.project, source) then return nil end
+  local part = (y - self:row_y(index)) / row.h
   if row.kind == "project" then
     local first = self.rows[index + 1]
     if lines and part > 1 - EDGE and first and first.kind == "tab" and first.project == row.project then
@@ -718,6 +724,17 @@ function SidebarView:drop_target_at(x, y, source)
   local place = {mode = "join", anchor = row.tab.id, side = "after"}
   if self:unchanged(source, place, row) then return nil end
   return {kind = "row", row = row, project = row.project, place = place}
+end
+
+-- The Tab row that ends at most one Tab's height above `y` in the main list, when no row is between them.
+function SidebarView:tab_above(y)
+  if y < self:list_top() or y >= self:main_bottom() then return nil end
+  local above, bottom
+  for index, row in ipairs(self.rows) do
+    local row_bottom = row.area == "main" and self:row_y(index) + row.h
+    if row_bottom and row_bottom <= y and (not bottom or row_bottom > bottom) then above, bottom = row, row_bottom end
+  end
+  if above and above.kind == "tab" and y - bottom < self:metrics().terminal then return above end
 end
 
 -- The route, Project path and request for a drop. A Tab moves inside its Project, or its Project exports it to the
