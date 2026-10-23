@@ -5022,6 +5022,21 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       push_window_event(window, SDL_EVENT_WINDOW_MOUSE_LEAVE, 0, 0);
       break;
 
+    case WM_NCLBUTTONDOWN: {
+      /* The Project never sees this press. Record the regions that the hit test used, so a click on a Title Bar
+       * control that does nothing can be traced. */
+      POINT pt = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      ScreenToClient(hwnd, &pt);
+      if (project)
+        SDL_Log("Shell non-client press: Window=%u hit=%d x=%ld y=%ld state=%d title=%d tabs=%d+%d "
+                "controls=%d+%d hit_config=%llu config=%llu",
+                window->id, (int)wparam, pt.x, pt.y, (int)project->state, project->hit.title_height,
+                project->hit.client_x, project->hit.client_width, project->hit.client2_x,
+                project->hit.client2_width, (unsigned long long)project->hit.configuration,
+                (unsigned long long)project->last_config.configuration);
+      break;
+    }
+
     case WM_NCRBUTTONUP:
       if (wparam == HTCAPTION) {
         win32_frame_hwnd_show_system_menu(hwnd, lparam);
