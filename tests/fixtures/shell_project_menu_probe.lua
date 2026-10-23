@@ -12,6 +12,8 @@ ffi.cdef [[
  void * __stdcall GetPropW(void *, const wchar_t *);
  int __stdcall PostMessageW(void *, unsigned int, uintptr_t, intptr_t);
  unsigned int __stdcall GetDpiForWindow(void *);
+ typedef struct { long left, top, right, bottom; } MenuProbeRect;
+ int __stdcall GetClientRect(void *, MenuProbeRect *);
 ]]
 local user32 = ffi.load("user32")
 local root = assert(os.getenv("ANVIL_PROJECT_PROBE_ROOT"))
@@ -94,6 +96,21 @@ if path:match("/driver$") then
    menu("Unload", "Move to New Window|Unload|Copy Path|Show in File Explorer")
    wait(function() return trace():find("Shell Project is Dormant: id=", 1, true) end, 15,
     "Unload did not unload the Project")
+   -- Without a loaded Project, the Sidebar's first row says so, and the Dormant Project is in a group in the
+   -- Sidebar's bottom area.
+   -- A right-click on a Project row makes the shell log a menu. Other rows ignore a right-click.
+   local file = assert(io.open(menu_file, "wb")); file:write(""); file:close()
+   point = nil
+   local client = ffi.new("MenuProbeRect")
+   assert(user32.GetClientRect(window, client) ~= 0)
+   for y = 40, client.bottom / scale, 8 do
+    local at, mark = math.floor(100 * scale) + math.floor(y * scale) * 65536, #trace()
+    for step = 7, 8 do user32.PostMessageW(window, 0x804a, step, at) end
+    local deadline = system.get_time() + .3
+    repeat coroutine.yield(.01) until trace():find("Shell Project menu:", mark + 1, true) or system.get_time() >= deadline
+    if trace():find("Shell Project menu:", mark + 1, true) then point = at; break end
+   end
+   assert(point, "The Dormant Project has no row in the Sidebar")
    menu("", "Open in New Window|Copy Path|Show in File Explorer")
    -- After the first Window closed, a click on the Dormant Project in the other Window's Sidebar loads it there.
    os.remove(root .. "/project.lua")
