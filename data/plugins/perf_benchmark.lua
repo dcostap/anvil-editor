@@ -470,15 +470,20 @@ end
 
 local FontRasterView = View:extend()
 
-local function open_image_viewer_scene()
-  local ImageView = require "core.imageview"
-  local scene = View()
+local function sample_image()
   local image = canvas.new(1200, 800, { 0, 0, 0, 0 }, true)
   image:draw_rect(80, 80, 680, 440, { 45, 140, 220, 255 }, true)
   image:draw_rect(480, 260, 620, 460, { 245, 160, 70, 180 }, true)
   for i = 0, 15 do
     image:draw_rect(120 + i * 24, 130, 12, 300, { 245, 250, 255, 255 }, true)
   end
+  return image
+end
+
+local function open_image_viewer_scene()
+  local ImageView = require "core.imageview"
+  local scene = View()
+  local image = sample_image()
   scene.main = ImageView()
   scene.preview = ImageView()
   scene.main:set_image(image, "Image Zoom")
@@ -788,6 +793,15 @@ local function setup_scenario()
     view = open_image_viewer_scene()
   elseif benchmark.scenario == "image-filtering" then
     view = open_image_filtering_scene()
+  elseif benchmark.scenario == "image-overlay" then
+    -- The Image Overlay over the fixture Editor, with a hovered action's tooltip and a toast.
+    local overlay = require "core.image_overlay"
+    config.transitions = false
+    overlay.open_image(sample_image(), { label = "Overlay sample.png" })
+    core.root_panel:update()
+    local button = overlay.button_rect("copy")
+    overlay.on_mouse_moved(button.x + button.w / 2, button.y + button.h / 2, 0, 0)
+    overlay.show_toast("Image copied")
   elseif benchmark.scenario == "terminal-images" then
     view = require("core.terminal_image_scene")()
     require("core.panes").place(function() return view end, {

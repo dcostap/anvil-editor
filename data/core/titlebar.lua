@@ -7,6 +7,7 @@ local style = require "core.style"
 local color_theme = require "core.color_theme"
 local tab = require "core.tab"
 local numbered_panes = require "core.numbered_panes"
+local system_icons = require "core.system_icons"
 local View = require "core.view"
 
 local TitleBar = View:extend()
@@ -23,8 +24,6 @@ local TAB_RADIUS = math.floor(8 * SCALE)
 local TEXT_FIT_RESERVE = 1
 local TEXT_OVERFLOW_TOLERANCE = 0.5
 local function tab_group_gap() return math.max(4, math.floor(8 * SCALE)) end
-local caption_font
-local caption_font_size
 local caption_glyphs = {
   "\238\164\161", -- U+E921 ChromeMinimize
   "\238\164\162", -- U+E922 ChromeMaximize
@@ -74,22 +73,9 @@ local function draw_centered_text(font, text, rect, color)
     rect.y + math.floor((rect.h - height) / 2), color)
 end
 
+-- Windows draws its caption buttons with the system icon font at 10 px.
 local function get_caption_font()
-  local size = 10 * SCALE
-  if caption_font == false and caption_font_size == size then return nil end
-  if caption_font and caption_font_size == size then return caption_font end
-  caption_font, caption_font_size = nil, size
-  -- Windows 11 draws its caption buttons with Segoe Fluent Icons. Windows 10 only has Segoe MDL2 Assets.
-  for _, path in ipairs {
-    "C:/Windows/Fonts/SegoeIcons.ttf",
-    "C:/Windows/Fonts/segmdl2.ttf",
-  } do
-    local ok, font = pcall(renderer.font.load, path, size, {
-      antialiasing = "grayscale", hinting = "full"
-    })
-    if ok and font then caption_font = font; return font end
-  end
-  caption_font = false
+  return system_icons.font(10 * SCALE)
 end
 
 local function draw_glyph_line(x, y, w, h, color)
@@ -684,7 +670,6 @@ function TitleBar:on_window_configuration()
 end
 
 function TitleBar:on_scale_change()
-  caption_font, caption_font_size = nil, nil
   self:on_window_configuration()
 end
 

@@ -1,4 +1,5 @@
 #include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -31,6 +32,7 @@
   #include <io.h>
   #include <windows.h>
   #include <shellapi.h>
+  #include <shlobj.h>
   #include <fileapi.h>
   #include "../utfconv.h"
   #define fileno _fileno
@@ -1698,6 +1700,74 @@ static int f_set_clipboard(lua_State *L) {
 }
 
 
+// The clipboard keeps one encoded copy for each image format until it changes again.
+typedef struct {
+  void *png, *bmp;
+  size_t png_size, bmp_size;
+} ClipboardImage;
+
+static const char *clipboard_image_types[] = { "image/png", "image/bmp" };
+
+static const void *clipboard_image_data(void *userdata, const char *mime_type, size_t *size) {
+  ClipboardImage *image = userdata;
+  bool png = SDL_strcmp(mime_type, "image/png") == 0;
+  *size = png ? image->png_size : image->bmp_size;
+  return png ? image->png : image->bmp;
+}
+
+static void clipboard_image_free(void *userdata) {
+  ClipboardImage *image = userdata;
+  SDL_free(image->png);
+  SDL_free(image->bmp);
+  SDL_free(image);
+}
+
+// Copy the stream's bytes, because closing a dynamic memory stream frees them.
+static void *encoded_surface(SDL_Surface *surface, bool png, size_t *size) {
+  SDL_IOStream *io = SDL_IOFromDynamicMem();
+  if (!io) return NULL;
+  void *data = NULL;
+  bool saved = png ? IMG_SavePNG_IO(surface, io, false) : SDL_SaveBMP_IO(surface, io, false);
+  Sint64 length = saved ? SDL_TellIO(io) : -1;
+  void *bytes = SDL_GetPointerProperty(SDL_GetIOProperties(io), SDL_PROP_IOSTREAM_DYNAMIC_MEMORY_POINTER, NULL);
+  if (length > 0 && bytes && (data = SDL_malloc((size_t)length))) {
+    SDL_memcpy(data, bytes, (size_t)length);
+    *size = (size_t)length;
+  }
+  SDL_CloseIO(io);
+  return data;
+}
+
+// PNG keeps transparency for browsers and chat apps. BMP becomes CF_DIB on Windows for older programs.
+static int f_set_clipboard_image(lua_State *L) {
+  RenCache *canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
+  if (!SDL_WasInit(SDL_INIT_VIDEO)) {
+    lua_pushboolean(L, false);
+    lua_pushstring(L, "no video subsystem");
+    return 2;
+  }
+  ClipboardImage *image = SDL_calloc(1, sizeof(*image));
+  if (image) {
+    image->png = encoded_surface(canvas->rensurface.surface, true, &image->png_size);
+    image->bmp = encoded_surface(canvas->rensurface.surface, false, &image->bmp_size);
+  }
+  if (!image || !image->png || !image->bmp) {
+    lua_pushboolean(L, false);
+    lua_pushstring(L, image ? SDL_GetError() : "out of memory");
+    if (image) clipboard_image_free(image);
+    return 2;
+  }
+  if (!SDL_SetClipboardData(clipboard_image_data, clipboard_image_free, image,
+      clipboard_image_types, SDL_arraysize(clipboard_image_types))) {
+    lua_pushboolean(L, false);
+    lua_pushstring(L, SDL_GetError());
+    return 2;
+  }
+  lua_pushboolean(L, true);
+  return 1;
+}
+
+
 static int f_get_clipboard_data(lua_State *L) {
   const char *mime_type = luaL_checkstring(L, 1);
   size_t size = 0;
@@ -1839,6 +1909,25 @@ static int f_open_in_system(lua_State *L) {
   HINSTANCE result = ShellExecuteW(NULL, L"open", wide, NULL, NULL, SW_SHOWNORMAL);
   SDL_free(wide);
   lua_pushboolean(L, (INT_PTR)result > 32);
+  return 1;
+}
+
+// Explorer opens the parent folder with the item selected. An open window for that folder is reused.
+static int f_show_in_folder(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+  LPWSTR wide = utfconv_utf8towc(path);
+  if (!wide) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  for (LPWSTR c = wide; *c; c++) if (*c == L'/') *c = L'\\';
+  HRESULT com = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+  PIDLIST_ABSOLUTE item = ILCreateFromPathW(wide);
+  SDL_free(wide);
+  HRESULT shown = item ? SHOpenFolderAndSelectItems(item, 0, NULL, 0) : E_FAIL;
+  if (item) ILFree(item);
+  if (SUCCEEDED(com)) CoUninitialize();
+  lua_pushboolean(L, SUCCEEDED(shown));
   return 1;
 }
 #endif
@@ -2778,6 +2867,7 @@ static const luaL_Reg lib[] = {
   { "get_file_info",         f_get_file_info         },
   { "get_clipboard",         f_get_clipboard         },
   { "set_clipboard",         f_set_clipboard         },
+  { "set_clipboard_image",   f_set_clipboard_image   },
   { "get_clipboard_data",    f_get_clipboard_data    },
   { "get_primary_selection", f_get_primary_selection },
   { "set_primary_selection", f_set_primary_selection },
@@ -2824,6 +2914,7 @@ static const luaL_Reg lib[] = {
   { "exec",                  f_exec                  },
 #ifdef _WIN32
   { "open_in_system",        f_open_in_system        },
+  { "show_in_folder",        f_show_in_folder        },
 #endif
   { "set_window_opacity",    f_set_window_opacity    },
   { "load_native_plugin",    f_load_native_plugin    },

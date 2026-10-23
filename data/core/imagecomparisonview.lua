@@ -49,10 +49,10 @@ function ImageComparisonView:sync_from(source)
   local target = source == self.left_view and self.right_view or self.left_view
   if not (source and source.image and target and target.image) then return end
   target.zoom_mode = source.zoom_mode
-  target.zoom_transition = nil
-  local scale = source.zoom_mode == "fit" and not source.zoom_transition and target:get_fit_scale()
+  target.transition, target.glide = nil, nil
+  local scale = source.zoom_mode == "fit" and not source.transition and target:get_fit_scale()
     or math.max(target:get_fit_scale(), source.zoom_scale)
-  target:apply_transform(scale, -source.scroll.x, -source.scroll.y)
+  target:apply_transform(scale, source.image_x, source.image_y)
 end
 
 function ImageComparisonView:update()

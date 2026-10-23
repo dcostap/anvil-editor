@@ -282,7 +282,6 @@ style.sidebar_card = c("353633")
 style.sidebar_shadow = { 0, 0, 0, 110 }
 style.image_grid_bright = c("383832")
 style.image_grid_dark = c("292a26")
-style.image_overlay_background = { 0, 0, 0, 225 }
 style.fuzzy_searcher_preview_background = { 0, 0, 0, 210 }
 style.fuzzy_searcher_overlay_background = { 0, 0, 0, 89 }
 style.fuzzy_searcher_result_selection_background = { common.color "rgba(210, 163, 107, 0.17)" }

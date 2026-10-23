@@ -1075,6 +1075,8 @@ local function image_fragment(view, span, opts)
     local embedded = images.is_data_image(image_source)
     local label = link.alias or link.alt
     if not label or label == "" then label = embedded and "Embedded image" or image_source end
+    -- The Image Overlay grows the image from the place where the clicked View last drew it.
+    local drawn_rects = setmetatable({}, { __mode = "k" })
     return {
       source_col1 = span.col1,
       source_col2 = span.col2,
@@ -1095,15 +1097,14 @@ local function image_fragment(view, span, opts)
         on_mouse_pressed = function(_, owner, hit, button)
           if button ~= "left" then return false end
           owner.buffer:set_selection(hit.line, 1)
-          if embedded then
-            return require("core.markdown.image_overlay").open_image(
-              entry.image, label, nil,
-              entry.animation_type and function() return images.open_animation(entry) end
-            )
-          end
-          return common.open_in_system(hit.fragment.image_path)
+          return require("core.image_overlay").open_image(entry.image, {
+            label = label,
+            path = not embedded and hit.fragment.image_path or nil,
+            open_animation = entry.animation_type and function() return images.open_animation(entry) end,
+            source_rect = drawn_rects[owner],
+          })
         end,
-        draw = function(_, fragment, x, y, row_height)
+        draw = function(view, fragment, x, y, row_height)
           local image_x = x + (fragment.draw_x_offset or 0)
           local image_y
           if fragment.draw_y_offset then
@@ -1111,6 +1112,9 @@ local function image_fragment(view, span, opts)
           else
             image_y = y + math.max(0, (row_height - height) / 2)
           end
+          local rect = drawn_rects[view] or {}
+          drawn_rects[view] = rect
+          rect.x, rect.y, rect.w, rect.h = image_x, image_y, width, height
           local frame = entry.animation_type and image_animation.frame(entry, {
             version = entry.image,
             open = images.open_animation,

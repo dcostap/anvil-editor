@@ -4680,7 +4680,7 @@ test.describe("Markdown Live Preview", function()
     local view, buffer = make_view(source .. "\nother", USERDIR .. PATHSEP .. "note.md")
     buffer:set_selection(2, 1)
     local old_load_image_data = canvas.load_image_data
-    local overlay = require "core.markdown.image_overlay"
+    local overlay = require "core.image_overlay"
     local loaded
     canvas.load_image_data = function(data)
       loaded = data
@@ -4716,6 +4716,55 @@ test.describe("Markdown Live Preview", function()
     end)
     overlay.close()
     canvas.load_image_data = old_load_image_data
+    if not ok then error(err, 0) end
+  end)
+
+  test.it("opens a project image in the Image Overlay from the place where it was drawn", function()
+    local image_path = USERDIR .. PATHSEP .. "markdown-live-overlay-" .. system.get_process_id() .. ".png"
+    test.ok(canvas.new(64, 32, { 20, 120, 220, 255 }, true):save_image(image_path))
+    local view, buffer = make_view("![Alt](" .. common.basename(image_path) .. ")\nother",
+      USERDIR .. PATHSEP .. "note.md")
+    buffer:set_selection(2, 1)
+    local overlay = require "core.image_overlay"
+    local old_open_in_system = common.open_in_system
+    local old_draw_canvas, old_draw_scaled = renderer.draw_canvas, renderer.draw_canvas_scaled
+    local old_draw_text, old_draw_rect = renderer.draw_text, renderer.draw_rect
+    local old_transitions = config.transitions
+    local opened_in_system, drawn
+    renderer.draw_rect = function() end
+    renderer.draw_text = function(font, text, x, _, _, opts) return x + font:get_width(text, opts) end
+    common.open_in_system = function(path) opened_in_system = path; return true end
+    renderer.draw_canvas = function(image, x, y)
+      local w, h = image:get_size()
+      drawn = { x, y, w, h }
+    end
+    renderer.draw_canvas_scaled = function(_, x, y, w, h) drawn = { x, y, w, h } end
+    local ok, err = pcall(function()
+      config.transitions = true
+      refresh(view)
+      view:draw_line_text(1, 0, 0)
+      local thumbnail = test.not_nil(drawn)
+      local image_fragment
+      for _, fragment in ipairs(view:get_line_render(1).fragments or {}) do
+        if fragment.widget and fragment.widget.type == "image" then image_fragment = fragment end
+      end
+      test.not_nil(image_fragment)
+      test.ok(image_fragment.widget:on_mouse_pressed(
+        view, { line = 1, fragment = image_fragment }, "left"
+      ))
+      test.equal(opened_in_system, nil)
+      test.ok(overlay.is_open())
+      local overlay_view = overlay.get_view()
+      test.equal(overlay_view.path, image_path)
+      local x, y, w, h = overlay_view:get_image_rect()
+      test.same({ x, y, w, h }, thumbnail)
+    end)
+    overlay.close()
+    config.transitions = old_transitions
+    common.open_in_system = old_open_in_system
+    renderer.draw_canvas, renderer.draw_canvas_scaled = old_draw_canvas, old_draw_scaled
+    renderer.draw_text, renderer.draw_rect = old_draw_text, old_draw_rect
+    os.remove(image_path)
     if not ok then error(err, 0) end
   end)
 
@@ -5307,40 +5356,35 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("opens a clicked rendered image in the system application", function()
+  test.it("opens a clicked rendered image in the Image Overlay", function()
     local image_path = USERDIR .. PATHSEP .. "markdown-live-click-image-" .. system.get_process_id() .. ".png"
-    local fp = io.open(image_path, "wb")
-    test.not_nil(fp)
-    fp:write("png")
-    fp:close()
+    test.ok(canvas.new(80, 40, { 20, 120, 220, 255 }, true):save_image(image_path))
     local image_url = common.basename and common.basename(image_path) or image_path:match("[^" .. PATHSEP .. "]+$")
     local view, buffer = make_view("![[" .. image_url .. "]]\nother", USERDIR .. PATHSEP .. "note.md")
     buffer:set_selection(2, 1)
-    local old_load_image = canvas.load_image
+    local overlay = require "core.image_overlay"
     local old_open = common.open_in_system
     local opened_path
-    canvas.load_image = function()
-      return {
-        get_size = function() return 80, 40 end,
-        scaled = function(self) return self end,
-      }
-    end
     common.open_in_system = function(path)
       opened_path = path
       return true
     end
 
-    refresh(view)
-    local x, y = view:get_line_screen_position(1)
-    local link_row = view:get_line_render(1).position_rows[1]
-    test.ok(view:on_mouse_pressed("left", x + 10, y + link_row.height + 10, 1))
-    test.equal(opened_path, image_path)
-    local line = buffer:get_selection()
-    test.equal(line, 1)
-
+    local ok, err = pcall(function()
+      refresh(view)
+      local x, y = view:get_line_screen_position(1)
+      local link_row = view:get_line_render(1).position_rows[1]
+      test.ok(view:on_mouse_pressed("left", x + 10, y + link_row.height + 10, 1))
+      test.equal(opened_path, nil)
+      test.ok(overlay.is_open())
+      test.equal(overlay.get_view().path, image_path)
+      local line = buffer:get_selection()
+      test.equal(line, 1)
+    end)
+    overlay.close()
     common.open_in_system = old_open
-    canvas.load_image = old_load_image
     os.remove(image_path)
+    if not ok then error(err, 0) end
   end)
 
   test.it("honors disabled live image rendering", function(context)

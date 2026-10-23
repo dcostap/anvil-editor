@@ -2062,9 +2062,14 @@ end
 function TerminalView:activate_point_of_interest(point, opts)
   if not point then return false end
   if point.image then
-    local overlay = require "core.markdown.image_overlay"
-    overlay.install()
-    return overlay.open_image(point.image, "Terminal image")
+    local scale = self.cell_width / self.native_cell_width
+    return require("core.image_overlay").open_image(point.image, {
+      label = "Terminal image",
+      source_rect = point.width and {
+        x = self.position.x + PADDING + point.x * scale, y = self.position.y + PADDING + point.y,
+        w = point.width * scale, h = point.height,
+      },
+    })
   end
   if point.uri then return self:activate_uri(point.uri) end
   if point.path then

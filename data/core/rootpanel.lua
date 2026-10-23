@@ -695,6 +695,8 @@ function RootPanel:update()
   self.focus_feedback_view = target
   if active or changed or finished then core.redraw = true end
   if changed then core.log_quiet("Focus feedback: target=%s", tostring(target)) end
+  local image_overlay = package.loaded["core.image_overlay"]
+  if image_overlay then image_overlay.update() end
   perf_end("rootpanel_update", started, scope)
 end
 
@@ -1176,6 +1178,8 @@ function RootPanel:draw()
     self.focus_feedback:draw(focused.position.x, focused.position.y, focused.size.x, focused.size.y)
     core.pop_clip_rect()
   end
+  local image_overlay = package.loaded["core.image_overlay"]
+  if image_overlay then image_overlay.draw() end
   self:publish_surface_overlay()
   self:draw_keyboard_caret()
   self:draw_autoscroll()

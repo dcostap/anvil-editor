@@ -467,6 +467,9 @@ case.
 Use `--scenario image-viewer` for image controls, transparency, a fit preview, and a clipped pan at actual size.
 This focused scene is not in the default suites. It does not yet have a full-suite performance baseline.
 
+Use `--scenario image-overlay` for the Image Overlay above an Editor: the backdrop, the title, the actions, a tooltip, a message, and the zoom controls.
+Like `image-viewer`, it has no baseline. Run it with `--report-only` and look at the captured screenshot.
+
 Use `--scenario titlebar-file-drop` to check external-drop feedback over a Title Bar with several Tabs.
 The scene sends internal drop events. It does not move the mouse or use a user's window.
 

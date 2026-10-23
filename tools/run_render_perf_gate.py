@@ -137,6 +137,7 @@ SCENARIOS["image-viewer"] = {
     "paced": False,
 }
 SCENARIOS["image-filtering"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["image-overlay"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["terminal-images"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["glyph-cache-growth"] = {
     "start_line": 1,

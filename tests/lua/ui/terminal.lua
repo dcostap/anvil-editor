@@ -206,7 +206,7 @@ test.describe("Terminal View", function()
   end)
 
   test.after_each(function(context)
-    require("core.markdown.image_overlay").close()
+    require("core.image_overlay").close()
     if context.previous_time then system.get_time = context.previous_time end
     if context.previous_defer_draw then core.root_panel.defer_draw = context.previous_defer_draw end
     if context.previous_clipboard ~= nil then
@@ -1714,7 +1714,7 @@ test.describe("Terminal View", function()
   end)
 
   test.it("previews terminal images during mouse tracking but preserves drags and other program clicks", function(context)
-    local overlay = require "core.markdown.image_overlay"
+    local overlay = require "core.image_overlay"
     local view = terminal.open()
     local session = context.sessions[1]
     local image = canvas.new(80, 40, { 255, 0, 0, 255 }, true)
@@ -1728,9 +1728,9 @@ test.describe("Terminal View", function()
     test.equal(view.cursor, "hand")
     local mouse_events_before_click = #session.mouse_events
     view:on_mouse_pressed("left", 7, 7)
-    test.ok(not overlay.visible())
+    test.ok(not overlay.is_open())
     view:on_mouse_released("left", 7, 7)
-    test.ok(overlay.visible())
+    test.ok(overlay.is_open())
     test.equal(overlay.get_view().image, image)
     test.equal(#session.mouse_events, mouse_events_before_click,
       "Image clicks must not reach the terminal program")
@@ -1739,7 +1739,7 @@ test.describe("Terminal View", function()
     view:on_mouse_pressed("left", 7, 7)
     view:on_mouse_moved(7 + view.cell_width * 3, 7, view.cell_width * 3, 0)
     view:on_mouse_released("left", 7 + view.cell_width * 3, 7)
-    test.ok(not overlay.visible())
+    test.ok(not overlay.is_open())
     test.equal(session.gesture_events[#session.gesture_events - 1][1], "drag")
 
     local outside_y = 7 + view.cell_height * 4
@@ -1747,17 +1747,17 @@ test.describe("Terminal View", function()
     test.equal(view.cursor, "arrow")
     view:on_mouse_pressed("left", 7, outside_y)
     view:on_mouse_released("left", 7, outside_y)
-    test.ok(not overlay.visible())
+    test.ok(not overlay.is_open())
     test.equal(session.mouse_events[#session.mouse_events - 1][1], "press")
     test.equal(session.mouse_events[#session.mouse_events][1], "release")
     keymap.modkeys.ctrl = true
     view:on_mouse_pressed("left", 7, 7)
     view:on_mouse_released("left", 7, 7)
-    test.ok(overlay.visible())
+    test.ok(overlay.is_open())
   end)
 
   test.it("previews the top image only inside its bounds and cancels when it disappears", function()
-    local overlay = require "core.markdown.image_overlay"
+    local overlay = require "core.image_overlay"
     local view = terminal.open()
     local back = canvas.new(20, 20, { 255, 0, 0, 255 }, true)
     local front = canvas.new(20, 20, { 0, 255, 0, 255 }, true)
@@ -1781,7 +1781,7 @@ test.describe("Terminal View", function()
     view:on_mouse_pressed("left", x, y)
     view.snapshot.images = {}
     view:on_mouse_released("left", x, y)
-    test.ok(not overlay.visible())
+    test.ok(not overlay.is_open())
     view:on_mouse_moved(x, y, 0, 0)
     test.equal(view.cursor, "arrow")
   end)

@@ -375,14 +375,8 @@ local function reveal_active_file_in_explorer(dv)
     return
   end
 
-  if PLATFORM == "Windows" then
-    local win_path = path:gsub("/", "\\"):gsub('"', '\\"')
-    -- Explorer's /select argument is picky: when the path contains spaces it
-    -- must be quoted inside the same /select, argument, otherwise Explorer can
-    -- ignore it and fall back to the default Documents location.
-    system.exec(string.format('explorer.exe /select,"%s"', win_path))
-  else
-    common.open_in_system(path:match("^(.*)[/\\][^/\\]+$") or path)
+  if not common.show_in_folder(path) then
+    core.error("Could not show the file in its folder: %s", path)
   end
 end
 

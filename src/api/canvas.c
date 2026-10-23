@@ -632,7 +632,7 @@ static int f_save_image(lua_State *L) {
   RenCache* canvas = luaL_checkudata(L, 1, API_TYPE_CANVAS);
   const char *file = luaL_checkstring(L, 2);
   const char *type = luaL_optstring(L, 3, "png");
-  int quality = luaL_optinteger(L, 3, 100);
+  int quality = luaL_optinteger(L, 4, 100);
 
   bool saved = false;
   if (strcmp(type, "png") == 0) {

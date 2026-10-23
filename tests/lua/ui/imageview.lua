@@ -1,8 +1,9 @@
 local core = require "core"
+local common = require "core.common"
 local config = require "core.config"
 local command = require "core.command"
 local ImageComparisonView = require "core.imagecomparisonview"
-local overlay = require "core.markdown.image_overlay"
+local overlay = require "core.image_overlay"
 local ImageView = require "core.imageview"
 local test = require "core.test"
 
@@ -192,23 +193,126 @@ test.describe("Image View interaction", function()
     end
   end)
 
-  test.it("closes the Markdown overlay only when the click is outside the image and controls", function(context)
+  test.it("zooms with the wheel while a modifier key is held", function(context)
+    local keymap = require "core.keymap"
+    local view = context.view
+    config.transitions = false
+    local before = image_rect(view)[3]
+    keymap.modkeys.ctrl = true
+    local ok, handled = pcall(view.on_mouse_wheel, view, 1)
+    keymap.modkeys.ctrl = false
+    if not ok then error(handled, 0) end
+    test.ok(handled)
+    test.ok(image_rect(view)[3] > before)
+  end)
+
+  test.it("enlarges a small image that fits at source size when double-clicked", function(context)
+    local view = context.view
+    config.transitions = false
+    view:set_image(canvas.new(60, 40, { 40, 100, 180, 255 }, true), "Small image")
+    near(image_rect(view)[3], 60)
+    view:on_mouse_pressed("left", 330, 240, 2)
+    near(image_rect(view)[4], 400)
+    view:on_mouse_released("left", 330, 240)
+    view:on_mouse_pressed("left", 330, 240, 2)
+    near(image_rect(view)[3], 60)
+  end)
+
+  test.it("keeps a fast drag moving after release, but not a drag that stopped first", function(context)
+    local view = context.view
+    config.transitions = false
+    view:zoom_reset()
+    config.transitions = true
+    local function drag(pause, dx)
+      view:on_mouse_pressed("left", 300, 200, 1)
+      for _ = 1, 3 do
+        context.now = context.now + 0.01
+        view:on_mouse_moved(300, 200, dx, 0)
+      end
+      context.now = context.now + pause
+      view:on_mouse_released("left", 300, 200)
+      local released = image_rect(view)[1]
+      context.now = context.now + 0.02
+      view:update()
+      return released, image_rect(view)[1]
+    end
+    local released, later = drag(0, -10)
+    test.ok(later < released, "a released fast drag keeps moving")
+    for _ = 1, 200 do
+      context.now = context.now + 0.02
+      view:update()
+    end
+    local settled = image_rect(view)[1]
+    context.now = context.now + 1
+    view:update()
+    near(image_rect(view)[1], settled)
+    released, later = drag(0.5, 10)
+    near(later, released)
+  end)
+
+  test.it("closes the Image Overlay on a backdrop click, but not on the image, the controls or a drag", function(context)
     config.transitions = false
     test.ok(overlay.open(context.path))
     local view = overlay.get_view()
+    local function click(x, y, to_x, to_y)
+      overlay.on_mouse_pressed("left", x, y, 1)
+      if to_x then overlay.on_mouse_moved(to_x, to_y, to_x - x, to_y - y) end
+      overlay.on_mouse_released("left", to_x or x, to_y or y)
+    end
     local x, y, w, h = view:get_image_rect()
-    overlay.on_mouse_pressed("left", x + w / 2, y + h / 2, 1)
-    overlay.on_mouse_released("left", x + w / 2, y + h / 2)
-    test.ok(overlay.visible())
+    click(x + w / 2, y + h / 2)
+    test.ok(overlay.is_open())
     for _, item in ipairs(view:get_controls()) do
       if item.action == "zoom_reset" then
-        overlay.on_mouse_pressed("left", item.x + item.w / 2, item.y + item.h / 2, 1)
-        test.ok(overlay.visible())
+        click(item.x + item.w / 2, item.y + item.h / 2)
+        test.ok(overlay.is_open())
         near(view.zoom_scale, 1)
       end
     end
-    overlay.on_mouse_pressed("left", core.root_panel.position.x, core.root_panel.position.y, 1)
-    test.equal(overlay.visible(), false)
+    view:zoom_fit()
+    local root = core.root_panel
+    local bx, by = root.position.x + 2, root.position.y + root.size.y / 2
+    test.equal(view:contains_image(bx, by), false)
+    click(bx, by, bx + 100, by)
+    test.ok(overlay.is_open(), "a drag from the backdrop must not close the overlay")
+    click(bx, by)
+    test.equal(overlay.is_open(), false)
+  end)
+
+  test.it("fits the overlay image between its top bar and its zoom controls", function(context)
+    config.transitions = false
+    test.ok(overlay.open(context.path))
+    overlay.update()
+    local view = overlay.get_view()
+    local _, y, _, h = view:get_image_rect()
+    local controls = test.not_nil(view:get_controls().rect)
+    test.ok(y + h <= controls.y, "the fitted image must end above the zoom controls")
+    for _, item in ipairs(view:get_controls()) do
+      test.equal(view:contains_image(item.x + item.w / 2, item.y + item.h / 2), false)
+    end
+    test.ok(view:get_fit_scale() < 1)
+    local root = core.root_panel
+    test.ok(y > root.position.y + root.size.y * 0.02, "the top bar keeps space above the fitted image")
+  end)
+
+  test.it("grows an overlay image from its source rectangle and returns it there on close", function(context)
+    local source = { x = 100, y = 120, w = 60, h = 40 }
+    test.ok(overlay.open(context.path, { source_rect = source }))
+    local view = overlay.get_view()
+    local first = image_rect(view)
+    near(first[1], source.x)
+    near(first[2], source.y)
+    near(first[3], source.w)
+    context.now = 1
+    overlay.update()
+    near(image_rect(view)[3], 1200 * view:get_fit_scale())
+    overlay.close()
+    test.equal(overlay.is_open(), false)
+    context.now = 2
+    overlay.update()
+    local returned = image_rect(view)
+    near(returned[1], source.x)
+    near(returned[3], source.w)
   end)
 
   test.it("keeps image comparisons aligned throughout zoom", function(context)
@@ -228,10 +332,11 @@ test.describe("Image View interaction", function()
     end
   end)
 
-  test.it("animates the Markdown image overlay through the same wheel interaction", function(context)
+  test.it("animates the Image Overlay through the same wheel interaction", function(context)
     test.ok(overlay.open(context.path))
     local saved, rect = {}, nil
-    for _, name in ipairs({ "draw_canvas_scaled", "draw_rect", "draw_rounded_rect", "draw_text", "set_clip_rect" }) do
+    for _, name in ipairs({ "draw_canvas_scaled", "draw_rect", "draw_rounded_rect", "draw_text", "set_clip_rect",
+      "push_transform", "pop_transform" }) do
       saved[name] = renderer[name]
       renderer[name] = function() return 0 end
     end
@@ -249,9 +354,91 @@ test.describe("Image View interaction", function()
       overlay.draw()
       test.ok(rect[3] > before[3])
       overlay.close()
-      test.equal(overlay.visible(), false)
+      test.equal(overlay.is_open(), false)
+      context.now = 2
+      core.root_panel:update()
+      overlay.draw()
     end)
     for name, fn in pairs(saved) do renderer[name] = fn end
+    if not ok then error(err, 0) end
+  end)
+end)
+
+test.describe("Image Overlay actions", function()
+  test.before_each(function(context)
+    context.root = USERDIR .. PATHSEP .. "image-overlay-actions-" .. system.get_process_id()
+    test.ok(common.mkdirp(context.root))
+    context.path = context.root .. PATHSEP .. "photo.png"
+    test.ok(canvas.new(40, 30, { 200, 20, 20, 255 }, true):save_image(context.path))
+    context.transitions = config.transitions
+    config.transitions = false
+    context.saved = {}
+    for _, name in ipairs({ "set_clipboard_image", "show_in_folder", "open_in_system" }) do
+      context.saved[name] = system[name]
+    end
+    context.calls = {}
+    system.set_clipboard_image = function(image) context.calls.clipboard = image; return true end
+    system.show_in_folder = function(path) context.calls.folder = path; return true end
+    system.open_in_system = function(path) context.calls.opened = path; return true end
+  end)
+
+  test.after_each(function(context)
+    overlay.close()
+    for name, fn in pairs(context.saved) do system[name] = fn end
+    config.transitions = context.transitions
+    test.ok(test.remove_tree(context.root))
+    if context.calls.opened and context.calls.opened ~= context.path then os.remove(context.calls.opened) end
+  end)
+
+  test.it("copies the image and shows a file in its folder", function(context)
+    test.ok(overlay.open(context.path))
+    test.ok(overlay.perform("copy"))
+    test.equal(context.calls.clipboard, overlay.get_view().image)
+    test.ok(overlay.perform("show_in_folder"))
+    test.equal(context.calls.folder, context.path)
+    test.ok(overlay.perform("open_external"))
+    test.equal(context.calls.opened, context.path)
+    test.ok(overlay.is_open())
+  end)
+
+  test.it("opens an image without a file through a temporary PNG", function(context)
+    test.ok(overlay.open_image(canvas.new(20, 10, { 0, 200, 0, 255 }, true), { label = "Terminal image" }))
+    test.equal(overlay.perform("show_in_folder"), false)
+    test.equal(overlay.perform("open_in_pane"), false)
+    test.ok(overlay.perform("open_external"))
+    local opened = test.not_nil(context.calls.opened)
+    local image = test.not_nil(canvas.load_image(opened))
+    test.same({ image:get_size() }, { 20, 10 })
+  end)
+
+  test.it("saves a file copy for the same extension and encodes other formats", function(context)
+    test.ok(overlay.open(context.path))
+    local copy = context.root .. PATHSEP .. "copy.png"
+    test.ok(overlay.save_to(copy))
+    local function read(path)
+      local file = test.not_nil(io.open(path, "rb"))
+      local data = file:read("*a")
+      file:close()
+      return data
+    end
+    test.equal(read(copy), read(context.path))
+    local jpeg = context.root .. PATHSEP .. "copy.jpg"
+    test.ok(overlay.save_to(jpeg))
+    test.same({ test.not_nil(canvas.load_image(jpeg)):get_size() }, { 40, 30 })
+    test.equal(overlay.save_to(context.root .. PATHSEP .. "copy.txt"), false)
+  end)
+
+  test.it("opens the image file in a Pane and closes the overlay", function(context)
+    local old_open_file = core.open_file
+    local opened
+    core.open_file = function(path) opened = path; return true end
+    local ok, err = pcall(function()
+      test.ok(overlay.open(context.path))
+      test.ok(overlay.perform("open_in_pane"))
+      test.equal(opened, context.path)
+      test.equal(overlay.is_open(), false)
+    end)
+    core.open_file = old_open_file
     if not ok then error(err, 0) end
   end)
 end)
@@ -310,8 +497,9 @@ test.describe("Image View animations", function()
   test.it("plays an embedded Markdown GIF in the image overlay", function(context)
     local images = require "core.markdown.images"
     local entry = images.get_asset(context.url)
-    test.ok(overlay.open_image(entry.image, "Embedded image", nil,
-      function() return images.open_animation(entry) end))
+    test.ok(overlay.open_image(entry.image, {
+      label = "Embedded image", open_animation = function() return images.open_animation(entry) end,
+    }))
     local view = test.not_nil(overlay.get_view())
     test.equal(drawn_color(view), "red")
     context.now = context.now + 0.05

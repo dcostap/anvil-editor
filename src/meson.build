@@ -209,6 +209,7 @@ if host_machine.system() == 'windows'
     anvil_deps += cc.find_library('dxgi', required: true)
     anvil_deps += cc.find_library('dxguid', required: true)
     anvil_deps += cc.find_library('shell32', required: true)
+    anvil_deps += cc.find_library('ole32', required: true)
     anvil_rc += windows.compile_resources('../resources/icons/icon.rc',
         depend_files : files('../resources/icons/icon.ico')
     )

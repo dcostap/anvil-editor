@@ -1201,6 +1201,16 @@ function common.rm(path, recursively)
 end
 
 
+---Show a file or folder in the system file manager.
+---Windows selects the item in its parent folder. Other platforms open the parent folder.
+---@param path string
+---@return boolean success
+function common.show_in_folder(path)
+  if system.show_in_folder then return system.show_in_folder(path) end
+  return common.open_in_system(common.dirname(path) or path)
+end
+
+
 ---Open the given resource using the system launcher.
 ---The resource can be an url, file or directory in most cases...
 ---@param resource string
