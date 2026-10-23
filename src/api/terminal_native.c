@@ -64,7 +64,8 @@ typedef struct {
   GhosttySnapshotDecoder decoder;
   bool replay_finished;
   bool detached;
-  bool revived, host_gone;
+  bool revived, host_gone, prepared, activated_prepared;
+  wchar_t *prepared_environment;
   volatile LONG host_exited;
   volatile LONG busy;
   LONG reported_busy;
@@ -858,7 +859,7 @@ struct ReconnectJob {
   DWORD host_pid, shell_pid, error;
   AnvilTerminalSize size;
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
-  bool connected;
+  bool connected, prepared;
   char *userdir, *project, *shell, *cwd, *datadir, *revive_from;
   wchar_t *environment;
   size_t scrollback_lines;
@@ -881,7 +882,8 @@ static DWORD WINAPI reconnect_main(void *userdata) {
   bool connected = job->userdir
     ? anvil_terminal_host_launch(&job->pipe, &job->process, &job->host_pid, &job->shell_pid,
         &replay_bytes, job->id, job->userdir, job->project, job->shell, job->cwd, job->datadir,
-        job->revive_from, job->environment, &job->size, job->has_scrollback_lines ? &job->scrollback_lines : NULL, &job->error)
+        job->revive_from, job->environment, job->prepared, &job->size,
+        job->has_scrollback_lines ? &job->scrollback_lines : NULL, &job->error)
     : anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
         &job->shell_pid, job->id, &job->size, &job->error);
   if (!connected && job->userdir && job->process) TerminateProcess(job->process, 1);
@@ -937,6 +939,7 @@ static bool start_launch(TerminalSession *session, const char *id, const char *p
   job->shell = _strdup(shell ? shell : ""); job->cwd = _strdup(cwd ? cwd : "");
   job->datadir = _strdup(datadir); job->revive_from = path ? _strdup(path) : NULL;
   job->environment = GetEnvironmentStringsW();
+  job->prepared = session->prepared;
   job->size = (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
   job->scrollback_lines = session->scrollback_lines; job->has_scrollback_lines = session->has_scrollback_lines;
   if (id) { memcpy(job->id, id, sizeof(job->id)); memcpy(session->id, id, sizeof(session->id)); }
@@ -995,7 +998,9 @@ static void terminate_terminal_process(TerminalSession *session) {
 static void close_session(TerminalSession *session) {
   if (!session || session->closed) return;
   session->closed = true;
-  uint16_t final_type = session->detached ? ANVIL_TERMINAL_DETACH : ANVIL_TERMINAL_CLOSE;
+  if (session->prepared_environment) FreeEnvironmentStringsW(session->prepared_environment);
+  session->prepared_environment = NULL;
+  uint16_t final_type = session->detached && !session->prepared ? ANVIL_TERMINAL_DETACH : ANVIL_TERMINAL_CLOSE;
   HANDLE process = retain_handle(session->process);
   bool job_owns_command = cancel_reconnect(session, final_type);
   if (session->vt_trace_file) {
@@ -1374,6 +1379,8 @@ static int f_terminal_new(lua_State *L) {
   } else {
     lua_getglobal(L, "DATADIR");
     const char *datadir = luaL_checkstring(L, -1);
+    lua_getfield(L, 1, "prepared");
+    session->prepared = lua_toboolean(L, -1); lua_pop(L, 1);
     started = start_launch(session, NULL, NULL, userdir ? userdir : ".", project, shell, cwd, datadir);
     if (!started) error = ERROR_NOT_ENOUGH_MEMORY;
   }
@@ -1493,6 +1500,11 @@ static void fail_transport(TerminalSession *session, DWORD error) {
 static bool service_transport(TerminalSession *session) {
   bool fault = session->read_failed || (session->write_failed && session->reader_done && !session->host_exited);
   if (session->state == TERMINAL_STATE_RUNNING && fault) {
+    if (session->prepared) {
+      send_final_command(session, retain_handle(session->process), ANVIL_TERMINAL_CLOSE);
+      fail_transport(session, session->read_error ? session->read_error : session->write_error);
+      return false;
+    }
     if (session->read_error == ERROR_INVALID_DATA || session->read_error == ERROR_NOT_ENOUGH_MEMORY ||
         !session->process || WaitForSingleObject(session->process, 0) != WAIT_TIMEOUT) {
       fail_transport(session, session->read_error ? session->read_error : session->write_error);
@@ -1531,6 +1543,10 @@ static bool service_transport(TerminalSession *session) {
           0, FALSE, DUPLICATE_SAME_ACCESS);
         session->host_pid = job->host_pid;
         memcpy(session->id, job->id, sizeof(session->id));
+        if (session->prepared) {
+          session->prepared_environment = job->environment;
+          job->environment = NULL;
+        }
       }
       handle = job->pipe.handle; job->pipe.handle = NULL;
       session->shell_pid = job->shell_pid;
@@ -1562,6 +1578,9 @@ static bool service_transport(TerminalSession *session) {
     session->attached_at = GetTickCount64(); session->attach_count++;
     session->initial_restore = session->preserve_grid = false;
     set_terminal_state(session, TERMINAL_STATE_RUNNING);
+    if (session->activated_prepared && !enqueue_record(session, ANVIL_TERMINAL_ACTIVATE, NULL, 0)) {
+      fail_transport(session, ERROR_BROKEN_PIPE); return false;
+    }
   }
   return !session->transport_released;
 }
@@ -1879,6 +1898,29 @@ static int f_terminal_stats(lua_State *L) {
   set_integer_field(L, "replay_bytes", InterlockedCompareExchange64((LONG64 *)&session->replay_bytes, 0, 0));
   lua_pushstring(L, session->id); lua_setfield(L, -2, "session_id");
   set_integer_field(L, "attach_count", session->attach_count);
+  return 1;
+}
+
+static int f_terminal_activate(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  wchar_t *current = GetEnvironmentStringsW();
+  bool same_environment = current && session->prepared_environment;
+  if (same_environment) {
+    const wchar_t *a = current, *b = session->prepared_environment;
+    while (*a || *b) {
+      if (wcscmp(a, b)) { same_environment = false; break; }
+      a += wcslen(a) + 1; b += wcslen(b) + 1;
+    }
+  }
+  if (current) FreeEnvironmentStringsW(current);
+  bool ok = session->prepared && session->state == TERMINAL_STATE_RUNNING && session->replay_finished &&
+    same_environment && !session->transport_released && enqueue_record(session, ANVIL_TERMINAL_ACTIVATE, NULL, 0);
+  if (ok) {
+    session->prepared = false;
+    session->activated_prepared = true;
+    FreeEnvironmentStringsW(session->prepared_environment); session->prepared_environment = NULL;
+  }
+  lua_pushboolean(L, ok);
   return 1;
 }
 
@@ -3724,6 +3766,7 @@ static const luaL_Reg terminal_methods[] = {
   { "snapshot", f_terminal_snapshot },
   { "stats", f_terminal_stats },
   { "close", f_terminal_close },
+  { "activate", f_terminal_activate },
   { "detach", f_terminal_detach },
   { "__gc", f_terminal_gc },
   { NULL, NULL },

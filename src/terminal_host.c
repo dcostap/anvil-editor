@@ -58,6 +58,9 @@ typedef struct {
   /* The last older process that named the shell's reused ID as its parent. It is logged once. */
   DWORD ignored_child_pid;
   bool explicit_close, shell_ended;
+  bool prepared;
+  uint64_t prepared_deadline;
+  volatile LONG activate_requested;
   /* The live title the Project Sidebar shows, and the last activity in Unix seconds. */
   char title[1024];
   int64_t activity;
@@ -172,6 +175,7 @@ static bool registry_host_live(TerminalHost *host) {
 }
 
 static bool write_registry(TerminalHost *host) {
+  if (host->prepared) return true;
   char temporary[32772], created[17];
   if (!creation_time(GetCurrentProcess(), created)) return false;
   HANDLE mutex = registry_lock(host->id);
@@ -589,6 +593,8 @@ static DWORD WINAPI host_client(void *userdata) {
       AnvilTerminalSize size; memcpy(&size, bytes, sizeof(size));
       EnterCriticalSection(&host->lock); bool ok = apply_size(host, size); LeaveCriticalSection(&host->lock);
       if (!ok) break;
+    } else if (header.type == ANVIL_TERMINAL_ACTIVATE && !header.size) {
+      InterlockedExchange(&host->activate_requested, 1);
     } else if (header.type == ANVIL_TERMINAL_CLOSE && !header.size) {
       host->explicit_close = true;
       host_log(host, "close requested"); stop_host(host); return 0;
@@ -604,6 +610,7 @@ static DWORD WINAPI host_client(void *userdata) {
       }
       LeaveCriticalSection(&host->lock);
     } else if (header.type == ANVIL_TERMINAL_DETACH && !header.size) {
+      InterlockedExchange(&host->activate_requested, 1);
       host_log(host, "detach requested"); break;
     } else break;
   }
@@ -622,6 +629,10 @@ static bool save_snapshot(TerminalHost *host, bool final);
 static void disconnect_client(TerminalHost *host) {
   stop_client(host);
   join_thread(&host->client); join_thread(&host->writer);
+  /* A claim can arrive between the main loop's check and the pipe closing. */
+  if (InterlockedExchange(&host->activate_requested, 0)) host->prepared = false;
+  /* Allow the final control connection to complete an activation whose queued message was cancelled. */
+  if (host->prepared) host->prepared_deadline = GetTickCount64() + 10000;
   EnterCriticalSection(&host->lock);
   while (host->head) { HostRecord *next = host->head->next; free(host->head); host->head = next; }
   host->tail = NULL; host->queued = 0;
@@ -654,7 +665,14 @@ static bool attach_client(TerminalHost *host) {
       if (header.type == ANVIL_TERMINAL_CLOSE) {
         host->explicit_close = true;
         host_log(host, "close requested through control connection"); stop_host(host);
-      } else if (header.type == ANVIL_TERMINAL_DETACH) host_log(host, "detach requested through control connection");
+      } else if (header.type == ANVIL_TERMINAL_DETACH) {
+        /* Unused clients send CLOSE. DETACH means a view accepted this shell. */
+        if (host->prepared) {
+          host->prepared = false;
+          if (!write_registry(host)) { host->explicit_close = true; stop_host(host); }
+        }
+        host_log(host, "detach requested through control connection");
+      }
     }
     return false;
   }
@@ -683,11 +701,13 @@ static bool attach_client(TerminalHost *host) {
       offset += count;
     }
     ok = ok && queue_record(host, ANVIL_TERMINAL_REPLAY_END, NULL, 0);
-    AnvilTerminalStatus status = { host->busy };
-    snprintf(status.agent_app, sizeof(status.agent_app), "%s", host->agent.app);
-    snprintf(status.agent_model, sizeof(status.agent_model), "%s", host->agent_model);
-    ok = ok && queue_record(host, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
-    host->status_pending = false;
+    if (!host->prepared) {
+      AnvilTerminalStatus status = { host->busy };
+      snprintf(status.agent_app, sizeof(status.agent_app), "%s", host->agent.app);
+      snprintf(status.agent_model, sizeof(status.agent_model), "%s", host->agent_model);
+      ok = ok && queue_record(host, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
+      host->status_pending = false;
+    }
   }
   host->replaying = false;
   WakeAllConditionVariable(&host->space);
@@ -801,6 +821,7 @@ static void capture_cwd(TerminalHost *host, GhosttyTerminal snapshot) {
 
 /* Runs in the host, never in the editor's UI thread. */
 static bool save_snapshot(TerminalHost *host, bool final) {
+  if (host->prepared) return true;
   uint8_t *bytes = NULL; size_t length = 0;
   EnterCriticalSection(&host->lock);
   uint64_t started = GetTickCount64();
@@ -910,12 +931,13 @@ static void set_agent_environment(TerminalHost *host, const char *datadir) {
 }
 
 int anvil_terminal_host_main(int argc, char **argv) {
-  if ((argc != 14 && argc != 16) || !anvil_terminal_id_valid(argv[2]) || strlen(argv[4]) > 32000 ||
+  if ((argc != 14 && argc != 15 && argc != 16) || !anvil_terminal_id_valid(argv[2]) || strlen(argv[4]) > 32000 ||
+      (argc == 15 && strcmp(argv[14], "--prepared")) ||
       (argc == 16 && strcmp(argv[14], "--revive-from"))) return 1;
   char expected_pipe[128]; snprintf(expected_pipe, sizeof(expected_pipe), "\\\\.\\pipe\\anvil-terminal-%s", argv[2]);
   if (strcmp(argv[3], expected_pipe) != 0) return 1;
   TerminalHost host = { .busy = true, .id = argv[2], .pipe_name = argv[3], .shell = argv[5],
-    .cwd = argv[6], .project = argv[12], .activity = (int64_t)time(NULL) };
+    .cwd = argv[6], .project = argv[12], .activity = (int64_t)time(NULL), .prepared = argc == 15 };
   InitializeCriticalSection(&host.lock);
   InitializeConditionVariable(&host.ready); InitializeConditionVariable(&host.space);
   const char *directories[] = { "logs", "terminal-sessions" };
@@ -991,8 +1013,21 @@ int anvil_terminal_host_main(int argc, char **argv) {
   uint64_t agent_written_at = 0;
   char agent_logged[sizeof(host.agent.state)] = "";
   bool exit_queued = false, final_snapshot_saved = false;
+  host.prepared_deadline = GetTickCount64() + 30000;
   while (!host.stop) {
+    if (InterlockedExchange(&host.activate_requested, 0)) {
+      host.prepared = false;
+      busy_probe_at = 0;
+      EnterCriticalSection(&host.lock); host.status_pending = true; LeaveCriticalSection(&host.lock);
+      host_log(&host, "prepared shell activated");
+      if (!write_registry(&host)) { host.explicit_close = true; break; }
+    }
     uint64_t now = GetTickCount64();
+    if (host.prepared && !host.attached && now >= host.prepared_deadline) {
+      host.explicit_close = true;
+      host_log(&host, "unused prepared shell had no client");
+      break;
+    }
     if ((host.client || host.writer) && host.client_stop) {
       disconnect_client(&host); write_registry(&host); idle_since = now;
     }
@@ -1043,7 +1078,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
     }
     uint64_t sent_at = InterlockedCompareExchange64(&host.exit_sent_ms, 0, 0);
     if (exit_queued && (!host.attached || (sent_at && now - sent_at > 3000))) break;
-    if (!exited_at && now >= busy_probe_at) {
+    if (!host.prepared && !exited_at && now >= busy_probe_at) {
       busy_probe_at = now + (host.attached ? 500 : 2000);
       char command[16384];
       DWORD command_pid = 0;
@@ -1076,7 +1111,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
     }
     EnterCriticalSection(&host.lock);
     /* Never block the monitor on a full client queue. Send the latest status later. */
-    if (host.attached && !host.replaying && !host.client_stop && host.status_pending &&
+    if (!host.prepared && host.attached && !host.replaying && !host.client_stop && host.status_pending &&
         host.queued + sizeof(HostRecord) + sizeof(AnvilTerminalStatus) <= CLIENT_QUEUE_LIMIT) {
       AnvilTerminalStatus status = { host.busy };
       snprintf(status.agent_app, sizeof(status.agent_app), "%s", host.agent.app);
@@ -1126,7 +1161,8 @@ int anvil_terminal_host_main(int argc, char **argv) {
       }
     }
     uint64_t revision = InterlockedCompareExchange64(&host.model_revision, 0, 0);
-    if (host.model && revision != host.snapshot_revision && now - host.snapshot_at >= 20000) save_snapshot(&host, false);
+    if (!host.prepared && host.model && revision != host.snapshot_revision && now - host.snapshot_at >= 20000)
+      save_snapshot(&host, false);
     Sleep(10);
   }
 cleanup:
@@ -1138,7 +1174,7 @@ cleanup:
     DWORD done; GetOverlappedResult(host.pipe.handle, &accept, &done, TRUE);
   }
   if (accept.hEvent) CloseHandle(accept.hEvent);
-  if (host.explicit_close) delete_registry(&host);
+  if (host.explicit_close || host.prepared) delete_registry(&host);
   /* Keep draining until ClosePseudoConsole releases its output sink. */
   anvil_conpty_kill(&host.pty);
   if (host.pty.pseudoconsole && !host.console_close)
@@ -1157,6 +1193,10 @@ cleanup:
   while (host.head) { HostRecord *next = host.head->next; free(host.head); host.head = next; }
   if (host.model) ghostty_terminal_free(host.model);
   DeleteCriticalSection(&host.lock);
+  if (host.prepared && host.explicit_close) {
+    wchar_t *path = wide_string(host.log_path);
+    if (path) { DeleteFileW(path); free(path); }
+  }
   return (int)exit_code;
 }
 
@@ -1244,7 +1284,7 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
                                 char id[ANVIL_TERMINAL_ID_LENGTH + 1],
                                 const char *userdir, const char *project, const char *shell, const char *cwd,
                                 const char *datadir,
-                                const char *revive_from, const wchar_t *environment,
+                                const char *revive_from, const wchar_t *environment, bool prepared,
                                 AnvilTerminalSize *size, const size_t *scrollback_lines, DWORD *error) {
   uint8_t random[16]; char name[128];
   bool random_ok = revive_from ? anvil_terminal_id_valid(id) : random_bytes(random, sizeof(random));
@@ -1258,12 +1298,13 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
   snprintf(cw, sizeof(cw), "%u", size->cell_width); snprintf(ch, sizeof(ch), "%u", size->cell_height);
   if (scrollback_lines) snprintf(lines, sizeof(lines), "%zu", *scrollback_lines); else strcpy(lines, "-1");
   const char *args[] = { "--terminal-session", id, name, userdir, shell ? shell : "",
-    cwd ? cwd : "", cols, rows, cw, ch, lines, project ? project : "", datadir, "--revive-from", revive_from };
+    cwd ? cwd : "", cols, rows, cw, ch, lines, project ? project : "", datadir,
+    prepared ? "--prepared" : "--revive-from", revive_from };
   wchar_t *command = calloc(32768, sizeof(wchar_t));
   if (!command) { *error = ERROR_NOT_ENOUGH_MEMORY; return false; }
   size_t n = quote_arg(command, exe);
   bool valid = true;
-  size_t arg_count = revive_from ? sizeof(args) / sizeof(args[0]) : sizeof(args) / sizeof(args[0]) - 2;
+  size_t arg_count = sizeof(args) / sizeof(args[0]) - (revive_from ? 0 : prepared ? 1 : 2);
   for (size_t i = 0; i < arg_count; i++) {
     wchar_t *arg = wide_string(args[i]);
     if (!arg || n + wcslen(arg) * 2 + 4 >= 32768) { free(arg); valid = false; break; }

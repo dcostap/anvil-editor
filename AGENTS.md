@@ -53,6 +53,15 @@ They return in the reconnecting state, like restored sessions. Wait for running 
 Startup copies the launch options and environment. Closing an unaccepted new session ends its shell, including during editor shutdown.
 Run `ui/terminal_startup.lua` after startup changes. Tests that need a live Terminal View use `tests/fixtures/terminal_ready.lua`.
 
+The visible Selected Project prepares one unused Terminal Session after a short delay.
+Opening a matching terminal uses that shell, then prepares a replacement. Other launches use normal background startup.
+The shell command, starting directory, Project, scrollback limit, and environment must match.
+Unused prepared shells have no session record or saved screen. They close when their Project becomes hidden or closes.
+They also close when their client disconnects. An activated shell keeps the normal detach and revival behavior.
+`config.plugins.terminal.prepare_session` controls preparation. It defaults to true and has a Terminal setting.
+Preparation uses extra memory and runs the shell profile early.
+Run `runtime/terminal_prepared.lua` and `ui/terminal_prepared.lua` after changes.
+
 A Terminal Session is busy while its shell has a child process.
 An interactive PowerShell also runs `data/tools/shell-integration/anvil.ps1`.
 That script marks prompts and commands with OSC 133 and a per-session nonce.

@@ -126,6 +126,7 @@ plugin_defaults("centered_editor", {
   pane_views_only = true,
 })
 plugin_defaults("terminal", {
+  prepare_session = true,
   shell = nil,
   cwd_mode = "project",
   scrollback_lines = 10000,

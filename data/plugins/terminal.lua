@@ -19,6 +19,7 @@ local view_icons = require "core.view_icons"
 local M = {}
 local native_override
 local next_log_id = 0
+local take_prepared_session
 
 local PADDING = 6
 local PASTE_CONFIRM_CHARACTERS = 5000
@@ -39,6 +40,13 @@ end
 local terminal_config = config.plugins.terminal
 terminal_config.config_spec = {
   name = "Terminal",
+  {
+    label = "Prepare a Terminal",
+    description = "Keep one unused shell ready. Uses extra memory and runs the shell profile early.",
+    path = "prepare_session",
+    type = "toggle",
+    default = terminal_config.prepare_session,
+  },
   {
     label = "Shell Command",
     description = "Command that starts new terminal sessions. Empty uses PowerShell.",
@@ -357,7 +365,9 @@ function TerminalView:new(options)
       core.log_quiet("Terminal Session %s record rejected: %s", tostring(options.session_id), tostring(record_error))
     end
   end
-  local session, start_error, transport_error = native.new(native_options)
+  local session = not options.session_id and take_prepared_session(native_options)
+  local start_error, transport_error
+  if not session then session, start_error, transport_error = native.new(native_options) end
   if record and not session and transport_error ~= 231 and transport_error ~= 5 then
     core.log_quiet("Terminal Session %s attach rejected: %s", record.session_id, tostring(start_error))
     native_options.session_id, native_options.host_pid = nil, nil
@@ -2116,7 +2126,86 @@ function M.open_views()
   return open
 end
 
+local prepared_session, prepared_options, prepare_after, prepare_failed
+
+local function same_launch(a, b)
+  return (a.shell or "") == (b.shell or "")
+    and common.path_equals(a.cwd, b.cwd)
+    and common.path_equals(a.project_path, b.project_path)
+    and a.scrollback_lines == b.scrollback_lines
+end
+
+function M.discard_prepared_session()
+  if prepared_session then
+    prepared_session:close()
+    core.log_quiet("Prepared Terminal Session discarded")
+  end
+  prepared_session, prepared_options, prepare_after, prepare_failed = nil, nil, nil, nil
+end
+
+-- The idle scheduler calls this only for the selected, visible Project.
+function M.prepare_session()
+  if not terminal_config.prepare_session or PLATFORM ~= "Windows" then
+    M.discard_prepared_session()
+    return false
+  end
+  local options = {
+    shell = terminal_config.shell,
+    cwd = project_path(terminal_config.cwd_mode),
+    project_path = project_path("project"),
+    scrollback_lines = terminal_config.scrollback_lines,
+  }
+  if prepared_options and not same_launch(prepared_options, options) then M.discard_prepared_session() end
+  if not prepared_options then
+    prepared_options, prepare_after = options, system.get_time() + 1
+  end
+  if prepare_failed or system.get_time() < prepare_after then return false end
+  if not prepared_session then
+    local native, err = terminal_native()
+    if native then
+      local launch = common.merge(session_colors(), options)
+      launch.cols, launch.rows = 80, 24
+      launch.cell_width = math.max(1, math.ceil(style.terminal_font:get_width("M")))
+      launch.cell_height = math.max(1, math.ceil(style.terminal_font:get_height()))
+      launch.prepared = true
+      prepared_session, err = native.new(launch)
+    end
+    if not prepared_session then
+      prepare_failed = true
+      core.log_quiet("Terminal preparation failed: %s", tostring(err))
+      return false
+    end
+    core.log_quiet("Terminal preparation started: cwd=%s", options.cwd)
+  end
+  local _, status = prepared_session:update()
+  if status.kind == "failed" or status.kind == "exited" or status.kind == "closed" then
+    prepared_session:close()
+    prepared_session, prepare_failed = nil, true
+    core.log_quiet("Terminal preparation ended: %s", status.error or status.kind)
+    return false
+  end
+  return status.kind == "running" and not status.replaying
+end
+
+take_prepared_session = function(options)
+  if not terminal_config.prepare_session then M.discard_prepared_session(); return end
+  if not prepared_session or not same_launch(prepared_options, options) then return end
+  local session = prepared_session
+  local _, status = session:update()
+  if status.kind ~= "running" or status.replaying then return end
+  if not session:set_colors(options) or not session:resize(
+      options.cols, options.rows, options.cell_width, options.cell_height) or not session:activate() then
+    M.discard_prepared_session()
+    core.log_quiet("Prepared Terminal Session rejected; start a new shell")
+    return
+  end
+  prepared_session, prepared_options, prepare_after, prepare_failed = nil, nil, nil, nil
+  core.log_quiet("Prepared Terminal Session used: id=%s", session:stats().session_id)
+  return session
+end
+
 function M._set_native_for_tests(native)
+  M.discard_prepared_session()
   native_override = native
 end
 
@@ -2451,6 +2540,25 @@ if system.is_hosted_surface() then
     return true
   end
 end
+
+local exit = core.exit
+function core.exit(quit_fn, force)
+  return exit(function()
+    M.discard_prepared_session()
+    quit_fn()
+  end, force)
+end
+
+core.add_background_thread(function()
+  while true do
+    local mode = require("core.cli").last_command
+    if not system.is_sidebar_surface() and (mode == "default" or mode == "edit") then
+      if system.window_should_render(core.window) then M.prepare_session()
+      else M.discard_prepared_session() end
+    end
+    coroutine.yield(0.25)
+  end
+end)
 
 M.cleanup_records()
 return M
