@@ -260,23 +260,24 @@ function core.refresh_project_path_consumers(reason)
   return refresh_project_path_consumers(reason)
 end
 
-local function ensure_initial_filetree_pane()
+local function ensure_initial_terminal_pane()
   if panes.count() > 0 then return false end
-  local ok, filetree = pcall(require, "plugins.filetree")
-  if not ok or not filetree or not filetree.open then
-    core.log_quiet("Workspace: initial File Tree is unavailable: %s", tostring(filetree))
+  local ok, terminal = pcall(require, "plugins.terminal")
+  if not ok or not terminal or not terminal.open then
+    core.log_quiet("Workspace: initial Terminal is unavailable: %s", tostring(terminal))
     return false
   end
-  local view, err = filetree.open(nil, {
+  local view, err = terminal.open {
+    cwd = core.root_project().path,
     placement = "new",
     focus = true,
     reason = "initial-project",
-  })
+  }
   if not view then
-    core.log_quiet("Workspace: initial File Tree failed: %s", tostring(err))
+    core.log_quiet("Workspace: initial Terminal failed: %s", tostring(err))
     return false
   end
-  core.log_quiet("Workspace: opened initial File Tree Pane for empty Project state")
+  core.log_quiet("Workspace: opened initial Terminal Pane for empty Project state")
   return true
 end
 
@@ -407,7 +408,7 @@ local function load_workspace()
         diffview.load_workspace_state(nil)
         language_mode.load_workspace_state(nil)
         project_paths.load_workspace_state(nil)
-        ensure_initial_filetree_pane()
+        ensure_initial_terminal_pane()
         core.log_quiet("Workspace: skipped restore for an empty Anvil window")
         return
       end
@@ -436,7 +437,7 @@ local function load_workspace()
         panes.restore_workspace_state(workspace.pane_state, load_view)
       end
       untitled_recovery.restore_project(core.root_project().path)
-      ensure_initial_filetree_pane()
+      ensure_initial_terminal_pane()
     end
 
     restore_workspace_state()
