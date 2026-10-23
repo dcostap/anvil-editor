@@ -1434,6 +1434,7 @@ function SidebarView:draw_row(row, y, width, now)
     return
   end
   if row.kind == "tab" or row.kind == "terminal" then
+    if row.attention then self:draw_attention(row, y, width) end
     local x, tab_width = self:tab_bounds(row, width)
     self:draw_tab(row, x, y, tab_width, now)
     return
@@ -1449,6 +1450,26 @@ function SidebarView:shimmer_phase()
   local wait = progress < 1 and SHIMMER_FRAME or SHIMMER_PERIOD - self.clock % SHIMMER_PERIOD
   self.shimmer_delay = math.min(self.shimmer_delay or wait, wait)
   return progress < 1 and progress or nil
+end
+
+-- The strength of a pending row's tint at its left edge, and the part of the row that the tint fades out over.
+local ATTENTION_TINT, ATTENTION_SPAN = 0.3, 0.85
+
+-- A Terminal that needs the user: a bar in its attention colour at the row's left edge, and a tint of that colour
+-- that fades out to the right. The renderer has no gradients, so thin strips with a falling alpha draw the fade.
+function SidebarView:draw_attention(row, y, width)
+  local m = self:metrics()
+  local color = tab.attention_color(row.attention)
+  local x, h = m.tab_left, row.h - 2
+  local bar = math.max(2, math.floor(3 * SCALE))
+  local span = (width - m.pad - x) * ATTENTION_SPAN
+  local step = math.max(1, math.floor(3 * SCALE))
+  for offset = bar, span - 1, step do
+    local strength = 1 - offset / span
+    renderer.draw_rect(x + offset, y + 1, math.min(step, span - offset), h,
+      fade(color, ATTENTION_TINT * strength * strength))
+  end
+  renderer.draw_rounded_rect(x, y + 1, bar, h, bar / 2, color)
 end
 
 -- A Tab's or Terminal Session's content in [x, x + width): its icon, name and status, and an agent's step below.
