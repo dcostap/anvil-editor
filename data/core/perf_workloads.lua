@@ -6,11 +6,15 @@ local linewrapping = require "core.linewrapping"
 local Workload = {}
 Workload.__index = Workload
 
-local function open(path)
-  return assert(core.open_file(path, { placement = "current", focus = true }))
+local function open(path, background)
+  return assert(core.open_file(path, { placement = "current", focus = true, background = background == true }))
 end
 
 local function ready_editor(view)
+  if view and view.buffer then
+    assert(not view.buffer.load_error, view.buffer.load_error)
+    if view.buffer:is_loading() then return false end
+  end
   return view and view.buffer and view.__async_wrap_reconstruction == nil
 end
 
@@ -295,19 +299,13 @@ function Workload:dispatch(index)
     if settings.kind == "open" then
       assert(not core.buffer_registry:find(self:path(name)), "First-open fixture was already loaded")
     end
-    self.view = open(self:path(name))
+    self.view = open(self:path(name), settings.kind == "open")
     if self.switch_buffers then
       assert(self.view.buffer == self.switch_buffers[1 + (index - 1) % settings.files],
         "File switching reloaded a cached Buffer")
     end
     self.view:set_wrapping_enabled(false)
     assert(common.basename(self.view.buffer.abs_filename) == name, "File open returned the wrong Buffer")
-    assert(#self.view.buffer.lines == settings.lines, string.format(
-      "File open loaded %d lines; expected %d", #self.view.buffer.lines, settings.lines))
-    local last = self.view.buffer.lines[settings.lines]
-    local expected = string.format(settings.kind == "open" and "value_%07d" or "value_%06d", settings.lines)
-    assert(last:find(expected, 1, true),
-      "File open did not retain the final fixture line")
   elseif settings.kind == "edit" then
     assert(core.active_view == self.view, "Editor lost input focus")
     if index % 2 == 1 then
@@ -344,6 +342,14 @@ function Workload:action_ready()
     return false
   end
   if not self:setup_ready() then return false end
+  if self.settings.kind == "open" or self.settings.kind == "switch" then
+    local settings = self.settings
+    assert(#self.view.buffer.lines == settings.lines, string.format(
+      "File open loaded %d lines; expected %d", #self.view.buffer.lines, settings.lines))
+    local expected = string.format(settings.kind == "open" and "value_%07d" or "value_%06d", settings.lines)
+    assert(self.view.buffer.lines[settings.lines]:find(expected, 1, true),
+      "File open did not retain the final fixture line")
+  end
   if self.settings.kind == "editor" then
     assert(self.view:is_wrapping_enabled() == self.settings.wrap,
       "Editor wrapping mode changed")

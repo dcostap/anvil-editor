@@ -8,6 +8,10 @@ local common = require "core.common"
 local language_mode = require "core.language_mode"
 local linewrapping = require "core.linewrapping"
 
+-- Presize whole-Buffer arrays. PUC Lua grows them when table.new is unavailable.
+local has_table_new, table_new = pcall(require, "table.new")
+if not has_table_new then table_new = function() return {} end end
+
 -- Match IntelliJ-style safe writes. Preserve file identity when replacement
 -- would break links or metadata, and use atomic replacement otherwise.
 -- Set config.safe_write = false to use the old direct truncate/write path.
@@ -217,18 +221,8 @@ end
 
 local copy_file, prompt_stale_backup
 
----Replace loaded UTF-8 source without adding an undo step.
----Source loaders must use this method, not assign lines directly.
----Keep selection positions and clamp them to the replacement text.
----Publish one full text transaction after all Buffer state is current.
----@param text string
----@param opts? { crlf?: boolean }
----@return table transaction
-function Buffer:replace_snapshot(text, opts)
+local function publish_snapshot(self, lines, clean_lines, highlights, crlf, binary, opts)
   opts = opts or {}
-  local split_stage = file_open_stage_begin("buffer_split_lines")
-  local lines, clean_lines, highlights, crlf, binary = encoding.split_lines(text)
-  file_open_stage_end(split_stage)
   if #lines == 0 then lines[1] = "\n" end
   local old_line_count = #self.lines
   -- Source lines have normalized endings. Compare them without allocating and
@@ -295,7 +289,30 @@ function Buffer:replace_snapshot(text, opts)
 end
 
 
-function Buffer:load(filename)
+---Replace UTF-8 source without an undo step. Publish one complete transaction.
+---Source loaders must use this method, not assign lines directly.
+---Keep selection positions and clamp them to the replacement text.
+---@param text string
+---@param opts? { crlf?: boolean }
+---@return table transaction
+function Buffer:replace_snapshot(text, opts)
+  local stage = file_open_stage_begin("buffer_split_lines")
+  local lines, clean, highlights, crlf, binary = encoding.split_lines(text)
+  file_open_stage_end(stage)
+  return publish_snapshot(self, lines, clean, highlights, crlf, binary, opts)
+end
+
+
+-- Prepared input lets background loads use the same load hooks as direct loads.
+function Buffer:load(filename, prepared)
+  if prepared then
+    self.loaded_file_size = prepared.info.size
+    self.encoding, self.bom = prepared.encoding, prepared.bom
+    publish_snapshot(self, prepared.lines, prepared.clean, prepared.highlights, prepared.crlf, prepared.binary)
+    self.load_error = nil
+    return
+  end
+  self:cancel_load()
   local load_stage = file_open_stage_begin("buffer_load_contents")
   if prompt_stale_backup then prompt_stale_backup(filename) end
   local file_info = system.get_file_info(filename)
@@ -330,7 +347,137 @@ function Buffer:load(filename)
   end
   file_open_stage_end(read_stage)
   self:replace_snapshot(text)
+  self.load_error = nil
   file_open_stage_end(load_stage)
+end
+
+
+function Buffer:is_loading()
+  return self.pending_load ~= nil
+end
+
+function Buffer:cancel_load()
+  local request = self.pending_load
+  if not request then return false end
+  request.pool:cancel(request.job)
+  request.finish("cancelled", "file loading was cancelled")
+  return true
+end
+
+---Read and decode on a worker. Construct lines in batches, then publish once.
+---The Buffer rejects edits and saves until the load succeeds.
+function Buffer:load_async(filename, on_finish)
+  self:cancel_load()
+  cancel_pending_save(self)
+  if prompt_stale_backup then prompt_stale_backup(filename) end
+  local request = {
+    status = "pending", path = filename, abs_filename = self.abs_filename,
+    started = system.get_time(), split_ms = 0,
+    revision = self.text_revision, source_lines = self.lines,
+    encoding = self.encoding, bom = self.bom,
+    data = { lines = {}, clean = {}, highlights = {} },
+    pool = require("core.worker_pool").named("file_io", { worker_count = 1 }),
+  }
+  self.pending_load, self.load_error = request, nil
+  local function finish(status, err)
+    if request.status ~= "pending" then return end
+    if self.pending_load == request then
+      self.pending_load = nil
+      self.load_error = (status == "failed" or status == "cancelled") and err or nil
+    end
+    request.status, request.error = status, err
+    request.total_ms = (system.get_time() - request.started) * 1000
+    request.data, request.source_lines, request.finish = nil, nil, nil
+    core.redraw = true
+    core.log_quiet("Background load %s for %s: %s", status, filename, err or "complete")
+    if status == "loaded" then
+      core.log_quiet("Background load timings: read=%.1fms split=%.1fms publish=%.1fms total=%.1fms",
+        request.read_ms, request.split_ms, request.publish_ms, request.total_ms)
+    end
+    if on_finish then core.try(on_finish, status == "loaded", err, request) end
+  end
+  request.finish = finish
+  local function current()
+    return request.status == "pending" and self.pending_load == request
+      and self.abs_filename == request.abs_filename and self.text_revision == request.revision
+      and self.lines == request.source_lines
+      and self.encoding == request.encoding and self.bom == request.bom
+  end
+  local function abandon()
+    local replaced = self.lines ~= request.source_lines or self.text_revision ~= request.revision
+    -- A newer source is valid. A renamed or reconfigured placeholder is not.
+    finish(replaced and "stale" or "cancelled", "Buffer changed during file loading")
+  end
+  local function accept(message)
+    if request.status ~= "pending" then return end
+    if not current() then
+      request.pool:cancel(request.job)
+      abandon()
+      return
+    end
+    local data, batch = request.data, message.payload
+    if message.type == "chunk" then
+      request.expected_lines = batch.line_count
+      data.lines, data.highlights = table_new(batch.line_count, 0), table_new(batch.line_count, 0)
+      return
+    end
+    if message.type == "final" then
+      for key, value in pairs(batch) do data[key] = value end
+      return
+    end
+    local split_started = system.get_time()
+    local lines, clean, highlights, crlf, binary = encoding.split_lines(batch)
+    request.split_ms = request.split_ms + (system.get_time() - split_started) * 1000
+    local offset = #data.lines
+    common.move(lines, 1, #lines, offset + 1, data.lines)
+    common.move(highlights, 1, #lines, offset + 1, data.highlights)
+    for line, value in pairs(clean) do data.clean[offset + line] = value end
+    data.crlf, data.binary = data.crlf or crlf, data.binary or binary
+  end
+  local job, err = request.pool:submit {
+    kind = "buffer_read", priority = "interactive",
+    payload = { path = filename, encoding = self.encoding, bom = self.bom },
+    on_result = function(message)
+      local ok, failure = pcall(accept, message)
+      if not ok then
+        request.pool:cancel(request.job)
+        finish("failed", tostring(failure))
+      end
+    end,
+    on_complete = function()
+      if request.status ~= "pending" then return end
+      if not current() then abandon(); return end
+      local data = request.data
+      if #data.lines ~= request.expected_lines or not data.info then
+        finish("failed", "file loading returned incomplete text")
+        return
+      end
+      local info = system.get_file_info(filename)
+      if not info or info.file_id ~= data.info.file_id or info.size ~= data.info.size
+        or info.modified ~= data.info.modified then
+        finish("failed", "source changed during file loading")
+        return
+      end
+      if data.detection_error then core.error("%s", data.detection_error) end
+      request.read_ms = data.read_ms
+      local publish_started = system.get_time()
+      local ok, failure = pcall(self.load, self, filename, data)
+      request.publish_ms = (system.get_time() - publish_started) * 1000
+      if not ok then finish("failed", tostring(failure)); return end
+      self.new_file = false
+      self:clean()
+      finish("loaded")
+    end,
+    on_error = function(message)
+      if not current() then abandon(); return end
+      finish("failed", message.error or "file loading failed")
+    end,
+    on_cancelled = function() finish("cancelled", "file loading was cancelled") end,
+  }
+  request.job = job
+  if not job then finish("failed", err); return nil, err end
+  core.log_quiet("Background load started for %s", filename)
+  return request
 end
 
 
@@ -661,6 +808,7 @@ end
 
 
 function Buffer:save(filename, abs_filename)
+  assert(not self:is_loading() and not self.load_error, self.load_error or "file is still loading")
   local prepared = self.prepared_save
   if not prepared then cancel_pending_save(self) end
   if not filename then
@@ -734,6 +882,7 @@ end
 
 ---Return whether a worker can prepare this file without changing save rules.
 function Buffer:can_save_async()
+  if self:is_loading() or self.load_error then return false end
   if not self.abs_filename or self:needs_encoding_conversion()
     or config.safe_write == false or not system.sync_file
     or not system.atomic_replace_file then return false end
@@ -1561,7 +1710,7 @@ function Buffer:normalize_edit_text(text, edit, opts)
 end
 
 function Buffer:can_apply_edits(edits, opts)
-  return true
+  return not self:is_loading() and not self.load_error
 end
 
 local function copy_array(t)
@@ -1569,11 +1718,6 @@ local function copy_array(t)
   if t then for i = 1, #t do res[i] = t[i] end end
   return res
 end
-
--- Presize whole-Buffer arrays so large files avoid repeated rehash growth.
--- The PUC Lua build (-Djit=false) has no table.new and grows them instead.
-local has_table_new, table_new = pcall(require, "table.new")
-if not has_table_new then table_new = function() return {} end end
 
 -- Byte offsets use one start per block of lines. A per-line array would
 -- allocate a whole-Buffer table for every keystroke and feed the collector.
@@ -2039,6 +2183,7 @@ end
 
 
 function Buffer:raw_insert(line, col, text, undo_stack, time, restore_observer_state)
+  assert(not self:is_loading() and not self.load_error, self.load_error or "file is still loading")
   self.table_cell_selection = nil
   local observer_state = {}
   local observer_transaction = { observer_state = observer_state, restore_observer_state = restore_observer_state }
@@ -2108,6 +2253,7 @@ end
 
 
 function Buffer:raw_remove(line1, col1, line2, col2, undo_stack, time, restore_observer_state)
+  assert(not self:is_loading() and not self.load_error, self.load_error or "file is still loading")
   self.table_cell_selection = nil
   local observer_state = {}
   local observer_transaction = { observer_state = observer_state, restore_observer_state = restore_observer_state }
@@ -2203,11 +2349,13 @@ end
 
 
 function Buffer:undo()
+  if self:is_loading() or self.load_error then return end
   pop_undo(self, self.undo_stack, self.redo_stack, false)
 end
 
 
 function Buffer:redo()
+  if self:is_loading() or self.load_error then return end
   pop_undo(self, self.redo_stack, self.undo_stack, false)
 end
 
@@ -2815,6 +2963,7 @@ end
 
 -- For plugins to get notified when a buffer is closed
 function Buffer:on_close()
+  self:cancel_load()
   cancel_pending_save(self)
   language_mode.cancel_content_detection(self)
   self:notify_metadata_listeners({

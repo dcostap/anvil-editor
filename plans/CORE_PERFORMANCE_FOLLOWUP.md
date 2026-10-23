@@ -136,8 +136,8 @@ Restart Anvil to load the changes in the daily application.
 
 ## Remaining priorities
 
-1. Large-file loading still blocks dispatch for hundreds of milliseconds.
-   Reading and line construction need bounded preparation and careful publication, not only a background read.
+1. Background loading now reduces large-file dispatch stalls, but complete-file loading takes longer.
+   Reduce the remaining allocation and collection pauses without losing the safety checks described below.
 2. Large-Buffer edits still build one whole-Buffer offset index and copy the line array.
    Removing that remaining cost needs a separate design that preserves snapshots, observer behavior, and undo.
 3. First File Search still waits for Project readiness. Separate startup overlap, scanning, membership preparation, and native index publication.
@@ -173,3 +173,85 @@ python tools/run_render_perf_gate.py \
 Run each diagnostic Lua file separately through `anvil:lua-runtime --test-args`.
 Use its absolute path because it lives outside normal test discovery.
 For the path comparison, set `ANVIL_PATH_PERF_REFERENCE` to the saved baseline's `app/share/anvil/core/common.lua`.
+
+## Large-file loading follow-up
+
+This change improves responsiveness, not loading throughput. Complete-file loading remains slower than the synchronous baseline.
+
+Ordinary UI opens use background loading for files of at least 16 MiB.
+Smaller files, explicit navigation destinations, and ordinary `core.open_buffer` calls remain synchronous.
+An immediate-content caller can also pass `background = false` to `core.open_file`.
+
+The existing file worker reads and decodes the source. It counts lines and sends complete text chunks.
+The UI reserves its arrays once, constructs lines in batches, and publishes one complete snapshot through normal load hooks.
+It does not expose partial source text. A loading Editor shows a message instead.
+
+Edits, Undo, Redo, and saves cannot change a loading Buffer.
+Read failures and cancelled placeholder loads also prevent saves. Reopening a failed file retries the load.
+Closing the last Editor cancels its load. Changed source, identity, or encoding invalidates an older request.
+The loader checks file identity, size, and modification time before publication.
+It preserves encoding, BOM, line endings, invalid source bytes, and normalized display text.
+
+The initial prototype transferred line tables. Serialization repeated too much work between the two Lua states.
+Text chunks remove that repeated table construction. They still require string allocation and collection on the UI thread.
+No native code or Buffer storage model changed. Production code does not pause garbage collection.
+
+### Paired results
+
+Run `20261023_164923_14172` alternated the saved `20261023_150113_78684` application with the final candidate.
+It used three unprofiled repetitions and separate instrumented repetitions.
+
+| Measurement | Synchronous reference | Candidate |
+|---|---:|---:|
+| 500,000-line command dispatch, median | 345.542 ms | 4.770 ms |
+| 500,000-line complete redraw, median | 372.260 ms | 599.184 ms |
+| 500,000-line observed maximum frame work, instrumented | 383.899 ms | 47.792 ms |
+| 100,000-line complete redraw, median | 69.559 ms | 73.285 ms |
+
+The 100,000-line fixture stays synchronous. Neither paired run establishes a material improvement for that case.
+The 500,000-line fixture becomes responsive sooner, but takes about 61% longer to finish loading.
+The earlier paired run measured 447.375 ms versus 728.731 ms for completion. It showed the same trade-off.
+The remaining allocation and collection pauses still exceed the frame budget. These maxima are not guaranteed limits.
+A single very long line can exceed the transfer target because Buffer lines remain indivisible.
+
+The paired gate reported **FAIL**. Its absolute budgets remain unmet, and it had no registered image goldens.
+Both final PNG hashes match the earlier captures in `20261023_145727_56144` exactly.
+
+Snapshot publication also exposed an unnecessary indentation-guide scan across all 500,000 new lines.
+A complete replacement now clears existing line packets instead of scanning new lines for surviving packets.
+Observed publication time fell from roughly 35–42 ms to 2.3–2.5 ms.
+
+### Correctness checks
+
+The focused checks cover 19 cases across four files:
+
+- `runtime/buffer_load_async.lua`: seven load, cancellation, publication, encoding, and save-safety cases.
+- `ui/file_open_async.lua`: four opening, immediate-content, navigation, and closing cases.
+- `runtime/buffer_snapshot.lua`: five existing snapshot contracts.
+- `ui/indent_guides.lua`: three existing packet invalidation and drawing cases.
+
+The initial load tests failed because `load_async` did not exist.
+The initial UI tests showed that opening loaded the whole file before returning.
+An additional regression showed that rejected Undo changed the undo position during loading.
+Another regression showed that changing file identity could enable a placeholder save. Both now pass.
+Lua syntax validation also passed. The daily application was not restarted.
+
+### Additional artifacts
+
+- `20261023_161345_81968`: small line-table transfers; complete huge-file redraw took about 1.9 seconds.
+- `20261023_161803_64928`: larger line-table transfers; completion still took about 1.5 seconds.
+- `20261023_162400_20608`: text-chunk transfers before array reservation and full-snapshot packet clearing.
+- `20261023_163056_36080`: first paired comparison of the selected design.
+- `20261023_164923_14172`: final paired comparison, including the final load-safety guards.
+
+```sh
+python tools/run_render_perf_gate.py \
+  --scenario file-open-huge --scenario file-open-large \
+  --runs 3 --metrics-runs 1 --paced-runs 1 --max-runs 3 \
+  --baseline tools/perf-results/render-gate/20261023_150113_78684/report.json \
+  --no-build --diagnose
+```
+
+`tools/audit/essential/load_perf.lua` separates file reading, line construction, and collection costs.
+Set `ANVIL_LOAD_PERF_FILE` to the isolated 500,000-line fixture before running it through the runtime test target.
+Its paused-collection comparison is diagnostic only. The bounded-read experiment did not establish a total-time improvement.

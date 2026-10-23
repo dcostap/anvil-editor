@@ -26,7 +26,8 @@ function Editor:new(buffer)
   self.remote_poi_source_capable = true
   self:add_poi_provider("core.editor-file-location", editor_file_pois, { priority = 0 })
   if core.buffer_registry then core.buffer_registry:retain(buffer, self) end
-  bookmarks.attach(buffer)
+  self.pending_bookmark_attach = buffer:is_loading()
+  if not self.pending_bookmark_attach then bookmarks.attach(buffer) end
 end
 
 function Editor:bookmark_gutter_width()
@@ -66,9 +67,27 @@ function Editor:draw_line_body(line, x, y)
 end
 
 function Editor:update()
+  if self.buffer:is_loading() or self.buffer.load_error then return end
+  if self.pending_bookmark_attach then
+    self.pending_bookmark_attach = nil
+    bookmarks.attach(self.buffer)
+  end
   Editor.super.update(self)
   editor_file_pois.update(self)
   navigation_history.update(self)
+end
+
+function Editor:draw()
+  if self.buffer:is_loading() or self.buffer.load_error then
+    self:draw_background(style.background)
+    local message = self.buffer.load_error and ("Could not load file: " .. self.buffer.load_error)
+      or "Loading file..."
+    common.draw_text(style.font, style.dim, message, "left",
+      self.position.x + style.padding.x, self.position.y + style.padding.y,
+      math.max(0, self.size.x - style.padding.x * 2), style.font:get_height())
+    return
+  end
+  return Editor.super.draw(self)
 end
 
 function Editor:release_buffer()

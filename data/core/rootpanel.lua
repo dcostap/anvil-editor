@@ -491,6 +491,12 @@ function RootPanel:open_file(filename, opts)
   local existing = core.buffer_registry:find(abs_filename)
   file_open_stage_end(lookup_stage)
   if existing then
+    if existing.load_error
+      or ((opts.line or opts.navigate or opts.background == false) and existing:is_loading()) then
+      existing = core.open_buffer(filename, {
+        background = opts.background ~= false and not opts.line and not opts.navigate,
+      })
+    end
     local present_stage = file_open_stage_begin("root_panel_present_existing_view")
     local view = self:open_buffer(existing, opts)
     file_open_stage_end(present_stage)
@@ -501,7 +507,9 @@ function RootPanel:open_file(filename, opts)
 
   local place_stage = file_open_stage_begin("root_panel_place_editor")
   local view = panes().place(function()
-    return new_file_editor(core.open_buffer(filename), opts)
+    return new_file_editor(core.open_buffer(filename, {
+      background = opts.background ~= false and not opts.line and not opts.navigate,
+    }), opts)
   end, {
     pane = opts.pane,
     placement = opts.placement or "current",

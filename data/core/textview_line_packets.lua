@@ -186,6 +186,12 @@ end
 
 function line_packets.apply_transaction(view, transaction)
   if not (view and transaction and transaction.changed) then return end
+  if transaction.full_snapshot then
+    -- No packet can survive a complete source replacement. Do not scan the
+    -- new Buffer for neighboring lines whose old packets are already gone.
+    line_packets.clear(view)
+    return
+  end
   local first_line, last_line, structure_changed
   local ranges = {}
   for _, range in ipairs(transaction.changed_ranges or {}) do

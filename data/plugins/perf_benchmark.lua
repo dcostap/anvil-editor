@@ -288,7 +288,7 @@ local function activate_view(view)
 end
 
 local function open_file(path)
-  return activate_view(assert(core.open_file(path, { placement = "current", focus = true })))
+  return activate_view(assert(core.open_file(path, { placement = "current", focus = true, background = false })))
 end
 
 local function set_position(view, line)

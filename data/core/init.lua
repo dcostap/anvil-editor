@@ -1953,7 +1953,13 @@ local function file_open_fail(reason)
   if perf and perf.file_open_fail then perf.file_open_fail(reason) end
 end
 
-function core.open_buffer(filename)
+function core.open_buffer(filename, opts)
+  opts = opts or {}
+  local function loaded(ok, err, request)
+    if not ok and request.status == "failed" then
+      core.error("Cannot load %s: %s", filename, err)
+    end
+  end
   local operation = filename and file_open_begin(filename, "core.open_buffer")
   local total_stage = operation and file_open_stage_begin("core_open_buffer")
   local new_file = true
@@ -1993,6 +1999,15 @@ function core.open_buffer(filename)
     end
     local existing = core.buffer_registry:find(abs_filename)
     if existing then
+      if existing.load_error or (existing:is_loading() and not opts.background) then
+        if opts.background then
+          existing:load_async(abs_filename, loaded)
+        else
+          existing:load(abs_filename)
+          existing.new_file = false
+          existing:clean()
+        end
+      end
       if close_textview then close_buffer_view(existing) end
       file_open_mark("existing_buffer", abs_filename)
       file_open_stage_end(total_stage)
@@ -2001,9 +2016,17 @@ function core.open_buffer(filename)
   end
   -- no existing buffer for filename; create new
   local construct_stage = file_open_stage_begin("buffer_construct")
-  local buffer = Buffer(filename, abs_filename, new_file)
+  -- Ordinary UI opens can prepare large files without blocking input. Callers
+  -- that need immediate contents keep the synchronous Buffer contract.
+  local background = opts.background == true and not new_file and file_size >= 16 * 1024 * 1024
+  local buffer = Buffer(filename, abs_filename, new_file or background)
   file_open_stage_end(construct_stage)
   core.buffer_registry:register(buffer, abs_filename)
+  if background then
+    buffer.new_file = false
+    buffer.loaded_file_size = file_size
+    buffer:load_async(abs_filename, loaded)
+  end
   core.log_quiet(filename and "Opened buffer \"%s\"" or "Opened new buffer", filename)
   if close_textview then close_buffer_view(buffer) end
   if operation then
