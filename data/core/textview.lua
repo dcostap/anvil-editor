@@ -6687,6 +6687,10 @@ function TextView:scroll_to_make_visible(line, col, instant, opts)
       end
     end
 
+    if opts.bottom_context_lines ~= nil then
+      below_pad = opts.bottom_context_lines
+    end
+
     local above = math.max(0, ly - oy - style.padding.y - context_lh * pad)
     local below = target_bottom - oy - self.size.y + scroll_h
       + context_lh * below_pad

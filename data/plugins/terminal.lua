@@ -548,6 +548,22 @@ function TerminalTextCaptureView:get_content_offset()
   return x, y + PADDING - style.padding.y
 end
 
+function TerminalTextCaptureView:scroll_to_make_visible(line, col, instant, opts)
+  local opening_context = not self.normal_scroll_context
+  local previous_y = self.scroll.to.y
+  if opening_context then
+    -- Keep the captured screen until navigation scrolls through its top margin.
+    -- The caret still scrolls into view when it crosses the bottom edge.
+    opts = common.merge({}, opts or {})
+    opts.bottom_context_lines = 0
+  end
+  TerminalTextCaptureView.super.scroll_to_make_visible(self, line, col, instant, opts)
+  if opening_context and self.scroll.to.y < previous_y then
+    self.normal_scroll_context = true
+    core.log_quiet("Terminal text capture enabled normal scroll context after upward navigation")
+  end
+end
+
 function TerminalTextCaptureView:duplicate()
   local line, col = self.buffer:get_selection()
   local capture = {
@@ -561,6 +577,7 @@ function TerminalTextCaptureView:duplicate()
     title = self.terminal_title,
   }
   local duplicate = TerminalTextCaptureView(nil, capture)
+  duplicate.normal_scroll_context = self.normal_scroll_context
   duplicate.scroll.x, duplicate.scroll.y = self.scroll.x, self.scroll.y
   duplicate.scroll.to.x, duplicate.scroll.to.y = self.scroll.to.x, self.scroll.to.y
   return duplicate
