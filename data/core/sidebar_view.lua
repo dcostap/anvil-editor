@@ -37,8 +37,10 @@ local MOVE_RATE, FADE_RATE, SCROLL_RATE = 20, 14, 22
 -- Highlights glide and fade at these base rates, times their speed. The hover highlight follows the pointer fastest.
 local MARK_MOVE_RATE, MARK_FADE_RATE = 28, 21
 local SELECTION_SPEED, HOVER_SPEED = 1.75, 3
+-- Rows move, appear and leave at this multiple of the base rates.
+local ROW_SPEED = 1.5
 -- The search field opens and closes at this rate.
-local SEARCH_RATE = 30
+local SEARCH_RATE = 45
 -- A working Terminal's row shows a glint that crosses it in GLINT_TRAVEL seconds, once each GLINT_PERIOD seconds.
 local GLINT_TRAVEL, GLINT_PERIOD, GLINT_FRAME = 1.1, 1.8, 1 / 60
 -- The longest step between two frames. After a pause, an animation starts where it stopped.
@@ -947,8 +949,8 @@ function SidebarView:step(dt)
     local visual
     local dim = self:dim_target(key)
     if before and before.area == row.area then
-      visual = {area = row.area, y = ease(before.y, row.y + (nudge[key] or 0), MOVE_RATE),
-        alpha = ease(before.alpha, 1, FADE_RATE, 0.01), dim = ease(before.dim, dim, FADE_RATE * 1.5, 0.01)}
+      visual = {area = row.area, y = ease(before.y, row.y + (nudge[key] or 0), MOVE_RATE * ROW_SPEED),
+        alpha = ease(before.alpha, 1, FADE_RATE * ROW_SPEED, 0.01), dim = ease(before.dim, dim, FADE_RATE * 1.5, 0.01)}
     elseif animate then
       local start = unfold[row.area]
       visual = {area = row.area, y = start or row.y, alpha = 0, dim = dim}
@@ -963,7 +965,7 @@ function SidebarView:step(dt)
   local leaving = {}
   for _, item in ipairs(self.leaving) do
     if not visuals[item.row.id_key] then
-      item.alpha = ease(item.alpha, 0, FADE_RATE * 1.8, 0.02)
+      item.alpha = ease(item.alpha, 0, FADE_RATE * 1.8 * ROW_SPEED, 0.02)
       if item.alpha > 0 then leaving[#leaving + 1] = item end
     end
   end
