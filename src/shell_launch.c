@@ -9,7 +9,7 @@
 #include <string.h>
 
 #define LAUNCH_MAGIC 0x53564E41u /* ANVS */
-#define LAUNCH_VERSION 1u
+#define LAUNCH_VERSION 2u
 #define LAUNCH_FLAG_FOREGROUND 1u
 #define LAUNCH_MAX_ARGS 64u
 #define LAUNCH_MAX_TEXT 32768u
@@ -28,6 +28,8 @@ struct AnvilShellLaunchRequest {
   DWORD client_pid;
   bool foreground;
   char *cwd;
+  char *terminal_id;
+  char *terminal_project;
   int argc;
   char **argv;
 };
@@ -245,8 +247,15 @@ static char *encode_request(int argc, char **argv, bool foreground, size_t *size
   char *buffer = NULL, *cwd = SDL_GetCurrentDirectory();
   uint32_t header[3] = {LAUNCH_MAGIC, LAUNCH_VERSION, foreground ? LAUNCH_FLAG_FOREGROUND : 0};
   uint32_t count = argc > 2 ? (uint32_t)(argc - 2) : 0;
+  const char *terminal_id = argc == 2 ? SDL_getenv("ANVIL_TERMINAL_ID") : NULL;
+  const char *terminal_project = terminal_id ? SDL_getenv("ANVIL_TERMINAL_PROJECT") : NULL;
+  bool terminal = terminal_id && strlen(terminal_id) == ANVIL_SURFACE_TERMINAL_ID_LEN &&
+    strspn(terminal_id, "0123456789abcdef") == ANVIL_SURFACE_TERMINAL_ID_LEN && terminal_project && *terminal_project;
   bool ok = cwd && count <= LAUNCH_MAX_ARGS && append(&buffer, size, header, sizeof(header)) &&
-            append_text(&buffer, size, cwd) && append(&buffer, size, &count, sizeof(count));
+            append_text(&buffer, size, cwd) &&
+            append_text(&buffer, size, terminal ? terminal_id : "") &&
+            append_text(&buffer, size, terminal ? terminal_project : "") &&
+            append(&buffer, size, &count, sizeof(count));
   SDL_free(cwd);
   bool option_value = false;
   for (int i = 2; ok && i < argc; i++) {
@@ -330,6 +339,8 @@ static void release_request(AnvilShellLaunchRequest *request) {
   for (int i = 0; i < request->argc; i++) free(request->argv[i]);
   free(request->argv);
   free(request->cwd);
+  free(request->terminal_id);
+  free(request->terminal_project);
   if (request->done) CloseHandle(request->done);
   free(request);
 }
@@ -354,6 +365,8 @@ static AnvilShellLaunchRequest *read_request(HANDLE pipe, DWORD client) {
   AnvilShellLaunchRequest *request = calloc(1, sizeof(*request));
   uint32_t count = 0;
   bool ok = request && (request->cwd = read_text(pipe, &total)) &&
+            (request->terminal_id = read_text(pipe, &total)) &&
+            (request->terminal_project = read_text(pipe, &total)) &&
             anvil_shell_transfer(pipe, false, &count, sizeof(count), LAUNCH_READ_MS, stop_event) && count <= LAUNCH_MAX_ARGS &&
             (request->argv = calloc(count + 2, sizeof(*request->argv))) &&
             (request->argv[0] = _strdup("anvil")) && (request->argv[1] = _strdup(ANVIL_SHELL_ARG));
@@ -361,6 +374,13 @@ static AnvilShellLaunchRequest *read_request(HANDLE pipe, DWORD client) {
   for (uint32_t i = 0; ok && i < count; i++) {
     ok = (request->argv[request->argc] = read_text(pipe, &total)) != NULL;
     if (ok) request->argc++;
+  }
+  if (ok && request->terminal_id[0]) {
+    ok = !count && request->terminal_project[0] &&
+      strlen(request->terminal_id) == ANVIL_SURFACE_TERMINAL_ID_LEN &&
+      strspn(request->terminal_id, "0123456789abcdef") == ANVIL_SURFACE_TERMINAL_ID_LEN;
+  } else if (ok) {
+    ok = !request->terminal_project[0];
   }
   if (request) {
     request->references = 1;
@@ -497,6 +517,8 @@ const wchar_t *anvil_shell_launch_user_directory(void) { return mutex_name[0] ? 
 int anvil_shell_launch_argc(const AnvilShellLaunchRequest *request) { return request->argc; }
 char **anvil_shell_launch_argv(const AnvilShellLaunchRequest *request) { return request->argv; }
 const char *anvil_shell_launch_cwd(const AnvilShellLaunchRequest *request) { return request->cwd; }
+const char *anvil_shell_launch_terminal_id(const AnvilShellLaunchRequest *request) { return request->terminal_id; }
+const char *anvil_shell_launch_terminal_project(const AnvilShellLaunchRequest *request) { return request->terminal_project; }
 DWORD anvil_shell_launch_client_pid(const AnvilShellLaunchRequest *request) { return request->client_pid; }
 bool anvil_shell_launch_foreground_granted(const AnvilShellLaunchRequest *request) { return request->foreground; }
 

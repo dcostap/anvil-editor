@@ -74,6 +74,14 @@ The host records its start, finish, and exit status from the trusted OSC 133 mar
 Without Agent Status, the Project Sidebar shows the command's elapsed time or completed duration.
 Run `ui/terminal_command_status.lua` after changes. Existing hosts keep their loaded integration until their shells restart.
 
+A bare `anvil` command from a focused Terminal triggers `editor:open` after its command ends.
+Launches with arguments keep their normal behavior.
+The request uses the Terminal Session and its Project, even after its current directory changes.
+The Terminal host confirms idle with a fresh probe before Lua runs the command. A cached idle status is not sufficient.
+The request does not change focus if another Pane or View has taken focus.
+New Terminal hosts set `ANVIL_TERMINAL_ID` and `ANVIL_TERMINAL_PROJECT`. Existing hosts need new Terminal Sessions for this feature.
+Run `ui/terminal_editor_open.lua` and the `launch-terminal-editor` shell probe after changes.
+
 A revived Terminal Session types the interrupted command at its new prompt. It does not press Enter.
 The PowerShell integration sends the submitted line as `cmdline_url` in the OSC 133 C mark.
 The host keeps that line in the record as `interrupted_input` until the command finishes.

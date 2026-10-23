@@ -70,6 +70,7 @@ typedef struct {
      whether a command runs between its C and D marks, and the reader's OSC scanner. */
   char nonce[33];
   volatile LONG command_running;
+  volatile LONG editor_request;
   int64_t command_started, command_finished;
   int command_exit;
   /* The line the shell submitted for the running command. Revival types it at the new prompt. */
@@ -593,6 +594,10 @@ static DWORD WINAPI host_client(void *userdata) {
       AnvilTerminalSize size; memcpy(&size, bytes, sizeof(size));
       EnterCriticalSection(&host->lock); bool ok = apply_size(host, size); LeaveCriticalSection(&host->lock);
       if (!ok) break;
+    } else if (header.type == ANVIL_TERMINAL_EDITOR_REQUEST && header.size == sizeof(uint32_t)) {
+      uint32_t token; memcpy(&token, bytes, sizeof(token));
+      InterlockedExchange(&host->editor_request, (LONG)token);
+      host_log(host, "editor request: wait for a fresh idle probe");
     } else if (header.type == ANVIL_TERMINAL_ACTIVATE && !header.size) {
       InterlockedExchange(&host->activate_requested, 1);
     } else if (header.type == ANVIL_TERMINAL_CLOSE && !header.size) {
@@ -629,6 +634,7 @@ static bool save_snapshot(TerminalHost *host, bool final);
 static void disconnect_client(TerminalHost *host) {
   stop_client(host);
   join_thread(&host->client); join_thread(&host->writer);
+  InterlockedExchange(&host->editor_request, 0);
   /* A claim can arrive between the main loop's check and the pipe closing. */
   if (InterlockedExchange(&host->activate_requested, 0)) host->prepared = false;
   /* Allow the final control connection to complete an activation whose queued message was cancelled. */
@@ -968,6 +974,11 @@ int anvil_terminal_host_main(int argc, char **argv) {
   host_log(&host, "start");
   host_log(&host, "ConPTY runtime: %s/conpty", argv[13]);
   set_agent_environment(&host, argv[13]);
+  /* Overwrite inherited context when an Anvil Terminal starts another Anvil. */
+  SetEnvironmentVariableA("ANVIL_TERMINAL_ID", host.id);
+  wchar_t *terminal_project = wide_string(host.project);
+  SetEnvironmentVariableW(L"ANVIL_TERMINAL_PROJECT", terminal_project);
+  free(terminal_project);
   BOOL in_job = FALSE;
   if (IsProcessInJob(GetCurrentProcess(), NULL, &in_job) && in_job)
     host_log(&host, "breakaway unavailable: host remains in parent job");
@@ -1090,6 +1101,8 @@ int anvil_terminal_host_main(int argc, char **argv) {
     if (exit_queued && (!host.attached || (sent_at && now - sent_at > 3000))) break;
     if (!host.prepared && !exited_at && now >= busy_probe_at) {
       busy_probe_at = now + (host.attached ? 500 : 2000);
+      /* Take the request before the snapshot. A cached idle status cannot release it. */
+      LONG editor_request = InterlockedExchange(&host.editor_request, 0);
       char command[16384];
       DWORD command_pid = 0;
       /* A child process covers any shell. The integrated shell's marks also cover
@@ -1106,6 +1119,16 @@ int anvil_terminal_host_main(int argc, char **argv) {
       }
       /* The agent's records end with the program, as at a prompt. Pi clears them when it quits normally. */
       if (!busy) clear_agent(&host);
+      if (editor_request) {
+        uint32_t token = (uint32_t)editor_request;
+        if (!busy && host.attached && !host.replaying && !host.client_stop &&
+            host.queued + sizeof(HostRecord) + sizeof(token) <= CLIENT_QUEUE_LIMIT &&
+            queue_record(&host, ANVIL_TERMINAL_EDITOR_READY, &token, sizeof(token))) {
+          host_log(&host, "editor request: command ended, ready");
+        } else {
+          InterlockedCompareExchange(&host.editor_request, editor_request, 0);
+        }
+      }
       LeaveCriticalSection(&host.lock);
       if (busy_changed) host.activity = (int64_t)time(NULL);
       if (command_changed || busy_changed) {

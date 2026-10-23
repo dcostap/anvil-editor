@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 33u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 34u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -48,6 +48,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_PANE_ACTION = 13,
   /* Another process saved the Zoom. Payload: AnvilSurfaceZoom. */
   ANVIL_SURFACE_MSG_ZOOM_CHANGED = 14,
+  /* Open an Untitled Editor after this Terminal Session's launch command ends. Payload: id + NUL. */
+  ANVIL_SURFACE_MSG_TERMINAL_EDITOR = 15,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,

@@ -97,6 +97,17 @@ if path:match("/driver$") then
    assert(item:returncode() == 0, label .. " shell ended with a failure")
   end
   local ok, err = pcall(function()
+   if action == "launch-terminal-editor" then
+    local shell = launch(root .. "/Project")
+    wait(function() return ready("a")[1] end, 30)
+    local result = wait(function() return load("terminal-editor") end, 45,
+     "the Terminal launch did not complete")
+    assert(result.ok, result.error)
+    assert(#ready("a") == 1 and #ready("b") == 0, "Terminal launch loaded another Project")
+    assert(select(2, windows(shell:pid())) == 1, "Terminal launch opened another Window")
+    return close_shell(shell, "Terminal editor")
+   end
+
    if action == "launch-forward" then
     local shell = launch(root .. "/Project")
     local a = wait(function() return ready("a")[1] end, 20)
@@ -242,6 +253,44 @@ elseif names[path] then
   coroutine.yield(.2)
   save(names[path] .. "-ready-" .. pid, {pid=pid, shell_pid=system.get_window_process_id(),
    window_id=system.get_anvil_window_id()})
+  if action == "launch-terminal-editor" and names[path] == "a" then
+   local terminal, panes = require "plugins.terminal", require "core.panes"
+   local Editor = require "core.editor"
+   local view
+   local ok, err = pcall(function()
+    wait(function() return trace():find("Shell Project runtime ready:", 1, true) end, 20)
+    view = terminal.open {cwd=path, shell="powershell.exe -NoLogo -NoProfile", focus=true}
+    wait(function() return view.state == "running" and view.busy == false end, 20)
+    local pane, session = panes.active(), view.session
+    local function quote(text) return "'" .. text:gsub("'", "''") .. "'" end
+    local function output(marker)
+     return ("\n" .. view.session:text_capture().text:gsub("\r", "") .. "\n"):find("\n" .. marker .. "\n", 1, true)
+    end
+    -- Match the user's PowerShell function. Change directory outside the Project before the bare launch.
+    assert(view:write_input("function anvil { & " .. quote(EXEFILE) .. " @args }; Set-Location " ..
+     quote(root .. "/Replacement") .. "; Write-Output 'ANVIL_SETUP_DONE'\r"))
+    wait(function() return output("ANVIL_SETUP_DONE") end, 10)
+    for attempt = 1, 2 do
+     assert(view:write_input("anvil\r"))
+     wait(function()
+      return core.active_view ~= view
+     end, 20, "bare anvil did not open an Editor: " .. view.session:text_capture().text)
+     assert(core.active_view:is(Editor) and not core.active_view.buffer.abs_filename,
+      "launch did not focus an Untitled Editor")
+     assert(view.busy == false, "launch opened an Editor before the command ended")
+     assert(view.session == session and view.state == "running", "launch closed the Terminal Session")
+     assert(panes.close(panes.active()))
+     assert(panes.focus(pane))
+     assert(pane.current_view == view, "launch did not retain the Terminal")
+    end
+    -- An explicit CLI argument must keep its normal behavior.
+    assert(view:write_input("anvil --version; Write-Output 'ANVIL_ARGS_DONE'\r"))
+    wait(function() return output("ANVIL_ARGS_DONE") end, 15)
+    assert(pane.current_view == view, "a CLI argument opened an Untitled Editor")
+   end)
+   if view then view:on_close() end
+   save("terminal-editor", {ok=ok, error=ok and nil or tostring(err)})
+  end
   if action == "launch-handoff" and names[path] == "b" then
    local request = wait(function() return load("select") end, 30)
    assert(system.select_project(request.path), "Replacement could not select Project")

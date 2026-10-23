@@ -10,8 +10,12 @@ enum {
   ANVIL_TERMINAL_HELLO = 1, ANVIL_TERMINAL_INPUT, ANVIL_TERMINAL_RESIZE,
   ANVIL_TERMINAL_CLOSE, ANVIL_TERMINAL_DETACH, ANVIL_TERMINAL_CLEAR,
   ANVIL_TERMINAL_ACTIVATE,
+  /* A uint32_t token. Reply only after a fresh probe finds no running command. */
+  ANVIL_TERMINAL_EDITOR_REQUEST,
   ANVIL_TERMINAL_WELCOME = 64, ANVIL_TERMINAL_REPLAY, ANVIL_TERMINAL_REPLAY_END,
   ANVIL_TERMINAL_OUTPUT, ANVIL_TERMINAL_EXITED, ANVIL_TERMINAL_STATUS,
+  /* The request token. This reply also reports that the shell is idle. */
+  ANVIL_TERMINAL_EDITOR_READY,
 };
 typedef struct { uint16_t cols, rows; uint32_t cell_width, cell_height; } AnvilTerminalSize;
 typedef struct { char id[ANVIL_TERMINAL_ID_LENGTH + 1]; AnvilTerminalSize size;

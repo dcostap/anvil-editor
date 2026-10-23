@@ -48,6 +48,8 @@ PSECURITY_DESCRIPTOR anvil_shell_user_security(void);
 int anvil_shell_launch_argc(const AnvilShellLaunchRequest *request);
 char **anvil_shell_launch_argv(const AnvilShellLaunchRequest *request);
 const char *anvil_shell_launch_cwd(const AnvilShellLaunchRequest *request);
+const char *anvil_shell_launch_terminal_id(const AnvilShellLaunchRequest *request);
+const char *anvil_shell_launch_terminal_project(const AnvilShellLaunchRequest *request);
 DWORD anvil_shell_launch_client_pid(const AnvilShellLaunchRequest *request);
 bool anvil_shell_launch_foreground_granted(const AnvilShellLaunchRequest *request);
 /* Replies once and releases the UI thread's reference. */

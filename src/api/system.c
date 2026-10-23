@@ -2083,6 +2083,12 @@ static int focusterminal_callback(lua_State *L, SDL_Event *event) {
   free(event->user.data1);
   return 2;
 }
+static int terminaleditor_callback(lua_State *L, SDL_Event *event) {
+  lua_pushstring(L, "terminaleditor");
+  lua_pushstring(L, event->user.data1);
+  free(event->user.data1);
+  return 2;
+}
 static int panerequest_callback(lua_State *L, SDL_Event *event) {
   AnvilSurfacePaneDelivery *delivery = event->user.data1;
   lua_pushstring(L, "panerequest");
@@ -2804,6 +2810,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Zoom event: %s", SDL_GetError());
   if (!register_custom_event("focusterminal", focusterminal_callback))
     return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
+  if (!register_custom_event("terminaleditor", terminaleditor_callback))
+    return luaL_error(L, "Unable to register the Terminal editor event: %s", SDL_GetError());
   if (!register_custom_event("panerequest", panerequest_callback))
     return luaL_error(L, "Unable to register the Pane action event: %s", SDL_GetError());
   luaL_newmetatable(L, API_TYPE_NATIVE_PLUGIN);

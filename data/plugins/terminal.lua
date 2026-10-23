@@ -977,6 +977,19 @@ function TerminalView:service_session(include_rows)
       end
     end
   end
+  local request = self.editor_request
+  if request and (request.session ~= self.session or status.kind ~= "running"
+      or status.editor_ready == request.token) then
+    self.editor_request = nil
+    local pane = request.pane
+    if request.session == self.session and status.kind == "running" and status.busy == false
+        and panes.active() == pane and pane.current_view == self and core.active_view == self then
+      core.log_quiet("Terminal Session %s runs editor:open from %s", self.session_id, pane.id)
+      command.perform_with_context("editor:open", { source_pane = pane, placement = "current" })
+    else
+      core.log_quiet("Terminal Session %s editor request canceled: focus or session changed", self.session_id)
+    end
+  end
   return needs_snapshot
 end
 
@@ -2719,11 +2732,34 @@ function M.focus_session(id)
   return false
 end
 
--- In a shell, the Project Sidebar's rows for Terminal Sessions that no Pane shows ask this Project to focus one.
-if system.is_hosted_surface() then
+local editor_request_token = 0
+
+-- A bare launch identifies its Session. The host checks idle again after it receives this request.
+function M.request_editor(id)
+  local pane = panes.active()
+  local view = pane and pane.current_view
+  if not view or not view:is(TerminalView) or view.session_id ~= id or core.active_view ~= view
+      or not view.session or view.state ~= "running" then
+    core.log_quiet("Terminal Session %s editor request ignored: source is not focused", tostring(id))
+    return false
+  end
+  if view.editor_request then return true end
+  editor_request_token = editor_request_token % 0xffffffff + 1
+  if not view.session:request_editor(editor_request_token) then
+    core.log_quiet("Terminal Session %s editor request failed: host request was not queued", id)
+    return false
+  end
+  view.editor_request = { token = editor_request_token, pane = pane, session = view.session }
+  core.log_quiet("Terminal Session %s editor request queued for %s", id, pane.id)
+  return true
+end
+
+-- Native shell launches and Project Sidebar rows target a Terminal Session, not the current directory.
+do
   local on_event = core.on_event
   function core.on_event(type, ...)
-    if type ~= "focusterminal" then return on_event(type, ...) end
+    if type == "terminaleditor" then return M.request_editor(...) end
+    if type ~= "focusterminal" or not system.is_hosted_surface() then return on_event(type, ...) end
     local id = ...
     if M.focus_session(id) then
       core.log_quiet("Terminal Session %s focused for the Sidebar", id)

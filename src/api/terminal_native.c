@@ -69,6 +69,7 @@ typedef struct {
   wchar_t *prepared_environment;
   volatile LONG host_exited;
   volatile LONG busy;
+  volatile LONG editor_ready;
   LONG reported_busy;
   char agent_app[32], reported_agent_app[32]; /* Protected by read_lock while the reader runs. */
   char agent_model[257], reported_agent_model[257];
@@ -320,6 +321,15 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
       session->exit_code_known = true;
       InterlockedExchange(&session->host_exited, 1);
       break;
+    }
+    if (header.type == ANVIL_TERMINAL_EDITOR_READY && !replaying && header.size == sizeof(uint32_t)) {
+      uint32_t token; memcpy(&token, buffer, sizeof(token));
+      EnterCriticalSection(&session->read_lock);
+      InterlockedExchange(&session->busy, 0);
+      InterlockedExchange(&session->editor_ready, (LONG)token);
+      LeaveCriticalSection(&session->read_lock);
+      wake_for_terminal_output(session);
+      continue;
     }
     /* Detached hosts survive editor updates. Older hosts send only the busy field. */
     if (header.type == ANVIL_TERMINAL_STATUS && !replaying &&
@@ -1432,13 +1442,14 @@ static bool output_drained(TerminalSession *session) {
 }
 
 static void push_status(lua_State *L, TerminalSession *session) {
-  LONG busy = InterlockedCompareExchange(&session->busy, 0, 0);
-  if (busy != session->reported_busy) { session->reported_busy = busy; session->state_revision++; }
   char app[sizeof(session->agent_app)], model[sizeof(session->agent_model)];
   if (session->read_lock_initialized) EnterCriticalSection(&session->read_lock);
+  LONG editor_ready = InterlockedExchange(&session->editor_ready, 0);
+  LONG busy = InterlockedCompareExchange(&session->busy, 0, 0);
   memcpy(app, session->agent_app, sizeof(app));
   memcpy(model, session->agent_model, sizeof(model));
   if (session->read_lock_initialized) LeaveCriticalSection(&session->read_lock);
+  if (busy != session->reported_busy) { session->reported_busy = busy; session->state_revision++; }
   if (strcmp(app, session->reported_agent_app)) {
     memcpy(session->reported_agent_app, app, sizeof(app));
     session->state_revision++;
@@ -1460,6 +1471,7 @@ static void push_status(lua_State *L, TerminalSession *session) {
     session->state == TERMINAL_STATE_RECONNECTING ||
     (session->state == TERMINAL_STATE_RUNNING && !session->replay_finished));
   set_boolean_field(L, "replaying", !session->replay_finished);
+  set_integer_field(L, "editor_ready", (uint32_t)editor_ready);
   if (busy >= 0) set_boolean_field(L, "busy", busy != 0);
   if (app[0] && session->state == TERMINAL_STATE_RUNNING) {
     lua_pushstring(L, app);
@@ -1957,6 +1969,16 @@ static int f_terminal_resize(lua_State *L) {
   session->render_generation++;
   invalidate_search_scan(session);
   lua_pushboolean(L, true);
+  return 1;
+}
+
+static int f_terminal_request_editor(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  lua_Integer value = luaL_checkinteger(L, 2);
+  luaL_argcheck(L, value > 0 && value <= UINT32_MAX, 2, "invalid editor request token");
+  uint32_t token = (uint32_t)value;
+  lua_pushboolean(L, terminal_is_live(session) && session->replay_finished &&
+    enqueue_record(session, ANVIL_TERMINAL_EDITOR_REQUEST, (const uint8_t *)&token, sizeof(token)));
   return 1;
 }
 
@@ -3866,6 +3888,7 @@ static const luaL_Reg terminal_methods[] = {
   { "paste", f_terminal_paste },
   { "resize", f_terminal_resize },
   { "clear", f_terminal_clear },
+  { "request_editor", f_terminal_request_editor },
   { "key", f_terminal_key },
   { "scroll", f_terminal_scroll },
   { "selection_gesture", f_terminal_selection_gesture },

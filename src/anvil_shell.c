@@ -4335,8 +4335,10 @@ static void accept_external(AnvilShellLaunchRequest *request) {
     anvil_shell_launch_finish(request, ANVIL_SHELL_LAUNCH_ACCEPTED);
     return;
   }
+  const char *terminal_project = anvil_shell_launch_terminal_project(request);
   if (shell.shutting_down || shell.updating ||
-      !queue_resolution(NULL, anvil_shell_launch_cwd(request), anvil_shell_launch_argc(request),
+      !queue_resolution(NULL, terminal_project[0] ? terminal_project : anvil_shell_launch_cwd(request),
+                        anvil_shell_launch_argc(request),
                         anvil_shell_launch_argv(request), false, false, true, request))
     anvil_shell_launch_finish(request, ANVIL_SHELL_LAUNCH_BUSY);
 }
@@ -5780,6 +5782,19 @@ static void finish_external(ProjectResolve *job) {
   ShellProject *project = job->success ? loaded_project(job->identity) : NULL;
   ShellWindow *owner = project ? window_for_id(project->window_id) : NULL;
   AnvilShellLaunchStatus status = ANVIL_SHELL_LAUNCH_ACCEPTED;
+  const char *terminal_id = request ? anvil_shell_launch_terminal_id(request) : "";
+  if (terminal_id[0]) {
+    /* Never resolve this request from the shell's current directory or open another Window.
+       Lua checks the originating Session and Pane; its host releases the request only after idle. */
+    bool ready = !shell.shutting_down && !shell.updating && project && owner && !owner->closing &&
+      project->connected && project->state == SHELL_READY;
+    if (ready)
+      shell_send(project, ANVIL_SURFACE_MSG_TERMINAL_EDITOR, terminal_id,
+                 ANVIL_SURFACE_TERMINAL_ID_LEN + 1, NULL, 0);
+    SDL_Log("Shell Terminal editor request: session=%s %s", terminal_id, ready ? "sent" : "rejected");
+    anvil_shell_launch_finish(request, ready ? ANVIL_SHELL_LAUNCH_ACCEPTED : ANVIL_SHELL_LAUNCH_REJECTED);
+    return;
+  }
   if (shell.shutting_down) {
     status = ANVIL_SHELL_LAUNCH_BUSY;
   } else if (!job->success) {
