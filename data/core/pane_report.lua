@@ -4,6 +4,7 @@ local core = require "core"
 local common = require "core.common"
 local panes = require "core.panes"
 local tab = require "core.tab"
+local recent_panes = require "core.recent_panes"
 
 local pane_report = {}
 
@@ -15,8 +16,8 @@ local SUSPENDED_INTERVAL = 1
 
 local sent, built_at
 
--- The report: one Tab item per Pane in Pane order, each with its Pane Group's one-based index. `active` is the
--- active Pane's Tab number and `visible` the visible Pane Group's index.
+-- The report: one Tab item per Pane in Pane order, each with its Pane Group's one-based index and the time it last
+-- took focus. `active` is the active Pane's position and `visible` the visible Pane Group's index.
 function pane_report.build()
   local report, groups = {}, {}
   local active, visible = panes.active(), panes.visible_group()
@@ -26,8 +27,8 @@ function pane_report.build()
       groups[#groups + 1] = pane.group
       groups[pane.group] = #groups
     end
-    local item = tab.describe(pane, number)
-    item.group = groups[pane.group]
+    local item = tab.describe(pane)
+    item.group, item.focused = groups[pane.group], recent_panes.focused_at(pane)
     if pane == active then report.active = number end
     if pane.group == visible then report.visible = item.group end
     report[number] = item
@@ -37,6 +38,7 @@ end
 
 -- Sends the report when it changed. `suspended` limits how often a Project that does not render builds it.
 function pane_report.publish(suspended)
+  recent_panes.observe(panes.active())
   if not system.is_hosted_surface() then return end
   local now = system.get_time()
   if suspended and built_at and now - built_at < SUSPENDED_INTERVAL then return end

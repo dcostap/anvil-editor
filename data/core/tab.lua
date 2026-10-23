@@ -1,4 +1,4 @@
--- One Tab's content: its Pane number, View Icon or agent icon, name, and note. The Title Bar and the
+-- One Tab's content: its Recent Pane number, View Icon or agent icon, name, and note. The Title Bar and the
 -- Project Sidebar draw Tabs with this module, so both show the same thing.
 -- A Tab item is plain data. The Project describes its Panes, and the Pane report sends the items to the Sidebar.
 local style = require "core.style"
@@ -45,7 +45,7 @@ function tab.spinner_delay(clock)
   return SPINNER_FRAME - clock % SPINNER_FRAME
 end
 
--- Describes one Pane as a Tab item. `number` is the Pane's one-based Tab number.
+-- Describes one Pane as a Tab item. `number` is the Pane's Recent Pane number, if it has one.
 function tab.describe(pane, number)
   local view = pane.current_view
   local item = {id = pane.id, number = number, name = view.get_name and view:get_name() or "View"}
@@ -242,9 +242,16 @@ function tab.display_name(item)
   return name .. arguments
 end
 
+-- The space for the Recent Pane number. `number_column` keeps the space in Tabs without a number, so a list of Tabs
+-- aligns its icons. Recent Pane numbers have one digit.
+local function number_width(item, opts)
+  local font = opts.number_font or style.font
+  if opts.number_column then return font:get_width("0") + number_gap() end
+  return item.number and font:get_width(tostring(item.number)) + number_gap() or 0
+end
+
 local function prefix_width(item, row_height, opts)
-  local width = 0
-  if item.number then width = (opts.number_font or style.font):get_width(tostring(item.number)) + number_gap() end
+  local width = number_width(item, opts)
   if item.terminal then
     local size = agent_icons.width(program_identity(item), row_height)
     width = width + (size > 0 and size or view_icons.width(TERMINAL_ICON, row_height)) + gap()
@@ -255,7 +262,7 @@ local function prefix_width(item, row_height, opts)
 end
 
 -- The width the Tab's content needs at its full display name.
----@param opts {number_font: renderer.font?, name_font: renderer.font?, now: number?}?
+---@param opts {number_font: renderer.font?, number_column: boolean?, name_font: renderer.font?, now: number?}?
 function tab.width(item, row_height, opts)
   opts = opts or {}
   local width = prefix_width(item, row_height, opts) + (opts.name_font or style.font):get_width(tab.display_name(item))
@@ -277,16 +284,15 @@ end
 -- Draws the Tab's content in the rectangle. `name_color` colours a name without a Git or missing-file colour.
 -- Returns true when it drew a spinner frame, so the caller can draw the next one, and the name's left edge.
 -- `shimmer` is the phase of a shimmer through the name, from 0 to 1.
----@param opts {name_color: renderer.color, number_font: renderer.font?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?}
+---@param opts {name_color: renderer.color, number_font: renderer.font?, number_column: boolean?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?}
 function tab.draw(item, x, y, w, h, opts)
   local number_font, name_font = opts.number_font or style.font, opts.name_font or style.font
   local right = x + w
   local function middle(font) return y + math.floor((h - font:get_height()) / 2) end
   if item.number then
-    local text = tostring(item.number)
-    renderer.draw_text(number_font, text, x, middle(number_font), style.titlebar_pane_number)
-    x = x + number_font:get_width(text) + number_gap()
+    renderer.draw_text(number_font, tostring(item.number), x, middle(number_font), style.titlebar_pane_number)
   end
+  x = x + number_width(item, opts)
   local color = opts.name_color
   if item.terminal then
     if item.terminal.state ~= "running" and item.terminal.state ~= "reconnecting" then color = style.dim end

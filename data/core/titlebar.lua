@@ -6,6 +6,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local color_theme = require "core.color_theme"
 local tab = require "core.tab"
+local recent_panes = require "core.recent_panes"
 local View = require "core.view"
 
 local TitleBar = View:extend()
@@ -171,7 +172,7 @@ local function pane_name(pane)
 end
 
 local function pane_label(number, pane)
-  return string.format("%d %s", number, pane_name(pane))
+  return number and string.format("%d %s", number, pane_name(pane)) or pane_name(pane)
 end
 
 function TitleBar.pane_marker_font()
@@ -179,7 +180,7 @@ function TitleBar.pane_marker_font()
   return style.get_scaled_font(style.prose_heading_font, size)
 end
 
--- Title Bar Tabs draw the Pane number in the interface font and the name in the View text font.
+-- Title Bar Tabs draw the Recent Pane number in the interface font and the name in the View text font.
 local function tab_fonts()
   return {number_font = style.font, name_font = style.view_text_font}
 end
@@ -236,12 +237,13 @@ function TitleBar:get_pane_entries()
   local active = panes().active()
   local visible = panes().visible_group()
   local ordered = panes().ordered()
+  local numbers = recent_panes.local_numbers()
   for i, pane in ipairs(ordered) do
     local geometry = self.entries[i] or {}
     result[i] = {
       pane = pane,
-      number = i,
-      label = pane_label(i, pane),
+      number = numbers[pane.id],
+      label = pane_label(numbers[pane.id], pane),
       active = pane == active,
       visible = pane.group == visible,
       x = geometry.x,
@@ -295,10 +297,11 @@ function TitleBar:update_geometry()
   self.entries = {}
   if count > 0 and available > 0 then
     local widths, starts, total = {}, {}, 0
+    local numbers = recent_panes.local_numbers()
     for i, pane in ipairs(ordered) do
       if i > 1 and ordered[i - 1].group ~= pane.group then total = total + tab_group_gap() end
       starts[i] = total
-      widths[i] = preferred_tab_width(i, pane, h)
+      widths[i] = preferred_tab_width(numbers[pane.id], pane, h)
       total = total + widths[i]
     end
     self.tab_scroll_max = math.max(0, total - available)
@@ -715,7 +718,7 @@ function TitleBar:draw_pane_drag()
     )
   end
 
-  local number = panes().number(pane) or 1
+  local number = recent_panes.local_numbers()[pane.id]
   local width = preferred_tab_width(number, pane, self.size.y)
   local height = self.size.y
   local x = common.clamp(

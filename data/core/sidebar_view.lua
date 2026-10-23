@@ -2,6 +2,7 @@ local Object = require "core.object"
 local style = require "core.style"
 local config = require "core.config"
 local tab = require "core.tab"
+local recent_panes = require "core.recent_panes"
 local common = require "core.common"
 local FocusFeedback = require "core.focus_feedback"
 
@@ -265,6 +266,7 @@ function SidebarView:rebuild_rows()
   for _, window in ipairs(projects.windows or {}) do
     if window.id == window_id then selected = window.selected_project end
   end
+  local recent = recent_panes.numbers(projects)
   -- A collapsed Project shows only the Terminals that need the user.
   local only_attention = false
   local function add_tab(row, agent)
@@ -299,14 +301,13 @@ function SidebarView:rebuild_rows()
     for _, item in ipairs(panes) do sizes[item.group or 0] = (sizes[item.group or 0] or 0) + 1 end
     for _, terminal in ipairs(project.terminals or {}) do records[terminal.id] = terminal end
     for index, item in ipairs(panes) do
-      -- A Terminal Tab takes its agent's status from the Terminal Session record.
+      -- A Terminal Tab takes its agent's status from the Terminal Session record. Each Tab takes its Recent Pane
+      -- number, if it has one.
       local record = item.terminal and records[item.terminal.session]
       local agent = record and record.state == "running" and tab.agent(record)
-      if agent then
-        local copy = {agent = agent}
-        for field, value in pairs(item) do copy[field] = value end
-        item = copy
-      end
+      local copy = {agent = agent}
+      for field, value in pairs(item) do copy[field] = value end
+      item, copy.number = copy, recent[recent_panes.key(project.path, item.id)]
       local session = item.terminal and item.terminal.session
       if session then
         shown[session] = true
@@ -615,7 +616,7 @@ function SidebarView:get_tooltip()
   if not item or not item.terminal then return nil end
   local name = tab.display_name(item)
   local _, width = self:tab_bounds(row, self.width)
-  local available = tab.name_width(item, width, self:metrics().terminal)
+  local available = tab.name_width(item, width, self:metrics().terminal, {number_column = true})
   if name ~= item.name or tab.fit(style.font, name, available) ~= name then return item.name end
 end
 
@@ -1398,7 +1399,7 @@ function SidebarView:draw_tab(row, x, y, width, now)
     name_font = font_variant("bold")
   end
   local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal, {name_color = style.text, now = now,
-    clock = self.clock, name_font = name_font, shimmer = not row.agent and shimmer or nil})
+    clock = self.clock, name_font = name_font, number_column = true, shimmer = not row.agent and shimmer or nil})
   if spinning then self.spinning = true end
   local unread = row.attention == "done" or row.attention == "error"
   if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - name_x,

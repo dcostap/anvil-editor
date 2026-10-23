@@ -423,18 +423,20 @@ end
 function fuzzy_searcher.current_file_pane_markers(max_width)
   local font = TitleBar.pane_marker_font()
   local numbers_by_path = {}
-  for number, pane in ipairs(panes.ordered()) do
+  local recent = require("core.recent_panes").local_numbers()
+  for _, pane in ipairs(panes.ordered()) do
     local path = file_context.view_file_path(pane.current_view)
     local key = path and common.path_compare_key(path)
-    if key then
+    if key and recent[pane.id] then
       local numbers = numbers_by_path[key] or {}
       numbers_by_path[key] = numbers
-      numbers[#numbers+1] = number
+      numbers[#numbers+1] = recent[pane.id]
     end
   end
 
   local markers = {}
   for key, numbers in pairs(numbers_by_path) do
+    table.sort(numbers)
     local text = table.concat(numbers, "·")
     if font:get_width(text) > max_width and #numbers > 1 then
       text = tostring(numbers[1]) .. "+"

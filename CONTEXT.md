@@ -356,8 +356,12 @@ An interaction rule where visible keyboard-selectable or activatable items also 
 _Avoid_: mouse-friendly UI, basic mouse support
 
 **Pane**:
-A numbered work area that shows one Current View and owns one Navigation History. Each Pane belongs to one Pane Group.
+A work area that shows one Current View and owns one Navigation History. Each Pane belongs to one Pane Group.
 _Avoid_: Left Pane, Right Pane, panel, split
+
+**Recent Pane**:
+One of the five Panes that had focus most recently before the current Pane, in any Project or Anvil Window. Recent Panes have the numbers 1 to 5, newest first, so number 1 is the previous Pane. The current Pane and older Panes have no number.
+_Avoid_: Pane number, Tab number
 
 **Constrained Pane**:
 A Pane dedicated to one owner, such as a Terminal session, Git Log, commit comparison, or nonempty Untitled Editor.
@@ -367,7 +371,7 @@ Its Navigation History contains only Views related to that owner, including its 
 A Pane that accepts unrelated ordinary Views in its Navigation History.
 
 **Pane Number Marker**:
-A Fuzzy Searcher result marker that identifies each Pane whose Current View shows the file.
+A Fuzzy Searcher result marker that shows the number of each Recent Pane whose Current View shows the file.
 _Avoid_: open file badge, tab number
 
 **Pane Group**:
@@ -430,7 +434,7 @@ The Current View whose focus scope receives input, including input received by o
 _Avoid_: Focused active view, globally active view
 
 **Tab**:
-An item representing one Pane. It shows the Pane's number, its Current View's name, and the View Icon or agent icon. The Project Sidebar shows Tabs under their Project. The Title Bar shows them only when the Project Sidebar is hidden or absent. Tab order gives each Pane its one-based number, including Panes shown in a Pane Group.
+An item representing one Pane. It shows the Recent Pane number if the Pane has one, its Current View's name, and the View Icon or agent icon. The Project Sidebar shows Tabs under their Project. The Title Bar shows them only when the Project Sidebar is hidden or absent.
 _Avoid_: Pane Tab, file tab, buffer tab, View tab, Node tab
 
 **File Tree**:

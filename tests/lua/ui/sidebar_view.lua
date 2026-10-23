@@ -76,7 +76,7 @@ test.describe("Sidebar title tooltips", function()
     view:set_size(width or 500, 800)
     view:set_model({{row_id=1,path="C:/A",state="ready",terminals={
       {id="detached",title=name,state="running"}},panes={
-      {id="pane-1",number=1,name=name,terminal={session="shown",state="running"}}}}})
+      {id="pane-1",name=name,terminal={session="shown",state="running"}}}}})
     return view
   end
 
@@ -218,7 +218,7 @@ test.describe("Sidebar list actions", function()
     local function model(active)
       return {
         {row_id=1,id=11,path="C:/A",state="ready",window_id=7,terminals={},panes={active=active,visible=1,
-          {id="pane-1",number=1,group=1,name="first.lua"},{id="pane-2",number=2,group=1,name="second.lua"}}},
+          {id="pane-1",group=1,name="first.lua"},{id="pane-2",group=1,name="second.lua"}}},
         windows={{id=7,selected_project=11},{id=9,selected_project=0}},
       }
     end
@@ -238,7 +238,7 @@ test.describe("Sidebar list actions", function()
     local actions, action = recorder()
     local view = SidebarView(action)
     view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={},panes={active=1,visible=1,
-      {id="pane-4",number=1,group=1,name="init.lua"},{id="pane-9",number=2,group=2,name="notes.md"}}}}, 5)
+      {id="pane-4",group=1,name="init.lua"},{id="pane-9",group=2,name="notes.md"}}}}, 5)
     local names = {}
     for _, row in ipairs(view.rows) do
       if row.kind == "tab" then names[#names + 1] = row.tab.name end
@@ -262,7 +262,7 @@ test.describe("Sidebar list actions", function()
     view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,activity=os.time(),terminals={
       {id="shown",title="pwsh",cwd="C:/A",state="running",busy=0,activity=os.time()},
       {id="detached",title="server",cwd="C:/A",state="running",busy=1,activity=os.time()}},
-      panes={active=1,visible=1,{id="pane-1",number=1,group=1,name="pwsh",
+      panes={active=1,visible=1,{id="pane-1",group=1,name="pwsh",
         terminal={session="shown",state="running",busy=false,activity=os.time()}}}}}, 5)
     test.equal(count(view, "tab"), 1)
     test.equal(count(view, "terminal"), 1)
@@ -440,7 +440,7 @@ test.describe("Sidebar age groups", function()
     local function model(selected)
       local function project(id, name)
         return {row_id=id,id=id,path="C:/" .. name,state="ready",window_id=1,terminals={},
-          panes={active=1,visible=1,{id=name .. "-pane",number=1,name=name .. ".lua",group=1}}}
+          panes={active=1,visible=1,{id=name .. "-pane",name=name .. ".lua",group=1}}}
       end
       return {project(1, "A"), project(2, "B"), windows={{id=1,selected_project=selected}}}
     end
@@ -489,11 +489,11 @@ test.describe("Sidebar age groups", function()
 
   test.it("shows each Terminal Session's live title", function()
     local view = SidebarView(function() end)
-    view:set_size(240, 800)
+    view:set_size(300, 800)
     view:set_model({project(1, "C:/P", 60, "ready",
       {{id="a",title="[40 s] \u{03C0} - GLP4",cwd="C:/P",state="running",busy=1,activity=now},
        {id="b",title="",cwd="C:/P",state="running",busy=0,activity=now}})})
-    local text = joined(drawn_texts(view, 240, 800))
+    local text = joined(drawn_texts(view, 300, 800))
     test.ok(text:find("[40 s] \u{03C0} - GLP4", 1, true), "The live title is missing")
     test.ok(text:find("Terminal", 1, true), "An untitled Terminal Session has no label")
   end)
@@ -560,8 +560,8 @@ test.describe("Sidebar agent status", function()
     for key, value in pairs(agent) do session[key] = value end
     return {{row_id=1,id=1,path="C:/P",state="ready",window_id=1,exists=true,activity=now,terminals={session},
       panes={active=active or 1,visible=1,
-        {id="pane-1",number=1,group=1,name="init.lua"},
-        {id="pane-2",number=2,group=2,name="\u{03C0} - GLP4",terminal={session="a",state="running",busy=true}}}},
+        {id="pane-1",group=1,name="init.lua"},
+        {id="pane-2",group=2,name="\u{03C0} - GLP4",terminal={session="a",state="running",busy=true}}}},
       windows={{id=1,selected_project=1}}}
   end
 
@@ -629,7 +629,7 @@ test.describe("Sidebar unread results", function()
   -- Selected Project unless `opts.selected` is set. `opts.active` is P's active Pane.
   local function model(sessions, opts)
     opts = opts or {}
-    local panes = {active=opts.active or 1,visible=1,{id="file",number=1,group=1,name="init.lua"}}
+    local panes = {active=opts.active or 1,visible=1,{id="file",group=1,name="init.lua"}}
     local records = {}
     for index, item in ipairs(sessions) do
       local record = {}
@@ -637,13 +637,13 @@ test.describe("Sidebar unread results", function()
       record.detached, record.bell = nil, nil
       records[#records + 1] = record
       if not item.detached then
-        panes[#panes + 1] = {id=item.id,number=index + 1,group=index + 1,name=item.id,
+        panes[#panes + 1] = {id=item.id,group=index + 1,name=item.id,
           terminal={session=item.id,state="running",busy=true,bell=item.bell}}
       end
     end
     return {{row_id=1,id=1,path="C:/P",state="ready",window_id=1,terminals=records,panes=panes},
       {row_id=2,id=2,path="C:/Q",state="ready",window_id=1,terminals={},panes={active=1,visible=1,
-        {id="q",number=1,group=1,name="q.lua"}}},
+        {id="q",group=1,name="q.lua"}}},
       windows={{id=1,selected_project=opts.selected and 1 or 2}}}
   end
 
@@ -736,6 +736,31 @@ test.describe("Sidebar search field", function()
   end)
 end)
 
+test.describe("Sidebar Recent Pane numbers", function()
+  test.it("numbers the Tabs of the Panes that had focus before the current one, across Windows", function()
+    local view = SidebarView(function() end)
+    view:set_model({
+      {row_id=1,id=1,path="C:/A",state="ready",window_id=1,terminals={},panes={active=1,visible=1,
+        {id="a1",group=1,name="current.lua",focused=30},{id="a2",group=2,name="never.lua"}}},
+      {row_id=2,id=2,path="C:/B",state="ready",window_id=2,terminals={},panes={active=1,visible=1,
+        {id="b1",group=1,name="older.lua",focused=10},{id="b2",group=2,name="previous.lua",focused=20}}},
+      windows={{id=1,selected_project=1},{id=2,selected_project=2}}}, 1)
+    local texts = drawn_texts(view, 400, 800)
+    local numbers = {}
+    for _, item in ipairs(texts) do
+      if item.text:match("^%d$") then
+        -- The number and the name of one Tab share a row.
+        for _, name in ipairs(texts) do
+          if name.text:match("%.lua$") and math.abs(name.y - item.y) < 4 then numbers[name.text] = item.text end
+        end
+      end
+    end
+    test.same(numbers, {["previous.lua"] = "1", ["older.lua"] = "2"})
+    test.equal(find_text(texts, "never.lua").x, find_text(texts, "previous.lua").x,
+      "A Tab without a number does not align with a numbered Tab")
+  end)
+end)
+
 test.describe("Sidebar Project badges", function()
   local style = require "core.style"
   test.it("centres the badge letter's ink in its badge", function()
@@ -816,7 +841,7 @@ test.describe("Sidebar motion", function()
         local view = SidebarView(function() end)
         view:set_model({{row_id=1,id=1,path="C:/A",state="ready",window_id=1,
           terminals={{id="s",title="pwsh",state="running",busy=1,agent_state=agent_state,agent_step=step}},
-          panes={active=1,visible=1,{id="p",number=1,name="pwsh",group=1,
+          panes={active=1,visible=1,{id="p",name="pwsh",group=1,
             terminal={session="s",state="running",busy=true}}}}, windows={{id=1,selected_project=1}}}, 1)
         -- Let the rows arrive.
         for _ = 1, 90 do advance(1 / 30); drawn_texts(view) end
@@ -895,13 +920,13 @@ test.describe("Sidebar drag and drop", function()
     return {
       {row_id=1,id=11,path="C:/A",state="ready",window_id=5,terminals={{id="s1",title="pwsh",state="running"}},
         panes={active=1,visible=1,
-          {id="pane-1",number=1,group=1,name="one.lua"},
-          {id="pane-2",number=2,group=2,name="two.lua"},
-          {id="pane-3",number=3,group=2,name="three.lua"},
-          {id="pane-4",number=4,group=3,name="four.lua"},
-          {id="pane-5",number=5,group=4,name="pwsh",terminal={session="s1",state="running"}}}},
+          {id="pane-1",group=1,name="one.lua"},
+          {id="pane-2",group=2,name="two.lua"},
+          {id="pane-3",group=2,name="three.lua"},
+          {id="pane-4",group=3,name="four.lua"},
+          {id="pane-5",group=4,name="pwsh",terminal={session="s1",state="running"}}}},
       {row_id=2,id=12,path="C:/B",state="ready",window_id=5,terminals={},panes={active=1,visible=1,
-        {id="pane-8",number=1,group=1,name="b.lua"}}},
+        {id="pane-8",group=1,name="b.lua"}}},
       {row_id=3,path="C:/C",state="dormant",exists=true,activity=os.time(),terminals={}},
       windows={{id=5,selected_project=11}},
     }
@@ -1055,7 +1080,7 @@ test.describe("Sidebar drag and drop", function()
 
   test.it("scrolls the list while a dragged Tab waits near its edge", function()
     local panes = {active=1,visible=1}
-    for i = 1, 60 do panes[i] = {id="pane-" .. i,number=i,group=i,name="file" .. i .. ".lua"} end
+    for i = 1, 60 do panes[i] = {id="pane-" .. i,group=i,name="file" .. i .. ".lua"} end
     local view, actions = sidebar({{row_id=1,id=11,path="C:/A",state="ready",terminals={},panes=panes},
       windows={{id=5,selected_project=11}}})
     view:set_size(300, 400)
@@ -1089,7 +1114,7 @@ test.describe("Sidebar drops from other applications", function()
     local view = SidebarView(action)
     view:set_size(300, 800)
     view:set_model({{row_id=1,id=11,path="C:/A",state="ready",window_id=5,terminals={},panes={active=1,visible=1,
-      {id="pane-1",number=1,group=1,name="one.lua"},{id="pane-2",number=2,group=2,name="two.lua"}}},
+      {id="pane-1",group=1,name="one.lua"},{id="pane-2",group=2,name="two.lua"}}},
       {row_id=3,path="C:/C",state="dormant",exists=true,activity=os.time(),terminals={}},
       windows={{id=5,selected_project=11}}}, 5)
     return view, actions

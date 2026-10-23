@@ -1,6 +1,8 @@
 local core = require "core"
 local config = require "core.config"
 local panes = require "core.panes"
+local pane_report = require "core.pane_report"
+local recent_panes = require "core.recent_panes"
 local style = require "core.style"
 local test = require "core.test"
 local View = require "core.view"
@@ -23,7 +25,10 @@ test.describe("Fuzzy Searcher Pane markers", function()
     context.wallpaper = config.wallpaper
     config.wallpaper = "none"
     context.set_active_view = core.set_active_view
+    context.window_has_focus = system.window_has_focus
+    system.window_has_focus = function() return true end
     panes.reset_for_tests()
+    recent_panes.reset_for_tests()
     core.set_active_view = function(view) core.active_view = view end
   end)
 
@@ -31,18 +36,25 @@ test.describe("Fuzzy Searcher Pane markers", function()
     config.wallpaper = context.wallpaper
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     panes.reset_for_tests()
+    recent_panes.reset_for_tests()
     core.set_active_view = context.set_active_view
+    system.window_has_focus = context.window_has_focus
   end)
 
-  test.it("shows each current Pane number before an open file result", function()
+  test.it("shows each Recent Pane number before an open file result", function()
     local shared_path = system.absolute_path("fuzzy-pane-marker-shared.lua")
     local other_path = system.absolute_path("fuzzy-pane-marker-other.lua")
     local one = panes.create { factory = function() return FileView(shared_path) end }
     local two = panes.split(one, "right", { factory = function() return FileView(other_path) end })
     local three = panes.split(two, "right", { factory = function() return FileView(shared_path) end })
-    local other_number = tostring(panes.number(two))
-    local shared_numbers = tostring(panes.number(one)) .. "·" .. tostring(panes.number(three))
-    local shared_compact = tostring(panes.number(one)) .. "+"
+    local current = panes.split(three, "right", { factory = function() return FileView(other_path) end })
+    -- The current Pane has no number, so the other file shows only the number of Pane two.
+    for _, pane in ipairs {three, two, one, current} do
+      panes.focus(pane)
+      pane_report.publish()
+    end
+    local other_number = "2"
+    local shared_numbers, shared_compact = "1·3", "1+"
     local picker = fuzzy_searcher.open_static_results("Files", {
       { kind = "file", file = shared_path, label = shared_path, match_spans = {} },
       { kind = "path", file = other_path, abs_path = other_path, label = other_path, match_spans = {} },

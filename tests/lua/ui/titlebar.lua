@@ -2,6 +2,8 @@ local core = require "core"
 local config = require "core.config"
 local layout = require "core.pane_layout"
 local panes = require "core.panes"
+local pane_report = require "core.pane_report"
+local recent_panes = require "core.recent_panes"
 local scale = require "plugins.scale"
 local style = require "core.style"
 local TitleBar = require "core.titlebar"
@@ -18,6 +20,15 @@ function NamedView:get_name() return self.name end
 
 local function factory(name)
   return function() return NamedView(name) end
+end
+
+-- Focuses `pane` while the Project has keyboard focus, and lets the Project observe it as a frame does.
+local function focus(pane)
+  panes.focus(pane)
+  local has_focus = system.window_has_focus
+  system.window_has_focus = function() return true end
+  pane_report.publish()
+  system.window_has_focus = has_focus
 end
 
 -- Tab lane scrolling eases over time, so let it finish before checking positions.
@@ -38,6 +49,7 @@ test.describe("Global title bar Pane entries", function()
 
   test.before_each(function()
     panes.reset_for_tests()
+    recent_panes.reset_for_tests()
     set_active_view = core.set_active_view
     projects = core.projects
     window = core.window
@@ -57,6 +69,7 @@ test.describe("Global title bar Pane entries", function()
 
   test.after_each(function()
     panes.reset_for_tests()
+    recent_panes.reset_for_tests()
     core.set_active_view = set_active_view
     core.projects = projects
     core.window = window
@@ -70,18 +83,21 @@ test.describe("Global title bar Pane entries", function()
     config.fps, core.in_live_resize_frame, config.animation_rate = configured_fps, live_resize, animation_rate
   end)
 
-  test.it("shows all Panes in current numeric order", function()
+  test.it("shows all Panes in Tab order and numbers the ones that had focus before the current one", function()
     local one = panes.create { factory = factory("alpha.lua") }
-    panes.split(one, "right", { factory = factory("beta.lua") })
-    panes.create { factory = factory("settings") }
+    local two = panes.split(one, "right", { factory = factory("beta.lua") })
+    local three = panes.create { factory = factory("settings") }
+    focus(three)
+    focus(one)
+    focus(two)
     local title = TitleBar()
     title.size.x = 900
     title:update()
     local entries = title:get_pane_entries()
     test.equal(#entries, 3)
     test.equal(entries[1].label, "1 alpha.lua")
-    test.equal(entries[2].label, "2 beta.lua")
-    test.equal(entries[3].label, "3 settings")
+    test.equal(entries[2].label, "beta.lua")
+    test.equal(entries[3].label, "2 settings")
   end)
 
   test.it("marks the active Pane and its visible group", function()
@@ -142,8 +158,10 @@ test.describe("Global title bar Pane entries", function()
     test.ok(group_indicator)
   end)
 
-  test.it("renders Pane numbers and names with their requested fonts", function()
-    panes.create { factory = factory("one") }
+  test.it("renders Recent Pane numbers and names with their requested fonts", function()
+    local one = panes.create { factory = factory("one") }
+    focus(one)
+    focus(panes.create { factory = factory("two") })
     local title = TitleBar()
     title.size.x = 900
     title:update()

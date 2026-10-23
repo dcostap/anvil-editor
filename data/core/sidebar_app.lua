@@ -236,11 +236,31 @@ function core.init()
   core.log_quiet("Sidebar frontend started")
   -- The Sidebar has no editor commands. Keep its focus shortcut and list commands only.
   local bindings = keymap.get_bindings("core:focus_project_sidebar") or {}
+  local recent_panes, recent_bindings = require "core.recent_panes", {}
+  for number = 1, recent_panes.COUNT do
+    recent_bindings[number] = keymap.get_bindings("pane:focus_recent_" .. number) or {}
+  end
   keymap.map, keymap.reverse_map = {}, {}
   command.add(nil, {
     ["core:focus_project_sidebar"] = function() system.focus_project_sidebar(false) end,
   })
   for _, binding in ipairs(bindings) do keymap.add {[binding] = "core:focus_project_sidebar"} end
+  -- The Recent Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
+  for number = 1, recent_panes.COUNT do
+    local name = "pane:focus_recent_" .. number
+    command.add(nil, {[name] = function()
+      local item, stamped = recent_panes.target(core.project_sidebar, number)
+      if not item then
+        core.log_quiet("Sidebar Recent Pane %d: none of %d stamped Panes", number, stamped)
+        return false
+      end
+      system.focus_project_sidebar(false)
+      local sent = recent_panes.request(item.path, item.id)
+      core.log_quiet("Sidebar Recent Pane %d: Project=%s pane=%s sent=%s", number, item.path, tostring(item.id),
+        tostring(sent))
+    end})
+    for _, binding in ipairs(recent_bindings[number]) do keymap.add {[binding] = name} end
+  end
   for _, key in ipairs {"up", "down", "left", "right", "home", "end", "return", "keypad enter", "escape", "backspace"} do
     local name = "sidebar:" .. key:gsub(" ", "_")
     command.add(nil, {[name] = function() if current then current.view:on_key_pressed(key) end end})

@@ -21,15 +21,16 @@ local function project(row_id, path, state, age, window_id, terminals, panes)
     activity = os.time() - age, terminals = terminals or {}, panes = panes or {}}
 end
 
-local function editor(number, group, name, fields)
-  local item = {id = "pane-" .. number, number = number, group = group, name = name,
+local function editor(index, group, name, fields)
+  local item = {id = "pane-" .. index, group = group, name = name,
     icon = {kind = "file", path = name}}
   for key, value in pairs(fields or {}) do item[key] = value end
   return item
 end
 
-local function terminal_tab(number, group, session, title, age, busy)
-  return {id = "pane-" .. number, number = number, group = group, name = title,
+-- `focused` is the time the Pane last took focus. The latest is the current Pane.
+local function terminal_tab(index, group, session, title, age, busy, focused)
+  return {id = "pane-" .. index, group = group, name = title, focused = focused,
     terminal = {session = session, state = "running", busy = busy, activity = os.time() - age}}
 end
 
@@ -54,10 +55,10 @@ function Scene:new(mode)
         agent_since = os.time() - 5 * MINUTE}),
       terminal("g", "old shell", 45 * DAY),
     }, {active = 2, visible = 1,
-      editor(1, 1, "init.lua"),
-      editor(2, 1, "sidebar_view.lua", {color = {0xe2, 0xc0, 0x8d, 255}}),
-      terminal_tab(3, 2, "a", "[40 s] \u{03C0} - GLP4", 30, true),
-      terminal_tab(4, 3, "b", POWERSHELL, 20 * MINUTE, false),
+      editor(1, 1, "init.lua", {focused = 30}),
+      editor(2, 1, "sidebar_view.lua", {color = {0xe2, 0xc0, 0x8d, 255}, focused = 50}),
+      terminal_tab(3, 2, "a", "[40 s] \u{03C0} - GLP4", 30, true, 40),
+      terminal_tab(4, 3, "b", POWERSHELL, 20 * MINUTE, false, 20),
       editor(5, 4, "removed.md", {missing = true}),
     }),
     project(2, "D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas", "ready", 2 * 60 * 60, 2, {

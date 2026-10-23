@@ -104,9 +104,6 @@ An Anvil that a Terminal Session started inherits the older preload, and the fir
 Run `ui/terminal_agent_status.lua` and `ui/terminal_agent_resume.lua` after changes.
 
 Terminal Tabs use the reported OSC 7501 `app` field to identify Pi.
-A Terminal without that icon shows the Terminal View's icon. Terminal Tabs have no status dot.
-The Project Sidebar shows a dot only for an Unread Result or an agent that waits for an answer.
-It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
 They do not infer the program from its title. Older running hosts need a new Terminal Session to report program identity.
 Run `ui/terminal_icons.lua` and `ui/terminal_agent_status.lua` after icon or identity changes.
 The Pi extension also reports the selected model's display name, or its ID when no name exists.
@@ -115,6 +112,17 @@ DeepSeek names use DeepSeek's whale. Name matching ignores case.
 The icon stays while Pi is idle and ends when Pi ends. Unknown or missing models show Pi's icon.
 Show only one logo: the detected model provider or Pi as the fallback. Logos have transparent backgrounds.
 Run `ui/terminal_agent_resume.lua` after model-report changes. It checks startup and model changes on Node and Bun.
+
+A Terminal without that icon shows the Terminal View's icon. Terminal Tabs have no status dot.
+The Project Sidebar shows a dot only for an Unread Result or an agent that waits for an answer.
+It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
+
+Tabs show Recent Pane numbers, not Tab positions. `core.recent_panes` owns the rule.
+Each Project stamps its active Pane when the Pane takes keyboard focus. The Pane report sends the stamps.
+The Sidebar ranks the stamps of all Projects. A Project fetches them when it takes keyboard focus.
+`system.get_time()` reads one clock for all processes, so stamps from different Projects compare.
+A Title Bar in a Window without focus can show old numbers until its Window takes focus.
+Run `ui/recent_panes.lua`, `ui/titlebar.lua` and `ui/sidebar_view.lua` after changes.
 
 The standalone option is `-Dembedded_runtime=true`. It is off by default.
 `scripts\build-standalone-windows.sh` enables it, strips the executable, runs
