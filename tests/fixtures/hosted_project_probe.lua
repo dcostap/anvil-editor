@@ -958,7 +958,7 @@ else
       end)
       local terminal = require("plugins.terminal").open {cwd = project, shell = "cmd.exe /D /Q"}
       assert(wait_for(function() return terminal.session and (terminal.session:stats().host_pid or 0) > 0 end, 10))
-      terminal.session:write("set _ANVIL_VISIBILITY=OUTPUT\r")
+      assert(terminal:on_text_input("set _ANVIL_VISIBILITY=OUTPUT\r"))
       for _, stage in ipairs {"minimized", "hidden"} do
         assert(wait_for(function() return load(root .. "/visibility-" .. stage .. "-go.lua") end, 10))
         if stage == "hidden" then system.set_window_visible(core.window, false) end

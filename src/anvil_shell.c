@@ -313,6 +313,8 @@ struct ShellWindow {
   HGDIOBJ ui_old_bitmap;
   void *ui_pixels;
   bool frame_busy;
+  bool frame_present_pending;
+  uint64_t frame_input_seq;
   SDL_TimerID retry_timer;
   int hovered_control, pressed_control;
   /* The colours of the drawn controls layer; a change repaints it. */
@@ -2648,9 +2650,10 @@ static void handle_frame(ShellWindow *window) {
             window->project_presentation.surface_w, window->project_presentation.surface_h);
     set_state(project, SHELL_READY);
   }
-  composite_and_present(window);
-  reveal_when_ready(window);
-  anvil_latency_probe_presented(frame.input_seq);
+  /* SDL drains callback events before it polls Windows input again. Presenting here can keep that drain
+   * busy for several refresh intervals while the Project and Sidebar publish more frames. */
+  window->frame_present_pending = true;
+  window->frame_input_seq = frame.input_seq;
   if (project->state == SHELL_READY && !project->close_requested_ns)
     anvil_latency_probe_start(window->window, finish_latency_probe);
 }
@@ -2685,8 +2688,9 @@ static void handle_sidebar_frame(ShellWindow *window) {
       window->sidebar_input_ns = 0;
     }
     if (window->shown)
-      composite_and_present(window);
-    reveal_when_ready(window);
+      window->frame_present_pending = true;
+    else
+      reveal_when_ready(window);
   }
 }
 
@@ -6925,6 +6929,15 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
       assigned |= item->window_id == window->id;
     if (assigned) continue;
     destroy_window(window);
+  }
+  /* Copy all queued surface updates before waiting for a refresh. Each Window gets one frame presentation
+   * per iteration, so SDL can return to Windows input instead of presenting each incoming frame notice. */
+  for (ShellWindow *window = shell.windows; window; window = window->next) {
+    if (!window->frame_present_pending) continue;
+    window->frame_present_pending = false;
+    composite_and_present(window);
+    reveal_when_ready(window);
+    anvil_latency_probe_presented(window->frame_input_seq);
   }
   anvil_timing_note("shell-step-end", 0, 0, 0);
   return shell.windows ? SDL_APP_CONTINUE : SDL_APP_SUCCESS;

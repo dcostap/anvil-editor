@@ -57,6 +57,10 @@ SDL drains callback events before it polls Windows input again.
 Inspect the interval from `shell-step-end` to the next `shell-step-begin`.
 Several presentations in that interval can delay the next input poll.
 
+Normal Project and Sidebar frame notices now copy surfaces without presenting them.
+The shell presents pending Windows after event dispatch, inside `shell-step`.
+Live resize and startup reveal retain their immediate presentation paths.
+
 ## Isolated input stress check
 
 Run this check on the private desktop, with Windows unlocked and the display on:
