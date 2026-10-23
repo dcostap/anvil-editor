@@ -496,6 +496,7 @@ if __name__ == "__main__":
             gate.msvcrt.locking(lock_stream.fileno(), gate.msvcrt.LK_NBLCK, 1)
         except OSError as exc:
             raise SystemExit("another render gate or scenario run is already running") from exc
+        gate.prune_runs(RESULTS_ROOT)
         raise SystemExit(main())
     finally:
         lock_stream.close()

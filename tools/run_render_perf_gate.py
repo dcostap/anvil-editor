@@ -15,6 +15,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import statistics
 import subprocess
@@ -45,6 +46,11 @@ EDITOR_BASELINE_ROOT = RESULTS_ROOT / "editor-baseline"
 DIFF_BASELINE_ROOT = RESULTS_ROOT / "diff-baseline"
 HIDDEN_LAUNCHER = ROOT / "tools" / "run_anvil_hidden_desktop.ps1"
 IMAGE_COMPARATOR = ROOT / "tools" / "compare_anvil_screenshot.ps1"
+# Each gate and scenario run writes a folder named for its start time. Old runs are deleted, but these stay: the
+# newest KEEP_RUNS runs, every run from the last KEEP_RUN_DAYS days, and each run that a saved baseline names.
+RUN_NAME = re.compile(r"(\d{8})[-_](\d{6})(?:_\d+)?$")
+KEEP_RUNS = 20
+KEEP_RUN_DAYS = 14
 MARKDOWN_LONG_LINK_PAYLOAD_REPETITIONS = 4950
 
 SCENARIOS: dict[str, dict[str, Any]] = {
@@ -622,6 +628,45 @@ def build_anvil() -> None:
     completed = run([str(meson), "compile", "-C", str(BUILD)], env=env, timeout=900)
     if completed.stdout.strip():
         print(completed.stdout.rstrip())
+
+
+def baseline_runs() -> set[Path]:
+    """Returns the run folders that saved baselines name. A baseline uses its run's executable as the reference."""
+    files = list((ROOT / "tools" / "baselines").glob("*.json"))
+    for child in RESULTS_ROOT.iterdir() if RESULTS_ROOT.is_dir() else ():
+        if child.is_dir() and not RUN_NAME.match(child.name):
+            files.extend(child.rglob("render_perf.json"))
+    runs = set()
+    for path in files:
+        try:
+            run_dir = json.loads(path.read_text(encoding="utf-8")).get("run_dir")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if run_dir:
+            runs.add(Path(run_dir).resolve())
+    return runs
+
+
+def prune_runs(results_root: Path) -> None:
+    """Deletes old run folders under results_root. Call it only while holding the gate lock."""
+    if not results_root.is_dir():
+        return
+    runs = []
+    for child in results_root.iterdir():
+        match = RUN_NAME.match(child.name)
+        if child.is_dir() and match:
+            started = time.mktime(time.strptime(match[1] + match[2], "%Y%m%d%H%M%S"))
+            runs.append((started, child))
+    runs.sort(reverse=True)
+    protected = baseline_runs()
+    cutoff = time.time() - KEEP_RUN_DAYS * 86400
+    removed = 0
+    for started, run in runs[KEEP_RUNS:]:
+        if started < cutoff and run.resolve() not in protected:
+            shutil.rmtree(run, ignore_errors=True)
+            removed += 1
+    if removed:
+        print(f"Removed {removed} runs older than {KEEP_RUN_DAYS} days from {results_root}", flush=True)
 
 
 def copy_app_tree(destination: Path) -> Path:
@@ -2501,6 +2546,7 @@ if __name__ == "__main__":
             msvcrt.locking(lock_stream.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError as exc:
             raise RuntimeError("another render performance gate is already running") from exc
+        prune_runs(RESULTS_ROOT)
         raise SystemExit(main())
     except Exception as exc:
         print(f"render performance gate failed: {exc}", file=sys.stderr)

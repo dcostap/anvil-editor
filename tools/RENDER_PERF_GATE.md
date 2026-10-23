@@ -540,6 +540,10 @@ Timestamped artifacts are written beneath:
 tools/perf-results/render-gate/<run_id>/
 ```
 
+Each gate or scenario run deletes old runs before it starts. It keeps the newest 20 runs and every run from the last
+14 days. It also keeps each run that a saved baseline names, because the baseline uses that run's executable.
+Folders without a timestamp name, such as baselines, stay. To keep a run longer, copy it to a named folder.
+
 Important files:
 
 - `report.md` — concise human-readable result

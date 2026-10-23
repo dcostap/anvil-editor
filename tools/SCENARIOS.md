@@ -16,6 +16,7 @@ python tools/run_scenarios.py --scenario filetree-scroll-folder --runs 1 --no-bu
 The exit code is 0 when every scenario is within budget, 1 when one is over
 budget, and 2 when a scenario could not run. Reports go to
 `tools/perf-results/scenarios/<run id>/report.md` and `report.json`.
+Each run deletes old runs first. It keeps the newest 20 and every run from the last 14 days.
 
 ## What a scenario is
 
