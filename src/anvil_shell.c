@@ -4187,6 +4187,15 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
   }
 }
 
+/* The hit test reports the Maximize button as non-client, so SDL reports a leave when the pointer moves onto it. */
+static bool pointer_on_maximize(ShellWindow *window) {
+  POINT point;
+  if (!GetCursorPos(&point) || WindowFromPoint(point) != window->hwnd) return false;
+  ScreenToClient(window->hwnd, &point);
+  RECT maximize = control_rect(window, 1);
+  return PtInRect(&maximize, point);
+}
+
 static void route_button(ShellWindow *window, SDL_Event *event) {
   ShellProject *project = window->selected;
   window->pointer_x = event->button.x;
@@ -4676,7 +4685,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     break;
   case SDL_EVENT_WINDOW_MOUSE_LEAVE:
     leave_sidebar(window);
-    window->hovered_control = -1;
+    window->hovered_control = pointer_on_maximize(window) ? 1 : -1;
     window->ui_hover_dirty = true;
     composite_and_present(window);
     if (!window->surface_buttons)
@@ -5024,6 +5033,11 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       RECT sidebar_button = sidebar_restart_rect(window);
       if (sidebar_restart_offered() && PtInRect(&sidebar_button, point))
         return HTCLIENT;
+      /* Windows 11 shows Snap Layouts over the button that the hit test reports as Maximize. Its presses still
+       * reach the shell's own button through WM_NCLBUTTONDOWN. */
+      RECT maximize = control_rect(window, 1);
+      if (result == HTCLIENT && PtInRect(&maximize, point))
+        return HTMAXBUTTON;
       return result;
     }
 
@@ -5092,12 +5106,24 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       push_window_event(window, SDL_EVENT_WINDOW_MOUSE_LEAVE, 0, 0);
       break;
 
-    case WM_NCLBUTTONDOWN: {
-      /* The Project never sees this press. Record the regions that the hit test used, so a click on a Title Bar
-       * control that does nothing can be traced. */
+    case WM_NCLBUTTONDOWN:
+    case WM_NCLBUTTONDBLCLK: {
       POINT pt = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ScreenToClient(hwnd, &pt);
-      if (project)
+      if (wparam == HTMAXBUTTON) {
+        /* Windows' own button tracking would draw its hidden caption button. The shell presses its button, and
+         * its capture brings the release as WM_LBUTTONUP. */
+        SDL_Event event = {0};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = (float)pt.x;
+        event.button.y = (float)pt.y;
+        route_button(window, &event);
+        return 0;
+      }
+      /* The Project never sees this press. Record the regions that the hit test used, so a click on a Title Bar
+       * control that does nothing can be traced. */
+      if (project && msg == WM_NCLBUTTONDOWN)
         SDL_Log("Shell non-client press: Window=%u hit=%d x=%ld y=%ld state=%d title=%d tabs=%d+%d "
                 "controls=%d+%d hit_config=%llu config=%llu",
                 window->id, (int)wparam, pt.x, pt.y, (int)project->state, project->hit.title_height,

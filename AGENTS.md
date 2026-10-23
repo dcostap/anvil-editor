@@ -259,6 +259,11 @@ Shutdown captures their paths before closing the hosted processes. Dormant Proje
 Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.
 Run `anvil:shell-state` and the `restore-loaded` shell launch probe after changes.
 
+The shell draws the Window controls with the Windows caption glyphs: Segoe Fluent Icons, or Segoe MDL2 Assets on Windows 10.
+Its hit test reports the Maximize button as `HTMAXBUTTON`, so Windows 11 shows Snap Layouts there.
+The shell handles that button's non-client press itself. Windows' own button tracking would draw its hidden button.
+Run the `maximize-button`, `theme-global` and `theme-empty` shell probes after changes to the Window controls.
+
 Shell process-exit monitoring must survive a Project pipe failure.
 Only runtime teardown cancels that wait. A requested Close completes when the Project exits, even without exit intent.
 Update retries resume unfinished Window Close requests without replacing the first saved Window layout.
