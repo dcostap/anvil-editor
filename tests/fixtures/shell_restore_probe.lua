@@ -282,7 +282,7 @@ if path:match("/driver$") then
     write_state({{100, 100, 800, 600, "Project"}, {160, 160, 800, 600, "Gone"}})
     local shell = launch()
     local a = wait(function() return ready("a", shell:pid())[1] end, 20, "restore did not load Project")
-    wait(function() return trace():find("Cannot restore this Window's Project", 1, true) end, 10,
+    wait(function() return trace():find("Shell Window status: id=%d+ Project folder not found") end, 10,
      "missing Project folder showed no notice")
     local found, count = windows(shell:pid())
     assert(count == 2, "missing Project folder removed its Window")

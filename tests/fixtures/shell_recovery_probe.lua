@@ -109,7 +109,7 @@ if path:match("/driver$") then
      wait(function() return trace():find("Shell Sidebar surface Ready: Window=2", 1, true) end, 15)
      local rect = ffi.new("RecoveryRect")
      assert(user32.GetClientRect(window, rect) ~= 0)
-     x, y = (layout.content_x + rect.right) / 2, (layout.title_h + rect.bottom) / 2 + 54 * scale
+     x, y = (layout.content_x + rect.right) / 2, (layout.title_h + rect.bottom) / 2
      marker = "Shell Open Project picker started: Window=2"
      target = point(x, y)
      assert(hit(layout.content_x + 60 * scale, layout.title_h / 2) == 2, "The empty Title Bar blocks dragging")

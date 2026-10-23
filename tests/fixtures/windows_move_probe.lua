@@ -129,8 +129,8 @@ if path:match("/driver$") then
      assert(user32.GetWindow(native,4) == aw,"native dialog lost its source parent")
     else wait(function() return trace():find("Shell close decision: waiting for user",1,true) end,8) end
     if action == "windows-move-target-close" then sidebar_move() else move(b.window_id,"reject") end
-    local message = blocked == "close" and "Cannot move Project during a pending Close choice." or
-      "Cannot move Project while a native file dialog is open."
+    local message = blocked == "close" and "Cannot move Project while it closes" or
+      "Cannot move Project while a dialog is open"
     wait(function() return trace():find("Shell Window status: id="..b.window_id.." "..message,1,true) end,5,
       "Move rejection did not show its status message")
     assert(row(model(),a.pid).window_id == a.window_id, "rejected Move changed assignment")

@@ -248,6 +248,7 @@ struct ShellWindow {
   AnvilShellWindowState close_entry;
   char notice[256];
   Uint64 notice_until;
+  RECT notice_rect; /* the notice toast, from the last UI draw */
   unsigned resolve_revision;
   uint64_t close_generation;
   ShellPresentation project_presentation, sidebar_presentation;
@@ -490,7 +491,7 @@ static void window_notice(ShellWindow *window, const char *text) {
 static bool overlay_covers_sidebar(ShellWindow *window) {
   return (window->overlay >> 24) && !(window->selected && window->selected->unresponsive);
 }
-static const char unresponsive_notice[] = "This Project is not responding. The Sidebar and other Projects still work.";
+static const char unresponsive_notice[] = "Project not responding";
 /* Stays until the Project answers or another Project is selected. */
 static void show_unresponsive_notice(ShellWindow *window) {
   window_notice(window, unresponsive_notice);
@@ -1935,29 +1936,52 @@ static void draw_native_button(ShellWindow *window, HDC dc, const AnvilSurfaceSh
   SetTextColor(dc, colors->text & 0xffffff);
 }
 
+/* A notice is a pill-shaped toast at the top of the Project area. update_ui rounds its corners. */
+static void draw_notice(ShellWindow *window, HDC dc, const AnvilSurfaceShellColors *colors) {
+  window->notice_rect = (RECT){0};
+  if (!window->notice[0]) return;
+  int pad = (int)(16 * window->scale), h = (int)(32 * window->scale), gap = (int)(10 * window->scale);
+  int area_w = window->buffer_w - window->sidebar_w;
+  RECT measure = {0};
+  DrawTextA(dc, window->notice, -1, &measure, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+  int w = SDL_min((int)measure.right + pad * 2, area_w - gap * 2);
+  if (w <= h) return;
+  int x = window->sidebar_w + (area_w - w) / 2, y = window->controls.bottom + gap;
+  RECT toast = window->notice_rect = (RECT){x, y, x + w, y + h};
+  ui_fill(dc, toast, colors->button & 0xffffff);
+  RECT label = {x + pad, y, x + w - pad, y + h};
+  DrawTextA(dc, window->notice, -1, &label, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+}
+
 static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellColors *colors) {
   ShellProject *project = window->selected;
   window->restart_button = (RECT){0};
   window->close_button = (RECT){0};
   window->open_button = (RECT){0};
   window->lifecycle_card = (RECT){0};
-  if (window->notice[0]) {
-    RECT notice = {window->sidebar_w, window->controls.bottom, window->buffer_w,
-                   window->controls.bottom + (LONG)(48 * window->scale)};
-    DrawTextA(dc, window->notice, -1, &notice, DT_CENTER | DT_TOP | DT_WORDBREAK);
-  }
+  draw_notice(window, dc, colors);
   bool empty = no_project_selected(window);
   if (!empty && project->state != SHELL_STARTING && project->state != SHELL_FAILED &&
       project->state != SHELL_DORMANT)
     return;
   RECT area = {window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h};
   if (!empty && project->state == SHELL_STARTING) {
-    DrawTextW(dc, L"Starting Project...", -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawTextW(dc, L"Starting Project\x2026", -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     return;
   }
   int pad = (int)(24 * window->scale), gap = (int)(12 * window->scale);
+  int mid = (area.left + area.right) / 2;
+  /* A Window without a Project shows only its one action. */
+  if (empty) {
+    int button_w = SDL_min((int)(184 * window->scale), area.right - area.left - gap * 2);
+    int button_h = (int)(36 * window->scale), button_y = (area.top + area.bottom - button_h) / 2;
+    window->open_button = window->lifecycle_card =
+        (RECT){mid - button_w / 2, button_y, mid + button_w / 2, button_y + button_h};
+    draw_native_button(window, dc, colors, window->open_button, 6, L"Open Project\x2026", true);
+    return;
+  }
   int w = SDL_min((int)(440 * window->scale), area.right - area.left - gap * 2);
-  int h = SDL_min((int)((empty ? 184 : 220) * window->scale), area.bottom - area.top - gap * 2);
+  int h = SDL_min((int)(168 * window->scale), area.bottom - area.top - gap * 2);
   int x = (area.left + area.right - w) / 2, y = (area.top + area.bottom - h) / 2;
   RECT card = window->lifecycle_card = (RECT){x, y, x + w, y + h};
   ui_box(dc, card, colors->background, ui_mix(colors->background, colors->text, 40), (int)(12 * window->scale));
@@ -1965,36 +1989,18 @@ static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellC
   HFONT title = ui_font(window, 20, FW_SEMIBOLD);
   HGDIOBJ old_font = SelectObject(dc, title);
   bool dormant = project->state == SHELL_DORMANT;
-  DrawTextW(dc, empty ? L"Open a Project" : dormant ? L"Project is Dormant" : L"Project failed", -1, &text,
+  DrawTextW(dc, dormant ? L"Project is Dormant" : L"Project failed", -1, &text,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
   SelectObject(dc, old_font);
   DeleteObject(title);
-  if (h >= (int)((empty ? 164 : 200) * window->scale)) {
+  if (h >= (int)(150 * window->scale)) {
     text.top += (LONG)(36 * window->scale);
     text.bottom = text.top + (LONG)(20 * window->scale);
     SetTextColor(dc, colors->inactive_text & 0xffffff);
-    if (!empty) {
-      ui_path(dc, project->project_path, text);
-      text.top += (LONG)(36 * window->scale);
-    }
-    text.bottom = text.top + (LONG)(36 * window->scale);
-    DrawTextW(dc, empty ? (window->sidebar_w > 0 && w >= (int)(360 * window->scale)
-                           ? L"Choose a folder to start working.\nOr select a recent Project in the Sidebar."
-                           : L"Choose a folder to start working.")
-                         : dormant ? L"Load to restore your Workspace."
-                         : w < (int)(360 * window->scale) ? L"Restart to continue, or unload."
-                         : L"Restart this Project to continue.\nOr unload it and select another Project.",
-              -1, &text, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+    ui_path(dc, project->project_path, text);
     SetTextColor(dc, colors->text & 0xffffff);
   }
   int button_y = card.bottom - pad - (int)(36 * window->scale);
-  int mid = (card.left + card.right) / 2;
-  if (empty) {
-    int button_w = SDL_min((int)(184 * window->scale), w - pad * 2);
-    window->open_button = (RECT){mid - button_w / 2, button_y, mid + button_w / 2, card.bottom - pad};
-    draw_native_button(window, dc, colors, window->open_button, 6, L"Open Project...", true);
-    return;
-  }
   window->restart_button = (RECT){card.left + pad, button_y, mid - gap / 2, card.bottom - pad};
   window->close_button = (RECT){mid + gap / 2, button_y, card.right - pad, card.bottom - pad};
   bool narrow = window->restart_button.right - window->restart_button.left < (int)(125 * window->scale);
@@ -2115,6 +2121,43 @@ static void tint_coverage(ShellWindow *window, RECT rect, uint32_t color) {
   }
 }
 
+/* How much of the pixel at (x, y) lies inside a rounded rect, from 0 to 1. */
+static float rounded_coverage(float x, float y, float left, float top, float right, float bottom, float radius) {
+  float cx = SDL_clamp(x, left + radius, right - radius), cy = SDL_clamp(y, top + radius, bottom - radius);
+  float d = SDL_sqrtf((x - cx) * (x - cx) + (y - cy) * (y - cy));
+  return SDL_clamp(radius - d + 0.5f, 0.0f, 1.0f);
+}
+
+static void round_notice(ShellWindow *window, const AnvilSurfaceShellColors *colors, bool opaque) {
+  RECT r = window->notice_rect;
+  float radius = (r.bottom - r.top) / 2.0f, border = SDL_max(1.0f, SDL_floorf(window->scale));
+  COLORREF edge = ui_mix(colors->button & 0xffffff, colors->text & 0xffffff, 40);
+  unsigned bg = window->background;
+  for (int y = SDL_max(0, (int)r.top); y < SDL_min((int)r.bottom, window->buffer_h); y++) {
+    uint8_t *row = (uint8_t *)window->ui_pixels + (size_t)y * window->ui_w * 4;
+    for (int x = SDL_max(0, (int)r.left); x < SDL_min((int)r.right, window->buffer_w); x++) {
+      uint8_t *pixel = row + x * 4;
+      float px = x + 0.5f, py = y + 0.5f;
+      float outer = rounded_coverage(px, py, r.left, r.top, r.right, r.bottom, radius);
+      float inner = rounded_coverage(px, py, r.left + border, r.top + border, r.right - border, r.bottom - border,
+                                     radius - border);
+      float ring = outer - inner;
+      float b = GetBValue(edge) * ring + pixel[0] * inner, g = GetGValue(edge) * ring + pixel[1] * inner,
+            red = GetRValue(edge) * ring + pixel[2] * inner, a = outer * 255.0f;
+      if (opaque) {
+        b += (bg >> 16 & 0xff) * (1.0f - outer);
+        g += (bg >> 8 & 0xff) * (1.0f - outer);
+        red += (bg & 0xff) * (1.0f - outer);
+        a = 255.0f;
+      }
+      pixel[0] = (uint8_t)(b + 0.5f);
+      pixel[1] = (uint8_t)(g + 0.5f);
+      pixel[2] = (uint8_t)(red + 0.5f);
+      pixel[3] = (uint8_t)(a + 0.5f);
+    }
+  }
+}
+
 static RECT control_rect(ShellWindow *window, int index) {
   int width = (window->controls.right - window->controls.left) / 3;
   return (RECT){window->controls.left + index * width, 0,
@@ -2193,7 +2236,7 @@ static void update_ui(ShellWindow *window) {
   RECT dirty[] = {{0, 0, window->sidebar_w, window->buffer_h}, window->controls, window->lifecycle_card, titlebar};
   bool full = window->ui_dirty;
   int dirty_count = (no_project_selected(window) || project->state == SHELL_FAILED || project->state == SHELL_DORMANT) ? 4 : 2;
-  /* The composite reads the full Project area only while no Project frame covers it, and the notice strip. */
+  /* The composite reads the full Project area only while no Project frame covers it, and the notice toast. */
   bool cover = project_area_covered(window);
   HRGN clip = CreateRectRgn(0, 0, 0, 0);
   if (!full) {
@@ -2252,6 +2295,7 @@ static void update_ui(ShellWindow *window) {
   draw_lifecycle(window, dc, &colors);
   draw_lifecycle_titlebar(window, dc, &colors);
   GdiFlush();
+  if (full && window->notice_rect.right > window->notice_rect.left) round_notice(window, &colors, cover);
   /* A state change can create the card for the first time. Upload its new bounds, not the old empty rect. */
   dirty[2] = window->lifecycle_card;
   /* Window controls use premultiplied coverage. Cards and the Sidebar recovery button are opaque copies. */
@@ -2267,9 +2311,7 @@ static void update_ui(ShellWindow *window) {
     uploads[upload_count++] = all;
   } else {
     for (int i = 0; i < dirty_count; i++) uploads[upload_count++] = dirty[i];
-    if (full)
-      uploads[upload_count++] = (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w,
-                                       SDL_min(window->buffer_h, window->controls.bottom + (LONG)(48 * window->scale))};
+    if (full) uploads[upload_count++] = window->notice_rect;
   }
   if (full && dirty_count < 4 && lifecycle_titlebar(window)) uploads[upload_count++] = titlebar;
   for (int i = 0; i < upload_count; i++) {
@@ -2572,9 +2614,7 @@ static void composite_and_present(ShellWindow *window) {
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h});
   else if (project->state == SHELL_FAILED)
     copy_ui(window, window->lifecycle_card);
-  if (window->notice[0])
-    copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w,
-                           SDL_min(window->buffer_h, window->controls.bottom + (LONG)(48 * window->scale))});
+  if (window->notice[0] && !project_area_covered(window)) blend_ui(window, window->notice_rect);
   if (window->capture) capture_backbuffer(window);
   anvil_latency_probe_stage("present-begin");
   anvil_timing_note("present-begin", window->id, 0, 0);
@@ -2881,7 +2921,7 @@ static void show_project_picker(ShellWindow *window) {
   if (window->closing || window->picker_pending) return;
   unsigned pending = 0;
   for (ShellPicker *item = shell.pickers; item; item = item->next) pending++;
-  if (pending >= 64) { window_notice(window, "Too many Project folder pickers are pending."); return; }
+  if (pending >= 64) { window_notice(window, "Too many folder pickers are open"); return; }
   ShellPicker *picker = calloc(1, sizeof(*picker));
   SDL_PropertiesID props = SDL_CreateProperties();
   if (!picker || !props ||
@@ -2889,7 +2929,7 @@ static void show_project_picker(ShellWindow *window) {
       !SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, "Open Project")) {
     free(picker);
     if (props) SDL_DestroyProperties(props);
-    window_notice(window, "Cannot open the Project folder picker.");
+    window_notice(window, "Cannot open the folder picker");
     return;
   }
   picker->window_id = window->id;
@@ -2915,15 +2955,15 @@ static void finish_project_picker(ShellPicker *picker) {
   if (!window || window->closing || picker->close_generation != window->close_generation) {
     SDL_Log("Shell discarded an Open Project picker result for removed or closing Window=%u", picker->window_id);
   } else if (!picker->result || !anvil_surface_dialog_result_valid(picker->result, picker->size)) {
-    window_notice(window, "Cannot read the Project folder picker result.");
+    window_notice(window, "Cannot read the chosen folder");
   } else {
     const AnvilSurfaceDialogResult *result = picker->result;
     if (result->status == ANVIL_SURFACE_DIALOG_ACCEPT) {
       const char *path = (const char *)(result + 1);
       /* Projects load beside each other; only the explicit command opens another Window. */
-      if (!select_project_path(window, path)) window_notice(window, "Cannot submit the Open Project request.");
+      if (!select_project_path(window, path)) window_notice(window, "Cannot open Project");
     } else if (result->status == ANVIL_SURFACE_DIALOG_ERROR)
-      window_notice(window, "The Project folder picker failed.");
+      window_notice(window, "The folder picker failed");
     else SDL_Log("Shell Open Project picker cancelled: Window=%u", window->id);
   }
   free_picker(picker);
@@ -2936,7 +2976,7 @@ static void check_picker_failures(void) {
     ShellWindow *window = window_for_id(picker->window_id);
     if (window) {
       window->picker_pending = false;
-      window_notice(window, "The Project folder picker result could not be delivered.");
+      window_notice(window, "Cannot open the chosen folder");
     }
     free_picker(picker);
   }
@@ -3123,9 +3163,7 @@ static void free_force_dialog(ForceCloseDialog *dialog) {
 static int SDLCALL force_close_dialog(void *userdata) {
   ForceCloseDialog *dialog = userdata;
   ShellProject *project = dialog->project;
-  const wchar_t *warning =
-      L"Force close can lose unsaved files and the latest Workspace changes. "
-      L"Terminal Sessions will keep running. Choose Wait to keep this Project running.";
+  const wchar_t *warning = L"Unsaved changes can be lost.";
   int answer = IDNO;
   HMODULE controls = LoadLibraryW(L"comctl32.dll");
   typedef HRESULT(WINAPI * TaskDialogFn)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
@@ -3137,7 +3175,7 @@ static int SDLCALL force_close_dialog(void *userdata) {
   config.hwndParent = dialog->parent;
   config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
   config.pszWindowTitle = L"Anvil - Project not responding";
-  config.pszMainInstruction = L"The Project has not completed Close.";
+  config.pszMainInstruction = L"Force close this Project?";
   config.pszContent = warning;
   config.pszMainIcon = TD_WARNING_ICON;
   config.cButtons = SDL_arraysize(buttons);
@@ -3145,9 +3183,7 @@ static int SDLCALL force_close_dialog(void *userdata) {
   config.nDefaultButton = IDNO;
   if (!task_dialog || FAILED(task_dialog(&config, &answer, NULL, NULL))) {
     answer = MessageBoxW(dialog->parent,
-                         L"The Project has not completed Close.\n\nForce close can lose unsaved "
-                         L"files and the latest Workspace changes. "
-                         L"Terminal Sessions will keep running.\n\nYes: Force close\nNo: Wait",
+                         L"Force close this Project?\n\nUnsaved changes can be lost.\n\nYes: Force close\nNo: Wait",
                          config.pszWindowTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
   }
   if (controls)
@@ -3408,7 +3444,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_NEW_WINDOW:
     if (*(const uint32_t *)payload == window->id && !window->closing)
-      if (!create_window(NULL)) window_notice(window, "Cannot create a Window.");
+      if (!create_window(NULL)) window_notice(window, "Cannot create a Window");
     break;
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
     if (*(const uint32_t *)payload == window->id && !window->closing)
@@ -4901,7 +4937,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       break;
     case WM_SYSCOMMAND:
       if ((wparam & 0xfff0) == SHELL_MENU_NEW_WINDOW) {
-        if (!window->closing && !create_window(NULL)) window_notice(window, "Cannot create a Window.");
+        if (!window->closing && !create_window(NULL)) window_notice(window, "Cannot create a Window");
         return 0;
       }
       if ((wparam & 0xfff0) == SHELL_MENU_OPEN_PROJECT) {
@@ -5545,7 +5581,7 @@ static void select_project(ShellProject *project, bool keep_sidebar_focus) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
   if (project->exit_announced) {
-    window_notice(window, "Project cleanup is still running. Try again when it finishes.");
+    window_notice(window, "Project is still closing");
     return;
   }
   if (!keep_sidebar_focus) focus_sidebar(window, false);
@@ -5613,23 +5649,23 @@ static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
   ShellWindow *source = project ? window_for_id(project->window_id) : NULL;
   ShellWindow *target = window_for_id(target_id);
   if (!source || !target || source->removing || target->removing) {
-    window_notice(requester, "Cannot move Project: Project or target Window is unavailable.");
+    window_notice(requester, "Cannot move Project");
     return;
   }
   if (requester->closing || source->closing || target->closing || project->close_requested_ns || project->close_waiting ||
       project->close_prompt || project->unloading || target->selected->close_requested_ns ||
       target->selected->close_waiting || target->selected->close_prompt) {
-    window_notice(requester, "Cannot move Project during a pending Close choice.");
+    window_notice(requester, "Cannot move Project while it closes");
     return;
   }
   if (project_has_dialog(project) || project_has_dialog(target->selected) ||
       source->picker_pending || target->picker_pending) {
-    window_notice(requester, "Cannot move Project while a native file dialog is open.");
+    window_notice(requester, "Cannot move Project while a dialog is open");
     return;
   }
   if (!project->connected || project->state != SHELL_READY || project->resolving ||
       (project->launch && !project->launch->taken)) {
-    window_notice(requester, "Cannot move Project until it is Ready.");
+    window_notice(requester, "Project is still starting");
     return;
   }
   if (source == target) return;
@@ -5698,7 +5734,7 @@ static bool unload_project_path(ShellWindow *window, const char *path) {
 static bool open_project_window(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path) return false;
   if (!queue_resolution(window, path, 0, NULL, false, false, true, NULL)) {
-    window_notice(window, "Cannot submit the Open Project request.");
+    window_notice(window, "Cannot open Project");
     return false;
   }
   clear_window_notice(window);
@@ -5895,10 +5931,10 @@ static void finish_resolutions(void) {
         SDL_Log("Shell restored Window has no Project: Window=%u path=%s", window->id, job->path);
         project->restore_waiting = false;
         retire_failed_placeholder(project);
-        window_notice(window, "Cannot restore this Window's Project. Its folder was not found.");
+        window_notice(window, "Project folder not found");
       } else if (job->initial)
         fail_connection(project, "Initial Project identity resolution failed");
-      else window_notice(window, "Cannot open Project. Check the directory path.");
+      else window_notice(window, "Project folder not found");
     } else {
       if (!job->initial) project = loaded_project(job->identity);
       if (job->unload) {
@@ -5927,7 +5963,7 @@ static void finish_resolutions(void) {
       if (project && !job->initial) {
         ShellWindow *owner = window_for_id(project->window_id);
         if (!owner || owner->closing) {
-          window_notice(window, "That Project's Window is closing. Wait for its Close decision.");
+          window_notice(window, "That Project's Window is closing");
           free_resolution(job);
           continue;
         }
@@ -5945,7 +5981,7 @@ static void finish_resolutions(void) {
         window = create_window(NULL);
         if (!window) {
           ShellWindow *requester = window_for_id(job->window_id);
-          if (requester) window_notice(requester, "Cannot create the Project's Window.");
+          if (requester) window_notice(requester, "Cannot create a Window");
           free_resolution(job);
           continue;
         }
@@ -5953,7 +5989,7 @@ static void finish_resolutions(void) {
       if (!project)
         project = new_project(window);
       if (!project)
-        window_notice(window, "Cannot load Project: runtime allocation failed.");
+        window_notice(window, "Cannot load Project: out of memory");
       else {
         if (created) assign_identity(project, job);
         /* The user may have selected another Project in a restored Window while this one resolved. */
@@ -6607,7 +6643,7 @@ static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y
   } else if (chosen == PROJECT_MENU_NEW_WINDOW) {
     ShellWindow *target = create_window(NULL);
     if (target) move_project(window, project_id, target->id);
-    else window_notice(window, "Cannot create a Window.");
+    else window_notice(window, "Cannot create a Window");
   } else if (chosen == PROJECT_MENU_UNLOAD) {
     unload_project_path(window, path);
   } else if (chosen == PROJECT_MENU_OPEN_WINDOW) {
@@ -6905,7 +6941,7 @@ static void advance_restore(void) {
 static ShellProject *restored_project(ShellWindow *window, const char *path, int rank) {
   ShellProject *project = new_project(window);
   if (!project) {
-    window_notice(window, "Cannot load Project: runtime allocation failed.");
+    window_notice(window, "Cannot load Project: out of memory");
     return NULL;
   }
   /* App State keeps the path while its identity resolves. */
