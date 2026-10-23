@@ -26,7 +26,7 @@ The Project currently presented in an Anvil Window.
 _Avoid_: Active Project, Current Project, hosted app
 
 **Project Sidebar**:
-The application sidebar listing recent Projects. A loaded Project shows its Tabs and the Terminal Sessions that no Pane shows. Dormant Projects are grouped by age below the loaded ones; each one shows how many of its Terminal Sessions run. Every Anvil Window shows the same list. Selecting a Project shown in another Anvil Window brings that window to the front.
+The application sidebar listing recent Projects. A loaded Project shows its Tabs and the Terminal Sessions that no Pane shows. A collapsed loaded Project still shows the Terminals with an Unread Result or an agent that waits for an answer. Dormant Projects are grouped by age below the loaded ones; each one shows how many of its Terminal Sessions run. Every Anvil Window shows the same list. Selecting a Project shown in another Anvil Window brings that window to the front.
 _Avoid_: Project panel, app switcher, side panel
 
 **Dormant Project**:
@@ -430,7 +430,7 @@ The Current View whose focus scope receives input, including input received by o
 _Avoid_: Focused active view, globally active view
 
 **Tab**:
-An item representing one Pane. It shows the Pane's number, its Current View's name, and the View Icon or Terminal status. The Project Sidebar shows Tabs under their Project. The Title Bar shows them only when the Project Sidebar is hidden or absent. Tab order gives each Pane its one-based number, including Panes shown in a Pane Group.
+An item representing one Pane. It shows the Pane's number, its Current View's name, and the View Icon or agent icon. The Project Sidebar shows Tabs under their Project. The Title Bar shows them only when the Project Sidebar is hidden or absent. Tab order gives each Pane its one-based number, including Panes shown in a Pane Group.
 _Avoid_: Pane Tab, file tab, buffer tab, View tab, Node tab
 
 **File Tree**:
@@ -568,6 +568,10 @@ _Avoid_: agent conversation, Pi session file
 **Agent Status**:
 What a coding agent in a Terminal Session reports about itself: working, waiting for an answer, done, failed, or idle. While it works, it also reports its current step, such as thinking or running a command. The Project Sidebar shows the Agent Status on a second line of the agent's Tab. The status ends when the agent ends.
 _Avoid_: agent state, program status, agent activity
+
+**Unread Result**:
+An agent's done or failed Agent Status, or a terminal bell, that came after the user last looked at its Terminal Session. The user looks at a Terminal Session when its Tab is the active Tab of a Selected Project.
+_Avoid_: notification, unseen result, badge
 
 **Terminal Text Capture**:
 A Text Capture containing stable text from a Terminal View while that terminal continues to run.

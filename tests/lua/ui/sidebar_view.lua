@@ -260,8 +260,8 @@ test.describe("Sidebar list actions", function()
   test.it("shows a Terminal Session that a Tab shows only as that Tab", function()
     local view = SidebarView(function() end)
     view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,activity=os.time(),terminals={
-      {id="shown",title="pwsh",cwd="C:/A",state="running",busy=0,bell=-1,activity=os.time()},
-      {id="detached",title="server",cwd="C:/A",state="running",busy=1,bell=-1,activity=os.time()}},
+      {id="shown",title="pwsh",cwd="C:/A",state="running",busy=0,activity=os.time()},
+      {id="detached",title="server",cwd="C:/A",state="running",busy=1,activity=os.time()}},
       panes={active=1,visible=1,{id="pane-1",number=1,group=1,name="pwsh",
         terminal={session="shown",state="running",busy=false,activity=os.time()}}}}}, 5)
     test.equal(count(view, "tab"), 1)
@@ -410,23 +410,24 @@ test.describe("Sidebar age groups", function()
   test.it("folds a Project's older Terminal Sessions into collapsed groups", function()
     local view = SidebarView(function() end)
     view:set_size(240, 800)
-    local function terminal(title, age, bell)
-      return {id=title,title=title,cwd="C:/P",state="running",busy=0,bell=bell and 1 or 0,activity=now - age}
+    local function terminal(title, age, asks)
+      return {id=title,title=title,cwd="C:/P",state="running",busy=0,activity=now - age,
+        agent_state=asks and "blocked" or nil,agent_since=asks and now - age or nil}
     end
     view:set_model({project(1, "C:/P", 60, "ready", {terminal("recent", 20 * 60), terminal("days", 3 * DAY),
-      terminal("week", 10 * DAY), terminal("month", 40 * DAY), terminal("bell", 40 * DAY, true)})})
-    -- A ringing Terminal Session stays visible however old it is.
-    test.same(titles(view), {"recent", "days", "bell"})
+      terminal("week", 10 * DAY), terminal("month", 40 * DAY), terminal("asks", 40 * DAY, true)})})
+    -- A Terminal Session that needs the user stays visible however old it is.
+    test.same(titles(view), {"recent", "days", "asks"})
     local index = row_index(view, function(row) return row.kind == "terminal_group" and row.bucket == "older" end)
     view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 240)
-    test.same(titles(view), {"recent", "days", "bell", "month"})
+    test.same(titles(view), {"recent", "days", "asks", "month"})
   end)
 
   test.it("shows an unloaded Project's running Terminal Sessions as a hint on its row", function()
     local view = SidebarView(function() end)
     view:set_size(400, 800)
     local function terminal(id, state, busy)
-      return {id=id,title=id,cwd="C:/P",state=state,busy=busy,bell=-1,activity=now}
+      return {id=id,title=id,cwd="C:/P",state=state,busy=busy,activity=now}
     end
     view:set_model({project(1, "C:/P", DAY, "dormant", {terminal("a", "running", 1), terminal("b", "running", 0),
       terminal("c", "exited", 0)})})
@@ -490,8 +491,8 @@ test.describe("Sidebar age groups", function()
     local view = SidebarView(function() end)
     view:set_size(240, 800)
     view:set_model({project(1, "C:/P", 60, "ready",
-      {{id="a",title="[40 s] \u{03C0} - GLP4",cwd="C:/P",state="running",busy=1,bell=0,activity=now},
-       {id="b",title="",cwd="C:/P",state="running",busy=0,bell=0,activity=now}})})
+      {{id="a",title="[40 s] \u{03C0} - GLP4",cwd="C:/P",state="running",busy=1,activity=now},
+       {id="b",title="",cwd="C:/P",state="running",busy=0,activity=now}})})
     local text = joined(drawn_texts(view, 240, 800))
     test.ok(text:find("[40 s] \u{03C0} - GLP4", 1, true), "The live title is missing")
     test.ok(text:find("Terminal", 1, true), "An untitled Terminal Session has no label")
@@ -514,7 +515,7 @@ test.describe("Sidebar Terminal spinners", function()
   local function view_with(title)
     local view = SidebarView(function() end)
     view:set_model({{row_id=1,id=1,path="C:/P",state="ready",exists=true,activity=now,terminals={
-      {id="t",title=title,cwd="C:/P",state="running",busy=1,bell=0,activity=now}}}})
+      {id="t",title=title,cwd="C:/P",state="running",busy=1,activity=now}}}})
     return view
   end
 
@@ -555,7 +556,7 @@ test.describe("Sidebar agent status", function()
 
   -- A loaded Project whose second Pane shows the Terminal Session "a". The first Pane is active.
   local function model(agent, active)
-    local session = {id="a",title="\u{03C0} - GLP4",cwd="C:/P",state="running",busy=1,bell=-1,activity=now}
+    local session = {id="a",title="\u{03C0} - GLP4",cwd="C:/P",state="running",busy=1,activity=now}
     for key, value in pairs(agent) do session[key] = value end
     return {{row_id=1,id=1,path="C:/P",state="ready",window_id=1,exists=true,activity=now,terminals={session},
       panes={active=active or 1,visible=1,
@@ -602,7 +603,7 @@ test.describe("Sidebar agent status", function()
   test.it("counts agents that need an answer in an unloaded Project's hint", function()
     local view = SidebarView(function() end)
     local function terminal(id, fields)
-      local item = {id=id,title=id,cwd="C:/P",state="running",busy=1,bell=-1,activity=now}
+      local item = {id=id,title=id,cwd="C:/P",state="running",busy=1,activity=now}
       for key, value in pairs(fields) do item[key] = value end
       return item
     end
@@ -612,6 +613,97 @@ test.describe("Sidebar agent status", function()
       terminal("c", {agent_state="idle",agent_since=now})}}})
     local texts = drawn(view)
     test.ok(find(texts, "3 terminals, 1 busy, 1 needs you"), "The hint is wrong: " .. joined(texts))
+  end)
+end)
+
+test.describe("Sidebar unread results", function()
+  local now = os.time()
+
+  local function session(id, fields)
+    local item = {id=id,title=id,cwd="C:/P",state="running",busy=1,activity=now}
+    for key, value in pairs(fields or {}) do item[key] = value end
+    return item
+  end
+
+  -- Project P shows a file and one Terminal Tab for each session that is not detached. Project Q is the Window's
+  -- Selected Project unless `opts.selected` is set. `opts.active` is P's active Pane.
+  local function model(sessions, opts)
+    opts = opts or {}
+    local panes = {active=opts.active or 1,visible=1,{id="file",number=1,group=1,name="init.lua"}}
+    local records = {}
+    for index, item in ipairs(sessions) do
+      local record = {}
+      for key, value in pairs(item) do record[key] = value end
+      record.detached, record.bell = nil, nil
+      records[#records + 1] = record
+      if not item.detached then
+        panes[#panes + 1] = {id=item.id,number=index + 1,group=index + 1,name=item.id,
+          terminal={session=item.id,state="running",busy=true,bell=item.bell}}
+      end
+    end
+    return {{row_id=1,id=1,path="C:/P",state="ready",window_id=1,terminals=records,panes=panes},
+      {row_id=2,id=2,path="C:/Q",state="ready",window_id=1,terminals={},panes={active=1,visible=1,
+        {id="q",number=1,group=1,name="q.lua"}}},
+      windows={{id=1,selected_project=opts.selected and 1 or 2}}}
+  end
+
+  local function shown(view)
+    local names = {}
+    for _, row in ipairs(view.rows) do
+      if (row.kind == "tab" or row.kind == "terminal") and row.project.path == "C:/P" then
+        names[#names + 1] = row.tab.name
+      end
+    end
+    return table.concat(names, ",")
+  end
+
+  -- The colours of the small round dots that a draw shows.
+  local function dots(view)
+    local colors = {}
+    with_renderer({draw_rounded_rect = function(_, _, w, h, _, color)
+      if w == h and w <= 10 * SCALE then colors[#colors + 1] = color end
+    end}, function() view:draw(400, 800) end)
+    return colors
+  end
+
+  test.it("keeps a collapsed Project's Terminals with unread results or questions visible", function()
+    local view = SidebarView(function() end, {["project:C:/P"]=true}, {})
+    view:set_model(model({
+      session("done", {agent_state="done",agent_since=now - 60}),
+      session("failed", {agent_state="error",agent_since=now - 60}),
+      session("asks", {agent_state="blocked",agent_since=now - 60}),
+      session("works", {agent_state="working",agent_since=now - 60}),
+      session("waits", {agent_state="idle",agent_since=now - 60}),
+      session("rang", {bell=now - 30}),
+      session("command", {command_started=now - 60,command_finished=now - 50,command_exit=0}),
+      session("detached", {detached=true,agent_state="done",agent_since=now - 60}),
+    }), 1)
+    test.equal(shown(view), "done,failed,asks,rang,detached")
+    test.equal(#dots(view), 5, "Each shown Terminal does not have one dot")
+  end)
+
+  test.it("draws no dot for a Terminal that does not need the user", function()
+    local view = SidebarView(function() end, {}, {})
+    view:set_model(model({session("works", {agent_state="working",agent_since=now - 60}),
+      session("idle", {busy=0}), session("waits", {agent_state="idle",agent_since=now - 60})}), 1)
+    test.equal(shown(view), "init.lua,works,idle,waits")
+    test.same(dots(view), {})
+  end)
+
+  test.it("marks a result read once its Tab was active, for every Window and the next Sidebar", function()
+    local actions, action = recorder()
+    local seen = {}
+    local done = session("done", {agent_state="done",agent_since=now - 60})
+    local view = SidebarView(action, {["project:C:/P"]=true}, seen)
+    view:set_model(model({done}, {selected=true, active=2}), 1)
+    test.same(actions, {{"seen", "done"}})
+    -- Another Window's Sidebar, or the next Sidebar process, starts from the same table.
+    local other = SidebarView(function() end, {["project:C:/P"]=true}, seen)
+    other:set_model(model({done}), 1)
+    test.equal(shown(other), "", "A read result stays under the collapsed Project")
+    -- A later result is unread again.
+    other:set_model(model({session("done", {agent_state="done",agent_since=now + 3600})}), 1)
+    test.equal(shown(other), "done")
   end)
 end)
 

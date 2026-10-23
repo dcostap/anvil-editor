@@ -291,7 +291,7 @@ static void terminal_records(AnvilSidebarScan *job, lua_State *L) {
       job->limited = true;
       continue;
     }
-    AnvilSidebarTerminal terminal = {.host_pid = (uint32_t)pid, .busy = -1, .bell = -1};
+    AnvilSidebarTerminal terminal = {.host_pid = (uint32_t)pid, .busy = -1};
     memcpy(terminal.id, id, sizeof(id));
     bool busy = true;
     if (boolean_field(L, "busy", &busy))

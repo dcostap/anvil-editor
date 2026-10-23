@@ -104,7 +104,9 @@ An Anvil that a Terminal Session started inherits the older preload, and the fir
 Run `ui/terminal_agent_status.lua` and `ui/terminal_agent_resume.lua` after changes.
 
 Terminal Tabs use the reported OSC 7501 `app` field to identify Pi.
-The Title Bar and Project Sidebar keep the status dot beside that icon.
+A Terminal without that icon shows the Terminal View's icon. Terminal Tabs have no status dot.
+The Project Sidebar shows a dot only for an Unread Result or an agent that waits for an answer.
+It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
 They do not infer the program from its title. Older running hosts need a new Terminal Session to report program identity.
 Run `ui/terminal_icons.lua` and `ui/terminal_agent_status.lua` after icon or identity changes.
 The Pi extension also reports the selected model's display name, or its ID when no name exists.

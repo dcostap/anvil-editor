@@ -1,4 +1,4 @@
--- One Tab's content: its Pane number, View Icon or Terminal status dot, name, and note. The Title Bar and the
+-- One Tab's content: its Pane number, View Icon or agent icon, name, and note. The Title Bar and the
 -- Project Sidebar draw Tabs with this module, so both show the same thing.
 -- A Tab item is plain data. The Project describes its Panes, and the Pane report sends the items to the Sidebar.
 local style = require "core.style"
@@ -52,7 +52,7 @@ function tab.describe(pane, number)
   if view.terminal_view then
     -- Each spinner frame would otherwise change the item. The Tab turns the spinner itself.
     if has_spinner(item.name) then item.name = SPINNER[1] .. item.name:sub(4) end
-    item.terminal = {session = view.session_id, state = view.state, busy = view.busy,
+    item.terminal = {session = view.session_id, state = view.state, busy = view.busy, bell = view.bell_at,
       activity = view.get_activity and view:get_activity() or nil,
       app = view.state == "running" and view.agent_app or nil, model = view.agent_model}
     return item
@@ -75,13 +75,9 @@ function tab.describe_session(terminal)
   local busy
   if terminal.busy == 1 then busy = true elseif terminal.busy == 0 then busy = false end
   return {name = name, terminal = {session = terminal.id, state = terminal.state, busy = busy,
-    bell = (terminal.bell or 0) > 0, activity = terminal.activity,
+    activity = terminal.activity,
     app = terminal.state == "running" and terminal.agent_app or nil, model = terminal.agent_model},
     agent = terminal.state == "running" and tab.agent(terminal) or nil}
-end
-
-local function tint(color, alpha)
-  return {color[1], color[2], color[3], alpha}
 end
 
 -- A short duration such as "8s", "3m 05s" or "1h 20m".
@@ -116,21 +112,25 @@ function tab.working(terminal, agent)
   return terminal.busy == true
 end
 
--- The Terminal status dot's colour: dim when it does not run, warn after a bell or while an agent needs an answer,
--- error after an agent failed, accent while a command or an agent works.
-function tab.status_color(item)
+-- What a running Terminal needs the user for: "blocked" while its agent waits for an answer, or an Unread Result:
+-- "done" or "error" when its agent finished, or "bell" when it rang, after `seen`, the time the user last looked
+-- at it. A shell command's result is not an Unread Result. Returns nil when it needs nothing.
+function tab.attention(item, seen)
   local terminal, agent = item.terminal, item.agent
-  if terminal.state ~= "running" and terminal.state ~= "reconnecting" then return tint(style.dim, 120) end
-  if terminal.bell then return style.warn end
-  if agent then
-    if agent.state == "blocked" then return style.warn end
-    if agent.state == "error" then return style.error end
-    if agent.state == "working" or agent.step then return style.accent end
-    return style.good
+  if not terminal or terminal.state ~= "running" then return nil end
+  seen = seen or 0
+  if agent and not agent.command then
+    if agent.state == "blocked" then return "blocked" end
+    if (agent.state == "done" or agent.state == "error") and (agent.since or 0) > seen then return agent.state end
   end
-  if terminal.busy == true then return style.accent end
-  if terminal.busy == false then return style.good end
-  return style.dim
+  if (terminal.bell or 0) > seen then return "bell" end
+end
+
+-- The colour of an attention state's dot.
+function tab.attention_color(attention)
+  if attention == "done" then return style.accent end
+  if attention == "error" then return style.error end
+  return style.warn
 end
 
 -- The right-aligned note: a Terminal's age since its last activity. An agent's own line shows its times instead.
@@ -138,13 +138,13 @@ function tab.note(item, now)
   return item.terminal and not item.agent and tab.age_text(item.terminal.activity, now) or nil
 end
 
--- The agent's line: its text, its time, and its tone: "warn", "error" or "result" for a result not seen yet.
+-- The agent's line: its text, its time, and its tone: "warn", "error" or "result" for an Unread Result.
 -- A time under an hour counts seconds, so `ticking` tells the caller to draw again each second.
-function tab.agent_line(agent, now, seen)
+function tab.agent_line(agent, now, unread)
   if agent.command then
     local elapsed = math.max(0, (agent.finished or now) - agent.since)
     local text = agent.finished and (agent.state == "error" and "Failed" or "Done") or "Running"
-    local tone = agent.state == "error" and "error" or (agent.finished and not seen and "result" or nil)
+    local tone = agent.state == "error" and "error" or nil
     return text, tab.duration_text(elapsed), tone, not agent.finished and elapsed < 60 * 60
   end
   local text, since, tone = nil, agent.since, nil
@@ -155,7 +155,7 @@ function tab.agent_line(agent, now, seen)
   elseif agent.state == "error" then
     text, tone = agent.message ~= "" and "Error: " .. agent.message or "Error", "error"
   elseif agent.state == "done" then
-    text, tone = "Done", not seen and "result" or nil
+    text, tone = "Done", unread and "result" or nil
   elseif agent.state == "idle" then
     text = "Idle"
   else
@@ -203,7 +203,8 @@ end
 
 local function gap() return math.max(4 * SCALE, style.padding.x / 2) end
 local function number_gap() return math.max(3 * SCALE, style.padding.x / 3) end
-local function dot_radius() return 3 * SCALE end
+-- A Terminal without an agent icon shows the Terminal View's icon.
+local TERMINAL_ICON = {kind = "ui", glyph = "t"}
 
 local function program_identity(item)
   if not item.terminal or item.terminal.state ~= "running" then return nil end
@@ -245,10 +246,8 @@ local function prefix_width(item, row_height, opts)
   local width = 0
   if item.number then width = (opts.number_font or style.font):get_width(tostring(item.number)) + number_gap() end
   if item.terminal then
-    width = width + dot_radius() * 2 + gap()
-    local app = program_identity(item)
-    local size = agent_icons.width(app, row_height)
-    if size > 0 then width = width + size + gap() end
+    local size = agent_icons.width(program_identity(item), row_height)
+    width = width + (size > 0 and size or view_icons.width(TERMINAL_ICON, row_height)) + gap()
   elseif item.icon then
     width = width + view_icons.width(item.icon, row_height) + gap()
   end
@@ -290,16 +289,15 @@ function tab.draw(item, x, y, w, h, opts)
   end
   local color = opts.name_color
   if item.terminal then
-    local radius = dot_radius()
-    renderer.draw_rounded_rect(x, y + h / 2 - radius, radius * 2, radius * 2, radius, tab.status_color(item))
-    x = x + radius * 2 + gap()
+    if item.terminal.state ~= "running" and item.terminal.state ~= "reconnecting" then color = style.dim end
     local app, model = program_identity(item)
     local size = agent_icons.width(app, h)
     if size > 0 then
       agent_icons.draw(app, x, y, h, model)
-      x = x + size + gap()
+    else
+      size = view_icons.draw(TERMINAL_ICON, x, y, h, color)
     end
-    if item.terminal.state ~= "running" and item.terminal.state ~= "reconnecting" then color = style.dim end
+    x = x + size + gap()
   elseif item.icon then
     view_icons.draw(item.icon, x, y, h, color)
     x = x + view_icons.width(item.icon, h) + gap()
@@ -326,9 +324,9 @@ end
 
 -- Draws the agent's line at the left edge of the Tab's name. Returns true when the time counts seconds.
 -- `shimmer` is the phase of a shimmer through the line's text, from 0 to 1.
----@param opts {now: number, seen: boolean?, shimmer: number?}
+---@param opts {now: number, unread: boolean?, shimmer: number?}
 function tab.draw_agent(agent, x, y, w, h, opts)
-  local text, time, tone, ticking = tab.agent_line(agent, opts.now, opts.seen)
+  local text, time, tone, ticking = tab.agent_line(agent, opts.now, opts.unread)
   local font, right = style.font, x + w
   local ty = y + math.floor((h - font:get_height()) / 2)
   local time_w = time and font:get_width(time) + gap() * 2 or 0

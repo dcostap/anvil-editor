@@ -10,7 +10,7 @@ local MINUTE, DAY = 60, 24 * 60 * 60
 local POWERSHELL = [[C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.6.0_x64__package\pwsh.exe]]
 
 local function terminal(id, title, age, fields)
-  local item = {id = id, title = title, cwd = "C:/Projects/anvil-editor", state = "running", busy = 0, bell = 0,
+  local item = {id = id, title = title, cwd = "C:/Projects/anvil-editor", state = "running", busy = 0,
     attached = true, activity = os.time() - age}
   for key, value in pairs(fields or {}) do item[key] = value end
   return item
@@ -33,10 +33,11 @@ local function terminal_tab(number, group, session, title, age, busy)
     terminal = {session = session, state = "running", busy = busy, activity = os.time() - age}}
 end
 
--- mode is nil, "search" or "drag".
+-- mode is nil, "search" or "drag". The second Project is collapsed, so it shows only its agent's question.
 function Scene:new(mode)
   Scene.super.new(self)
-  self.sidebar = SidebarView(function() end, {})
+  self.sidebar = SidebarView(function() end,
+    {["project:D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas"] = true}, {})
   self.sidebar:set_model({
     project(1, "C:/Projects/anvil-editor", "ready", MINUTE, 1, {
       terminal("a", "[40 s] \u{03C0} - GLP4", 30, {busy = 1, agent_app = "pi", agent_model = "GPT Test", agent_state = "working", agent_since = os.time() - 400,
@@ -49,7 +50,8 @@ function Scene:new(mode)
       terminal("c", "npm run dev", 3 * DAY),
       terminal("d", "", 2 * DAY, {state = "exited"}),
       terminal("e", "build log", 10 * DAY),
-      terminal("f", "ssh server", 40 * DAY, {bell = 1}),
+      terminal("f", "\u{03C0} - review", 40 * DAY, {agent_app = "pi", agent_model = "Claude Test", agent_state = "done",
+        agent_since = os.time() - 5 * MINUTE}),
       terminal("g", "old shell", 45 * DAY),
     }, {active = 2, visible = 1,
       editor(1, 1, "init.lua"),

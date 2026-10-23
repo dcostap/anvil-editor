@@ -217,7 +217,7 @@ static void agent_status(void) {
   CHECK(anvil_sidebar_merge_recents(&model, paths, 1), "Recent source failed");
   AnvilSidebarProject *b = anvil_sidebar_find(&model, "C:/B");
   AnvilSidebarTerminal session = {.id = "0123456789abcdef0123456789abcdef", .title = "pi", .cwd = "C:/B",
-                                  .busy = 1, .bell = -1};
+                                  .busy = 1};
   CHECK(anvil_sidebar_set_terminals(&model, b, &session, 1), "Terminal source failed");
   uint32_t revision = model.revision;
   snprintf(session.agent.state, sizeof(session.agent.state), "working");

@@ -669,7 +669,7 @@ test.describe("Terminal View", function()
     view:service_session(false)
     test.equal(session.snapshot_calls, 1)
     test.equal(session.snapshot_requests[1], false)
-    test.equal(view.bell_count, 2)
+    test.not_nil(require("core.tab").describe({current_view = view}, 1).terminal.bell, "The Tab does not report the bell")
     test.equal(view.cursor, normal_cursor)
 
     view:service_session(true)
@@ -1949,7 +1949,7 @@ test.describe("Terminal View", function()
     view:handle_events()
     core.active_view = previous_active_view
     system.flash_window = previous_flash_window
-    test.equal(view.bell_count, 1)
+    test.not_nil(require("core.tab").describe({current_view = view}, 1).terminal.bell, "The Tab does not report the bell")
     test.equal(flash_count, 0)
     test.equal(system.get_clipboard(), "terminal clipboard")
     test.ok(not prompted)

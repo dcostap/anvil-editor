@@ -1147,7 +1147,8 @@ end
 function TerminalView:handle_events()
   for _, event in ipairs((self.snapshot and self.snapshot.events) or {}) do
     if event.type == "bell" then
-      self.bell_count = (self.bell_count or 0) + (event.count or 1)
+      -- The Tab reports when it last rang. The Project Sidebar shows a bell after the user's last look as unread.
+      self.bell_at = os.time()
     elseif event.type == "clipboard" and event.text ~= nil then
       system.set_clipboard(event.text)
       core.log_quiet(

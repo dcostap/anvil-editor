@@ -195,7 +195,7 @@ bool anvil_sidebar_set_terminals(AnvilSidebarModel *model, AnvilSidebarProject *
   for (size_t i = 0; !changed && i < count; i++) {
     const AnvilSidebarTerminal *a = &project->terminals[i], *b = &terminals[i];
     changed = strcmp(a->id, b->id) || strcmp(a->title, b->title ? b->title : "") ||
-              strcmp(a->cwd, b->cwd ? b->cwd : "") || a->busy != b->busy || a->bell != b->bell ||
+              strcmp(a->cwd, b->cwd ? b->cwd : "") || a->busy != b->busy ||
               a->state != b->state || a->attached != b->attached || a->host_pid != b->host_pid ||
               a->activity != b->activity || !agent_equal(&a->agent, &b->agent) ||
               a->command_started != b->command_started || a->command_finished != b->command_finished ||
@@ -298,10 +298,10 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
       } else {
         const AnvilSidebarTerminal *terminal = &row->terminals[j - 1];
         append(&item,
-               "{kind=\"terminal\",row_id=%u,id=\"%s\",host_pid=%u,state=\"%s\",busy=%d,bell=%d,"
+               "{kind=\"terminal\",row_id=%u,id=\"%s\",host_pid=%u,state=\"%s\",busy=%d,"
                "attached=%s,activity=%lld,title=",
                row->row_id, terminal->id, terminal->host_pid, terminal_states[terminal->state],
-               terminal->busy, terminal->bell, terminal->attached ? "true" : "false",
+               terminal->busy, terminal->attached ? "true" : "false",
                (long long)terminal->activity);
         quoted(&item, terminal->title);
         append(&item, ",cwd=");

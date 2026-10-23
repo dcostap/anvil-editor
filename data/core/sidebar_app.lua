@@ -38,6 +38,33 @@ local function save_collapsed()
   if not ok then core.log_quiet("Sidebar collapse state not saved: %s", tostring(err)) end
 end
 
+-- When the user last looked at each Terminal Session, so an Unread Result stays unread in every Window and in
+-- the next Sidebar process.
+local seen = {}
+local function load_seen()
+  local ok, saved = pcall(storage.load, "sidebar", "seen")
+  if ok and type(saved) == "table" then
+    for session, time in pairs(saved) do
+      if type(session) == "string" and type(time) == "number" then seen[session] = time end
+    end
+  end
+  core.log_quiet("Sidebar seen times: %s", ok and saved and "loaded" or "none")
+end
+-- Saves the times of the Terminal Sessions that still exist.
+local function save_seen()
+  local live = {}
+  for _, project in ipairs(core.project_sidebar or {}) do
+    for _, terminal in ipairs(project.terminals or {}) do live[terminal.id] = true end
+  end
+  local pruned = 0
+  for session in pairs(seen) do
+    if not live[session] then seen[session], pruned = nil, pruned + 1 end
+  end
+  local ok, err = pcall(storage.save, "sidebar", "seen", seen)
+  if not ok then core.log_quiet("Sidebar seen times not saved: %s", tostring(err)) end
+  return pruned
+end
+
 -- The shell lists recent Projects from a source that a Project publishes. Windows can all be empty after a
 -- restart, so the Sidebar publishes the saved recent Projects itself. A later Project replaces them.
 local function publish_recents()
@@ -103,6 +130,15 @@ local function add_surface(id, window)
       end
       return
     end
+    if action == "seen" then
+      local pruned = save_seen()
+      core.log_quiet("Sidebar result read: Window=%d session=%s pruned=%d", id, row_id, pruned)
+      -- Other surfaces show the same result. It is read there too.
+      for _, other in pairs(surfaces) do
+        if other ~= surface then other.view:rebuild_rows(); other.redraw = true end
+      end
+      return
+    end
     if action == "request" then
       local route, path, request, x, y = row_id, target, ...
       -- Focusing a Pane gives the keyboard back to the Project. The shell gets both messages in this order.
@@ -147,7 +183,7 @@ local function add_surface(id, window)
     end
     core.log_quiet("Sidebar %s dropped: Window=%d row=%s is not in the model (%d rows)", action, id,
       tostring(row_id), #(core.project_sidebar or {}))
-  end, collapsed)
+  end, collapsed, seen)
   surfaces[id] = surface
   core.log_quiet("Sidebar surface created: Window=%d", id)
 end
@@ -216,6 +252,7 @@ function core.init()
   core.window, core.active_window = window, window
   SCALE = system.get_scale(window)
   load_collapsed()
+  load_seen()
   load_zoom()
   apply_color_theme()
   SidebarView = require "core.sidebar_view"

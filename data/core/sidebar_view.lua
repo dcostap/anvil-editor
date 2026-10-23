@@ -67,9 +67,11 @@ end
 
 ---@param action fun(name: string, ...)
 ---@param collapsed table<string, boolean>? Saved collapse state, shared by every Sidebar surface.
-function SidebarView:new(action, collapsed)
+function SidebarView:new(action, collapsed, seen)
   self.action, self.rows, self.scroll, self.bottom_scroll = action, {}, 0, 0
   self.collapsed = collapsed or {}
+  -- When the user last looked at each Terminal Session, by its ID. Every surface shares it.
+  self.seen = seen or {}
   -- The Selected Projects that show expanded over their saved state, and the Projects selected at the last layout.
   self.opened, self.was_selected = {}, {}
   self.width, self.view_h = 240, 600
@@ -263,15 +265,12 @@ function SidebarView:rebuild_rows()
   for _, window in ipairs(projects.windows or {}) do
     if window.id == window_id then selected = window.selected_project end
   end
-  -- An agent's result counts as seen once its Tab was the Window's active Tab.
-  self.seen = self.seen or {}
+  -- A collapsed Project shows only the Terminals that need the user.
+  local only_attention = false
   local function add_tab(row, agent)
     row.agent = agent
-    if agent and (agent.state == "done" or agent.state == "error") then
-      local session = row.tab.terminal.session
-      if row.selected then self.seen[session] = agent.since end
-      row.seen = self.seen[session] == agent.since
-    end
+    if row.tab.terminal then row.attention = tab.attention(row.tab, self.seen[row.tab.terminal.session]) end
+    if only_attention and not row.attention then return end
     add(row, agent and m.agent or m.terminal)
   end
   local function add_terminal(project, terminal, depth)
@@ -295,7 +294,7 @@ function SidebarView:rebuild_rows()
     add({kind = "project", project = project, key = key, collapsed = collapsed, tabs = #panes,
       id_key = "project:" .. project.path, current = is_selected,
       selected = is_selected and (not active or collapsed and not searching)}, m.project)
-    if collapsed and not searching then return end
+    only_attention = collapsed and not searching
     local shown, sizes, records = {}, {}, {}
     for _, item in ipairs(panes) do sizes[item.group or 0] = (sizes[item.group or 0] or 0) + 1 end
     for _, terminal in ipairs(project.terminals or {}) do records[terminal.id] = terminal end
@@ -308,22 +307,33 @@ function SidebarView:rebuild_rows()
         for field, value in pairs(item) do copy[field] = value end
         item = copy
       end
-      if item.terminal and item.terminal.session then shown[item.terminal.session] = true end
+      local session = item.terminal and item.terminal.session
+      if session then
+        shown[session] = true
+        -- The user looks at the Selected Project's active Tab, so its Unread Result becomes read.
+        local attention = index == active and tab.attention(item, self.seen[session])
+        if attention and attention ~= "blocked" then
+          self.seen[session] = now
+          self.action("seen", session)
+        end
+      end
       local group = item.group or 0
-      -- A Pane Group with several Panes shows as one container around its Tabs.
-      local bracket = sizes[group] > 1 and {first = (panes[index - 1] or {}).group ~= group,
+      -- A Pane Group with several Panes shows as one container around its Tabs. A collapsed Project shows single
+      -- Tabs, so it has no containers.
+      local bracket = sizes[group] > 1 and not only_attention and {first = (panes[index - 1] or {}).group ~= group,
         last = (panes[index + 1] or {}).group ~= group, visible = group == panes.visible} or nil
       add_tab({kind = "tab", project = project, tab = item, selected = index == active, bracket = bracket,
         id_key = "tab:" .. project.path .. ":" .. tostring(item.id)}, item.agent)
     end
-    -- Terminal Sessions that no Pane shows. Recent and ringing ones show directly, and so do those from hosts that
-    -- do not report activity. Older ones fold into groups.
+    -- Terminal Sessions that no Pane shows. Recent ones and those that need the user show directly, and so do
+    -- those from hosts that do not report activity. Older ones fold into groups.
     local older = {}
     for _, terminal in ipairs(project.terminals or {}) do
       local bucket = (terminal.activity or 0) > 0 and age_bucket(terminal.activity, now)
       if shown[terminal.id] then
         -- Its Tab shows it.
-      elseif bucket and bucket ~= "week" and not ((terminal.bell or 0) > 0) then
+      elseif bucket and bucket ~= "week"
+        and not tab.attention(tab.describe_session(terminal), self.seen[terminal.id]) then
         older[bucket] = older[bucket] or {}
         table.insert(older[bucket], terminal)
       else
@@ -332,7 +342,7 @@ function SidebarView:rebuild_rows()
     end
     for _, group in ipairs(GROUPS) do
       local terminals = older[group.bucket]
-      if terminals then
+      if terminals and not only_attention then
         local group_key = "terminals:" .. group.bucket .. ":" .. project.path
         local group_collapsed = self:is_collapsed(group_key, true)
         add({kind = "terminal_group", project = project, bucket = group.bucket, label = group.terminal_label,
@@ -1379,11 +1389,20 @@ function SidebarView:draw_tab(row, x, y, width, now)
   local m = self:metrics()
   -- A working Terminal shimmers its agent's line, or its name when it has no such line.
   local shimmer = tab.working(row.tab.terminal or {}, row.agent) and self:shimmer_phase() or nil
-  local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal,
-    {name_color = style.text, now = now, clock = self.clock, shimmer = not row.agent and shimmer or nil})
+  -- A Terminal that needs the user has a dot at the right edge of its name's line and a bold name.
+  local name_font, right = nil, x + width
+  if row.attention then
+    local radius = 3 * SCALE
+    dot(x + width - radius, y + m.terminal / 2, radius, tab.attention_color(row.attention))
+    width = width - radius * 2 - 6 * SCALE
+    name_font = font_variant("bold")
+  end
+  local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal, {name_color = style.text, now = now,
+    clock = self.clock, name_font = name_font, shimmer = not row.agent and shimmer or nil})
   if spinning then self.spinning = true end
-  if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, x + width - name_x,
-      m.terminal, {now = now, seen = row.seen, shimmer = shimmer}) then
+  local unread = row.attention == "done" or row.attention == "error"
+  if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - name_x,
+      m.terminal, {now = now, unread = unread, shimmer = shimmer}) then
     self.ticking = true
   end
 end

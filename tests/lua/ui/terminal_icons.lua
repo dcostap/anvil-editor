@@ -4,11 +4,10 @@ local style = require "core.style"
 
 -- Seam: Terminal Session Tab models and their renderer output.
 test.describe("Terminal program icons", function()
-  test.it("shows Pi's icon and keeps the status dot without guessing from the title", function()
-    local old_canvas, old_dot, old_text = renderer.draw_canvas, renderer.draw_rounded_rect, renderer.draw_text
-    local images, dots = {}, {}
+  test.it("shows Pi's icon without guessing from the title", function()
+    local old_canvas, old_text = renderer.draw_canvas, renderer.draw_text
+    local images = {}
     renderer.draw_canvas = function(image) images[#images + 1] = image end
-    renderer.draw_rounded_rect = function(_, _, _, _, _, color) dots[#dots + 1] = color end
     renderer.draw_text = function() end
     local ok, err = pcall(function()
       local session = {id="pi-session",title="My task",state="running",busy=1,
@@ -16,7 +15,6 @@ test.describe("Terminal program icons", function()
       local item = tab.describe_session(session)
       tab.draw(item, 0, 0, 400, 28 * SCALE, {name_color=style.text})
       test.equal(#images, 1, "Pi's icon is missing")
-      test.equal(dots[1], style.warn, "Pi's icon hid the waiting status")
       session.agent_app, session.title = "other", "pi"
       tab.draw(tab.describe_session(session), 0, 0, 400, 28 * SCALE, {name_color=style.text})
       test.equal(#images, 1, "A title selected Pi's icon for another program")
@@ -24,7 +22,7 @@ test.describe("Terminal program icons", function()
       tab.draw(tab.describe_session(session), 0, 0, 400, 28 * SCALE, {name_color=style.text})
       test.equal(#images, 1, "An ended program kept Pi's icon")
     end)
-    renderer.draw_canvas, renderer.draw_rounded_rect, renderer.draw_text = old_canvas, old_dot, old_text
+    renderer.draw_canvas, renderer.draw_text = old_canvas, old_text
     if not ok then error(err) end
   end)
 end)
@@ -42,10 +40,9 @@ test.describe("Pi model icons", function()
   end)
 
   test.it("replaces Pi's logo with the model provider and falls back for unknown models", function()
-    local old_canvas, old_dot, old_text = renderer.draw_canvas, renderer.draw_rounded_rect, renderer.draw_text
-    local images, dots = {}, {}
+    local old_canvas, old_text = renderer.draw_canvas, renderer.draw_text
+    local images = {}
     renderer.draw_canvas = function(image) images[#images + 1] = image end
-    renderer.draw_rounded_rect = function(_, _, _, _, _, color) dots[#dots + 1] = color end
     renderer.draw_text = function() end
     local ok, err = pcall(function()
       local session = {id="pi",title="Task",state="running",busy=1,agent_app="pi",agent_state="working"}
@@ -57,13 +54,12 @@ test.describe("Pi model icons", function()
       for _, model in ipairs {"GPT Test", "Claude Test", "Fable Test", "DeepSeek Test"} do
         session.agent_model = model
         local item = tab.describe_session(session)
-        images, dots = {}, {}
+        images = {}
         tab.draw(item, 0, 0, 400, 28 * SCALE, {name_color=style.text})
         test.equal(#images, 1, model .. " must show only the provider icon")
         test.ok(images[1] ~= pi, model .. " kept Pi's logo")
         if model == "Claude Test" then claude = images[1] end
         if model == "Fable Test" then test.equal(images[1], claude) end
-        test.equal(dots[1], style.accent)
         test.equal(tab.width(item, 28 * SCALE), plain, "The replaced icon changed the name's space")
       end
       for _, model in ipairs {"Other Model", ""} do
@@ -74,7 +70,7 @@ test.describe("Pi model icons", function()
         test.equal(images[1], pi, "An unknown model did not restore Pi's logo")
       end
     end)
-    renderer.draw_canvas, renderer.draw_rounded_rect, renderer.draw_text = old_canvas, old_dot, old_text
+    renderer.draw_canvas, renderer.draw_text = old_canvas, old_text
     if not ok then error(err) end
   end)
 end)

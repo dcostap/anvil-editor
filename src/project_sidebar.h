@@ -35,7 +35,6 @@ typedef struct {
   char *title, *cwd;
   uint32_t host_pid;
   int busy; /* -1 means unknown. */
-  int bell; /* -1 means unavailable. */
   bool attached;
   /* The last time the user typed into it, or a command started or ended, or its title changed. Unix seconds; 0 means
    * unknown. */
