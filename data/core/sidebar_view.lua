@@ -566,7 +566,7 @@ end
 -- The Project arrow has its own hit area, even when the Project is not selected.
 function SidebarView:project_arrow_at(row, x)
   return row and row.kind == "project" and row.key and self.query == ""
-    and x >= self.width - 32 * SCALE and x < self.width
+    and x >= self.width - 32 * SCALE and x < self.width - self:metrics().pad
 end
 
 function SidebarView:on_mouse_pressed(button, x, y)
@@ -1396,7 +1396,8 @@ function SidebarView:draw_project(row, y, width, now)
     local shows = row.collapsed or self.hover == row or self.focused and self:get_cursor() == row
     local hovered = self.arrow_hover == row
     if hovered then
-      renderer.draw_rounded_rect(width - 32 * SCALE, y, 32 * SCALE, row.h, 4 * SCALE, style.sidebar_hover)
+      renderer.draw_rounded_rect(width - 32 * SCALE, y + 1, 32 * SCALE - m.pad, row.h - 2,
+        m.radius, style.sidebar_hover)
     end
     if shows then chevron(right - 12 * SCALE, cy, self.chevrons[row.key], hovered and style.text or style.dim) end
     right = right - 20 * SCALE
