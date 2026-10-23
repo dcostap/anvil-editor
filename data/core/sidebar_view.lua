@@ -563,6 +563,12 @@ function SidebarView:search_offset(x)
   return self.input:offset_at(style.font, x - self:search_box() + self.search_scroll)
 end
 
+-- The Project arrow has its own hit area, even when the Project is not selected.
+function SidebarView:project_arrow_at(row, x)
+  return row and row.kind == "project" and row.key and self.query == ""
+    and x >= self.width - 32 * SCALE and x < self.width
+end
+
 function SidebarView:on_mouse_pressed(button, x, y)
   if button ~= "left" and button ~= "right" and button ~= "middle" then return end
   if self:in_search(x, y) then
@@ -603,7 +609,7 @@ function SidebarView:on_mouse_pressed(button, x, y)
     return
   end
   if row.kind ~= "project" then return end
-  if button == "left" and row.key and x >= self.width - 32 * SCALE and self.query == "" then
+  if button == "left" and row.key and self.query == "" and (row.current or self:project_arrow_at(row, x)) then
     self:toggle(row.key, row.collapsed)
     return
   end
@@ -647,8 +653,9 @@ function SidebarView:update_hover()
   local scrollbar = self.hover_x and self:scrollbar_at(self.hover_x, self.hover_y)
   if scrollbar then hover = nil end
   scrollbar = scrollbar and scrollbar.field
-  local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover
-  self.hover, self.scrollbar_hover = hover, scrollbar
+  local arrow = hover and self:project_arrow_at(hover, self.hover_x) and hover or nil
+  local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover or arrow ~= self.arrow_hover
+  self.hover, self.scrollbar_hover, self.arrow_hover = hover, scrollbar, arrow
   local tooltip = self:get_tooltip()
   if tooltip ~= self.tooltip_text then
     self.tooltip_text, self.tooltip_started = tooltip, system.get_time()
@@ -1387,7 +1394,11 @@ function SidebarView:draw_project(row, y, width, now)
   -- The chevron keeps its space, so the note does not move when it shows.
   if row.key and self.query == "" then
     local shows = row.collapsed or self.hover == row or self.focused and self:get_cursor() == row
-    if shows then chevron(right - 12 * SCALE, cy, self.chevrons[row.key], style.dim) end
+    local hovered = self.arrow_hover == row
+    if hovered then
+      renderer.draw_rounded_rect(width - 32 * SCALE, y, 32 * SCALE, row.h, 4 * SCALE, style.sidebar_hover)
+    end
+    if shows then chevron(right - 12 * SCALE, cy, self.chevrons[row.key], hovered and style.text or style.dim) end
     right = right - 20 * SCALE
   end
   if not note and project.window_id and project.window_id ~= 0 and self.window_id

@@ -83,6 +83,7 @@ function Scene:new(mode)
     self.sidebar:edit("select_to_previous_char")
   end
   self.drag = mode == "drag"
+  self.hover_arrow = mode == nil
 end
 
 local function tab_y(sidebar, id, part)
@@ -108,6 +109,11 @@ function Scene:draw()
   if self.drag then
     self.drag = false
     self:start_drag(width, height)
+  end
+  if self.hover_arrow then
+    self.hover_arrow = false
+    self.sidebar:set_size(width, height)
+    self.sidebar:on_mouse_moved(width - 20 * SCALE, self.sidebar:row_y(1) + self.sidebar.rows[1].h / 2)
   end
   self.sidebar:draw(width, height)
 end

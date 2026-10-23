@@ -198,6 +198,42 @@ test.describe("Sidebar list actions", function()
     test.same(actions, {{"select", 9}, {"select", 7}})
   end)
 
+  test.it("toggles the Selected Project's children when its row is clicked", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    local model = {{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={},
+      panes={active=1,{id="pane",name="A.lua"}}}, windows={{id=5,selected_project=31}}}
+    view:set_model(model, 5)
+    test.equal(count(view, "tab"), 1)
+    view:on_mouse_pressed("left", 60, row_y(view, "project"))
+    test.equal(count(view, "tab"), 0, "Clicking the Selected Project does not collapse its children")
+    view:set_model(model, 5)
+    test.equal(count(view, "tab"), 0, "A model refresh expands the collapsed Project")
+    view:on_mouse_pressed("left", 60, row_y(view, "project"))
+    test.equal(count(view, "tab"), 1, "Clicking the collapsed Project does not expand its children")
+    test.same(actions, {{"collapsed", "project:C:/A", true}, {"collapsed", "project:C:/A", false}})
+  end)
+
+  test.it("selects another Window's Selected Project without collapsing its children", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={},
+      panes={active=1,{id="pane",name="A.lua"}}},
+      windows={{id=5,selected_project=31},{id=8,selected_project=0}}}, 8)
+    view:on_mouse_pressed("left", 60, row_y(view, "project"))
+    test.equal(count(view, "tab"), 1)
+    test.same(actions, {{"select", 7}})
+  end)
+
+  test.it("requests a redraw when the pointer enters or leaves the Project arrow", function()
+    local view = SidebarView(function() end)
+    view:set_model({{row_id=7,path="C:/A",state="ready",terminals={},panes={{id="pane",name="A.lua"}}}})
+    local y = row_y(view, "project")
+    view:on_mouse_moved(60, y)
+    test.ok(view:on_mouse_moved(230, y), "Entering the arrow does not request hover feedback")
+    test.ok(view:on_mouse_moved(60, y), "Leaving the arrow does not clear hover feedback")
+  end)
+
   test.it("asks to focus a clicked Terminal Session without giving it Project actions", function()
     local actions, action = recorder()
     local view = SidebarView(action)
