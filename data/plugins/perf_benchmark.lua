@@ -827,6 +827,23 @@ local function setup_scenario()
     set_position(view, benchmark.start_line)
   end
   benchmark.view = view
+  if benchmark.scenario:find("^nag%-bar") then
+    local message = "\"perf_benchmark.lua\" has unsaved changes. Quit anyway?"
+    local options = {{text = "Yes", default_yes = true}, {text = "No", default_no = true}}
+    if benchmark.scenario == "nag-bar-list" then
+      message = {filetree_styled_nag_message = true, lines = {
+        {{text = "File Tree will perform these filesystem operations:"}}, {},
+        {{text = "MOVE", font = style.code_font, color = style.filetree_operation_move},
+          {text = " src/old_name.lua -> src/new_name.lua", font = style.code_font}},
+        {{text = "CREATE", font = style.code_font, color = style.filetree_operation_create},
+          {text = " docs/notes.md", font = style.code_font}},
+        {{text = "DELETE", font = style.code_font, color = style.filetree_operation_delete},
+          {text = " build/cache.bin", font = style.code_font}},
+      }}
+      options = {{text = "Apply", default_yes = true}, {text = "Cancel", default_no = true}}
+    end
+    core.nag_view:show("Render scene", message, options)
+  end
 
   if benchmark.scenario:find("wrapped%-document", 1, false) then
     view:set_wrapping_enabled(true)

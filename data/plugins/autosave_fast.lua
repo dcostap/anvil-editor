@@ -298,14 +298,8 @@ local function show_conflict_prompt(buffer)
         .. "\n\nAnvil cannot read the current file. Save a copy or cancel."
     end
     if core.nag_view.on_selected == on_select then
-      core.nag_view.title = missing and "File Missing on Disk" or "File Changed on Disk"
-      core.nag_view.options = buttons
+      core.nag_view:replace(missing and "File Missing on Disk" or "File Changed on Disk", message, buttons)
       core.nag_view:change_hovered(1)
-      core.nag_view.message = message .. "\n"
-      core.nag_view.target_height = math.max(
-        core.nag_view:get_message_height(), core.nag_view:get_buttons_height()
-      )
-      core.redraw = true
     end
     core.log_quiet("Disk changed again during conflict choice for %s", buffer.filename or name)
     return false

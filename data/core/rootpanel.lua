@@ -554,16 +554,16 @@ function RootPanel:update_layout()
   local status_h = core.status_bar and core.status_bar:get_height() or 0
 
   local title_h = title and title.size.y or 0
-  local nag_h = nag and (nag.show_height or nag.size.y) or 0
   local pane_prompt = prompt and prompt.pane_scope and panes().find(prompt.pane_scope)
   local prompt_h = prompt and prompt.size.y or 0
   local global_prompt_h = pane_prompt and 0 or prompt_h
   set_rect(title, x, y, w, title_h)
-  set_rect(nag, x, y + title_h, w, nag_h)
+  -- The nag bar's card floats over the Panes. Its View covers the area below the Title Bar while a dialog is open.
+  set_rect(nag, x, y + title_h, w, nag and nag.visible and math.max(0, h - title_h) or 0)
   if not pane_prompt then set_rect(prompt, x, y + h - prompt_h, w, prompt_h) end
 
-  local content_y = y + title_h + nag_h
-  local content_h = math.max(0, h - title_h - nag_h - global_prompt_h)
+  local content_y = y + title_h
+  local content_h = math.max(0, h - title_h - global_prompt_h)
   self.content_rect = { x = x, y = content_y, w = w, h = content_h }
   local group = panes().visible_group()
   if group then

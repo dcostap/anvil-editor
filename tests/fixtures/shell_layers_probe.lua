@@ -4,7 +4,7 @@
 -- modal overlay dim reaches the shell so it can cover the Sidebar too. A click on the covered Sidebar goes to the
 -- Project, whose modal UI decides what an outside click does. Sidebar hover appears without waiting for a later
 -- event. The fuzzy picker is centred on the whole Window, shows above the Sidebar, and takes clicks there. A
--- warning over the picker spans the Window too, and its dim covers the Sidebar and the picker above it.
+-- warning over the picker dims the whole Window, and its dim covers the Sidebar and the picker above it.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "layers" then return end
 local core, common = require "core", require "core.common"
@@ -154,15 +154,9 @@ if path:match("/driver$") then
    local state = wait(function() return load("picker-state") end, 10, "the Project did not report the picker")
    assert(state.open, "a click on the fuzzy picker over the Sidebar closed it")
    save("warning-go", {go=true})
-   local warning = wait(function() return load("warning") end, 10, "the Project did not show the warning")
+   wait(function() return load("warning") end, 10, "the Project did not show the warning")
    coroutine.yield(1)
    capture(window, 4)
-   -- The band's top padding is flat on both sides of the Sidebar edge.
-   local band_y = math.floor(warning.y + 2)
-   over, beside = capture_pixel(4, layout.content_x - 8, band_y), capture_pixel(4, layout.content_x + 8, band_y)
-   assert(over[1] == beside[1] and over[2] == beside[2] and over[3] == beside[3], string.format(
-    "the warning stops at the Sidebar: over=%d,%d,%d beside=%d,%d,%d",
-    over[1], over[2], over[3], beside[1], beside[2], beside[3]))
    -- The picker's empty lower part, under the warning's dim, on both sides of the Sidebar edge.
    y = math.floor(picker.y + picker.h * .9)
    over, beside = capture_pixel(4, layout.content_x - 8, y), capture_pixel(4, layout.content_x + 8, y)
@@ -222,8 +216,8 @@ elseif path == root .. "/Project" then
   wait(function() return load("warning-go") end, 30)
   local nag = core.nag_view
   nag:show("Probe", "A warning over the picker", {{text="OK", default_yes=true}}, function() end)
-  wait(function() return nag.show_height >= nag:get_target_height() and nag.dim_alpha >= 1 end, 10)
+  wait(function() return nag.progress >= 1 end, 10)
   coroutine.yield(.5)
-  save("warning", {y=nag.position.y, h=nag.show_height})
+  save("warning", {shown=true})
  end)
 end

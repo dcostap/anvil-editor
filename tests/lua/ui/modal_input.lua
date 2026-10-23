@@ -183,7 +183,6 @@ test.describe("Modal input routing", function()
       selected = option.text
     end)
     nag.size.x = 600
-    nag.show_height = nag:get_target_height()
 
     local button_x, button_y
     for index, _, x, y, width, height in nag:each_option() do

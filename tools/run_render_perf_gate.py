@@ -162,6 +162,17 @@ SCENARIOS["project-sidebar-dark"] = dict(SCENARIOS["project-sidebar"], theme="de
 SCENARIOS["project-sidebar-drag"] = dict(SCENARIOS["project-sidebar"])
 SCENARIOS["project-sidebar-drag-dark"] = dict(SCENARIOS["project-sidebar"], theme="default")
 SCENARIOS["focus-feedback"] = dict(SCENARIOS["project-sidebar"], window_height=500)
+# A confirmation in the nag bar over a document: one line, and a File Tree operation list.
+SCENARIOS["nag-bar"] = {
+    "start_line": 1700,
+    "window_width": 1100,
+    "window_height": 700,
+    "theme": "default",
+    "visual": True,
+    "paced": False,
+}
+SCENARIOS["nag-bar-light"] = dict(SCENARIOS["nag-bar"], theme="light")
+SCENARIOS["nag-bar-list"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,
     "tab_count": 8,
