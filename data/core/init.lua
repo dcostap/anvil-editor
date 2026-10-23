@@ -2584,6 +2584,8 @@ function core.on_event(type, ...)
     require("core.pane_requests").perform(text, x, y)
     -- A rejected request also releases the shell's wait for the next frame.
     system.complete_pane_request(request)
+    -- Publish the completed request even when it keeps the same Pane or fails.
+    if request > 0 then require("core.pane_report").publish(false, true) end
     core.redraw = true
   elseif type == "dialogfinished" then
     local id, status, result, filter = ...

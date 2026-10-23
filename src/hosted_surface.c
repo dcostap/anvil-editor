@@ -1039,7 +1039,12 @@ bool anvil_hosted_surface_set_panes(const char *panes) {
   free(hosted.panes);
   hosted.panes = copy;
   if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
-  send_message(ANVIL_SURFACE_MSG_PANES, panes, (uint32_t)size);
+  AnvilSurfacePaneReport *report = malloc(sizeof(*report) + size);
+  if (!report) return false;
+  report->request = view->pane_request;
+  memcpy(report + 1, panes, size);
+  send_message(ANVIL_SURFACE_MSG_PANES, report, (uint32_t)(sizeof(*report) + size));
+  free(report);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 

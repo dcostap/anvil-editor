@@ -133,6 +133,8 @@ if path:match("/driver$") then
     assert(not same(color, old), "Project selection showed the previously focused Pane before the requested Pane")
     return same(color, target)
    end, 15, "the requested Pane did not appear")
+   local sidebar = wait(function() return load("sidebar-selection") end, 15, "Sidebar selection check did not finish")
+   assert(sidebar.ok, sidebar.error)
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})
@@ -174,5 +176,20 @@ elseif path:match("/Replacement$") then
   local target = assert(load("a-ready")).pane
   assert(system.pane_request("select", root .. "/Project",
    common.serialize({action = "focus", pane = target}, {escape = true})))
+  local ok, err = pcall(function()
+   wait(function()
+    local previous = core.project_sidebar
+    if not core.request_project_sidebar() then return end
+    local model = wait(function() return core.project_sidebar ~= previous and core.project_sidebar end, 10)
+    for _, project in ipairs(model) do
+     if project.path:gsub("\\", "/") == root .. "/Project" and project.selected then
+      local active = project.panes[project.panes.active]
+      assert(active and active.id == target, "Sidebar selected the Project with its previously focused Pane")
+      return true
+     end
+    end
+   end, 15, "Sidebar did not select the requested Pane")
+  end)
+  save("sidebar-selection", {ok = ok, error = ok and nil or tostring(err)})
  end)
 end

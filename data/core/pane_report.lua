@@ -37,14 +37,14 @@ function pane_report.build()
 end
 
 -- Sends the report when it changed. `suspended` limits how often a Project that does not render builds it.
-function pane_report.publish(suspended)
+function pane_report.publish(suspended, force)
   recent_panes.observe(panes.active())
   if not system.is_hosted_surface() then return end
   local now = system.get_time()
   if suspended and built_at and now - built_at < SUSPENDED_INTERVAL then return end
   built_at = now
   local text = common.serialize(pane_report.build(), {sort = true})
-  if text == sent then return end
+  if text == sent and not force then return end
   if #text > TEXT_LIMIT then
     core.log_quiet("Pane report not sent: %d bytes exceed the limit", #text)
     return

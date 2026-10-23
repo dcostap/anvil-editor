@@ -277,6 +277,8 @@ The `restore-loaded` probe checks readiness without selecting the restored backg
 A Sidebar Pane selection keeps the previous Project's frame until the requested Pane has rendered.
 Pane deliveries carry request IDs. Lua completes each request, including a rejected request, before the next redraw.
 Both renderers report the completed ID. The shell rejects frames that precede the requested ID.
+Pane reports also carry the completed ID. The Sidebar keeps its previous selection until that report arrives.
+The shell then publishes the destination Project and its requested Pane together, without highlighting its previous Pane.
 Runtime readiness permits delivery before the first frame, so selection cannot block a new Project's startup.
 Run `anvil:hosted-routing`, `ui/pane_requests.lua`, and the `select-hold` shell probe after changes.
 

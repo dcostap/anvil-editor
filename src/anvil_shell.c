@@ -205,6 +205,7 @@ typedef struct ShellProject {
   char pending_terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
   PendingPane *pending_panes;
   uint64_t pane_request;
+  uint64_t sidebar_pane_request;
 } ShellProject;
 
 typedef struct {
@@ -603,6 +604,7 @@ static ShellProject *retain_project(ShellProject *project) {
 }
 
 static void clear_pending_panes(ShellProject *project) {
+  project->sidebar_pane_request = 0;
   project->pane_request = project->last_config.pane_request = 0;
   while (project->pending_panes) {
     PendingPane *pending = project->pending_panes;
@@ -1130,8 +1132,9 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_DIALOG:
     return size >= sizeof(AnvilSurfaceDialog);
   case ANVIL_SURFACE_MSG_PANES:
-    return size >= 1 && size <= ANVIL_SURFACE_PANES_MAX && !((const char *)payload)[size - 1] &&
-           !memchr(payload, 0, size - 1);
+    return size > sizeof(AnvilSurfacePaneReport) && size <= sizeof(AnvilSurfacePaneReport) + ANVIL_SURFACE_PANES_MAX &&
+           !((const char *)payload)[size - 1] &&
+           !memchr((const char *)payload + sizeof(AnvilSurfacePaneReport), 0, size - sizeof(AnvilSurfacePaneReport) - 1);
   case ANVIL_SURFACE_MSG_PANE_REQUEST:
     return anvil_surface_pane_request_valid(payload, size);
   case ANVIL_SURFACE_MSG_SELECT_TERMINAL: {
@@ -3563,14 +3566,23 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     if (!window->closing) set_sidebar_hidden(!shell.sidebar_hidden);
     break;
   case ANVIL_SURFACE_MSG_PANES: {
-    if (project->sidebar || (project->panes && !strcmp(project->panes, payload))) break;
-    char *panes = _strdup(payload);
+    const AnvilSurfacePaneReport *report = payload;
+    const char *text = (const char *)(report + 1);
+    if (project->sidebar) break;
+    bool completed = project->sidebar_pane_request && report->request >= project->sidebar_pane_request;
+    if (!completed && project->panes && !strcmp(project->panes, text)) break;
+    char *panes = _strdup(text);
     if (!panes) {
       SDL_Log("Shell dropped a Pane report: Project=%u allocation failed", project->id);
       break;
     }
     free(project->panes);
     project->panes = panes;
+    if (completed) {
+      SDL_Log("Shell Sidebar Pane selection completed: Project=%u request=%llu", project->id,
+              (unsigned long long)project->sidebar_pane_request);
+      project->sidebar_pane_request = 0;
+    }
     notify_sidebar_changes();
     break;
   }
@@ -6048,6 +6060,7 @@ static void finish_resolutions(void) {
           pending->request = ++shell.next_pane_request;
           /* Selection can compose immediately. Reject old Pane frames before changing the Project. */
           project->pane_request = project->last_config.pane_request = pending->request;
+          project->sidebar_pane_request = pending->request;
         } else if (job->pane) SDL_Log("Shell dropped a Pane request: allocation failed");
         /* The user may have selected another Project in a restored Window while this one resolved. */
         if (!job->restored || window->selected == project) select_project(project, pending != NULL);
@@ -6070,6 +6083,7 @@ static void finish_resolutions(void) {
         } else if (pending) {
           SDL_Log("Shell dropped a Pane request: Project=%u is unavailable", project->id);
           project->pane_request = project->last_config.pane_request = 0;
+          project->sidebar_pane_request = 0;
           free(pending->text);
           free(pending);
         }
@@ -6198,12 +6212,23 @@ static AnvilSidebarProject *sidebar_project(const char *path) {
   }
   return row;
 }
+/* Keep the last Sidebar selection until the destination reports the requested Pane. */
+static uint32_t sidebar_selected_project(ShellWindow *window) {
+  if (!window || !window->selected) return 0;
+  if (window->selected->sidebar_pane_request) {
+    for (size_t i = 0; i < shell.sidebar.window_count; i++)
+      if (shell.sidebar.windows[i].id == window->id) return shell.sidebar.windows[i].selected_project;
+    return 0;
+  }
+  return window->selected->id;
+}
+
 static void sync_sidebar_model(void) {
   AnvilSidebarWindow windows[ANVIL_SIDEBAR_WINDOW_LIMIT];
   size_t count = 0;
   for (ShellWindow *window = shell.windows; window; window = window->next) {
     if (window->removing) continue;
-    windows[count++] = (AnvilSidebarWindow){window->id, window->selected ? window->selected->id : 0};
+    windows[count++] = (AnvilSidebarWindow){window->id, sidebar_selected_project(window)};
   }
   anvil_sidebar_set_windows(&shell.sidebar, windows, count);
   for (ShellProject *project = shell.projects; project; project = project->next) {
@@ -6227,10 +6252,10 @@ static void sync_sidebar_model(void) {
     anvil_sidebar_set_runtime(&shell.sidebar, row, project->id,
                               live ? project->process.dwProcessId : 0,
                               state == ANVIL_SIDEBAR_DORMANT ? 0 : project->window_id, state,
-                              window_for_id(project->window_id) && project == window_for_id(project->window_id)->selected &&
+                              sidebar_selected_project(window_for_id(project->window_id)) == project->id &&
                               state != ANVIL_SIDEBAR_DORMANT, deferred,
                               live && (project->close_waiting || project->close_prompt));
-    if (!anvil_sidebar_set_panes(&shell.sidebar, row,
+    if (!project->sidebar_pane_request && !anvil_sidebar_set_panes(&shell.sidebar, row,
                                  state == ANVIL_SIDEBAR_DORMANT || !project->panes ? "" : project->panes))
       SDL_Log("Shell kept the last Pane report: Project=%u report does not fit the Sidebar", project->id);
   }

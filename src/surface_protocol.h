@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 35u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 36u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -85,7 +85,7 @@ typedef enum {
   ANVIL_SURFACE_MSG_COLOR_THEME_SAVED = 93,
   ANVIL_SURFACE_MSG_SHELL_COLORS = 94,
   /* This Project's Panes for the Project Sidebar, as Lua table text. The shell forwards it unread.
-   * Payload: the text + NUL, at most ANVIL_SURFACE_PANES_MAX bytes. */
+   * Payload: AnvilSurfacePaneReport, then text + NUL, at most ANVIL_SURFACE_PANES_MAX text bytes. */
   ANVIL_SURFACE_MSG_PANES = 95,
   /* Select a Project and focus one of its Terminal Sessions. Payload: id + NUL + Project path + NUL. */
   ANVIL_SURFACE_MSG_SELECT_TERMINAL = 96,
@@ -146,6 +146,7 @@ typedef struct {
   uint32_t path_size;
 } AnvilSurfacePaneRequest;
 typedef struct { int32_t x, y; uint64_t request; } AnvilSurfacePaneDelivery;
+typedef struct { uint64_t request; } AnvilSurfacePaneReport;
 bool anvil_surface_pane_request_valid(const void *packet, uint32_t size);
 bool anvil_surface_pane_delivery_valid(const void *packet, uint32_t size);
 
