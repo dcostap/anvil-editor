@@ -1887,6 +1887,31 @@ test.describe("Terminal View", function()
     test.equal(popup_text(), "", "the popup remained after the pointer left")
   end)
 
+  test.it("shows no hover popup over an image", function(context)
+    local view = terminal.open()
+    view:update()
+    context.previous_time = system.get_time
+    context.previous_defer_draw = core.root_panel.defer_draw
+    local now = system.get_time()
+    system.get_time = function() return now end
+    core.root_panel.defer_draw = function(_, fn, ...) fn(...) end
+    local scale = view.cell_width / view.native_cell_width
+    view.snapshot.images = {
+      { canvas = canvas.new(20, 20, { 255, 0, 0, 255 }, true), x = 10, y = 10, width = 20, height = 20,
+        z = 1, id = 1, placement_id = 1 },
+    }
+    keymap.modkeys.ctrl = false
+    local x, y = view.position.x + 7 + 15 * scale, view.position.y + 22
+    view:on_mouse_moved(x, y, 0, 0)
+    test.equal(view.cursor, "hand")
+    now = now + 1
+    view:update()
+    -- The test window cannot draw image canvases. The popup keeps its state from the hover.
+    view.snapshot.images = {}
+    local calls = draw_calls(function() view:draw() end)
+    for _, call in ipairs(calls.text) do test.equal(call[2], nil, "a popup showed over the image") end
+  end)
+
   test.it("keeps the link hover while terminal output changes", function(context)
     local view = terminal.open()
     local session = context.sessions[1]

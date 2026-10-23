@@ -2018,14 +2018,14 @@ function TerminalView:mouse_point_at(x, y)
   end
 end
 
--- Explicit links show their targets on hover. Ctrl also enables plain-text detection.
+-- Explicit links show their targets on hover. Ctrl also enables plain-text detection. Images show only the hand cursor.
 function TerminalView:hover_point_at(col, row)
   self.hover_cell = { col = col, row = row, ctrl = keymap.modkeys.ctrl == true }
   self.hover_point = self.hover_x and self:mouse_point_at(self.hover_x, self.hover_y)
     or self:point_of_interest_at(col, row, not keymap.modkeys.ctrl)
   self.cursor = self.hover_point and "hand" or "arrow"
   local point = self.hover_point
-  local target = point and (point.image and "Click to preview image" or point.uri or (point.target_line
+  local target = point and not point.image and (point.uri or (point.target_line
     and string.format("%s:%d", point.path, point.target_line) or point.path))
   if not target then
     self.link_tooltip = nil
