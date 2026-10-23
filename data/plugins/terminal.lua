@@ -185,6 +185,10 @@ local function terminal_pwd(snapshot)
   local pwd = snapshot and snapshot.pwd
   if type(pwd) ~= "string" or pwd == "" then return nil end
   if pwd:find("[%z%c]") then return nil end
+  -- ConEmu OSC 9;9 can wrap its filesystem path in double quotes.
+  if pwd:sub(1, 1) == '"' and pwd:sub(-1) == '"' then
+    pwd = pwd:sub(2, -2)
+  end
   if pwd:match("^file://") then
     local authority, path = pwd:match("^file://([^/]*)(/.*)$")
     if not path then return nil end

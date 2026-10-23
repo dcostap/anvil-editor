@@ -797,13 +797,19 @@ static void capture_cwd(TerminalHost *host, GhosttyTerminal snapshot) {
       !pwd.ptr || !pwd.len || pwd.len >= sizeof(host->last_cwd)) return;
   char text[32768]; memcpy(text, pwd.ptr, pwd.len); text[pwd.len] = 0;
   char *path = text;
+  /* ConEmu OSC 9;9 can quote a filesystem path. It is not a URI. */
+  if (pwd.len >= 2 && path[0] == '"' && path[pwd.len - 1] == '"') {
+    path[pwd.len - 1] = 0;
+    path++;
+  }
+  bool uri = !strncmp(path, "file://", 7);
   if (!strncmp(path, "file://localhost/", 17)) path += 16;
   else if (!strncmp(path, "file:///", 8)) path += 7;
   if (path[0] == '/' && path[1] && path[2] == ':') path++;
   char decoded[32768]; size_t count = 0;
   for (; *path; path++) {
     unsigned ch = (unsigned char)*path;
-    if (ch == '%' && path[1] && path[2]) {
+    if (uri && ch == '%' && path[1] && path[2]) {
       unsigned hex = 0;
       if (sscanf(path + 1, "%2x", &hex) != 1) return;
       ch = hex; path += 2;
