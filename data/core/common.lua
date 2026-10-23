@@ -915,6 +915,13 @@ function common.normalize_volume(filename)
 end
 
 
+local function is_plain_drive_path(filename)
+  return filename:find('^%a:\\') and not filename:find('/', 1, true)
+    and not filename:find('\\\\', 1, true) and filename:sub(-1) ~= '\\'
+    and not filename:find('\\%.%.?\\') and not filename:find('\\%.%.?$')
+end
+
+
 ---Normalizes a path into the same format across platforms.
 ---
 ---On Windows, all drive letters are converted to uppercase.
@@ -927,6 +934,13 @@ function common.normalize_path(filename)
   local volume
   local volume_type
   if PATHSEP == '\\' then
+    -- Most indexed paths already have canonical components. Avoid splitting
+    -- and rebuilding those paths for every file and every consumer.
+    if is_plain_drive_path(filename) then
+      local drive = filename:sub(1, 1)
+      local upper = drive:upper()
+      return drive == upper and filename or (upper .. filename:sub(2))
+    end
     filename = filename:gsub('[/\\]', '\\')
     local drive, rem = filename:match('^([a-zA-Z]:\\)(.*)')
     if drive then
@@ -976,9 +990,7 @@ end
 local function compute_path_compare_key(filename)
   -- Scans and joins produce plain drive paths. Normalizing one changes
   -- nothing that lowercasing does not already fold.
-  if PATHSEP == '\\' and filename:find('^%a:\\') and not filename:find('/', 1, true)
-      and not filename:find('\\\\', 1, true) and filename:sub(-1) ~= '\\'
-      and not filename:find('\\%.%.?\\') and not filename:find('\\%.%.?$') then
+  if PATHSEP == '\\' and is_plain_drive_path(filename) then
     return filename:lower()
   end
   local raw =filename:gsub('[/\\]', '\\')
