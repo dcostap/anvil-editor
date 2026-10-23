@@ -435,7 +435,7 @@ test.describe("Sidebar age groups", function()
     test.ok(text:find("2 terminals, 1 busy", 1, true), "The hint is missing: " .. text)
   end)
 
-  test.it("keeps the Selected Project expanded while its saved state is collapsed", function()
+  test.it("expands a Project each time it becomes selected and saves a collapse made there", function()
     local function model(selected)
       local function project(id, name)
         return {row_id=id,id=id,path="C:/" .. name,state="ready",window_id=1,terminals={},
@@ -452,13 +452,25 @@ test.describe("Sidebar age groups", function()
       end
       return table.concat(names, ",")
     end
+    local function toggle_first()
+      view:on_mouse_pressed("left", 235, row_y(view, "project", 1))
+    end
     view:set_model(model(1), 1)
+    test.equal(shown_tabs(), "A.lua", "The Selected Project does not expand")
+    test.same(view.collapsed, {["project:C:/A"]=true, ["project:C:/B"]=true})
+    -- A collapse while the Project is selected acts and is saved.
+    toggle_first()
+    test.equal(shown_tabs(), "", "The Selected Project does not collapse")
+    toggle_first()
     test.equal(shown_tabs(), "A.lua")
-    -- A click on the Selected Project's row edge does not collapse it.
-    view:on_mouse_pressed("left", 235, row_y(view, "project", 1))
-    test.equal(shown_tabs(), "A.lua")
+    test.same(actions, {{"collapsed", "project:C:/A", true}, {"collapsed", "project:C:/A", false}})
+    toggle_first()
+    test.equal(shown_tabs(), "")
+    -- Another Project's selection expands it and leaves A collapsed. Selecting A again expands it again.
     view:set_model(model(2), 1)
     test.equal(shown_tabs(), "B.lua")
+    view:set_model(model(1), 1)
+    test.equal(shown_tabs(), "A.lua", "A does not expand when it is selected again")
     test.same(view.collapsed, {["project:C:/A"]=true, ["project:C:/B"]=true})
   end)
 

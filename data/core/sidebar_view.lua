@@ -69,6 +69,8 @@ end
 function SidebarView:new(action, collapsed)
   self.action, self.rows, self.scroll, self.bottom_scroll = action, {}, 0, 0
   self.collapsed = collapsed or {}
+  -- The Selected Projects that show expanded over their saved state, and the Projects selected at the last layout.
+  self.opened, self.was_selected = {}, {}
   self.width, self.view_h = 240, 600
   self.main_h, self.bottom_h = 0, 0
   self.query = ""
@@ -236,7 +238,8 @@ function SidebarView:is_collapsed(key, default)
 end
 
 function SidebarView:toggle(key, default)
-  local collapsed = not self:is_collapsed(key, default)
+  local collapsed = self.opened[key] or not self:is_collapsed(key, default)
+  self.opened[key] = nil
   self.collapsed[key] = collapsed
   self.action("collapsed", key, collapsed)
   self:rebuild_rows()
@@ -249,7 +252,7 @@ function SidebarView:rebuild_rows()
   local m = self:metrics()
   local now = os.time()
   self.built_minute = math.floor(now / 60)
-  local rows = {}
+  local rows, selected_keys = {}, {}
   local area
   local function add(row, height)
     row.h, row.area = height, area
@@ -280,11 +283,14 @@ function SidebarView:rebuild_rows()
     local panes = project.panes or {}
     -- The Selected Project's active Tab takes the highlight.
     local active = is_selected and panes[panes.active or 0] and panes.active
-    -- The Selected Project always shows its rows, so it has no collapse state of its own. Its saved state returns
-    -- when another Project becomes selected.
-    local key = not is_selected and (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path)
-      or nil
-    local collapsed = key and self:is_collapsed(key, false) or false
+    local key = (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
+    -- A Project expands when it becomes selected, over its saved state. A collapse while it is selected acts.
+    if key then
+      if is_selected and not self.was_selected[key] then self.opened[key] = true end
+      if not is_selected then self.opened[key] = nil end
+      selected_keys[key] = is_selected or nil
+    end
+    local collapsed = key and not self.opened[key] and self:is_collapsed(key, false) or false
     add({kind = "project", project = project, key = key, collapsed = collapsed, tabs = #panes,
       id_key = "project:" .. project.path, current = is_selected,
       selected = is_selected and (not active or collapsed and not searching)}, m.project)
@@ -393,6 +399,7 @@ function SidebarView:rebuild_rows()
     end
   end
   self.rows, self.main_h, self.bottom_h = rows, main_y, bottom_y
+  self.was_selected = selected_keys
   self.cursor = nil
   for index, row in ipairs(rows) do
     if cursor_key and row_key(row) == cursor_key then self.cursor = index; break end
