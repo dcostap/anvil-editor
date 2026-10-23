@@ -1258,6 +1258,7 @@ local function font_variant(name)
   if not fonts[name] then
     local size = base:get_size()
     if name == "bold" then fonts[name] = base:copy(size, {bold = true})
+    elseif name == "number" then fonts[name] = base:copy(math.floor(size * 1.2 + 0.5))
     else fonts[name] = base:copy(math.max(1, math.floor(size * 0.84 + 0.5))) end
   end
   return fonts[name]
@@ -1486,7 +1487,7 @@ function SidebarView:draw_tab(row, x, y, width, now)
     name_font = font_variant("bold")
   end
   local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal, {name_color = style.text, now = now,
-    clock = self.clock, name_font = name_font, number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
+    clock = self.clock, name_font = name_font, number_font = font_variant("number"), number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
   if spinning then self.spinning = true end
   local unread = row.attention == "done" or row.attention == "error"
   if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - name_x,
