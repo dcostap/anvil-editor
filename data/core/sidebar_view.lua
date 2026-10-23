@@ -18,8 +18,20 @@ local FocusFeedback = require "core.focus_feedback"
 -- Rows keep the shell's order. Age only chooses a row's group, so rows never swap places under the pointer.
 -- Rows, highlights, chevrons and scrolling animate toward the layout. Hit testing uses the layout itself, so a
 -- click acts on the row that moves to the pointer.
+-- Drag and drop: a dragged Tab or a drop from another application lands on a line between Tabs, which places a new
+-- Pane there, or on a row. A Tab's middle takes the drop into its Pane; a Project's row takes it into that Project.
+-- The receiving Project performs each request and reports its new Tabs, which then slide to their places.
 local SidebarView = Object:extend()
 local TOOLTIP_DELAY = 0.4
+-- A press on a Tab becomes a drag after the pointer moves this far.
+local DRAG_THRESHOLD = 6
+-- Parts of a Tab's height. A drop near an edge inserts beside the Tab; at a Pane Group's outer edge, the outer
+-- part makes a new group instead of joining it.
+local EDGE, OUTER_EDGE = 0.32, 0.15
+-- A drag this close to an area's edge scrolls it, up to this speed in pixels per second.
+local SCROLL_ZONE, SCROLL_SPEED = 28, 900
+-- A dropped Tab stays dim at its old place until its Project reports the result, at most this long.
+local PENDING_MOVE, PENDING_TRANSFER = 1.5, 4
 -- Animated values approach their targets at these rates per second. A change is 95% done after 3 / rate seconds.
 local MOVE_RATE, FADE_RATE, SCROLL_RATE = 20, 14, 22
 -- The longest step between two frames. After a pause, an animation starts where it stopped.
@@ -128,7 +140,7 @@ end
 function SidebarView:activate_row(row)
   if not row then return end
   if row.kind == "project" then self.action("select", row.project.row_id)
-  elseif row.kind == "tab" then self.action("pane", row.project.row_id, row.tab.id, "focus")
+  elseif row.kind == "tab" then self.action("request", "select", row.project.path, {action = "focus", pane = row.tab.id})
   elseif row.kind == "terminal" then self.action("select_terminal", row.project.row_id, row.terminal.id)
   elseif row.key then self:toggle(row.key, row.collapsed) end
 end
@@ -170,7 +182,15 @@ end
 
 function SidebarView:set_model(projects, window_id)
   self.projects, self.window_id = projects, window_id
+  -- A Tab moved inside its Project shows its result in the next report.
+  if self.pending and not self.pending.transfer then self.pending = nil end
   self:rebuild_rows()
+end
+
+function SidebarView:row_by_key(key)
+  for index, row in ipairs(self.rows) do
+    if row.id_key == key then return row, index end
+  end
 end
 
 -- The left edge and width of a Tab's content.
@@ -367,6 +387,7 @@ function SidebarView:rebuild_rows()
   end
   self:clamp_scroll()
   if self.focused then self:reveal_cursor() end
+  if self.drag then self:update_drag() end
   if self.hover_y then self:update_hover() end
 end
 
@@ -486,7 +507,7 @@ function SidebarView:on_mouse_pressed(button, x, y)
     if not self.focused then self.action("focus") end
     return
   end
-  local row = self:row_at(y)
+  local row, index = self:row_at(y)
   if not row then return end
   if row.kind == "group" or row.kind == "terminal_group" then
     if button == "left" then self:toggle(row.key, row.collapsed) end
@@ -498,9 +519,11 @@ function SidebarView:on_mouse_pressed(button, x, y)
   end
   if row.kind == "tab" then
     if button == "left" then
-      self.action("pane", row.project.row_id, row.tab.id, "focus")
+      self.action("request", "select", row.project.path, {action = "focus", pane = row.tab.id})
+      -- The press becomes a drag when the pointer moves far enough.
+      self.press = {key = row.id_key, x = x, y = y}
     elseif button == "middle" then
-      self.click_row = {button = button, row_id = row.project.row_id, pane = row.tab.id}
+      self.click_row = {button = button, path = row.project.path, pane = row.tab.id}
     end
     return
   end
@@ -518,14 +541,19 @@ function SidebarView:on_mouse_pressed(button, x, y)
 end
 
 function SidebarView:on_mouse_released(button, x, y)
-  if button == "left" then self.scroll_drag = nil; return end
+  if button == "left" then
+    self.scroll_drag, self.press = nil, nil
+    if self.drag then self:finish_drag(x, y) end
+    return
+  end
   local pressed = self.click_row
   self.click_row = nil
   if not pressed or pressed.button ~= button then return end
-  local row = self:row_at(y)
+  -- The shell sends a release outside the Sidebar too.
+  local row = x >= 0 and x < self.width and self:row_at(y)
   if pressed.pane then
-    if row and row.kind == "tab" and row.tab.id == pressed.pane and row.project.row_id == pressed.row_id then
-      self.action("pane", pressed.row_id, pressed.pane, "close")
+    if row and row.kind == "tab" and row.tab.id == pressed.pane and row.project.path == pressed.path then
+      self.action("request", "select", pressed.path, {action = "close", pane = pressed.pane})
     end
     return
   end
@@ -538,7 +566,8 @@ function SidebarView:on_mouse_released(button, x, y)
 end
 
 function SidebarView:update_hover()
-  local row = self.hover_y and self:row_at(self.hover_y)
+  local inside = self.hover_x and self.hover_x >= 0 and self.hover_x < self.width
+  local row = inside and not self.drag and self:row_at(self.hover_y)
   local hover = row and row.kind ~= "empty" and row or nil
   local scrollbar = self.hover_x and self:scrollbar_at(self.hover_x, self.hover_y)
   if scrollbar then hover = nil end
@@ -556,7 +585,7 @@ end
 
 -- Show the original Terminal title only when the Tab hides part of it.
 function SidebarView:get_tooltip()
-  if self.scroll_drag then return nil end
+  if self.scroll_drag or self.drag then return nil end
   local row = self.hover
   local item = row and row.tab
   if not item or not item.terminal then return nil end
@@ -574,14 +603,242 @@ function SidebarView:on_mouse_moved(x, y)
     self:update_hover()
     return true
   end
+  local press = self.press
+  if press and math.max(math.abs(x - press.x), math.abs(y - press.y)) >= DRAG_THRESHOLD * SCALE then
+    self.press = nil
+    local row, index = self:row_by_key(press.key)
+    if row then
+      self.drag = {key = press.key, row = row}
+      self.card = {row = row, from = self:card_slot(row, self:row_y(index)), lift = 0, alpha = 1}
+    end
+  end
+  if self.drag then
+    self.drag.x, self.drag.y = x, y
+    self:update_drag()
+    self:update_hover()
+    return true
+  end
   local changed = self:update_hover()
   return changed or self.tooltip_text ~= nil
 end
 
+-- The shell holds the pointer for the Sidebar while a button is down, so a drag does not end here. A pointer that
+-- leaves anyway cancels the drag.
 function SidebarView:on_mouse_left()
   self.hover_x, self.hover_y = nil, nil
-  self.scroll_drag, self.click_row = nil, nil
+  self.scroll_drag, self.click_row, self.press = nil, nil, nil
+  if self.drag then self:end_drag(nil) end
   return self:update_hover()
+end
+
+-- The pointer's cursor: a hand over rows that act on a click, a text cursor over the search field.
+function SidebarView:pointer_cursor()
+  if self.drag or self.scroll_drag or not self.hover_x then return "arrow" end
+  if self.press then return "hand" end
+  if self:scrollbar_at(self.hover_x, self.hover_y) then return "arrow" end
+  if self:search_at(self.hover_x, self.hover_y) then return "ibeam" end
+  return self.hover and "hand" or "arrow"
+end
+
+------------------------------------------------------------------------------------------------------------------
+-- Drag and drop
+
+-- Whether a Project takes a dragged Tab from `source`, or a drop from another application when `source` is nil.
+local function accepts(project, source)
+  if project.state == "failed" or project.state == "closing" then return false end
+  if project.state == "dormant" and not project.exists then return false end
+  if not source or source.project.path == project.path then return true end
+  -- A Terminal Session belongs to its Project.
+  return not source.tab.terminal
+end
+
+-- The Tab next to `row` in its Project, one row up or down.
+function SidebarView:neighbor(row, direction)
+  local _, index = self:row_by_key(row.id_key)
+  local next = index and self.rows[index + direction]
+  return next and next.kind == "tab" and next.project.path == row.project.path and next or nil
+end
+
+-- Whether placing the dragged Tab `source` beside `anchor` leaves its Project's layout as it is.
+function SidebarView:unchanged(source, place, anchor)
+  if anchor.project.path ~= source.project.path then return false end
+  local single = not source.bracket
+  if anchor.id_key == source.id_key then return place.mode == "join" or single end
+  local group, own = anchor.tab.group, source.tab.group
+  if place.mode == "join" then
+    local next = group == own and self:neighbor(anchor, place.side == "after" and 1 or -1)
+    return next and next.id_key == source.id_key or false
+  end
+  return single and (place.side == "after" and group == own - 1 or place.side == "before" and group == own + 1)
+end
+
+-- A line beside a Tab. Inside a Pane Group with several Panes the new Pane joins it, except on the group's outer
+-- edge, where `outer` places a new group beside it.
+function SidebarView:line_target(row, side, outer, source)
+  local bracket = row.bracket
+  local edge = bracket and (side == "before" and bracket.first or side == "after" and bracket.last)
+  local join = bracket and not (outer and edge) or false
+  local place = {mode = join and "join" or "group", anchor = row.tab.id, side = side}
+  if source and self:unchanged(source, place, row) then return nil end
+  return {kind = "line", row = row, project = row.project, place = place, inset = join, area = row.area,
+    y = side == "before" and row.y or row.y + row.h}
+end
+
+-- The drop target at a point: a line between Tabs, or a row. `source` is the dragged Tab's row, or nil for a drop
+-- from another application.
+function SidebarView:drop_target_at(x, y, source)
+  if not x or x < 0 or x >= self.width then return nil end
+  local row, index = self:row_at(y)
+  if not row or not row.project or not accepts(row.project, source) then return nil end
+  local part = (y - self:row_y(index)) / row.h
+  -- Search hides Tabs, so a line between the shown ones has no clear place.
+  local lines = self.query == ""
+  if row.kind == "project" then
+    local first = self.rows[index + 1]
+    if lines and part > 1 - EDGE and first and first.kind == "tab" and first.project == row.project then
+      return self:line_target(first, "before", true, source)
+    end
+    if source and row.project.path == source.project.path then return nil end
+    return {kind = "row", row = row, project = row.project, place = {mode = "group"}}
+  end
+  if row.kind ~= "tab" then return nil end
+  if part < EDGE or part > 1 - EDGE then
+    if not lines then return nil end
+    return self:line_target(row, part < EDGE and "before" or "after", part < OUTER_EDGE or part > 1 - OUTER_EDGE,
+      source)
+  end
+  if not source then return {kind = "row", row = row, project = row.project, pane = row.tab.id} end
+  -- A Tab dropped on another Tab joins its Pane Group after it.
+  local place = {mode = "join", anchor = row.tab.id, side = "after"}
+  if self:unchanged(source, place, row) then return nil end
+  return {kind = "row", row = row, project = row.project, place = place}
+end
+
+-- The route, Project path and request for a drop. A Tab moves inside its Project, or its Project exports it to the
+-- target Project. A drop from another application opens its files and text there, or goes into a Tab's Pane.
+function SidebarView:drop_request(target, source, files, text)
+  local path = target.project.path
+  if source then
+    local from = source.project.path
+    if path == from then return "direct", from, {action = "move", pane = source.tab.id, target = target.place} end
+    self.transfers = (self.transfers or 0) + 1
+    return "direct", from, {action = "export", pane = source.tab.id, to = path, target = target.place,
+      transfer = string.format("%d-%d-%d", self.window_id or 0, os.time(), self.transfers)}
+  end
+  files = files and #files > 0 and files or nil
+  text = text ~= "" and text or nil
+  if target.pane then return "select", path, {action = "drop", pane = target.pane, files = files, text = text} end
+  return "select", path, {action = "open", files = files, text = text, target = target.place}
+end
+
+function SidebarView:drop_target()
+  return self.drag and self.drag.target or self.external and self.external.target or nil
+end
+
+function SidebarView:update_drag()
+  local drag = self.drag
+  local row = self:row_by_key(drag.key)
+  -- The Pane closed during the drag.
+  if not row then self:end_drag(nil); return end
+  drag.row = row
+  drag.target = drag.x and self:drop_target_at(drag.x, drag.y, row) or nil
+end
+
+-- A Tab row's rectangle with its top at y.
+function SidebarView:card_slot(row, y)
+  local m = self:metrics()
+  return {x = m.tab_left, y = y, w = self.width - m.pad - m.tab_left, h = row.h}
+end
+
+-- The dragged Tab's chip: below and right of the pointer, so the drop mark under the pointer stays visible.
+function SidebarView:card_chip(drag)
+  local m = self:metrics()
+  local w = math.min(self.width - 2 * m.pad, m.tab_x - m.tab_left + tab.width(drag.row.tab, m.terminal) + 10 * SCALE)
+  return {x = common.clamp(drag.x + 12 * SCALE, m.pad, self.width - m.pad - w), y = drag.y + 10 * SCALE,
+    w = w, h = m.terminal}
+end
+
+-- The card's rectangle now. During a drag it shrinks from its row into the chip as it lifts.
+function SidebarView:card_rect(drag)
+  local card = self.card
+  if not drag then return card.rect end
+  if not drag.x then return card.from end
+  local from, to, t = card.from, self:card_chip(drag), card.lift
+  local rect = {}
+  for key, value in pairs(from) do rect[key] = value + (to[key] - value) * t end
+  return rect
+end
+
+-- Ends the drag. The card grows back into a row at the target, or at its own row, and fades.
+function SidebarView:end_drag(target)
+  local drag, card = self.drag, self.card
+  self.drag = nil
+  if not card then return end
+  if config.transitions == false or not drag.x then self.card = nil; return end
+  card.rect = self:card_rect(drag)
+  local row, y = drag.row
+  local _, index = self:row_by_key(target and target.row.id_key or row.id_key)
+  if target and target.kind == "line" then
+    y = self:area_origin(target.area) + target.y - row.h / 2
+  elseif index then
+    y = self:row_y(index)
+  end
+  card.to = y and self:card_slot(row, y) or card.rect
+  card.dropped = target ~= nil
+end
+
+function SidebarView:finish_drag(x, y)
+  local drag = self.drag
+  drag.x, drag.y = x, y
+  self:update_drag()
+  if not self.drag then return end
+  local target, source = drag.target, drag.row
+  self:end_drag(target)
+  if not target then return end
+  local route, path, request = self:drop_request(target, source)
+  local transfer = request.action == "export"
+  self.pending = {key = source.id_key, transfer = transfer,
+    deadline = system.get_time() + (transfer and PENDING_TRANSFER or PENDING_MOVE)}
+  self.action("request", route, path, request)
+end
+
+-- A drop from another application. The shell sends a position of -1, -1 when it leaves the Sidebar.
+function SidebarView:on_drop_begin()
+  self.external = {files = {}, seen = {}, text = {}}
+end
+
+function SidebarView:on_drop_moved(x, y)
+  if not self.external then self:on_drop_begin() end
+  local drop = self.external
+  if x and y and x >= 0 and y >= 0 then drop.x, drop.y = x, y else drop.x, drop.y = nil, nil end
+  drop.target = drop.x and self:drop_target_at(drop.x, drop.y) or nil
+end
+
+function SidebarView:on_file_dropped(path, x, y)
+  self:on_drop_moved(x, y)
+  local drop = self.external
+  if not drop.seen[path] then
+    drop.seen[path] = true
+    drop.files[#drop.files + 1] = path
+  end
+end
+
+function SidebarView:on_text_dropped(text, x, y)
+  self:on_drop_moved(x, y)
+  local parts = self.external.text
+  parts[#parts + 1] = text
+end
+
+-- Sends the completed drop to its target. Returns true when a target took it.
+function SidebarView:on_drop_complete()
+  local drop = self.external
+  self.external = nil
+  local target = drop and drop.x and self:drop_target_at(drop.x, drop.y)
+  if not target then return false end
+  local text = table.concat(drop.text):gsub("\r\n", "\n"):gsub("\r", "\n")
+  if #drop.files == 0 and text == "" then return false end
+  self.action("request", self:drop_request(target, nil, drop.files, text))
+  return true
 end
 
 -- Scrolls the area under the pointer.
@@ -594,6 +851,7 @@ function SidebarView:on_mouse_wheel(amount, height, y)
     self.scroll = self.scroll - amount * step
   end
   self:clamp_scroll()
+  if self.drag then self:update_drag() end
   if self.hover_y then self:update_hover() end
 end
 
@@ -620,6 +878,40 @@ function SidebarView:step(dt)
   end
   self.shown = self.shown or {}
   local shown = self.shown
+  -- A drag near an area's edge scrolls it. The list follows at once, so the target stays under the pointer.
+  local drag = self.drag
+  if drag and drag.x and drag.x >= 0 and drag.x < self.width and dt > 0 then
+    local field, speed = self:autoscroll_speed(drag.y)
+    local before = field and self[field]
+    if field then
+      self[field] = before + speed * dt
+      self:clamp_scroll()
+    end
+    if field and self[field] ~= before then
+      shown[field] = self[field]
+      self:update_drag()
+      moving = true
+    end
+  end
+  local card = self.card
+  if card and self.drag then
+    card.lift = ease(card.lift, 1, FADE_RATE, 0.01)
+  elseif card then
+    for key, value in pairs(card.to) do card.rect[key] = ease(card.rect[key], value, MOVE_RATE) end
+    card.lift = ease(card.lift, 0, FADE_RATE, 0.01)
+    card.alpha = ease(card.alpha, 0, card.dropped and FADE_RATE or FADE_RATE * 0.6, 0.02)
+    if card.alpha <= 0 then self.card = nil end
+  end
+  -- The rows beside a drop line part a little.
+  local target, nudge = self:drop_target(), {}
+  if target and target.kind == "line" and config.transitions ~= false then
+    for _, row in ipairs(self.rows) do
+      if row.area == target.area then
+        if row.y + row.h == target.y then nudge[row.id_key] = -2 * SCALE
+        elseif row.y == target.y then nudge[row.id_key] = 2 * SCALE end
+      end
+    end
+  end
   shown.scroll = ease(shown.scroll, self.scroll, SCROLL_RATE)
   shown.bottom_scroll = ease(shown.bottom_scroll, self.bottom_scroll, SCROLL_RATE)
   -- Rows. A new row unfolds from the row above it, which already showed. A row that leaves fades where it was.
@@ -628,14 +920,16 @@ function SidebarView:step(dt)
   for _, row in ipairs(self.rows) do
     local key, before = row.id_key, old[row.id_key]
     local visual
+    local dim = self:dim_target(key)
     if before and before.area == row.area then
-      visual = {area = row.area, y = ease(before.y, row.y, MOVE_RATE), alpha = ease(before.alpha, 1, FADE_RATE, 0.01)}
+      visual = {area = row.area, y = ease(before.y, row.y + (nudge[key] or 0), MOVE_RATE),
+        alpha = ease(before.alpha, 1, FADE_RATE, 0.01), dim = ease(before.dim, dim, FADE_RATE * 1.5, 0.01)}
     elseif animate then
       local start = unfold[row.area]
-      visual = {area = row.area, y = start or row.y, alpha = 0}
+      visual = {area = row.area, y = start or row.y, alpha = 0, dim = dim}
       moving = true
     else
-      visual = {area = row.area, y = row.y, alpha = 1}
+      visual = {area = row.area, y = row.y, alpha = 1, dim = dim}
     end
     if before and before.area == row.area then unfold[row.area] = before.y + row.h end
     visuals[key] = visual
@@ -651,13 +945,18 @@ function SidebarView:step(dt)
   if animate then
     for key, visual in pairs(old) do
       if not visuals[key] and visual.row and visual.alpha > 0.05 then
-        leaving[#leaving + 1] = {row = visual.row, area = visual.area, y = visual.y, alpha = visual.alpha}
+        leaving[#leaving + 1] = {row = visual.row, area = visual.area, y = visual.y, alpha = visual.alpha * visual.dim}
         moving = true
       end
     end
   end
   for _, row in ipairs(self.rows) do visuals[row.id_key].row = row end
   self.visuals, self.leaving = visuals, leaving
+  -- A moved Tab's old row stays dim until its Project reports the result or the row leaves.
+  local pending = self.pending
+  if pending and (not visuals[pending.key] or system.get_time() >= pending.deadline) then
+    self.pending, moving = nil, true
+  end
   -- Highlights glide from row to row and fade where no row takes them.
   local m = self:metrics()
   local function mark(name, row)
@@ -686,6 +985,34 @@ function SidebarView:step(dt)
   mark("active", active)
   mark("cursor", self.focused and self:get_cursor() or nil)
   mark("hover", self.hover)
+  -- The drop target's mark: a line between rows that grows into a box around a target row.
+  local drop = self.marks.drop
+  if target then
+    local area, x, right, y, h, box = target.row.area
+    if target.kind == "line" then
+      local line = math.max(2, math.floor(2 * SCALE))
+      x = target.inset and m.tab_x or m.tab_left
+      right = self.width - m.pad - (target.inset and 4 * SCALE or 0)
+      y, h, box = target.y - line / 2, line, 0
+    else
+      x = target.row.kind == "project" and m.pad or m.tab_left
+      right = self.width - m.pad
+      y, h, box = target.row.y, target.row.h, 1
+    end
+    if not drop or drop.area ~= area or drop.alpha <= 0.01 then
+      self.marks.drop = {area = area, x = x, w = right - x, y = y, h = h, box = box,
+        alpha = ease(0, 1, FADE_RATE * 1.5, 0.01)}
+    else
+      local rate = MOVE_RATE * 1.6
+      drop.x, drop.w = ease(drop.x, x, rate), ease(drop.w, right - x, rate)
+      drop.y, drop.h = ease(drop.y, y, rate), ease(drop.h, h, rate)
+      drop.box = ease(drop.box, box, rate, 0.01)
+      drop.alpha = ease(drop.alpha, 1, FADE_RATE * 1.5, 0.01)
+    end
+  elseif drop then
+    drop.alpha = ease(drop.alpha, 0, FADE_RATE * 1.5, 0.01)
+    if drop.alpha <= 0 then self.marks.drop = nil end
+  end
   for _, row in ipairs(self.rows) do
     if row.key then
       local target = row.collapsed and 0 or 1
@@ -693,6 +1020,30 @@ function SidebarView:step(dt)
     end
   end
   return moving
+end
+
+-- The area to scroll for a drag at `y`, and the speed in pixels per second: faster as the pointer goes deeper into
+-- the edge zone. Nil when `y` is not near an edge.
+function SidebarView:autoscroll_speed(y)
+  local m = self:metrics()
+  local zone = SCROLL_ZONE * SCALE
+  local function speed(depth) return SCROLL_SPEED * SCALE * math.min(1, depth / zone) ^ 2 end
+  local bottom_top, bottom_height = self:bottom_area()
+  if bottom_height <= 0 or y < bottom_top - m.gap / 2 then
+    local main_bottom = self:main_bottom()
+    if y < m.top + zone then return "scroll", -speed(m.top + zone - y) end
+    if y > main_bottom - zone then return "scroll", speed(y - main_bottom + zone) end
+    return
+  end
+  if y < bottom_top + zone then return "bottom_scroll", -speed(bottom_top + zone - y) end
+  if y > self.view_h - zone then return "bottom_scroll", speed(y - self.view_h + zone) end
+end
+
+-- The opacity factor that a row moves toward: a dragged or moved Tab's row stays dim at its old place.
+function SidebarView:dim_target(key)
+  local drag, pending = self.drag, self.pending
+  if drag and drag.key == key or pending and pending.key == key then return 0.35 end
+  return 1
 end
 
 -- The top of a row's area on screen, at the shown scroll.
@@ -728,6 +1079,26 @@ end
 
 local function dot(x, cy, radius, color)
   renderer.draw_rounded_rect(x - radius, cy - radius, radius * 2, radius * 2, radius, color)
+end
+
+-- An outline `stroke` wide along a rounded rectangle's edge. One polygon with a seam draws it, so it needs no fill
+-- below it and shows on a transparent surface too.
+local function ring(x, y, w, h, radius, stroke, color)
+  local r = math.min(radius, w / 2, h / 2)
+  local ix, iy, iw, ih = x + stroke, y + stroke, w - 2 * stroke, h - 2 * stroke
+  local ir = math.max(0, r - stroke)
+  renderer.draw_poly({
+    {x, y + r, x, y, x + r, y},
+    {x + w - r, y, x + w, y, x + w, y + r},
+    {x + w, y + h - r, x + w, y + h, x + w - r, y + h},
+    {x + r, y + h, x, y + h, x, y + h - r},
+    {x, y + r},
+    {ix, iy + ir},
+    {ix, iy + ih - ir, ix, iy + ih, ix + ir, iy + ih},
+    {ix + iw - ir, iy + ih, ix + iw, iy + ih, ix + iw, iy + ih - ir},
+    {ix + iw, iy + ir, ix + iw, iy, ix + iw - ir, iy},
+    {ix + ir, iy, ix, iy, ix, iy + ir},
+  }, color)
 end
 
 -- A small triangle that points right when closed and turns to point down as it opens.
@@ -781,6 +1152,7 @@ function SidebarView:animation_delay(clock)
     local remaining = TOOLTIP_DELAY - (clock - self.tooltip_started)
     if remaining > 0 then delay = math.min(delay or remaining, remaining) end
   end
+  if self.pending then delay = math.min(delay or math.huge, math.max(0, self.pending.deadline - clock)) end
   return delay
 end
 
@@ -920,26 +1292,36 @@ function SidebarView:draw_row(row, y, width, now)
   end
   if row.kind == "tab" or row.kind == "terminal" then
     local x, tab_width = self:tab_bounds(row, width)
-    local spinning, name_x = tab.draw(row.tab, x, y, tab_width, m.terminal,
-      {name_color = style.text, now = now, clock = self.clock})
-    if spinning then self.spinning = true end
-    if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - 8 * SCALE - name_x,
-        m.terminal, {now = now, seen = row.seen}) then
-      self.ticking = true
-    end
+    self:draw_tab(row, x, y, tab_width, now)
     return
   end
   self:draw_project(row, y, width, now)
 end
 
+-- A Tab's or Terminal Session's content in [x, x + width): its icon, name and status, and an agent's step below.
+function SidebarView:draw_tab(row, x, y, width, now)
+  local m = self:metrics()
+  local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal,
+    {name_color = style.text, now = now, clock = self.clock})
+  if spinning then self.spinning = true end
+  if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, x + width - name_x,
+      m.terminal, {now = now, seen = row.seen}) then
+    self.ticking = true
+  end
+end
+
 -- Pane Groups with several Panes: one rounded container behind their Tabs. The visible group has an accent rail.
+-- A drop line inside a container tints it: the new Pane joins that group.
 function SidebarView:draw_containers(area, width)
   local m = self:metrics()
   local origin = self:shown_origin(area)
-  local first
+  local drop, mark = self:drop_target(), self.marks.drop
+  local join = drop and drop.kind == "line" and drop.inset and mark and drop.row.id_key
+  local first, joined
   for _, row in ipairs(self.rows) do
     if row.area == area and row.bracket and row.shown then
-      if row.bracket.first or not first then first = row end
+      if row.bracket.first or not first then first, joined = row, false end
+      joined = joined or row.id_key == join
       if row.bracket.last then
         local top = origin + first.shown.y
         local bottom = origin + row.shown.y + row.h
@@ -947,6 +1329,10 @@ function SidebarView:draw_containers(area, width)
         local x, w = m.tab_left, width - m.pad - m.tab_left
         renderer.draw_rounded_rect(x, top + 1, w, bottom - top - 2, m.radius, fade(style.sidebar_group, alpha))
         local rail = math.max(2, math.floor(2 * SCALE))
+        if joined then
+          renderer.draw_rounded_rect(x, top + 1, w, bottom - top - 2, m.radius,
+            fade(style.drop_target_background, alpha * mark.alpha))
+        end
         renderer.draw_rect(x + 3 * SCALE, top + 6 * SCALE, rail, bottom - top - 12 * SCALE,
           fade(row.bracket.visible and style.titlebar_group_indicator or style.divider, alpha))
         first = nil
@@ -961,6 +1347,63 @@ function SidebarView:draw_mark(name, area, width, color)
   local m = self:metrics()
   local y = self:shown_origin(area) + mark.y
   renderer.draw_rounded_rect(mark.x, y + 1, width - m.pad - mark.x, mark.h - 2, m.radius, fade(color, mark.alpha))
+end
+
+-- The drop target's mark. Below the rows: the box's fill. Above them: the line, or the box's outline.
+function SidebarView:draw_drop(area, above)
+  local mark = self.marks.drop
+  if not mark or mark.area ~= area or mark.alpha <= 0.01 then return end
+  local m = self:metrics()
+  local x, y, w, h = mark.x, self:shown_origin(area) + mark.y, mark.w, mark.h
+  if not above then
+    if mark.box > 0.01 then
+      renderer.draw_rounded_rect(x, y + 1, w, h - 2, m.radius, fade(style.drop_target_background, mark.alpha * mark.box))
+    end
+    return
+  end
+  local color = fade(style.drop_target_accent, mark.alpha)
+  local stroke = math.max(1, math.floor(1.5 * SCALE + 0.5))
+  if h - 2 > 3 * stroke then
+    ring(x, y + 1, w, h - 2, m.radius, stroke, color)
+  else
+    renderer.draw_rounded_rect(x, y, w, h, h / 2, color)
+  end
+  -- A line starts with a dot.
+  if mark.box < 0.99 then
+    local radius = 3 * SCALE
+    dot(x + radius, y + h / 2, radius, fade(style.drop_target_accent, mark.alpha * (1 - mark.box)))
+  end
+end
+
+-- The dragged Tab's card: a chip that follows the pointer while the drag lasts, then a row that glides to its
+-- target and fades.
+function SidebarView:draw_card(width, height, now)
+  local card = self.card
+  if not card then return end
+  local m = self:metrics()
+  local rect = self:card_rect(self.drag)
+  local alpha, lift = card.alpha, card.lift
+  local x, y = math.floor(rect.x + 0.5), math.floor(rect.y + 0.5)
+  local w, h = math.floor(rect.w + 0.5), math.floor(rect.h + 0.5)
+  -- A soft shadow that deepens as the card lifts.
+  for i = 3, 1, -1 do
+    local spread = i * SCALE
+    renderer.draw_rounded_rect(x - spread, y - spread + 2 * SCALE * lift, w + 2 * spread, h + 2 * spread,
+      m.radius + spread, fade(style.sidebar_shadow, alpha * lift * (4 - i) / 6))
+  end
+  local border = math.max(1, math.floor(SCALE))
+  renderer.draw_rounded_rect(x - border, y - border, w + 2 * border, h + 2 * border, m.radius + border,
+    fade(style.divider, alpha))
+  renderer.draw_rounded_rect(x, y, w, h, m.radius, fade(style.sidebar_card, alpha))
+  local tx = x + m.tab_x - m.tab_left
+  renderer.set_clip_rect(x, y, w, h)
+  if alpha < 0.999 then renderer.push_transform(0, 0, 1, alpha) end
+  if tab.draw(card.row.tab, tx, y + math.floor((h - m.terminal) / 2), x + w - 8 * SCALE - tx, m.terminal,
+      {name_color = style.text, now = now, clock = self.clock}) then
+    self.spinning = true
+  end
+  if alpha < 0.999 then renderer.pop_transform() end
+  renderer.set_clip_rect(0, 0, width, height)
 end
 
 function SidebarView:draw_search()
@@ -1062,6 +1505,7 @@ function SidebarView:draw(width, height)
     self:draw_mark("hover", name, width, style.sidebar_hover)
     self:draw_mark("active", name, width, active_color)
     self:draw_mark("cursor", name, width, style.row_selection)
+    self:draw_drop(name, false)
     local origin = self:shown_origin(name)
     for _, item in ipairs(self.leaving) do
       if item.area == name then self:draw_shown(item.row, origin + item.y, item.alpha, width, now) end
@@ -1069,9 +1513,12 @@ function SidebarView:draw(width, height)
     for _, row in ipairs(self.rows) do
       if row.area == name then
         local y = origin + row.shown.y
-        if y + row.h > area_top and y < area_bottom then self:draw_shown(row, y, row.shown.alpha, width, now) end
+        if y + row.h > area_top and y < area_bottom then
+          self:draw_shown(row, y, row.shown.alpha * row.shown.dim, width, now)
+        end
       end
     end
+    self:draw_drop(name, true)
   end
   renderer.set_clip_rect(0, 0, width, height)
   local bar_w = math.max(2, math.floor(4 * SCALE))
@@ -1084,6 +1531,7 @@ function SidebarView:draw(width, height)
       renderer.draw_rounded_rect(width - bar_w - 4 * SCALE, thumb_top, bar_w, h, bar_w / 2, color)
     end
   end
+  self:draw_card(width, height, now)
   self.focus_feedback:draw(0, 0, width, height, self.clock)
   self:draw_tooltip(width, height)
 end

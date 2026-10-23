@@ -104,9 +104,16 @@ Project with the pointer position in that Project's coordinates. Bump the protoc
 
 - Milestone 1: done. Lua tests run with transitions off; the motion tests turn them on.
   The `project-sidebar` and `project-sidebar-dark` render scenarios show the look.
+- Milestones 2 to 4: done in one change, because they share the request protocol. `CONTRACT.md` describes it.
+  A dragged Tab becomes a chip below and right of the pointer, so the drop mark stays visible.
+  The `project-sidebar-drag` and `project-sidebar-drag-dark` render scenarios show a drag over a Pane Group.
+  The shell's pointer capture and drop routing still need a check in a live Window.
+- Milestone 5: not started.
 
 ## Tests
 
 - `tests/lua/ui/sidebar_view.lua` and `sidebar_navigation.lua`: clicks, drag targets and emitted requests.
-- `tests/lua/ui/pane_report.lua`: Pane requests change Panes as described.
+- `tests/lua/ui/pane_requests.lua`: Pane requests change Panes as described.
+- `tests/lua/ui/pane_transfer.lua`: a Pane moves to another Project only after the target confirms.
+- `anvil:hosted-routing`: the shell's request routes.
 - The `project-sidebar` render scenario for the look in light and dark themes.

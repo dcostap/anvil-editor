@@ -245,13 +245,13 @@ test.describe("Sidebar list actions", function()
     end
     test.same(names, {"init.lua", "notes.md"})
     view:on_mouse_pressed("left", 20, row_y(view, "tab", 2), 240)
-    test.same(actions, {{"pane", 7, "pane-9", "focus"}})
+    test.same(actions, {{"request", "select", "C:/A", {action = "focus", pane = "pane-9"}}})
     -- A middle-click closes the Tab at its release over the same Tab.
     local y = row_y(view, "tab", 1)
     view:on_mouse_pressed("middle", 20, y, 240)
     test.equal(#actions, 1)
     view:on_mouse_released("middle", 20, y)
-    test.same(actions[2], {"pane", 7, "pane-4", "close"})
+    test.same(actions[2], {"request", "select", "C:/A", {action = "close", pane = "pane-4"}})
     view:on_mouse_pressed("middle", 20, y, 240)
     view:on_mouse_released("middle", 20, row_y(view, "tab", 2))
     test.equal(#actions, 2)
@@ -671,5 +671,225 @@ test.describe("Sidebar motion", function()
       test.ok(moving > first and moving < last, ("The highlight did not glide: %s to %s, at %s"):format(first, last, moving))
       test.equal(last - first, view:row_y(2) - view:row_y(1))
     end)
+  end)
+end)
+
+test.describe("Sidebar drag and drop", function()
+  -- Project A has a one-Pane group, a two-Pane group, another one-Pane group and a Terminal's group.
+  local function model()
+    return {
+      {row_id=1,id=11,path="C:/A",state="ready",window_id=5,terminals={{id="s1",title="pwsh",state="running"}},
+        panes={active=1,visible=1,
+          {id="pane-1",number=1,group=1,name="one.lua"},
+          {id="pane-2",number=2,group=2,name="two.lua"},
+          {id="pane-3",number=3,group=2,name="three.lua"},
+          {id="pane-4",number=4,group=3,name="four.lua"},
+          {id="pane-5",number=5,group=4,name="pwsh",terminal={session="s1",state="running"}}}},
+      {row_id=2,id=12,path="C:/B",state="ready",window_id=5,terminals={},panes={active=1,visible=1,
+        {id="pane-8",number=1,group=1,name="b.lua"}}},
+      {row_id=3,path="C:/C",state="dormant",exists=true,activity=os.time(),terminals={}},
+      windows={{id=5,selected_project=11}},
+    }
+  end
+
+  local function sidebar(projects)
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_size(300, 800)
+    view:set_model(projects or model(), 5)
+    return view, actions
+  end
+
+  -- A point at `part` of a row's height, from its top.
+  local function tab_y(view, id, part)
+    for index, row in ipairs(view.rows) do
+      if row.kind == "tab" and row.tab.id == id then return view:row_y(index) + row.h * part end
+    end
+    error("no Tab " .. id)
+  end
+
+  local function project_y(view, path)
+    for index, row in ipairs(view.rows) do
+      if row.kind == "project" and row.project.path == path then return view:row_y(index) + row.h / 2 end
+    end
+    error("no Project " .. path)
+  end
+
+  -- Drags a Tab from its middle and releases it at (x, y). Returns the actions after the press's focus request.
+  local function drag(view, actions, id, y, x)
+    local first = #actions + 2
+    local start = tab_y(view, id, 0.5)
+    view:on_mouse_pressed("left", 60, start)
+    view:on_mouse_moved(60, start + 10 * SCALE)
+    view:on_mouse_moved(x or 60, y)
+    view:on_mouse_released("left", x or 60, y)
+    return {table.unpack(actions, first)}
+  end
+
+  local function move(id, target)
+    return {"request", "direct", "C:/A", {action = "move", pane = id, target = target}}
+  end
+
+  test.it("moves a Tab dropped between two Tabs into a new Pane Group there", function()
+    local view, actions = sidebar()
+    test.same(drag(view, actions, "pane-1", tab_y(view, "pane-4", 0.25)),
+      {move("pane-1", {mode = "group", anchor = "pane-4", side = "before"})})
+  end)
+
+  test.it("adds a Tab dropped between a Pane Group's Tabs to that group", function()
+    local view, actions = sidebar()
+    test.same(drag(view, actions, "pane-4", tab_y(view, "pane-2", 0.75)),
+      {move("pane-4", {mode = "join", anchor = "pane-2", side = "after"})})
+  end)
+
+  test.it("places a new Pane Group beside a group at the group's outer edge", function()
+    local view, actions = sidebar()
+    test.same(drag(view, actions, "pane-1", tab_y(view, "pane-3", 0.75)),
+      {move("pane-1", {mode = "join", anchor = "pane-3", side = "after"})})
+    test.same(drag(view, actions, "pane-1", tab_y(view, "pane-3", 0.95)),
+      {move("pane-1", {mode = "group", anchor = "pane-3", side = "after"})})
+  end)
+
+  test.it("moves a Tab out of its Pane Group into a group of its own", function()
+    local view, actions = sidebar()
+    test.same(drag(view, actions, "pane-3", tab_y(view, "pane-3", 0.95)),
+      {move("pane-3", {mode = "group", anchor = "pane-3", side = "after"})})
+  end)
+
+  test.it("adds a Tab dropped on another Tab's middle to that Tab's Pane Group", function()
+    local view, actions = sidebar()
+    test.same(drag(view, actions, "pane-1", tab_y(view, "pane-4", 0.5)),
+      {move("pane-1", {mode = "join", anchor = "pane-4", side = "after"})})
+  end)
+
+  test.it("sends nothing for a drop that leaves the layout as it is", function()
+    local view, actions = sidebar()
+    test.same(drag(view, actions, "pane-1", tab_y(view, "pane-1", 0.5)), {}, "Its own row")
+    test.same(drag(view, actions, "pane-4", tab_y(view, "pane-3", 0.95)), {}, "After the group before its own")
+    test.same(drag(view, actions, "pane-3", tab_y(view, "pane-2", 0.75)), {}, "Its own place in its group")
+    test.same(drag(view, actions, "pane-1", tab_y(view, "pane-4", 0.5), 400), {}, "A release outside the Sidebar")
+  end)
+
+  test.it("keeps a short press a click", function()
+    local view, actions = sidebar()
+    local y = tab_y(view, "pane-2", 0.5)
+    view:on_mouse_pressed("left", 60, y)
+    view:on_mouse_moved(62, y + 2)
+    view:on_mouse_released("left", 62, y + 2)
+    test.same(actions, {{"request", "select", "C:/A", {action = "focus", pane = "pane-2"}}})
+  end)
+
+  test.it("asks the source Project to move a Tab dropped on another Project", function()
+    local view, actions = sidebar()
+    for _, path in ipairs({"C:/B", "C:/C"}) do
+      local sent = drag(view, actions, "pane-1", project_y(view, path))
+      test.equal(#sent, 1)
+      local route, from, request = sent[1][2], sent[1][3], sent[1][4]
+      test.same({route, from, request.action, request.pane, request.to}, {"direct", "C:/A", "export", "pane-1", path})
+      test.same(request.target, {mode = "group"})
+      test.equal(type(request.transfer), "string")
+    end
+  end)
+
+  test.it("places a Tab moved to another Project beside that Project's Tabs", function()
+    local view, actions = sidebar()
+    local sent = drag(view, actions, "pane-1", tab_y(view, "pane-8", 0.5))
+    test.equal(sent[1][4].to, "C:/B")
+    test.same(sent[1][4].target, {mode = "join", anchor = "pane-8", side = "after"})
+  end)
+
+  test.it("keeps a Terminal's Tab in its Project", function()
+    local view, actions = sidebar()
+    test.same(drag(view, actions, "pane-5", project_y(view, "C:/B")), {})
+    test.same(drag(view, actions, "pane-5", tab_y(view, "pane-1", 0.25)),
+      {move("pane-5", {mode = "group", anchor = "pane-1", side = "before"})})
+  end)
+
+  test.it("scrolls the list while a dragged Tab waits near its edge", function()
+    local panes = {active=1,visible=1}
+    for i = 1, 60 do panes[i] = {id="pane-" .. i,number=i,group=i,name="file" .. i .. ".lua"} end
+    local view, actions = sidebar({{row_id=1,id=11,path="C:/A",state="ready",terminals={},panes=panes},
+      windows={{id=5,selected_project=11}}})
+    view:set_size(300, 400)
+    local old_time, time = system.get_time, 100
+    system.get_time = function() return time end
+    local ok, err = pcall(function()
+      with_renderer({}, function() view:draw(300, 400) end)
+      local edge = 398
+      local _, before = view:row_at(edge)
+      local start = tab_y(view, "pane-1", 0.5)
+      view:on_mouse_pressed("left", 60, start)
+      view:on_mouse_moved(60, start + 10 * SCALE)
+      view:on_mouse_moved(60, edge)
+      for _ = 1, 10 do
+        time = time + 1 / 30
+        with_renderer({}, function() view:draw(300, 400) end)
+      end
+      local row, after = view:row_at(edge)
+      test.ok(after > before, "The list did not scroll")
+      view:on_mouse_released("left", 60, edge)
+      test.equal(actions[#actions][4].target.anchor, row.tab.id)
+    end)
+    system.get_time = old_time
+    if not ok then error(err, 0) end
+  end)
+end)
+
+test.describe("Sidebar drops from other applications", function()
+  local function sidebar()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_size(300, 800)
+    view:set_model({{row_id=1,id=11,path="C:/A",state="ready",window_id=5,terminals={},panes={active=1,visible=1,
+      {id="pane-1",number=1,group=1,name="one.lua"},{id="pane-2",number=2,group=2,name="two.lua"}}},
+      {row_id=3,path="C:/C",state="dormant",exists=true,activity=os.time(),terminals={}},
+      windows={{id=5,selected_project=11}}}, 5)
+    return view, actions
+  end
+
+  local function point(view, kind, id, part)
+    for index, row in ipairs(view.rows) do
+      if row.kind == kind and (row.tab and row.tab.id or row.project.path) == id then
+        return view:row_y(index) + row.h * part
+      end
+    end
+    error("no row " .. id)
+  end
+
+  test.it("opens files dropped between Tabs in a new Pane Group there", function()
+    local view, actions = sidebar()
+    view:on_drop_begin()
+    local y = point(view, "tab", "pane-2", 0.25)
+    view:on_file_dropped("C:/notes/a.md", 60, y)
+    view:on_file_dropped("C:/notes/b.png", 60, y)
+    test.ok(view:on_drop_complete())
+    test.same(actions, {{"request", "select", "C:/A", {action = "open", files = {"C:/notes/a.md", "C:/notes/b.png"},
+      target = {mode = "group", anchor = "pane-2", side = "before"}}}})
+  end)
+
+  test.it("gives text dropped on a Tab's middle to its Pane", function()
+    local view, actions = sidebar()
+    view:on_drop_begin()
+    view:on_text_dropped("one\r\ntwo", 60, point(view, "tab", "pane-1", 0.5))
+    view:on_drop_complete()
+    test.same(actions, {{"request", "select", "C:/A", {action = "drop", pane = "pane-1", text = "one\ntwo"}}})
+  end)
+
+  test.it("opens a drop on a Project's row in that Project, also when it is unloaded", function()
+    local view, actions = sidebar()
+    view:on_drop_begin()
+    view:on_file_dropped("C:/notes/a.md", 60, point(view, "project", "C:/C", 0.5))
+    view:on_drop_complete()
+    test.same(actions, {{"request", "select", "C:/C", {action = "open", files = {"C:/notes/a.md"},
+      target = {mode = "group"}}}})
+  end)
+
+  test.it("ignores a drop that moved out of the Sidebar", function()
+    local view, actions = sidebar()
+    view:on_drop_begin()
+    view:on_drop_moved(60, point(view, "tab", "pane-1", 0.5))
+    view:on_drop_moved(-1, -1)
+    test.ok(not view:on_drop_complete())
+    test.same(actions, {})
   end)
 end)

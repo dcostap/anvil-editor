@@ -50,14 +50,6 @@ function pane_report.publish(suspended)
   if system.set_project_panes(text) then sent = text end
 end
 
--- Performs a Pane action from the Project Sidebar: "focus" or "close".
-function pane_report.perform(action, id)
-  local pane = panes.find(id)
-  core.log_quiet("Sidebar Pane action: %s %s found=%s", tostring(action), tostring(id), tostring(pane ~= nil))
-  if not pane then return end
-  if action == "close" then panes.close(pane) else panes.focus(pane) end
-end
-
 function pane_report.reset_for_tests()
   sent, built_at = nil, nil
 end

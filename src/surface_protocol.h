@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 32u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 33u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -44,7 +44,7 @@ typedef enum {
   ANVIL_SURFACE_MSG_PING = 11,
   /* Save the Workspace and exit, leaving Terminal Sessions running. No payload. */
   ANVIL_SURFACE_MSG_PREPARE_UPDATE = 12,
-  /* Focus or close one of this Project's Panes. Payload: AnvilSurfacePaneAction. */
+  /* Pane request delivery: AnvilSurfacePaneDelivery followed by request text. */
   ANVIL_SURFACE_MSG_PANE_ACTION = 13,
   /* Another process saved the Zoom. Payload: AnvilSurfaceZoom. */
   ANVIL_SURFACE_MSG_ZOOM_CHANGED = 14,
@@ -98,8 +98,7 @@ typedef enum {
   ANVIL_SURFACE_MSG_PONG = 100,
   /* Another instance shows this Project, so this Project exits. Its Window stays open. No payload. */
   ANVIL_SURFACE_MSG_HAND_OFF = 101,
-  /* A Sidebar Pane row action: select the Project, then act on the Pane. Payload: AnvilSurfacePaneAction +
-   * Project path + NUL. */
+  /* AnvilSurfacePaneRequest followed by path bytes and request text. */
   ANVIL_SURFACE_MSG_PANE_REQUEST = 102,
   /* Lua startup and Workspace restore finished. Independent of rendering. No payload. */
   ANVIL_SURFACE_MSG_RUNTIME_READY = 103,
@@ -134,14 +133,19 @@ typedef struct {
 } AnvilSurfaceSidebarSource;
 
 #define ANVIL_SURFACE_PANES_MAX (16u * 1024u)
-#define ANVIL_SURFACE_PANE_ID_MAX 64
-typedef enum { ANVIL_SURFACE_PANE_FOCUS, ANVIL_SURFACE_PANE_CLOSE } AnvilSurfacePaneActionKind;
-/* pane is a NUL-terminated Pane id. */
+typedef enum {
+  ANVIL_SURFACE_PANE_ROUTE_SELECT = 1,
+  ANVIL_SURFACE_PANE_ROUTE_DIRECT = 2,
+  ANVIL_SURFACE_PANE_ROUTE_POINTER = 3
+} AnvilSurfacePaneRoute;
 typedef struct {
-  uint32_t action;
-  char pane[ANVIL_SURFACE_PANE_ID_MAX];
-} AnvilSurfacePaneAction;
-bool anvil_surface_pane_action_valid(const AnvilSurfacePaneAction *action);
+  uint32_t route;
+  int32_t x, y;
+  uint32_t path_size;
+} AnvilSurfacePaneRequest;
+typedef struct { int32_t x, y; } AnvilSurfacePaneDelivery;
+bool anvil_surface_pane_request_valid(const void *packet, uint32_t size);
+bool anvil_surface_pane_delivery_valid(const void *packet, uint32_t size);
 
 typedef enum {
   ANVIL_SURFACE_WINDOW_NORMAL = 0,

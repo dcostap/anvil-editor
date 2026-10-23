@@ -2550,8 +2550,8 @@ function core.on_event(type, ...)
       projects.windows = request.windows
       core.project_sidebar, core.project_sidebar_request = projects, nil
     end
-  elseif type == "paneaction" then
-    require("core.pane_report").perform(...)
+  elseif type == "panerequest" then
+    require("core.pane_requests").perform(...)
   elseif type == "dialogfinished" then
     local id, status, result, filter = ...
     local callback = core.active_file_dialogs[id]

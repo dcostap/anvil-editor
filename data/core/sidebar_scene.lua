@@ -33,7 +33,8 @@ local function terminal_tab(number, group, session, title, age, busy)
     terminal = {session = session, state = "running", busy = busy, activity = os.time() - age}}
 end
 
-function Scene:new(search)
+-- mode is nil, "search" or "drag".
+function Scene:new(mode)
   Scene.super.new(self)
   self.sidebar = SidebarView(function() end, {})
   self.sidebar:set_model({
@@ -71,15 +72,38 @@ function Scene:new(search)
     project(6, "C:/Projects/old-tool", "dormant", 60 * DAY),
     windows = {{id = 1, selected_project = 1}, {id = 2, selected_project = 2}},
   }, 1)
-  if search then
+  if mode == "search" then
     self.sidebar:on_focus(true)
     self.sidebar:on_text_input("shell")
   end
+  self.drag = mode == "drag"
+end
+
+local function tab_y(sidebar, id, part)
+  for index, row in ipairs(sidebar.rows) do
+    if row.kind == "tab" and row.tab.id == id then return sidebar:row_y(index) + row.h * part end
+  end
+end
+
+-- Holds removed.md over the line between the first group's two Tabs, with all motion finished.
+function Scene:start_drag(width, height)
+  local sidebar = self.sidebar
+  sidebar:set_size(width, height)
+  local x, start = 110 * SCALE, tab_y(sidebar, "pane-5", 0.5)
+  sidebar:on_mouse_pressed("left", x, start)
+  sidebar:on_mouse_moved(x, start - 10 * SCALE)
+  sidebar:on_mouse_moved(x + 24 * SCALE, tab_y(sidebar, "pane-1", 0.85))
+  for _ = 1, 90 do sidebar:step(1 / 30) end
 end
 
 function Scene:draw()
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, style.background)
-  self.sidebar:draw(math.floor(280 * SCALE), math.floor(self.position.y + self.size.y))
+  local width, height = math.floor(280 * SCALE), math.floor(self.position.y + self.size.y)
+  if self.drag then
+    self.drag = false
+    self:start_drag(width, height)
+  end
+  self.sidebar:draw(width, height)
 end
 
 return Scene

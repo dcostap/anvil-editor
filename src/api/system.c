@@ -1913,18 +1913,19 @@ static int f_set_project_panes(lua_State *L) {
   return 1;
 }
 
-/* The Sidebar's Pane row action: "focus" or "close". The shell selects the Project first. */
-static int f_pane_action(lua_State *L) {
-  size_t path_size = 0, id_size = 0;
-  const char *path = luaL_checklstring(L, 1, &path_size);
-  const char *id = luaL_checklstring(L, 2, &id_size);
-  static const char *const actions[] = {"focus", "close", NULL};
-  AnvilSurfacePaneAction action = {.action = (uint32_t)luaL_checkoption(L, 3, NULL, actions)};
-  luaL_argcheck(L, path_size > 0 && path_size < 32767 && !memchr(path, 0, path_size), 1, "invalid Project path");
-  luaL_argcheck(L, id_size < sizeof(action.pane), 2, "invalid Pane id");
-  memcpy(action.pane, id, id_size);
-  luaL_argcheck(L, anvil_surface_pane_action_valid(&action), 2, "invalid Pane id");
-  lua_pushboolean(L, anvil_hosted_surface_pane_request(path, &action));
+static int f_pane_request(lua_State *L) {
+  static const char *const routes[] = {"select", "direct", "pointer", NULL};
+  uint32_t route = 1 + luaL_checkoption(L, 1, NULL, routes);
+  size_t path_size = 0, text_size = 0;
+  const char *path = route == ANVIL_SURFACE_PANE_ROUTE_POINTER ? NULL : luaL_checklstring(L, 2, &path_size);
+  const char *text = luaL_checklstring(L, 3, &text_size);
+  luaL_argcheck(L, route != ANVIL_SURFACE_PANE_ROUTE_POINTER || lua_isnil(L, 2), 2, "expected nil");
+  luaL_argcheck(L, !path || (path_size && path_size < 32768 && !memchr(path, 0, path_size)), 2, "invalid Project path");
+  luaL_argcheck(L, text_size && !memchr(text, 0, text_size), 3, "invalid Pane request");
+  lua_Integer x = luaL_optinteger(L, 4, 0), y = luaL_optinteger(L, 5, 0);
+  luaL_argcheck(L, x >= INT32_MIN && x <= INT32_MAX, 4, "invalid pointer");
+  luaL_argcheck(L, y >= INT32_MIN && y <= INT32_MAX, 5, "invalid pointer");
+  lua_pushboolean(L, anvil_hosted_surface_pane_request(route, path, text, (int)x, (int)y));
   return 1;
 }
 
@@ -2082,12 +2083,14 @@ static int focusterminal_callback(lua_State *L, SDL_Event *event) {
   free(event->user.data1);
   return 2;
 }
-static int paneaction_callback(lua_State *L, SDL_Event *event) {
-  lua_pushstring(L, "paneaction");
-  lua_pushstring(L, event->user.code == ANVIL_SURFACE_PANE_CLOSE ? "close" : "focus");
-  lua_pushstring(L, event->user.data1);
+static int panerequest_callback(lua_State *L, SDL_Event *event) {
+  AnvilSurfacePaneDelivery *delivery = event->user.data1;
+  lua_pushstring(L, "panerequest");
+  lua_pushstring(L, (const char *)(delivery + 1));
+  lua_pushinteger(L, delivery->x);
+  lua_pushinteger(L, delivery->y);
   free(event->user.data1);
-  return 3;
+  return 4;
 }
 static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   (void)event;
@@ -2733,7 +2736,7 @@ static const luaL_Reg lib[] = {
   { "await_shell_adoption",  f_await_shell_adoption  },
   { "select_project",        f_select_project        },
   { "set_project_panes",     f_set_project_panes     },
-  { "pane_action",           f_pane_action           },
+  { "pane_request",          f_pane_request          },
   { "select_terminal",       f_select_terminal       },
   { "toggle_project_sidebar", f_toggle_project_sidebar },
   { "focus_project_sidebar", f_focus_project_sidebar },
@@ -2801,7 +2804,7 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Zoom event: %s", SDL_GetError());
   if (!register_custom_event("focusterminal", focusterminal_callback))
     return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
-  if (!register_custom_event("paneaction", paneaction_callback))
+  if (!register_custom_event("panerequest", panerequest_callback))
     return luaL_error(L, "Unable to register the Pane action event: %s", SDL_GetError());
   luaL_newmetatable(L, API_TYPE_NATIVE_PLUGIN);
   lua_pushcfunction(L, f_library_gc);

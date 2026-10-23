@@ -118,6 +118,10 @@ enum {
 };
 
 typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED, SHELL_DORMANT } ShellState;
+typedef struct PendingPane {
+  struct PendingPane *next;
+  char *text;
+} PendingPane;
 typedef struct DormantProject {
   struct DormantProject *next;
   Uint32 id;
@@ -197,6 +201,7 @@ typedef struct ShellProject {
   char *panes;
   /* A Terminal Session the Sidebar asked the Project to focus once Ready. */
   char pending_terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
+  PendingPane *pending_panes;
 } ShellProject;
 
 typedef struct {
@@ -289,7 +294,7 @@ struct ShellWindow {
   bool sidebar_sliding;
   bool sidebar_grip_hover, sidebar_dragging;
   float sidebar_drag_offset;
-  Uint32 surface_buttons;
+  Uint32 surface_buttons, sidebar_buttons;
   /* Buttons held when a menu closed. That click closed the menu; SDL replays its
      press at the pointer position from before the menu, so the press and its release are dropped. */
   Uint32 menu_buttons;
@@ -407,8 +412,8 @@ static void check_gpu_failure(ShellWindow *window);
 static void close_memory_frame(ShellPresentation *surface);
 static bool select_project_path(ShellWindow *window, const char *path);
 static bool select_terminal_path(ShellWindow *window, const char *path, const char *id);
-static bool select_pane_path(ShellWindow *window, const char *path, const AnvilSurfacePaneAction *action);
-static void select_project(ShellProject *project);
+static bool select_pane_path(ShellWindow *window, const char *path, const char *text, uint32_t size);
+static void select_project(ShellProject *project, bool keep_sidebar_focus);
 static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id);
 static void present_deferred_dialogs(ShellProject *project);
 static void finish_launch(ShellProject *project);
@@ -586,6 +591,15 @@ static ShellProject *retain_project(ShellProject *project) {
   return project;
 }
 
+static void clear_pending_panes(ShellProject *project) {
+  while (project->pending_panes) {
+    PendingPane *pending = project->pending_panes;
+    project->pending_panes = pending->next;
+    free(pending->text);
+    free(pending);
+  }
+}
+
 /* The registry owns one reference until all transport threads have been joined.
  * Packets and dialog callbacks can retain it after removal from that registry. */
 static void release_project(ShellProject *project) {
@@ -606,6 +620,7 @@ static void release_project(ShellProject *project) {
   free(project->project_path);
   free(project->identity);
   free(project->dormant);
+  clear_pending_panes(project);
   free(project);
 }
 
@@ -706,6 +721,18 @@ static void set_surface_busy(ShellWindow *window, ShellPresentation *surface, bo
   set_frame_busy(window, window->project_presentation.busy || window->sidebar_presentation.busy);
 }
 
+static void deliver_pending_panes(ShellProject *project) {
+  if (!project->connected || project->state != SHELL_READY || !project->runtime_ready) return;
+  AnvilSurfacePaneDelivery delivery = {-1, -1};
+  while (project->pending_panes) {
+    PendingPane *pending = project->pending_panes;
+    project->pending_panes = pending->next;
+    shell_send(project, ANVIL_SURFACE_MSG_PANE_ACTION, &delivery, sizeof(delivery), pending->text, strlen(pending->text));
+    free(pending->text);
+    free(pending);
+  }
+}
+
 static void set_state(ShellProject *project, ShellState state) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
@@ -719,6 +746,11 @@ static void set_state(ShellProject *project, ShellState state) {
       project->panes = NULL;
     }
     if (state == SHELL_FAILED || state == SHELL_DORMANT) project->pending_terminal[0] = 0;
+    if ((state == SHELL_FAILED || state == SHELL_DORMANT) && project->pending_panes) {
+      SDL_Log("Shell dropped pending Pane requests: Project=%u is unavailable", project->id);
+      clear_pending_panes(project);
+    }
+    deliver_pending_panes(project);
     if (state == SHELL_READY && project->pending_terminal[0]) {
       SDL_Log("Shell Terminal Session focus delivered after start: Project=%u session=%s", project->id,
               project->pending_terminal);
@@ -962,6 +994,20 @@ static bool push_shell_event(ShellProject *project, int code, void *data, int va
   return false;
 }
 
+/* Compare reported paths without filesystem work on the event thread. */
+static bool pane_project_path_equal(const char *a, const char *b) {
+  size_t na = strlen(a), nb = strlen(b);
+  while (na > 3 && (a[na - 1] == '/' || a[na - 1] == '\\')) na--;
+  while (nb > 3 && (b[nb - 1] == '/' || b[nb - 1] == '\\')) nb--;
+  if (na != nb) return false;
+  for (size_t i = 0; i < na; i++) {
+    unsigned char ca = a[i] == '\\' ? '/' : (unsigned char)a[i];
+    unsigned char cb = b[i] == '\\' ? '/' : (unsigned char)b[i];
+    if (SDL_tolower(ca) != SDL_tolower(cb)) return false;
+  }
+  return true;
+}
+
 static bool valid_terminal_id(const char *id) {
   for (int i = 0; i < ANVIL_SURFACE_TERMINAL_ID_LEN; i++)
     if (!strchr("0123456789abcdef", id[i]) || !id[i]) return false;
@@ -1069,12 +1115,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_PANES:
     return size >= 1 && size <= ANVIL_SURFACE_PANES_MAX && !((const char *)payload)[size - 1] &&
            !memchr(payload, 0, size - 1);
-  case ANVIL_SURFACE_MSG_PANE_REQUEST: {
-    const char *path = (const char *)payload + sizeof(AnvilSurfacePaneAction);
-    uint32_t path_size = size - sizeof(AnvilSurfacePaneAction);
-    return size > sizeof(AnvilSurfacePaneAction) + 1 && path_size < 32768 &&
-           anvil_surface_pane_action_valid(payload) && !path[path_size - 1] && !memchr(path, 0, path_size - 1);
-  }
+  case ANVIL_SURFACE_MSG_PANE_REQUEST:
+    return anvil_surface_pane_request_valid(payload, size);
   case ANVIL_SURFACE_MSG_SELECT_TERMINAL: {
     const char *text = payload;
     uint32_t path = ANVIL_SURFACE_TERMINAL_ID_LEN + 1;
@@ -3191,7 +3233,7 @@ static void close_decision(ShellProject *project, int decision) {
     set_state(project, SHELL_CLOSING);
     if (decision == ANVIL_SURFACE_CLOSE_WAITING) {
       if (project != window->selected)
-        select_project(project);
+        select_project(project, false);
       stop_close_timer(project);
       project->close_waiting = true;
       project->close_serial++;
@@ -3276,6 +3318,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       SDL_Log("Shell Project runtime ready: Project=%u background=%d", project->id, project != window->selected);
       notify_sidebar_changes();
     }
+    deliver_pending_panes(project);
     return;
   }
   const void *payload = message->payload;
@@ -3408,12 +3451,35 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   }
   case ANVIL_SURFACE_MSG_PANE_REQUEST: {
-    const AnvilSurfacePaneAction *request = payload;
-    if (project->sidebar && request->action == ANVIL_SURFACE_PANE_FOCUS) focus_sidebar(window, false);
-    const char *path = (const char *)payload + sizeof(*request);
-    SDL_Log("Shell Pane request: Window=%u action=%u pane=%s closing=%d", window->id, request->action,
-            request->pane, window->closing);
-    if (project->sidebar && !window->closing) select_pane_path(window, path, request);
+    const AnvilSurfacePaneRequest *request = payload;
+    const char *bytes = (const char *)(request + 1);
+    char path[32768];
+    memcpy(path, bytes, request->path_size);
+    path[request->path_size] = 0;
+    const char *text = bytes + request->path_size;
+    uint32_t text_size = message->size - sizeof(*request) - request->path_size;
+    if (request->route == ANVIL_SURFACE_PANE_ROUTE_SELECT && !window->closing) {
+      if (!select_pane_path(window, path, text, text_size)) SDL_Log("Shell dropped a Pane selection request");
+      break;
+    }
+    ShellProject *target = NULL;
+    AnvilSurfacePaneDelivery delivery = {-1, -1};
+    if (request->route == ANVIL_SURFACE_PANE_ROUTE_DIRECT) {
+      for (ShellProject *item = shell.projects; item; item = item->next)
+        if (!item->sidebar && item->project_path && pane_project_path_equal(item->project_path, path)) {
+          target = item;
+          break;
+        }
+    } else if (request->route == ANVIL_SURFACE_PANE_ROUTE_POINTER && window->selected) {
+      target = window->selected;
+      int origin_x = project->sidebar ? window->sidebar_w - window->sidebar_full_w : project->last_config.origin_x;
+      int origin_y = project->sidebar ? 0 : project->last_config.origin_y;
+      delivery.x = (int32_t)SDL_clamp((int64_t)request->x + origin_x - target->last_config.origin_x, INT32_MIN, INT32_MAX);
+      delivery.y = (int32_t)SDL_clamp((int64_t)request->y + origin_y - target->last_config.origin_y, INT32_MIN, INT32_MAX);
+    }
+    if (!window->closing && target && target->connected && target->state == SHELL_READY && target->runtime_ready)
+      shell_send(target, ANVIL_SURFACE_MSG_PANE_ACTION, &delivery, sizeof(delivery), text, text_size);
+    else SDL_Log("Shell dropped a Pane request: route=%u Project is not Ready", request->route);
     break;
   }
   case ANVIL_SURFACE_MSG_PROJECT_MENU: {
@@ -3488,7 +3554,8 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_CURSOR:
     project->child_cursor = value;
-    if (project == window->selected && (window->pointer_in_surface || window->surface_buttons))
+    if ((project == window->selected && (window->pointer_in_surface || window->surface_buttons)) ||
+        (project == window->sidebar_client && (window->pointer_in_sidebar || window->sidebar_buttons)))
       apply_cursor(value);
     break;
   case ANVIL_SURFACE_MSG_TEXT_INPUT: {
@@ -3564,7 +3631,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     if (project != window->selected) {
       if (window->closing)
         break;
-      select_project(project);
+      select_project(project, false);
     }
     if (window->shown) {
       if (current_window_mode(window) == ANVIL_SURFACE_WINDOW_MINIMIZED)
@@ -3807,17 +3874,22 @@ static void release_surface_pointer(ShellWindow *window) {
   if (GetCapture() == window->hwnd) ReleaseCapture();
 }
 
+static void send_sidebar_input(ShellWindow *window, const SDL_Event *event);
+
 static void cancel_input(ShellWindow *window) {
   ShellProject *project = window->selected;
   end_sidebar_drag(window);
   window->sidebar_grip_hover = false;
   Uint32 buttons = window->surface_buttons;
+  window->sidebar_buttons = 0;
   window->surface_buttons = 0;
   window->pressed_control = -1;
   window->pointer_in_surface = false;
   window->hovered_control = -1;
   window->ui_hover_dirty = true;
   release_surface_pointer(window);
+  /* A release would complete a Sidebar drag at the pointer. Leaving cancels it. */
+  leave_sidebar(window);
   for (int button = 1; button <= 5; button++) {
     if (!(buttons & SDL_BUTTON_MASK(button))) continue;
     SDL_Event event = {0};
@@ -3842,7 +3914,7 @@ static void leave_surface(ShellWindow *window) {
     leave.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
     forward_event(window, &leave, NULL);
   }
-  if (!window->surface_buttons)
+  if (!window->surface_buttons && !window->pointer_in_sidebar && !window->sidebar_buttons)
     apply_cursor(ANVIL_SURFACE_CURSOR_ARROW);
 }
 
@@ -3853,6 +3925,7 @@ static bool sidebar_takes_pointer(ShellWindow *window, float x) {
 }
 
 static void send_sidebar_input(ShellWindow *window, const SDL_Event *event) {
+  if (!window->sidebar_client || !shell.sidebar_process || !shell.sidebar_process->connected) return;
   anvil_timing_note("sidebar-input-forward", event->common.timestamp, event->type, window->id);
   AnvilSurfaceInput input = {.event = *event, .configuration = window->sidebar_client->last_config.configuration};
   /* A sliding Sidebar shows its surface moved left. */
@@ -3861,12 +3934,19 @@ static void send_sidebar_input(ShellWindow *window, const SDL_Event *event) {
   else if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_BUTTON_UP)
     input.event.button.x += slide;
   else if (event->type == SDL_EVENT_MOUSE_WHEEL) input.event.wheel.mouse_x += slide;
+  else if (event->type >= SDL_EVENT_DROP_FILE && event->type <= SDL_EVENT_DROP_POSITION && event->drop.x >= 0)
+    input.event.drop.x += slide;
   if (!window->sidebar_input_ns) window->sidebar_input_ns = SDL_GetTicksNS();
   const char *text = NULL;
   if (event->type == SDL_EVENT_TEXT_INPUT) { text = event->text.text; input.event.text.text = NULL; }
   if (event->type == SDL_EVENT_TEXT_EDITING) { text = event->edit.text; input.event.edit.text = NULL; }
+  if (event->type >= SDL_EVENT_DROP_FILE && event->type <= SDL_EVENT_DROP_POSITION) {
+    text = event->drop.data;
+    input.event.drop.data = NULL;
+    input.event.drop.source = NULL;
+  }
   input.text_len = text ? (uint32_t)strlen(text) : 0;
-  if (input.text_len > ANVIL_SURFACE_MAX_PAYLOAD - sizeof(input)) return;
+  if (input.text_len > ANVIL_SURFACE_MAX_PAYLOAD - sizeof(input) - sizeof(AnvilSidebarSurfacePacket)) return;
   shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), text, input.text_len);
 }
 
@@ -3891,6 +3971,7 @@ static void focus_sidebar(ShellWindow *window, bool focused) {
 }
 
 static void leave_sidebar(ShellWindow *window) {
+  if (window->sidebar_buttons) return;
   if (!window->pointer_in_sidebar) return;
   window->pointer_in_sidebar = false;
   if (!window->sidebar_client || !shell.sidebar_process || !shell.sidebar_process->connected) return;
@@ -4001,6 +4082,11 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
   ShellProject *project = window->selected;
   window->pointer_x = event->motion.x;
   window->pointer_y = event->motion.y;
+  if (window->sidebar_buttons) {
+    send_sidebar_input(window, event);
+    apply_cursor(window->sidebar_client->child_cursor);
+    return;
+  }
   if (window->pressed_control < 0 && route_sidebar_grip(window, event)) return;
   int control = control_at(window, event->motion.x, event->motion.y);
   if (window->hovered_control != control) {
@@ -4010,8 +4096,9 @@ static void route_motion(ShellWindow *window, SDL_Event *event) {
   }
   if (window->pressed_control < 0 && sidebar_takes_pointer(window, event->motion.x) &&
       event->motion.y >= window->controls.bottom) {
-    leave_surface(window);
     window->pointer_in_sidebar = true;
+    leave_surface(window);
+    apply_cursor(window->sidebar_client->child_cursor);
     send_sidebar_input(window, event);
     return;
   }
@@ -4044,6 +4131,19 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
   window->pointer_x = event->button.x;
   window->pointer_y = event->button.y;
   Uint32 mask = SDL_BUTTON_MASK(event->button.button);
+  if (window->sidebar_buttons) {
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) window->sidebar_buttons |= mask;
+    else window->sidebar_buttons &= ~mask;
+    send_sidebar_input(window, event);
+    if (!window->sidebar_buttons) {
+      release_surface_pointer(window);
+      if (!sidebar_takes_pointer(window, event->button.x)) {
+        leave_sidebar(window);
+        apply_cursor(ANVIL_SURFACE_CURSOR_ARROW);
+      }
+    }
+    return;
+  }
   /* A release in another app leaves the bit set; a later click is a new one. */
   if ((window->menu_buttons & mask) && event->type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
       SDL_GetTicksNS() - window->menu_closed_ns > SDL_NS_PER_SECOND)
@@ -4058,7 +4158,13 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
   if (!window->surface_buttons && window->pressed_control < 0 && route_sidebar_grip(window, event)) return;
   int control = control_at(window, event->button.x, event->button.y);
   if (control < 0 && window->pressed_control < 0 && sidebar_takes_pointer(window, event->button.x)) {
+    window->pointer_in_sidebar = true;
     leave_surface(window);
+    if (down) {
+      window->sidebar_buttons |= mask;
+      capture_surface_pointer(window);
+    }
+    apply_cursor(window->sidebar_client->child_cursor);
     send_sidebar_input(window, event);
     return;
   }
@@ -4542,12 +4648,25 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     break;
   case SDL_EVENT_DROP_BEGIN:
   case SDL_EVENT_DROP_COMPLETE:
+    send_sidebar_input(window, event);
     if (project->state == SHELL_READY || project->state == SHELL_CLOSING)
       forward_event(window, event, NULL);
     break;
   case SDL_EVENT_DROP_POSITION:
   case SDL_EVENT_DROP_FILE:
   case SDL_EVENT_DROP_TEXT:
+    if (event->type == SDL_EVENT_DROP_POSITION) {
+      SDL_Event outside = *event;
+      outside.drop.x = outside.drop.y = -1;
+      outside.drop.data = NULL;
+      if (sidebar_takes_pointer(window, event->drop.x) && control_at(window, event->drop.x, event->drop.y) < 0) {
+        if (project->connected) forward_event(window, &outside, NULL);
+      } else send_sidebar_input(window, &outside);
+    }
+    if (sidebar_takes_pointer(window, event->drop.x) && control_at(window, event->drop.x, event->drop.y) < 0) {
+      send_sidebar_input(window, event);
+      break;
+    }
     if (!surface_contains(window, event->drop.x, event->drop.y) ||
         control_at(window, event->drop.x, event->drop.y) >= 0 || project->state == SHELL_STARTING ||
         project->state == SHELL_FAILED || project->state == SHELL_DORMANT) {
@@ -4803,7 +4922,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       break;
     }
     case WM_CAPTURECHANGED:
-      if ((HWND)lparam != hwnd && (window->pressed_control >= 0 || window->surface_buttons)) {
+      if ((HWND)lparam != hwnd && (window->pressed_control >= 0 || window->surface_buttons || window->sidebar_buttons)) {
         SDL_Log("Shell native control cancelled: capture changed");
         cancel_input(window);
         window->ui_hover_dirty = true;
@@ -5112,8 +5231,7 @@ struct ProjectResolve {
   bool restored;
   /* A Sidebar Terminal Session click: focus this session once the Project is selected. */
   char terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
-  /* A Sidebar Pane row action, applied once the Project is selected. pane.pane is empty when there is none. */
-  AnvilSurfacePaneAction pane;
+  char *pane;
   int argc;
   char **argv;
   char *path;
@@ -5128,6 +5246,7 @@ static void free_resolution(ProjectResolve *job) {
   free(job->argv);
   free(job->path);
   free(job->identity);
+  free(job->pane);
   free(job);
 }
 
@@ -5380,10 +5499,10 @@ static void finish_launch(ShellProject *project) {
   }
 }
 
-static void select_project(ShellProject *project) {
+static void select_project(ShellProject *project, bool keep_sidebar_focus) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
-  focus_sidebar(window, false);
+  if (!keep_sidebar_focus) focus_sidebar(window, false);
   clear_window_notice(window);
   if (project->unresponsive) show_unresponsive_notice(window);
   if (project == window->selected)
@@ -5423,12 +5542,13 @@ static void select_project(ShellProject *project) {
   send_configure(project);
   if (project->connected)
     shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS,
-        !IsIconic(window->hwnd) &&
+        !window->sidebar_focused && !IsIconic(window->hwnd) &&
         (anvil_latency_probe_enabled() || (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS) != 0));
-  if (project->text_active && !IsIconic(window->hwnd) &&
+  if ((window->sidebar_focused || project->text_active) && !IsIconic(window->hwnd) &&
       (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS))
     SDL_StartTextInput(window->window);
-  apply_cursor(project->child_cursor);
+  apply_cursor(window->pointer_in_sidebar || window->sidebar_buttons ?
+               window->sidebar_client->child_cursor : project->child_cursor);
   present_deferred_dialogs(project);
   SDL_Log("Shell selected loaded Project: id=%u pid=%lu path=%s", project->id,
           (unsigned long)project->process.dwProcessId, project->project_path);
@@ -5475,14 +5595,14 @@ static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
       if (item != project && item->window_id == source->id && !item->unloading && !item->failed_close) {
         replacement = item; break;
       }
-    select_project(replacement);
+    select_project(replacement, false);
   } else {
     shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS, 0);
     send_configure(project);
   }
   project->window_id = target->id;
   /* Window identity is part of layout identity, even for equal-sized targets. */
-  select_project(project);
+  select_project(project, false);
   clear_window_notice(requester);
   /* A Window that the Move left without a Project closes. Dormant Projects belong to no Window. */
   bool emptied = true;
@@ -5514,9 +5634,13 @@ static bool select_terminal_path(ShellWindow *window, const char *path, const ch
 
 /* Selects the Project like a Project row click, then acts on its Pane. A close also selects the Project, so a
  * close prompt never opens in a Project the Window does not show. */
-static bool select_pane_path(ShellWindow *window, const char *path, const AnvilSurfacePaneAction *action) {
-  if (!select_project_path(window, path)) return false;
-  shell.resolvers->pane = *action;
+static bool select_pane_path(ShellWindow *window, const char *path, const char *text, uint32_t size) {
+  char *copy = malloc(size + 1);
+  if (!copy) return false;
+  memcpy(copy, text, size);
+  copy[size] = 0;
+  if (!select_project_path(window, path)) { free(copy); return false; }
+  shell.resolvers->pane = copy;
   return true;
 }
 
@@ -5624,7 +5748,7 @@ static void finish_external(ProjectResolve *job) {
     SDL_Log("Shell external launch selects loaded Project: pid=%lu Project=%u Window=%u", client, project->id,
             owner->id);
     if (project->restore_waiting) project->restore_rank = -1;
-    select_project(project);
+    select_project(project, false);
   } else if (!sidebar_project(job->path)) {
     SDL_Log("Shell external launch rejected: Project Sidebar list is full or allocation failed");
     status = ANVIL_SHELL_LAUNCH_REJECTED;
@@ -5634,7 +5758,7 @@ static void finish_external(ProjectResolve *job) {
     status = ANVIL_SHELL_LAUNCH_REJECTED;
   } else {
     assign_identity(project, job);
-    select_project(project);
+    select_project(project, false);
     SDL_Log("Shell external launch starts Project: pid=%lu Project=%u Window=%u", client, project->id, owner->id);
     if (!start_project(project, job->argc, job->argv)) fail_connection(project, "External launch startup failed");
   }
@@ -5735,7 +5859,7 @@ static void finish_resolutions(void) {
         ShellWindow *duplicate_window = window_for_id(duplicate->window_id);
         bool selected = duplicate_window && duplicate_window->selected == duplicate;
         retire_failed_placeholder(duplicate);
-        if (selected && kept->window_id == duplicate_window->id) select_project(kept);
+        if (selected && kept->window_id == duplicate_window->id) select_project(kept, job->pane != NULL);
         if (!keep_this) {
           free_resolution(job);
           continue;
@@ -5774,14 +5898,9 @@ static void finish_resolutions(void) {
       else {
         if (created) assign_identity(project, job);
         /* The user may have selected another Project in a restored Window while this one resolved. */
-        if (!job->restored || window->selected == project) select_project(project);
+        if (!job->restored || window->selected == project) select_project(project, job->pane != NULL);
         if (!job->initial) raise_owner(project);
         if (job->terminal[0]) focus_terminal(project, job->terminal);
-        /* Only a Ready Project reports Panes, so a Pane row always names a Ready Project. */
-        if (job->pane.pane[0] && project->connected && project->state == SHELL_READY)
-          shell_send(project, ANVIL_SURFACE_MSG_PANE_ACTION, &job->pane, sizeof(job->pane), NULL, 0);
-        else if (job->pane.pane[0])
-          SDL_Log("Shell dropped a Pane action: Project=%u is not Ready", project->id);
         if (created || (project->failed_close && project->process.hProcess &&
                         WaitForSingleObject(project->process.hProcess, 0) ==
                             WAIT_OBJECT_0)) {
@@ -5791,6 +5910,17 @@ static void finish_resolutions(void) {
                                     job->initial ? job->argv : NULL))
             fail_connection(project, "Project selection startup failed");
         }
+        if (job->pane && project->state != SHELL_FAILED && project->state != SHELL_CLOSING) {
+          PendingPane *pending = calloc(1, sizeof(*pending));
+          if (pending) {
+            pending->text = job->pane;
+            job->pane = NULL;
+            PendingPane **tail = &project->pending_panes;
+            while (*tail) tail = &(*tail)->next;
+            *tail = pending;
+            deliver_pending_panes(project);
+          } else SDL_Log("Shell dropped a Pane request: allocation failed");
+        } else if (job->pane) SDL_Log("Shell dropped a Pane request: Project=%u is unavailable", project->id);
       }
     }
     free_resolution(job);
@@ -5825,11 +5955,11 @@ static void complete_unload(ShellProject *project) {
     for (ShellProject *item = shell.projects; item; item = item->next)
       if (item->window_id == window->id) { next = item; break; }
     if (next)
-      select_project(next);
+      select_project(next, false);
     else {
       free(window->empty->project_path);
       window->empty->project_path = _strdup(dormant->path);
-      select_project(window->empty);
+      select_project(window->empty, false);
       SDL_SetWindowTitle(window->window, "Anvil - Dormant Project");
     }
   }
@@ -5854,7 +5984,7 @@ static void complete_unload(ShellProject *project) {
 
 static void retire_failed_placeholder(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
-  if (window && window->selected == project) select_project(window->empty);
+  if (window && window->selected == project) select_project(window->empty, false);
   ShellProject **link = &shell.projects;
   while (*link != project) link = &(*link)->next;
   *link = project->next;
@@ -6746,7 +6876,7 @@ static size_t restore_windows(AnvilShellState *saved, AnvilAdoptionRecord *adopt
       const char *path = j == 0 ? entry->path : entry->projects[j - 1];
       if (!path) continue;
       ShellProject *project = restored_project(window, path, j == 0 ? (int)i : rank++);
-      if (project && j == 0) select_project(project);
+      if (project && j == 0) select_project(project, false);
       for (size_t k = 0; project && k < adoptable_count; k++)
         if (adoptable[k].pid && adoptable[k].window_id == entry->id && !strcmp(adoptable[k].path, path)) {
           adopt_record(project, &adoptable[k]);
@@ -6762,7 +6892,7 @@ static size_t restore_windows(AnvilShellState *saved, AnvilAdoptionRecord *adopt
     if (!front && (front = create_window(NULL))) restored++;
     if (!front) break;
     ShellProject *project = restored_project(front, adoptable[j].path, rank++);
-    if (project && front->selected == front->empty) select_project(project);
+    if (project && front->selected == front->empty) select_project(project, false);
     adopt_record(project, &adoptable[j]);
   }
   SDL_Log("Shell restored %u Windows from %u saved Windows and %u adoptable Projects", (unsigned)restored,
@@ -6916,7 +7046,7 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   start_sidebar();
   ShellProject *project = new_project(window);
   if (!project) return SDL_APP_FAILURE;
-  select_project(project);
+  select_project(project, false);
   if (!queue_resolution(window, NULL, argc, argv, true, false, false, NULL)) {
     SDL_Log("Anvil shell could not resolve its initial Project");
     set_state(project, SHELL_FAILED);
@@ -6982,7 +7112,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
            WaitForSingleObject(item->process.hProcess, 0) == WAIT_TIMEOUT))) {
         next = item; break;
       }
-    if (next) { select_project(next); request_close(next); continue; }
+    if (next) { select_project(next, false); request_close(next); continue; }
     bool assigned = false;
     for (ShellProject *item = shell.projects; item; item = item->next)
       assigned |= item->window_id == window->id;

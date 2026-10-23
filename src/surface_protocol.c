@@ -226,12 +226,22 @@ oversized:
   return packet;
 }
 
-/* Pane ids such as "pane-3" use letters, digits, '-' and '_'. */
-bool anvil_surface_pane_action_valid(const AnvilSurfacePaneAction *action) {
-  if (action->action != ANVIL_SURFACE_PANE_FOCUS && action->action != ANVIL_SURFACE_PANE_CLOSE) return false;
-  size_t length = strnlen(action->pane, sizeof(action->pane));
-  return length && length < sizeof(action->pane) &&
-         strspn(action->pane, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") == length;
+bool anvil_surface_pane_request_valid(const void *packet, uint32_t size) {
+  if (!packet || size <= sizeof(AnvilSurfacePaneRequest) || size > ANVIL_SURFACE_MAX_PAYLOAD) return false;
+  const AnvilSurfacePaneRequest *request = packet;
+  if (request->route < ANVIL_SURFACE_PANE_ROUTE_SELECT || request->route > ANVIL_SURFACE_PANE_ROUTE_POINTER)
+    return false;
+  if (request->path_size >= 32768 || request->path_size >= size - sizeof(*request)) return false;
+  if (request->route == ANVIL_SURFACE_PANE_ROUTE_POINTER) {
+    if (request->path_size) return false;
+  } else if (!request->path_size || request->x || request->y) return false;
+  return !memchr(request + 1, 0, size - sizeof(*request));
+}
+
+bool anvil_surface_pane_delivery_valid(const void *packet, uint32_t size) {
+  return packet && size > sizeof(AnvilSurfacePaneDelivery) && size <= ANVIL_SURFACE_MAX_PAYLOAD &&
+         !memchr((const char *)packet + sizeof(AnvilSurfacePaneDelivery), 0,
+                 size - sizeof(AnvilSurfacePaneDelivery));
 }
 
 bool anvil_surface_dialog_result_valid(const void *packet, uint32_t size) {

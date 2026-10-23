@@ -800,10 +800,9 @@ local function setup_scenario()
     require("core.panes").place(function() return view end, {
       placement = "current", focus = true, reason = "perf-focus-feedback",
     })
-  elseif benchmark.scenario == "project-sidebar" or benchmark.scenario == "project-sidebar-search"
-      or benchmark.scenario == "project-sidebar-dark" then
+  elseif benchmark.scenario:find("^project%-sidebar") then
     if benchmark.scenario == "project-sidebar-search" then core.title_bar.visible = false end
-    view = require("core.sidebar_scene")(benchmark.scenario == "project-sidebar-search")
+    view = require("core.sidebar_scene")(benchmark.scenario:match("^project%-sidebar%-(%a+)"))
     require("core.panes").place(function() return view end, {
       placement = "current", focus = true, reason = "perf-project-sidebar",
     })

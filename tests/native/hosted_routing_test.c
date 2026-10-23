@@ -3,6 +3,7 @@
 #include "hosted_surface.h"
 #include "system_events.h"
 #include "input_latency_probe.h"
+#include "custom_events.h"
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -22,6 +23,7 @@ static bool sidebar_change_drop;
 static bool ping;
 static SDL_AtomicInt pong;
 static SDL_AtomicInt dialogs_checked;
+static SDL_AtomicInt pane_checked;
 static struct { int status, filter, count; char paths[2][128]; } dialog_results[3];
 static void SDLCALL dialog_result(void *userdata, const char *const *paths, int filter) {
   int index = (int)(intptr_t)userdata;
@@ -113,6 +115,19 @@ static int SDLCALL server(void *data) {
     WaitForSingleObject(finish, 5000);
     return 0;
   }
+  do {
+    if (!anvil_ipc_pipe_read(&pipe, &header, bytes, sizeof(bytes))) return 1;
+  } while (header.type != ANVIL_SURFACE_MSG_PANE_REQUEST);
+  const AnvilSurfacePaneRequest *pane = (const void *)bytes;
+  const char expected[] = "C:/Project{action=\"focus\",pane=\"pane-2\"}";
+  SDL_SetAtomicInt(&pane_checked, anvil_surface_pane_request_valid(bytes, header.size) &&
+    pane->route == ANVIL_SURFACE_PANE_ROUTE_DIRECT && pane->path_size == 10 &&
+    header.size == sizeof(*pane) + sizeof(expected) - 1 &&
+    !memcmp(pane + 1, expected, sizeof(expected) - 1) ? 1 : -1);
+  AnvilSurfacePaneDelivery delivery = {-20, 35};
+  const char request_text[] = "{action=\"drag\",phase=\"move\"}";
+  if (!anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_PANE_ACTION, &delivery, sizeof(delivery),
+                            request_text, sizeof(request_text) - 1)) return 1;
   const Uint32 types[] = {SDL_EVENT_TEXT_EDITING, SDL_EVENT_TEXT_INPUT, SDL_EVENT_DROP_TEXT};
   for (unsigned i = 0; i < SDL_arraysize(types); i++) {
     AnvilSurfaceInput input = {0};
@@ -152,7 +167,47 @@ static int SDLCALL server(void *data) {
   return 0;
 }
 
+static int pane_payloads(void) {
+  struct { AnvilSurfacePaneRequest request; char text[32]; } packet = {
+    {ANVIL_SURFACE_PANE_ROUTE_SELECT, 0, 0, 4}, "C:/p{}"
+  };
+  uint32_t size = sizeof(packet.request) + 6;
+  CHECK(anvil_surface_pane_request_valid(&packet, size));
+  packet.request.route = ANVIL_SURFACE_PANE_ROUTE_DIRECT;
+  CHECK(anvil_surface_pane_request_valid(&packet, size));
+  packet.request.x = 1;
+  CHECK(!anvil_surface_pane_request_valid(&packet, size));
+  packet.request.x = 0;
+  packet.text[2] = 0;
+  CHECK(!anvil_surface_pane_request_valid(&packet, size));
+  packet.text[2] = '/';
+  CHECK(!anvil_surface_pane_request_valid(&packet, sizeof(packet.request)));
+  CHECK(!anvil_surface_pane_request_valid(&packet, size + 1));
+  CHECK(!anvil_surface_pane_request_valid(&packet, ANVIL_SURFACE_MAX_PAYLOAD + 1));
+  packet.request.path_size = UINT32_MAX;
+  CHECK(!anvil_surface_pane_request_valid(&packet, size));
+  packet.request.path_size = 6;
+  CHECK(!anvil_surface_pane_request_valid(&packet, size));
+  packet.request.path_size = 0;
+  CHECK(!anvil_surface_pane_request_valid(&packet, size));
+  packet.request.route = ANVIL_SURFACE_PANE_ROUTE_POINTER;
+  packet.request.x = -45;
+  packet.request.y = 300;
+  CHECK(anvil_surface_pane_request_valid(&packet, size));
+  packet.request.path_size = 4;
+  CHECK(!anvil_surface_pane_request_valid(&packet, size));
+  packet.request.route = 99;
+  CHECK(!anvil_surface_pane_request_valid(&packet, size));
+  struct { AnvilSurfacePaneDelivery delivery; char text[3]; } delivered = {{-1, -1}, "{}"};
+  CHECK(anvil_surface_pane_delivery_valid(&delivered, sizeof(delivered.delivery) + 2));
+  CHECK(!anvil_surface_pane_delivery_valid(&delivered, sizeof(delivered.delivery)));
+  CHECK(!anvil_surface_pane_delivery_valid(&delivered, sizeof(delivered.delivery) + 3));
+  CHECK(!anvil_surface_pane_delivery_valid(&delivered, ANVIL_SURFACE_MAX_PAYLOAD + 1));
+  return 0;
+}
+
 int main(int test_argc, char **test_argv) {
+  CHECK(pane_payloads() == 0);
   /* Equal-sized Windows still require a new input/frame/IME configuration. */
   AnvilSurfaceConfigure source_window = {.window_id = 7}, target_window = {.window_id = 9};
   CHECK(anvil_surface_layout_changed(&source_window, &target_window));
@@ -226,6 +281,8 @@ int main(int test_argc, char **test_argv) {
     CHECK(x == 30.5f && y == 40.25f);
   }
   CHECK(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS));
+  CHECK(init_custom_events());
+  CHECK(register_custom_event("panerequest", NULL));
   if (dialogs) {
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, "title");
@@ -276,6 +333,9 @@ int main(int test_argc, char **test_argv) {
     for (int i = 0; i < 3; i++) CHECK(anvil_hosted_surface_show_dialog(41 + i, i, props, dialog_result, (void *)(intptr_t)i));
     SDL_DestroyProperties(props);
   }
+  if (!dialogs && !ping && !motion_stall)
+    CHECK(anvil_hosted_surface_pane_request(ANVIL_SURFACE_PANE_ROUTE_DIRECT, "C:/Project",
+                                           "{action=\"focus\",pane=\"pane-2\"}", 0, 0));
   SetEvent(ready);
   CHECK(WaitForSingleObject(sent, 5000) == WAIT_OBJECT_0);
   SDL_Delay(50);
@@ -359,12 +419,30 @@ int main(int test_argc, char **test_argv) {
   }
   CHECK(anvil_hosted_surface_display_scale() == 1.25f);
   unsigned text_count = 0;
+  bool pane_delivered = false;
   /* A refresh rate change alone must reach the editor, or its FPS target stays stale. */
   float display_rate = 0;
   unsigned display_changes = 0;
-  for (;;) {
+  Uint64 input_deadline = SDL_GetTicks() + 5000;
+  while (SDL_GetTicks() < input_deadline) {
+    while (SDL_PollEvent(&event)) {
+      CHECK(!anvil_hosted_surface_loss_event(event.type));
+      if (!anvil_hosted_surface_dispatch(&event)) system_push_event(&event);
+    }
     anvil_hosted_surface_poll();
-    if (!system_event_pop(&event)) break;
+    if (!system_event_pop(&event)) {
+      if (pane_delivered && text_count == 4) break;
+      SDL_Delay(1);
+      continue;
+    }
+    const char *custom = get_custom_event_name(event.type);
+    if (custom && !strcmp(custom, "panerequest")) {
+      const AnvilSurfacePaneDelivery *delivery = event.user.data1;
+      CHECK(delivery->x == -20 && delivery->y == 35);
+      CHECK(!strcmp((const char *)(delivery + 1), "{action=\"drag\",phase=\"move\"}"));
+      free(event.user.data1);
+      pane_delivered = true;
+    }
     if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED) {
       display_rate = anvil_hosted_surface_refresh_rate();
       display_changes++;
@@ -380,6 +458,7 @@ int main(int test_argc, char **test_argv) {
     }
   }
   CHECK(text_count == 4);
+  CHECK(SDL_GetAtomicInt(&pane_checked) == 1 && pane_delivered);
   CHECK(display_changes == 1 && display_rate == 60);
   CHECK(anvil_hosted_surface_display_scale() == 1.5f);
   SDL_Surface *surface = SDL_CreateSurface(320, 240, SDL_PIXELFORMAT_BGRA32);

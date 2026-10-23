@@ -25,7 +25,7 @@ test.describe("Sidebar keyboard navigation", function()
     test.equal(view:get_cursor().tab.id, "b")
     test.same(actions, {})
     view:on_key_pressed("return")
-    test.same(actions, {{"pane",1,"b","focus"}})
+    test.same(actions, {{"request","select","C:/Alpha",{action="focus",pane="b"}}})
   end)
 
   test.it("collapses a Project and searches its hidden Tabs with Project context", function()

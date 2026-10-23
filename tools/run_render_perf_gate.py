@@ -157,6 +157,9 @@ SCENARIOS["project-sidebar"] = {
 SCENARIOS["project-sidebar-search"] = dict(SCENARIOS["project-sidebar"])
 # The same Project Sidebar in the dark default theme.
 SCENARIOS["project-sidebar-dark"] = dict(SCENARIOS["project-sidebar"], theme="default")
+# A Tab held over a drop line inside a Pane Group, in the light and dark themes.
+SCENARIOS["project-sidebar-drag"] = dict(SCENARIOS["project-sidebar"])
+SCENARIOS["project-sidebar-drag-dark"] = dict(SCENARIOS["project-sidebar"], theme="default")
 SCENARIOS["focus-feedback"] = dict(SCENARIOS["project-sidebar"], window_height=500)
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,

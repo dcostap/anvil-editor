@@ -9,6 +9,7 @@ local storage = require "core.storage"
 local zoom = require "core.zoom"
 local keymap = require "core.keymap"
 local command = require "core.command"
+local common = require "core.common"
 -- The Sidebar draws at each Window's display scale times the interface Zoom that Projects save.
 local interface_zoom = 1
 local function set_zoom(interface)
@@ -113,19 +114,22 @@ local function add_surface(id, window)
       end
       return
     end
-    if action == "select_terminal" or action == "pane" then
+    if action == "request" then
+      local route, path, request = row_id, target, ...
+      -- Focusing a Pane gives the keyboard back to the Project. The shell gets both messages in this order.
+      if request.action == "focus" then system.focus_project_sidebar(false) end
+      local text = common.serialize(request, {escape = true})
+      local sent = system.pane_request(route, path, text)
+      core.log_quiet("Sidebar Pane request: Window=%d route=%s Project=%s action=%s pane=%s bytes=%d sent=%s", id,
+        route, path, request.action, tostring(request.pane), #text, tostring(sent))
+      return
+    end
+    if action == "select_terminal" then
       for _, project in ipairs(core.project_sidebar or {}) do
         if project.row_id == row_id then
-          if action == "pane" then
-            local pane_action = ...
-            local sent = system.pane_action(project.path, target, pane_action)
-            core.log_quiet("Sidebar Pane %s: Window=%d Project=%d pane=%s sent=%s", pane_action, id,
-              project.id or 0, target, tostring(sent))
-          else
-            local sent = system.select_terminal(project.path, target)
-            core.log_quiet("Sidebar Terminal Session selection: Window=%d Project=%d session=%s sent=%s", id,
-              project.id or 0, target, tostring(sent))
-          end
+          local sent = system.select_terminal(project.path, target)
+          core.log_quiet("Sidebar Terminal Session selection: Window=%d Project=%d session=%s sent=%s", id,
+            project.id or 0, target, tostring(sent))
           return
         end
       end
@@ -273,7 +277,8 @@ function core.on_event(name, ...)
     current.view:on_mouse_pressed(button, x, y); core.redraw = true
   elseif name == "mousereleased" then
     local button, x, y = ...
-    core.log_quiet("Sidebar release: Window=%d button=%s x=%d y=%d", current.id, button, x, y)
+    core.log_quiet("Sidebar release: Window=%d button=%s x=%d y=%d drag=%s", current.id, button, x, y,
+      tostring(current.view.drag ~= nil))
     current.view:on_mouse_released(button, x, y); core.redraw = true
   elseif name == "mousemoved" then
     local x, y = ...
@@ -284,6 +289,21 @@ function core.on_event(name, ...)
   elseif name == "mouseleft" then
     current.pointer_y = nil
     if current.view:on_mouse_left() then core.redraw = true end
+    -- The shell shows the Project's cursor outside the Sidebar.
+    current.cursor = nil
+  elseif name == "dropbegin" then
+    current.view:on_drop_begin()
+  elseif name == "dropmoved" then
+    current.view:on_drop_moved(...); core.redraw = true
+  elseif name == "filedropped" then
+    local filename, x, y = ...
+    current.view:on_file_dropped(system.absolute_path(filename) or filename, x, y)
+  elseif name == "textdropped" then
+    current.view:on_text_dropped(...)
+  elseif name == "dropcomplete" then
+    local taken = current.view:on_drop_complete()
+    core.log_quiet("Sidebar drop: Window=%d taken=%s", current.id, tostring(taken))
+    core.redraw = true
   elseif name == "mousewheel" then
     local _, height = renwindow.get_size(core.window)
     current.view:on_mouse_wheel((...), height, current.pointer_y); core.redraw = true
@@ -295,6 +315,13 @@ function core.on_event(name, ...)
         tostring(configured_w), tostring(configured_h), width, height)
     end
     core.redraw = true
+  end
+  if name:find("^mouse") and name ~= "mouseleft" then
+    local cursor = current.view:pointer_cursor()
+    if cursor ~= current.cursor then
+      current.cursor = cursor
+      system.set_cursor(cursor)
+    end
   end
   save()
 end

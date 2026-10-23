@@ -1588,9 +1588,16 @@ local function save_closed_pane(pane)
   return snapshot
 end
 
-function M.reopen_last_closed()
-  local snapshot = table.remove(closed_panes)
-  if not snapshot then return nil, "No closed Pane is available" end
+function M.snapshot(target)
+  local pane = M.find(target)
+  if not pane then return nil, "Pane is no longer available" end
+  local ok, snapshot = pcall(save_closed_pane, pane)
+  if not ok then return nil, tostring(snapshot) end
+  return snapshot
+end
+
+function M.restore(snapshot, opts)
+  opts = opts or {}
   if snapshot.error then return nil, snapshot.error end
   local views = {}
   local ok, result = pcall(function()
@@ -1628,7 +1635,7 @@ function M.reopen_last_closed()
         pane.retained_views[#pane.retained_views + 1] = view
       end
     end
-    M.focus(pane)
+    if opts.focus ~= false then M.focus(pane) end
     after_mutation("reopened " .. pane.id)
     return pane
   end)
@@ -1641,6 +1648,12 @@ function M.reopen_last_closed()
   end
   quiet("Pane reopened with %d Views", #views)
   return result
+end
+
+function M.reopen_last_closed()
+  local snapshot = table.remove(closed_panes)
+  if not snapshot then return nil, "No closed Pane is available" end
+  return M.restore(snapshot)
 end
 
 local function commit_close(pane)
