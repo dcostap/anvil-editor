@@ -838,6 +838,7 @@ function M.is_disposable(target)
     return false
   end
   local view = pane.current_view
+  if view and view.is_disposable then return view:is_disposable() end
   local buffer = view and view.buffer
   local Editor = require "core.editor"
   return view.extends and view:extends(Editor)
@@ -1079,7 +1080,10 @@ function M.present(view, opts)
       focus = opts.focus, history_limit = opts.history_limit,
     }
   end
-  if current ~= view and current.can_suspend and current:can_suspend() == false then
+  local disposable_replacement = M.is_disposable(pane)
+    and (not M.constraint(pane) or M.constraint(pane) ~= M.view_constraint(view))
+  if current ~= view and (disposable_replacement
+      or current.can_suspend and current:can_suspend() == false) then
     if not existing and M.is_disposable(pane) then
       local committed = false
       local function approved()

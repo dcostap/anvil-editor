@@ -235,6 +235,68 @@ test.describe("Terminal View", function()
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
+  test.it("replaces an unused terminal without keeping it in Pane history", function(context)
+    local view = terminal.open()
+    local pane = panes.pane_for_view(view)
+    local session = context.sessions[1]
+    -- Startup output does not make a terminal used.
+    view.snapshot.title = "PowerShell"
+    view:service_session(true)
+    local editor = Editor(Buffer())
+    test.equal(panes.present(editor), pane)
+    test.equal(pane.current_view, editor)
+    test.equal(#pane.history.entries, 1)
+    test.equal(pane.history.entries[1].view, editor)
+    test.is_nil(panes.pane_for_view(view))
+    test.ok(session.closed)
+    test.equal(panes.visible_group(), pane.group)
+  end)
+
+  test.it("keeps a terminal protected after typed input is deleted", function(context)
+    local view = terminal.open()
+    local pane = panes.pane_for_view(view)
+    test.ok(view:on_text_input("x"))
+    test.ok(view:on_key_pressed("backspace"))
+    local editor = Editor(Buffer())
+    local opened = panes.present(editor)
+    test.ok(opened.group ~= pane.group)
+    test.equal(pane.current_view, view)
+    test.ok(not context.sessions[1].closed)
+  end)
+
+  test.it("keeps a terminal after paste or a submitted command", function(context)
+    for _, send in ipairs {
+      function(view) return view:paste("echo hello") end,
+      function(view) return view:run_command_line("echo hello") end,
+    } do
+      local view = terminal.open()
+      local pane = panes.pane_for_view(view)
+      local session = view.session
+      test.ok(send(view))
+      local opened = panes.present(Editor(Buffer()))
+      test.ok(opened.group ~= pane.group)
+      test.equal(pane.current_view, view)
+      test.ok(not session.closed)
+    end
+  end)
+
+  test.it("keeps an unused terminal replaceable after rejected input", function(context)
+    local view = terminal.open()
+    local pane = panes.pane_for_view(view)
+    context.sessions[1].key_failures = 1
+    test.not_ok(view:on_key_pressed("return"))
+    test.equal(panes.present(Editor(Buffer())), pane)
+    test.ok(context.sessions[1].closed)
+  end)
+
+  test.it("protects a restored terminal even without a saved session identifier", function()
+    local view = terminal.TerminalView.from_state { cwd = system.getcwd() }
+    local pane = panes.present(view)
+    local opened = panes.present(Editor(Buffer()))
+    test.ok(opened.group ~= pane.group)
+    test.equal(pane.current_view, view)
+  end)
+
   test.it("opens the file at the terminal cursor in a new Pane Group", function(context)
     local path = USERDIR .. PATHSEP .. "terminal-activation.txt"
     context.activation_path = path
@@ -616,6 +678,7 @@ test.describe("Terminal View", function()
 
   test.it("keeps Terminal sessions in separate Panes and closes only the selected session", function(context)
     local first = terminal.open()
+    test.ok(first:on_text_input("work"))
     local pane = panes.active()
     local second = terminal.open { pane = pane }
     local first_session, second_session = first.session, second.session
@@ -630,6 +693,7 @@ test.describe("Terminal View", function()
 
   test.it("focuses every Pane-owned Terminal View through one command", function()
     local first = terminal.open({ focus = true })
+    test.ok(first:on_text_input("work"))
     local pane = panes.pane_for_view(first)
     local second = terminal.open({ pane = pane, focus = true })
     local other_pane = panes.create()
@@ -1637,6 +1701,7 @@ test.describe("Terminal View", function()
     local view = terminal.open({ focus = true })
     local pane = panes.pane_for_view(view)
     local session = context.sessions[1]
+    test.ok(view:on_text_input("work"))
     view:update()
 
     panes.place(function() return Editor(Buffer(nil, nil, true)) end, {

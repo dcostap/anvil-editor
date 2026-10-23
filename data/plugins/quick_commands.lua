@@ -123,7 +123,7 @@ local function enter_command(view, def, slot)
     return false
   end
   view.session:scroll("bottom")
-  if not view.session:write(slot.command .. "\r") then
+  if not view:write_input(slot.command .. "\r") then
     core.warn("Quick Command %s did not run: its terminal rejected the input", def.label)
     return false
   end

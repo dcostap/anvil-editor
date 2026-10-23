@@ -387,7 +387,7 @@ A center drop that exchanges two complete Panes between their visual positions, 
 _Avoid_: swap Views, swap histories
 
 **Disposable Pane**:
-A Pane whose only Navigation History entry is a blank Untitled Editor and which has no retained Views. It remains disposable after its text is added and then removed.
+A Pane whose only Navigation History entry is a blank Untitled Editor or an Ephemeral Terminal, with no retained Views. A blank Untitled Editor remains disposable after its text is added and then removed.
 _Avoid_: void Pane, empty split
 
 **Reopen Closed Pane**:
@@ -555,6 +555,11 @@ _Avoid_: Terminal panel, terminal buffer, console
 **Terminal Session**:
 The running shell or terminal application behind a Terminal View. It belongs to one Project and can keep running while no Terminal View shows it.
 _Avoid_: PTY, terminal process, shell instance
+
+**Ephemeral Terminal**:
+A new Terminal View that has received no user input. Shell startup output does not count as input.
+Opening an unrelated View replaces it in the same Disposable Pane, closes its Terminal Session, and removes it from Navigation History.
+Successful input ends this state, even if the user then deletes that input. Restored Terminal Sessions are not ephemeral.
 
 **Agent Session**:
 A coding agent's saved conversation, such as a Pi session. When a Terminal Session revives after its shell ended, it resumes the Agent Session that its agent had open.

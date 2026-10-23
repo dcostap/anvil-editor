@@ -316,6 +316,8 @@ function TerminalView:new(options)
   self.pane_constraint = {}
   self.owns_pane_constraint = true
   options = options or {}
+  -- An attached session can contain work from another View or run.
+  self.input_used = options.session_id ~= nil
   self.context = "workspace"
   self.terminal_view = true
   self.scrollable = true
@@ -576,6 +578,30 @@ function TerminalView:get_cwd()
     or system.getcwd()
 end
 
+function TerminalView:is_disposable()
+  return not self.input_used and (self.state == "new" or self.state == "reconnecting"
+    or self.state == "running")
+end
+
+function TerminalView:mark_input_used()
+  if self.input_used then return end
+  self.input_used = true
+  core.log_quiet("Terminal session %d retained after input", self.log_id)
+end
+
+function TerminalView:write_input(text)
+  if not self.session or not text or text == "" then return false end
+  local sent = self.session:write(text)
+  if sent then self:mark_input_used() end
+  return sent
+end
+
+function TerminalView:send_mouse(...)
+  local sent, encoded = self.session:mouse(...)
+  if sent and encoded then self:mark_input_used() end
+  return sent, encoded
+end
+
 function TerminalView:get_state()
   return {
     cwd = self:get_cwd(),
@@ -603,7 +629,9 @@ end
 function TerminalView.from_state(state)
   if type(state) ~= "table" then return nil end
   if state.kind == "text_capture" then return TerminalTextCaptureView(nil, state.capture) end
-  return TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id }
+  local view = TerminalView { cwd = state.cwd, shell = state.shell, session_id = state.session_id }
+  view.input_used = true
+  return view
 end
 
 function TerminalView:can_discard_from_history()
@@ -677,7 +705,7 @@ function TerminalView:run_command_line(text)
     text = "Start-Process -FilePath " .. quote(exe)
       .. (args ~= "" and " -ArgumentList " .. quote(args) or "") .. " -NoNewWindow -Wait"
   end
-  return self.session:write(text .. "\r")
+  return self:write_input(text .. "\r")
 end
 
 function TerminalView:restore_interrupted_command(record)
@@ -696,7 +724,7 @@ function TerminalView:return_interrupted_command()
   end
   -- A control character, such as a line break or Tab, would act as a key at the prompt.
   if type(text) ~= "string" or text == "" or text:find("%c") then return end
-  local ok = self.session:write(text)
+  local ok = self:write_input(text)
   core.log_quiet("Terminal Session %s interrupted command returned to the prompt: %s",
     tostring(self.session_id), ok and "typed" or "write failed")
 end
@@ -1446,6 +1474,7 @@ function TerminalView:on_text_input(text)
     local event = common.merge(owner.event, { text = text })
     local encoded, reason = self.session:key(owner.key, owner.modifiers, owner.action, event)
     if encoded then
+      self:mark_input_used()
       self.key_owners[owner.key_id] = {
         owner = "ghostty", key = owner.key, modifiers = owner.modifiers, event = event,
       }
@@ -1456,7 +1485,7 @@ function TerminalView:on_text_input(text)
       return false
     end
   end
-  return self.session:write(text) == true
+  return self:write_input(text) == true
 end
 
 function TerminalView:on_ime_text_editing(text, start, length)
@@ -1490,7 +1519,7 @@ function TerminalView:paste(text, confirmed)
   end
 
   local ok, reason = self.session:paste(text, true)
-  if ok then return true end
+  if ok then self:mark_input_used(); return true end
   if reason == "queue_full" then
     core.error("The terminal input queue is full. Try the paste again.")
   end
@@ -1634,6 +1663,7 @@ function TerminalView:on_key_pressed(key, event)
   end
   local encoded, reason = self.session:key(key, modifiers, action, event)
   encoded = encoded == true
+  if encoded then self:mark_input_used() end
   if reason == "queue_full" then
     core.log_quiet("Terminal session %d input queue is full", self.log_id)
   end
@@ -1948,7 +1978,7 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
     self.session:reset_selection_gesture()
     self.mouse_button = button
     self.session:clear_selection()
-    self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
+    self:send_mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
   elseif button == "left" then
     self.selection_start = true
     self.session:selection_gesture(
@@ -1999,7 +2029,7 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
     return true
   end
   if self.snapshot and self.snapshot.mouse_tracking then
-    self.session:mouse("motion", self.mouse_button, pixel_x, pixel_y, mouse_modifiers())
+    self:send_mouse("motion", self.mouse_button, pixel_x, pixel_y, mouse_modifiers())
     return true
   end
   return false
@@ -2038,7 +2068,7 @@ function TerminalView:on_mouse_released(button, x, y)
     return true
   end
   if self.snapshot and self.snapshot.mouse_tracking then
-    self.session:mouse("release", button, pixel_x, pixel_y, mouse_modifiers())
+    self:send_mouse("release", button, pixel_x, pixel_y, mouse_modifiers())
     self.mouse_button = nil
     return true
   end
@@ -2052,7 +2082,7 @@ function TerminalView:on_mouse_wheel(delta_y)
     local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
     local button = delta_y > 0 and "four" or "five"
     -- Input follows live terminal modes, not the last display snapshot.
-    local sent, encoded = self.session:mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
+    local sent, encoded = self:send_mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
     core.log_quiet(
       "Terminal session %d wheel: delta=%s position=%.1f,%.1f sent=%s encoded=%s snapshot_tracking=%s",
       self.log_id, tostring(delta_y), pixel_x, pixel_y, tostring(sent), tostring(encoded),
