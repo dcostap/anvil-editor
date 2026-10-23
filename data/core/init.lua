@@ -3780,7 +3780,11 @@ function core.run_step(options)
       did_redraw    = core.step(run_next_frame_time, options, core.perf_frame_stats)
       core_step_ms  = (system.get_time() - core_step_start) * 1000
       now           = system.get_time()
-      run_next_step = nil
+      -- Input can wake us before the next frame's update is due. Keep that
+      -- deadline; otherwise an unchanged pointer event replaces a pending
+      -- animation frame with the much later caret-blink deadline.
+      run_next_step = not did_redraw and now < run_next_frame_time
+        and run_next_frame_time or nil
     end
     if startup_run_step then
       startup.run_step_end(startup_run_step, did_redraw)
