@@ -276,7 +276,10 @@ function SidebarView:rebuild_rows()
     local panes = project.panes or {}
     -- The Selected Project's active Tab takes the highlight.
     local active = is_selected and panes[panes.active or 0] and panes.active
-    local key = (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
+    -- The Selected Project always shows its rows, so it has no collapse state of its own. Its saved state returns
+    -- when another Project becomes selected.
+    local key = not is_selected and (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path)
+      or nil
     local collapsed = key and self:is_collapsed(key, false) or false
     add({kind = "project", project = project, key = key, collapsed = collapsed, tabs = #panes,
       id_key = "project:" .. project.path, current = is_selected,
@@ -1514,13 +1517,8 @@ function SidebarView:draw(width, height)
     system.is_surface_transparent() and style.wallpaper_surface(style.background2) or style.background2)
   renderer.draw_rect(width - math.max(1, SCALE), 0, math.max(1, SCALE), height, style.divider)
   self:draw_search()
-  local m = self:metrics()
   local top, main_bottom = self:shown_list_top(), self:main_bottom()
-  local bottom_top, bottom_height = self:bottom_area()
-  if bottom_height > 0 then
-    renderer.draw_rect(m.pad + 8 * SCALE, bottom_top - math.floor(m.gap / 2), width - 2 * m.pad - 16 * SCALE,
-      math.max(1, math.floor(SCALE)), style.divider)
-  end
+  local bottom_top = self:bottom_area()
   local active_color = self.focused and style.row_selection_inactive or style.row_selection
   for _, area in ipairs({{"main", top, main_bottom}, {"bottom", bottom_top, height}}) do
     local name, area_top, area_bottom = area[1], area[2], area[3]

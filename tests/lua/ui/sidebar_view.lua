@@ -435,6 +435,33 @@ test.describe("Sidebar age groups", function()
     test.ok(text:find("2 terminals, 1 busy", 1, true), "The hint is missing: " .. text)
   end)
 
+  test.it("keeps the Selected Project expanded while its saved state is collapsed", function()
+    local function model(selected)
+      local function project(id, name)
+        return {row_id=id,id=id,path="C:/" .. name,state="ready",window_id=1,terminals={},
+          panes={active=1,visible=1,{id=name .. "-pane",number=1,name=name .. ".lua",group=1}}}
+      end
+      return {project(1, "A"), project(2, "B"), windows={{id=1,selected_project=selected}}}
+    end
+    local actions, action = recorder()
+    local view = SidebarView(action, {["project:C:/A"]=true, ["project:C:/B"]=true})
+    local function shown_tabs()
+      local names = {}
+      for _, row in ipairs(view.rows) do
+        if row.kind == "tab" then names[#names + 1] = row.tab.name end
+      end
+      return table.concat(names, ",")
+    end
+    view:set_model(model(1), 1)
+    test.equal(shown_tabs(), "A.lua")
+    -- A click on the Selected Project's row edge does not collapse it.
+    view:on_mouse_pressed("left", 235, row_y(view, "project", 1))
+    test.equal(shown_tabs(), "A.lua")
+    view:set_model(model(2), 1)
+    test.equal(shown_tabs(), "B.lua")
+    test.same(view.collapsed, {["project:C:/A"]=true, ["project:C:/B"]=true})
+  end)
+
   test.it("restores collapsed groups and reports changes for the next Sidebar", function()
     local actions, action = recorder()
     local view = SidebarView(action, {["group:older"] = true})
