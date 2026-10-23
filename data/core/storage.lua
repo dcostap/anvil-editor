@@ -24,45 +24,29 @@ end
 local storage = {}
 
 
+-- While another process replaces a file, Windows refuses to open it for a moment.
+local OPEN_RETRY_DELAYS = { 0.005, 0.01, 0.02, 0.04 }
+
+local function load_file(path)
+  local func, err = loadfile(path)
+  for _, delay in ipairs(OPEN_RETRY_DELAYS) do
+    if func or not tostring(err):find("cannot open", 1, true) or not system.get_file_info(path) then break end
+    system.sleep(delay)
+    func, err = loadfile(path)
+  end
+  return func, err
+end
+
+
 ---Loads data from a persistent storage file.
 ---
 ---@param module string The module under which the data is stored.
 ---@param key string The key under which the data is stored.
 ---@return string|table|number? data The stored data present for this module, at this key.
-local function latest_backup_for(path)
-  local dir = common.dirname(path)
-  local base = common.basename(path)
-  local items = system.list_dir(dir)
-  if not items then return nil end
-  local prefix = base .. ".bak-"
-  local best, best_time
-  for _, item in ipairs(items) do
-    if item:sub(1, #prefix) == prefix then
-      local backup = dir .. PATHSEP .. item
-      local info = system.get_file_info(backup)
-      if info and (not best_time or info.modified > best_time) then
-        best, best_time = backup, info.modified
-      end
-    end
-  end
-  return best
-end
-
 function storage.load(module, key)
   local path = module_key_to_path(module, key)
-  if not system.get_file_info(path) then
-    local backup = latest_backup_for(path)
-    if backup then
-      local restored, err = os.rename(backup, path)
-      if restored then
-        log("log", "restored storage backup %s", backup)
-      else
-        log("error", "error restoring storage backup %s: %s", backup, err)
-      end
-    end
-  end
   if system.get_file_info(path) then
-    local func, err = loadfile(path)
+    local func, err = load_file(path)
     if func then
       return func()
     else
@@ -103,22 +87,8 @@ function storage.save(module, key, value)
       check_io(f:close())
     end)
     if ok then
-      local renamed, rename_err = os.rename(tmp, path)
-      if not renamed and system.get_file_info(path) then
-        local backup = path .. ".bak-" .. tostring(math.floor(system.get_time() * 1000000))
-        local moved_old, move_old_err = os.rename(path, backup)
-        if moved_old then
-          renamed, rename_err = os.rename(tmp, path)
-          if renamed then
-            local removed, remove_err = os.remove(backup)
-            if not removed then log("error", "error deleting storage backup %s: %s", backup, remove_err) end
-          else
-            pcall(os.rename, backup, path)
-          end
-        else
-          rename_err = move_old_err
-        end
-      end
+      -- Other processes read some keys while they change, so the file must never be missing during a replace.
+      local renamed, rename_err = system.replace_file(tmp, path)
       if not renamed then
         os.remove(tmp)
         log("error", "error replacing storage file %s: %s", path, rename_err)

@@ -1607,6 +1607,47 @@ static int f_atomic_replace_file(lua_State *L) {
 }
 
 
+/* Renames source to target and replaces an existing target in one step. A
+   reader of target opens the old file or the new file, never a missing one.
+   ReplaceFileW keeps the target's metadata, but it takes several steps. */
+static int f_replace_file(lua_State *L) {
+  const char *source = luaL_checkstring(L, 1);
+  const char *target = luaL_checkstring(L, 2);
+#ifdef _WIN32
+  LPWSTR wsource = utfconv_utf8towc(source);
+  LPWSTR wtarget = utfconv_utf8towc(target);
+  BOOL replaced = FALSE;
+  DWORD error = ERROR_NO_UNICODE_TRANSLATION;
+  if (wsource && wtarget) {
+    DWORD flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+    replaced = MoveFileExW(wsource, wtarget, flags);
+    /* A reader that has target open blocks the replace until it closes. */
+    for (size_t i = 0; !replaced && i < SDL_arraysize(replace_retry_delays_ms); i++) {
+      if (!replace_error_is_transient(GetLastError())) break;
+      SDL_Delay(replace_retry_delays_ms[i]);
+      replaced = MoveFileExW(wsource, wtarget, flags);
+    }
+    if (!replaced) error = GetLastError();
+  }
+  SDL_free(wsource);
+  SDL_free(wtarget);
+  if (!replaced) {
+    lua_pushboolean(L, 0);
+    push_win32_error(L, error);
+    return 2;
+  }
+#else
+  if (rename(source, target) != 0) {
+    lua_pushboolean(L, 0);
+    lua_pushfstring(L, "rename(): %s", strerror(errno));
+    return 2;
+  }
+#endif
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+
 static int f_mkdir(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
 
@@ -2792,6 +2833,7 @@ static const luaL_Reg lib[] = {
   { "ftruncate",             f_ftruncate             },
   { "sync_file",             f_sync_file             },
   { "atomic_replace_file",   f_atomic_replace_file   },
+  { "replace_file",          f_replace_file          },
   { "get_display_info",      f_get_display_info      },
   { "open_file_dialog",      f_open_file_dialog      },
   { "save_file_dialog",      f_save_file_dialog      },

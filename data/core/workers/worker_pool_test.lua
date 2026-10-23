@@ -45,6 +45,18 @@ function worker_pool_test.run(payload, ctx)
     return
   end
 
+  if op == "storage_save_loop" then
+    USERDIR = payload.userdir
+    local storage = require "core.storage"
+    local failures = {}
+    for i = 1, payload.count do
+      local ok, err = storage.save(payload.module, payload.key, { value = i })
+      if not ok then failures[#failures + 1] = tostring(err) end
+    end
+    ctx.send({ type = "final", payload = { failures = failures } })
+    return
+  end
+
   if op == "fail" then
     error(payload.message or "worker-pool-test-failure")
   end
