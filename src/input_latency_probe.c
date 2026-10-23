@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #define PROBE_MAX_SAMPLES 4096
 #define PROBE_TAG 0x5A000000u
@@ -92,6 +95,16 @@ static void push_key(Uint32 window_id, Uint32 type, Uint32 seq) {
   SDL_PushEvent(&event);
 }
 
+static void push_sample(Uint32 window_id, Uint32 seq) {
+  push_key(window_id, SDL_EVENT_KEY_DOWN, seq);
+  SDL_Event text = {0};
+  text.type = SDL_EVENT_TEXT_INPUT;
+  text.text.windowID = window_id;
+  text.text.text = "a";
+  SDL_PushEvent(&text);
+  push_key(window_id, SDL_EVENT_KEY_UP, seq);
+}
+
 static int compare_double(const void *a, const void *b) {
   double x = *(const double *)a, y = *(const double *)b;
   return x < y ? -1 : x > y ? 1 : 0;
@@ -144,6 +157,14 @@ static int SDLCALL generator_thread(void *data) {
   SDL_Delay((Uint32)(probe.warmup_ms > 0 ? probe.warmup_ms : 0));
   Uint32 window_id = SDL_GetWindowID(probe.window);
   Uint32 random = 0x9E3779B9u;
+  bool sidebar_hover = SDL_getenv("ANVIL_INPUT_LATENCY_SIDEBAR_HOVER") != NULL;
+  unsigned motion = 0;
+#ifdef _WIN32
+  /* Native messages expose delays between Windows input polls. SDL_PushEvent bypasses that wait. */
+  HWND native_window = sidebar_hover && !strcmp(probe.role, "shell")
+    ? SDL_GetPointerProperty(SDL_GetWindowProperties(probe.window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL)
+    : NULL;
+#endif
   for (int seq = 1; seq <= probe.count; seq++) {
     probe.sent_ns[seq] = SDL_GetTicksNS();
     SDL_SetAtomicInt(&probe.last_sent, seq);
@@ -153,22 +174,38 @@ static int SDLCALL generator_thread(void *data) {
     const char *gate = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
     const char *skip = SDL_getenv("ANVIL_INPUT_LATENCY_SKIP_AFTER");
     if (gate && !strcmp(gate, "1") && skip && seq > SDL_atoi(skip)) continue;
-    push_key(window_id, SDL_EVENT_KEY_DOWN, (Uint32)seq);
-
-    SDL_Event text;
-    SDL_zero(text);
-    text.type = SDL_EVENT_TEXT_INPUT;
-    text.text.windowID = window_id;
-    text.text.text = "a";
-    SDL_PushEvent(&text);
-
-    push_key(window_id, SDL_EVENT_KEY_UP, (Uint32)seq);
+#ifdef _WIN32
+    if (native_window)
+      PostMessageW(native_window, ANVIL_ROUTING_PROBE_MESSAGE, 12, seq);
+    else
+#endif
+      push_sample(window_id, (Uint32)seq);
 
     /* Vary the gap so samples land on every phase of the display refresh. */
     random ^= random << 13;
     random ^= random >> 17;
     random ^= random << 5;
-    SDL_Delay(90 + random % 80);
+    /* Keep both surfaces active in the Sidebar check. Sparse hover changes do not reproduce the queue delay. */
+    Uint32 gap = sidebar_hover ? 25 + random % 25 : 90 + random % 80;
+    if (!sidebar_hover) SDL_Delay(gap);
+    else {
+      Uint64 until = SDL_GetTicks() + gap;
+      while (SDL_GetTicks() < until) {
+        SDL_Event hover = {0};
+        hover.type = SDL_EVENT_MOUSE_MOTION;
+        hover.motion.windowID = window_id;
+        hover.motion.x = 100;
+        hover.motion.y = motion++ % 2 ? 250 : 50;
+#ifdef _WIN32
+        if (native_window)
+          PostMessageW(native_window, ANVIL_ROUTING_PROBE_MESSAGE, 0,
+                       ((int)hover.motion.y << 16) | (int)hover.motion.x);
+        else
+#endif
+          SDL_PushEvent(&hover);
+        SDL_Delay(8);
+      }
+    }
   }
 
   Uint64 deadline = SDL_GetTicksNS() + 3 * SDL_NS_PER_SECOND;
@@ -190,6 +227,10 @@ void anvil_latency_probe_start(SDL_Window *window, void (*finish)(void)) {
 }
 
 bool anvil_routing_probe_message(SDL_Window *window, uint32_t message, uintptr_t action, intptr_t point) {
+  if (message == ANVIL_ROUTING_PROBE_MESSAGE && action == 12 && probe.started && point > 0 && point <= probe.count) {
+    push_sample(SDL_GetWindowID(window), (Uint32)point);
+    return true;
+  }
   if (message != ANVIL_ROUTING_PROBE_MESSAGE || action > 11) return false;
   const char *enabled = SDL_getenv("ANVIL_INPUT_ROUTING_PROBE");
   if (!enabled || strcmp(enabled, "1")) return false;

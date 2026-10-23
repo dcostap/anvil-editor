@@ -34,7 +34,8 @@ DISABLED_PLUGINS = "ipc,autorestart,autoreload,autosave_fast,autosaveonfocuslost
 
 
 def run_case(exe: Path, work: Path, mode: str, renderer: str, samples: int,
-             warmup_ms: int, run_index: int) -> dict[str, Any]:
+             warmup_ms: int, run_index: int, sidebar_hover: bool = False,
+             diagnostics: bool = False) -> dict[str, Any]:
     run_dir = work / f"{mode}-{renderer}-{run_index}"
     user = run_dir / "user"
     project = run_dir / "project"
@@ -56,6 +57,11 @@ def run_case(exe: Path, work: Path, mode: str, renderer: str, samples: int,
         "ANVIL_SURFACE_LOG": native_path(run_dir / "surface.log"),
     }
     arguments = ["--shell" if mode == "shell" else "--direct", native_path(probe_file)]
+    if sidebar_hover:
+        environment["ANVIL_INPUT_LATENCY_SIDEBAR_HOVER"] = "1"
+        environment["ANVIL_INPUT_ROUTING_PROBE"] = "1"
+    if diagnostics:
+        environment["ANVIL_INPUT_LATENCY_DIAGNOSTICS"] = "1"
     config = {
         "exe": native_path(exe),
         "working_directory": native_path(project),
@@ -73,6 +79,8 @@ def run_case(exe: Path, work: Path, mode: str, renderer: str, samples: int,
     values = read_key_values(result_file)
     case = {
         "mode": mode, "renderer": renderer, "run": run_index,
+        "sidebar_hover": sidebar_hover, "diagnostics": diagnostics,
+        "input_path": "native-window" if sidebar_hover and mode == "shell" else "sdl-queue",
         "exit_code": launcher.get("exit_code"), "timed_out": launcher.get("timed_out"),
         "done": values.get("done") == "1",
         "requested": int(values.get("requested", 0) or 0),
@@ -146,6 +154,10 @@ def main() -> int:
         "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart", "sidebar-model", "sidebar-worker", "sidebar-demand", "sidebar-process", "sidebar-log", "sidebar-recovery", "sidebar-recovery-reset", "sidebar-idle", "dormant-terminal-sidebar"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
+    parser.add_argument("--sidebar-hover", action="store_true",
+                        help="send rapid typing and Sidebar motion through the shell's native message queue")
+    parser.add_argument("--diagnostics", action="store_true",
+                        help="record native input and presentation stages")
     parser.add_argument("--runs", type=int, default=2)
     parser.add_argument("--warmup-ms", type=int, default=5000)
     parser.add_argument("--renderer", action="append", choices=["d3d11", "software"])
@@ -153,6 +165,8 @@ def main() -> int:
     parser.add_argument("--keep", action="store_true", help="keep the temporary work directory")
     parser.add_argument("--json", type=Path, help="write the full results to this file")
     args = parser.parse_args()
+    if args.sidebar_hover and args.mode != ["shell"]:
+        parser.error("--sidebar-hover requires --mode shell")
     if args.reference_data and (not args.reference_exe or not args.reference_data.is_dir()):
         parser.error("--reference-data requires --reference-exe and a saved runtime data directory")
 
@@ -328,7 +342,8 @@ def main() -> int:
         for run_index in range(args.runs):
             for renderer in renderers:
                 for mode in modes:
-                    case = run_case(exe, work, mode, renderer, args.samples, args.warmup_ms, run_index)
+                    case = run_case(exe, work, mode, renderer, args.samples, args.warmup_ms, run_index,
+                                    args.sidebar_hover, args.diagnostics)
                     cases.append(case)
                     status = "ok" if case["ok"] else f"failed exit={case['exit_code']}"
                     if case["environment_invalid"]:

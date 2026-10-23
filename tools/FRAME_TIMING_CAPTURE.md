@@ -49,6 +49,35 @@ Compare successive `present-end` times to find display submission gaps.
 Then inspect received frames, copying, input delivery, and loop work during each gap.
 `Present` completion is not physical display scanout. These records cannot measure monitor response time.
 
+A frame notice identifies a publication, not an immutable copy of its pixels.
+The shared texture can contain a later frame when the shell copies it.
+Do not report notice-to-presentation delay as exact visible latency.
+
+SDL drains callback events before it polls Windows input again.
+Inspect the interval from `shell-step-end` to the next `shell-step-begin`.
+Several presentations in that interval can delay the next input poll.
+
+## Isolated input stress check
+
+Run this check on the private desktop, with Windows unlocked and the display on:
+
+```sh
+python tools/run_surface_latency_probe.py --mode shell --renderer d3d11 \
+  --sidebar-hover --samples 160 --runs 2 --keep
+```
+
+This workload types rapidly while the pointer alternates between a Sidebar row and empty space.
+It sends owned native window messages, not input to the user's windows.
+The shell converts each tagged typing message into SDL input events.
+The timing includes the wait for Windows message processing and ends after presentation returns.
+It does not measure hardware input delivery or physical display scanout.
+
+The default typing check injects directly into SDL. It does not measure the Windows message wait.
+The stress check must use the shell. Its saved results identify the input path.
+Add `--diagnostics` to log native stages. Logging adds measurement cost; leave it off for timing comparisons.
+Use `--reference-exe` and `--reference-data` to compare saved builds with the same runtime data.
+Use `--no-build` only when the required build outputs are current.
+
 ## Overhead and limits
 
 Native records use bounded memory: 262144 records per process, about 12 MiB.
