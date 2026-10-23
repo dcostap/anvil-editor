@@ -2,6 +2,10 @@
 
 Living record for the production performance audit of Anvil.
 
+The [2026-10-23 essential implementation audit](ESSENTIAL_IMPLEMENTATION_AUDIT.md)
+checks current paths and adds isolated reproductions and measurements at `9df5a67d`.
+Use that evidence before treating older static findings below as current defects.
+
 ## Scope
 
 Audit production-reachable behavior in the normal daily configuration:
