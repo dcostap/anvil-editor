@@ -190,13 +190,27 @@ void anvil_latency_probe_start(SDL_Window *window, void (*finish)(void)) {
 }
 
 bool anvil_routing_probe_message(SDL_Window *window, uint32_t message, uintptr_t action, intptr_t point) {
-  if (message != ANVIL_ROUTING_PROBE_MESSAGE || action > 8) return false;
+  if (message != ANVIL_ROUTING_PROBE_MESSAGE || action > 11) return false;
   const char *enabled = SDL_getenv("ANVIL_INPUT_ROUTING_PROBE");
   if (!enabled || strcmp(enabled, "1")) return false;
   SDL_Event event = {0};
   float x = (int16_t)(point & 0xffff);
   float y = (int16_t)((point >> 16) & 0xffff);
-  if (action == 0) {
+  if (action == 9 || action == 10) {
+    event.type = action == 9 ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+    event.key.windowID = SDL_GetWindowID(window);
+    event.key.key = (SDL_Keycode)point;
+    event.key.scancode = SDL_GetScancodeFromKey(event.key.key, NULL);
+    event.key.down = action == 9;
+  } else if (action == 11) {
+    /* One ASCII character for owned search-routing checks. */
+    static char text[2];
+    if (point <= 0 || point > 127) return false;
+    text[0] = (char)point;
+    event.type = SDL_EVENT_TEXT_INPUT;
+    event.text.windowID = SDL_GetWindowID(window);
+    event.text.text = text;
+  } else if (action == 0) {
     event.type = SDL_EVENT_MOUSE_MOTION;
     event.motion.windowID = SDL_GetWindowID(window);
     event.motion.x = x;

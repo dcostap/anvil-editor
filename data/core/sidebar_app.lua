@@ -7,6 +7,8 @@ local fonts, style = {}, nil
 local color_theme = require "core.color_theme"
 local storage = require "core.storage"
 local zoom = require "core.zoom"
+local keymap = require "core.keymap"
+local command = require "core.command"
 -- The Sidebar draws at each Window's display scale times the interface Zoom that Projects save.
 local interface_zoom = 1
 local function set_zoom(interface)
@@ -86,6 +88,11 @@ local function add_surface(id, window)
   local surface = {id = id, window = window, native_id = system.get_window_id(window), scale = system.get_scale(window),
     redraw = true, query_needed = true}
   surface.view = SidebarView(function(action, row_id, target, ...)
+    if action == "return_focus" then
+      core.log_quiet("Sidebar return focus: Window=%d", id)
+      system.focus_project_sidebar(false)
+      return
+    end
     if action == "collapsed" then
       core.log_quiet("Sidebar group %s collapsed=%s", row_id, tostring(target))
       save_collapsed()
@@ -184,6 +191,18 @@ function core.init()
     if core.session_log then core.session_log:write("INFO", string.format(...), "Sidebar") end
   end
   core.log_quiet("Sidebar frontend started")
+  -- The Sidebar has no editor commands. Keep its focus shortcut and list commands only.
+  local bindings = keymap.get_bindings("core:focus_project_sidebar") or {}
+  keymap.map, keymap.reverse_map = {}, {}
+  command.add(nil, {
+    ["core:focus_project_sidebar"] = function() system.focus_project_sidebar(false) end,
+  })
+  for _, binding in ipairs(bindings) do keymap.add {[binding] = "core:focus_project_sidebar"} end
+  for _, key in ipairs {"up", "down", "left", "right", "home", "end", "return", "keypad enter", "escape", "backspace"} do
+    local name = "sidebar:" .. key:gsub(" ", "_")
+    command.add(nil, {[name] = function() if current then current.view:on_key_pressed(key) end end})
+    keymap.add {[key] = name}
+  end
   if core.session_log then core.session_log:flush() end
   local window = renwindow.create("Sidebar", 240, 600)
   core.window, core.active_window = window, window
@@ -218,6 +237,20 @@ function core.on_event(name, ...)
     core.project_sidebar_request = nil
     current.query_needed = true
   elseif name == "projectsidebar" then saved_event(name, ...)
+  elseif name == "focusgained" or name == "focuslost" then
+    keymap.modkeys = {}
+    current.suppress_text = false
+    current.view:on_focus(name == "focusgained")
+    core.log_quiet("Sidebar keyboard focus: Window=%d focused=%s", current.id, tostring(current.view.focused))
+    core.redraw = true
+  elseif name == "keypressed" then
+    current.suppress_text = keymap.on_key_pressed(...)
+    core.redraw = true
+  elseif name == "keyreleased" then
+    keymap.on_key_released(...)
+  elseif name == "textinput" then
+    if not current.suppress_text then current.view:on_text_input(...) end
+    core.redraw = true
   elseif name == "mousepressed" then
     local button, x, y = ...
     core.log_quiet("Sidebar press: Window=%d button=%s x=%d y=%d", current.id, button, x, y)

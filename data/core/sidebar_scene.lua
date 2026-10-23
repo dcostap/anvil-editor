@@ -33,7 +33,7 @@ local function terminal_tab(number, group, session, title, age, busy)
     terminal = {session = session, state = "running", busy = busy, activity = os.time() - age}}
 end
 
-function Scene:new()
+function Scene:new(search)
   Scene.super.new(self)
   self.sidebar = SidebarView(function() end, {})
   self.sidebar:set_model({
@@ -70,6 +70,10 @@ function Scene:new()
     project(6, "C:/Projects/old-tool", "dormant", 60 * DAY),
     windows = {{id = 1, selected_project = 1}, {id = 2, selected_project = 2}},
   }, 1)
+  if search then
+    self.sidebar:on_focus(true)
+    self.sidebar:on_text_input("shell")
+  end
 end
 
 function Scene:draw()

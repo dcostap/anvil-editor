@@ -1,6 +1,7 @@
 local Object = require "core.object"
 local style = require "core.style"
 local tab = require "core.tab"
+local common = require "core.common"
 
 -- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions. A
 -- right-click on a Project asks the shell for its native actions menu: Move, Unload and the rest.
@@ -28,6 +29,10 @@ local GROUPS = {
 local GROUPS_HEIGHT = 0.5
 local GROUPS_ROWS = 16
 
+local function name_of(path)
+  return path:match("([^/\\]+)[/\\]*$") or path
+end
+
 ---@param action fun(name: string, ...)
 ---@param collapsed table<string, boolean>? Saved collapse state, shared by every Sidebar surface.
 function SidebarView:new(action, collapsed)
@@ -35,6 +40,82 @@ function SidebarView:new(action, collapsed)
   self.collapsed = collapsed or {}
   self.width, self.view_h = 240, 600
   self.main_h, self.bottom_h = 0, 0
+  self.query = ""
+end
+
+local function row_key(row)
+  if not row then return end
+  return row.key or (row.project and row.project.path .. ":" .. row.kind .. ":"
+    .. tostring(row.tab and row.tab.id or row.terminal and row.terminal.id or ""))
+end
+
+function SidebarView:get_cursor() return self.rows[self.cursor] end
+
+function SidebarView:reveal_cursor()
+  local row = self:get_cursor()
+  if not row then return end
+  local field = row.area == "main" and "scroll" or "bottom_scroll"
+  local top = row.area == "main" and self:list_top() or self:bottom_area()
+  local bottom = row.area == "main" and self:main_bottom() or self.view_h
+  local y = self:row_y(self.cursor)
+  if y < top then self[field] = self[field] + y - top
+  elseif y + row.h > bottom then self[field] = self[field] + y + row.h - bottom end
+  self:clamp_scroll()
+end
+
+function SidebarView:on_focus(focused)
+  self.focused = focused
+  self.query, self.cursor = "", nil
+  self:rebuild_rows()
+  if focused then
+    for index, row in ipairs(self.rows) do
+      if row.selected then self.cursor = index; break end
+    end
+    self:reveal_cursor()
+  end
+end
+
+function SidebarView:on_text_input(text)
+  if not self.focused then return end
+  self.query, self.cursor = self.query .. text, nil
+  self:rebuild_rows()
+end
+
+function SidebarView:activate_row(row)
+  if not row then return end
+  if row.kind == "project" then self.action("select", row.project.row_id)
+  elseif row.kind == "tab" then self.action("pane", row.project.row_id, row.tab.id, "focus")
+  elseif row.kind == "terminal" then self.action("select_terminal", row.project.row_id, row.terminal.id)
+  elseif row.key then self:toggle(row.key, row.collapsed) end
+end
+
+function SidebarView:on_key_pressed(key)
+  if not self.focused then return end
+  local row = self:get_cursor()
+  if key == "escape" then self.action("return_focus")
+  elseif key == "return" or key == "keypad enter" then self:activate_row(row)
+  elseif key == "backspace" then
+    self.query = self.query:gsub("[%z\1-\127\194-\244][\128-\191]*$", "", 1)
+    self.cursor = nil
+    self:rebuild_rows()
+  elseif key == "up" or key == "down" or key == "home" or key == "end" then
+    local index = key == "home" and 1 or key == "end" and #self.rows
+      or (self.cursor or 1) + (key == "up" and -1 or 1)
+    index = math.max(1, math.min(#self.rows, index))
+    if self.rows[index] and self.rows[index].kind ~= "empty" then self.cursor = index end
+    self:reveal_cursor()
+  elseif row and (key == "left" or key == "right") and self.query == "" then
+    if row.key then
+      if row.collapsed == (key == "right") then self:toggle(row.key, row.collapsed)
+      elseif key == "right" then self:on_key_pressed("down") end
+    elseif key == "left" and row.project then
+      for index = self.cursor - 1, 1, -1 do
+        local parent = self.rows[index]
+        if parent.kind == "project" and parent.project == row.project then self.cursor = index; break end
+      end
+    end
+    self:reveal_cursor()
+  end
 end
 
 function SidebarView:set_size(width, height)
@@ -99,6 +180,8 @@ function SidebarView:toggle(key, default)
 end
 
 function SidebarView:rebuild_rows()
+  local cursor_key = row_key(self:get_cursor())
+  local searching = self.query ~= ""
   local projects, window_id = self.projects or {}, self.window_id
   local m = metrics()
   local now = os.time()
@@ -133,7 +216,11 @@ function SidebarView:rebuild_rows()
     local panes = project.panes or {}
     -- The Selected Project's active Tab takes the highlight.
     local active = is_selected and panes[panes.active or 0] and panes.active
-    add({kind = "project", project = project, selected = is_selected and not active}, m.project)
+    local key = (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
+    local collapsed = key and self:is_collapsed(key, false) or false
+    add({kind = "project", project = project, key = key, collapsed = collapsed,
+      selected = is_selected and (not active or collapsed and not searching)}, m.project)
+    if collapsed and not searching then return end
     local shown, sizes, records = {}, {}, {}
     for _, item in ipairs(panes) do sizes[item.group or 0] = (sizes[item.group or 0] or 0) + 1 end
     for _, terminal in ipairs(project.terminals or {}) do records[terminal.id] = terminal end
@@ -175,7 +262,7 @@ function SidebarView:rebuild_rows()
         local collapsed = self:is_collapsed(key, true)
         add({kind = "terminal_group", project = project, bucket = group.bucket, label = group.terminal_label,
           count = #terminals, key = key, collapsed = collapsed}, m.terminal)
-        if not collapsed then
+        if searching or not collapsed then
           for _, terminal in ipairs(terminals) do add_terminal(project, terminal, 2) end
         end
       end
@@ -203,10 +290,27 @@ function SidebarView:rebuild_rows()
       local collapsed = self:is_collapsed(key, group.collapsed)
       add({kind = "group", bucket = group.bucket, label = group.label, count = #members, key = key,
         collapsed = collapsed}, m.group)
-      if not collapsed then
+      if searching or not collapsed then
         for _, project in ipairs(members) do add({kind = "project", project = project}, m.project) end
       end
     end
+  end
+  if searching then
+    local filtered, matches = {}, {}
+    for _, row in ipairs(rows) do
+      if row.project and row.kind ~= "terminal_group" then
+        local project_match = common.fuzzy_match(name_of(row.project.path), self.query) ~= nil
+        row.matches = project_match or row.tab and common.fuzzy_match(row.tab.name or "", self.query) ~= nil
+        if row.matches then matches[row.project] = true end
+      end
+    end
+    for _, row in ipairs(rows) do
+      if row.matches or row.kind == "project" and matches[row.project] then
+        filtered[#filtered + 1] = row
+      end
+    end
+    rows = filtered
+    if #rows == 0 then rows = {{kind="empty",label="No matches",area="main",h=m.project}} end
   end
   local main_y, bottom_y = 0, 0
   for _, row in ipairs(rows) do
@@ -217,7 +321,17 @@ function SidebarView:rebuild_rows()
     end
   end
   self.rows, self.main_h, self.bottom_h = rows, main_y, bottom_y
+  self.cursor = nil
+  for index, row in ipairs(rows) do
+    if cursor_key and row_key(row) == cursor_key then self.cursor = index; break end
+  end
+  if not self.cursor then
+    for index, row in ipairs(rows) do
+      if row.kind ~= "empty" and (not searching or row.matches) then self.cursor = index; break end
+    end
+  end
   self:clamp_scroll()
+  if self.focused then self:reveal_cursor() end
   if self.hover_y then self:update_hover() end
 end
 
@@ -333,6 +447,10 @@ function SidebarView:on_mouse_pressed(button, x, y)
     return
   end
   if row.kind ~= "project" then return end
+  if button == "left" and row.key and x >= self.width - 32 * SCALE and self.query == "" then
+    self:toggle(row.key, row.collapsed)
+    return
+  end
   if button == "right" or button == "middle" then
     -- The release acts, so the menu's loop never takes the press's own release.
     self.click_row = {button = button, row_id = row.project.row_id}
@@ -429,10 +547,6 @@ end
 
 local function tint(color, alpha)
   return {color[1], color[2], color[3], alpha}
-end
-
-local function name_of(path)
-  return path:match("([^/\\]+)[/\\]*$") or path
 end
 
 local function project_status(project)
@@ -532,7 +646,10 @@ function SidebarView:draw_row(row, y, width, now)
     return
   end
   local radius = 6 * SCALE
-  if row.selected then
+  if self.focused and self:get_cursor() == row then
+    renderer.draw_rounded_rect(left, y + 1, right - left, row.h - 2, radius, style.selection)
+    renderer.draw_rect(left, y + 4 * SCALE, math.max(2, SCALE), row.h - 8 * SCALE, style.text)
+  elseif row.selected then
     renderer.draw_rounded_rect(left, y + 1, right - left, row.h - 2, radius, style.selection)
   elseif self.hover == row then
     renderer.draw_rounded_rect(left, y + 1, right - left, row.h - 2, radius, tint(style.text, 22))
@@ -573,6 +690,10 @@ function SidebarView:draw_row(row, y, width, now)
   local project = row.project
   local color, note = project_status(project)
   dot(left + 12 * SCALE, cy, 4 * SCALE, color)
+  if row.key and self.query == "" then
+    chevron(right - 14 * SCALE, cy, not row.collapsed, style.dim)
+    right = right - 20 * SCALE
+  end
   local x = left + 24 * SCALE
   if not note and project.window_id and project.window_id ~= 0 and self.window_id
     and project.window_id ~= self.window_id then
@@ -619,6 +740,11 @@ function SidebarView:draw(width, height)
   renderer.draw_rect(0, 0, width, height,
     system.is_surface_transparent() and style.wallpaper_surface(style.background2) or style.background2)
   renderer.draw_rect(width - math.max(1, SCALE), 0, math.max(1, SCALE), height, style.divider)
+  if self.focused then
+    local label = self.query ~= "" and ("Find: " .. self.query) or "Type to search"
+    text(tab.fit(style.font, label, width - 16 * SCALE), 8 * SCALE,
+      (self:list_top() - style.font:get_height()) / 2, style.text)
+  end
   local top, main_bottom = self:list_top(), self:main_bottom()
   local bottom_top, bottom_height = self:bottom_area()
   if bottom_height > 0 then

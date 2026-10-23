@@ -314,6 +314,7 @@ keymap.add_direct {
   ["ctrl+alt+z"] = "editor:revert_file_change",
   ["ctrl+shift+r"] = "core:restart",
   ["alt+return"] = "core:toggle_fullscreen",
+  ["alt+y"] = "core:focus_project_sidebar",
   ["f11"] = "core:toggle_fullscreen",
   ["f4"] = "core:repeat_last_command",
 

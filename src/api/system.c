@@ -322,8 +322,11 @@ top:
       /* on some systems, when alt-tabbing to the window SDL will queue up
       ** several KEYDOWN events for the `tab` key; we flush all keydown
       ** events on focus so these are discarded */
-      SDL_FlushEvent(SDL_EVENT_KEY_DOWN);
-      system_flush_events(SDL_EVENT_KEY_DOWN);
+      /* Sidebar focus is an input route change, not an OS Alt+Tab. Keep subsequent navigation keys. */
+      if (!anvil_hosted_surface_sidebar()) {
+        SDL_FlushEvent(SDL_EVENT_KEY_DOWN);
+        system_flush_events(SDL_EVENT_KEY_DOWN);
+      }
       lua_pushstring(L, "focusgained");
       return 1;
 
@@ -1940,6 +1943,11 @@ static int f_toggle_project_sidebar(lua_State *L) {
   return 1;
 }
 
+static int f_focus_project_sidebar(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_focus_sidebar(lua_toboolean(L, 1)));
+  return 1;
+}
+
 static int f_select_terminal(lua_State *L) {
   size_t path_size = 0, id_size = 0;
   const char *path = luaL_checklstring(L, 1, &path_size);
@@ -2728,6 +2736,7 @@ static const luaL_Reg lib[] = {
   { "pane_action",           f_pane_action           },
   { "select_terminal",       f_select_terminal       },
   { "toggle_project_sidebar", f_toggle_project_sidebar },
+  { "focus_project_sidebar", f_focus_project_sidebar },
   { "show_project_menu",     f_show_project_menu     },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },

@@ -296,6 +296,7 @@ struct ShellWindow {
   float pointer_x, pointer_y;
   bool pointer_in_surface;
   bool pointer_in_sidebar; /* the Sidebar surface received motion and needs a leave */
+  bool sidebar_focused;
   Uint64 sidebar_input_ns;  /* first Sidebar input since its last frame, for the input-to-frame diagnostic */
   bool shown;
   /* DWM does not draw the shown Window until its content is ready. It stays visible to Windows and its Projects. */
@@ -423,6 +424,7 @@ static AnvilSidebarProject *sidebar_project(const char *path);
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value);
 static void start_sidebar(void);
 static void set_sidebar_hidden(bool hidden);
+static void focus_sidebar(ShellWindow *window, bool focused);
 static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y);
 static void schedule_sidebar_restart(void);
 static ShellWindow *create_window(const AnvilShellWindowState *placement);
@@ -971,7 +973,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     case ANVIL_SURFACE_MSG_SELECT_PROJECT: case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
     case ANVIL_SURFACE_MSG_MOVE_PROJECT: case ANVIL_SURFACE_MSG_SELECT_TERMINAL: case ANVIL_SURFACE_MSG_PROJECT_MENU:
     case ANVIL_SURFACE_MSG_PANE_REQUEST: case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
-    case ANVIL_SURFACE_MSG_TEXT_INPUT: case ANVIL_SURFACE_MSG_TITLE:
+    case ANVIL_SURFACE_MSG_TEXT_INPUT: case ANVIL_SURFACE_MSG_TITLE: case ANVIL_SURFACE_MSG_SIDEBAR_FOCUS:
     case ANVIL_SURFACE_MSG_VISIBLE: case ANVIL_SURFACE_MSG_SET_BOUNDS: case ANVIL_SURFACE_MSG_BORDERED:
       return valid_project_message(packet->type, packet + 1, size - sizeof(*packet));
     default: return false;
@@ -991,6 +993,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size >= 1 && size < 32700 && !((const char *)payload)[size - 1] &&
            !memchr(payload, 0, size - 1);
   case ANVIL_SURFACE_MSG_CURSOR:
+  case ANVIL_SURFACE_MSG_SIDEBAR_FOCUS:
   case ANVIL_SURFACE_MSG_WINDOW_MODE:
   case ANVIL_SURFACE_MSG_BORDERED:
   case ANVIL_SURFACE_MSG_VISIBLE:
@@ -3233,6 +3236,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   int value =
       message->size == sizeof(AnvilSurfaceInt) ? ((const AnvilSurfaceInt *)payload)->value : 0;
   if (project->sidebar && message->type != ANVIL_SURFACE_MSG_SIDEBAR_QUERY &&
+      message->type != ANVIL_SURFACE_MSG_SIDEBAR_FOCUS &&
       message->type != ANVIL_SURFACE_MSG_SIDEBAR_REFRESH &&
       message->type != ANVIL_SURFACE_MSG_SELECT_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_UNLOAD_PROJECT &&
@@ -3262,6 +3266,10 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     }
   }
   switch (message->type) {
+  case ANVIL_SURFACE_MSG_SIDEBAR_FOCUS:
+    if (!window->closing && (project->sidebar || project == window->selected))
+      focus_sidebar(window, value != 0);
+    break;
   case ANVIL_SURFACE_MSG_MOVE_PROJECT: {
     const AnvilSurfaceMoveProject *request = payload;
     move_project(window, request->project_id, request->target_window_id);
@@ -3327,6 +3335,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     service_sidebar();
     break;
   case ANVIL_SURFACE_MSG_SELECT_PROJECT:
+    if (project->sidebar) focus_sidebar(window, false);
     SDL_Log("Shell Project selection requested: Window=%u from=%s closing=%d", window->id,
             project->sidebar ? "Sidebar" : "Project", window->closing);
     if (!window->closing)
@@ -3337,6 +3346,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       unload_project_path(window, payload);
     break;
   case ANVIL_SURFACE_MSG_SELECT_TERMINAL: {
+    if (project->sidebar) focus_sidebar(window, false);
     const char *path = (const char *)payload + ANVIL_SURFACE_TERMINAL_ID_LEN + 1;
     SDL_Log("Shell Terminal Session selection requested: Window=%u session=%s closing=%d", window->id,
             (const char *)payload, window->closing);
@@ -3345,6 +3355,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   }
   case ANVIL_SURFACE_MSG_PANE_REQUEST: {
     const AnvilSurfacePaneAction *request = payload;
+    if (project->sidebar && request->action == ANVIL_SURFACE_PANE_FOCUS) focus_sidebar(window, false);
     const char *path = (const char *)payload + sizeof(*request);
     SDL_Log("Shell Pane request: Window=%u action=%u pane=%s closing=%d", window->id, request->action,
             request->pane, window->closing);
@@ -3434,7 +3445,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       break;
     if (input->active >= 0) {
       project->text_active = input->active != 0;
-      if (project != window->selected)
+      if (project != window->selected || window->sidebar_focused)
         break;
       if (project->text_active)
         SDL_StartTextInput(window->window);
@@ -3443,7 +3454,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
         SDL_StopTextInput(window->window);
       }
     } else {
-      if (project != window->selected)
+      if (project != window->selected || window->sidebar_focused)
         break;
       SDL_Rect rect;
       int cursor;
@@ -3600,6 +3611,9 @@ static void slide_sidebar(ShellWindow *window) {
 /* Every Window slides its Sidebar open or closed. A Window that is not shown changes at once. */
 static void set_sidebar_hidden(bool hidden) {
   if (shell.sidebar_hidden == hidden) return;
+  if (hidden) {
+    for (ShellWindow *window = shell.windows; window; window = window->next) focus_sidebar(window, false);
+  }
   shell.sidebar_hidden = hidden;
   SDL_Log("Shell Sidebar %s", hidden ? "hidden" : "shown");
   for (ShellWindow *window = shell.windows; window; window = window->next) {
@@ -3794,7 +3808,32 @@ static void send_sidebar_input(ShellWindow *window, const SDL_Event *event) {
     input.event.button.x += slide;
   else if (event->type == SDL_EVENT_MOUSE_WHEEL) input.event.wheel.mouse_x += slide;
   if (!window->sidebar_input_ns) window->sidebar_input_ns = SDL_GetTicksNS();
-  shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), NULL, 0);
+  const char *text = NULL;
+  if (event->type == SDL_EVENT_TEXT_INPUT) { text = event->text.text; input.event.text.text = NULL; }
+  if (event->type == SDL_EVENT_TEXT_EDITING) { text = event->edit.text; input.event.edit.text = NULL; }
+  input.text_len = text ? (uint32_t)strlen(text) : 0;
+  if (input.text_len > ANVIL_SURFACE_MAX_PAYLOAD - sizeof(input)) return;
+  shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), text, input.text_len);
+}
+
+static void focus_sidebar(ShellWindow *window, bool focused) {
+  if (focused && (overlay_covers_sidebar(window) || !window->sidebar_client ||
+      !shell.sidebar_process || !shell.sidebar_process->connected)) return;
+  if (window->sidebar_focused == focused) return;
+  clear_composition(window);
+  window->sidebar_focused = focused;
+  if (focused) set_sidebar_hidden(false);
+  if (window->selected->connected)
+    shell_send_int(window->selected, ANVIL_SURFACE_MSG_FOCUS, !focused && window_focused(window));
+  if (window->sidebar_client && shell.sidebar_process && shell.sidebar_process->connected)
+    shell_send_int(window->sidebar_client, ANVIL_SURFACE_MSG_FOCUS, focused);
+  if (focused || window->selected->text_active) SDL_StartTextInput(window->window);
+  else SDL_StopTextInput(window->window);
+  if (focused) {
+    SDL_Rect rect = {8, 8, SDL_max(1, (int)(window->sidebar_full_w / window->scale) - 16), 24};
+    SDL_SetTextInputArea(window->window, &rect, 0);
+  }
+  SDL_Log("Shell Sidebar focus: Window=%u focused=%d", window->id, focused);
 }
 
 static void leave_sidebar(ShellWindow *window) {
@@ -3997,6 +4036,7 @@ static void route_button(ShellWindow *window, SDL_Event *event) {
       clear_composition(window);
       return;
     }
+    focus_sidebar(window, false);
     window->surface_buttons |= mask;
     capture_surface_pointer(window);
   } else {
@@ -4081,7 +4121,7 @@ static void handle_connected(ShellProject *project) {
   project->connected = true;
   set_responsive(project);
   send_configure(project);
-  bool focused = project == window->selected &&
+  bool focused = project == window->selected && !window->sidebar_focused &&
                  (anvil_latency_probe_enabled() ||
                   (SDL_GetWindowFlags(window->window) & SDL_WINDOW_INPUT_FOCUS) != 0);
   shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS, focused ? 1 : 0);
@@ -4387,8 +4427,11 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     }
     if (project->connected && !anvil_latency_probe_enabled()) {
       shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS,
-                     event->type == SDL_EVENT_WINDOW_FOCUS_GAINED);
+                     event->type == SDL_EVENT_WINDOW_FOCUS_GAINED && !window->sidebar_focused);
     }
+    if (window->sidebar_focused && window->sidebar_client && shell.sidebar_process && shell.sidebar_process->connected)
+      shell_send_int(window->sidebar_client, ANVIL_SURFACE_MSG_FOCUS,
+                     event->type == SDL_EVENT_WINDOW_FOCUS_GAINED);
     /* Unfocused controls use the dim glyph colour. */
     if (window->shown) composite_and_present(window);
     break;
@@ -4403,14 +4446,17 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   case SDL_EVENT_KEY_DOWN:
   case SDL_EVENT_KEY_UP:
     anvil_latency_probe_note_event(event);
+    if (window->sidebar_focused) { send_sidebar_input(window, event); break; }
     if (project->state == SHELL_READY || project->state == SHELL_CLOSING)
       forward_event(window, event, NULL);
     break;
   case SDL_EVENT_TEXT_INPUT:
+    if (window->sidebar_focused) { send_sidebar_input(window, event); break; }
     if (project->state == SHELL_READY || project->state == SHELL_CLOSING)
       forward_event(window, event, event->text.text);
     break;
   case SDL_EVENT_TEXT_EDITING:
+    if (window->sidebar_focused) { send_sidebar_input(window, event); break; }
     if (project->state == SHELL_READY || project->state == SHELL_CLOSING)
       forward_event(window, event, event->edit.text);
     break;
@@ -5274,6 +5320,7 @@ static void finish_launch(ShellProject *project) {
 static void select_project(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window) return;
+  focus_sidebar(window, false);
   clear_window_notice(window);
   if (project->unresponsive) show_unresponsive_notice(window);
   if (project == window->selected)
@@ -5892,6 +5939,7 @@ static void schedule_sidebar_restart(void) {
   if (!window || window->closing || shell.shutting_down || shell.sidebar_restart_timer || !project || project->state != SHELL_FAILED ||
       (project->launch && !project->launch->taken))
     return;
+  for (ShellWindow *item = shell.windows; item; item = item->next) focus_sidebar(item, false);
   if (shell.sidebar_healthy_timer) KillTimer(shell.service_hwnd, shell.sidebar_healthy_timer);
   shell.sidebar_healthy_timer = 0;
   if (project->process.hProcess && WaitForSingleObject(project->process.hProcess, 0) != WAIT_OBJECT_0) {

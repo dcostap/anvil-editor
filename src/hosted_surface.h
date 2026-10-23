@@ -91,6 +91,7 @@ bool anvil_hosted_surface_select_terminal(const char *path, const char *id);
 bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y);
 /* Asks the shell to hide the Project Sidebar in every Window, or to show it again. */
 bool anvil_hosted_surface_toggle_sidebar(void);
+bool anvil_hosted_surface_focus_sidebar(bool focused);
 /* Tells the shell that this Project saved a Color Theme, so other processes reload it. */
 bool anvil_hosted_surface_color_theme_saved(void);
 /* Sends the Zoom that this Project saved to the shell, so other Projects and the Sidebar apply it. */

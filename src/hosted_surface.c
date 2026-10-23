@@ -1083,6 +1083,13 @@ bool anvil_hosted_surface_toggle_sidebar(void) {
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
+bool anvil_hosted_surface_focus_sidebar(bool focused) {
+  if (!hosted.active || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  AnvilSurfaceInt value = {focused ? 1 : 0};
+  send_message(ANVIL_SURFACE_MSG_SIDEBAR_FOCUS, &value, sizeof(value));
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
 bool anvil_hosted_surface_color_theme_saved(void) {
   if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_COLOR_THEME_SAVED, NULL, 0);
@@ -1585,6 +1592,7 @@ bool anvil_hosted_surface_zoom_saved(double interface_zoom, double code_zoom) {
   (void)interface_zoom; (void)code_zoom; return false;
 }
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }
+bool anvil_hosted_surface_focus_sidebar(bool focused) { (void)focused; return false; }
 bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y) { (void)row_id; (void)x; (void)y; return false; }
 bool anvil_hosted_surface_set_panes(const char *panes) { (void)panes; return false; }
 void anvil_hosted_surface_runtime_ready(void) {}
