@@ -250,14 +250,18 @@ LRESULT win32_frame_hwnd_nccalcsize(HWND hwnd, WPARAM wparam, LPARAM lparam) {
 }
 
 LRESULT win32_frame_hwnd_hit_test(HWND hwnd, const Win32FrameHitTest *hit, LPARAM lparam) {
+  /* The surface reports its Title Bar regions in client coordinates. A maximized Window's client area is the
+     monitor's work area, inside a window rect that extends past it by the hidden frame, so window coordinates
+     would move every region by the frame's width. A normal Window's client area is its whole window rect. */
   POINT pt = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
-  RECT wr;
-  GetWindowRect(hwnd, &wr);
+  ScreenToClient(hwnd, &pt);
+  RECT client;
+  GetClientRect(hwnd, &client);
 
-  const int width = wr.right - wr.left;
-  const int height = wr.bottom - wr.top;
-  const int x = pt.x - wr.left;
-  const int y = pt.y - wr.top;
+  const int width = client.right - client.left;
+  const int height = client.bottom - client.top;
+  const int x = pt.x;
+  const int y = pt.y;
 
   int resize = hit->resize_border;
   const int title_height = hit->title_height;
