@@ -23,6 +23,7 @@ local take_prepared_session
 
 local PADDING = 6
 local PASTE_CONFIRM_CHARACTERS = 5000
+local LINK_TOOLTIP_DELAY = 0.4
 
 function M.cleanup_records(id)
   if PLATFORM ~= "Windows" then return end
@@ -1037,6 +1038,12 @@ function TerminalView:update()
   self:service_session(true)
   if not self.session then return end
 
+  local tooltip = self.link_tooltip
+  if tooltip and not tooltip.visible and system.get_time() - tooltip.started >= LINK_TOOLTIP_DELAY then
+    tooltip.visible = true
+    core.redraw = true
+  end
+
   if self.search_pending then
     self:search(self.search_pending.query, self.search_pending.reverse)
   end
@@ -1297,6 +1304,35 @@ function TerminalView:draw_block_cursor(x, y, width, height, color, blink_on)
   core.pop_clip_rect()
 end
 
+local function image_order(a, b)
+  if a.z ~= b.z then return a.z < b.z end
+  if a.id ~= b.id then return a.id < b.id end
+  return a.placement_id < b.placement_id
+end
+
+function TerminalView:draw_images(layer, origin_x, origin_y)
+  local images = self.snapshot.images or {}
+  if #images == 0 then return end
+  if layer == 1 then table.sort(images, image_order) end
+  core.push_clip_rect(origin_x, origin_y,
+    self.snapshot.cols * self.cell_width, self.snapshot.row_count * self.cell_height)
+  for _, image in ipairs(images) do
+    local image_layer = image.z < -1073741824 and 1 or image.z < 0 and 2 or 3
+    if image_layer == layer then
+      local grid_scale = self.cell_width / self.native_cell_width
+      local x, y = origin_x + image.x * grid_scale, origin_y + image.y
+      local sx = image.width * grid_scale / image.source_width
+      local sy = image.height / image.source_height
+      local width, height = image.canvas:get_size()
+      core.push_clip_rect(x, y, image.width * grid_scale, image.height)
+      renderer.draw_canvas_scaled(image.canvas,
+        x - image.source_x * sx, y - image.source_y * sy, width * sx, height * sy)
+      core.pop_clip_rect()
+    end
+  end
+  core.pop_clip_rect()
+end
+
 function TerminalView:draw()
   local draw_scope = perf_scope_begin("terminal", true)
   local snapshot = self.snapshot
@@ -1322,6 +1358,7 @@ function TerminalView:draw()
 
   local origin_x = self.position.x + PADDING
   local origin_y = self.position.y + PADDING
+  self:draw_images(1, origin_x, origin_y)
   local phase_scope = perf_scope_begin("backgrounds")
   for row_index, row in ipairs(snapshot.rows or {}) do
     local y = origin_y + (row_index - 1) * self.cell_height
@@ -1341,6 +1378,7 @@ function TerminalView:draw()
   draw_hover_background(self, origin_x, origin_y)
   perf_scope_end(phase_scope)
 
+  self:draw_images(2, origin_x, origin_y)
   phase_scope = perf_scope_begin("text_runs")
   self.has_blinking_content = snapshot.cursor and snapshot.cursor.blinking or false
   local blink_on = config.disable_blink or
@@ -1355,6 +1393,7 @@ function TerminalView:draw()
   end
   perf_scope_end(phase_scope)
 
+  self:draw_images(3, origin_x, origin_y)
   phase_scope = perf_scope_begin("cursor")
   local cursor = snapshot.cursor
   local cursor_on = not (cursor and cursor.blinking) or blink_on
@@ -1440,7 +1479,45 @@ function TerminalView:draw()
     )
   end
   self:draw_scrollbar()
+  if self.link_tooltip and self.link_tooltip.visible then
+    core.root_panel:defer_draw(self.draw_link_tooltip, self)
+  end
   perf_scope_end(draw_scope)
+end
+
+function TerminalView:draw_link_tooltip()
+  local tooltip = self.link_tooltip
+  if not tooltip or not tooltip.visible or not self.hover_x or not self.hover_y then return end
+  local root, font = core.root_panel, style.font
+  local padding, margin = style.padding.x, 4 * SCALE + 1
+  local available = math.min(600 * SCALE, root.size.x - 2 * (padding + margin))
+  local line_height = font:get_height()
+  local max_lines = math.floor((root.size.y - 2 * (padding + margin)) / line_height)
+  if available <= 0 or max_lines < 1 then return end
+  local label = tooltip.text
+  local starts = font:text_layout(label):wrap(available, "word")
+  local lines, text_width = {}, 0
+  for index = 1, math.min(#starts, max_lines) do
+    local line = label:sub(starts[index] + 1, starts[index + 1] or #label)
+    if index == max_lines and #starts > max_lines then
+      local ends = font:text_layout(line):wrap(math.max(1, available - font:get_width("…")), "char")
+      line = line:sub(1, ends[2] or #line) .. "…"
+    end
+    lines[#lines + 1] = line
+    text_width = math.max(text_width, font:get_width(line))
+  end
+  local w, h = text_width + padding * 2, #lines * line_height + padding * 2
+  local x = common.clamp(self.hover_x + margin,
+    root.position.x + margin, root.position.x + root.size.x - w - margin)
+  local y = self.hover_y + line_height
+  if y + h > root.position.y + root.size.y - margin then y = self.hover_y - h - margin end
+  y = math.max(root.position.y + margin, y)
+  renderer.draw_rounded_rect(x - 1, y - 1, w + 2, h + 2, 4 * SCALE + 1, style.divider)
+  renderer.draw_rounded_rect(x, y, w, h, 4 * SCALE, style.background3)
+  for index, line in ipairs(lines) do
+    renderer.draw_text(font, line, common.round(x + padding),
+      common.round(y + padding + (index - 1) * line_height), style.text)
+  end
 end
 
 -- The OS sends the text of a key press before the next key event.
@@ -1874,6 +1951,11 @@ function TerminalView:hover_point_at(col, row)
   local point = self.hover_point
   local target = point and (point.uri or (point.target_line
     and string.format("%s:%d", point.path, point.target_line) or point.path))
+  if not target then
+    self.link_tooltip = nil
+  elseif not self.link_tooltip or self.link_tooltip.text ~= target then
+    self.link_tooltip = { text = target, started = system.get_time() }
+  end
   if target then
     core.status_bar:show_tooltip(target)
   elseif self.showing_target then
@@ -1884,6 +1966,7 @@ function TerminalView:hover_point_at(col, row)
 end
 
 function TerminalView:clear_point_hover()
+  self.link_tooltip = nil
   if self.showing_target then core.status_bar:remove_tooltip() end
   self.showing_target = nil
   if not self.hover_point and not self.hover_cell and self.cursor == "arrow" then return false end
@@ -1945,6 +2028,7 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
   if not self.session then return false end
   local scrollbar = self.v_scrollbar:on_mouse_pressed(button, x, y, clicks)
   if scrollbar then
+    self:clear_point_hover()
     if scrollbar ~= true then self:scroll_to_percent(scrollbar) end
     return true
   end
@@ -2010,11 +2094,13 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
   end
   local scrollbar = self.v_scrollbar:on_mouse_moved(x, y, dx or 0, dy or 0)
   if scrollbar then
+    self:clear_point_hover()
     if scrollbar ~= true then self:scroll_to_percent(scrollbar) end
     return true
   end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
   if self:contains_terminal_cell(x, y) and not self.selection_start then
+    self.hover_x, self.hover_y = x, y
     local cell = self.hover_cell
     if not (cell and cell.col == col and cell.row == row and cell.ctrl == (keymap.modkeys.ctrl == true)) then
       self:hover_point_at(col, row)
@@ -2111,6 +2197,7 @@ function TerminalView:can_close(approve)
 end
 
 function TerminalView:detach_session()
+  self:clear_point_hover()
   if not self.session then return end
   if self.vt_trace_path then self:stop_vt_trace() end
   self.session:detach()
@@ -2126,6 +2213,7 @@ function TerminalView:on_workspace_close()
 end
 
 function TerminalView:on_close()
+  self:clear_point_hover()
   self.running, self.state = false, "closed"
   if self.session then
     if self.vt_trace_path then self:stop_vt_trace() end

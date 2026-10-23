@@ -206,6 +206,8 @@ test.describe("Terminal View", function()
   end)
 
   test.after_each(function(context)
+    if context.previous_time then system.get_time = context.previous_time end
+    if context.previous_defer_draw then core.root_panel.defer_draw = context.previous_defer_draw end
     if context.previous_clipboard ~= nil then
       system.set_clipboard(context.previous_clipboard)
     end
@@ -1635,6 +1637,35 @@ test.describe("Terminal View", function()
     test.ok(core.status_bar.tooltip_mode)
     view:on_mouse_left()
     test.ok(not core.status_bar.tooltip_mode)
+  end)
+
+  test.it("shows the hidden link destination in a hover popup and removes it on leave", function(context)
+    local view = terminal.open()
+    view:update()
+    local session = context.sessions[1]
+    local uri = "https://example.test/" .. string.rep("long-path/", 16) .. "destination"
+    session.hyperlink_uri = uri
+    context.previous_time = system.get_time
+    context.previous_defer_draw = core.root_panel.defer_draw
+    local now = system.get_time()
+    system.get_time = function() return now end
+    -- Execute overlays at the renderer boundary, without drawing unrelated Views.
+    core.root_panel.defer_draw = function(_, fn, ...) fn(...) end
+    local function popup_text()
+      local calls = draw_calls(function() view:draw() end)
+      local text = {}
+      for _, call in ipairs(calls.text) do text[#text + 1] = call[2] end
+      return table.concat(text)
+    end
+    keymap.modkeys.ctrl = false
+    local x, y = view.position.x + 7, view.position.y + 7
+    view:on_mouse_moved(x, y, 0, 0)
+    test.equal(popup_text(), "", "the popup appeared before the hover delay")
+    now = now + 1
+    view:update()
+    test.equal(popup_text(), uri, "the popup did not show the complete destination")
+    view:on_mouse_left()
+    test.equal(popup_text(), "", "the popup remained after the pointer left")
   end)
 
   test.it("keeps the link hover while terminal output changes", function(context)
