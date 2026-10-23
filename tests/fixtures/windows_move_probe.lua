@@ -93,12 +93,33 @@ if path:match("/driver$") then
    local page = model(); local ar, br, cr = row(page,a.pid), row(page,b.pid), row(page,c.pid)
    assert(selected(page,a.window_id) == cr.id, "A's original Project was not unpresented")
    wait(function() return trace():find("Shell Sidebar surface Ready: Window=" .. b.window_id, 1, true) end)
+   -- The probe names the Project menu item in a file, so the shell shows no native menu. An empty name chooses
+   -- nothing.
+   local function choose(label)
+    local file = assert(io.open(root .. "/menu-choice.txt", "wb")); file:write(label); file:close()
+   end
+   -- Finds A's row in B's Sidebar. Terminal rows appear while the Projects start, so rows have no fixed position. A
+   -- right-click on a Project row makes the shell log that row. Other rows ignore a right-click.
+   local function a_row_y()
+    choose("")
+    for y = 46, 600, 12 do
+     local mark = #trace()
+     user32.PostMessageW(bw,0x804a,7,20+y*65536); user32.PostMessageW(bw,0x804a,8,20+y*65536)
+     local deadline = system.get_time() + .3
+     repeat
+      coroutine.yield(.01)
+      local row_id = trace():match("Shell Project menu: Window=" .. b.window_id .. " row=(%d+)", mark + 1)
+      if row_id then
+       if tonumber(row_id) == ar.row_id then return y end
+       break
+      end
+     until system.get_time() >= deadline
+    end
+    error("A's row is missing from B's Sidebar")
+   end
    -- Select the original Project through B's actual Sidebar surface input.
    user32.PostMessageW(aw, 0x112, 0xf020, 0); wait(function() return user32.IsIconic(aw) ~= 0 end, 3)
-   local font = renderer.font.load(DATADIR .. "/fonts/FiraSans-Regular.ttf", 14)
-   local index = 0
-   for _, item in ipairs(page.items) do index=index+1; if item == ar then break end end
-   local y = math.floor(40 + font:get_height() + 16 + (index-1)*font:get_height()*3 + font:get_height())
+   local y = a_row_y()
    user32.PostMessageW(bw,0x804a,1,20+y*65536); user32.PostMessageW(bw,0x804a,2,20+y*65536)
    wait(function() return user32.IsIconic(aw) == 0 end, 5, "B Sidebar did not restore A's owning Window")
    page = model()
@@ -107,13 +128,13 @@ if path:match("/driver$") then
    assert(row(page,a.pid).window_id == a.window_id, "Sidebar selection silently moved the Project")
    save("inspect-0",{target=a.window_id}); local before = wait(function() return load("a-state-0") end)
    local function sidebar_move()
-    -- Open A's Move choices in B's Sidebar, then choose B explicitly.
+    -- Right-click A's row in B's Sidebar and choose B in the Project menu.
+    y = a_row_y()
+    choose("Move to Window " .. b.window_id)
+    local mark = #trace()
     user32.PostMessageW(bw,0x804a,7,20+y*65536); user32.PostMessageW(bw,0x804a,8,20+y*65536)
-    coroutine.yield(.05)
-    local terminals=0
-    for _, item in ipairs(page.items) do if item.kind=="terminal" and item.row_id==ar.row_id then terminals=terminals+1 end end
-    local target_y=math.floor(y+(terminals+1)*font:get_height()*3)
-    user32.PostMessageW(bw,0x804a,1,20+target_y*65536); user32.PostMessageW(bw,0x804a,2,20+target_y*65536)
+    wait(function() return trace():find("Shell Project menu command:", mark + 1, true) end, 5,
+     "A right-click on A's row did not choose Move")
    end
    local function move(target, stage)
     save("move-"..stage,{project_id=ar.id,target=target})
@@ -128,7 +149,9 @@ if path:match("/driver$") then
      native = wait(function() return dialog(a.shell_pid,"Move dialog probe") end,8)
      assert(user32.GetWindow(native,4) == aw,"native dialog lost its source parent")
     else wait(function() return trace():find("Shell close decision: waiting for user",1,true) end,8) end
-    if action == "windows-move-target-close" then sidebar_move() else move(b.window_id,"reject") end
+    -- A closing Window shows no Project menu, and other menus do not offer it as a target. The hosted API still
+    -- reaches the shell, which must reject the Move.
+    move(b.window_id,"reject")
     local message = blocked == "close" and "Cannot move Project while it closes" or
       "Cannot move Project while a dialog is open"
     wait(function() return trace():find("Shell Window status: id="..b.window_id.." "..message,1,true) end,5,

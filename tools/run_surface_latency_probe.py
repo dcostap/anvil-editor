@@ -283,7 +283,7 @@ def main() -> int:
                     }
                     if action == "launch-link":
                         config["environment"]["ANVIL_PROBE_LINKED_EXE"] = native_path(case_dir / "app-link/bin/anvil.exe")
-                    if action == "project-menu":
+                    if action == "project-menu" or action.startswith("windows-move"):
                         config["environment"]["ANVIL_SHELL_MENU_PROBE"] = native_path(case_dir / "menu-choice.txt")
                     if action == "dialog-error":
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"

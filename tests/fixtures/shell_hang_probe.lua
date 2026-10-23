@@ -56,15 +56,16 @@ local function project_row(window)
  local scale = user32.GetDpiForWindow(window) / 96
  return math.floor(40 * scale) + math.floor(54 * scale) * 65536
 end
--- Clicks the Project's Sidebar row and reports whether the Sidebar asked the shell to select it.
+-- Clicks the Project's Sidebar row and reports whether the Sidebar drew a frame for that input.
+-- The row belongs to the Selected Project, so the click collapses or expands it.
 local function click_project(window)
- local _, before = trace():gsub("Shell Project selection requested: Window=%d+ from=Sidebar", "")
+ local _, before = trace():gsub("Shell Sidebar input frame:", "")
  -- The shell's routing probe message: posted Win32 clicks are ignored on an inactive desktop.
  for step = 0, 2 do user32.PostMessageW(window, 0x804a, step, project_row(window)); coroutine.yield(.1) end
  local deadline = system.get_time() + 3
  repeat
   coroutine.yield(.05)
-  local _, after = trace():gsub("Shell Project selection requested: Window=%d+ from=Sidebar", "")
+  local _, after = trace():gsub("Shell Sidebar input frame:", "")
   if after > before then return true end
  until system.get_time() >= deadline
  return false
