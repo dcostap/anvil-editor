@@ -242,6 +242,7 @@ top:
   if ( !system_event_pop(&e) ) {
     return 0;
   }
+  anvil_timing_note("input-polled", e.common.timestamp, e.type, system_pending_event_count());
   last_event_window_id = event_window_id(&e);
   if (anvil_hosted_surface_sidebar()) {
     if (e.type >= SDL_EVENT_USER) last_event_window_id = e.user.windowID;
@@ -634,7 +635,9 @@ bool system_wait_event(double seconds) {
 
 static int f_wait_event(lua_State *L) {
   double seconds = lua_isnoneornil(L, 1) ? -1 : fmax(0, luaL_checknumber(L, 1));
+  anvil_timing_note("wait-event-begin", 0, seconds > 0 ? (uint64_t)(seconds * 1000000) : 0, 0);
   lua_pushboolean(L, system_wait_event(seconds));
+  anvil_timing_note("wait-event-end", 0, 0, 0);
   return 1;
 }
 
@@ -1697,6 +1700,18 @@ static int f_get_time(lua_State *L) {
   return 1;
 }
 
+static int f_timing_capture(lua_State *L) {
+  const char *base = luaL_checkstring(L, 1);
+  char path[32768];
+  if (strlen(base) > sizeof(path) - 32) return luaL_error(L, "timing capture path too long");
+  SDL_snprintf(path, sizeof(path), "%s%s", base, *base ? "_native.csv" : "");
+  if (!*base) anvil_hosted_surface_timing_capture(base);
+  bool ok = anvil_timing_capture(path);
+  if (ok && *base) anvil_hosted_surface_timing_capture(base);
+  lua_pushboolean(L, ok);
+  return 1;
+}
+
 
 static int f_set_native_single_instance_enabled(lua_State *L) {
   bool enabled = lua_toboolean(L, 1);
@@ -1720,7 +1735,9 @@ static int f_sleep(lua_State *L) {
   double n = luaL_checknumber(L, 1);
   if (n < 0) n = 0;
   uint64_t start_ns = SDL_GetTicksNS();
+  anvil_timing_note("sleep-begin", 0, (uint64_t)(n * 1000000), 0);
   SDL_Delay(n * 1000);
+  anvil_timing_note("sleep-end", 0, 0, 0);
   uint64_t end_ns = SDL_GetTicksNS();
   anvil_resize_diag_log(&(AnvilResizeDiagEvent){
     .category = "lua_sleep",
@@ -1739,7 +1756,9 @@ static int f_idle(lua_State *L) {
   double n = luaL_checknumber(L, 1);
   if (n < 0) n = 0;
   if (anvil_hosted_surface_active()) {
+    anvil_timing_note("idle-begin", 0, (uint64_t)(n * 1000000), 0);
     lua_pushboolean(L, anvil_hosted_surface_wait_inbound(n));
+    anvil_timing_note("idle-end", 0, 0, 0);
     return 1;
   }
   f_sleep(L);
@@ -2700,6 +2719,7 @@ static const luaL_Reg lib[] = {
   { "set_primary_selection", f_set_primary_selection },
   { "get_process_id",        f_get_process_id        },
   { "get_time",              f_get_time              },
+  { "timing_capture",        f_timing_capture        },
   { "set_native_single_instance_enabled", f_set_native_single_instance_enabled },
   { "is_hosted_surface",     f_is_hosted_surface     },
   { "await_shell_adoption",  f_await_shell_adoption  },

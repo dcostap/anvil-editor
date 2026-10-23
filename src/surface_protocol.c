@@ -9,6 +9,81 @@
 
 static char log_role[16];
 
+#define TIMING_CAPACITY 262144
+typedef struct {
+  Uint64 tick, thread, id, a, b;
+  const char *stage;
+} TimingRow;
+static SDL_SpinLock timing_lock;
+static SDL_AtomicInt timing_active;
+static TimingRow *timing_rows;
+static size_t timing_count, timing_dropped;
+static char *timing_path;
+
+bool anvil_timing_capture(const char *path) {
+  if (!path) return false;
+  if (*path) {
+    TimingRow *rows = SDL_malloc(sizeof(*rows) * TIMING_CAPACITY);
+    char *name = SDL_strdup(path);
+    if (!rows || !name) { SDL_free(rows); SDL_free(name); return false; }
+    SDL_LockSpinlock(&timing_lock);
+    if (timing_rows) {
+      SDL_UnlockSpinlock(&timing_lock);
+      SDL_free(rows); SDL_free(name);
+      return false;
+    }
+    timing_rows = rows;
+    timing_path = name;
+    timing_count = timing_dropped = 0;
+    SDL_SetAtomicInt(&timing_active, 1);
+    SDL_UnlockSpinlock(&timing_lock);
+    anvil_timing_note("capture-start", 0, 0, 0);
+    return true;
+  }
+  anvil_timing_note("capture-stop", 0, 0, 0);
+  SDL_LockSpinlock(&timing_lock);
+  TimingRow *rows = timing_rows;
+  char *name = timing_path;
+  size_t count = timing_count, dropped = timing_dropped;
+  timing_rows = NULL;
+  SDL_SetAtomicInt(&timing_active, 0);
+  timing_path = NULL;
+  SDL_UnlockSpinlock(&timing_lock);
+  if (!rows) return true;
+  SDL_IOStream *file = SDL_IOFromFile(name, "wb");
+  bool ok = file != NULL;
+  char line[256];
+  double frequency = (double)SDL_GetPerformanceFrequency();
+  if (file) {
+    const char *header = "time,thread,stage,id,a,b\n";
+    ok = SDL_WriteIO(file, header, strlen(header)) == strlen(header);
+    for (size_t i = 0; ok && i < count; i++) {
+      TimingRow *row = &rows[i];
+      int n = SDL_snprintf(line, sizeof(line), "%.9f,%llu,%s,%llu,%llu,%llu\n",
+        row->tick / frequency, (unsigned long long)row->thread, row->stage,
+        (unsigned long long)row->id, (unsigned long long)row->a, (unsigned long long)row->b);
+      ok = n > 0 && (size_t)n < sizeof(line) && SDL_WriteIO(file, line, n) == (size_t)n;
+    }
+    int n = SDL_snprintf(line, sizeof(line), "0,0,dropped,%llu,0,0\n", (unsigned long long)dropped);
+    ok = SDL_WriteIO(file, line, n) == (size_t)n && ok;
+    ok = SDL_CloseIO(file) && ok;
+  }
+  SDL_Log("Timing capture %s: %s rows=%llu dropped=%llu", ok ? "saved" : "write failed", name,
+          (unsigned long long)count, (unsigned long long)dropped);
+  SDL_free(rows); SDL_free(name);
+  return ok;
+}
+void anvil_timing_note(const char *stage, uint64_t id, uint64_t a, uint64_t b) {
+  if (!SDL_GetAtomicInt(&timing_active)) return;
+  SDL_LockSpinlock(&timing_lock);
+  if (timing_rows) {
+    if (timing_count < TIMING_CAPACITY)
+      timing_rows[timing_count++] = (TimingRow){SDL_GetPerformanceCounter(), SDL_GetCurrentThreadID(), id, a, b, stage};
+    else timing_dropped++;
+  }
+  SDL_UnlockSpinlock(&timing_lock);
+}
+
 static const char *dialog_option_keys[] = {
     SDL_PROP_FILE_DIALOG_TITLE_STRING,
     SDL_PROP_FILE_DIALOG_LOCATION_STRING,

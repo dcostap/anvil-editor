@@ -331,6 +331,11 @@ static void signal_loss(const char *cause, uint16_t type, size_t bytes) {
 bool anvil_hosted_surface_active(void) {
   return hosted.active;
 }
+bool anvil_hosted_surface_timing_capture(const char *path) {
+  if (!hosted.active || hosted.sidebar) return false;
+  send_message(ANVIL_SURFACE_MSG_TIMING_CAPTURE, path, (uint32_t)strlen(path) + 1);
+  return true;
+}
 bool anvil_hosted_surface_sidebar(void) { return hosted.active && hosted.sidebar; }
 void anvil_hosted_surface_render_failed(const char *cause) {
   SDL_SetAtomicInt(&hosted.render_failed, 1);
@@ -510,6 +515,10 @@ bool anvil_hosted_surface_sidebar_activate(uint32_t id) {
 static void dispatch_message(HostedMessage *message) {
   uint16_t type = message->type;
   uint8_t *payload = message->payload;
+  if (type == ANVIL_SURFACE_MSG_TIMING_CAPTURE) {
+    anvil_timing_capture((const char *)payload);
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_SIDEBAR_REMOVE) {
     HostedView *item = sidebar_view(*(uint32_t *)payload, false);
     if (item) {
@@ -610,6 +619,8 @@ static void dispatch_message(HostedMessage *message) {
       }
       break;
     case ANVIL_SURFACE_MSG_INPUT:
+      anvil_timing_note("input-dispatch", ((AnvilSurfaceInput *)payload)->event.common.timestamp,
+                        ((AnvilSurfaceInput *)payload)->event.type, view->config.window_id);
       if (((AnvilSurfaceInput *)payload)->configuration == view->config.configuration)
         push_input((AnvilSurfaceInput *)payload, (char *)payload + sizeof(AnvilSurfaceInput));
       break;
@@ -737,6 +748,9 @@ static int SDLCALL reader_thread(void *data) {
       type = packet.type; size -= sizeof(packet); body += sizeof(packet);
     }
     switch (type) {
+      case ANVIL_SURFACE_MSG_TIMING_CAPTURE:
+        if (!size || size > 32768 || body[size - 1] || memchr(body, 0, size - 1)) goto failed;
+        break;
       case ANVIL_SURFACE_MSG_CONFIGURE:
         if (size != sizeof(AnvilSurfaceConfigure) || !valid_configure((const AnvilSurfaceConfigure *)body)) goto failed;
         break;
@@ -744,6 +758,8 @@ static int SDLCALL reader_thread(void *data) {
         if (size < sizeof(AnvilSurfaceInput)) goto failed;
         AnvilSurfaceInput input;
         memcpy(&input, body, sizeof(input));
+        anvil_timing_note("input-received", input.event.common.timestamp, input.event.type,
+                          (uint64_t)SDL_GetAtomicInt(&hosted.inbound_bytes));
         if (input.text_len != size - sizeof(AnvilSurfaceInput)) goto failed;
         if (memchr(body + sizeof(input), 0, input.text_len)) goto failed;
         break;
@@ -1273,6 +1289,7 @@ void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, in
   frame.overlay = view->overlay;
   memcpy(frame.raised, view->raised, sizeof(frame.raised));
   frame.input_seq = anvil_latency_probe_consumed_seq();
+  anvil_timing_note("frame-publish", frame.generation, frame.configuration, frame.kind);
   anvil_latency_probe_stage("frame-published");
   SDL_strlcpy(frame.name, name, sizeof(frame.name));
   send_message(ANVIL_SURFACE_MSG_FRAME, &frame, sizeof(frame));
@@ -1381,6 +1398,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   frame.overlay = view->overlay;
   memcpy(frame.raised, view->raised, sizeof(frame.raised));
   frame.input_seq = anvil_latency_probe_consumed_seq();
+  anvil_timing_note("frame-publish", frame.generation, frame.configuration, frame.kind);
   anvil_latency_probe_stage("frame-published");
   SDL_strlcpy(frame.name, view->memory.name, sizeof(frame.name));
   send_message(ANVIL_SURFACE_MSG_FRAME, &frame, sizeof(frame));
@@ -1509,6 +1527,7 @@ bool anvil_hosted_surface_sidebar(void) { return false; }
 bool anvil_hosted_surface_parse_args(int *argc, char **argv) { (void)argc; (void)argv; return false; }
 bool anvil_hosted_surface_connect(void) { return false; }
 bool anvil_hosted_surface_active(void) { return false; }
+bool anvil_hosted_surface_timing_capture(const char *path) { (void)path; return false; }
 bool anvil_hosted_surface_dispatch(const SDL_Event *event) { (void)event; return false; }
 void anvil_hosted_surface_poll(void) {}
 bool anvil_hosted_surface_wait_inbound(double seconds) { (void)seconds; return false; }

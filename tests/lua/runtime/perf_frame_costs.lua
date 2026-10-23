@@ -18,7 +18,7 @@ test.describe("performance frame cost report", function()
     panes.reset_for_tests()
     if frames then
       for _, suffix in ipairs { "_frames.csv", "_summary.txt", "_draw_scopes.csv",
-        "_file_opens.csv", "_lua_samples.csv", "_api_calls.csv", "_details.csv" } do
+        "_file_opens.csv", "_lua_samples.csv", "_api_calls.csv", "_details.csv", "_native.csv" } do
         os.remove(frames:gsub("_frames%.csv$", suffix))
       end
     end
@@ -56,7 +56,15 @@ test.describe("performance frame cost report", function()
     test.equal(active_mask, mask)
     test.equal(active_count, count)
     perf.on_frame { did_redraw = true, draw_emit_ms = 7 }
+    local pending = assert(io.open(frames, "rb"))
+    test.equal(pending:read("*a"), "", "frame rows reached disk during capture")
+    pending:close()
     local summary = perf.stop_recording()
+    local native = assert(io.open(base .. "_native.csv", "rb"))
+    local native_text = native:read("*a")
+    native:close()
+    test.contains(native_text, "capture-start")
+    test.contains(native_text, "capture-stop")
     test.equal(frames, base .. "_frames.csv")
     test.equal(summary, base .. "_summary.txt")
     test.equal(system.get_clipboard(), clipboard)

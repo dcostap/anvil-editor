@@ -16,6 +16,7 @@ bool anvil_hosted_surface_parse_args(int *argc, char **argv);
  * reader. Needs the SDL event subsystem. */
 bool anvil_hosted_surface_connect(void);
 bool anvil_hosted_surface_active(void);
+bool anvil_hosted_surface_timing_capture(const char *path);
 bool anvil_hosted_surface_sidebar(void);
 /* Consume shell packets on the UI thread in pipe order. */
 bool anvil_hosted_surface_dispatch(const SDL_Event *event);

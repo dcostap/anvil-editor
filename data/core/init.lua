@@ -4040,6 +4040,11 @@ function core.run_step(options)
   end
 
   core.performance_snapshot = {
+    next_frame_due_ms = (run_next_frame_time - system.get_time()) * 1000,
+    next_step_due_ms = run_next_step and (run_next_step - system.get_time()) * 1000 or 0,
+    redraw_pending = core.redraw,
+    scroll_y = active_view and active_view.scroll and active_view.scroll.y or 0,
+    scroll_target_y = active_view and active_view.scroll and active_view.scroll.to.y or 0,
     time = system.get_time(),
     rad_pacing = rad_pacing,
     immediate = immediate,

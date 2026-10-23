@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 30u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 31u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -106,7 +106,14 @@ typedef enum {
   /* This Project saved the Zoom. The shell sends it to every other Project and the Sidebar.
    * Payload: AnvilSurfaceZoom. */
   ANVIL_SURFACE_MSG_ZOOM_SAVED = 104,
+  /* Start a bounded in-memory timing capture at path, or stop with an empty string. */
+  ANVIL_SURFACE_MSG_TIMING_CAPTURE = 105,
 } AnvilSurfaceMessageType;
+
+/* Static stage names only. Times use the same performance clock as system.get_time().
+ * Records contain no key codes, text, or Buffer contents. Stop writes the CSV. */
+bool anvil_timing_capture(const char *path);
+void anvil_timing_note(const char *stage, uint64_t id, uint64_t a, uint64_t b);
 
 /* Sidebar surface traffic shares one authenticated transport. */
 typedef struct {

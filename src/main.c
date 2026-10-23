@@ -531,6 +531,7 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
 
   Uint64 run_start_ns = SDL_GetTicksNS();
   anvil_latency_probe_stage("step-begin");
+  anvil_timing_note("step-begin", 0, system_pending_event_count(), immediate);
 
   /* Call core.run_step() — one frame of the main loop.
    * Returns true  → keep running
@@ -587,6 +588,7 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
   app->in_run_step = false;
   Uint64 run_end_ns = SDL_GetTicksNS();
   anvil_latency_probe_stage("step-end");
+  anvil_timing_note("step-end", 0, system_pending_event_count(), immediate);
   anvil_resize_diag_log(&(AnvilResizeDiagEvent){
     .category = "app_run_step",
     .name = immediate ? "end_immediate" : "end",

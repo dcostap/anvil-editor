@@ -987,6 +987,9 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
            (frame->kind == ANVIL_SURFACE_FRAME_D3D11 ||
             frame->kind == ANVIL_SURFACE_FRAME_SHARED_MEMORY);
   }
+  case ANVIL_SURFACE_MSG_TIMING_CAPTURE:
+    return size >= 1 && size < 32700 && !((const char *)payload)[size - 1] &&
+           !memchr(payload, 0, size - 1);
   case ANVIL_SURFACE_MSG_CURSOR:
   case ANVIL_SURFACE_MSG_WINDOW_MODE:
   case ANVIL_SURFACE_MSG_BORDERED:
@@ -1128,6 +1131,7 @@ static int reader_loop(void *data) {
         break;
       }
       if (header.type == ANVIL_SURFACE_MSG_FRAME) {
+        anvil_timing_note("frame-received", ((AnvilSurfaceFrame *)payload)->generation, project->id, 0);
         SDL_LockMutex(project->lock);
         memcpy(&project->latest_frame, payload, sizeof(AnvilSurfaceFrame));
         bool notify = !project->frame_pending;
@@ -1137,6 +1141,12 @@ static int reader_loop(void *data) {
         if (notify)
           push_shell_event(project, SHELL_EVENT_FRAME, NULL, 0);
         continue;
+      }
+      if (header.type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE) {
+        const AnvilSidebarSurfacePacket *packet = (const void *)payload;
+        if (packet->type == ANVIL_SURFACE_MSG_FRAME)
+          anvil_timing_note("sidebar-frame-received", ((const AnvilSurfaceFrame *)(packet + 1))->generation,
+                            packet->window_id, 1);
       }
       ShellMessage *message =
           take_fault(FAULT_ALLOC) ? NULL : malloc(sizeof(ShellMessage) + header.size);
@@ -2351,6 +2361,7 @@ static void capture_backbuffer(ShellWindow *window) {
 }
 
 static void composite_and_present(ShellWindow *window) {
+  anvil_timing_note("compose-begin", window->id, 0, 0);
   ShellProject *project = window->selected;
   if (window->render_failed) { InvalidateRect(window->hwnd, NULL, FALSE); return; }
   if (!window->rtv)
@@ -2459,9 +2470,11 @@ static void composite_and_present(ShellWindow *window) {
                            SDL_min(window->buffer_h, window->controls.bottom + (LONG)(48 * window->scale))});
   if (window->capture) capture_backbuffer(window);
   anvil_latency_probe_stage("present-begin");
+  anvil_timing_note("present-begin", window->id, 0, 0);
   /* Like a direct window, a live resize step does not wait for vertical blank. */
   HRESULT hr = window->swapchain->lpVtbl->Present(window->swapchain, window->live_resize ? 0 : 1, 0);
   anvil_latency_probe_stage("present-end");
+  anvil_timing_note("present-end", window->id, (uint32_t)hr, 0);
   if (take_fault(FAULT_PRESENT))
     hr = DXGI_ERROR_DEVICE_REMOVED;
   if (FAILED(hr))
@@ -2491,6 +2504,7 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
   if (window->render_failed || project->state == SHELL_FAILED || !project->last_config.render_enabled)
     return false;
   if (!pending) return false;
+  anvil_timing_note("frame-load-begin", frame->generation, project->id, project->sidebar);
   if (!anvil_surface_frame_matches(&project->last_config, frame)) {
     set_surface_busy(window, surface, false);
     /* A slow Project trails every configure during a drag. Its frames still show it is responsive. */
@@ -2519,6 +2533,7 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
                     ? load_memory_frame(project, surface, frame)
                     : false;
   if (!loaded) {
+    anvil_timing_note("frame-load-deferred", frame->generation, project->id, surface->busy);
     set_surface_busy(window, surface, surface->busy);
     if (surface->busy) {
       SDL_LockMutex(project->lock);
@@ -2535,6 +2550,7 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
     return false;
   }
   set_surface_busy(window, surface, false);
+  anvil_timing_note("frame-load-end", frame->generation, project->id, project->sidebar);
   surface->have_surface = true;
   if (surface->held) {
     surface->held = false;
@@ -3251,6 +3267,23 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     move_project(window, request->project_id, request->target_window_id);
     break;
   }
+  case ANVIL_SURFACE_MSG_TIMING_CAPTURE: {
+    const char *base = payload;
+    char path[32768];
+    if (!*base && shell.sidebar_process && shell.sidebar_process->connected)
+      shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_TIMING_CAPTURE, "", 1, NULL, 0);
+    SDL_snprintf(path, sizeof(path), "%s%s", base, *base ? "_shell.csv" : "");
+    if (!anvil_timing_capture(path)) {
+      SDL_Log("Shell timing capture request failed");
+      break;
+    }
+    if (*base && shell.sidebar_process && shell.sidebar_process->connected) {
+      SDL_snprintf(path, sizeof(path), "%s%s", base, *base ? "_sidebar.csv" : "");
+      shell_send(shell.sidebar_process, ANVIL_SURFACE_MSG_TIMING_CAPTURE, path,
+                 (uint32_t)strlen(path) + 1, NULL, 0);
+    }
+    break;
+  }
   case ANVIL_SURFACE_MSG_FRAME:
     memcpy(&project->latest_frame, payload, sizeof(project->latest_frame));
     project->frame_pending = true;
@@ -3656,6 +3689,7 @@ static bool route_sidebar_grip(ShellWindow *window, const SDL_Event *event) {
 }
 
 static void forward_event(ShellWindow *window, const SDL_Event *event, const char *text) {
+  anvil_timing_note("input-forward", event->common.timestamp, event->type, window->id);
   ShellProject *project = window->selected;
   if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_TEXT_INPUT ||
       event->type == SDL_EVENT_MOUSE_BUTTON_DOWN)
@@ -3751,6 +3785,7 @@ static bool sidebar_takes_pointer(ShellWindow *window, float x) {
 }
 
 static void send_sidebar_input(ShellWindow *window, const SDL_Event *event) {
+  anvil_timing_note("sidebar-input-forward", event->common.timestamp, event->type, window->id);
   AnvilSurfaceInput input = {.event = *event, .configuration = window->sidebar_client->last_config.configuration};
   /* A sliding Sidebar shows its surface moved left. */
   float slide = (float)(window->sidebar_full_w - window->sidebar_w);
@@ -4089,6 +4124,7 @@ static void accept_external(AnvilShellLaunchRequest *request) {
 }
 
 SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
+  anvil_timing_note("shell-event", event->common.timestamp, event->type, 0);
   ShellWindow *window = NULL;
   ShellProject *project = NULL;
   (void)appstate;
@@ -5929,6 +5965,7 @@ static void start_sidebar(void) {
   }
 }
 static void service_sidebar(void) {
+  anvil_timing_note("sidebar-service-begin", 0, 0, 0);
   bool visible = false;
   for (ShellWindow *item = shell.windows; item; item = item->next)
     visible |= !item->closing && IsWindowVisible(item->hwnd) && !IsIconic(item->hwnd);
@@ -6008,6 +6045,7 @@ static void service_sidebar(void) {
     shell.sidebar_timer = 0;
   }
   notify_sidebar_changes();
+  anvil_timing_note("sidebar-service-end", 0, 0, 0);
 }
 static void notify_sidebar_changes(void) {
   sync_sidebar_model();
@@ -6779,6 +6817,7 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
 
 SDL_AppResult anvil_shell_iterate(void *appstate) {
   (void)appstate;
+  anvil_timing_note("shell-step-begin", 0, 0, 0);
   check_picker_failures();
   for (ShellWindow *window = shell.windows; window; window = window->next) check_gpu_failure(window);
   finish_resolutions();
@@ -6839,6 +6878,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
     if (assigned) continue;
     destroy_window(window);
   }
+  anvil_timing_note("shell-step-end", 0, 0, 0);
   return shell.windows ? SDL_APP_CONTINUE : SDL_APP_SUCCESS;
 }
 

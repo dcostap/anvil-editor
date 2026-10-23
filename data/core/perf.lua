@@ -562,6 +562,7 @@ local function unwrap_system_api()
 end
 
 local diagnostic_frame_keys = {
+  "next_frame_due_ms", "next_step_due_ms", "redraw_pending", "scroll_y", "scroll_target_y",
   "worker_pool_drain_wall_ms",
   "worker_pool_drain_ms",
   "worker_pool_drain_messages",
@@ -1377,6 +1378,11 @@ local function write_summary(path)
   if not file then return end
   local elapsed = record.stop_time - record.start_time
   file:write("Anvil performance recording\n")
+  file:write(string.format("Timing captures: native=%s_native.csv shell=%s_shell.csv sidebar=%s_sidebar.csv enabled=%s\n",
+    record.base, record.base, record.base, tostring(record.native_capture)))
+  file:write("Native timing uses the same performance clock as this report. Shell and Sidebar files arrive asynchronously after stop.\n")
+  file:write(string.format("Capture buffering: 32 MiB per Lua stream; dropped bytes frames=%d scopes=%d file_opens=%d. Native captures retain 262144 records each.\n",
+    record.file.dropped, record.scope_file.dropped, record.file_open_file.dropped))
   file:write(string.format("Elapsed: %.3fs\n", elapsed))
   file:write(string.format("Frame target: target_fps=%s budget_ms=%.3f\n",
     tostring(record.target_fps), 1000 / math.max(1, record.target_fps or 1)))
@@ -1838,16 +1844,37 @@ function perf.is_recording()
   return recording
 end
 
+-- Keep capture writes off the measured frame path. Each stream has a fixed
+-- memory limit; the summary reports lost bytes instead of growing forever.
+local function capture_stream(path)
+  local file = assert(io.open(path, "wb"))
+  local stream = { chunks = {}, bytes = 0, dropped = 0 }
+  function stream:write(text)
+    if self.bytes + #text <= 32 * 1024 * 1024 then
+      self.chunks[#self.chunks + 1] = text
+      self.bytes = self.bytes + #text
+    else
+      self.dropped = self.dropped + #text
+    end
+  end
+  function stream:close()
+    for _, chunk in ipairs(self.chunks) do assert(file:write(chunk)) end
+    assert(file:close())
+    self.chunks = {}
+  end
+  return stream
+end
+
 function perf.start_recording(options)
   if recording then return record and record.dir end
   options = options or {}
   local base = options.base_path or (output_dir() .. PATHSEP .. timestamp_name())
   local frames_path = base .. "_frames.csv"
-  local file = assert(io.open(frames_path, "wb"))
+  local file = capture_stream(frames_path)
   local scope_path = base .. "_draw_scopes.csv"
-  local scope_file = assert(io.open(scope_path, "wb"))
+  local scope_file = capture_stream(scope_path)
   local file_open_path = base .. "_file_opens.csv"
-  local file_open_file = assert(io.open(file_open_path, "wb"))
+  local file_open_file = capture_stream(file_open_path)
   write_frame_header(file)
   scope_file:write("frame,time,phase,action,draw_emit_ms,path,calls,inclusive_ms,exclusive_ms,scope_heap_delta_kb,scope_heap_drop_calls,frame_heap_delta_kb,scope_imbalance\n")
   file_open_file:write("open_id,event,time,offset_ms,duration_ms,depth,path,source,detail\n")
@@ -1857,6 +1884,7 @@ function perf.start_recording(options)
     instruction_samples = options.instruction_samples ~= false,
     detail_interval = math.max(1, options.detail_interval or detail_frame_interval),
     base = base,
+    native_capture = system.timing_capture(base),
     frames_path = frames_path,
     summary_path = base .. "_summary.txt",
     samples_path = base .. "_lua_samples.csv",
@@ -1928,6 +1956,7 @@ function perf.stop_recording()
   unwrap_renderer_api()
   unwrap_system_api()
   record.stop_time = system.get_time()
+  if record.native_capture then system.timing_capture("") end
   if active_file_open and not active_file_open.finished then
     file_open_finish(active_file_open, "incomplete", "recording_stopped", record.stop_time)
   end

@@ -51,6 +51,34 @@ int main(int argc, char **argv) {
   CHECK(GetTempPathW(SDL_arraysize(temp), temp));
   CHECK(GetTempFileNameW(temp, L"avl", 0, root));
   CHECK(DeleteFileW(root) && CreateDirectoryW(root, NULL));
+  /* Timing capture stays off disk until stopped and starts each run empty. */
+  _snwprintf(path, SDL_arraysize(path), L"%ls\\timing.csv", root);
+  char *timing_path = SDL_iconv_string("UTF-8", "UTF-16LE", (char *)path,
+                                     (wcslen(path) + 1) * sizeof(wchar_t));
+  CHECK(timing_path);
+  anvil_timing_note("outside", 0, 0, 0);
+  CHECK(anvil_timing_capture(timing_path));
+  anvil_timing_note("input", 42, 7, 9);
+  CHECK(GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES);
+  CHECK(anvil_timing_capture(""));
+  FILE *timing = _wfopen(path, L"rb");
+  CHECK(timing);
+  char timing_text[4096] = {0};
+  fread(timing_text, 1, sizeof(timing_text) - 1, timing);
+  fclose(timing);
+  CHECK(strstr(timing_text, ",input,42,7,9"));
+  CHECK(!strstr(timing_text, "outside"));
+  CHECK(DeleteFileW(path));
+  CHECK(anvil_timing_capture(timing_path));
+  CHECK(anvil_timing_capture(""));
+  timing = _wfopen(path, L"rb");
+  CHECK(timing);
+  memset(timing_text, 0, sizeof(timing_text));
+  fread(timing_text, 1, sizeof(timing_text) - 1, timing);
+  fclose(timing);
+  CHECK(!strstr(timing_text, ",input,"));
+  CHECK(DeleteFileW(path));
+  SDL_free(timing_path);
   _snwprintf(user, SDL_arraysize(user), L"%ls\\usu\x00e1rio", root);
   _snwprintf(logs, SDL_arraysize(logs), L"%ls\\logs", user);
   CHECK(SetEnvironmentVariableW(L"ANVIL_USERDIR", user));
