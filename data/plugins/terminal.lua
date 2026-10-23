@@ -2030,19 +2030,11 @@ function TerminalView:hover_point_at(col, row)
   elseif not self.link_tooltip or self.link_tooltip.text ~= target then
     self.link_tooltip = { text = target, started = system.get_time() }
   end
-  if target then
-    core.status_bar:show_tooltip(target)
-  elseif self.showing_target then
-    core.status_bar:remove_tooltip()
-  end
-  self.showing_target = target ~= nil
   core.redraw = true
 end
 
 function TerminalView:clear_point_hover()
   self.link_tooltip = nil
-  if self.showing_target then core.status_bar:remove_tooltip() end
-  self.showing_target = nil
   if not self.hover_point and not self.hover_cell and self.cursor == "arrow" then return false end
   self.hover_point = nil
   self.hover_cell = nil

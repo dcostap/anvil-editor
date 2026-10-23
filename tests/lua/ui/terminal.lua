@@ -1797,7 +1797,7 @@ test.describe("Terminal View", function()
     keymap.modkeys.ctrl = false
     view:on_mouse_moved(7, 7, 0, 0)
     test.equal(view.cursor, "hand")
-    test.ok(table.concat(core.status_bar.tooltip):find(session.hyperlink_uri, 1, true))
+    test.ok(not core.status_bar.tooltip_mode)
     view:on_mouse_pressed("left", 7, 7)
     local opened_on_press = #opened
     view:on_mouse_released("left", 7, 7)
@@ -1845,17 +1845,18 @@ test.describe("Terminal View", function()
     context.sessions[1].hyperlink_uri = "https://example.test/hidden-target"
     keymap.modkeys.ctrl = true
     view:on_mouse_moved(7, 7, 0, 0)
-    test.ok(core.status_bar.tooltip_mode)
-    test.ok(table.concat(core.status_bar.tooltip):find("https://example.test/hidden-target", 1, true))
+    test.equal(view.hover_point.uri, "https://example.test/hidden-target")
+    test.ok(not core.status_bar.tooltip_mode)
     keymap.modkeys.ctrl = false
     view:on_key_released("left ctrl", { scancode = 224 })
     test.equal(view.cursor, "hand")
-    test.ok(core.status_bar.tooltip_mode)
+    test.equal(view.hover_point.uri, "https://example.test/hidden-target")
+    test.ok(not core.status_bar.tooltip_mode)
     view:on_mouse_left()
     test.ok(not core.status_bar.tooltip_mode)
   end)
 
-  test.it("shows the hidden link destination in a hover popup and removes it on leave", function(context)
+  test.it("shows the hidden link destination only in a hover popup and removes it on leave", function(context)
     local view = terminal.open()
     view:update()
     local session = context.sessions[1]
@@ -1877,9 +1878,11 @@ test.describe("Terminal View", function()
     local x, y = view.position.x + 7, view.position.y + 7
     view:on_mouse_moved(x, y, 0, 0)
     test.equal(popup_text(), "", "the popup appeared before the hover delay")
+    test.ok(not core.status_bar.tooltip_mode, "the link target appeared in the Status Bar before the popup")
     now = now + 1
     view:update()
     test.equal(popup_text(), uri, "the popup did not show the complete destination")
+    test.ok(not core.status_bar.tooltip_mode, "the link target appeared in both the popup and the Status Bar")
     view:on_mouse_left()
     test.equal(popup_text(), "", "the popup remained after the pointer left")
   end)
