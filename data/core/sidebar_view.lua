@@ -1367,7 +1367,7 @@ function SidebarView:draw_glint(left, y, right, h)
   self.glint_delay = math.min(self.glint_delay or wait, wait)
   if progress >= 1 then return end
   local span = right - left
-  local band = common.clamp(span * 0.4, 40 * SCALE, 120 * SCALE)
+  local band = common.clamp(span * 0.12, 14 * SCALE, 36 * SCALE)
   local center = left - band / 2 + progress * (span + band)
   local envelope = math.sin(math.pi * progress)
   local color = style.sidebar_glint
