@@ -11,7 +11,10 @@ luajit_packagefiles_changed=false
 if [[ -d "$luajit_source" ]]; then
   while IFS= read -r -d '' packagefile; do
     relative_path="${packagefile#"$luajit_packagefiles/"}"
-    if [[ "$relative_path" != *.diff ]] && ! cmp -s "$packagefile" "$luajit_source/$relative_path"; then
+    [[ "$relative_path" == *.diff ]] && continue
+    # MSYS2 includes sha256sum in coreutils; cmp needs the separate diffutils package.
+    if [[ ! -f "$luajit_source/$relative_path" ]] ||
+       [[ "$(sha256sum < "$packagefile")" != "$(sha256sum < "$luajit_source/$relative_path")" ]]; then
       luajit_packagefiles_changed=true
       break
     fi
