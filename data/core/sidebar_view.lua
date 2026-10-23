@@ -2,7 +2,7 @@ local Object = require "core.object"
 local style = require "core.style"
 local config = require "core.config"
 local tab = require "core.tab"
-local recent_panes = require "core.recent_panes"
+local numbered_panes = require "core.numbered_panes"
 local common = require "core.common"
 local LineInput = require "core.line_input"
 local FocusFeedback = require "core.focus_feedback"
@@ -121,7 +121,7 @@ function SidebarView:metrics()
   -- Tabs sit under their Project's badge. A Pane Group's container starts at the badge's middle.
   m.tab_left = pad + 6 * SCALE + math.floor(badge / 2) - 4 * SCALE
   m.tab_x = m.tab_left + 10 * SCALE
-  -- Recent Pane numbers end here, left of their Tab's row and its Pane Group's rail.
+  -- Pane numbers end here, left of their Tab's row and its Pane Group's rail.
   m.number_gutter = m.tab_left - 3 * SCALE
   self.metrics_cache = m
   return m
@@ -290,7 +290,7 @@ function SidebarView:rebuild_rows()
   for _, window in ipairs(projects.windows or {}) do
     if window.id == window_id then selected = window.selected_project end
   end
-  local recent = recent_panes.numbers(projects)
+  local numbers = numbered_panes.numbers(projects, self.seen)
   -- A collapsed Project shows only the Terminals that need the user.
   local only_attention = false
   local function add_tab(row, agent)
@@ -325,13 +325,12 @@ function SidebarView:rebuild_rows()
     for _, item in ipairs(panes) do sizes[item.group or 0] = (sizes[item.group or 0] or 0) + 1 end
     for _, terminal in ipairs(project.terminals or {}) do records[terminal.id] = terminal end
     for index, item in ipairs(panes) do
-      -- A Terminal Tab takes its agent's status from the Terminal Session record. Each Tab takes its Recent Pane
-      -- number, if it has one.
+      -- A Terminal Tab takes its agent's status from the Terminal Session record and its Pane's number.
       local record = item.terminal and records[item.terminal.session]
       local agent = record and record.state == "running" and tab.agent(record)
       local copy = {agent = agent}
       for field, value in pairs(item) do copy[field] = value end
-      item, copy.number = copy, recent[recent_panes.key(project.path, item.id)]
+      item, copy.number = copy, numbers[numbered_panes.key(project.path, item.id)]
       local session = item.terminal and item.terminal.session
       if session then
         shown[session] = true

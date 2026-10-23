@@ -877,19 +877,20 @@ test.describe("Sidebar search editing", function()
   end)
 end)
 
-test.describe("Sidebar Recent Pane numbers", function()
-  -- Two Projects in two Windows. `stamped` gives the Panes the times they last had focus.
+test.describe("Sidebar pending Pane numbers", function()
+  -- Two Projects in two Windows. `stamped` gives the Panes pending results.
   local function model(stamped)
     local function at(time) return stamped and time or nil end
     return {
       {row_id=1,id=1,path="C:/A",state="ready",window_id=1,terminals={},panes={active=1,visible=1,
         {id="a1",group=1,name="current.lua",focused=at(30)},{id="a2",group=2,name="never.lua"}}},
-      {row_id=2,id=2,path="C:/B",state="ready",window_id=2,terminals={},panes={active=1,visible=1,
-        {id="b1",group=1,name="older.lua",focused=at(10)},{id="b2",group=2,name="previous.lua",focused=at(20)}}},
+      {row_id=2,id=2,path="C:/B",state="ready",window_id=2,terminals={},panes={visible=1,
+        {id="b1",group=1,name="older.lua",terminal={session="old",state="running",bell=at(10)}},
+        {id="b2",group=2,name="previous.lua",terminal={session="new",state="running",bell=at(20)}}}},
       windows={{id=1,selected_project=1},{id=2,selected_project=2}}}
   end
 
-  test.it("numbers the Tabs of the Panes that had focus before the current one, across Windows", function()
+  test.it("numbers pending Tabs FIFO across Windows", function()
     local view = SidebarView(function() end)
     view:set_model(model(true), 1)
     local texts = drawn_texts(view, 400, 800)
@@ -902,7 +903,7 @@ test.describe("Sidebar Recent Pane numbers", function()
         end
       end
     end
-    test.same(numbers, {["previous.lua"] = "1", ["older.lua"] = "2"})
+    test.same(numbers, {["older.lua"] = "1", ["previous.lua"] = "2"})
   end)
 
   test.it("draws the numbers beside the Tabs, so they move no row content", function()

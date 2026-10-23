@@ -1,5 +1,4 @@
 local core = require "core"
-local command = require "core.command"
 local panes = require "core.panes"
 local pane_report = require "core.pane_report"
 local recent_panes = require "core.recent_panes"
@@ -96,13 +95,13 @@ test.describe("Recent Panes in a Project", function()
     focus(one)
     focus(two)
     focus(three)
-    command.perform("pane:focus_recent_1")
+    recent_panes.focus(1)
     test.equal(panes.active(), two)
     pane_report.publish()
-    command.perform("pane:focus_recent_1")
+    recent_panes.focus(1)
     test.equal(panes.active(), three)
     pane_report.publish()
-    command.perform("pane:focus_recent_2")
+    recent_panes.focus(2)
     test.equal(panes.active(), one)
     test.same(requests, {})
   end)
@@ -117,13 +116,13 @@ test.describe("Recent Panes in a Project", function()
       {path = "C:/Other", panes = {{id = "far", focused = system.get_time()}}},
     }
     focus(two)
-    command.perform("pane:focus_recent_1")
+    recent_panes.focus(1)
     test.equal(panes.active(), two, "A Pane in another Project took focus here")
     test.equal(#requests, 1)
     local route, path, text = table.unpack(requests[1])
     test.same({route, path}, {"select", "C:/Other"})
     test.same(assert(load("return " .. text, "=request", "t", {}))(), {action = "focus", pane = "far"})
-    command.perform("pane:focus_recent_2")
+    recent_panes.focus(2)
     test.equal(panes.active(), one)
   end)
 

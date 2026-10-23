@@ -1,4 +1,4 @@
--- One Tab's content: its Recent Pane number, View Icon or agent icon, name, and note. The Title Bar and the
+-- One Tab's content: its Pane number, View Icon or agent icon, name, and note. The Title Bar and the
 -- Project Sidebar draw Tabs with this module, so both show the same thing.
 -- A Tab item is plain data. The Project describes its Panes, and the Pane report sends the items to the Sidebar.
 local style = require "core.style"
@@ -45,7 +45,7 @@ function tab.spinner_delay(clock)
   return SPINNER_FRAME - clock % SPINNER_FRAME
 end
 
--- Describes one Pane as a Tab item. `number` is the Pane's Recent Pane number, if it has one.
+-- Describes one Pane as a Tab item. `number` is the Pane's Pane number, if it has one.
 function tab.describe(pane, number)
   local view = pane.current_view
   local item = {id = pane.id, number = number, name = view.get_name and view:get_name() or "View"}
@@ -242,7 +242,7 @@ function tab.display_name(item)
   return name .. arguments
 end
 
--- The space for the Recent Pane number. A number in a gutter takes none.
+-- The space for the Pane number. A number in a gutter takes none.
 local function number_width(item, opts)
   if opts.number_gutter or not item.number then return 0 end
   return (opts.number_font or style.font):get_width(tostring(item.number)) + number_gap()

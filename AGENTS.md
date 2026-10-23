@@ -117,12 +117,15 @@ A Terminal without that icon shows the Terminal View's icon. Terminal Tabs have 
 The Project Sidebar shows a dot only for an Unread Result or an agent that waits for an answer.
 It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
 
-Tabs show Recent Pane numbers, not Tab positions. `core.recent_panes` owns the rule.
+Tabs show Pending Pane numbers, not Tab positions. `core.numbered_panes` selects `core.pending_panes`.
+Unread Results and agents waiting for an answer get numbers 1 to 5, oldest pending event first.
+The Sidebar passes its shared seen times. Projects read the persisted seen times with a short cache.
+`core.recent_panes` retains focus-history numbering. Change the selection in `core.numbered_panes` to restore it; there is no setting.
 Each Project stamps its active Pane when the Pane takes keyboard focus. The Pane report sends the stamps.
-The Sidebar ranks the stamps of all Projects. A Project fetches them when it takes keyboard focus.
+A Project fetches the reports when it takes keyboard focus. Focus-history numbering ranks these stamps across Projects.
 `system.get_time()` reads one clock for all processes, so stamps from different Projects compare.
 A Title Bar in a Window without focus can show old numbers until its Window takes focus.
-Run `ui/recent_panes.lua`, `ui/titlebar.lua` and `ui/sidebar_view.lua` after changes.
+Run `ui/pending_panes.lua`, `ui/recent_panes.lua`, `ui/titlebar.lua` and `ui/sidebar_view.lua` after changes.
 
 The Sidebar process has no Buffer or Text View. Its search field uses `core.line_input`.
 The Sidebar reads the user's bindings for the editor's line commands, such as `core:select_to_start_of_indentation`.

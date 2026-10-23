@@ -6,7 +6,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local color_theme = require "core.color_theme"
 local tab = require "core.tab"
-local recent_panes = require "core.recent_panes"
+local numbered_panes = require "core.numbered_panes"
 local View = require "core.view"
 
 local TitleBar = View:extend()
@@ -180,7 +180,7 @@ function TitleBar.pane_marker_font()
   return style.get_scaled_font(style.prose_heading_font, size)
 end
 
--- Title Bar Tabs draw the Recent Pane number in the interface font and the name in the View text font.
+-- Title Bar Tabs draw the Pane number in the interface font and the name in the View text font.
 local function tab_fonts()
   return {number_font = style.font, name_font = style.view_text_font}
 end
@@ -237,7 +237,7 @@ function TitleBar:get_pane_entries()
   local active = panes().active()
   local visible = panes().visible_group()
   local ordered = panes().ordered()
-  local numbers = recent_panes.local_numbers()
+  local numbers = numbered_panes.local_numbers()
   for i, pane in ipairs(ordered) do
     local geometry = self.entries[i] or {}
     result[i] = {
@@ -297,7 +297,7 @@ function TitleBar:update_geometry()
   self.entries = {}
   if count > 0 and available > 0 then
     local widths, starts, total = {}, {}, 0
-    local numbers = recent_panes.local_numbers()
+    local numbers = numbered_panes.local_numbers()
     for i, pane in ipairs(ordered) do
       if i > 1 and ordered[i - 1].group ~= pane.group then total = total + tab_group_gap() end
       starts[i] = total
@@ -718,7 +718,7 @@ function TitleBar:draw_pane_drag()
     )
   end
 
-  local number = recent_panes.local_numbers()[pane.id]
+  local number = numbered_panes.local_numbers()[pane.id]
   local width = preferred_tab_width(number, pane, self.size.y)
   local height = self.size.y
   local x = common.clamp(

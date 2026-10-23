@@ -83,10 +83,16 @@ test.describe("Global title bar Pane entries", function()
     config.fps, core.in_live_resize_frame, config.animation_rate = configured_fps, live_resize, animation_rate
   end)
 
-  test.it("shows all Panes in Tab order and numbers the ones that had focus before the current one", function()
+  test.it("keeps Tab order while numbering pending Panes FIFO", function()
     local one = panes.create { factory = factory("alpha.lua") }
     local two = panes.split(one, "right", { factory = factory("beta.lua") })
     local three = panes.create { factory = factory("settings") }
+    for index, pane in ipairs {three, one} do
+      pane.current_view.terminal_view = true
+      pane.current_view.session_id = "title-number-" .. index
+      pane.current_view.state = "running"
+      pane.current_view.bell_at = os.time() - 3 + index
+    end
     focus(three)
     focus(one)
     focus(two)
@@ -95,9 +101,9 @@ test.describe("Global title bar Pane entries", function()
     title:update()
     local entries = title:get_pane_entries()
     test.equal(#entries, 3)
-    test.equal(entries[1].label, "1 alpha.lua")
+    test.equal(entries[1].label, "2 alpha.lua")
     test.equal(entries[2].label, "beta.lua")
-    test.equal(entries[3].label, "2 settings")
+    test.equal(entries[3].label, "1 settings")
   end)
 
   test.it("marks the active Pane and its visible group", function()
@@ -158,8 +164,12 @@ test.describe("Global title bar Pane entries", function()
     test.ok(group_indicator)
   end)
 
-  test.it("renders Recent Pane numbers and names with their requested fonts", function()
+  test.it("renders pending Pane numbers and names with their requested fonts", function()
     local one = panes.create { factory = factory("one") }
+    one.current_view.terminal_view = true
+    one.current_view.session_id = "number-font-test"
+    one.current_view.state = "running"
+    one.current_view.bell_at = os.time()
     focus(one)
     focus(panes.create { factory = factory("two") })
     local title = TitleBar()

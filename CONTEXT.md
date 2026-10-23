@@ -363,6 +363,9 @@ _Avoid_: Left Pane, Right Pane, panel, split
 One of the five Panes that had focus most recently before the current Pane, in any Project or Anvil Window. Recent Panes have the numbers 1 to 5, newest first, so number 1 is the previous Pane. The current Pane and older Panes have no number.
 _Avoid_: Pane number, Tab number
 
+**Pending Pane**:
+A Pane with an Unread Result or an agent waiting for an answer. The first five Pending Panes have numbers 1 to 5 across Projects and Anvil Windows, oldest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
+
 **Constrained Pane**:
 A Pane dedicated to one owner, such as a Terminal session, Git Log, commit comparison, or nonempty Untitled Editor.
 Its Navigation History contains only Views related to that owner, including its text captures.
@@ -371,7 +374,7 @@ Its Navigation History contains only Views related to that owner, including its 
 A Pane that accepts unrelated ordinary Views in its Navigation History.
 
 **Pane Number Marker**:
-A Fuzzy Searcher result marker that shows the number of each Recent Pane whose Current View shows the file.
+A Fuzzy Searcher result marker that shows the number of each numbered Pane whose Current View shows the file.
 _Avoid_: open file badge, tab number
 
 **Pane Group**:
@@ -434,7 +437,7 @@ The Current View whose focus scope receives input, including input received by o
 _Avoid_: Focused active view, globally active view
 
 **Tab**:
-An item representing one Pane. It shows the Recent Pane number if the Pane has one, its Current View's name, and the View Icon or agent icon. The Project Sidebar shows Tabs under their Project. The Title Bar shows them only when the Project Sidebar is hidden or absent.
+An item representing one Pane. It shows the Pane's number if it has one, its Current View's name, and the View Icon or agent icon. The Project Sidebar shows Tabs under their Project. The Title Bar shows them only when the Project Sidebar is hidden or absent.
 _Avoid_: Pane Tab, file tab, buffer tab, View tab, Node tab
 
 **File Tree**:

@@ -423,7 +423,7 @@ end
 function fuzzy_searcher.current_file_pane_markers(max_width)
   local font = TitleBar.pane_marker_font()
   local numbers_by_path = {}
-  local recent = require("core.recent_panes").local_numbers()
+  local recent = require("core.numbered_panes").local_numbers()
   for _, pane in ipairs(panes.ordered()) do
     local path = file_context.view_file_path(pane.current_view)
     local key = path and common.path_compare_key(path)

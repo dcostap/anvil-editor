@@ -246,9 +246,9 @@ function core.init()
   local new_group_bindings = bindings_for("pane:new_group")
   local LineInput, line_bindings = require "core.line_input", {}
   for _, name in ipairs(LineInput.COMMANDS) do line_bindings[name] = bindings_for("core:" .. name) end
-  local recent_panes, recent_bindings = require "core.recent_panes", {}
-  for number = 1, recent_panes.COUNT do
-    recent_bindings[number] = bindings_for("pane:focus_recent_" .. number)
+  local numbered_panes, number_bindings = require "core.numbered_panes", {}
+  for number = 1, numbered_panes.COUNT do
+    number_bindings[number] = bindings_for("pane:focus_number_" .. number)
   end
   keymap.map, keymap.reverse_map = {}, {}
   command.add(nil, {
@@ -257,21 +257,21 @@ function core.init()
   })
   for _, binding in ipairs(bindings) do keymap.add {[binding] = "core:focus_project_sidebar"} end
   for _, binding in ipairs(new_group_bindings) do keymap.add {[binding] = "pane:new_group"} end
-  -- The Recent Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
-  for number = 1, recent_panes.COUNT do
-    local name = "pane:focus_recent_" .. number
+  -- Numbered Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
+  for number = 1, numbered_panes.COUNT do
+    local name = "pane:focus_number_" .. number
     command.add(nil, {[name] = function()
-      local item, stamped = recent_panes.target(core.project_sidebar, number)
+      local item, stamped = numbered_panes.target(core.project_sidebar, number, seen)
       if not item then
-        core.log_quiet("Sidebar Recent Pane %d: none of %d stamped Panes", number, stamped)
+        core.log_quiet("Sidebar Numbered Pane %d: none of %d pending Panes", number, stamped)
         return false
       end
       system.focus_project_sidebar(false)
-      local sent = recent_panes.request(item.path, item.id)
-      core.log_quiet("Sidebar Recent Pane %d: Project=%s pane=%s sent=%s", number, item.path, tostring(item.id),
+      local sent = numbered_panes.request(item.path, item.id)
+      core.log_quiet("Sidebar Numbered Pane %d: Project=%s pane=%s sent=%s", number, item.path, tostring(item.id),
         tostring(sent))
     end})
-    for _, binding in ipairs(recent_bindings[number]) do keymap.add {[binding] = name} end
+    for _, binding in ipairs(number_bindings[number]) do keymap.add {[binding] = name} end
   end
   for _, key in ipairs {"up", "down", "left", "right", "home", "end", "return", "keypad enter", "escape"} do
     local name = "sidebar:" .. key:gsub(" ", "_")

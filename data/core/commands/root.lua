@@ -274,14 +274,14 @@ end
 
 command.add(active_pane, commands)
 
--- The Recent Panes can be in other Projects, so these commands need no active Pane.
-local recent_commands = {}
-for number = 1, require("core.recent_panes").COUNT do
-  recent_commands["pane:focus_recent_" .. number] = function()
-    return require("core.recent_panes").focus(number)
+-- Numbered Panes can be in other Projects, so these commands need no active Pane.
+local number_commands = {}
+for number = 1, require("core.numbered_panes").COUNT do
+  number_commands["pane:focus_number_" .. number] = function()
+    return require("core.numbered_panes").focus(number)
   end
 end
-command.add(nil, recent_commands)
+command.add(nil, number_commands)
 
 command.add(nil, {
   ["editor:open"] = command.palette(function()
