@@ -173,6 +173,14 @@ SCENARIOS["nag-bar"] = {
 }
 SCENARIOS["nag-bar-light"] = dict(SCENARIOS["nag-bar"], theme="light")
 SCENARIOS["nag-bar-list"] = dict(SCENARIOS["nag-bar"])
+SCENARIOS["autocomplete-popup"] = dict(SCENARIOS["nag-bar"])
+SCENARIOS["autocomplete-popup-light"] = dict(SCENARIOS["nag-bar"], theme="light")
+SCENARIOS["find-bar"] = dict(SCENARIOS["nag-bar"])
+SCENARIOS["find-bar-replace"] = dict(SCENARIOS["nag-bar"])
+SCENARIOS["find-bar-light"] = dict(SCENARIOS["nag-bar"], theme="light")
+SCENARIOS["prompt-bar"] = dict(SCENARIOS["nag-bar"])
+SCENARIOS["prompt-bar-list"] = dict(SCENARIOS["nag-bar"])
+SCENARIOS["prompt-bar-light"] = dict(SCENARIOS["nag-bar-list"], theme="light")
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,
     "tab_count": 8,

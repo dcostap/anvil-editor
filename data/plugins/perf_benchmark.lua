@@ -844,6 +844,52 @@ local function setup_scenario()
     end
     core.nag_view:show("Render scene", message, options)
   end
+  if benchmark.scenario:find("^autocomplete%-popup") then
+    local autocomplete = require "plugins.autocomplete"
+    local buffer = view.buffer
+    view:with_selection_state(function() buffer:set_selection(benchmark.start_line, math.huge) end)
+    command.perform "core:newline"
+    for _, char in ipairs { "s", "e", "l", "f", ".", "v", "a" } do core.on_event("textinput", char) end
+    local line, col = buffer:get_selection()
+    local items = {
+      { text = "values", info = "table", icon = "field", desc = "values: table\n\nCalculated rows, keyed by index." },
+      { text = "value_count", info = "integer", icon = "property" },
+      { text = "validate", info = "function(input)", icon = "method" },
+      { text = "variant", info = "string", icon = "field" },
+      { text = "VALUE_LIMIT", info = "constant", icon = "constant" },
+    }
+    autocomplete.add_provider("render-scene", function()
+      return { query = "va", line = line, query_col = col - 2, items = items }
+    end)
+    -- The popup needs the Editor's laid-out size.
+    core.add_thread(function()
+      coroutine.yield(0.2)
+      autocomplete.trigger()
+    end)
+  end
+  if benchmark.scenario:find("^find%-bar") then
+    command.perform(benchmark.scenario == "find-bar-replace" and "editor:replace" or "editor:find")
+    for _, char in ipairs { "v", "a", "l", "u", "e" } do core.on_event("textinput", char) end
+  end
+  if benchmark.scenario:find("^prompt%-bar") then
+    if benchmark.scenario ~= "prompt-bar" then
+      local paths = { "fixtures/render-benchmark.lua", "fixtures/markdown-long-link.md",
+        "fixtures/tabs/benchmark-tab-001.lua", "fixtures/tabs/benchmark-tab-002.lua" }
+      core.global_prompt_bar:enter("Open File", {
+        text = "fixtures/",
+        suggest = function(text)
+          local result = {}
+          for _, path in ipairs(paths) do
+            if path:find(text, 1, true) == 1 then result[#result + 1] = { text = path, info = "file" } end
+          end
+          return result
+        end,
+      })
+    else
+      command.perform "editor:go_to_line"
+      for _, char in ipairs { "1", "7" } do core.on_event("textinput", char) end
+    end
+  end
 
   if benchmark.scenario:find("wrapped%-document", 1, false) then
     view:set_wrapping_enabled(true)
@@ -1524,13 +1570,13 @@ local function record_video()
 end
 
 -- Check readiness after updates, before drawing. A later result needs another redraw.
-local old_root_draw = core.root_panel.draw
+-- Plugins that load later, such as autocomplete, wrap RootPanel.draw. Read it at call time to keep their drawing.
 core.root_panel.draw = function(self, ...)
   if benchmark.actions and benchmark.phase == "measure" and not benchmark.finished then
     local ok, err = pcall(benchmark.actions.before_draw, benchmark.actions)
     if not ok then fail(err) end
   end
-  return old_root_draw(self, ...)
+  return getmetatable(self).draw(self, ...)
 end
 
 local function request_screenshot()

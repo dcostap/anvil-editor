@@ -5,6 +5,7 @@ local common = require "core.common"
 local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
+local card = require "core.card"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local View = require "core.view"
@@ -1648,14 +1649,9 @@ local function point_over_rect(x, y, rect)
     and x <= rect.x + rect.w and y <= rect.y + rect.h
 end
 
-local function draw_box_border(x, y, w, h)
-  local t = math.max(1, style.divider_size or 1)
-  local color = style.autocomplete_border
-  renderer.draw_rect(x, y, w, t, color)
-  renderer.draw_rect(x, y + h - t, w, t, color)
-  renderer.draw_rect(x, y, t, h, color)
-  renderer.draw_rect(x + w - t, y, t, h, color)
-end
+-- The popup and its description box are cards with these corner radii.
+local function popup_radius() return 6 * SCALE end
+local function row_radius() return 4 * SCALE end
 
 local function get_description_view(text)
   local font_size = config.plugins.autocomplete.desc_font_size
@@ -1917,14 +1913,17 @@ local function draw_description_box(text, sx, sy, sw, sh)
   local available_height = wh - y - style.padding.y
   local height = math.min(content_height, max_height, math.max(available_height, 1))
 
-  view:draw_at(x, y, width, height, style.background3, true)
-  draw_box_border(x, y, width, height)
+  card.draw(x, y, width, height, popup_radius())
+  view:draw_at(x, y, width, height, nil, true)
   desc_rect = { x = x, y = y, w = width, h = height }
 end
 
 local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_width, selected)
-  local row_bg = selected and style.autocomplete_selection or style.background3
-  if selected then renderer.draw_rect(rx, y, rw, lh, row_bg) end
+  if selected then
+    -- The selected row is a pill inset from the card's edges.
+    local inset = 4 * SCALE
+    renderer.draw_rounded_rect(rx + inset, y, rw - 2 * inset, lh, row_radius(), style.autocomplete_selection)
+  end
 
   local icon_l_padding, icon_r_padding = 0, 0
   if icon_column_width > 0 then
@@ -1992,7 +1991,7 @@ function autocomplete.draw(av)
   local rx, ry, rw, rh, icon_column_width, visible_count = get_suggestions_rect(av)
   desc_rect = nil
   if visible_count == 0 then return end
-  renderer.draw_rect(rx, ry, rw, rh, style.background3)
+  card.draw(rx, ry, rw, rh, popup_radius())
 
   local font = av:get_font()
   local lh = font:get_height() + style.padding.y
@@ -2021,8 +2020,6 @@ function autocomplete.draw(av)
   if selected_item and selected_desc and #selected_desc > 0 then
     draw_description_box(selected_desc, rx, ry, rw, rh)
   end
-
-  draw_box_border(rx, ry, rw, rh)
 end
 
 local function show_autocomplete(opts)

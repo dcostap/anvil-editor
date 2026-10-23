@@ -101,8 +101,7 @@ style.background2 = c("26282b")
 style.tab_background = style.background
 style.titlebar = c("30343a")
 style.background3 = p("text_bg")
-style.autocomplete_border = { common.color "rgba(255, 255, 255, 0.25)" }
-style.autocomplete_selection = c("30343a")
+style.autocomplete_selection = { common.color "rgba(126, 174, 235, 0.20)" }
 style.text = p("text_fg")
 style.caret = c("ffffff")
 style.caret_trail = { common.color "rgba(143, 199, 255, 0.35)" }
@@ -123,12 +122,12 @@ style.scrollbar = p("scrollbar_thumb")
 style.scrollbar_hover = p("scrollbar_thumb_hover")
 style.scrollbar_active = p("scrollbar_thumb_active")
 style.scrollbar_track = p("gutter_bg")
--- The nag bar is a floating confirmation card. nagbar is its fill and nagbar_text its message text.
-style.nagbar = c("2f3237")
-style.nagbar_text = c("a3aebb")
+-- Floating cards: dialogs, prompts and popups. card_text is their secondary text.
+style.card = c("2f3237")
+style.card_text = c("a3aebb")
 style.nagbar_dim = { common.color "rgba(0, 0, 0, 0.45)" }
-style.nagbar_border = { 255, 255, 255, 20 }
-style.nagbar_shadow = { 0, 0, 0, 120 }
+style.card_border = { 255, 255, 255, 20 }
+style.card_shadow = { 0, 0, 0, 120 }
 style.nagbar_button = { 255, 255, 255, 16 }
 style.nagbar_button_hover = { 255, 255, 255, 14 }
 style.nagbar_button_pressed = { 0, 0, 0, 50 }

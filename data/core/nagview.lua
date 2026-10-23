@@ -3,6 +3,7 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local View = require "core.view"
+local card = require "core.card"
 local style = require "core.style"
 
 -- The nag bar: a modal confirmation card at the top of the Window. It shows a title, a message and a row of choices,
@@ -64,7 +65,6 @@ local function metrics()
     title_gap = 6 * SCALE, buttons_gap = 18 * SCALE,
     button_h = math.floor(h + 14 * SCALE + 0.5), button_min = 76 * SCALE,
     button_pad = 14 * SCALE, button_gap = 8 * SCALE, button_radius = 6 * SCALE,
-    shadow = 3 * 3 * SCALE,
   }
 end
 
@@ -90,7 +90,7 @@ end
 local function tokens_of(line)
   local tokens = {}
   for _, part in ipairs(line) do
-    local font, color = part.font or style.view_text_font, part.color or style.nagbar_text
+    local font, color = part.font or style.view_text_font, part.color or style.card_text
     for text, space in tostring(part.text or ""):gmatch("([^%s]*)(%s*)") do
       for _, piece in ipairs {{text, false}, {space, true}} do
         if piece[1] ~= "" then
@@ -343,7 +343,7 @@ function NagView:draw_button(i, option, button)
     local gap = ring + math.max(1, math.floor(SCALE + 0.5))
     renderer.draw_rounded_rect(x - gap, y - gap, w + 2 * gap, h + 2 * gap, r + gap, style.accent)
     renderer.draw_rounded_rect(x - gap + ring, y - gap + ring, w + 2 * (gap - ring), h + 2 * (gap - ring),
-      r + gap - ring, style.nagbar)
+      r + gap - ring, style.card)
   end
   renderer.draw_rounded_rect(x, y, w, h, r, primary and style.accent or style.nagbar_button)
   local pressed = i == self.pressed_item and self.pointer_item == i
@@ -365,18 +365,11 @@ local function draw_nagview(self)
   -- The card settles into place from slightly above, at a slightly smaller size.
   local shift = math.floor((1 - p) * -8 * SCALE + 0.5)
   y = y + shift
-  core.root_panel:show_above_sidebar(x - m.shadow, y - m.shadow, w + 2 * m.shadow, h + 2 * m.shadow)
+  local shadow = card.shadow_extent()
+  core.root_panel:show_above_sidebar(x - shadow, y - shadow, w + 2 * shadow, h + 2 * shadow)
   local transformed = p < 0.999
   if transformed then renderer.push_transform(x + w / 2, y, 0.97 + 0.03 * p, p) end
-  for i = 3, 1, -1 do
-    local spread = i * 3 * SCALE
-    renderer.draw_rounded_rect(x - spread, y - spread + 4 * SCALE, w + 2 * spread, h + 2 * spread,
-      m.radius + spread, fade(style.nagbar_shadow, (4 - i) / 6))
-  end
-  local border = math.max(1, math.floor(SCALE + 0.5))
-  renderer.draw_rounded_rect(x, y, w, h, m.radius, style.nagbar_border)
-  renderer.draw_rounded_rect(x + border, y + border, w - 2 * border, h - 2 * border, m.radius - border,
-    style.nagbar)
+  card.draw(x, y, w, h, m.radius)
 
   local font, title = style.view_text_font, title_font()
   local title_h = line_height(title:get_height())

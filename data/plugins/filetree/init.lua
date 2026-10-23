@@ -3486,8 +3486,8 @@ local function filetree_operation_message(lines)
   for _, line in ipairs(lines) do
     local verb, rest = line:match("^(%S+)(.*)$")
     message.lines[#message.lines + 1] = {
-      { text = verb or line, font = style.code_font, color = operation_colors[verb] or style.nagbar_text },
-      { text = rest or "", font = style.code_font, color = style.nagbar_text },
+      { text = verb or line, font = style.code_font, color = operation_colors[verb] or style.card_text },
+      { text = rest or "", font = style.code_font, color = style.card_text },
     }
   end
   return message
