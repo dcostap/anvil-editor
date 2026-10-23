@@ -34,6 +34,11 @@ local SCROLL_ZONE, SCROLL_SPEED = 28, 900
 local PENDING_MOVE, PENDING_TRANSFER = 1.5, 4
 -- Animated values approach their targets at these rates per second. A change is 95% done after 3 / rate seconds.
 local MOVE_RATE, FADE_RATE, SCROLL_RATE = 20, 14, 22
+-- Highlights glide and fade at these base rates, times their speed. The hover highlight follows the pointer fastest.
+local MARK_MOVE_RATE, MARK_FADE_RATE = 28, 21
+local SELECTION_SPEED, HOVER_SPEED = 1.75, 3
+-- The search field opens and closes at this rate.
+local SEARCH_RATE = 30
 -- The longest step between two frames. After a pause, an animation starts where it stopped.
 local MAX_STEP = 1 / 30
 local FRAME = 1 / 120
@@ -85,6 +90,8 @@ function SidebarView:metrics()
   m = {font = font, scale = SCALE,
     pad = pad,
     gap = 16 * SCALE,
+    -- The space above each loaded Project after the first.
+    project_gap = 14 * SCALE,
     search_y = caption + 2 * SCALE,
     search = math.floor(h + 12 * SCALE + 0.5),
     group = h + 16 * SCALE,
@@ -96,7 +103,9 @@ function SidebarView:metrics()
     radius = 6 * SCALE,
     badge = badge,
   }
-  m.top = m.search_y + m.search + 8 * SCALE
+  -- The list starts below the caption strip. While a query is typed, the search field opens above it.
+  m.top = m.search_y
+  m.search_space = m.search + 8 * SCALE
   -- Tabs sit under their Project's badge. A Pane Group's container starts at the badge's middle.
   m.tab_left = pad + 6 * SCALE + math.floor(badge / 2) - 4 * SCALE
   m.tab_x = m.tab_left + 10 * SCALE
@@ -370,6 +379,7 @@ function SidebarView:rebuild_rows()
   local main_y, bottom_y = 0, 0
   for _, row in ipairs(rows) do
     if row.area == "main" then
+      if row.kind == "project" and main_y > 0 then main_y = main_y + m.project_gap end
       row.y, main_y = main_y, main_y + row.h
     else
       row.y, bottom_y = bottom_y, bottom_y + row.h
@@ -408,11 +418,16 @@ end
 function SidebarView:clamp_scroll()
   local m = self:metrics()
   local _, bottom_height = self:bottom_area()
-  self.scroll = math.max(0, math.min(self.scroll, self.main_h - (self:main_bottom() - m.top)))
+  self.scroll = math.max(0, math.min(self.scroll, self.main_h - (self:main_bottom() - self:list_top())))
   self.bottom_scroll = math.max(0, math.min(self.bottom_scroll, self.bottom_h + m.pad - bottom_height))
 end
 
-function SidebarView:list_top() return self:metrics().top end
+function SidebarView:search_open() return self.query ~= "" end
+
+function SidebarView:list_top()
+  local m = self:metrics()
+  return m.top + (self:search_open() and m.search_space or 0)
+end
 
 -- The top of an area's content at a scroll offset.
 function SidebarView:area_origin(area, scroll)
@@ -440,23 +455,12 @@ function SidebarView:row_at(y)
   end
 end
 
--- The search field's rectangle: x, y, width, height.
-function SidebarView:search_rect()
-  local m = self:metrics()
-  return m.pad, m.search_y, self.width - 2 * m.pad, m.search
-end
-
-function SidebarView:search_at(x, y)
-  local sx, sy, sw, sh = self:search_rect()
-  return x >= sx and x < sx + sw and y >= sy and y < sy + sh
-end
-
 -- Each scrolling area with its visible span, content height and scroll field.
 function SidebarView:scroll_areas()
   local m = self:metrics()
   local bottom_top, bottom_height = self:bottom_area()
   return {
-    {field = "scroll", top = m.top, height = self:main_bottom() - m.top, content = self.main_h},
+    {field = "scroll", top = self:list_top(), height = self:main_bottom() - self:list_top(), content = self.main_h},
     {field = "bottom_scroll", top = bottom_top, height = bottom_height, content = self.bottom_h + m.pad},
   }
 end
@@ -501,10 +505,6 @@ function SidebarView:on_mouse_pressed(button, x, y)
     local offset = (y >= top and y < top + h) and y - top or h / 2
     self.scroll_drag = {field = area.field, offset = offset}
     self:drag_scrollbar(y)
-    return
-  end
-  if button == "left" and self:search_at(x, y) then
-    if not self.focused then self.action("focus") end
     return
   end
   local row, index = self:row_at(y)
@@ -572,9 +572,8 @@ function SidebarView:update_hover()
   local scrollbar = self.hover_x and self:scrollbar_at(self.hover_x, self.hover_y)
   if scrollbar then hover = nil end
   scrollbar = scrollbar and scrollbar.field
-  local search = self.hover_x and self:search_at(self.hover_x, self.hover_y) or false
-  local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover or search ~= self.search_hover
-  self.hover, self.scrollbar_hover, self.search_hover = hover, scrollbar, search
+  local changed = hover ~= self.hover or scrollbar ~= self.scrollbar_hover
+  self.hover, self.scrollbar_hover = hover, scrollbar
   local tooltip = self:get_tooltip()
   if tooltip ~= self.tooltip_text then
     self.tooltip_text, self.tooltip_started = tooltip, system.get_time()
@@ -632,12 +631,11 @@ function SidebarView:on_mouse_left()
   return self:update_hover()
 end
 
--- The pointer's cursor: a hand over rows that act on a click, a text cursor over the search field.
+-- The pointer's cursor: a hand over rows that act on a click.
 function SidebarView:pointer_cursor()
   if self.drag or self.scroll_drag or not self.hover_x then return "arrow" end
   if self.press then return "hand" end
   if self:scrollbar_at(self.hover_x, self.hover_y) then return "arrow" end
-  if self:search_at(self.hover_x, self.hover_y) then return "ibeam" end
   return self.hover and "hand" or "arrow"
 end
 
@@ -935,6 +933,7 @@ function SidebarView:step(dt)
   end
   shown.scroll = ease(shown.scroll, self.scroll, SCROLL_RATE)
   shown.bottom_scroll = ease(shown.bottom_scroll, self.bottom_scroll, SCROLL_RATE)
+  shown.search = ease(shown.search, self:search_open() and 1 or 0, SEARCH_RATE, 0.01)
   -- Rows. A new row unfolds from the row above it, which already showed. A row that leaves fades where it was.
   local old, visuals = self.visuals, {}
   local unfold = {}
@@ -980,32 +979,33 @@ function SidebarView:step(dt)
   end
   -- Highlights glide from row to row and fade where no row takes them.
   local m = self:metrics()
-  local function mark(name, row)
+  local function mark(name, row, speed)
+    local move, fade_rate = MARK_MOVE_RATE * speed, MARK_FADE_RATE * speed
     local current = self.marks[name]
     if not row or not row.shown then
       if current then
-        current.alpha = ease(current.alpha, 0, FADE_RATE * 1.5, 0.01)
+        current.alpha = ease(current.alpha, 0, fade_rate, 0.01)
         if current.alpha <= 0 then self.marks[name] = nil end
       end
       return
     end
     local x = (row.kind == "project" or row.kind == "group" or row.kind == "empty") and m.pad or m.tab_left
     if not current or current.area ~= row.area or current.alpha <= 0.01 then
-      self.marks[name] = {area = row.area, x = x, y = row.shown.y, h = row.h, alpha = ease(0, 1, FADE_RATE * 1.5, 0.01)}
+      self.marks[name] = {area = row.area, x = x, y = row.shown.y, h = row.h, alpha = ease(0, 1, fade_rate, 0.01)}
       return
     end
-    current.x = ease(current.x, x, MOVE_RATE * 1.4)
-    current.y = ease(current.y, row.shown.y, MOVE_RATE * 1.4)
-    current.h = ease(current.h, row.h, MOVE_RATE * 1.4)
-    current.alpha = ease(current.alpha, 1, FADE_RATE * 1.5, 0.01)
+    current.x = ease(current.x, x, move)
+    current.y = ease(current.y, row.shown.y, move)
+    current.h = ease(current.h, row.h, move)
+    current.alpha = ease(current.alpha, 1, fade_rate, 0.01)
   end
   local active
   for _, row in ipairs(self.rows) do
     if row.selected then active = row; break end
   end
-  mark("active", active)
-  mark("cursor", self.focused and self:get_cursor() or nil)
-  mark("hover", self.hover)
+  mark("active", active, SELECTION_SPEED)
+  mark("cursor", self.focused and self:get_cursor() or nil, SELECTION_SPEED)
+  mark("hover", self.hover, HOVER_SPEED)
   -- The drop target's mark: a line between rows that grows into a box around a target row.
   local drop = self.marks.drop
   if target then
@@ -1052,7 +1052,8 @@ function SidebarView:autoscroll_speed(y)
   local bottom_top, bottom_height = self:bottom_area()
   if bottom_height <= 0 or y < bottom_top - m.gap / 2 then
     local main_bottom = self:main_bottom()
-    if y < m.top + zone then return "scroll", -speed(m.top + zone - y) end
+    local top = self:list_top()
+    if y < top + zone then return "scroll", -speed(top + zone - y) end
     if y > main_bottom - zone then return "scroll", speed(y - main_bottom + zone) end
     return
   end
@@ -1067,10 +1068,18 @@ function SidebarView:dim_target(key)
   return 1
 end
 
+-- The top of the list on screen, as the search field opens or closes.
+function SidebarView:shown_list_top()
+  local m = self:metrics()
+  local open = (self.shown or {}).search or (self:search_open() and 1 or 0)
+  return m.top + open * m.search_space
+end
+
 -- The top of a row's area on screen, at the shown scroll.
 function SidebarView:shown_origin(area)
   local shown = self.shown or {}
-  return self:area_origin(area, area == "bottom" and shown.bottom_scroll or shown.scroll)
+  if area == "bottom" then return self:area_origin(area, shown.bottom_scroll) end
+  return self:shown_list_top() - (shown.scroll or self.scroll)
 end
 
 ------------------------------------------------------------------------------------------------------------------
@@ -1266,8 +1275,11 @@ function SidebarView:draw_project(row, y, width, now)
   else
     renderer.draw_rounded_rect(bx, by, size, size, radius, tint(color, 46 * strength))
   end
-  text(letter, bx + math.floor((size - bold:get_width(letter)) / 2), by + math.floor((size - bold:get_height()) / 2),
-    letter_color, bold)
+  -- The letter's ink centres in the badge. Its line box has room for descenders, so centring the line would put a
+  -- capital too high.
+  local ink_top, ink_bottom = bold:get_ink_extent(letter)
+  local ly = ink_top and by + (size - ink_top - ink_bottom) / 2 or by + (size - bold:get_height()) / 2
+  text(letter, bx + math.floor((size - bold:get_width(letter)) / 2), math.floor(ly + 0.5), letter_color, bold)
   local status, note = project_status(project)
   if status then
     -- A ring in the panel's colour separates the dot from the badge.
@@ -1427,40 +1439,31 @@ function SidebarView:draw_card(width, height, now)
   renderer.set_clip_rect(0, 0, width, height)
 end
 
+-- The search field shows only while a query is typed. It grows in and fades as it opens, and keeps the last query
+-- while it closes.
 function SidebarView:draw_search()
+  local open = self.shown.search
+  if self:search_open() then self.shown_query = self.query end
+  if open <= 0.01 or not self.shown_query then return end
   local m = self:metrics()
-  local x, y, w, h = self:search_rect()
-  local focused = self.focused
-  if focused then
-    -- An input field with an accent outline.
-    local border = math.max(1, math.floor(1.5 * SCALE + 0.5))
-    renderer.draw_rounded_rect(x, y, w, h, m.radius, style.accent)
-    renderer.draw_rounded_rect(x + border, y + border, w - 2 * border, h - 2 * border, m.radius - border,
-      style.background)
-  else
-    renderer.draw_rounded_rect(x, y, w, h, m.radius, self.search_hover and style.sidebar_hover or style.sidebar_field)
-  end
+  local x, y, w, h = m.pad, m.search_y, self.width - 2 * m.pad, m.search
+  local transformed = open < 0.999
+  if transformed then renderer.push_transform(x + w / 2, y, 0.94 + 0.06 * open, open) end
+  -- An input field with an accent outline.
+  local border = math.max(1, math.floor(1.5 * SCALE + 0.5))
+  renderer.draw_rounded_rect(x, y, w, h, m.radius, style.accent)
+  renderer.draw_rounded_rect(x + border, y + border, w - 2 * border, h - 2 * border, m.radius - border,
+    style.background)
   local icon = style.icon_font
   local ix = x + 8 * SCALE
-  text("L", ix, y + math.floor((h - icon:get_height()) / 2), focused and style.accent or style.dim, icon)
+  text("L", ix, y + math.floor((h - icon:get_height()) / 2), style.accent, icon)
   local tx = ix + icon:get_width("L") + 8 * SCALE
   local ty = y + math.floor((h - style.font:get_height()) / 2)
-  local right = x + w - 8 * SCALE
-  if focused then
-    local query = tab.fit(style.font, self.query, math.max(0, right - tx - 4 * SCALE))
-    if query ~= "" then text(query, tx, ty, style.text) end
-    local caret_x = tx + style.font:get_width(query)
-    renderer.draw_rect(caret_x + SCALE, ty, math.max(1, math.floor(1.5 * SCALE)), style.font:get_height(), style.accent)
-    if self.query == "" then
-      text(tab.fit(style.font, "Type to search", right - caret_x - 6 * SCALE), caret_x + 6 * SCALE, ty, style.dim)
-    end
-    return
-  end
-  local hint = self.shortcut
-  local hint_w = hint and style.font:get_width(hint) or 0
-  if hint and hint_w + 60 * SCALE > right - tx then hint, hint_w = nil, 0 end
-  text(tab.fit(style.font, "Search", right - tx - hint_w - 8 * SCALE), tx, ty, style.dim)
-  if hint then text(hint, right - hint_w, ty, style.dim) end
+  local query = tab.fit(style.font, self.shown_query, math.max(0, x + w - 12 * SCALE - tx))
+  text(query, tx, ty, style.text)
+  local caret_x = tx + style.font:get_width(query)
+  renderer.draw_rect(caret_x + SCALE, ty, math.max(1, math.floor(1.5 * SCALE)), style.font:get_height(), style.accent)
+  if transformed then renderer.pop_transform() end
 end
 
 function SidebarView:draw_tooltip(width, height)
@@ -1512,7 +1515,7 @@ function SidebarView:draw(width, height)
   renderer.draw_rect(width - math.max(1, SCALE), 0, math.max(1, SCALE), height, style.divider)
   self:draw_search()
   local m = self:metrics()
-  local top, main_bottom = self:list_top(), self:main_bottom()
+  local top, main_bottom = self:shown_list_top(), self:main_bottom()
   local bottom_top, bottom_height = self:bottom_area()
   if bottom_height > 0 then
     renderer.draw_rect(m.pad + 8 * SCALE, bottom_top - math.floor(m.gap / 2), width - 2 * m.pad - 16 * SCALE,

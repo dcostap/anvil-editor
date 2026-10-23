@@ -228,6 +228,21 @@ static int f_font_get_width(lua_State *L) {
   return 1;
 }
 
+// The top and bottom of the drawn glyphs below the line top, or nil when the text draws nothing.
+static int f_font_get_ink_extent(lua_State *L) {
+  RenFont* fonts[FONT_FALLBACK_MAX]; font_retrieve(L, fonts, 1);
+  size_t len;
+  const char *text = luaL_checklstring(L, 2, &len);
+  float top, bottom;
+  if (!ren_font_group_get_ink_extent(fonts, text, len, &top, &bottom)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushnumber(L, top);
+  lua_pushnumber(L, bottom);
+  return 2;
+}
+
 static int f_font_get_height(lua_State *L) {
   RenFont* fonts[FONT_FALLBACK_MAX]; font_retrieve(L, fonts, 1);
   lua_pushnumber(L, ren_font_group_get_height(fonts));
@@ -1796,6 +1811,7 @@ static const luaL_Reg fontLib[] = {
   { "text_layout",        f_font_text_layout        },
   { "wrap_text",          f_font_wrap_text          },
   { "get_height",         f_font_get_height         },
+  { "get_ink_extent",     f_font_get_ink_extent     },
   { "get_size",           f_font_get_size           },
   { "get_generation",     f_font_get_generation     },
   { "get_surface_scale",  f_font_get_surface_scale  },

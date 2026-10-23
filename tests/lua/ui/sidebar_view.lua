@@ -577,17 +577,62 @@ test.describe("Sidebar agent status", function()
 end)
 
 test.describe("Sidebar search field", function()
-  test.it("asks for keyboard focus when the search field is clicked", function()
-    local actions, action = recorder()
-    local view = SidebarView(action)
-    view:set_model({{row_id=7,path="C:/A",state="ready",terminals={}}})
-    local x, y, w, h = view:search_rect()
-    view:on_mouse_pressed("left", x + w / 2, y + h / 2)
-    test.same(actions, {{"focus"}})
-    -- A focused Sidebar already takes the typed text.
+  local style = require "core.style"
+  test.it("shows the search field only while a query is typed", function()
+    local view = SidebarView(function() end)
+    view:set_model({{row_id=1,path="C:/Alpha",state="ready",terminals={}},
+      {row_id=2,path="C:/Beta",state="ready",terminals={}}})
+    local function search_icon(texts)
+      for _, item in ipairs(texts) do
+        if item.text == "L" and item.color == style.accent then return item end
+      end
+    end
+    local idle = drawn_texts(view)
+    test.is_nil(search_icon(idle), "An unfocused Sidebar shows the search field")
+    local alpha_y = test.not_nil(find_text(idle, "Alpha")).y
     view:on_focus(true)
-    view:on_mouse_pressed("left", x + w / 2, y + h / 2)
-    test.equal(#actions, 1)
+    test.is_nil(search_icon(drawn_texts(view)), "A focused Sidebar without a query shows the search field")
+    view:on_text_input("al")
+    local searching = drawn_texts(view)
+    test.not_nil(search_icon(searching), "The search field does not show while a query is typed")
+    test.not_nil(find_text(searching, "al"), "The query is not drawn")
+    test.ok(test.not_nil(find_text(searching, "Alpha")).y > alpha_y, "The list does not make room for the field")
+    view:on_key_pressed("backspace")
+    view:on_key_pressed("backspace")
+    local cleared = drawn_texts(view)
+    test.is_nil(search_icon(cleared), "The search field stays after the query is erased")
+    test.equal(test.not_nil(find_text(cleared, "Alpha")).y, alpha_y)
+  end)
+end)
+
+test.describe("Sidebar Project badges", function()
+  local style = require "core.style"
+  test.it("centres the badge letter's ink in its badge", function()
+    local old_font = style.font
+    local ok, err = pcall(function()
+      for size = 12, 20 do
+        style.font = renderer.font.load(DATADIR .. "/fonts/FiraSans-Regular.ttf", size * SCALE)
+        local view = SidebarView(function() end)
+        view:set_model({{row_id=1,id=1,path="C:/Projects/programming",state="ready",terminals={}}})
+        local badge_size, badge, letter = view:metrics().badge
+        with_renderer({
+          draw_rounded_rect = function(x, y, w, h)
+            if w == badge_size and h == badge_size then badge = {x = x, y = y} end
+          end,
+          draw_text = function(font, text, x, y)
+            if text == "P" then letter = {font = font, y = y} end
+          end,
+        }, function() view:draw(400, 800) end)
+        test.not_nil(badge, "No badge is drawn")
+        test.not_nil(letter, "No badge letter is drawn")
+        local top, bottom = letter.font:get_ink_extent("P")
+        local offset = letter.y + (top + bottom) / 2 - (badge.y + badge_size / 2)
+        test.ok(math.abs(offset) <= 0.5,
+          ("At size %d the letter's centre is %.2f px from the badge's centre"):format(size, offset))
+      end
+    end)
+    style.font = old_font
+    if not ok then error(err, 0) end
   end)
 end)
 

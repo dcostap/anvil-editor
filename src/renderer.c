@@ -2090,6 +2090,31 @@ double ren_font_group_get_width(RenFont **fonts, const char *text, size_t len, R
 #endif
 }
 
+bool ren_font_group_get_ink_extent(RenFont **fonts, const char *text, size_t len, float *top, float *bottom) {
+  const float scale = ren_font_get_surface_scale(fonts[0]);
+  const float baseline = fonts[0]->baseline * scale;
+  const char *end = text + len;
+  bool found = false;
+  while (text < end) {
+    unsigned int codepoint;
+    text = utf8_to_codepoint(text, end, &codepoint);
+    if (is_whitespace(codepoint))
+      continue;
+    SDL_Surface *surface = NULL;
+    GlyphMetric *metric = NULL;
+    font_group_get_glyph(fonts, codepoint, 0, &surface, &metric);
+    if (!surface || !metric || metric->y1 <= metric->y0)
+      continue;
+    // Text draws each bitmap row at the baseline minus the bitmap's top.
+    float glyph_top = (baseline - metric->bitmap_top) / scale;
+    float glyph_bottom = glyph_top + (metric->y1 - metric->y0) / scale;
+    if (!found || glyph_top < *top) *top = glyph_top;
+    if (!found || glyph_bottom > *bottom) *bottom = glyph_bottom;
+    found = true;
+  }
+  return found;
+}
+
 typedef struct {
   RenSurface *rs;
   SDL_Surface *surface;

@@ -104,6 +104,9 @@ void update_font_scale(RenWindow *window_renderer, RenFont **fonts);
 #endif
 void ren_font_group_set_tab_size(RenFont **font, int n);
 double ren_font_group_get_width(RenFont **font, const char *text, size_t len, RenTab tab, int *x_offset);
+/* The rows that the unshaped glyphs of `text` cover, from the top of the line.
+ * Returns false when no glyph draws a bitmap, such as for whitespace. */
+bool ren_font_group_get_ink_extent(RenFont **font, const char *text, size_t len, float *top, float *bottom);
 /* Produces one cumulative horizontal advance for every UTF-8 byte boundary.
  * `byte_offsets` and `advances` need room for `len + 1` entries. The returned
  * count always includes the zero-byte/zero-width origin. */

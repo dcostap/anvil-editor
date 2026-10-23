@@ -211,7 +211,6 @@ style.titlebar_tab_hover = { 0, 0, 0, 12 }
 style.titlebar_pane_number = style.dim
 style.titlebar_group_indicator = { common.color "rgba(107, 29, 29, 0.60)" }
 style.sidebar_hover = { 107, 29, 29, 16 }
-style.sidebar_field = { 107, 29, 29, 12 }
 style.sidebar_group = { 107, 29, 29, 8 }
 style.sidebar_card = c("faf2dd")
 style.sidebar_shadow = { 70, 40, 10, 44 }

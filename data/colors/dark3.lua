@@ -272,7 +272,6 @@ style.titlebar_tab_hover = { 210, 163, 107, 17 }
 style.titlebar_pane_number = style.dim
 style.titlebar_group_indicator = { common.color "rgba(210, 163, 107, 0.62)" }
 style.sidebar_hover = { 210, 163, 107, 17 }
-style.sidebar_field = { 210, 163, 107, 12 }
 style.sidebar_group = { 210, 163, 107, 8 }
 style.sidebar_card = c("353633")
 style.sidebar_shadow = { 0, 0, 0, 110 }

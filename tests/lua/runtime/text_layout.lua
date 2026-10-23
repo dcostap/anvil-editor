@@ -161,3 +161,28 @@ test.describe("Native text layout", function()
     test.equal(width_at(#text), layout:width())
   end)
 end)
+
+test.describe("Font ink extent", function()
+  local font = renderer.font.load(DATADIR .. "/fonts/FiraSans-Regular.ttf", 14 * SCALE)
+
+  test.it("reports the rows that a text's glyphs cover inside the line", function()
+    local cap_top, cap_bottom = font:get_ink_extent("H")
+    test.ok(cap_top and cap_top >= 0 and cap_bottom > cap_top and cap_bottom <= font:get_height(),
+      ("H covers %s to %s in a %s line"):format(tostring(cap_top), tostring(cap_bottom), font:get_height()))
+    -- A capital sits on the baseline. A descender goes below it, and a period stays near it.
+    local _, descender_bottom = font:get_ink_extent("p")
+    test.ok(descender_bottom > cap_bottom, "p does not descend below H")
+    local dot_top, dot_bottom = font:get_ink_extent(".")
+    test.ok(dot_top > cap_top + (cap_bottom - cap_top) / 2, "The period is not low in the line")
+    test.ok(math.abs(dot_bottom - cap_bottom) <= 1, "The period does not sit on the baseline")
+    -- A text covers the rows of all its glyphs.
+    local top, bottom = font:get_ink_extent("Hp")
+    test.equal(top, cap_top)
+    test.equal(bottom, descender_bottom)
+  end)
+
+  test.it("reports nothing for text that draws no glyph", function()
+    test.is_nil(font:get_ink_extent(""))
+    test.is_nil(font:get_ink_extent("  "))
+  end)
+end)

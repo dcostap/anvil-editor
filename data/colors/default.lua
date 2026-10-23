@@ -293,10 +293,8 @@ style.titlebar_pane_number = style.dim
 style.titlebar_group_indicator = { common.color "rgba(89, 160, 250, 0.60)" }
 style.drop_target_accent = p("ctrl_clickable")
 style.drop_target_background = { common.color "rgba(89, 160, 250, 0.12)" }
--- Project Sidebar: a row under the pointer, the search field, a Pane Group's container, and a dragged Tab with its
--- shadow.
+-- Project Sidebar: a row under the pointer, a Pane Group's container, and a dragged Tab with its shadow.
 style.sidebar_hover = { 255, 255, 255, 14 }
-style.sidebar_field = { 255, 255, 255, 10 }
 style.sidebar_group = { 255, 255, 255, 7 }
 
 style.sidebar_card = c("313338")
