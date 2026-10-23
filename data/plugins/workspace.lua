@@ -321,8 +321,12 @@ local function save_workspace(during_use)
   local snapshot_ended = system.get_time()
   local text = common.serialize(workspace, { sort = true })
   local serialization_ended = system.get_time()
-  if during_use and key == last_saved_key and text == last_saved_text then return end
-  storage.save(STORAGE_MODULE, key, workspace)
+  if during_use and key == last_saved_key and text == last_saved_text then return true end
+  local saved, err = storage.save(STORAGE_MODULE, key, workspace)
+  if not saved then
+    core.log_quiet("Workspace: save failed for %s: %s", project_dir, tostring(err))
+    return false
+  end
   local write_ended = system.get_time()
   last_saved_key, last_saved_text = key, text
   loaded_workspace_key = key
@@ -344,6 +348,7 @@ local function save_workspace(during_use)
       (write_ended - serialization_ended) * 1000
     )
   end
+  return true
 end
 
 
@@ -357,7 +362,11 @@ local function run_pending_saves()
       local reason = pending_save.reason
       pending_save = nil
       if workspace_restored then
-        core.try(save_workspace, true)
+        local ok, saved = core.try(save_workspace, true)
+        if not ok or saved == false then
+          local retry_at = system.get_time() + SAVE_MAX_DELAY_SECONDS
+          pending_save = { first_at = retry_at, due_at = retry_at, reason = "retry failed save" }
+        end
       else
         core.log_quiet("Workspace: skipped save during use (%s) before the Workspace restored", reason)
       end

@@ -53,6 +53,11 @@ local function get_render_token_at(buffer, line, col)
   end
 end
 
+local function is_code_bracket(buffer, line, col)
+  local token = get_token_at(buffer, line, col)
+  return token ~= "comment" and token ~= "string"
+end
+
 
 --- @param buffer core.buffer
 --- @param line integer
@@ -69,9 +74,9 @@ local function get_matching_bracket(buffer, line, col, line_limit, open_byte, cl
 
   while line ~= end_line do
     local byte = buffer.lines[line]:byte(col)
-    if byte == open_byte and get_token_at(buffer, line, col) ~= "comment" then
+    if byte == open_byte and is_code_bracket(buffer, line, col) then
       depth = depth + 1
-    elseif byte == close_byte and get_token_at(buffer, line, col) ~= "comment" then
+    elseif byte == close_byte and is_code_bracket(buffer, line, col) then
       depth = depth - 1
       if depth == 0 then return line, col end
     end
@@ -96,7 +101,7 @@ local function get_enclosing_bracket(buffer, caret_line, caret_col)
       local byte = buffer.lines[line]:byte(col)
       local close = bracket_maps[1][byte]
       local open = bracket_maps[2][byte]
-      if (close or open) and get_token_at(buffer, line, col) ~= "comment" then
+      if (close or open) and is_code_bracket(buffer, line, col) then
         if open then
           depths[open] = (depths[open] or 0) + 1
         elseif (depths[byte] or 0) > 0 then
@@ -141,7 +146,7 @@ local function update_state(line_limit)
       local line, col = buffer:position_offset(line, col, i)
       local open = buffer.lines[line]:byte(col)
       local close = map[open]
-      if close and get_token_at(buffer, line, col) ~= "comment" then
+      if close and is_code_bracket(buffer, line, col) then
         -- i == 0 if the cursor is on the left side of a bracket (or -1 when on right)
         select_adj = i + 1 -- if i == 0 then select_adj = 1 else select_adj = 0 end
         line2, col2 = get_matching_bracket(buffer, line, col, line_limit, open, close, map.direction)

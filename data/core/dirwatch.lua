@@ -26,6 +26,10 @@ local change_kinds = {
   [dirmonitor.CHANGE_RESCAN] = "rescan",
 }
 
+local function contains_path(parent, path)
+  return common.path_equals(parent, path) or common.path_belongs_to(path, parent)
+end
+
 
 ---Constructor.
 function DirWatch:new()
@@ -75,11 +79,19 @@ function DirWatch:watch(path, watch)
   if not self.watched[path] and self.scanned[path] == nil then
     if self.monitor:mode() == "single" then
       if info.type ~= "dir" then return self:scan(path) end
-      if not self.single_watch_top or path:find(self.single_watch_top, 1, true) ~= 1 then
+      if not self.single_watch_top or not contains_path(self.single_watch_top, path) then
         -- Get the highest level of directory that is common to this directory, and the original.
-        local target = path
-        while self.single_watch_top and self.single_watch_top:find(target, 1, true) ~= 1 do
-          target = common.dirname(target)
+        local target = common.normalize_path(path)
+        while self.single_watch_top and not contains_path(target, self.single_watch_top) do
+          local parent = common.dirname(target)
+          if PLATFORM == "Windows" and parent and parent:match("^%a:$") then
+            parent = parent .. PATHSEP
+          end
+          if not parent or parent == target or not common.is_absolute_path(parent) then
+            core.log_quiet("DirWatch: no shared watch root for %s and %s; using timestamps", path, self.single_watch_top)
+            return self:scan(path)
+          end
+          target = parent
         end
         if target ~= self.single_watch_top then
           local value = self.monitor:watch(target)

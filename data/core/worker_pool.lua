@@ -30,19 +30,6 @@ local function unique_name(prefix)
   return string.format("anvil-worker-pool-%s-%s-%d-%d", prefix, tostring(pid), math.floor(now() * 1000000), pool_sequence)
 end
 
-local function copy_handle(handle)
-  if type(handle) ~= "table" then return nil end
-  return {
-    id = handle.id,
-    pool_id = handle.pool_id,
-    worker_id = handle.worker_id,
-    kind = handle.kind,
-    generation = handle.generation,
-    project_paths_generation = handle.project_paths_generation,
-    phase = handle.phase,
-  }
-end
-
 local function default_worker_count()
   local count = thread and thread.get_cpu_count and thread.get_cpu_count() or 1
   count = math.max(1, math.min(4, math.floor(count or 1)))
@@ -56,6 +43,11 @@ end
 
 local function release_terminal_job(job)
   if not job or not job.finished_at or job.released then return end
+  -- The caller owns completed status. The pool keeps only live jobs.
+  if job.pool then
+    job.handle.terminal_status = job.pool:status(job.handle)
+    job.pool.jobs[job.id] = nil
+  end
   if job.cancel_channel then job.cancel_channel:clear() end
   job.spec = nil
   job.cancel_channel = nil
@@ -278,7 +270,7 @@ function worker_pool:submit(spec)
     if native_id then self.native_jobs[native_id] = job_id end
     self.diagnostics.submitted = self.diagnostics.submitted + 1
     log_quiet("worker_pool %s submitted native job %d kind=%s native_id=%s", tostring(self.name), job_id, spec.kind, tostring(native_id))
-    return copy_handle(handle)
+    return handle
   end
 
   local worker = self:choose_worker(spec)
@@ -338,10 +330,11 @@ function worker_pool:submit(spec)
 
   self.diagnostics.submitted = self.diagnostics.submitted + 1
   log_quiet("worker_pool %s submitted job %d kind=%s worker=%d", tostring(self.name), job_id, spec.kind, worker.id)
-  return copy_handle(handle)
+  return handle
 end
 
 function worker_pool:cancel(handle)
+  if not handle or handle.pool_id ~= self.id then return false end
   local job = handle and self.jobs[handle.id]
   if not job or job.finished_at then
     return false
@@ -372,8 +365,11 @@ function worker_pool:cancel(handle)
 end
 
 function worker_pool:status(handle)
+  if not handle or handle.pool_id ~= self.id then return nil end
   local job = handle and self.jobs[handle.id]
-  if not job then return nil end
+  if not job then
+    return handle.terminal_status and common.merge({}, handle.terminal_status) or nil
+  end
   if job.backend == "native" and self.native and job.native_handle and not job.finished_at then
     local ok, native_status = pcall(function() return self.native:status(job.native_handle) end)
     if ok and native_status and native_status.status then job.status = native_status.status end

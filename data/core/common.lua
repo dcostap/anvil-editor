@@ -1143,13 +1143,17 @@ function common.rm(path, recursively)
     return false, "invalid path given", path
   end
 
-  if stat.type == "file" then
+  if stat.symlink and stat.type == "dir" and PLATFORM == "Windows" then
+    local removed, error = system.rmdir(path)
+    if not removed then return false, error, path end
+  elseif stat.type == "file" or stat.symlink then
     local removed, error = os.remove(path)
     if not removed then
       return false, error, path
     end
   else
-    local contents = system.list_dir(path)
+    local contents, error = system.list_dir(path)
+    if not contents then return false, error, path end
     if #contents > 0 and not recursively then
       return false, "directory is not empty", path
     end

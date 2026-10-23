@@ -409,32 +409,55 @@ local function copy_file(src, dest)
   local output
   output, err = io.open(dest, "wb")
   if not output then input:close(); return nil, err end
+  local function fail(message)
+    input:close()
+    output:close()
+    local removed, remove_err = os.remove(dest)
+    if not removed then
+      return nil, tostring(message) .. "; incomplete copy remains at " .. dest .. ": " .. tostring(remove_err)
+    end
+    return nil, message
+  end
   while true do
-    local chunk = input:read(1024 * 1024)
+    local chunk, read_err = input:read(1024 * 1024)
+    if read_err then return fail(read_err) end
     if not chunk then break end
     local ok
     ok, err = output:write(chunk)
-    if not ok then input:close(); output:close(); return nil, err end
+    if not ok then return fail(err) end
   end
-  input:close()
-  output:close()
+  local input_ok, input_err = input:close()
+  local output_ok, output_err = output:close()
+  if not input_ok or not output_ok then
+    local removed, remove_err = os.remove(dest)
+    err = input_err or output_err
+    if not removed then
+      err = tostring(err) .. "; incomplete copy remains at " .. dest .. ": " .. tostring(remove_err)
+    end
+    return nil, err
+  end
   return true
 end
 
 local function copy_recursive(src, dest, entry_type)
   local info = system.get_file_info(src)
   if not info then return nil, "source does not exist: " .. src end
+  if info.symlink then return nil, "copying links is not supported: " .. src end
   entry_type = entry_type or info.type
   if entry_type == "dir" then
+    local entries, list_err = system.list_dir(src)
+    if not entries then return nil, list_err or ("cannot list directory: " .. src) end
     local ok, err, path = common.mkdirp(dest)
     if not ok then return nil, string.format("mkdir failed: %s: %s", path or dest, err) end
-    for _, name in ipairs(system.list_dir(src) or {}) do
+    for _, name in ipairs(entries) do
       local child_src = path_join(src, name)
       local child_dest = path_join(dest, name)
       local child_info = system.get_file_info(child_src)
       if child_info then
         ok, err = copy_recursive(child_src, child_dest, child_info.type)
         if not ok then return nil, err end
+      else
+        return nil, "cannot inspect source: " .. child_src
       end
     end
     return true
@@ -3328,7 +3351,11 @@ function FileTreeView:apply_plan(plan)
       return
     end
     local ok, err = copy_recursive(op.apply_from or op.from, op.to, op.type)
-    if not ok then core.error("File Tree: copy failed: %s", err); return end
+    if not ok then
+      core.error("File Tree: copy failed: %s%s", err,
+        system.get_file_info(op.to) and ("; incomplete copy remains at " .. op.to) or "")
+      return
+    end
     core.log("File Tree: copied %s -> %s", op.from, op.to)
     changed = true
   end

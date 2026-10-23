@@ -83,6 +83,27 @@ test.describe("worker_pool", function()
     for i = 1, 6 do test.ok(results[i]) end
   end)
 
+  for _, native in ipairs { false, true } do
+  test.test("completed " .. (native and "native" or "Lua") .. " handles are collectible while the pool stays open", function()
+    local pool = new_pool("test-handle-lifetime", 1)
+    local handles = setmetatable({}, { __mode = "v" })
+    local completed = false
+    pool:submit {
+      native = native,
+      kind = native and "test_echo" or "worker_pool_test",
+      payload = { op = "echo", value = "done" },
+      on_complete = function(_, handle)
+        handles[1] = handle
+        completed = true
+      end,
+    }
+    test.ok(drain_until(pool, function() return completed end))
+    collectgarbage("collect")
+    collectgarbage("collect")
+    test.equal(handles[1], nil, "pool retains the completed handle")
+  end)
+  end
+
   test.test("submits new work to an idle worker instead of queueing behind a busy one", function()
     local pool = new_pool("test-idle-worker-selection", 2)
     local slow_progress = 0
