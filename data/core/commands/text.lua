@@ -2893,6 +2893,33 @@ command.add_toggle("core:toggle_bom", {
   end,
 })
 
+local function move_to_markdown_list_content(buffer, line, col)
+  local list_content_col = markdown_list_content_start(
+    buffer, line, buffer.lines[line], true
+  )
+  if list_content_col and col > list_content_col then
+    return line, list_content_col
+  end
+end
+
+local function move_to_start_of_line(buffer, line, col)
+  local target_line, target_col = move_to_markdown_list_content(buffer, line, col)
+  if target_line then return target_line, target_col end
+  return translate.start_of_line(buffer, line, col)
+end
+
+local function move_to_start_of_indentation(buffer, line, col)
+  local target_line, target_col = move_to_markdown_list_content(buffer, line, col)
+  if target_line then return target_line, target_col end
+  return translate.start_of_indentation(buffer, line, col)
+end
+
+-- Movement, selection, and deletion must use the same logical line starts.
+local line_start_translations = {
+  start_of_line = move_to_start_of_line,
+  start_of_indentation = move_to_start_of_indentation,
+}
+
 local translations = {
   previous_char = translate,
   next_char = translate,
@@ -2902,10 +2929,10 @@ local translations = {
   next_block_end = translate,
   start_of_buffer = translate,
   end_of_buffer = translate,
-  start_of_line = translate,
+  start_of_line = line_start_translations,
   end_of_line = translate,
   start_of_word = translate,
-  start_of_indentation = translate,
+  start_of_indentation = line_start_translations,
   end_of_word = translate,
   previous_line = TextView.translate,
   next_line = TextView.translate,
@@ -3125,29 +3152,6 @@ end
 
 local function move_to_end_of_line(buffer, line)
   return line, #buffer.lines[line]
-end
-
-local function move_to_markdown_list_content(buffer, line, col)
-  local list_content_col = markdown_list_content_start(
-    buffer, line, buffer.lines[line], true
-  )
-  if list_content_col and col > list_content_col then
-    return line, list_content_col
-  end
-end
-
-local function move_to_start_of_line(buffer, line, col)
-  local target_line, target_col = move_to_markdown_list_content(buffer, line, col)
-  if target_line then return target_line, target_col end
-  return translate.start_of_line(buffer, line, col)
-end
-
-local function move_to_start_of_indentation(buffer, line, col)
-  local target_line, target_col = move_to_markdown_list_content(buffer, line, col)
-  if target_line then return target_line, target_col end
-  local _, indent_end = buffer.lines[line]:find("^[\t ]*")
-  local indent_col = indent_end + 1
-  return line, col > indent_col and indent_col or (col == 1 and indent_col or 1)
 end
 
 commands["core:move_to_end_of_line"] = function(dv)
@@ -3578,7 +3582,7 @@ local function move_to_wrapped_end_of_line(buffer, line, col, dv)
   return linewrapping.wrapped_end_of_line_position(dv, buffer, line, col, translate.end_of_line)
 end
 
-local function move_to_wrapped_start_of_line(buffer, line, col, dv, logical_start)
+local function move_to_wrapped_start_of_line(buffer, line, col, dv)
   if dv and dv.get_line_render_position_row_bounds then
     local row_start, _, row_index = dv:get_line_render_position_row_bounds(line, col)
     if row_start and col ~= row_start then
@@ -3589,11 +3593,11 @@ local function move_to_wrapped_start_of_line(buffer, line, col, dv, logical_star
     end
   end
   return linewrapping.wrapped_start_of_line_position(
-    dv, buffer, line, col, logical_start or translate.start_of_line
+    dv, buffer, line, col, move_to_start_of_line
   )
 end
 
-local function move_to_wrapped_start_of_indentation(buffer, line, col, dv, logical_start)
+local function move_to_wrapped_start_of_indentation(buffer, line, col, dv)
   if dv and dv.get_line_render_position_row_bounds then
     local row_start, _, row_index = dv:get_line_render_position_row_bounds(line, col)
     if row_start and row_start ~= 1 and col ~= row_start then
@@ -3604,7 +3608,7 @@ local function move_to_wrapped_start_of_indentation(buffer, line, col, dv, logic
     end
   end
   return linewrapping.wrapped_start_of_indentation_position(
-    dv, buffer, line, col, logical_start or translate.start_of_indentation
+    dv, buffer, line, col, move_to_start_of_indentation
   )
 end
 
@@ -3646,7 +3650,7 @@ end
 commands["core:move_to_start_of_line"] = function(dv)
   return wrapped_move_to(
     dv, "core:move_to_start_of_line",
-    move_to_wrapped_start_of_line, dv, move_to_start_of_line
+    move_to_wrapped_start_of_line, dv
   )
 end
 commands["core:select_to_start_of_line"] = function(dv)
@@ -3658,7 +3662,7 @@ end
 commands["core:move_to_start_of_indentation"] = function(dv)
   return wrapped_move_to(
     dv, "core:move_to_start_of_indentation",
-    move_to_wrapped_start_of_indentation, dv, move_to_start_of_indentation
+    move_to_wrapped_start_of_indentation, dv
   )
 end
 commands["core:select_to_start_of_indentation"] = function(dv)
