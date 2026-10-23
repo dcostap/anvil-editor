@@ -506,7 +506,7 @@ function TerminalTextCaptureView:new(source, capture)
     read_only_reason = "Terminal text captures are read-only",
   })
   self.terminal_text_capture = true
-  self.pane_constraint = source and panes.view_constraint(source) or {}
+  self.pane_constraint = source and panes.view_constraint(source)
   self.terminal_title = terminal_title
   self.terminal_capture = capture
   self.color_cache = {}

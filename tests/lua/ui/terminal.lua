@@ -565,6 +565,31 @@ test.describe("Terminal View", function()
     test.equal(panes.history_length(copy_pane), 1)
   end)
 
+  test.it("opens an Editor in a copied Terminal Text Capture's Pane", function(context)
+    local source = terminal.open()
+    context.sessions[1].capture = { text = "frozen output" }
+    test.ok(source:open_text_capture())
+    local source_pane = panes.active()
+    local original = source_pane.current_view
+
+    test.ok(command.perform("pane:copy_view_to_new_group"))
+    local copy_pane = panes.active()
+    local copy = copy_pane.current_view
+    test.not_equal(copy_pane, source_pane)
+    test.ok(copy.buffer.read_only)
+
+    local path = DATADIR .. "/core/commands/core.lua"
+    local editor = core.root_panel:open_buffer(Buffer(path, path), { pane = copy_pane })
+    test.ok(editor:extends(Editor))
+    test.equal(copy_pane.current_view, editor)
+    test.equal(panes.count(), 2)
+    test.equal(panes.back(copy_pane), copy)
+    test.ok(copy.buffer.read_only)
+    test.equal(source_pane.current_view, original)
+    test.equal(panes.back(source_pane), source)
+    test.ok(panes.validate())
+  end)
+
   test.it("does not retain a closed Terminal View through its text capture", function(context)
     local source = terminal.TerminalView()
     context.sessions[1].capture = {
