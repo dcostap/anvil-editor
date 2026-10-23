@@ -142,7 +142,7 @@ local function add_surface(id, window)
     if action == "request" then
       local route, path, request, x, y = row_id, target, ...
       -- Focusing a Pane gives the keyboard back to the Project. The shell gets both messages in this order.
-      if request.action == "focus" then system.focus_project_sidebar(false) end
+      if request.action == "focus" or request.action == "new_group" then system.focus_project_sidebar(false) end
       local text = common.serialize(request, {escape = true})
       local sent = system.pane_request(route, path, text, x, y)
       -- A drag over the work area sends a request for each pointer move. Log only its end.
@@ -234,20 +234,29 @@ function core.init()
     if core.session_log then core.session_log:write("INFO", string.format(...), "Sidebar") end
   end
   core.log_quiet("Sidebar frontend started")
-  -- The Sidebar has no editor commands. Keep its focus shortcut, the Recent Pane shortcuts, the list commands, and
-  -- the editor's line editing shortcuts for the search field.
-  local bindings = keymap.get_bindings("core:focus_project_sidebar") or {}
+  -- Keep Project actions, list navigation, and line editing shortcuts for the search field.
+  local ok, settings = pcall(dofile, USERDIR .. "/user_settings.lua")
+  local saved_config = ok and type(settings) == "table" and settings.config
+  local custom = type(saved_config) == "table" and saved_config.custom_keybindings
+  local function bindings_for(name)
+    local saved = type(custom) == "table" and custom[name]
+    return type(saved) == "table" and saved or keymap.get_bindings(name) or {}
+  end
+  local bindings = bindings_for("core:focus_project_sidebar")
+  local new_group_bindings = bindings_for("pane:new_group")
   local LineInput, line_bindings = require "core.line_input", {}
-  for _, name in ipairs(LineInput.COMMANDS) do line_bindings[name] = keymap.get_bindings("core:" .. name) or {} end
+  for _, name in ipairs(LineInput.COMMANDS) do line_bindings[name] = bindings_for("core:" .. name) end
   local recent_panes, recent_bindings = require "core.recent_panes", {}
   for number = 1, recent_panes.COUNT do
-    recent_bindings[number] = keymap.get_bindings("pane:focus_recent_" .. number) or {}
+    recent_bindings[number] = bindings_for("pane:focus_recent_" .. number)
   end
   keymap.map, keymap.reverse_map = {}, {}
   command.add(nil, {
     ["core:focus_project_sidebar"] = function() system.focus_project_sidebar(false) end,
+    ["pane:new_group"] = function() return current ~= nil and current.view:new_group() end,
   })
   for _, binding in ipairs(bindings) do keymap.add {[binding] = "core:focus_project_sidebar"} end
+  for _, binding in ipairs(new_group_bindings) do keymap.add {[binding] = "pane:new_group"} end
   -- The Recent Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
   for number = 1, recent_panes.COUNT do
     local name = "pane:focus_recent_" .. number
@@ -272,7 +281,9 @@ function core.init()
   -- Added last, so they go first. Without a query they decline, and Left, Right, Home and End move through the list.
   for _, name in ipairs(LineInput.COMMANDS) do
     local sidebar_name = "sidebar:" .. name
-    command.add(nil, {[sidebar_name] = function() return current ~= nil and current.view:edit(name) end})
+    command.add(function()
+      return current ~= nil and current.view.focused and (current.view.query ~= "" or name == "paste")
+    end, {[sidebar_name] = function() current.view:edit(name) end})
     for _, binding in ipairs(line_bindings[name]) do keymap.add {[binding] = sidebar_name} end
   end
   keymap.add {["alt+r"] = "sidebar:return"}

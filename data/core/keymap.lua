@@ -317,6 +317,7 @@ end
 --------------------------------------------------------------------------------
 -- Register default bindings
 --------------------------------------------------------------------------------
+keymap.add { ["ctrl+t"] = "pane:new_group" }
 if macos then
   local keymap_macos = require("core.keymap-macos")
   keymap_macos(keymap)

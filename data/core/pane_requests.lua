@@ -84,6 +84,7 @@ function M.place(pane, target)
 end
 
 local schemas = {
+  new_group = {},
   focus = {pane = true}, close = {pane = true}, move = {pane = true, target = true},
   open = {files = true, text = true, target = true},
   drop = {pane = true, files = true, text = true},
@@ -133,6 +134,7 @@ end
 
 local function execute(request, x, y)
   local action = request.action
+  if action == "new_group" then return require("core.command").perform("pane:new_group") end
   if action == "drag" then
     -- A Tab of another Project has the same Pane IDs, so the source Project must be this one.
     local project = core.root_project()

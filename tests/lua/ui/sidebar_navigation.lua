@@ -17,6 +17,24 @@ local function sidebar()
 end
 
 test.describe("Sidebar keyboard navigation", function()
+  test.it("opens a new Pane Group in the cursor's Project", function()
+    for _, query in ipairs {"Beta", "bsv", "archive"} do
+      local view, actions = sidebar()
+      view:on_focus(true)
+      view:on_text_input(query)
+      local path = view:get_cursor().project.path
+      test.ok(view:new_group())
+      test.same(actions, {{"request", "select", path, {action="new_group"}}})
+    end
+    local view, actions = sidebar()
+    view:on_focus(true)
+    test.ok(view:new_group())
+    test.same(actions, {{"request", "select", "C:/Alpha", {action="new_group"}}})
+    view:on_text_input("no matching project")
+    test.ok(not view:new_group())
+    test.equal(#actions, 1)
+  end)
+
   test.it("starts at the current Tab and activates only on Enter", function()
     local view, actions = sidebar()
     view:on_focus(true)

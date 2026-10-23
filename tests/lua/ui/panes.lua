@@ -165,6 +165,16 @@ test.describe("Pane manager", function()
     test.equal(source.current_view:get_name(), "source")
   end)
 
+  test.it("opens and focuses an untitled Editor for a Sidebar new group request", function()
+    panes.create { factory = factory("Existing") }
+    local previous = panes.active()
+    test.ok(require("core.pane_requests").perform('{action="new_group"}'))
+    test.equal(panes.count(), 2)
+    test.ok(panes.active() ~= previous)
+    test.ok(panes.active().current_view:is(Editor))
+    test.equal(core.active_view, panes.active().current_view)
+  end)
+
   test.it("copies the Current View into a new Pane Group without copying history", function()
     local source = panes.create { factory = factory("previous") }
     local original = FakeView("current")

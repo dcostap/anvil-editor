@@ -185,6 +185,13 @@ function SidebarView:activate_row(row)
   elseif row.key then self:toggle(row.key, row.collapsed) end
 end
 
+function SidebarView:new_group()
+  local row = self:get_cursor()
+  if not self.focused or not row or not row.project then return false end
+  self.action("request", "select", row.project.path, {action = "new_group"})
+  return true
+end
+
 function SidebarView:on_key_pressed(key)
   if not self.focused then return end
   local row = self:get_cursor()

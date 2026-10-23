@@ -599,7 +599,6 @@ command.add(nil, {
 })
 
 keymap.add_direct {
-  ["ctrl+t"] = "pane:new_group",
   ["ctrl+shift+n"] = "editor:new_file_with_path",
 }
 
