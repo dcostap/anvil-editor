@@ -63,6 +63,8 @@ Preparation uses extra memory and runs the shell profile early.
 Run `runtime/terminal_prepared.lua` and `ui/terminal_prepared.lua` after changes.
 
 A Terminal Session is busy while its shell has a child process.
+A new shell is idle until its host reports busy state, so closing it during startup asks nothing.
+A session that attaches to an existing host counts as busy until that report, because a command can still run there.
 An interactive PowerShell also runs `data/tools/shell-integration/anvil.ps1`.
 That script marks prompts and commands with OSC 133 and a per-session nonce.
 The host also reports a command that runs inside the shell, such as `Start-Sleep`, as busy.

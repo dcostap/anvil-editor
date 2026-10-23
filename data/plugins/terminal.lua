@@ -402,6 +402,7 @@ function TerminalView:new(options)
     return
   end
   self.session = session
+  self.existing_host = native_options.session_id ~= nil
   -- A revived session keeps the activity time its host recorded.
   self.activity = record and tonumber(record.activity) or os.time()
   local attaching = session:stats().attach_count == 0
@@ -686,6 +687,7 @@ end
 
 function TerminalView:adopt_session(session)
   self.session = session
+  self.existing_host = false
   self.activity = self.activity or os.time()
   local attaching = session:stats().attach_count == 0
   if not attaching then self:log_session_attach() end
@@ -2265,12 +2267,24 @@ function TerminalView:on_mouse_wheel(delta_y)
   return false
 end
 
+-- The session status for a close or quit decision. An existing host can run a command before its first busy report.
+-- A new shell runs none until its host reports, so it counts as starting.
+function TerminalView:close_status()
+  local _, status = self.session:update()
+  if not self.existing_host and status.busy == nil
+      and (status.kind == "reconnecting" or status.kind == "running") then
+    return { kind = "starting" }
+  end
+  return status
+end
+
 function TerminalView:can_close(approve)
   if not self.session then approve(); return end
-  local _, status = self.session:update()
+  local status = self:close_status()
   local actions = M.quit_decision({ status })
   if actions then approve(); return end
-  core.log_quiet("Terminal session %d requested close confirmation", self.log_id)
+  core.log_quiet("Terminal session %d requested close confirmation: state=%s busy=%s",
+    self.log_id, tostring(status.kind), tostring(status.busy))
   core.nag_view:show("Running Terminal", "End this Terminal Session and its running command?", {
     { text = "End", action = "end" },
     { text = "Cancel", action = "cancel", default_yes = true, default_no = true },
@@ -2649,8 +2663,7 @@ function M.confirm_quit(accept, cancel)
   for _, pane in ipairs(panes.ordered()) do
     for _, view in ipairs(panes.views(pane)) do
       if view:is(TerminalView) and view.context == "workspace" and view.session then
-        local _, status = view.session:update()
-        views[#views + 1], statuses[#statuses + 1] = view, status
+        views[#views + 1], statuses[#statuses + 1] = view, view:close_status()
       end
     end
   end
@@ -2658,8 +2671,7 @@ function M.confirm_quit(accept, cancel)
   local remembered = storage.load("plugins.terminal", "quit_choice")
   local function apply(answer, remember)
     for i, view in ipairs(views) do
-      if view.session then local _, status = view.session:update(); statuses[i] = status
-      else statuses[i] = { kind = "closed" } end
+      statuses[i] = view.session and view:close_status() or { kind = "closed" }
     end
     local actions, reason = M.quit_decision(statuses, answer)
     core.log_quiet("Terminal quit decision: answer=%s result=%s sessions=%d", tostring(answer), tostring(reason or "accepted"), #views)

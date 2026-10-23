@@ -37,8 +37,8 @@ test.describe("Terminal quit confirmation", function()
     local storage = require "core.storage"
     storage.clear("plugins.terminal", "quit_choice")
     terminal._set_native_for_tests(nil)
-    local idle = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
-    local busy = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
+    local idle = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q", placement = "new" })
+    local busy = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q", placement = "new" })
     local busy_state = busy:get_state()
     local busy_id = busy.session:stats().host_pid
     local previous_quit = core.quit_request

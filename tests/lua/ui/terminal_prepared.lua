@@ -19,7 +19,6 @@ test.describe("Prepared Terminal View", function()
     }
     local view, second
     local ok, err = pcall(function()
-      local view_count = #terminal.open_views()
       local deadline = system.get_time() + 30
       local ready
       repeat
@@ -28,7 +27,9 @@ test.describe("Prepared Terminal View", function()
       until ready or system.get_time() >= deadline
       test.ok(ready, "prepared PowerShell did not reach its prompt: " ..
         (prepared and prepared:text_capture().text or "no session"))
-      test.equal(#terminal.open_views(), view_count, "preparation added a Workspace view")
+      for _, open in ipairs(terminal.open_views()) do
+        test.ok(open.session ~= prepared, "preparation added a Workspace view")
+      end
       local started = system.get_time()
       view = terminal.open()
       print(string.format("Prepared terminal open: %.1fms", (system.get_time() - started) * 1000))
