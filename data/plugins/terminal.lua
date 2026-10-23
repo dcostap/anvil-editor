@@ -1347,6 +1347,14 @@ function TerminalView:draw_images(layer, origin_x, origin_y)
       local grid_scale = self.cell_width / self.native_cell_width
       local x, y = origin_x + image.x * grid_scale, origin_y + image.y
       renderer.draw_canvas_scaled(image.canvas, x, y, image.width * grid_scale, image.height)
+      if self.hover_point and self.hover_point.image == image.canvas
+          and self.hover_point.id == image.id and self.hover_point.placement_id == image.placement_id then
+        local w, h = image.width * grid_scale, image.height
+        renderer.draw_rect(x, y, w, 1, style.text)
+        renderer.draw_rect(x, y + h - 1, w, 1, style.text)
+        renderer.draw_rect(x, y, 1, h, style.text)
+        renderer.draw_rect(x + w - 1, y, 1, h, style.text)
+      end
     end
   end
   core.pop_clip_rect()
@@ -1957,18 +1965,47 @@ end
 
 
 local function same_point(a, b)
+  if a and b and (a.image or b.image) then
+    return a.image == b.image and a.id == b.id and a.placement_id == b.placement_id
+      and a.x == b.x and a.y == b.y and a.width == b.width and a.height == b.height
+  end
   return a and b and a.kind == b.kind and a.uri == b.uri and a.path == b.path
     and a.target_line == b.target_line and a.target_col == b.target_col
     and a.generation == b.generation and a.col == b.col and a.row == b.row
 end
 
+-- Use pixel bounds, including placement offsets and the terminal's fractional grid scale.
+function TerminalView:mouse_point_at(x, y)
+  if not self:contains_terminal_cell(x, y) then return nil end
+  local col, row = self:mouse_position(x, y)
+  local point = self:point_of_interest_at(col, row, not keymap.modkeys.ctrl)
+  if point then return point end
+  if self.snapshot.mouse_tracking and not keymap.modkeys.ctrl then return nil end
+  local scale = self.cell_width / self.native_cell_width
+  local px = x - self.position.x - PADDING
+  local py = y - self.position.y - PADDING
+  local hit
+  for _, image in ipairs(self.snapshot.images or {}) do
+    if px >= image.x * scale and px < (image.x + image.width) * scale
+        and py >= image.y and py < image.y + image.height
+        and (not hit or image_order(hit, image)) then
+      hit = image
+    end
+  end
+  if hit then
+    return { kind = "image", image = hit.canvas, id = hit.id, placement_id = hit.placement_id,
+      x = hit.x, y = hit.y, width = hit.width, height = hit.height }
+  end
+end
+
 -- Explicit links show their targets on hover. Ctrl also enables plain-text detection.
 function TerminalView:hover_point_at(col, row)
   self.hover_cell = { col = col, row = row, ctrl = keymap.modkeys.ctrl == true }
-  self.hover_point = self:point_of_interest_at(col, row, not keymap.modkeys.ctrl)
+  self.hover_point = self.hover_x and self:mouse_point_at(self.hover_x, self.hover_y)
+    or self:point_of_interest_at(col, row, not keymap.modkeys.ctrl)
   self.cursor = self.hover_point and "hand" or "arrow"
   local point = self.hover_point
-  local target = point and (point.uri or (point.target_line
+  local target = point and (point.image and "Click to preview image" or point.uri or (point.target_line
     and string.format("%s:%d", point.path, point.target_line) or point.path))
   if not target then
     self.link_tooltip = nil
@@ -2012,6 +2049,11 @@ end
 
 function TerminalView:activate_point_of_interest(point, opts)
   if not point then return false end
+  if point.image then
+    local overlay = require "core.markdown.image_overlay"
+    overlay.install()
+    return overlay.open_image(point.image, "Terminal image")
+  end
   if point.uri then return self:activate_uri(point.uri) end
   if point.path then
     return core.open_file(point.path, {
@@ -2069,7 +2111,7 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
   self.pending_selection_drag = nil
   -- Explicit links open on click. Plain-text targets still need Ctrl.
   if button == "left" and self:contains_terminal_cell(x, y) then
-    local point = self:point_of_interest_at(col, row, not keymap.modkeys.ctrl)
+    local point = self:mouse_point_at(x, y)
     if point then
       self.uri_gesture = { point = point, col = col, row = row, cancelled = false }
       if keymap.modkeys.ctrl then return true end
@@ -2101,7 +2143,7 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
       self.uri_gesture.cancelled = true
     else
       local col, row = self:mouse_position(x, y)
-      local point = self:point_of_interest_at(col, row)
+      local point = self:mouse_point_at(x, y)
       local target = self.uri_gesture.point
       if col ~= self.uri_gesture.col or row ~= self.uri_gesture.row
           or not same_point(point, target) then
@@ -2121,7 +2163,8 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
   if self:contains_terminal_cell(x, y) and not self.selection_start then
     self.hover_x, self.hover_y = x, y
     local cell = self.hover_cell
-    if not (cell and cell.col == col and cell.row == row and cell.ctrl == (keymap.modkeys.ctrl == true)) then
+    if #(self.snapshot.images or {}) > 0
+        or not (cell and cell.col == col and cell.row == row and cell.ctrl == (keymap.modkeys.ctrl == true)) then
       self:hover_point_at(col, row)
     end
   else
@@ -2157,12 +2200,13 @@ function TerminalView:on_mouse_released(button, x, y)
     self.uri_gesture = nil
     local inside = self:contains_terminal_cell(x, y)
     local col, row = self:mouse_position(x, y)
-    local point = self:point_of_interest_at(col, row)
+    local point = self:mouse_point_at(x, y)
     local target = gesture.point
     if inside and not gesture.cancelled and col == gesture.col and row == gesture.row
         and same_point(point, target) then
       local opened = self:activate_point_of_interest(target)
-      core.log_quiet("Terminal link %s: %s", opened and "opened" or "failed", target.uri or target.path)
+      core.log_quiet("Terminal target %s: %s", opened and "opened" or "failed",
+        target.image and "image" or target.uri or target.path)
     end
     return true
   end

@@ -206,6 +206,7 @@ test.describe("Terminal View", function()
   end)
 
   test.after_each(function(context)
+    require("core.markdown.image_overlay").close()
     if context.previous_time then system.get_time = context.previous_time end
     if context.previous_defer_draw then core.root_panel.defer_draw = context.previous_defer_draw end
     if context.previous_clipboard ~= nil then
@@ -1593,6 +1594,75 @@ test.describe("Terminal View", function()
     -- Text in the padding ends the link, so row 2 is a separate link.
     point = view:point_of_interest_at(3, 2)
     test.same({ point.col, point.row, point.end_col, point.end_row }, { 2, 2, 6, 2 })
+  end)
+
+  test.it("previews terminal images on click but preserves selection and program mouse input", function(context)
+    local overlay = require "core.markdown.image_overlay"
+    local view = terminal.open()
+    local session = context.sessions[1]
+    local image = canvas.new(80, 40, { 255, 0, 0, 255 }, true)
+    view.snapshot.images = {
+      { canvas = image, x = 0, y = 0, width = 80, height = 40,
+        z = 1, id = 1, placement_id = 1 },
+    }
+    keymap.modkeys.ctrl = false
+    view:on_mouse_moved(7, 7, 0, 0)
+    test.equal(view.cursor, "hand")
+    view:on_mouse_pressed("left", 7, 7)
+    test.ok(not overlay.visible())
+    view:on_mouse_released("left", 7, 7)
+    test.ok(overlay.visible())
+    test.equal(overlay.get_view().image, image)
+    overlay.close()
+
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_moved(7 + view.cell_width * 3, 7, view.cell_width * 3, 0)
+    view:on_mouse_released("left", 7 + view.cell_width * 3, 7)
+    test.ok(not overlay.visible())
+    test.equal(session.gesture_events[#session.gesture_events - 1][1], "drag")
+
+    view.snapshot.mouse_tracking = true
+    view:on_mouse_moved(7, 7, 0, 0)
+    test.equal(view.cursor, "arrow")
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_released("left", 7, 7)
+    test.ok(not overlay.visible())
+    test.equal(session.mouse_events[#session.mouse_events - 1][1], "press")
+    test.equal(session.mouse_events[#session.mouse_events][1], "release")
+    keymap.modkeys.ctrl = true
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_released("left", 7, 7)
+    test.ok(overlay.visible())
+  end)
+
+  test.it("previews the top image only inside its bounds and cancels when it disappears", function()
+    local overlay = require "core.markdown.image_overlay"
+    local view = terminal.open()
+    local back = canvas.new(20, 20, { 255, 0, 0, 255 }, true)
+    local front = canvas.new(20, 20, { 0, 255, 0, 255 }, true)
+    local scale = view.cell_width / view.native_cell_width
+    view.snapshot.images = {
+      { canvas = front, x = 10, y = 10, width = 20, height = 20,
+        z = 2, id = 2, placement_id = 1 },
+      { canvas = back, x = 10, y = 10, width = 20, height = 20,
+        z = 1, id = 1, placement_id = 1 },
+    }
+    keymap.modkeys.ctrl = false
+    view:on_mouse_moved(7, 7, 0, 0)
+    test.equal(view.cursor, "arrow")
+    local x, y = 7 + 15 * scale, 22
+    view:on_mouse_moved(x, y, 0, 0)
+    test.equal(view.cursor, "hand")
+    view:on_mouse_pressed("left", x, y)
+    view:on_mouse_released("left", x, y)
+    test.equal(overlay.get_view().image, front)
+    overlay.close()
+    view:on_mouse_pressed("left", x, y)
+    view.snapshot.images = {}
+    view:on_mouse_released("left", x, y)
+    test.ok(not overlay.visible())
+    view:on_mouse_moved(x, y, 0, 0)
+    test.equal(view.cursor, "arrow")
   end)
 
   test.it("opens explicit links without Ctrl instead of sending the click to the program", function(context)
