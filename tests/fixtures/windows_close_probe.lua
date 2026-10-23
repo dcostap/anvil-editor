@@ -141,6 +141,37 @@ if path:match("/driver$") then
    assert(c.window_id == a.window_id, "Other did not load into Window A")
    local pc = open(c.pid)
 
+   if action == "windows-close-update-disconnect" then
+    -- Hold the selected Project alive while its transport fails. Its later exit
+    -- must still complete the update, even without a final exit notification.
+    assert(ntdll.NtSuspendProcess(pc) >= 0)
+    local function request_update()
+     local request = assert(require("core.process").start({EXEFILE, "--prepare-update"}, {
+      stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
+     wait(function() return not request:running() end, 10, "update request did not return")
+     assert(request:returncode() == 0, "shell rejected the update request")
+    end
+    request_update()
+    user32.PostMessageW(aw, 0x804b, 8, 0) -- Break only this owned Project's pipe.
+    wait(function() return trace():find("Shell connection failed: pipe connection ended", 1, true) end,
+     10, "Project transport did not fail")
+    request_update()
+    assert(running(pc), "update retry killed a Project that had not finished")
+    local warning = wait(function() return dialog(shell, "Anvil - Project not responding") end,
+     15, "connection loss removed the pending Close's Wait choice")
+    assert(user32.GetWindow(warning, 4) == aw, "Close warning used the wrong Window")
+    user32.PostMessageW(warning, 0x466, 7, 0) -- TaskDialog Wait
+    user32.PostMessageW(warning, 0x111, 7, 0) -- MessageBox fallback
+    wait(function() return trace():find("Shell close timeout: Wait selected", 1, true) end, 5)
+    assert(running(pc), "Wait ended the disconnected Project")
+    assert(ntdll.NtResumeProcess(pc) >= 0)
+    wait(function() return not running(pc) end, 30, "disconnected Project did not finish shutdown")
+    wait(function() return not subject:running() end, 30, "update stopped after the disconnected Project exited")
+    assert(not running(pa) and not running(pb), "update left another Project running")
+    assert(subject:returncode() == 0, "update ended the shell with a failure")
+    return
+   end
+
    if action == "windows-close-cleanup-unload" then
     save("unload-c", true)
     wait(function() return load("cleanup-c") end, 10, "Other did not reach cleanup")

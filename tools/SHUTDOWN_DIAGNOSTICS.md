@@ -51,3 +51,18 @@ Existing Close timeout warnings remain active during cleanup.
 
 Compare the native log with each Project's shutdown log to separate visible closure from final cleanup.
 The native elapsed time starts when the shell handles Close, not when Windows first receives the click.
+
+## Connection loss during an update
+
+The shell keeps watching a Project's process after its pipe fails.
+Pipe cancellation does not stop process-exit monitoring. Runtime teardown stops that wait before joining the reader.
+A Project that exits during a requested Close completes that Close, even without its final notification.
+A live disconnected Project still gets the Wait or Force close choice.
+
+Repeated update requests resume unfinished Window Close requests.
+They keep the Window layout saved by the first request and do not force-close a process.
+The native log records `Shell update: resume unfinished Window Close requests` for a retry.
+
+Run the isolated `windows-close-update-disconnect` shell probe after changes.
+It suspends an owned Project, starts an update, breaks its pipe, and retries the update.
+It selects Wait, resumes the Project, and checks that all Projects and the shell exit.

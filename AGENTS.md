@@ -230,6 +230,11 @@ Shutdown captures their paths before closing the hosted processes. Dormant Proje
 Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.
 Run `anvil:shell-state` and the `restore-loaded` shell launch probe after changes.
 
+Shell process-exit monitoring must survive a Project pipe failure.
+Only runtime teardown cancels that wait. A requested Close completes when the Project exits, even without exit intent.
+Update retries resume unfinished Window Close requests without replacing the first saved Window layout.
+Run the `windows-close-update-disconnect` shell probe after changes to shutdown recovery.
+
 The Project Sidebar reports a Project ready after Lua startup and Workspace restore finish.
 Hosted processes report this separately from their first frame and repeat the report after adoption.
 Background Projects do not render. Keep the shell's first-frame guards separate from this status.

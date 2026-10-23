@@ -141,6 +141,7 @@ typedef struct ShellProject {
   char *title;
   UINT_PTR startup_timer;
   PROCESS_INFORMATION process;
+  HANDLE exit_wait_stop;
   SDL_Thread *reader, *writer;
   SDL_Thread *launcher;
   ProjectLaunch *launch;
@@ -568,10 +569,12 @@ static ShellProject *allocate_project(ShellWindow *window) {
   project->lock = SDL_CreateMutex();
   project->queue_cond = SDL_CreateCondition();
   project->frame_cond = SDL_CreateCondition();
-  if (!project->lock || !project->queue_cond || !project->frame_cond) {
+  project->exit_wait_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (!project->lock || !project->queue_cond || !project->frame_cond || !project->exit_wait_stop) {
     SDL_DestroyMutex(project->lock);
     SDL_DestroyCondition(project->queue_cond);
     SDL_DestroyCondition(project->frame_cond);
+    if (project->exit_wait_stop) CloseHandle(project->exit_wait_stop);
     free(project);
     return NULL;
   }
@@ -615,6 +618,7 @@ static void release_project(ShellProject *project) {
     CloseHandle(project->process.hThread);
   if (project->process.hProcess)
     CloseHandle(project->process.hProcess);
+  CloseHandle(project->exit_wait_stop);
   SDL_DestroyCondition(project->frame_cond);
   SDL_DestroyCondition(project->queue_cond);
   SDL_DestroyMutex(project->lock);
@@ -682,6 +686,8 @@ static void fail_connection(ShellProject *project, const char *cause) {
   if (project->pipe.handle)
     DisconnectNamedPipe(project->pipe.handle);
   set_state(project, SHELL_FAILED);
+  /* Connection loss cannot cancel a pending Close's Wait/Force close choice. */
+  if (project->close_requested_ns) arm_close_timer(project);
   if (project == window->selected) {
     SDL_SetWindowTitle(window->window, "Anvil - Project failed");
     composite_and_present(window);
@@ -1230,7 +1236,9 @@ static int reader_loop(void *data) {
   free(payload);
 
   push_shell_event(project, SHELL_EVENT_DISCONNECTED, NULL, 0);
-  HANDLE waits[] = {project->process.hProcess, project->pipe.stop_event};
+  /* A broken pipe ends transport, not process ownership. Only runtime teardown
+   * may stop this wait before the Project exits. */
+  HANDLE waits[] = {project->process.hProcess, project->exit_wait_stop};
   WaitForMultipleObjects(2, waits, FALSE, INFINITE);
   if (WaitForSingleObject(project->process.hProcess, 0) == WAIT_OBJECT_0) {
     DWORD exit_code = 1;
@@ -4317,10 +4325,12 @@ static void accept_external(AnvilShellLaunchRequest *request) {
       shell.state_enabled = false;
       shell.updating = true;
       SDL_Log("Shell update: save Workspaces and detach Terminal Sessions");
-      for (ShellWindow *item = shell.windows; item; item = item->next) {
-        begin_window_close(item);
-        request_close(item->selected);
-      }
+    } else {
+      SDL_Log("Shell update: resume unfinished Window Close requests");
+    }
+    for (ShellWindow *item = shell.windows; item; item = item->next) {
+      begin_window_close(item);
+      request_close(item->selected);
     }
     anvil_shell_launch_finish(request, ANVIL_SHELL_LAUNCH_ACCEPTED);
     return;
@@ -4487,13 +4497,13 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         }
         return SDL_APP_CONTINUE;
       }
-      if (project->intentional_exit &&
-          (project->exit_announced || (int)(intptr_t)event->user.data2 == 0)) {
+      if (project->close_requested_ns || (project->intentional_exit &&
+          (project->exit_announced || (int)(intptr_t)event->user.data2 == 0))) {
         project->connected = false;
         project->failed_close = true;
         if (!project->unloading) {
           /* Exit intent already started Close. A later Project may have cancelled it. */
-          if (!project->exit_announced) begin_window_close(window);
+          if (!project->close_requested_ns && !project->exit_announced) begin_window_close(window);
           if (window->closing && project != window->selected && !window->selected->exit_announced)
             request_close(window->selected);
           if (!window->closing && project->identity && project->project_path)
@@ -5366,6 +5376,7 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
 }
 
 static bool stop_transport(ShellProject *project, Uint64 deadline) {
+  SetEvent(project->exit_wait_stop);
   if (project->pipe.handle)
     anvil_ipc_pipe_cancel(&project->pipe);
   if (project->lock) {
@@ -5467,6 +5478,7 @@ static bool start_project(ShellProject *project, int argc, char **argv) {
     }
   }
   project->intentional_exit = false;
+  ResetEvent(project->exit_wait_stop);
   SDL_SetAtomicInt(&project->transport_failure, 0);
   SDL_SetAtomicInt(&project->reader_done, 0);
   SDL_SetAtomicInt(&project->writer_done, 0);
