@@ -3,6 +3,49 @@ local command = require "core.command"
 local style = require "core.style"
 local test = require "core.test"
 
+-- Seam: prompt navigation commands and the completed input text.
+test.describe("Global Prompt Bar navigation", function()
+  local function with_prompt(options, fn)
+    local bar = core.global_prompt_bar
+    bar:exit(true)
+    local previous_view = core.active_view
+    options.suggest = function() return { "one", "two", "three" } end
+    local ok, err = pcall(function()
+      bar:enter("Choices", options)
+      fn(bar)
+    end)
+    bar:exit(true)
+    if previous_view then core.set_active_view(previous_view) end
+    if not ok then error(err, 0) end
+  end
+
+  test.it("moves through visible suggestions in top-to-bottom order", function()
+    with_prompt({}, function(bar)
+      test.ok(command.perform("core:select_next_prompt_item"))
+      test.equal(bar:get_text(), "two")
+      test.ok(command.perform("core:select_previous_prompt_item"))
+      test.equal(bar:get_text(), "one")
+      test.ok(command.perform("core:select_previous_prompt_item"))
+      test.equal(bar:get_text(), "three")
+      test.ok(command.perform("core:select_next_prompt_item"))
+      test.equal(bar:get_text(), "one")
+    end)
+  end)
+
+  test.it("recalls older hidden history and returns to the typed text", function()
+    with_prompt({ show_suggestions = false, text = "draft" }, function(bar)
+      test.ok(command.perform("core:select_previous_prompt_item"))
+      test.equal(bar:get_text(), "one")
+      test.ok(command.perform("core:select_previous_prompt_item"))
+      test.equal(bar:get_text(), "two")
+      test.ok(command.perform("core:select_next_prompt_item"))
+      test.equal(bar:get_text(), "one")
+      test.ok(command.perform("core:select_next_prompt_item"))
+      test.equal(bar:get_text(), "draft")
+    end)
+  end)
+end)
+
 test.describe("Global Prompt Bar attention overlay", function()
   test.it("can keep the editor clear while previewing choices", function()
     local bar = core.global_prompt_bar
