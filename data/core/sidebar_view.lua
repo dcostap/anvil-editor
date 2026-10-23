@@ -38,11 +38,11 @@ local MOVE_RATE, FADE_RATE, SCROLL_RATE = 20, 14, 22
 local MARK_MOVE_RATE, MARK_FADE_RATE = 28, 21
 local SELECTION_SPEED, HOVER_SPEED = 1.75, 3
 -- Rows move, appear and leave at this multiple of the base rates.
-local ROW_SPEED = 1.5
+local ROW_SPEED = 1.8
 -- The search field opens and closes at this rate.
-local SEARCH_RATE = 45
+local SEARCH_RATE = 54
 -- A working Terminal's row shows a glint that crosses it in GLINT_TRAVEL seconds, once each GLINT_PERIOD seconds.
-local GLINT_TRAVEL, GLINT_PERIOD, GLINT_FRAME = 1.1, 1.8, 1 / 60
+local GLINT_TRAVEL, GLINT_PERIOD, GLINT_FRAME = 1.1, 1.35, 1 / 60
 -- The longest step between two frames. After a pause, an animation starts where it stopped.
 local MAX_STEP = 1 / 30
 local FRAME = 1 / 120
@@ -1396,8 +1396,8 @@ function SidebarView:draw_tab(row, x, y, width, now)
   end
 end
 
--- Pane Groups with several Panes: one rounded container behind their Tabs. The visible group has an accent rail.
--- A drop line inside a container tints it: the new Pane joins that group.
+-- Pane Groups with several Panes: a rail beside their Tabs, in the accent colour for the visible group. A drop line
+-- inside a group tints its Tabs: the new Pane joins that group.
 function SidebarView:draw_containers(area, width)
   local m = self:metrics()
   local origin = self:shown_origin(area)
@@ -1413,7 +1413,6 @@ function SidebarView:draw_containers(area, width)
         local bottom = origin + row.shown.y + row.h
         local alpha = math.min(first.shown.alpha, row.shown.alpha)
         local x, w = m.tab_left, width - m.pad - m.tab_left
-        renderer.draw_rounded_rect(x, top + 1, w, bottom - top - 2, m.radius, fade(style.sidebar_group, alpha))
         local rail = math.max(2, math.floor(2 * SCALE))
         if joined then
           renderer.draw_rounded_rect(x, top + 1, w, bottom - top - 2, m.radius,

@@ -726,9 +726,16 @@ test.describe("Sidebar motion", function()
         end}, function() view:draw(400, 800) end)
         return found
       end
+      -- Watches five seconds of frames. Returns whether any frame drew the glint, and the shortest frame delay.
       local function in_sweep(view)
-        while system.get_time() % 1.8 > 0.5 or system.get_time() % 1.8 < 0.3 do advance(0.05) end
-        return glint_drawn(view), view:animation_delay(system.get_time())
+        local drawn, shortest = false, nil
+        for _ = 1, 150 do
+          drawn = glint_drawn(view) or drawn
+          local delay = view:animation_delay(advance(0))
+          if delay then shortest = math.min(shortest or delay, delay) end
+          advance(1 / 30)
+        end
+        return drawn, shortest
       end
       local drawn, delay = in_sweep(sidebar(true))
       test.ok(drawn, "A working Terminal shows no glint")
