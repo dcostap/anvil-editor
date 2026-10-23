@@ -230,6 +230,12 @@ Hosted processes report this separately from their first frame and repeat the re
 Background Projects do not render. Keep the shell's first-frame guards separate from this status.
 The `restore-loaded` probe checks readiness without selecting the restored background Project.
 
+The shell waits for swapchain capacity without blocking its event loop. It collects input and new surfaces during that wait.
+Each Window has one pending presentation and one one-shot readiness wait. Idle Windows have no readiness wait.
+The shell composes the latest surfaces when capacity becomes available. Vsync stays enabled outside live resize.
+Window destruction cancels and joins its wait before releasing its renderer.
+Run the Sidebar-hover latency probe and focused shell rendering, resize, GPU-failure, and Window-close probes after changes.
+
 ## Renderer selection
 
 The dev portable build defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.

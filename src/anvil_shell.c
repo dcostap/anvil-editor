@@ -18,7 +18,7 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <d3d11_1.h>
-#include <dxgi1_2.h>
+#include <dxgi1_3.h>
 #include <dwmapi.h>
 #include <stdio.h>
 #include <time.h>
@@ -114,6 +114,7 @@ enum {
   SHELL_EVENT_LAUNCHED,
   SHELL_EVENT_PICKER_RESULT,
   SHELL_EVENT_EXTERNAL,
+  SHELL_EVENT_PRESENT_READY,
 };
 
 typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED, SHELL_DORMANT } ShellState;
@@ -314,6 +315,9 @@ struct ShellWindow {
   void *ui_pixels;
   bool frame_busy;
   bool frame_present_pending;
+  HANDLE present_ready_event;
+  HANDLE present_wait;
+  bool present_ready;
   uint64_t frame_input_seq;
   SDL_TimerID retry_timer;
   int hovered_control, pressed_control;
@@ -1468,7 +1472,6 @@ static bool init_d3d11(ShellWindow *window) {
   IDXGIFactory2 *factory = NULL;
   hr = window->device->lpVtbl->QueryInterface(window->device, &IID_IDXGIDevice1, (void **)&dxgi_device);
   if (SUCCEEDED(hr)) {
-    dxgi_device->lpVtbl->SetMaximumFrameLatency(dxgi_device, 2);
     hr = dxgi_device->lpVtbl->GetAdapter(dxgi_device, &adapter);
   }
   if (SUCCEEDED(hr)) hr = adapter->lpVtbl->GetParent(adapter, &IID_IDXGIFactory2, (void **)&factory);
@@ -1488,9 +1491,21 @@ static bool init_d3d11(ShellWindow *window) {
     desc.Scaling = DXGI_SCALING_NONE;
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+    desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
     hr = factory->lpVtbl->CreateSwapChainForHwnd(factory, (IUnknown *)window->device, hwnd, &desc,
                                                  NULL, NULL, &window->swapchain);
     if (SUCCEEDED(hr)) {
+      IDXGISwapChain2 *paced = NULL;
+      hr = window->swapchain->lpVtbl->QueryInterface(window->swapchain, &IID_IDXGISwapChain2, (void **)&paced);
+      if (SUCCEEDED(hr)) {
+        hr = paced->lpVtbl->SetMaximumFrameLatency(paced, 1);
+        if (SUCCEEDED(hr)) {
+          window->present_ready_event = paced->lpVtbl->GetFrameLatencyWaitableObject(paced);
+          if (!window->present_ready_event) hr = E_FAIL;
+          else SDL_Log("Shell presentation uses waitable capacity: Window=%u latency=1", window->id);
+        }
+        SAFE_RELEASE(paced);
+      }
       factory->lpVtbl->MakeWindowAssociation(factory, hwnd, DXGI_MWA_NO_ALT_ENTER);
       apply_swapchain_background(window);
     }
@@ -1506,6 +1521,14 @@ static bool init_d3d11(ShellWindow *window) {
 }
 
 static void release_d3d11(ShellWindow *window) {
+  /* The callback reads the Window. Join it before closing the handle or freeing the Window. */
+  if (window->present_wait) {
+    UnregisterWaitEx(window->present_wait, INVALID_HANDLE_VALUE);
+    window->present_wait = NULL;
+  }
+  if (window->present_ready_event) CloseHandle(window->present_ready_event);
+  window->present_ready_event = NULL;
+  window->present_ready = false;
   if (window->context)
     window->context->lpVtbl->ClearState(window->context);
   SAFE_RELEASE(window->project_presentation.shared_mutex);
@@ -1580,7 +1603,7 @@ static void resize_buffers(ShellWindow *window) {
   SAFE_RELEASE(window->rtv);
   SAFE_RELEASE(window->backbuffer);
   HRESULT hr = window->swapchain->lpVtbl->ResizeBuffers(window->swapchain, 0, (UINT)pixel_w, (UINT)pixel_h,
-                                                      DXGI_FORMAT_UNKNOWN, 0);
+                                                      DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
   if (take_fault(FAULT_RESIZE)) hr = DXGI_ERROR_DEVICE_REMOVED;
   if (FAILED(hr) || !create_backbuffer_view(window)) {
     fail_gpu(window, "swapchain resize failed", FAILED(hr) ? hr : E_FAIL);
@@ -2365,12 +2388,37 @@ static void capture_backbuffer(ShellWindow *window) {
   SAFE_RELEASE(staging);
 }
 
+static VOID CALLBACK presentation_ready(void *context, BOOLEAN timed_out) {
+  (void)timed_out;
+  ShellWindow *window = context;
+  SDL_Event event = {0};
+  event.type = shell.event_type;
+  event.user.code = SHELL_EVENT_PRESENT_READY;
+  /* Queued notifications can outlive the Window. Never send its pointer to the UI thread. */
+  event.user.windowID = window->id;
+  SDL_PushEvent(&event);
+}
+
 static void composite_and_present(ShellWindow *window) {
-  anvil_timing_note("compose-begin", window->id, 0, 0);
   ShellProject *project = window->selected;
   if (window->render_failed) { InvalidateRect(window->hwnd, NULL, FALSE); return; }
   if (!window->rtv)
     return;
+  /* Keep collecting input and surfaces while DXGI waits for presentation capacity.
+   * Compose only when ready, so the queued frame contains the newest surfaces. */
+  if (!window->live_resize && !window->present_ready) {
+    if (window->present_wait || WaitForSingleObject(window->present_ready_event, 0) != WAIT_OBJECT_0) {
+      window->frame_present_pending = true;
+      if (!window->present_wait &&
+          !RegisterWaitForSingleObject(&window->present_wait, window->present_ready_event,
+                                       presentation_ready, window, INFINITE, WT_EXECUTEONLYONCE))
+        fail_gpu(window, "presentation wait failed", HRESULT_FROM_WIN32(GetLastError()));
+      return;
+    }
+  }
+  window->present_ready = false;
+  window->frame_present_pending = false;
+  anvil_timing_note("compose-begin", window->id, 0, 0);
   sync_backdrop(window);
   uint32_t background = window->background;
   const FLOAT clear[4] = {(background & 0xff) / 255.0f, (background >> 8 & 0xff) / 255.0f,
@@ -2484,6 +2532,8 @@ static void composite_and_present(ShellWindow *window) {
     hr = DXGI_ERROR_DEVICE_REMOVED;
   if (FAILED(hr))
     fail_gpu(window, "presentation failed", hr);
+  else
+    anvil_latency_probe_presented(window->frame_input_seq);
 }
 
 static void finish_latency_probe(void) {
@@ -4173,6 +4223,15 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   ShellProject *project = NULL;
   (void)appstate;
   if (event->type == shell.event_type) {
+    if (event->user.code == SHELL_EVENT_PRESENT_READY) {
+      ShellWindow *window = window_for_id(event->user.windowID);
+      if (window && window->present_wait) {
+        UnregisterWaitEx(window->present_wait, INVALID_HANDLE_VALUE);
+        window->present_wait = NULL;
+        window->present_ready = true;
+      }
+      return SDL_APP_CONTINUE;
+    }
     if (event->user.code == SHELL_EVENT_PICKER_RESULT) {
       finish_project_picker(event->user.data1);
       return SDL_APP_CONTINUE;
@@ -6934,10 +6993,8 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
    * per iteration, so SDL can return to Windows input instead of presenting each incoming frame notice. */
   for (ShellWindow *window = shell.windows; window; window = window->next) {
     if (!window->frame_present_pending) continue;
-    window->frame_present_pending = false;
     composite_and_present(window);
     reveal_when_ready(window);
-    anvil_latency_probe_presented(window->frame_input_seq);
   }
   anvil_timing_note("shell-step-end", 0, 0, 0);
   return shell.windows ? SDL_APP_CONTINUE : SDL_APP_SUCCESS;
