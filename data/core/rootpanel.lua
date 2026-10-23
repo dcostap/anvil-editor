@@ -276,7 +276,6 @@ function RootPanel:show_app_overlay(owner, color, options)
   end
   overlay.owner = owner
   overlay.color = color
-  overlay.unobscured_view = options.unobscured_view
   overlay.transition_name = options.transition_name
   start_app_overlay_transition(overlay, 1, now)
   core.redraw = true
@@ -290,30 +289,12 @@ function RootPanel:hide_app_overlay(owner)
   overlay = self.app_overlay
   if not overlay or overlay.owner ~= owner then return false end
   start_app_overlay_transition(overlay, 0, now)
-  overlay.unobscured_view = nil
   core.redraw = true
   return true
 end
 
-function RootPanel:draw_app_overlay(color, unobscured_view)
-  local left, top = self.position.x, self.position.y
-  local right, bottom = left + self.size.x, top + self.size.y
-  if not unobscured_view then
-    renderer.draw_rect(left, top, self.size.x, self.size.y, color)
-    return
-  end
-  local view_left = common.clamp(unobscured_view.position.x, left, right)
-  local view_top = common.clamp(unobscured_view.position.y, top, bottom)
-  local view_right = common.clamp(unobscured_view.position.x + unobscured_view.size.x, left, right)
-  local view_bottom = common.clamp(unobscured_view.position.y + unobscured_view.size.y, top, bottom)
-  if view_top > top then renderer.draw_rect(left, top, self.size.x, view_top - top, color) end
-  if view_bottom < bottom then renderer.draw_rect(left, view_bottom, self.size.x, bottom - view_bottom, color) end
-  if view_left > left and view_bottom > view_top then
-    renderer.draw_rect(left, view_top, view_left - left, view_bottom - view_top, color)
-  end
-  if view_right < right and view_bottom > view_top then
-    renderer.draw_rect(view_right, view_top, right - view_right, view_bottom - view_top, color)
-  end
+function RootPanel:draw_app_overlay(color)
+  renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, color)
 end
 
 function RootPanel:draw_active_app_overlay()
@@ -324,7 +305,7 @@ function RootPanel:draw_active_app_overlay()
   if type(source) ~= "table" then return end
   local color = { table.unpack(source) }
   color[4] = (color[4] or 255) * overlay.progress
-  self:draw_app_overlay(color, overlay.unobscured_view)
+  self:draw_app_overlay(color)
   self.surface_overlay_color = color
 end
 
@@ -556,15 +537,13 @@ function RootPanel:update_layout()
 
   local title_h = title and title.size.y or 0
   local pane_prompt = prompt and prompt.pane_scope and panes().find(prompt.pane_scope)
-  local prompt_h = prompt and prompt.size.y or 0
-  local global_prompt_h = pane_prompt and 0 or prompt_h
   set_rect(title, x, y, w, title_h)
   -- The nag bar's card floats over the Panes. Its View covers the area below the Title Bar while a dialog is open.
   set_rect(nag, x, y + title_h, w, nag and nag.visible and math.max(0, h - title_h) or 0)
-  if not pane_prompt then set_rect(prompt, x, y + h - prompt_h, w, prompt_h) end
-
   local content_y = y + title_h
-  local content_h = math.max(0, h - title_h - global_prompt_h)
+  local content_h = math.max(0, h - title_h)
+  -- The prompt's card floats over the Panes, near the top of the window or of its Pane.
+  if prompt and not pane_prompt then prompt:place(x, content_y, w, content_h) end
   self.content_rect = { x = x, y = content_y, w = w, h = content_h }
   local group = panes().visible_group()
   if group then
@@ -578,11 +557,7 @@ function RootPanel:update_layout()
         set_rect(bar, pane.position.x, pane.position.y + view_h, pane.size.x, bar_h)
         bar:update()
       end
-      if pane == pane_prompt then
-        local prompt_bar_h = math.min(prompt_h, view_h)
-        view_h = view_h - prompt_bar_h
-        set_rect(prompt, pane.position.x, pane.position.y + view_h, pane.size.x, prompt_bar_h)
-      end
+      if pane == pane_prompt then prompt:place(pane.position.x, pane.position.y, pane.size.x, view_h) end
       set_rect(pane.current_view, pane.position.x, pane.position.y, pane.size.x, view_h)
     end
   end

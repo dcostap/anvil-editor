@@ -53,26 +53,26 @@ test.describe("Global Prompt Bar outside clicks", function()
 end)
 
 test.describe("Global Prompt Bar suggestion geometry", function()
-  test.it("lets the suggestion dropdown reach the prompt bar", function()
+  test.it("lets the suggestion list reach the input", function()
     local bar = core.global_prompt_bar
     bar:exit(true)
     local previous_active = core.active_view
     local previous_x, previous_y = bar.position.x, bar.position.y
-    local previous_width = bar.size.x
+    local previous_width, previous_input_height = bar.size.x, bar.size.y
     local previous_height = bar.suggestions_height
 
     bar:enter("Suggestions", { suggest = function() return { "one" } end })
     bar.position.x, bar.position.y = 0, 100
-    bar.size.x = 300
+    bar.size.x, bar.size.y = 300, 20
     bar.suggestions_height = 20
     bar.mouse_position.x = 10
-    bar.mouse_position.y = bar.position.y - math.max(1, style.divider_size or 1) / 2
+    bar.mouse_position.y = bar.position.y + bar.size.y + 0.5
 
     test.ok(bar:is_mouse_on_suggestions())
 
     bar:exit(true)
     bar.position.x, bar.position.y = previous_x, previous_y
-    bar.size.x = previous_width
+    bar.size.x, bar.size.y = previous_width, previous_input_height
     bar.suggestions_height = previous_height
     if previous_active then core.set_active_view(previous_active) end
   end)
@@ -155,12 +155,12 @@ test.describe("Global Prompt Bar long and multiline text", function()
 
   test.it("keeps the caret inside the bar at the end of long text", function()
     with_prompt(function(bar)
-      bar.position.x, bar.position.y, bar.size.x = 0, 500, 400
       bar:on_text_input(string.rep("word ", 400))
       for _ = 1, 3 do bar:update(); coroutine.yield() end
       local x = bar:get_line_screen_position(1, #bar:get_text() + 1)
       test.ok(x > bar.position.x + bar:get_gutter_width() and x < bar.position.x + bar.size.x,
-        "caret x " .. x .. " is outside the bar")
+        string.format("caret x %.1f is outside the bar from %.1f to %.1f", x,
+          bar.position.x + bar:get_gutter_width(), bar.position.x + bar.size.x))
     end)
   end)
 end)

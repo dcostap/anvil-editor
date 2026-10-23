@@ -1922,7 +1922,7 @@ local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_
   if selected then
     -- The selected row is a pill inset from the card's edges.
     local inset = 4 * SCALE
-    renderer.draw_rounded_rect(rx + inset, y, rw - 2 * inset, lh, row_radius(), style.autocomplete_selection)
+    renderer.draw_rounded_rect(rx + inset, y, rw - 2 * inset, lh, row_radius(), style.card_selection)
   end
 
   local icon_l_padding, icon_r_padding = 0, 0

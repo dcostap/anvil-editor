@@ -68,9 +68,9 @@ local function clean_fonts_cache()
         core.active_view ~= core.global_prompt_bar
         or
         (
-          core.global_prompt_bar.label ~= "Select Font: "
+          core.global_prompt_bar.label ~= "Select Font"
           and
-          core.global_prompt_bar.label ~= "List only monospaced fonts?: "
+          core.global_prompt_bar.label ~= "List only monospaced fonts?"
         )
       then
         fontcache = nil
@@ -99,7 +99,7 @@ function Fonts.show_picker(callback, monospaced)
         and
         core.active_view == core.global_prompt_bar
         and
-        core.global_prompt_bar.label == "Select Font: "
+        core.global_prompt_bar.label == "Select Font"
       do
         core.global_prompt_bar:update_suggestions()
         coroutine.yield(2)
@@ -182,7 +182,7 @@ end
 core.status_bar:add_item({
   predicate = function()
     return core.active_view == core.global_prompt_bar
-      and core.global_prompt_bar.label == "Select Font: "
+      and core.global_prompt_bar.label == "Select Font"
   end,
   name = "widget:font-select",
   alignment = StatusView.Item.LEFT,

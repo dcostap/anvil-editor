@@ -3,6 +3,7 @@ local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
 local prompt_bar_renderer = require "core.prompt_bar_renderer"
+local card = require "core.card"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local View = require "core.view"
@@ -33,7 +34,9 @@ function SingleLineBuffer:insert(line, col, text)
 end
 
 
----Global Prompt Bar: bottom-anchored full-width prompt for app-wide actions.
+---Global Prompt Bar: a card near the top of the window for app-wide actions.
+---A pane-scoped prompt shows its card near the top of its Pane.
+---The View's rect is the input row. The card adds a margin, and the suggestions show below the input.
 ---Provides autocomplete, suggestions, and app-wide prompt execution.
 ---@class core.global_prompt_bar : core.textview
 ---@overload fun():core.global_prompt_bar
@@ -46,12 +49,12 @@ end
 ---@field suggestions_last integer Last visible suggestion index
 ---@field last_change_id integer Last buffer change ID (for detecting updates)
 ---@field last_text string Last input text (for typeahead)
----@field gutter_width number Width of label gutter
----@field gutter_text_brightness number Label brightness animation value
----@field selection_offset number Animated cursor position in suggestions
 ---@field state core.global_prompt_bar.state Current prompt state
 ---@field font string Font name to use
----@field label string Label text displayed in gutter
+---@field label string Label text displayed before the input
+---@field card_rect {x: number, y: number, w: number, h: number}? The card's rect from the last layout
+---@field fit_rows integer? How many suggestion rows fit below the input in the prompt's area
+---@field progress number How far the card has shown, from 0 to 1
 ---@field mouse_position table Mouse coordinates {x, y}
 ---@field save_suggestion string? Saved suggestion for cycling
 ---@field covered_by_app_overlay? boolean Another application overlay temporarily owns focus
@@ -95,9 +98,16 @@ local default_state = {
 }
 
 
+local CARD_WIDTH = 640
+
 local function get_max_visible_suggestions(self)
-  return self.state.max_visible_suggestions or config.max_visible_commands
+  local count = self.state.max_visible_suggestions or config.max_visible_commands
+  return math.min(count, self.fit_rows or count)
 end
+
+local function card_padding() return 6 * SCALE end
+local function label_inset() return 8 * SCALE end
+local function divider_gap() return 4 * SCALE end
 
 
 ---Constructor - initializes the Global Prompt Bar.
@@ -112,9 +122,7 @@ function GlobalPromptBar:new()
   self.suggestions_last = 0
   self.last_change_id = 0
   self.last_text = ""
-  self.gutter_width = 0
-  self.gutter_text_brightness = 0
-  self.selection_offset = 0
+  self.progress = 0
   self.state = default_state
   self.font = "font"
   self.size.y = 0
@@ -318,13 +326,13 @@ function GlobalPromptBar:enter(label, ...)
   core.set_active_view(self)
   if not self.pane_scope and self.state.overlay then
     core.root_panel:show_app_overlay(self, "global_prompt_bar_overlay_background", {
-      unobscured_view = self,
       transition_name = "global_prompt_bar",
     })
   end
   self:update_suggestions()
-  self.gutter_text_brightness = 100
-  self.label = label .. ": "
+  self.label = label
+  self.progress = 0
+  core.log_quiet("Global Prompt Bar: entered %q%s", label, self.pane_scope and " in a Pane" or "")
 end
 
 
@@ -375,10 +383,11 @@ function GlobalPromptBar:get_line_height()
 end
 
 
----Get the width of the label gutter area.
+---Get the width of the label before the input.
 ---@return number width Gutter width in pixels
 function GlobalPromptBar:get_gutter_width()
-  return self.gutter_width
+  if self.label == "" then return label_inset() end
+  return label_inset() * 2 + style.view_text_font:get_width(self.label)
 end
 
 
@@ -434,7 +443,6 @@ function GlobalPromptBar:update()
         and (not overlay or overlay.owner ~= self or overlay.target ~= 1) then
       core.root_panel:show_app_overlay(
         self, "global_prompt_bar_overlay_background", {
-          unobscured_view = self,
           transition_name = "global_prompt_bar",
         }
       )
@@ -460,17 +468,6 @@ function GlobalPromptBar:update()
     self.last_change_id = self.buffer:get_change_id()
   end
 
-  -- update gutter text color brightness
-  self:move_towards("gutter_text_brightness", 0, 0.1, "global_prompt_bar")
-
-  -- update gutter width
-  local dest = prompt_bar_renderer.label_width(self.label, self:get_font())
-  if self.size.y <= 0 then
-    self.gutter_width = dest
-  else
-    self:move_towards("gutter_width", dest, nil, "global_prompt_bar")
-  end
-
   -- update suggestions box height
   local lh = self:get_suggestion_line_height()
   local max_visible_suggestions = get_max_visible_suggestions(self)
@@ -478,17 +475,40 @@ function GlobalPromptBar:update()
     and math.min(#self.suggestions, max_visible_suggestions) * lh or 0
   self:move_towards("suggestions_height", dest, nil, "global_prompt_bar")
 
-  -- update suggestion cursor offset
-  local dest = math.min(self.suggestion_idx, max_visible_suggestions)
-    * self:get_suggestion_line_height()
-  self:move_towards("selection_offset", dest, nil, "global_prompt_bar")
+  local active = self == core.active_view
+  if not active then self.progress = 0 end
+  self:move_towards("progress", active and 1 or 0, nil, "global_prompt_bar")
+  self.size.y = active and prompt_bar_renderer.height(style.font) or 0
+end
 
-  -- update size based on whether this is the active_view
-  local dest = 0
-  if self == core.active_view then
-    dest = prompt_bar_renderer.height(style.font)
+
+---Place the card in an area: the window below the Title Bar, or a Pane.
+---The View takes the input row inside the card.
+---@param x number
+---@param y number
+---@param w number
+---@param h number
+function GlobalPromptBar:place(x, y, w, h)
+  local pad, margin = card_padding(), 12 * SCALE
+  local card_w = math.max(0, math.min(CARD_WIDTH * SCALE, w - 2 * margin))
+  local card_x = x + math.floor((w - card_w) / 2)
+  local card_y = y + math.floor(math.min(h * 0.12, 96 * SCALE))
+  self.position.x, self.position.y = card_x + pad, card_y + pad
+  local width = math.max(0, card_w - 2 * pad)
+  if width ~= self.size.x then
+    self.size.x = width
+    -- A narrower card can hide a caret that was visible.
+    if self.size.y > 0 then
+      local line, col = self.buffer:get_selection()
+      self:scroll_to_make_visible(line, col, true)
+    end
   end
-  self:move_towards(self.size, "y", dest, nil, "global_prompt_bar")
+  local list_y = self.position.y + self.size.y + divider_gap() * 2
+  self.fit_rows = math.max(1, math.floor((y + h - margin - pad - list_y) / self:get_suggestion_line_height()))
+  local list_h = math.ceil(self.suggestions_height)
+  local card_h = pad * 2 + self.size.y
+  if list_h > 0 then card_h = list_y + list_h + pad - card_y end
+  self.card_rect = { x = card_x, y = card_y, w = card_w, h = card_h }
 end
 
 
@@ -498,113 +518,142 @@ function GlobalPromptBar:draw_line_highlight()
 end
 
 
----Draw the label gutter with animated brightness.
----@param idx integer Line index (unused)
----@param x number Gutter x position
----@param y number Gutter y position
+---Draw the label before the input.
 ---@return integer height Line height
-function GlobalPromptBar:draw_line_gutter(idx, x, y)
-  local pos = self.position
-  prompt_bar_renderer.draw_label(
-    self:get_font(),
-    self.label,
-    pos.x,
-    pos.y,
-    self:get_gutter_width(),
-    self.size.y,
-    self.gutter_text_brightness
-  )
+function GlobalPromptBar:draw_line_gutter()
+  if self.label ~= "" then
+    common.draw_text(style.view_text_font, style.card_text, self.label, "left",
+      self.position.x + label_inset(), self.position.y, self:get_gutter_width(), self.size.y)
+  end
   return self:get_line_height()
 end
 
 
+---The card draws the background behind the input.
+function GlobalPromptBar:draw_background() end
+
+
+---The label needs no edge between it and the input.
+function GlobalPromptBar:draw_content_left_edge() end
+
+
+---The suggestion list's rect, below the input.
+---@return number x
+---@return number y
+---@return number w
+---@return number h
+function GlobalPromptBar:get_suggestions_rect()
+  local y = self.position.y + self.size.y + divider_gap() * 2
+  return self.position.x, y, self.size.x, math.ceil(self.suggestions_height)
+end
+
+
+local function point_in_rect(px, py, x, y, w, h)
+  return px >= x and px <= x + w and py >= y and py <= y + h
+end
+
+
 ---Check if the mouse is hovering the suggestions box.
+---The gap between the input and the list counts as the list, so the pointer can move straight down.
 ---@return boolean hovering True if mouse is over suggestions box
 function GlobalPromptBar:is_mouse_on_suggestions()
   if self.state.show_suggestions and #self.suggestions > 0 then
-    local mx, my = self.mouse_position.x, self.mouse_position.y
-    local sh = math.ceil(self.suggestions_height)
-    local x, y, w, h = self.position.x, self.position.y - sh, self.size.x, sh
-    if mx >= x and mx <= x+w and my >= y and my <= y+h then
-      return true
-    end
+    local x, y, w, h = self:get_suggestions_rect()
+    if h <= 0 then return false end
+    local top = self.position.y + self.size.y
+    return point_in_rect(self.mouse_position.x, self.mouse_position.y, x, top, w, y + h - top)
   end
   return false
 end
 
 
----Draw the suggestions dropdown box.
----Renders background, divider, and suggestion items with highlighting.
----@param self core.global_prompt_bar
-local function draw_suggestions_box(self)
-  local lh = self:get_suggestion_line_height()
-  local dh = style.divider_size
-  local x, _ = self:get_line_screen_position()
-  local h = math.ceil(self.suggestions_height)
-  local rx, ry, rw, rh = self.position.x, self.position.y - h, self.size.x, h
-
-  if #self.suggestions > 0 then
-    -- draw suggestions background
-    renderer.draw_rect(rx, ry, rw, rh, style.background3)
-    renderer.draw_rect(rx, ry - dh, rw, dh, style.divider)
-
-    -- draw suggestion text
-    local current = self.suggestion_idx
-    local max_visible_suggestions = get_max_visible_suggestions(self)
-    local offset = math.max(current - max_visible_suggestions, 0)
-    if self.suggestions_first-1 == current then
-      offset = math.max(self.suggestions_first - 2, 0)
-    end
-    local first = 1 + offset
-    local last = math.min(offset + max_visible_suggestions, #self.suggestions)
-    if
-      current < self.suggestions_first
-      or
-      current > self.suggestions_last
-      or
-      self.suggestions_last - self.suggestions_first < last - first
-    then
-      self.suggestions_first = first
-      self.suggestions_last = last
-      self.suggestions_offset = offset
-    else
-      offset = self.suggestions_offset
-      first = self.suggestions_first
-      last = math.min(self.suggestions_last, #self.suggestions)
-    end
-    core.push_clip_rect(rx, ry, rw, rh)
-    local draw_text = self.state.draw_text
-    local font = self:get_font()
-    for i=first, last do
-      local item = self.suggestions[i]
-      local color = (i == current) and style.accent or style.text
-      local y = self.position.y - (i - offset) * lh
-      if i == current then
-        renderer.draw_rect(rx, y, rw, lh, style.line_highlight)
-      end
-      local w = self.size.x - x - style.padding.x
-      if not draw_text then
-        common.draw_text(font, color, item.display_text or item.text, nil, x, y, 0, lh)
-      else
-        draw_text(item, font, color, x, y, w, lh)
-      end
-      if item.info then
-        common.draw_text(self:get_font(), style.dim, item.info, "right", x, y, w, lh)
-      end
-    end
-    core.pop_clip_rect()
-  end
+---Check if a point is on the card, including the input and suggestions.
+function GlobalPromptBar:is_on_card(x, y)
+  local r = self.size.y > 0 and self.card_rect
+  return r and point_in_rect(x, y, r.x, r.y, r.w, r.h) or false
 end
 
 
----Draw the Global Prompt Bar.
----Renders input text and defers its suggestions box above the app overlay.
-function GlobalPromptBar:draw()
-  if self.covered_by_app_overlay then return end
-  GlobalPromptBar.super.draw(self)
-  if self.state.show_suggestions then
-    core.root_panel:defer_draw(draw_suggestions_box, self)
+---Draw the suggestion list below the input.
+---@param self core.global_prompt_bar
+local function draw_suggestions(self)
+  local lh = self:get_suggestion_line_height()
+  local rx, ry, rw, rh = self:get_suggestions_rect()
+  if #self.suggestions == 0 or rh <= 0 then return end
+
+  local current = self.suggestion_idx
+  local max_visible_suggestions = get_max_visible_suggestions(self)
+  local offset = math.max(current - max_visible_suggestions, 0)
+  if self.suggestions_first-1 == current then
+    offset = math.max(self.suggestions_first - 2, 0)
   end
+  local first = 1 + offset
+  local last = math.min(offset + max_visible_suggestions, #self.suggestions)
+  if
+    current < self.suggestions_first
+    or
+    current > self.suggestions_last
+    or
+    self.suggestions_last - self.suggestions_first < last - first
+  then
+    self.suggestions_first = first
+    self.suggestions_last = last
+    self.suggestions_offset = offset
+  else
+    offset = self.suggestions_offset
+    first = self.suggestions_first
+    last = math.min(self.suggestions_last, #self.suggestions)
+  end
+
+  core.push_clip_rect(rx, ry, rw, rh)
+  local draw_text = self.state.draw_text
+  local font = self:get_font()
+  local x, w = rx + label_inset(), rw - label_inset() * 2
+  for i = first, last do
+    local item = self.suggestions[i]
+    local y = ry + (i - first) * lh
+    if i == current then
+      renderer.draw_rounded_rect(rx, y, rw, lh, 4 * SCALE, style.card_selection)
+    end
+    if not draw_text then
+      common.draw_text(font, style.text, item.display_text or item.text, nil, x, y, 0, lh)
+    else
+      draw_text(item, font, style.text, x, y, w, lh)
+    end
+    if item.info then
+      common.draw_text(font, style.dim, item.info, "right", x, y, w, lh)
+    end
+  end
+  core.pop_clip_rect()
+end
+
+
+---Draw the card, the input and the suggestions. The Root Panel draws them after the dim overlay.
+---@param self core.global_prompt_bar
+local function draw_card(self)
+  local r = self.card_rect
+  if not r or r.w <= 0 then return end
+  local p = self.progress
+  local transformed = p < 1
+  if transformed then renderer.push_transform(r.x + r.w / 2, r.y, 0.98 + 0.02 * p, p) end
+  card.draw(r.x, r.y, r.w, r.h, 10 * SCALE)
+  core.push_clip_rect(self.position.x, self.position.y, self.size.x, self.size.y)
+  GlobalPromptBar.super.draw(self)
+  core.pop_clip_rect()
+  if self.state.show_suggestions and self.suggestions_height > 0 and #self.suggestions > 0 then
+    local border = card.border_width()
+    renderer.draw_rect(r.x + border, self.position.y + self.size.y + divider_gap(), r.w - 2 * border,
+      border, style.card_border)
+    draw_suggestions(self)
+  end
+  if transformed then renderer.pop_transform() end
+end
+
+
+---Draw the Global Prompt Bar above the Panes and the dim overlay.
+function GlobalPromptBar:draw()
+  if self.covered_by_app_overlay or self.size.y <= 0 then return end
+  core.root_panel:defer_draw(draw_card, self)
 end
 
 
@@ -618,21 +667,13 @@ function GlobalPromptBar:on_mouse_moved(x, y, ...)
   self.mouse_position.y = y
   if self:is_mouse_on_suggestions() then
     core.request_cursor("arrow")
-
-    local lh = self:get_suggestion_line_height()
-    local dh = style.divider_size
-    local offset = self.suggestions_offset
-    local first = self.suggestions_first
-    local last = self.suggestions_last
-
-    for i=first, last do
-      local sy = self.position.y - (i - offset) * lh - dh
-      if y >= sy then
-        self.suggestion_idx=i
-        self:complete()
-        self.last_change_id = self.buffer:get_change_id()
-        break
-      end
+    local _, list_y = self:get_suggestions_rect()
+    local i = self.suggestions_first + math.floor((y - list_y) / self:get_suggestion_line_height())
+    i = common.clamp(i, self.suggestions_first, math.min(self.suggestions_last, #self.suggestions))
+    if i ~= self.suggestion_idx then
+      self.suggestion_idx = i
+      self:complete()
+      self.last_change_id = self.buffer:get_change_id()
     end
     return true
   end
@@ -647,11 +688,7 @@ end
 ---@return boolean handled True if event was consumed
 function GlobalPromptBar:on_mouse_wheel(y, ...)
   if self:is_mouse_on_suggestions() then
-    if y < 0 then
-      self:move_suggestion_idx(-1)
-    else
-      self:move_suggestion_idx(1)
-    end
+    self:move_suggestion_idx(y < 0 and 1 or -1)
     return true
   end
   GlobalPromptBar.super.on_mouse_wheel(self, y, ...)
@@ -659,8 +696,8 @@ function GlobalPromptBar:on_mouse_wheel(y, ...)
 end
 
 
----Handle mouse press on suggestions box.
----Submits the current prompt text if clicking a suggestion with left button.
+---Handle mouse press on the card.
+---A left click on a suggestion submits it. A press on the input places the caret.
 ---@param button core.view.mousebutton
 ---@param x number Screen x coordinate
 ---@param y number Screen y coordinate
@@ -673,20 +710,21 @@ function GlobalPromptBar:on_mouse_pressed(button, x, y, clicks)
     end
     return true
   end
+  if not self:is_on_card(x, y) then return false end
   GlobalPromptBar.super.on_mouse_pressed(self, button, x, y, clicks)
-  return false
+  return true
 end
 
 
----Handle mouse release on suggestions box.
+---Handle mouse release on the card.
 ---Consumes event to prevent propagation.
----@return boolean handled True if mouse is over suggestions
-function GlobalPromptBar:on_mouse_released(...)
+---@return boolean handled True if mouse is over the card
+function GlobalPromptBar:on_mouse_released(button, x, y, ...)
   if self:is_mouse_on_suggestions() then
     return true
   end
-  GlobalPromptBar.super.on_mouse_released(self, ...)
-  return false
+  GlobalPromptBar.super.on_mouse_released(self, button, x, y, ...)
+  return self:is_on_card(x, y)
 end
 
 

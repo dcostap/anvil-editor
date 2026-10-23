@@ -4,6 +4,7 @@ local panes = require "core.panes"
 local pane_layout = require "core.pane_layout"
 local RootPanel = require "core.rootpanel"
 local NagView = require "core.nagview"
+local GlobalPromptBar = require "core.global_prompt_bar"
 local View = require "core.view"
 local test = require "core.test"
 local autocomplete = require "plugins.autocomplete"
@@ -99,7 +100,7 @@ test.describe("Root Panel Pane presentation", function()
     config.wallpaper = "none"
     core.title_bar = FakeView("title", 10)
     core.nag_view = FakeView("nag", 5)
-    core.global_prompt_bar = FakeView("prompt", 7)
+    core.global_prompt_bar = GlobalPromptBar()
     core.status_bar = nil
     core.app_overlay = nil
     root = RootPanel()
@@ -131,9 +132,22 @@ test.describe("Root Panel Pane presentation", function()
 
     test.equal(core.title_bar.position.y, 0)
     test.equal(one.position.y, 10)
-    test.equal(one.size.y, 183)
+    test.equal(one.size.y, 190)
     test.equal(two.position.x, 150)
-    test.equal(core.global_prompt_bar.position.y, 193)
+  end)
+
+  test.it("opens the prompt over the Panes without moving them", function()
+    local bar = core.global_prompt_bar
+    local one = panes.create { factory = pane_factory("one") }
+    root:update()
+
+    bar:enter("Go To Line", { show_suggestions = false })
+    for _ = 1, 3 do root:update() end
+
+    test.equal(one.position.y, 10)
+    test.equal(one.size.y, 190)
+    test.equal(root:view_at(bar.position.x + 1, bar.position.y + 1), bar)
+    bar:exit(true)
   end)
 
   test.it("opens the nag bar over the Panes without moving them", function()
@@ -149,7 +163,7 @@ test.describe("Root Panel Pane presentation", function()
     for _ = 1, 3 do root:update() end
 
     test.equal(one.position.y, 10)
-    test.equal(one.size.y, 183)
+    test.equal(one.size.y, 190)
     test.equal(root:view_at(150, 100), nag)
     nag:next()
     root:update()
@@ -172,7 +186,7 @@ test.describe("Root Panel Pane presentation", function()
   test.it("renders the shell with zero Panes", function()
     root:update()
     test.same(root:pane_views(), {})
-    test.equal(root.content_rect.h, 183)
+    test.equal(root.content_rect.h, 190)
   end)
 
   test.it("runs deferred draws queued by another deferred draw", function()
