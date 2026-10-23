@@ -117,6 +117,7 @@ style.card_text = c("4b4f5c")
 style.nagbar_dim = { common.color "rgba(0, 0, 0, 0.20)" }
 style.card_border = { 0, 0, 0, 30 }
 style.card_shadow = { 0, 0, 0, 40 }
+style.card_field = { 0, 0, 0, 10 }
 style.nagbar_button = { 0, 0, 0, 10 }
 style.nagbar_button_hover = { 0, 0, 0, 10 }
 style.nagbar_button_pressed = { 0, 0, 0, 26 }

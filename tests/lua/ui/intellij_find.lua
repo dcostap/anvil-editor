@@ -254,6 +254,40 @@ test.describe("TextView Prompt Bar find", function()
     test.same(state.matches, { { line = 1, col1 = 1, col2 = 8 } })
   end)
 
+  test.it("toggles regex and case matching from the find bar", function(context)
+    local view = open_editor(context, "Cat1\ncat2\nnone")
+    test.ok(command.perform("editor:find"))
+    local input = active_find_input_for(view)
+    local state = input.local_find_state
+    input:set_text("cat[0-9]")
+    test.equal(#state.matches, 0)
+
+    local function click_label(label)
+      local found
+      local draw_text = renderer.draw_text
+      renderer.draw_text = function(font, text, x, y, ...)
+        if text == label then found = { x = x + font:get_width(text) / 2, y = y + font:get_height() / 2 } end
+        return draw_text(font, text, x, y, ...)
+      end
+      view:update()
+      local window = renwindow.create("find-bar-test", 400, 200)
+      renderer.begin_frame(window)
+      local ok, err = pcall(view.draw, view)
+      renderer.end_frame()
+      renderer.draw_text = draw_text
+      if not ok then error(err, 0) end
+      test.ok(found, "expected the find bar to show " .. label)
+      test.ok(view:on_mouse_pressed("left", found.x, found.y, 1))
+      view:on_mouse_released("left", found.x, found.y)
+    end
+
+    click_label(".*")
+    test.equal(#state.matches, 2)
+    click_label("Aa")
+    test.same(state.matches, { { line = 2, col1 = 1, col2 = 5 } })
+    test.equal(core.active_view, input)
+  end)
+
   test.it("cycles through visible prompt inputs and Pane Views in both directions", function(context)
     local view = open_editor(context, "alpha beta alpha\n")
     local sibling_buffer = track(context, "buffers", core.open_buffer())

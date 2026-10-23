@@ -122,12 +122,14 @@ style.scrollbar = p("scrollbar_thumb")
 style.scrollbar_hover = p("scrollbar_thumb_hover")
 style.scrollbar_active = p("scrollbar_thumb_active")
 style.scrollbar_track = p("gutter_bg")
--- Floating cards: dialogs, prompts and popups. card_text is their secondary text.
+-- Floating cards: dialogs, prompts and popups. card_text is their secondary text,
+-- and card_field fills their input fields.
 style.card = c("2f3237")
 style.card_text = c("a3aebb")
 style.nagbar_dim = { common.color "rgba(0, 0, 0, 0.45)" }
 style.card_border = { 255, 255, 255, 20 }
 style.card_shadow = { 0, 0, 0, 120 }
+style.card_field = { 0, 0, 0, 50 }
 style.nagbar_button = { 255, 255, 255, 16 }
 style.nagbar_button_hover = { 255, 255, 255, 14 }
 style.nagbar_button_pressed = { 0, 0, 0, 50 }
@@ -241,11 +243,11 @@ style.diff_overview_insert = { common.color "rgba(105, 170, 120, 0.54)" }
 style.diff_overview_modify = { common.color "rgba(100, 145, 195, 0.54)" }
 style.search_selection = c("214283")
 style.search_selection_text = nil
-style.search_selection_outline = c("c8c8c8")
-style.search_selection_secondary = c("274324")
+style.search_selection_outline = { common.color "rgba(143, 185, 245, 0.75)" }
+style.search_selection_secondary = c("2c4a29")
 style.search_selection_secondary_outline = c("777777")
 style.search_overview = c("4674b5")
-style.search_overview_secondary = c("4c7945")
+style.search_overview_secondary = { 96, 140, 90, 70 }
 style.fuzzy_searcher_match = c("000000")
 style.fuzzy_searcher_modifier = style.accent
 style.fuzzy_searcher_match_background = { 186, 151, 82, 230 }

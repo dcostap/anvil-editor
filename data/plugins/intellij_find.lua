@@ -2,8 +2,7 @@
 -- View-local in-file find/replace overlay.
 --
 -- This intentionally does not use the core.global_prompt_bar instance: find is
--- editor-local UI.  It does share the prompt bar renderer so local find looks
--- like Anvil's other prompt bars instead of carrying custom chrome.
+-- editor-local UI. It floats as a card at the top right of its Editor.
 -- Each TextView owns its own find state, so two splits of the same Buffer can keep
 -- independent queries, current match, highlights, and visible input bars.
 
@@ -14,6 +13,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local prompt_bar_renderer = require "core.prompt_bar_renderer"
 local common = require "core.common"
+local card = require "core.card"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
 local navigation_history = require "core.navigation_history"
@@ -66,9 +66,6 @@ function LocalFindInputView:new(state, field_name)
   self.scrollable = false
   self.hide_scrollbars = true
   self.font = "font"
-  self.label = ""
-  self.gutter_width = 0
-  self.gutter_text_brightness = 0
   self.size.y = 0
 
   local input = self
@@ -112,7 +109,7 @@ function LocalFindInputView:move_to_end()
 end
 
 function LocalFindInputView:get_gutter_width()
-  return self.gutter_width or 0, 0
+  return 0, 0
 end
 
 function LocalFindInputView:get_line_height()
@@ -136,19 +133,12 @@ function LocalFindInputView:get_line_screen_position(line, col)
   return x, prompt_bar_renderer.line_y(y, self.size.y, self:get_font())
 end
 
-function LocalFindInputView:draw_line_gutter(idx, x, y)
-  local pos = self.position
-  prompt_bar_renderer.draw_label(
-    self:get_font(),
-    self.label,
-    pos.x,
-    pos.y,
-    self:get_gutter_width(),
-    self.size.y,
-    self.gutter_text_brightness
-  )
+function LocalFindInputView:draw_line_gutter()
   return self:get_line_height()
 end
+
+-- The find card draws the field behind the input.
+function LocalFindInputView:draw_background() end
 
 function LocalFindInputView:draw_overlay()
   if core.active_view == self then
@@ -559,8 +549,8 @@ local function set_status(state)
   elseif state.error and state.error ~= true then
     state.info = tostring(state.error)
   elseif #(state.matches or {}) == 0 then
-    state.info = "0 results"
-    state.error = "0 results"
+    state.info = "No results"
+    state.error = "No results"
   else
     state.info = string.format("%d / %d", state.current or 0, #state.matches)
     state.error = false
@@ -1052,167 +1042,154 @@ local function toggle_field_focus(view, state)
   field:select_all()
 end
 
+local function toggle_option(view, state, key)
+  state[key] = not state[key]
+  refresh_matches(view, state, { from_origin = true, scroll = true })
+  core.log_quiet("Local find: %s %s", key, state[key] and "on" or "off")
+  core.redraw = true
+end
+
+local FIND_CARD_MAX_WIDTH = 440
+local FIND_OPTIONS = {
+  { key = "case_sensitive", label = "Aa" },
+  { key = "regex", label = ".*" },
+}
+local FIND_INFO_SAMPLES = { "8888 / 8888", "Invalid regex", "No results", "Searching…" }
+
+-- The card sits at the top right of its Editor and leaves the scrollbar clear.
+-- The first row holds the query field, its option toggles and the match count.
+-- Replace mode adds a second field below the query.
 local function find_bar_layout(view, state)
-  local font = style.font
-  local h = prompt_bar_renderer.height(font)
-  return {
-    x = view.position.x,
-    y = view.position.y + view.size.y - h,
-    w = view.size.x,
-    h = h,
-    pad = style.padding.x,
-    sep = math.max(style.padding.x, style.divider_size or SCALE),
-    font = font,
-  }
-end
-
-local function find_info_text(state)
-  local flags = {}
-  if state.regex then flags[#flags + 1] = "Regex" end
-  if state.case_sensitive then flags[#flags + 1] = "Aa" end
-  local suffix = #flags > 0 and (" [" .. table.concat(flags, " ") .. "]") or ""
-  return tostring(state.info or "") .. suffix
-end
-
-local function make_field_row(layout, label, x, w)
-  local label_w = prompt_bar_renderer.label_width(label, layout.font)
-  w = math.max(label_w + 1, w)
-  return {
-    label = label,
-    label_w = label_w,
-    x = x,
-    y = layout.y,
+  local font, info_font = style.font, style.view_text_font
+  local margin, pad, gap = 8 * SCALE, 6 * SCALE, 4 * SCALE
+  local text_pad = 7 * SCALE
+  local field_h = math.floor(font:get_height() + 10 * SCALE)
+  local info_w = 0
+  for _, sample in ipairs(FIND_INFO_SAMPLES) do info_w = math.max(info_w, info_font:get_width(sample)) end
+  local right = view.position.x + view.size.x - style.scrollbar_size - margin
+  local w = math.max(1, math.min(FIND_CARD_MAX_WIDTH * SCALE, right - view.position.x - margin))
+  local rows = state.mode == "replace" and 2 or 1
+  local layout = {
+    x = right - w,
+    y = view.position.y + margin,
     w = w,
-    h = layout.h,
-    input_x = x + label_w,
-    input_w = math.max(1, w - label_w),
-    input_h = layout.h,
-    font = layout.font,
+    h = pad * 2 + rows * field_h + (rows - 1) * gap,
+    radius = 8 * SCALE,
+    font = font,
+    info_font = info_font,
   }
-end
+  local field_w = math.max(1, w - pad * 3 - info_w)
+  layout.find = { x = layout.x + pad, y = layout.y + pad, w = field_w, h = field_h }
+  layout.info = { x = layout.find.x + field_w + pad, y = layout.find.y, w = info_w, h = field_h }
 
-local function find_bar_rows(layout, state, info_text)
-  local font, pad, sep = layout.font, layout.pad, layout.sep
-  local right = layout.x + layout.w
-  -- Reserve the complete results slot independently of its current text.
-  -- The text can change from empty, to an error, to a match count without
-  -- changing the geometry of either input field.
-  -- Keep this compact so the reserved area does not leave a large gap before
-  -- the result count. Longer status text is clipped within the same stable
-  -- slot rather than moving the input fields.
-  local info_slot_w = 130 * SCALE
-  info_slot_w = math.min(info_slot_w, math.max(0, layout.w - pad))
-  local info_slot_x = right - pad - info_slot_w
-  local info_x = info_slot_x + sep + pad
-  local info_w = math.max(0, right - pad - info_x)
-  local info = {
-    text = info_text,
-    x = info_x,
-    w = info_w,
-    separator_x = info_slot_x,
-  }
-  local field_right = math.max(layout.x, info_slot_x - pad)
-  local find_label = "Find: "
-  local replace_label = "Replace: "
-
-  if state.mode == "replace" then
-    local available = math.max(0, field_right - layout.x)
-    local find_label_w = prompt_bar_renderer.label_width(find_label, font)
-    local replace_label_w = prompt_bar_renderer.label_width(replace_label, font)
-    local gap = available >= find_label_w + replace_label_w + sep and sep or 0
-    local usable = math.max(0, available - gap - find_label_w - replace_label_w)
-    local find_input_w = math.floor(usable * 0.48)
-    local replace_input_w = usable - find_input_w
-    local find_w = find_label_w + find_input_w
-    local replace_w = replace_label_w + replace_input_w
-    local find_row = make_field_row(layout, find_label, layout.x, find_w)
-    local replace_row = make_field_row(layout, replace_label, layout.x + find_w + gap, replace_w)
-    replace_row.separator_x = gap > 0 and replace_row.x - gap or nil
-    return find_row, replace_row, info
+  -- The option toggles sit inside the right end of the query field.
+  local toggle_h = field_h - 8 * SCALE
+  local toggle_right = layout.find.x + field_w - 4 * SCALE
+  layout.toggles = {}
+  for i = #FIND_OPTIONS, 1, -1 do
+    local option = FIND_OPTIONS[i]
+    local toggle_w = math.max(toggle_h, font:get_width(option.label) + 8 * SCALE)
+    toggle_right = toggle_right - toggle_w
+    table.insert(layout.toggles, 1, {
+      key = option.key, label = option.label,
+      x = toggle_right, y = layout.find.y + 4 * SCALE, w = toggle_w, h = toggle_h,
+    })
+    toggle_right = toggle_right - 2 * SCALE
   end
-
-  local find_row = make_field_row(layout, find_label, layout.x, math.max(0, field_right - layout.x))
-  return find_row, nil, info
+  layout.find_input = {
+    x = layout.find.x + text_pad, y = layout.find.y,
+    w = toggle_right - layout.find.x - text_pad, h = field_h,
+  }
+  if rows == 2 then
+    layout.replace = { x = layout.find.x, y = layout.find.y + field_h + gap, w = field_w, h = field_h }
+    layout.replace_input = {
+      x = layout.replace.x + text_pad, y = layout.replace.y,
+      w = field_w - 2 * text_pad, h = field_h,
+    }
+  end
+  return layout
 end
 
-local function apply_field_row(field, row)
-  field.label = row.label
-  field.gutter_width = row.label_w
-  field.position.x = row.x
-  field.position.y = row.y
-  field.size.x = math.max(1, row.w)
-  field.size.y = math.max(1, row.h)
+local function place_input(input, rect)
+  input.position.x, input.position.y = rect.x, rect.y
+  input.size.x, input.size.y = math.max(1, rect.w), math.max(1, rect.h)
 end
 
 local function layout_find_fields(view, state)
   local layout = find_bar_layout(view, state)
-  local find_row, replace_row, info = find_bar_rows(layout, state, find_info_text(state))
-  apply_field_row(state.find, find_row)
-  if replace_row then apply_field_row(state.replace, replace_row) end
-  return layout, find_row, replace_row, info
+  place_input(state.find, layout.find_input)
+  if layout.replace then place_input(state.replace, layout.replace_input) end
+  return layout
 end
 
 local function update_find_input_fields(view, state)
-  local _, _, replace_row = layout_find_fields(view, state)
+  local layout = layout_find_fields(view, state)
   state.find:update()
-  if replace_row then state.replace:update() end
+  if layout.replace then state.replace:update() end
 end
 
-local function draw_input_field(field)
-  core.push_clip_rect(field.position.x, field.position.y, field.size.x, field.size.y)
-  field:draw()
+local function draw_field(field, input, placeholder)
+  local r = 6 * SCALE
+  if core.active_view == input then
+    local ring = math.max(1, math.floor(SCALE + 0.5))
+    renderer.draw_rounded_rect(field.x, field.y, field.w, field.h, r, style.accent)
+    renderer.draw_rounded_rect(field.x + ring, field.y + ring, field.w - 2 * ring, field.h - 2 * ring,
+      r - ring, style.card)
+  end
+  renderer.draw_rounded_rect(field.x, field.y, field.w, field.h, r, style.card_field)
+  local x, y, w, h = input.position.x, input.position.y, input.size.x, input.size.y
+  core.push_clip_rect(x, y, w, h)
+  input:draw()
+  if input:get_text() == "" then
+    local text_x = input:get_line_screen_position(1, 1)
+    common.draw_text(input:get_font(), style.dim, placeholder, "left", text_x, y, w, h)
+  end
   core.pop_clip_rect()
+end
+
+local function draw_toggle(toggle, font, on)
+  if on then
+    local accent = style.accent
+    renderer.draw_rounded_rect(toggle.x, toggle.y, toggle.w, toggle.h, 4 * SCALE,
+      { accent[1], accent[2], accent[3], 64 })
+  end
+  common.draw_text(font, on and style.accent or style.dim, toggle.label, "center",
+    toggle.x, toggle.y, toggle.w, toggle.h)
 end
 
 local function draw_local_find(view)
   local state = visible_find_state(view)
   if not state then return end
-  local layout, find_row, replace_row, info = layout_find_fields(view, state)
-  prompt_bar_renderer.draw_background(layout.x, layout.y, layout.w, layout.h)
-
-  draw_input_field(state.find)
-
-  if replace_row then
-    draw_input_field(state.replace)
-    if replace_row.separator_x then
-      prompt_bar_renderer.draw_vertical_divider(
-        replace_row.separator_x,
-        layout.y,
-        layout.h
-      )
-    end
+  local layout = layout_find_fields(view, state)
+  card.draw(layout.x, layout.y, layout.w, layout.h, layout.radius)
+  draw_field(layout.find, state.find, "Find")
+  for _, toggle in ipairs(layout.toggles) do draw_toggle(toggle, layout.font, state[toggle.key]) end
+  if layout.replace then draw_field(layout.replace, state.replace, "Replace") end
+  local info = layout.info
+  if state.info and state.info ~= "" then
+    core.push_clip_rect(info.x, info.y, info.w, info.h)
+    common.draw_text(layout.info_font, state.error and style.error or style.card_text, state.info, "left",
+      info.x, info.y, info.w, info.h)
+    core.pop_clip_rect()
   end
-
-  if info and info.text ~= "" and info.w > 0 then
-    local color = state.error and style.error or style.dim
-    prompt_bar_renderer.draw_info(
-      layout.font,
-      info.text,
-      info.x,
-      layout.y,
-      info.w,
-      layout.h,
-      color
-    )
-    prompt_bar_renderer.draw_vertical_divider(info.separator_x, layout.y, layout.h)
-  end
-
-  prompt_bar_renderer.draw_top_divider(layout.x, layout.y, layout.w)
 end
 
 local function point_in_rect(x, y, r)
-  return x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h
-end
-
-local function point_in_field(x, y, row)
-  return row and x >= row.x and x <= row.x + row.w and y >= row.y and y <= row.y + row.h
+  return r and x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h
 end
 
 local function handle_find_mouse_pressed(view, state, x, y, clicks)
-  local layout, find_row, replace_row = layout_find_fields(view, state)
+  local layout = layout_find_fields(view, state)
   if not point_in_rect(x, y, layout) then return false end
+  for _, toggle in ipairs(layout.toggles) do
+    if point_in_rect(x, y, toggle) then
+      focus_field(view, state, state.focus)
+      toggle_option(view, state, toggle.key)
+      return true
+    end
+  end
   local target_field, target_name = state.find, "find"
-  if replace_row and point_in_field(x, y, replace_row) then
+  if point_in_rect(x, y, layout.replace) then
     target_field, target_name = state.replace, "replace"
   end
   focus_field(view, state, target_name)
@@ -1518,14 +1495,10 @@ command.add(active_find_state, {
     if state.mode == "replace" then confirm_replace_all(view, state) end
   end,
   ["editor:toggle_sensitivity"] = function(view, state)
-    state.case_sensitive = not state.case_sensitive
-    refresh_matches(view, state, { from_origin = true, scroll = true })
-    core.redraw = true
+    toggle_option(view, state, "case_sensitive")
   end,
   ["editor:toggle_regex"] = function(view, state)
-    state.regex = not state.regex
-    refresh_matches(view, state, { from_origin = true, scroll = true })
-    core.redraw = true
+    toggle_option(view, state, "regex")
   end,
 })
 

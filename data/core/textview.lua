@@ -386,6 +386,7 @@ local function draw_wrapped_search_match_segment(view, x1, y, x2, h, primary, ou
     renderer.draw_rect(x1, y, x2 - x1, h, bg)
     return
   end
+  if not border then return end
   local t = math.max(1, common.round(SCALE))
   renderer.draw_rect(x1, y, x2 - x1, t, border)
   renderer.draw_rect(x1, y + h - t, x2 - x1, t, border)
@@ -8645,11 +8646,12 @@ function TextView:draw_caret(x, y, line, col, caret_idx, color)
 end
 
 
+---The fill and outline colors of a search match. Only the current match has an outline.
 function TextView:search_match_style(primary)
   if primary then
     return style.search_selection, style.search_selection_outline
   end
-  return style.search_selection_secondary, style.search_selection_secondary_outline
+  return style.search_selection_secondary
 end
 
 ---Iterate the screen rectangles occupied by a single-line Buffer range.
@@ -8826,6 +8828,7 @@ end
 
 function TextView:draw_search_match_outline(line, col1, col2, primary, rectangles)
   local _, outline = self:search_match_style(primary)
+  if not outline then return end
   local t = math.max(1, common.round(SCALE))
   local segments
   if rectangles and #rectangles > 0 then
