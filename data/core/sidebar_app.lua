@@ -203,6 +203,7 @@ function core.init()
     command.add(nil, {[name] = function() if current then current.view:on_key_pressed(key) end end})
     keymap.add {[key] = name}
   end
+  keymap.add {["alt+r"] = "sidebar:return"}
   if core.session_log then core.session_log:flush() end
   local window = renwindow.create("Sidebar", 240, 600)
   core.window, core.active_window = window, window
