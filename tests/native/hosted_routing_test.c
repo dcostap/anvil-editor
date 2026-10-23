@@ -256,6 +256,19 @@ int main(int test_argc, char **test_argv) {
   CHECK(!anvil_surface_frame_matches(&geometry, &frame));
   frame.configuration = 7;
   CHECK(anvil_surface_frame_matches(&geometry, &frame));
+  /* A Project switch must not show the old Pane while its focus request waits. */
+  geometry.pane_request = 12;
+  CHECK(!anvil_surface_frame_matches(&geometry, &frame));
+  frame.pane_request = 11;
+  CHECK(!anvil_surface_frame_matches(&geometry, &frame));
+  frame.pane_request = 12;
+  CHECK(anvil_surface_frame_matches(&geometry, &frame));
+  geometry.pane_request = 13;
+  CHECK(!anvil_surface_frame_matches(&geometry, &frame));
+  frame.pane_request = 13;
+  CHECK(anvil_surface_frame_matches(&geometry, &frame));
+  geometry.pane_request = 0;
+  CHECK(anvil_surface_frame_matches(&geometry, &frame));
   AnvilSurfaceTextInput area_input = {.active = -1, .x = -10, .y = 230, .w = 30, .h = 40, .cursor = 25, .configuration = 7};
   SDL_Rect area;
   int cursor;

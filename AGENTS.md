@@ -274,6 +274,12 @@ Hosted processes report this separately from their first frame and repeat the re
 Background Projects do not render. Keep the shell's first-frame guards separate from this status.
 The `restore-loaded` probe checks readiness without selecting the restored background Project.
 
+A Sidebar Pane selection keeps the previous Project's frame until the requested Pane has rendered.
+Pane deliveries carry request IDs. Lua completes each request, including a rejected request, before the next redraw.
+Both renderers report the completed ID. The shell rejects frames that precede the requested ID.
+Runtime readiness permits delivery before the first frame, so selection cannot block a new Project's startup.
+Run `anvil:hosted-routing`, `ui/pane_requests.lua`, and the `select-hold` shell probe after changes.
+
 The shell waits for swapchain capacity without blocking its event loop. It collects input and new surfaces during that wait.
 Each Window has one pending presentation and one one-shot readiness wait. Idle Windows have no readiness wait.
 The shell composes the latest surfaces when capacity becomes available. Vsync stays enabled outside live resize.

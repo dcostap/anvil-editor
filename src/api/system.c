@@ -2089,14 +2089,20 @@ static int terminaleditor_callback(lua_State *L, SDL_Event *event) {
   free(event->user.data1);
   return 2;
 }
+static int f_complete_pane_request(lua_State *L) {
+  anvil_hosted_surface_complete_pane_request((uint64_t)luaL_checkinteger(L, 1));
+  return 0;
+}
+
 static int panerequest_callback(lua_State *L, SDL_Event *event) {
   AnvilSurfacePaneDelivery *delivery = event->user.data1;
   lua_pushstring(L, "panerequest");
   lua_pushstring(L, (const char *)(delivery + 1));
   lua_pushinteger(L, delivery->x);
   lua_pushinteger(L, delivery->y);
+  lua_pushinteger(L, delivery->request);
   free(event->user.data1);
-  return 4;
+  return 5;
 }
 static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   (void)event;
@@ -2743,6 +2749,7 @@ static const luaL_Reg lib[] = {
   { "select_project",        f_select_project        },
   { "set_project_panes",     f_set_project_panes     },
   { "pane_request",          f_pane_request          },
+  { "complete_pane_request", f_complete_pane_request },
   { "select_terminal",       f_select_terminal       },
   { "toggle_project_sidebar", f_toggle_project_sidebar },
   { "focus_project_sidebar", f_focus_project_sidebar },

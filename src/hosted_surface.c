@@ -52,6 +52,7 @@ typedef struct HostedView {
   SDL_AtomicInt focused;
   int last_cursor;
   uint32_t frame_generation;
+  uint64_t pane_request;
   Uint64 resize_configured_ns; /* when the latest live-resize size arrived; zero once published */
   uint32_t background, overlay;
   AnvilSurfaceArea raised[ANVIL_SURFACE_RAISED_MAX];
@@ -670,6 +671,7 @@ complete:
 static void apply_configure(const AnvilSurfaceConfigure *config);
 /* Runs on the UI thread. The new shell knows nothing this Project told the old one, so send it again. */
 void anvil_hosted_surface_finish_adoption(void) {
+  view->pane_request = 0;
   SDL_LockMutex(hosted.queue_lock);
   AnvilSurfaceConfigure config = hosted.adopted_config;
   hosted.lost = false;
@@ -1041,6 +1043,10 @@ bool anvil_hosted_surface_set_panes(const char *panes) {
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
+void anvil_hosted_surface_complete_pane_request(uint64_t request) {
+  if (request > view->pane_request) view->pane_request = request;
+}
+
 bool anvil_hosted_surface_pane_request(uint32_t route, const char *path, const char *text, int x, int y) {
   size_t path_size = path ? strlen(path) : 0, text_size = text ? strlen(text) : 0;
   size_t size = sizeof(AnvilSurfacePaneRequest) + path_size + text_size;
@@ -1293,6 +1299,7 @@ void anvil_hosted_surface_publish_d3d11(SDL_Window *window, const char *name, in
   frame.kind = ANVIL_SURFACE_FRAME_D3D11;
   frame.generation = ++view->frame_generation;
   frame.configuration = view->config.configuration;
+  frame.pane_request = view->pane_request;
   frame.width = width;
   frame.height = height;
   frame.background = view->background;
@@ -1402,6 +1409,7 @@ bool anvil_hosted_surface_publish_software(SDL_Window *window, SDL_Surface *surf
   frame.kind = ANVIL_SURFACE_FRAME_SHARED_MEMORY;
   frame.generation = header->generation;
   frame.configuration = header->configuration;
+  frame.pane_request = view->pane_request;
   frame.width = surface->w;
   frame.height = surface->h;
   frame.background = view->background;
@@ -1599,6 +1607,7 @@ bool anvil_hosted_surface_focus_sidebar(bool focused) { (void)focused; return fa
 bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y) { (void)row_id; (void)x; (void)y; return false; }
 bool anvil_hosted_surface_set_panes(const char *panes) { (void)panes; return false; }
 void anvil_hosted_surface_runtime_ready(void) {}
+void anvil_hosted_surface_complete_pane_request(uint64_t request) { (void)request; }
 bool anvil_hosted_surface_pane_request(uint32_t route, const char *path, const char *text, int x, int y) {
   (void)route; (void)path; (void)text; (void)x; (void)y; return false;
 }

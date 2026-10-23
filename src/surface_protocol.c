@@ -281,7 +281,8 @@ bool anvil_surface_layout_changed(const AnvilSurfaceConfigure *previous, const A
 }
 
 bool anvil_surface_frame_matches(const AnvilSurfaceConfigure *config, const AnvilSurfaceFrame *frame) {
-  return frame->configuration == config->configuration && frame->width == config->pixel_w && frame->height == config->pixel_h &&
+  return frame->pane_request >= config->pane_request &&
+    frame->configuration == config->configuration && frame->width == config->pixel_w && frame->height == config->pixel_h &&
     (frame->kind == ANVIL_SURFACE_FRAME_D3D11 || frame->kind == ANVIL_SURFACE_FRAME_SHARED_MEMORY) &&
     frame->name[0] && memchr(frame->name, 0, sizeof(frame->name));
 }

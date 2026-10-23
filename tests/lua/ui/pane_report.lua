@@ -69,13 +69,13 @@ test.describe("Pane report", function()
     local one = panes.create { factory = factory("one.lua") }
     local two = panes.create { factory = factory("two.lua") }
     panes.focus(one)
-    core.on_event("panerequest", common.serialize({action = "focus", pane = two.id}, {escape = true}), -1, -1)
+    core.on_event("panerequest", common.serialize({action = "focus", pane = two.id}, {escape = true}), -1, -1, 0)
     test.equal(panes.active(), two)
-    core.on_event("panerequest", common.serialize({action = "close", pane = one.id}, {escape = true}), -1, -1)
+    core.on_event("panerequest", common.serialize({action = "close", pane = one.id}, {escape = true}), -1, -1, 0)
     test.equal(panes.count(), 1)
     test.is_nil(panes.find(one.id))
     -- A Pane that no longer exists changes nothing.
-    core.on_event("panerequest", common.serialize({action = "focus", pane = one.id}, {escape = true}), -1, -1)
+    core.on_event("panerequest", common.serialize({action = "focus", pane = one.id}, {escape = true}), -1, -1, 0)
     test.equal(panes.active(), two)
   end)
 end)

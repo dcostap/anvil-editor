@@ -11,7 +11,7 @@ local test = require "core.test"
 
 -- Seam: shell requests delivered through the public event handler.
 local function request(value, x, y)
-  core.on_event("panerequest", common.serialize(value, {escape = true}), x or -1, y or -1)
+  core.on_event("panerequest", common.serialize(value, {escape = true}), x or -1, y or -1, 0)
 end
 local function create()
   return panes.create {factory = function() return View() end}
@@ -147,7 +147,7 @@ test.describe("Pane requests", function()
       {action = "drop", pane = a.id, text = false},
       {action = "focus", pane = a.id, surprise = true},
     } do request(value) end
-    core.on_event("panerequest", "not valid Lua", -1, -1)
+    core.on_event("panerequest", "not valid Lua", -1, -1, 0)
     test.same(panes.ordered(), {a, b})
     test.equal(panes.active(), b)
   end)

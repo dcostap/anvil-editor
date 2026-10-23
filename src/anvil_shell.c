@@ -121,6 +121,7 @@ typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED, SHELL_D
 typedef struct PendingPane {
   struct PendingPane *next;
   char *text;
+  uint64_t request;
 } PendingPane;
 typedef struct DormantProject {
   struct DormantProject *next;
@@ -203,6 +204,7 @@ typedef struct ShellProject {
   /* A Terminal Session the Sidebar asked the Project to focus once Ready. */
   char pending_terminal[ANVIL_SURFACE_TERMINAL_ID_LEN + 1];
   PendingPane *pending_panes;
+  uint64_t pane_request;
 } ShellProject;
 
 typedef struct {
@@ -341,6 +343,7 @@ typedef struct {
   ShellProject *retiring;
   DormantProject *dormants;
   Uint32 next_connection, next_project;
+  uint64_t next_pane_request;
   ProjectResolve *resolvers;
   UINT_PTR resolve_timer;
   UINT_PTR state_timer;
@@ -600,6 +603,7 @@ static ShellProject *retain_project(ShellProject *project) {
 }
 
 static void clear_pending_panes(ShellProject *project) {
+  project->pane_request = project->last_config.pane_request = 0;
   while (project->pending_panes) {
     PendingPane *pending = project->pending_panes;
     project->pending_panes = pending->next;
@@ -733,11 +737,13 @@ static void set_surface_busy(ShellWindow *window, ShellPresentation *surface, bo
 }
 
 static void deliver_pending_panes(ShellProject *project) {
-  if (!project->connected || project->state != SHELL_READY || !project->runtime_ready) return;
+  if (!project->connected || !project->runtime_ready ||
+      (project->state != SHELL_READY && project->state != SHELL_STARTING)) return;
   AnvilSurfacePaneDelivery delivery = {-1, -1};
   while (project->pending_panes) {
     PendingPane *pending = project->pending_panes;
     project->pending_panes = pending->next;
+    delivery.request = pending->request;
     shell_send(project, ANVIL_SURFACE_MSG_PANE_ACTION, &delivery, sizeof(delivery), pending->text, strlen(pending->text));
     free(pending->text);
     free(pending);
@@ -757,8 +763,8 @@ static void set_state(ShellProject *project, ShellState state) {
       project->panes = NULL;
     }
     if (state == SHELL_FAILED || state == SHELL_DORMANT) project->pending_terminal[0] = 0;
-    if ((state == SHELL_FAILED || state == SHELL_DORMANT) && project->pending_panes) {
-      SDL_Log("Shell dropped pending Pane requests: Project=%u is unavailable", project->id);
+    if (state == SHELL_FAILED || state == SHELL_DORMANT) {
+      if (project->pending_panes) SDL_Log("Shell dropped pending Pane requests: Project=%u is unavailable", project->id);
       clear_pending_panes(project);
     }
     deliver_pending_panes(project);
@@ -1428,6 +1434,7 @@ static void send_configure(ShellProject *project) {
   if (!project->connected)
     return;
   AnvilSurfaceConfigure config = project->last_config;
+  config.pane_request = project->pane_request;
   config.window_id = window->id;
   config.window_mode = current_window_mode(window);
   config.live_resize = window->live_resize;
@@ -2668,9 +2675,11 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
     /* A slow Project trails every configure during a drag. Its frames still show it is responsive. */
     if (surface == &window->project_presentation && window->live_resize)
       window->resize_wait_disabled = false;
-    SDL_Log("Shell discarded stale frame: configuration=%llu current=%llu; last safe frame=%s",
+    SDL_Log("Shell discarded stale frame: configuration=%llu current=%llu Pane_request=%llu required=%llu; last safe frame=%s",
             (unsigned long long)frame->configuration,
             (unsigned long long)project->last_config.configuration,
+            (unsigned long long)frame->pane_request,
+            (unsigned long long)project->last_config.pane_request,
             surface->have_surface ? "retained" : "none");
     return false;
   }
@@ -2710,6 +2719,11 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
   set_surface_busy(window, surface, false);
   anvil_timing_note("frame-load-end", frame->generation, project->id, project->sidebar);
   surface->have_surface = true;
+  if (project->pane_request) {
+    SDL_Log("Shell presented Pane request: Project=%u request=%llu", project->id,
+            (unsigned long long)project->pane_request);
+    project->pane_request = project->last_config.pane_request = 0;
+  }
   if (surface->held) {
     surface->held = false;
     KillTimer(window->hwnd, SHELL_SELECTION_HOLD_TIMER);
@@ -6027,8 +6041,16 @@ static void finish_resolutions(void) {
         window_notice(window, "Cannot load Project: out of memory");
       else {
         if (created) assign_identity(project, job);
+        PendingPane *pending = job->pane ? calloc(1, sizeof(*pending)) : NULL;
+        if (pending) {
+          pending->text = job->pane;
+          job->pane = NULL;
+          pending->request = ++shell.next_pane_request;
+          /* Selection can compose immediately. Reject old Pane frames before changing the Project. */
+          project->pane_request = project->last_config.pane_request = pending->request;
+        } else if (job->pane) SDL_Log("Shell dropped a Pane request: allocation failed");
         /* The user may have selected another Project in a restored Window while this one resolved. */
-        if (!job->restored || window->selected == project) select_project(project, job->pane != NULL);
+        if (!job->restored || window->selected == project) select_project(project, pending != NULL);
         if (!job->initial) raise_owner(project);
         if (job->terminal[0]) focus_terminal(project, job->terminal);
         if (created || (project->failed_close && project->process.hProcess &&
@@ -6040,17 +6062,17 @@ static void finish_resolutions(void) {
                                     job->initial ? job->argv : NULL))
             fail_connection(project, "Project selection startup failed");
         }
-        if (job->pane && project->state != SHELL_FAILED && project->state != SHELL_CLOSING) {
-          PendingPane *pending = calloc(1, sizeof(*pending));
-          if (pending) {
-            pending->text = job->pane;
-            job->pane = NULL;
-            PendingPane **tail = &project->pending_panes;
-            while (*tail) tail = &(*tail)->next;
-            *tail = pending;
-            deliver_pending_panes(project);
-          } else SDL_Log("Shell dropped a Pane request: allocation failed");
-        } else if (job->pane) SDL_Log("Shell dropped a Pane request: Project=%u is unavailable", project->id);
+        if (pending && project->state != SHELL_FAILED && project->state != SHELL_CLOSING) {
+          PendingPane **tail = &project->pending_panes;
+          while (*tail) tail = &(*tail)->next;
+          *tail = pending;
+          deliver_pending_panes(project);
+        } else if (pending) {
+          SDL_Log("Shell dropped a Pane request: Project=%u is unavailable", project->id);
+          project->pane_request = project->last_config.pane_request = 0;
+          free(pending->text);
+          free(pending);
+        }
       }
     }
     free_resolution(job);

@@ -2580,7 +2580,11 @@ function core.on_event(type, ...)
       core.redraw = true
     end
   elseif type == "panerequest" then
-    require("core.pane_requests").perform(...)
+    local text, x, y, request = ...
+    require("core.pane_requests").perform(text, x, y)
+    -- A rejected request also releases the shell's wait for the next frame.
+    system.complete_pane_request(request)
+    core.redraw = true
   elseif type == "dialogfinished" then
     local id, status, result, filter = ...
     local callback = core.active_file_dialogs[id]

@@ -77,9 +77,9 @@ end
 local function same(a, b) return a[1] == b[1] and a[2] == b[2] and a[3] == b[3] end
 local function show(color) return string.format("#%02x%02x%02x", color[1], color[2], color[3]) end
 local function quit() core.exit(function() core.quit_request = true end, true) end
-local function ready(name)
+local function ready(name, pane)
  local _, _, controls_w = system.get_window_controls()
- save(name, {pid = tonumber(kernel.GetCurrentProcessId()), controls_w = controls_w,
+ save(name, {pid = tonumber(kernel.GetCurrentProcessId()), controls_w = controls_w, pane = pane,
   background = {style.background[1], style.background[2], style.background[3]}})
 end
 
@@ -124,6 +124,15 @@ if path:match("/driver$") then
    local switching = capture(window).pixel(x, y)
    assert(same(switching, shown), "the switch showed " .. show(switching) .. " before Project A presented, not B's "
     .. show(shown))
+   -- A Pane request must never show the previously focused Pane during the switch.
+   local px, py = math.floor(first.width * .75), math.floor(first.height * .5)
+   local target = {32, 160, 64}
+   local old = {192, 48, 32}
+   wait(function()
+    local color = capture(window).pixel(px, py)
+    assert(not same(color, old), "Project selection showed the previously focused Pane before the requested Pane")
+    return same(color, target)
+   end, 15, "the requested Pane did not appear")
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
   file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action})
@@ -138,10 +147,21 @@ if path:match("/driver$") then
  end)
 elseif path:match("/Project$") then
  core.add_background_thread(function()
+  local panes, View = require "core.panes", require "core.view"
+  local ColorView = View:extend()
+  function ColorView:new(color) ColorView.super.new(self); self.color = color end
+  function ColorView:get_name() return "Selection probe" end
+  function ColorView:draw()
+   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, self.color)
+  end
+  local old = assert(panes.create {factory = function() return ColorView({192, 48, 32, 255}) end})
+  local target = assert(panes.create {factory = function() return ColorView({32, 160, 64, 255}) end})
+  panes.focus(old)
   coroutine.yield(.5)
-  ready("a-ready")
+  ready("a-ready", target.id)
   wait(function() return load("select-b") end, 60)
-  assert(core.open_project_in_same_window(root .. "/Replacement"))
+  assert(system.pane_request("select", root .. "/Replacement",
+   common.serialize({action = "new_group"}, {escape = true})))
   wait(function() return load("a-block") end, 60)
   save("a-blocking", {go = true})
   system.sleep(1.5)
@@ -151,6 +171,8 @@ elseif path:match("/Replacement$") then
   coroutine.yield(.5)
   ready("b-ready")
   wait(function() return load("select-a") end, 60)
-  assert(core.open_project_in_same_window(root .. "/Project"))
+  local target = assert(load("a-ready")).pane
+  assert(system.pane_request("select", root .. "/Project",
+   common.serialize({action = "focus", pane = target}, {escape = true})))
  end)
 end

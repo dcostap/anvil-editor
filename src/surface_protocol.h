@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 34u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 35u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -145,7 +145,7 @@ typedef struct {
   int32_t x, y;
   uint32_t path_size;
 } AnvilSurfacePaneRequest;
-typedef struct { int32_t x, y; } AnvilSurfacePaneDelivery;
+typedef struct { int32_t x, y; uint64_t request; } AnvilSurfacePaneDelivery;
 bool anvil_surface_pane_request_valid(const void *packet, uint32_t size);
 bool anvil_surface_pane_delivery_valid(const void *packet, uint32_t size);
 
@@ -176,6 +176,7 @@ typedef enum {
 
 typedef struct {
   uint64_t configuration;
+  uint64_t pane_request;             /* frame must include this Pane request */
   uint32_t window_id;                /* stable shell identity, not an SDL ID */
   int32_t origin_x, origin_y;        /* physical client pixels */
   int32_t pixel_w, pixel_h;          /* surface size */
@@ -232,6 +233,7 @@ typedef struct {
   uint32_t kind;         /* AnvilSurfaceFrameKind */
   uint32_t generation;   /* increments for every published frame */
   uint64_t configuration;
+  uint64_t pane_request; /* last Pane request completed before this frame */
   int32_t width, height;
   uint64_t input_seq;    /* highest latency-probe input consumed before this frame */
   /* The frame's full-window background, R | G << 8 | B << 16 | A << 24. The shell fills
