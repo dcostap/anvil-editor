@@ -25,6 +25,51 @@ local function recorder()
   return actions, function(...) actions[#actions + 1] = {...} end
 end
 
+-- Runs `fn` with the renderer's draw calls replaced. `calls` records the ones that a test reads; the others do
+-- nothing, because tests draw outside a frame.
+local DRAW_CALLS = {"draw_rect", "draw_rounded_rect", "draw_text", "draw_poly", "set_clip_rect", "push_transform",
+  "pop_transform"}
+local function with_renderer(calls, fn)
+  local saved = {}
+  for _, name in ipairs(DRAW_CALLS) do
+    saved[name] = renderer[name]
+    renderer[name] = calls[name] or function() end
+  end
+  local ok, err = pcall(fn)
+  for _, name in ipairs(DRAW_CALLS) do renderer[name] = saved[name] end
+  if not ok then error(err, 0) end
+end
+
+-- Each text that a draw of the view at `width` x `height` shows, with its position and colour.
+local function drawn_texts(view, width, height)
+  local texts = {}
+  with_renderer({draw_text = function(font, text, x, y, color)
+    texts[#texts + 1] = {text = text, x = x, y = y, color = color, right = x + font:get_width(text)}
+  end}, function() view:draw(width or 400, height or 800) end)
+  return texts
+end
+
+local function joined(texts)
+  local parts = {}
+  for _, item in ipairs(texts) do parts[#parts + 1] = item.text end
+  return table.concat(parts, " | ")
+end
+
+local function find_text(texts, text)
+  for _, item in ipairs(texts) do if item.text == text then return item end end
+end
+
+-- The names of the rows that carry the selection highlight.
+local function highlighted(view)
+  local names = {}
+  for _, row in ipairs(view.rows) do
+    if row.selected then
+      names[#names + 1] = row.tab and row.tab.name or row.project.path:match("[^/]+$")
+    end
+  end
+  return table.concat(names, ",")
+end
+
 test.describe("Sidebar title tooltips", function()
   local function sidebar(name, width)
     local view = SidebarView(function() end)
@@ -58,10 +103,7 @@ test.describe("Sidebar title tooltips", function()
 
   test.it("places the tooltip near the pointer and keeps it inside the Sidebar", function()
     local view = sidebar([[C:\tools\tool.exe]])
-    local old_rounded, old_text = renderer.draw_rounded_rect, renderer.draw_text
     local boxes = {}
-    renderer.draw_rounded_rect = function(x, y, w, h) boxes[#boxes + 1] = {x=x,y=y,w=w,h=h} end
-    renderer.draw_text = function() end
     local function draw_at(x, y)
       view:on_mouse_moved(x, y)
       view.clock = system.get_time() + 10
@@ -69,7 +111,7 @@ test.describe("Sidebar title tooltips", function()
       view:draw_tooltip(view.width, view.view_h)
       return test.not_nil(boxes[2], "The hidden title has no tooltip")
     end
-    local ok, err = pcall(function()
+    with_renderer({draw_rounded_rect = function(x, y, w, h) boxes[#boxes + 1] = {x=x,y=y,w=w,h=h} end}, function()
       local y = row_y(view, "tab")
       local box = draw_at(180, y)
       test.ok(box.x >= 180, "The tooltip does not follow the pointer")
@@ -78,8 +120,6 @@ test.describe("Sidebar title tooltips", function()
       box = draw_at(view.width - 1, y)
       test.ok(box.x >= 0 and box.x + box.w <= view.width, "The tooltip leaves the Sidebar")
     end)
-    renderer.draw_rounded_rect, renderer.draw_text = old_rounded, old_text
-    if not ok then error(err) end
   end)
 end)
 
@@ -131,7 +171,6 @@ test.describe("Sidebar list actions", function()
   end)
 
   test.it("highlights each Window's Selected Project and names Projects shown in other Windows", function()
-    local style = require "core.style"
     local model = {
       {row_id=1,id=11,path="C:/A",state="ready",window_id=7,terminals={}},
       {row_id=2,id=22,path="C:/B",state="ready",window_id=9,terminals={}},
@@ -139,35 +178,13 @@ test.describe("Sidebar list actions", function()
     }
     local a, b = SidebarView(function() end), SidebarView(function() end)
     a:set_model(model, 7); b:set_model(model, 9)
-    local old_rect, old_rounded, old_text, old_clip =
-      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
-    local function draw(view)
-      local selected, selected_title, labels = nil, nil, {}
-      renderer.draw_rect = function() end
-      renderer.draw_rounded_rect = function(_, y, _, h, _, color)
-        if color == style.selection then selected = {y, y + h} end
-      end
-      renderer.draw_text = function(_, text, _, y)
-        if selected and y >= selected[1] and y < selected[2] and not selected_title then selected_title = text end
-        labels[#labels + 1] = text
-      end
-      renderer.set_clip_rect = function() end
-      view:draw(600, 1000)
-      return selected_title, table.concat(labels, "\n")
-    end
-    local ok, err = pcall(function()
-      local title, labels = draw(a)
-      test.equal(title, "A")
-      test.ok(labels:find("Window 9", 1, true), "A's Sidebar does not name B's Window")
-      test.ok(not labels:find("Window 7", 1, true), "A's Sidebar names its own Window")
-      local b_title, b_labels = draw(b)
-      test.equal(b_title, "B")
-      test.ok(b_labels:find("Window 7", 1, true))
-      test.equal(draw(a), "A", "Drawing B changed A's selection")
-    end)
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
-      old_rect, old_rounded, old_text, old_clip
-    if not ok then error(err) end
+    test.equal(highlighted(a), "A")
+    local labels = joined(drawn_texts(a, 600, 1000))
+    test.ok(labels:find("Window 9", 1, true), "A's Sidebar does not name B's Window")
+    test.ok(not labels:find("Window 7", 1, true), "A's Sidebar names its own Window")
+    test.equal(highlighted(b), "B")
+    test.ok(joined(drawn_texts(b, 600, 1000)):find("Window 7", 1, true))
+    test.equal(highlighted(a), "A", "Drawing B changed A's selection")
   end)
 
   test.it("selects a Project clicked anywhere on its row", function()
@@ -198,7 +215,6 @@ test.describe("Sidebar list actions", function()
   end)
 
   test.it("highlights the active Tab of the Window's Selected Project instead of the Project", function()
-    local style = require "core.style"
     local function model(active)
       return {
         {row_id=1,id=11,path="C:/A",state="ready",window_id=7,terminals={},panes={active=active,visible=1,
@@ -206,38 +222,16 @@ test.describe("Sidebar list actions", function()
         windows={{id=7,selected_project=11},{id=9,selected_project=0}},
       }
     end
-    local old_rect, old_rounded, old_text, old_clip =
-      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
-    local function highlighted(view)
-      local selected, titles = {}, {}
-      renderer.draw_rect, renderer.set_clip_rect = function() end, function() end
-      renderer.draw_rounded_rect = function(_, y, _, h, _, color)
-        if color == style.selection then selected[#selected + 1] = {y, y + h} end
-      end
-      -- Each highlighted row's name is its last label before the next row. Collect every label in the band.
-      renderer.draw_text = function(_, text, _, y)
-        for _, band in ipairs(selected) do
-          if y >= band[1] and y < band[2] then titles[#titles + 1] = text end
-        end
-      end
-      view:draw(600, 1000)
-      return table.concat(titles, ",")
-    end
-    local ok, err = pcall(function()
-      local view = SidebarView(function() end)
-      view:set_model(model(2), 7)
-      test.equal(highlighted(view), "2,second.lua")
-      -- No active Tab: the Project row shows the selection.
-      view:set_model(model(nil), 7)
-      test.equal(highlighted(view), "A")
-      -- Another Window's Sidebar highlights neither.
-      local other = SidebarView(function() end)
-      other:set_model(model(2), 9)
-      test.equal(highlighted(other), "")
-    end)
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
-      old_rect, old_rounded, old_text, old_clip
-    if not ok then error(err) end
+    local view = SidebarView(function() end)
+    view:set_model(model(2), 7)
+    test.equal(highlighted(view), "second.lua")
+    -- No active Tab: the Project row shows the selection.
+    view:set_model(model(nil), 7)
+    test.equal(highlighted(view), "A")
+    -- Another Window's Sidebar highlights neither.
+    local other = SidebarView(function() end)
+    other:set_model(model(2), 9)
+    test.equal(highlighted(other), "")
   end)
 
   test.it("lists a loaded Project's Tabs in Pane order and acts on a clicked Tab", function()
@@ -437,16 +431,7 @@ test.describe("Sidebar age groups", function()
     view:set_model({project(1, "C:/P", DAY, "dormant", {terminal("a", "running", 1), terminal("b", "running", 0),
       terminal("c", "exited", 0)})})
     test.equal(count(view, "terminal"), 0, "An unloaded Project lists its Terminal Sessions")
-    local old_rect, old_rounded, old_text, old_clip =
-      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
-    local labels = {}
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
-    renderer.draw_text = function(_, text) labels[#labels + 1] = text end
-    local ok, err = pcall(view.draw, view, 400, 800)
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
-      old_rect, old_rounded, old_text, old_clip
-    if not ok then error(err) end
-    local text = table.concat(labels, "\n")
+    local text = joined(drawn_texts(view, 400, 800))
     test.ok(text:find("2 terminals, 1 busy", 1, true), "The hint is missing: " .. text)
   end)
 
@@ -468,16 +453,7 @@ test.describe("Sidebar age groups", function()
     view:set_model({project(1, "C:/P", 60, "ready",
       {{id="a",title="[40 s] \u{03C0} - GLP4",cwd="C:/P",state="running",busy=1,bell=0,activity=now},
        {id="b",title="",cwd="C:/P",state="running",busy=0,bell=0,activity=now}})})
-    local old_rect, old_rounded, old_text, old_clip =
-      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
-    local labels = {}
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
-    renderer.draw_text = function(_, text) labels[#labels + 1] = text end
-    local ok, err = pcall(view.draw, view, 240, 800)
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
-      old_rect, old_rounded, old_text, old_clip
-    if not ok then error(err) end
-    local text = table.concat(labels, "\n")
+    local text = joined(drawn_texts(view, 240, 800))
     test.ok(text:find("[40 s] \u{03C0} - GLP4", 1, true), "The live title is missing")
     test.ok(text:find("Terminal", 1, true), "An untitled Terminal Session has no label")
   end)
@@ -485,17 +461,8 @@ test.describe("Sidebar age groups", function()
   test.it("shortens a long Project name with an ellipsis inside a narrow Sidebar", function()
     local view = SidebarView(function() end)
     view:set_model({project(1, "C:/Israel Mallo Mart\u{00ED}nez - ManualSistemas", 60, "ready", {})})
-    local old_rect, old_rounded, old_text, old_clip =
-      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
-    local drawn = {}
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
-    renderer.draw_text = function(font, text, x) drawn[#drawn + 1] = {text = text, right = x + font:get_width(text)} end
-    local ok, err = pcall(view.draw, view, 170, 800)
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
-      old_rect, old_rounded, old_text, old_clip
-    if not ok then error(err) end
     local label
-    for _, item in ipairs(drawn) do if item.text:find("^Israel") then label = item end end
+    for _, item in ipairs(drawn_texts(view, 170, 800)) do if item.text:find("^Israel") then label = item end end
     test.not_nil(label, "The Project name is missing")
     test.ok(label.text:find("\u{2026}$"), "The long name is not shortened: " .. label.text)
     test.ok(label.right <= 170, "The shortened name runs past the Sidebar's edge")
@@ -514,16 +481,13 @@ test.describe("Sidebar Terminal spinners", function()
 
   -- The Terminal title the view draws at the clock time `time`.
   local function title_at(view, time)
-    local old_rect, old_rounded, old_text, old_clip, old_time =
-      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect, system.get_time
-    local title
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
-    renderer.draw_text = function(_, text) if text:find("GLP4") then title = text end end
+    local old_time = system.get_time
     system.get_time = function() return time end
-    local ok, err = pcall(view.draw, view, 400, 800)
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect, system.get_time =
-      old_rect, old_rounded, old_text, old_clip, old_time
-    if not ok then error(err) end
+    local ok, texts = pcall(drawn_texts, view, 400, 800)
+    system.get_time = old_time
+    if not ok then error(texts, 0) end
+    local title
+    for _, item in ipairs(texts) do if item.text:find("GLP4") then title = item.text end end
     return test.not_nil(title, "The Terminal title is missing")
   end
 
@@ -548,29 +512,7 @@ test.describe("Sidebar agent status", function()
   local style = require "core.style"
   local now = os.time()
 
-  -- Each text the view draws, with its colour.
-  local function drawn(view)
-    local old_rect, old_rounded, old_text, old_clip =
-      renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect
-    local texts = {}
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.set_clip_rect = function() end, function() end, function() end
-    renderer.draw_text = function(_, text, _, _, color) texts[#texts + 1] = {text = text, color = color} end
-    local ok, err = pcall(view.draw, view, 400, 800)
-    renderer.draw_rect, renderer.draw_rounded_rect, renderer.draw_text, renderer.set_clip_rect =
-      old_rect, old_rounded, old_text, old_clip
-    if not ok then error(err) end
-    return texts
-  end
-
-  local function find(texts, text)
-    for _, item in ipairs(texts) do if item.text == text then return item end end
-  end
-
-  local function joined(texts)
-    local parts = {}
-    for _, item in ipairs(texts) do parts[#parts + 1] = item.text end
-    return table.concat(parts, " | ")
-  end
+  local drawn, find = drawn_texts, find_text
 
   -- A loaded Project whose second Pane shows the Terminal Session "a". The first Pane is active.
   local function model(agent, active)
@@ -587,7 +529,12 @@ test.describe("Sidebar agent status", function()
     local view = SidebarView(function() end)
     view:set_model(model({agent_state="working",agent_message="GLP4",agent_since=now-300,
       agent_step="bash: npm test",agent_step_since=now-42}), 1)
-    local texts = drawn(view)
+    -- The clock stays at the model's time, so the step's age cannot pass another second.
+    local old_time = os.time
+    os.time = function(date) return date and old_time(date) or now end
+    local ok, texts = pcall(drawn, view)
+    os.time = old_time
+    if not ok then error(texts, 0) end
     test.ok(find(texts, "bash: npm test"), "The step is missing: " .. joined(texts))
     test.ok(find(texts, "42s"), "The step's time is missing: " .. joined(texts))
     test.not_nil(view:animation_delay(0), "The step's time does not count on")
@@ -626,5 +573,103 @@ test.describe("Sidebar agent status", function()
       terminal("c", {agent_state="idle",agent_since=now})}}})
     local texts = drawn(view)
     test.ok(find(texts, "3 terminals, 1 busy, 1 needs you"), "The hint is wrong: " .. joined(texts))
+  end)
+end)
+
+test.describe("Sidebar search field", function()
+  test.it("asks for keyboard focus when the search field is clicked", function()
+    local actions, action = recorder()
+    local view = SidebarView(action)
+    view:set_model({{row_id=7,path="C:/A",state="ready",terminals={}}})
+    local x, y, w, h = view:search_rect()
+    view:on_mouse_pressed("left", x + w / 2, y + h / 2)
+    test.same(actions, {{"focus"}})
+    -- A focused Sidebar already takes the typed text.
+    view:on_focus(true)
+    view:on_mouse_pressed("left", x + w / 2, y + h / 2)
+    test.equal(#actions, 1)
+  end)
+end)
+
+test.describe("Sidebar motion", function()
+  local config = require "core.config"
+  local style = require "core.style"
+
+  local function project(id, name)
+    return {row_id=id,id=id,path="C:/" .. name,state="ready",terminals={}}
+  end
+
+  -- Runs `fn` with transitions on or off and a clock that only `advance` moves, so each draw is one frame. Lua
+  -- tests run with transitions off.
+  local function with_clock(transitions, fn)
+    local old_time, old_transitions, time = system.get_time, config.transitions, 100
+    system.get_time = function() return time end
+    config.transitions = transitions
+    local ok, err = pcall(fn, function(seconds) time = time + seconds; return time end)
+    system.get_time, config.transitions = old_time, old_transitions
+    if not ok then error(err, 0) end
+  end
+
+  local function text_y(view, label)
+    return test.not_nil(find_text(drawn_texts(view), label), label .. " is not drawn").y
+  end
+
+  test.it("slides a row to its new place when a Project above it loads", function()
+    with_clock(true, function(advance)
+      local view = SidebarView(function() end)
+      view:set_model({project(2, "Beta")})
+      local start = text_y(view, "Beta")
+      local fresh = SidebarView(function() end)
+      fresh:set_model({project(1, "Alpha"), project(2, "Beta")})
+      local target = text_y(fresh, "Beta")
+      test.ok(target > start, "The new Project does not take the place above")
+      view:set_model({project(1, "Alpha"), project(2, "Beta")})
+      local now = advance(1 / 60)
+      local moving = text_y(view, "Beta")
+      test.ok(moving > start and moving < target, ("The row did not slide: %s to %s, at %s"):format(start, target, moving))
+      test.not_nil(view:animation_delay(now), "The Sidebar does not ask for the next frame")
+      for _ = 1, 60 do advance(1 / 30); drawn_texts(view) end
+      test.equal(text_y(view, "Beta"), target)
+      test.is_nil(view:animation_delay(advance(0)), "The Sidebar keeps drawing after the row arrived")
+    end)
+  end)
+
+  test.it("places rows at once when transitions are off", function()
+    with_clock(false, function(advance)
+      local view = SidebarView(function() end)
+      view:set_model({project(2, "Beta")})
+      drawn_texts(view)
+      local fresh = SidebarView(function() end)
+      fresh:set_model({project(1, "Alpha"), project(2, "Beta")})
+      local target = text_y(fresh, "Beta")
+      view:set_model({project(1, "Alpha"), project(2, "Beta")})
+      advance(1 / 60)
+      test.equal(text_y(view, "Beta"), target)
+    end)
+  end)
+
+  test.it("glides the keyboard cursor's highlight to the next row", function()
+    with_clock(true, function(advance)
+      local view = SidebarView(function() end)
+      view:set_model({project(1, "Alpha"), project(2, "Beta")})
+      view:on_focus(true)
+      -- The cursor's highlight is the only box in the row selection colour while the Sidebar has focus.
+      local function highlight_y()
+        local y
+        with_renderer({draw_rounded_rect = function(_, top, _, _, _, color)
+          if color == style.row_selection then y = top end
+        end}, function() view:draw(400, 800) end)
+        return test.not_nil(y, "The cursor has no highlight")
+      end
+      local first = highlight_y()
+      view:on_key_pressed("down")
+      test.equal(view:get_cursor().project.row_id, 2)
+      advance(1 / 60)
+      local moving = highlight_y()
+      for _ = 1, 60 do advance(1 / 30); highlight_y() end
+      local last = highlight_y()
+      test.ok(moving > first and moving < last, ("The highlight did not glide: %s to %s, at %s"):format(first, last, moving))
+      test.equal(last - first, view:row_y(2) - view:row_y(1))
+    end)
   end)
 end)

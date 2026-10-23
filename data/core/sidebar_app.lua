@@ -21,6 +21,12 @@ local function load_zoom()
   if ok then set_zoom(interface) else core.log_quiet("Sidebar Zoom not loaded: %s", tostring(interface)) end
 end
 
+-- The focus shortcut that the search field shows, such as "Alt+Y".
+local shortcut
+local function shortcut_label(binding)
+  return binding and (binding:gsub("[^+]+", function(part) return part:sub(1, 1):upper() .. part:sub(2) end))
+end
+
 -- Which Sidebar groups are collapsed. Every surface shares it, and the next Sidebar process restores it.
 local collapsed = {}
 local function load_collapsed()
@@ -93,6 +99,11 @@ local function add_surface(id, window)
       system.focus_project_sidebar(false)
       return
     end
+    if action == "focus" then
+      local sent = system.focus_project_sidebar(true)
+      core.log_quiet("Sidebar search focus: Window=%d sent=%s", id, tostring(sent))
+      return
+    end
     if action == "collapsed" then
       core.log_quiet("Sidebar group %s collapsed=%s", row_id, tostring(target))
       save_collapsed()
@@ -141,6 +152,7 @@ local function add_surface(id, window)
     core.log_quiet("Sidebar %s dropped: Window=%d row=%s is not in the model (%d rows)", action, id,
       tostring(row_id), #(core.project_sidebar or {}))
   end, collapsed)
+  surface.view.shortcut = shortcut
   surfaces[id] = surface
   core.log_quiet("Sidebar surface created: Window=%d", id)
 end
@@ -193,6 +205,7 @@ function core.init()
   core.log_quiet("Sidebar frontend started")
   -- The Sidebar has no editor commands. Keep its focus shortcut and list commands only.
   local bindings = keymap.get_bindings("core:focus_project_sidebar") or {}
+  shortcut = shortcut_label(bindings[1])
   keymap.map, keymap.reverse_map = {}, {}
   command.add(nil, {
     ["core:focus_project_sidebar"] = function() system.focus_project_sidebar(false) end,

@@ -155,6 +155,8 @@ SCENARIOS["project-sidebar"] = {
     "paced": False,
 }
 SCENARIOS["project-sidebar-search"] = dict(SCENARIOS["project-sidebar"])
+# The same Project Sidebar in the dark default theme.
+SCENARIOS["project-sidebar-dark"] = dict(SCENARIOS["project-sidebar"], theme="default")
 SCENARIOS["focus-feedback"] = dict(SCENARIOS["project-sidebar"], window_height=500)
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,

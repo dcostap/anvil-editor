@@ -61,6 +61,7 @@ function Scene:new(search)
       terminal("h", "\u{03C0} - Israel Mallo Mart\u{00ED}nez", 5 * MINUTE, {agent_state = "blocked",
         agent_app = "pi", agent_model = "Claude Test", agent_kind = "permission", agent_message = "Allow write to src/main.c?", agent_since = os.time() - 90}),
     }, {active = 1, visible = 1, terminal_tab(1, 1, "h", "\u{03C0} - Israel Mallo Mart\u{00ED}nez", 5 * MINUTE)}),
+    project(7, "C:/Projects/api-server", "starting", 3 * MINUTE, 1),
     project(3, "C:/Projects/notes", "dormant", 2 * DAY, 0, {
       terminal("i", "pi", 3 * 60 * 60, {busy = 1}),
       terminal("j", "pwsh", 5 * 60 * 60),
