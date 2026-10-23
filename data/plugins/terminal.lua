@@ -1641,7 +1641,10 @@ function TerminalView:on_key_released(key, event)
   self.key_owners[key_id] = nil
   self.text_owner = nil
   local owner = type(owned) == "table" and owned.owner or owned
-  if key == "left ctrl" or key == "right ctrl" then self:clear_point_hover() end
+  if key == "left ctrl" or key == "right ctrl" then
+    local cell = self.hover_cell
+    if cell then self:hover_point_at(cell.col, cell.row) end
+  end
   if owner ~= "ghostty" then return true end
   self:send_key_release(owned)
   return true
@@ -1755,7 +1758,7 @@ function TerminalView:hyperlink_extent(col, row, uri)
   }
 end
 
-function TerminalView:point_of_interest_at(col, row)
+function TerminalView:point_of_interest_at(col, row, explicit_only)
   local uri = self.session:hyperlink(col, row)
   local scheme = supported_uri_scheme(uri)
   local point
@@ -1771,6 +1774,7 @@ function TerminalView:point_of_interest_at(col, row)
     if path then point = { kind = "terminal-location", path = path } end
   end
   if point then return common.merge(point, self:hyperlink_extent(col, row, uri)) end
+  if explicit_only then return nil end
   if not self.session.row_text then return nil end
   local data = self.session:row_text(row)
   if type(data) ~= "table" or type(data.text) ~= "string" then return nil end
@@ -1818,11 +1822,10 @@ local function same_point(a, b)
     and a.generation == b.generation and a.col == b.col and a.row == b.row
 end
 
--- With Ctrl held, the pointer shows the link or file location under it. The status bar shows its target,
--- because an OSC 8 link shows only its label.
+-- Explicit links show their targets on hover. Ctrl also enables plain-text detection.
 function TerminalView:hover_point_at(col, row)
-  self.hover_cell = { col = col, row = row }
-  self.hover_point = self:point_of_interest_at(col, row)
+  self.hover_cell = { col = col, row = row, ctrl = keymap.modkeys.ctrl == true }
+  self.hover_point = self:point_of_interest_at(col, row, not keymap.modkeys.ctrl)
   self.cursor = self.hover_point and "hand" or "arrow"
   local point = self.hover_point
   local target = point and (point.uri or (point.target_line
@@ -1965,13 +1968,15 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
     return true
   end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
-  if keymap.modkeys.ctrl then
+  if self:contains_terminal_cell(x, y) and not self.selection_start then
     local cell = self.hover_cell
-    if not (cell and cell.col == col and cell.row == row) then self:hover_point_at(col, row) end
-    return self.hover_point ~= nil
-  elseif self.hover_point then
+    if not (cell and cell.col == col and cell.row == row and cell.ctrl == (keymap.modkeys.ctrl == true)) then
+      self:hover_point_at(col, row)
+    end
+  else
     self:clear_point_hover()
   end
+  if keymap.modkeys.ctrl then return self.hover_point ~= nil end
   if self.selection_start then
     -- Each drag step refreshes the whole snapshot. A busy machine can queue hundreds of motions before a frame,
     -- so only the latest one is applied, once per frame.

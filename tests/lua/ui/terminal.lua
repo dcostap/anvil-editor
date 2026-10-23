@@ -1452,7 +1452,33 @@ test.describe("Terminal View", function()
     test.same({ point.col, point.row, point.end_col, point.end_row }, { 2, 2, 6, 2 })
   end)
 
-  test.it("shows the target of a hovered link until Ctrl is released", function(context)
+  test.it("shows explicit links without Ctrl and leaves mouse input with the program", function(context)
+    local view = terminal.open()
+    local session = context.sessions[1]
+    session.hyperlink_uri = "https://example.test/hidden-target"
+    view.snapshot.mouse_tracking = true
+    keymap.modkeys.ctrl = false
+    view:on_mouse_moved(7, 7, 0, 0)
+    test.equal(view.cursor, "hand")
+    test.ok(table.concat(core.status_bar.tooltip):find(session.hyperlink_uri, 1, true))
+    view:on_mouse_pressed("left", 7, 7)
+    view:on_mouse_released("left", 7, 7)
+    test.equal(session.mouse_events[1][1], "motion")
+    test.equal(session.mouse_events[2][1], "press")
+    test.equal(session.mouse_events[3][1], "release")
+    session.hyperlink_uri = nil
+    local text = "https://example.test/plain"
+    local columns = {}
+    for index = 1, #text do columns[index] = index - 1 end
+    session.row_text_data = { text = text, columns = columns, generation = 1 }
+    session.next_changed = true
+    view:service_session(true)
+    test.equal(view.hover_point, nil)
+    test.equal(view.cursor, "arrow")
+    test.ok(not core.status_bar.tooltip_mode)
+  end)
+
+  test.it("keeps an explicit link target after Ctrl is released and clears it on leave", function(context)
     local view = terminal.open()
     context.sessions[1].hyperlink_uri = "https://example.test/hidden-target"
     keymap.modkeys.ctrl = true
@@ -1461,6 +1487,9 @@ test.describe("Terminal View", function()
     test.ok(table.concat(core.status_bar.tooltip):find("https://example.test/hidden-target", 1, true))
     keymap.modkeys.ctrl = false
     view:on_key_released("left ctrl", { scancode = 224 })
+    test.equal(view.cursor, "hand")
+    test.ok(core.status_bar.tooltip_mode)
+    view:on_mouse_left()
     test.ok(not core.status_bar.tooltip_mode)
   end)
 
