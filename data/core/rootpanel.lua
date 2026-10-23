@@ -461,7 +461,8 @@ function RootPanel:open_buffer(buffer, opts)
   local target = panes().find(opts.pane or panes().active())
   if target and (opts.placement == nil or opts.placement == "current") then
     for _, view in ipairs(panes().views(target)) do
-      if view.extends and view:extends(Editor) and view.buffer == buffer then
+      if view.extends and view:extends(Editor) and view.buffer == buffer
+          and target.current_view:can_open_view(view) then
         prepare_file_destination(view, opts)
         panes().present(view, { pane = target, focus = opts.focus })
         return view

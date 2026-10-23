@@ -367,7 +367,7 @@ _Avoid_: Pane number, Tab number
 A Pane with an Unread Result or an agent waiting for an answer. The first five Pending Panes have numbers 1 to 5 across Projects and Anvil Windows, oldest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
 
 **Constrained Pane**:
-A Pane dedicated to one owner, such as a Terminal session, Git Log, commit comparison, or nonempty Untitled Editor.
+A Pane dedicated to one owner, such as a Git Log, commit comparison, or nonempty Untitled Editor.
 Its Navigation History contains only Views related to that owner, including its text captures.
 
 **Unconstrained Pane**:
@@ -557,6 +557,8 @@ _Avoid_: Copy flash, copy animation
 
 **Terminal View**:
 An interactive View connected to a running shell or terminal application.
+Opening an unrelated View from a busy Terminal View creates another Pane Group.
+An idle Terminal View can share a Pane's Navigation History with unrelated Views.
 _Avoid_: Terminal panel, terminal buffer, console
 
 **Terminal Session**:
@@ -564,7 +566,7 @@ The running shell or terminal application behind a Terminal View. It belongs to 
 _Avoid_: PTY, terminal process, shell instance
 
 **Ephemeral Terminal**:
-A new Terminal View that has received no user input. Shell startup output does not count as input.
+A new Terminal View that has received no user input and has no running command. Shell startup output does not count as input.
 Opening an unrelated View replaces it in the same Disposable Pane, closes its Terminal Session, and removes it from Navigation History.
 Successful input ends this state, even if the user then deletes that input. Restored Terminal Sessions are not ephemeral.
 

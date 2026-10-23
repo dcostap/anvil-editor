@@ -832,13 +832,13 @@ local function collect_owned_views(pane)
   return result
 end
 
-function M.is_disposable(target)
+function M.is_disposable(target, next_view)
   local pane = M.find(target)
   if not pane or #pane.history.entries ~= 1 or #(pane.retained_views or {}) ~= 0 then
     return false
   end
   local view = pane.current_view
-  if view and view.is_disposable then return view:is_disposable() end
+  if view and view.is_disposable then return view:is_disposable(next_view) end
   local buffer = view and view.buffer
   local Editor = require "core.editor"
   return view.extends and view:extends(Editor)
@@ -1072,19 +1072,21 @@ function M.present(view, opts)
     end
   end
   local current = pane.current_view
-  if current ~= view and not M.accepts(pane, view) then
+  local blocked = current.can_open_view and not current:can_open_view(view)
+  if current ~= view and (blocked or not M.accepts(pane, view)) then
     if existing then return nil, "View is owned by an incompatible Pane" end
-    quiet("Pane admission: opening a new group after %s", pane.id)
+    quiet("Pane admission: opening a new group after %s (opening blocked=%s)", pane.id, tostring(blocked))
     return M.create {
       factory = function() return view end, after_group = pane.group,
       focus = opts.focus, history_limit = opts.history_limit,
     }
   end
-  local disposable_replacement = M.is_disposable(pane)
+  local disposable = M.is_disposable(pane, view)
+  local disposable_replacement = disposable
     and (not M.constraint(pane) or M.constraint(pane) ~= M.view_constraint(view))
   if current ~= view and (disposable_replacement
       or current.can_suspend and current:can_suspend() == false) then
-    if not existing and M.is_disposable(pane) then
+    if not existing and disposable then
       local committed = false
       local function approved()
         if not M.contains(pane) or pane.current_view ~= current then return end
@@ -1907,7 +1909,7 @@ function M.restore_workspace_state(state, load_view)
         end
       end
       -- Reconnect captures after loading their owner, even when the owner is outside history.
-      owner = owner or {}
+      -- An older Terminal history has no constrained owner now.
       for _, view in pairs(related) do view.pane_constraint = owner end
       local history_views = related
       if type(record.history_views) == "table" then

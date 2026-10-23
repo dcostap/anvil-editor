@@ -255,19 +255,22 @@ test.describe("Terminal View", function()
     test.equal(panes.visible_group(), pane.group)
   end)
 
-  test.it("keeps a terminal protected after typed input is deleted", function(context)
+  test.it("keeps an idle terminal in history after typed input is deleted", function(context)
     local view = terminal.open()
     local pane = panes.pane_for_view(view)
     test.ok(view:on_text_input("x"))
     test.ok(view:on_key_pressed("backspace"))
-    local editor = Editor(Buffer())
-    local opened = panes.present(editor)
-    test.ok(opened.group ~= pane.group)
-    test.equal(pane.current_view, view)
+    view:apply_status { kind = "running", busy = false }
+    local tree = require("plugins.filetree").new(system.getcwd())
+    local opened = panes.present(tree)
+    test.equal(opened, pane)
+    test.equal(pane.current_view, tree)
+    test.equal(panes.back(pane), view)
     test.ok(not context.sessions[1].closed)
+    test.ok(panes.validate())
   end)
 
-  test.it("keeps a terminal after paste or a submitted command", function(context)
+  test.it("keeps an idle terminal after paste or a submitted command", function(context)
     for _, send in ipairs {
       function(view) return view:paste("echo hello") end,
       function(view) return view:run_command_line("echo hello") end,
@@ -276,9 +279,10 @@ test.describe("Terminal View", function()
       local pane = panes.pane_for_view(view)
       local session = view.session
       test.ok(send(view))
-      local opened = panes.present(Editor(Buffer()))
-      test.ok(opened.group ~= pane.group)
-      test.equal(pane.current_view, view)
+      view:apply_status { kind = "running", busy = false }
+      local opened = panes.present(View())
+      test.equal(opened, pane)
+      test.equal(panes.back(pane), view)
       test.ok(not session.closed)
     end
   end)
@@ -292,12 +296,126 @@ test.describe("Terminal View", function()
     test.ok(context.sessions[1].closed)
   end)
 
-  test.it("protects a restored terminal even without a saved session identifier", function()
+  test.it("retains an idle restored terminal in history without a saved session identifier", function()
     local view = terminal.TerminalView.from_state { cwd = system.getcwd() }
     local pane = panes.present(view)
-    local opened = panes.present(Editor(Buffer()))
-    test.ok(opened.group ~= pane.group)
+    view:apply_status { kind = "running", busy = false }
+    local opened = panes.present(View())
+    test.equal(opened, pane)
+    test.equal(panes.back(pane), view)
+    test.ok(view.session)
+  end)
+
+  test.it("opens elsewhere only while the current terminal is busy", function(context)
+    local view = terminal.open()
+    local pane = panes.active()
+    test.ok(view:on_text_input("command"))
+    view:apply_status { kind = "running", busy = true }
+    local _, elsewhere = panes.place(function() return View() end, { pane = pane })
+    test.not_equal(elsewhere.group, pane.group)
     test.equal(pane.current_view, view)
+    view:apply_status { kind = "running", busy = false }
+    local next_view, destination = panes.place(function() return View() end, { pane = pane })
+    test.equal(destination, pane)
+    test.equal(pane.current_view, next_view)
+    test.equal(panes.back(pane), view)
+    test.not_ok(context.sessions[1].closed)
+    test.ok(panes.validate())
+  end)
+
+  test.it("does not rearrange history when a hidden terminal becomes busy", function()
+    local original = View()
+    local pane = panes.create { factory = function() return original end }
+    local view = terminal.open()
+    test.equal(panes.active(), pane)
+    test.ok(view:on_text_input("command"))
+    view:apply_status { kind = "running", busy = false }
+    local next_view = View()
+    test.equal(panes.present(next_view), pane)
+    view:apply_status { kind = "running", busy = true }
+    test.equal(panes.count(), 1)
+    test.equal(pane.current_view, next_view)
+    test.equal(panes.back(pane), view)
+    test.equal(panes.back(pane), original)
+    test.ok(panes.validate())
+  end)
+
+  test.it("opens a busy terminal's text capture in the same Pane", function(context)
+    local view = terminal.open()
+    local pane = panes.active()
+    test.ok(view:on_text_input("command"))
+    view:apply_status { kind = "running", busy = true }
+    context.sessions[1].capture = { text = "running output" }
+    test.ok(view:open_text_capture())
+    test.equal(panes.active(), pane)
+    test.ok(pane.current_view.terminal_text_capture)
+    test.equal(panes.back(pane), view)
+    test.not_ok(context.sessions[1].closed)
+    test.ok(panes.validate())
+  end)
+
+  test.it("keeps an unused terminal visible while its shell runs a command", function(context)
+    local view = terminal.open()
+    local pane = panes.active()
+    view:apply_status { kind = "running", busy = true }
+    local _, destination = panes.place(function() return View() end)
+    test.not_equal(destination.group, pane.group)
+    test.equal(pane.current_view, view)
+    test.not_ok(context.sessions[1].closed)
+  end)
+
+  test.it("opens a previously visited file elsewhere from a busy terminal", function(context)
+    local buffer = Buffer()
+    buffer:set_filename("saved.lua", "C:/saved.lua")
+    context.link_buffer = buffer
+    local editor = core.root_panel:open_buffer(buffer)
+    local pane = panes.active()
+    local view = terminal.open()
+    test.ok(view:on_text_input("command"))
+    view:apply_status { kind = "running", busy = true }
+    local opened = core.root_panel:open_buffer(buffer)
+    test.not_nil(opened)
+    test.not_equal(panes.active().group, pane.group)
+    test.equal(pane.current_view, view)
+    test.equal(panes.active().current_view, opened)
+    test.equal(opened.buffer, buffer)
+    test.not_equal(opened, editor)
+    test.ok(panes.validate())
+  end)
+
+  test.it("opens a previously visited File Tree elsewhere from a busy terminal", function()
+    local filetree = require "plugins.filetree"
+    local tree = filetree.open(system.getcwd())
+    local pane = panes.active()
+    local view = terminal.open()
+    test.ok(view:on_text_input("command"))
+    view:apply_status { kind = "running", busy = true }
+    test.ok(command.perform("filetree:open_at_choose_path", system.getcwd()))
+    test.not_equal(panes.active().group, pane.group)
+    test.equal(pane.current_view, view)
+    test.equal(panes.active().current_view.root_dir, tree.root_dir)
+    test.ok(panes.validate())
+  end)
+
+  test.it("restores older Terminal history without retaining its old Pane constraint", function()
+    local view = terminal.open()
+    local pane = panes.active()
+    local state = panes.save_workspace_state(function(candidate)
+      return { module = candidate:get_module(), state = candidate:get_state() }
+    end)
+    local record = state.panes[1]
+    -- Earlier Workspaces stored Terminal history as constrained related Views.
+    record.related_views, record.history_views = record.history_views, nil
+    test.ok(panes.restore_workspace_state(state, function(saved)
+      return require(saved.module).from_state(saved.state)
+    end))
+    pane = panes.active()
+    view = pane.current_view
+    view:apply_status { kind = "running", busy = false }
+    local _, destination = panes.place(function() return View() end)
+    test.equal(destination, pane)
+    test.equal(panes.back(pane), view)
+    test.ok(panes.validate())
   end)
 
   test.it("opens the file at the terminal cursor in a new Pane Group", function(context)
@@ -350,18 +468,17 @@ test.describe("Terminal View", function()
     test.ok(command.perform("terminal:restart"))
   end)
 
-  test.it("preserves the Editor and keeps the exact Terminal session in its own Pane", function(context)
+  test.it("keeps the Editor and exact idle Terminal session in the same Pane history", function(context)
     local pane = panes.create { factory = function() return Editor(Buffer(nil, nil, true)) end }
     pane.current_view.buffer:set_filename("saved.lua", "C:/saved.lua")
     local editor = pane.current_view
     local view = terminal.open { pane = pane }
     local session = view.session
     local terminal_pane = panes.pane_for_view(view)
-    test.not_equal(terminal_pane.group, pane.group)
-    test.equal(pane.current_view, editor)
-    panes.focus(pane)
+    test.equal(terminal_pane, pane)
+    test.equal(panes.back(pane), editor)
     test.not_ok(session.closed)
-    panes.focus(terminal_pane)
+    test.equal(panes.forward(pane), view)
     test.equal(terminal_pane.current_view, view)
     test.equal(view.session, session)
   end)
@@ -488,7 +605,7 @@ test.describe("Terminal View", function()
     test.equal(capture.terminal_source_view, nil)
   end)
 
-  test.it("restores Terminal Text with its owning Terminal in one constrained Pane", function(context)
+  test.it("restores Terminal Text and its Terminal in ordinary Pane history", function(context)
     local source = terminal.open()
     context.sessions[1].capture = { text = "saved output", title = "Saved Terminal" }
     test.ok(source:open_text_capture())
@@ -506,7 +623,7 @@ test.describe("Terminal View", function()
     test.not_equal(restored, source)
     test.ok(panes.forward(pane).terminal_text_capture)
     local _, other = panes.place(function() return View() end, { pane = pane })
-    test.not_equal(other, pane)
+    test.equal(other, pane)
     test.ok(panes.validate())
   end)
 
@@ -760,7 +877,7 @@ test.describe("Terminal View", function()
     local first = terminal.open()
     test.ok(first:on_text_input("work"))
     local pane = panes.active()
-    local second = terminal.open { pane = pane }
+    local second = terminal.open { pane = pane, placement = "new" }
     local first_session, second_session = first.session, second.session
     test.not_ok(first_session.closed)
     test.not_ok(second_session.closed)

@@ -3766,7 +3766,8 @@ local function open_root_in_context(target, context, pane, source_view)
   if placement == "current" then
     for _, candidate in ipairs(pane and panes.views(pane) or {}) do
       if candidate.extends and candidate:extends(FileTreeView)
-          and common.path_equals(candidate.root_dir, root) then
+          and common.path_equals(candidate.root_dir, root)
+          and pane.current_view:can_open_view(candidate) then
         panes.present(candidate, { pane = pane, focus = true })
         return candidate
       end
@@ -3787,7 +3788,8 @@ local function reveal_path_in_context(target, context, pane, source_view)
   if not path or not system.get_file_info(path) then return nil, "File Tree target does not exist" end
   if (context.placement or "current") == "current" then
     for _, candidate in ipairs(pane and panes.views(pane) or {}) do
-      if candidate.extends and candidate:extends(FileTreeView) and focus_path(candidate, path) then
+      if candidate.extends and candidate:extends(FileTreeView)
+          and pane.current_view:can_open_view(candidate) and focus_path(candidate, path) then
         panes.present(candidate, { pane = pane, focus = true })
         return candidate
       end

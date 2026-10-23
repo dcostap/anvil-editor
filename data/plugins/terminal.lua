@@ -314,8 +314,7 @@ end
 
 function TerminalView:new(options)
   TerminalView.super.new(self)
-  self.pane_constraint = {}
-  self.owns_pane_constraint = true
+  self.terminal_capture_owner = {}
   options = options or {}
   -- An attached session can contain work from another View or run.
   self.input_used = options.session_id ~= nil
@@ -506,7 +505,7 @@ function TerminalTextCaptureView:new(source, capture)
     read_only_reason = "Terminal text captures are read-only",
   })
   self.terminal_text_capture = true
-  self.pane_constraint = source and panes.view_constraint(source)
+  self.terminal_capture_owner = source and source.terminal_capture_owner
   self.terminal_title = terminal_title
   self.terminal_capture = capture
   self.color_cache = {}
@@ -596,8 +595,14 @@ function TerminalView:get_cwd()
     or system.getcwd()
 end
 
-function TerminalView:is_disposable()
-  return not self.input_used and (self.state == "new" or self.state == "reconnecting"
+function TerminalView:can_open_view(view)
+  return self.busy ~= true or view.terminal_capture_owner == self.terminal_capture_owner
+end
+
+function TerminalView:is_disposable(next_view)
+  return self.busy ~= true and not self.input_used
+    and (not next_view or next_view.terminal_capture_owner ~= self.terminal_capture_owner)
+    and (self.state == "new" or self.state == "reconnecting"
     or self.state == "running")
 end
 
@@ -2482,7 +2487,7 @@ command.add(nil, {
     for offset = 1, #terminals do
       local view = terminals[(current + offset - 1) % #terminals + 1]
       local pane = panes.pane_for_view(view)
-      if pane and panes.present(view, { pane = pane, focus = true }) then return true end
+      if pane and panes.present(view, { pane = pane, focus = true, reuse = true }) then return true end
     end
     return false
   end, {
@@ -2708,7 +2713,7 @@ function M.focus_session(id)
   for _, view in ipairs(M.open_views()) do
     if view.session_id == id then
       local pane = panes.pane_for_view(view)
-      if pane and panes.present(view, { pane = pane, focus = true }) then return true end
+      if pane and panes.present(view, { pane = pane, focus = true, reuse = true }) then return true end
     end
   end
   return false

@@ -110,6 +110,12 @@ function View:duplicate()
   return nil
 end
 
+---Return false to open a new unrelated View in another Pane Group.
+---This opening rule does not restrict back/forward navigation or Pane ownership.
+function View:can_open_view(view)
+  return true
+end
+
 ---Return this View's ordered Surface Focus Targets.
 ---An empty result makes the View itself one Local Focus Cycle target.
 ---Targets can provide their own targets. Include self to keep this View focusable.
