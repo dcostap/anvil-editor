@@ -115,10 +115,13 @@ local function completion_preview_for_capture(buffer, capture)
 end
 
 local function item_from_capture(buffer, capture)
-  local preview, preview_name_span = completion_preview_for_capture(buffer, capture)
+  local kind = capture_kind(capture.capture) or "reference"
+  -- A parameter's line declares its function, so that preview would make the two look the same.
+  local preview, preview_name_span
+  if kind ~= "parameter" then preview, preview_name_span = completion_preview_for_capture(buffer, capture) end
   return {
     name = capture_text(buffer, capture),
-    kind = capture_kind(capture.capture) or "reference",
+    kind = kind,
     capture = capture.capture,
     start_line = capture.start_line,
     start_col = capture.start_col,

@@ -1120,6 +1120,7 @@ function update_suggestions()
   local filename = buffer and buffer.filename or ""
   pending_tree_sitter_completion = nil
 
+  local previous = suggestions
   suggestions = {}
   desc_rect = nil
 
@@ -1267,6 +1268,18 @@ function update_suggestions()
           line = line2,
           col = col2,
         }
+        -- An edit makes the parse stale for a moment. The open list keeps its matching items until the
+        -- parse ends, so it does not switch to Buffer words and back on each key. Members after a
+        -- receiver come from the Project index, which does not wait for the parse.
+        local kept = {}
+        for _, item in ipairs(match_completion_items(previous, partial) or {}) do
+          if suggestion_text(item) ~= partial then kept[#kept + 1] = item end
+        end
+        if #kept > 0 and not member_completion_receiver(buffer) then
+          suggestions = annotate_matches(kept, partial)
+          suggestions_idx, suggestions_offset = 1, 1
+          return 0
+        end
       end
     end
     if not visible_symbols and locals and locals.get_buffer_symbols then

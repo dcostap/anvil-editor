@@ -95,6 +95,24 @@ test.describe("completion after parsing", function()
     end)
   end
 
+  test.it("keeps symbol details while typing waits for parsing", function(context)
+    config.plugins.autocomplete.suggestions_scope = "local"
+    local view, buffer = open_editor(context)
+    buffer:set_filename(context.path .. ".kt", context.path .. ".kt")
+    wait_ready(buffer)
+    core.set_active_view(view)
+    core.root_panel:on_text_input("l")
+    wait_ready(buffer)
+    core.root_panel:update()
+    test.not_nil(test.not_nil(autocomplete.get_selected_suggestion()).icon, "expected a symbol after parsing")
+
+    core.root_panel:on_text_input("e")
+    test.not_ok(buffer.treesitter.status == "ready", "the edit must wait for a new parse")
+    local item = test.not_nil(autocomplete.get_selected_suggestion(), "expected completion while parsing")
+    test.equal(item.text, method)
+    test.not_nil(item.icon, "the list must not switch to Buffer words while parsing")
+  end)
+
   test.it("shows current Buffer members after parsing a receiver dot", function(context)
     config.plugins.autocomplete.suggestions_scope = "local"
     local view, buffer = open_editor(context)

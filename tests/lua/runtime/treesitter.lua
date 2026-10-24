@@ -2774,6 +2774,18 @@ int second(void) {
     buffer:on_close()
   end)
 
+  test.it("visible parameter symbols do not preview their function's line", function()
+    local buffer = odin_buffer("package main\n\ntest_function :: proc(test_param: int) {\n\ttest\n}\n")
+    test.ok(wait_ready(buffer))
+    local visible = treesitter.locals.get_visible_buffer_symbols(buffer, 4, 6)
+    local names = {}
+    for _, symbol in ipairs(visible or {}) do names[symbol.name] = symbol end
+    test.equal(test.not_nil(names.test_param).kind, "parameter")
+    test.is_nil(names.test_param.completion_preview, "a parameter must not look like its function")
+    test.equal(test.not_nil(names.test_function).completion_preview, "test_function :: proc(test_param: int) {")
+    buffer:on_close()
+  end)
+
   test.it("local Tree-sitter fallback gracefully returns empty without locals query", function()
     local buffer = c_buffer("int main(void) { return 0; }")
     test.ok(wait_ready(buffer))
