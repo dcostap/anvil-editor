@@ -1377,7 +1377,7 @@ function SidebarView:draw_project(row, y, width, now)
   local bold = font_variant("bold")
   local letter = initial(name)
   local letter_color = tint(color, 255 * strength)
-  renderer.draw_rounded_rect(bx, by, size, size, radius, tint(color, 46 * strength))
+  renderer.draw_rounded_rect(bx, by, size, size, radius, tint(color, 64 * strength))
   -- The letter's ink centres in the badge. Its line box has room for descenders, so centring the line would put a
   -- capital too high.
   local ink_top, ink_bottom = bold:get_ink_extent(letter)
