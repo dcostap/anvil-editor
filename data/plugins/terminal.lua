@@ -6,6 +6,7 @@ local config = require "core.config"
 local core = require "core"
 local file_context = require "core.file_context"
 local ime = require "core.ime"
+local image_formats = require "core.image_formats"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
 local blocks = require "plugins.terminal.blocks"
@@ -1866,7 +1867,7 @@ function TerminalView:activate_uri(uri)
   elseif scheme == "file" then
     local path = local_file_from_uri(uri)
     if not path then return false end
-    return core.open_file(path) ~= nil
+    return self:activate_point_of_interest({ path = path })
   end
   return false
 end
@@ -2068,6 +2069,10 @@ function TerminalView:activate_point_of_interest(point, opts)
   end
   if point.uri then return self:activate_uri(point.uri) end
   if point.path then
+    if image_formats.is_supported(point.path) then
+      core.log_quiet("Terminal image link: opening Image Overlay for %s", point.path)
+      return require("core.image_overlay").open(point.path)
+    end
     return core.open_file(point.path, {
       pane = panes.pane_for_view(self),
       placement = opts and opts.placement or "current",

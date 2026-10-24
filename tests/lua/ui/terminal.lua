@@ -1656,6 +1656,34 @@ test.describe("Terminal View", function()
     test.equal(opened, "HTTPS://example.test/path")
   end)
 
+  test.it("opens local image hyperlinks in the Image Overlay without leaving the Terminal", function(context)
+    local overlay = require "core.image_overlay"
+    context.link_cwd = system.getcwd()
+    context.link_folder = USERDIR .. PATHSEP .. "terminal-image-link"
+    test.ok(common.mkdirp(context.link_folder))
+    local path = context.link_folder .. PATHSEP .. "linked image.png"
+    test.ok(canvas.new(80, 40, { 255, 0, 0, 255 }, true):save_image(path))
+    local view = terminal.open { cwd = context.link_folder, focus = true }
+    local pane = panes.active()
+    view.snapshot.mouse_tracking = true
+    keymap.modkeys.ctrl = false
+    for _, uri in ipairs({
+      "file:///" .. path:gsub("\\", "/"):gsub(" ", "%%20"),
+      "linked image.png",
+    }) do
+      view.session.hyperlink_uri = uri
+      view:on_mouse_moved(7, 7, 0, 0)
+      view:on_mouse_pressed("left", 7, 7)
+      view:on_mouse_released("left", 7, 7)
+      test.ok(overlay.is_open(), "image links must use the same overlay as drawn images")
+      test.ok(common.path_equals(overlay.get_view().path, path))
+      test.same({ overlay.get_view().image:get_size() }, { 80, 40 })
+      test.equal(core.active_view, view)
+      test.equal(pane.current_view, view)
+      overlay.close()
+    end
+  end)
+
   test.it("detects plain HTTP text and clears its hover when Ctrl is released", function(context)
     local view = terminal.open()
     local normal_cursor = view.cursor
