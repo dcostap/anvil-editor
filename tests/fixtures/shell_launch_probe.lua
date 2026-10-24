@@ -122,17 +122,47 @@ if path:match("/driver$") then
      "launcher did not grant foreground permission before its raise request")
     assert(#ready("a") == 1, "aliased launch started a duplicate Project runtime")
     controls(aw, "Window A after a forwarded launch")
-    -- A new Project opens in a new Window of the running shell. A relative path uses the launcher's directory.
+    -- A new Project opens in the Window that the user used last. A relative path uses the launcher's directory.
     local other = launch("Replacement", {cwd=root})
     assert(exits(other, 20, "new Project") == 0, "new Project launch failed")
     local b = wait(function() return ready("b")[1] end, 20, "forwarded launch did not load its Project")
     assert(b.shell_pid == shell:pid(), "new Project did not load in the running shell")
-    assert(b.window_id ~= a.window_id, "new Project did not open a new Window")
-    local _, count = windows(shell:pid()); assert(count == 2, "running shell does not own both Windows")
+    assert(b.window_id == a.window_id, "new Project did not open in the Window used last")
+    local _, count = windows(shell:pid()); assert(count == 1, "new Project opened another Window")
     -- A repeated launch of the second Project selects it again without a second runtime.
     assert(exits(launch(root .. "/REPLACEMENT"), 20, "repeated") == 0, "repeated launch failed")
-    assert(#ready("b") == 1 and select(2, windows(shell:pid())) == 2, "repeated launch duplicated its Project")
+    assert(#ready("b") == 1 and select(2, windows(shell:pid())) == 1, "repeated launch duplicated its Project")
     return close_shell(shell, "forwarded")
+   end
+
+   if action == "launch-files" then
+    -- Files open in new Panes of the deepest known Project that contains them, in the Window used last.
+    -- The runner lists Project and Replacement as recent Projects.
+    assert(common.mkdirp(root .. "/Project/sub") and common.mkdirp(root .. "/Replacement/deep"))
+    local inner, new, deep = root .. "/Project/sub/inner.txt", root .. "/Project/sub/new.txt",
+     root .. "/Replacement/deep/deep.txt"
+    for _, name in ipairs {inner, deep} do
+     local file = assert(io.open(name, "wb")); file:write("on disk\n"); file:close()
+    end
+    local function opened(name, path)
+     wait(function() local files = load(name .. "-files"); return files and files[path:lower()] end, 20,
+      "Project " .. name .. " did not open " .. path)
+    end
+    local shell = launch(root .. "/Project")
+    local a = wait(function() return ready("a")[1] end, 30)
+    -- A loaded Project opens a file from its subfolder, and a new file there. No Project starts at the subfolder.
+    assert(exits(launch(inner), 20, "subfolder file") == 0, "subfolder file launch failed")
+    opened("a", inner)
+    assert(exits(launch(new), 20, "new file") == 0, "new file launch failed")
+    opened("a", new)
+    -- A known Project that is not loaded starts at its root, in the same Window.
+    assert(exits(launch(deep), 20, "known Project file") == 0, "known Project file launch failed")
+    local b = wait(function() return ready("b")[1] end, 30, "file launch did not start its known Project")
+    opened("b", deep)
+    assert(b.window_id == a.window_id, "known Project did not open in the Window used last")
+    assert(#ready("a") == 1 and #ready("b") == 1, "file launches started duplicate Project runtimes")
+    assert(select(2, windows(shell:pid())) == 1, "file launches opened another Window")
+    return close_shell(shell, "file launches")
    end
 
    if action == "launch-concurrent" then
@@ -307,6 +337,22 @@ elseif names[path] then
    end)
    if view then view:on_close() end
    save("terminal-editor", {ok=ok, error=ok and nil or tostring(err)})
+  end
+  if action == "launch-files" then
+   -- Report each opened file. Save new files so the isolated shell can close without a save prompt.
+   local reported = -1
+   while true do
+    local files, count = {}, 0
+    for _, buffer in ipairs(core.buffers) do
+     if buffer.abs_filename then
+      if not system.get_file_info(buffer.abs_filename) then buffer:save() end
+      files[buffer.abs_filename:gsub("\\", "/"):lower()] = true
+      count = count + 1
+     end
+    end
+    if count ~= reported then save(names[path] .. "-files", files); reported = count end
+    coroutine.yield(.1)
+   end
   end
   if action == "launch-handoff" and names[path] == "b" then
    local request = wait(function() return load("select") end, 30)

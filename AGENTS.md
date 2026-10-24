@@ -263,6 +263,12 @@ A different executable with the same user folder, such as `launch-anvil-debug.ba
 If a Project is open in another instance, selecting it raises that instance.
 The Window keeps its other Projects. The `launch-link` and `launch-handoff` shell launch probes cover this.
 
+An external launch selects its Project in the Window that the user activated last, as a Sidebar click does.
+A folder argument names the Project. File arguments open in new Panes of the deepest known Project that contains them all.
+Known Projects are the Sidebar list, loaded or Dormant. Other files open in a Project at their own folder.
+A launch with files waits up to 5 seconds for the first Sidebar list. A Terminal launch keeps its Terminal's Project.
+Run the `launch-files`, `launch-forward` and `restore-argument` shell probes after changes.
+
 Shell App State keeps each Window's loaded Projects and Selected Project.
 Shutdown captures their paths before closing the hosted processes. Dormant Projects stay dormant.
 Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.

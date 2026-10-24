@@ -143,7 +143,7 @@ def main() -> int:
         "windows-sidebar-folding",
         "launch-terminal-editor",
         "restore-loaded", "navigate-sidebar", "windows-close-cleanup", "windows-close-cleanup-cancel", "windows-close-cleanup-unload", "windows-close-update-disconnect",
-        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "project-menu-background", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-files", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "project-menu-background", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "recovery", "shell-empty", "shell-sidebar",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -244,6 +244,10 @@ def main() -> int:
                         (case_dir / "user/appstate.lua").write_text(
                             'return {recents={' + ','.join(json.dumps(str(case_dir / name).replace("\\", "/"))
                                 for name in ("Project", "Recent", "Replacement")) + '}}', encoding="utf-8")
+                    if action == "launch-files":
+                        (case_dir / "user/appstate.lua").write_text(
+                            'return {recents={' + ','.join(json.dumps(str(case_dir / name).replace("\\", "/"))
+                                for name in ("Project", "Replacement")) + '}}', encoding="utf-8")
                     if action == "launch-link":
                         subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", native_path(case_dir / "app-link"),
                                         native_path(work / "app")], check=True, capture_output=True)
@@ -285,6 +289,8 @@ def main() -> int:
                             "ANVIL_TEST_DISABLE_PLUGINS": "autorestart,autoreload,autosave_fast,autosaveonfocuslost",
                             "ANVIL_RENDERER": (args.renderer or ["d3d11"])[0],
                             "ANVIL_SURFACE_LOG": native_path(case_dir / "surface.log"),
+                            # A run from an Anvil Terminal must not make probe launches Terminal requests.
+                            "ANVIL_TERMINAL_ID": "", "ANVIL_TERMINAL_PROJECT": "",
                         }, "startup_timeout_seconds": 0, "stable_ui_scheduling": False,
                     }
                     if action == "launch-link":

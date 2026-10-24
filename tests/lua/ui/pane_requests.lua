@@ -127,6 +127,22 @@ test.describe("Pane requests", function()
     test.equal(panes.active(), ordered[2])
   end)
 
+  test.it("opens launched files, including new files, in new Panes", function()
+    folder = USERDIR .. "/pane-request-" .. tostring(system.get_time()):gsub("%.", "-")
+    test.ok(system.mkdir(folder))
+    local existing, new = folder .. "/existing.txt", folder .. "/new.txt"
+    local file = assert(io.open(existing, "wb")); file:write("Existing content"); file:close()
+    local a = create()
+    request {action = "launch", files = {existing, new}}
+    local opened = {}
+    for _, pane in ipairs(panes.ordered()) do
+      if pane ~= a then opened[#opened + 1] = pane.current_view.buffer.abs_filename end
+    end
+    test.same(opened, {system.absolute_path(existing), common.normalize_path(new)})
+    test.equal(panes.active().current_view.buffer.abs_filename, common.normalize_path(new))
+    test.is_nil(system.get_file_info(new), "opening a new file does not create it")
+  end)
+
   test.it("drops text at the Editor caret without pointer coordinates", function()
     local pane = panes.create {factory = function() return Editor(Buffer(nil, nil, true)) end}
     local view = pane.current_view

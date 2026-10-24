@@ -87,6 +87,7 @@ local schemas = {
   new_group = {},
   focus = {pane = true}, close = {pane = true}, move = {pane = true, target = true},
   open = {files = true, text = true, target = true},
+  launch = {files = true},
   drop = {pane = true, files = true, text = true},
   export = {pane = true, to = true, target = true, transfer = true},
   import = {snapshot = true, target = true, source = true, transfer = true},
@@ -147,6 +148,15 @@ local function execute(request, x, y)
   end
   local pane = request.pane and panes.find(request.pane)
   if request.pane and not pane then return nil, "Pane not found" end
+  -- An external launch names files, including new ones. Each opens in a new Pane, as from a Terminal.
+  if action == "launch" then
+    for _, path in ipairs(request.files) do
+      local opened, err = core.open_file(path, { placement = "new", reason = "launch" })
+      core.log_quiet("Pane request: launch opened %s: %s", path, opened and "yes" or tostring(err))
+      if not opened then core.error("Cannot open %s: %s", path, tostring(err)) end
+    end
+    return true
+  end
   if action == "focus" then panes.focus(pane); return true end
   if action == "close" then panes.close(pane); return true end
   if action == "move" then

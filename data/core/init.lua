@@ -657,9 +657,10 @@ function core.init()
           else
             file_abs = system.absolute_path(".") .. PATHSEP .. filename
           end
+          -- A folder argument names the Project, as the native shell decides. Otherwise the last file's folder does.
           if file_abs then
             table.insert(files, file_abs)
-            project_dir = file_abs:match("^(.+)[/\\].+$")
+            if not project_dir_explicit then project_dir = file_abs:match("^(.+)[/\\].+$") end
           end
         end
       end

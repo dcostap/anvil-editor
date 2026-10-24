@@ -259,12 +259,12 @@ if path:match("/driver$") then
     assert(select(2, windows(second:pid())) == 1, "argument for a restored Project opened another Window")
     assert(a2.window_id, "restored Project has no Window")
     close_shell(second, "second")
-    -- Another Project opens in a new Window beside the restored Window.
+    -- Another Project opens in the restored Window, the Window used last.
     local third = launch("Replacement")
     local a3 = wait(function() return ready("a", third:pid())[1] end, 20, "restore did not load Project")
     local b3 = wait(function() return ready("b", third:pid())[1] end, 20, "argument did not load its Project")
-    assert(a3.window_id ~= b3.window_id, "argument Project did not open a new Window")
-    assert(select(2, windows(third:pid())) == 2, "restore with an argument did not keep both Windows")
+    assert(a3.window_id == b3.window_id, "argument Project did not open in the restored Window")
+    assert(select(2, windows(third:pid())) == 1, "restore with an argument opened another Window")
     return close_shell(third, "third")
    end
    if action == "restore-invalid" then

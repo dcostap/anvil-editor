@@ -42,6 +42,8 @@
 #define SHELL_SIDEBAR_SLIDE_MS 180
 #define SHELL_SIDEBAR_SLIDE_TIMER 0x8102u
 #define SHELL_CONNECT_TIMEOUT_MS 30000
+/* A launch with files waits this long at most for the first Sidebar list. Without it, files route only by folder. */
+#define SHELL_LAUNCH_LIST_WAIT_MS 5000
 #define SHELL_SIDEBAR_HEALTHY_MS 60000
 #define SHELL_WRITE_QUEUE_LIMIT (8u * 1024u * 1024u)
 #define SHELL_SYNC_TIMEOUT_MS 0
@@ -5286,7 +5288,35 @@ static wchar_t *canonical_project_identity(const char *path) {
 typedef struct {
   char *path;
   wchar_t *identity;
+  /* A folder argument names the Project. Without one, the last file's folder does. */
+  bool folder;
+  /* Each file argument's absolute path and canonical folder. A launch routes the files by their folders. */
+  int file_count;
+  char **files;
+  wchar_t **folders;
 } ProjectIdentity;
+
+static char *utf8_path(const wchar_t *path) {
+  int bytes = WideCharToMultiByte(CP_UTF8, 0, path, -1, NULL, 0, NULL, NULL);
+  char *text = bytes > 0 ? malloc(bytes) : NULL;
+  if (text) WideCharToMultiByte(CP_UTF8, 0, path, -1, text, bytes, NULL, NULL);
+  return text;
+}
+
+static bool add_file(ProjectIdentity *project, char *file, wchar_t *folder) {
+  char **files = realloc(project->files, (project->file_count + 1) * sizeof(*files));
+  if (files) project->files = files;
+  wchar_t **folders = files ? realloc(project->folders, (project->file_count + 1) * sizeof(*folders)) : NULL;
+  if (folders) project->folders = folders;
+  if (!folders) {
+    free(file);
+    free(folder);
+    return false;
+  }
+  project->files[project->file_count] = file;
+  project->folders[project->file_count++] = folder;
+  return true;
+}
 
 static bool choose_project(ProjectIdentity *project, int argc, char **argv) {
   bool option_value = false;
@@ -5313,26 +5343,39 @@ static bool choose_project(ProjectIdentity *project, int argc, char **argv) {
     if (!n || n >= SDL_arraysize(full))
       return false;
     DWORD attrs = GetFileAttributesW(full);
-    if (attrs == INVALID_FILE_ATTRIBUTES ||
-        !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+    bool folder = attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
+    if (!folder) {
+      char *file = utf8_path(full);
       wchar_t *slash = wcsrchr(full, L'\\');
-      if (!slash)
+      if (!file || !slash) {
+        free(file);
         return false;
+      }
       if (slash == full + 2)
         slash[1] = 0;
       else
         *slash = 0;
       DWORD parent_attrs = GetFileAttributesW(full);
       if (parent_attrs == INVALID_FILE_ATTRIBUTES ||
-          !(parent_attrs & FILE_ATTRIBUTE_DIRECTORY))
+          !(parent_attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        free(file);
         continue;
+      }
+      char *parent = utf8_path(full);
+      wchar_t *identity = parent ? canonical_project_identity(parent) : NULL;
+      free(parent);
+      if (!identity) {
+        free(file);
+        continue;
+      }
+      if (!add_file(project, file, identity)) return false;
+      if (project->folder) continue;
     }
-    int bytes = WideCharToMultiByte(CP_UTF8, 0, full, -1, NULL, 0, NULL, NULL);
     free(project->path);
-    project->path = bytes > 0 ? malloc(bytes) : NULL;
+    project->path = utf8_path(full);
     if (!project->path)
       return false;
-    WideCharToMultiByte(CP_UTF8, 0, full, -1, project->path, bytes, NULL, NULL);
+    project->folder |= folder;
   }
   if (!project->path)
     return false;
@@ -5366,6 +5409,8 @@ struct ProjectResolve {
   bool launch;
   /* An external launch has no requesting Window. It replies once its Project is selected or started. */
   AnvilShellLaunchRequest *external;
+  /* A launch chose this selection, so the Project takes focus from the Sidebar. */
+  bool launched;
   /* A restored Window's initial resolution names its Project, because the Window's selection can change first. */
   Uint32 project_id;
   bool restored;
@@ -5376,6 +5421,11 @@ struct ProjectResolve {
   char **argv;
   char *path;
   wchar_t *identity;
+  bool folder;
+  int file_count;
+  char **files;
+  wchar_t **folders;
+  Uint64 queued;
   DWORD error;
 };
 
@@ -5384,6 +5434,12 @@ static void free_resolution(ProjectResolve *job) {
   for (int i = 0; i < job->argc; i++)
     free(job->argv[i]);
   free(job->argv);
+  for (int i = 0; i < job->file_count; i++) {
+    free(job->files[i]);
+    free(job->folders[i]);
+  }
+  free(job->files);
+  free(job->folders);
   free(job->path);
   free(job->identity);
   free(job->pane);
@@ -5403,6 +5459,10 @@ static int SDLCALL resolve_project_thread(void *data) {
   job->success = choose_project(&result, job->argc, job->argv);
   job->path = result.path;
   job->identity = result.identity;
+  job->folder = result.folder;
+  job->file_count = result.file_count;
+  job->files = result.files;
+  job->folders = result.folders;
   job->error = job->success ? 0 : GetLastError();
   SDL_SetAtomicInt(&job->done, 1);
   /* The temporary native timer also drains completion if this notification
@@ -5430,6 +5490,7 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
     return false;
   }
   job->initial = initial;
+  job->queued = SDL_GetTicks();
   job->window_id = window ? window->id : 0;
   job->close_generation = window ? window->close_generation : 0;
   job->unload = unload;
@@ -5885,7 +5946,69 @@ static void raise_owner(ShellProject *project) {
   SDL_RaiseWindow(owner->window);
 }
 
-/* An external launch selects its loaded Project, or starts it in a new Window. */
+/* The deepest Project in the Sidebar list that contains `folder`, or NULL. */
+static const AnvilSidebarProject *containing_project(const wchar_t *folder) {
+  const AnvilSidebarProject *found = NULL;
+  size_t found_length = 0, folder_length = wcslen(folder);
+  for (size_t i = 0; i < shell.sidebar.count; i++) {
+    const AnvilSidebarProject *row = shell.sidebar.projects[i];
+    size_t length = row->identity ? wcslen(row->identity) : 0;
+    if (!length || length > folder_length || length <= found_length ||
+        CompareStringOrdinal(row->identity, (int)length, folder, (int)length, TRUE) != CSTR_EQUAL ||
+        (folder[length] && folder[length] != L'\\' && row->identity[length - 1] != L'\\'))
+      continue;
+    found = row;
+    found_length = length;
+  }
+  return found;
+}
+
+/* The one known Project that contains every file of a launch, or NULL. */
+static const AnvilSidebarProject *launch_project(const ProjectResolve *job) {
+  const AnvilSidebarProject *found = NULL;
+  for (int i = 0; i < job->file_count; i++) {
+    const AnvilSidebarProject *row = containing_project(job->folders[i]);
+    if (!row || (found && row != found)) return NULL;
+    found = row;
+  }
+  return found;
+}
+
+/* The Pane request that opens a launch's files in new Panes, as Lua text. NULL when it is too large. */
+static char *launch_request(const ProjectResolve *job, uint32_t *size) {
+  size_t capacity = 64;
+  for (int i = 0; i < job->file_count; i++) capacity += 4 * strlen(job->files[i]) + 3;
+  if (capacity > ANVIL_SURFACE_MAX_PAYLOAD - sizeof(AnvilSurfacePaneDelivery)) return NULL;
+  char *text = malloc(capacity), *out = text;
+  if (!text) return NULL;
+  out += sprintf(out, "{action=\"launch\",files={");
+  for (int i = 0; i < job->file_count; i++) {
+    *out++ = '"';
+    for (const unsigned char *c = (const unsigned char *)job->files[i]; *c; c++) {
+      if (*c == '\\' || *c == '"') {
+        *out++ = '\\';
+        *out++ = (char)*c;
+      } else if (*c < 32 || *c == 127) out += sprintf(out, "\\%03u", *c);
+      else *out++ = (char)*c;
+    }
+    *out++ = '"';
+    *out++ = ',';
+  }
+  out += sprintf(out, "}}");
+  *size = (uint32_t)(out - text);
+  return text;
+}
+
+/* The Window that the user activated last, or NULL. */
+static ShellWindow *last_window(void) {
+  ShellWindow *found = NULL;
+  for (ShellWindow *item = shell.windows; item; item = item->next)
+    if (!item->closing && !item->removing && (!found || item->activated > found->activated)) found = item;
+  return found;
+}
+
+/* An external launch selects its Project in the Window that the user activated last, as a Sidebar click does.
+ * A folder argument names the Project. Files open in new Panes of the deepest known Project that contains them. */
 static void finish_external(ProjectResolve *job) {
   AnvilShellLaunchRequest *request = job->external;
   job->external = NULL;
@@ -5925,32 +6048,28 @@ static void finish_external(ProjectResolve *job) {
   } else if (!job->success) {
     SDL_Log("Shell external launch identity failed: pid=%lu Windows error=%lu", client, (unsigned long)job->error);
     status = ANVIL_SHELL_LAUNCH_REJECTED;
-  } else if (project && (!owner || owner->closing)) {
-    SDL_Log("Shell external launch waits for its Project's Window Close: pid=%lu Project=%u", client, project->id);
-    status = ANVIL_SHELL_LAUNCH_BUSY;
-  } else if (project) {
-    SDL_Log("Shell external launch selects loaded Project: pid=%lu Project=%u Window=%u", client, project->id,
-            owner->id);
-    if (project->restore_waiting) project->restore_rank = -1;
-    select_project(project, false);
-  } else if (!sidebar_project(job->path)) {
-    SDL_Log("Shell external launch rejected: Project Sidebar list is full or allocation failed");
-    status = ANVIL_SHELL_LAUNCH_REJECTED;
-  } else if (!(owner = create_window(NULL)) || !(project = new_project(owner))) {
-    SDL_Log("Shell external launch rejected: Window or runtime allocation failed");
-    if (owner) destroy_window(owner);
-    status = ANVIL_SHELL_LAUNCH_REJECTED;
   } else {
-    assign_identity(project, job);
-    select_project(project, false);
-    SDL_Log("Shell external launch starts Project: pid=%lu Project=%u Window=%u", client, project->id, owner->id);
-    if (!start_project(project, job->argc, job->argv)) fail_connection(project, "External launch startup failed");
-  }
-  if (status == ANVIL_SHELL_LAUNCH_ACCEPTED) {
-    /* Windows decides whether the raise takes the foreground. Without the launcher's grant it may only flash. */
-    SDL_Log("Shell external launch raise: foreground grant=%d",
-            request ? anvil_shell_launch_foreground_granted(request) : 1);
-    raise_owner(project);
+    const AnvilSidebarProject *known = job->folder ? NULL : launch_project(job);
+    const char *path = known ? known->path : job->path;
+    uint32_t size = 0;
+    char *text = job->file_count ? launch_request(job, &size) : NULL;
+    ShellWindow *window = last_window();
+    if (!window) window = create_window(NULL);
+    if (job->file_count && !text) {
+      SDL_Log("Shell external launch rejected: its file list is too large");
+      status = ANVIL_SHELL_LAUNCH_REJECTED;
+    } else if (!window || !(text ? select_pane_path(window, path, text, size) : select_project_path(window, path))) {
+      SDL_Log("Shell external launch rejected: no Window or the selection queue is full");
+      status = ANVIL_SHELL_LAUNCH_BUSY;
+    } else {
+      SDL_Log("Shell external launch selects Project: pid=%lu Window=%u files=%d known=%d path=%s", client,
+              window->id, job->file_count, known != NULL, path);
+      /* The selection replies once its Project is selected or started. */
+      shell.resolvers->external = request;
+      shell.resolvers->launched = true;
+      request = NULL;
+    }
+    free(text);
   }
   if (request) anvil_shell_launch_finish(request, status);
 }
@@ -5976,8 +6095,11 @@ static void finish_resolutions(void) {
   ProjectResolve **link = &shell.resolvers;
   while (*link) {
     ProjectResolve *job = *link;
-    /* The first Project has no identity until its resolution finishes. A launch waits so it cannot duplicate it. */
-    if (!SDL_GetAtomicInt(&job->done) || (job->launch && initial_resolution_pending())) {
+    /* The first Project has no identity until its resolution finishes. A launch waits so it cannot duplicate it.
+     * Files route to known Projects, so a launch with files also waits briefly for the first Sidebar list. */
+    if (!SDL_GetAtomicInt(&job->done) || (job->launch && initial_resolution_pending()) ||
+        (job->launch && job->file_count && !job->folder && !shell.sidebar_seeded &&
+         SDL_GetTicks() - job->queued < SHELL_LAUNCH_LIST_WAIT_MS)) {
       link = &job->next;
       continue;
     }
@@ -6015,6 +6137,8 @@ static void finish_resolutions(void) {
     } else if (!job->success) {
       SDL_Log("Shell rejected Project identity: Windows error=%lu path=%s",
               (unsigned long)job->error, job->path);
+      if (job->external) anvil_shell_launch_finish(job->external, ANVIL_SHELL_LAUNCH_REJECTED);
+      job->external = NULL;
       if (job->restored) {
         /* The Window stays, empty. Its Project Sidebar entry comes from recent Projects and stays too. */
         SDL_Log("Shell restored Window has no Project: Window=%u path=%s", window->id, job->path);
@@ -6091,7 +6215,13 @@ static void finish_resolutions(void) {
           project->sidebar_pane_request = pending->request;
         } else if (job->pane) SDL_Log("Shell dropped a Pane request: allocation failed");
         /* The user may have selected another Project in a restored Window while this one resolved. */
-        if (!job->restored || window->selected == project) select_project(project, pending != NULL);
+        if (!job->restored || window->selected == project) select_project(project, pending && !job->launched);
+        if (job->launched) {
+          /* Windows decides whether the raise takes the foreground. Without the launcher's grant it may only flash. */
+          SDL_Log("Shell external launch raise: Project=%u foreground grant=%d", project->id,
+                  job->external ? anvil_shell_launch_foreground_granted(job->external) : 1);
+          if (project->restore_waiting) project->restore_rank = -1;
+        }
         if (!job->initial) raise_owner(project);
         if (job->terminal[0]) focus_terminal(project, job->terminal);
         if (created || (project->failed_close && project->process.hProcess &&
@@ -6115,6 +6245,8 @@ static void finish_resolutions(void) {
           free(pending->text);
           free(pending);
         }
+        if (job->external) anvil_shell_launch_finish(job->external, ANVIL_SHELL_LAUNCH_ACCEPTED);
+        job->external = NULL;
       }
     }
     free_resolution(job);
