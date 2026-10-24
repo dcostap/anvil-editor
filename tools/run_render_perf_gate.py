@@ -169,6 +169,8 @@ SCENARIOS["project-sidebar-dark"] = dict(SCENARIOS["project-sidebar"], theme="de
 SCENARIOS["project-sidebar-drag"] = dict(SCENARIOS["project-sidebar"])
 SCENARIOS["project-sidebar-drag-dark"] = dict(SCENARIOS["project-sidebar"], theme="default")
 SCENARIOS["focus-feedback"] = dict(SCENARIOS["project-sidebar"], window_height=500)
+# A loaded Project that asks "Unload?" after Left.
+SCENARIOS["project-sidebar-unload"] = dict(SCENARIOS["project-sidebar"], theme="default")
 # A confirmation in the nag bar over a document: one line, and a File Tree operation list.
 SCENARIOS["nag-bar"] = {
     "start_line": 1700,

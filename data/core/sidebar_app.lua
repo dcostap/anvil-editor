@@ -282,7 +282,9 @@ function core.init()
   end
   for _, key in ipairs {"up", "down", "left", "right", "home", "end", "return", "keypad enter", "escape"} do
     local name = "sidebar:" .. key:gsub(" ", "_")
-    command.add(nil, {[name] = function() if current then current.view:on_key_pressed(key) end end})
+    command.add(nil, {[name] = function()
+      if current then current.view:on_key_pressed(key, current.key_repeat) end
+    end})
     keymap.add {[key] = name}
   end
   -- Added last, so they go first. Without a query they decline, and Left, Right, Home and End move through the list.
@@ -336,6 +338,8 @@ function core.on_event(name, ...)
     core.log_quiet("Sidebar keyboard focus: Window=%d focused=%s", current.id, tostring(current.view.focused))
     core.redraw = true
   elseif name == "keypressed" then
+    local _, info = ...
+    current.key_repeat = info and info["repeat"] == true
     current.suppress_text = keymap.on_key_pressed(...)
     core.redraw = true
   elseif name == "keyreleased" then

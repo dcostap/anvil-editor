@@ -82,6 +82,13 @@ function Scene:new(mode)
     self.sidebar:edit("select_to_previous_char")
     self.sidebar:edit("select_to_previous_char")
   end
+  if mode == "unload" then
+    -- The Project without Tabs asks to unload.
+    self.sidebar:on_focus(true)
+    while self.sidebar:get_cursor().project.id ~= 7 do self.sidebar:on_key_pressed("down") end
+    self.sidebar:on_key_pressed("left")
+  end
+  self.unload = mode == "unload"
   self.drag = mode == "drag"
   self.hover_arrow = mode == nil
 end
@@ -115,6 +122,8 @@ function Scene:draw()
     self.sidebar:set_size(width, height)
     self.sidebar:on_mouse_moved(width - 20 * SCALE, self.sidebar:row_y(1) + self.sidebar.rows[1].h / 2)
   end
+  -- The question stays open until the capture.
+  if self.unload then self.sidebar.unload_ask.deadline = system.get_time() + 1 end
   self.sidebar:draw(width, height)
 end
 

@@ -63,6 +63,40 @@ test.describe("Sidebar keyboard navigation", function()
     view:on_key_pressed("return")
   end)
 
+  test.it("asks before a second Left unloads a collapsed Project", function()
+    local view, actions = sidebar()
+    local function unloads()
+      local found = {}
+      for _, action in ipairs(actions) do
+        if action[1] == "unload" then found[#found + 1] = action[2] end
+      end
+      return found
+    end
+    view:on_focus(true)
+    view:on_key_pressed("left")
+    view:on_key_pressed("left")
+    test.ok(view:get_cursor().collapsed)
+    view:on_key_pressed("left")
+    view:on_key_pressed("left", true)
+    test.same(unloads(), {}, "A held Left must not unload")
+    view:on_key_pressed("down")
+    view:on_key_pressed("up")
+    view:on_key_pressed("left")
+    test.same(unloads(), {}, "Another key must cancel the question")
+    view:on_key_pressed("left")
+    test.same(unloads(), {1})
+  end)
+
+  test.it("does not unload a Dormant Project", function()
+    local view, actions = sidebar()
+    view:on_focus(true)
+    view:on_key_pressed("end")
+    test.equal(view:get_cursor().project.path, "C:/Archive")
+    view:on_key_pressed("left")
+    view:on_key_pressed("left")
+    test.same(actions, {})
+  end)
+
   test.it("finds detached Terminals and Dormant Projects without loading them", function()
     local view, actions = sidebar()
     view:on_focus(true)

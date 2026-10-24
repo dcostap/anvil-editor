@@ -11,6 +11,7 @@ local FocusFeedback = require "core.focus_feedback"
 -- right-click on a Project asks the shell for its native actions menu: Move, Unload and the rest.
 -- The menu opens at the button's release. A menu opened at the press takes the release into its own loop, and the
 -- shell then reports a stray left press that selects the Project.
+-- Left on a collapsed loaded Project asks to unload it. A second Left unloads it; any other input cancels.
 -- Layout: a search field below the window caption, then the main list: loaded Projects with their Tabs, one for
 -- each Pane, and the Terminal Sessions that no Pane shows. Unloaded Projects sit in collapsible age groups aligned
 -- to the bottom, which take at most part of the height and scroll on their own. Their rows count their running
@@ -36,6 +37,8 @@ local SCROLL_ZONE, SCROLL_SPEED = 28, 900
 local PENDING_MOVE, PENDING_TRANSFER = 1.5, 4
 -- A chosen row keeps the selection until the model selects it, at most this long.
 local CHOICE_TIMEOUT = 5
+-- Left on a collapsed loaded Project asks "Unload?" for this long. A second Left unloads it.
+local UNLOAD_TIMEOUT = 3
 -- Animated values approach their targets at these rates per second. A change is 95% done after 3 / rate seconds.
 local MOVE_RATE, FADE_RATE, SCROLL_RATE = 20, 14, 22
 -- Highlights glide and fade at these base rates, times their speed. The hover highlight follows the pointer fastest.
@@ -148,7 +151,7 @@ function SidebarView:reveal_cursor()
 end
 
 function SidebarView:on_focus(focused)
-  self.focused = focused
+  self.focused, self.unload_ask = focused, nil
   self.focus_feedback:update(focused and self or nil)
   self.input:set_text("")
   self.query, self.cursor, self.selecting = "", nil, nil
@@ -170,6 +173,7 @@ end
 
 function SidebarView:on_text_input(text)
   if not self.focused then return end
+  self.unload_ask = nil
   self.input:insert(text)
   self:input_changed()
 end
@@ -179,6 +183,7 @@ end
 function SidebarView:edit(name)
   if not self.focused or self.query == "" and name ~= "paste" then return false end
   if not self.input:perform(name) then return false end
+  self.unload_ask = nil
   self:input_changed()
   return true
 end
@@ -209,9 +214,26 @@ function SidebarView:new_group()
   return true
 end
 
-function SidebarView:on_key_pressed(key)
+-- Asks to unload the cursor's Project, or unloads it when the last key asked the same. A held key does neither.
+function SidebarView:ask_unload(row, asked, repeating)
+  local state = row.project.state
+  if state == "dormant" or state == "closing" then return end
+  if repeating then
+    self.unload_ask = asked
+  elseif asked and asked.key == row.id_key then
+    self.action("unload", row.project.row_id)
+  else
+    self.unload_ask = {key = row.id_key, deadline = system.get_time() + UNLOAD_TIMEOUT}
+  end
+end
+
+---@param repeating boolean? The key is held down and repeats.
+function SidebarView:on_key_pressed(key, repeating)
   if not self.focused then return end
   local row = self:get_cursor()
+  -- Each key ends the question. Only Left on the same Project continues it.
+  local asked = self.unload_ask
+  self.unload_ask = nil
   if key == "escape" then self.action("return_focus")
   elseif key == "return" or key == "keypad enter" then self:activate_row(row)
   elseif key == "up" or key == "down" or key == "home" or key == "end" then
@@ -221,7 +243,9 @@ function SidebarView:on_key_pressed(key)
     if self.rows[index] and self.rows[index].kind ~= "empty" then self.cursor = index end
     self:reveal_cursor()
   elseif row and (key == "left" or key == "right") and self.query == "" then
-    if row.key then
+    if key == "left" and row.kind == "project" and (row.collapsed or not row.key) then
+      self:ask_unload(row, asked, repeating)
+    elseif row.key then
       if row.collapsed == (key == "right") then self:toggle(row.key, row.collapsed)
       elseif key == "right" then self:on_key_pressed("down") end
     elseif key == "left" and row.project then
@@ -606,6 +630,7 @@ end
 
 function SidebarView:on_mouse_pressed(button, x, y)
   if button ~= "left" and button ~= "right" and button ~= "middle" then return end
+  self.unload_ask = nil
   if self:in_search(x, y) then
     -- A press places the caret. A drag from it selects.
     if button == "left" then
@@ -1028,6 +1053,10 @@ function SidebarView:step(dt)
     self.chosen = nil
     self:rebuild_rows()
   end
+  local ask = self.unload_ask
+  if ask and (system.get_time() >= ask.deadline or not self:row_by_key(ask.key)) then
+    ask, self.unload_ask = nil, nil
+  end
   local animate = config.transitions ~= false and dt > 0 and self.drawn
   local moving = false
   local function ease(value, target, rate, epsilon)
@@ -1037,6 +1066,16 @@ function SidebarView:step(dt)
     moving = true
     return next
   end
+  -- The question slides in over its Project's row and fades out when it ends.
+  local asked = self.unload_shown
+  if ask then
+    if not asked or asked.key ~= ask.key then asked = {key = ask.key, amount = 0} end
+    asked.amount = ease(asked.amount, 1, FADE_RATE, 0.01)
+  elseif asked then
+    asked.amount = ease(asked.amount, 0, FADE_RATE * 1.5, 0.01)
+    if asked.amount <= 0 then asked = nil end
+  end
+  self.unload_shown = asked
   self.shown = self.shown or {}
   local shown = self.shown
   -- A drag near an area's edge scrolls it. The list follows at once, so the target stays under the pointer.
@@ -1341,6 +1380,7 @@ function SidebarView:animation_delay(clock)
   end
   if self.pending then delay = math.min(delay or math.huge, math.max(0, self.pending.deadline - clock)) end
   if self.chosen then delay = math.min(delay or math.huge, math.max(0, self.chosen.deadline - clock)) end
+  if self.unload_ask then delay = math.min(delay or math.huge, math.max(0, self.unload_ask.deadline - clock)) end
   return delay
 end
 
@@ -1368,7 +1408,7 @@ end
 -- Draws a label shortened before a right-aligned note, then the note. The note keeps the same inset from the
 -- row highlight's right edge as the row's content keeps from its left edge. The first hint that fits follows the
 -- label in the dim colour.
-function SidebarView:label_with_note(label, color, note, x, y, row, right, hints, font)
+function SidebarView:label_with_note(label, color, note, x, y, row, right, hints, font, note_color)
   font = font or style.font
   local ty = y + math.floor((row.h - font:get_height()) / 2)
   local note_ty = y + math.floor((row.h - style.font:get_height()) / 2)
@@ -1385,7 +1425,7 @@ function SidebarView:label_with_note(label, color, note, x, y, row, right, hints
       break
     end
   end
-  if note then text(note, right - note_w + 8 * SCALE, note_ty, style.dim) end
+  if note then text(note, right - note_w + 8 * SCALE, note_ty, note_color or style.dim) end
 end
 
 -- A section header: a chevron, a small uppercase label, a line and a count.
@@ -1418,6 +1458,13 @@ function SidebarView:draw_project(row, y, width, now)
   local project = row.project
   local name = name_of(project.path)
   local dormant = project.state == "dormant"
+  local asked = self.unload_shown
+  local asking = asked and asked.key == row.id_key and asked.amount
+  if asking then
+    -- A tint slides in from the left.
+    renderer.draw_rounded_rect(left, y + 1, math.max(2 * m.radius, (right - left) * asking), row.h - 2, m.radius,
+      fade(style.warn, 0.16 * asking))
+  end
   -- Keep the badge dim, including for the Window's Selected Project.
   local size = m.badge
   local bx, by = left + 6 * SCALE, math.floor(cy - size / 2)
@@ -1461,9 +1508,11 @@ function SidebarView:draw_project(row, y, width, now)
   elseif row.collapsed and (row.tabs or 0) > 0 then
     hints = {row.tabs .. (row.tabs == 1 and " tab" or " tabs")}
   end
+  local note_color
+  if asking then note, note_color = "Unload?", fade(style.warn, asking) end
   local name_color = dormant and not project.exists and style.dim or style.text
   self:label_with_note(name, name_color, note, bx + size + 8 * SCALE, y, row, right, hints,
-    dormant and style.font or bold)
+    dormant and style.font or bold, note_color)
 end
 
 function SidebarView:draw_row(row, y, width, now)
