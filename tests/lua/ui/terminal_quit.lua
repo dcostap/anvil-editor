@@ -127,6 +127,11 @@ test.describe("Terminal quit confirmation", function()
 end)
 
 test.describe("Idle Pi close decisions", function()
+  test.it("closes Pi after its turn finishes", function()
+    local status = { kind = "running", busy = true, agent_app = "pi", agent_state = "done" }
+    test.same(terminal.quit_decision({ status }), { "close" })
+    test.equal(status.busy, true)
+  end)
   test.it("closes idle Pi without changing its shell busy state", function()
     local status = { kind = "running", busy = true, agent_app = "pi", agent_state = "idle" }
     test.same(terminal.quit_decision({ status }), { "close" })

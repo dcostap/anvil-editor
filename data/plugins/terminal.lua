@@ -2656,7 +2656,8 @@ function M.quit_decision(statuses, answer)
   local busy = {}
   local count = 0
   for i, status in ipairs(statuses) do
-    local idle_pi = status.agent_app == "pi" and status.agent_state == "idle"
+    local idle_pi = status.agent_app == "pi"
+      and (status.agent_state == "idle" or status.agent_state == "done")
     busy[i] = status.kind == "reconnecting"
       or (status.kind == "running" and status.busy ~= false and not idle_pi)
     if busy[i] then count = count + 1 end

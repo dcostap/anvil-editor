@@ -71,7 +71,7 @@ The host also reports a command that runs inside the shell, such as `Start-Sleep
 It ignores marks without the nonce, so a nested shell or TUI cannot end a running command.
 Run the `Terminal busy status` tests in `ui/terminal_quit.lua` after changes.
 
-Close and quit skip confirmation when Pi reports `idle`, even while its shell command remains busy.
+Close and quit skip confirmation when Pi reports `idle` or `done`, even while its shell command remains busy.
 Other agent states keep the normal busy check. Reconnecting sessions still require confirmation.
 The host sends the root Agent Status with its live status packet. Older hosts keep the normal busy check.
 Run `ui/terminal_quit.lua` and `ui/terminal_agent_status.lua` after changes.
