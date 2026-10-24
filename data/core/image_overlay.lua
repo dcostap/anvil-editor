@@ -11,7 +11,7 @@ local ImageView = require "core.imageview"
 ---Markdown images and Terminal images open in it.
 local overlay = {}
 
-local OPEN_DURATION = 0.24
+local OPEN_DURATION = 0.12
 local CLOSE_DURATION = 0.18
 local TOAST_DURATION = 1.8
 local TOOLTIP_DELAY = 0.35
