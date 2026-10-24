@@ -398,6 +398,7 @@ end
 
 
 ---Performs a command.
+---Requests a redraw after successful execution, including calls without input events.
 ---
 ---The arguments passed into this function are forwarded to the predicate function. </br>
 ---If the predicate function returns more than 1 value, the other values are passed
@@ -412,6 +413,8 @@ end
 ---@return boolean # true if the command is performed successfully.
 function command.perform(name, ...)
   local ok, res = core.try(perform, name, ...)
+  -- Programmatic commands need a redraw even when no input event arrives.
+  if ok and res then core.redraw = true end
   local metadata = command.get_metadata(name)
   if ok and res and name ~= "core:repeat_last_command"
       and (not metadata or metadata.record_last ~= false) then
