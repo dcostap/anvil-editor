@@ -17,9 +17,10 @@ local SUSPENDED_INTERVAL = 1
 local sent, built_at
 
 -- The report: one Tab item per Pane in Pane order, each with its Pane Group's one-based index and the time it last
--- took focus. `active` is the active Pane's position and `visible` the visible Pane Group's index.
+-- took focus. `active` is the active Pane's position and `visible` the visible Pane Group's index. `held` lists the
+-- Terminal Sessions that Panes keep in their history but do not show.
 function pane_report.build()
-  local report, groups = {}, {}
+  local report, groups, held = {}, {}, {}
   local active, visible = panes.active(), panes.visible_group()
   for number, pane in ipairs(panes.ordered()) do
     if number > TAB_LIMIT then break end
@@ -32,7 +33,11 @@ function pane_report.build()
     if pane == active then report.active = number end
     if pane.group == visible then report.visible = item.group end
     report[number] = item
+    for _, view in ipairs(panes.views(pane)) do
+      if view.terminal_view and view ~= pane.current_view then held[#held + 1] = view.session_id end
+    end
   end
+  if #held > 0 then report.held = held end
   return report
 end
 

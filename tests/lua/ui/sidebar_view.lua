@@ -395,6 +395,21 @@ test.describe("Sidebar list actions", function()
     end
   end)
 
+  test.it("hides a Terminal Session in a Pane's history unless it needs the user", function()
+    local view = SidebarView(function() end)
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,activity=os.time(),terminals={
+      {id="idle",title="ls",cwd="C:/A",state="running",busy=0,activity=os.time()},
+      {id="asks",title="pi",cwd="C:/A",state="running",busy=1,activity=os.time(),
+        agent_state="blocked",agent_since=os.time() - 60},
+      {id="detached",title="server",cwd="C:/A",state="running",busy=1,activity=os.time()}},
+      panes={active=1,visible=1,held={"idle","asks"},{id="pane-1",group=1,name="init.lua"}}}}, 5)
+    local ids = {}
+    for _, row in ipairs(view.rows) do
+      if row.kind == "terminal" then ids[#ids + 1] = row.terminal.id end
+    end
+    test.same(ids, {"asks", "detached"})
+  end)
+
   test.it("tracks the hovered row and clears it when the pointer leaves", function()
     local view = SidebarView(function() end)
     view:set_model({{row_id=7,path="C:/B",state="ready",terminals={}}})

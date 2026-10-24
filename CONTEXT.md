@@ -26,7 +26,7 @@ The Project currently presented in an Anvil Window.
 _Avoid_: Active Project, Current Project, hosted app
 
 **Project Sidebar**:
-The application sidebar listing recent Projects. A loaded Project shows its Tabs and the Terminal Sessions that no Pane shows. A collapsed loaded Project still shows the Terminals with an Unread Result or an agent that waits for an answer. Dormant Projects are grouped by age below the loaded ones; each one shows how many of its Terminal Sessions run. Every Anvil Window shows the same list. Selecting a Project shown in another Anvil Window brings that window to the front.
+The application sidebar listing recent Projects. A loaded Project shows its Tabs and the Terminal Sessions that no Pane shows. A Terminal Session in a Pane's Navigation History shows only when it has an Unread Result or an agent that waits for an answer. A collapsed loaded Project still shows the Terminals with an Unread Result or an agent that waits for an answer. Dormant Projects are grouped by age below the loaded ones; each one shows how many of its Terminal Sessions run. Every Anvil Window shows the same list. Selecting a Project shown in another Anvil Window brings that window to the front.
 _Avoid_: Project panel, app switcher, side panel
 
 **Dormant Project**:

@@ -398,14 +398,16 @@ function SidebarView:rebuild_rows()
         id_key = "tab:" .. project.path .. ":" .. tostring(item.id)}, item.agent)
     end
     -- Terminal Sessions that no Pane shows. Recent ones and those that need the user show directly, and so do
-    -- those from hosts that do not report activity. Older ones fold into groups.
-    local older = {}
+    -- those from hosts that do not report activity. Older ones fold into groups. A Session in a Pane's history
+    -- shows only when it needs the user.
+    local older, held = {}, {}
+    for _, id in ipairs(panes.held or {}) do held[id] = true end
     for _, terminal in ipairs(project.terminals or {}) do
       local bucket = (terminal.activity or 0) > 0 and age_bucket(terminal.activity, now)
-      if shown[terminal.id] then
-        -- Its Tab shows it.
-      elseif bucket and bucket ~= "week"
-        and not tab.attention(tab.describe_session(terminal), self.seen[terminal.id]) then
+      local attention = tab.attention(tab.describe_session(terminal), self.seen[terminal.id])
+      if shown[terminal.id] or held[terminal.id] and not attention then
+        -- Its Tab shows it, or its Pane's history keeps it.
+      elseif bucket and bucket ~= "week" and not attention then
         older[bucket] = older[bucket] or {}
         table.insert(older[bucket], terminal)
       else

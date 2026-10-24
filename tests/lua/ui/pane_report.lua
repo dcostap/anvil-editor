@@ -65,6 +65,21 @@ test.describe("Pane report", function()
     test.equal(last_report()[1].name, "renamed.lua")
   end)
 
+  test.it("lists the Terminal Sessions that a Pane holds in its history", function()
+    local function terminal(session)
+      return function()
+        local view = NamedView(session)
+        view.terminal_view, view.session_id, view.state = true, session, "running"
+        return view
+      end
+    end
+    local one = panes.create { factory = terminal("history") }
+    panes.present(NamedView("file.lua"), { pane = one })
+    panes.create { factory = terminal("shown") }
+    pane_report.publish()
+    test.same(last_report().held, {"history"})
+  end)
+
   test.it("focuses and closes the Pane that a Pane action names", function()
     local one = panes.create { factory = factory("one.lua") }
     local two = panes.create { factory = factory("two.lua") }
