@@ -5710,33 +5710,44 @@ static bool project_has_dialog(const ShellProject *project) {
     if (project->dialogs[i] || project->deferred_dialogs[i]) return true;
   return false;
 }
+/* A zero target creates a Window only after the Project can move. */
 static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id) {
   ShellProject *project = NULL;
   for (ShellProject *item = shell.projects; item; item = item->next)
     if (item->id == project_id) { project = item; break; }
   ShellWindow *source = project ? window_for_id(project->window_id) : NULL;
   ShellWindow *target = window_for_id(target_id);
-  if (!source || !target || source->removing || target->removing) {
+  if (!source || (target_id && !target) || source->removing || (target && target->removing)) {
     window_notice(requester, "Cannot move Project");
     return;
   }
-  if (requester->closing || source->closing || target->closing || project->close_requested_ns || project->close_waiting ||
-      project->close_prompt || project->unloading || target->selected->close_requested_ns ||
-      target->selected->close_waiting || target->selected->close_prompt) {
+  if (requester->closing || source->closing || project->close_requested_ns || project->close_waiting ||
+      project->close_prompt || project->unloading ||
+      (target && (target->closing || target->selected->close_requested_ns ||
+                  target->selected->close_waiting || target->selected->close_prompt))) {
     window_notice(requester, "Cannot move Project while it closes");
     return;
   }
-  if (project_has_dialog(project) || project_has_dialog(target->selected) ||
-      source->picker_pending || target->picker_pending) {
+  if (project_has_dialog(project) || source->picker_pending ||
+      (target && (project_has_dialog(target->selected) || target->picker_pending))) {
     window_notice(requester, "Cannot move Project while a dialog is open");
     return;
   }
-  if (!project->connected || project->state != SHELL_READY || project->resolving ||
+  /* Restored background Projects finish startup without drawing a first frame. */
+  bool ready = project->state == SHELL_READY || (project->state == SHELL_STARTING && project->runtime_ready);
+  if (!project->connected || !ready || project->resolving ||
       (project->launch && !project->launch->taken)) {
     window_notice(requester, "Project is still starting");
     return;
   }
   if (source == target) return;
+  if (!target) {
+    target = create_window(NULL);
+    if (!target) {
+      window_notice(requester, "Cannot create a Window");
+      return;
+    }
+  }
   retain_project(project);
   /* Revoke the old surface before changing ownership. Keep the Project retained during native callbacks. */
   if (source->selected == project) {
@@ -6730,9 +6741,7 @@ static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y
   if (chosen >= PROJECT_MENU_MOVE) {
     move_project(window, project_id, chosen - PROJECT_MENU_MOVE);
   } else if (chosen == PROJECT_MENU_NEW_WINDOW) {
-    ShellWindow *target = create_window(NULL);
-    if (target) move_project(window, project_id, target->id);
-    else window_notice(window, "Cannot create a Window");
+    move_project(window, project_id, 0);
   } else if (chosen == PROJECT_MENU_UNLOAD) {
     unload_project_path(window, path);
   } else if (chosen == PROJECT_MENU_OPEN_WINDOW) {

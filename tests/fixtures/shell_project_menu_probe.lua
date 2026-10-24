@@ -3,7 +3,8 @@
 -- actions menu for it, and the chosen command acts on that Project. The probe names the command in a file, so the
 -- shell shows no native menu.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
-if action ~= "project-menu" then return end
+if action ~= "project-menu" and action ~= "project-menu-background" then return end
+local background = action == "project-menu-background"
 local core, common, style = require "core", require "core.common", require "core.style"
 local ffi = require "ffi"
 ffi.cdef [[
@@ -55,7 +56,13 @@ if path:match("/driver$") then
  core.add_background_thread(function()
   local shell
   local ok, err = pcall(function()
-   shell = assert(require("core.process").start({EXEFILE, "--shell", root .. "/Project"},
+   if background then
+    local selected, loaded = root .. "/Replacement", root .. "/Project"
+    local state = assert(io.open(root .. "/user/shell-windows.state", "wb"))
+    state:write(string.format("anvil-shell-windows 5\nwindow 1 40 40 1000 700 0 %d %s\nloaded 1 %d %s\n",
+     #selected, selected, #loaded, loaded)); state:close()
+   end
+   shell = assert(require("core.process").start({EXEFILE, "--shell", background and root .. "/Replacement" or root .. "/Project"},
     {stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
    local window = wait(function() return shell_windows(shell:pid())[1] end, 30, "shell Window not found")
    wait(function() return trace():find("Shell Sidebar surface Ready", 1, true) end, 30, "Sidebar did not become Ready")
@@ -67,6 +74,34 @@ if path:match("/driver$") then
    -- The first row is the Project. Row heights follow the Sidebar's font.
    local point = math.floor(100 * scale) + math.floor((40 + (font + 14) / 2) * scale) * 65536
    local menu_file = root .. "/menu-choice.txt"
+   local function model()
+    os.remove(root .. "/sidebar-0.lua"); user32.PostMessageW(window, 0x804d, 0, 0)
+    return wait(function() return load("sidebar-0") end, 10, "Sidebar model did not arrive")
+   end
+   local original
+   if background then
+    wait(function() return trace():match("Shell Project runtime ready: Project=%d+ background=1") end, 30,
+     "The background Project did not become ready")
+    for _, item in ipairs(model().items) do
+     if item.kind == "project" and item.path:gsub("\\", "/") == root .. "/Project" then original = item end
+    end
+    assert(original and original.state == "ready", "The background Project is not ready in the Sidebar")
+    -- Locate the Project through Sidebar input without selecting it first.
+    local file = assert(io.open(menu_file, "wb")); file:write(""); file:close()
+    point = nil
+    for y = 46, 600, 12 do
+     local at, mark = math.floor(100 * scale) + math.floor(y * scale) * 65536, #trace()
+     for step = 7, 8 do user32.PostMessageW(window, 0x804a, step, at) end
+     local deadline = system.get_time() + .3
+     repeat
+      coroutine.yield(.01)
+      local row = trace():match("Shell Project menu: Window=1 row=(%d+)", mark + 1)
+      if row then if tonumber(row) == original.row_id then point = at end; break end
+     until system.get_time() >= deadline
+     if point then break end
+    end
+    assert(point, "The background Project has no Sidebar row")
+   end
    -- Right-clicks the Project's row with the shell's routing probe message: posted Win32 input is ignored on an
    -- inactive desktop. Returns the menu's items.
    local function menu(choice, items)
@@ -88,6 +123,17 @@ if path:match("/driver$") then
     "Copy Path did not copy the Project's path")
    menu("Move to New Window", "Move to New Window|Unload|Copy Path|Show in File Explorer")
    wait(function() return load("project").window == 2 end, 15, "The Project did not move to a new Window")
+   if background then
+    assert(#shell_windows(shell:pid()) == 2, "Move closed the Window with the other Project")
+    local page, moved = model()
+    for _, item in ipairs(page.items) do if item.id == original.id then moved = item end end
+    assert(moved and moved.window_id == 2 and moved.pid == original.pid, "Move replaced or lost the live Project")
+    local selected = {}
+    for _, item in ipairs(page.windows) do selected[item.id] = item.selected_project end
+    assert(selected[2] == original.id, "The new Window did not select the moved Project")
+    assert(selected[1] and selected[1] ~= original.id, "Move changed the first Window's Selected Project")
+    return
+   end
    -- The Move took the first Window's only Project, so that Window closes.
    wait(function() return #shell_windows(shell:pid()) == 1 end, 10, "The first Window stayed open without a Project")
    local other = shell_windows(shell:pid())[1]
