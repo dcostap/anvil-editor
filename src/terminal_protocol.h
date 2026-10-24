@@ -21,6 +21,6 @@ typedef struct { uint16_t cols, rows; uint32_t cell_width, cell_height; } AnvilT
 typedef struct { char id[ANVIL_TERMINAL_ID_LENGTH + 1]; AnvilTerminalSize size;
   uint32_t client_pid, replay; } AnvilTerminalHello;
 typedef struct { uint32_t host_pid, shell_pid, state; AnvilTerminalSize size; } AnvilTerminalWelcome;
-typedef struct { uint32_t busy; char agent_app[32], agent_model[257]; } AnvilTerminalStatus;
+typedef struct { uint32_t busy; char agent_app[32], agent_model[257]; char agent_state[16]; } AnvilTerminalStatus;
 typedef struct { uint32_t exit_code; } AnvilTerminalExited;
 #endif

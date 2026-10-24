@@ -72,6 +72,7 @@ typedef struct {
   volatile LONG editor_ready;
   LONG reported_busy;
   char agent_app[32], reported_agent_app[32]; /* Protected by read_lock while the reader runs. */
+  char agent_state[16], reported_agent_state[16];
   char agent_model[257], reported_agent_model[257];
   HANDLE reader_thread;
   HANDLE writer_thread;
@@ -334,16 +335,21 @@ static DWORD WINAPI terminal_reader_main(void *userdata) {
     /* Detached hosts survive editor updates. Older hosts send only the busy field. */
     if (header.type == ANVIL_TERMINAL_STATUS && !replaying &&
         (header.size == sizeof(uint32_t) || header.size == offsetof(AnvilTerminalStatus, agent_model) ||
+         header.size == ((offsetof(AnvilTerminalStatus, agent_state) + 3) & ~3u) ||
          header.size == sizeof(AnvilTerminalStatus))) {
       AnvilTerminalStatus status = {0}; memcpy(&status, buffer, header.size);
+      /* The previous packet ends with alignment padding, not an agent state. */
+      if (header.size != sizeof(status)) memset(status.agent_state, 0, sizeof(status.agent_state));
       if (status.busy > 1 || !memchr(status.agent_app, 0, sizeof(status.agent_app)) ||
-          !memchr(status.agent_model, 0, sizeof(status.agent_model))) {
+          !memchr(status.agent_model, 0, sizeof(status.agent_model)) ||
+          !memchr(status.agent_state, 0, sizeof(status.agent_state))) {
         session->read_error = ERROR_INVALID_DATA; InterlockedExchange(&session->read_failed, 1); break;
       }
       InterlockedExchange(&session->busy, status.busy);
       EnterCriticalSection(&session->read_lock);
       memcpy(session->agent_app, status.agent_app, sizeof(session->agent_app));
       memcpy(session->agent_model, status.agent_model, sizeof(session->agent_model));
+      memcpy(session->agent_state, status.agent_state, sizeof(session->agent_state));
       LeaveCriticalSection(&session->read_lock);
       wake_for_terminal_output(session);
       continue;
@@ -1442,14 +1448,20 @@ static bool output_drained(TerminalSession *session) {
 }
 
 static void push_status(lua_State *L, TerminalSession *session) {
+  char agent_state[sizeof(session->agent_state)];
   char app[sizeof(session->agent_app)], model[sizeof(session->agent_model)];
   if (session->read_lock_initialized) EnterCriticalSection(&session->read_lock);
   LONG editor_ready = InterlockedExchange(&session->editor_ready, 0);
   LONG busy = InterlockedCompareExchange(&session->busy, 0, 0);
   memcpy(app, session->agent_app, sizeof(app));
   memcpy(model, session->agent_model, sizeof(model));
+  memcpy(agent_state, session->agent_state, sizeof(agent_state));
   if (session->read_lock_initialized) LeaveCriticalSection(&session->read_lock);
   if (busy != session->reported_busy) { session->reported_busy = busy; session->state_revision++; }
+  if (strcmp(agent_state, session->reported_agent_state)) {
+    memcpy(session->reported_agent_state, agent_state, sizeof(agent_state));
+    session->state_revision++;
+  }
   if (strcmp(app, session->reported_agent_app)) {
     memcpy(session->reported_agent_app, app, sizeof(app));
     session->state_revision++;
@@ -1473,6 +1485,10 @@ static void push_status(lua_State *L, TerminalSession *session) {
   set_boolean_field(L, "replaying", !session->replay_finished);
   set_integer_field(L, "editor_ready", (uint32_t)editor_ready);
   if (busy >= 0) set_boolean_field(L, "busy", busy != 0);
+  if (agent_state[0] && session->state == TERMINAL_STATE_RUNNING) {
+    lua_pushstring(L, agent_state);
+    lua_setfield(L, -2, "agent_state");
+  }
   if (app[0] && session->state == TERMINAL_STATE_RUNNING) {
     lua_pushstring(L, app);
     lua_setfield(L, -2, "agent_app");

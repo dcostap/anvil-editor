@@ -27,6 +27,32 @@ local function wait_for(view, predicate, seconds)
 end
 
 test.describe("Terminal agent status", function()
+  test.it("closes idle Pi without confirmation while its command still runs", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
+    local ok, err = pcall(function()
+      test.ok(wait_for(view, function(value) return value.busy == false end, 20), "idle shell missing")
+      test.ok(view.session:write(
+        "$e=[char]27; [Console]::Write(\"$e]7501;state=idle:app=pi$e\\\"); Start-Sleep 30\r"))
+      local status
+      local deadline = system.get_time() + 20
+      repeat
+        status = view:close_status()
+        if status.agent_state == "idle" and status.busy == true then break end
+        coroutine.yield(0.05)
+      until system.get_time() >= deadline
+      test.equal(status.agent_app, "pi")
+      test.equal(status.agent_state, "idle")
+      test.equal(status.busy, true)
+      local approved = false
+      view:can_close(function() approved = true end)
+      test.ok(approved, "idle Pi still required confirmation")
+    end)
+    view:on_close()
+    test.ok(ok, err)
+  end)
+
   test.it("keeps a program's status and step while it runs and drops them when it ends", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)

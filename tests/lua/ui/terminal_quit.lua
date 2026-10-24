@@ -126,6 +126,31 @@ test.describe("Terminal quit confirmation", function()
   end)
 end)
 
+test.describe("Idle Pi close decisions", function()
+  test.it("closes idle Pi without changing its shell busy state", function()
+    local status = { kind = "running", busy = true, agent_app = "pi", agent_state = "idle" }
+    test.same(terminal.quit_decision({ status }), { "close" })
+    test.equal(status.busy, true)
+  end)
+
+  test.it("keeps confirmation for other programs and uncertain Pi states", function()
+    for _, fields in ipairs {
+      { agent_app = "other", agent_state = "idle" },
+      { agent_state = "idle" },
+      { agent_app = "pi" },
+      { agent_app = "pi", agent_state = "working" },
+      { agent_app = "pi", agent_state = "blocked" },
+      { agent_app = "pi", agent_state = "idle", kind = "reconnecting" },
+    } do
+      fields.kind = fields.kind or "running"
+      fields.busy = true
+      local actions, reason = terminal.quit_decision({ fields })
+      test.equal(actions, nil)
+      test.equal(reason, "ask")
+    end
+  end)
+end)
+
 test.describe("Terminal busy status", function()
   test.it("reports a shell child while it runs and idle after it exits", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")

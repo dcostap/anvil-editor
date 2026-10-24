@@ -710,6 +710,7 @@ static bool attach_client(TerminalHost *host) {
     if (!host->prepared) {
       AnvilTerminalStatus status = { host->busy };
       snprintf(status.agent_app, sizeof(status.agent_app), "%s", host->agent.app);
+      snprintf(status.agent_state, sizeof(status.agent_state), "%s", host->agent.state);
       snprintf(status.agent_model, sizeof(status.agent_model), "%s", host->agent_model);
       ok = ok && queue_record(host, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
       host->status_pending = false;
@@ -1148,6 +1149,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
         host.queued + sizeof(HostRecord) + sizeof(AnvilTerminalStatus) <= CLIENT_QUEUE_LIMIT) {
       AnvilTerminalStatus status = { host.busy };
       snprintf(status.agent_app, sizeof(status.agent_app), "%s", host.agent.app);
+      snprintf(status.agent_state, sizeof(status.agent_state), "%s", host.agent.state);
       snprintf(status.agent_model, sizeof(status.agent_model), "%s", host.agent_model);
       if (queue_record(&host, ANVIL_TERMINAL_STATUS, &status, sizeof(status))) host.status_pending = false;
     }

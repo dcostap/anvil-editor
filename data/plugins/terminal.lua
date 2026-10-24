@@ -2287,7 +2287,12 @@ function TerminalView:can_close(approve)
   if not self.session then approve(); return end
   local status = self:close_status()
   local actions = M.quit_decision({ status })
-  if actions then approve(); return end
+  if actions then
+    core.log_quiet("Terminal session %d closed without confirmation: busy=%s app=%s agent=%s",
+      self.log_id, tostring(status.busy), tostring(status.agent_app), tostring(status.agent_state))
+    approve()
+    return
+  end
   core.log_quiet("Terminal session %d requested close confirmation: state=%s busy=%s",
     self.log_id, tostring(status.kind), tostring(status.busy))
   core.nag_view:show("Running Terminal", "End this Terminal Session and its running command?", {
@@ -2651,7 +2656,9 @@ function M.quit_decision(statuses, answer)
   local busy = {}
   local count = 0
   for i, status in ipairs(statuses) do
-    busy[i] = status.kind == "reconnecting" or (status.kind == "running" and status.busy ~= false)
+    local idle_pi = status.agent_app == "pi" and status.agent_state == "idle"
+    busy[i] = status.kind == "reconnecting"
+      or (status.kind == "running" and status.busy ~= false and not idle_pi)
     if busy[i] then count = count + 1 end
   end
   if count > 0 then
