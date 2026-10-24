@@ -101,6 +101,8 @@ In Pi, the script writes `terminal-sessions/<id>.agent` with Pi's executable and
 The record's `interrupted_pid` must match the report, so an old report cannot resume a different command.
 Both option parsers treat backslashes as escapes, and Bun has no quoting, so the host passes forward slashes and a short path to Bun.
 Run `ui/terminal_agent_resume.lua` after changes. It runs a fake Pi on Node and on Bun when they are installed.
+Compiled programs must also have the executable name `pi` or `pi.exe` before the preload checks their package.
+Run `node --test tests/agent-sessions.test.cjs` to check compiled Pi and unrelated programs. It requires Bun.
 
 The host reads program status reports (OSC 7501) and keeps the Agent Status in the session record.
 It sets `PI_PROGRAM_STATUS=1`, so Pi reports without a query.

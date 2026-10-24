@@ -2,7 +2,7 @@
 // through NODE_OPTIONS and BUN_OPTIONS. In Pi, it reports which session file Pi
 // writes, so a revived Terminal Session can resume that Agent Session. It also
 // loads pi-status.cjs into an interactive Pi, which reports Pi's current step to
-// the Terminal Session. Every other program returns at the package check.
+// the Terminal Session. Other programs return at the executable or package check.
 "use strict";
 // A failure here must never stop the program that loaded this file.
 try { (() => {
@@ -12,6 +12,8 @@ try { (() => {
   const path = require("path");
 
   const runtime = /^(node|bun)(\.exe)?$/i.test(path.basename(process.execPath));
+  // A compiled program can sit below an unrelated Pi package, such as ~/.local/bin/claude.exe.
+  if (!runtime && !/^pi(\.exe)?$/i.test(path.basename(process.execPath))) return;
   const script = runtime && process.argv[1] ? path.resolve(process.argv[1]) : null;
   if (runtime && !script) return;
   const name = (() => {
