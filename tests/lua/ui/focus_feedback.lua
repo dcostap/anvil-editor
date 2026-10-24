@@ -71,6 +71,7 @@ test.describe("Focus feedback surfaces", function()
   local saved, rectangles, clock, focused
   test.before_each(function()
     saved = {root=core.root_panel,view=core.active_view,window=core.active_window,
+      nag=core.nag_view,last=core.last_active_view,next=core.next_active_view,
       time=system.get_time,focus=system.window_has_focus,draw=renderer.draw_rect,color=style.focus_feedback}
     clock, focused, rectangles = 100, true, {}
     system.get_time = function() return clock end
@@ -84,12 +85,14 @@ test.describe("Focus feedback surfaces", function()
     end
     panes.reset_for_tests()
     core.root_panel = RootPanel()
+    core.nag_view = require("core.nagview")()
     core.root_panel.size.x, core.root_panel.size.y = 640, 400
     core.active_window = core.window
   end)
   test.after_each(function()
     panes.reset_for_tests()
     core.root_panel, core.active_view, core.active_window = saved.root, saved.view, saved.window
+    core.nag_view, core.last_active_view, core.next_active_view = saved.nag, saved.last, saved.next
     system.get_time, system.window_has_focus = saved.time, saved.focus
     renderer.draw_rect, style.focus_feedback = saved.draw, saved.color
   end)
@@ -150,5 +153,25 @@ test.describe("Focus feedback surfaces", function()
     sidebar:on_focus(true)
     draw(function() sidebar:draw(240, 400) end)
     test.ok(#rectangles > 0)
+  end)
+
+  test.it("does not highlight the content area when a confirmation takes focus", function()
+    local pane = panes.create {factory=function() return View() end}
+    local root = core.root_panel
+    root:update()
+    clock = clock + 10
+    core.nag_view:show("Open Folder", "Open this folder?", {
+      {text="Cancel", default_no=true},
+    })
+    root:update()
+    test.equal(core.active_view, core.nag_view)
+    draw(function() root:draw() end)
+    test.same(rectangles, {}, "Confirmation must not produce content-area focus feedback")
+
+    core.nag_view:next()
+    root:update()
+    test.equal(core.active_view, pane.current_view)
+    draw(function() root:draw() end)
+    inside(pane.current_view)
   end)
 end)

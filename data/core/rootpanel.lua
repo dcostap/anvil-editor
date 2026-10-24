@@ -688,6 +688,8 @@ function RootPanel:update()
   end
   local target = core.active_window == core.window and system.window_has_focus(core.window)
     and self:keyboard_target() or nil
+  -- Confirmations have their own button focus ring. Their View spans the content area, not just the card.
+  if target == core.nag_view then target = nil end
   local pane = target and panes().pane_for_view(target)
   -- A new file in the same Pane keeps the same focus region. Compound Views use their focused child.
   local identity = pane and pane.current_view == target and pane or target
