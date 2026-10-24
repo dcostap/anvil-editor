@@ -68,8 +68,9 @@ local GROUPS = {
 local GROUPS_HEIGHT = 0.5
 local GROUPS_ROWS = 16
 
-local function name_of(path)
-  return path:match("([^/\\]+)[/\\]*$") or path
+local function name_of(project)
+  if project.scratch then return "Scratch" end
+  return project.path:match("([^/\\]+)[/\\]*$") or project.path
 end
 
 ---@param action fun(name: string, ...)
@@ -428,9 +429,15 @@ function SidebarView:rebuild_rows()
     end
   end
   area = "main"
+  -- The Scratch Project stays first, even when it is Dormant.
+  for _, project in ipairs(projects) do
+    if project.scratch then add_loaded(project) end
+  end
   local grouped = {}
   for _, project in ipairs(projects) do
-    if project.state == "dormant" then
+    if project.scratch then
+      -- It is listed first.
+    elseif project.state == "dormant" then
       local bucket = age_bucket(project_activity(project), now)
       grouped[bucket] = grouped[bucket] or {}
       table.insert(grouped[bucket], project)
@@ -461,7 +468,7 @@ function SidebarView:rebuild_rows()
     local filtered, matches = {}, {}
     for _, row in ipairs(rows) do
       if row.project and row.kind ~= "terminal_group" then
-        local project_match = common.fuzzy_match(name_of(row.project.path), self.query) ~= nil
+        local project_match = common.fuzzy_match(name_of(row.project), self.query) ~= nil
         row.matches = project_match or row.tab and common.fuzzy_match(row.tab.name or "", self.query) ~= nil
         if row.matches then matches[row.project] = true end
       end
@@ -1461,7 +1468,7 @@ function SidebarView:draw_project(row, y, width, now)
   local cy = y + row.h / 2
   local left, right = m.pad, width - m.pad
   local project = row.project
-  local name = name_of(project.path)
+  local name = name_of(project)
   local dormant = project.state == "dormant"
   local asked = self.unload_shown
   local asking = asked and asked.key == row.id_key and asked.amount

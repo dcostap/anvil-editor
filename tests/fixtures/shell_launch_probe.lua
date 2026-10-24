@@ -65,7 +65,7 @@ local function windows(pid)
  user32.EnumWindows(cb, 0); cb:free(); return found, count
 end
 local function quit() core.exit(function() core.quit_request = true end, true) end
-local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b"}
+local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b", [root .. "/user/scratch"] = "s"}
 
 if path:match("/driver$") then
  core.add_background_thread(function()
@@ -138,10 +138,12 @@ if path:match("/driver$") then
    if action == "launch-files" then
     -- Files open in new Panes of the deepest known Project that contains them, in the Window used last.
     -- The runner lists Project and Replacement as recent Projects.
-    assert(common.mkdirp(root .. "/Project/sub") and common.mkdirp(root .. "/Replacement/deep"))
+    assert(common.mkdirp(root .. "/Project/sub") and common.mkdirp(root .. "/Replacement/deep")
+     and common.mkdirp(root .. "/Loose"))
     local inner, new, deep = root .. "/Project/sub/inner.txt", root .. "/Project/sub/new.txt",
      root .. "/Replacement/deep/deep.txt"
-    for _, name in ipairs {inner, deep} do
+    local loose = root .. "/Loose/loose.txt"
+    for _, name in ipairs {inner, deep, loose} do
      local file = assert(io.open(name, "wb")); file:write("on disk\n"); file:close()
     end
     local function opened(name, path)
@@ -160,7 +162,13 @@ if path:match("/driver$") then
     local b = wait(function() return ready("b")[1] end, 30, "file launch did not start its known Project")
     opened("b", deep)
     assert(b.window_id == a.window_id, "known Project did not open in the Window used last")
-    assert(#ready("a") == 1 and #ready("b") == 1, "file launches started duplicate Project runtimes")
+    -- A file that no known Project contains opens in the Scratch Project, in the same Window.
+    assert(exits(launch(loose), 20, "loose file") == 0, "loose file launch failed")
+    local s = wait(function() return ready("s")[1] end, 30, "loose file did not open the Scratch Project")
+    opened("s", loose)
+    assert(s.window_id == a.window_id, "Scratch Project did not open in the Window used last")
+    assert(#ready("a") == 1 and #ready("b") == 1 and #ready("s") == 1,
+     "file launches started duplicate Project runtimes")
     assert(select(2, windows(shell:pid())) == 1, "file launches opened another Window")
     return close_shell(shell, "file launches")
    end
@@ -268,7 +276,7 @@ if path:match("/driver$") then
   for _, item in ipairs(launched) do
    if item:running() then item:terminate(); item:wait(1) end
   end
-  for _, name in ipairs({"a", "b"}) do
+  for _, name in ipairs({"a", "b", "s"}) do
    for _, record in ipairs(ready(name)) do
     local handle = kernel.OpenProcess(0x1F0FFF, 0, record.pid)
     if handle ~= nil then kernel.TerminateProcess(handle, 9); kernel.CloseHandle(handle) end

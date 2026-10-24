@@ -100,7 +100,12 @@ local function snapshot()
   wait(function() return not core.project_sidebar_request end, 5)
   local previous = core.project_sidebar
   assert(core.request_project_sidebar(true))
-  return wait(function() return core.project_sidebar ~= previous and core.project_sidebar end, 5)
+  local model = wait(function() return core.project_sidebar ~= previous and core.project_sidebar end, 5)
+  -- The Scratch Project is always listed. These cases check the Projects from the recent list and runtimes.
+  local listed = {}
+  for key, value in pairs(model) do if type(key) ~= "number" then listed[key] = value end end
+  for _, project in ipairs(model) do if not project.scratch then listed[#listed + 1] = project end end
+  return listed
 end
 local function row(model, name)
   for _, project in ipairs(model) do

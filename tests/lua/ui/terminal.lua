@@ -238,6 +238,23 @@ test.describe("Terminal View", function()
     if context.previous_active_view then core.set_active_view(context.previous_active_view) end
   end)
 
+  test.it("starts a new Terminal of the Scratch Project at home and keeps it in that Project", function(context)
+    local Project = require "core.project"
+    local scratch = USERDIR .. PATHSEP .. "scratch"
+    test.ok(system.mkdir(scratch))
+    local projects = core.projects
+    core.projects = { Project(scratch) }
+    local ok, err = pcall(function()
+      test.ok(terminal.open())
+      local options = context.sessions[1].options
+      test.ok(common.path_equals(options.cwd, HOME), "the Terminal started in " .. tostring(options.cwd))
+      test.ok(common.path_equals(options.project_path, scratch))
+    end)
+    core.projects = projects
+    test.ok(test.remove_tree(scratch))
+    test.ok(ok, err)
+  end)
+
   test.it("replaces an unused terminal without keeping it in Pane history", function(context)
     local view = terminal.open()
     local pane = panes.pane_for_view(view)

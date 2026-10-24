@@ -265,9 +265,17 @@ The Window keeps its other Projects. The `launch-link` and `launch-handoff` shel
 
 An external launch selects its Project in the Window that the user activated last, as a Sidebar click does.
 A folder argument names the Project. File arguments open in new Panes of the deepest known Project that contains them all.
-Known Projects are the Sidebar list, loaded or Dormant. Other files open in a Project at their own folder.
+Known Projects are the Sidebar list, loaded or Dormant. Other files open in the Scratch Project.
 A launch with files waits up to 5 seconds for the first Sidebar list. A Terminal launch keeps its Terminal's Project.
+A cold start without saved Windows still opens a file's own folder.
 Run the `launch-files`, `launch-forward` and `restore-argument` shell probes after changes.
+
+The Scratch Project's folder is `USERDIR/scratch`. The shell makes it at startup and again before a launch uses it.
+The shell marks its Sidebar row with `scratch`. The list bound never removes that row.
+The status scan reads its Terminal Sessions while it is Dormant.
+The Sidebar View lists it first and names it "Scratch". Its new Terminals start in `HOME`.
+Lua finds it with `core.is_scratch_project`, which compares paths and does not resolve links.
+Run `ui/sidebar_view.lua`, `ui/terminal.lua` and the `launch-files` shell probe after changes.
 
 Shell App State keeps each Window's loaded Projects and Selected Project.
 Shutdown captures their paths before closing the hosted processes. Dormant Projects stay dormant.

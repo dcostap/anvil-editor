@@ -367,6 +367,8 @@ typedef struct {
   int sidebar_points;
   AnvilSidebarScan *sidebar_scan;
   char *sidebar_userdir, *sidebar_recents;
+  /* The Scratch Project's canonical folder, USERDIR\scratch. Every Project Sidebar lists it. */
+  char *scratch_path;
   /* Saved Project activity for Projects the Project Sidebar does not list yet. */
   AnvilShellProjectActivity saved_activity[ANVIL_SHELL_STATE_MAX_PROJECTS];
   size_t saved_activity_count;
@@ -5228,7 +5230,8 @@ static bool create_pipe(ShellProject *project, char *name, size_t name_size) {
   return true;
 }
 
-/* Called only by the resolve worker. Opening a directory can wait for a remote server. */
+/* The resolve worker calls this, because opening a directory can wait for a remote server.
+ * Shell startup also calls it once for the Scratch folder in its own user folder. */
 static wchar_t *canonical_project_identity(const char *path) {
   wchar_t *wide =
       (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", path, strlen(path) + 1);
@@ -5999,6 +6002,16 @@ static char *launch_request(const ProjectResolve *job, uint32_t *size) {
   return text;
 }
 
+/* Make the Scratch folder again if the user deleted it. */
+static bool make_scratch(void) {
+  wchar_t *folder =
+      (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", shell.scratch_path, strlen(shell.scratch_path) + 1);
+  bool made = folder && (CreateDirectoryW(folder, NULL) || GetLastError() == ERROR_ALREADY_EXISTS);
+  if (!made) SDL_Log("Shell could not make the Scratch folder: Windows error=%lu", GetLastError());
+  SDL_free(folder);
+  return made;
+}
+
 /* The Window that the user activated last, or NULL. */
 static ShellWindow *last_window(void) {
   ShellWindow *found = NULL;
@@ -6008,7 +6021,8 @@ static ShellWindow *last_window(void) {
 }
 
 /* An external launch selects its Project in the Window that the user activated last, as a Sidebar click does.
- * A folder argument names the Project. Files open in new Panes of the deepest known Project that contains them. */
+ * A folder argument names the Project. Files open in new Panes of the deepest known Project that contains them,
+ * or of the Scratch Project when no one Project contains them all. */
 static void finish_external(ProjectResolve *job) {
   AnvilShellLaunchRequest *request = job->external;
   job->external = NULL;
@@ -6050,7 +6064,8 @@ static void finish_external(ProjectResolve *job) {
     status = ANVIL_SHELL_LAUNCH_REJECTED;
   } else {
     const AnvilSidebarProject *known = job->folder ? NULL : launch_project(job);
-    const char *path = known ? known->path : job->path;
+    bool scratch = !known && !job->folder && job->file_count && shell.scratch_path && make_scratch();
+    const char *path = known ? known->path : scratch ? shell.scratch_path : job->path;
     uint32_t size = 0;
     char *text = job->file_count ? launch_request(job, &size) : NULL;
     ShellWindow *window = last_window();
@@ -6062,8 +6077,8 @@ static void finish_external(ProjectResolve *job) {
       SDL_Log("Shell external launch rejected: no Window or the selection queue is full");
       status = ANVIL_SHELL_LAUNCH_BUSY;
     } else {
-      SDL_Log("Shell external launch selects Project: pid=%lu Window=%u files=%d known=%d path=%s", client,
-              window->id, job->file_count, known != NULL, path);
+      SDL_Log("Shell external launch selects Project: pid=%lu Window=%u files=%d known=%d scratch=%d path=%s",
+              client, window->id, job->file_count, known != NULL, scratch, path);
       /* The selection replies once its Project is selected or started. */
       shell.resolvers->external = request;
       shell.resolvers->launched = true;
@@ -6391,6 +6406,11 @@ static void sync_sidebar_model(void) {
     windows[count++] = (AnvilSidebarWindow){window->id, sidebar_selected_project(window)};
   }
   anvil_sidebar_set_windows(&shell.sidebar, windows, count);
+  AnvilSidebarProject *scratch = shell.scratch_path ? sidebar_project(shell.scratch_path) : NULL;
+  if (scratch && !scratch->scratch) {
+    scratch->scratch = true;
+    shell.sidebar.revision++;
+  }
   for (ShellProject *project = shell.projects; project; project = project->next) {
     if (!project->project_path)
       continue;
@@ -7306,6 +7326,22 @@ static bool destroy_window(ShellWindow *window) {
   return true;
 }
 
+/* The Scratch Project holds files and Terminals that belong to no other Project. Its folder holds no work. */
+static void init_scratch(const wchar_t *userdir) {
+  static wchar_t folder[32768 + 16];
+  if (_snwprintf(folder, SDL_arraysize(folder), L"%ls\\scratch", userdir) <= 0) return;
+  if (!CreateDirectoryW(folder, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+    SDL_Log("Shell could not make the Scratch folder: Windows error=%lu", GetLastError());
+    return;
+  }
+  char *path = utf8_path(folder);
+  wchar_t *identity = path ? canonical_project_identity(path) : NULL;
+  free(path);
+  shell.scratch_path = identity ? utf8_path(identity) : NULL;
+  free(identity);
+  SDL_Log("Shell Scratch Project: %s", shell.scratch_path ? shell.scratch_path : "unavailable");
+}
+
 SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   *appstate = &shell;
   anvil_surface_log_init("shell");
@@ -7362,6 +7398,7 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
     shell.state_enabled = anvil_shell_state_writer_start(state_file);
     if (!shell.state_enabled) SDL_Log("Shell Window state writer unavailable; Windows will not be restored");
   } else SDL_Log("Shell user directory unavailable; Windows will not be restored");
+  if (userdir) init_scratch(userdir);
   shell.next_window = saved.last_window_id;
   shell.sidebar_points = saved.sidebar_points
                              ? SDL_clamp(saved.sidebar_points, SHELL_SIDEBAR_MIN_POINTS, SHELL_SIDEBAR_MAX_POINTS)
@@ -7538,6 +7575,7 @@ void anvil_shell_quit(void *appstate, SDL_AppResult result) {
   anvil_sidebar_destroy(&shell.sidebar);
   free(shell.sidebar_userdir);
   free(shell.sidebar_recents);
+  free(shell.scratch_path);
   for (ProjectResolve *job = shell.resolvers; job; job = job->next) {
     while (!SDL_GetAtomicInt(&job->done)) {
       if (SDL_GetTicks() >= deadline) {

@@ -5,7 +5,7 @@
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "project-menu" and action ~= "project-menu-background" then return end
 local background = action == "project-menu-background"
-local core, common, style = require "core", require "core.common", require "core.style"
+local core, common = require "core", require "core.common"
 local ffi = require "ffi"
 ffi.cdef [[
  int __stdcall EnumWindows(int (__stdcall *)(void *, intptr_t), intptr_t);
@@ -70,38 +70,41 @@ if path:match("/driver$") then
     "The Project did not start")
    coroutine.yield(1)
    local scale = user32.GetDpiForWindow(window) / 96
-   local font = style.font:get_height() / SCALE
-   -- The first row is the Project. Row heights follow the Sidebar's font.
-   local point = math.floor(100 * scale) + math.floor((40 + (font + 14) / 2) * scale) * 65536
    local menu_file = root .. "/menu-choice.txt"
    local function model()
     os.remove(root .. "/sidebar-0.lua"); user32.PostMessageW(window, 0x804d, 0, 0)
     return wait(function() return load("sidebar-0") end, 10, "Sidebar model did not arrive")
    end
-   local original
-   if background then
-    wait(function() return trace():match("Shell Project runtime ready: Project=%d+ background=1") end, 30,
-     "The background Project did not become ready")
-    for _, item in ipairs(model().items) do
-     if item.kind == "project" and item.path:gsub("\\", "/") == root .. "/Project" then original = item end
-    end
-    assert(original and original.state == "ready", "The background Project is not ready in the Sidebar")
-    -- Locate the Project through Sidebar input without selecting it first.
+   -- Finds a Project's row in `target`'s Sidebar through Sidebar input, without selecting it. A right-click on a
+   -- Project row makes the shell log a menu; an empty choice performs nothing. The Scratch Project's row is first.
+   local function find_row(target, row_id, message)
     local file = assert(io.open(menu_file, "wb")); file:write(""); file:close()
-    point = nil
-    for y = 46, 600, 12 do
+    local client = ffi.new("MenuProbeRect")
+    assert(user32.GetClientRect(target, client) ~= 0)
+    for y = 40, client.bottom / scale, 8 do
      local at, mark = math.floor(100 * scale) + math.floor(y * scale) * 65536, #trace()
-     for step = 7, 8 do user32.PostMessageW(window, 0x804a, step, at) end
+     for step = 7, 8 do user32.PostMessageW(target, 0x804a, step, at) end
      local deadline = system.get_time() + .3
      repeat
       coroutine.yield(.01)
-      local row = trace():match("Shell Project menu: Window=1 row=(%d+)", mark + 1)
-      if row then if tonumber(row) == original.row_id then point = at end; break end
+      local row = trace():match("Shell Project menu: Window=%d+ row=(%d+)", mark + 1)
+      if row then if tonumber(row) == row_id then return at end; break end
      until system.get_time() >= deadline
-     if point then break end
     end
-    assert(point, "The background Project has no Sidebar row")
+    error(message)
    end
+   if background then
+    wait(function() return trace():match("Shell Project runtime ready: Project=%d+ background=1") end, 30,
+     "The background Project did not become ready")
+   end
+   local original = wait(function()
+    for _, item in ipairs(model().items) do
+     if item.kind == "project" and item.path:gsub("\\", "/") == root .. "/Project" and item.state == "ready" then
+      return item
+     end
+    end
+   end, 30, "The Project is not ready in the Sidebar")
+   local point = find_row(window, original.row_id, "The Project has no Sidebar row")
    -- Right-clicks the Project's row with the shell's routing probe message: posted Win32 input is ignored on an
    -- inactive desktop. Returns the menu's items.
    local function menu(choice, items)
@@ -139,24 +142,12 @@ if path:match("/driver$") then
    local other = shell_windows(shell:pid())[1]
    assert(other ~= window, "The Project's new Window closed")
    window = other
+   point = find_row(window, original.row_id, "The moved Project has no Sidebar row")
    menu("Unload", "Move to New Window|Unload|Copy Path|Show in File Explorer")
    wait(function() return trace():find("Shell Project is Dormant: id=", 1, true) end, 15,
     "Unload did not unload the Project")
-   -- Without a loaded Project, the Sidebar's first row says so, and the Dormant Project is in a group in the
-   -- Sidebar's bottom area.
-   -- A right-click on a Project row makes the shell log a menu. Other rows ignore a right-click.
-   local file = assert(io.open(menu_file, "wb")); file:write(""); file:close()
-   point = nil
-   local client = ffi.new("MenuProbeRect")
-   assert(user32.GetClientRect(window, client) ~= 0)
-   for y = 40, client.bottom / scale, 8 do
-    local at, mark = math.floor(100 * scale) + math.floor(y * scale) * 65536, #trace()
-    for step = 7, 8 do user32.PostMessageW(window, 0x804a, step, at) end
-    local deadline = system.get_time() + .3
-    repeat coroutine.yield(.01) until trace():find("Shell Project menu:", mark + 1, true) or system.get_time() >= deadline
-    if trace():find("Shell Project menu:", mark + 1, true) then point = at; break end
-   end
-   assert(point, "The Dormant Project has no row in the Sidebar")
+   -- The Dormant Project is in a group in the Sidebar's bottom area.
+   point = find_row(window, original.row_id, "The Dormant Project has no row in the Sidebar")
    menu("", "Open in New Window|Copy Path|Show in File Explorer")
    -- After the first Window closed, a click on the Dormant Project in the other Window's Sidebar loads it there.
    os.remove(root .. "/project.lua")

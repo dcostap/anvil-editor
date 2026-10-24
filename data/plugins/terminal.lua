@@ -174,6 +174,13 @@ local function project_path(mode)
   return project and project.path or system.getcwd()
 end
 
+-- A new Terminal's starting folder. The Scratch Project's folder holds no work, so its Terminals start at home.
+local function start_directory(mode)
+  local path = project_path(mode)
+  if core.is_scratch_project(path) then return HOME or path end
+  return path
+end
+
 local function validated_terminal_directory(path)
   if type(path) ~= "string" or path == "" or path:find("[%z%c]") then return nil end
   local local_path = path:match("^[A-Za-z]:[\\/]") ~= nil
@@ -327,7 +334,7 @@ function TerminalView:new(options)
   self.cols, self.rows = 80, 24
   self.color_cache = {}
   self.launch_options = {
-    cwd = options.cwd or project_path(options.cwd_mode or terminal_config.cwd_mode),
+    cwd = options.cwd or start_directory(options.cwd_mode or terminal_config.cwd_mode),
     shell = options.shell or terminal_config.shell,
   }
   self.session_id = options.session_id
@@ -2393,7 +2400,7 @@ function M.prepare_session()
   end
   local options = {
     shell = terminal_config.shell,
-    cwd = project_path(terminal_config.cwd_mode),
+    cwd = start_directory(terminal_config.cwd_mode),
     project_path = project_path("project"),
     scrollback_lines = terminal_config.scrollback_lines,
   }
@@ -2551,7 +2558,7 @@ command.add(nil, {
       placement = context.placement or "current",
       direction = context.direction,
       focus = true,
-      cwd = file_context.source_directory(source_view) or project_path("project"),
+      cwd = file_context.source_directory(source_view) or start_directory("project"),
       reason = "terminal-open-here",
     } ~= nil
   end, {
@@ -2566,7 +2573,7 @@ command.add(nil, {
       placement = context.placement or "current",
       direction = context.direction,
       focus = true,
-      cwd = project_path("project"),
+      cwd = start_directory("project"),
       reason = "terminal-open-project-root",
     } ~= nil
   end, {

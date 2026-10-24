@@ -418,7 +418,8 @@ AnvilSidebarScan *anvil_sidebar_scan_start(const char *userdir, const char *rece
   if (!job->userdir || !job->recents)
     goto failed;
   for (size_t i = 0; i < known->count; i++) {
-    if (known->projects[i]->state == ANVIL_SIDEBAR_DORMANT)
+    /* The Scratch Project is listed even when no recent list names it. */
+    if (known->projects[i]->state == ANVIL_SIDEBAR_DORMANT && !known->projects[i]->scratch)
       continue;
     job->known[job->known_count] = strdup(known->projects[i]->path);
     if (!job->known[job->known_count++])

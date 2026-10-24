@@ -95,11 +95,11 @@ bool anvil_sidebar_merge_recents(AnvilSidebarModel *model, const char *const *pa
           bool in_source = false;
           for (size_t j = 0; j < front_count; j++)
             in_source |= front[j] == old;
-          if (old->state == ANVIL_SIDEBAR_DORMANT && !old->pid && !old->selected && !in_source)
+          if (old->state == ANVIL_SIDEBAR_DORMANT && !old->pid && !old->selected && !old->scratch && !in_source)
             break;
         }
         AnvilSidebarProject *old = pending.projects[victim];
-        bool protected = old->state != ANVIL_SIDEBAR_DORMANT || old->pid || old->selected;
+        bool protected = old->state != ANVIL_SIDEBAR_DORMANT || old->pid || old->selected || old->scratch;
         for (size_t j = 0; j < front_count; j++)
           protected |= front[j] == old;
         if (protected)
@@ -294,6 +294,7 @@ char *anvil_sidebar_snapshot(const AnvilSidebarModel *model, size_t offset) {
         quoted(&item, row->panes ? row->panes : "");
         append(&item, ",path=");
         quoted(&item, row->path);
+        if (row->scratch) append(&item, ",scratch=true");
         append(&item, "},");
       } else {
         const AnvilSidebarTerminal *terminal = &row->terminals[j - 1];

@@ -1897,6 +1897,11 @@ function core.root_project() return core.projects[1] end
 function core.normalize_to_project_dir(path) return core.root_project():normalize_path(path) end
 function core.project_absolute_path(path) return core.root_project():absolute_path(path) end
 
+-- Whether `path` is the Scratch Project's folder. The shell makes it and lists it in every Project Sidebar.
+function core.is_scratch_project(path)
+  return common.path_equals(path, USERDIR .. PATHSEP .. "scratch")
+end
+
 local function close_buffer_view(buffer)
   core.add_thread(function()
     local panes = require "core.panes"

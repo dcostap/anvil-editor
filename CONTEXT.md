@@ -33,6 +33,10 @@ _Avoid_: Project panel, app switcher, side panel
 A Project listed in an Anvil Window that is not currently loaded for editing. Selecting it loads it with its saved Workspace.
 _Avoid_: unopened Project, closed Project, inactive Project
 
+**Scratch Project**:
+The one Project for files and Terminals that belong to no other Project. A file opened from outside Anvil goes there when no known Project contains it. The Project Sidebar always lists it first, even when it is Dormant. Its Terminals start in the home folder. A Project at the home folder is a different Project.
+_Avoid_: Ghost Project, home Project, default Project
+
 **Root Project**:
 The first project loaded into Anvil, used as the default base for relative paths and project-level behavior.
 _Avoid_: Primary project, main project

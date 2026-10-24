@@ -54,6 +54,8 @@ typedef struct {
   uint32_t row_id, id, pid, window_id;
   AnvilSidebarState state;
   bool exists, selected, deferred_dialog, close_choice;
+  /* The Scratch Project, which holds files and Terminals outside every other Project. The shell marks it. */
+  bool scratch;
   /* The last time the user worked in it, in Unix seconds; 0 means unknown. The shell sets and saves it. */
   int64_t activity;
   /* The Project's own Pane report: Lua table text, or empty while it has not reported. */
