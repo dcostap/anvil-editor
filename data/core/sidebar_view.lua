@@ -84,6 +84,8 @@ function SidebarView:new(action, collapsed, seen, restore_folds)
   self.seen = seen or {}
   -- The Selected Projects that show expanded over their saved state, and the Projects selected at the last layout.
   self.opened, self.was_selected = {}, {}
+  -- Snapshot ownership separately: callers can update the same model table after a move.
+  self.owned_projects = {}
   self.width, self.view_h = 240, 600
   self.main_h, self.bottom_h = 0, 0
   -- The search field's text, caret and selection. `query` is its text.
@@ -270,6 +272,19 @@ end
 
 function SidebarView:set_model(projects, window_id)
   self.projects, self.window_id = projects, window_id
+  local owned = {}
+  for _, project in ipairs(projects) do
+    local owner = project.window_id
+    if window_id and owner == window_id then
+      owned[project.path] = true
+    elseif window_id and owner and owner ~= 0 and self.owned_projects[project.path] then
+      -- Fold once when a Project leaves this Window. Later manual expansion still acts.
+      local key = "project:" .. project.path
+      self.opened[key], self.collapsed[key] = nil, true
+      self.action("collapsed", key, true)
+    end
+  end
+  self.owned_projects = owned
   -- A Tab moved inside its Project shows its result in the next report.
   if self.pending and not self.pending.transfer then self.pending = nil end
   self:rebuild_rows()

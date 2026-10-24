@@ -221,6 +221,8 @@ test.describe("Sidebar list actions", function()
     model[1].window_id = 9
     model.windows = {{id=7,selected_project=0},{id=9,selected_project=11}}
     a:set_model(model, 7); b:set_model(model, 9)
+    -- Expand the row that the move folded to check its children's dimming too.
+    a:toggle("project:C:/Alpha", true)
     test.ok(find_text(drawn_texts(a, 600, 1000), "notes.lua").opacity
       < find_text(drawn_texts(b, 600, 1000), "notes.lua").opacity)
   end)
@@ -447,6 +449,48 @@ local function row_index(view, predicate)
 end
 
 test.describe("Sidebar Window folding", function()
+  test.it("folds a moved Project only in its old Window and permits manual expansion", function()
+    local function model(owner)
+      return {
+        {row_id=1,id=11,path="C:/A",state="ready",window_id=owner,
+          panes={active=1,{id="a",name="a.lua"}}},
+        {row_id=2,id=22,path="C:/B",state="ready",window_id=7,
+          panes={active=1,{id="b",name="b.lua"}}},
+        windows={{id=7,selected_project=owner == 7 and 11 or 22},
+          {id=9,selected_project=owner == 9 and 11 or 0}},
+      }
+    end
+    local actions, action = recorder()
+    local saved = {["project:C:/A"]=false}
+    local a, b = SidebarView(action, saved, nil, true), SidebarView(function() end)
+    a:set_model(model(7), 7); b:set_model(model(7), 9)
+    test.equal(count(a, "tab"), 2)
+    a:set_model(model(9), 7); b:set_model(model(9), 9)
+    test.equal(count(a, "tab"), 1, "The old Window still shows the moved Project's Tab")
+    test.equal(a.rows[3].tab.name, "b.lua")
+    test.equal(count(b, "tab"), 2, "The destination folded the moved Project")
+    test.same(actions, {{"collapsed", "project:C:/A", true}})
+
+    -- Model updates and a new frontend keep the saved fold.
+    a:set_model(model(9), 7)
+    a = SidebarView(action, saved, nil, true)
+    a:set_model(model(9), 7)
+    test.equal(count(a, "tab"), 1)
+    test.equal(#actions, 1, "A model update repeats the automatic fold")
+
+    -- Manual expansion stays in effect after a model update.
+    a:toggle("project:C:/A", true)
+    a:set_model(model(9), 7)
+    test.equal(count(a, "tab"), 2, "A model update undid manual expansion")
+    test.same(actions[2], {"collapsed", "project:C:/A", false})
+
+    -- Moving back selects and expands A, even after the user folded its remote row.
+    a:toggle("project:C:/A", false)
+    a:set_model(model(7), 7); b:set_model(model(7), 9)
+    test.equal(count(a, "tab"), 2, "The returning Selected Project stayed folded")
+    test.equal(count(b, "tab"), 1, "The second Window did not fold the departing Project")
+  end)
+
   test.it("keeps Project age groups and Terminal age groups separate between Windows", function()
     local model = {
       {row_id=1,id=1,path="C:/A",state="ready",window_id=7,terminals={
