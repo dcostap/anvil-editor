@@ -3348,6 +3348,10 @@ local function layout_inline_image_rows(view, line_text, render_line)
   local wrap_mode = config.plugins.linewrapping.mode
   local rows, y, segment_start = {}, 0, 1
   local function append_text_rows(col1, col2, highlight_full_layout)
+    -- Retained image ranges can outlive their source during an edit.
+    -- Never scan past the text: an empty character cannot advance the loop.
+    col1 = math.max(1, col1)
+    col2 = math.min(#line_text + 1, col2)
     if col2 <= col1 then return end
     -- Segments are scanned in increasing column order, so a cursor keeps the
     -- scan linear. Runs with a constant x offset, such as an embedded image's
@@ -3510,9 +3514,15 @@ local function render_line_metric_height(view, render_line)
 end
 
 local function apply_inline_edit_to_render(render_line, current_text, edit)
+  -- Columns describe one captured line only. Multiline removals need the
+  -- structural projection, even when both endpoint columns are equal.
+  -- The replacement may contain newlines; split_pending_render handles them.
+  if edit.line1 ~= edit.line2 then return nil end
   local start_col, end_col = edit.col1, edit.col2
   local replacement = edit.text or ""
-  if not start_col or not end_col or start_col > end_col then
+  if not start_col or not end_col or start_col < 1
+    or start_col > end_col or end_col > #current_text + 1
+  then
     return nil
   end
   if current_text == "" and #(render_line.fragments or {}) == 0 then

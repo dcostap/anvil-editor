@@ -52,7 +52,7 @@ local function image_count(view, label)
 end
 
 test.describe("Markdown pending images", function()
-  test.it("keeps a duplicated image line rendered while semantics publish", function()
+  test.it("keeps image duplication, undo and redo correct before semantic publication", function()
     local old_live = config.markdown_live_editor
     local old_images = config.markdown_live_render_images
     local old_active = core.active_view
@@ -79,7 +79,7 @@ test.describe("Markdown pending images", function()
 
       local filename = root .. PATHSEP .. "note.md"
       local buffer = Buffer(filename, filename, true)
-      buffer:insert(1, 1, "![[one.png]]\nplain")
+      buffer:insert(1, 1, "![[one.png]]\n\nplain")
       buffer:clear_undo_redo()
       view = Editor(buffer)
       view.position.x, view.position.y = 0, 0
@@ -98,6 +98,27 @@ test.describe("Markdown pending images", function()
       test.equal(image_count(view, "pending duplicate"), 2)
       test.ok(wait_ready(instance, view), instance.reason)
       test.equal(image_count(view, "published duplicate"), 2)
+
+      for _ = 1, 3 do
+        -- Undo must also work while the duplicated image's source is visible.
+        buffer:set_selection(2, 5)
+        view:get_line_render(2)
+        buffer:undo()
+        test.equal(buffer.lines[2], "\n")
+        local render = view:get_line_render(2)
+        for _, fragment in ipairs(render and render.fragments or {}) do
+          test.ok(not (fragment.widget and fragment.widget.type == "image"),
+            "Undo must remove the duplicated image")
+        end
+        test.equal(image_count(view, "pending undo"), 1)
+        test.ok(wait_ready(instance, view), instance.reason)
+        test.equal(image_count(view, "published undo"), 1)
+
+        buffer:redo()
+        test.equal(image_count(view, "pending redo"), 2)
+        test.ok(wait_ready(instance, view), instance.reason)
+        test.equal(image_count(view, "published redo"), 2)
+      end
     end)
 
     if view then markdown.live_render.detach(view) end
@@ -105,7 +126,7 @@ test.describe("Markdown pending images", function()
     config.markdown_live_editor = old_live
     config.markdown_live_render_images = old_images
     core.active_view = old_active
-    common.rm(root, true)
+    test.ok(test.remove_tree(root))
     if not ok then error(err, 0) end
   end)
 
