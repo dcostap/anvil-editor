@@ -33,9 +33,20 @@ local function probe(kind)
   config.disable_blink = true
   config.animated_caret = false
 
+  local buffer
+  if kind == "save" then
+    config.plugins.autosave_fast.enabled = false
+    local path = USERDIR .. PATHSEP .. "save-result.txt"
+    local file = assert(io.open(path, "wb"))
+    file:write("original\n"); file:close()
+    buffer = require("core.buffer")(path, path)
+    buffer:insert(1, 1, "saved ")
+  end
   local ResultView = View:extend()
   function ResultView:update() end
-  function ResultView:draw() self.drawn_value = self.value end
+  function ResultView:draw()
+    self.drawn_value = buffer and (buffer:is_dirty() and "before" or "after") or self.value
+  end
   function ResultView:on_text_input(value) self.value = value end
   local view = ResultView()
   view.value = "before"
@@ -50,6 +61,23 @@ local function probe(kind)
     if not core.performance_snapshot.did_redraw then idle = true break end
   end
   assert(idle and view.drawn_value == "before", "the View did not reach idle")
+
+  if kind == "save" then
+    assert(buffer:is_dirty(), "the Buffer was saved before the measured request")
+    local request = assert(buffer:save_async())
+    local deadline = os.time() + 30
+    now = now + 1
+    repeat
+      core.run_step()
+      system.sleep(0.001)
+    until request.status ~= "pending" or os.time() >= deadline
+    assert(request.status == "saved", request.error or "the background save did not finish")
+    assert(not buffer:is_dirty(), "the saved Buffer stayed dirty")
+    core.run_step()
+    assert(view.drawn_value == "after", "the background save left the dirty marker on screen")
+    buffer:on_close()
+    return
+  end
 
   if kind == "worker" or kind == "hidden" then
     -- Start a frame through normal input, then deliver a result before the next frame.
@@ -146,6 +174,7 @@ test.describe("Redraw scheduling", function()
     { "input", "retains input changes until the next frame without another event" },
     { "worker", "draws a worker result at the next frame without input" },
     { "hidden", "retains a hidden Project's worker result until rendering resumes" },
+    { "save", "redraws the clean state after a background save without input" },
   }
   for _, case in ipairs(cases) do
     test.it(case[2], function()

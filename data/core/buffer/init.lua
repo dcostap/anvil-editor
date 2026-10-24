@@ -878,6 +878,8 @@ function Buffer:save(filename, abs_filename)
     self:clean()
   end
   if core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
+  -- Background saves must show the new clean state without another input event.
+  core.redraw = true
 end
 
 ---Return whether a worker can prepare this file without changing save rules.
