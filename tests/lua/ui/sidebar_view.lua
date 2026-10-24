@@ -305,6 +305,56 @@ test.describe("Sidebar list actions", function()
     test.equal(highlighted(other), "")
   end)
 
+  -- The shell keeps the Window's old selection until a chosen Pane renders. The Sidebar shows the user's choice.
+  local function two_projects(selected, b_active, b_panes)
+    return {
+      {row_id=1,id=11,path="C:/A",state="ready",window_id=7,terminals={},panes={active=1,visible=1,
+        {id="pane-1",group=1,name="a.lua"}}},
+      {row_id=2,id=12,path="C:/B",state="ready",window_id=7,activity=os.time(),panes=b_panes or {active=b_active,
+        visible=1,{id="pane-2",group=1,name="b1.lua"},{id="pane-3",group=1,name="b2.lua"}},
+        terminals={{id="server",title="server",cwd="C:/B",state="running",busy=1,activity=os.time()}}},
+      windows={{id=7,selected_project=selected}},
+    }
+  end
+
+  test.it("keeps the highlight on a chosen Tab while its Project opens it", function()
+    local view = SidebarView(function() end)
+    view:set_model(two_projects(11, 1), 7)
+    test.equal(highlighted(view), "a.lua")
+    view:on_mouse_pressed("left", 20, row_y(view, "tab", 3), 240)
+    view:on_mouse_released("left", 20, row_y(view, "tab", 3))
+    -- The shell reports other changes while it holds the old selection.
+    view:set_model(two_projects(11, 1), 7)
+    test.equal(highlighted(view), "b2.lua")
+    view:set_model(two_projects(12, 2), 7)
+    test.equal(highlighted(view), "b2.lua")
+    -- After that, the model's selection shows again.
+    view:set_model(two_projects(12, 1), 7)
+    test.equal(highlighted(view), "b1.lua")
+  end)
+
+  test.it("keeps the highlight on a chosen Terminal Session until its Tab is active", function()
+    local view = SidebarView(function() end)
+    view:set_model(two_projects(11, 1), 7)
+    view:on_mouse_pressed("left", 20, row_y(view, "terminal"), 240)
+    -- The Project is selected before its Pane for the Terminal Session opens.
+    view:set_model(two_projects(12, 1), 7)
+    test.equal(highlighted(view), "server")
+    view:set_model(two_projects(12, nil, {active=3,visible=1,{id="pane-2",group=1,name="b1.lua"},
+      {id="pane-3",group=1,name="b2.lua"},{id="pane-4",group=1,name="server",
+      terminal={session="server",state="running",busy=true}}}), 7)
+    test.equal(highlighted(view), "server")
+    test.equal(count(view, "terminal"), 0)
+  end)
+
+  test.it("shows the model's selection when a chosen Tab closes before it opens", function()
+    local view = SidebarView(function() end)
+    view:set_model(two_projects(11, 1), 7)
+    view:on_mouse_pressed("left", 20, row_y(view, "tab", 3), 240)
+    view:set_model(two_projects(12, nil, {active=1,visible=1,{id="pane-2",group=1,name="b1.lua"}}), 7)
+    test.equal(highlighted(view), "b1.lua")
+  end)
+
   test.it("lists a loaded Project's Tabs in Pane order and acts on a clicked Tab", function()
     local actions, action = recorder()
     local view = SidebarView(action)

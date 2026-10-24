@@ -34,6 +34,8 @@ local EDGE, OUTER_EDGE = 0.32, 0.15
 local SCROLL_ZONE, SCROLL_SPEED = 28, 900
 -- A dropped Tab stays dim at its old place until its Project reports the result, at most this long.
 local PENDING_MOVE, PENDING_TRANSFER = 1.5, 4
+-- A chosen row keeps the selection until the model selects it, at most this long.
+local CHOICE_TIMEOUT = 5
 -- Animated values approach their targets at these rates per second. A change is 95% done after 3 / rate seconds.
 local MOVE_RATE, FADE_RATE, SCROLL_RATE = 20, 14, 22
 -- Highlights glide and fade at these base rates, times their speed. The hover highlight follows the pointer fastest.
@@ -179,8 +181,19 @@ function SidebarView:edit(name)
   return true
 end
 
+-- The shell keeps a Window's old selection until a chosen Pane renders, and opens a Terminal Session's Pane after
+-- it selects the Project. The chosen row shows the selection meanwhile, so the highlight does not go back.
+function SidebarView:choose(row)
+  local owner = row.project.window_id
+  if row.selected or row.current or self.window_id and owner and owner ~= 0 and owner ~= self.window_id then return end
+  self.chosen = {key = row.id_key, path = row.project.path, session = row.kind == "terminal" and row.terminal.id or nil,
+    deadline = system.get_time() + CHOICE_TIMEOUT}
+  self:rebuild_rows()
+end
+
 function SidebarView:activate_row(row)
   if not row then return end
+  if row.kind == "project" or row.kind == "tab" or row.kind == "terminal" then self:choose(row) end
   if row.kind == "project" then self.action("select", row.project.row_id)
   elseif row.kind == "tab" then self.action("request", "select", row.project.path, {action = "focus", pane = row.tab.id})
   elseif row.kind == "terminal" then self.action("select_terminal", row.project.row_id, row.terminal.id)
@@ -435,6 +448,20 @@ function SidebarView:rebuild_rows()
       row.y, bottom_y = bottom_y, bottom_y + row.h
     end
   end
+  -- The chosen row, or the Tab that shows the chosen Terminal Session, takes the selection until the model selects it.
+  local chosen, target = self.chosen, nil
+  if chosen then
+    for _, row in ipairs(rows) do
+      if row.id_key == chosen.key or chosen.session and row.kind == "tab" and row.project.path == chosen.path
+        and row.tab.terminal and row.tab.terminal.session == chosen.session then target = row end
+    end
+    if not target or target.selected or target.current then
+      self.chosen = nil
+    else
+      for _, row in ipairs(rows) do row.selected = nil end
+      target.selected = true
+    end
+  end
   self.rows, self.main_h, self.bottom_h = rows, main_y, bottom_y
   self.was_selected = selected_keys
   self.cursor = nil
@@ -597,12 +624,12 @@ function SidebarView:on_mouse_pressed(button, x, y)
     return
   end
   if row.kind == "terminal" then
-    if button == "left" then self.action("select_terminal", row.project.row_id, row.terminal.id) end
+    if button == "left" then self:activate_row(row) end
     return
   end
   if row.kind == "tab" then
     if button == "left" then
-      self.action("request", "select", row.project.path, {action = "focus", pane = row.tab.id})
+      self:activate_row(row)
       -- The press becomes a drag when the pointer moves far enough.
       self.press = {key = row.id_key, x = x, y = y}
     elseif button == "middle" then
@@ -619,7 +646,7 @@ function SidebarView:on_mouse_pressed(button, x, y)
     -- The release acts, so the menu's loop never takes the press's own release.
     self.click_row = {button = button, row_id = row.project.row_id}
   else
-    self.action("select", row.project.row_id)
+    self:activate_row(row)
   end
 end
 
@@ -991,6 +1018,10 @@ end
 
 -- Moves the shown state one step toward the layout. Returns true while something still moves.
 function SidebarView:step(dt)
+  if self.chosen and system.get_time() >= self.chosen.deadline then
+    self.chosen = nil
+    self:rebuild_rows()
+  end
   local animate = config.transitions ~= false and dt > 0 and self.drawn
   local moving = false
   local function ease(value, target, rate, epsilon)
@@ -1294,6 +1325,7 @@ function SidebarView:animation_delay(clock)
     if remaining > 0 then delay = math.min(delay or remaining, remaining) end
   end
   if self.pending then delay = math.min(delay or math.huge, math.max(0, self.pending.deadline - clock)) end
+  if self.chosen then delay = math.min(delay or math.huge, math.max(0, self.chosen.deadline - clock)) end
   return delay
 end
 
