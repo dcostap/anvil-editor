@@ -6806,14 +6806,14 @@ static RECT visible_placement(const AnvilShellWindowState *placement) {
 static ShellWindow *create_window(const AnvilShellWindowState *placement) {
   unsigned count = 0;
   for (ShellWindow *item = shell.windows; item; item = item->next) count++;
-  if (count >= 64 || shell.next_window == UINT32_MAX || shell.shutting_down) {
+  if (count >= 64 || (!placement && shell.next_window >= INT32_MAX) || shell.shutting_down) {
     SDL_Log("Shell rejected New Window: Window bound or shutdown");
     return NULL;
   }
   ShellWindow *window = calloc(1, sizeof(*window));
   if (window) window->background = 23 | 23 << 8 | 28 << 16;
   if (!window) return NULL;
-  window->id = ++shell.next_window;
+  window->id = placement ? placement->id : ++shell.next_window;
   window->sidebar = true;
   window->sidebar_hidden = placement ? placement->sidebar_hidden : count > 0;
   window->sidebar_open = window->sidebar_hidden ? 0.0f : 1.0f;
@@ -6984,7 +6984,7 @@ static void save_windows(bool final) {
       activity[j] = activity[j - 1];
       activity[j - 1] = swap;
     }
-  AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points};
+  AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.next_window};
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
   for (size_t i = 0; i < count; i++) if (owned[i]) anvil_shell_window_state_free(&entries[i]);
@@ -7230,6 +7230,7 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
     shell.state_enabled = anvil_shell_state_writer_start(state_file);
     if (!shell.state_enabled) SDL_Log("Shell Window state writer unavailable; Windows will not be restored");
   } else SDL_Log("Shell user directory unavailable; Windows will not be restored");
+  shell.next_window = saved.last_window_id;
   shell.sidebar_points = saved.sidebar_points
                              ? SDL_clamp(saved.sidebar_points, SHELL_SIDEBAR_MIN_POINTS, SHELL_SIDEBAR_MAX_POINTS)
                              : SHELL_SIDEBAR_POINTS;

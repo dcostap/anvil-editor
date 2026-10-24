@@ -428,6 +428,69 @@ local function row_index(view, predicate)
   error("no matching row")
 end
 
+test.describe("Sidebar Window folding", function()
+  test.it("keeps Project age groups and Terminal age groups separate between Windows", function()
+    local model = {
+      {row_id=1,id=1,path="C:/A",state="ready",window_id=7,terminals={
+        {id="old",title="old shell",state="running",activity=os.time() - 15 * 86400}}},
+      {row_id=2,path="C:/Old",state="dormant",activity=os.time() - 60 * 86400},
+    }
+    local saved_a, saved_b = {["project:C:/A"]=false}, {["project:C:/A"]=false}
+    local a, b = SidebarView(function() end, saved_a, nil, true), SidebarView(function() end, saved_b, nil, true)
+    a:set_model(model, 7); b:set_model(model, 9)
+    a:toggle("terminals:month:C:/A", true)
+    b:toggle("group:older", false)
+    for _ = 1, 2 do
+      test.equal(count(a, "terminal"), 1)
+      test.equal(count(b, "terminal"), 0)
+      test.equal(count(a, "project"), 2)
+      test.equal(count(b, "project"), 1)
+      a = SidebarView(function() end, saved_a, nil, true)
+      b = SidebarView(function() end, saved_b, nil, true)
+      a:set_model(model, 7); b:set_model(model, 9)
+    end
+  end)
+
+  test.it("starts with only the Selected Project expanded and keeps each Window's choices", function()
+    local model = {
+      {row_id=1,id=11,path="C:/A",state="ready",window_id=7,panes={{id="a",name="a.lua"}}},
+      {row_id=2,id=22,path="C:/B",state="ready",window_id=9,panes={{id="b",name="b.lua"}}},
+      {row_id=3,id=33,path="C:/C",state="ready",window_id=7,panes={{id="c",name="c.lua"}}},
+      windows={{id=7,selected_project=11},{id=9,selected_project=22}},
+    }
+    local saved_a, saved_b = {}, {}
+    local a, b = SidebarView(function() end, saved_a, nil, true), SidebarView(function() end, saved_b, nil, true)
+    local function tabs(view)
+      local names = {}
+      for _, row in ipairs(view.rows) do if row.kind == "tab" then names[#names + 1] = row.tab.name end end
+      return table.concat(names, ",")
+    end
+    a:set_model(model, 7); b:set_model(model, 9)
+    test.equal(tabs(a), "a.lua")
+    test.equal(tabs(b), "b.lua")
+    -- Expand A in B's Window. The same choice in A's Window stays unchanged.
+    b:toggle("project:C:/A", true)
+    a:toggle("project:C:/A", false)
+    test.equal(tabs(a), "")
+    test.equal(tabs(b), "a.lua,b.lua")
+    a:set_model(model, 7); b:set_model(model, 9)
+    test.equal(tabs(a), "")
+    test.equal(tabs(b), "a.lua,b.lua")
+    -- A fresh frontend restores the manual folds, including the Selected Project's fold.
+    a = SidebarView(function() end, saved_a, nil, true)
+    b = SidebarView(function() end, saved_b, nil, true)
+    a:set_model(model, 7); b:set_model(model, 9)
+    test.equal(tabs(a), "")
+    test.equal(tabs(b), "a.lua,b.lua")
+    model.windows[1].selected_project = 33
+    a:set_model(model, 7)
+    test.equal(tabs(a), "c.lua", "Selecting another Project did not expand it")
+    model.windows[1].selected_project = 11
+    a:set_model(model, 7)
+    test.equal(tabs(a), "a.lua", "Selecting the folded Project again did not expand it")
+  end)
+end)
+
 test.describe("Sidebar age groups", function()
   local now = os.time()
   local function project(id, path, age, state, terminals)

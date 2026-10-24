@@ -13,7 +13,7 @@
 #define ANVIL_SHELL_STATE_MAX_BYTES (256 * 1024)
 
 typedef struct {
-  /* The Window's id in the shell that wrote the file. Adopted Projects name it. */
+  /* The Window's persistent id. Adopted Projects and saved Sidebar folds name it. */
   uint32_t id;
   /* Normal (restored) bounds in Windows workspace coordinates, as `GetWindowPlacement` reports them. */
   int32_t x, y, w, h;
@@ -41,6 +41,8 @@ typedef struct {
   size_t project_count;
   /* The Project Sidebar's width in points, shared by every Window. 0 means the default. */
   int sidebar_points;
+  /* Highest allocated Window id, including Windows that closed. Never reuse their folding state. */
+  uint32_t last_window_id;
 } AnvilShellState;
 
 /* Encodes `state`. Returns NULL when it exceeds the bounds above. */

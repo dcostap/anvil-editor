@@ -72,12 +72,13 @@ static void sidebar_layout(void) {
   AnvilShellWindowState windows[] = {sample[0], sample[1], sample[2]};
   windows[0].sidebar_hidden = true;
   windows[2].sidebar_hidden = true;
-  AnvilShellState state = {windows, 3, NULL, 0, 320}, decoded;
+  AnvilShellState state = {windows, 3, NULL, 0, 320, 42}, decoded;
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
   CHECK(data && anvil_shell_state_decode(data, size, &decoded), "Sidebar layout did not round-trip");
   CHECK(decoded.count == 3 && decoded.sidebar_points == 320,
         "Sidebar layout changed");
+  CHECK(decoded.last_window_id == 42, "Closed Window identities could be reused for another Window's folds");
   if (decoded.count == 3)
     CHECK(decoded.windows[0].sidebar_hidden && !decoded.windows[1].sidebar_hidden && decoded.windows[2].sidebar_hidden,
           "Windows lost their independent Sidebar visibility");
@@ -111,6 +112,7 @@ static void round_trip(void) {
   CHECK(data, "encode failed");
   CHECK(anvil_shell_state_decode(data, size, &decoded), "decode failed");
   CHECK(decoded.count == 3, "Window count changed");
+  CHECK(decoded.last_window_id == 7, "The allocation sequence did not include the largest saved Window ID");
   for (size_t i = 0; i < 3 && i < decoded.count; i++) {
     AnvilShellWindowState *a = &sample[i], *b = &decoded.windows[i];
     CHECK(a->id == b->id, "Window id changed");
@@ -132,7 +134,11 @@ static void rejects(void) {
   AnvilShellState decoded;
   const char *bad[] = {
     "anvil-shell-windows 1\nwindow 0 0 10 10 0 0 \n",
-    "anvil-shell-windows 7\n",
+    "anvil-shell-windows 8\n",
+    "anvil-shell-windows 7\nsequence -1\n",
+    "anvil-shell-windows 7\nsequence 2\nsequence 3\n",
+    "anvil-shell-windows 7\nsequence 2147483648\n",
+    "anvil-shell-windows 7\nwindow 1 0 0 10 10 0 0 0 \nwindow 1 0 0 10 10 0 0 0 \n",
     "anvil-shell-windows 6\nwindow 1 0 0 10 10 0 2 0 \n",
     "anvil-shell-windows 6\nwindow 1 0 0 10 10 0 0 \n",
     "anvil-shell-windows 6\nsidebar 320 1\n",

@@ -70,10 +70,12 @@ local function name_of(path)
 end
 
 ---@param action fun(name: string, ...)
----@param collapsed table<string, boolean>? Saved collapse state, shared by every Sidebar surface.
-function SidebarView:new(action, collapsed, seen)
+---@param collapsed table<string, boolean>? This Window's saved folding state.
+---@param collapse_projects boolean? Start other Projects collapsed and restore saved folds on first selection.
+function SidebarView:new(action, collapsed, seen, collapse_projects)
   self.action, self.rows, self.scroll, self.bottom_scroll = action, {}, 0, 0
   self.collapsed = collapsed or {}
+  self.collapse_projects = collapse_projects == true
   -- When the user last looked at each Terminal Session, by its ID. Every surface shares it.
   self.seen = seen or {}
   -- The Selected Projects that show expanded over their saved state, and the Projects selected at the last layout.
@@ -327,11 +329,15 @@ function SidebarView:rebuild_rows()
     local key = (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
     -- A Project expands when it becomes selected, over its saved state. A collapse while it is selected acts.
     if key then
-      if is_selected and not self.was_selected[key] then self.opened[key] = true end
+      if is_selected and not self.was_selected[key] then
+        -- A restored Window keeps its manual fold. Later selections still expand the chosen Project.
+        self.opened[key] = not self.collapse_projects or self.selected_once or self.collapsed[key] == nil
+        self.selected_once = true
+      end
       if not is_selected then self.opened[key] = nil end
       selected_keys[key] = is_selected or nil
     end
-    local collapsed = key and not self.opened[key] and self:is_collapsed(key, false) or false
+    local collapsed = key and not self.opened[key] and self:is_collapsed(key, self.collapse_projects) or false
     add({kind = "project", project = project, key = key, collapsed = collapsed, tabs = #panes,
       id_key = "project:" .. project.path, current = is_selected,
       selected = is_selected and (not active or collapsed and not searching)}, m.project)

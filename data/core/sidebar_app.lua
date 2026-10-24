@@ -22,20 +22,30 @@ local function load_zoom()
   if ok then set_zoom(interface) else core.log_quiet("Sidebar Zoom not loaded: %s", tostring(interface)) end
 end
 
--- Which Sidebar groups are collapsed. Every surface shares it, and the next Sidebar process restores it.
+-- Each persistent Window ID owns its Project and group folds. Sidebar recovery uses the same tables.
 local collapsed = {}
 local function load_collapsed()
-  local ok, saved = pcall(storage.load, "sidebar", "collapsed")
+  local ok, saved = pcall(storage.load, "sidebar", "folding")
   if ok and type(saved) == "table" then
-    for key, value in pairs(saved) do
-      if type(key) == "string" and type(value) == "boolean" then collapsed[key] = value end
+    for id, folds in pairs(saved) do
+      if type(id) == "number" and type(folds) == "table" then
+        collapsed[id] = {}
+        for key, value in pairs(folds) do
+          if type(key) == "string" and type(value) == "boolean" then collapsed[id][key] = value end
+        end
+      end
     end
   end
   core.log_quiet("Sidebar collapse state: %s", ok and saved and "loaded" or "defaults")
 end
 local function save_collapsed()
-  local ok, err = pcall(storage.save, "sidebar", "collapsed", collapsed)
-  if not ok then core.log_quiet("Sidebar collapse state not saved: %s", tostring(err)) end
+  -- Retain every live Window, including hidden surfaces not yet created by this frontend.
+  local live = {}
+  for _, window in ipairs((core.project_sidebar or {}).windows or {}) do live[window.id] = true end
+  for id in pairs(surfaces) do live[id] = true end
+  for id in pairs(collapsed) do if not live[id] then collapsed[id] = nil end end
+  local ok, saved, err = pcall(storage.save, "sidebar", "folding", collapsed)
+  if not ok or not saved then core.log_quiet("Sidebar folding not saved: %s", tostring(ok and err or saved)) end
 end
 
 -- When the user last looked at each Terminal Session, so an Unread Result stays unread in every Window and in
@@ -113,6 +123,7 @@ local function activate(id)
   return true
 end
 local function add_surface(id, window)
+  collapsed[id] = collapsed[id] or {}
   local surface = {id = id, window = window, native_id = system.get_window_id(window), scale = system.get_scale(window),
     redraw = true, query_needed = true}
   surface.view = SidebarView(function(action, row_id, target, ...)
@@ -122,12 +133,8 @@ local function add_surface(id, window)
       return
     end
     if action == "collapsed" then
-      core.log_quiet("Sidebar group %s collapsed=%s", row_id, tostring(target))
+      core.log_quiet("Sidebar group %s collapsed=%s Window=%d", row_id, tostring(target), id)
       save_collapsed()
-      -- Other surfaces share the state. Their rows change too.
-      for _, other in pairs(surfaces) do
-        if other ~= surface then other.view:rebuild_rows(); other.redraw = true end
-      end
       return
     end
     if action == "seen" then
@@ -183,7 +190,7 @@ local function add_surface(id, window)
     end
     core.log_quiet("Sidebar %s dropped: Window=%d row=%s is not in the model (%d rows)", action, id,
       tostring(row_id), #(core.project_sidebar or {}))
-  end, collapsed, seen)
+  end, collapsed[id], seen, true)
   surfaces[id] = surface
   core.log_quiet("Sidebar surface created: Window=%d", id)
 end

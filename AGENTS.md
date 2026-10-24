@@ -270,8 +270,10 @@ Run `anvil:shell-state` and the `restore-loaded` shell launch probe after change
 
 Project Sidebar visibility belongs to each Window. The first new Window starts expanded; additional Windows start collapsed.
 Restored Windows use their saved visibility, including a lone Window saved with its Sidebar hidden.
-Sidebar width, the Project list, and group folding remain shared.
-Run `anvil:shell-state` and the `windows-sidebar-layout` and `toggle-sidebar` shell probes after visibility changes.
+Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
+New Sidebars expand their Selected Project and collapse other Projects by default.
+Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state.
+Run `anvil:shell-state`, `ui/sidebar_view.lua`, and the `windows-sidebar-layout`, `windows-sidebar-folding`, and `toggle-sidebar` shell probes after changes.
 
 The shell draws the Window controls with the Windows caption glyphs: Segoe Fluent Icons, or Segoe MDL2 Assets on Windows 10.
 Its hit test reports the Maximize button as `HTMAXBUTTON`, so Windows 11 shows Snap Layouts there.
