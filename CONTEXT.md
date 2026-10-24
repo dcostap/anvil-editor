@@ -26,7 +26,7 @@ The Project currently presented in an Anvil Window.
 _Avoid_: Active Project, Current Project, hosted app
 
 **Project Sidebar**:
-The application sidebar listing recent Projects. A loaded Project shows its Tabs and the Terminal Sessions that no Pane shows. A Terminal Session in a Pane's Navigation History shows only when it has an Unread Result or an agent that waits for an answer. A collapsed loaded Project still shows the Terminals with an Unread Result or an agent that waits for an answer. Dormant Projects are grouped by age below the loaded ones; each one shows how many of its Terminal Sessions run. Every Anvil Window shows the same list. Selecting a Project shown in another Anvil Window brings that window to the front.
+The application sidebar listing recent Projects. A loaded Project shows its Tabs and the Terminal Sessions that no Pane shows. A Terminal Session in a Pane's Navigation History shows only when it has an Unread Result or an agent that waits for an answer. A collapsed loaded Project still shows the Terminals with an Unread Result or an agent that waits for an answer. Dormant Projects are grouped by age below the loaded ones; each one shows how many of its Terminal Sessions run. Every Anvil Window shows the same list. Selecting a Project shown in another Anvil Window brings that window to the front. The Scratch Project is the exception: it moves to the Anvil Window where the user selects it.
 _Avoid_: Project panel, app switcher, side panel
 
 **Dormant Project**:
@@ -34,7 +34,7 @@ A Project listed in an Anvil Window that is not currently loaded for editing. Se
 _Avoid_: unopened Project, closed Project, inactive Project
 
 **Scratch Project**:
-The one Project for files and Terminals that belong to no other Project. A file opened from outside Anvil goes there when no known Project contains it. The Project Sidebar always lists it first, even when it is Dormant. Its Terminals start in the home folder. A Project at the home folder is a different Project.
+The one Project for files and Terminals that belong to no other Project. A file opened from outside Anvil goes there when no known Project contains it. The Project Sidebar always lists it first, even when it is Dormant. Its Terminals start in the home folder. A Project at the home folder is a different Project. It follows the user: selecting it in an Anvil Window moves it there, and a new empty Anvil Window starts with it. The Anvil Window that loses it stays open.
 _Avoid_: Ghost Project, home Project, default Project
 
 **Root Project**:

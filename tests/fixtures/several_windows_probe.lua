@@ -366,6 +366,12 @@ if path:find("/driver$", 1) then
     if subject and subject:running() then subject:terminate(); subject:wait(1) end
     quit()
   end)
+elseif path:match("/user/scratch$") then
+  -- New Window loads Scratch. It takes no part in these checks.
+  core.add_background_thread(function()
+    wait_for(function() return load("finish") end, 60)
+    quit()
+  end)
 else
   core.add_background_thread(function()
     local state = {pid = tonumber(kernel.GetCurrentProcessId()), shell_pid = system.get_window_process_id(),

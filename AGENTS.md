@@ -282,15 +282,18 @@ The Scratch Project's folder is `USERDIR/scratch`. The shell makes it at startup
 The shell marks its Sidebar row with `scratch`. The list bound never removes that row.
 The status scan reads its Terminal Sessions while it is Dormant.
 The Sidebar View lists it first and names it "Scratch". Its new Terminals start in `HOME`.
+Scratch follows the selection. Selecting it in a Window that does not hold it moves it there, through the normal Project Move.
+New Window selects Scratch the same way. The Window that loses Scratch stays open, and shows its Sidebar if it has no other Project.
+An external launch into Scratch also moves it, to the Window that the user activated last.
 Lua finds it with `core.is_scratch_project`, which compares paths and does not resolve links.
-Run `ui/sidebar_view.lua`, `ui/terminal.lua` and the `launch-files` shell probe after changes.
+Run `ui/sidebar_view.lua`, `ui/terminal.lua` and the `launch-files` and `windows-move` shell probes after changes.
 
 Shell App State keeps each Window's loaded Projects and Selected Project.
 Shutdown captures their paths before closing the hosted processes. Dormant Projects stay dormant.
 Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.
 Run `anvil:shell-state` and the `restore-loaded` shell launch probe after changes.
 
-Project Sidebar visibility belongs to each Window. The first new Window starts expanded; additional Windows start collapsed.
+Project Sidebar visibility belongs to each Window. The first Window and each New Window start expanded. A Window that opens for one Project, such as Open Project in New Window or Move to New Window, starts collapsed.
 Restored Windows use their saved visibility, including a lone Window saved with its Sidebar hidden.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
 Loaded Projects start expanded unless this Window has a saved manual fold.

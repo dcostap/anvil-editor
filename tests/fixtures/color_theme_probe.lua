@@ -186,14 +186,15 @@ elseif path:match("/driver$") and action == "theme-empty" then
    shell = assert(process.start({EXEFILE, "--shell", root .. "/Project"},
     {stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
    wait(function() return load("a-ready") end, 30, "Project A did not start")
-   -- Project A asks for a New Window, which has no Project.
+   -- New Window takes Scratch. A second New Window takes it from the first, which stays open without a Project.
    save("new-window", {go = true})
-   -- Project A's Window was empty before A started too.
-   local id = wait(function()
-    local ids = {}
-    for found in trace():gmatch("Shell empty Window ready: id=(%d+)") do ids[#ids + 1] = found end
-    return ids[2]
-   end, 10, "the shell did not open an empty Window")
+   wait(function()
+    local scratch = trace():match("Shell selected loaded Project: id=(%d+) pid=%d+ path=[^\n]-\\user\\scratch")
+    return scratch and trace():find("Shell Project runtime ready: Project=" .. scratch .. " ", 1, true)
+   end, 30, "New Window did not start Scratch")
+   save("new-window-2", {go = true})
+   local id = wait(function() return trace():match("Shell keeps Window emptied by Move: id=(%d+)") end, 10,
+    "the shell did not keep an empty Window")
    local hex = assert(trace():match("Shell Window record: id=" .. id .. " SDL=%d+ hwnd=(%x+)"))
    local window = ffi.cast("void *", tonumber(hex, 16))
    wait(function() return trace():find("Shell Sidebar surface Ready: Window=" .. id, 1, true) end, 15,
@@ -285,6 +286,8 @@ elseif path:match("/Project$") and action == "theme-empty" then
   coroutine.yield(.5)
   ready("a-ready")
   wait(function() return load("new-window") end, 60)
+  assert(system.new_anvil_window(), "New Window request failed")
+  wait(function() return load("new-window-2") end, 60)
   assert(system.new_anvil_window(), "New Window request failed")
  end)
 elseif path:match("/Project$") then

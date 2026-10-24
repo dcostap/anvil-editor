@@ -426,7 +426,8 @@ static bool select_terminal_path(ShellWindow *window, const char *path, const ch
 static bool select_pane_path(ShellWindow *window, const char *path, const char *text, uint32_t size);
 static void select_project(ShellProject *project, bool keep_sidebar_focus);
 static void select_after_close(ShellProject *project);
-static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id);
+static bool move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id, bool keep_source);
+static void open_new_window(ShellWindow *requester);
 static void present_deferred_dialogs(ShellProject *project);
 static void finish_launch(ShellProject *project);
 static void finish_resolutions(void);
@@ -450,7 +451,7 @@ static void set_sidebar_hidden(ShellWindow *window, bool hidden);
 static void focus_sidebar(ShellWindow *window, bool focused);
 static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y);
 static void schedule_sidebar_restart(void);
-static ShellWindow *create_window(const AnvilShellWindowState *placement);
+static ShellWindow *create_window(const AnvilShellWindowState *placement, bool show_sidebar);
 static bool destroy_window(ShellWindow *window);
 static void save_windows(bool final);
 static void advance_restore(void);
@@ -3447,7 +3448,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_MOVE_PROJECT: {
     const AnvilSurfaceMoveProject *request = payload;
-    move_project(window, request->project_id, request->target_window_id);
+    move_project(window, request->project_id, request->target_window_id, false);
     break;
   }
   case ANVIL_SURFACE_MSG_TIMING_CAPTURE: {
@@ -3473,8 +3474,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     handle_sidebar_frame(window);
     break;
   case ANVIL_SURFACE_MSG_NEW_WINDOW:
-    if (*(const uint32_t *)payload == window->id && !window->closing)
-      if (!create_window(NULL)) window_notice(window, "Cannot create a Window");
+    if (*(const uint32_t *)payload == window->id && !window->closing) open_new_window(window);
     break;
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_WINDOW:
     if (*(const uint32_t *)payload == window->id && !window->closing)
@@ -4996,7 +4996,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       break;
     case WM_SYSCOMMAND:
       if ((wparam & 0xfff0) == SHELL_MENU_NEW_WINDOW) {
-        if (!window->closing && !create_window(NULL)) window_notice(window, "Cannot create a Window");
+        if (!window->closing) open_new_window(window);
         return 0;
       }
       if ((wparam & 0xfff0) == SHELL_MENU_OPEN_PROJECT) {
@@ -5778,8 +5778,9 @@ static bool project_has_dialog(const ShellProject *project) {
     if (project->dialogs[i] || project->deferred_dialogs[i]) return true;
   return false;
 }
-/* A zero target creates a Window only after the Project can move. */
-static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id) {
+/* A zero target creates a Window only after the Project can move. A Window that the Move leaves without a Project
+ * closes, unless `keep_source` keeps it open with its Sidebar shown. */
+static bool move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id, bool keep_source) {
   ShellProject *project = NULL;
   for (ShellProject *item = shell.projects; item; item = item->next)
     if (item->id == project_id) { project = item; break; }
@@ -5787,33 +5788,33 @@ static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
   ShellWindow *target = window_for_id(target_id);
   if (!source || (target_id && !target) || source->removing || (target && target->removing)) {
     window_notice(requester, "Cannot move Project");
-    return;
+    return false;
   }
   if (requester->closing || source->closing || project->close_requested_ns || project->close_waiting ||
       project->close_prompt || project->unloading ||
       (target && (target->closing || target->selected->close_requested_ns ||
                   target->selected->close_waiting || target->selected->close_prompt))) {
     window_notice(requester, "Cannot move Project while it closes");
-    return;
+    return false;
   }
   if (project_has_dialog(project) || source->picker_pending ||
       (target && (project_has_dialog(target->selected) || target->picker_pending))) {
     window_notice(requester, "Cannot move Project while a dialog is open");
-    return;
+    return false;
   }
   /* Restored background Projects finish startup without drawing a first frame. */
   bool ready = project->state == SHELL_READY || (project->state == SHELL_STARTING && project->runtime_ready);
   if (!project->connected || !ready || project->resolving ||
       (project->launch && !project->launch->taken)) {
     window_notice(requester, "Project is still starting");
-    return;
+    return false;
   }
-  if (source == target) return;
+  if (source == target) return true;
   if (!target) {
-    target = create_window(NULL);
+    target = create_window(NULL, false);
     if (!target) {
       window_notice(requester, "Cannot create a Window");
-      return;
+      return false;
     }
   }
   retain_project(project);
@@ -5833,11 +5834,14 @@ static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
   /* Window identity is part of layout identity, even for equal-sized targets. */
   select_project(project, false);
   clear_window_notice(requester);
-  /* A Window that the Move left without a Project closes. Dormant Projects belong to no Window. */
+  /* Dormant Projects belong to no Window. */
   bool emptied = true;
   for (ShellProject *item = shell.projects; item; item = item->next)
     emptied &= item->window_id != source->id;
-  if (emptied) {
+  if (emptied && keep_source) {
+    SDL_Log("Shell keeps Window emptied by Move: id=%u", source->id);
+    set_sidebar_hidden(source, false);
+  } else if (emptied) {
     SDL_Log("Shell closes Window emptied by Move: id=%u", source->id);
     request_close(source->empty);
   }
@@ -5847,6 +5851,7 @@ static void move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
           (unsigned long)project->process.dwProcessId, source->id, target->id,
           (unsigned long long)project->last_config.configuration);
   release_project(project);
+  return true;
 }
 static bool select_project_path(ShellWindow *window, const char *path) {
   if (window->closing || !path || !*path)
@@ -6010,6 +6015,12 @@ static char *launch_request(const ProjectResolve *job, uint32_t *size) {
   return text;
 }
 
+static bool is_scratch(const ShellProject *project) {
+  const AnvilSidebarProject *row =
+      project->project_path ? anvil_sidebar_find(&shell.sidebar, project->project_path) : NULL;
+  return row && row->scratch;
+}
+
 /* Make the Scratch folder again if the user deleted it. */
 static bool make_scratch(void) {
   wchar_t *folder =
@@ -6018,6 +6029,17 @@ static bool make_scratch(void) {
   if (!made) SDL_Log("Shell could not make the Scratch folder: Windows error=%lu", GetLastError());
   SDL_free(folder);
   return made;
+}
+
+/* New Window shows its Sidebar and selects Scratch, as a click on the Scratch row does. */
+static void open_new_window(ShellWindow *requester) {
+  ShellWindow *window = create_window(NULL, true);
+  if (!window) {
+    window_notice(requester, "Cannot create a Window");
+    return;
+  }
+  if (!shell.scratch_path || !make_scratch() || !select_project_path(window, shell.scratch_path))
+    SDL_Log("Shell New Window could not select Scratch: Window=%u", window->id);
 }
 
 /* The Window that the user activated last, or NULL. */
@@ -6077,7 +6099,7 @@ static void finish_external(ProjectResolve *job) {
     uint32_t size = 0;
     char *text = job->file_count ? launch_request(job, &size) : NULL;
     ShellWindow *window = last_window();
-    if (!window) window = create_window(NULL);
+    if (!window) window = create_window(NULL, false);
     if (job->file_count && !text) {
       SDL_Log("Shell external launch rejected: its file list is too large");
       status = ANVIL_SHELL_LAUNCH_REJECTED;
@@ -6203,6 +6225,13 @@ static void finish_resolutions(void) {
           free_resolution(job);
           continue;
         }
+        /* Scratch follows the selection: it moves to this Window, and its old Window stays open. A launch that
+         * cannot move it still opens its files in the old Window. */
+        if (owner != window && !job->new_window && is_scratch(project) &&
+            !move_project(window, project->id, window->id, true) && !job->launched) {
+          free_resolution(job);
+          continue;
+        }
       }
       bool created = job->initial || !project;
       /* Reserve a list entry before creating another runtime. Every runtime
@@ -6214,7 +6243,7 @@ static void finish_resolutions(void) {
         continue;
       }
       if (!project && job->new_window) {
-        window = create_window(NULL);
+        window = create_window(NULL, false);
         if (!window) {
           ShellWindow *requester = window_for_id(job->window_id);
           if (requester) window_notice(requester, "Cannot create a Window");
@@ -6909,9 +6938,9 @@ static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y
   }
   if (!window || window->closing) chosen = 0;
   if (chosen >= PROJECT_MENU_MOVE) {
-    move_project(window, project_id, chosen - PROJECT_MENU_MOVE);
+    move_project(window, project_id, chosen - PROJECT_MENU_MOVE, false);
   } else if (chosen == PROJECT_MENU_NEW_WINDOW) {
-    move_project(window, project_id, 0);
+    move_project(window, project_id, 0, false);
   } else if (chosen == PROJECT_MENU_UNLOAD) {
     unload_project_path(window, path);
   } else if (chosen == PROJECT_MENU_OPEN_WINDOW) {
@@ -6963,7 +6992,8 @@ static RECT visible_placement(const AnvilShellWindowState *placement) {
   return (RECT){x - dx, y - dy, x - dx + w, y - dy + h};
 }
 
-static ShellWindow *create_window(const AnvilShellWindowState *placement) {
+/* Without a placement, the first Window and New Window show their Sidebars. A Window for one Project hides it. */
+static ShellWindow *create_window(const AnvilShellWindowState *placement, bool show_sidebar) {
   unsigned count = 0;
   for (ShellWindow *item = shell.windows; item; item = item->next) count++;
   if (count >= 64 || (!placement && shell.next_window >= INT32_MAX) || shell.shutting_down) {
@@ -6975,7 +7005,7 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement) {
   if (!window) return NULL;
   window->id = placement ? placement->id : ++shell.next_window;
   window->sidebar = true;
-  window->sidebar_hidden = placement ? placement->sidebar_hidden : count > 0;
+  window->sidebar_hidden = placement ? placement->sidebar_hidden : count > 0 && !show_sidebar;
   window->sidebar_open = window->sidebar_hidden ? 0.0f : 1.0f;
   if (!shell.sidebar_window_id) shell.sidebar_window_id = window->id;
   window->empty = allocate_project(window);
@@ -7245,7 +7275,7 @@ static size_t restore_windows(AnvilShellState *saved, AnvilAdoptionRecord *adopt
   ShellWindow *front = NULL;
   for (size_t i = saved->count; i-- > 0;) {
     AnvilShellWindowState *entry = &saved->windows[i];
-    ShellWindow *window = create_window(entry);
+    ShellWindow *window = create_window(entry, false);
     if (!window) continue;
     restored++;
     front = window;
@@ -7266,7 +7296,7 @@ static size_t restore_windows(AnvilShellState *saved, AnvilAdoptionRecord *adopt
   }
   for (size_t j = 0; j < adoptable_count; j++) {
     if (!adoptable[j].pid) continue;
-    if (!front && (front = create_window(NULL))) restored++;
+    if (!front && (front = create_window(NULL, false))) restored++;
     if (!front) break;
     ShellProject *project = restored_project(front, adoptable[j].path, rank++);
     if (project && front->selected == front->empty) select_project(project, false);
@@ -7435,7 +7465,7 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
       SDL_Log("Shell launch server unavailable; later launches cannot reach this shell");
     return SDL_APP_CONTINUE;
   }
-  ShellWindow *window = create_window(NULL);
+  ShellWindow *window = create_window(NULL, false);
   if (!window) return SDL_APP_FAILURE;
   start_sidebar();
   ShellProject *project = new_project(window);

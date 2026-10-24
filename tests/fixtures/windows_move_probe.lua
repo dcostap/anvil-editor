@@ -186,14 +186,26 @@ if path:match("/driver$") then
      return (not hwnd or user32.IsWindowVisible(hwnd)==0) and selected(model(),id)==nil
     end,5,message)
    end
-   local empty_id = new_window("1")
-   move(empty_id,"empty")
-   wait(function() return row(model(),a.pid).window_id==empty_id end,5,"Move to empty Window failed")
-   page=model(); assert(selected(page,b.window_id)==br.id and selected(page,empty_id)==ar.id)
+   -- New Window loads Scratch with its Sidebar shown. The Window then holds Scratch, so Moves do not close it.
+   local scratch_id = new_window("1")
+   local scratch = wait(function() return load("scratch-ready") end,20,"New Window did not load Scratch")
+   assert(scratch.window_id==scratch_id and scratch.content_x>0,"New Window did not show Scratch beside its Sidebar")
+   local sr = row(model(),scratch.pid)
+   assert(selected(model(),scratch_id)==sr.id,"New Window did not select Scratch")
+   move(scratch_id,"empty")
+   wait(function() return row(model(),a.pid).window_id==scratch_id end,5,"Move to the Scratch Window failed")
+   page=model(); assert(selected(page,b.window_id)==br.id and selected(page,scratch_id)==ar.id)
    move(b.window_id,"occupied-again")
    wait(function() return row(model(),a.pid).window_id==b.window_id end,5)
-   closed(empty_id,"Move left its source Window open without a Project")
+   assert(selected(model(),scratch_id)==sr.id,"A Move out of the Scratch Window lost Scratch")
+   -- A second New Window takes Scratch. The first keeps its Window open without a Project.
    local minimized_id = new_window("2")
+   wait(function() return row(model(),scratch.pid).window_id==minimized_id end,5,"New Window did not take Scratch")
+   page=model()
+   assert(selected(page,minimized_id)==sr.id and row(page,scratch.pid).pid==scratch.pid,"Scratch did not move live")
+   local kept=windows(a.shell_pid)[scratch_id]
+   assert(kept and user32.IsWindowVisible(kept)~=0 and selected(page,scratch_id)~=sr.id,
+    "The Window that lost Scratch closed or still shows it")
    local minimized=windows(a.shell_pid)[minimized_id]
    user32.PostMessageW(minimized,0x112,0xf020,0); wait(function() return user32.IsIconic(minimized)~=0 end,3)
    move(minimized_id,"minimized")
@@ -204,10 +216,16 @@ if path:match("/driver$") then
    user32.PostMessageW(minimized,0x112,0xf120,0); wait(function() return user32.IsIconic(minimized)==0 end,3)
    save("inspect-2",{target=minimized_id}); local final=wait(function() return load("a-state-2") end)
    assert(final.window_id==minimized_id and final.session_id==before.session_id and final.attach_count==before.attach_count)
+   -- Selecting Scratch in B moves it there, as a click on its Sidebar row does.
+   save("select-scratch",true)
+   wait(function() return row(model(),scratch.pid).window_id==b.window_id end,5,"Selecting Scratch did not move it")
+   assert(selected(model(),b.window_id)==sr.id,"Selecting Scratch did not select it in B")
    move(a.window_id,"return")
    wait(function() return row(model(),a.pid).window_id==a.window_id end,5)
    assert(selected(model(),a.window_id)==ar.id)
    closed(minimized_id,"Move left its source Window open without a Project")
+   user32.PostMessageW(kept,0x10,0,0)
+   closed(scratch_id,"The Window without a Project did not close")
    save("finish",true)
    wait(function() return not subject:running() end,15)
   end)
@@ -293,6 +311,9 @@ elseif path == root .. "/Replacement" then
      assert(system.move_project(request.project_id,request.target)); sent[stage]=true; save("requested-"..stage,true)
     end
    end
+   if load("select-scratch") and not sent.scratch then
+    assert(system.select_project(USERDIR.."/scratch")); sent.scratch=true
+   end
    for _,stage in ipairs{"1","2"} do
     if load("new-"..stage) and not load("new-requested-"..stage) then
      assert(command.perform("core:new_anvil_window")); save("new-requested-"..stage,true)
@@ -301,6 +322,13 @@ elseif path == root .. "/Replacement" then
    coroutine.yield(.01)
   end
   quit()
+ end)
+elseif path:match("/user/scratch$") then
+ core.add_background_thread(function()
+  wait(function() return system.get_window_content_x() > 0 end,10)
+  save("scratch-ready",{pid=tonumber(kernel.GetCurrentProcessId()),window_id=system.get_anvil_window_id(),
+   content_x=system.get_window_content_x()})
+  wait(function() return load("finish") end,90); quit()
  end)
 else
  core.add_background_thread(function()

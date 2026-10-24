@@ -104,8 +104,17 @@ if path:match("/driver$") then
    if action == "shell-empty" or action == "shell-sidebar" then
     local x, y, target, marker
     if action == "shell-empty" then
+     -- New Window takes Scratch. A second New Window takes it from Window 2, which stays open without a Project.
      user32.SendMessageW(window, 0x112, 0xe010, 0)
-     window = wait(function() return shell_window(shell:pid(), window) end, 10, "New Window did not open")
+     wait(function()
+      local scratch = trace():match("Shell selected loaded Project: id=(%d+) pid=%d+ path=[^\n]-\\user\\scratch")
+      return scratch and trace():find("Shell Project runtime ready: Project=" .. scratch .. " ", 1, true)
+     end, 30, "New Window did not start Scratch")
+     user32.SendMessageW(window, 0x112, 0xe010, 0)
+     wait(function() return trace():find("Shell keeps Window emptied by Move: id=2", 1, true) end, 10,
+      "The shell did not keep an empty Window")
+     local hex = assert(trace():match("Shell Window record: id=2 SDL=%d+ hwnd=(%x+)"))
+     window = ffi.cast("void *", tonumber(hex, 16))
      wait(function() return trace():find("Shell Sidebar surface Ready: Window=2", 1, true) end, 15)
      local rect = ffi.new("RecoveryRect")
      assert(user32.GetClientRect(window, rect) ~= 0)
