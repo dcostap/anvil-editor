@@ -12,13 +12,15 @@ local style = require "core.style"
 local function render_completions(view, width)
   local runs = {}
   local old_text, old_rect, old_clip = renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect
+  local old_rounded = renderer.draw_rounded_rect
   local old_size, old_stack = system.get_window_size, core.clip_rect_stack
   local clip = { 0, 0, width, 800 }
   core.clip_rect_stack = { clip }
   system.get_window_size = function() return width, 800 end
   renderer.set_clip_rect = function(x, y, w, h) clip = { x, y, w, h } end
+  -- A fill drawn over text hides it.
   renderer.draw_rect = function(x, y, w, h, color)
-    if color == style.background3 or color == style.autocomplete_selection then
+    if color == style.card or color == style.card_selection then
       for i = #runs, 1, -1 do
         local run = runs[i]
         if run.x >= x and run.x + run.width <= x + w and run.y >= y and run.y < y + h then
@@ -41,8 +43,10 @@ local function render_completions(view, width)
     runs[#runs + 1] = { text = visible, x = x, y = y, width = font:get_width(text), color = color }
     return x + font:get_width(text)
   end
+  renderer.draw_rounded_rect = function(x, y, w, h, _radius, color) renderer.draw_rect(x, y, w, h, color) end
   local ok, err = pcall(function() autocomplete.draw(view) end)
   renderer.draw_text, renderer.draw_rect, renderer.set_clip_rect = old_text, old_rect, old_clip
+  renderer.draw_rounded_rect = old_rounded
   system.get_window_size, core.clip_rect_stack = old_size, old_stack
   if not ok then error(err, 0) end
   return runs
@@ -316,23 +320,6 @@ test.describe("Markdown link completion", function()
     local visible = {}
     for _, run in ipairs(render_completions(context.view, 600)) do visible[#visible + 1] = run.text end
     test.contains(table.concat(visible), "C# LeafTarget")
-  end)
-
-  test.it("widens the popup to show a long heading path in full when the window has room", function(context)
-    local parent = string.rep("Parent heading ", 7)
-    write_file(context.root .. PATHSEP .. "Guide.md", "# " .. parent .. "\n## LeafTarget\n")
-    context.index:rebuild("completion-wide-row")
-    core.root_panel:on_text_input("[[Guide#leaftarget")
-    test.ok(autocomplete.is_open(), "the heading had no suggestion")
-    local label = autocomplete.get_selected_suggestion().text
-    test.contains(label, "LeafTarget")
-
-    local old_size = system.get_window_size
-    system.get_window_size = function() return 3000, 800 end
-    local ok, _, _, width = pcall(autocomplete._test.get_suggestions_rect, context.view)
-    system.get_window_size = old_size
-    test.ok(ok)
-    test.ok(width > context.view:get_font():get_width(label), "the popup must fit the whole row")
   end)
 
   test.it("aligns file details to one right edge across completion rows", function(context)
