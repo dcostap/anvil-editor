@@ -1368,7 +1368,7 @@ function SidebarView:draw_project(row, y, width, now)
   local project = row.project
   local name = name_of(project.path)
   local dormant = project.state == "dormant"
-  -- The badge. The Window's Selected Project has a solid badge.
+  -- Keep the badge dim, including for the Window's Selected Project.
   local size = m.badge
   local bx, by = left + 6 * SCALE, math.floor(cy - size / 2)
   local color = badge_color(name)
@@ -1377,12 +1377,7 @@ function SidebarView:draw_project(row, y, width, now)
   local bold = font_variant("bold")
   local letter = initial(name)
   local letter_color = tint(color, 255 * strength)
-  if row.current then
-    renderer.draw_rounded_rect(bx, by, size, size, radius, color)
-    letter_color = style.background2
-  else
-    renderer.draw_rounded_rect(bx, by, size, size, radius, tint(color, 46 * strength))
-  end
+  renderer.draw_rounded_rect(bx, by, size, size, radius, tint(color, 46 * strength))
   -- The letter's ink centres in the badge. Its line box has room for descenders, so centring the line would put a
   -- capital too high.
   local ink_top, ink_bottom = bold:get_ink_extent(letter)
