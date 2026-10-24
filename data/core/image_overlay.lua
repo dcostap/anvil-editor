@@ -28,7 +28,6 @@ local ACTIONS = {
 
 ---@class core.image_overlay.state
 ---@field view core.imageview
----@field source { x: number, y: number, w: number, h: number }?
 ---@field progress number
 ---@field target number
 local state
@@ -67,22 +66,6 @@ function overlay.is_open() return state ~= nil and state.target == 1 end
 ---The Image View of the open overlay.
 function overlay.get_view() return state and state.target == 1 and state.view or nil end
 
--- The source rectangle is usable when it has a size and some part shows in the Window.
-local function source_transform(st)
-  local rect = st.source
-  if not rect or not rect.w or rect.w <= 0 or rect.h <= 0 then return nil end
-  local x, y, w, h = root_rect()
-  if rect.x + rect.w <= x or rect.y + rect.h <= y or rect.x >= x + w or rect.y >= y + h then return nil end
-  local view = st.view
-  local iw, ih = view.image:get_size()
-  local scale = math.min(rect.w / iw, rect.h / ih)
-  return {
-    scale = scale,
-    x = rect.x - view.position.x + (rect.w - iw * scale) / 2,
-    y = rect.y - view.position.y + (rect.h - ih * scale) / 2,
-  }
-end
-
 -- Lay out the top bar: the title on the left and the actions on the right.
 local function layout(st)
   local x, y, w, h = root_rect()
@@ -101,7 +84,9 @@ local function layout(st)
   for i, action in ipairs(actions) do
     width = width + button + ((i > 1 and action.separated) and gap or 0)
   end
-  local bar = { x = x + w - margin - width, y = y + margin, w = width, h = button + pad * 2 }
+  local title_bar = core.title_bar
+  local top = title_bar and math.max(y, title_bar.position.y + title_bar.size.y) or y
+  local bar = { x = x + w - margin - width, y = top + margin, w = width, h = button + pad * 2 }
   local bx = bar.x + pad
   st.buttons = {}
   for i, action in ipairs(actions) do
@@ -169,10 +154,10 @@ function overlay.update()
   end
 end
 
----Open an image. `opts.source_rect` is the image's place on screen; the image grows from there.
+---Open an image with a subtle fade and scale at its overlay position.
 ---`opts.open_animation` returns a canvas animation for an animated image.
 ---@param image canvas
----@param opts? { label: string?, path: string?, open_animation: function?, source_rect: table? }
+---@param opts? { label: string?, path: string?, open_animation: function? }
 function overlay.open_image(image, opts)
   if not image then return false, "image is required" end
   opts = opts or {}
@@ -180,19 +165,14 @@ function overlay.open_image(image, opts)
   local view = ImageView()
   view:set_image(image, opts.label, opts.path, opts.open_animation)
   state = {
-    view = view, source = opts.source_rect, file = opts.path ~= nil and system.get_file_info(opts.path) ~= nil,
+    view = view, file = opts.path ~= nil and system.get_file_info(opts.path) ~= nil,
     progress = 0, from = 0, target = 1, started = now(), duration = OPEN_DURATION,
   }
   layout(state)
   view:update()
-  local from = config.transitions and source_transform(state)
-  state.flying = from ~= nil
-  if from then
-    view:animate_to(view.zoom_scale, view.image_x, view.image_y, { from = from, duration = OPEN_DURATION })
-  end
   core.root_panel:push_modal_input(overlay, { label = "image-overlay", handlers = modal_handlers })
-  core.log_quiet("Image overlay opened: %s (source rect: %s)", opts.label or opts.path or "Image",
-    from and "yes" or "no")
+  local iw, ih = image:get_size()
+  core.log_quiet("Image overlay opened: %s (%dx%d, fit=%.6f)", view:get_name(), iw, ih, view:get_fit_scale())
   core.redraw = true
   return true
 end
@@ -207,28 +187,23 @@ function overlay.open(path, opts)
   end
   opts = opts or {}
   return overlay.open_image(image, {
-    label = opts.label, path = path, source_rect = opts.source_rect,
+    label = opts.label, path = path,
     open_animation = ImageView.file_animation_opener(path),
   })
 end
 
----Close the overlay. The image returns to its source rectangle, or fades out.
+---Close the overlay with a fade and scale at its current position.
 function overlay.close()
   local st = state
   if not st or st.target == 0 then return end
   core.root_panel:pop_modal_input(overlay)
+  st.view:stop_motion()
   st.view:on_mouse_left()
   st.hovered, st.tooltip_shown, st.backdrop_press = nil, nil, nil
   if not config.transitions then
     state = nil
   else
     st.from, st.target, st.started, st.duration = st.progress, 0, now(), CLOSE_DURATION
-    local to = source_transform(st)
-    st.flying = to ~= nil
-    if to then
-      st.view:stop_motion()
-      st.view:animate_to(to.scale, to.x, to.y, { duration = CLOSE_DURATION, free = true })
-    end
   end
   core.log_quiet("Image overlay closed")
   core.redraw = true
@@ -519,11 +494,11 @@ function overlay.draw()
   renderer.draw_rect(x, y, w, h, backdrop)
   core.root_panel:dim_sidebar(backdrop)
   core.push_clip_rect(x, y, w, h)
-  -- An image that does not fly from or to its source rectangle fades, and grows a little as it opens.
-  local fade = not st.flying and p < 0.999
+  -- Fade and scale in place. Do not move between the source and overlay positions.
+  local fade = p < 0.999
   if fade then
     local ix, iy, iw, ih = st.view:get_image_rect()
-    renderer.push_transform(ix + iw / 2, iy + ih / 2, 0.96 + 0.04 * p, p)
+    renderer.push_transform(ix + iw / 2, iy + ih / 2, 0.98 + 0.02 * p, p)
   end
   st.view:draw_image()
   if fade then renderer.pop_transform() end

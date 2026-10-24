@@ -146,6 +146,20 @@ test.describe("Image View interaction", function()
     test.equal(view:on_mouse_wheel(0), false)
   end)
 
+  test.it("can zoom past actual size after a fit-to-actual-size animation", function(context)
+    local view = context.view
+    view.size.x, view.size.y = 210, 210
+    view:set_image(canvas.new(1010, 1010, { 40, 100, 180, 255 }, true), "Square image")
+    view:zoom_reset()
+    context.now = 1
+    view:update()
+    near(image_rect(view)[3], 1010)
+    test.ok(view:on_mouse_wheel(1))
+    context.now = 2
+    view:update()
+    test.ok(image_rect(view)[3] > 1010, "zoom must not stop at actual size")
+  end)
+
   test.it("restores the requested zoom and pan without sharing saved state", function(context)
     local view = context.view
     view:on_mouse_moved(270, 200, 0, 0)
@@ -295,24 +309,29 @@ test.describe("Image View interaction", function()
     test.ok(y > root.position.y + root.size.y * 0.02, "the top bar keeps space above the fitted image")
   end)
 
-  test.it("grows an overlay image from its source rectangle and returns it there on close", function(context)
-    local source = { x = 100, y = 120, w = 60, h = 40 }
-    test.ok(overlay.open(context.path, { source_rect = source }))
+  test.it("keeps the overlay actions below the Title Bar", function(context)
+    test.ok(overlay.open(context.path))
+    local button = test.not_nil(overlay.button_rect("close"))
+    local title = core.title_bar
+    test.ok(title.size.y > 0)
+    test.ok(button.y >= title.position.y + title.size.y, "actions must not cover Window controls")
+  end)
+
+  test.it("keeps the overlay image in place while opening and closing", function(context)
+    test.ok(overlay.open(context.path))
     local view = overlay.get_view()
     local first = image_rect(view)
-    near(first[1], source.x)
-    near(first[2], source.y)
-    near(first[3], source.w)
     context.now = 1
     overlay.update()
-    near(image_rect(view)[3], 1200 * view:get_fit_scale())
+    test.same(image_rect(view), first)
     overlay.close()
     test.equal(overlay.is_open(), false)
+    context.now = 1.05
+    overlay.update()
+    test.same(image_rect(view), first)
     context.now = 2
     overlay.update()
-    local returned = image_rect(view)
-    near(returned[1], source.x)
-    near(returned[3], source.w)
+    test.same(image_rect(view), first)
   end)
 
   test.it("keeps image comparisons aligned throughout zoom", function(context)

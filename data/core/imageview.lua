@@ -197,28 +197,27 @@ end
 
 ---Move to a transform. The scale changes at a constant rate, and each axis moves with it,
 ---so the one point that both transforms show at the same place stays still.
----`opts.from` starts from another transform. `opts.free` skips the pan limits at the end too.
-function ImageView:animate_to(scale, x, y, opts)
-  opts = opts or {}
+function ImageView:animate_to(scale, x, y)
   self.glide = nil
-  local from = opts.from or { scale = self.zoom_scale, x = self.image_x, y = self.image_y }
+  local from = { scale = self.zoom_scale, x = self.image_x, y = self.image_y }
   local changed = math.abs(scale - from.scale) > EPSILON
     or math.abs(x - from.x) > 0.01 or math.abs(y - from.y) > 0.01
   self.transition = nil
   if changed and config.transitions then
-    self:apply_transform(from.scale, from.x, from.y, true)
     self.transition = {
-      started = system.get_time(), duration = opts.duration or ZOOM_DURATION,
-      from = from, to = { scale = scale, x = x, y = y }, free = opts.free,
+      started = system.get_time(), duration = ZOOM_DURATION,
+      from = from, to = { scale = scale, x = x, y = y },
     }
   else
-    self:apply_transform(scale, x, y, opts.free)
+    self:apply_transform(scale, x, y)
   end
   core.redraw = true
   return true
 end
 
 local function interpolate(from, to, t)
+  -- Keep the endpoint exact. A scale just below 1 can trigger the actual-size stop again.
+  if t == 1 then return to.scale, to.x, to.y end
   if math.abs(to.scale - from.scale) < EPSILON then
     return to.scale, common.lerp(from.x, to.x, t), common.lerp(from.y, to.y, t)
   end
@@ -250,6 +249,8 @@ function ImageView:set_zoom(scale, x, y, mode)
   local tx, ty = self:constrain(scale, x - px * scale, y - py * scale)
   self.zoom_mode = mode or (math.abs(scale - fit) < EPSILON and "fit" or "fixed")
   self.panning = nil
+  core.log_quiet("Image View zoom: %s from=%.6f to=%.6f fit=%.6f mode=%s",
+    self:get_name(), self.zoom_scale, scale, fit, self.zoom_mode)
   return self:animate_to(scale, tx, ty)
 end
 
@@ -464,7 +465,7 @@ function ImageView:update_motion()
     if not config.transitions then progress = 1 end
     local t = 1 - (1 - progress) ^ 3
     local scale, x, y = interpolate(move.from, move.to, t)
-    self:apply_transform(scale, x, y, progress < 1 or move.free)
+    self:apply_transform(scale, x, y, progress < 1)
     if progress == 1 then self.transition = nil end
     core.redraw = true
   end
