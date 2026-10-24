@@ -735,6 +735,7 @@ function provider.schedule_semantic_tokens(client, state, buffer)
     if buffer.highlighter and buffer.highlighter.invalidate_render_cache then
       buffer.highlighter:invalidate_render_cache()
     end
+    core.redraw = true
   end, { generation = requested_generation })
   if not ok then
     pending[key] = nil

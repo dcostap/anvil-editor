@@ -11,6 +11,7 @@ local generation = 0
 
 local function bump_generation()
   generation = generation + 1
+  core.redraw = true
   return generation
 end
 

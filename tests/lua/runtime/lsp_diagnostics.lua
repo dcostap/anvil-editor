@@ -1,3 +1,4 @@
+local core = require "core"
 local common = require "core.common"
 local Buffer = require "core.buffer"
 local test = require "core.test"
@@ -68,6 +69,7 @@ end
 
 test.describe("core.lsp.diagnostics", function()
   test.before_each(function(context)
+    context.redraw = core.redraw
     temp_root = USERDIR .. PATHSEP .. "lsp-diagnostics-tests-"
       .. system.get_process_id() .. "-"
       .. math.floor(system.get_time() * 1000000)
@@ -83,6 +85,7 @@ test.describe("core.lsp.diagnostics", function()
       for _, client in ipairs(context.clients) do diagnostics.clear_client(client) end
     end
     if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
+    core.redraw = context.redraw
   end)
 
   local function track_client(context, client)
@@ -96,6 +99,23 @@ test.describe("core.lsp.diagnostics", function()
     context.buffers[#context.buffers + 1] = buffer
     return buffer
   end
+
+  -- Seam: server notifications and clear_uri request a redraw through the public core flag.
+  test.test("requests a redraw when diagnostics arrive or are cleared without input", function(context)
+    local client = track_client(context, fake_client())
+    diagnostics.attach_client(client)
+    local buffer_uri = uri.path_to_uri(join_path(temp_root, "main.cpp"))
+    core.redraw = false
+    publish(client, { uri = buffer_uri, diagnostics = {
+      { range = range(0, 0, 0, 1), severity = 1, message = "error" },
+    } })
+    test.equal(#diagnostics.get(client, buffer_uri), 1)
+    test.ok(core.redraw, "the diagnostics publication did not request a redraw")
+    core.redraw = false
+    diagnostics.clear_uri(client, buffer_uri)
+    test.equal(#diagnostics.get(client, buffer_uri), 0)
+    test.ok(core.redraw, "clearing diagnostics did not request a redraw")
+  end)
 
   test.test("stores unopened-file diagnostics with raw ranges and metadata", function(context)
     local client = track_client(context, fake_client("fake-a"))

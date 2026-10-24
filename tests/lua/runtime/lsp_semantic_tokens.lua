@@ -84,6 +84,7 @@ end
 
 test.describe("core.lsp.provider semantic tokens", function()
   test.before_each(function(context)
+    context.redraw = core.redraw
     temp_root = USERDIR .. PATHSEP .. "lsp-semantic-token-tests-"
       .. system.get_process_id() .. "-"
       .. math.floor(system.get_time() * 1000000)
@@ -100,6 +101,7 @@ test.describe("core.lsp.provider semantic tokens", function()
       for _, buffer in ipairs(context.buffers) do pcall(function() buffer:on_close() end) end
     end
     if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
+    core.redraw = context.redraw
   end)
 
   local function track_buffer(context, buffer)
@@ -194,6 +196,16 @@ test.describe("core.lsp.provider semantic tokens", function()
     test.not_equal(line.source, "lsp")
     test.equal(#client.requests, 1)
     test.equal(client.requests[1].method, "textDocument/semanticTokens/full")
+  end)
+
+  -- Seam: a semantic-token response requests a redraw through the public core flag.
+  test.test("requests a redraw when semantic tokens arrive without input", function(context)
+    local buffer, client = attach(context)
+    buffer.highlighter:get_render_line(1)
+    core.redraw = false
+    complete_request(client, 1, { data = { 0, 4, 4, 0, 0 } })
+    test.ok(core.redraw, "semantic token publication did not request a redraw")
+    test.ok(has_token(buffer.highlighter:get_render_line(1).tokens, "function.call", "main"))
   end)
 
   test.test("fresh semantic tokens overlay render tokens and are cached", function(context)
