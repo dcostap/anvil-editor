@@ -1120,7 +1120,8 @@ function SidebarView:step(dt)
   if pending and (not visuals[pending.key] or system.get_time() >= pending.deadline) then
     self.pending, moving = nil, true
   end
-  -- Highlights glide from row to row and fade where no row takes them. A `snap` highlight jumps to its row.
+  -- Highlights glide from row to row and fade where no row takes them. A `snap` highlight jumps to a row in another
+  -- Project.
   local m = self:metrics()
   local function mark(name, row, speed, snap)
     local move, fade_rate = MARK_MOVE_RATE * speed, MARK_FADE_RATE * speed
@@ -1134,10 +1135,13 @@ function SidebarView:step(dt)
     end
     local x = (row.kind == "project" or row.kind == "group" or row.kind == "empty") and m.pad or m.tab_left
     if not current or current.area ~= row.area or current.alpha <= 0.01 then
-      self.marks[name] = {area = row.area, x = x, y = row.shown.y, h = row.h, alpha = ease(0, 1, fade_rate, 0.01)}
+      self.marks[name] = {area = row.area, x = x, y = row.shown.y, h = row.h, alpha = ease(0, 1, fade_rate, 0.01),
+        path = row.project and row.project.path}
       return
     end
-    if snap then
+    local path = row.project and row.project.path
+    if snap and current.path ~= path then
+      current.path = path
       current.x, current.y, current.h = x, row.shown.y, row.h
     else
       current.x = ease(current.x, x, move)
@@ -1150,7 +1154,7 @@ function SidebarView:step(dt)
   for _, row in ipairs(self.rows) do
     if row.selected then active = row; break end
   end
-  -- The selection shows on the chosen row at once, so it never slides over the rows between.
+  -- A selection in another Project shows on its row at once, so it never slides over the rows between.
   mark("active", active, SELECTION_SPEED, true)
   mark("cursor", self.focused and self:get_cursor() or nil, SELECTION_SPEED)
   mark("hover", self.hover, HOVER_SPEED)
