@@ -1015,6 +1015,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
     host_log(&host, "revival: restored disk screen; start new shell");
   } else if (!anvil_terminal_model_new(&host.model, size.cols, size.rows, size.cell_width,
         size.cell_height, strcmp(argv[11], "-1") == 0 ? NULL : &lines)) goto cleanup;
+  host_log(&host, "screen resize: keep scrollback outside the live ConPTY grid");
   /* A revived shell starts at the restored screen size, which client resizes compare against. */
   host.pty.cols = size.cols; host.pty.rows = size.rows;
   if (!size.cols || !size.rows || size.cols > 32767 || size.rows > 32767 || !size.cell_width || !size.cell_height ||

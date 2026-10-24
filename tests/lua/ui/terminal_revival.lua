@@ -121,7 +121,7 @@ test.describe("Terminal revival", function()
     test.ok(ok, err)
   end)
 
-  test.it("keeps typed input on the revived shell's prompt", function()
+  test.it("keeps input on the revived prompt through resize and reattachment", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
     local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
@@ -143,14 +143,27 @@ test.describe("Terminal revival", function()
       test.ok(wait_for(restored, function()
         return restored.state == "running" and after_marker():find("PS ", 1, true)
       end), "revived shell showed no prompt: " .. screen_text(restored))
-      test.ok(restored.session:write("ANVIL_TYPED"))
-      test.ok(wait_for(restored, function()
-        local capture = restored.session:text_capture()
-        local lines = {}
-        for line in (capture.text .. "\n"):gmatch("(.-)\r?\n") do lines[#lines + 1] = line end
-        local line = lines[capture.cursor_line] or ""
-        return line:find("PS .*ANVIL_TYPED") and after_marker():find("ANVIL_TYPED", 1, true)
-      end), "typed input left the new prompt: " .. screen_text(restored))
+      local function type_on_prompt(text, expected)
+        test.ok(restored.session:write(text))
+        test.ok(wait_for(restored, function()
+          local capture = restored.session:text_capture()
+          if not capture then return false end
+          local lines = {}
+          for line in (capture.text .. "\n"):gmatch("(.-)\r?\n") do lines[#lines + 1] = line end
+          local line = lines[capture.cursor_line] or ""
+          return line:find("PS .*" .. expected) and after_marker():find(expected, 1, true)
+        end), "typed input left the new prompt: " .. screen_text(restored))
+      end
+      -- A short Pane puts the prompt at the bottom. Growing must not pull
+      -- saved history into the live screen and move it away from shell input.
+      test.ok(restored.session:resize(140, 1, 8, 16))
+      type_on_prompt("ANVIL_TYPED", "ANVIL_TYPED")
+      test.ok(restored.session:resize(140, 30, 8, 16))
+      type_on_prompt("_GROWN", "ANVIL_TYPED_GROWN")
+      local grown_state = restored:get_state()
+      restored:detach_session()
+      restored = ready(terminal.from_state(grown_state))
+      type_on_prompt("_ATTACHED", "ANVIL_TYPED_GROWN_ATTACHED")
     end)
     if restored then restored:on_close() end
     view:on_close()

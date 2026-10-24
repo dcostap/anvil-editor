@@ -802,6 +802,17 @@ Pi emits OSC 133 A as a zero-width marker during synchronized TUI repaints. Ghos
 
 When updating Ghostty, verify this patch still applies. Remove it only after Pi and Ghostty agree on OSC 133 A behavior during TUI repaints.
 
+Ghostty ConPTY resize patch:
+
+- `subprojects/packagefiles/ghostty-conpty-resize-history.patch`
+- listed after the semantic-prompt patch in `subprojects/ghostty.wrap`
+- prevents screen growth from pulling scrollback into the live ConPTY screen
+- keeps a restored prompt aligned with the shell's input coordinates after resize
+
+Keep saved history available for scrolling, but outside the live screen when it grows.
+Run `ui/terminal_revival.lua` after changes. It checks input through resize and reattachment.
+Keep this patch when updating Ghostty unless its resize API supports this behavior.
+
 Current Anvil Tree-sitter Markdown patch:
 
 - `subprojects/packagefiles/tree-sitter-markdown-scanner-state-bounds.patch`
