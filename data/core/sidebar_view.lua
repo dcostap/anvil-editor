@@ -47,7 +47,7 @@ local ROW_SPEED = 1.8
 local SEARCH_RATE = 54
 -- A working Terminal's status text shimmers: a light crosses it in SHIMMER_TRAVEL seconds, once each SHIMMER_PERIOD
 -- seconds. The colours change one letter at a time, so SHIMMER_FRAME can be longer than a display frame.
-local SHIMMER_TRAVEL, SHIMMER_PERIOD, SHIMMER_FRAME = 1.3, 1.5, 1 / 30
+local SHIMMER_TRAVEL, SHIMMER_PERIOD, SHIMMER_FRAME = 1.3, 1.3, 1 / 30
 -- The longest step between two frames. After a pause, an animation starts where it stopped.
 local MAX_STEP = 1 / 30
 local FRAME = 1 / 120
