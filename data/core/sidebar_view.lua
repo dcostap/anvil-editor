@@ -190,17 +190,20 @@ end
 
 -- The shell keeps a Window's old selection until a chosen Pane renders, and opens a Terminal Session's Pane after
 -- it selects the Project. The chosen row shows the selection meanwhile, so the highlight does not go back.
-function SidebarView:choose(row)
+-- With `jump`, the highlight goes to the chosen row at once instead of gliding there.
+function SidebarView:choose(row, jump)
   local owner = row.project.window_id
   if row.selected or row.current or self.window_id and owner and owner ~= 0 and owner ~= self.window_id then return end
   self.chosen = {key = row.id_key, path = row.project.path, session = row.kind == "terminal" and row.terminal.id or nil,
     deadline = system.get_time() + CHOICE_TIMEOUT}
+  self.jump_selection = jump
   self:rebuild_rows()
 end
 
-function SidebarView:activate_row(row)
+-- A row activated from the keyboard takes the highlight at once. The user already moved the cursor there.
+function SidebarView:activate_row(row, from_keyboard)
   if not row then return end
-  if row.kind == "project" or row.kind == "tab" or row.kind == "terminal" then self:choose(row) end
+  if row.kind == "project" or row.kind == "tab" or row.kind == "terminal" then self:choose(row, from_keyboard) end
   if row.kind == "project" then self.action("select", row.project.row_id)
   elseif row.kind == "tab" then self.action("request", "select", row.project.path, {action = "focus", pane = row.tab.id})
   elseif row.kind == "terminal" then self.action("select_terminal", row.project.row_id, row.terminal.id)
@@ -235,7 +238,7 @@ function SidebarView:on_key_pressed(key, repeating)
   local asked = self.unload_ask
   self.unload_ask = nil
   if key == "escape" then self.action("return_focus")
-  elseif key == "return" or key == "keypad enter" then self:activate_row(row)
+  elseif key == "return" or key == "keypad enter" then self:activate_row(row, true)
   elseif key == "up" or key == "down" or key == "home" or key == "end" then
     local index = key == "home" and 1 or key == "end" and #self.rows
       or (self.cursor or 1) + (key == "up" and -1 or 1)
@@ -1159,10 +1162,10 @@ function SidebarView:step(dt)
   if pending and (not visuals[pending.key] or system.get_time() >= pending.deadline) then
     self.pending, moving = nil, true
   end
-  -- Highlights glide from row to row and fade where no row takes them. A `snap` highlight jumps to a row in another
-  -- Project.
+  -- Highlights glide from row to row and fade where no row takes them. With `jump`, a highlight goes to a new row at
+  -- once.
   local m = self:metrics()
-  local function mark(name, row, speed, snap)
+  local function mark(name, row, speed, jump)
     local move, fade_rate = MARK_MOVE_RATE * speed, MARK_FADE_RATE * speed
     local current = self.marks[name]
     if not row or not row.shown then
@@ -1175,26 +1178,26 @@ function SidebarView:step(dt)
     local x = (row.kind == "project" or row.kind == "group" or row.kind == "empty") and m.pad or m.tab_left
     if not current or current.area ~= row.area or current.alpha <= 0.01 then
       self.marks[name] = {area = row.area, x = x, y = row.shown.y, h = row.h, alpha = ease(0, 1, fade_rate, 0.01),
-        path = row.project and row.project.path}
+        key = row.id_key}
       return
     end
-    local path = row.project and row.project.path
-    if snap and current.path ~= path then
-      current.path = path
+    if jump and current.key ~= row.id_key then
       current.x, current.y, current.h = x, row.shown.y, row.h
     else
       current.x = ease(current.x, x, move)
       current.y = ease(current.y, row.shown.y, move)
       current.h = ease(current.h, row.h, move)
     end
+    current.key = row.id_key
     current.alpha = ease(current.alpha, 1, fade_rate, 0.01)
   end
   local active
   for _, row in ipairs(self.rows) do
     if row.selected then active = row; break end
   end
-  -- A selection in another Project shows on its row at once, so it never slides over the rows between.
-  mark("active", active, SELECTION_SPEED, true)
+  -- A keyboard choice moves the selection at once. Its row was selected when the choice was made, so one step uses it.
+  mark("active", active, SELECTION_SPEED, self.jump_selection)
+  self.jump_selection = nil
   mark("cursor", self.focused and self:get_cursor() or nil, SELECTION_SPEED)
   mark("hover", self.hover, HOVER_SPEED)
   -- The drop target's mark: a line between rows that grows into a box around a target row.
