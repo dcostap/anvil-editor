@@ -966,6 +966,36 @@ test.describe("Sidebar unread results", function()
     other:set_model(model({session("done", {agent_state="done",agent_since=now + 3600})}), 1)
     test.equal(shown(other), "done")
   end)
+
+  test.it("clears remote read marks even when the Terminal's Window has no visible Sidebar", function()
+    local actions, action = recorder()
+    local seen = {}
+    -- Only the other Window has a Sidebar View. The owner's selection comes from the shared model.
+    local view = SidebarView(action, {["project:C:/P"]=true}, seen)
+    local function show(active)
+      local projects = model({
+        session("rang", {agent_state="working",agent_step="Preparing a tool call",bell=now - 30}),
+        session("done", {agent_state="done",agent_since=now - 20}),
+        session("asks", {agent_state="blocked",agent_since=now - 10}),
+      }, {selected=true,active=active})
+      projects.windows[2] = {id=9,selected_project=0}
+      view:set_model(projects, 9)
+    end
+    show(1)
+    test.equal(shown(view), "rang,done,asks")
+    test.equal(#dots(view), 3)
+    show(2)
+    test.equal(shown(view), "done,asks", "The remote active Terminal kept its bell mark")
+    test.equal(#dots(view), 2, "The read Terminal kept its attention dot")
+    show(3)
+    test.equal(shown(view), "asks", "The remote active Terminal kept its unread result")
+    test.equal(#dots(view), 1)
+    test.same(actions, {{"seen", "rang"}, {"seen", "done"}})
+    -- Looking at an agent's question does not answer it.
+    show(4)
+    test.equal(shown(view), "asks")
+    test.equal(#actions, 2)
+  end)
 end)
 
 test.describe("Sidebar search field", function()

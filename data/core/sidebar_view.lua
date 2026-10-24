@@ -346,8 +346,9 @@ function SidebarView:rebuild_rows()
     row.h, row.area = height, area
     rows[#rows + 1] = row
   end
-  local selected = 0
+  local selected, selected_projects = 0, {}
   for _, window in ipairs(projects.windows or {}) do
+    selected_projects[window.selected_project] = true
     if window.id == window_id then selected = window.selected_project end
   end
   local numbers = numbered_panes.numbers(projects, self.seen)
@@ -367,6 +368,7 @@ function SidebarView:rebuild_rows()
   local function add_loaded(project)
     local is_selected = window_id and selected ~= 0 and project.id == selected or not window_id and project.selected
     local panes = project.panes or {}
+    local seen_active = (selected_projects[project.id] or not window_id and project.selected) and panes.active
     -- The Selected Project's active Tab takes the highlight.
     local active = is_selected and panes[panes.active or 0] and panes.active
     local key = (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
@@ -398,8 +400,8 @@ function SidebarView:rebuild_rows()
       local session = item.terminal and item.terminal.session
       if session then
         shown[session] = true
-        -- The user looks at the Selected Project's active Tab, so its Unread Result becomes read.
-        local attention = index == active and tab.attention(item, self.seen[session])
+        -- A Tab shown in any Window is read, even when that Window's Sidebar is hidden.
+        local attention = index == seen_active and tab.attention(item, self.seen[session])
         if attention and attention ~= "blocked" then
           self.seen[session] = now
           self.action("seen", session)
