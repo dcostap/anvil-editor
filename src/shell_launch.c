@@ -247,7 +247,14 @@ static char *encode_request(int argc, char **argv, bool foreground, size_t *size
   char *buffer = NULL, *cwd = SDL_GetCurrentDirectory();
   uint32_t header[3] = {LAUNCH_MAGIC, LAUNCH_VERSION, foreground ? LAUNCH_FLAG_FOREGROUND : 0};
   uint32_t count = argc > 2 ? (uint32_t)(argc - 2) : 0;
-  const char *terminal_id = argc == 2 ? SDL_getenv("ANVIL_TERMINAL_ID") : NULL;
+  bool files_only = true;
+  for (int i = 2; i < argc; i++) {
+    SDL_PathInfo info;
+    if (argv[i][0] == '-' ||
+        (SDL_GetPathInfo(argv[i], &info) && info.type == SDL_PATHTYPE_DIRECTORY))
+      files_only = false;
+  }
+  const char *terminal_id = files_only ? SDL_getenv("ANVIL_TERMINAL_ID") : NULL;
   const char *terminal_project = terminal_id ? SDL_getenv("ANVIL_TERMINAL_PROJECT") : NULL;
   bool terminal = terminal_id && strlen(terminal_id) == ANVIL_SURFACE_TERMINAL_ID_LEN &&
     strspn(terminal_id, "0123456789abcdef") == ANVIL_SURFACE_TERMINAL_ID_LEN && terminal_project && *terminal_project;
@@ -376,9 +383,11 @@ static AnvilShellLaunchRequest *read_request(HANDLE pipe, DWORD client) {
     if (ok) request->argc++;
   }
   if (ok && request->terminal_id[0]) {
-    ok = !count && request->terminal_project[0] &&
+    ok = request->terminal_project[0] &&
       strlen(request->terminal_id) == ANVIL_SURFACE_TERMINAL_ID_LEN &&
       strspn(request->terminal_id, "0123456789abcdef") == ANVIL_SURFACE_TERMINAL_ID_LEN;
+    for (int i = 2; ok && i < request->argc; i++)
+      ok = request->argv[i][0] && request->argv[i][0] != '-';
   } else if (ok) {
     ok = !request->terminal_project[0];
   }

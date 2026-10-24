@@ -568,7 +568,9 @@ static void dispatch_message(HostedMessage *message) {
   }
   if (type == ANVIL_SURFACE_MSG_FOCUS_TERMINAL || type == ANVIL_SURFACE_MSG_TERMINAL_EDITOR) {
     CustomEvent event = {0};
-    event.data1 = _strdup((const char *)payload);
+    event.code = message->size;
+    event.data1 = malloc(message->size);
+    if (event.data1) memcpy(event.data1, payload, message->size);
     if (!event.data1 || !push_custom_event(type == ANVIL_SURFACE_MSG_FOCUS_TERMINAL ?
         "focusterminal" : "terminaleditor", &event)) {
       free(event.data1);
@@ -799,10 +801,19 @@ static int SDLCALL reader_thread(void *data) {
         if (!hosted.sidebar || !size || body[size - 1] || memchr(body, 0, size - 1)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_FOCUS_TERMINAL:
-      case ANVIL_SURFACE_MSG_TERMINAL_EDITOR:
         if (hosted.sidebar || size != ANVIL_SURFACE_TERMINAL_ID_LEN + 1 || body[size - 1] ||
             strspn((const char *)body, "0123456789abcdef") != ANVIL_SURFACE_TERMINAL_ID_LEN)
           goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_TERMINAL_EDITOR:
+        if (hosted.sidebar || size < ANVIL_SURFACE_TERMINAL_ID_LEN + 1 || body[size - 1] ||
+            body[ANVIL_SURFACE_TERMINAL_ID_LEN] ||
+            strspn((const char *)body, "0123456789abcdef") != ANVIL_SURFACE_TERMINAL_ID_LEN)
+          goto failed;
+        for (size_t offset = ANVIL_SURFACE_TERMINAL_ID_LEN + 1; offset < size;) {
+          if (!body[offset]) goto failed;
+          offset += strlen((const char *)body + offset) + 1;
+        }
         break;
       case ANVIL_SURFACE_MSG_SIDEBAR_REMOVE:
         if (!hosted.sidebar || size != sizeof(uint32_t) || !*(uint32_t *)body) goto failed;

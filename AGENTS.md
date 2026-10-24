@@ -82,7 +82,9 @@ Without Agent Status, the Project Sidebar shows the command's elapsed time or co
 Run `ui/terminal_command_status.lua` after changes. Existing hosts keep their loaded integration until their shells restart.
 
 A bare `anvil` command from a focused Terminal triggers `editor:open` after its command ends.
-Launches with arguments keep their normal behavior.
+An `anvil <file> ...` command opens those files in new Panes in the same Project after its command ends.
+File paths resolve from the Terminal's current directory. New files are supported.
+Launches with options, CLI commands, or directory arguments keep their normal behavior.
 The request uses the Terminal Session and its Project, even after its current directory changes.
 The Terminal host confirms idle with a fresh probe before Lua runs the command. A cached idle status is not sufficient.
 The request does not change focus if another Pane or View has taken focus.

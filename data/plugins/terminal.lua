@@ -987,8 +987,16 @@ function TerminalView:service_session(include_rows)
     local pane = request.pane
     if request.session == self.session and status.kind == "running" and status.busy == false
         and panes.active() == pane and pane.current_view == self and core.active_view == self then
-      core.log_quiet("Terminal Session %s runs editor:open from %s", self.session_id, pane.id)
-      command.perform_with_context("editor:open", { source_pane = pane, placement = "current" })
+      if #request.paths == 0 then
+        core.log_quiet("Terminal Session %s runs editor:open from %s", self.session_id, pane.id)
+        command.perform_with_context("editor:open", { source_pane = pane, placement = "current" })
+      else
+        for _, path in ipairs(request.paths) do
+          core.log_quiet("Terminal Session %s opens file: %s", self.session_id, path)
+          local opened, err = core.open_file(path, { pane = pane, placement = "new", reason = "terminal-open" })
+          if not opened then core.error("Cannot open %s: %s", path, tostring(err)) end
+        end
+      end
     else
       core.log_quiet("Terminal Session %s editor request canceled: focus or session changed", self.session_id)
     end
@@ -2762,8 +2770,8 @@ end
 
 local editor_request_token = 0
 
--- A bare launch identifies its Session. The host checks idle again after it receives this request.
-function M.request_editor(id)
+-- A launch identifies its Session. The host checks idle again after it receives this request.
+function M.request_editor(id, paths)
   local pane = panes.active()
   local view = pane and pane.current_view
   if not view or not view:is(TerminalView) or view.session_id ~= id or core.active_view ~= view
@@ -2777,7 +2785,7 @@ function M.request_editor(id)
     core.log_quiet("Terminal Session %s editor request failed: host request was not queued", id)
     return false
   end
-  view.editor_request = { token = editor_request_token, pane = pane, session = view.session }
+  view.editor_request = { token = editor_request_token, pane = pane, session = view.session, paths = paths or {} }
   core.log_quiet("Terminal Session %s editor request queued for %s", id, pane.id)
   return true
 end

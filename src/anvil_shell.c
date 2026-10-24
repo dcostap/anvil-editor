@@ -4418,8 +4418,8 @@ static void accept_external(AnvilShellLaunchRequest *request) {
   const char *terminal_project = anvil_shell_launch_terminal_project(request);
   if (shell.shutting_down || shell.updating ||
       !queue_resolution(NULL, terminal_project[0] ? terminal_project : anvil_shell_launch_cwd(request),
-                        anvil_shell_launch_argc(request),
-                        anvil_shell_launch_argv(request), false, false, true, request))
+                        terminal_project[0] ? 0 : anvil_shell_launch_argc(request),
+                        terminal_project[0] ? NULL : anvil_shell_launch_argv(request), false, false, true, request))
     anvil_shell_launch_finish(request, ANVIL_SHELL_LAUNCH_BUSY);
 }
 
@@ -5903,9 +5903,23 @@ static void finish_external(ProjectResolve *job) {
        Lua checks the originating Session and Pane; its host releases the request only after idle. */
     bool ready = !shell.shutting_down && !shell.updating && project && owner && !owner->closing &&
       project->connected && project->state == SHELL_READY;
-    if (ready)
-      shell_send(project, ANVIL_SURFACE_MSG_TERMINAL_EDITOR, terminal_id,
-                 ANVIL_SURFACE_TERMINAL_ID_LEN + 1, NULL, 0);
+    size_t size = ANVIL_SURFACE_TERMINAL_ID_LEN + 1;
+    int argc = anvil_shell_launch_argc(request);
+    char **argv = anvil_shell_launch_argv(request);
+    for (int i = 2; i < argc; i++) size += strlen(argv[i]) + 1;
+    char *payload = ready && size <= ANVIL_SURFACE_MAX_PAYLOAD ? malloc(size) : NULL;
+    ready = ready && payload;
+    if (ready) {
+      memcpy(payload, terminal_id, ANVIL_SURFACE_TERMINAL_ID_LEN + 1);
+      size_t offset = ANVIL_SURFACE_TERMINAL_ID_LEN + 1;
+      for (int i = 2; i < argc; i++) {
+        size_t length = strlen(argv[i]) + 1;
+        memcpy(payload + offset, argv[i], length);
+        offset += length;
+      }
+      shell_send(project, ANVIL_SURFACE_MSG_TERMINAL_EDITOR, payload, (uint32_t)size, NULL, 0);
+    }
+    free(payload);
     SDL_Log("Shell Terminal editor request: session=%s %s", terminal_id, ready ? "sent" : "rejected");
     anvil_shell_launch_finish(request, ready ? ANVIL_SHELL_LAUNCH_ACCEPTED : ANVIL_SHELL_LAUNCH_REJECTED);
     return;

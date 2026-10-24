@@ -2214,10 +2214,18 @@ static int focusterminal_callback(lua_State *L, SDL_Event *event) {
   return 2;
 }
 static int terminaleditor_callback(lua_State *L, SDL_Event *event) {
+  const char *payload = event->user.data1;
   lua_pushstring(L, "terminaleditor");
-  lua_pushstring(L, event->user.data1);
+  lua_pushstring(L, payload);
+  lua_newtable(L);
+  int index = 1;
+  for (size_t offset = ANVIL_SURFACE_TERMINAL_ID_LEN + 1; offset < (size_t)event->user.code;) {
+    lua_pushstring(L, payload + offset);
+    lua_rawseti(L, -2, index++);
+    offset += strlen(payload + offset) + 1;
+  }
   free(event->user.data1);
-  return 2;
+  return 3;
 }
 static int f_complete_pane_request(lua_State *L) {
   anvil_hosted_surface_complete_pane_request((uint64_t)luaL_checkinteger(L, 1));

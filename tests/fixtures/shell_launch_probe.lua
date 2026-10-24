@@ -283,6 +283,23 @@ elseif names[path] then
      assert(panes.focus(pane))
      assert(pane.current_view == view, "launch did not retain the Terminal")
     end
+    -- File arguments use the Terminal's Project, but resolve from its changed directory.
+    local filename = root .. "/Replacement/terminal file.txt"
+    local file = assert(io.open(filename, "wb")); file:write("from the Terminal\n"); file:close()
+    assert(view:write_input("anvil './terminal file.txt' './new file.txt'\r"))
+    wait(function() return core.active_view ~= view end, 20,
+     "file arguments did not open an Editor in the originating Project")
+    assert(core.active_view:is(Editor), "file launch did not focus an Editor")
+    assert(core.active_view.buffer.abs_filename:gsub("\\", "/") == root .. "/Replacement/new file.txt",
+     "file launch did not resolve the new file from the Terminal directory")
+    assert(core.buffer_registry:find(filename), "file launch did not open the existing file")
+    assert(view.busy == false, "file launch opened an Editor before the command ended")
+    assert(view.session == session and view.state == "running", "file launch closed the Terminal Session")
+    assert(core.root_project().path:gsub("\\", "/") == path, "file launch changed the Project")
+    -- Save the new file so the isolated shell can close without a save prompt.
+    core.active_view.buffer:save()
+    assert(panes.focus(pane))
+    assert(pane.current_view == view, "file launch did not retain the Terminal")
     -- An explicit CLI argument must keep its normal behavior.
     assert(view:write_input("anvil --version; Write-Output 'ANVIL_ARGS_DONE'\r"))
     wait(function() return output("ANVIL_ARGS_DONE") end, 15)
