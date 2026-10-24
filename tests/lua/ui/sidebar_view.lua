@@ -470,7 +470,7 @@ test.describe("Sidebar Window folding", function()
     end
   end)
 
-  test.it("starts with only the Selected Project expanded and keeps each Window's choices", function()
+  test.it("keeps each Window's manual folds without folding Projects when selection changes", function()
     local model = {
       {row_id=1,id=11,path="C:/A",state="ready",window_id=7,panes={{id="a",name="a.lua"}}},
       {row_id=2,id=22,path="C:/B",state="ready",window_id=9,panes={{id="b",name="b.lua"}}},
@@ -485,28 +485,28 @@ test.describe("Sidebar Window folding", function()
       return table.concat(names, ",")
     end
     a:set_model(model, 7); b:set_model(model, 9)
-    test.equal(tabs(a), "a.lua")
-    test.equal(tabs(b), "b.lua")
-    -- Expand A in B's Window. The same choice in A's Window stays unchanged.
-    b:toggle("project:C:/A", true)
+    test.equal(tabs(a), "a.lua,b.lua,c.lua")
+    test.equal(tabs(b), "a.lua,b.lua,c.lua")
+    -- Collapse A in A's Window and B in B's Window. Each choice stays local.
+    b:toggle("project:C:/B", false)
     a:toggle("project:C:/A", false)
-    test.equal(tabs(a), "")
-    test.equal(tabs(b), "a.lua,b.lua")
+    test.equal(tabs(a), "b.lua,c.lua")
+    test.equal(tabs(b), "a.lua,c.lua")
     a:set_model(model, 7); b:set_model(model, 9)
-    test.equal(tabs(a), "")
-    test.equal(tabs(b), "a.lua,b.lua")
+    test.equal(tabs(a), "b.lua,c.lua")
+    test.equal(tabs(b), "a.lua,c.lua")
     -- A fresh frontend restores the manual folds, including the Selected Project's fold.
     a = SidebarView(function() end, saved_a, nil, true)
     b = SidebarView(function() end, saved_b, nil, true)
     a:set_model(model, 7); b:set_model(model, 9)
-    test.equal(tabs(a), "")
-    test.equal(tabs(b), "a.lua,b.lua")
+    test.equal(tabs(a), "b.lua,c.lua")
+    test.equal(tabs(b), "a.lua,c.lua")
     model.windows[1].selected_project = 33
     a:set_model(model, 7)
-    test.equal(tabs(a), "c.lua", "Selecting another Project did not expand it")
+    test.equal(tabs(a), "b.lua,c.lua", "Changing selection folded another Project")
     model.windows[1].selected_project = 11
     a:set_model(model, 7)
-    test.equal(tabs(a), "a.lua", "Selecting the folded Project again did not expand it")
+    test.equal(tabs(a), "a.lua,b.lua,c.lua", "Selecting the folded Project again did not expand it")
   end)
 end)
 

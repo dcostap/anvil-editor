@@ -271,7 +271,7 @@ Run `anvil:shell-state` and the `restore-loaded` shell launch probe after change
 Project Sidebar visibility belongs to each Window. The first new Window starts expanded; additional Windows start collapsed.
 Restored Windows use their saved visibility, including a lone Window saved with its Sidebar hidden.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
-New Sidebars expand their Selected Project and collapse other Projects by default.
+Loaded Projects start expanded unless this Window has a saved manual fold.
 Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state.
 Run `anvil:shell-state`, `ui/sidebar_view.lua`, and the `windows-sidebar-layout`, `windows-sidebar-folding`, and `toggle-sidebar` shell probes after changes.
 
