@@ -268,6 +268,11 @@ Shutdown captures their paths before closing the hosted processes. Dormant Proje
 Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.
 Run `anvil:shell-state` and the `restore-loaded` shell launch probe after changes.
 
+Project Sidebar visibility belongs to each Window. The first new Window starts expanded; additional Windows start collapsed.
+Restored Windows use their saved visibility, including a lone Window saved with its Sidebar hidden.
+Sidebar width, the Project list, and group folding remain shared.
+Run `anvil:shell-state` and the `windows-sidebar-layout` and `toggle-sidebar` shell probes after visibility changes.
+
 The shell draws the Window controls with the Windows caption glyphs: Segoe Fluent Icons, or Segoe MDL2 Assets on Windows 10.
 Its hit test reports the Maximize button as `HTMAXBUTTON`, so Windows 11 shows Snap Layouts there.
 The shell handles that button's non-client press itself. Windows' own button tracking would draw its hidden button.

@@ -67,22 +67,41 @@ static void project_activity(void) {
   anvil_shell_state_free(&decoded);
 }
 
-/* Every Window shares one Sidebar width and hidden state. */
+/* Windows share a Sidebar width, but save their visibility independently. */
 static void sidebar_layout(void) {
-  AnvilShellState state = {sample, 3, NULL, 0, 320, true}, decoded;
+  AnvilShellWindowState windows[] = {sample[0], sample[1], sample[2]};
+  windows[0].sidebar_hidden = true;
+  windows[2].sidebar_hidden = true;
+  AnvilShellState state = {windows, 3, NULL, 0, 320}, decoded;
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
   CHECK(data && anvil_shell_state_decode(data, size, &decoded), "Sidebar layout did not round-trip");
-  CHECK(decoded.count == 3 && decoded.sidebar_points == 320 && decoded.sidebar_hidden,
+  CHECK(decoded.count == 3 && decoded.sidebar_points == 320,
         "Sidebar layout changed");
+  if (decoded.count == 3)
+    CHECK(decoded.windows[0].sidebar_hidden && !decoded.windows[1].sidebar_hidden && decoded.windows[2].sidebar_hidden,
+          "Windows lost their independent Sidebar visibility");
   anvil_shell_state_free(&decoded);
   free(data);
   /* A file from before the Sidebar layout keeps its Windows and uses the default layout. */
   const char *old = "anvil-shell-windows 3\nwindow 1 0 0 10 10 0 3 abc\nproject 5 3 abc\n";
   CHECK(anvil_shell_state_decode(old, strlen(old), &decoded) && decoded.count == 1 && decoded.project_count == 1 &&
-            decoded.sidebar_points == 0 && !decoded.sidebar_hidden,
+            decoded.sidebar_points == 0 && !decoded.windows[0].sidebar_hidden,
         "Window state without a Sidebar layout rejected");
   anvil_shell_state_free(&decoded);
+  /* Existing saved Windows retain their old shared visibility, including an empty Window. */
+  const char *legacy[] = {
+    "anvil-shell-windows 4\nsidebar 320 0\nwindow 1 0 0 10 10 0 3 abc\nwindow 2 0 0 10 10 0 0 \n",
+    "anvil-shell-windows 5\nwindow 1 0 0 10 10 0 3 abc\nloaded 1 3 def\nwindow 2 0 0 10 10 0 0 \nsidebar 320 1\n",
+  };
+  for (size_t i = 0; i < SDL_arraysize(legacy); i++) {
+    CHECK(anvil_shell_state_decode(legacy[i], strlen(legacy[i]), &decoded) && decoded.count == 2,
+          "existing Sidebar layout did not load");
+    if (decoded.count == 2)
+      CHECK(decoded.sidebar_points == 320 && decoded.windows[0].sidebar_hidden == (i == 1) &&
+            decoded.windows[1].sidebar_hidden == (i == 1), "existing Windows lost their Sidebar visibility");
+    anvil_shell_state_free(&decoded);
+  }
 }
 
 static void round_trip(void) {
@@ -113,7 +132,12 @@ static void rejects(void) {
   AnvilShellState decoded;
   const char *bad[] = {
     "anvil-shell-windows 1\nwindow 0 0 10 10 0 0 \n",
-    "anvil-shell-windows 6\n",
+    "anvil-shell-windows 7\n",
+    "anvil-shell-windows 6\nwindow 1 0 0 10 10 0 2 0 \n",
+    "anvil-shell-windows 6\nwindow 1 0 0 10 10 0 0 \n",
+    "anvil-shell-windows 6\nsidebar 320 1\n",
+    "anvil-shell-windows 6\nsidebar 0\n",
+    "anvil-shell-windows 6\nsidebar 240\nsidebar 240\n",
     "anvil-shell-windows 5\nloaded 1 3 abc\n",
     "anvil-shell-windows 5\nwindow 1 0 0 10 10 0 3 abc\nloaded 2 3 def\n",
     "anvil-shell-windows 5\nwindow 1 0 0 10 10 0 3 abc\nloaded 1 0 \n",

@@ -173,7 +173,10 @@ if path:find("/driver$", 1) then
               if next_pid == pid then return false end
               local text = trace()
               for _, window in ipairs(windows(a.shell_pid)) do
-                if not text:find("Shell Sidebar surface Ready: Window=" .. window_id(window) .. " connection=" .. connection, 1, true) then
+                local id = window_id(window)
+                -- The new empty Window keeps its Sidebar hidden and needs no frame.
+                if (id == a.window_id or id == b.window_id) and
+                  not text:find("Shell Sidebar surface Ready: Window=" .. id .. " connection=" .. connection, 1, true) then
                   return false
                 end
               end
@@ -384,6 +387,8 @@ else
       end
     end
     if path == root .. "/Replacement" then
+      -- These checks need two visible Sidebars. Additional Windows start with theirs hidden.
+      if shared then assert(command.perform("core:toggle_project_sidebar")) end
       save("b-ready", state)
       if action ~= "windows-open" then
         wait_for(function() return load("finish") end, 25)

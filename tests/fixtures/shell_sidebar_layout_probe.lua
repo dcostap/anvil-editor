@@ -60,6 +60,9 @@ local function saved_state()
  local file = assert(io.open(root .. "/user/shell-windows.state", "rb"))
  local text = file:read("*a"); file:close(); return text
 end
+local function saved_hidden()
+ return saved_state():match("\nwindow %d+ %-?%d+ %-?%d+ %d+ %d+ [01] ([01]) ")
+end
 
 if path:match("/driver$") then
  core.add_background_thread(function()
@@ -131,8 +134,8 @@ if path:match("/driver$") then
    save("finish-1", {go = true})
    stop_shell(shell)
    shell = nil
-   -- Every Window shares the saved width and hidden state.
-   assert(saved_state():find("\nsidebar 320 1\n", 1, true), "The shell did not save the Sidebar layout")
+   assert(saved_state():find("\nsidebar 320\n", 1, true) and saved_hidden() == "1",
+    "The shell did not save the Sidebar layout")
 
    -- The next shell restores the Window with its Sidebar hidden. The hidden Sidebar renders nothing, so the
    -- Window shows without it, and the Sidebar's startup deadline passes without a failure.
@@ -152,7 +155,7 @@ if path:match("/driver$") then
    save("finish-2", {go = true})
    stop_shell(shell)
    shell = nil
-   assert(saved_state():find("\nsidebar 320 0\n", 1, true), "The shell did not save the shown Sidebar")
+   assert(saved_hidden() == "0", "The shell did not save the shown Sidebar")
   end)
   save("finish-1", {go = true})
   save("finish-2", {go = true})

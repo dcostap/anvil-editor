@@ -271,6 +271,9 @@ elseif path == root .. "/Project" then
  end)
 elseif path == root .. "/Replacement" then
  core.add_background_thread(function()
+  -- The Move check uses this Window's Sidebar, which starts hidden in an additional Window.
+  assert(command.perform("core:toggle_project_sidebar"))
+  wait(function() return system.get_window_content_x() > 0 end)
   save("b-ready",{pid=tonumber(kernel.GetCurrentProcessId()),shell_pid=system.get_window_process_id(),window_id=system.get_anvil_window_id()})
   local sent={}
   local blocking, editor

@@ -139,6 +139,7 @@ def main() -> int:
     parser.add_argument("--reference-exe", type=Path, help="copy a saved reference executable into the isolated app")
     parser.add_argument("--reference-data", type=Path, help="use the saved reference's matching runtime data")
     parser.add_argument("--project-case", action="append", choices=[
+        "windows-sidebar-layout",
         "launch-terminal-editor",
         "restore-loaded", "navigate-sidebar", "windows-close-cleanup", "windows-close-cleanup-cancel", "windows-close-cleanup-unload", "windows-close-update-disconnect",
         "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "project-menu-background", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
@@ -225,6 +226,8 @@ def main() -> int:
                         fixture = "shell_terminal_focus_probe.lua"
                     if action == "toggle-sidebar":
                         fixture = "shell_sidebar_layout_probe.lua"
+                    if action == "windows-sidebar-layout":
+                        fixture = "shell_sidebar_windows_probe.lua"
                     if action == "navigate-sidebar":
                         fixture = "shell_sidebar_navigation_probe.lua"
                     if action in ("project-menu", "project-menu-background"):

@@ -23,6 +23,8 @@ typedef struct {
   /* Other loaded Projects in this Window. The Selected Project is already in `path`. */
   char **projects;
   size_t project_count;
+  /* This Window's Project Sidebar visibility. Width remains shared. */
+  bool sidebar_hidden;
 } AnvilShellWindowState;
 
 /* The last time the user worked in a Project, in Unix seconds. The Project Sidebar groups Projects by it. */
@@ -39,7 +41,6 @@ typedef struct {
   size_t project_count;
   /* The Project Sidebar's width in points, shared by every Window. 0 means the default. */
   int sidebar_points;
-  bool sidebar_hidden;
 } AnvilShellState;
 
 /* Encodes `state`. Returns NULL when it exceeds the bounds above. */

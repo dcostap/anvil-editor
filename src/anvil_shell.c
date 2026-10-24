@@ -295,6 +295,7 @@ struct ShellWindow {
   /* The shown Sidebar width. While the Sidebar slides it is less than sidebar_full_w, the Sidebar surface's width. */
   int sidebar_w, sidebar_full_w;
   float sidebar_open; /* 0 hidden, 1 shown */
+  bool sidebar_hidden;
   float sidebar_slide_from;
   Uint64 sidebar_slide_start;
   bool sidebar_sliding;
@@ -360,9 +361,8 @@ typedef struct {
   bool has_theme_colors;
   /* The Project whose unsaved Color Theme the Sidebar draws, or 0. */
   Uint32 theme_preview_project;
-  /* The Project Sidebar's width in points and whether it is hidden. Every Window shares them. */
+  /* The Project Sidebar's width in points. Every Window shares it. */
   int sidebar_points;
-  bool sidebar_hidden;
   AnvilSidebarScan *sidebar_scan;
   char *sidebar_userdir, *sidebar_recents;
   /* Saved Project activity for Projects the Project Sidebar does not list yet. */
@@ -442,7 +442,7 @@ static void sync_sidebar_model(void);
 static AnvilSidebarProject *sidebar_project(const char *path);
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value);
 static void start_sidebar(void);
-static void set_sidebar_hidden(bool hidden);
+static void set_sidebar_hidden(ShellWindow *window, bool hidden);
 static void focus_sidebar(ShellWindow *window, bool focused);
 static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y);
 static void schedule_sidebar_restart(void);
@@ -3563,7 +3563,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
   }
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
     SDL_Log("Shell Sidebar toggle requested: Window=%u", window->id);
-    if (!window->closing) set_sidebar_hidden(!shell.sidebar_hidden);
+    if (!window->closing) set_sidebar_hidden(window, !window->sidebar_hidden);
     break;
   case ANVIL_SURFACE_MSG_PANES: {
     const AnvilSurfacePaneReport *report = payload;
@@ -3803,7 +3803,7 @@ static void apply_sidebar_layout(ShellWindow *window) {
 }
 
 static void slide_sidebar(ShellWindow *window) {
-  float target = shell.sidebar_hidden ? 0.0f : 1.0f;
+  float target = window->sidebar_hidden ? 0.0f : 1.0f;
   float t = (float)(SDL_GetTicks() - window->sidebar_slide_start) / SHELL_SIDEBAR_SLIDE_MS;
   if (t >= 1.0f || !window->shown || IsIconic(window->hwnd)) {
     KillTimer(window->hwnd, SHELL_SIDEBAR_SLIDE_TIMER);
@@ -3816,27 +3816,23 @@ static void slide_sidebar(ShellWindow *window) {
     SDL_Log("Shell Sidebar slide ended: Window=%u width=%d", window->id, window->sidebar_w);
 }
 
-/* Every Window slides its Sidebar open or closed. A Window that is not shown changes at once. */
-static void set_sidebar_hidden(bool hidden) {
-  if (shell.sidebar_hidden == hidden) return;
-  if (hidden) {
-    for (ShellWindow *window = shell.windows; window; window = window->next) focus_sidebar(window, false);
-  }
-  shell.sidebar_hidden = hidden;
-  SDL_Log("Shell Sidebar %s", hidden ? "hidden" : "shown");
-  for (ShellWindow *window = shell.windows; window; window = window->next) {
-    window->sidebar_dragging = window->sidebar_grip_hover = false;
-    window->sidebar_slide_from = window->sidebar_open;
-    window->sidebar_slide_start = SDL_GetTicks();
-    if (window->shown && !window->revealing && !IsIconic(window->hwnd) &&
-        SetTimer(window->hwnd, SHELL_SIDEBAR_SLIDE_TIMER, USER_TIMER_MINIMUM, NULL)) {
-      window->sidebar_sliding = true;
-      if (hidden) leave_sidebar(window);
-    } else {
-      window->sidebar_sliding = false;
-      window->sidebar_open = hidden ? 0.0f : 1.0f;
-      apply_sidebar_layout(window);
-    }
+/* Only this Window slides its Sidebar. A Window that is not shown changes at once. */
+static void set_sidebar_hidden(ShellWindow *window, bool hidden) {
+  if (window->sidebar_hidden == hidden) return;
+  if (hidden) focus_sidebar(window, false);
+  window->sidebar_hidden = hidden;
+  SDL_Log("Shell Sidebar %s: Window=%u", hidden ? "hidden" : "shown", window->id);
+  window->sidebar_dragging = window->sidebar_grip_hover = false;
+  window->sidebar_slide_from = window->sidebar_open;
+  window->sidebar_slide_start = SDL_GetTicks();
+  if (window->shown && !window->revealing && !IsIconic(window->hwnd) &&
+      SetTimer(window->hwnd, SHELL_SIDEBAR_SLIDE_TIMER, USER_TIMER_MINIMUM, NULL)) {
+    window->sidebar_sliding = true;
+    if (hidden) leave_sidebar(window);
+  } else {
+    window->sidebar_sliding = false;
+    window->sidebar_open = hidden ? 0.0f : 1.0f;
+    apply_sidebar_layout(window);
   }
   windows_changed();
 }
@@ -4043,7 +4039,7 @@ static void focus_sidebar(ShellWindow *window, bool focused) {
   if (window->sidebar_focused == focused) return;
   clear_composition(window);
   window->sidebar_focused = focused;
-  if (focused) set_sidebar_hidden(false);
+  if (focused) set_sidebar_hidden(window, false);
   if (window->selected->connected)
     shell_send_int(window->selected, ANVIL_SURFACE_MSG_FOCUS, !focused && window_focused(window));
   if (window->sidebar_client && shell.sidebar_process && shell.sidebar_process->connected)
@@ -5082,7 +5078,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
        * open Sidebar. SDL's minimum size would add borders and grow the Window each time it is set. */
       info->ptMinTrackSize.x = SDL_max(info->ptMinTrackSize.x,
                                        (LONG)(SHELL_PROJECT_MIN_POINTS * window->scale) +
-                                           (shell.sidebar_hidden ? 0 : window->sidebar_full_w));
+                                           (window->sidebar_hidden ? 0 : window->sidebar_full_w));
       info->ptMinTrackSize.y = SDL_max(info->ptMinTrackSize.y, (LONG)(180 * window->scale));
       return 0;
     }
@@ -6819,6 +6815,8 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement) {
   if (!window) return NULL;
   window->id = ++shell.next_window;
   window->sidebar = true;
+  window->sidebar_hidden = placement ? placement->sidebar_hidden : count > 0;
+  window->sidebar_open = window->sidebar_hidden ? 0.0f : 1.0f;
   if (!shell.sidebar_window_id) shell.sidebar_window_id = window->id;
   window->empty = allocate_project(window);
   if (!window->empty) { free(window); return NULL; }
@@ -6842,7 +6840,6 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement) {
     destroy_window(window);
     return NULL;
   }
-  window->sidebar_open = shell.sidebar_hidden ? 0.0f : 1.0f;
   update_scale(window);
   set_window_icon(window);
   if (placement) {
@@ -6883,7 +6880,8 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement) {
     window->sidebar_client->process.dwProcessId = shell.sidebar_process->process.dwProcessId;
     send_configure(window->sidebar_client);
   }
-  SDL_Log("Shell empty Window ready: id=%u", window->id);
+  SDL_Log("Shell empty Window ready: id=%u Sidebar_hidden=%d restored=%d", window->id,
+          window->sidebar_hidden, placement != NULL);
   reveal_when_ready(window);
   return window;
 }
@@ -6903,6 +6901,7 @@ static void window_entry(ShellWindow *window, AnvilShellWindowState *entry) {
   GetWindowPlacement(window->hwnd, &placement);
   RECT bounds = placement.rcNormalPosition;
   entry->id = window->id;
+  entry->sidebar_hidden = window->sidebar_hidden;
   entry->x = bounds.left;
   entry->y = bounds.top;
   entry->w = bounds.right - bounds.left;
@@ -6985,7 +6984,7 @@ static void save_windows(bool final) {
       activity[j] = activity[j - 1];
       activity[j - 1] = swap;
     }
-  AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.sidebar_hidden};
+  AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points};
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
   for (size_t i = 0; i < count; i++) if (owned[i]) anvil_shell_window_state_free(&entries[i]);
@@ -7234,8 +7233,7 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
   shell.sidebar_points = saved.sidebar_points
                              ? SDL_clamp(saved.sidebar_points, SHELL_SIDEBAR_MIN_POINTS, SHELL_SIDEBAR_MAX_POINTS)
                              : SHELL_SIDEBAR_POINTS;
-  shell.sidebar_hidden = saved.sidebar_hidden;
-  SDL_Log("Shell Sidebar layout: points=%d hidden=%d", shell.sidebar_points, shell.sidebar_hidden);
+  SDL_Log("Shell Sidebar width: points=%d", shell.sidebar_points);
   /* Projects from a shell that ended wait for this one. */
   static AnvilAdoptionRecord adoptable[ANVIL_ADOPTION_MAX_RECORDS];
   size_t adoptable_count = userdir ? anvil_adoption_scan(adoptable, SDL_arraysize(adoptable)) : 0;

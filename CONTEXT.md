@@ -14,7 +14,7 @@ _Avoid_: Host window, Project window
 
 **App State**:
 Global editor state that persists across launches, including recent Projects, Window placement, and previous find/replace text.
-It includes each Window's loaded Projects and Selected Project; Dormant Projects remain dormant.
+It includes each Window's loaded Projects, Selected Project, and Project Sidebar visibility; Dormant Projects remain dormant.
 _Avoid_: Session
 
 **Project**:
