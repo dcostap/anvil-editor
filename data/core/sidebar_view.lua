@@ -1046,7 +1046,7 @@ function SidebarView:step(dt)
   for _, row in ipairs(self.rows) do
     local key, before = row.id_key, old[row.id_key]
     local visual
-    local dim = self:dim_target(key)
+    local dim = self:dim_target(row)
     if before and before.area == row.area then
       visual = {area = row.area, y = ease(before.y, row.y + (nudge[key] or 0), MOVE_RATE * ROW_SPEED),
         alpha = ease(before.alpha, 1, FADE_RATE * ROW_SPEED, 0.01), dim = ease(before.dim, dim, FADE_RATE * 1.5, 0.01)}
@@ -1167,10 +1167,13 @@ function SidebarView:autoscroll_speed(y)
   if y > self.view_h - zone then return "bottom_scroll", speed(y - self.view_h + zone) end
 end
 
--- The opacity factor that a row moves toward: a dragged or moved Tab's row stays dim at its old place.
-function SidebarView:dim_target(key)
+-- Other Windows' Projects and their children stay dim. A dragged or moved Tab dims further at its old place.
+function SidebarView:dim_target(row)
+  local key = row.id_key
   local drag, pending = self.drag, self.pending
   if drag and drag.key == key or pending and pending.key == key then return 0.35 end
+  local owner = row.project and row.project.window_id
+  if self.window_id and owner and owner ~= 0 and owner ~= self.window_id then return 0.7 end
   return 1
 end
 
@@ -1507,7 +1510,7 @@ function SidebarView:draw_containers(area, width)
       if row.bracket.last then
         local top = origin + first.shown.y
         local bottom = origin + row.shown.y + row.h
-        local alpha = math.min(first.shown.alpha, row.shown.alpha)
+        local alpha = math.min(first.shown.alpha * first.shown.dim, row.shown.alpha * row.shown.dim)
         local x, w = m.tab_left, width - m.pad - m.tab_left
         if joined then
           renderer.draw_rounded_rect(x, top + 1, w, bottom - top - 2, m.radius,

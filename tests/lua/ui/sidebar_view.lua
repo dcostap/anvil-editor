@@ -40,12 +40,20 @@ local function with_renderer(calls, fn)
   if not ok then error(err, 0) end
 end
 
--- Each text that a draw of the view at `width` x `height` shows, with its position and colour.
+-- Records each text's position, colour and effective opacity at `width` x `height`.
 local function drawn_texts(view, width, height)
-  local texts = {}
-  with_renderer({draw_text = function(font, text, x, y, color)
-    texts[#texts + 1] = {text = text, x = x, y = y, color = color, right = x + font:get_width(text)}
-  end}, function() view:draw(width or 400, height or 800) end)
+  local texts, stack, opacity = {}, {}, 1
+  with_renderer({
+    push_transform = function(x, y, scale, alpha)
+      stack[#stack + 1] = opacity
+      opacity = opacity * (alpha or 1)
+    end,
+    pop_transform = function() opacity = table.remove(stack) end,
+    draw_text = function(font, text, x, y, color)
+      texts[#texts + 1] = {text = text, x = x, y = y, color = color, right = x + font:get_width(text),
+        opacity = opacity * (color[4] or 255) / 255}
+    end,
+  }, function() view:draw(width or 400, height or 800) end)
   return texts
 end
 
@@ -185,6 +193,33 @@ test.describe("Sidebar list actions", function()
     test.equal(highlighted(b), "B")
     test.ok(joined(drawn_texts(b, 600, 1000)):find("Window 7", 1, true))
     test.equal(highlighted(a), "A", "Drawing B changed A's selection")
+  end)
+
+  test.it("dims another Window's Project and its children, but not Dormant Projects", function()
+    local model = {
+      {row_id=1,id=11,path="C:/Alpha",state="ready",window_id=7,panes={
+        {id="pane-1",group=1,name="notes.lua"}},terminals={
+        {id="recent",title="recent shell",state="running"},
+        {id="old",title="old shell",state="running",activity=os.time() - 15 * 86400}}},
+      {row_id=2,path="C:/Dormant",state="dormant",window_id=0,exists=true,activity=os.time()},
+      windows={{id=7,selected_project=11},{id=9,selected_project=0}},
+    }
+    local a, b = SidebarView(function() end), SidebarView(function() end)
+    for _, view in ipairs {a, b} do view:toggle("terminals:month:C:/Alpha", true) end
+    a:set_model(model, 7); b:set_model(model, 9)
+    local local_texts, remote_texts = drawn_texts(a, 600, 1000), drawn_texts(b, 600, 1000)
+    for _, label in ipairs {"Alpha", "notes.lua", "recent shell", "OLDER THAN A WEEK", "old shell"} do
+      local normal = test.not_nil(find_text(local_texts, label), label .. " is missing locally")
+      local dimmed = test.not_nil(find_text(remote_texts, label), label .. " is missing remotely")
+      test.ok(dimmed.opacity > 0 and dimmed.opacity < normal.opacity, label .. " is not dimmed remotely")
+    end
+    test.equal(find_text(remote_texts, "Dormant").opacity, find_text(local_texts, "Dormant").opacity)
+    -- Moving the Project changes which Sidebar dims it.
+    model[1].window_id = 9
+    model.windows = {{id=7,selected_project=0},{id=9,selected_project=11}}
+    a:set_model(model, 7); b:set_model(model, 9)
+    test.ok(find_text(drawn_texts(a, 600, 1000), "notes.lua").opacity
+      < find_text(drawn_texts(b, 600, 1000), "notes.lua").opacity)
   end)
 
   test.it("selects a Project clicked anywhere on its row", function()
