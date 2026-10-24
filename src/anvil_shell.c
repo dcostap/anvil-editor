@@ -4743,7 +4743,14 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     break;
   case SDL_EVENT_MOUSE_WHEEL:
     if (sidebar_takes_pointer(window, event->wheel.mouse_x)) {
-      send_sidebar_input(window, event);
+      SDL_Keymod mods = SDL_GetModState();
+      if ((mods & SDL_KMOD_CTRL) && !(mods & (SDL_KMOD_ALT | SDL_KMOD_GUI | SDL_KMOD_MODE)) &&
+          event->wheel.y != 0 && project->state == SHELL_READY) {
+        /* The Project owns Zoom, even while the Sidebar has keyboard focus. */
+        shell_send_int(project, ANVIL_SURFACE_MSG_ZOOM_WHEEL, event->wheel.y > 0 ? 1 : -1);
+      } else {
+        send_sidebar_input(window, event);
+      }
     } else if (surface_contains(window, event->wheel.mouse_x, event->wheel.mouse_y) &&
         control_at(window, event->wheel.mouse_x, event->wheel.mouse_y) < 0 &&
         (project->state == SHELL_READY || project->state == SHELL_CLOSING)) {

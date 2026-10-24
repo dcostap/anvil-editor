@@ -293,6 +293,14 @@ end
 
 local on_event = core.on_event
 function core.on_event(type, ...)
+  if type == "zoomwheel" then
+    local direction = ...
+    if config.plugins.scale.use_mousewheel then
+      if direction > 0 then scale.increase() elseif direction < 0 then scale.decrease() end
+      core.log_quiet("Sidebar Zoom wheel: direction=%s", tostring(direction))
+    end
+    return true
+  end
   if type ~= "zoomchanged" then return on_event(type, ...) end
   apply_zoom("another Project saved it", ...)
   return true

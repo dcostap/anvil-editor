@@ -2239,6 +2239,11 @@ static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, "colorthemechanged");
   return 1;
 }
+static int zoomwheel_callback(lua_State *L, SDL_Event *event) {
+  lua_pushstring(L, "zoomwheel");
+  lua_pushinteger(L, event->user.code);
+  return 2;
+}
 static int zoomchanged_callback(lua_State *L, SDL_Event *event) {
   AnvilSurfaceZoom zoom;
   memcpy(&zoom, event->user.data1, sizeof(zoom));
@@ -2948,6 +2953,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Color Theme preview event: %s", SDL_GetError());
   if (!register_custom_event("zoomchanged", zoomchanged_callback))
     return luaL_error(L, "Unable to register the Zoom event: %s", SDL_GetError());
+  if (!register_custom_event("zoomwheel", zoomwheel_callback))
+    return luaL_error(L, "Unable to register the Sidebar Zoom wheel event: %s", SDL_GetError());
   if (!register_custom_event("focusterminal", focusterminal_callback))
     return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
   if (!register_custom_event("terminaleditor", terminaleditor_callback))

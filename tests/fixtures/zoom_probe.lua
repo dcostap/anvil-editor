@@ -12,6 +12,10 @@ ffi.cdef [[
  void * __stdcall OpenProcess(unsigned long, int, unsigned long);
  int __stdcall TerminateProcess(void *, unsigned int);
  int __stdcall CloseHandle(void *);
+ int __stdcall EnumWindows(int (__stdcall *)(void *, intptr_t), intptr_t);
+ unsigned long __stdcall GetWindowThreadProcessId(void *, unsigned long *);
+ void * __stdcall GetPropW(void *, const wchar_t *);
+ int __stdcall PostMessageW(void *, unsigned int, uintptr_t, intptr_t);
 ]]
 local kernel = ffi.load("kernel32")
 local root = assert(os.getenv("ANVIL_PROJECT_PROBE_ROOT"))
@@ -45,6 +49,18 @@ local function trace()
 end
 
 if path:match("/driver$") then
+ local user32 = ffi.load("user32")
+ local function shell_window(pid)
+  local property = ffi.new("wchar_t[17]", {65,110,118,105,108,83,104,101,108,108,87,105,110,100,111,119,0})
+  local found
+  local cb = ffi.cast("int (__stdcall *)(void *, intptr_t)", function(window)
+   local owner = ffi.new("unsigned long[1]")
+   user32.GetWindowThreadProcessId(window, owner)
+   if tonumber(owner[0]) == pid and user32.GetPropW(window, property) ~= nil then found = window end
+   return 1
+  end)
+  user32.EnumWindows(cb, 0); cb:free(); return found
+ end
  core.add_background_thread(function()
   local shell
   local ok, err = pcall(function()
@@ -55,6 +71,20 @@ if path:match("/driver$") then
    save("select-b", {go = true})
    local b = wait(function() return load("b-ready") end, 30, "Project B did not start")
    assert(same(b, a), "Project B started at " .. show(b) .. ", not the saved " .. show(a))
+   local window = wait(function() return shell_window(shell:pid()) end, 30, "Shell Window missing")
+   -- Exercise the shell's wheel routing, first with Project focus, then with Sidebar focus.
+   local control = 0x400000e0 -- SDL's left Control key.
+   user32.PostMessageW(window, 0x804a, 9, control)
+   user32.PostMessageW(window, 0x804a, 3, 40 + 100 * 65536)
+   wait(function() return load("wheel-1-done") end, 15, "Ctrl-wheel over the Sidebar did not zoom")
+   local mark = #trace() + 1
+   save("focus-sidebar", true)
+   wait(function() return trace():find("Shell Sidebar focus: Window=%d+ focused=1", mark) end,
+    15, "Sidebar did not take focus")
+   user32.PostMessageW(window, 0x804a, 3, 40 + 100 * 65536)
+   wait(function() return load("wheel-2-done") end, 15, "Ctrl-wheel with Sidebar focus did not zoom")
+   assert(not trace():find("Shell Sidebar focus: Window=%d+ focused=0", mark), "Zoom moved keyboard focus")
+   user32.PostMessageW(window, 0x804a, 10, control)
    save("b-zoom", {go = true})
    b = wait(function() return load("b-zoomed") end, 10, "Project B did not zoom")
    local other = wait(function() return load("a-changed") end, 10, "Project A kept its old Zoom")
@@ -99,6 +129,16 @@ elseif path:match("/Replacement$") then
  core.add_background_thread(function()
   coroutine.yield(.5)
   save("b-ready", zoom())
+  local before = zoom()
+  wait(function() return zoom().interface < before.interface end, 60, "First Sidebar wheel missing")
+  assert(zoom().code < before.code, "Sidebar wheel left text Zoom unchanged")
+  save("wheel-1-done", zoom())
+  wait(function() return load("focus-sidebar") end, 60)
+  assert(require("core.command").perform("core:focus_project_sidebar"))
+  before = zoom()
+  wait(function() return zoom().interface < before.interface end, 60, "Second Sidebar wheel missing")
+  assert(zoom().code < before.code, "Focused Sidebar wheel left text Zoom unchanged")
+  save("wheel-2-done", zoom())
   wait(function() return load("b-zoom") end, 60)
   local scale = require "plugins.scale"
   for _ = 1, 20 do scale.increase() end

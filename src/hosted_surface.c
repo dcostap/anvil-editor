@@ -540,6 +540,13 @@ static void dispatch_message(HostedMessage *message) {
       SDL_Log("Color Theme change event dropped: %s", SDL_GetError());
     goto complete;
   }
+  if (type == ANVIL_SURFACE_MSG_ZOOM_WHEEL) {
+    CustomEvent event = {0};
+    event.code = ((AnvilSurfaceInt *)payload)->value;
+    if (!push_custom_event("zoomwheel", &event))
+      SDL_Log("Sidebar Zoom wheel dropped: %s", SDL_GetError());
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_ZOOM_CHANGED) {
     CustomEvent event = {0};
     event.data1 = malloc(sizeof(AnvilSurfaceZoom));
@@ -769,6 +776,7 @@ static int SDLCALL reader_thread(void *data) {
       }
       case ANVIL_SURFACE_MSG_FOCUS:
       case ANVIL_SURFACE_MSG_PING:
+      case ANVIL_SURFACE_MSG_ZOOM_WHEEL:
         if (size != sizeof(AnvilSurfaceInt)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_CLOSE:

@@ -1,5 +1,6 @@
 local core = require "core"
 local scale = require "plugins.scale"
+local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -11,6 +12,7 @@ test.describe("font scaling", function()
     if context.default_scale then DEFAULT_SCALE = context.default_scale end
     if context.interface_scale then scale.set(context.interface_scale) end
     if context.code_scale then scale.set_code(context.code_scale) end
+    if context.use_mousewheel ~= nil then config.plugins.scale.use_mousewheel = context.use_mousewheel end
   end)
 
   test.it("applies a Zoom that another Project reports", function(context)
@@ -29,6 +31,35 @@ test.describe("font scaling", function()
 
     test.near(scale.get(), interface, 0.000001)
     test.near(scale.get_code(), code, 0.000001)
+  end)
+
+  test.it("zooms from a Sidebar wheel request without changing focus", function(context)
+    context.interface_scale = scale.get()
+    context.code_scale = scale.get_code()
+    scale.set(DEFAULT_SCALE)
+    scale.set_code(DEFAULT_SCALE)
+    local active = core.active_view
+
+    core.on_event("zoomwheel", 1)
+
+    test.ok(scale.get() > DEFAULT_SCALE, "Sidebar wheel did not increase interface Zoom")
+    test.ok(scale.get_code() > DEFAULT_SCALE, "Sidebar wheel did not increase text Zoom")
+    test.equal(core.active_view, active)
+    core.on_event("zoomwheel", -1)
+    test.near(scale.get(), DEFAULT_SCALE, 0.000001)
+    test.near(scale.get_code(), DEFAULT_SCALE, 0.000001)
+  end)
+
+  test.it("ignores Sidebar Zoom wheel requests when wheel Zoom is disabled", function(context)
+    context.use_mousewheel = config.plugins.scale.use_mousewheel
+    config.plugins.scale.use_mousewheel = false
+    local interface, code = scale.get(), scale.get_code()
+
+    core.on_event("zoomwheel", 1)
+    core.on_event("zoomwheel", -1)
+
+    test.equal(scale.get(), interface)
+    test.equal(scale.get_code(), code)
   end)
 
   test.it("keeps a saved Zoom relative to the display scale", function(context)

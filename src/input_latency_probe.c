@@ -243,6 +243,19 @@ bool anvil_routing_probe_message(SDL_Window *window, uint32_t message, uintptr_t
     event.key.key = (SDL_Keycode)point;
     event.key.scancode = SDL_GetScancodeFromKey(event.key.key, NULL);
     event.key.down = action == 9;
+    /* Posted probe keys do not update SDL's modifier state as OS keys do. */
+    SDL_Keymod modifier = 0;
+    switch (event.key.scancode) {
+      case SDL_SCANCODE_LCTRL: modifier = SDL_KMOD_LCTRL; break;
+      case SDL_SCANCODE_RCTRL: modifier = SDL_KMOD_RCTRL; break;
+      case SDL_SCANCODE_LSHIFT: modifier = SDL_KMOD_LSHIFT; break;
+      case SDL_SCANCODE_RSHIFT: modifier = SDL_KMOD_RSHIFT; break;
+      case SDL_SCANCODE_LALT: modifier = SDL_KMOD_LALT; break;
+      case SDL_SCANCODE_RALT: modifier = SDL_KMOD_RALT; break;
+      default: break;
+    }
+    if (modifier) SDL_SetModState(event.key.down ? SDL_GetModState() | modifier : SDL_GetModState() & ~modifier);
+    event.key.mod = SDL_GetModState();
   } else if (action == 11) {
     /* One ASCII character for owned search-routing checks. */
     static char text[2];
