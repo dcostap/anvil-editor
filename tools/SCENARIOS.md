@@ -58,6 +58,37 @@ seconds. Bump `GENERATOR_VERSION` when generated content changes.
 `--project PATH` runs read-only scenarios on an existing folder, such as this
 repository. Scenarios that edit files refuse `--project`.
 
+## Response latency
+
+Run the response check separately from uncapped rendering-cost measurements:
+
+```sh
+python tools/run_scenarios.py --suite response --runs 3
+python tools/run_scenarios.py --scenario autocomplete-navigation-latency --runs 1 --attribute
+```
+
+`autocomplete-navigation-latency` alternates Next and Previous commands in a real autocomplete popup.
+It checks the selected suggestion and observes its overlay draw before completing each action.
+Its p95 action budget is 50 ms. A missing redraw fails the action deadline.
+
+Response scenes set `settings.cadence = "normal"`.
+The benchmark keeps normal frame limits and enables D3D11 vsync.
+Setup and warmup can request redraws. Measured dispatch and pending actions receive no harness redraw requests.
+The production command or result handler must request the redraw.
+
+Reports label cadence explicitly. Response scenes score completed-redraw latency, not frame-work throughput.
+Their raw metrics can include a presentation wait, so uncapped frame-work budgets do not apply.
+Existing scenarios keep their uncapped rendering-cost measurements.
+Latency excludes native input delivery, shell composition, and physical display scanout.
+
+The harness guards use the private desktop launcher:
+
+```sh
+python -m unittest tests.tools.test_response_latency -v
+```
+
+See [redraw ownership](REDRAW_SCHEDULING.md) for the background publication audit and regression tests.
+
 ## Scoring and attribution
 
 Each scoring run records frames without detail instrumentation. The verdict

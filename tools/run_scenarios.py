@@ -91,6 +91,10 @@ class Scenario:
 
 
 SCENARIOS: dict[str, Scenario] = {
+    # Response latency uses normal pacing and only producer-owned redraw requests.
+    "autocomplete-navigation-latency": Scenario(
+        "autocomplete_navigation", FolderSpec("response-small", files=1), actions=40,
+        suites=("response", "smoke"), settings={"cadence": "normal"}, action_budget_ms=50.0),
     # The baseline: typing in a small file with nothing else open.
     "editor-type-baseline": Scenario(
         "editor_type", REPO_MEDIUM, actions=300, suites=("smoke",), targets=1, writes=True,
@@ -295,7 +299,8 @@ def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
     """Score with the median of each run's p95, so one noisy run cannot pass or fail alone."""
     def median(values: list[float]) -> float:
         return statistics.median(values) if values else 0.0
-    frame = None if scenario.self_driven else {
+    # A paced frame can include a vsync wait. Score response latency, not renderer throughput, there.
+    frame = None if scenario.self_driven or scenario.settings.get("cadence") == "normal" else {
         key: median([run["metrics"].get(key, 0.0) for run in runs])
         for key in ("work_ms_p50", "work_ms_p95", "work_ms_p99", "work_ms_max",
                     "lua_heap_kib_avg", "gc_ms_p95", "frames")}
@@ -336,6 +341,7 @@ def markdown(report: dict[str, Any]) -> str:
         if case.get("error"):
             lines += [f"Error: {case['error']}", ""]
             continue
+        lines += [f"Cadence: {case['cadence']}. Action latency includes the wait for a completed redraw.", ""]
         frame = case["frame"]
         if frame:
             lines.append(f"Frame work ms: p50 {frame['work_ms_p50']:.2f}, p95 {frame['work_ms_p95']:.2f}, "
@@ -380,6 +386,7 @@ def markdown(report: dict[str, Any]) -> str:
 
 def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log) -> dict[str, Any]:
     case: dict[str, Any] = {"scene": scenario.scene, "launch": scenario.launch,
+                            "cadence": scenario.settings.get("cadence", "uncapped"),
                             "fixture": None if args.project else scenario.fixture.key,
                             "frame_budget_ms": scenario.frame_budget_ms,
                             "frame_spike_ms": scenario.frame_spike_ms,

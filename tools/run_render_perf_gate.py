@@ -1070,7 +1070,7 @@ def run_case(
         # it before startup so a benchmark can never hand its fixture to the
         # user's interactive Anvil instance.
         "ANVIL_TEST_DISABLE_PLUGINS": "ipc,autorestart,autoreload,autosave_fast,autosaveonfocuslost",
-        "ANVIL_D3D11_PRESENT_SYNC_INTERVAL": "1" if mode == "paced-metrics" else "0",
+        "ANVIL_D3D11_PRESENT_SYNC_INTERVAL": "1" if mode == "paced-metrics" or settings.get("cadence") == "normal" else "0",
         "ANVIL_PERF_BENCHMARK": "1",
         "ANVIL_PERF_CAPTURE": "0",
         "ANVIL_PERF_CADENCE_ONLY": "0",

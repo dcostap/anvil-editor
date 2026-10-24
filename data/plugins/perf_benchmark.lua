@@ -752,8 +752,7 @@ local function setup_scenario()
   config.animated_caret = false
   config.draw_stats = false
   core.perf_capture_active = true
-  -- Measure frame work here. Normal redraw scheduling has separate coverage
-  -- in tests/lua/ui/autocomplete_layout.lua without forced redraw requests.
+  -- Frame-work measurements stay uncapped. Response scenes select normal cadence below.
   core.perf_cadence_uncapped = true
 
   if core.status_bar then
@@ -766,6 +765,11 @@ local function setup_scenario()
     local fp = assert(io.open(benchmark.workload_file, "rb"))
     local settings = require("core.json").decode(fp:read("*a"))
     fp:close()
+    benchmark.normal_cadence = settings.cadence == "normal"
+    if benchmark.normal_cadence then
+      assert(settings.kind == "scene", "normal cadence requires a shared scene")
+      core.perf_cadence_uncapped = false
+    end
     benchmark.workload = require("core.perf_workloads").new(settings, settings.root)
     benchmark.actions = require("core.perf_actions")(system.get_time, benchmark.action_timeout)
     benchmark.view = benchmark.workload:setup()
@@ -1026,7 +1030,7 @@ local function perform_action()
       benchmark.pending_action_ms = benchmark.actions.pending.dispatch_ms
       benchmark.action_count = index
     end
-    core.redraw = true
+    if benchmark.phase ~= "measure" or not benchmark.normal_cadence then core.redraw = true end
     return
   end
   local view = benchmark.view or active_textview()
@@ -1640,7 +1644,7 @@ function perf.on_frame(snapshot)
     local ok, err = pcall(benchmark.actions.check_timeout, benchmark.actions)
     if not ok then fail(err); return end
   end
-  if not snapshot.did_redraw then return end
+  if not snapshot.did_redraw then heartbeat(false); return end
   if not benchmark.first_redraw_recorded then
     benchmark.first_redraw_recorded = true
     mark_lifecycle("first_redraw")
@@ -1732,7 +1736,7 @@ function perf.on_frame(snapshot)
         begin_state_settle()
       elseif next_action then
         perform_action()
-      else
+      elseif not benchmark.normal_cadence then
         core.redraw = true
       end
     elseif benchmark.phase == "capture_settle" then

@@ -297,6 +297,9 @@ The runner supports these modes:
 - **paced metrics**: repeats user-facing scenarios with D3D11 vsync enabled and records completion-interval percentiles
 - **diagnostic**: repeats the workload with detailed scopes and LuaJIT samples; these costs do not affect scores
 
+These frame-work modes can supply redraw requests. They do not prove that production code requests every required redraw.
+Use the [response scenarios](SCENARIOS.md#response-latency) to check normal scheduling without harness-supplied measurement redraws.
+
 Metrics include p50/p95/p99/max, frame-budget miss counts, the longest run of
 missed 16.67 ms budgets, first/last-quarter averages, rolling p95 maxima, and
 least-squares progression slopes. A 250 ms external sampler records working-set

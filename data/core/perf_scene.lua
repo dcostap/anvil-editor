@@ -37,7 +37,7 @@ function Scene:dispatch(index)
   self.index = index
   self.module.dispatch(self.context, index)
   self.view = self.context.view
-  core.redraw = true
+  if self.settings.cadence ~= "normal" then core.redraw = true end
 end
 
 function Scene:action_ready()
