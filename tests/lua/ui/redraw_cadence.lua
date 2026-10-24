@@ -41,11 +41,17 @@ local function probe(kind)
     file:write("original\n"); file:close()
     buffer = require("core.buffer")(path, path)
     buffer:insert(1, 1, "saved ")
+  elseif kind == "language" then
+    buffer = require("core.buffer")()
   end
   local ResultView = View:extend()
   function ResultView:update() end
   function ResultView:draw()
-    self.drawn_value = buffer and (buffer:is_dirty() and "before" or "after") or self.value
+    if kind == "language" then
+      self.drawn_value = buffer.syntax.name == "Lua" and "after" or "before"
+    else
+      self.drawn_value = buffer and (buffer:is_dirty() and "before" or "after") or self.value
+    end
   end
   function ResultView:on_text_input(value) self.value = value end
   local view = ResultView()
@@ -61,6 +67,19 @@ local function probe(kind)
     if not core.performance_snapshot.did_redraw then idle = true break end
   end
   assert(idle and view.drawn_value == "before", "the View did not reach idle")
+
+  if kind == "language" then
+    -- Content detection publishes its worker result through this public API.
+    core.add_thread(function()
+      assert(require("core.language_mode").set_buffer_inference(buffer, "Lua"))
+    end)
+    now = now + 1
+    core.run_step()
+    assert(buffer.syntax.name == "Lua", "the inferred Language Mode did not change")
+    assert(view.drawn_value == "after", "the inferred Language Mode waited for another input event")
+    buffer:on_close()
+    return
+  end
 
   if kind == "save" then
     assert(buffer:is_dirty(), "the Buffer was saved before the measured request")
@@ -175,6 +194,7 @@ test.describe("Redraw scheduling", function()
     { "worker", "draws a worker result at the next frame without input" },
     { "hidden", "retains a hidden Project's worker result until rendering resumes" },
     { "save", "redraws the clean state after a background save without input" },
+    { "language", "redraws an inferred Language Mode without input" },
   }
   for _, case in ipairs(cases) do
     test.it(case[2], function()

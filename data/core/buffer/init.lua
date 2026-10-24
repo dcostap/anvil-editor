@@ -132,6 +132,8 @@ function Buffer:set_syntax(syn, reason, opts)
   local old = metadata_snapshot(self)
   self.syntax = syn
   self.highlighter:soft_reset()
+  -- Content detection can change syntax after input has stopped.
+  core.redraw = true
   if opts.notify ~= false then
     self:notify_metadata_listeners({
       kind = "metadata",
