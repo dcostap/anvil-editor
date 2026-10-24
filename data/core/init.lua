@@ -3089,13 +3089,11 @@ function core.step(next_frame_time, options, frame_stats)
     return false
   end
 
-  -- Skip drawing if there is time left before next frame, unless, an event is
-  -- received or benchmarking. Skipping helps keep FPS near to the value set on
-  ---config.fps when core.redraw is set from a coroutine and not by user
-  ---interaction. Otherwise, rendering is prioritized on user events and
-  ---config.fps not obeyed.
+  -- Keep an input redraw pending when the frame limit defers it. The event
+  -- queue is already empty when the next frame becomes due.
+  if event_received then core.redraw = true end
   if
-    not uncapped and not resizing and not options.immediate and ((not event_received and not core.redraw) or
+    not uncapped and not resizing and not options.immediate and (not core.redraw or
       -- time left before next frame so we can skip
       next_frame_time > system.get_time()
     )

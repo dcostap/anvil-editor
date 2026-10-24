@@ -52,6 +52,17 @@ test.describe("autocomplete popup layout", function()
   end)
 
   test.after_each(function(context)
+    if context.cadence then
+      system.get_time = context.cadence.get_time
+      system.poll_event = context.cadence.poll_event
+      autocomplete.draw = context.cadence.draw
+      config.transitions = context.cadence.transitions
+      config.disable_blink = context.cadence.disable_blink
+      config.animated_caret = context.cadence.animated_caret
+      config.draw_stats = context.cadence.draw_stats
+      core.perf_cadence_uncapped = context.cadence.uncapped
+      core.window_resizing_until = context.cadence.resizing_until
+    end
     autocomplete.close()
     autocomplete.remove_provider("test-popup-layout")
     config.plugins.centered_editor.enabled = context.centered
@@ -87,6 +98,73 @@ test.describe("autocomplete popup layout", function()
     test.equal(autocomplete.get_selected_suggestion().text, "test01")
     test.ok(command.perform("autocomplete:previous"))
     test.equal(autocomplete.get_selected_suggestion().text, "test12")
+  end)
+
+  -- Seam: normal core.step pacing and real popup drawing, with a controlled
+  -- native clock and event queue. The harness must not request the redraw.
+  test.it("draws navigation deferred by the frame limit without another input event", function(context)
+    local view = open_popup(context, 3)
+    context.cadence = {
+      get_time = system.get_time,
+      poll_event = system.poll_event,
+      draw = autocomplete.draw,
+      transitions = config.transitions,
+      disable_blink = config.disable_blink,
+      animated_caret = config.animated_caret,
+      draw_stats = config.draw_stats,
+      uncapped = core.perf_cadence_uncapped,
+      resizing_until = core.window_resizing_until,
+    }
+    local now = system.get_time()
+    system.get_time = function() return now end
+    config.transitions = false
+    config.disable_blink = true
+    config.animated_caret = false
+    config.draw_stats = false
+    core.perf_cadence_uncapped = false
+    core.window_resizing_until = nil
+
+    local drawn_selection
+    autocomplete.draw = function(active_view, ...)
+      local selected = autocomplete.get_selected_suggestion()
+      if active_view == view and selected then
+        drawn_selection = selected.text
+      end
+      return context.cadence.draw(active_view, ...)
+    end
+    system.poll_event = function() end
+    test.ok(core.step(now - 1), "the initial popup did not draw")
+    -- Autocomplete queues its overlay after the Root Panel draws.
+    core.redraw = true
+    test.ok(core.step(now - 1), "the popup overlay did not draw")
+    test.equal(drawn_selection, "test01")
+    -- Let focus feedback and layout finish, so they cannot supply the redraw.
+    local idle = false
+    for _ = 1, 10 do
+      now = now + 1
+      if not core.step(now - 1) then idle = true break end
+    end
+    test.ok(idle, "the popup did not reach an idle frame")
+
+    -- Find the command's current binding. No shortcut is part of this contract.
+    local key
+    for _, binding in ipairs(require("core.keymap").get_bindings("autocomplete:next") or {}) do
+      if not binding:find("+", 1, true) then key = binding break end
+    end
+    test.not_nil(key, "navigation needs an input binding")
+    local events = { { "keypressed", key }, { "keyreleased", key } }
+    system.poll_event = function()
+      local event = table.remove(events, 1)
+      if event then return table.unpack(event) end
+    end
+    local due = now + 1 / config.fps
+    test.not_ok(core.step(due), "early input must keep the frame limit")
+    test.equal(autocomplete.get_selected_suggestion().text, "test02")
+    test.equal(drawn_selection, "test01", "navigation drew before the frame deadline")
+
+    now = due + 0.001
+    test.ok(core.step(due), "deferred navigation waited for another input event")
+    test.equal(drawn_selection, "test02", "the completed redraw kept the old selection")
   end)
 
   test.it("does not widen the popup for longer declaration signatures", function(context)

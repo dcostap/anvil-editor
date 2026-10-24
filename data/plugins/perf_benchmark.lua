@@ -752,6 +752,8 @@ local function setup_scenario()
   config.animated_caret = false
   config.draw_stats = false
   core.perf_capture_active = true
+  -- Measure frame work here. Normal redraw scheduling has separate coverage
+  -- in tests/lua/ui/autocomplete_layout.lua without forced redraw requests.
   core.perf_cadence_uncapped = true
 
   if core.status_bar then
