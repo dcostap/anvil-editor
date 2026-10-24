@@ -134,7 +134,7 @@ end)
 test.describe("Sidebar list actions", function()
   test.it("asks the shell for a Project's actions menu when a right-click releases on it", function()
     local actions, action = recorder()
-    local view = SidebarView(action)
+    local view = SidebarView(action, {["group:week"]=false})
     view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={}},
       {row_id=9,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}},
       windows={{id=5,selected_project=31},{id=8,selected_project=0}}}, 8)
@@ -154,7 +154,7 @@ test.describe("Sidebar list actions", function()
 
   test.it("shows no menu when a right-click releases on another row", function()
     local actions, action = recorder()
-    local view = SidebarView(action)
+    local view = SidebarView(action, {["group:week"]=false})
     view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={}},
       {row_id=9,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}}}, 5)
     view:on_mouse_pressed("right", 20, row_y(view, "project", 1), 240)
@@ -205,7 +205,10 @@ test.describe("Sidebar list actions", function()
       windows={{id=7,selected_project=11},{id=9,selected_project=0}},
     }
     local a, b = SidebarView(function() end), SidebarView(function() end)
-    for _, view in ipairs {a, b} do view:toggle("terminals:month:C:/Alpha", true) end
+    for _, view in ipairs {a, b} do
+      view:toggle("terminals:month:C:/Alpha", true)
+      view:toggle("group:week", true)
+    end
     a:set_model(model, 7); b:set_model(model, 9)
     local local_texts, remote_texts = drawn_texts(a, 600, 1000), drawn_texts(b, 600, 1000)
     for _, label in ipairs {"Alpha", "notes.lua", "recent shell", "OLDER THAN A WEEK", "old shell"} do
@@ -224,7 +227,7 @@ test.describe("Sidebar list actions", function()
 
   test.it("selects a Project clicked anywhere on its row", function()
     local actions, action = recorder()
-    local view = SidebarView(action)
+    local view = SidebarView(action, {["group:week"]=false})
     view:set_model({{row_id=7,path="C:/B",state="ready",terminals={}},
                     {row_id=9,path="C:/A",state="dormant",exists=true,activity=os.time(),terminals={}}})
     view:on_mouse_pressed("left", 20, row_y(view, "project", 2), 240)
@@ -435,7 +438,8 @@ test.describe("Sidebar Window folding", function()
         {id="old",title="old shell",state="running",activity=os.time() - 15 * 86400}}},
       {row_id=2,path="C:/Old",state="dormant",activity=os.time() - 60 * 86400},
     }
-    local saved_a, saved_b = {["project:C:/A"]=false}, {["project:C:/A"]=false}
+    local saved_a, saved_b = {["project:C:/A"]=false, ["group:older"]=false},
+      {["project:C:/A"]=false, ["group:older"]=false}
     local a, b = SidebarView(function() end, saved_a, nil, true), SidebarView(function() end, saved_b, nil, true)
     a:set_model(model, 7); b:set_model(model, 9)
     a:toggle("terminals:month:C:/A", true)
@@ -499,12 +503,12 @@ test.describe("Sidebar age groups", function()
   end
 
   test.it("keeps loaded Projects on top and groups unloaded Projects by age at the bottom", function()
-    local view = SidebarView(function() end)
+    local view = SidebarView(function() end, {["group:week"]=false, ["group:month"]=false, ["group:older"]=false})
     view:set_size(240, 800)
     view:set_model({project(1, "C:/Week", DAY), project(2, "C:/Month", 10 * DAY), project(3, "C:/Old", 60 * DAY),
       project(4, "C:/Loaded", 90 * DAY, "ready"), project(5, "C:/Unknown")})
     test.same(paths(view, "main"), {"C:/Loaded"})
-    -- Every group starts open.
+    -- Saved choices keep these groups open.
     test.same(paths(view, "bottom"), {"C:/Week", "C:/Month", "C:/Old", "C:/Unknown"})
     local index = row_index(view, function(row) return row.kind == "group" and row.bucket == "older" end)
     view:on_mouse_pressed("left", 20, view:row_y(index) + 2, 240)
@@ -528,7 +532,7 @@ test.describe("Sidebar age groups", function()
   end)
 
   test.it("gives the groups at most part of the height and scrolls them on their own", function()
-    local view = SidebarView(function() end)
+    local view = SidebarView(function() end, {["group:month"]=false})
     view:set_size(240, 600)
     local model = {project(100, "C:/Loaded", DAY, "ready")}
     for i = 1, 40 do model[#model + 1] = project(i, "C:/Month" .. i, 10 * DAY) end
@@ -548,7 +552,7 @@ test.describe("Sidebar age groups", function()
   end)
 
   test.it("limits the groups to a few rows in a tall Sidebar and scrolls the rest", function()
-    local view = SidebarView(function() end)
+    local view = SidebarView(function() end, {["group:older"]=false})
     view:set_size(240, 3000)
     local model = {}
     for i = 1, 60 do model[#model + 1] = project(i, "C:/Old" .. i, 60 * DAY) end
@@ -563,7 +567,7 @@ test.describe("Sidebar age groups", function()
 
   test.it("scrolls the groups by dragging their scrollbar without selecting a Project", function()
     local actions, action = recorder()
-    local view = SidebarView(action)
+    local view = SidebarView(action, {["group:older"]=false})
     view:set_size(240, 600)
     local model = {}
     for i = 1, 40 do model[#model + 1] = project(i, "C:/Old" .. i, 60 * DAY) end
@@ -608,7 +612,7 @@ test.describe("Sidebar age groups", function()
   end)
 
   test.it("shows an unloaded Project's running Terminal Sessions as a hint on its row", function()
-    local view = SidebarView(function() end)
+    local view = SidebarView(function() end, {["group:week"]=false})
     view:set_size(400, 800)
     local function terminal(id, state, busy)
       return {id=id,title=id,cwd="C:/P",state=state,busy=busy,activity=now}
@@ -785,7 +789,7 @@ test.describe("Sidebar agent status", function()
   end)
 
   test.it("counts agents that need an answer in an unloaded Project's hint", function()
-    local view = SidebarView(function() end)
+    local view = SidebarView(function() end, {["group:week"]=false})
     local function terminal(id, fields)
       local item = {id=id,title=id,cwd="C:/P",state="running",busy=1,activity=now}
       for key, value in pairs(fields) do item[key] = value end
@@ -1276,7 +1280,7 @@ test.describe("Sidebar drag and drop", function()
 
   local function sidebar(projects)
     local actions, action = recorder()
-    local view = SidebarView(action)
+    local view = SidebarView(action, {["group:week"]=false})
     view:set_size(300, 800)
     view:set_model(projects or model(), 5)
     return view, actions
@@ -1453,7 +1457,7 @@ end)
 test.describe("Sidebar drops from other applications", function()
   local function sidebar()
     local actions, action = recorder()
-    local view = SidebarView(action)
+    local view = SidebarView(action, {["group:week"]=false})
     view:set_size(300, 800)
     view:set_model({{row_id=1,id=11,path="C:/A",state="ready",window_id=5,terminals={},panes={active=1,visible=1,
       {id="pane-1",group=1,name="one.lua"},{id="pane-2",group=2,name="two.lua"}}},

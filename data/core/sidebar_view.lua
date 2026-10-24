@@ -60,9 +60,9 @@ local WEEK, MONTH = 7 * DAY, 30 * DAY
 -- The groups. Each starts open or collapsed as given here unless saved otherwise. Unloaded Projects use every
 -- group; a loaded Project's older Terminal Sessions use the groups with a terminal label.
 local GROUPS = {
-  {bucket = "week", label = "Last week", collapsed = false},
-  {bucket = "month", label = "Last month", terminal_label = "Older than a week", collapsed = false},
-  {bucket = "older", label = "Older", terminal_label = "Older than a month", collapsed = false},
+  {bucket = "week", label = "Last week", collapsed = true},
+  {bucket = "month", label = "Last month", terminal_label = "Older than a week", collapsed = true},
+  {bucket = "older", label = "Older", terminal_label = "Older than a month", collapsed = true},
 }
 -- The groups take at most this part of the height below the list top, and at most this many Project rows.
 local GROUPS_HEIGHT = 0.5
