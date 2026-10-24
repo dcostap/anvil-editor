@@ -730,10 +730,9 @@ local function recover_known_line_meta(view)
         if not abs then goto continue end
         local needs_original = not meta or (not meta.original_abs and not meta.force_create)
         local known = needs_original and view.known_originals[path_key(abs)]
-        local entry_type = parsed.wants_dir and "dir"
-          or (meta and meta.original_type)
-          or (known and known.type)
-          or "file"
+        -- A typed filename can briefly match a folder name. Recover folder
+        -- metadata only when the row also has the folder separator.
+        local entry_type = parsed.wants_dir and "dir" or "file"
 
         if (not meta or (not meta.original_abs and not meta.force_create))
           and known and known.type == entry_type
