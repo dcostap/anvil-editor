@@ -570,7 +570,7 @@ An idle Terminal View can share a Pane's Navigation History with unrelated Views
 _Avoid_: Terminal panel, terminal buffer, console
 
 **Terminal Session**:
-The running shell or terminal application behind a Terminal View. It belongs to one Project and can keep running while no Terminal View shows it.
+The running shell or terminal application behind a Terminal View. It belongs to one Project at a time and can keep running while no Terminal View shows it. Moving its Pane to another Project moves the Terminal Session there.
 _Avoid_: PTY, terminal process, shell instance
 
 **Ephemeral Terminal**:

@@ -370,6 +370,8 @@ function TerminalView:new(options)
       return
     end
     if record then
+      -- Only hosts that write `movable` accept a new Project. Others drop the connection.
+      self.record_project = record.movable and record.project_path or nil
       native_options.cols, native_options.rows = nil, nil
       native_options.session_id = record.session_id
       native_options.host_pid = record.host_pid
@@ -391,6 +393,7 @@ function TerminalView:new(options)
     if transport_error == 1067 and system.get_file_info(record.snapshot_path) then
       native_options.revive_from, native_options.revive_session_id = record.snapshot_path, record.session_id
       native_options.project_path = record.project_path
+      self.record_project = record.project_path
       self:restore_interrupted_command(record)
       core.log_quiet("Terminal Session %s revival requested from disk", record.session_id)
     end
@@ -691,6 +694,18 @@ function TerminalView:log_session_attach()
   if core.request_workspace_save then core.request_workspace_save("terminal attach") end
   core.log_quiet("Terminal session %d attached: host=%d shell=%d replay=%d bytes",
     self.log_id, stats.host_pid, stats.shell_pid, stats.replay_bytes)
+  self:claim_session()
+end
+
+-- A View that attaches to a session of another Project claims the session for its own Project. A Pane that
+-- moves to another Project does this.
+function TerminalView:claim_session()
+  local owner, project = self.record_project, project_path("project")
+  self.record_project = nil
+  if not owner or common.path_equals(owner, project) then return end
+  local sent = self.session:set_project(project)
+  core.log_quiet("Terminal Session %s claimed for %s from %s: %s",
+    tostring(self.session_id), project, owner, sent and "sent" or "failed")
 end
 
 function TerminalView:adopt_session(session)
@@ -781,6 +796,7 @@ function TerminalView:revive_lost_host()
     core.log_quiet("Terminal Session %s revival rejected: %s", record.session_id, tostring(err))
     return false
   end
+  self.record_project = record.project_path
   self.launch_options.cwd, self.launch_options.shell = options.cwd, options.shell
   self:restore_interrupted_command(record)
   local previous = self.session
@@ -2328,6 +2344,51 @@ function TerminalView:detach_session()
   self.running, self.state = false, "detached"
   if core.request_workspace_save then core.request_workspace_save("terminal detach") end
   core.log_quiet("Terminal session %d detached: id=%s", self.log_id, tostring(self.session_id))
+end
+
+-- Why the View cannot move to another Project, or nil when it can. Its host must accept a new Project.
+function TerminalView:move_refusal()
+  if self.state ~= "running" or not self.session or not self.session_id then
+    return "Only a running Terminal Session can move to another Project"
+  end
+  local record = session_record(self.session_id)
+  if not record or not record.movable then
+    return "This Terminal Session started before Terminals could move. Open a new Terminal Session"
+  end
+end
+
+-- Gives the session up after another Project attached it. Closing the View then leaves the session running.
+function TerminalView:release_session()
+  core.log_quiet("Terminal session %d released: id=%s", self.log_id, tostring(self.session_id))
+  self.session_id = nil
+end
+
+-- Attaches the View again to its session after a move to another Project failed.
+function TerminalView:reattach_session()
+  if self.session or not self.session_id then return false end
+  local record, record_error = session_record(self.session_id)
+  local native = record and terminal_native()
+  local session, start_error
+  if native then
+    local options = session_colors()
+    options.cell_width, options.cell_height = self.native_cell_width, self.cell_height
+    options.cwd, options.shell = self.launch_options.cwd, self.launch_options.shell
+    options.scrollback_lines = terminal_config.scrollback_lines
+    options.project_path = project_path("project")
+    options.session_id, options.host_pid = record.session_id, record.host_pid
+    options.host_creation_time, options.pipe_name = record.host_creation_time, record.pipe_name
+    session, start_error = native.new(options)
+  end
+  if not session then
+    core.log_quiet("Terminal Session %s reattach failed: %s", tostring(self.session_id),
+      tostring(start_error or record_error))
+    return false
+  end
+  self.record_project = record.movable and record.project_path or nil
+  self:adopt_session(session)
+  self.existing_host = true
+  core.log_quiet("Terminal Session %s reattached", tostring(self.session_id))
+  return true
 end
 
 function TerminalView:on_workspace_close()

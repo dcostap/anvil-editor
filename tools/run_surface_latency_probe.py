@@ -141,7 +141,7 @@ def main() -> int:
     parser.add_argument("--project-case", action="append", choices=[
         "windows-sidebar-layout",
         "windows-sidebar-folding",
-        "launch-terminal-editor",
+        "launch-terminal-editor", "launch-terminal-move",
         "restore-loaded", "navigate-sidebar", "windows-close-cleanup", "windows-close-cleanup-cancel", "windows-close-cleanup-unload", "windows-close-update-disconnect",
         "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-files", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "project-menu-background", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "recovery", "shell-empty", "shell-sidebar",

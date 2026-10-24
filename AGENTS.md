@@ -91,6 +91,14 @@ The request does not change focus if another Pane or View has taken focus.
 New Terminal hosts set `ANVIL_TERMINAL_ID` and `ANVIL_TERMINAL_PROJECT`. Existing hosts need new Terminal Sessions for this feature.
 Run `ui/terminal_editor_open.lua` and the `launch-terminal-editor` shell probe after changes.
 
+A Pane with a running Terminal Session can move to another Project. The source detaches the session before the export.
+The target attaches it and sends `ANVIL_TERMINAL_PROJECT` to the host. The host then saves the new Project in its record and screen file.
+The source releases its View only after the target confirms. A failed move attaches the session again in the source.
+Only hosts that write `movable = true` in their record accept the message. Older hosts disconnect, so Lua refuses to move their sessions.
+The shell routes an `anvil` request to the Project whose Sidebar row lists the Terminal Session. `ANVIL_TERMINAL_PROJECT` in the shell environment is the fallback.
+That fallback names the first Project, so a moved Terminal needs a Sidebar scan first. A hidden Sidebar does not scan.
+Run `ui/pane_transfer.lua`, `ui/sidebar_view.lua` and the `launch-terminal-move` shell probe after changes.
+
 A revived Terminal Session types the interrupted command at its new prompt. It does not press Enter.
 The PowerShell integration sends the submitted line as `cmdline_url` in the OSC 133 C mark.
 The host keeps that line in the record as `interrupted_input` until the command finishes.

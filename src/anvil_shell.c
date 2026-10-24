@@ -4415,7 +4415,15 @@ static void accept_external(AnvilShellLaunchRequest *request) {
     anvil_shell_launch_finish(request, ANVIL_SHELL_LAUNCH_ACCEPTED);
     return;
   }
+  /* A Terminal Session can move to another Project after its shell started, so its environment can name the old
+   * Project. The Sidebar list names the Project whose record holds the session now. */
   const char *terminal_project = anvil_shell_launch_terminal_project(request);
+  const char *terminal_id = anvil_shell_launch_terminal_id(request);
+  for (size_t i = 0; terminal_id[0] && i < shell.sidebar.count; i++) {
+    const AnvilSidebarProject *row = shell.sidebar.projects[i];
+    for (size_t j = 0; j < row->terminal_count; j++)
+      if (!strcmp(row->terminals[j].id, terminal_id)) terminal_project = row->path;
+  }
   if (shell.shutting_down || shell.updating ||
       !queue_resolution(NULL, terminal_project[0] ? terminal_project : anvil_shell_launch_cwd(request),
                         terminal_project[0] ? 0 : anvil_shell_launch_argc(request),

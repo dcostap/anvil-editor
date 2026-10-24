@@ -12,6 +12,9 @@ enum {
   ANVIL_TERMINAL_ACTIVATE,
   /* A uint32_t token. Reply only after a fresh probe finds no running command. */
   ANVIL_TERMINAL_EDITOR_REQUEST,
+  /* The UTF-8 path of the Project that now owns the session, without a terminator. Hosts that write
+     movable = true in their record accept it. */
+  ANVIL_TERMINAL_PROJECT,
   ANVIL_TERMINAL_WELCOME = 64, ANVIL_TERMINAL_REPLAY, ANVIL_TERMINAL_REPLAY_END,
   ANVIL_TERMINAL_OUTPUT, ANVIL_TERMINAL_EXITED, ANVIL_TERMINAL_STATUS,
   /* The request token. This reply also reports that the shell is idle. */

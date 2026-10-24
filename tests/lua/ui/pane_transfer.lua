@@ -74,17 +74,87 @@ test.describe("Pane transfer", function()
     test.equal(panes.find(pane.id), pane)
   end)
 
-  test.it("refuses a Terminal View in Navigation History without starting a transfer", function()
-    -- Do not start a shell. The module identity is the transfer boundary.
-    local view = Capture { title = "Terminal" }
-    function view:get_module() return "plugins.terminal" end
-    function view:get_state() return { cwd = USERDIR } end
-    local pane = panes.create { factory = function() return view end }
-    panes.present(Capture { title = "Current" }, { pane = pane })
-    test.equal(pane.current_view:get_name(), "Current")
+  -- A real shell, because the move hands its host from one client to the next.
+  local function open_terminal(shell)
+    local terminal = require "plugins.terminal"
+    terminal._set_native_for_tests(nil)
+    return terminal.open { shell = shell or "powershell.exe -NoLogo -NoProfile" }
+  end
+
+  local function session_record(id)
+    local text = require("terminal_native").read_session_record(id)
+    return text and assert(load(text, "record", "t", {}))()
+  end
+
+  local function wait_until(fn, message)
+    local deadline = system.get_time() + 30
+    repeat
+      if fn() then return end
+      coroutine.yield(0.02)
+    until system.get_time() >= deadline
+    test.fail(message)
+  end
+
+  test.it("moves a running Terminal Session to the target Project", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local ready = dofile("tests/fixtures/terminal_ready.lua")
+    local Project = require "core.project"
+    local source = ready(open_terminal())
+    local pane, id = panes.pane_for_view(source), source.session_id
+    wait_until(function() local record = session_record(id); return record and record.movable end,
+      "the host did not write its record")
+    test.ok(export(pane))
+    local target = USERDIR .. PATHSEP .. "pane-transfer-target"
+    test.ok(common.mkdirp(target))
+    local projects, moved = core.projects, nil
+    core.projects = { Project(target) }
+    local ok, err = pcall(function()
+      test.ok(perform(sent[1].request))
+      moved = ready(panes.active().current_view)
+      test.equal(moved.session_id, id)
+      wait_until(function() return common.path_equals(session_record(id).project_path, target) end,
+        "the host did not save the target Project")
+    end)
+    core.projects = projects
+    if ok then
+      ok, err = pcall(function()
+        test.ok(perform(sent[2].request))
+        test.not_ok(panes.find(pane.id))
+        moved:service_session(true)
+        test.equal(moved.state, "running")
+        test.ok(session_record(id), "closing the source ended the moved session")
+      end)
+    end
+    if moved then panes.close(panes.pane_for_view(moved), { force = true }) end
+    test.ok(test.remove_tree(target))
+    test.ok(ok, err)
+  end)
+
+  test.it("attaches the Terminal Session again when the target cannot take it", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local ready = dofile("tests/fixtures/terminal_ready.lua")
+    local source = ready(open_terminal())
+    local pane, id = panes.pane_for_view(source), source.session_id
+    wait_until(function() local record = session_record(id); return record and record.movable end,
+      "the host did not write its record")
+    test.ok(export(pane))
+    test.not_ok(perform { action = "transferred", transfer = transfer_id, ok = false, error = "Cannot restore" })
+    test.equal(panes.find(pane.id), pane)
+    ready(source)
+    test.equal(source.session_id, id)
+    panes.close(pane, { force = true })
+  end)
+
+  test.it("refuses a Terminal View that has not started without starting a transfer", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local view = open_terminal()
+    local pane = panes.pane_for_view(view)
+    test.equal(view.state, "reconnecting")
     test.not_ok(export(pane))
     test.equal(#sent, 0)
     test.equal(panes.find(pane.id), pane)
+    dofile("tests/fixtures/terminal_ready.lua")(view)
+    panes.close(pane, { force = true })
   end)
 
   test.it("saves modified file-backed Buffers before sending", function()

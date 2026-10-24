@@ -27,15 +27,28 @@ local function send(route, path, request)
   return true
 end
 
+-- A Terminal Session has one client. The source detaches each Terminal before the target attaches it.
+local function live_terminals(views)
+  local terminals = {}
+  for _, view in ipairs(views) do
+    if view.move_refusal then terminals[#terminals + 1] = view end
+  end
+  return terminals
+end
+
+local function reattach(terminals)
+  for _, view in ipairs(terminals) do view:reattach_session() end
+end
+
 local function export(request)
   local pane = panes.find(request.pane)
   if not pane then return refuse("Pane is no longer available") end
   if pending[request.transfer] then return refuse("Transfer is already pending") end
   local views = panes.views(pane)
-  for _, view in ipairs(views) do
-    if view:get_module() == "plugins.terminal" and view:get_state().kind ~= "text_capture" then
-      return refuse("A Terminal Session belongs to one Project")
-    end
+  local terminals = live_terminals(views)
+  for _, view in ipairs(terminals) do
+    local reason = view:move_refusal()
+    if reason then return refuse(reason) end
   end
   local buffers = {}
   for _, view in ipairs(views) do
@@ -60,12 +73,14 @@ local function export(request)
     end
   end
   local project = core.root_project()
-  pending[request.transfer] = { pane = pane, views = views, buffers = buffers }
+  for _, view in ipairs(terminals) do view:detach_session() end
+  pending[request.transfer] = { pane = pane, views = views, buffers = buffers, terminals = terminals }
   local ok
   ok, err = send("select", request.to, { action = "import", snapshot = snapshot,
     source = project and project.path or system.getcwd(), target = request.target, transfer = request.transfer })
   if not ok then
     pending[request.transfer] = nil
+    reattach(terminals)
     return refuse(err)
   end
   core.log_quiet("Pane transfer %s exported %s to %s", request.transfer, pane.id, request.to)
@@ -82,7 +97,14 @@ local function import(request)
     placed, reason = require("core.pane_requests").place(pane, request.target)
     assert(placed, reason)
   end)
-  if not ok and pane then panes.close(pane, { force = true }) end
+  if not ok and pane then
+    -- The source attaches its Terminals again. Closing them here would end their shells.
+    for _, view in ipairs(live_terminals(panes.views(pane))) do
+      view:detach_session()
+      view:release_session()
+    end
+    panes.close(pane, { force = true })
+  end
   core.log_quiet("Pane transfer %s import: %s", request.transfer, ok and "restored" or tostring(err))
   local sent, send_error = send("direct", request.source, { action = "transferred",
     transfer = request.transfer, ok = ok, error = not ok and tostring(err) or nil })
@@ -98,7 +120,12 @@ local function transferred(request)
     return true
   end
   pending[request.transfer] = nil
-  if not request.ok then return refuse(request.error or "The target could not restore the Pane") end
+  if not request.ok then
+    reattach(transfer.terminals)
+    return refuse(request.error or "The target could not restore the Pane")
+  end
+  -- The target owns the Terminal Sessions now. Closing these Views leaves them running.
+  for _, view in ipairs(transfer.terminals) do view:release_session() end
   local pane = transfer.pane
   if panes.find(pane.id) ~= pane then
     core.log_quiet("Pane transfer %s confirmed after source closed", request.transfer)
@@ -114,6 +141,11 @@ local function transferred(request)
     if buffer:get_change_id() ~= revision or (buffer.filename and buffer:is_dirty()) then changed = true end
   end
   if changed then
+    for _, view in ipairs(transfer.terminals) do
+      if panes.pane_for_view(view) == pane then
+        panes.close_view(pane, { view = view, force = true, keep_pane = true, focus = false })
+      end
+    end
     core.log_quiet("Pane transfer %s kept source: Pane changed after export", request.transfer)
     return true
   end

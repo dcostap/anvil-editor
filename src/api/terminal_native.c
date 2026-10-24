@@ -1998,6 +1998,17 @@ static int f_terminal_request_editor(lua_State *L) {
   return 1;
 }
 
+/* Makes the host record `path` as the session's Project. A moved Pane's new Project sends it. */
+static int f_terminal_set_project(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  size_t length = 0;
+  const char *path = luaL_checklstring(L, 2, &length);
+  luaL_argcheck(L, length && length < 32768 && !memchr(path, 0, length), 2, "invalid Project path");
+  lua_pushboolean(L, terminal_is_live(session) &&
+    enqueue_record(session, ANVIL_TERMINAL_PROJECT, (const uint8_t *)path, (uint32_t)length));
+  return 1;
+}
+
 static int f_terminal_clear(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   if (!terminal_is_live(session)) {
@@ -3905,6 +3916,7 @@ static const luaL_Reg terminal_methods[] = {
   { "resize", f_terminal_resize },
   { "clear", f_terminal_clear },
   { "request_editor", f_terminal_request_editor },
+  { "set_project", f_terminal_set_project },
   { "key", f_terminal_key },
   { "scroll", f_terminal_scroll },
   { "selection_gesture", f_terminal_selection_gesture },

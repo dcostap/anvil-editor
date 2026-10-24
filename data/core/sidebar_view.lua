@@ -818,13 +818,11 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Drag and drop
 
--- Whether a Project takes a dragged Tab from `source`, or a drop from another application when `source` is nil.
-local function accepts(project, source)
+-- Whether a Project takes a dragged Tab or a drop from another application.
+local function accepts(project)
   if project.state == "failed" or project.state == "closing" then return false end
   if project.state == "dormant" and not project.exists then return false end
-  if not source or source.project.path == project.path then return true end
-  -- A Terminal Session belongs to its Project.
-  return not source.tab.terminal
+  return true
 end
 
 -- The Tab next to `row` in its Project, one row up or down.
@@ -869,10 +867,10 @@ function SidebarView:drop_target_at(x, y, source)
   if not row then
     -- Just below a Project's last Tab: in the gap before the next Project, or below the list.
     local above = lines and self:tab_above(y)
-    if not above or not accepts(above.project, source) then return nil end
+    if not above or not accepts(above.project) then return nil end
     return self:line_target(above, "after", true, source)
   end
-  if not row.project or not accepts(row.project, source) then return nil end
+  if not row.project or not accepts(row.project) then return nil end
   local part = (y - self:row_y(index)) / row.h
   if row.kind == "project" then
     local first = self.rows[index + 1]

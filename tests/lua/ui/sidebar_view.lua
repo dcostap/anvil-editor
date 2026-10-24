@@ -1520,9 +1520,11 @@ test.describe("Sidebar drag and drop", function()
     test.same(sent[1][4].target, {mode = "join", anchor = "pane-8", side = "after"})
   end)
 
-  test.it("keeps a Terminal's Tab in its Project", function()
+  test.it("asks the source Project to move a Terminal's Tab dropped on another Project", function()
     local view, actions = sidebar()
-    test.same(drag(view, actions, "pane-5", project_y(view, "C:/B")), {})
+    local sent = drag(view, actions, "pane-5", project_y(view, "C:/B"))
+    test.equal(#sent, 1)
+    test.same({sent[1][3], sent[1][4].action, sent[1][4].pane, sent[1][4].to}, {"C:/A", "export", "pane-5", "C:/B"})
     test.same(drag(view, actions, "pane-5", tab_y(view, "pane-1", 0.25)),
       {move("pane-5", {mode = "group", anchor = "pane-1", side = "before"})})
   end)

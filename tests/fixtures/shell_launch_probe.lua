@@ -108,6 +108,19 @@ if path:match("/driver$") then
     return close_shell(shell, "Terminal editor")
    end
 
+   if action == "launch-terminal-move" then
+    -- Project moves its Terminal to Replacement. An `anvil` file launch in it then opens in Replacement.
+    local shell = launch(root .. "/Project")
+    local a = wait(function() return ready("a")[1] end, 30)
+    assert(exits(launch(root .. "/Replacement"), 20, "second Project") == 0, "second Project launch failed")
+    local b = wait(function() return ready("b")[1] end, 30, "second Project did not load")
+    assert(a.window_id == b.window_id, "second Project opened in another Window")
+    local result = wait(function() return load("terminal-move") end, 90, "the Terminal move did not complete")
+    assert(result.ok, result.error)
+    assert(#ready("a") == 1 and #ready("b") == 1, "the Terminal move started a duplicate Project runtime")
+    return close_shell(shell, "Terminal move")
+   end
+
    if action == "launch-forward" then
     local shell = launch(root .. "/Project")
     local a = wait(function() return ready("a")[1] end, 20)
@@ -345,6 +358,64 @@ elseif names[path] then
    end)
    if view then view:on_close() end
    save("terminal-editor", {ok=ok, error=ok and nil or tostring(err)})
+  end
+  if action == "launch-terminal-move" then
+   local terminal, panes = require "plugins.terminal", require "core.panes"
+   local function record(id)
+    local text = require("terminal_native").read_session_record(id)
+    return text and assert(loadstring(text))()
+   end
+   local function output(view, marker)
+    return ("\n" .. view.session:text_capture().text:gsub("\r", "") .. "\n"):find("\n" .. marker .. "\n", 1, true)
+   end
+   local function scans() return select(2, trace():gsub("Shell Sidebar status scan started", "")) end
+   local view
+   local ok, err = pcall(function()
+    wait(function() return trace():find("Shell Project runtime ready:", 1, true) end, 20)
+    if names[path] == "a" then
+     view = terminal.open {cwd=path, shell="powershell.exe -NoLogo -NoProfile", focus=true}
+     wait(function() return view.state == "running" and view.busy == false end, 20, "the Terminal did not start")
+     local function quote(text) return "'" .. text:gsub("'", "''") .. "'" end
+     assert(view:write_input("function anvil { & " .. quote(EXEFILE) .. " @args }; Write-Output 'ANVIL_SETUP_DONE'\r"))
+     wait(function() return output(view, "ANVIL_SETUP_DONE") end, 10)
+     wait(function() local r = record(view.session_id); return r and r.movable end, 10, "the host is not movable")
+     wait(function() return ready("b")[1] end, 30)
+     local pane, id = panes.pane_for_view(view), view.session_id
+     save("terminal-move-id", {id=id})
+     assert(require("core.pane_transfer").perform {action="export", pane=pane.id, to=root .. "/Replacement",
+      transfer="probe-terminal-move", target={mode="group"}})
+     wait(function() return not panes.find(pane.id) end, 30, "the source kept the moved Pane")
+     view = nil
+     return
+    end
+    local id = wait(function() local moved = load("terminal-move-id"); return moved and moved.id end, 60)
+    view = wait(function()
+     for _, pane in ipairs(panes.ordered()) do
+      for _, candidate in ipairs(panes.views(pane)) do
+       if candidate.session_id == id then return candidate end
+      end
+     end
+    end, 30, "Replacement did not receive the Terminal")
+    wait(function() return view.state == "running" end, 20, "the moved Terminal did not attach")
+    wait(function() return common.path_equals(record(id).project_path, path) end, 20,
+     "the host did not record Replacement")
+    -- The shell routes by the Sidebar's Terminal list. Each command start and end rewrites the record, and a
+    -- scan starts only after the last one ends, so the second new scan follows a complete one.
+    local before = scans()
+    assert(view:write_input("Write-Output 'ANVIL_MOVE_SYNC'\r"))
+    wait(function() return output(view, "ANVIL_MOVE_SYNC") and scans() >= before + 2 end, 20,
+     "the Sidebar did not scan the moved record")
+    assert(view:write_input("anvil './moved file.txt'\r"))
+    wait(function() return core.active_view ~= view end, 20, "the file launch did not open in Replacement")
+    local Editor = require "core.editor"
+    assert(core.active_view:is(Editor), "the file launch did not focus an Editor")
+    assert(core.active_view.buffer.abs_filename:gsub("\\", "/") == root .. "/Project/moved file.txt",
+     "the file launch did not resolve from the Terminal directory")
+    core.active_view.buffer:save()
+    assert(view.state == "running", "the file launch closed the moved Terminal Session")
+   end)
+   if view then view:on_close() end
+   if names[path] == "b" or not ok then save("terminal-move", {ok=ok, error=ok and nil or tostring(err)}) end
   end
   if action == "launch-files" then
    -- Report each opened file. Save new files so the isolated shell can close without a save prompt.

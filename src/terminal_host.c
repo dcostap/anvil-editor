@@ -51,6 +51,9 @@ typedef struct {
   volatile LONG64 last_output, exit_sent_ms, last_input;
   HANDLE reader, writer, client, console_close;
   const char *id, *pipe_name, *project, *shell, *cwd;
+  /* The owning Project after a move. The client thread sets next_project under lock; the monitor applies it. */
+  char moved_project[32768], next_project[32768];
+  volatile LONG project_requested;
   char log_path[32768], record_path[32768], snapshot_path[32768];
   char last_cwd[32768], interrupted_command[16384], agent_report_path[32768];
   /* The busy child that interrupted_command came from. An agent report names it. */
@@ -197,6 +200,7 @@ static bool write_registry(TerminalHost *host) {
     registry_string(file, "host_creation_time", created);
     registry_string(file, "pipe_name", host->pipe_name);
     registry_string(file, "project_path", host->project);
+    fputs("  movable = true,\n", file);
     registry_string(file, "shell", host->shell);
     registry_string(file, "cwd", host->last_cwd);
     registry_string(file, "title", host->title);
@@ -600,6 +604,13 @@ static DWORD WINAPI host_client(void *userdata) {
       host_log(host, "editor request: wait for a fresh idle probe");
     } else if (header.type == ANVIL_TERMINAL_ACTIVATE && !header.size) {
       InterlockedExchange(&host->activate_requested, 1);
+    } else if (header.type == ANVIL_TERMINAL_PROJECT && header.size && header.size < sizeof(host->next_project) &&
+               !memchr(bytes, 0, header.size)) {
+      EnterCriticalSection(&host->lock);
+      memcpy(host->next_project, bytes, header.size);
+      host->next_project[header.size] = 0;
+      LeaveCriticalSection(&host->lock);
+      InterlockedExchange(&host->project_requested, 1);
     } else if (header.type == ANVIL_TERMINAL_CLOSE && !header.size) {
       host->explicit_close = true;
       host_log(host, "close requested"); stop_host(host); return 0;
@@ -1038,6 +1049,15 @@ int anvil_terminal_host_main(int argc, char **argv) {
   bool exit_queued = false, final_snapshot_saved = false;
   host.prepared_deadline = GetTickCount64() + 30000;
   while (!host.stop) {
+    if (InterlockedExchange(&host.project_requested, 0)) {
+      /* The screen file names its Project, and revival compares it with the record. Save both. */
+      EnterCriticalSection(&host.lock);
+      strcpy(host.moved_project, host.next_project);
+      LeaveCriticalSection(&host.lock);
+      host.project = host.moved_project;
+      host_log(&host, "moved to another Project");
+      if (!save_snapshot(&host, false)) write_registry(&host);
+    }
     if (InterlockedExchange(&host.activate_requested, 0)) {
       host.prepared = false;
       busy_probe_at = 0;
