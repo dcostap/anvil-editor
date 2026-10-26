@@ -361,13 +361,20 @@ local function display_root(root)
   return common.home_encode and common.home_encode(root) or root
 end
 
-function fuzzy_searcher.project_roots_label(roots)
+---The size of the file index, such as "42 files · 3 folders".
+---It names the Project roots only when there are several.
+function fuzzy_searcher.index_label(files, folders, roots)
   roots = roots or project_paths.search_roots("files")
-  if #roots <= 1 then
-    local root = roots[1] and roots[1].path or project_dir()
-    return common.home_encode and common.home_encode(root) or root
+  local function count_label(count, one, many)
+    return string.format("%d %s", count, count == 1 and one or many)
   end
-  return string.format("%d Project path roots", #roots)
+  local label = count_label(files, "file", "files") .. " · " .. count_label(folders, "folder", "folders")
+  if #roots > 1 then label = label .. " · " .. count_label(#roots, "root", "roots") end
+  return label
+end
+
+function fuzzy_searcher.matches_label(count, has_more)
+  return string.format("%d%s %s", count, has_more and "+" or "", count == 1 and not has_more and "match" or "matches")
 end
 
 function fuzzy_searcher.remember_file_metadata(meta, metadata)
@@ -2107,6 +2114,11 @@ function fuzzy_searcher.compile_grep(grep, case_sensitive)
   }
 end
 
+---The margin between the card's edge and its preview, and around a highlighted row.
+function fuzzy_searcher.card_inset()
+  return common.round(6 * SCALE)
+end
+
 local function color_with_alpha(color, alpha)
   color = color or style.accent
   return { color[1] or 255, color[2] or 255, color[3] or 255, alpha or color[4] or 255 }
@@ -2225,16 +2237,10 @@ local function clip_highlighted_text(font, text, width, spans, anchor_to_match)
   return clipped, project_spans(spans, first, last, leading and #ellipsis or 0)
 end
 
+-- A fill without an outline, like the other matches of Find.
 local function draw_match_highlight_rect(x, y, w, h)
   if w <= 0 or h <= 0 then return end
-  renderer.draw_rect(x, y, w, h, style.search_selection_secondary)
-  local outline = style.search_selection_secondary_outline
-  if not outline then return end
-  local t = math.max(1, common.round(SCALE or 1))
-  renderer.draw_rect(x, y, w, t, outline)
-  renderer.draw_rect(x, y + h - t, w, t, outline)
-  renderer.draw_rect(x, y, t, h, outline)
-  renderer.draw_rect(x + w - t, y, t, h, outline)
+  renderer.draw_rounded_rect(x, y, w, h, 2 * SCALE, style.search_selection_secondary)
 end
 
 local function draw_highlighted_text(font, text, x, y, width, color, spans, match_color, anchor_to_match)
@@ -2824,9 +2830,18 @@ local function draw_path_result_row(font, r, x, y, width)
     fuzzy_searcher.file_icons.draw(r.path or r.label, x, y, font:get_height())
   end
   local path_x = x + icon_column_width
+  local label = r.label or r.path
+  if r.create_path then
+    -- Name the action, so that this row does not look like a file that exists.
+    local action_font = style.view_text_font
+    local action_y = y + math.max(0, math.floor((font:get_height() - action_font:get_height()) / 2))
+    path_x = renderer.draw_text(action_font, "Create ", path_x, action_y, style.good)
+    local root = project_dir()
+    if common.path_belongs_to(r.path, root) then label = common.relative_path(root, r.path) end
+  end
   local path_end = draw_file_result_row(
-    font, r.label or r.path, r.match_spans, "",
-    path_x, y, math.max(0, width - icon_column_width), nil, nil, nil, false
+    font, label, r.match_spans, "",
+    path_x, y, math.max(0, x + width - path_x), nil, nil, nil, false
   )
   path_end = math.min(x + width, path_end or path_x)
 
@@ -3656,7 +3671,8 @@ function FSView:new(prefix, opts)
   file_context.exclude_content_view(self)
   self.type_name = "plugins.fuzzy_searcher"
   self.name = "Fuzzy Searcher"
-  self.background_color = style.background
+  -- The card draws the background.
+  self.render_background = false
   self.border.width = 0
   self.results = {}
   self.selected = 1
@@ -3789,12 +3805,10 @@ function FSView:new(prefix, opts)
   -- place the cursor before the closing quote so the user can extend the query.
   if (prefix or ""):match('^#".*"$') then cursor_col = cursor_col - 1 end
   self.input.textview.buffer:set_selection(1, cursor_col, 1, cursor_col)
-  self.input.border.color = style.dim
-  self.input.activate = function(input)
-    TextBox.activate(input)
-    input.hover_border = style.dim
-    input.border.color = input.hover_border
-  end
+  -- The query sits on the card, without a box of its own.
+  self.input.border.width = 0
+  self.input.render_background = false
+  self.input.textview.draw_background = function() end
   file_context.exclude_content_view(self.input)
   file_context.exclude_content_view(self.input.textview)
   self.input.on_change = function(_, text)
@@ -3845,9 +3859,12 @@ function FSView:layout()
   local y = ry + (rh - h) / 2
   self:set_size(w, h)
   self:set_position(x, y)
+  -- The query text starts at the same x as the result text. The status takes the right end of its row.
   local pad = style.padding.x
-  self.input:set_position(pad, pad)
-  self.input:set_size(self.size.x - pad * 2)
+  local input_x = pad - style.padding.x / 2
+  local status_w = self:status_layout(style.view_text_font, self.size.x * 0.45).width
+  self.input:set_position(input_x, fuzzy_searcher.card_inset())
+  self.input:set_size(math.max(0, self.size.x - input_x - pad - (status_w > 0 and status_w + pad or 0)))
 end
 
 function FSView:is_command_mode()
@@ -3903,25 +3920,42 @@ function FSView:list_metrics(font)
   local pad = style.padding.x
   local row_padding = style.fuzzy_searcher_result_row_padding
   local lh = math.max(font:get_height(), style.view_text_font:get_height()) + row_padding * 2
+  local inset = fuzzy_searcher.card_inset()
   local x, y = self.position.x, self.position.y
   local w, h = self.size.x, self.size.y
-  local top = y + self.input.size.y + pad * 3 + lh
+  -- The query row, then a divider, then the results.
+  local divider_y = y + self.input.size.y + inset * 2
+  local top = divider_y + inset
   local vertical_preview = self:uses_vertical_preview(w)
-  local list_w = (self:is_full_width_mode() or vertical_preview) and w or w * (1 - fuzzy_searcher.preview_width)
-  local available_h = math.max(0, h - (top - y))
-  local list_h = available_h
+  local list_w = (self:is_full_width_mode() or vertical_preview) and w
+    or math.floor(w * (1 - fuzzy_searcher.preview_width))
+  local available_h = math.max(0, y + h - inset - top)
+  local result_rows = math.max(1, math.floor(available_h / lh))
   if vertical_preview then
-    list_h = math.max(lh * 5, math.floor(available_h * (fuzzy_searcher.deep_code_results_height or 0.42)))
+    local share = fuzzy_searcher.deep_code_results_height or 0.42
+    result_rows = math.max(5, math.floor(available_h * share / lh))
   end
-  local total_rows = math.max(0, math.floor(list_h / lh))
-  local result_rows = math.max(1, total_rows - 2) -- first/last rows are scroll indicators
+  local list_h = vertical_preview and result_rows * lh or available_h
   return {
-    x = x, y = y, w = w, h = h, top = top, list_w = list_w, list_h = list_h,
+    x = x, y = y, w = w, h = h, top = top, divider_y = divider_y, list_w = list_w, list_h = list_h,
     vertical_preview = vertical_preview,
-    lh = lh, row_padding = row_padding, total_rows = total_rows, result_rows = result_rows,
-    results_top = top + lh,
-    bottom_indicator_y = top + math.max(0, total_rows - 1) * lh,
+    lh = lh, row_padding = row_padding, total_rows = result_rows, result_rows = result_rows,
+    results_top = top,
+    results_bottom = top + result_rows * lh,
   }
+end
+
+---The thin scroll indicator at the right end of the results: its track and thumb.
+---Returns nil when every result fits.
+function FSView:list_scroll_track(m)
+  local total = #self.results + (self:can_load_more() and m.result_rows or 0)
+  if total <= m.result_rows then return nil end
+  local width = math.max(2, common.round(3 * SCALE))
+  local x = m.x + m.list_w - fuzzy_searcher.card_inset() - width - common.round(3 * SCALE)
+  local y, h = m.top + 2 * SCALE, m.result_rows * m.lh - 4 * SCALE
+  local thumb_h = math.max(math.min(h, 24 * SCALE), h * m.result_rows / total)
+  local scrolled = common.clamp(self.list_scroll.y / ((total - m.result_rows) * m.lh), 0, 1)
+  return { x = x, y = y, w = width, h = h, thumb_y = y + (h - thumb_h) * scrolled, thumb_h = thumb_h }
 end
 
 function FSView:reset_pagination()
@@ -4322,17 +4356,15 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
 end
 
 function FSView:preview_bounds()
-  local pad = style.padding.x
+  local inset = fuzzy_searcher.card_inset()
   local m = self:list_metrics(style.code_font)
+  local bottom = m.y + m.h - inset
   if m.vertical_preview then
-    local py = m.top + m.list_h + pad
-    return m.x + pad, py, math.max(0, m.w - pad * 2), math.max(0, m.y + m.h - py - pad)
+    local py = m.top + m.list_h + inset
+    return m.x + inset, py, math.max(0, m.w - inset * 2), math.max(0, bottom - py)
   end
-  local px = m.x + m.list_w + pad
-  local py = m.top
-  local pw = m.w - m.list_w - pad * 2
-  local ph = m.h - (m.top - m.y)
-  return px, py, pw, ph
+  local px = m.x + m.list_w
+  return px, m.top, math.max(0, m.x + m.w - inset - px), math.max(0, bottom - m.top)
 end
 
 function FSView:preview_contains(x, y)
@@ -4411,8 +4443,27 @@ local function draw_preview_debug(view, result, x, y, w, h)
   end
 end
 
+---Describe a result that has no content preview: a title, its path or name, and the keys for it.
+function fuzzy_searcher.draw_preview_info(x, y, w, h, title, title_color, text, spans, detail, hints)
+  local title_font, font = style.view_text_font, style.code_font
+  local cx, cw = x + style.padding.x, math.max(0, w - style.padding.x * 2)
+  local cy = y + style.padding.y * 2
+  core.push_clip_rect(x, y, w, h)
+  renderer.draw_text(title_font, truncate_text(title_font, title or "", cw), cx, cy, title_color)
+  cy = cy + math.floor(title_font:get_height() * 1.5)
+  draw_highlighted_text(font, text or "", cx, cy, cw, style.text, spans or {})
+  cy = cy + math.floor(font:get_height() * 1.4)
+  if detail and detail ~= "" then
+    renderer.draw_text(font, truncate_text(font, detail, cw), cx, cy, style.dim)
+    cy = cy + math.floor(font:get_height() * 1.4)
+  end
+  if hints then
+    renderer.draw_text(title_font, truncate_text(title_font, hints, cw), cx, cy + style.padding.y, style.dim)
+  end
+  core.pop_clip_rect()
+end
+
 local function draw_preview_placeholder(message, detail, x, y, w, h)
-  renderer.draw_rect(x, y, w, h, style.wallpaper_surface(style.background))
   local font = style.code_font
   local lh = font:get_height()
   local yy = y + style.padding.y
@@ -4830,21 +4881,18 @@ end
 function FSView:result_at_point(x, y)
   if not self:panel_contains(x, y) then return nil end
   local m = self:list_metrics(style.code_font)
-  if x < m.x or x > m.x + m.list_w - style.divider_size then return nil end
+  if x < m.x or x > m.x + m.list_w then return nil end
+  if y < m.results_top or y >= m.results_top + m.result_rows * m.lh then return nil end
+  -- A click on the scroll track moves one page toward the click.
+  local track = self:list_scroll_track(m)
+  if track and x >= track.x - 4 * SCALE and x <= track.x + track.w + 4 * SCALE then
+    if y < track.thumb_y then return "scroll-up" end
+    if y > track.thumb_y + track.thumb_h then return "scroll-down" end
+    return nil
+  end
   local first, shift = self:displayed_list_offset(m)
-
-  if y >= m.results_top and y < m.results_top + m.result_rows * m.lh then
-    local idx = first + math.floor((y - m.results_top + shift) / m.lh)
-    if idx >= 1 and idx <= #self.results then return idx end
-  end
-  if y >= m.top and y < m.top + m.lh and first > 1 then
-    return "scroll-up"
-  end
-  if y >= m.bottom_indicator_y and y < m.bottom_indicator_y + m.lh
-    and (first + m.result_rows - 1 < #self.results or self:can_load_more())
-  then
-    return "scroll-down"
-  end
+  local idx = first + math.floor((y - m.results_top + shift) / m.lh)
+  if idx >= 1 and idx <= #self.results then return idx end
   return nil
 end
 
@@ -5025,9 +5073,8 @@ function FSView:start_file_search(query, line, reset_selection)
   local gen = file_search_generation
   local direct = self.direct_path_result
   local keep_limit = self:max_result_limit() + 1
-  local roots_label = fuzzy_searcher.project_roots_label()
   local loading_status = fuzzy_searcher.files_indexing
-    and string.format("Indexing files… %d available — %s", file_index_count(), roots_label)
+    and string.format("Indexing files… %d available", file_index_count())
     or string.format("Searching %d files…", file_index_count())
   self:defer_loading_feedback(loading_status)
 
@@ -5098,14 +5145,11 @@ function FSView:start_file_search(query, line, reset_selection)
         local status
         if #recent_matches + #general_matches == 0 then
           status = fuzzy_searcher.files_indexing
-            and string.format("Searching files… refreshing with %d files available — %s",
-              file_index_count(), roots_label)
-            or string.format("No matching files — %d files + %d folders indexed — %s",
-              file_index_count(), folder_index_count(), roots_label)
+            and string.format("Searching files… %d available", file_index_count())
+            or "No matches · " .. fuzzy_searcher.index_label(file_index_count(), folder_index_count())
         else
-          status = string.format("%d%s matches found — %d files + %d folders indexed — %s",
-            #recent_matches + #general_matches, has_more and "+" or "",
-            file_index_count(), folder_index_count(), roots_label)
+          status = fuzzy_searcher.matches_label(#recent_matches + #general_matches, has_more) .. " · "
+            .. fuzzy_searcher.index_label(file_index_count(), folder_index_count())
         end
         apply_results(out, has_more)
         self.status = status
@@ -5143,20 +5187,18 @@ function FSView:start_file_search(query, line, reset_selection)
         local total_matches = #recent_matches + matched_general + matched_folders
         if total_matches == 0 then
           status = fuzzy_searcher.files_indexing
-            and string.format("Searching files… refreshing with %d files available — %s",
-              file_index_count(), roots_label)
-            or string.format("No matching files — %d files + %d folders indexed — %s",
-              #items, folder_index_count(), roots_label)
+            and string.format("Searching files… %d available", file_index_count())
+            or "No matches · " .. fuzzy_searcher.index_label(#items, folder_index_count())
         else
-          status = fuzzy_searcher.files_indexing
-            and string.format("%d matches — refreshing with %d files available — %s", total_matches, file_index_count(), roots_label)
-            or string.format("%d matches — %d files + %d folders indexed — %s",
-              total_matches, #items, folder_index_count(), roots_label)
+          status = fuzzy_searcher.matches_label(total_matches) .. " · " .. (fuzzy_searcher.files_indexing
+            and string.format("indexing, %d files available", file_index_count())
+            or fuzzy_searcher.index_label(#items, folder_index_count()))
         end
       elseif #recent_matches + matched_general == 0 then
-        status = string.format("Searching files… scanning %d/%d files…", scanned, #items)
+        status = string.format("Searching files… %d of %d", scanned, #items)
       else
-        status = string.format("%d matches — scanning %d/%d files…", #recent_matches + matched_general, scanned, #items)
+        status = string.format("%s · scanning %d of %d files…",
+          fuzzy_searcher.matches_label(#recent_matches + matched_general), scanned, #items)
       end
       apply_results(out, has_more)
       self.status = status
@@ -5279,7 +5321,7 @@ function FSView:start_everything_path_search(query, scope, append)
       self.everything_status = string.format("%d folders%s",
         #(self.everything_folder_results or {}), self.everything_folder_has_more and "+" or "")
     else
-      self.everything_status = string.format("%d folders%s — %d files%s",
+      self.everything_status = string.format("%d folders%s · %d files%s",
         #(self.everything_folder_results or {}), self.everything_folder_has_more and "+" or "",
         #(self.everything_file_results or {}), self.everything_file_has_more and "+" or "")
     end
@@ -5714,22 +5756,23 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
     if bare_path_search then
       self.status = string.format("%d recent Projects", #get_recent_projects())
     else
-      local scope_label = path_plan.scope and (" — " .. path_plan.scope) or ""
+      local scope_label = path_plan.scope and (" · " .. path_plan.scope) or ""
       self.status = (self.everything_status or "") .. scope_label
     end
   elseif path_plan.project_scope then
-    local scope_label = path_plan.scope and (" — " .. path_plan.scope) or ""
+    local scope_label = path_plan.scope and (" · " .. path_plan.scope) or ""
     self.status = (self.everything_status or "") .. scope_label
+  elseif mode == ">" then
+    self.status = string.format("%d commands", #self.palette_commands)
   elseif fuzzy_searcher.files_indexing then
-    self.status = string.format("Indexing files… %d available — %s", file_index_count(), fuzzy_searcher.project_roots_label())
+    self.status = string.format("Indexing files… %d available", file_index_count())
   else
-    self.status = string.format("%d files + %d folders indexed — %s",
-      file_index_count(), folder_index_count(), fuzzy_searcher.project_roots_label())
+    self.status = fuzzy_searcher.index_label(file_index_count(), folder_index_count())
   end
   if self.file_picker then
     local labels = { any = "Select a file or folder", file = "Select a file", folder = "Select a folder" }
     local label = self.file_picker.label or labels[self.file_picker.select]
-    self.status = label .. (self.status ~= "" and (" — " .. self.status) or "")
+    self.status = label .. (self.status ~= "" and (" · " .. self.status) or "")
   end
 
   if (path_plan.external or path_plan.project_scope)
@@ -7995,9 +8038,6 @@ function FSView:update()
   end
   self:layout()
   FSView.super.update(self)
-  if self.input then
-    self.input.border.color = style.dim
-  end
   if self._awaiting_textinput and not self._awaiting_textinput.logged and system.get_time() - self._awaiting_textinput.time > 0.25 then
     local a = self._awaiting_textinput
     a.logged = true
@@ -8054,22 +8094,39 @@ function FSView:draw()
     scale, visible = self:opening_transition()
   end
   if not visible then return false end
-  local inset_x = self.size.x * (1 - scale) / 2
-  local inset_y = self.size.y * (1 - scale) / 2
+  local shadow = require("core.card").shadow_extent()
+  local inset_x = self.size.x * (1 - scale) / 2 - shadow
+  local inset_y = self.size.y * (1 - scale) / 2 - shadow
   core.root_panel:show_above_sidebar(self.position.x + inset_x, self.position.y + inset_y,
-    self.size.x * scale, self.size.y * scale)
-  if config.wallpaper ~= "none"
-    and self.updated and self.size.x > 0 and self.size.y > 0 then
-    core.root_panel:draw_wallpaper_region(
-      self.position.x + inset_x, self.position.y + inset_y,
-      self.size.x * scale, self.size.y * scale)
-  end
-  return fuzzy_searcher.open_transition.draw(self, scale, function()
+    self.size.x * scale + 2 * shadow, self.size.y * scale + 2 * shadow)
+  self.drawing_scale = scale
+  local drawn = fuzzy_searcher.open_transition.draw(self, scale, function()
     return self:draw_open_content()
   end)
+  self.drawing_scale = nil
+  return drawn
 end
 
-function FSView:draw_status(font, x, y, max_width)
+---Draw the wallpaper surface behind the preview, like the surface behind an Editor.
+---The image stays fixed while the card scales, so the transform is lifted for it.
+function FSView:draw_preview_surface(x, y, w, h)
+  if config.wallpaper == "none" then
+    renderer.draw_rect(x, y, w, h, style.background)
+    return
+  end
+  local scale = self.drawing_scale or 1
+  if scale == 1 then
+    core.root_panel:draw_wallpaper_region(x, y, w, h)
+    return
+  end
+  local cx, cy = self.position.x + self.size.x / 2, self.position.y + self.size.y / 2
+  renderer.pop_transform()
+  core.root_panel:draw_wallpaper_region(cx + (x - cx) * scale, cy + (y - cy) * scale, w * scale, h * scale)
+  renderer.push_transform(cx, cy, scale, 1)
+end
+
+---Fit the status and the active Search Modifiers into a width.
+function FSView:status_layout(font, max_width)
   local full_status = tostring(self.status or "")
   local modifier = self:search_modifier_text()
   if modifier ~= "" and (self.modifier_font_base ~= font or self.modifier_font_size ~= font:get_size()) then
@@ -8088,6 +8145,18 @@ function FSView:draw_status(font, x, y, max_width)
   end
   if modifier == "" then gap = 0 end
   local status = truncate_text(font, full_status, max_width - modifier_font:get_width(modifier) - gap)
+  local status_w = status ~= "" and font:get_width(status) or 0
+  return {
+    status = status, modifier = modifier, modifier_font = modifier_font, gap = gap, status_w = status_w,
+    width = status_w + gap + (modifier ~= "" and modifier_font:get_width(modifier) or 0),
+  }
+end
+
+---Draw the status so that it ends at `right`.
+function FSView:draw_status(font, right, y, max_width)
+  local layout = self:status_layout(font, max_width)
+  local status, modifier, modifier_font = layout.status, layout.modifier, layout.modifier_font
+  local x = right - layout.width
   local label = status:match("^(Searching.-…)") or status:match("^(Indexing.-…)")
   if not label then
     renderer.draw_text(font, status, x, y, style.dim)
@@ -8106,7 +8175,7 @@ function FSView:draw_status(font, x, y, max_width)
     renderer.draw_text(font, status:sub(#label + 1), x + width, y, style.dim)
   end
   if modifier ~= "" then
-    renderer.draw_text(modifier_font, modifier, x + font:get_width(status) + gap, y,
+    renderer.draw_text(modifier_font, modifier, x + layout.status_w + layout.gap, y,
       common.lerp(style.dim, style.accent, 0.6))
   end
 end
@@ -8115,7 +8184,11 @@ function FSView:draw_open_content()
   if not self:is_visible() then return false end
   local draw_scope = fuzzy_searcher._perf_scope_begin("fuzzy_searcher", true)
 
+  local card = require "core.card"
   local phase_scope = fuzzy_searcher._perf_scope_begin("widget_chrome")
+  if self.updated and self.size.x > 0 and self.size.y > 0 then
+    card.draw(self.position.x, self.position.y, self.size.x, self.size.y, 10 * SCALE)
+  end
   local widget_drawn = FSView.super.draw(self)
   fuzzy_searcher._perf_scope_end(phase_scope)
   if not widget_drawn then
@@ -8125,6 +8198,7 @@ function FSView:draw_open_content()
 
   phase_scope = fuzzy_searcher._perf_scope_begin("list_setup")
   local pad = style.padding.x
+  local inset = fuzzy_searcher.card_inset()
   local font = style.code_font
   local m = self:list_metrics(font)
   local x, y, w, h = m.x, m.y, m.w, m.h
@@ -8133,28 +8207,20 @@ function FSView:draw_open_content()
   self:ensure_selection_visible()
   local first, scroll_shift = self:displayed_list_offset(m)
 
-  self:draw_status(font, x + pad, y + self.input.size.y + pad * 1.5, w - pad * 2)
+  local status_font = style.view_text_font
+  self:draw_status(status_font, x + w - pad,
+    self.input.position.y + math.floor((self.input.size.y - status_font:get_height()) / 2), w * 0.45)
+  local border = card.border_width()
+  renderer.draw_rect(x + border, m.divider_y, w - 2 * border, border, style.card_border)
   local full_width_mode = self:is_full_width_mode()
   local vertical_preview = m.vertical_preview
   local command_mode = self:is_command_mode()
-  local divider_w = (full_width_mode or vertical_preview) and 0 or style.divider_size
-  if vertical_preview then
-    renderer.draw_rect(x, top + m.list_h, w, style.divider_size, style.divider)
-  elseif not full_width_mode then
-    renderer.draw_rect(x + list_w, top, style.divider_size, h - (top - y), style.divider)
-  end
 
-  core.push_clip_rect(x, top, list_w - divider_w, m.list_h)
-  local row_text_w = list_w - (pad * 2) - divider_w
+  core.push_clip_rect(x, top, list_w, m.list_h)
+  local row_text_w = list_w - (pad * 2)
   local pane_markers = fuzzy_searcher.current_file_pane_markers(pad)
-  local arrow_color = style.dim
-  local up_arrow, down_arrow = "▲", "▼"
-  if first > 1 then
-    renderer.draw_text(font, up_arrow, x + (list_w - font:get_width(up_arrow)) / 2, top + row_padding, arrow_color)
-  end
-  if first + m.result_rows - 1 < #self.results or self:can_load_more() then
-    renderer.draw_text(font, down_arrow, x + (list_w - font:get_width(down_arrow)) / 2, m.bottom_indicator_y + row_padding, arrow_color)
-  end
+  local header_font = style.get_small_font(style.view_text_font)
+  local row_radius = 4 * SCALE
   fuzzy_searcher._perf_scope_end(phase_scope)
 
   phase_scope = fuzzy_searcher._perf_scope_begin("result_scan")
@@ -8180,7 +8246,7 @@ function FSView:draw_open_content()
   local metadata_rows, metadata_columns = fuzzy_searcher.visible_file_metadata(
     self, font, first, last
   )
-  core.push_clip_rect(x, m.results_top, list_w - divider_w, m.result_rows * lh)
+  core.push_clip_rect(x, m.results_top, list_w, m.result_rows * lh)
   local previous_rendered_file_kind = nil
   local previous_rendered_file = nil
   local previous_rendered_line_x = nil
@@ -8239,23 +8305,24 @@ function FSView:draw_open_content()
     if r.header then
       reset_rendered_file_group()
       if r.separator then
-        renderer.draw_rect(x + pad, yy + math.floor(lh / 2), math.max(0, row_text_w), style.divider_size, style.divider)
+        renderer.draw_rect(x + pad, yy + math.floor(lh / 2), math.max(0, row_text_w), border, style.card_border)
       else
-        renderer.draw_text(font, truncate_text(font, r.label, row_text_w), x + pad, row_y, style.accent)
+        renderer.draw_text(header_font, truncate_text(header_font, r.label, row_text_w), x + pad,
+          yy + math.floor((lh - header_font:get_height()) / 2), style.dim)
       end
     else
       local marked = self:can_mark_result(idx)
         and self.marked_result_keys[self:result_selection_key(r)]
       local range_first = self.range_anchor and math.min(self.range_anchor, self.selected)
       local range_last = self.range_anchor and math.max(self.range_anchor, self.selected)
-      if idx == self.selected or marked or range_first and idx >= range_first and idx <= range_last then
-        renderer.draw_rect(x, yy, list_w, lh, style.fuzzy_searcher_result_selection_background)
+      local row_x, row_w = x + inset, list_w - 2 * inset
+      if idx == self.selected then
+        renderer.draw_rounded_rect(row_x, yy, row_w, lh, row_radius, style.card_selection)
+      elseif marked or range_first and idx >= range_first and idx <= range_last then
+        renderer.draw_rounded_rect(row_x, yy, row_w, lh, row_radius, style.fuzzy_searcher_result_mark_background)
       end
       if idx == self.hovered_result then
-        renderer.draw_rect(x, yy, list_w, lh, style.fuzzy_searcher_result_hover_background)
-      end
-      if idx == self.selected then
-        renderer.draw_rect(x, yy, math.max(2, style.divider_size), lh, style.accent)
+        renderer.draw_rounded_rect(row_x, yy, row_w, lh, row_radius, style.fuzzy_searcher_result_hover_background)
       end
       if not r.revision and (r.kind == "file" or (r.kind == "path" and r.file)) then
         local path = fullpath(r)
@@ -8360,50 +8427,37 @@ function FSView:draw_open_content()
     local path_w, gap = grep_row_columns(row_text_w)
     local sx = x + pad + path_w + gap / 2
     renderer.draw_rect(
-      sx, m.results_top, style.divider_size,
-      math.max(0, last - first + 1) * lh, style.divider
+      sx, m.results_top, card.border_width(),
+      math.max(0, last - first + 1) * lh, style.card_border
     )
   end
   core.pop_clip_rect()
+  local track = self:list_scroll_track(m)
+  if track then
+    renderer.draw_rounded_rect(track.x, track.thumb_y, track.w, track.thumb_h, track.w / 2, style.scrollbar)
+  end
   core.pop_clip_rect()
   fuzzy_searcher._perf_scope_end(results_scope)
 
   phase_scope = fuzzy_searcher._perf_scope_begin("preview")
   local r = self:selected_result()
   local px, py, preview_w, preview_h = self:preview_bounds()
-  if not (full_width_mode and not vertical_preview) then
+  if not (full_width_mode and not vertical_preview) and preview_w > 0 and preview_h > 0 then
+    self:draw_preview_surface(px, py, preview_w, preview_h)
     if r and r.kind == "navigation_place" and not r.buffer then
-      core.push_clip_rect(px, py, preview_w, preview_h)
-      renderer.draw_text(style.view_text_font, r.label, px, py, style.accent)
-      draw_highlighted_text(font, r.text, px, py + lh, preview_w, style.text, r.content_spans)
-      renderer.draw_text(font, "Enter: restore this Navigation Place", px, py + lh * 3, style.dim)
-      core.pop_clip_rect()
+      fuzzy_searcher.draw_preview_info(px, py, preview_w, preview_h, r.label, style.accent,
+        r.text, r.content_spans, nil, "Enter: restore")
     elseif r and r.kind == "command" then
-      core.push_clip_rect(px, py, preview_w, preview_h)
-      renderer.draw_text(font, "Command", px, py, style.accent)
-      draw_highlighted_text(font, r.command, px, py + lh, preview_w, style.text, r.match_spans or {})
-      local info = r.info or command_preview_info(r.command)
-      if info and info ~= "" then
-        renderer.draw_text(font, info, px, py + lh * 2, style.dim)
-      end
-      core.pop_clip_rect()
+      fuzzy_searcher.draw_preview_info(px, py, preview_w, preview_h, "Command", style.accent,
+        r.command, r.match_spans, r.info or command_preview_info(r.command))
     elseif r and r.kind == "create_path" then
-      core.push_clip_rect(px, py, preview_w, preview_h)
-      local title = r.is_folder and "Create Folder" or "Create File"
-      renderer.draw_text(font, title, px, py, style.good)
-      draw_highlighted_text(font, display_root(r.path), px, py + lh, preview_w, style.text, {})
-      renderer.draw_text(font, "Enter: create", px, py + lh * 3, style.dim)
-      if not r.is_folder then
-        renderer.draw_text(font, "Ctrl+Enter: create and open in a new Pane Group", px, py + lh * 4, style.dim)
-      end
-      core.pop_clip_rect()
+      fuzzy_searcher.draw_preview_info(px, py, preview_w, preview_h, r.is_folder and "Create Folder" or "Create File",
+        style.good, display_root(r.path), nil, nil,
+        r.is_folder and "Enter: create" or "Enter: create  ·  Ctrl+Enter: create and open in a new Pane Group")
     elseif r and (r.kind == "project" or (r.kind == "path" and r.is_folder)) then
-      core.push_clip_rect(px, py, preview_w, preview_h)
-      renderer.draw_text(font, r.kind == "project" and "Recent Project" or "Folder", px, py, style.accent)
-      draw_highlighted_text(font, display_root(r.project or r.path), px, py + lh, preview_w, style.text, r.match_spans or {})
-      renderer.draw_text(font, "Enter: open here", px, py + lh * 3, style.dim)
-      renderer.draw_text(font, "Ctrl+Enter: open in new Anvil window", px, py + lh * 4, style.dim)
-      core.pop_clip_rect()
+      fuzzy_searcher.draw_preview_info(px, py, preview_w, preview_h, r.kind == "project" and "Recent Project" or "Folder",
+        style.accent, display_root(r.project or r.path), r.match_spans, nil,
+        "Enter: open here  ·  Ctrl+Enter: open in a new Anvil Window")
     else
       local preview = self.preview_view
       local preview_phase_scope
@@ -8419,6 +8473,11 @@ function FSView:draw_open_content()
         fuzzy_searcher._perf_scope_end(preview_phase_scope)
       end
     end
+    local edge = card.border_width()
+    renderer.draw_rect(px, py, preview_w, edge, style.card_border)
+    renderer.draw_rect(px, py + preview_h - edge, preview_w, edge, style.card_border)
+    renderer.draw_rect(px, py + edge, edge, preview_h - 2 * edge, style.card_border)
+    renderer.draw_rect(px + preview_w - edge, py + edge, edge, preview_h - 2 * edge, style.card_border)
   end
   fuzzy_searcher._perf_scope_end(phase_scope)
   fuzzy_searcher._perf_scope_end(draw_scope)

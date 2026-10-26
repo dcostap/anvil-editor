@@ -63,12 +63,12 @@ local function drawn_result_text(picker)
   picker.list_scroll.move_data_y = nil
   local saved, drawn = {}, {}
   for _, name in ipairs { "draw_rect", "draw_rounded_rect", "draw_text_known_bounds",
-    "set_clip_rect", "draw_canvas", "draw_text" } do
+    "set_clip_rect", "draw_canvas", "draw_canvas_scaled", "draw_text" } do
     saved[name] = renderer[name]
     renderer[name] = function() end
   end
   renderer.draw_text = function(font, text, x, y)
-    if y >= metrics.results_top and y < metrics.bottom_indicator_y
+    if y >= metrics.results_top and y < metrics.results_bottom
       and x < metrics.x + metrics.list_w then
       drawn[#drawn + 1] = text
     end
@@ -449,7 +449,7 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     picker:set_size(1600, 750)
     local saved, drawn = {}, {}
     for _, name in ipairs { "draw_rect", "draw_rounded_rect", "draw_text_known_bounds",
-      "set_clip_rect", "draw_canvas", "draw_text" } do
+      "set_clip_rect", "draw_canvas", "draw_canvas_scaled", "draw_text" } do
       saved[name] = renderer[name]
       renderer[name] = function() end
     end

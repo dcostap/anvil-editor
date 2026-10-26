@@ -15,9 +15,13 @@ test.describe("Fuzzy Searcher Text Search context", function()
       draw_text = renderer.draw_text,
       draw_rect = renderer.draw_rect,
       draw_canvas = renderer.draw_canvas,
+      draw_canvas_scaled = renderer.draw_canvas_scaled,
+      draw_rounded_rect = renderer.draw_rounded_rect,
       draw_file_icon = file_icons.draw,
       draw_symbol_icon = symbol_icons.draw,
     }
+    renderer.draw_canvas_scaled = function() end
+    renderer.draw_rounded_rect = function() end
   end)
 
   test.after_each(function()
@@ -25,6 +29,8 @@ test.describe("Fuzzy Searcher Text Search context", function()
     renderer.draw_text = saved.draw_text
     renderer.draw_rect = saved.draw_rect
     renderer.draw_canvas = saved.draw_canvas
+    renderer.draw_canvas_scaled = saved.draw_canvas_scaled
+    renderer.draw_rounded_rect = saved.draw_rounded_rect
     file_icons.draw = saved.draw_file_icon
     symbol_icons.draw = saved.draw_symbol_icon
   end)
