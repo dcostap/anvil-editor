@@ -826,6 +826,21 @@ test.describe("Sidebar agent status", function()
       windows={{id=1,selected_project=1}}}
   end
 
+  test.it("keeps the active working agent at normal opacity", function()
+    for _, active in ipairs {1, 2} do
+      local view = SidebarView(function() end)
+      view:set_model(model({agent_state="working",agent_since=now}, active), 1)
+      local texts = drawn(view)
+      local agent = test.not_nil(find(texts, "\u{03C0} - GLP4"))
+      local normal = test.not_nil(find(texts, "init.lua"))
+      if active == 2 then
+        test.equal(agent.opacity, normal.opacity, "The active working agent is dimmed")
+      else
+        test.ok(agent.opacity < normal.opacity, "An inactive working agent is not dimmed")
+      end
+    end
+  end)
+
   test.it("shows the agent's current step and how long it runs below its Tab", function()
     local view = SidebarView(function() end)
     view:set_model(model({agent_state="working",agent_message="GLP4",agent_since=now-300,
