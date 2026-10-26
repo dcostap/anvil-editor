@@ -10,7 +10,6 @@ test.describe("Initial Project Pane", function()
   test.before_each(function(context)
     panes.reset_for_tests()
     context.cwd = system.getcwd()
-    context.projects = core.projects
     context.recent_projects = core.recent_projects
     context.root = USERDIR .. PATHSEP .. "initial-terminal-" .. math.floor(system.get_time() * 1000000)
     context.project_path = context.root .. PATHSEP .. "project"
@@ -21,11 +20,12 @@ test.describe("Initial Project Pane", function()
   test.after_each(function(context)
     panes.reset_for_tests()
     require("terminal_native").finish_close_commands()
-    system.chdir(context.cwd)
-    core.projects = context.projects
+    -- Leave the temporary Project before yielding during folder removal.
+    -- A visible empty Project now creates another Terminal on its next update.
+    core.set_project(context.cwd)
     core.recent_projects = context.recent_projects
     storage.clear("ws")
-    test.ok(test.remove_tree(context.root))
+    test.ok(test.remove_tree(context.root, 30))
   end)
 
   for _, saved_empty_workspace in ipairs { false, true } do
@@ -49,4 +49,33 @@ test.describe("Initial Project Pane", function()
       test.ok(common.path_equals(view:get_cwd(), context.project_path))
     end)
   end
+
+  test.it("opens a Terminal when an empty Project becomes visible", function(context)
+    core.set_project(context.project_path)
+    local deadline = system.get_time() + 30
+    while panes.count() == 0 and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(panes.count(), 1)
+    test.ok(panes.close(panes.active(), { force = true }))
+
+    -- Hidden Projects must not replace closed Panes.
+    core.root_panel:update_suspended()
+    test.equal(panes.count(), 0)
+
+    -- The shell updates the visible Root Panel after selecting its Project.
+    core.root_panel:update()
+    test.equal(panes.count(), 1)
+    local pane = panes.active()
+    local view = pane.current_view
+    test.ok(view.terminal_view)
+    test.equal(core.active_view, view)
+    core.root_panel:update()
+    test.same(panes.ordered(), { pane }, "a nonempty Project keeps its Panes")
+    ready(view)
+    test.ok(common.path_equals(view:get_cwd(), context.project_path))
+
+    test.ok(panes.close(pane, { force = true }))
+    core.root_panel:update()
+    test.equal(panes.count(), 1, "closing the last visible Pane leaves a Terminal")
+    test.ok(panes.active().current_view.terminal_view)
+  end)
 end)

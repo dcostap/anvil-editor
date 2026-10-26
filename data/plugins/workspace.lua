@@ -6,6 +6,7 @@ local storage = require "core.storage"
 local project_paths = require "core.project_paths"
 local language_mode = require "core.language_mode"
 local panes = require "core.panes"
+local RootPanel = require "core.rootpanel"
 local diffview = require "plugins.diffview"
 local untitled_recovery = require "plugins.untitled_recovery"
 
@@ -260,24 +261,24 @@ function core.refresh_project_path_consumers(reason)
   return refresh_project_path_consumers(reason)
 end
 
-local function ensure_initial_terminal_pane()
+local function ensure_terminal_pane()
   if panes.count() > 0 then return false end
   local ok, terminal = pcall(require, "plugins.terminal")
   if not ok or not terminal or not terminal.open then
-    core.log_quiet("Workspace: initial Terminal is unavailable: %s", tostring(terminal))
+    core.log_quiet("Workspace: empty Project Terminal is unavailable: %s", tostring(terminal))
     return false
   end
   local view, err = terminal.open {
     cwd = core.root_project().path,
     placement = "new",
     focus = true,
-    reason = "initial-project",
+    reason = "empty-project",
   }
   if not view then
-    core.log_quiet("Workspace: initial Terminal failed: %s", tostring(err))
+    core.log_quiet("Workspace: empty Project Terminal failed: %s", tostring(err))
     return false
   end
-  core.log_quiet("Workspace: opened initial Terminal Pane for empty Project state")
+  core.log_quiet("Workspace: opened Terminal Pane for empty Project state")
   return true
 end
 
@@ -408,7 +409,7 @@ local function load_workspace()
         diffview.load_workspace_state(nil)
         language_mode.load_workspace_state(nil)
         project_paths.load_workspace_state(nil)
-        ensure_initial_terminal_pane()
+        ensure_terminal_pane()
         core.log_quiet("Workspace: skipped restore for an empty Anvil window")
         return
       end
@@ -437,7 +438,7 @@ local function load_workspace()
         panes.restore_workspace_state(workspace.pane_state, load_view)
       end
       untitled_recovery.restore_project(core.root_project().path)
-      ensure_initial_terminal_pane()
+      ensure_terminal_pane()
     end
 
     restore_workspace_state()
@@ -448,6 +449,16 @@ end
 
 if not core.__workspace_hooks_installed then
   core.__workspace_hooks_installed = true
+
+  -- Only visible Projects receive a full update. Wait for Workspace restore
+  -- before filling an empty Project, including after its last Pane closes.
+  local update = RootPanel.update
+  function RootPanel:update(...)
+    if workspace_restored and not panes.active() and not core.quit_request and not core.restart_request then
+      ensure_terminal_pane()
+    end
+    return update(self, ...)
+  end
 
   local function close_workspace_views()
     for _, pane in ipairs(panes.ordered()) do
