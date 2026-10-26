@@ -116,6 +116,27 @@ test.describe("Terminal agent status", function()
     test.ok(ok, err)
   end)
 
+  test.it("keeps a reported start time unless it lies in the future", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
+    local ok, err = pcall(function()
+      test.ok(wait_for(view, function(value) return value.busy == false end, 20), "idle shell missing")
+      local started, future = os.time() - 1800, os.time() + 3600
+      -- "Thinking" in base64. The step claims a start time in the future.
+      test.ok(view.session:write(string.format(
+        "$e=[char]27; [Console]::Write(\"$e]7501;state=working:app=pi:since=%d$e\\\");" ..
+        " [Console]::Write(\"$e]7501;state=working:id=step:msg=VGhpbmtpbmc=:since=%d$e\\\"); Start-Sleep 4\r",
+        started, future)))
+      local value = wait_for(view, function(record) return record.agent_step == "Thinking" end, 4)
+      test.equal(value and value.agent_since, started)
+      test.ok(value and value.agent_step_since <= os.time() and value.agent_step_since >= started + 1700,
+        "A future start time was not replaced with the arrival time")
+    end)
+    view:on_close()
+    test.ok(ok, err)
+  end)
+
   test.it("ignores a malformed report", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)

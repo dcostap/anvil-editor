@@ -351,6 +351,7 @@ static void clear_agent(TerminalHost *host) {
    changes nothing. Pi reports the root record; Anvil's Pi extension reports the "step" and "model" records. */
 static void apply_status(TerminalHost *host, const char *pairs) {
   char state[8] = "", kind[16] = "", app[32] = "", id[33] = "", message[ANVIL_TERMINAL_AGENT_TEXT_MAX + 1] = "";
+  int64_t since = 0;
   for (const char *pair = pairs; *pair;) {
     size_t length = strcspn(pair, ":");
     const char *equals = memchr(pair, '=', length);
@@ -367,6 +368,10 @@ static void apply_status(TerminalHost *host, const char *pairs) {
       } else if (key == 3 && !memcmp(pair, "app", 3)) {
         if (size >= sizeof(app)) return;
         memcpy(app, value, size); app[size] = 0;
+      } else if (key == 5 && !memcmp(pair, "since", 5)) {
+        /* The state's start time in Unix seconds, for a program that resumes a state that began earlier. */
+        if (!size || size > 12 || strspn(value, "0123456789") < size) return;
+        since = _strtoi64(value, NULL, 10);
       } else if (key == 2 && !memcmp(pair, "id", 2)) {
         if (size >= sizeof(id)) return;
         memcpy(id, value, size); id[size] = 0;
@@ -407,9 +412,11 @@ static void apply_status(TerminalHost *host, const char *pairs) {
       if (root) snprintf(next.app, sizeof(next.app), "%s", app);
       if (!strcmp(state, "blocked")) snprintf(next.kind, sizeof(next.kind), "%s", kind);
       snprintf(next.message, sizeof(next.message), "%s", message);
-      /* A repeated state keeps its start time. A step starts again when its text changes. */
+      /* A reported start time wins unless it lies in the future. Otherwise a repeated state keeps its start time,
+         and a step starts again when its text changes. */
+      int64_t now = (int64_t)time(NULL);
       bool same = !strcmp(record->state, next.state) && (root || !strcmp(record->message, next.message));
-      next.since = same ? record->since : (int64_t)time(NULL);
+      next.since = since > 0 && since <= now ? since : same ? record->since : now;
     }
     if (strcmp(record->state, next.state) || strcmp(record->kind, next.kind) || strcmp(record->app, next.app) ||
         strcmp(record->message, next.message) || record->since != next.since) {
