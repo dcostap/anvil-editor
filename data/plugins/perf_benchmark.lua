@@ -911,6 +911,16 @@ local function setup_scenario()
     end
   end
 
+  if benchmark.scenario:find("^fuzzy%-picker") then
+    local query = ({ ["fuzzy-picker-text"] = "#value", ["fuzzy-picker-commands"] = ">editor" })
+      [benchmark.scenario] or "bench"
+    -- The picker needs the window's final layout.
+    core.add_thread(function()
+      coroutine.yield(0.2)
+      require("plugins.fuzzy_searcher").open(query)
+    end)
+  end
+
   if benchmark.scenario:find("wrapped%-document", 1, false) then
     view:set_wrapping_enabled(true)
     linewrapping.update_textview_breaks(view)
@@ -977,6 +987,11 @@ local function scenario_is_ready()
   if benchmark.workload then return benchmark.workload:setup_ready() end
   local view = benchmark.view
   if not view then return false end
+  if benchmark.scenario:find("^fuzzy%-picker") then
+    local picker = core.fuzzy_searcher_active_view
+    if not (picker and picker.open_transition_complete and #picker.results > 0) then return false end
+    if tostring(picker.status):find("…", 1, true) then return false end
+  end
   if not view.buffer then return true end
   if benchmark.scenario == "filetree-edit-repeat" then
     -- Workspace restore can refresh the File Tree during startup.

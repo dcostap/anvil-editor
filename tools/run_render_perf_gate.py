@@ -190,6 +190,11 @@ SCENARIOS["find-bar-light"] = dict(SCENARIOS["nag-bar"], theme="light")
 SCENARIOS["prompt-bar"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["prompt-bar-list"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["prompt-bar-light"] = dict(SCENARIOS["nag-bar-list"], theme="light")
+# The Fuzzy Searcher over a document: File Search, Text Search and the Command Palette.
+SCENARIOS["fuzzy-picker-files"] = dict(SCENARIOS["nag-bar"], window_width=1400, window_height=900)
+SCENARIOS["fuzzy-picker-files-light"] = dict(SCENARIOS["fuzzy-picker-files"], theme="light")
+SCENARIOS["fuzzy-picker-text"] = dict(SCENARIOS["fuzzy-picker-files"])
+SCENARIOS["fuzzy-picker-commands"] = dict(SCENARIOS["fuzzy-picker-files"])
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,
     "tab_count": 8,
