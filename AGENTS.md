@@ -734,6 +734,15 @@ Do **not** use plain `cmd /c ...` or `cmd.exe /c ...` from this shell; it may on
 
 ## Vendored/Meson subprojects
 
+Meson refreshes cached Git subprojects before it loads them when their checked-in inputs change.
+`scripts/sync-git-subprojects.py` tracks wrap files, local patches, and package files.
+The first configure also refreshes existing Git checkouts. Missing checkouts use normal Meson downloads.
+A refresh puts local dependency edits in that checkout's Git stash. It does not apply them again.
+Ignored build caches, such as Zig's, stay in place.
+State stays under the ignored `subprojects/.anvil-wrap-state` directory.
+Custom library targets must depend on their input state and expose the library as a build output.
+Run `anvil:subproject-sync` after changes to this path. Its fixtures use local Git repositories and real Meson builds.
+
 SDL3 is brought in through Meson's wrap system, not as a top-level git submodule:
 
 - wrap file: `subprojects/sdl3.wrap`

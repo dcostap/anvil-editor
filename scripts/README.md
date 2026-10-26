@@ -4,6 +4,9 @@ Various scripts and configurations used to configure, build, and package Anvil.
 
 ### Build
 
+- **sync-git-subprojects.py**: Refresh cached Git dependencies before Meson opens them.
+  A refresh occurs when a wrap, patch, or package file changes, also in incremental builds.
+  Local dependency edits go to that dependency's Git stash. Ignored build caches stay.
 - **build.sh**
 - **build-packages.sh**: In root directory, as all in one script; relies to the
   ones in this directory.

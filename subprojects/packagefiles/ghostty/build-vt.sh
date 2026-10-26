@@ -2,16 +2,16 @@
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
-  echo "usage: $0 <zig> <ghostty-source> <stamp>" >&2
+  echo "usage: $0 <zig> <ghostty-source> <output-library>" >&2
   exit 2
 fi
 
 zig=$1
 source_dir=$2
-stamp=$3
-case "$stamp" in
+output_library=$3
+case "$output_library" in
   /*|[A-Za-z]:*) ;;
-  *) stamp="$(pwd)/$stamp" ;;
+  *) output_library="$(pwd)/$output_library" ;;
 esac
 
 cd "$source_dir"
@@ -25,7 +25,7 @@ for attempt in $(seq 1 40); do
   set -e
   printf '%s\n' "$output"
   if [ "$status" -eq 0 ]; then
-    printf 'libghostty-vt built\n' > "$stamp"
+    cp zig-out/lib/ghostty-vt-static.lib "$output_library"
     exit 0
   fi
 

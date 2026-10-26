@@ -16,6 +16,8 @@ anvil_source_root = meson.current_source_dir()
 anvil_build_root = meson.current_build_dir()
 cc = meson.get_compiler('c')
 
+subdir('scripts/sync-subprojects')
+
 #===============================================================================
 # Enable static linking on windows
 #===============================================================================
@@ -519,6 +521,12 @@ if not get_option('source-only')
         env : anvil_test_env,
         suite : 'anvil',
         timeout : 30,
+    )
+    test('subproject-sync', subproject_python,
+        args : [anvil_source_root / 'tests/tools/test_subproject_sync.py', '-v'],
+        env : anvil_test_env,
+        suite : 'anvil',
+        timeout : 180,
     )
     subdir('scripts')
 endif
