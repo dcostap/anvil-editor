@@ -1,3 +1,5 @@
+local common = require "core.common"
+local core = require "core"
 local startup = require "core.startup"
 local test = require "core.test"
 
@@ -18,6 +20,17 @@ local function trace_paths()
     end
   end
   return paths
+end
+
+local function trace_root()
+  return USERDIR .. PATHSEP .. "logs" .. PATHSEP .. "startup"
+end
+
+local function write_file(path, text)
+  local file, err = io.open(path, "wb")
+  test.not_nil(file, err)
+  file:write(text)
+  file:close()
 end
 
 local function table_size(values)
@@ -59,6 +72,38 @@ test.describe("startup performance tracing", function()
     test.match(trace, "event=stage_end name=test_stage")
     test.match(trace, "event=startup name=end")
     test.match(trace, "status=ready")
+  end)
+
+  test.it("removes the oldest traces when a new trace begins", function()
+    common.mkdirp(trace_root())
+    extra_paths = {}
+    for index = 1, 200 do
+      local name = string.format("anvil-startup-20000101-%06d-p1-m000000.log", index)
+      extra_paths[name] = trace_root() .. PATHSEP .. name
+      write_file(extra_paths[name], "old trace\n")
+    end
+
+    test.ok(startup.begin({ detail = "test" }))
+    path = startup.path()
+    startup.finish("ready", "test_complete")
+
+    test.is_nil(system.get_file_info(extra_paths["anvil-startup-20000101-000001-p1-m000000.log"]))
+    test.not_nil(system.get_file_info(extra_paths["anvil-startup-20000101-000200-p1-m000000.log"]))
+    test.not_nil(system.get_file_info(path))
+  end)
+
+  test.it("ends the trace when a background Project skips its first frame", function()
+    local should_render, poll_event = system.window_should_render, system.poll_event
+    system.window_should_render = function() return false end
+    system.poll_event = function() end
+    test.ok(startup.begin({ detail = "test" }))
+    path = startup.path()
+    local ok, err = pcall(core.step, system.get_time(), { immediate = true })
+    system.window_should_render, system.poll_event = should_render, poll_event
+    test.ok(ok, err)
+
+    test.not_ok(startup.active())
+    test.match(read_file(path), "event=startup name=end detail=status=ready detail=background")
   end)
 
   test.it("does not create application startup traces for Lua worker threads", function()

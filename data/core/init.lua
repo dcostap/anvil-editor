@@ -3090,6 +3090,8 @@ function core.step(next_frame_time, options, frame_stats)
     render_resume_pending = true
     if core.startup_trace_active and startup then
       startup.stage_end(startup_update_stage, "ok", "rendering disabled")
+      -- A background Project does not draw until the user selects it.
+      startup.finish("ready", "background")
     end
     core.ui_snapshot_active = false
     return false
