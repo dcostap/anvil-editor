@@ -2119,6 +2119,10 @@ function fuzzy_searcher.card_inset()
   return common.round(6 * SCALE)
 end
 
+function fuzzy_searcher.card_radius()
+  return 10 * SCALE
+end
+
 local function color_with_alpha(color, alpha)
   color = color or style.accent
   return { color[1] or 255, color[2] or 255, color[3] or 255, alpha or color[4] or 255 }
@@ -4363,7 +4367,7 @@ function FSView:preview_bounds()
     local py = m.top + m.list_h + inset
     return m.x + inset, py, math.max(0, m.w - inset * 2), math.max(0, bottom - py)
   end
-  local px = m.x + m.list_w
+  local px = m.x + m.list_w + inset
   return px, m.top, math.max(0, m.x + m.w - inset - px), math.max(0, bottom - m.top)
 end
 
@@ -8094,11 +8098,10 @@ function FSView:draw()
     scale, visible = self:opening_transition()
   end
   if not visible then return false end
-  local shadow = require("core.card").shadow_extent()
-  local inset_x = self.size.x * (1 - scale) / 2 - shadow
-  local inset_y = self.size.y * (1 - scale) / 2 - shadow
-  core.root_panel:show_above_sidebar(self.position.x + inset_x, self.position.y + inset_y,
-    self.size.x * scale + 2 * shadow, self.size.y * scale + 2 * shadow)
+  local inset_x = self.size.x * (1 - scale) / 2
+  local inset_y = self.size.y * (1 - scale) / 2
+  require("core.card").show_above_sidebar(self.position.x + inset_x, self.position.y + inset_y,
+    self.size.x * scale, self.size.y * scale, fuzzy_searcher.card_radius() * scale)
   self.drawing_scale = scale
   local drawn = fuzzy_searcher.open_transition.draw(self, scale, function()
     return self:draw_open_content()
@@ -8107,9 +8110,9 @@ function FSView:draw()
   return drawn
 end
 
----Draw the wallpaper surface behind the preview, like the surface behind an Editor.
+---Draw part of the card's surface: the background and wallpaper, like the surface behind an Editor.
 ---The image stays fixed while the card scales, so the transform is lifted for it.
-function FSView:draw_preview_surface(x, y, w, h)
+function FSView:draw_surface(x, y, w, h)
   if config.wallpaper == "none" then
     renderer.draw_rect(x, y, w, h, style.background)
     return
@@ -8187,7 +8190,8 @@ function FSView:draw_open_content()
   local card = require "core.card"
   local phase_scope = fuzzy_searcher._perf_scope_begin("widget_chrome")
   if self.updated and self.size.x > 0 and self.size.y > 0 then
-    card.draw(self.position.x, self.position.y, self.size.x, self.size.y, 10 * SCALE)
+    card.draw(self.position.x, self.position.y, self.size.x, self.size.y, fuzzy_searcher.card_radius(),
+      function(bx, by, bw, bh) self:draw_surface(bx, by, bw, bh) end)
   end
   local widget_drawn = FSView.super.draw(self)
   fuzzy_searcher._perf_scope_end(phase_scope)
@@ -8443,7 +8447,6 @@ function FSView:draw_open_content()
   local r = self:selected_result()
   local px, py, preview_w, preview_h = self:preview_bounds()
   if not (full_width_mode and not vertical_preview) and preview_w > 0 and preview_h > 0 then
-    self:draw_preview_surface(px, py, preview_w, preview_h)
     if r and r.kind == "navigation_place" and not r.buffer then
       fuzzy_searcher.draw_preview_info(px, py, preview_w, preview_h, r.label, style.accent,
         r.text, r.content_spans, nil, "Enter: restore")
@@ -8473,11 +8476,14 @@ function FSView:draw_open_content()
         fuzzy_searcher._perf_scope_end(preview_phase_scope)
       end
     end
+    -- A line divides the list from the preview, like the line below the query.
     local edge = card.border_width()
-    renderer.draw_rect(px, py, preview_w, edge, style.card_border)
-    renderer.draw_rect(px, py + preview_h - edge, preview_w, edge, style.card_border)
-    renderer.draw_rect(px, py + edge, edge, preview_h - 2 * edge, style.card_border)
-    renderer.draw_rect(px + preview_w - edge, py + edge, edge, preview_h - 2 * edge, style.card_border)
+    if vertical_preview then
+      renderer.draw_rect(x + edge, m.top + m.list_h + math.floor(fuzzy_searcher.card_inset() / 2), w - 2 * edge, edge,
+        style.card_border)
+    else
+      renderer.draw_rect(x + list_w, m.divider_y, edge, y + h - edge - m.divider_y, style.card_border)
+    end
   end
   fuzzy_searcher._perf_scope_end(phase_scope)
   fuzzy_searcher._perf_scope_end(draw_scope)

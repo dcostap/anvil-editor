@@ -17,13 +17,45 @@ function card.border_width()
   return math.max(1, math.floor(SCALE + 0.5))
 end
 
+---Report a card's shape to a hosted shell, which shows it above the Sidebar.
+---The shell copies whole rectangles, so two of them follow the rounded corners.
+---The shadow stays out: the shell would show it as a band over the Sidebar.
+function card.show_above_sidebar(x, y, w, h, radius)
+  local cut = math.ceil(radius * (1 - math.sqrt(0.5)))
+  core.root_panel:show_above_sidebar(x + cut, y, w - 2 * cut, h)
+  core.root_panel:show_above_sidebar(x, y + cut, w, h - 2 * cut)
+end
+
+---Call fill(x, y, w, h) for each rectangle of a rounded area, from the top down.
+---Corner rows are one pixel high. They stop at the curve, so a fill that cannot be
+---rounded, such as an image, takes the card's shape.
+local function each_rounded_band(x, y, w, h, radius, fill)
+  x, y, w, h = math.floor(x), math.floor(y), math.floor(w), math.floor(h)
+  local rows = math.min(math.ceil(radius), math.floor(h / 2))
+  local function inset(row)
+    local dy = radius - (row + 0.5)
+    if dy <= 0 then return 0 end
+    return math.max(0, math.ceil(radius - math.sqrt(math.max(0, radius * radius - dy * dy)) - 0.3))
+  end
+  for row = 0, rows - 1 do
+    local cut = inset(row)
+    fill(x + cut, y + row, w - 2 * cut, 1)
+  end
+  if h - 2 * rows > 0 then fill(x, y + rows, w, h - 2 * rows) end
+  for row = rows - 1, 0, -1 do
+    local cut = inset(row)
+    fill(x + cut, y + h - row - 1, w - 2 * cut, 1)
+  end
+end
+
 ---Draw a card with its shadow, border and fill.
 ---@param x number
 ---@param y number
 ---@param w number
 ---@param h number
 ---@param radius number Corner radius in pixels
-function card.draw(x, y, w, h, radius)
+---@param fill? fun(x: number, y: number, w: number, h: number) Draws the inside instead of the card color.
+function card.draw(x, y, w, h, radius, fill)
   local shadow = style.card_shadow
   local border = card.border_width()
   local function draw_edge()
@@ -56,8 +88,12 @@ function card.draw(x, y, w, h, radius)
       core.pop_clip_rect()
     end
   end
-  renderer.draw_rounded_rect(x + border, y + border, w - 2 * border, h - 2 * border, math.max(0, radius - border),
-    style.card)
+  local inner_radius = math.max(0, radius - border)
+  if fill then
+    each_rounded_band(x + border, y + border, w - 2 * border, h - 2 * border, inner_radius, fill)
+  else
+    renderer.draw_rounded_rect(x + border, y + border, w - 2 * border, h - 2 * border, inner_radius, style.card)
+  end
 end
 
 return card

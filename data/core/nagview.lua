@@ -365,8 +365,7 @@ local function draw_nagview(self)
   -- The card settles into place from slightly above, at a slightly smaller size.
   local shift = math.floor((1 - p) * -8 * SCALE + 0.5)
   y = y + shift
-  local shadow = card.shadow_extent()
-  core.root_panel:show_above_sidebar(x - shadow, y - shadow, w + 2 * shadow, h + 2 * shadow)
+  card.show_above_sidebar(x, y, w, h, m.radius)
   local transformed = p < 0.999
   if transformed then renderer.push_transform(x + w / 2, y, 0.97 + 0.03 * p, p) end
   card.draw(x, y, w, h, m.radius)
