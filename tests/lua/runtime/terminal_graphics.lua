@@ -53,6 +53,8 @@ test.describe("Terminal inline images", function()
     snapshot = wait_for("GRAPHICS_CROP", snapshot)
     test.equal(#snapshot.images, 1)
     test.equal(snapshot.images[1].canvas:get_pixels(), string.char(0, 0, 255, 255))
+    -- A program can crop its placement. The stored image stays complete.
+    test.equal(session:image(42):get_pixels(), string.char(255, 0, 0, 255, 0, 0, 255, 255))
 
     test.ok(session:write("replace\r\n"))
     snapshot = wait_for("GRAPHICS_BLUE", snapshot)

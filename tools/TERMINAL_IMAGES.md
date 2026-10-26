@@ -50,6 +50,8 @@ Delete that image:
 It reuses canvases by Ghostty image generation and source rectangle.
 Cropping occurs before scaling, so filtering cannot read pixels outside the source region.
 `data/plugins/terminal.lua` draws those canvases in protocol layer order.
+A click opens the complete stored image in the Image Overlay, not the cropped canvas.
+Pi crops a placement to the rows that its own scrolling shows.
 
 Run the focused integration tests:
 

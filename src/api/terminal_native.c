@@ -3612,8 +3612,9 @@ static bool ensure_snapshot_text(TerminalSession *session) {
   return true;
 }
 
+/* Push the source rectangle of an image as a new canvas. */
 static bool push_terminal_image(lua_State *L, GhosttyKittyGraphicsImage image,
-    const GhosttyKittyGraphicsPlacementRenderInfo *info) {
+    uint32_t source_x, uint32_t source_y, uint32_t source_width, uint32_t source_height) {
   uint32_t width = 0, height = 0;
   GhosttyKittyImageFormat format;
   const uint8_t *pixels = NULL;
@@ -3632,15 +3633,15 @@ static bool push_terminal_image(lua_State *L, GhosttyKittyGraphicsImage image,
     format == GHOSTTY_KITTY_IMAGE_FORMAT_GRAY ? 1 : 0;
   if (!channels || !width || !height || width > INT_MAX / 4 || height > INT_MAX ||
       (uint64_t)width * height * channels != length ||
-      info->source_x > width || info->source_width > width - info->source_x ||
-      info->source_y > height || info->source_height > height - info->source_y) return false;
+      source_x > width || source_width > width - source_x ||
+      source_y > height || source_height > height - source_y) return false;
   /* Crop before scaling so filtering cannot sample outside the source region. */
-  SDL_Surface *surface = SDL_CreateSurface(info->source_width, info->source_height, SDL_PIXELFORMAT_RGBA32);
+  SDL_Surface *surface = SDL_CreateSurface(source_width, source_height, SDL_PIXELFORMAT_RGBA32);
   if (!surface) return false;
-  for (uint32_t y = 0; y < info->source_height; y++) {
+  for (uint32_t y = 0; y < source_height; y++) {
     uint8_t *dst = (uint8_t *)surface->pixels + (size_t)y * surface->pitch;
-    const uint8_t *src = pixels + ((size_t)(y + info->source_y) * width + info->source_x) * channels;
-    for (uint32_t x = 0; x < info->source_width; x++, src += channels, dst += 4) {
+    const uint8_t *src = pixels + ((size_t)(y + source_y) * width + source_x) * channels;
+    for (uint32_t x = 0; x < source_width; x++, src += channels, dst += 4) {
       dst[0] = src[0];
       dst[1] = channels < 3 ? src[0] : src[1];
       dst[2] = channels < 3 ? src[0] : src[2];
@@ -3698,7 +3699,8 @@ static void push_terminal_images(lua_State *L, TerminalSession *session) {
     }
     if (lua_isnil(L, -1)) {
       lua_pop(L, 1);
-      if (!push_terminal_image(L, image, &info)) continue;
+      if (!push_terminal_image(L, image, info.source_x, info.source_y,
+          info.source_width, info.source_height)) continue;
     }
     if (!retained) canvas_bytes += bytes;
     lua_pushvalue(L, -1);
@@ -3725,6 +3727,25 @@ done:
   lua_setfield(L, snapshot, "images");
   lua_setfield(L, snapshot, "_image_canvases");
   lua_pop(L, 1); /* previous cache */
+}
+
+/* Programs can crop a placement to its visible rows. Previews need the complete image. */
+static int f_terminal_image(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  uint32_t id = (uint32_t)luaL_checkinteger(L, 2);
+  GhosttyKittyGraphics graphics = NULL;
+  GhosttyKittyGraphicsImage image = NULL;
+  uint32_t width = 0, height = 0;
+  if (terminal_model_available(session) &&
+      ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS,
+        &graphics) == GHOSTTY_SUCCESS &&
+      (image = ghostty_kitty_graphics_image(graphics, id)) &&
+      ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_WIDTH, &width) == GHOSTTY_SUCCESS &&
+      ghostty_kitty_graphics_image_get(image, GHOSTTY_KITTY_IMAGE_DATA_HEIGHT, &height) == GHOSTTY_SUCCESS &&
+      push_terminal_image(L, image, 0, 0, width, height))
+    return 1;
+  lua_pushnil(L);
+  return 1;
 }
 
 static int f_terminal_snapshot(lua_State *L) {
@@ -3932,6 +3953,7 @@ static const luaL_Reg terminal_methods[] = {
   { "focus", f_terminal_focus },
   { "set_colors", f_terminal_set_colors },
   { "snapshot", f_terminal_snapshot },
+  { "image", f_terminal_image },
   { "stats", f_terminal_stats },
   { "close", f_terminal_close },
   { "activate", f_terminal_activate },
