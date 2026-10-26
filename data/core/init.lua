@@ -3970,12 +3970,13 @@ function core.run_step(options)
     end
   end
 
-  if window_has_focus and total_ms >= MAIN_LOOP_STALL_MS then
-    local work_ms = math.max(0, total_ms - sleep_actual_ms)
+  local work_ms = math.max(0, total_ms - sleep_actual_ms)
+  -- Background Projects log only work stalls. Windows can delay their sleeps.
+  if total_ms >= MAIN_LOOP_STALL_MS and (window_has_focus or work_ms >= MAIN_LOOP_STALL_MS) then
     local sleep_overrun_ms = math.max(0, sleep_actual_ms - sleep_requested_ms)
     local source = work_ms >= MAIN_LOOP_STALL_MS and "application" or "scheduler"
     core.log_quiet(
-      "Main loop stall: source=%s total_ms=%.1f work_ms=%.1f sleep_requested_ms=%.1f sleep_actual_ms=%.1f sleep_overrun_ms=%.1f threads_ms=%.1f slowest_thread_ms=%.1f slowest_thread=%s core_step_ms=%.1f event_count=%d event_ms=%.1f slowest_event=%s slowest_event_ms=%.1f update_ms=%.1f pre_draw_ms=%.1f draw_ms=%.1f renderer_end_ms=%.1f present_ms=%.1f gc_ms=%.1f pending=%s queue=%d active=%s",
+      "Main loop stall: source=%s total_ms=%.1f work_ms=%.1f sleep_requested_ms=%.1f sleep_actual_ms=%.1f sleep_overrun_ms=%.1f threads_ms=%.1f slowest_thread_ms=%.1f slowest_thread=%s core_step_ms=%.1f event_count=%d event_ms=%.1f slowest_event=%s slowest_event_ms=%.1f update_ms=%.1f pre_draw_ms=%.1f draw_ms=%.1f renderer_end_ms=%.1f present_ms=%.1f gc_ms=%.1f pending=%s queue=%d active=%s focus=%s",
       source, total_ms, work_ms, sleep_requested_ms, sleep_actual_ms,
       sleep_overrun_ms, run_threads_ms, last_run_threads_slowest_ms,
       last_run_threads_slowest_loc, core_step_ms, step_stats.event_count,
@@ -3983,7 +3984,7 @@ function core.run_step(options)
       step_stats.slowest_event_ms or 0, step_stats.update_ms,
       step_stats.pre_draw_ms, step_stats.draw_emit_ms,
       step_stats.renderer_end_ms, renderer_stats.present_ms or 0, gc_ms,
-      tostring(pending_events_at_start), queue_depth, active_view_name
+      tostring(pending_events_at_start), queue_depth, active_view_name, tostring(window_has_focus)
     )
   end
 
