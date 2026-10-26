@@ -1279,11 +1279,13 @@ function SidebarView:autoscroll_speed(y)
   if y > self.view_h - zone then return "bottom_scroll", speed(y - self.view_h + zone) end
 end
 
--- Other Windows' Projects and their children stay dim. A dragged or moved Tab dims further at its old place.
+-- Working agents stay dim. Other Windows' Projects and their children also stay dim.
+-- A dragged or moved Tab dims further at its old place.
 function SidebarView:dim_target(row)
   local key = row.id_key
   local drag, pending = self.drag, self.pending
   if drag and drag.key == key or pending and pending.key == key then return 0.35 end
+  if row.agent and not row.agent.command and tab.working(row.tab.terminal or {}, row.agent) then return 0.5 end
   local owner = row.project and row.project.window_id
   if self.window_id and owner and owner ~= 0 and owner ~= self.window_id then return 0.7 end
   return 1
