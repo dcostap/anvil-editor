@@ -3,7 +3,7 @@ local function configured_value(value, fallback)
   return value:match("^@.-@$") and fallback or value
 end
 
-VERSION = configured_value("@PROJECT_VERSION@", "3.10.1-dev")
+VERSION = configured_value("@PROJECT_VERSION@", "1.0.0-dev")
 MOD_VERSION_MAJOR = tonumber(configured_value("@MOD_VERSION_MAJOR@", "3"))
 MOD_VERSION_MINOR = tonumber(configured_value("@MOD_VERSION_MINOR@", "10"))
 MOD_VERSION_PATCH = tonumber(configured_value("@MOD_VERSION_PATCH@", "1"))

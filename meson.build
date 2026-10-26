@@ -1,6 +1,6 @@
 project('anvil',
     ['c', 'cpp'],
-    version : '3.10.1',
+    version : '1.0.0',
     license : 'MIT',
     meson_version : '>= 0.63',
     default_options : [
@@ -11,7 +11,8 @@ project('anvil',
 )
 
 version = meson.project_version()
-mod_version = version.split('.')
+# Plugins declare this API version in their mod-version header. It is separate from the app version.
+mod_version = ['3', '10', '1']
 anvil_source_root = meson.current_source_dir()
 anvil_build_root = meson.current_build_dir()
 cc = meson.get_compiler('c')
@@ -528,5 +529,4 @@ if not get_option('source-only')
         suite : 'anvil',
         timeout : 180,
     )
-    subdir('scripts')
 endif

@@ -1,31 +1,17 @@
 @echo off
 setlocal EnableExtensions
 
-set "BASH=C:\msys64\usr\bin\bash.exe"
-set "MSYSTEM=MINGW64"
-set "CHERE_INVOKING=1"
-set "MSYS_ENV=export MSYSTEM=MINGW64 HOME=C:/Users/Darius USERPROFILE=C:/Users/Darius HOMEDRIVE=C: HOMEPATH=/Users/Darius; export PATH=/mingw64/bin:/usr/bin:/bin:$PATH;"
-
-call :UseLayout "D:\Projects\c_projects\anvil-editor" "D:\Projects\c_projects\anvil-portable" "/d/Projects/c_projects/anvil-editor" "/d/Projects/c_projects/anvil-portable"
-call :UseLayout "C:\Projects\c_projects\anvil-editor" "C:\Projects\c_projects\anvil-portable" "/c/Projects/c_projects/anvil-editor" "/c/Projects/c_projects/anvil-portable"
-if not defined REPO (
-  echo Could not find Anvil source checkout at either:
-  echo   D:\Projects\c_projects\anvil-editor
-  echo   C:\Projects\c_projects\anvil-editor
-  exit /b 1
-)
+call "%~dp0scripts\msys2-env.cmd"
+if errorlevel 1 exit /b 1
+rem The dev portable app lives beside the repository.
+for %%I in ("%REPO%\..\anvil-portable") do set "DEST=%%~fI"
 set "APP=%DEST%\anvil.exe"
-
-if not exist "%BASH%" (
-  echo MSYS2 bash not found: %BASH%
-  exit /b 1
-)
 
 cd /d "%REPO%" || exit /b 1
 
 echo.
 echo === Building Anvil incrementally ===
-"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && zig_dir=$(./scripts/ensure-zig.sh) && export PATH=$zig_dir:$PATH && ./scripts/ensure-luajit-cli.sh && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi"
+"%BASH%" -lc "zig_dir=$(./scripts/ensure-zig.sh) && export PATH=$zig_dir:$PATH && ./scripts/ensure-luajit-cli.sh && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi"
 if errorlevel 1 exit /b 1
 
 echo.
@@ -48,7 +34,7 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Updating stripped portable Anvil at %DEST% ===
-"%BASH%" -lc "%MSYS_ENV% cd %REPO_BASH% && meson install -C build-windows-x86_64 --destdir %DEST_BASH% --strip"
+"%BASH%" -lc "meson install -C build-windows-x86_64 --destdir \"%DEST%\" --strip"
 if errorlevel 1 exit /b 1
 
 echo.
@@ -76,18 +62,9 @@ rem Start Anvil without inherited handles. A caller that reads this script's out
 rem would otherwise wait until Anvil exits.
 rem Anvil and its Terminal Sessions inherit this environment, so remove this script's variables.
 rem This also removes copies that an older script left in the caller. LINK breaks the MSVC linker.
-powershell -NoProfile -Command "$app = $env:APP; 'APP','BASH','CHERE_INVOKING','DEST','DEST_BASH','LINK','MSYS_ENV','MSYSTEM','REPO','REPO_BASH','TARGET' | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction SilentlyContinue }; Start-Process -FilePath $app"
+powershell -NoProfile -Command "$app = $env:APP; 'ANVIL_PACKAGES','APP','BASH','CHERE_INVOKING','DEST','LINK','MSYS2_ROOT','MSYSTEM','REPO','TARGET' | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction SilentlyContinue }; Start-Process -FilePath $app"
 exit /b 0
 
-:UseLayout
-if defined REPO exit /b 0
-if exist "%~1\src\api\api.h" (
-  set "REPO=%~1"
-  set "DEST=%~2"
-  set "REPO_BASH=%~3"
-  set "DEST_BASH=%~4"
-)
-exit /b 0
 
 :RemoveLink
 set "LINK=%~1"

@@ -1,12 +1,8 @@
 @echo off
 setlocal EnableExtensions
 
-call :UseLayout "D:\Projects\c_projects\anvil-editor" "D:\Projects\c_projects\anvil-portable"
-call :UseLayout "C:\Projects\c_projects\anvil-editor" "C:\Projects\c_projects\anvil-portable"
-if not defined REPO (
-  echo Could not find the Anvil source checkout.
-  exit /b 1
-)
+for %%I in ("%~dp0.") do set "REPO=%%~fI"
+for %%I in ("%REPO%\..\anvil-portable") do set "DEST=%%~fI"
 
 set "DEBUG_APP=%REPO%\build-windows-x86_64\src\anvil.exe"
 set "DEBUG_DATA=%REPO%\build-windows-x86_64\src\data"
@@ -44,10 +40,3 @@ echo   %DEBUG_APP%
 start "Anvil Debug" "%DEBUG_APP%" %*
 exit /b 0
 
-:UseLayout
-if defined REPO exit /b 0
-if exist "%~1\src\api\api.h" (
-  set "REPO=%~1"
-  set "DEST=%~2"
-)
-exit /b 0

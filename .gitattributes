@@ -2,6 +2,10 @@
 # See https://help.github.com/en/articles/dealing-with-line-endings
 * text=auto
 *.patch -text
+# cmd.exe misreads labels in LF batch files. Bash scripts keep LF for every shell.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sh text eol=lf
 
 winlib/*  linguist-vendored
 src/lib/* linguist-vendored

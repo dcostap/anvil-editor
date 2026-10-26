@@ -4,9 +4,9 @@ This repository is the source for the personal Anvil editor fork.
 
 ## Layout
 
-- Source repo: `C:\Projects\c_projects\anvil-editor`
-- Dev portable app: `C:\Projects\c_projects\anvil-portable`
-- Build dir: `C:\Projects\c_projects\anvil-editor\build-windows-x86_64`
+- Source repo: any folder, for example `D:\Projects\c_projects\anvil-editor`
+- Dev portable app: `anvil-portable` beside the repo, for example `D:\Projects\c_projects\anvil-portable`
+- Build dir: `build-windows-x86_64` in the repo
 - Source built-in plugins: `data\plugins`
 - Source core Lua: `data\core`
 
@@ -20,11 +20,13 @@ Compiling produces binaries in:
 These build-directory binaries retain native debug information. The dev
 portable install strips its executable so the daily launcher starts quickly.
 
-Dev builds load Lua/data files beside the exe. A runnable dev app is produced by `meson install` into `C:\Projects\c_projects\anvil-portable`.
+Dev builds load Lua/data files beside the exe. A runnable dev app is produced by `meson install` into `..\anvil-portable`.
 
 ## Standalone Windows release
 
-Run `build-anvil-standalone.bat` to create and test `dist\anvil.exe`.
+Run `build.bat` to create and test `dist\anvil.exe`. This is the build for other users.
+`scripts\msys2-env.cmd` finds MSYS2 at `MSYS2_ROOT` or `C:\msys64`. It installs MSYS2 with winget when it is missing.
+It installs missing build packages with pacman. All BAT files use it, so none of them hardcode a folder.
 
 The release exe contains a compressed copy of the runtime data. On first run,
 it extracts that data to `%LOCALAPPDATA%\Anvil\runtime\<build-id>\data`.
@@ -115,6 +117,7 @@ Compiled programs must also have the executable name `pi` or `pi.exe` before the
 Run `node --test tests/agent-sessions.test.cjs` to check compiled Pi and unrelated programs. It requires Bun.
 
 The host reads program status reports (OSC 7501) and keeps the Agent Status in the session record.
+A report can carry `since=<Unix seconds>` for a state that began earlier. A time in the future is ignored.
 It sets `PI_PROGRAM_STATUS=1`, so Pi reports without a query.
 It also sets `PI_HYPERLINKS=1`, so Pi sends OSC 8 links and does not print each URL after its label.
 It sets `PI_IMAGE_PROTOCOL=kitty`, so Pi displays inline images without recognizing Anvil's terminal name.
@@ -173,10 +176,14 @@ one Windows x86_64 standalone executable and uploads `dist\anvil.exe` to a
 GitHub Release. A tag that starts with `v` starts the workflow:
 
 ```sh
-git tag -a v3.10.1-anvil.3 -m "Anvil v3.10.1-anvil.3"
+git tag -a v1.0.1 -m "Anvil 1.0.1"
 git push origin master
-git push origin v3.10.1-anvil.3
+git push origin v1.0.1
 ```
+
+Versions use `MAJOR.MINOR.PATCH`. Set the version in `meson.build` before you tag.
+The plugin API version (`mod_version` in `meson.build`) is separate. Plugins declare it in their
+`mod-version` header. Change it only when the plugin API changes.
 
 The workflow also supports manual dispatch. Pass an existing release tag when
 you retry a build. Do not commit release executables; `*.exe` is ignored.
@@ -205,7 +212,7 @@ To replace the app logo:
 4. Run `update-anvil-dev-build.bat` to rebuild, install, and restart the dev portable app.
 
 The generator needs Python and Pillow. It crops transparent outer padding and adds no inset.
-It updates the welcome logo, Windows ICO, macOS ICNS, native window icon, and installer images.
+It updates the welcome logo, Windows ICO, macOS ICNS, and native window icon.
 Linux packages use the generated PNG.
 Do not edit generated icons separately. Commit the source PNG and all generated files together.
 Normal builds use these files and do not need the generator's tools.
@@ -219,7 +226,7 @@ Use the BAT files in the repo root
 - `setup-anvil-dev.bat`
   - first-time setup
   - builds the editor
-  - installs a dev portable app to `C:\Projects\c_projects\anvil-portable`
+  - installs a dev portable app to `..\anvil-portable`
   - creates Windows junctions for editable data directories, including `data\core`, `data\plugins`, `data\colors`, and `data\widget`
   - launches the app
 
@@ -242,7 +249,7 @@ Use the BAT files in the repo root
 Daily launcher target:
 
 ```text
-C:\Projects\c_projects\anvil-portable\anvil.exe
+..\anvil-portable\anvil.exe
 ```
 
 The daily launcher is the stripped executable. Do not switch it back to the
@@ -367,7 +374,7 @@ Keep personal machine-only state out of the repo, such as app state, workspace d
 
 `USERDIR` is the portable/user state and local-config root:
 
-- `C:\Projects\c_projects\anvil-portable\user`
+- `..\anvil-portable\user`
 
 User plugins and machine-local state belong under `USERDIR`. First-party core/default behavior, bundled plugins, and bundled theme/style schema belong under `DATADIR` in the repo.
 
@@ -389,7 +396,7 @@ When adding a new first-party style key, ensure the base style schema remains co
 Anvil writes persistent session logs to:
 
 ```text
-C:\Projects\c_projects\anvil-portable\user\logs\anvil-*.log
+..\anvil-portable\user\logs\anvil-*.log
 ```
 
 Check the newest file first when you investigate a crash or unexpected behavior. These logs are machine-local state and must stay outside the repo.
@@ -711,7 +718,7 @@ Use one clear commit message for each milestone. Report each new commit hash in 
 
 ## Finalizing changes / updating the dev portable app
 
-When a change or feature is finished and non-Lua files were edited, run the relevant BAT file from the repo root so `C:\Projects\c_projects\anvil-portable` is updated. For non-Lua changes, usually run:
+When a change or feature is finished and non-Lua files were edited, run the relevant BAT file from the repo root so `..\anvil-portable` is updated. For non-Lua changes, usually run:
 
 ```text
 .\update-anvil-dev-build.bat
@@ -727,10 +734,10 @@ C/C++ edits require a rebuild and restart. For edits under junctioned data direc
 The coding-agent shell runs under MSYS2/MinGW bash in this repo. If you need to invoke a Windows BAT file through `cmd.exe`, use double-slash CMD switches so MSYS does not path-convert `/c`, `/d`, or `/s`:
 
 ```sh
-cmd.exe //d //s //c "call C:\Projects\c_projects\anvil-editor\update-anvil-dev-build.bat"
+cmd.exe //d //s //c "call D:\Projects\c_projects\anvil-editor\update-anvil-dev-build.bat"
 ```
 
-Do **not** use plain `cmd /c ...` or `cmd.exe /c ...` from this shell; it may only print the CMD banner/prompt and not run the command. The double-slash form was verified to build, install to `C:\Projects\c_projects\anvil-portable`, restore junctions, and restart Anvil.
+Do **not** use plain `cmd /c ...` or `cmd.exe /c ...` from this shell; it may only print the CMD banner/prompt and not run the command. The double-slash form was verified to build, install to `..\anvil-portable`, restore junctions, and restart Anvil.
 
 ## Vendored/Meson subprojects
 
