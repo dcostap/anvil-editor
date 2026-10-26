@@ -14,7 +14,6 @@ __pycache__/
 *.tar.gz
 *.zip
 *.DS_Store
-*App*
 compile_commands.json
 tools/perf-results/
 tools/baselines/perf_capture_*.png

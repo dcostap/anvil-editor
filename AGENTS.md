@@ -702,7 +702,12 @@ Do not capture the screen with `CopyFromScreen`, `PrintWindow`, or an ad hoc OS 
 Do not find, focus, move, close, or reuse the user's windows for verification.
 Do not launch the daily portable app as an isolated test process.
 Its adjacent `user` directory takes priority over `ANVIL_USERDIR`.
-Legacy `tools/anvil_*_perf_test.ps1` scripts are not the default visual verification path.
+### README screenshots
+
+Run `python tools/showcase/run_showcase.py --no-build` to make `docs/screenshots/workspace.png`.
+It uses the same private desktop with fake Projects from `tools/showcase/projects`.
+Fake commands in `tools/showcase/bin` act like Pi, npm, cargo and Gradle. They call no model.
+The fake Pi sends OSC 7501 with `since`, so agent times look real. Shell command times are real.
 
 ## Git commits
 

@@ -1,0 +1,6 @@
+{
+  "name": "orbit-api",
+  "version": "2.4.0",
+  "private": true,
+  "scripts": { "dev": "vite --port 5173", "test": "vitest run" }
+}

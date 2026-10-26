@@ -683,7 +683,7 @@ def copy_app_tree(destination: Path) -> Path:
     bindir.mkdir(parents=True)
     datadir.mkdir(parents=True)
     shutil.copy2(exe, bindir / "anvil.exe")
-    for name in ("core", "compat", "plugins", "colors", "fonts", "widget", "treesitter"):
+    for name in ("core", "compat", "plugins", "colors", "fonts", "widget", "treesitter", "tools", "models"):
         source = ROOT / "data" / name
         if source.exists():
             shutil.copytree(source, datadir / name)
