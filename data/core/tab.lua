@@ -138,7 +138,8 @@ function tab.note(item, now)
   return item.terminal and not item.agent and tab.age_text(item.terminal.activity, now) or nil
 end
 
--- The agent's line: its text, its time, and its tone: "warn", "error" or "result" for an Unread Result.
+-- The agent's line shows its current step but counts time from the start of its working state.
+-- Its tone is "warn", "error" or "result" for an Unread Result.
 -- A time under an hour counts seconds, so `ticking` tells the caller to draw again each second.
 function tab.agent_line(agent, now, unread)
   if agent.command then
@@ -149,7 +150,7 @@ function tab.agent_line(agent, now, unread)
   end
   local text, since, tone = nil, agent.since, nil
   if agent.step and agent.state ~= "blocked" then
-    text, since = agent.step, agent.step_since
+    text = agent.step
   elseif agent.state == "blocked" then
     text, tone = agent.message ~= "" and "Needs you: " .. agent.message or "Needs you", "warn"
   elseif agent.state == "error" then

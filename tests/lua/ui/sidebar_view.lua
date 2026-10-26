@@ -841,19 +841,28 @@ test.describe("Sidebar agent status", function()
     end
   end)
 
-  test.it("shows the agent's current step and how long it runs below its Tab", function()
+  test.it("keeps the agent's run timer counting when its current step changes", function()
     local view = SidebarView(function() end)
-    view:set_model(model({agent_state="working",agent_message="GLP4",agent_since=now-300,
-      agent_step="bash: npm test",agent_step_since=now-42}), 1)
-    -- The clock stays at the model's time, so the step's age cannot pass another second.
+    local clock = now
     local old_time = os.time
-    os.time = function(date) return date and old_time(date) or now end
-    local ok, texts = pcall(drawn, view)
+    os.time = function(date) return date and old_time(date) or clock end
+    local ok, err = pcall(function()
+      view:set_model(model({agent_state="working",agent_message="GLP4",agent_since=now-300,
+        agent_step="Thinking",agent_step_since=now-42}), 1)
+      local texts = drawn(view)
+      test.ok(find(texts, "Thinking"), "The step is missing: " .. joined(texts))
+      test.ok(find(texts, "5m 00s"), "The run time is missing: " .. joined(texts))
+
+      clock = now + 10
+      view:set_model(model({agent_state="working",agent_message="GLP4",agent_since=now-300,
+        agent_step="bash: npm test",agent_step_since=clock}), 1)
+      texts = drawn(view)
+      test.ok(find(texts, "bash: npm test"), "The new step is missing: " .. joined(texts))
+      test.ok(find(texts, "5m 10s"), "The step change reset the run timer: " .. joined(texts))
+      test.not_nil(view:animation_delay(0), "The run timer does not count on")
+    end)
     os.time = old_time
-    if not ok then error(texts, 0) end
-    test.ok(find(texts, "bash: npm test"), "The step is missing: " .. joined(texts))
-    test.ok(find(texts, "42s"), "The step's time is missing: " .. joined(texts))
-    test.not_nil(view:animation_delay(0), "The step's time does not count on")
+    if not ok then error(err, 0) end
   end)
 
   test.it("shows what a waiting agent asks for", function()
