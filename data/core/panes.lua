@@ -187,14 +187,14 @@ local function create_group(pane, index)
   return group
 end
 
-local function focus_view(pane)
+local function focus_view(pane, feedback)
   local view = pane and pane.current_view
   if not view then return end
   local target = view.get_focus_view and view:get_focus_view() or view
   if target and target ~= view then M.register_focus_target(view, target) end
   local root = core.root_panel
   if target and core.set_active_view and root and root.contains_view and root:contains_view(target) then
-    core.set_active_view(target)
+    core.set_active_view(target, {feedback = feedback})
   end
 end
 
@@ -324,12 +324,12 @@ function M.split(target, direction, opts)
   return new_pane
 end
 
-function M.focus(target)
+function M.focus(target, feedback)
   local pane = M.find(target)
   if not pane then return nil, "invalid Pane" end
   M.active_pane = pane
   M.visible_group_value = pane.group
-  focus_view(pane)
+  focus_view(pane, feedback)
   request_refresh()
   quiet("Pane focus: id=%s number=%s", pane.id, tostring(M.number(pane)))
   return pane

@@ -693,10 +693,15 @@ function RootPanel:update()
   local pane = target and panes().pane_for_view(target)
   -- A new file in the same Pane keeps the same focus region. Compound Views use their focused child.
   local identity = pane and pane.current_view == target and pane or target
-  local active, changed, finished = self.focus_feedback:update(identity)
+  local kind = self.focus_feedback_kind
+  local active, changed, finished = self.focus_feedback:update(identity, nil, kind)
+  -- A remote request can arrive before this Project gains keyboard focus.
+  if target then self.focus_feedback_kind = nil end
   self.focus_feedback_view = target
   if active or changed or finished then core.redraw = true end
-  if changed then core.log_quiet("Focus feedback: target=%s", tostring(target)) end
+  if changed or (target and kind) then
+    core.log_quiet("Focus feedback: target=%s kind=%s", tostring(target), kind or "standard")
+  end
   local image_overlay = package.loaded["core.image_overlay"]
   if image_overlay then image_overlay.update() end
   perf_end("rootpanel_update", started, scope)

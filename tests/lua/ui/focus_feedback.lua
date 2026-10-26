@@ -72,18 +72,20 @@ test.describe("Focus feedback surfaces", function()
   test.before_each(function()
     saved = {root=core.root_panel,view=core.active_view,window=core.active_window,
       nag=core.nag_view,last=core.last_active_view,next=core.next_active_view,
-      time=system.get_time,focus=system.window_has_focus,draw=renderer.draw_rect,color=style.focus_feedback}
+      time=system.get_time,focus=system.window_has_focus,request=system.pane_request,
+      draw=renderer.draw_rect,color=style.focus_feedback}
     clock, focused, rectangles = 100, true, {}
     system.get_time = function() return clock end
     system.window_has_focus = function() return focused end
     style.focus_feedback = {13, 57, 91, 120}
     renderer.draw_rect = function(x, y, w, h, color)
       if color[1] == 13 and color[2] == 57 and color[3] == 91 then
-        rectangles[#rectangles + 1] = {x=x,y=y,w=w,h=h}
+        rectangles[#rectangles + 1] = {x=x,y=y,w=w,h=h,alpha=color[4]}
       end
       return saved.draw(x, y, w, h, color)
     end
     panes.reset_for_tests()
+    require("core.recent_panes").reset_for_tests()
     core.root_panel = RootPanel()
     core.nag_view = require("core.nagview")()
     core.root_panel.size.x, core.root_panel.size.y = 640, 400
@@ -91,9 +93,11 @@ test.describe("Focus feedback surfaces", function()
   end)
   test.after_each(function()
     panes.reset_for_tests()
+    require("core.recent_panes").reset_for_tests()
     core.root_panel, core.active_view, core.active_window = saved.root, saved.view, saved.window
     core.nag_view, core.last_active_view, core.next_active_view = saved.nag, saved.last, saved.next
     system.get_time, system.window_has_focus = saved.time, saved.focus
+    system.pane_request = saved.request
     renderer.draw_rect, style.focus_feedback = saved.draw, saved.color
   end)
   local function draw(fn)
@@ -111,6 +115,74 @@ test.describe("Focus feedback surfaces", function()
       test.ok(rect.y + rect.h <= view.position.y + view.size.y)
     end
   end
+
+  test.it("dims pointer focus without changing ordinary focus feedback", function()
+    local left = panes.create {factory=function() return View() end}
+    local right = panes.split(left, "right", {factory=function() return View() end})
+    local root = core.root_panel
+    root:update()
+    draw(function() root:draw() end)
+    local standard = rectangles[2].alpha
+    clock = clock + 10
+    local view = left.current_view
+    local x, y = view.position.x + view.size.x / 2, view.position.y + view.size.y / 2
+    core.on_event("mousepressed", "left", x, y, 1)
+    core.on_event("mousereleased", "left", x, y)
+    root:update()
+    draw(function() root:draw() end)
+    inside(view)
+    test.ok(rectangles[2].alpha < standard, "Pointer focus must be dimmer than ordinary focus")
+    clock = clock + 10
+    panes.focus(right)
+    root:update()
+    draw(function() root:draw() end)
+    test.equal(rectangles[2].alpha, standard)
+  end)
+
+  test.it("delays numbered Pane feedback without delaying focus", function()
+    local recent = require "core.recent_panes"
+    local first = panes.create {factory=function() return View() end}
+    recent.observe(first)
+    clock = clock + 1
+    local second = panes.create {factory=function() return View() end}
+    recent.observe(second)
+    local root = core.root_panel
+    root:update()
+    draw(function() root:draw() end)
+    test.ok(require("core.command").perform("pane:focus_number_1"))
+    test.equal(panes.active(), first)
+    root:update()
+    draw(function() root:draw() end)
+    test.same(rectangles, {}, "Numbered focus must wait before drawing feedback")
+    clock = clock + 0.3
+    root:update()
+    draw(function() root:draw() end)
+    inside(first.current_view)
+  end)
+
+  test.it("starts remote numbered feedback only after the destination gains focus", function()
+    local pane = panes.create {factory=function() return View() end}
+    local root = core.root_panel
+    root:update()
+    focused = false
+    root:update()
+    -- The shell transports the request to the destination Project.
+    system.pane_request = function(_, _, text)
+      return require("core.pane_requests").perform(text)
+    end
+    test.ok(require("core.numbered_panes").request("C:/Project", pane.id))
+    root:update()
+    clock = clock + 10
+    focused = true
+    core.on_event("focusgained")
+    root:update()
+    draw(function() root:draw() end)
+    test.same(rectangles, {}, "Remote numbered focus must wait after the Project gains focus")
+    clock = clock + 0.3
+    root:update()
+    draw(function() root:draw() end)
+    inside(pane.current_view)
+  end)
 
   test.it("follows Pane and nested surface focus and stops when the Window loses focus", function()
     local left = panes.create {factory=function() return View() end}

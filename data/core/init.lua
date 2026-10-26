@@ -1757,6 +1757,8 @@ end
 
 function core.set_active_view(view, focus_context)
   assert(view, "Tried to set active view to nil")
+  local feedback_kind = focus_context and focus_context.feedback or core.focus_feedback_source
+  local view_changed = view ~= core.active_view
   -- Reset the IME even if the focus didn't change. Clear composition on
   -- the previous input window before moving focus to another native window.
   local previous_window = core.active_window or core.window
@@ -1809,6 +1811,10 @@ function core.set_active_view(view, focus_context)
     if view.extends and view:extends(TextView) and view.buffer and view.become_selection_mirror_owner then
       view:become_selection_mirror_owner()
     end
+  end
+  -- Focus return to the same View must keep a pending numbered request.
+  if core.root_panel and (view_changed or feedback_kind) then
+    core.root_panel.focus_feedback_kind = feedback_kind
   end
   if
     core.active_view:extends(TextView)
@@ -2374,6 +2380,9 @@ function core.on_event(type, ...)
   if type == "shelladopted" then core.on_shell_adopted(); return true end
   if core.shell_lost and (type == "quit" or type == "windowclosed") then return true end
   core.current_event_context = event_summary(type, ...)
+  local button = ...
+  core.focus_feedback_source = (type == "mousepressed" or type == "mousereleased")
+    and button ~= "x" and button ~= "y" and "pointer" or nil
   record_focus_input_event(type, ...)
   local did_keymap = false
   local active = core.active_view
@@ -2390,6 +2399,7 @@ function core.on_event(type, ...)
         or type == "textinput" or type == "textediting") then
     owner:on_raw_keyboard_event(type, ...)
     core.current_event_context = nil
+    core.focus_feedback_source = nil
     -- Do not discard the separate SDL textinput event after a captured key.
     return false
   end
@@ -2414,6 +2424,7 @@ function core.on_event(type, ...)
       local key, event = ...
       trace_keyboard_input("route", type, key, event, "ime-composition")
       core.current_event_context = nil
+      core.focus_feedback_source = nil
       return false
     end
     local key, event = ...
@@ -2659,6 +2670,7 @@ function core.on_event(type, ...)
     core.quit()
   end
   core.current_event_context = nil
+  core.focus_feedback_source = nil
   return did_keymap
 end
 
@@ -3032,6 +3044,7 @@ function core.step(next_frame_time, options, frame_stats)
       did_keymap = res or did_keymap
     end
     core.current_event_context = nil
+    core.focus_feedback_source = nil
     note_event(type, event_item_start)
     event_received = type
   end

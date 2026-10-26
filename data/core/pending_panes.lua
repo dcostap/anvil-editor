@@ -114,7 +114,7 @@ function pending.focus(number)
     return false
   end
   if common.path_compare_key(item.path) == common.path_compare_key(path) then
-    return require("core.panes").focus(item.id) ~= nil
+    return require("core.panes").focus(item.id, "numbered") ~= nil
   end
   local sent = pending.request(item.path, item.id)
   core.log_quiet("Pending Pane %d: Project=%s pane=%s sent=%s", number, item.path, tostring(item.id), tostring(sent))

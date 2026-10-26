@@ -66,7 +66,8 @@ end
 
 -- Asks the shell to select the Project at `path`, bring its Window to the front, and focus its Pane `id`.
 function recent_panes.request(path, id)
-  return system.pane_request("select", path, common.serialize({action = "focus", pane = id}, {escape = true}))
+  return system.pane_request("select", path,
+    common.serialize({action = "focus", pane = id, feedback = "numbered"}, {escape = true}))
 end
 
 -- This Project's view of all Projects: the last fetched Project Sidebar model, with this Project's live Panes in
@@ -105,7 +106,7 @@ function recent_panes.focus(number)
     return false
   end
   if common.path_compare_key(item.path) == common.path_compare_key(path) then
-    return require("core.panes").focus(item.id) ~= nil
+    return require("core.panes").focus(item.id, "numbered") ~= nil
   end
   local sent = recent_panes.request(item.path, item.id)
   core.log_quiet("Recent Pane %d: Project=%s pane=%s sent=%s", number, item.path, tostring(item.id), tostring(sent))

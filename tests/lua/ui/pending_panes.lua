@@ -111,7 +111,7 @@ test.describe("Pending Pane numbers", function()
       test.equal(#requests, 1)
       test.equal(requests[1][2], "C:/pending-number-test")
       local request = assert(load("return " .. requests[1][3], "=request", "t", {}))()
-      test.same(request, {action = "focus", pane = "old"})
+      test.same(request, {action = "focus", pane = "old", feedback = "numbered"})
     end)
     core.project_sidebar, system.pane_request = old_model, old_request
     test.ok(ok, err)

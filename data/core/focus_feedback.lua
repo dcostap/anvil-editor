@@ -5,12 +5,13 @@ local style = require "core.style"
 local FocusFeedback = Object:extend()
 local DURATION = 0.38
 
-function FocusFeedback:update(target, now)
+function FocusFeedback:update(target, now, kind)
   now = now or system.get_time()
   local changed = target ~= self.target
-  if changed then
+  if changed or (target and kind == "numbered") then
     self.target = target
-    self.started = target and now or nil
+    self.started = target and (now + (kind == "numbered" and 0.25 or 0)) or nil
+    self.strength = kind == "pointer" and 0.35 or 1
   end
   local active = self:active(now)
   local finished = self.started ~= nil and not active
@@ -24,8 +25,8 @@ end
 
 function FocusFeedback:draw(x, y, width, height, now)
   now = now or system.get_time()
-  if not self:active(now) or width <= 0 or height <= 0 then return false end
-  local strength = (1 - math.max(0, now - self.started) / DURATION) ^ 2
+  if not self:active(now) or now < self.started or width <= 0 or height <= 0 then return false end
+  local strength = self.strength * (1 - (now - self.started) / DURATION) ^ 2
   local source = style.focus_feedback
   local color = {source[1], source[2], source[3], source[4] * strength}
   local inset = math.min(2 * SCALE, width / 4, height / 4)
