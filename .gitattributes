@@ -18,3 +18,4 @@ data/tools/dprint/plugins/*.wasm -text
 tests/fixtures/unicode-stress-test.txt -text whitespace=-blank-at-eol
 # Benchmark specimens must keep the same bytes on every checkout.
 tests/fixtures/markdown/gallery-benchmark.md text eol=lf
+tools/showcase/bin/npm text eol=lf

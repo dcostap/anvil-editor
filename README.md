@@ -1,8 +1,17 @@
 # Anvil
 
-A fast Windows code editor with built-in terminals, made for running coding agents side by side.
+There are many code editors, but this one is ~~mine~~ yours.
 
 ![Anvil with several Projects and coding agents](docs/screenshots/workspace.png)
+
+A fast Windows code editor with built-in terminals, WYSIWYG Markdown live editing, a diff viewer, and much more. Run several agents side by side. Keep all your Projects, panes, files, terminals and agents visible in one sidebar, or split Projects into separate windows as you see fit.
+
+- Fast fuzzy search for files and text
+- Tree-sitter syntax and code navigation
+- Live Markdown editing with many Obsidian-style features
+- Built-in support for the Pi coding agent, easy to extend to other terminal agents
+
+![One Markdown note in each color theme](docs/screenshots/themes.png)
 
 ## Download
 

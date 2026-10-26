@@ -1,33 +1,41 @@
 -- mod-version:3
 -- Screenshot showcase, installed only by tools/showcase/run_showcase.py. Every Lua process loads it.
 -- The driver process starts the shell and captures its Window. Each loaded fake Project opens its Panes and
--- types the fake commands from tools/showcase/bin, which act like Pi, npm, cargo and Gradle.
+-- types its commands: the real Pi on a canned model, and fake npm, cargo and Gradle from tools/showcase/bin.
 local root = os.getenv("ANVIL_SHOWCASE_ROOT")
 if not root then return end
 local core = require "core"
 
--- The Panes of each loaded Project, in order. "split" shows the Pane beside the first one.
+-- The loaded Projects, from run_showcase.py. The first one is the Selected Project.
+local loaded = {}
+for name in os.getenv("ANVIL_SHOWCASE_LOADED"):gmatch("[^,]+") do loaded[#loaded + 1] = name end
+
+-- The Panes of each Project, in order. "split" shows the Pane beside the first one. "line" puts the caret there.
 local scenarios = {
   ["orbit-api"] = {
     {file = "src/billing/invoice.ts"},
-    {command = "pi orbit-claude", split = true},
-    {command = "pi orbit-gpt"},
+    {command = "pi orbit-claude anthropic/claude-opus-5-5", split = true},
+    {command = "pi orbit-gpt openai/gpt-6.1"},
     {command = "npm run dev"},
   },
   ["raytracer"] = {
     {file = "src/bvh.rs"},
-    {command = "pi ray-claude"},
-    {command = "pi ray-gpt"},
+    {command = "pi ray-claude anthropic/claude-sonnet-5-5"},
+    {command = "pi ray-gpt openai/gpt-6.1"},
     {command = "cargo watch -x run"},
   },
   ["mobile-app"] = {
     {file = "build.gradle.kts"},
-    {command = "pi mobile-gpt"},
+    {command = "pi mobile-gpt openai/gpt-6.1"},
     {command = ".\\gradlew.bat runAppDesktop"},
   },
   ["dotfiles"] = {
     {file = ".bashrc"},
-    {command = "pi dotfiles-claude"},
+    {command = "pi dotfiles-claude anthropic/claude-opus-5-5"},
+  },
+  -- A blank line for the caret, so Live Preview shows no Markdown source.
+  ["notes"] = {
+    {file = "Orbit launch.md", line = 2},
   },
 }
 
@@ -59,6 +67,7 @@ local function hosted(name, path)
     if item.file then
       local view = core.open_file(path .. "/" .. item.file, {placement = index == 1 and "current" or "new"})
       first = first or (view and panes.pane_for_view(view))
+      if item.line then view:with_selection_state(function() view.buffer:set_selection(item.line, 1) end) end
     else
       local view = terminal.open {cwd = path, placement = item.split and "split" or "new", direction = "right",
         pane = item.split and first and first.id or nil}
@@ -110,20 +119,20 @@ local function driver()
   local shell
   local ok, err = pcall(function()
     -- The shell restores the saved Window. Start it in the Selected Project, not in the driver's folder.
-    shell = assert(require("core.process").start({EXEFILE, "--shell"}, {cwd = root .. "/Projects/orbit-api",
+    shell = assert(require("core.process").start({EXEFILE, "--shell"}, {cwd = root .. "/home/Projects/" .. loaded[1],
       stdin = process.REDIRECT_DISCARD, stdout = process.REDIRECT_DISCARD, stderr = process.REDIRECT_DISCARD}))
-    for name in pairs(scenarios) do
+    for _, name in ipairs(loaded) do
       wait(function() return exists("ready-" .. name) end, 120, "Project did not get ready: " .. name)
     end
     -- Let the Sidebar scan the Terminal Sessions and draw their status.
-    coroutine.yield(8)
+    coroutine.yield(15)
     local window = wait(function() return shell_window(shell:pid()) end, 10, "shell Window not found")
     user32.SendMessageW(window, 0x8052, 1, 0)
     wait(function() return log_text():find("capture%-1%.bmp") end, 10, "the shell did not write its capture")
   end)
   touch("finish")
   pcall(function()
-    for name in pairs(scenarios) do
+    for _, name in ipairs(loaded) do
       wait(function() return exists("closed-" .. name) end, 20, "Terminals did not close: " .. name)
     end
   end)

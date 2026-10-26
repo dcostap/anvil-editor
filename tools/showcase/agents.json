@@ -1,0 +1,60 @@
+{
+  "orbit-claude": {
+    "prompt": "Invoice previews ignore plan changes in the middle of a cycle. Prorate both plans by day and keep the current rounding rules.",
+    "turns": [
+      {"text": "I'll check how previews are built before I change anything.",
+       "tools": [{"name": "read", "args": {"path": "src/billing/proration.ts"}}]},
+      {"text": "The preview already splits the cycle at the change date, but `prorate` still assumes a 30-day month. I'll use the real cycle length.",
+       "tools": [{"name": "edit", "args": {"path": "src/billing/proration.ts", "edits": [
+         {"oldText": "  return monthlyPrice * (days / 30);", "newText": "  return (monthlyPrice * days) / cycleDays;"}]}}]},
+      {"text": "Rounding still happens once, on the total. Now the tests.",
+       "tools": [{"name": "bash", "args": {"command": "npm test -- invoice"}}]}
+    ],
+    "ages": {"working": 1500, "step": 131},
+    "step": "bash: npm test -- invoice"
+  },
+  "orbit-gpt": {
+    "prompt": "Summarize what changed since the v2.3.0 release.",
+    "turns": [
+      {"tools": [{"name": "bash", "args": {"command": "git log --oneline v2.3.0..HEAD"}}]},
+      {"text": "Three commits since v2.3.0:\n\n- **Fixes:** CSV exports round each line to the cent again.\n- **Features:** invoice previews split the cycle at a plan change.\n- **Chores:** dependency updates.\n\nNothing changes the public API."}
+    ],
+    "ages": {"done": 1080}
+  },
+  "ray-claude": {
+    "prompt": "The BVH build is slow on large scenes. Find out why.",
+    "turns": [
+      {"tools": [{"name": "read", "args": {"path": "src/bvh.rs"}}]},
+      {"thinking": "Traversal pushes both children for every hit branch, so the stack grows with the tree. The build itself sorts all primitives on each split, which is O(n log n) per level. For Sponza that is about 260k triangles, so binned SAH would cut most of that work. I should check where the build spends its time before I change the split heuristic.",
+       "hang": true}
+    ],
+    "ages": {"working": 300, "step": 14},
+    "step": "Thinking"
+  },
+  "ray-gpt": {
+    "prompt": "Benchmark the new BVH traversal against main.",
+    "turns": [
+      {"text": "I'll run the BVH benchmark on this branch first.",
+       "tools": [{"name": "bash", "args": {"command": "cargo bench --bench bvh"}}]}
+    ],
+    "confirm": {"command": "cargo bench", "title": "Run benches?"},
+    "ages": {"blocked": 105}
+  },
+  "mobile-gpt": {
+    "prompt": "Which Kotlin version does the app build with?",
+    "turns": [
+      {"tools": [{"name": "read", "args": {"path": "build.gradle.kts"}}]},
+      {"text": "Kotlin **2.2.0**, through the multiplatform plugin in `build.gradle.kts`."}
+    ],
+    "ages": {"done": 1740}
+  },
+  "dotfiles-claude": {
+    "prompt": "Add a git alias that shows the last five commits, one line each.",
+    "turns": [
+      {"tools": [{"name": "edit", "args": {"path": ".bashrc", "edits": [
+        {"oldText": "alias gs=\"git status\"", "newText": "alias gs=\"git status\"\nalias gl=\"git log --oneline -5\""}]}}]},
+      {"text": "Added `gl` to `.bashrc`. Open a new shell or run `source ~/.bashrc` to use it."}
+    ],
+    "ages": {"done": 240}
+  }
+}

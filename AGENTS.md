@@ -704,10 +704,12 @@ Do not launch the daily portable app as an isolated test process.
 Its adjacent `user` directory takes priority over `ANVIL_USERDIR`.
 ### README screenshots
 
-Run `python tools/showcase/run_showcase.py --no-build` to make `docs/screenshots/workspace.png`.
-It uses the same private desktop with fake Projects from `tools/showcase/projects`.
-Fake commands in `tools/showcase/bin` act like Pi, npm, cargo and Gradle. They call no model.
-The fake Pi sends OSC 7501 with `since`, so agent times look real. Shell command times are real.
+Run `python tools/showcase/run_showcase.py --no-build` to make `docs/screenshots/workspace.png` and `themes.png`.
+It uses the same private desktop with fake Projects from `tools/showcase/projects`. It needs Pi on `PATH`.
+The real Pi runs the scenarios in `tools/showcase/agents.json` against a canned model server in the script.
+It calls no real model. Pi gets a private agent folder, so no user settings, sessions or extensions appear.
+`tools/showcase/pi/showcase.cjs` repeats Pi's status with OSC 7501 `since`, so agent times look real.
+Shell command times are real. `themes.png` stacks one Markdown note in each Color Theme.
 
 ## Git commits
 

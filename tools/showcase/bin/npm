@@ -1,0 +1,8 @@
+#!/bin/sh
+# A stand-in for npm in Pi's bash tool, for screenshots. The test run never ends, so Pi keeps working.
+printf '\n> orbit-api@2.4.0 test\n> vitest run invoice\n\n'
+printf ' \033[32m✓\033[0m src/billing/invoice.test.ts \033[2m>\033[0m prorates an upgrade on day 12 \033[2m4ms\033[0m\n'
+printf ' \033[32m✓\033[0m src/billing/invoice.test.ts \033[2m>\033[0m keeps rounding to the cent \033[2m1ms\033[0m\n'
+printf ' \033[32m✓\033[0m src/billing/invoice.test.ts \033[2m>\033[0m credits a downgrade \033[2m2ms\033[0m\n'
+printf ' \033[33m❯\033[0m src/billing/invoice.test.ts \033[2m>\033[0m previews a change on the last day\n'
+exec sleep 86400
