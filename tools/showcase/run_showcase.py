@@ -39,7 +39,7 @@ SCENES = {
                   {"blog": 1, "advent-of-code": 3, "infra": 9, "notes": 40}, (1720, 1040), True),
     "themes": (["notes"], {}, (900, 1000), False),
 }
-THEMES = ["dark", "dark3", "light", "light2"]  # From the back of the stack to the front.
+THEMES = ["dark", "dark3", "light2", "light"]  # From the back of the stack to the front.
 AGENTS = json.loads((HERE / "agents.json").read_text(encoding="utf-8"))
 # The models in the Terminal commands of showcase.lua: ID, name, and dollars per million input and output tokens.
 MODELS = {
