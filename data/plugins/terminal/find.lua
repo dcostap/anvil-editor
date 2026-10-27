@@ -10,6 +10,7 @@ local Highlighter = require "core.buffer.highlighter"
 local Object = require "core.object"
 local TextView = require "core.textview"
 local card = require "core.card"
+local find_card = require "core.find_card"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
 local prompt_bar_renderer = require "core.prompt_bar_renderer"
@@ -17,6 +18,9 @@ local translate = require "core.buffer.translate"
 
 local CARD_MAX_WIDTH = 440
 local INFO_SAMPLES = { "8888 / 10000+", "No results", "Searching…" }
+local OPTIONS = {
+  { key = "case_sensitive", label = "Aa", tooltip = "Match Case", command = "terminal:find_toggle_case" },
+}
 
 local last_query = ""
 
@@ -132,6 +136,7 @@ end
 function Find:close(closing)
   if not self.visible then return end
   self.visible = false
+  self.hover = nil
   self:clear()
   local session = self.view.session
   if session then session:find("", false) end
@@ -267,15 +272,12 @@ function Find:layout()
   local field_w = math.max(1, w - pad * 3 - info_w)
   layout.field = { x = layout.x + pad, y = layout.y + pad, w = field_w, h = field_h }
   layout.info = { x = layout.field.x + field_w + pad, y = layout.field.y, w = info_w, h = field_h }
-  local toggle_h = field_h - 8 * SCALE
-  local toggle_w = math.max(toggle_h, font:get_width("Aa") + 8 * SCALE)
-  layout.toggle = {
-    x = layout.field.x + field_w - 4 * SCALE - toggle_w, y = layout.field.y + 4 * SCALE, w = toggle_w, h = toggle_h,
-  }
+  local toggle_left
+  layout.toggles, toggle_left = find_card.place_toggles(OPTIONS, layout.field, font)
   local text_pad = 7 * SCALE
   local input = self.input
   input.position.x, input.position.y = layout.field.x + text_pad, layout.field.y
-  input.size.x = math.max(1, layout.toggle.x - 2 * SCALE - input.position.x)
+  input.size.x = math.max(1, toggle_left - input.position.x)
   input.size.y = field_h
   return layout
 end
@@ -284,11 +286,10 @@ function Find:update()
   self:layout()
   self.input:update()
   self:poll()
+  find_card.update(self)
 end
 
-local function inside(x, y, rect)
-  return x >= rect.x and x <= rect.x + rect.w and y >= rect.y and y <= rect.y + rect.h
-end
+local inside = find_card.inside
 
 function Find:contains(x, y)
   return self.visible and inside(x, y, self:layout())
@@ -298,7 +299,7 @@ function Find:on_mouse_pressed(button, x, y, clicks)
   if button ~= "left" or not self:contains(x, y) then return false end
   local layout = self:layout()
   self:focus()
-  if inside(x, y, layout.toggle) then
+  if find_card.toggle_at(layout.toggles, x, y) then
     self:toggle_case()
     return true
   end
@@ -318,6 +319,22 @@ function Find:on_mouse_pressed(button, x, y, clicks)
     input:select_all()
   end
   return true
+end
+
+-- Returns the cursor for a pointer over the card, or nil when the pointer is outside it.
+function Find:on_mouse_moved(x, y)
+  local layout = self:contains(x, y) and self:layout()
+  local toggle = layout and find_card.toggle_at(layout.toggles, x, y)
+  find_card.set_hover(self, toggle)
+  if not layout then return nil end
+  return (inside(x, y, layout.field) and not toggle) and "ibeam" or "arrow"
+end
+
+function Find:on_mouse_left() find_card.set_hover(self, nil) end
+
+---The tooltip of the toggle under the pointer, after the pointer rests on it.
+function Find:tooltip()
+  if self.visible then return find_card.tooltip(self, self:layout().toggles) end
 end
 
 -- Calls fn(match, x, y, w, h, current) for each match on the screen.
@@ -400,30 +417,10 @@ function Find:draw_card()
   local layout = self:layout()
   core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
   card.draw(layout.x, layout.y, layout.w, layout.h, layout.radius)
-  local field, input = layout.field, self.input
-  local radius = 6 * SCALE
-  if self:focused() then
-    local ring = math.max(1, math.floor(SCALE + 0.5))
-    renderer.draw_rounded_rect(field.x, field.y, field.w, field.h, radius, style.accent)
-    renderer.draw_rounded_rect(field.x + ring, field.y + ring, field.w - 2 * ring, field.h - 2 * ring,
-      radius - ring, style.card)
+  find_card.draw_field(layout.field, self.input, "Find", self:focused())
+  for _, toggle in ipairs(layout.toggles) do
+    find_card.draw_toggle(toggle, layout.font, self[toggle.key], find_card.is_hovered(self, toggle.key))
   end
-  renderer.draw_rounded_rect(field.x, field.y, field.w, field.h, radius, style.card_field)
-  core.push_clip_rect(input.position.x, input.position.y, input.size.x, input.size.y)
-  input:draw()
-  if self:query() == "" then
-    local text_x = input:get_line_screen_position(1, 1)
-    common.draw_text(input:get_font(), style.dim, "Find", "left", text_x, input.position.y, input.size.x,
-      input.size.y)
-  end
-  core.pop_clip_rect()
-  local toggle = layout.toggle
-  if self.case_sensitive then
-    local accent = style.accent
-    renderer.draw_rounded_rect(toggle.x, toggle.y, toggle.w, toggle.h, 4 * SCALE, { accent[1], accent[2], accent[3], 64 })
-  end
-  common.draw_text(layout.font, self.case_sensitive and style.accent or style.dim, "Aa", "center",
-    toggle.x, toggle.y, toggle.w, toggle.h)
   local info, failed = self:info()
   if info ~= "" then
     local rect = layout.info
@@ -432,6 +429,8 @@ function Find:draw_card()
       rect.x, rect.y, rect.w, rect.h)
     core.pop_clip_rect()
   end
+  find_card.draw_tooltip(self, layout.toggles, layout,
+    { x = view.position.x, y = view.position.y, w = view.size.x, h = view.size.y })
   core.pop_clip_rect()
 end
 

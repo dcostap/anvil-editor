@@ -14,6 +14,7 @@ local style = require "core.style"
 local prompt_bar_renderer = require "core.prompt_bar_renderer"
 local common = require "core.common"
 local card = require "core.card"
+local find_card = require "core.find_card"
 local file_context = require "core.file_context"
 local panes = require "core.panes"
 local navigation_history = require "core.navigation_history"
@@ -848,6 +849,7 @@ local function close_find(view, state, hide)
     })
     state.history_origin = nil
     state.visible = false
+    state.hover = nil
     state.matches = {}
     state.match_indexes_by_line = {}
     state.current = 0
@@ -1052,8 +1054,8 @@ end
 
 local FIND_CARD_MAX_WIDTH = 440
 local FIND_OPTIONS = {
-  { key = "case_sensitive", label = "Aa" },
-  { key = "regex", label = ".*" },
+  { key = "case_sensitive", label = "Aa", tooltip = "Match Case", command = "editor:toggle_sensitivity" },
+  { key = "regex", label = ".*", tooltip = "Regular Expression", command = "editor:toggle_regex" },
 }
 local FIND_INFO_SAMPLES = { "8888 / 8888", "Invalid regex", "No results", "Searching…" }
 
@@ -1083,20 +1085,8 @@ local function find_bar_layout(view, state)
   layout.find = { x = layout.x + pad, y = layout.y + pad, w = field_w, h = field_h }
   layout.info = { x = layout.find.x + field_w + pad, y = layout.find.y, w = info_w, h = field_h }
 
-  -- The option toggles sit inside the right end of the query field.
-  local toggle_h = field_h - 8 * SCALE
-  local toggle_right = layout.find.x + field_w - 4 * SCALE
-  layout.toggles = {}
-  for i = #FIND_OPTIONS, 1, -1 do
-    local option = FIND_OPTIONS[i]
-    local toggle_w = math.max(toggle_h, font:get_width(option.label) + 8 * SCALE)
-    toggle_right = toggle_right - toggle_w
-    table.insert(layout.toggles, 1, {
-      key = option.key, label = option.label,
-      x = toggle_right, y = layout.find.y + 4 * SCALE, w = toggle_w, h = toggle_h,
-    })
-    toggle_right = toggle_right - 2 * SCALE
-  end
+  local toggle_right
+  layout.toggles, toggle_right = find_card.place_toggles(FIND_OPTIONS, layout.find, font)
   layout.find_input = {
     x = layout.find.x + text_pad, y = layout.find.y,
     w = toggle_right - layout.find.x - text_pad, h = field_h,
@@ -1129,43 +1119,18 @@ local function update_find_input_fields(view, state)
   if layout.replace then state.replace:update() end
 end
 
-local function draw_field(field, input, placeholder)
-  local r = 6 * SCALE
-  if core.active_view == input then
-    local ring = math.max(1, math.floor(SCALE + 0.5))
-    renderer.draw_rounded_rect(field.x, field.y, field.w, field.h, r, style.accent)
-    renderer.draw_rounded_rect(field.x + ring, field.y + ring, field.w - 2 * ring, field.h - 2 * ring,
-      r - ring, style.card)
-  end
-  renderer.draw_rounded_rect(field.x, field.y, field.w, field.h, r, style.card_field)
-  local x, y, w, h = input.position.x, input.position.y, input.size.x, input.size.y
-  core.push_clip_rect(x, y, w, h)
-  input:draw()
-  if input:get_text() == "" then
-    local text_x = input:get_line_screen_position(1, 1)
-    common.draw_text(input:get_font(), style.dim, placeholder, "left", text_x, y, w, h)
-  end
-  core.pop_clip_rect()
-end
-
-local function draw_toggle(toggle, font, on)
-  if on then
-    local accent = style.accent
-    renderer.draw_rounded_rect(toggle.x, toggle.y, toggle.w, toggle.h, 4 * SCALE,
-      { accent[1], accent[2], accent[3], 64 })
-  end
-  common.draw_text(font, on and style.accent or style.dim, toggle.label, "center",
-    toggle.x, toggle.y, toggle.w, toggle.h)
-end
-
 local function draw_local_find(view)
   local state = visible_find_state(view)
   if not state then return end
   local layout = layout_find_fields(view, state)
   card.draw(layout.x, layout.y, layout.w, layout.h, layout.radius)
-  draw_field(layout.find, state.find, "Find")
-  for _, toggle in ipairs(layout.toggles) do draw_toggle(toggle, layout.font, state[toggle.key]) end
-  if layout.replace then draw_field(layout.replace, state.replace, "Replace") end
+  find_card.draw_field(layout.find, state.find, "Find", core.active_view == state.find)
+  for _, toggle in ipairs(layout.toggles) do
+    find_card.draw_toggle(toggle, layout.font, state[toggle.key], find_card.is_hovered(state, toggle.key))
+  end
+  if layout.replace then
+    find_card.draw_field(layout.replace, state.replace, "Replace", core.active_view == state.replace)
+  end
   local info = layout.info
   if state.info and state.info ~= "" then
     core.push_clip_rect(info.x, info.y, info.w, info.h)
@@ -1173,21 +1138,20 @@ local function draw_local_find(view)
       info.x, info.y, info.w, info.h)
     core.pop_clip_rect()
   end
+  find_card.draw_tooltip(state, layout.toggles, layout,
+    { x = view.position.x, y = view.position.y, w = view.size.x, h = view.size.y })
 end
 
-local function point_in_rect(x, y, r)
-  return r and x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h
-end
+local point_in_rect = find_card.inside
 
 local function handle_find_mouse_pressed(view, state, x, y, clicks)
   local layout = layout_find_fields(view, state)
   if not point_in_rect(x, y, layout) then return false end
-  for _, toggle in ipairs(layout.toggles) do
-    if point_in_rect(x, y, toggle) then
-      focus_field(view, state, state.focus)
-      toggle_option(view, state, toggle.key)
-      return true
-    end
+  local toggle = find_card.toggle_at(layout.toggles, x, y)
+  if toggle then
+    focus_field(view, state, state.focus)
+    toggle_option(view, state, toggle.key)
+    return true
   end
   local target_field, target_name = state.find, "find"
   if point_in_rect(x, y, layout.replace) then
@@ -1224,6 +1188,39 @@ function TextView:on_local_find_mouse_pressed(button, x, y, clicks)
   return false
 end
 
+-- The Find card takes pointer moves over it, so the content below shows no hover.
+-- A drag that started in the content keeps its moves.
+function TextView:on_local_find_mouse_moved(x, y)
+  local state = visible_find_state(self)
+  if not state then return false end
+  local layout = layout_find_fields(self, state)
+  local over = not (self.mouse_selecting or self.render_widget_drag) and point_in_rect(x, y, layout)
+  local toggle = over and find_card.toggle_at(layout.toggles, x, y)
+  find_card.set_hover(state, toggle)
+  if not over then return false end
+  local in_field = point_in_rect(x, y, layout.find) or point_in_rect(x, y, layout.replace)
+  self.cursor = (in_field and not toggle) and "ibeam" or "arrow"
+  return true
+end
+
+function TextView:on_local_find_mouse_left()
+  local state = find_state_by_view[self]
+  if state then find_card.set_hover(state, nil) end
+end
+
+---The rectangles of the visible Find card: the card, its fields and its option toggles.
+function TextView:get_local_find_layout()
+  local state = visible_find_state(self)
+  return state and layout_find_fields(self, state)
+end
+
+---The tooltip of the Find toggle under the pointer, after the pointer rests on it.
+function TextView:get_local_find_tooltip()
+  local state = visible_find_state(self)
+  if not state then return end
+  return find_card.tooltip(state, layout_find_fields(self, state).toggles)
+end
+
 -- Draw per-view find highlights. These are intentionally keyed by TextView, not
 -- Buffer, so the same Buffer open in two splits can show independent search state.
 --
@@ -1239,6 +1236,8 @@ local textview_draw_wrapper
 local textview_draw_scrollbar_wrapper
 local textview_update_wrapper
 local textview_on_mouse_pressed_wrapper
+local textview_on_mouse_moved_wrapper
+local textview_on_mouse_left_wrapper
 
 local function draw_find_overview(view)
   local state = visible_find_state(view)
@@ -1357,6 +1356,7 @@ local function make_local_find_update(base)
     local state = visible_find_state(self)
     if state then
       update_find_input_fields(self, state)
+      find_card.update(state)
       if state.pending then
         advance_scan(self, state)
       elseif state.change_id ~= self.buffer:get_change_id() or not matches_are_current(self.buffer, state) then
@@ -1387,6 +1387,29 @@ local function make_local_find_on_mouse_pressed(base)
     local result = base(self, button, x, y, clicks)
     TextView.__local_find_on_mouse_pressed_depth = old_depth
     return result
+  end
+end
+
+local function make_local_find_on_mouse_moved(base)
+  return function(self, x, y, ...)
+    if (TextView.__local_find_on_mouse_moved_depth or 0) > 0 then
+      return base(self, x, y, ...)
+    end
+
+    if self:on_local_find_mouse_moved(x, y) then return true end
+
+    local old_depth = TextView.__local_find_on_mouse_moved_depth or 0
+    TextView.__local_find_on_mouse_moved_depth = old_depth + 1
+    local result = base(self, x, y, ...)
+    TextView.__local_find_on_mouse_moved_depth = old_depth
+    return result
+  end
+end
+
+local function make_local_find_on_mouse_left(base)
+  return function(self, ...)
+    self:on_local_find_mouse_left()
+    return base(self, ...)
   end
 end
 
@@ -1441,6 +1464,20 @@ local function install_textview_patches()
     "__local_find_on_mouse_pressed_base",
     textview_on_mouse_pressed_wrapper,
     make_local_find_on_mouse_pressed
+  )
+  textview_on_mouse_moved_wrapper = patch_textview_method(
+    "on_mouse_moved",
+    "__local_find_on_mouse_moved_wrapper",
+    "__local_find_on_mouse_moved_base",
+    textview_on_mouse_moved_wrapper,
+    make_local_find_on_mouse_moved
+  )
+  textview_on_mouse_left_wrapper = patch_textview_method(
+    "on_mouse_left",
+    "__local_find_on_mouse_left_wrapper",
+    "__local_find_on_mouse_left_base",
+    textview_on_mouse_left_wrapper,
+    make_local_find_on_mouse_left
   )
 end
 

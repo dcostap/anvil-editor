@@ -291,6 +291,7 @@ end
 
 function RowTextView:on_mouse_moved(x, y, ...)
   if not self.row_selection_mode then return RowTextView.super.on_mouse_moved(self, x, y, ...) end
+  if self.on_local_find_mouse_moved and self:on_local_find_mouse_moved(x, y) then return true end
   View.on_mouse_moved(self, x, y, ...)
   self.cursor = "arrow"
   if self.mouse_selecting then

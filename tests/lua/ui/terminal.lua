@@ -1552,6 +1552,24 @@ test.describe("Terminal View", function()
     test.equal(#session.scrolls, scrolls)
   end)
 
+  test.it("names its case toggle after the pointer rests on it", function(context)
+    local view = open_find(context, { match(90) })
+    local toggle = view.find:layout().toggles[1]
+    view:on_mouse_moved(toggle.x + toggle.w / 2, toggle.y + toggle.h / 2, 0, 0)
+    test.equal(view.cursor, "arrow")
+    test.equal(view.find:tooltip(), nil, "the tooltip waits for the pointer to rest")
+    local deadline = system.get_time() + 10
+    while not view.find:tooltip() and system.get_time() < deadline do
+      view:update()
+      coroutine.yield(0.01)
+    end
+    local text, binding = view.find:tooltip()
+    test.equal(text, "Match Case")
+    test.equal(binding, keymap.get_binding("terminal:find_toggle_case"))
+    view:on_mouse_left()
+    test.equal(view.find:tooltip(), nil, "leaving the View hides the tooltip")
+  end)
+
   test.it("reports no results", function(context)
     local view = open_find(context, {})
     test.equal(view.find:info(), "No results")

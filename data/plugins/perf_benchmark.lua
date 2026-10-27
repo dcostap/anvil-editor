@@ -1009,6 +1009,14 @@ local function scenario_is_ready()
     end
     return view.find.delivered and not view.find.stale
   end
+  if benchmark.scenario == "find-bar-hover" then
+    local layout = view:get_local_find_layout()
+    if not layout then return false end
+    if view:get_local_find_tooltip() then return true end
+    local toggle = layout.toggles[#layout.toggles]
+    core.root_panel:on_mouse_moved(toggle.x + toggle.w / 2, toggle.y + toggle.h / 2, 0, 0)
+    return false
+  end
   if not view.buffer then return true end
   if benchmark.scenario == "filetree-edit-repeat" then
     -- Workspace restore can refresh the File Tree during startup.

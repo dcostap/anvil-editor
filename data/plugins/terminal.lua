@@ -2037,6 +2037,7 @@ function TerminalView:on_mouse_left()
   TerminalView.super.on_mouse_left(self)
   if self.uri_gesture then self.uri_gesture.cancelled = true end
   self:clear_point_hover()
+  self.find:on_mouse_left()
 end
 
 function TerminalView:contains_terminal_cell(x, y)
@@ -2169,8 +2170,10 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
     return true
   end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
-  if not self.selection_start and self.find:contains(x, y) then
+  local find_cursor = not self.selection_start and self.find:on_mouse_moved(x, y)
+  if find_cursor then
     self:clear_point_hover()
+    self.cursor = find_cursor
     return true
   end
   if self:contains_terminal_cell(x, y) and not self.selection_start then

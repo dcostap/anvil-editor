@@ -2038,7 +2038,8 @@ end
 
 function FileTreeView:on_mouse_moved(x, y, dx, dy)
   local handled = FileTreeView.super.on_mouse_moved(self, x, y, dx, dy)
-  if self.mouse_selecting or self.hovering_gutter
+  local over_find = self.on_local_find_mouse_moved and self:on_local_find_mouse_moved(x, y)
+  if over_find or self.mouse_selecting or self.hovering_gutter
       or self:scrollbar_hovering() or self:scrollbar_dragging()
   then
     if self.hovered_entry_line then

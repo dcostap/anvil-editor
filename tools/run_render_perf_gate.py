@@ -187,6 +187,8 @@ SCENARIOS["autocomplete-popup-light"] = dict(SCENARIOS["nag-bar"], theme="light"
 SCENARIOS["find-bar"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["find-bar-replace"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["find-bar-light"] = dict(SCENARIOS["nag-bar"], theme="light")
+# The pointer rests on the regex toggle, so the toggle shows its hover and tooltip.
+SCENARIOS["find-bar-hover"] = dict(SCENARIOS["nag-bar"])
 # A live Terminal with its find card, matches on the screen and marks on the scrollbar.
 SCENARIOS["terminal-find"] = dict(SCENARIOS["nag-bar"], start_line=1)
 SCENARIOS["prompt-bar"] = dict(SCENARIOS["nag-bar"])
