@@ -17,34 +17,42 @@ local function sidebar()
 end
 
 test.describe("Sidebar keyboard navigation", function()
-  test.it("sends Pane commands to the cursor's Tab only", function()
+  test.it("sends a key to the cursor's Pane, or to the cursor's Project", function()
     local view, actions = sidebar()
     view:on_focus(true)
     view:on_key_pressed("down")
-    test.ok(view:perform_pane_command("pane:copy_view_to_split_right"))
-    test.same(actions, {{"request", "select", "C:/Alpha",
-      {action="command", pane="b", command="pane:copy_view_to_split_right"}}})
+    test.ok(view:forward_key("ctrl+shift+e"))
+    test.same(actions[1], {"request", "select", "C:/Alpha", {action="key", stroke="ctrl+shift+e", pane="b"}})
     view:on_key_pressed("left")
-    test.ok(not view:perform_pane_command("pane:copy_view_to_split_right"))
-    test.equal(#actions, 1)
+    test.ok(view:forward_key("ctrl+shift+e"))
+    test.same(actions[2], {"request", "select", "C:/Alpha", {action="key", stroke="ctrl+shift+e"}})
+    for _, case in ipairs {{"bsv", "C:/Beta"}, {"archive", "C:/Archive"}} do
+      view:on_focus(false)
+      view:on_focus(true)
+      view:on_text_input(case[1])
+      test.ok(view:forward_key("alt+x"))
+      test.same(actions[#actions], {"request", "select", case[2], {action="key", stroke="alt+x"}})
+    end
   end)
 
-  test.it("opens a new Pane Group in the cursor's Project", function()
-    for _, query in ipairs {"Beta", "bsv", "archive"} do
-      local view, actions = sidebar()
-      view:on_focus(true)
-      view:on_text_input(query)
-      local path = view:get_cursor().project.path
-      test.ok(view:new_group())
-      test.same(actions, {{"request", "select", path, {action="new_group"}}})
-    end
+  test.it("sends a key from a row without a Project to the Selected Project", function()
     local view, actions = sidebar()
     view:on_focus(true)
-    test.ok(view:new_group())
-    test.same(actions, {{"request", "select", "C:/Alpha", {action="new_group"}}})
-    view:on_text_input("no matching project")
-    test.ok(not view:new_group())
-    test.equal(#actions, 1)
+    view:on_key_pressed("end")
+    test.equal(view:get_cursor().kind, "group")
+    test.ok(view:forward_key("f5"))
+    test.same(actions, {{"request", "select", "C:/Alpha", {action="key", stroke="f5"}}})
+  end)
+
+  test.it("keeps keys that can type text, and keys without Sidebar focus", function()
+    local view, actions = sidebar()
+    view:on_focus(true)
+    for _, stroke in ipairs {"a", "shift+a", "altgr+2", "space"} do
+      test.ok(not view:forward_key(stroke), stroke)
+    end
+    view:on_focus(false)
+    test.ok(not view:forward_key("ctrl+shift+e"))
+    test.same(actions, {})
   end)
 
   test.it("starts at the current Tab and activates only on Enter", function()
@@ -103,10 +111,13 @@ test.describe("Sidebar keyboard navigation", function()
     local view, actions = sidebar()
     view:on_focus(true)
     view:on_key_pressed("end")
+    view:on_key_pressed("right")
+    view:on_key_pressed("down")
     test.equal(view:get_cursor().project.path, "C:/Archive")
+    local before = #actions
     view:on_key_pressed("left")
     view:on_key_pressed("left")
-    test.same(actions, {})
+    test.equal(#actions, before)
   end)
 
   test.it("finds detached Terminals and Dormant Projects without loading them", function()

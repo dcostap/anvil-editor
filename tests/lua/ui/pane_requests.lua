@@ -8,6 +8,8 @@ local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local View = require "core.view"
 local test = require "core.test"
+local command = require "core.command"
+local keymap = require "core.keymap"
 
 -- Seam: shell requests delivered through the public event handler.
 local function request(value, x, y)
@@ -46,63 +48,16 @@ test.describe("Pane requests", function()
     test.same(panes.ordered(), {a})
   end)
 
-  test.it("closes a Sidebar keyboard target using normal Pane Group selection", function()
-    local outside, left = create(), create()
-    local right = panes.split(left, "right", {factory = function() return View() end})
-    panes.focus(outside)
-    request {action = "close", pane = right.id, focus = true}
-    test.is_nil(panes.find(right.id))
-    test.equal(panes.active(), left)
-    test.equal(panes.visible_group(), left.group)
-  end)
-
-  test.it("cycles from the named Sidebar Pane instead of the active Pane", function()
-    local a, b, c = create(), create(), create()
-    panes.focus(a)
-    request {action = "command", pane = b.id, command = "pane:focus_next"}
-    test.equal(panes.active(), c)
-    request {action = "command", pane = b.id, command = "pane:focus_previous"}
-    test.equal(panes.active(), a)
-  end)
-
-  test.it("rejects commands outside the Sidebar Pane command list", function()
+  test.it("runs a Sidebar key in the named Pane, or in the active Pane", function()
+    local stroke, ran = "ctrl+alt+shift+f12", {}
+    command.add(nil, {["test:sidebar_key"] = function() ran[#ran + 1] = panes.active() end})
+    keymap.add {[stroke] = "test:sidebar_key"}
     local a, b = create(), create()
     panes.focus(a)
-    request {action = "command", pane = b.id, command = "pane:close_all"}
-    test.same(panes.ordered(), {a, b})
-    test.equal(panes.active(), a)
-  end)
-
-  for _, name in ipairs {"pane:copy_view_to_split_right", "pane:copy_view_to_new_group"} do
-    test.it("copies the named Sidebar View through " .. name, function()
-      local buffer = Buffer(nil, nil, true)
-      buffer:insert(1, 1, "Sidebar target")
-      local source = panes.create {factory = function() return Editor(buffer) end}
-      local other = create()
-      panes.focus(other)
-      request {action = "command", pane = source.id, command = name}
-      local destination = panes.active()
-      test.equal(panes.count(), 3)
-      test.not_equal(destination, source)
-      test.not_equal(destination.current_view, source.current_view)
-      test.equal(destination.current_view.buffer, buffer)
-      if name == "pane:copy_view_to_split_right" then
-        test.equal(destination.group, source.group)
-      else
-        test.not_equal(destination.group, source.group)
-      end
-    end)
-  end
-
-  test.it("cycles inside the named Sidebar Pane Group", function()
-    local outside, left = create(), create()
-    local right = panes.split(left, "right", {factory = function() return View() end})
-    panes.focus(outside)
-    request {action = "command", pane = left.id, command = "pane:focus_local_next"}
-    test.equal(panes.active(), right)
-    panes.focus(outside)
-    request {action = "command", pane = right.id, command = "pane:focus_local_previous"}
-    test.equal(panes.active(), left)
+    request {action = "key", pane = b.id, stroke = stroke}
+    request {action = "key", stroke = stroke}
+    keymap.unbind(stroke, "test:sidebar_key")
+    test.same(ran, {b, b})
   end)
 
   test.it("moves groups before, after, and to the end", function()

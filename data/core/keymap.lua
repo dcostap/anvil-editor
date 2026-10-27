@@ -235,28 +235,34 @@ function keymap.on_key_pressed(k, ...)
       end
     end
     local stroke = key_to_stroke(k)
-    local commands, performed = keymap.map[stroke], false
-    core.log_quiet("Input trace: keymap stroke=%s candidates=%d", stroke, commands and #commands or 0)
-    if commands then
-      for _, cmd in ipairs(commands) do
-        if type(cmd) == "function" then
-          local ok, res = core.try(cmd, ...)
-          if ok then
-            performed = not (res == false)
-          else
-            performed = true
-          end
-        else
-          performed = command.perform(cmd, ...)
-        end
-        core.log_quiet("Input trace: keymap stroke=%s command=%s performed=%s",
-          stroke, tostring(cmd), tostring(performed))
-        if performed then break end
-      end
-      return performed
-    end
+    return keymap.perform(stroke, ...), stroke
   end
   return false
+end
+
+---Runs the first command bound to `stroke` that accepts it.
+---@param stroke string
+---@return boolean performed
+function keymap.perform(stroke, ...)
+  stroke = normalize_stroke(stroke)
+  local commands, performed = keymap.map[stroke], false
+  core.log_quiet("Input trace: keymap stroke=%s candidates=%d", stroke, commands and #commands or 0)
+  for _, cmd in ipairs(commands or {}) do
+    if type(cmd) == "function" then
+      local ok, res = core.try(cmd, ...)
+      if ok then
+        performed = not (res == false)
+      else
+        performed = true
+      end
+    else
+      performed = command.perform(cmd, ...)
+    end
+    core.log_quiet("Input trace: keymap stroke=%s command=%s performed=%s",
+      stroke, tostring(cmd), tostring(performed))
+    if performed then break end
+  end
+  return performed
 end
 
 function keymap.on_mouse_wheel(delta_y, delta_x, ...)

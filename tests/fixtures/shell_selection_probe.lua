@@ -163,7 +163,8 @@ elseif path:match("/Project$") then
   ready("a-ready", target.id)
   wait(function() return load("select-b") end, 60)
   assert(system.pane_request("select", root .. "/Replacement",
-   common.serialize({action = "new_group"}, {escape = true})))
+   common.serialize({action = "key", stroke = require("core.keymap").get_binding("pane:new_group")},
+    {escape = true})))
   wait(function() return load("a-block") end, 60)
   save("a-blocking", {go = true})
   system.sleep(1.5)

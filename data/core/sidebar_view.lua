@@ -294,26 +294,34 @@ function SidebarView:activate_row(row, from_keyboard)
   elseif row.key then self:toggle(row.key, row.collapsed) end
 end
 
-function SidebarView:new_group()
-  local row = self:get_cursor()
-  if not self.focused or not row or not row.project then return false end
-  self.action("request", "select", row.project.path, {action = "new_group"})
-  return true
+function SidebarView:selected_project()
+  for _, window in ipairs((self.projects or {}).windows or {}) do
+    if window.id == self.window_id then
+      for _, project in ipairs(self.projects) do
+        if project.id == window.selected_project then return project end
+      end
+    end
+  end
 end
 
-function SidebarView:perform_pane_command(name)
-  local row = self:get_cursor()
-  if not self.focused or not row or row.kind ~= "tab"
-    or not require("core.sidebar_commands")[name] then return false end
-  self.action("request", "select", row.project.path, {action = "command", pane = row.tab.id, command = name})
-  return true
+-- Keys with Ctrl or Alt, and function keys, cannot type text. AltGr and Shift keys type text in the search field.
+local function forwardable(stroke)
+  for part in stroke:gmatch("[^+]+") do
+    if part == "ctrl" or part == "alt" or part:match("^f%d+$") then return true end
+  end
+  return false
 end
 
-function SidebarView:close_pane()
+-- A key that the Sidebar does not use acts as if the user pressed it in the cursor's Pane, or else in the cursor's
+-- Project. A row without a Project, such as an age group, sends it to the Selected Project.
+function SidebarView:forward_key(stroke)
+  if not self.focused or self.hours or not forwardable(stroke) then return false end
   local row = self:get_cursor()
-  if not self.focused or not row or row.kind ~= "tab" then return false end
+  local project = row and row.project or self:selected_project()
+  if not project then return false end
   self.unload_ask = nil
-  self.action("request", "select", row.project.path, {action = "close", pane = row.tab.id, focus = true})
+  self.action("request", "select", project.path,
+    {action = "key", stroke = stroke, pane = row and row.kind == "tab" and row.tab.id or nil})
   return true
 end
 

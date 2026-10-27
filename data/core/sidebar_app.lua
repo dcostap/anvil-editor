@@ -181,7 +181,7 @@ local function add_surface(id, window)
     if action == "request" then
       local route, path, request, x, y = row_id, target, ...
       -- Focusing a Pane gives the keyboard back to the Project. The shell gets both messages in this order.
-      if request.action == "focus" or request.action == "new_group" or request.action == "command" then
+      if request.action == "focus" or request.action == "key" then
         system.focus_project_sidebar(false)
       end
       local text = common.serialize(request, {escape = true})
@@ -288,7 +288,8 @@ function core.init()
     if core.session_log then core.session_log:write("INFO", string.format(...), "Sidebar") end
   end
   core.log_quiet("Sidebar frontend started")
-  -- Keep Project actions, list navigation, and line editing shortcuts for the search field.
+  -- Keep list navigation, line editing for the search field, and keys that do not act on the cursor's row.
+  -- Other keys with Ctrl or Alt go to the cursor's Pane or Project.
   local ok, settings = pcall(dofile, USERDIR .. "/user_settings.lua")
   local saved_config = ok and type(settings) == "table" and settings.config
   local custom = type(saved_config) == "table" and saved_config.custom_keybindings
@@ -297,10 +298,6 @@ function core.init()
     return type(saved) == "table" and saved or keymap.get_bindings(name) or {}
   end
   local bindings = bindings_for("core:focus_project_sidebar")
-  local new_group_bindings = bindings_for("pane:new_group")
-  local close_pane_bindings = bindings_for("pane:close")
-  local pane_bindings = {}
-  for name in pairs(require "core.sidebar_commands") do pane_bindings[name] = bindings_for(name) end
   local LineInput, line_bindings = require "core.line_input", {}
   for _, name in ipairs(LineInput.COMMANDS) do line_bindings[name] = bindings_for("core:" .. name) end
   local numbered_panes, number_bindings = require "core.numbered_panes", {}
@@ -310,18 +307,8 @@ function core.init()
   keymap.map, keymap.reverse_map = {}, {}
   command.add(nil, {
     ["core:focus_project_sidebar"] = function() system.focus_project_sidebar(false) end,
-    ["pane:new_group"] = function() return current ~= nil and current.view:new_group() end,
-    ["pane:close"] = function() return current ~= nil and current.view:close_pane() end,
   })
   for _, binding in ipairs(bindings) do keymap.add {[binding] = "core:focus_project_sidebar"} end
-  for _, binding in ipairs(new_group_bindings) do keymap.add {[binding] = "pane:new_group"} end
-  for _, binding in ipairs(close_pane_bindings) do keymap.add {[binding] = "pane:close"} end
-  for name, keys in pairs(pane_bindings) do
-    command.add(nil, {[name] = function()
-      return current ~= nil and current.view:perform_pane_command(name)
-    end})
-    for _, binding in ipairs(keys) do keymap.add {[binding] = name} end
-  end
   -- Numbered Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
   for number = 1, numbered_panes.COUNT do
     local name = "pane:focus_number_" .. number
@@ -403,7 +390,10 @@ function core.on_event(name, ...)
   elseif name == "keypressed" then
     local _, info = ...
     current.key_repeat = info and info["repeat"] == true
-    current.suppress_text = keymap.on_key_pressed(...)
+    local performed, stroke = keymap.on_key_pressed(...)
+    -- A key that the Sidebar binds stays here, even when its command declines.
+    if not performed and stroke and not keymap.map[stroke] then performed = current.view:forward_key(stroke) end
+    current.suppress_text = performed
     core.redraw = true
   elseif name == "keyreleased" then
     keymap.on_key_released(...)

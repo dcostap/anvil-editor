@@ -170,6 +170,9 @@ Run `ui/pending_panes.lua`, `ui/recent_panes.lua`, `ui/titlebar.lua` and `ui/sid
 
 The Sidebar process has no Buffer or Text View. Its search field uses `core.line_input`.
 The Sidebar reads the user's bindings for the editor's line commands, such as `core:select_to_start_of_indentation`.
+The Sidebar keeps list navigation, search-field editing, Sidebar focus, and Numbered Panes.
+It sends each other key with Ctrl or Alt, and each function key, to the cursor row's Pane, or else to its Project.
+A row without a Project sends the key to the Selected Project. Do not add Sidebar copies of editor commands.
 Run `ui/sidebar_view.lua` and `ui/sidebar_navigation.lua` after changes.
 
 The standalone option is `-Dembedded_runtime=true`. It is off by default.

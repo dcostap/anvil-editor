@@ -165,10 +165,10 @@ test.describe("Pane manager", function()
     test.equal(source.current_view:get_name(), "source")
   end)
 
-  test.it("opens and focuses an untitled Editor for a Sidebar new group request", function()
+  test.it("opens and focuses an untitled Editor in a new Pane Group", function()
     panes.create { factory = factory("Existing") }
     local previous = panes.active()
-    test.ok(require("core.pane_requests").perform('{action="new_group"}'))
+    test.ok(command.perform("pane:new_group"))
     test.equal(panes.count(), 2)
     test.ok(panes.active() ~= previous)
     test.ok(panes.active().current_view:is(Editor))

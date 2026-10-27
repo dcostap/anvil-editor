@@ -84,9 +84,8 @@ function M.place(pane, target)
 end
 
 local schemas = {
-  command = {pane = true, command = true},
-  new_group = {},
-  focus = {pane = true, feedback = true}, close = {pane = true, focus = true}, move = {pane = true, target = true},
+  key = {pane = true, stroke = true},
+  focus = {pane = true, feedback = true}, close = {pane = true}, move = {pane = true, target = true},
   open = {files = true, text = true, target = true},
   launch = {files = true},
   drop = {pane = true, files = true, text = true},
@@ -101,12 +100,12 @@ local function validate(request)
   if type(request) ~= "table" or type(request.action) ~= "string" then return nil, "invalid request" end
   local schema = schemas[request.action]
   if not schema or not fields(request, schema) then return nil, "unknown action or field" end
-  if request.action == "command" and not require("core.sidebar_commands")[request.command] then
-    return nil, "unsupported Sidebar command"
+  if request.action == "key" and not identifier(request.stroke) then return nil, "invalid key" end
+  -- A key without a Pane acts in the Project's active Pane.
+  if schema.pane and (request.action ~= "key" or request.pane ~= nil) and not identifier(request.pane) then
+    return nil, "invalid Pane ID"
   end
-  if schema.pane and not identifier(request.pane) then return nil, "invalid Pane ID" end
   if request.feedback ~= nil and request.feedback ~= "numbered" then return nil, "invalid focus feedback" end
-  if request.focus ~= nil and type(request.focus) ~= "boolean" then return nil, "invalid close focus" end
   if schema.target then
     local ok, err = position(request.target)
     if not ok then return nil, err end
@@ -141,7 +140,6 @@ end
 
 local function execute(request, x, y)
   local action = request.action
-  if action == "new_group" then return require("core.command").perform("pane:new_group") end
   if action == "drag" then
     -- A Tab of another Project has the same Pane IDs, so the source Project must be this one.
     local project = core.root_project()
@@ -154,11 +152,12 @@ local function execute(request, x, y)
   end
   local pane = request.pane and panes.find(request.pane)
   if request.pane and not pane then return nil, "Pane not found" end
-  if action == "command" then
-    panes.focus(pane)
-    local performed = require("core.command").perform(request.command)
-    core.log_quiet("Sidebar command: %s Pane=%s performed=%s", request.command, pane.id, tostring(performed))
-    return performed
+  -- A key from the Sidebar acts as if the user pressed it in the cursor's Pane, or in this Project.
+  if action == "key" then
+    if pane then panes.focus(pane) end
+    local performed = require("core.keymap").perform(request.stroke)
+    core.log_quiet("Sidebar key: %s Pane=%s performed=%s", request.stroke, tostring(request.pane), tostring(performed))
+    return true
   end
   -- An external launch names files, including new ones. Each opens in a new Pane, as from a Terminal.
   if action == "launch" then
@@ -170,12 +169,7 @@ local function execute(request, x, y)
     return true
   end
   if action == "focus" then panes.focus(pane, request.feedback); return true end
-  if action == "close" then
-    -- Keyboard close acts as if its Sidebar target had Pane focus. Middle-click keeps the current focus.
-    if request.focus then panes.focus(pane) end
-    panes.close(pane)
-    return true
-  end
+  if action == "close" then panes.close(pane); return true end
   if action == "move" then
     local placed, err = M.place(pane, request.target)
     return placed and true, err
