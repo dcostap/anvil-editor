@@ -12,6 +12,9 @@
 #include "treesitter/project_index.h"
 #include "treesitter/service.h"
 #include "treesitter/snapshot.h"
+#ifdef _WIN32
+#include "terminal_snapshot.h"
+#endif
 
 #include <tree_sitter/api.h>
 #define PCRE2_CODE_UNIT_WIDTH 8
@@ -1309,6 +1312,48 @@ static void run_language_detect(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
   SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
   enqueue_simple_result(pool, job, "final");
 }
+
+#ifdef _WIN32
+/* The plain text of a Terminal Session's saved screen, one line for each row. `path` names the file. `text` names
+   the Project and `value` the Terminal Session that own it. */
+static void run_terminal_snapshot_text(AnvilWorkerPool *pool, AnvilWorkerJob *job) {
+  GhosttyTerminal model = NULL;
+  DWORD error = ERROR_SUCCESS;
+  uint8_t *text = NULL;
+  size_t length = 0;
+  bool ok = job->path && job->text && job->value &&
+    anvil_terminal_snapshot_load(job->path, job->text, job->value, &model, &error) &&
+    anvil_terminal_model_text(model, &text, &length);
+  if (model) ghostty_terminal_free(model);
+  if (job_cancelled(job)) {
+    free(text);
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_CANCELLED);
+    enqueue_simple_result(pool, job, "cancelled");
+    return;
+  }
+  AnvilWorkerResult *result = ok ? result_new(job, "result") : NULL;
+  if (result && !(result->value = pool_textdup((const char *)text, length))) {
+    anvil_worker_result_free(result);
+    result = NULL;
+  }
+  free(text);
+  if (!result) {
+    SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_FAILED);
+    AnvilWorkerResult *failed = result_new(job, "error");
+    if (failed) {
+      char buffer[96];
+      snprintf(buffer, sizeof(buffer), "cannot read the saved Terminal screen (Windows error %lu)",
+        (unsigned long)error);
+      failed->error = pool_strdup(ok ? "out of memory publishing Terminal text" : buffer);
+    }
+    enqueue_result(pool, failed);
+    return;
+  }
+  enqueue_result(pool, result);
+  SDL_SetAtomicInt(&job->status, ANVIL_WORKER_STATUS_COMPLETE);
+  enqueue_simple_result(pool, job, "final");
+}
+#endif
 
 typedef struct AnvilWorkerTSParseRun {
   uint64_t started_ticks;
@@ -4164,6 +4209,10 @@ static void run_job(AnvilWorkerContext *context, AnvilWorkerJob *job) {
     run_test_fail(pool, job);
   } else if (strcmp(kind, "language_detect") == 0) {
     run_language_detect(pool, job);
+#ifdef _WIN32
+  } else if (strcmp(kind, "terminal_snapshot_text") == 0) {
+    run_terminal_snapshot_text(pool, job);
+#endif
   } else if (strcmp(kind, "treesitter_index_text") == 0) {
     run_treesitter_index_text(context, job);
   } else if (strcmp(kind, "treesitter_project_run") == 0) {

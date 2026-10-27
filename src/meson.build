@@ -389,8 +389,15 @@ markdown_vault_index_test = executable('markdown_vault_index_test',
 )
 test('markdown-vault-index', markdown_vault_index_test, env: anvil_test_env)
 
+# The worker pool reads saved Terminal screens on Windows.
+worker_pool_terminal_sources = []
+worker_pool_terminal_deps = []
+if host_machine.system() == 'windows'
+    worker_pool_terminal_sources = ['terminal_model.c', 'terminal_snapshot.c', 'zig_abi_compat.c']
+    worker_pool_terminal_deps = [ghostty_vt_dep, sdl_image]
+endif
 worker_pool_test = executable('worker_pool_test',
-    [
+    worker_pool_terminal_sources + [
         '../tests/native/worker_pool_test.c',
         'worker_pool.c',
         'shutdown_diagnostics.c',
@@ -410,7 +417,7 @@ worker_pool_test = executable('worker_pool_test',
         'custom_events.c',
     ],
     include_directories: anvil_includes,
-    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_rust_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep, lua_dep, pcre2_dep],
+    dependencies: [tree_sitter_dep, tree_sitter_c_dep, tree_sitter_cpp_dep, tree_sitter_odin_dep, tree_sitter_kotlin_dep, tree_sitter_rust_dep, tree_sitter_javascript_dep, tree_sitter_typescript_dep, tree_sitter_tsx_dep, tree_sitter_markdown_dep, tree_sitter_markdown_inline_dep, sdl_dep, lua_dep, pcre2_dep] + worker_pool_terminal_deps,
     c_args: anvil_cargs,
 )
 test('worker_pool', worker_pool_test, env: anvil_test_env)

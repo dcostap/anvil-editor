@@ -2839,6 +2839,22 @@ function M.focus_session(id)
   return false
 end
 
+-- Shows a Terminal Session with its find card on `query`, at the first match at or after `row`. Text Search
+-- opens its Terminal matches this way.
+function M.show_match(id, query, case_sensitive, row)
+  if not M.focus_session(id) then
+    local view, err = M.open_session(id)
+    if not view then return nil, err end
+  end
+  for _, view in ipairs(M.open_views()) do
+    if view.session_id == id then
+      view.find:show(query, case_sensitive, row)
+      return true
+    end
+  end
+  return nil, "the Terminal Session has no View"
+end
+
 local editor_request_token = 0
 
 -- A launch identifies its Session. The host checks idle again after it receives this request.

@@ -93,6 +93,7 @@ local schemas = {
   import = {snapshot = true, target = true, source = true, transfer = true},
   transferred = {transfer = true, ok = true, error = true},
   drag = {phase = true, source = true, pane = true},
+  terminal_find = {session = true, query = true, case_sensitive = true, row = true},
 }
 for _, schema in pairs(schemas) do schema.action = true end
 
@@ -119,6 +120,11 @@ local function validate(request)
   if schema.snapshot and type(request.snapshot) ~= "table" then return nil, "invalid snapshot" end
   if request.action == "transferred" and (type(request.ok) ~= "boolean"
     or (request.error ~= nil and type(request.error) ~= "string")) then return nil, "invalid transfer result" end
+  if request.action == "terminal_find" and (not identifier(request.session) or not identifier(request.query)
+    or type(request.case_sensitive) ~= "boolean" or type(request.row) ~= "number"
+    or request.row % 1 ~= 0 or request.row < 0) then
+    return nil, "invalid Terminal match"
+  end
   if request.action == "drag" and request.phase ~= "move" and request.phase ~= "drop"
     and request.phase ~= "leave" then return nil, "invalid drag phase" end
   if schema.files then
@@ -149,6 +155,10 @@ local function execute(request, x, y)
   end
   if action == "export" or action == "import" or action == "transferred" then
     return require("core.pane_transfer").perform(request)
+  end
+  -- A Text Search match in a Terminal Session of this Project.
+  if action == "terminal_find" then
+    return require("plugins.terminal").show_match(request.session, request.query, request.case_sensitive, request.row)
   end
   local pane = request.pane and panes.find(request.pane)
   if request.pane and not pane then return nil, "Pane not found" end

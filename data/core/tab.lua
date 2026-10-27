@@ -253,15 +253,36 @@ local function number_width(item, opts)
   return (opts.number_font or style.font):get_width(tostring(item.number)) + number_gap()
 end
 
-local function prefix_width(item, row_height, opts)
-  local width = number_width(item, opts)
+-- The width of the Tab's icon: its agent's, the Terminal View's, or its View's. 0 without an icon.
+function tab.icon_width(item, row_height)
   if item.terminal then
     local size = agent_icons.width(program_identity(item), row_height)
-    width = width + (size > 0 and size or view_icons.width(TERMINAL_ICON, row_height)) + gap()
-  elseif item.icon then
-    width = width + view_icons.width(item.icon, row_height) + gap()
+    return size > 0 and size or view_icons.width(TERMINAL_ICON, row_height)
   end
-  return width
+  return item.icon and view_icons.width(item.icon, row_height) or 0
+end
+
+-- Draws the Tab's icon and returns its width. `color` colours an icon that has no colours of its own.
+function tab.draw_icon(item, x, y, h, color)
+  if item.terminal then
+    local app, model = program_identity(item)
+    local size = agent_icons.width(app, h)
+    if size > 0 then
+      agent_icons.draw(app, x, y, h, model)
+      return size
+    end
+    return view_icons.draw(TERMINAL_ICON, x, y, h, color)
+  end
+  if item.icon then
+    view_icons.draw(item.icon, x, y, h, color)
+    return view_icons.width(item.icon, h)
+  end
+  return 0
+end
+
+local function prefix_width(item, row_height, opts)
+  local icon = tab.icon_width(item, row_height)
+  return number_width(item, opts) + (icon > 0 and icon + gap() or 0)
 end
 
 -- The width the Tab's content needs at its full display name.
@@ -300,20 +321,11 @@ function tab.draw(item, x, y, w, h, opts)
   end
   x = x + number_width(item, opts)
   local color = opts.name_color
-  if item.terminal then
-    if item.terminal.state ~= "running" and item.terminal.state ~= "reconnecting" then color = style.dim end
-    local app, model = program_identity(item)
-    local size = agent_icons.width(app, h)
-    if size > 0 then
-      agent_icons.draw(app, x, y, h, model)
-    else
-      size = view_icons.draw(TERMINAL_ICON, x, y, h, color)
-    end
-    x = x + size + gap()
-  elseif item.icon then
-    view_icons.draw(item.icon, x, y, h, color)
-    x = x + view_icons.width(item.icon, h) + gap()
+  if item.terminal and item.terminal.state ~= "running" and item.terminal.state ~= "reconnecting" then
+    color = style.dim
   end
+  local icon = tab.draw_icon(item, x, y, h, color)
+  if icon > 0 then x = x + icon + gap() end
   color = item.missing and style.tab_file_missing or item.color or color
   local name_width, note = tab.name_width(item, w, h, opts)
   local name, spinning = tab.display_name(item), false

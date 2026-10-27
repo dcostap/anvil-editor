@@ -42,6 +42,7 @@ local fuzzy_searcher = {
   search = require "plugins.fuzzy_searcher.search",
   open_transition = require "plugins.fuzzy_searcher.open_transition",
   projects = require "plugins.fuzzy_searcher.projects",
+  terminals = require "plugins.fuzzy_searcher.terminals",
   project_look = require "core.project_look",
   copy_feedback = require "core.copy_feedback",
   encoded_data = require "core.encoded_data",
@@ -2733,6 +2734,17 @@ function fuzzy_searcher.file_result_filename_width(font, file, prefix, suffix, s
     + file_font:get_width(name) + font:get_width(suffix) + directory_gap
 end
 
+-- The width of a Text Search row's location: a file's path or a Terminal's name, with the prefix and line suffix.
+function fuzzy_searcher.location_width(font, result, prefix, suffix)
+  if result.terminal then return fuzzy_searcher.terminals.location_width(font, result, prefix, suffix) end
+  return fuzzy_searcher.file_result_full_width(font, result.file, prefix, suffix, true)
+end
+
+-- Rows of one file, or of one Terminal, form a group. Terminals can share a name, so a Terminal's key is its ID.
+function fuzzy_searcher.group_key(result)
+  return tostring(result.terminal and result.abs_path or result.file or "")
+end
+
 function fuzzy_searcher.file_result_full_width(font, file, prefix, suffix, show_file_icon)
   file = tostring(file or "")
   prefix = tostring(prefix or "")
@@ -2793,6 +2805,8 @@ function fuzzy_searcher.draw_grouped_file_location(
       font, truncate_text(font, line_suffix, math.max(0, x + file_width - line_x)),
       line_x, y, style.dim
     )
+  elseif result.terminal then
+    line_x = fuzzy_searcher.terminals.draw_location(font, result, prefix, line_suffix, x, y, file_width)
   else
     local _end_x
     _end_x, line_x = draw_file_result_row(
@@ -3066,9 +3080,7 @@ function FSView:grep_file_column_width(font, path_w)
   for _, result in ipairs(results) do
     if result.kind == "grep" or result.kind == "navigation_place" and result.buffer then
       local prefix, suffix = fuzzy_searcher.line_result_location(result)
-      width = math.max(width, fuzzy_searcher.file_result_full_width(
-        font, result.file, prefix, suffix, true
-      ))
+      width = math.max(width, fuzzy_searcher.location_width(font, result, prefix, suffix))
     end
   end
   width = math.min(path_w, width)
@@ -3096,9 +3108,7 @@ local function draw_grep_result_row(
   local symbol = result.enclosing_symbol
   local context_gap = math.max(8 * (SCALE or 1), style.padding.x * 2)
   local prefix, line_suffix = fuzzy_searcher.line_result_location(result)
-  local filename_width = fuzzy_searcher.file_result_full_width(
-    font, result.file, prefix, line_suffix, true
-  )
+  local filename_width = fuzzy_searcher.location_width(font, result, prefix, line_suffix)
   edit_metadata_width = tonumber(edit_metadata_width)
     or fuzzy_searcher.grep_edit_metadata_width(font)
   local content_width = math.max(0, path_w - edit_metadata_width)
@@ -3106,7 +3116,7 @@ local function draw_grep_result_row(
   if not show_metadata then
     edit_metadata_width = 0
     content_width = path_w
-  elseif not collapse_file and not history then
+  elseif not collapse_file and not history and not result.terminal then
     local metadata_parts = fuzzy_searcher.grep_edit_metadata_parts(result)
     fuzzy_searcher.draw_file_metadata(
       font, result, x, y, path_w, metadata_parts, nil, false
@@ -4105,7 +4115,7 @@ end
 function FSView:can_mark_result(index)
   local result = self.results[index]
   return not self.file_picker and result and not result.header
-    and (result.file or result.buffer and result.line) and not result.is_folder
+    and (result.file or result.buffer and result.line) and not result.is_folder and not result.terminal
     and result.kind ~= "create_path" and result.kind ~= "navigation_place"
     and result.kind ~= "bookmark"
 end
@@ -4620,6 +4630,21 @@ function FSView:update_preview_view()
     end
     view = self.preview_view
     if not view then return nil end
+  elseif r.terminal then
+    key = table.concat({ "terminal", r.abs_path, tostring(r.line), tostring(r.terminal.entry) }, ":")
+    if self.preview_key ~= key then
+      self:clear_preview_view()
+      self.preview_key = key
+      local buffer = Buffer()
+      buffer.disable_language_services = true
+      buffer.disable_treesitter = true
+      buffer.disable_gitdiff_highlight = true
+      buffer:replace_snapshot(fuzzy_searcher.terminals.preview_text(r, 1000))
+      buffer.read_only = true
+      buffer.read_only_reason = "Fuzzy Searcher previews are read-only"
+      self.preview_view = preview_text_view.new(buffer)
+    end
+    view = self.preview_view
   elseif r.revision then
     view = self:prepare_historical_preview(r)
     if not view then return nil end
@@ -5835,6 +5860,9 @@ function fuzzy_searcher.grep_order.better(a, b)
   local aps, bps = a.path_score or 0, b.path_score or 0
   if aps ~= bps then return aps > bps end
 
+  -- Most searches look for code, so a file goes before a Terminal with the same score.
+  if (a.terminal == nil) ~= (b.terminal == nil) then return a.terminal == nil end
+
   local af, bf = fuzzy_searcher.grep_order.file_key(a), fuzzy_searcher.grep_order.file_key(b)
   if af ~= bf then return af < bf end
 
@@ -5944,6 +5972,29 @@ function fuzzy_searcher.grep_order.retain_top(heap, candidate, limit)
   return true
 end
 
+-- Text Search also searches Terminals, unless a path or a line number limits it to files.
+function fuzzy_searcher.searches_terminals(base, line)
+  return not line and (base == "" or base:sub(1, 1) == ">")
+end
+
+-- A fuzzy text search job whose lines come from Terminals.
+function fuzzy_searcher.terminal_grep_job(matcher, alive)
+  local job = { key = "terminals", seed = matcher.seed, lines = {}, scanned = 0, done = false }
+  local function wake()
+    for thread_key in pairs(job.wake_threads or {}) do core.wake_thread(thread_key) end
+  end
+  job.thread_key = core.add_thread(function()
+    fuzzy_searcher.terminals.search(matcher, function(source)
+      job.scanned = job.scanned + 1
+      job.lines[#job.lines + 1] = source
+      wake()
+    end, alive, fuzzy_searcher.fuzzy_scan_limit)
+    job.done = true
+    wake()
+  end)
+  return job
+end
+
 function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, gen, scope_meta, scope_plan)
   -- Grep results are streamed asynchronously. Do not page them by clearing and
   -- restarting the search while the user scrolls; publish a growing stable
@@ -6001,6 +6052,11 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
   local exact_results = #terms == 1 and not terms[1].exact and trim_query(grep):lower() == terms[1].text
   local fuzzy_query = terms_fuzzy_query(terms)
   local matcher = fuzzy_searcher.compile_grep(grep, self.case_sensitive)
+  if fuzzy_searcher.searches_terminals(base, line) then
+    add_job(fuzzy_searcher.terminal_grep_job(matcher, function()
+      return gen == grep_generation and active_view == self
+    end))
+  end
   local initial_settle_seconds = 0.10
   local initial_settle_visible_multiplier = 2
 
@@ -6075,6 +6131,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         kind = "grep",
         file = source.file,
         abs_path = source.abs_path,
+        terminal = source.terminal,
         root_label = source.root_label,
         root_role = source.root_role,
         root_id = source.root_id,
@@ -6337,6 +6394,7 @@ function FSView:start_grep(base, line, grep)
     end
   end
 
+  local query = grep
   local exact_query = quoted_exact_query(grep)
   if exact_query and exact_query ~= "" then grep = exact_query end
 
@@ -6536,6 +6594,12 @@ function FSView:start_grep(base, line, grep)
         batch = nil
       end
     until not batch
+
+    if fuzzy_searcher.searches_terminals(base, line) then
+      fuzzy_searcher.terminals.search(fuzzy_searcher.compile_grep(query, self.case_sensitive), function(source)
+        add_result(source, seen, true)
+      end, function() return gen == grep_generation and active_view == self end, fuzzy_searcher.fuzzy_scan_limit)
+    end
 
     if gen ~= grep_generation or active_view ~= self then return end
     if not results_started then begin_results() end
@@ -7386,6 +7450,7 @@ function FSView:finish_close()
   if self.closed then return end
   self.closed = true
   self:clear_preview_view()
+  fuzzy_searcher.terminals.forget()
   self:hide()
   self:destroy()
   if active_view == self then active_view = nil end
@@ -7445,7 +7510,7 @@ end
 
 function FSView:selected_file_path()
   local r = self:selected_result()
-  if not r or r.revision then return end
+  if not r or r.revision or r.terminal then return end
 
   if r.file or r.abs_path then
     return common.normalize_path(fullpath(r))
@@ -7966,6 +8031,10 @@ function FSView:activate_selected_result(new_group)
       or (r.kind == "path" and r.is_folder and r.project) then
     return self:confirm_folder_open(r, new_group)
   end
+  if r.terminal then
+    self:close()
+    return fuzzy_searcher.terminals.open(r)
+  end
   if r.buffer and r.line then
     return self:open_buffer_result(r, new_group)
   end
@@ -8018,7 +8087,7 @@ function FSView:prepare_visible_grep_context(metrics)
     local result = self.results[i]
     if result.kind == "grep" and not result.header then
       result.enclosing_symbol = nil
-      if result.abs_path then
+      if result.abs_path and not result.terminal then
         locations[#locations + 1] = {
           path = result.abs_path,
           line = tonumber(result.line) or 1,
@@ -8285,14 +8354,14 @@ function FSView:draw_open_content()
     local before = self.results[first - 1]
     local kind = first_result and (first_result.kind == "grep" or first_result.kind == "symbol"
       or first_result.kind == "navigation_place" and first_result.buffer) and first_result.kind
-    local file = kind and tostring(first_result.file or "") or ""
+    local file = kind and fuzzy_searcher.group_key(first_result) or ""
     if file ~= "" and before and before.kind == kind
-        and tostring(before.file or "") == file then
+        and fuzzy_searcher.group_key(before) == file then
       local group_start = first - 1
       while group_start > 1 do
         local candidate = self.results[group_start - 1]
         if not candidate or candidate.kind ~= kind
-            or tostring(candidate.file or "") ~= file then
+            or fuzzy_searcher.group_key(candidate) ~= file then
           break
         end
         group_start = group_start - 1
@@ -8371,7 +8440,7 @@ function FSView:draw_open_content()
         reset_rendered_file_group()
         draw_grep_result_row(font, r, x + pad, row_y, row_text_w, false, nil, nil, nil, 0)
       elseif r.kind == "grep" or r.kind == "navigation_place" and r.buffer then
-        local file = tostring(r.file or "")
+        local file = fuzzy_searcher.group_key(r)
         local collapse_file = file ~= "" and previous_rendered_file_kind == r.kind
           and file == previous_rendered_file
         previous_rendered_line_x, previous_rendered_context_x = draw_grep_result_row(

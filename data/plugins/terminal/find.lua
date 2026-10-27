@@ -132,6 +132,20 @@ function Find:open()
   self:focus()
 end
 
+-- Opens the card on `query` and selects its first match at or after `row`, a row from the top of the scrollback.
+function Find:show(query, case_sensitive, row)
+  if not self.visible then
+    self.visible = true
+    core.log_quiet("Terminal session %s find opened at row %d", tostring(self.view.log_id), row)
+  end
+  self.case_sensitive = case_sensitive
+  if query ~= self:query() then self.input:set_text(query) end
+  self:clear()
+  self.origin, self.reveal = { row = row, col = 0 }, true
+  self.input:select_all()
+  self:focus()
+end
+
 -- A View that closes passes `closing`. Its Pane then moves the focus.
 function Find:close(closing)
   if not self.visible then return end

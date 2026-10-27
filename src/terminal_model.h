@@ -20,4 +20,6 @@ bool anvil_terminal_snapshot_decode(const uint8_t *bytes, size_t length, Ghostty
    A large active screen or continuation can fail.
    The caller frees the decoded copy, if requested. */
 bool anvil_terminal_disk_snapshot_prepare(uint8_t **bytes, size_t *length, GhosttyTerminal *decoded);
+/* The plain text of the screen and its scrollback, one line for each row. Free the text with free(). */
+bool anvil_terminal_model_text(GhosttyTerminal model, uint8_t **text, size_t *length);
 #endif

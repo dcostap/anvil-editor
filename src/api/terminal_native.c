@@ -2791,51 +2791,10 @@ static int f_terminal_text_capture(lua_State *L) {
     return push_capture_error(L, "Could not read terminal capture state");
   }
 
-  GhosttyPoint start_point = {
-    .tag = GHOSTTY_POINT_TAG_SCREEN,
-    .value = { .coordinate = { .x = 0, .y = 0 } },
-  };
-  GhosttyPoint end_point = {
-    .tag = GHOSTTY_POINT_TAG_SCREEN,
-    .value = { .coordinate = {
-      .x = (uint16_t)(session->cols - 1),
-      .y = (uint32_t)(total_rows - 1),
-    } },
-  };
-  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
-  if (ghostty_terminal_grid_ref(
-      session->terminal, start_point, &selection.start
-    ) != GHOSTTY_SUCCESS ||
-      ghostty_terminal_grid_ref(
-        session->terminal, end_point, &selection.end
-      ) != GHOSTTY_SUCCESS) {
-    return push_capture_error(L, "Could not resolve terminal capture rows");
-  }
-
-  GhosttyTerminalSelectionFormatOptions options =
-    GHOSTTY_INIT_SIZED(GhosttyTerminalSelectionFormatOptions);
-  options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
-  options.unwrap = false;
-  options.trim = true;
-  options.selection = &selection;
-  size_t length = 0;
-  GhosttyResult result = ghostty_terminal_selection_format_buf(
-    session->terminal, options, NULL, 0, &length
-  );
-  if (result != GHOSTTY_OUT_OF_SPACE && result != GHOSTTY_SUCCESS) {
-    return push_capture_error(L, "Could not measure terminal text");
-  }
   uint8_t *text = NULL;
-  if (length > 0) {
-    text = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, length);
-    if (!text) return push_capture_error(L, "Could not allocate terminal text");
-    result = ghostty_terminal_selection_format_buf(
-      session->terminal, options, text, length, &length
-    );
-    if (result != GHOSTTY_SUCCESS) {
-      HeapFree(GetProcessHeap(), 0, text);
-      return push_capture_error(L, "Could not format terminal text");
-    }
+  size_t length = 0;
+  if (!anvil_terminal_model_text(session->terminal, &text, &length)) {
+    return push_capture_error(L, "Could not format terminal text");
   }
 
   size_t cursor_screen_row = scrollback_rows + cursor_y;
@@ -2871,7 +2830,21 @@ static int f_terminal_text_capture(lua_State *L) {
     total_rows
   );
   lua_setfield(L, capture_index, "styles");
-  if (text) HeapFree(GetProcessHeap(), 0, text);
+  free(text);
+  return 1;
+}
+
+/* The plain text of the screen and its scrollback, one line for each row, without the styles of a capture. */
+static int f_terminal_plain_text(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  uint8_t *text = NULL;
+  size_t length = 0;
+  if (session->closed || !session->terminal || !anvil_terminal_model_text(session->terminal, &text, &length)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushlstring(L, (const char *)text, length);
+  free(text);
   return 1;
 }
 
@@ -3988,6 +3961,7 @@ static const luaL_Reg terminal_methods[] = {
   { "reset_selection_gesture", f_terminal_reset_selection_gesture },
   { "selected_text", f_terminal_selected_text },
   { "text_capture", f_terminal_text_capture },
+  { "plain_text", f_terminal_plain_text },
   { "find", f_terminal_find },
   { "row_text", f_terminal_row_text },
   { "mouse", f_terminal_mouse },
