@@ -158,6 +158,7 @@ local function is_searchable_textview(view)
   return view and view.extends and view:extends(TextView)
     and not view:is(GlobalPromptBar)
     and not view.local_find_input
+    and not view.local_find_disabled
     and view.buffer
 end
 

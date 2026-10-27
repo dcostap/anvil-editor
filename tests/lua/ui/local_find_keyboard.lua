@@ -6,6 +6,8 @@ local test = require "core.test"
 local diffview = require "plugins.diffview"
 local git_view = require "plugins.git_view"
 local backend = require "plugins.git.backend"
+local fuzzy_searcher = require "plugins.fuzzy_searcher"
+local View = require "core.view"
 
 require "plugins.intellij_find"
 
@@ -49,8 +51,43 @@ test.describe("Local Find keyboard routing", function()
 
   test.after_each(function(context)
     command.perform("editor:find_close")
+    if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
     panes.reset_for_tests()
     config.plugins.diffview.layout = context.layout
+    if context.file then pcall(os.remove, context.file) end
+  end)
+
+  test.it("leaves Find closed in a one-line text field", function()
+    panes.create { factory = function() return View() end }
+    fuzzy_searcher.open("")
+    local field = core.fuzzy_searcher_active_view.input.textview
+    test.equal(core.active_view, field)
+    command.perform("editor:find")
+    test.equal(core.active_view, field)
+  end)
+
+  test.it("types into Find in a focused Fuzzy Searcher preview", function(context)
+    local path = system.absolute_path(".") .. PATHSEP .. "find-keys-preview.txt"
+    context.file = path
+    local file = assert(io.open(path, "wb"))
+    file:write("first\nsecond\n")
+    file:close()
+    panes.create { factory = function() return View() end }
+    fuzzy_searcher.open("")
+    local picker = core.fuzzy_searcher_active_view
+    picker.results = { { kind = "file", file = path, text = path } }
+    picker.selected = 1
+    local preview = test.not_nil(picker:update_preview_view())
+    test.ok(picker:cycle_local_focus(1))
+    test.ok(command.perform("editor:find"))
+    local input = core.active_view
+    test.ok(input.local_find_input)
+    input:set_text("")
+    core.on_event("textinput", "sec")
+    test.equal(input:get_text(), "sec", "typed text must reach the preview's Find input")
+    test.equal(picker.input:get_text(), "")
+    test.equal(core.active_view, input)
+    picker:close()
   end)
 
   test.it("types into Find on the unified Diff surface after a layout change", function()

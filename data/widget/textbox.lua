@@ -86,6 +86,8 @@ function TextView:new(parent, subparent)
   self.scrollable = true
   self.font = "font"
   self.name = View.get_name(self)
+  -- Find searches content, not a one-line field.
+  self.local_find_disabled = true
 
   self.size.y = 0
   self.label = ""

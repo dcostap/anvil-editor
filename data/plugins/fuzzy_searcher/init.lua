@@ -7270,6 +7270,11 @@ function FSView:on_text_input(text)
   -- Text input is the authoritative path for all printable characters,
   -- especially layout-dependent ones like AltGr, dead keys and IME output.
   self._awaiting_textinput = nil
+  local find_input = core.active_view
+  if find_input and find_input.local_find_input and self.preview_view
+      and find_input.local_find_state.owner_view == self.preview_view then
+    return find_input:on_text_input(text)
+  end
   fuzzy_focus_log("text-input-before", self, "bytes=" .. tostring(#tostring(text or "")))
   ensure_input_focus(self)
   self.input:on_text_input(text)
