@@ -2715,7 +2715,7 @@ keymap.add({
   ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+v"] = "terminal:paste",
   ["ctrl+shift+v"] = "terminal:paste",
-  ["ctrl+shift+f"] = { "terminal:find", "fuzzy:open_grep" },
+  ["ctrl+alt+f"] = "terminal:find",
   ["f3"] = "terminal:find_next",
   ["shift+f3"] = "terminal:find_previous",
   ["return"] = "terminal:find_field_next",
