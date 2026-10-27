@@ -107,8 +107,36 @@ static int colour_alpha_sets_opacity(void) {
   return 0;
 }
 
+/* A translucent image blends with the pixels under it. */
+static int translucent_image_blends(void) {
+  const Uint8 rgba[] = { 255, 0, 0, 128,  255, 0, 0, 128,  255, 0, 0, 128,  255, 0, 0, 128 };
+  SDL_Surface *src = image(2, 2, rgba);
+  SDL_Surface *dst = screen(8, 8, 0, 0, 255);
+  CHECK(image_scale_blit(src, dst, 0, 0, 8, 8, WHITE));
+  SDL_Color c = pixel(dst, 4, 4);
+  CHECK(c.r > 120 && c.r < 136 && c.g == 0 && c.b > 120 && c.b < 136);
+  SDL_DestroySurface(src);
+  SDL_DestroySurface(dst);
+  return 0;
+}
+
+/* The colour's RGB tints the image. */
+static int colour_tints_image(void) {
+  const Uint8 rgba[] = { 255, 255, 255, 255,  255, 255, 255, 255 };
+  SDL_Surface *src = image(2, 1, rgba);
+  SDL_Surface *dst = screen(8, 4, 0, 0, 0);
+  CHECK(image_scale_blit(src, dst, 0, 0, 8, 4, (SDL_Color){ 255, 128, 0, 255 }));
+  SDL_Color c = pixel(dst, 4, 2);
+  CHECK(c.r == 255 && c.g > 120 && c.g < 136 && c.b == 0);
+  SDL_DestroySurface(src);
+  SDL_DestroySurface(dst);
+  return 0;
+}
+
 int main(void) {
   int failures = 0;
+  failures += colour_tints_image();
+  failures += translucent_image_blends();
   failures += deep_zoom_draws_visible_part();
   failures += clipped_draws_join_without_seams();
   failures += transparent_neighbour_keeps_edge_colour();
