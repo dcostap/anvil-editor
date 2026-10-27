@@ -129,6 +129,8 @@ function M.source_directory(view)
     end
   end
   local project = core.root_project and core.root_project()
+  -- The Scratch Project's folder holds no work, so views without a folder use home.
+  if project and core.is_scratch_project(project.path) then return HOME or project.path end
   return project and project.path or nil
 end
 

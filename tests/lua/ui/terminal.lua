@@ -260,6 +260,23 @@ test.describe("Terminal View", function()
     test.ok(ok, err)
   end)
 
+  test.it("opens a Terminal at home from a Scratch Pane that shows no file", function(context)
+    local Project = require "core.project"
+    local scratch = USERDIR .. PATHSEP .. "scratch"
+    test.ok(system.mkdir(scratch))
+    local projects = core.projects
+    core.projects = { Project(scratch) }
+    local ok, err = pcall(function()
+      panes.present(Editor(Buffer()))
+      test.ok(command.perform("terminal:open"))
+      local cwd = context.sessions[1].options.cwd
+      test.ok(common.path_equals(cwd, HOME), "the Terminal started in " .. tostring(cwd))
+    end)
+    core.projects = projects
+    test.ok(test.remove_tree(scratch))
+    test.ok(ok, err)
+  end)
+
   test.it("replaces an unused terminal without keeping it in Pane history", function(context)
     local view = terminal.open()
     local pane = panes.pane_for_view(view)
