@@ -251,6 +251,7 @@ function core.init()
   end
   local bindings = bindings_for("core:focus_project_sidebar")
   local new_group_bindings = bindings_for("pane:new_group")
+  local close_pane_bindings = bindings_for("pane:close")
   local LineInput, line_bindings = require "core.line_input", {}
   for _, name in ipairs(LineInput.COMMANDS) do line_bindings[name] = bindings_for("core:" .. name) end
   local numbered_panes, number_bindings = require "core.numbered_panes", {}
@@ -261,9 +262,11 @@ function core.init()
   command.add(nil, {
     ["core:focus_project_sidebar"] = function() system.focus_project_sidebar(false) end,
     ["pane:new_group"] = function() return current ~= nil and current.view:new_group() end,
+    ["pane:close"] = function() return current ~= nil and current.view:close_pane() end,
   })
   for _, binding in ipairs(bindings) do keymap.add {[binding] = "core:focus_project_sidebar"} end
   for _, binding in ipairs(new_group_bindings) do keymap.add {[binding] = "pane:new_group"} end
+  for _, binding in ipairs(close_pane_bindings) do keymap.add {[binding] = "pane:close"} end
   -- Numbered Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
   for number = 1, numbered_panes.COUNT do
     local name = "pane:focus_number_" .. number

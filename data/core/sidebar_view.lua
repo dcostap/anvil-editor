@@ -220,6 +220,14 @@ function SidebarView:new_group()
   return true
 end
 
+function SidebarView:close_pane()
+  local row = self:get_cursor()
+  if not self.focused or not row or row.kind ~= "tab" then return false end
+  self.unload_ask = nil
+  self.action("request", "select", row.project.path, {action = "close", pane = row.tab.id})
+  return true
+end
+
 -- Asks to unload the cursor's Project, or unloads it when the last key asked the same. A held key does neither.
 function SidebarView:ask_unload(row, asked, repeating)
   local state = row.project.state
