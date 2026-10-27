@@ -224,7 +224,7 @@ local REMINDER_HOURS = {1, 2, 3, 4, 24}
 function SidebarView:open_terminal_menu(session, x, y)
   local labels, choices = {"Remind Me In"}, {}
   for _, hours in ipairs(REMINDER_HOURS) do
-    labels[#labels + 1] = "\t" .. (hours == 24 and "1 Day" or hours == 1 and "1 Hour" or hours .. " Hours")
+    labels[#labels + 1] = "\t" .. (hours == 1 and "1 Hour" or hours .. " Hours")
     choices[#labels] = hours
   end
   labels[#labels + 1] = "\tCustom…"
