@@ -224,7 +224,7 @@ function SidebarView:close_pane()
   local row = self:get_cursor()
   if not self.focused or not row or row.kind ~= "tab" then return false end
   self.unload_ask = nil
-  self.action("request", "select", row.project.path, {action = "close", pane = row.tab.id})
+  self.action("request", "select", row.project.path, {action = "close", pane = row.tab.id, focus = true})
   return true
 end
 
@@ -342,8 +342,8 @@ function SidebarView:toggle(key, default)
 end
 
 function SidebarView:rebuild_rows()
-  local cursor_index = self.cursor
-  local cursor_key = row_key(self:get_cursor())
+  local cursor_row = self:get_cursor()
+  local cursor_key = row_key(cursor_row)
   local searching = self.query ~= ""
   local projects, window_id = self.projects or {}, self.window_id
   local m = self:metrics()
@@ -530,22 +530,37 @@ function SidebarView:rebuild_rows()
       target.selected = true
     end
   end
-  self.rows, self.main_h, self.bottom_h = rows, main_y, bottom_y
-  self.was_selected = selected_keys
-  self.cursor = nil
+  local cursor
   for index, row in ipairs(rows) do
-    if cursor_key and row_key(row) == cursor_key then self.cursor = index; break end
+    if cursor_key and row_key(row) == cursor_key then cursor = index; break end
   end
-  -- A removed row leaves the cursor at its position, or at the new end of the list.
-  if not self.cursor and cursor_key then
-    local index = math.min(cursor_index, #rows)
-    if rows[index] and rows[index].kind ~= "empty" then self.cursor = index end
-  end
-  if not self.cursor then
+  if not cursor and cursor_row and cursor_row.kind == "tab" then
+    -- The Pane manager chooses the replacement. Follow its report, within the same Project.
+    local active_found = false
     for index, row in ipairs(rows) do
-      if row.kind ~= "empty" and (not searching or row.matches) then self.cursor = index; break end
+      if row.project and row.project.path == cursor_row.project.path then
+        local panes = row.project.panes or {}
+        local active = panes[panes.active or 0]
+        if row.kind == "project" then cursor = index end
+        if row.kind == "tab" and active and row.tab.id == active.id then
+          cursor, active_found = index, true
+          break
+        end
+      end
+    end
+    if searching and not active_found then
+      self.input:set_text("")
+      self.query = ""
+      core.log_quiet("Sidebar close selection: cleared search to show Project=%s", cursor_row.project.path)
+      return self:rebuild_rows()
+    end
+  elseif not cursor then
+    for index, row in ipairs(rows) do
+      if row.kind ~= "empty" and (not searching or row.matches) then cursor = index; break end
     end
   end
+  self.rows, self.main_h, self.bottom_h = rows, main_y, bottom_y
+  self.was_selected, self.cursor = selected_keys, cursor
   self:clamp_scroll()
   if self.focused then self:reveal_cursor() end
   if self.drag then self:update_drag() end

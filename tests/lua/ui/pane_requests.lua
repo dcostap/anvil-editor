@@ -46,6 +46,16 @@ test.describe("Pane requests", function()
     test.same(panes.ordered(), {a})
   end)
 
+  test.it("closes a Sidebar keyboard target using normal Pane Group selection", function()
+    local outside, left = create(), create()
+    local right = panes.split(left, "right", {factory = function() return View() end})
+    panes.focus(outside)
+    request {action = "close", pane = right.id, focus = true}
+    test.is_nil(panes.find(right.id))
+    test.equal(panes.active(), left)
+    test.equal(panes.visible_group(), left.group)
+  end)
+
   test.it("moves groups before, after, and to the end", function()
     local a, b, c = create(), create(), create()
     move(c, "group", a, "before")

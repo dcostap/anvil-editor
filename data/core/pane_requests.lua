@@ -85,7 +85,7 @@ end
 
 local schemas = {
   new_group = {},
-  focus = {pane = true, feedback = true}, close = {pane = true}, move = {pane = true, target = true},
+  focus = {pane = true, feedback = true}, close = {pane = true, focus = true}, move = {pane = true, target = true},
   open = {files = true, text = true, target = true},
   launch = {files = true},
   drop = {pane = true, files = true, text = true},
@@ -102,6 +102,7 @@ local function validate(request)
   if not schema or not fields(request, schema) then return nil, "unknown action or field" end
   if schema.pane and not identifier(request.pane) then return nil, "invalid Pane ID" end
   if request.feedback ~= nil and request.feedback ~= "numbered" then return nil, "invalid focus feedback" end
+  if request.focus ~= nil and type(request.focus) ~= "boolean" then return nil, "invalid close focus" end
   if schema.target then
     local ok, err = position(request.target)
     if not ok then return nil, err end
@@ -159,7 +160,12 @@ local function execute(request, x, y)
     return true
   end
   if action == "focus" then panes.focus(pane, request.feedback); return true end
-  if action == "close" then panes.close(pane); return true end
+  if action == "close" then
+    -- Keyboard close acts as if its Sidebar target had Pane focus. Middle-click keeps the current focus.
+    if request.focus then panes.focus(pane) end
+    panes.close(pane)
+    return true
+  end
   if action == "move" then
     local placed, err = M.place(pane, request.target)
     return placed and true, err
