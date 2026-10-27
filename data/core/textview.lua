@@ -84,6 +84,26 @@ function TextView:compute_wrap_width()
   return linewrapping.compute_wrap_width(self)
 end
 
+-- A line jump stays active until the user scrolls, moves the selection, or edits.
+local function current_line_scroll_anchor(view)
+  local jump = view.__line_scroll_anchor
+  if not jump then return nil end
+  local line1, col1, line2, col2 = view.buffer:get_selection()
+  if view.scroll.to.y == jump.target_y and view.buffer.text_revision == jump.revision
+    and line1 == jump.line1 and col1 == jump.col1
+    and line2 == jump.line2 and col2 == jump.col2
+  then return jump end
+  view.__line_scroll_anchor = nil
+end
+
+-- Move the scroll for a layout change. An active line jump stays active.
+local function shift_scroll_for_layout(view, delta)
+  local jump = current_line_scroll_anchor(view)
+  view.scroll.y = (view.scroll.y or 0) + delta
+  view.scroll.to.y = (view.scroll.to.y or 0) + delta
+  if jump then jump.target_y = view.scroll.to.y end
+end
+
 local function capture_wrap_viewport_anchor(view, new_width)
   local settings = view.wrapped_settings
   if not view.scroll then return end
@@ -117,8 +137,7 @@ local function restore_wrap_viewport_anchor(view, anchor, expected_width)
   anchored_y = common.clamp(anchored_y, 0, max_scroll)
   local delta = anchored_y - anchor.scroll_y
   if delta ~= 0 then
-    view.scroll.y = (view.scroll.y or 0) + delta
-    view.scroll.to.y = (view.scroll.to.y or 0) + delta
+    shift_scroll_for_layout(view, delta)
     view.scroll.move_data_y = nil
   end
 end
@@ -1995,8 +2014,7 @@ local function update_metric_rows(view, cache, changes, row_count)
   cache.dirty_rows = next(dirty) and dirty or nil
   cache.row_count = heights:count()
   if anchor_delta ~= 0 and view.scroll and not view.__pending_viewport_anchor then
-    view.scroll.y = view.scroll.y + anchor_delta
-    view.scroll.to.y = view.scroll.to.y + anchor_delta
+    shift_scroll_for_layout(view, anchor_delta)
   end
   cache.invalidated_rows = (cache.invalidated_rows or 0) + touched_rows
   view.render_cache_diagnostics.metric_invalidations =
@@ -3924,17 +3942,6 @@ function TextView:get_visual_metric_signature(
   return signature
 end
 
-local function current_line_scroll_anchor(view)
-  local jump = view.__line_scroll_anchor
-  if not jump then return nil end
-  local line1, col1, line2, col2 = view.buffer:get_selection()
-  if view.scroll.to.y == jump.target_y and view.buffer.text_revision == jump.revision
-    and line1 == jump.line1 and col1 == jump.col1
-    and line2 == jump.line2 and col2 == jump.col2
-  then return jump end
-  view.__line_scroll_anchor = nil
-end
-
 ---Keep an explicit line jump fixed; otherwise preserve the viewport's top row.
 ---Do not resolve new provider state while capturing the previous layout.
 function TextView:capture_viewport_anchor()
@@ -4012,14 +4019,15 @@ local function apply_viewport_anchor(view, cache)
   local anchor = view.__pending_viewport_anchor
   if not anchor then return end
   view.__pending_viewport_anchor = nil
-  if anchor.jump and current_line_scroll_anchor(view) ~= anchor.jump then return end
+  local jump = current_line_scroll_anchor(view)
+  if anchor.jump and jump ~= anchor.jump then return end
   local row = view:get_visual_row(anchor.line, anchor.col)
   row = common.clamp(row, 1, cache.row_count)
   local delta = cache.heights:y_offset(row) - anchor.content_y
   view.scroll.y = math.max(0, view.scroll.y + delta)
   view.scroll.to.y = math.max(0, view.scroll.to.y + delta)
+  if jump then jump.target_y = view.scroll.to.y end
   if anchor.jump then
-    anchor.jump.target_y = view.scroll.to.y
     if delta ~= 0 then
       core.log_quiet("Line jump kept at %s:%d after layout changed by %.1f",
         view.buffer:get_name(), anchor.line, delta)
@@ -4216,8 +4224,7 @@ function TextView:get_visual_row_metric_cache()
       end
       cache.dirty_rows = nil
       if anchor_delta ~= 0 and self.scroll and not self.__pending_viewport_anchor then
-        self.scroll.y = self.scroll.y + anchor_delta
-        self.scroll.to.y = self.scroll.to.y + anchor_delta
+        shift_scroll_for_layout(self, anchor_delta)
       end
     end
     apply_viewport_anchor(self, cache)
@@ -6515,6 +6522,14 @@ function TextView:resolve_screen_position(x, y)
 end
 
 
+---Return the vertical scroll offset that centers a line in the viewport.
+function TextView:get_line_center_scroll_y(line)
+  local _, y = self:get_line_screen_position(line)
+  local _, oy = self:get_content_offset()
+  local _, _, _, scroll_h = self.h_scrollbar:get_track_rect()
+  return math.max(0, y - oy - (self.size.y - scroll_h) / 2)
+end
+
 ---Scroll to center a line in the viewport.
 ---@param line integer Line number to scroll to
 ---@param ignore_if_visible? boolean Don't scroll if line already visible
@@ -6542,10 +6557,7 @@ function TextView:scroll_to_line(line, ignore_if_visible, instant, opts)
     max = max - visible_margin_lines
   end
   if not (ignore_if_visible and line >= min and line <= max) then
-    local x, y = self:get_line_screen_position(line)
-    local ox, oy = self:get_content_offset()
-    local _, _, _, scroll_h = self.h_scrollbar:get_track_rect()
-    self.scroll.to.y = math.max(0, y - oy - (self.size.y - scroll_h) / 2)
+    self.scroll.to.y = self:get_line_center_scroll_y(line)
     if instant then
       self.scroll.y = self.scroll.to.y
       self.scroll.move_data_y = nil
@@ -7394,6 +7406,14 @@ function TextView:update()
     self:scroll_to_line(
       pending.line, pending.ignore_if_visible, pending.instant, pending.opts
     )
+  end
+
+  -- Rows above an active line jump can change height while the layout loads.
+  -- Keep the jump's line centered.
+  local active_jump = current_line_scroll_anchor(self)
+  if active_jump and self.size.y > 0 then
+    local delta = self:get_line_center_scroll_y(active_jump.line) - active_jump.target_y
+    if delta ~= 0 then shift_scroll_for_layout(self, delta) end
   end
 
   -- scroll to make caret visible and reset blink timer if it moved
