@@ -854,6 +854,7 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
     end
     self.focused_pane_name = pane.git_pane
     self.focus_pane = "buffer"
+    if panes.pane_for_view(self) then panes.register_focus_target(self, pane) end
     core.set_active_view(pane)
     local scrollbar, handled = self.mouse_router:press_scrollbar(pane, button, x, y, clicks)
     if scrollbar then
@@ -2406,7 +2407,7 @@ function GitView:focus_diff_pane(side)
   self.focused_diff_buffer_view = focus
   focus.git_owner_view = self
   return with_git_session_event_window(self.git_session, function()
-    core.set_active_view(focus)
+    view:focus_side(focus)
     if core.active_view then core.active_view.git_owner_view = self end
     return true
   end)

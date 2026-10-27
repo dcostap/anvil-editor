@@ -591,6 +591,12 @@ function DiffView:get_focus_view()
   return self.navigation_focus_side == "left" and self.buffer_view_a or self.buffer_view_b
 end
 
+-- Keyboard input reaches a surface only after its Pane knows that this View owns it.
+function DiffView:focus_side(side)
+  if panes.pane_for_view(self) then panes.register_focus_target(self, side) end
+  core.set_active_view(side)
+end
+
 function DiffView:get_navigation_state()
   if core.active_view == self.buffer_view_a then
     self.navigation_focus_side = "left"
@@ -888,8 +894,7 @@ function DiffView:on_mouse_pressed(button, x, y, clicks)
     return handled
   end
   self.mouse_router:capture(side)
-  if panes.pane_for_view(self) then panes.register_focus_target(self, side) end
-  core.set_active_view(side)
+  self:focus_side(side)
   handled = self.mouse_router:call(side, "on_mouse_pressed", button, x, y, clicks)
   if side:scrollbar_dragging() then
     side.scroll.y = side.scroll.to.y
@@ -2017,7 +2022,7 @@ function DiffView:replace_unified_view()
   view.git_owner_view = old.git_owner_view
   view.position.x, view.position.y, view.size.x, view.size.y = old.position.x, old.position.y, old.size.x, old.size.y
   old:on_close()
-  if core.active_view == old then core.set_active_view(view) end
+  if core.active_view == old then self:focus_side(view) end
 end
 
 function DiffView:dispose_integrations()
@@ -2416,7 +2421,7 @@ function DiffView:update()
     self.mouse_router.captured = nil
     self.mouse_router:leave()
     if active == unified or active == self.buffer_view_a or active == self.buffer_view_b or active == self then
-      core.set_active_view(self:get_focus_view())
+      self:focus_side(self:get_focus_view())
     end
     core.log_quiet("Diff View layout: %s at %.0fpx", config.plugins.diffview.layout, self.size.x)
     core.redraw = true
@@ -3179,7 +3184,7 @@ function DiffRequestController:reload(opts)
   view:assign_request()
   if attached and panes.pane_for_view(view) then
     local focus_side = request.preferred_focus_side == "left" and view.buffer_view_a or view.buffer_view_b
-    core.set_active_view(focus_side or view)
+    view:focus_side(focus_side)
   elseif attached then
     core.log_quiet("Diff comparison: kept source focus while View placement is pending or canceled")
   end
