@@ -301,6 +301,14 @@ function SidebarView:new_group()
   return true
 end
 
+function SidebarView:perform_pane_command(name)
+  local row = self:get_cursor()
+  if not self.focused or not row or row.kind ~= "tab"
+    or not require("core.sidebar_commands")[name] then return false end
+  self.action("request", "select", row.project.path, {action = "command", pane = row.tab.id, command = name})
+  return true
+end
+
 function SidebarView:close_pane()
   local row = self:get_cursor()
   if not self.focused or not row or row.kind ~= "tab" then return false end

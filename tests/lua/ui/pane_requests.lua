@@ -56,6 +56,55 @@ test.describe("Pane requests", function()
     test.equal(panes.visible_group(), left.group)
   end)
 
+  test.it("cycles from the named Sidebar Pane instead of the active Pane", function()
+    local a, b, c = create(), create(), create()
+    panes.focus(a)
+    request {action = "command", pane = b.id, command = "pane:focus_next"}
+    test.equal(panes.active(), c)
+    request {action = "command", pane = b.id, command = "pane:focus_previous"}
+    test.equal(panes.active(), a)
+  end)
+
+  test.it("rejects commands outside the Sidebar Pane command list", function()
+    local a, b = create(), create()
+    panes.focus(a)
+    request {action = "command", pane = b.id, command = "pane:close_all"}
+    test.same(panes.ordered(), {a, b})
+    test.equal(panes.active(), a)
+  end)
+
+  for _, name in ipairs {"pane:copy_view_to_split_right", "pane:copy_view_to_new_group"} do
+    test.it("copies the named Sidebar View through " .. name, function()
+      local buffer = Buffer(nil, nil, true)
+      buffer:insert(1, 1, "Sidebar target")
+      local source = panes.create {factory = function() return Editor(buffer) end}
+      local other = create()
+      panes.focus(other)
+      request {action = "command", pane = source.id, command = name}
+      local destination = panes.active()
+      test.equal(panes.count(), 3)
+      test.not_equal(destination, source)
+      test.not_equal(destination.current_view, source.current_view)
+      test.equal(destination.current_view.buffer, buffer)
+      if name == "pane:copy_view_to_split_right" then
+        test.equal(destination.group, source.group)
+      else
+        test.not_equal(destination.group, source.group)
+      end
+    end)
+  end
+
+  test.it("cycles inside the named Sidebar Pane Group", function()
+    local outside, left = create(), create()
+    local right = panes.split(left, "right", {factory = function() return View() end})
+    panes.focus(outside)
+    request {action = "command", pane = left.id, command = "pane:focus_local_next"}
+    test.equal(panes.active(), right)
+    panes.focus(outside)
+    request {action = "command", pane = right.id, command = "pane:focus_local_previous"}
+    test.equal(panes.active(), left)
+  end)
+
   test.it("moves groups before, after, and to the end", function()
     local a, b, c = create(), create(), create()
     move(c, "group", a, "before")

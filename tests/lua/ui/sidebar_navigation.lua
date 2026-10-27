@@ -17,6 +17,18 @@ local function sidebar()
 end
 
 test.describe("Sidebar keyboard navigation", function()
+  test.it("sends Pane commands to the cursor's Tab only", function()
+    local view, actions = sidebar()
+    view:on_focus(true)
+    view:on_key_pressed("down")
+    test.ok(view:perform_pane_command("pane:copy_view_to_split_right"))
+    test.same(actions, {{"request", "select", "C:/Alpha",
+      {action="command", pane="b", command="pane:copy_view_to_split_right"}}})
+    view:on_key_pressed("left")
+    test.ok(not view:perform_pane_command("pane:copy_view_to_split_right"))
+    test.equal(#actions, 1)
+  end)
+
   test.it("opens a new Pane Group in the cursor's Project", function()
     for _, query in ipairs {"Beta", "bsv", "archive"} do
       local view, actions = sidebar()

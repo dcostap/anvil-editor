@@ -84,6 +84,7 @@ function M.place(pane, target)
 end
 
 local schemas = {
+  command = {pane = true, command = true},
   new_group = {},
   focus = {pane = true, feedback = true}, close = {pane = true, focus = true}, move = {pane = true, target = true},
   open = {files = true, text = true, target = true},
@@ -100,6 +101,9 @@ local function validate(request)
   if type(request) ~= "table" or type(request.action) ~= "string" then return nil, "invalid request" end
   local schema = schemas[request.action]
   if not schema or not fields(request, schema) then return nil, "unknown action or field" end
+  if request.action == "command" and not require("core.sidebar_commands")[request.command] then
+    return nil, "unsupported Sidebar command"
+  end
   if schema.pane and not identifier(request.pane) then return nil, "invalid Pane ID" end
   if request.feedback ~= nil and request.feedback ~= "numbered" then return nil, "invalid focus feedback" end
   if request.focus ~= nil and type(request.focus) ~= "boolean" then return nil, "invalid close focus" end
@@ -150,6 +154,12 @@ local function execute(request, x, y)
   end
   local pane = request.pane and panes.find(request.pane)
   if request.pane and not pane then return nil, "Pane not found" end
+  if action == "command" then
+    panes.focus(pane)
+    local performed = require("core.command").perform(request.command)
+    core.log_quiet("Sidebar command: %s Pane=%s performed=%s", request.command, pane.id, tostring(performed))
+    return performed
+  end
   -- An external launch names files, including new ones. Each opens in a new Pane, as from a Terminal.
   if action == "launch" then
     for _, path in ipairs(request.files) do

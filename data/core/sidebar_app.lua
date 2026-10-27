@@ -181,7 +181,9 @@ local function add_surface(id, window)
     if action == "request" then
       local route, path, request, x, y = row_id, target, ...
       -- Focusing a Pane gives the keyboard back to the Project. The shell gets both messages in this order.
-      if request.action == "focus" or request.action == "new_group" then system.focus_project_sidebar(false) end
+      if request.action == "focus" or request.action == "new_group" or request.action == "command" then
+        system.focus_project_sidebar(false)
+      end
       local text = common.serialize(request, {escape = true})
       local sent = system.pane_request(route, path, text, x, y)
       -- A drag over the work area sends a request for each pointer move. Log only its end.
@@ -297,6 +299,8 @@ function core.init()
   local bindings = bindings_for("core:focus_project_sidebar")
   local new_group_bindings = bindings_for("pane:new_group")
   local close_pane_bindings = bindings_for("pane:close")
+  local pane_bindings = {}
+  for name in pairs(require "core.sidebar_commands") do pane_bindings[name] = bindings_for(name) end
   local LineInput, line_bindings = require "core.line_input", {}
   for _, name in ipairs(LineInput.COMMANDS) do line_bindings[name] = bindings_for("core:" .. name) end
   local numbered_panes, number_bindings = require "core.numbered_panes", {}
@@ -312,6 +316,12 @@ function core.init()
   for _, binding in ipairs(bindings) do keymap.add {[binding] = "core:focus_project_sidebar"} end
   for _, binding in ipairs(new_group_bindings) do keymap.add {[binding] = "pane:new_group"} end
   for _, binding in ipairs(close_pane_bindings) do keymap.add {[binding] = "pane:close"} end
+  for name, keys in pairs(pane_bindings) do
+    command.add(nil, {[name] = function()
+      return current ~= nil and current.view:perform_pane_command(name)
+    end})
+    for _, binding in ipairs(keys) do keymap.add {[binding] = name} end
+  end
   -- Numbered Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
   for number = 1, numbered_panes.COUNT do
     local name = "pane:focus_number_" .. number
