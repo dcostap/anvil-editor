@@ -433,6 +433,7 @@ Windows also writes native diagnostics before Lua starts. These logs are always 
 `USERDIR/logs/anvil-<date>-<time>-p<pid>-native.log`
 
 Check the shell and hosted process logs for connection failures, rendering failures, and shell loss.
+The `D3D11 device:` line names the adapter. A frame that falls back to the software renderer logs `D3D11 frame failed: <reason>` once for each reason.
 Each record includes local time, elapsed time, process ID, thread ID, and priority.
 Each process keeps two parts, with up to 10 MiB per part. The session log cleaner removes old native logs.
 `ANVIL_SURFACE_LOG` selects an explicit shared file for probes. It does not control normal logging.

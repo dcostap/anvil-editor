@@ -493,6 +493,19 @@ static void d3d11_stats_abort_reason(const char *reason) {
   }
 }
 
+/* A failed D3D11 frame falls back to the software renderer. Log each reason once, so the fallback shows in the
+ * native log without a line for each frame. Reasons are string literals. */
+static void d3d11_note_software_frame(const char *reason) {
+  static const char *logged[32];
+  static int logged_count;
+  for (int i = 0; i < logged_count; i++) {
+    if (logged[i] == reason || strcmp(logged[i], reason) == 0) return;
+  }
+  if (logged_count < (int)(sizeof(logged) / sizeof(logged[0]))) logged[logged_count++] = reason;
+  SDL_Log("D3D11 frame failed: %s. This frame uses the software renderer. Later failures with this reason are not logged.",
+          reason);
+}
+
 static bool d3d11_device_lost(HRESULT hr) {
   return hr == DXGI_ERROR_DEVICE_REMOVED ||
          hr == DXGI_ERROR_DEVICE_RESET ||
@@ -656,13 +669,17 @@ static bool d3d11_create_device(void) {
                                  D3D11_SDK_VERSION,
                                  &g_d3d11.device, &selected, &g_d3d11.context);
   if (FAILED(hr)) {
+    SDL_Log("D3D11 hardware device failed (hr=0x%08lx). Trying WARP.", (unsigned long)hr);
     used_warp = true;
     hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_WARP, NULL, flags,
                            levels, (UINT)(sizeof(levels) / sizeof(levels[0])),
                            D3D11_SDK_VERSION,
                            &g_d3d11.device, &selected, &g_d3d11.context);
   }
-  if (FAILED(hr)) return false;
+  if (FAILED(hr)) {
+    SDL_Log("D3D11 device failed (hr=0x%08lx). Anvil uses the software renderer.", (unsigned long)hr);
+    return false;
+  }
   g_d3d11.device_is_warp = used_warp;
   g_d3d11.feature_level = selected;
 
@@ -694,6 +711,7 @@ static bool d3d11_create_device(void) {
   SAFE_RELEASE(dxgi_device);
 
   if (FAILED(hr) || !g_d3d11.factory) {
+    SDL_Log("D3D11 adapter setup failed (hr=0x%08lx). Anvil uses the software renderer.", (unsigned long)hr);
     /* No other device object exists yet. */
     SAFE_RELEASE(g_d3d11.factory);
     SAFE_RELEASE(g_d3d11.context);
@@ -701,6 +719,8 @@ static bool d3d11_create_device(void) {
     return false;
   }
 
+  SDL_Log("D3D11 device: adapter=%s feature_level=%s%s", g_d3d11.adapter_name,
+          d3d11_feature_level_string(selected), used_warp ? " (WARP software rasterizer)" : "");
   g_d3d11.available = true;
   return true;
 }
@@ -1260,16 +1280,25 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
   bool initialized = d3d11_init();
   QueryPerformanceCounter(&end);
   setup_stats.device_init_ms = d3d11_ms_between(start, end);
-  if (!initialized) return false;
+  if (!initialized) {
+    d3d11_note_software_frame("no D3D11 device");
+    return false;
+  }
 
   QueryPerformanceCounter(&start);
   bool common_pipeline_ready = d3d11_ensure_common_pipeline();
   QueryPerformanceCounter(&end);
   setup_stats.common_pipeline_ms = d3d11_ms_between(start, end);
-  if (!common_pipeline_ready || !d3d11_ensure_quad_pipeline(&setup_stats)) return false;
+  if (!common_pipeline_ready || !d3d11_ensure_quad_pipeline(&setup_stats)) {
+    d3d11_note_software_frame("pipeline setup");
+    return false;
+  }
 
   D3D11Window *w = d3d11_get_or_create_window(window, width, height, &setup_stats);
-  if (!w) return false;
+  if (!w) {
+    d3d11_note_software_frame(anvil_hosted_surface_is_window(window) ? "hosted surface buffers" : "swap chain");
+    return false;
+  }
   d3d11_stats_begin("commands", window, w, width, height);
   g_d3d11.stats.frame.device_init_ms = setup_stats.device_init_ms;
   g_d3d11.stats.frame.common_pipeline_ms = setup_stats.common_pipeline_ms;
@@ -1282,6 +1311,7 @@ bool anvil_d3d11_begin_frame(SDL_Window *window, int width, int height, RenColor
   d3d11_set_swapchain_background(w, clear_color);
   if (!d3d11_resize_window(w, width, height)) {
     g_d3d11.stats.frame.fail_reason = "resize";
+    d3d11_note_software_frame("resize");
     d3d11_stats_end(false, g_d3d11.stats.frame.resize_hr);
     anvil_d3d11_forget_window(window);
     return false;
@@ -2000,6 +2030,7 @@ void anvil_d3d11_abort_frame_reason(SDL_Window *window, const char *reason) {
     g_d3d11.quad_srv_count = 0;
     g_d3d11.quad_last_texture_srv = NULL;
     g_d3d11.quad_texture_runs = 0;
+    d3d11_note_software_frame(reason ? reason : "abort");
     d3d11_stats_abort_reason(reason ? reason : "abort");
   }
 }
