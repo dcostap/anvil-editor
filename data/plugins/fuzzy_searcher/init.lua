@@ -4402,6 +4402,9 @@ end
 
 function FSView:clear_preview_view()
   if self.preview_git_job then self.preview_git_job:cancel(); self.preview_git_job = nil end
+  local loading = self.preview_loading_buffer
+  self.preview_loading_buffer = nil
+  if loading then loading:cancel_load() end
   if self:is_preview_focused() then
     self:set_preview_interactive(false)
   end
@@ -4582,6 +4585,51 @@ function FSView:prepare_historical_preview(result)
   return self.preview_view
 end
 
+-- Read the file on a worker. A slow disk must not stop the UI.
+function FSView:load_text_preview(key, path)
+  local ok, buffer = pcall(Buffer)
+  if ok then
+    buffer.disable_language_services = true
+    buffer.disable_treesitter = true
+    buffer.disable_gitdiff_highlight = true
+    ok = pcall(buffer.set_filename, buffer, core.normalize_to_project_dir(path), path)
+  end
+  if not ok then
+    self.preview_blocked = { reason = "Cannot open file", path = path }
+    return
+  end
+  self.preview_loading_buffer = buffer
+  core.log_quiet("Fuzzy Searcher preview load started: path=%s", path)
+  buffer:load_async(path, function(loaded, err, request)
+    if self.preview_loading_buffer ~= buffer then return end
+    self.preview_loading_buffer = nil
+    core.log_quiet(
+      "Fuzzy Searcher preview load finished: path=%s elapsed=%.1fms ok=%s lines=%d error=%s",
+      path, request and request.total_ms or 0, tostring(loaded), #buffer.lines, tostring(err))
+    if self.preview_key ~= key or self.closing or self.closed then return end
+    if not loaded then
+      self.preview_blocked = { reason = "Cannot open file", path = path }
+    else
+      local limit_started = system.get_time()
+      local reason = self:preview_line_limit_reason(buffer)
+      local limit_elapsed_ms = (system.get_time() - limit_started) * 1000
+      if limit_elapsed_ms >= 25 then
+        core.log_quiet(
+          "Fuzzy Searcher preview line-limit scan slow: path=%s elapsed=%.1fms lines=%d",
+          path, limit_elapsed_ms, #buffer.lines)
+      end
+      if reason then
+        self.preview_blocked = { reason = reason, path = path }
+      else
+        buffer.read_only = true
+        buffer.read_only_reason = "Fuzzy Searcher previews are read-only"
+        self.preview_view = preview_text_view.new(buffer)
+      end
+    end
+    self:schedule_update(true)
+  end, { backup_prompt = false })
+end
+
 function FSView:update_preview_view()
   local r = self:selected_result()
   if not r or not r.file or r.is_folder then self:clear_preview_view(); return nil end
@@ -4676,44 +4724,9 @@ function FSView:update_preview_view()
     if key:sub(1, 6) == "image:" then
       view = ImageView(path, "fit")
     else
-      local ok, buffer = pcall(Buffer)
-      if ok and buffer then
-        buffer.disable_language_services = true
-        buffer.disable_treesitter = true
-        buffer.disable_gitdiff_highlight = true
-        local filename = core.normalize_to_project_dir(path)
-        local load_started = system.get_time()
-        core.log_quiet("Fuzzy Searcher preview load started: path=%s size=%s",
-          path, tostring(r.file_size or "unknown"))
-        ok = pcall(function()
-          buffer:set_filename(filename, path)
-          buffer:load(path)
-        end)
-        local load_elapsed_ms = (system.get_time() - load_started) * 1000
-        core.log_quiet(
-          "Fuzzy Searcher preview load finished: path=%s elapsed=%.1fms ok=%s lines=%d",
-          path, load_elapsed_ms, tostring(ok), #buffer.lines)
-      end
-      if not ok or not buffer then
-        self.preview_blocked = { reason = "Cannot open file", path = path }
-        return nil
-      end
-      local limit_started = system.get_time()
-      local reason = self:preview_line_limit_reason(buffer)
-      local limit_elapsed_ms = (system.get_time() - limit_started) * 1000
-      if limit_elapsed_ms >= 25 then
-        core.log_quiet(
-          "Fuzzy Searcher preview line-limit scan slow: path=%s elapsed=%.1fms lines=%d",
-          path, limit_elapsed_ms, #buffer.lines)
-      end
-      if reason then
-        self.preview_key = key
-        self.preview_blocked = { reason = reason, path = path }
-        return nil
-      end
-      buffer.read_only = true
-      buffer.read_only_reason = "Fuzzy Searcher previews are read-only"
-      view = preview_text_view.new(buffer)
+      self.preview_key = key
+      self:load_text_preview(key, path)
+      return nil
     end
     self.preview_view = view
     self.preview_key = key

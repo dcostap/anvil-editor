@@ -77,6 +77,8 @@ local function wait_for_markdown(view)
   test.equal(model.status, "ready", model.reason)
 end
 
+local load_preview = dofile("tests/fixtures/fuzzy_preview.lua")
+
 local function visible_render_text(view, line)
   local rendered = test.not_nil(view:get_line_render(line))
   local text = {}
@@ -298,6 +300,59 @@ test.describe("Fuzzy Searcher preview", function()
     test.same(selection_state(view), { 1, 1, 1, 1 })
   end)
 
+  test.it("returns from a file selection before its preview file is read", function(context)
+    local path = temp_file_path("fuzzy-preview-async-test.txt")
+    context.files = { path }
+    write_file(path, "loaded later\n")
+
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = path, text = path },
+    })
+    local picker = core.fuzzy_searcher_active_view
+
+    test.is_nil(picker:update_preview_view(), "the selection waited for the file read")
+    test.is_nil(picker.preview_blocked)
+    local preview = test.not_nil(load_preview(picker))
+    test.equal(table.concat(preview.buffer.lines), "loaded later\n")
+  end)
+
+  test.it("shows the selected file when an earlier preview load finishes late", function(context)
+    local first = temp_file_path("fuzzy-preview-late-first-test.txt")
+    local second = temp_file_path("fuzzy-preview-late-second-test.txt")
+    context.files = { first, second }
+    write_file(first, "first\n")
+    write_file(second, "second\n")
+
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = first, text = first },
+      { kind = "file", file = second, text = second },
+    })
+    local picker = core.fuzzy_searcher_active_view
+    picker:update_preview_view()
+    picker.selected = 2
+
+    local preview = test.not_nil(load_preview(picker))
+    for _ = 1, 10 do coroutine.yield(0.001) end
+    test.equal(picker.preview_view, preview)
+    test.equal(table.concat(preview.buffer.lines), "second\n")
+  end)
+
+  test.it("does not offer to restore a save backup for a previewed file", function(context)
+    local path = temp_file_path("fuzzy-preview-backup-test.txt")
+    local backup = temp_file_path(".fuzzy-preview-backup-test.txt.1.1.anvil-bak")
+    context.files = { path, backup }
+    write_file(path, "current\n")
+    write_file(backup, "older\n")
+
+    fuzzy_searcher.open_static_results("Files", {
+      { kind = "file", file = path, text = path },
+    })
+    local preview = test.not_nil(load_preview(core.fuzzy_searcher_active_view))
+
+    test.equal(table.concat(preview.buffer.lines), "current\n")
+    test.not_equal(core.nag_view:get_title(), "Save Backup Found")
+  end)
+
   test.it("keeps preview Buffers lightweight and unwrapped", function(context)
     config.plugins.linewrapping.enable_by_default = true
     local path = temp_file_path("fuzzy-preview-lightweight-buffer-test.txt")
@@ -315,7 +370,7 @@ test.describe("Fuzzy Searcher preview", function()
     }
     picker.selected = 1
 
-    local preview = picker:update_preview_view()
+    local preview = load_preview(picker)
 
     test.ok(preview and preview.buffer, "expected a TextView preview")
     test.equal(preview.buffer.disable_language_services, true)
@@ -334,7 +389,7 @@ test.describe("Fuzzy Searcher preview", function()
       { kind = "file", file = path, text = path },
     })
     local picker = core.fuzzy_searcher_active_view
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
 
     test.ok(not markdown.live_render.is_live_mode(preview),
       "expected raw Markdown preview text")
@@ -354,7 +409,7 @@ test.describe("Fuzzy Searcher preview", function()
     })
     local picker = core.fuzzy_searcher_active_view
 
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
 
     test.ok(markdown.live_render.is_live_mode(preview),
       "expected Markdown Live Preview formatting")
@@ -375,7 +430,7 @@ test.describe("Fuzzy Searcher preview", function()
       exact = true, content_spans = { { 1, 1 } }, text = "# Matched heading",
     } })
     local picker = core.fuzzy_searcher_active_view
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
     wait_for_markdown(preview)
 
     test.equal(visible_render_text(preview, 1), "# Matched heading")
@@ -396,14 +451,14 @@ test.describe("Fuzzy Searcher preview", function()
       grep_query = "_lg", exact = true, text = "_lg" } }
     picker.selected = 1
 
-    test.equal(picker:update_preview_view(), nil)
+    test.equal(load_preview(picker), nil)
     test.ok(picker.preview_blocked and picker.preview_blocked.reason)
     test.equal(picker:selected_result(), result)
     result.grep_query = "_l"
     test.equal(picker:update_preview_view(), nil)
 
     picker.selected = 2
-    test.ok(picker:update_preview_view(), "normal results must still show a preview")
+    test.ok(load_preview(picker), "normal results must still show a preview")
     test.equal(picker.preview_blocked, nil)
   end)
 
@@ -419,7 +474,7 @@ test.describe("Fuzzy Searcher preview", function()
     picker.refresh = function() end
 
     picker:update()
-    local preview = test.not_nil(picker.preview_view)
+    local preview = test.not_nil(load_preview(picker))
     local updates = 0
     preview.update = function() updates = updates + 1 end
 
@@ -441,7 +496,7 @@ test.describe("Fuzzy Searcher preview", function()
     local picker = core.fuzzy_searcher_active_view
     for selected, path in ipairs({ text_path, binary_path }) do
       picker.selected = selected
-      picker:update_preview_view()
+      load_preview(picker)
       local opens, open = 0, io.open
       io.open = function(name, ...)
         if name == path then opens = opens + 1 end
@@ -484,7 +539,7 @@ test.describe("Fuzzy Searcher preview", function()
     }
     picker.selected = 1
 
-    local preview = picker:update_preview_view()
+    local preview = load_preview(picker)
 
     test.ok(preview and preview.buffer, "expected a TextView preview")
     local x1, x2 = range_x(preview, 1, col1, col2)

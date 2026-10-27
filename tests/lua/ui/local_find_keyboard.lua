@@ -1,3 +1,4 @@
+local load_preview = dofile("tests/fixtures/fuzzy_preview.lua")
 local core = require "core"
 local command = require "core.command"
 local config = require "core.config"
@@ -77,7 +78,7 @@ test.describe("Local Find keyboard routing", function()
     local picker = core.fuzzy_searcher_active_view
     picker.results = { { kind = "file", file = path, text = path } }
     picker.selected = 1
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
     test.ok(picker:cycle_local_focus(1))
     test.ok(command.perform("editor:find"))
     local input = core.active_view

@@ -368,10 +368,14 @@ end
 
 ---Read and decode on a worker. Construct lines in batches, then publish once.
 ---The Buffer rejects edits and saves until the load succeeds.
-function Buffer:load_async(filename, on_finish)
+---Set `opts.backup_prompt` to false for read-only copies, such as previews.
+---@param opts? { backup_prompt?: boolean }
+function Buffer:load_async(filename, on_finish, opts)
   self:cancel_load()
   cancel_pending_save(self)
-  if prompt_stale_backup then prompt_stale_backup(filename) end
+  if prompt_stale_backup and not (opts and opts.backup_prompt == false) then
+    prompt_stale_backup(filename)
+  end
   local request = {
     status = "pending", path = filename, abs_filename = self.abs_filename,
     started = system.get_time(), split_ms = 0,

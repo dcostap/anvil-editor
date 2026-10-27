@@ -1,3 +1,4 @@
+local load_preview = dofile("tests/fixtures/fuzzy_preview.lua")
 local core = require "core"
 local common = require "core.common"
 local Editor = require "core.editor"
@@ -73,7 +74,7 @@ test.describe("Project Symbol Search refresh", function()
       local names = {}
       for _, result in ipairs(picker.results) do names[result.name] = true end
       test.same(names, { ["Software de monitoreo obsoleto"] = true, ["Software de monitorización"] = true })
-      test.not_nil(picker:update_preview_view(), "the selected file needs a preview")
+      test.not_nil(load_preview(picker), "the selected file needs a preview")
     end
   end)
 
@@ -131,7 +132,7 @@ test.describe("Project Symbol Search refresh", function()
     local picker = fuzzy_searcher.open_static_results("Preview", {
       { kind = "file", file = "IMPRESORAS.md", abs_path = context.path },
     })
-    test.not_nil(picker:update_preview_view())
+    test.not_nil(load_preview(picker))
     test.ok(wait_until(function() return request.done end))
     test.equal(request.status, "fresh", "a read-only preview must not change the searched symbols")
     test.equal(#request.results, 2)

@@ -1,3 +1,4 @@
+local load_preview = dofile("tests/fixtures/fuzzy_preview.lua")
 local command = require "core.command"
 local core = require "core"
 local config = require "core.config"
@@ -76,7 +77,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
         buffer = kind == "buffer" and source.buffer or nil } }
       picker.selected = 1
       if kind == "preview" then
-        test.not_nil(picker:update_preview_view())
+        test.not_nil(load_preview(picker))
         test.ok(picker:cycle_local_focus(1))
       end
 
@@ -111,7 +112,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
     picker.results = { { kind = "file", file = path, text = path } }
     picker.selected = 1
 
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
 
     test.equal(preview:get_current_line_highlight_mode(), false)
     test.equal(preview.buffer.read_only, true)
@@ -127,7 +128,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
       { kind = "file", file = path, text = path },
     })
     local picker = core.fuzzy_searcher_active_view
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
     wait_for_markdown(preview)
 
     local rendered = test.not_nil(preview:get_line_render(1))
@@ -154,7 +155,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
     local picker = core.fuzzy_searcher_active_view
     picker.results = { { kind = "file", file = path, text = path } }
     picker.selected = 1
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
 
     test.ok(picker:cycle_local_focus(1))
     test.equal(core.active_view, preview)
@@ -179,7 +180,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
       { kind = "file", file = path, text = path },
     }
     picker.selected = 1
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
     test.ok(picker:cycle_local_focus(1))
 
     test.not_ok(command.perform("fuzzy:next"))
@@ -200,7 +201,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
     local picker = core.fuzzy_searcher_active_view
     picker.results = { { kind = "file", file = path, text = path } }
     picker.selected = 1
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
     local x, y = preview:get_line_screen_position(2)
 
     picker:on_mouse_pressed("left", x + preview:get_font():get_width("se"),
@@ -235,7 +236,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
       text = "alpha NEEDLE omega",
     } }
     picker.selected = 1
-    picker:update_preview_view()
+    load_preview(picker)
 
     test.ok(command.perform("core:activate_point_of_interest"))
 
@@ -280,7 +281,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
     local picker = core.fuzzy_searcher_active_view
     picker.results = { { kind = "file", file = path, text = path, line = 80 } }
     picker.selected = 1
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
     test.ok(picker:cycle_local_focus(1))
     preview.buffer:set_selection(82, 3, 82, 6)
     preview.scroll.x, preview.scroll.to.x = 14, 14
@@ -310,7 +311,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
       { kind = "file", file = path, text = path, line = 80 },
     })
     local picker = core.fuzzy_searcher_active_view
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
     wait_for_markdown(preview)
     test.ok(picker:cycle_local_focus(1))
     preview.buffer:set_selection(82, 3, 82, 6)
@@ -336,7 +337,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
     local picker = core.fuzzy_searcher_active_view
     picker.results = { { kind = "file", file = path, text = path, line = 30 } }
     picker.selected = 1
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
     test.ok(picker:cycle_local_focus(1))
     preview.buffer:set_selection(32, 2, 33, 4)
 
@@ -368,7 +369,7 @@ test.describe("Fuzzy Searcher preview interaction", function()
       text = "alpha NEEDLE omega",
     } }
     picker.selected = 1
-    local preview = test.not_nil(picker:update_preview_view())
+    local preview = test.not_nil(load_preview(picker))
     test.ok(#(preview.preview_search_ranges or {}) > 0)
     test.ok(picker:cycle_local_focus(1))
     picker:update_preview_view()
