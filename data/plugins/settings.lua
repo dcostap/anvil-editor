@@ -2631,7 +2631,7 @@ function core.run()
   end)
 
   startup_measure("settings_apply_wallpaper", function()
-    local name = settings.config.wallpaper or "image1"
+    local name = settings.config.wallpaper or config.wallpaper
     if not wallpapers.exists(name) then
       core.log_quiet("Unknown saved wallpaper: %s; using image1", tostring(name))
       name = "image1"
