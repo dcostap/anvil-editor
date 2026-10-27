@@ -888,6 +888,7 @@ function DiffView:on_mouse_pressed(button, x, y, clicks)
     return handled
   end
   self.mouse_router:capture(side)
+  if panes.pane_for_view(self) then panes.register_focus_target(self, side) end
   core.set_active_view(side)
   handled = self.mouse_router:call(side, "on_mouse_pressed", button, x, y, clicks)
   if side:scrollbar_dragging() then

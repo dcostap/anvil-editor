@@ -2068,6 +2068,7 @@ end
 function FileTreeView:on_mouse_pressed(button, x, y, clicks)
   self.pressed_entry_line = nil
   self.pressed_entry_clicks = 0
+  if self.on_local_find_mouse_pressed and self:on_local_find_mouse_pressed(button, x, y, clicks) then return true end
   local modified = keymap.modkeys.ctrl or keymap.modkeys.cmd or keymap.modkeys.shift
   local line = button == "left" and not modified and self:entry_row_at_point(x, y) or nil
   if not line then return FileTreeView.super.on_mouse_pressed(self, button, x, y, clicks) end

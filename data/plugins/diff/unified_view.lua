@@ -582,6 +582,7 @@ local function snap_range(view, anchor, caret, snap)
 end
 
 function UnifiedView:on_mouse_pressed(button, x, y, clicks)
+  if self.on_local_find_mouse_pressed and self:on_local_find_mouse_pressed(button, x, y, clicks) then return true end
   if button ~= "left" or self.hovering_gutter or self:scrollbar_hovering() then
     return UnifiedView.super.on_mouse_pressed(self, button, x, y, clicks)
   end
