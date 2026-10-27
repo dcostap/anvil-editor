@@ -8120,12 +8120,13 @@ function FSView:draw_surface(x, y, w, h)
   local scale = self.drawing_scale or 1
   if scale == 1 then
     core.root_panel:draw_wallpaper_region(x, y, w, h)
-    return
+  else
+    local cx, cy = self.position.x + self.size.x / 2, self.position.y + self.size.y / 2
+    renderer.pop_transform()
+    core.root_panel:draw_wallpaper_region(cx + (x - cx) * scale, cy + (y - cy) * scale, w * scale, h * scale)
+    renderer.push_transform(cx, cy, scale, 1)
   end
-  local cx, cy = self.position.x + self.size.x / 2, self.position.y + self.size.y / 2
-  renderer.pop_transform()
-  core.root_panel:draw_wallpaper_region(cx + (x - cx) * scale, cy + (y - cy) * scale, w * scale, h * scale)
-  renderer.push_transform(cx, cy, scale, 1)
+  renderer.draw_rect(x, y, w, h, style.wallpaper_surface(style.background, 0.5))
 end
 
 ---Fit the status and the active Search Modifiers into a width.
