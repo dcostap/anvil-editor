@@ -187,6 +187,8 @@ SCENARIOS["autocomplete-popup-light"] = dict(SCENARIOS["nag-bar"], theme="light"
 SCENARIOS["find-bar"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["find-bar-replace"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["find-bar-light"] = dict(SCENARIOS["nag-bar"], theme="light")
+# A live Terminal with its find card, matches on the screen and marks on the scrollbar.
+SCENARIOS["terminal-find"] = dict(SCENARIOS["nag-bar"], start_line=1)
 SCENARIOS["prompt-bar"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["prompt-bar-list"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["prompt-bar-light"] = dict(SCENARIOS["nag-bar-list"], theme="light")

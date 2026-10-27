@@ -10,6 +10,7 @@ local image_formats = require "core.image_formats"
 local keymap = require "core.keymap"
 local panes = require "core.panes"
 local blocks = require "plugins.terminal.blocks"
+local TerminalFind = require "plugins.terminal.find"
 local style = require "core.style"
 local text_capture = require "core.text_capture"
 local text_poi_locations = require "core.text_poi_locations"
@@ -328,6 +329,7 @@ function TerminalView:new(options)
   self.input_used = options.session_id ~= nil
   self.context = "workspace"
   self.terminal_view = true
+  self.find = TerminalFind(self)
   self.scrollable = true
   self.cursor = "arrow"
   self:refresh_cell_metrics()
@@ -726,9 +728,6 @@ function TerminalView:adopt_session(session)
   self.reported_error = nil
   self.launch_error = nil
   self.status_revision = nil
-  self.search_pending = nil
-  self.search_query = nil
-  self.search_state = nil
   self.key_owners = {}
   self.text_owner = nil
   self.pending_key_releases = {}
@@ -826,6 +825,10 @@ function TerminalView:supports_text_input()
   return true
 end
 
+function TerminalView:get_surface_focus_targets()
+  if self.find.visible then return { self, self.find.input } end
+end
+
 function TerminalView:cell_geometry()
   local width = math.max(1, self.size.x - PADDING * 2)
   local height = math.max(1, self.size.y - PADDING * 2)
@@ -856,8 +859,6 @@ function TerminalView:sync_geometry()
   self.session_cell_height = self.cell_height
   core.log_quiet("Terminal session %d resized: cols=%d rows=%d",
     self.log_id, cols, rows)
-  self.search_pending = nil
-  self.search_state = nil
   self:clear_point_hover()
   local pane = panes.pane_for_view(self)
   local include_rows = pane ~= nil and pane.current_view == self and panes.is_visible(pane)
@@ -1120,9 +1121,7 @@ function TerminalView:update()
     core.redraw = true
   end
 
-  if self.search_pending then
-    self:search(self.search_pending.query, self.search_pending.reverse)
-  end
+  if self.find.visible then self.find:update() end
 end
 
 function TerminalView:open_text_capture()
@@ -1455,6 +1454,7 @@ function TerminalView:draw()
     end
   end
   draw_hover_background(self, origin_x, origin_y)
+  self.find:draw_matches(origin_x, origin_y)
   perf_scope_end(phase_scope)
 
   self:draw_images(2, origin_x, origin_y)
@@ -1470,6 +1470,7 @@ function TerminalView:draw()
       draw_text_run(self, run, origin_x, y, blink_on)
     end
   end
+  self.find:draw_current_outline(origin_x, origin_y)
   perf_scope_end(phase_scope)
 
   self:draw_images(3, origin_x, origin_y)
@@ -1544,20 +1545,9 @@ function TerminalView:draw()
     draw_composition_foreground(self, x, y)
     ime.set_location(x, y, width, self.cell_height)
   end
-  if self.search_state and self.search_query then
-    local label = self.search_state == "no_match"
-      and string.format("No match: %s", self.search_query)
-      or self.search_state == "searching"
-        and string.format("Searching: %s", self.search_query)
-        or string.format("Found: %s", self.search_query)
-    renderer.draw_text(
-      self.font, label,
-      origin_x, self.position.y + self.size.y - self.cell_height - PADDING,
-      self.search_state == "no_match" and (style.error or style.text)
-        or (style.dim or style.text)
-    )
-  end
   self:draw_scrollbar()
+  self.find:draw_marks()
+  self.find:draw_card()
   if self.link_tooltip and self.link_tooltip.visible then
     core.root_panel:defer_draw(self.draw_link_tooltip, self)
   end
@@ -1699,40 +1689,6 @@ function TerminalView:on_drop(drop)
   local pasted = text ~= "" and self:paste(text)
   core.log_quiet("Terminal session %s drop: files=%d text_bytes=%d pasted=%s",
     tostring(self.log_id), #drop.files, #drop.text, tostring(pasted))
-  return true
-end
-
-function TerminalView:search(query, reverse)
-  if not self.session then return false end
-  if not query or query == "" then
-    self.search_pending = nil
-    self.search_query = nil
-    self.search_state = nil
-    core.redraw = true
-    return false
-  end
-  self.search_query = query
-  self.search_state = "searching"
-  local found, state = self.session:search(query, reverse == true)
-  if state == "pending" then
-    self.search_pending = { query = query, reverse = reverse == true }
-    self.search_state = "searching"
-    core.redraw = true
-    return true
-  end
-  self.search_pending = nil
-  self.search_state = found and "found" or "no_match"
-  if found then self:refresh_snapshot() else core.redraw = true end
-  return found == true
-end
-
-function TerminalView:prompt_search()
-  core.global_prompt_bar:enter("Terminal Search", {
-    text = self.search_query or "",
-    select_text = true,
-    show_suggestions = false,
-    submit = function(text) self:search(text, false) end,
-  })
   return true
 end
 
@@ -2139,6 +2095,7 @@ end
 
 function TerminalView:on_mouse_pressed(button, x, y, clicks)
   if not self.session then return false end
+  if self.find:on_mouse_pressed(button, x, y, clicks) then return true end
   local scrollbar = self.v_scrollbar:on_mouse_pressed(button, x, y, clicks)
   if scrollbar then
     self:clear_point_hover()
@@ -2212,6 +2169,10 @@ function TerminalView:on_mouse_moved(x, y, dx, dy)
     return true
   end
   local col, row, pixel_x, pixel_y = self:mouse_position(x, y)
+  if not self.selection_start and self.find:contains(x, y) then
+    self:clear_point_hover()
+    return true
+  end
   if self:contains_terminal_cell(x, y) and not self.selection_start then
     self.hover_x, self.hover_y = x, y
     local cell = self.hover_cell
@@ -2402,6 +2363,7 @@ end
 
 function TerminalView:on_close()
   self:clear_point_hover()
+  self.find:close(true)
   self.running, self.state = false, "closed"
   if self.session then
     if self.vt_trace_path then self:stop_vt_trace() end
@@ -2715,19 +2677,53 @@ end, {
   end, {
     keywords = { "terminal", "diagnostic", "record", "raw", "output" },
   }),
-  ["terminal:search"] = command.palette(function(view) return view:prompt_search() end),
-  ["terminal:search_next"] = function(view) return view:search(view.search_query, false) end,
-  ["terminal:search_previous"] = function(view) return view:search(view.search_query, true) end,
+})
+
+-- The Terminal View while it or its find field has focus.
+local function find_owner()
+  local view = core.active_view
+  if view and view.terminal_find then return true, view.terminal_find.view end
+  return view and view.terminal_view == true, view
+end
+
+command.add(find_owner, {
+  ["terminal:find"] = command.palette(function(view) view.find:open() end),
+})
+
+command.add(function()
+  local ok, view = find_owner()
+  return ok and view.find.visible, view
+end, {
+  ["terminal:find_next"] = function(view) return view.find:navigate(false) end,
+  ["terminal:find_previous"] = function(view) return view.find:navigate(true) end,
+})
+
+-- Keys that the shell needs, such as Enter and Escape, act on the card only while its field has focus.
+command.add(function()
+  local view = core.active_view
+  local find = view and view.terminal_find
+  return find ~= nil and find.visible, find
+end, {
+  ["terminal:find_field_next"] = function(find) find:navigate(false) end,
+  ["terminal:find_field_previous"] = function(find) find:navigate(true) end,
+  ["terminal:find_toggle_case"] = function(find) find:toggle_case() end,
+  ["terminal:find_close"] = function(find) find:close() end,
 })
 
 keymap.add({
-  ["escape"] = { "editor:find_close", "terminal:close_text_capture" },
+  ["escape"] = { "terminal:find_close", "editor:find_close", "terminal:close_text_capture" },
   ["ctrl+shift+c"] = "terminal:copy",
   ["ctrl+v"] = "terminal:paste",
   ["ctrl+shift+v"] = "terminal:paste",
-  ["ctrl+shift+f"] = { "terminal:search", "fuzzy:open_grep" },
-  ["f3"] = "terminal:search_next",
-  ["shift+f3"] = "terminal:search_previous",
+  ["ctrl+shift+f"] = { "terminal:find", "fuzzy:open_grep" },
+  ["f3"] = "terminal:find_next",
+  ["shift+f3"] = "terminal:find_previous",
+  ["return"] = "terminal:find_field_next",
+  ["keypad enter"] = "terminal:find_field_next",
+  ["shift+return"] = "terminal:find_field_previous",
+  ["down"] = "terminal:find_field_next",
+  ["up"] = "terminal:find_field_previous",
+  ["ctrl+i"] = "terminal:find_toggle_case",
   ["ctrl+shift+k"] = "terminal:clear",
 })
 

@@ -449,30 +449,51 @@ test.describe("Native terminal session", function()
     test.ok(text:find("ANVIL_KEYS=1B-5B-35-35-3A-34-37-3B-34-75", 1, true), text)
   end)
 
-  test.it("searches repeated matches in terminal output", function()
+  -- Polls until a scan of the current content ends.
+  local function find_all(session, query, case_sensitive)
+    local deadline = system.get_time() + 10
+    repeat
+      session:update()
+      local matches, stale, shift = session:find(query, case_sensitive)
+      if matches and not stale then return matches, shift end
+      coroutine.yield(0.005)
+    until system.get_time() >= deadline
+    test.fail("Terminal find did not finish")
+  end
+
+  local function match_cells(matches)
+    local cells = {}
+    for index, match in ipairs(matches) do cells[index] = { match.col1, match.col2 } end
+    return cells
+  end
+
+  test.it("finds each match in live terminal output", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
     local session, start_error = terminal_native.new({
       cols = 80, rows = 8, cell_width = 8, cell_height = 16,
       cwd = system.getcwd(),
-      shell = 'cmd.exe /d /s /c "echo needle needle"',
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Write-Output ('Needle needle '+[char]0x754c+'needle'); Start-Sleep -Milliseconds 1500; Write-Output 'needle later'; Start-Sleep -Seconds 30"]],
     })
     test.ok(session, start_error)
-    local deadline = system.get_time() + 5
-    local text = ""
-    while system.get_time() < deadline and not text:find("needle needle", 1, true) do
-      session:update()
-      text = snapshot_text(session:snapshot())
-      if not text:find("needle needle", 1, true) then coroutine.yield(0.01) end
-    end
-    test.ok(text:find("needle needle", 1, true), text)
-    test.ok(session:search("needle", false))
-    local first = session:selected_text()
-    test.ok(session:search("needle", false))
-    local second = session:selected_text()
+    local text = wait_for_text(session, "needle", 5)
+    test.ok(text:find("Needle needle", 1, true), text)
+
+    local matches, shift = find_all(session, "needle", false)
+    -- The wide character takes two cells.
+    test.same({ { 0, 6 }, { 7, 13 }, { 16, 22 } }, match_cells(matches))
+    test.same({ { 7, 13 }, { 16, 22 } }, match_cells((find_all(session, "needle", true))))
+
+    test.ok(session:scroll("row", matches[1].row - shift))
+    test.ok(session:row_text(0).text:find("^Needle needle"))
+
+    text = wait_for_text(session, "needle later", 5)
+    test.ok(text:find("needle later", 1, true), text)
+    matches = find_all(session, "needle", false)
     session:close()
-    test.equal(first, "needle")
-    test.equal(second, "needle")
+    test.equal(#matches, 4)
+    test.same({ 0, 6 }, { matches[4].col1, matches[4].col2 })
+    test.ok(matches[4].row > matches[1].row)
   end)
 
   test.it("captures complete scrollback without changing the terminal selection", function()
@@ -769,7 +790,7 @@ test.describe("Native terminal session", function()
       function() return session:reset_selection_gesture() end,
       function() return session:selected_text() end,
       function() return session:text_capture() end,
-      function() return session:search("x", false) end,
+      function() return session:find("x", false) end,
       function() return session:row_text(0) end,
       function() return session:mouse("press", "left", 0, 0, {}) end,
       function() return session:hyperlink(0, 0) end,

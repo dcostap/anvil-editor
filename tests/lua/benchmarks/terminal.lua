@@ -88,15 +88,14 @@ test.describe("Terminal native benchmark", function()
       if not changed then coroutine.yield(0.001) end
     end
     local elapsed_ms = (system.get_time() - started) * 1000
-    local search_calls, search_max_ms = 0, 0
-    local search_state = "pending"
-    while search_state == "pending" do
-      local search_started = system.get_time()
-      local _, state = session:search("ANVIL_TERMINAL_MISSING_QUERY", false)
-      search_max_ms = math.max(search_max_ms, (system.get_time() - search_started) * 1000)
-      search_calls = search_calls + 1
-      search_state = state
-    end
+    local find_calls, find_max_ms = 0, 0
+    local matches
+    repeat
+      local find_started = system.get_time()
+      matches = session:find("ANVIL_TERMINAL_MISSING_QUERY", false)
+      find_max_ms = math.max(find_max_ms, (system.get_time() - find_started) * 1000)
+      find_calls = find_calls + 1
+    until matches
     local native_stats = session:stats()
     session:close()
     test.ok(text:find("ANVIL_TERMINAL_BENCHMARK_TAIL", 1, true), text)
@@ -119,7 +118,7 @@ test.describe("Terminal native benchmark", function()
         p95 = percentile(snapshots, 0.95),
         max = percentile(snapshots, 1.00),
       },
-      no_match_search = { calls = search_calls, max_step_ms = search_max_ms },
+      no_match_find = { calls = find_calls, max_step_ms = find_max_ms },
       native = native_stats,
       lua_heap_kib = {
         before = heap_before,

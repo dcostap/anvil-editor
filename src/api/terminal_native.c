@@ -32,6 +32,8 @@
 #define TERMINAL_SYNC_OUTPUT_TIMEOUT_MS 1000u
 #define TERMINAL_CURSOR_HIDE_HOLD_MS 30u
 #define TERMINAL_OUTPUT_EVENT "terminaloutput"
+#define TERMINAL_FIND_MATCH_LIMIT 10000u
+#define TERMINAL_FIND_SLICE_MS 4
 
 typedef enum {
   TERMINAL_STATE_NEW,
@@ -45,6 +47,11 @@ typedef enum {
 
 typedef struct TerminalColors TerminalColors;
 typedef struct ReconnectJob ReconnectJob;
+typedef struct {
+  uint32_t row;
+  uint16_t col1;
+  uint16_t col2;
+} TerminalFindMatch;
 typedef struct {
   AnvilIPCPipe pipe;
   HANDLE process;
@@ -149,19 +156,22 @@ typedef struct {
   size_t notification_body_length;
   bool notification_pending;
   size_t notification_count;
-  char *search_query;
-  size_t search_query_length;
-  size_t search_row;
-  size_t search_col;
-  char *search_scan_query;
-  size_t search_scan_query_length;
-  size_t search_scan_total_rows;
-  size_t search_scan_start_row;
-  size_t search_scan_step;
-  bool search_scan_active;
-  bool search_scan_reverse;
-  bool search_scan_continuing;
-  uint64_t search_scan_generation;
+  char *find_query;
+  size_t find_query_length;
+  bool find_case_sensitive;
+  bool find_scanning;
+  bool find_has_result;
+  bool find_limited;
+  uint64_t find_generation;
+  size_t find_next_row;
+  size_t find_end_row;
+  TerminalFindMatch *find_matches;
+  size_t find_count;
+  size_t find_capacity;
+  GhosttyTrackedGridRef find_scan_anchor;
+  uint32_t find_scan_anchor_row;
+  GhosttyTrackedGridRef find_result_anchor;
+  uint32_t find_result_anchor_row;
 } TerminalSession;
 
 struct TerminalColors {
@@ -266,9 +276,7 @@ static void set_terminal_state(TerminalSession *session, TerminalState state) {
   session->state_revision++;
 }
 
-static void invalidate_search_scan(TerminalSession *session) {
-  session->search_scan_active = false;
-}
+static void reset_find(TerminalSession *session);
 
 static bool terminal_is_live(const TerminalSession *session) {
   return session && session->state == TERMINAL_STATE_RUNNING;
@@ -1038,13 +1046,15 @@ static void close_session(TerminalSession *session) {
     session->snapshot_text = NULL;
     session->snapshot_text_capacity = 0;
   }
-  if (session->search_query) {
-    HeapFree(GetProcessHeap(), 0, session->search_query);
-    session->search_query = NULL;
+  reset_find(session);
+  if (session->find_query) {
+    HeapFree(GetProcessHeap(), 0, session->find_query);
+    session->find_query = NULL;
   }
-  if (session->search_scan_query) {
-    HeapFree(GetProcessHeap(), 0, session->search_scan_query);
-    session->search_scan_query = NULL;
+  if (session->find_matches) {
+    HeapFree(GetProcessHeap(), 0, session->find_matches);
+    session->find_matches = NULL;
+    session->find_capacity = 0;
   }
   if (session->clipboard_text) {
     HeapFree(GetProcessHeap(), 0, session->clipboard_text);
@@ -1647,7 +1657,7 @@ static bool service_replay(TerminalSession *session, bool *changed) {
         session->has_scrollback_lines ? &session->scrollback_lines : NULL)) {
       fail_transport(session, ERROR_INVALID_DATA); return false;
     }
-    session->render_generation++; invalidate_search_scan(session);
+    session->render_generation++;
     *changed = true;
     return false;
   }
@@ -1671,7 +1681,7 @@ static bool service_replay(TerminalSession *session, bool *changed) {
     if (GetTickCount64() >= deadline) break;
   }
   if (update_terminal_render_state(session) == GHOSTTY_SUCCESS && !session->render_pending) {
-    session->render_generation++; invalidate_search_scan(session); *changed = true;
+    session->render_generation++; *changed = true;
   }
   return false;
 }
@@ -1733,7 +1743,6 @@ static int f_terminal_update(lua_State *L) {
     if (update_terminal_render_state(session) == GHOSTTY_SUCCESS && !session->render_pending) {
       changed = true;
       session->render_generation++;
-      invalidate_search_scan(session);
     }
   }
   bool output_remains = false;
@@ -1762,7 +1771,6 @@ static int f_terminal_update(lua_State *L) {
       update_terminal_render_state(session) == GHOSTTY_SUCCESS && !session->render_pending) {
     changed = true;
     session->render_generation++;
-    invalidate_search_scan(session);
   }
   lua_pushboolean(L, changed);
   push_status(L, session);
@@ -1983,7 +1991,6 @@ static int f_terminal_resize(lua_State *L) {
   session->cell_height = cell_height;
   update_terminal_render_state(session);
   session->render_generation++;
-  invalidate_search_scan(session);
   lua_pushboolean(L, true);
   return 1;
 }
@@ -2023,7 +2030,6 @@ static int f_terminal_clear(lua_State *L) {
   );
   update_terminal_render_state(session);
   session->render_generation++;
-  invalidate_search_scan(session);
   lua_pushboolean(L, true);
   return 1;
 }
@@ -2869,31 +2875,6 @@ static int f_terminal_text_capture(lua_State *L) {
   return 1;
 }
 
-static bool byte_match(
-  const uint8_t *text, size_t text_length, const char *query, size_t query_length,
-  size_t begin, size_t end, bool reverse, size_t *match_col
-) {
-  if (query_length == 0 || query_length > text_length) return false;
-  end = end > text_length ? text_length : end;
-  begin = begin > end ? end : begin;
-  if (!reverse) {
-    for (size_t index = begin; index + query_length <= end; index++) {
-      if (memcmp(text + index, query, query_length) == 0) {
-        *match_col = index;
-        return true;
-      }
-    }
-  } else if (end >= query_length) {
-    for (size_t index = end - query_length + 1; index-- > begin;) {
-      if (memcmp(text + index, query, query_length) == 0) {
-        *match_col = index;
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 static size_t append_utf8(uint8_t *buffer, size_t capacity, size_t length, uint32_t codepoint) {
   if (codepoint <= 0x7f && length + 1 <= capacity) buffer[length++] = (uint8_t)codepoint;
   else if (codepoint <= 0x7ff && length + 2 <= capacity) {
@@ -2971,179 +2952,240 @@ static int f_terminal_row_text(lua_State *L) {
   return 1;
 }
 
-static int f_terminal_search(lua_State *L) {
+static void free_find_anchor(GhosttyTrackedGridRef *anchor) {
+  ghostty_tracked_grid_ref_free(*anchor);
+  *anchor = NULL;
+}
+
+static void reset_find(TerminalSession *session) {
+  session->find_scanning = false;
+  session->find_has_result = false;
+  session->find_count = 0;
+  free_find_anchor(&session->find_scan_anchor);
+  free_find_anchor(&session->find_result_anchor);
+}
+
+/* Rows that left the top of the screen since the anchor was at `row`. Output prunes old rows, so a row of that
+ * frame is now `shift` rows higher. False when the anchor row itself is gone. */
+static bool find_anchor_shift(GhosttyTrackedGridRef anchor, uint32_t row, int64_t *shift) {
+  GhosttyPointCoordinate point = { 0 };
+  if (!anchor || ghostty_tracked_grid_ref_point(anchor, GHOSTTY_POINT_TAG_SCREEN, &point) != GHOSTTY_SUCCESS) {
+    return false;
+  }
+  *shift = (int64_t)row - (int64_t)point.y;
+  return true;
+}
+
+static void start_find_scan(TerminalSession *session) {
+  free_find_anchor(&session->find_scan_anchor);
+  session->find_generation = session->render_generation;
+  size_t total_rows = 0;
+  if (ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS, &total_rows) != GHOSTTY_SUCCESS ||
+      total_rows == 0 || total_rows > UINT32_MAX) {
+    return;
+  }
+  GhosttyPoint last = {
+    .tag = GHOSTTY_POINT_TAG_SCREEN,
+    .value = { .coordinate = { .x = 0, .y = (uint32_t)(total_rows - 1) } },
+  };
+  if (ghostty_terminal_grid_ref_track(session->terminal, last, &session->find_scan_anchor) != GHOSTTY_SUCCESS) {
+    session->find_scan_anchor = NULL;
+    return;
+  }
+  session->find_scan_anchor_row = (uint32_t)(total_rows - 1);
+  session->find_next_row = 0;
+  session->find_end_row = total_rows;
+  session->find_count = 0;
+  session->find_limited = false;
+  session->find_scanning = true;
+}
+
+static bool add_find_match(TerminalSession *session, uint32_t row, uint16_t col1, uint16_t col2) {
+  if (session->find_count == session->find_capacity) {
+    size_t capacity = session->find_capacity ? session->find_capacity * 2 : 64;
+    if (capacity > TERMINAL_FIND_MATCH_LIMIT) capacity = TERMINAL_FIND_MATCH_LIMIT;
+    TerminalFindMatch *matches = session->find_matches
+      ? (TerminalFindMatch *)HeapReAlloc(GetProcessHeap(), 0, session->find_matches, capacity * sizeof(*matches))
+      : (TerminalFindMatch *)HeapAlloc(GetProcessHeap(), 0, capacity * sizeof(*matches));
+    if (!matches) return false;
+    session->find_matches = matches;
+    session->find_capacity = capacity;
+  }
+  session->find_matches[session->find_count++] = (TerminalFindMatch){ row, col1, col2 };
+  return true;
+}
+
+static uint8_t fold_ascii(uint8_t byte, bool case_sensitive) {
+  return !case_sensitive && byte >= 'A' && byte <= 'Z' ? (uint8_t)(byte + 32) : byte;
+}
+
+/* Adds each match in one screen row. `frame_row` is the same row in the frame where the scan started.
+ * False when the scan must stop. */
+static bool find_in_row(
+  TerminalSession *session, uint32_t screen_row, uint32_t frame_row,
+  uint8_t *text, uint16_t *starts, uint16_t *ends, size_t capacity
+) {
+  size_t length = 0;
+  for (uint16_t col = 0; col < session->cols; col++) {
+    GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+    GhosttyPoint point = {
+      .tag = GHOSTTY_POINT_TAG_SCREEN,
+      .value = { .coordinate = { .x = col, .y = screen_row } },
+    };
+    if (ghostty_terminal_grid_ref(session->terminal, point, &ref) != GHOSTTY_SUCCESS) continue;
+    GhosttyCell cell = 0;
+    GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
+    if (ghostty_grid_ref_cell(&ref, &cell) == GHOSTTY_SUCCESS) {
+      ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, &wide);
+    }
+    if (wide == GHOSTTY_CELL_WIDE_SPACER_TAIL || wide == GHOSTTY_CELL_WIDE_SPACER_HEAD) continue;
+    uint32_t grapheme[16];
+    size_t grapheme_length = 0;
+    size_t cell_start = length;
+    GhosttyResult result = ghostty_grid_ref_graphemes(&ref, grapheme, 16, &grapheme_length);
+    if (result == GHOSTTY_SUCCESS && grapheme_length > 0) {
+      for (size_t index = 0; index < grapheme_length; index++) {
+        length = append_utf8(text, capacity, length, grapheme[index]);
+      }
+    } else if (result == GHOSTTY_SUCCESS && length < capacity) {
+      text[length++] = ' ';
+    }
+    uint16_t end = (uint16_t)(col + (wide == GHOSTTY_CELL_WIDE_WIDE ? 2 : 1));
+    for (size_t index = cell_start; index < length; index++) {
+      text[index] = fold_ascii(text[index], session->find_case_sensitive);
+      starts[index] = col;
+      ends[index] = end;
+    }
+  }
+  const char *query = session->find_query;
+  size_t query_length = session->find_query_length;
+  for (size_t index = 0; index + query_length <= length;) {
+    if (memcmp(text + index, query, query_length) != 0) { index++; continue; }
+    if (session->find_count >= TERMINAL_FIND_MATCH_LIMIT) {
+      session->find_limited = true;
+      return false;
+    }
+    if (!add_find_match(session, frame_row, starts[index], ends[index + query_length - 1])) return false;
+    index += query_length;
+  }
+  return true;
+}
+
+static void push_find_matches(lua_State *L, TerminalSession *session) {
+  lua_createtable(L, (int)session->find_count, 1);
+  for (size_t index = 0; index < session->find_count; index++) {
+    TerminalFindMatch *match = &session->find_matches[index];
+    lua_createtable(L, 0, 3);
+    set_integer_field(L, "row", match->row);
+    set_integer_field(L, "col1", match->col1);
+    set_integer_field(L, "col2", match->col2);
+    lua_rawseti(L, -2, (lua_Integer)index + 1);
+  }
+  lua_pushboolean(L, session->find_limited);
+  lua_setfield(L, -2, "limited");
+}
+
+/* Finds each match of `query` in the screen and its scrollback, for a few milliseconds in each call.
+ * Call it each frame while the find card is open. A content change starts a new scan.
+ * 1. The complete match list when a scan ends, else nil. Rows are screen rows when that scan started.
+ *    Columns are cells; col2 is the cell after the match.
+ * 2. True while the matches are not current.
+ * 3. The rows that output pruned since that scan started, or nil when those rows are gone. */
+static int f_terminal_find(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   size_t query_length = 0;
   const char *query = luaL_checklstring(L, 2, &query_length);
-  bool reverse = lua_toboolean(L, 3) != 0;
-  if (!terminal_model_available(session)) {
+  bool case_sensitive = lua_toboolean(L, 3) != 0;
+  if (!terminal_model_available(session) || query_length == 0) {
+    reset_find(session);
+    lua_pushnil(L);
     lua_pushboolean(L, false);
-    return 1;
+    lua_pushnil(L);
+    return 3;
   }
-  if (query_length == 0) {
-    lua_pushboolean(L, false);
-    return 1;
+  char *folded = (char *)HeapAlloc(GetProcessHeap(), 0, query_length);
+  if (!folded) return luaL_error(L, "Could not allocate the terminal find query");
+  for (size_t index = 0; index < query_length; index++) {
+    folded[index] = (char)fold_ascii((uint8_t)query[index], case_sensitive);
   }
-  bool resume = session->search_scan_active &&
-    session->search_scan_generation == session->render_generation &&
-    session->search_scan_reverse == reverse &&
-    session->search_scan_query_length == query_length &&
-    memcmp(session->search_scan_query, query, query_length) == 0;
-  if (!resume) {
-    char *scan_query = session->search_scan_query
-      ? (char *)HeapReAlloc(GetProcessHeap(), 0, session->search_scan_query, query_length)
-      : (char *)HeapAlloc(GetProcessHeap(), 0, query_length);
-    if (!scan_query) return luaL_error(L, "Could not allocate terminal search query");
-    memcpy(scan_query, query, query_length);
-    session->search_scan_query = scan_query;
-    session->search_scan_query_length = query_length;
-    session->search_scan_reverse = reverse;
-    session->search_scan_continuing = session->search_query &&
-      session->search_query_length == query_length &&
-      memcmp(session->search_query, query, query_length) == 0;
-    session->search_scan_total_rows = 0;
-    ghostty_terminal_get(
-      session->terminal, GHOSTTY_TERMINAL_DATA_TOTAL_ROWS,
-      &session->search_scan_total_rows
-    );
-    session->search_scan_start_row = session->search_scan_continuing
-      ? session->search_row
-      : (reverse && session->search_scan_total_rows > 0
-          ? session->search_scan_total_rows - 1 : 0);
-    session->search_scan_step = 0;
-    session->search_scan_active = true;
-    session->search_scan_generation = session->render_generation;
+  if (!session->find_query || session->find_query_length != query_length ||
+      session->find_case_sensitive != case_sensitive ||
+      memcmp(session->find_query, folded, query_length) != 0) {
+    if (session->find_query) HeapFree(GetProcessHeap(), 0, session->find_query);
+    session->find_query = folded;
+    session->find_query_length = query_length;
+    session->find_case_sensitive = case_sensitive;
+    reset_find(session);
+  } else {
+    HeapFree(GetProcessHeap(), 0, folded);
   }
-  size_t total_rows = session->search_scan_total_rows;
-  bool continuing = session->search_scan_continuing;
-  size_t start_row = session->search_scan_start_row;
-  size_t row_capacity = (size_t)session->cols * 64;
-  uint8_t *row_text = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, row_capacity);
-  uint16_t *byte_cols = (uint16_t *)HeapAlloc(
-    GetProcessHeap(), 0, row_capacity * sizeof(*byte_cols)
-  );
-  if (!row_text || !byte_cols) {
-    if (row_text) HeapFree(GetProcessHeap(), 0, row_text);
-    if (byte_cols) HeapFree(GetProcessHeap(), 0, byte_cols);
-    return luaL_error(L, "Could not allocate terminal search row");
+  if (!session->find_scanning &&
+      (!session->find_has_result || session->find_generation != session->render_generation)) {
+    start_find_scan(session);
   }
-  bool found = false;
-  size_t found_row = 0, found_col = 0, found_end_col = 0;
-  uint64_t scan_started = GetTickCount64();
-  for (; session->search_scan_step < total_rows; session->search_scan_step++) {
-    size_t step = session->search_scan_step;
-    size_t row = reverse
-      ? (start_row + total_rows - step) % total_rows
-      : (start_row + step) % total_rows;
-    size_t length = 0;
-    for (uint16_t col = 0; col < session->cols; col++) {
-      GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
-      GhosttyPoint point = {
-        .tag = GHOSTTY_POINT_TAG_SCREEN,
-        .value = { .coordinate = { .x = col, .y = (uint32_t)row } },
-      };
-      if (ghostty_terminal_grid_ref(session->terminal, point, &ref) != GHOSTTY_SUCCESS) continue;
-      GhosttyCell raw_cell = 0;
-      GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
-      if (ghostty_grid_ref_cell(&ref, &raw_cell) == GHOSTTY_SUCCESS) {
-        ghostty_cell_get(raw_cell, GHOSTTY_CELL_DATA_WIDE, &wide);
+  bool delivered = false;
+  if (session->find_scanning) {
+    size_t capacity = (size_t)session->cols * 64;
+    uint8_t *text = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, capacity);
+    uint16_t *starts = (uint16_t *)HeapAlloc(GetProcessHeap(), 0, capacity * sizeof(*starts));
+    uint16_t *ends = (uint16_t *)HeapAlloc(GetProcessHeap(), 0, capacity * sizeof(*ends));
+    if (!text || !starts || !ends) {
+      if (text) HeapFree(GetProcessHeap(), 0, text);
+      if (starts) HeapFree(GetProcessHeap(), 0, starts);
+      if (ends) HeapFree(GetProcessHeap(), 0, ends);
+      return luaL_error(L, "Could not allocate a terminal find row");
+    }
+    LARGE_INTEGER frequency, started, now;
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&started);
+    int64_t budget = frequency.QuadPart * TERMINAL_FIND_SLICE_MS / 1000;
+    int64_t shift = 0;
+    bool anchored = find_anchor_shift(session->find_scan_anchor, session->find_scan_anchor_row, &shift);
+    bool complete = false;
+    while (anchored) {
+      size_t frame_row = session->find_next_row;
+      if (frame_row >= session->find_end_row) { complete = true; break; }
+      session->find_next_row++;
+      int64_t screen_row = (int64_t)frame_row - shift;
+      if (screen_row >= 0 &&
+          !find_in_row(session, (uint32_t)screen_row, (uint32_t)frame_row, text, starts, ends, capacity)) {
+        complete = true;
+        break;
       }
-      if (wide == GHOSTTY_CELL_WIDE_SPACER_TAIL ||
-          wide == GHOSTTY_CELL_WIDE_SPACER_HEAD) continue;
-      uint32_t grapheme[16];
-      size_t grapheme_length = 0;
-      size_t cell_start = length;
-      GhosttyResult grapheme_result = ghostty_grid_ref_graphemes(
-        &ref, grapheme, 16, &grapheme_length
-      );
-      if (grapheme_result == GHOSTTY_SUCCESS && grapheme_length > 0) {
-        for (size_t index = 0; index < grapheme_length; index++) {
-          length = append_utf8(row_text, row_capacity, length, grapheme[index]);
-        }
-      } else if (grapheme_result == GHOSTTY_SUCCESS) {
-        row_text[length++] = ' ';
+      if ((session->find_next_row & 15) == 0) {
+        QueryPerformanceCounter(&now);
+        if (now.QuadPart - started.QuadPart >= budget) break;
       }
-      for (size_t index = cell_start; index < length; index++) byte_cols[index] = col;
     }
-    size_t match_offset = 0;
-    size_t begin = 0, end = length;
-    if (continuing && step == 0 && row == session->search_row) {
-      size_t current_byte = 0;
-      while (current_byte < length && byte_cols[current_byte] <= session->search_col) current_byte++;
-      if (reverse) end = current_byte > 0 ? current_byte - 1 : 0;
-      else begin = current_byte;
-    }
-    if (byte_match(row_text, length, query, query_length, begin, end, reverse, &match_offset)) {
-      found = true;
-      found_row = row;
-      found_col = byte_cols[match_offset];
-      found_end_col = byte_cols[match_offset + query_length - 1];
-      break;
-    }
-    if (GetTickCount64() - scan_started >= 8) {
-      session->search_scan_step++;
-      HeapFree(GetProcessHeap(), 0, row_text);
-      HeapFree(GetProcessHeap(), 0, byte_cols);
-      lua_pushboolean(L, false);
-      lua_pushliteral(L, "pending");
-      return 2;
+    HeapFree(GetProcessHeap(), 0, text);
+    HeapFree(GetProcessHeap(), 0, starts);
+    HeapFree(GetProcessHeap(), 0, ends);
+    if (!anchored) {
+      /* Output pruned every row of this scan. The next call starts again. */
+      session->find_scanning = false;
+      free_find_anchor(&session->find_scan_anchor);
+      session->find_generation = session->render_generation - 1;
+    } else if (complete) {
+      session->find_scanning = false;
+      free_find_anchor(&session->find_result_anchor);
+      session->find_result_anchor = session->find_scan_anchor;
+      session->find_result_anchor_row = session->find_scan_anchor_row;
+      session->find_scan_anchor = NULL;
+      session->find_has_result = true;
+      delivered = true;
     }
   }
-  HeapFree(GetProcessHeap(), 0, row_text);
-  HeapFree(GetProcessHeap(), 0, byte_cols);
-  if (!found) {
-    session->search_scan_active = false;
-    lua_pushboolean(L, false);
-    lua_pushliteral(L, "not_found");
-    return 2;
+  if (delivered) push_find_matches(L, session);
+  else lua_pushnil(L);
+  lua_pushboolean(L, session->find_scanning || session->find_generation != session->render_generation);
+  int64_t shift = 0;
+  if (session->find_has_result &&
+      find_anchor_shift(session->find_result_anchor, session->find_result_anchor_row, &shift)) {
+    lua_pushinteger(L, (lua_Integer)shift);
+  } else {
+    lua_pushnil(L);
   }
-  session->search_scan_active = false;
-  char *saved = session->search_query
-    ? (char *)HeapReAlloc(GetProcessHeap(), 0, session->search_query, query_length)
-    : (char *)HeapAlloc(GetProcessHeap(), 0, query_length);
-  if (saved) {
-    memcpy(saved, query, query_length);
-    session->search_query = saved;
-    session->search_query_length = query_length;
-    session->search_row = found_row;
-    session->search_col = found_col;
-  }
-  GhosttyTerminalScrollViewport viewport = {
-    .tag = GHOSTTY_SCROLL_VIEWPORT_ROW,
-    .value = { .row = found_row },
-  };
-  ghostty_terminal_scroll_viewport(session->terminal, viewport);
-  GhosttyGridRef start_ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
-  GhosttyGridRef end_ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
-  GhosttyPoint start_point = {
-    .tag = GHOSTTY_POINT_TAG_SCREEN,
-    .value = { .coordinate = { .x = (uint16_t)found_col, .y = (uint32_t)found_row } },
-  };
-  GhosttyPoint end_point = {
-    .tag = GHOSTTY_POINT_TAG_SCREEN,
-    .value = { .coordinate = {
-      .x = (uint16_t)found_end_col,
-      .y = (uint32_t)found_row
-    } },
-  };
-  if (ghostty_terminal_grid_ref(session->terminal, start_point, &start_ref) != GHOSTTY_SUCCESS ||
-      ghostty_terminal_grid_ref(session->terminal, end_point, &end_ref) != GHOSTTY_SUCCESS) {
-    lua_pushboolean(L, false);
-    return 1;
-  }
-  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
-  selection.start = start_ref;
-  selection.end = end_ref;
-  if (ghostty_terminal_set(
-    session->terminal, GHOSTTY_TERMINAL_OPT_SELECTION, &selection
-  ) != GHOSTTY_SUCCESS) {
-    lua_pushboolean(L, false);
-    return 1;
-  }
-  update_terminal_render_state(session);
-  lua_pushboolean(L, true);
-  lua_pushinteger(L, (lua_Integer)found_row);
-  return 2;
+  return 3;
 }
 
 static GhosttyMouseButton mouse_button_from_name(const char *name) {
@@ -3946,7 +3988,7 @@ static const luaL_Reg terminal_methods[] = {
   { "reset_selection_gesture", f_terminal_reset_selection_gesture },
   { "selected_text", f_terminal_selected_text },
   { "text_capture", f_terminal_text_capture },
-  { "search", f_terminal_search },
+  { "find", f_terminal_find },
   { "row_text", f_terminal_row_text },
   { "mouse", f_terminal_mouse },
   { "hyperlink", f_terminal_hyperlink },

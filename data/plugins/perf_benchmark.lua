@@ -820,6 +820,12 @@ local function setup_scenario()
     require("core.panes").place(function() return view end, {
       placement = "current", focus = true, reason = "perf-terminal-blocks",
     })
+  elseif benchmark.scenario == "terminal-find" then
+    -- A live Terminal with matches above and on the screen. scenario_is_ready opens its find card.
+    view = require("plugins.terminal").open {
+      focus = true, reason = "perf-terminal-find",
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "1..80 | ForEach-Object { if ($_ % 9 -eq 0) { 'row ' + $_ + ' has a needle in it' } else { 'row ' + $_ } }; Write-Output 'Needle at the end'; Start-Sleep -Seconds 600"]],
+    }
   elseif benchmark.scenario == "focus-feedback" then
     view = require("core.focus_feedback_scene")()
     require("core.panes").place(function() return view end, {
@@ -991,6 +997,17 @@ local function scenario_is_ready()
     local picker = core.fuzzy_searcher_active_view
     if not (picker and picker.open_transition_complete and #picker.results > 0) then return false end
     if tostring(picker.status):find("…", 1, true) then return false end
+  end
+  if benchmark.scenario == "terminal-find" then
+    if view.state ~= "running" then return false end
+    if not view.find.visible then
+      local capture = view.session:text_capture()
+      if not (capture and capture.text:find("Needle at the end", 1, true)) then return false end
+      command.perform("terminal:find")
+      for _, char in ipairs { "n", "e", "e", "d", "l", "e" } do core.on_event("textinput", char) end
+      return false
+    end
+    return view.find.delivered and not view.find.stale
   end
   if not view.buffer then return true end
   if benchmark.scenario == "filetree-edit-repeat" then

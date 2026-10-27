@@ -60,7 +60,8 @@ local function fake_native()
       resizes = {},
       scrolls = {},
       gesture_events = {},
-      searches = {},
+      find_calls = {},
+      find_shift = 0,
       traces = {},
       closed = false,
       state = "running",
@@ -166,9 +167,12 @@ local function fake_native()
       }
       return true, kind == "drag" and "down" or "none"
     end
-    function session:search(query, reverse)
-      self.searches[#self.searches + 1] = { query, reverse }
-      return query == "needle"
+    function session:find(query, case_sensitive)
+      self.find_calls[#self.find_calls + 1] = { query, case_sensitive }
+      if query == "" then return nil, false, nil end
+      local matches = self.find_pending
+      self.find_pending = nil
+      return matches, false, self.find_shift
     end
     function session:hyperlink() return self.hyperlink_uri end
     function session:row_text() return self.row_text_data end
@@ -1497,33 +1501,82 @@ test.describe("Terminal View", function()
     test.same({ "row", 20 }, context.sessions[1].scrolls[#context.sessions[1].scrolls])
   end)
 
-  test.it("searches terminal scrollback through commands", function(context)
+  local function open_find(context, matches)
     local view = terminal.open()
-    view.search_query = "needle"
-    test.ok(command.perform("terminal:search_next"))
-    test.ok(command.perform("terminal:search_previous"))
-    test.same({ "needle", false }, context.sessions[1].searches[1])
-    test.same({ "needle", true }, context.sessions[1].searches[2])
-  end)
-
-  test.it("shows found and no-match terminal search states", function()
-    local view = terminal.open()
-    test.not_ok(view:search("missing", false))
-    test.equal(view.search_state, "no_match")
-    test.ok(view:search("needle", false))
-    test.equal(view.search_state, "found")
-    test.equal(view.search_query, "needle")
-  end)
-
-  test.it("cancels pending terminal search when the query is cleared", function(context)
-    local view = terminal.open()
-    context.sessions[1].search = function() return false, "pending" end
-    test.ok(view:search("needle", false))
-    test.ok(view.search_pending)
-    test.not_ok(view:search("", false))
-    test.equal(view.search_pending, nil)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 800, 400
     view:update()
-    test.equal(view.search_query, nil)
+    view.snapshot.scrollbar = { total = 100, offset = 80, len = 20 }
+    test.ok(command.perform("terminal:find"))
+    test.equal(core.active_view, view.find.input)
+    core.active_view:on_text_input("needle")
+    context.sessions[1].find_pending = matches
+    view:update()
+    return view, context.sessions[1]
+  end
+
+  local function match(row, col1) return { row = row, col1 = col1 or 0, col2 = (col1 or 0) + 6 } end
+
+  test.it("counts the matches of the typed query and starts at the last one on the screen", function(context)
+    local view, session = open_find(context, { match(10), match(50), match(90), match(99, 20) })
+    test.same({ "needle", false }, session.find_calls[#session.find_calls])
+    test.equal(view.find:info(), "4 / 4")
+    -- The current match is on the screen, so the screen stays.
+    test.equal(#session.scrolls, 0)
+  end)
+
+  test.it("moves between matches and scrolls only to a match off the screen", function(context)
+    local view, session = open_find(context, { match(10), match(50), match(90) })
+    test.ok(command.perform("terminal:find_field_next"))
+    test.equal(view.find:info(), "1 / 3")
+    test.same({ "row", 0 }, session.scrolls[#session.scrolls])
+    view.snapshot.scrollbar.offset = 0
+    test.ok(command.perform("terminal:find_field_previous"))
+    test.equal(view.find:info(), "3 / 3")
+    test.same({ "row", 80 }, session.scrolls[#session.scrolls])
+  end)
+
+  test.it("keeps the current match on its line when new output arrives", function(context)
+    local view, session = open_find(context, { match(10), match(50), match(90) })
+    view.snapshot.scrollbar.offset = 40
+    test.ok(command.perform("terminal:find_previous"))
+    test.equal(view.find:info(), "2 / 3")
+    local scrolls = #session.scrolls
+    -- Output pruned 5 rows. The next scan finds the same lines 5 rows higher, and a new match.
+    session.find_shift = 5
+    view:update()
+    session.find_shift = 0
+    session.find_pending = { match(5), match(45), match(85), match(98) }
+    view:update()
+    test.equal(view.find:info(), "2 / 4")
+    test.equal(#session.scrolls, scrolls)
+  end)
+
+  test.it("reports no results", function(context)
+    local view = open_find(context, {})
+    test.equal(view.find:info(), "No results")
+  end)
+
+  test.it("starts with a one-line terminal selection as its query", function(context)
+    local view = terminal.open()
+    context.sessions[1].selection_text = "selected words"
+    test.ok(command.perform("terminal:find"))
+    test.equal(view.find:query(), "selected words")
+  end)
+
+  test.it("closes from its field and gives the focus back to the terminal", function(context)
+    local view = open_find(context, { match(90) })
+    test.ok(command.perform("terminal:find_close"))
+    test.equal(core.active_view, view)
+    test.not_ok(view.find.visible)
+  end)
+
+  test.it("leaves field keys to the shell while the terminal has focus", function(context)
+    local view = open_find(context, { match(90) })
+    core.set_active_view(view)
+    test.not_ok(command.perform("terminal:find_field_next"))
+    test.not_ok(command.perform("terminal:find_close"))
+    test.ok(view.find.visible)
   end)
 
   test.it("reports mouse input when the terminal enables mouse tracking", function(context)

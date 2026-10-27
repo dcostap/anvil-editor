@@ -495,6 +495,9 @@ It uses independent expected colors, not a visual golden, to test filtering beha
 Use `--scenario terminal-images` on both renderers to check static inline terminal images.
 It checks transparency, crop edges, terminal bounds, and image layer order with independent expected pixels.
 
+Use `--scenario terminal-find --report-only` to see the Terminal find card over live shell output.
+The scene has no golden. Inspect its screenshot for the card, the match highlights, and the scrollbar marks.
+
 Use `--scenario glyph-cache-growth --report-only` to check glyph atlas growth.
 The scene compares pixels from growing fonts with separate warm fonts.
 It allows one channel unit for GPU blend rounding at different screen positions.
