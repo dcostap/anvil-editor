@@ -8,6 +8,8 @@ local test = require "core.test"
 local git_view = require "plugins.git_view"
 local backend = require "plugins.git.backend"
 
+require "plugins.intellij_find"
+
 local function open_log()
   local _, view = git_view.open_log({ path = "C:/row-selection-repo" }, {
     git_view_opts = { defer_refresh = true },
@@ -45,11 +47,45 @@ test.describe("Git Log row selection", function()
   end)
 
   test.after_each(function(context)
+    if core.active_view and core.active_view.local_find_input then
+      command.perform("editor:find_close")
+    end
     keymap.modkeys.shift = false
     keymap.modkeys.ctrl = false
     panes.reset_for_tests()
     core.active_view = context.active_view
   end)
+
+  for _, case in ipairs {
+    { row_mode = true, surface = "Git Log" },
+    { row_mode = false, surface = "Git Log" },
+    { row_mode = true, surface = "commit list" },
+  } do
+    test.it("focuses and edits Find above the " .. case.surface .. " in " .. (case.row_mode and "row" or "text") .. " mode", function()
+      local view, list = open_log()
+      if not case.row_mode then command.perform("git:toggle_row_selection_mode") end
+      test.ok(command.perform("editor:find"))
+      local input = core.active_view
+      test.ok(input.local_find_input)
+      input:set_text("Newest")
+      list:update()
+      view:focus_list_pane()
+      local before = list:get_selection_state()
+      local x = input.position.x + input.size.x / 2
+      local y = input.position.y + input.size.y / 2
+
+      local surface = case.surface == "Git Log" and view or list
+      surface:on_mouse_pressed("left", x, y, 1)
+      surface:on_mouse_released("left", x, y)
+
+      test.equal(core.active_view, input, "a Find click must focus its input, not the commit underneath")
+      test.same(list:get_selection_state(), before)
+      input:select_all()
+      core.root_panel:on_text_input("Middle")
+      test.equal(input:get_text(), "Middle")
+      test.ok(table.concat(list.buffer.lines):find("Newest", 1, true), "Find must not edit the commit list")
+    end)
+  end
 
   test.it("moves and extends complete rows, then restores normal text navigation", function()
     local _, list = open_log()

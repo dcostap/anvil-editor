@@ -849,6 +849,9 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
   local hovered = self.mouse_router:press_target(x, y)
   local pane = hovered and hovered.git_pane and hovered or nil
   if pane then
+    if self.mouse_router:call(pane, "on_local_find_mouse_pressed", button, x, y, clicks) then
+      return true
+    end
     self.focused_pane_name = pane.git_pane
     self.focus_pane = "buffer"
     core.set_active_view(pane)

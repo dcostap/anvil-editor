@@ -1213,6 +1213,16 @@ local function handle_find_mouse_pressed(view, state, x, y, clicks)
   return true
 end
 
+-- Specialized text surfaces must offer the Find card clicks before selecting content.
+function TextView:on_local_find_mouse_pressed(button, x, y, clicks)
+  local state = find_state_by_view[self]
+  if button == "left" and state and state.visible then
+    if handle_find_mouse_pressed(self, state, x, y, clicks) then return true end
+    state.input_active = false
+  end
+  return false
+end
+
 -- Draw per-view find highlights. These are intentionally keyed by TextView, not
 -- Buffer, so the same Buffer open in two splits can show independent search state.
 --
@@ -1369,11 +1379,7 @@ local function make_local_find_on_mouse_pressed(base)
       return base(self, button, x, y, clicks)
     end
 
-    local state = find_state_by_view[self]
-    if button == "left" and state and state.visible then
-      if handle_find_mouse_pressed(self, state, x, y, clicks) then return true end
-      state.input_active = false
-    end
+    if self:on_local_find_mouse_pressed(button, x, y, clicks) then return true end
 
     local old_depth = TextView.__local_find_on_mouse_pressed_depth or 0
     TextView.__local_find_on_mouse_pressed_depth = old_depth + 1

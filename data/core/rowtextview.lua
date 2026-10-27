@@ -281,6 +281,7 @@ end
 
 function RowTextView:on_mouse_pressed(button, x, y, clicks)
   if not self.row_selection_mode then return RowTextView.super.on_mouse_pressed(self, button, x, y, clicks) end
+  if self.on_local_find_mouse_pressed and self:on_local_find_mouse_pressed(button, x, y, clicks) then return true end
   if View.on_mouse_pressed(self, button, x, y, clicks) then return true end
   if button == "left" then
     self:select_row_at(x, y, keymap.modkeys.shift, keymap.modkeys.ctrl or keymap.modkeys.cmd)
