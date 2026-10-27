@@ -50,7 +50,7 @@ end
 local function prune_old_traces(root)
   local names = {}
   for _, name in ipairs(system.list_dir(root) or {}) do
-    if name:match("^anvil%-startup%-%d%d%d%d%d%d%d%d%-%d%d%d%d%-p%d+") then
+    if name:match("^anvil%-startup%-%d+%-%d+%-p%d+") then
       names[#names + 1] = name
     end
   end
@@ -64,8 +64,12 @@ end
 local function write_line(line)
   if not trace or not trace.file then return false end
   trace.file:write(line, "\n")
-  -- Keep the trace useful after a crash. Startup work is short, so flush every event.
-  trace.file:flush()
+  -- Keep the trace useful after a crash without a disk write for each event.
+  local now = system.get_time()
+  if now - trace.flushed >= 0.1 then
+    trace.file:flush()
+    trace.flushed = now
+  end
   return true
 end
 
@@ -102,11 +106,13 @@ function startup.begin(options)
     pid = pid,
     started = system.get_time(),
     sequence = 0,
+    flushed = 0,
     stack = {},
     first_run_step = false,
     first_present = false,
   }
   last_path = path
+  if type(core) == "table" then core.startup_trace_active = true end
 
   write_line("Anvil startup trace")
   write_line("trace_version=1")

@@ -109,6 +109,7 @@ local function fake_native()
       return snapshot
     end
     function session:write(text) self.writes[#self.writes + 1] = text; return true end
+    function session:image(id) return self.images and self.images[id] end
     function session:clear() self.cleared = true; return true end
     function session:key(key, mods, action, event)
       self.keys[#self.keys + 1] = { key, mods, action, event }
@@ -1799,6 +1800,25 @@ test.describe("Terminal View", function()
     view:on_mouse_pressed("left", 7, 7)
     view:on_mouse_released("left", 7, 7)
     test.ok(overlay.is_open())
+  end)
+
+  test.it("previews the complete image when the program shows only part of it", function(context)
+    local overlay = require "core.image_overlay"
+    local view = terminal.open()
+    local complete = canvas.new(20, 60, { 255, 0, 0, 255 }, true)
+    local visible = complete:copy(0, 0, 20, 20)
+    context.sessions[1].images = { [7] = complete }
+    view.snapshot.images = {
+      { canvas = visible, x = 0, y = 0, width = 20, height = 20,
+        z = 1, id = 7, placement_id = 1 },
+    }
+    keymap.modkeys.ctrl = false
+    view:on_mouse_moved(10, 10, 0, 0)
+    view:on_mouse_pressed("left", 10, 10)
+    view:on_mouse_released("left", 10, 10)
+    test.ok(overlay.is_open())
+    test.same({ overlay.get_view().image:get_size() }, { 20, 60 })
+    overlay.close()
   end)
 
   test.it("previews the top image only inside its bounds and cancels when it disappears", function()

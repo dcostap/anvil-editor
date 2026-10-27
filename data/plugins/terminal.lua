@@ -2094,7 +2094,11 @@ end
 function TerminalView:activate_point_of_interest(point, opts)
   if not point then return false end
   if point.image then
-    return require("core.image_overlay").open_image(point.image, {
+    -- The drawn canvas holds only the placement's crop, such as the rows that Pi shows.
+    local image = self.session and self.session:image(point.id)
+    core.log_quiet("Terminal image %s: opening Image Overlay with the %s image",
+      tostring(point.id), image and "complete" or "drawn")
+    return require("core.image_overlay").open_image(image or point.image, {
       label = "Terminal image",
     })
   end

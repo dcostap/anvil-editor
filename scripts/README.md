@@ -9,6 +9,8 @@ Scripts that configure and build Anvil.
 - **ensure-luajit-cli.sh**: Build the LuaJIT command-line tool for syntax checks.
 - **generate-embedded-runtime.py**: Pack the runtime data into the standalone executable.
 - **prepare-dev-update.ps1**: Save the running dev app before an update.
+- **start-dev-anvil.ps1**: Start the dev app through Windows Explorer, outside the caller's Terminal process group.
+  The app uses the desktop environment, not the build shell's environment.
 - **sync-git-subprojects.py**: Refresh cached Git dependencies before Meson opens them.
   A refresh occurs when a wrap, patch, or package file changes, also in incremental builds.
   Local dependency edits go to that dependency's Git stash. Ignored build caches stay.

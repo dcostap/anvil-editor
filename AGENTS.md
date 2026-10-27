@@ -238,6 +238,8 @@ Use the BAT files in the repo root
   - restores the source-data junctions
   - builds first, then asks the running editor to save its Workspaces and detach Terminal Sessions
   - Terminal Session hosts and their shells keep running; the restarted editor reconnects to them
+  - restarts through Windows Explorer, outside the updating Terminal's process group
+  - uses the desktop environment for the restarted app; closing the updating Terminal cannot kill that app
   - moves the old `anvil.exe` and ConPTY files into `anvil-portable\retired`, because running hosts lock them
   - stops if the editor does not close, for example at an unsaved-file prompt; it never force-stops a process
 
@@ -245,6 +247,10 @@ Use the BAT files in the repo root
   - explicitly launches the unstripped `build-windows-x86_64\src\anvil.exe`
   - uses the normal dev portable data and user directory
   - use this only when native debugger/symbol information is needed
+
+`scripts/start-dev-anvil.ps1` starts the app after setup and updates. Do not replace it with `Start-Process` or CMD `start`.
+Those calls keep the caller's Windows job. A later Terminal Close can then kill the restarted editor.
+Run `anvil:dev-update-launch` after changes. It uses a windowless test app, not the daily editor.
 
 Daily launcher target:
 
