@@ -807,7 +807,12 @@ local function setup_scenario()
     core.root_panel:update()
     local button = overlay.button_rect("copy")
     overlay.on_mouse_moved(button.x + button.w / 2, button.y + button.h / 2, 0, 0)
-    overlay.show_toast("Image copied")
+    -- The message fades after a short time. Show it again on each update, so every capture has it.
+    local update = overlay.update
+    function overlay.update()
+      overlay.show_toast("Image copied")
+      return update()
+    end
   elseif benchmark.scenario == "image-zoom" then
     -- The Image Overlay at a new zoom and pan on each frame, so each frame draws the whole image again.
     config.transitions = false

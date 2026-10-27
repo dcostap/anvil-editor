@@ -2,6 +2,7 @@ local test = require "core.test"
 local style = require "core.style"
 local View = require "core.view"
 local TerminalView = require("plugins.terminal").TerminalView
+local TerminalFind = require "plugins.terminal.find"
 
 local WIDTH, HEIGHT = 400, 60
 
@@ -52,6 +53,7 @@ end
 local function terminal_view(runs, cell_width)
   local view = setmetatable({}, TerminalView)
   View.new(view)
+  view.find = TerminalFind(view)
   view.font = style.terminal_font
   view.cell_width = cell_width
   view.cell_height = math.ceil(style.terminal_font:get_height())

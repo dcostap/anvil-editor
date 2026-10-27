@@ -4,6 +4,7 @@ local View = require "core.view"
 local style = require "core.style"
 local canvas = require "canvas"
 local TerminalView = require("plugins.terminal").TerminalView
+local TerminalFind = require "plugins.terminal.find"
 local Scene = View:extend()
 
 function Scene:get_name() return "Terminal Images" end
@@ -29,6 +30,7 @@ function Scene:draw()
   renderer.draw_rect(self.position.x, self.position.y, self.size.x, self.size.y, {255,255,255,255})
   local view = setmetatable({}, TerminalView)
   View.new(view)
+  view.find = TerminalFind(view)
   view.font = style.code_font
   view.cell_width, view.native_cell_width, view.cell_height = 8, 8, 16
   view.position.x, view.position.y = self.position.x + 30, self.position.y + 30

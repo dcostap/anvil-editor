@@ -3,6 +3,7 @@ local common = require "core.common"
 local style = require "core.style"
 local View = require "core.view"
 local TerminalView = require("plugins.terminal").TerminalView
+local TerminalFind = require "plugins.terminal.find"
 local core = require "core"
 local config = require "core.config"
 local CaretRenderer = require "core.caret_renderer"
@@ -22,6 +23,7 @@ end
 local function terminal(font, x, y, background)
   local view = setmetatable({}, TerminalView)
   View.new(view)
+  view.find = TerminalFind(view)
   view.font = font
   view.cell_width, view.cell_height = font:get_width("M"), math.ceil(font:get_height())
   view.position.x, view.position.y = x, y

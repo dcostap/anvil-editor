@@ -2,11 +2,13 @@ local test = require "core.test"
 local style = require "core.style"
 local View = require "core.view"
 local TerminalView = require("plugins.terminal").TerminalView
+local TerminalFind = require "plugins.terminal.find"
 
 -- The renderer is the boundary. Record coverage without testing private helpers.
 local function draw(runs, width, height)
   local view = setmetatable({}, TerminalView)
   View.new(view)
+  view.find = TerminalFind(view)
   view.font = style.terminal_font
   view.cell_width, view.cell_height = width, height
   view.position.x, view.position.y = 0, 0
