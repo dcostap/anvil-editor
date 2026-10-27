@@ -1004,7 +1004,6 @@ static void push_markdown_vault_note(lua_State *L, const AnvilMarkdownVaultNoteV
   lua_pushinteger(L, note->fact_signature); lua_setfield(L, -2, "fact_signature");
   push_string_list(L, note->aliases, note->alias_count); lua_setfield(L, -2, "aliases");
   push_string_list(L, note->tags, note->tag_count); lua_setfield(L, -2, "tags");
-  push_string_list(L, note->preview, note->preview_count); lua_setfield(L, -2, "embed_preview");
   lua_createtable(L, (int)note->metadata_count, 0);
   for (uint32_t i = 0; i < note->metadata_count; i++) {
     const AnvilMarkdownVaultMetadataView *meta = &note->metadata[i];
@@ -1029,7 +1028,6 @@ static void push_markdown_vault_note(lua_State *L, const AnvilMarkdownVaultNoteV
     lua_pushstring(L, heading->path_slug); lua_setfield(L, -2, "path_slug");
     lua_pushinteger(L, heading->line); lua_setfield(L, -2, "line");
     lua_pushinteger(L, heading->level); lua_setfield(L, -2, "level");
-    push_string_list(L, heading->preview, heading->preview_count); lua_setfield(L, -2, "embed_preview");
     lua_pushvalue(L, -1); lua_rawseti(L, headings_table, (int)i + 1);
     lua_pushvalue(L, -1); lua_setfield(L, slug_table, heading->slug);
     lua_pushvalue(L, -1); lua_setfield(L, text_table, heading->normalized_text);
@@ -1050,7 +1048,6 @@ static void push_markdown_vault_note(lua_State *L, const AnvilMarkdownVaultNoteV
     lua_pushinteger(L, block->line); lua_setfield(L, -2, "line");
     lua_pushinteger(L, block->col1); lua_setfield(L, -2, "col1");
     lua_pushinteger(L, block->col2); lua_setfield(L, -2, "col2");
-    push_string_list(L, block->preview, block->preview_count); lua_setfield(L, -2, "embed_preview");
     lua_pushvalue(L, -1); lua_rawseti(L, blocks_table, (int)i + 1);
     lua_setfield(L, blocks_by_id, block->id);
   }

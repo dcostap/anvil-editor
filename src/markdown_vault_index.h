@@ -26,8 +26,6 @@ typedef struct AnvilMarkdownVaultHeadingView {
   const char *path_slug;
   uint32_t line;
   uint32_t level;
-  const char **preview;
-  uint32_t preview_count;
 } AnvilMarkdownVaultHeadingView;
 
 typedef struct AnvilMarkdownVaultBlockView {
@@ -35,8 +33,6 @@ typedef struct AnvilMarkdownVaultBlockView {
   uint32_t line;
   uint32_t col1;
   uint32_t col2;
-  const char **preview;
-  uint32_t preview_count;
 } AnvilMarkdownVaultBlockView;
 
 typedef struct AnvilMarkdownVaultLinkView {
@@ -71,8 +67,6 @@ typedef struct AnvilMarkdownVaultNoteView {
   uint32_t alias_count;
   const char **tags;
   uint32_t tag_count;
-  const char **preview;
-  uint32_t preview_count;
   AnvilMarkdownVaultHeadingView *headings;
   uint32_t heading_count;
   AnvilMarkdownVaultBlockView *blocks;

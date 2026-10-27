@@ -189,27 +189,6 @@ static char *heading_slug(const char *text) {
   return slug;
 }
 
-static char *clean_preview(const char *line) {
-  while (*line && isspace((unsigned char)*line)) line++;
-  while (*line == '#') line++;
-  while (*line && isspace((unsigned char)*line)) line++;
-  size_t len = strlen(line);
-  while (len && isspace((unsigned char)line[len - 1])) len--;
-  while (len && line[len - 1] == '#') { len--; while (len && isspace((unsigned char)line[len - 1])) len--; }
-  const char *caret = len ? line + len : line;
-  while (caret > line && (isalnum((unsigned char)caret[-1]) || caret[-1] == '-')) caret--;
-  if (caret > line && caret[-1] == '^') {
-    size_t before = (size_t)(caret - line - 1);
-    while (before && isspace((unsigned char)line[before - 1])) before--;
-    len = before;
-  }
-  bool truncated = len > 240;
-  if (truncated) len = 237;
-  char *copy = truncated ? (char *)SDL_malloc(len + 4) : dup_range(line, len);
-  if (copy && truncated) { memcpy(copy, line, len); memcpy(copy + len, "...", 4); }
-  return copy;
-}
-
 static bool line_is_fence(const char *line) {
   while (*line == ' ' || *line == '\t') line++;
   return strncmp(line, "```", 3) == 0 || strncmp(line, "~~~", 3) == 0;
@@ -496,14 +475,6 @@ static bool parse_note_text(OwnedNote *owned, char *text, size_t len, bool shall
   if (!lines.items) { SDL_free(structural.excluded); return false; }
   uint32_t body_start = 0;
   if (!parse_frontmatter(note, &lines, &body_start)) { SDL_free(lines.items); SDL_free(structural.excluded); return false; }
-  for (uint32_t i = body_start; i < lines.count && note->preview_count < 3; i++) {
-    char *preview = clean_preview(lines.items[i]);
-    if (preview && preview[0] && strcmp(preview, "---") && strcmp(preview, "+++")) {
-      const char **grown = (const char **)SDL_realloc((void *)note->preview, ((size_t)note->preview_count + 1) * sizeof(char *));
-      if (!grown) { SDL_free(preview); SDL_free(lines.items); SDL_free(structural.excluded); return false; }
-      note->preview = grown; ((char **)note->preview)[note->preview_count++] = preview;
-    } else SDL_free(preview);
-  }
   if (shallow) { SDL_free(lines.items); SDL_free(structural.excluded); return true; }
   bool fence = false, html = false;
   bool structural_fallback = structural.excluded == NULL;
@@ -552,27 +523,6 @@ static bool parse_note_text(OwnedNote *owned, char *text, size_t len, bool shall
         || (strchr(trim, '>') && strstr(trim, "</")))) html = false;
   }
   for (uint32_t i = 0; i < 6; i++) { SDL_free(hierarchy[i]); SDL_free(slug_hierarchy[i]); }
-  for (uint32_t h = 0; h < note->heading_count; h++) {
-    uint32_t line = note->headings[h].line;
-    uint32_t end = lines.count;
-    for (uint32_t next = h + 1; next < note->heading_count; next++) if (note->headings[next].level <= note->headings[h].level) { end = note->headings[next].line - 1; break; }
-    for (uint32_t i = line; i < end && note->headings[h].preview_count < 2; i++) {
-      char *preview = clean_preview(lines.items[i]);
-      if (preview && preview[0]) {
-        const char **grown = (const char **)SDL_realloc((void *)note->headings[h].preview,
-          ((size_t)note->headings[h].preview_count + 1) * sizeof(char *));
-        if (!grown) { SDL_free(preview); SDL_free(lines.items); SDL_free(structural.excluded); return false; }
-        note->headings[h].preview = grown; ((char **)note->headings[h].preview)[note->headings[h].preview_count++] = preview;
-      } else SDL_free(preview);
-    }
-  }
-  for (uint32_t b = 0; b < note->block_count; b++) {
-    char *preview = clean_preview(lines.items[note->blocks[b].line - 1]);
-    if (preview && preview[0]) {
-      const char **items = (const char **)SDL_malloc(sizeof(char *)); if (!items) { SDL_free(preview); SDL_free(lines.items); SDL_free(structural.excluded); return false; }
-      items[0] = preview; note->blocks[b].preview = items; note->blocks[b].preview_count = 1;
-    } else SDL_free(preview);
-  }
   SDL_free(lines.items); SDL_free(structural.excluded);
   return true;
 }
@@ -589,17 +539,14 @@ static uint32_t note_fact_hash(const AnvilMarkdownVaultNoteView *note) {
   uint32_t hash = 2166136261u;
   for (uint32_t i = 0; i < note->alias_count; i++) fact_hash_string(&hash, note->aliases[i]);
   for (uint32_t i = 0; i < note->tag_count; i++) fact_hash_string(&hash, note->tags[i]);
-  for (uint32_t i = 0; i < note->preview_count; i++) fact_hash_string(&hash, note->preview[i]);
   for (uint32_t i = 0; i < note->heading_count; i++) {
     const AnvilMarkdownVaultHeadingView *heading = &note->headings[i];
     fact_hash_string(&hash, heading->text); fact_hash_string(&hash, heading->path_slug);
     fact_hash_bytes(&hash, &heading->line, sizeof(heading->line)); fact_hash_bytes(&hash, &heading->level, sizeof(heading->level));
-    for (uint32_t p = 0; p < heading->preview_count; p++) fact_hash_string(&hash, heading->preview[p]);
   }
   for (uint32_t i = 0; i < note->block_count; i++) {
     const AnvilMarkdownVaultBlockView *block = &note->blocks[i]; fact_hash_string(&hash, block->id);
     fact_hash_bytes(&hash, &block->line, sizeof(block->line));
-    for (uint32_t p = 0; p < block->preview_count; p++) fact_hash_string(&hash, block->preview[p]);
   }
   for (uint32_t i = 0; i < note->link_count; i++) {
     const AnvilMarkdownVaultLinkView *link = &note->links[i];
@@ -613,15 +560,14 @@ static void free_note(OwnedNote *owned) {
   AnvilMarkdownVaultNoteView *note = &owned->view;
   SDL_free((void *)note->absolute_path); SDL_free((void *)note->relative_path);
   SDL_free((void *)note->relative_no_extension); SDL_free((void *)note->display_name);
-  free_strings(note->aliases, note->alias_count); free_strings(note->tags, note->tag_count); free_strings(note->preview, note->preview_count);
+  free_strings(note->aliases, note->alias_count); free_strings(note->tags, note->tag_count);
   for (uint32_t i = 0; i < note->heading_count; i++) {
     SDL_free((void *)note->headings[i].text); SDL_free((void *)note->headings[i].normalized_text);
     SDL_free((void *)note->headings[i].slug);
     SDL_free((void *)note->headings[i].path_text); SDL_free((void *)note->headings[i].path_slug);
-    free_strings(note->headings[i].preview, note->headings[i].preview_count);
   }
   SDL_free((void *)note->headings);
-  for (uint32_t i = 0; i < note->block_count; i++) { SDL_free((void *)note->blocks[i].id); free_strings(note->blocks[i].preview, note->blocks[i].preview_count); }
+  for (uint32_t i = 0; i < note->block_count; i++) { SDL_free((void *)note->blocks[i].id); }
   SDL_free((void *)note->blocks);
   for (uint32_t i = 0; i < note->link_count; i++) {
     SDL_free((void *)note->links[i].kind); SDL_free((void *)note->links[i].raw_target); SDL_free((void *)note->links[i].path);
@@ -645,8 +591,7 @@ static bool clone_note(OwnedNote *destination, const AnvilMarkdownVaultNoteView 
   note->shallow = source->shallow; note->fact_signature = source->fact_signature;
   if (!note->absolute_path || !note->relative_path || !note->relative_no_extension || !note->display_name
       || !clone_string_list(&note->aliases, &note->alias_count, source->aliases, source->alias_count)
-      || !clone_string_list(&note->tags, &note->tag_count, source->tags, source->tag_count)
-      || !clone_string_list(&note->preview, &note->preview_count, source->preview, source->preview_count)) goto failed;
+      || !clone_string_list(&note->tags, &note->tag_count, source->tags, source->tag_count)) goto failed;
   if (source->heading_count) {
     note->headings = (AnvilMarkdownVaultHeadingView *)SDL_calloc(source->heading_count, sizeof(*note->headings)); if (!note->headings) goto failed;
     note->heading_count = source->heading_count;
@@ -655,8 +600,7 @@ static bool clone_note(OwnedNote *destination, const AnvilMarkdownVaultNoteView 
       to->text = SDL_strdup(from->text); to->normalized_text = SDL_strdup(from->normalized_text);
       to->slug = SDL_strdup(from->slug); to->path_text = SDL_strdup(from->path_text); to->path_slug = SDL_strdup(from->path_slug);
       to->line = from->line; to->level = from->level;
-      if (!to->text || !to->normalized_text || !to->slug || !to->path_text || !to->path_slug
-          || !clone_string_list(&to->preview, &to->preview_count, from->preview, from->preview_count)) goto failed;
+      if (!to->text || !to->normalized_text || !to->slug || !to->path_text || !to->path_slug) goto failed;
     }
   }
   if (source->block_count) {
@@ -665,7 +609,7 @@ static bool clone_note(OwnedNote *destination, const AnvilMarkdownVaultNoteView 
     for (uint32_t i = 0; i < source->block_count; i++) {
       const AnvilMarkdownVaultBlockView *from = &source->blocks[i]; AnvilMarkdownVaultBlockView *to = &note->blocks[i];
       to->id = SDL_strdup(from->id); to->line = from->line; to->col1 = from->col1; to->col2 = from->col2;
-      if (!to->id || !clone_string_list(&to->preview, &to->preview_count, from->preview, from->preview_count)) goto failed;
+      if (!to->id) goto failed;
     }
   }
   if (source->link_count) {

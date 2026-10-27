@@ -1217,39 +1217,6 @@ test.describe("Markdown Live Preview", function()
     end
   end)
 
-  test.it("updates a self-embed preview after ordinary body typing publishes", function(context)
-    local root = USERDIR .. PATHSEP .. "markdown-kept-self-embed-" .. system.get_process_id()
-    test.ok(common.mkdirp(root))
-    local old_projects = core.projects
-    local view
-    context.cleanup = function()
-      if view then markdown.live_render.release(view, "test-cleanup") end
-      core.projects = old_projects
-      test.ok(test.remove_tree(root))
-    end
-    core.projects = { Project(root) }
-    markdown.vault_index.get_index(root):rebuild("kept-self-embed-test")
-    local buffer
-    view, buffer = make_view("# Section\n\nbody\n\n![[#Section]]\n\nplain", root .. PATHSEP .. "Source.md")
-    buffer:set_selection(7, 1)
-    refresh(view)
-    view:update()
-    local function preview()
-      for _, fragment in ipairs(view:get_line_render(5).fragments or {}) do
-        if fragment.embed_preview then return table.concat(fragment.preview_lines, "\n") end
-      end
-      return ""
-    end
-    test.ok(wait_until(function() return preview():find("body", 1, true) end, 15))
-
-    buffer:insert(3, #buffer.lines[3], " changed")
-
-    local instance = test.not_nil(markdown_model.peek(buffer))
-    test.ok(wait_status(instance, "ready", 15), instance.reason)
-    test.ok(wait_until(function() return preview():find("body changed", 1, true) end, 15),
-      "the kept self-embed preview did not follow its source")
-  end)
-
   test.it("invalidates fence-dependent suffix rendering when an opener is broken", function()
     local view, buffer = make_view("```\n# code\n```\n# after", "note.md")
     buffer:set_selection(4, 1)
@@ -4299,7 +4266,7 @@ test.describe("Markdown Live Preview", function()
     if not ok then error(err, 0) end
   end)
 
-  test.it("presents resolved note, heading, and block embeds as bounded visual rows", function(context)
+  test.it("shows resolved note, heading, and block embeds as links without content", function(context)
     local root = USERDIR .. PATHSEP .. "markdown-live-note-embeds-" .. system.get_process_id()
     local old_projects = core.projects
     context.cleanup = function()
@@ -4325,19 +4292,20 @@ test.describe("Markdown Live Preview", function()
     end
     render_provider = test.not_nil(render_provider)
     local ok, err = pcall(function()
-      local function preview(line)
-        local rendered = test.not_nil(render_provider:render_line(view, line))
-        for _, fragment in ipairs(rendered.fragments or {}) do
-          if fragment.embed_preview then return fragment end
-        end
-      end
-      local note_preview = test.not_nil(preview(1))
-      test.same(note_preview.preview_lines, { "Target", "first", "second" })
-      test.equal(note_preview.widget.type, "markdown-embed-preview")
-      test.same(test.not_nil(preview(2)).preview_lines, { "child text", "block content" })
-      test.same(test.not_nil(preview(3)).preview_lines, { "block content" })
-      test.equal(preview(4), nil)
       test.equal(index.status, "ready")
+      for line = 1, 3 do
+        local rendered = test.not_nil(render_provider:render_line(view, line))
+        local link
+        for _, fragment in ipairs(rendered.fragments or {}) do
+          test.equal(fragment.widget, nil, "line " .. line .. " draws embedded content")
+          if fragment.link and fragment.link_resolution
+            and fragment.link_resolution.status == "resolved" then
+            link = fragment
+          end
+        end
+        test.not_nil(link, "line " .. line .. " has no resolved link")
+      end
+      test.equal(visible_render_text(view, 1), "Target")
     end)
     if not ok then error(err, 0) end
   end)

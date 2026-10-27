@@ -1578,61 +1578,6 @@ revealed_link_fragments = function(view, line_text, line, span, opts)
   return fragments
 end
 
-local function embed_preview_for_resolution(resolution)
-  if not (resolution and resolution.status == "resolved" and resolution.kind == "note")
-    or resolution.subtarget_missing
-  then
-    return nil
-  end
-  if resolution.block then return resolution.block.embed_preview end
-  if resolution.heading then return resolution.heading.embed_preview end
-  return resolution.entry and resolution.entry.embed_preview
-end
-
-local function embed_preview_fragment(view, line_text, span)
-  local link = span.link
-  if not (link and link.kind == "embed") or is_image_target(link.path)
-    or attachment_kind(link.path) or semantic_comment_overlaps(view, span.line, span.col1, span.col2)
-  then
-    return nil
-  end
-  local resolution = resolve_live_link(view, link)
-  local preview = embed_preview_for_resolution(resolution)
-  if not preview or #preview == 0 then return nil end
-  local body_font = live_fonts.body(view)
-  local line_height = live_fonts.body_line_height(view)
-  local padding = math.max(2, math.floor(4 * SCALE))
-  view.__markdown_layout_width_read = true
-  return {
-    source_col1 = #line_text + 1, source_col2 = #line_text + 1,
-    width = 0, draw_x_offset = 0,
-    draw_y_offset = line_height,
-    semantic_id = span.semantic_id .. ":preview",
-    embed_preview = true, preview_lines = preview,
-    widget = {
-      type = "markdown-embed-preview",
-      width = math.max(1, view.size.x),
-      height = line_height + #preview * line_height + padding * 2,
-      cursor = "hand",
-      draw = function(_, fragment, x, y)
-        local card_x = x - body_font:get_width(line_text)
-        local card_y = y + (fragment.draw_y_offset or line_height)
-        local width = math.max(1, view.size.x)
-        renderer.draw_rect(card_x, card_y, width, #preview * line_height + padding * 2,
-          style.markdown_live_embed_background)
-        for i, text in ipairs(preview) do
-          renderer.draw_text(body_font, text, card_x + padding,
-            card_y + padding + (i - 1) * line_height, style.markdown_live_embed_text)
-        end
-      end,
-      on_mouse_pressed = function(_, owner, _, button)
-        if button ~= "left" then return false end
-        return live.open_link(owner, { link = link, resolution = resolution })
-      end,
-    },
-  }
-end
-
 local function link_text_source_range(line_text, span, label)
   if not label or label == "" then return nil end
   local attributes = span.attributes or {}
@@ -1769,8 +1714,6 @@ local function semantic_link_fragments(view, line_text, line, reveal_units, opts
           image.image_block_active = true
           fragments[#fragments + 1] = image
         end
-        local preview = embed_preview_fragment(view, line_text, span)
-        if preview then fragments[#fragments + 1] = preview end
       end
     end
   end
@@ -4543,13 +4486,10 @@ function edit_visual_projection.contains_retainable_presentation(render_line)
   if render_line and render_line.callout_record then return true end
   for _, fragment in ipairs(render_line and render_line.fragments or {}) do
     if fragment.attachment_chip or fragment.image_status
-      or fragment.embed_preview or fragment.hard_break or fragment.footnote
+      or fragment.hard_break or fragment.footnote
       or fragment.footnote_definition or fragment.tag
       or fragment.reference_definition or fragment.escape or fragment.math_source
-      or fragment.widget and (
-        fragment.widget.type == "image"
-        or fragment.widget.type == "markdown-embed-preview"
-      )
+      or fragment.widget and fragment.widget.type == "image"
     then
       return true
     end
@@ -7123,18 +7063,6 @@ local function invalidate_semantic_publication(view, instance, reason)
   local pending_wrap_line = owner and owner.semantic_pending_wrap_line
   local kept_lines = owner and owner.kept_plan_lines
   local projected_lines = owner and owner.projected_plan_lines or {}
-  -- A self-embed reads body text outside its own semantic nodes. The vault
-  -- overlay publishes separately, so retain the old rebuild rule here.
-  if not inputs_changed then
-    for _, pending in pairs(owner and owner.pending_lines or {}) do
-      if pending.kept then
-        for _, fragment in ipairs(pending.render_line.fragments or {}) do
-          if fragment.embed_preview then inputs_changed = true break end
-        end
-      end
-      if inputs_changed then break end
-    end
-  end
   if owner then
     local fence_presentations = {}
     for line, pending in pairs(owner.pending_lines or {}) do
@@ -7552,8 +7480,8 @@ local function bind_link_index(view)
     perf_detail(
       "markdown_live_link_index_invalidation:" .. tostring(reason or "unknown"), 1
     )
-    -- Vault changes can alter link resolution, embed previews, and image
-    -- targets, but ordinary prose and code rows do not depend on the vault.
+    -- Vault changes can alter link resolution and image targets, but ordinary
+    -- prose and code rows do not depend on the vault.
     -- Invalidating the entire Buffer here made every heading keystroke
     -- synchronously reconstruct wrapping for large notes.
     local ranges = {}
