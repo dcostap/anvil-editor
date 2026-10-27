@@ -1022,6 +1022,91 @@ test.describe("Sidebar unread results", function()
   end)
 end)
 
+test.describe("Sidebar Reminders", function()
+  -- A whole minute plus 10 seconds, so a Reminder can come due inside the minute that the rows were built in.
+  local start = (math.floor(os.time() / 60) + 1) * 60 + 10
+
+  -- Runs `fn` with os.time returning `clock`, which `fn` can change through the setter it receives.
+  local function with_clock(fn)
+    local saved, clock = os.time, start
+    os.time = function(date) return date and saved(date) or clock end
+    local ok, err = pcall(fn, function(time) clock = time end)
+    os.time = saved
+    if not ok then error(err, 0) end
+  end
+
+  -- Project P shows a file and the Terminal Tabs "done", "asks" and "works". Project Q is the Window's Selected
+  -- Project unless `active` selects P with that Pane active.
+  local function model(active)
+    local records = {
+      {id="done",title="done",state="running",activity=start,agent_state="done",agent_since=start - 60},
+      {id="asks",title="asks",state="running",activity=start,agent_state="blocked",agent_since=start - 60},
+      {id="works",title="works",state="running",activity=start,agent_state="working",agent_since=start - 60},
+    }
+    local panes = {active=active or 1,visible=1,{id="file",group=1,name="init.lua"}}
+    for index, record in ipairs(records) do
+      panes[#panes + 1] = {id=record.id,group=index + 1,name=record.id,terminal={session=record.id,state="running"}}
+    end
+    return {{row_id=1,id=1,path="C:/P",state="ready",window_id=1,terminals=records,panes=panes},
+      {row_id=2,id=2,path="C:/Q",state="ready",window_id=1,terminals={},panes={active=1,visible=1,
+        {id="q",group=1,name="q.lua"}}},
+      windows={{id=1,selected_project=active and 1 or 2}}}
+  end
+
+  -- P's Terminal Tabs that need the user, with what they need.
+  local function attention(view)
+    local names = {}
+    for _, row in ipairs(view.rows) do
+      if row.kind == "tab" and row.project.path == "C:/P" and row.attention then
+        names[#names + 1] = row.tab.name .. "=" .. row.attention
+      end
+    end
+    return table.concat(names, ",")
+  end
+
+  test.it("holds a Terminal's result and question until its Reminder time, then shows them", function()
+    with_clock(function(set_clock)
+      local reminders = {done=start + 20, asks=start + 20, works=start + 20}
+      local view = SidebarView(function() end, {}, {}, false, reminders)
+      view:set_model(model(), 1)
+      test.equal(attention(view), "")
+      set_clock(start + 19)
+      test.not_ok(view:refresh_ages())
+      set_clock(start + 20)
+      test.ok(view:refresh_ages(), "The Sidebar does not show a Reminder that came due inside a minute")
+      test.equal(attention(view), "done=done,asks=blocked,works=reminder")
+    end)
+  end)
+
+  test.it("dims a Terminal with a Reminder and shows the time left", function()
+    with_clock(function()
+      local view = SidebarView(function() end, {}, {}, false, {done=start + 2 * 3600 + 30 * 60})
+      view:set_model(model(), 1)
+      local texts = drawn_texts(view)
+      local done = test.not_nil(find_text(texts, "done"), "The Terminal is missing: " .. joined(texts))
+      local file = test.not_nil(find_text(texts, "init.lua"))
+      test.ok(done.opacity < file.opacity, "The Terminal with a Reminder is not dimmed")
+      test.ok(find_text(texts, "2h 30m"), "The time left is missing: " .. joined(texts))
+    end)
+  end)
+
+  test.it("keeps a Reminder when the user looks early, and ends it when the user looks after its time", function()
+    with_clock(function(set_clock)
+      local actions, action = recorder()
+      local seen, reminders = {}, {done=start + 600}
+      local view = SidebarView(action, {}, seen, false, reminders)
+      view:set_model(model(2), 1)
+      test.same(actions, {})
+      test.equal(reminders.done, start + 600)
+      set_clock(start + 600)
+      view:refresh_ages()
+      test.same(actions, {{"seen", "done"}, {"reminder", "done"}})
+      test.is_nil(reminders.done)
+      test.equal(seen.done, start + 600)
+    end)
+  end)
+end)
+
 test.describe("Sidebar search field", function()
   local style = require "core.style"
   test.it("shows the search field only while a query is typed", function()

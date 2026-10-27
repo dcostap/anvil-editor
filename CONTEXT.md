@@ -590,6 +590,10 @@ _Avoid_: agent state, program status, agent activity
 An agent's done or failed Agent Status, or a terminal bell, that came after the user last looked at its Terminal Session. The user looks at a Terminal Session when its Tab is the active Tab of a Selected Project.
 _Avoid_: notification, unseen result, badge
 
+**Reminder**:
+A time at which a Terminal Session needs the user again. Until then, the Terminal Session needs nothing: its Unread Result, its agent's question, and its bell wait. Looking at it earlier does not end the Reminder; only the user can remove it. At that time, it needs the user until the user looks at it, even when nothing else happened.
+_Avoid_: snooze, timer, remind-me
+
 **Terminal Text Capture**:
 A Text Capture containing stable text from a Terminal View while that terminal continues to run.
 _Avoid_: terminal buffer, copy mode

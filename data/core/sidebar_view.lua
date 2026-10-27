@@ -76,12 +76,15 @@ end
 ---@param action fun(name: string, ...)
 ---@param collapsed table<string, boolean>? This Window's saved folding state.
 ---@param restore_folds boolean? Restore saved folds on first selection.
-function SidebarView:new(action, collapsed, seen, restore_folds)
+---@param reminders table<string, number>? The Reminder time of each Terminal Session, by its ID.
+function SidebarView:new(action, collapsed, seen, restore_folds, reminders)
   self.action, self.rows, self.scroll, self.bottom_scroll = action, {}, 0, 0
   self.collapsed = collapsed or {}
   self.restore_folds = restore_folds == true
   -- When the user last looked at each Terminal Session, by its ID. Every surface shares it.
   self.seen = seen or {}
+  -- Every surface shares the Reminders too.
+  self.reminders = reminders or {}
   -- The Selected Projects that show expanded over their saved state, and the Projects selected at the last layout.
   self.opened, self.was_selected = {}, {}
   -- Snapshot ownership separately: callers can update the same model table after a move.
@@ -341,6 +344,21 @@ function SidebarView:toggle(key, default)
   self:rebuild_rows()
 end
 
+-- The user looks at a Terminal Session: this reads its Unread Result, and ends its Reminder once the time came.
+-- Looking at an agent's question does not answer it.
+function SidebarView:look(item, session, now)
+  local reminder = self.reminders[session]
+  local attention = tab.attention(item, self.seen[session], reminder)
+  if attention and attention ~= "blocked" then
+    self.seen[session] = now
+    self.action("seen", session)
+  end
+  if reminder and reminder <= now then
+    self.reminders[session] = nil
+    self.action("reminder", session)
+  end
+end
+
 function SidebarView:rebuild_rows()
   local cursor_row = self:get_cursor()
   local cursor_key = row_key(cursor_row)
@@ -360,12 +378,22 @@ function SidebarView:rebuild_rows()
     selected_projects[window.selected_project] = true
     if window.id == window_id then selected = window.selected_project end
   end
-  local numbers = numbered_panes.numbers(projects, self.seen)
+  local numbers = numbered_panes.numbers(projects, self.seen, self.reminders)
+  -- The next Reminder time. The rows change then.
+  self.next_reminder = nil
+  for _, time in pairs(self.reminders) do
+    if time > now and time < (self.next_reminder or math.huge) then self.next_reminder = time end
+  end
   -- A collapsed Project shows only the Terminals that need the user.
   local only_attention = false
   local function add_tab(row, agent)
     row.agent = agent
-    if row.tab.terminal then row.attention = tab.attention(row.tab, self.seen[row.tab.terminal.session]) end
+    local session = row.tab.terminal and row.tab.terminal.session
+    if session then
+      local reminder = self.reminders[session]
+      row.attention = tab.attention(row.tab, self.seen[session], reminder)
+      if reminder and reminder > now and row.tab.terminal.state == "running" then row.reminder = reminder end
+    end
     if only_attention and not row.attention then return end
     add(row, agent and m.agent or m.terminal)
   end
@@ -410,11 +438,7 @@ function SidebarView:rebuild_rows()
       if session then
         shown[session] = true
         -- A Tab shown in any Window is read, even when that Window's Sidebar is hidden.
-        local attention = index == seen_active and tab.attention(item, self.seen[session])
-        if attention and attention ~= "blocked" then
-          self.seen[session] = now
-          self.action("seen", session)
-        end
+        if index == seen_active then self:look(item, session, now) end
       end
       local group = item.group or 0
       -- A Pane Group with several Panes shows as one container around its Tabs. A collapsed Project shows single
@@ -431,7 +455,7 @@ function SidebarView:rebuild_rows()
     for _, id in ipairs(panes.held or {}) do held[id] = true end
     for _, terminal in ipairs(project.terminals or {}) do
       local bucket = (terminal.activity or 0) > 0 and age_bucket(terminal.activity, now)
-      local attention = tab.attention(tab.describe_session(terminal), self.seen[terminal.id])
+      local attention = tab.attention(tab.describe_session(terminal), self.seen[terminal.id], self.reminders[terminal.id])
       if shown[terminal.id] or held[terminal.id] and not attention then
         -- Its Tab shows it, or its Pane's history keeps it.
       elseif bucket and bucket ~= "week" and not attention then
@@ -1095,7 +1119,10 @@ end
 
 -- Whether a minute passed since the last layout, so ages and groups need an update.
 function SidebarView:refresh_ages()
-  if math.floor(os.time() / 60) == self.built_minute then return false end
+  local now = os.time()
+  if math.floor(now / 60) == self.built_minute and not (self.next_reminder and now >= self.next_reminder) then
+    return false
+  end
   self:rebuild_rows()
   return true
 end
@@ -1308,14 +1335,15 @@ function SidebarView:autoscroll_speed(y)
   if y > self.view_h - zone then return "bottom_scroll", speed(y - self.view_h + zone) end
 end
 
--- Working agents stay dim unless selected. Other Windows' Projects and their children also stay dim.
+-- Working agents and Terminals with a Reminder stay dim unless selected. Other Windows' Projects and their children
+-- also stay dim.
 -- A dragged or moved Tab dims further at its old place.
 function SidebarView:dim_target(row)
   local key = row.id_key
   local drag, pending = self.drag, self.pending
   if drag and drag.key == key or pending and pending.key == key then return 0.35 end
-  if not row.selected and row.agent and not row.agent.command
-    and tab.working(row.tab.terminal or {}, row.agent) then return 0.5 end
+  if not row.selected and (row.reminder or row.agent and not row.agent.command
+    and tab.working(row.tab.terminal or {}, row.agent)) then return 0.5 end
   local owner = row.project and row.project.window_id
   if self.window_id and owner and owner ~= 0 and owner ~= self.window_id then return 0.7 end
   return 1
@@ -1627,6 +1655,32 @@ function SidebarView:draw_attention(row, y, width)
   renderer.draw_rounded_rect(m.rail_x, y + 1, m.rail, h, m.rail / 2, color)
 end
 
+-- The time until a Reminder in whole minutes, rounded up: "45m" or "2h 30m".
+local function reminder_text(time, now)
+  local minutes = math.max(1, math.ceil((time - now) / 60))
+  if minutes < 60 then return minutes .. "m" end
+  local hours, rest = math.floor(minutes / 60), minutes % 60
+  return rest > 0 and string.format("%dh %02dm", hours, rest) or hours .. "h"
+end
+
+-- A Reminder's note, right-aligned at `right` on a line centred at `cy`: a small clock and the time left.
+-- Returns its width.
+local function draw_reminder(time, right, cy, now)
+  local label = reminder_text(time, now)
+  local font, color = style.font, style.dim
+  local label_w = font:get_width(label)
+  text(label, right - label_w, math.floor(cy - font:get_height() / 2), color)
+  local size = math.floor(font:get_height() * 0.6 + 0.5)
+  local stroke = math.max(1, math.floor(1.25 * SCALE + 0.5))
+  local cx = right - label_w - 4 * SCALE - size / 2
+  local x, y = math.floor(cx - size / 2), math.floor(cy - size / 2)
+  ring(x, y, size, size, size / 2, stroke, color)
+  local half = math.floor(size / 2)
+  renderer.draw_rect(x + half - stroke / 2, y + 3 * stroke, stroke, half - 3 * stroke, color)
+  renderer.draw_rect(x + half - stroke / 2, y + half - stroke / 2, half - 2 * stroke, stroke, color)
+  return label_w + 4 * SCALE + size
+end
+
 -- A Tab's or Terminal Session's content in [x, x + width): its icon, name and status, and an agent's step below.
 function SidebarView:draw_tab(row, x, y, width, now)
   local m = self:metrics()
@@ -1634,6 +1688,9 @@ function SidebarView:draw_tab(row, x, y, width, now)
   local shimmer = tab.working(row.tab.terminal or {}, row.agent) and self:shimmer_phase() or nil
   -- A Terminal that needs the user has a dot at the right edge of its name's line and a bold name.
   local name_font, right = nil, x + width
+  if row.reminder then
+    width = width - draw_reminder(row.reminder, x + width, y + m.terminal / 2, now) - 6 * SCALE
+  end
   if row.attention then
     local radius = 3 * SCALE
     dot(x + width - radius, y + m.terminal / 2, radius, tab.attention_color(row.attention))

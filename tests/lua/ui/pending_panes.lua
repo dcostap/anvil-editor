@@ -62,6 +62,29 @@ test.describe("Pending Pane numbers", function()
     test.is_nil(numbered.target(projects, 2, seen))
   end)
 
+  test.it("holds a Terminal with a Reminder until its time, then queues it from that time", function()
+    local projects = {{path = "C:/A", panes = {
+      {id = "held", terminal = {session = "held", state = "running", bell = 10}},
+      {id = "asks", terminal = {session = "asks", state = "running"}},
+      {id = "due", terminal = {session = "due", state = "running"}},
+      {id = "bell", terminal = {session = "bell", state = "running", bell = 30}}},
+      terminals = {{id = "asks", state = "running", agent_state = "blocked", agent_since = 5}}}}
+    local later = os.time() + 3600
+    local reminders = {held = later, asks = later, due = 40}
+    local function targets()
+      local ids = {}
+      for n = 1, numbered.COUNT do
+        local item = numbered.target(projects, n, {}, reminders)
+        ids[#ids + 1] = item and item.id
+      end
+      return table.concat(ids, ",")
+    end
+    test.equal(targets(), "bell,due")
+    -- A held result comes back at its Reminder time, not at its own older time.
+    reminders.held = 35
+    test.equal(targets(), "bell,held,due")
+  end)
+
   test.it("removes a viewed result but keeps an agent waiting for an answer", function()
     local projects = {{id = 1, path = "C:/A", panes = {active = 1,
       {id = "active", terminal = {session = "s", state = "running"}}},

@@ -60,18 +60,45 @@ local function load_seen()
   end
   core.log_quiet("Sidebar seen times: %s", ok and saved and "loaded" or "none")
 end
--- Saves the times of the Terminal Sessions that still exist.
-local function save_seen()
+local function live_sessions()
   local live = {}
   for _, project in ipairs(core.project_sidebar or {}) do
     for _, terminal in ipairs(project.terminals or {}) do live[terminal.id] = true end
   end
+  return live
+end
+-- Saves the times of the Terminal Sessions that still exist.
+local function save_seen()
+  local live = live_sessions()
   local pruned = 0
   for session in pairs(seen) do
     if not live[session] then seen[session], pruned = nil, pruned + 1 end
   end
   local ok, err = pcall(storage.save, "sidebar", "seen", seen)
   if not ok then core.log_quiet("Sidebar seen times not saved: %s", tostring(err)) end
+  return pruned
+end
+
+-- The time at which each Terminal Session needs the user again, in Unix seconds, so a Reminder survives restarts,
+-- sleep and a new Sidebar process.
+local reminders = {}
+local function load_reminders()
+  local ok, saved = pcall(storage.load, "sidebar", "reminders")
+  if ok and type(saved) == "table" then
+    for session, time in pairs(saved) do
+      if type(session) == "string" and type(time) == "number" then reminders[session] = time end
+    end
+  end
+  core.log_quiet("Sidebar Reminders: %s", ok and saved and "loaded" or "none")
+end
+-- A Reminder whose time has not come stays, even when the model does not list its Terminal Session yet.
+local function save_reminders()
+  local live, now, pruned = live_sessions(), os.time(), 0
+  for session, time in pairs(reminders) do
+    if not live[session] and time <= now then reminders[session], pruned = nil, pruned + 1 end
+  end
+  local ok, err = pcall(storage.save, "sidebar", "reminders", reminders)
+  if not ok then core.log_quiet("Sidebar Reminders not saved: %s", tostring(err)) end
   return pruned
 end
 
@@ -137,9 +164,12 @@ local function add_surface(id, window)
       save_collapsed()
       return
     end
-    if action == "seen" then
-      local pruned = save_seen()
-      core.log_quiet("Sidebar result read: Window=%d session=%s pruned=%d", id, row_id, pruned)
+    if action == "seen" or action == "reminder" then
+      if action == "seen" then
+        core.log_quiet("Sidebar result read: Window=%d session=%s pruned=%d", id, row_id, save_seen())
+      else
+        core.log_quiet("Sidebar Reminder ended: Window=%d session=%s pruned=%d", id, row_id, save_reminders())
+      end
       -- Other surfaces show the same result. It is read there too.
       for _, other in pairs(surfaces) do
         if other ~= surface then other.view:rebuild_rows(); other.redraw = true end
@@ -190,7 +220,7 @@ local function add_surface(id, window)
     end
     core.log_quiet("Sidebar %s dropped: Window=%d row=%s is not in the model (%d rows)", action, id,
       tostring(row_id), #(core.project_sidebar or {}))
-  end, collapsed[id], seen, true)
+  end, collapsed[id], seen, true, reminders)
   surfaces[id] = surface
   core.log_quiet("Sidebar surface created: Window=%d", id)
 end
@@ -271,7 +301,7 @@ function core.init()
   for number = 1, numbered_panes.COUNT do
     local name = "pane:focus_number_" .. number
     command.add(nil, {[name] = function()
-      local item, stamped = numbered_panes.target(core.project_sidebar, number, seen)
+      local item, stamped = numbered_panes.target(core.project_sidebar, number, seen, reminders)
       if not item then
         core.log_quiet("Sidebar Numbered Pane %d: none of %d pending Panes", number, stamped)
         return false
@@ -305,6 +335,7 @@ function core.init()
   SCALE = system.get_scale(window)
   load_collapsed()
   load_seen()
+  load_reminders()
   load_zoom()
   apply_color_theme()
   SidebarView = require "core.sidebar_view"
@@ -439,7 +470,7 @@ function core.run_step()
     if core.session_log then core.session_log:close(); core.session_log = nil end
     return false
   end
-  local pending, spin_at = false, nil
+  local pending, spin_at, next_reminder = false, nil, nil
   for id, surface in pairs(surfaces) do
     if activate(id) then
       local visible, now = system.window_should_render(core.window), system.get_time()
@@ -470,6 +501,9 @@ function core.run_step()
       end
       if not visible then surface.spin_at = nil end
       if surface.spin_at then spin_at = math.min(spin_at or math.huge, surface.spin_at) end
+      if surface.view.next_reminder then
+        next_reminder = math.min(next_reminder or math.huge, surface.view.next_reminder)
+      end
       pending = pending or core.project_sidebar_request ~= nil
       save()
     end
@@ -478,10 +512,13 @@ function core.run_step()
   local used = {}
   for _, surface in pairs(surfaces) do used[surface.scale] = true end
   for scale in pairs(fonts) do if not used[scale] then fonts[scale] = nil end end
-  -- Wake each minute so ages stay current.
+  -- Wake each minute so ages stay current, and when a Reminder comes due. The wait can stop counting while the
+  -- computer sleeps, so each wake compares Reminders with the clock again.
+  local minute = 60 - os.time() % 60
+  if next_reminder then minute = math.max(0, math.min(minute, next_reminder - os.time())) end
   if pending then system.wait_event(.01)
-  elseif spin_at then system.wait_event(math.max(0, spin_at - system.get_time()))
-  else system.wait_event(60 - os.time() % 60) end
+  elseif spin_at then system.wait_event(math.max(0, math.min(minute, spin_at - system.get_time())))
+  else system.wait_event(minute) end
   return true
 end
 return core
