@@ -342,6 +342,7 @@ function SidebarView:toggle(key, default)
 end
 
 function SidebarView:rebuild_rows()
+  local cursor_index = self.cursor
   local cursor_key = row_key(self:get_cursor())
   local searching = self.query ~= ""
   local projects, window_id = self.projects or {}, self.window_id
@@ -534,6 +535,11 @@ function SidebarView:rebuild_rows()
   self.cursor = nil
   for index, row in ipairs(rows) do
     if cursor_key and row_key(row) == cursor_key then self.cursor = index; break end
+  end
+  -- A removed row leaves the cursor at its position, or at the new end of the list.
+  if not self.cursor and cursor_key then
+    local index = math.min(cursor_index, #rows)
+    if rows[index] and rows[index].kind ~= "empty" then self.cursor = index end
   end
   if not self.cursor then
     for index, row in ipairs(rows) do
