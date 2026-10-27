@@ -918,8 +918,12 @@ local function setup_scenario()
   end
 
   if benchmark.scenario:find("^fuzzy%-picker") then
-    local query = ({ ["fuzzy-picker-text"] = "#value", ["fuzzy-picker-commands"] = ">editor" })
-      [benchmark.scenario] or "bench"
+    local query = ({ ["fuzzy-picker-text"] = "#value", ["fuzzy-picker-commands"] = ">editor",
+      ["fuzzy-picker-projects"] = "@" })[benchmark.scenario] or "bench"
+    if benchmark.scenario == "fuzzy-picker-projects" then
+      -- The Project Sidebar's scene model, as the shell reports it.
+      core.project_sidebar = require("core.sidebar_scene").model()
+    end
     -- The picker needs the window's final layout.
     core.add_thread(function()
       coroutine.yield(0.2)

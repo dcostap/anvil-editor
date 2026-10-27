@@ -41,6 +41,8 @@ local fuzzy_searcher = {
   modifiers = require "plugins.fuzzy_searcher.modifiers",
   search = require "plugins.fuzzy_searcher.search",
   open_transition = require "plugins.fuzzy_searcher.open_transition",
+  projects = require "plugins.fuzzy_searcher.projects",
+  project_look = require "core.project_look",
   copy_feedback = require "core.copy_feedback",
   encoded_data = require "core.encoded_data",
   file_icons = require "core.file_icons",
@@ -2456,20 +2458,37 @@ function fuzzy_searcher.command_search_text(name)
   return table.concat(parts, " ")
 end
 
+-- A Project row looks like the Project Sidebar's: its badge, its name, then its parent folder. Its Tab or Terminal
+-- count and the Sidebar's note sit at the right.
 local function draw_project_result_row(font, r, x, y, width)
-  local label, spans, prefix = result_list_label_and_spans(r)
-  local project_font = style.view_text_font
-  local age = r.opened_at and compact_age(r.opened_at)
+  local project, h = fuzzy_searcher.projects.of(r), font:get_height()
+  local bold = fuzzy_searcher.projects.bold(style.font)
+  local small = style.get_small_font(font)
   local gap = style.padding.x
-  local label_w = width
-  if age and age ~= "" then
-    local age_w = font:get_width(age)
-    renderer.draw_text(font, age, x + width - age_w, y, style.dim)
-    label_w = math.max(0, width - age_w - gap)
+  fuzzy_searcher.project_look.draw_badge(project, x, y, h, bold, style.card)
+  local cx = x + h + math.floor(gap / 2)
+  local hint, note = fuzzy_searcher.projects.details(project, os.time())
+  local details = hint and note and hint .. "  " .. note or hint or note or ""
+  local right = x + width
+  if details ~= "" then
+    details = truncate_text(small, details, math.max(0, (right - cx) / 2))
+    local details_w = small:get_width(details)
+    renderer.draw_text(small, details, right - details_w, y + math.floor((h - small:get_height()) / 2), style.dim)
+    right = right - details_w - gap
   end
-  local cx = renderer.draw_text(font, prefix, x, y, style.dim)
-  local project_y = y + math.max(0, math.floor((font:get_height() - project_font:get_height()) / 2))
-  draw_highlighted_text(project_font, label, cx, project_y, math.max(0, x + label_w - cx), style.text, spans)
+  -- The match runs over the folder's path. Its last part is the name, unless the Sidebar names it otherwise.
+  local label, name = r.label or "", fuzzy_searcher.project_look.name(project)
+  local parent = label:match("^(.*)[/\\][^/\\]+[/\\]*$")
+  local name_start = parent and #parent + 2 or 1
+  local name_spans = label:sub(name_start):lower() == name:lower()
+    and project_spans(r.match_spans, name_start, #label, 0) or {}
+  local name_color = project.state == "dormant" and not project.exists and style.dim or style.text
+  local name_y = y + math.floor((h - bold:get_height()) / 2)
+  cx = draw_highlighted_text(bold, name, cx, name_y, math.max(0, right - cx), name_color, name_spans)
+  if parent and cx + gap < right then
+    draw_highlighted_text(small, parent, cx + gap, y + math.floor((h - small:get_height()) / 2),
+      right - cx - gap, style.dim, project_spans(r.match_spans, 1, #parent, 0))
+  end
 end
 
 function fuzzy_searcher.file_metadata_parts(r)
@@ -3565,15 +3584,13 @@ function path_search.direct_result(text, line, col, case_sensitive)
   local info = system.get_file_info(path)
   if info then
     ensure_recent_project_times()
-    local recent, opened_at
+    local sidebar
     if info.type == "dir" then
-      for _, project in ipairs(get_recent_projects()) do
-        if common.path_equals(project, path) then
-          recent, opened_at = true, recent_project_times[project]
-          break
-        end
+      for _, project in ipairs(fuzzy_searcher.projects.list(get_recent_projects(), recent_project_times)) do
+        if common.path_equals(project.path, path) then sidebar = project; break end
       end
     end
+    local recent = sidebar ~= nil
     local label = common.home_encode(path)
     local score, spans = fuzzy_match(query, label, case_sensitive)
     return {
@@ -3586,15 +3603,14 @@ function path_search.direct_result(text, line, col, case_sensitive)
       is_folder = info.type == "dir",
       exact_path = true,
       path_search = recent or nil,
-      opened_at = opened_at,
+      sidebar = sidebar,
       query = query,
       line = line,
       col = col,
       match_score = score,
       match_spans = spans or {},
       size_label = info.type == "file" and format_size(info.size) or "",
-      modified_label = (recent and compact_age(opened_at))
-        or (info.modified and compact_age(info.modified)) or "",
+      modified_label = info.modified and compact_age(info.modified) or "",
     }
   end
 
@@ -4339,16 +4355,11 @@ function FSView:copy_flash_bounds(font, r, row_x, row_text_w)
     text = r.label or r.path or r.project or r.file or ""
     text_font = style.view_text_font
   elseif r.kind == "project" then
-    local label, _, prefix = result_list_label_and_spans(r)
-    local prefix_w = font:get_width(prefix)
-    text = label
-    text_font = style.view_text_font
-    x = row_x + prefix_w
-    width = math.max(0, row_text_w - prefix_w)
-    local age = r.opened_at and compact_age(r.opened_at)
-    if age and age ~= "" then
-      width = math.max(0, width - font:get_width(age) - style.padding.x)
-    end
+    local badge_w = font:get_height() + math.floor(style.padding.x / 2)
+    text = fuzzy_searcher.project_look.name(fuzzy_searcher.projects.of(r))
+    text_font = fuzzy_searcher.projects.bold(style.font)
+    x = row_x + badge_w
+    width = math.max(0, row_text_w - badge_w)
   elseif r.kind == "new_project" then
     local prefix = "Open this new folder as project: "
     x = row_x + font:get_width(prefix)
@@ -5458,10 +5469,11 @@ end
 
 function path_search.recent_project_results(query, scope, limit, case_sensitive)
   ensure_recent_project_times()
-  local candidates = {}
-  for _, path in ipairs(get_recent_projects()) do
+  local candidates, records = {}, {}
+  for _, project in ipairs(fuzzy_searcher.projects.list(get_recent_projects(), recent_project_times)) do
+    local path = project.path
     if not scope or common.path_equals(path, scope) or common.path_belongs_to(path, scope) then
-      candidates[#candidates+1] = path
+      candidates[#candidates+1], records[path] = path, project
     end
   end
 
@@ -5473,20 +5485,16 @@ function path_search.recent_project_results(query, scope, limit, case_sensitive)
       if i > limit then hidden = true break end
       local path = match.item
       out[#out+1] = {
-        kind = "project", label = display_root(path), project = path, path = path,
-        query = query, match_spans = match.spans, recent = true,
-        opened_at = recent_project_times[path], modified_label = compact_age(recent_project_times[path]),
-        is_folder = true, path_search = true,
+        kind = "project", label = display_root(path), project = path, path = path, sidebar = records[path],
+        query = query, match_spans = match.spans, is_folder = true, path_search = true,
       }
     end
   else
     for i, path in ipairs(candidates) do
       if i > limit then hidden = true break end
       out[#out+1] = {
-        kind = "project", label = display_root(path), project = path, path = path,
-        query = query, match_spans = {}, recent = true,
-        opened_at = recent_project_times[path], modified_label = compact_age(recent_project_times[path]),
-        is_folder = true, path_search = true,
+        kind = "project", label = display_root(path), project = path, path = path, sidebar = records[path],
+        query = query, match_spans = {}, is_folder = true, path_search = true,
       }
     end
   end
@@ -5761,7 +5769,9 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
 
   if path_plan.external then
     if bare_path_search then
-      self.status = string.format("%d recent Projects", #get_recent_projects())
+      local count = 0
+      for _, r in ipairs(out) do if r.kind == "project" then count = count + 1 end end
+      self.status = string.format(count == 1 and "%d Project" or "%d Projects", count)
     else
       local scope_label = path_plan.scope and (" · " .. path_plan.scope) or ""
       self.status = (self.everything_status or "") .. scope_label
@@ -8414,9 +8424,6 @@ function FSView:draw_open_content()
       elseif r.kind == "command" then
         reset_rendered_file_group()
         draw_command_result_row(font, r, x + pad, row_y, row_text_w)
-      elseif r.kind == "project" and r.path_search then
-        reset_rendered_file_group()
-        draw_path_result_row(font, r, x + pad, row_y, row_text_w)
       elseif r.kind == "project" then
         reset_rendered_file_group()
         draw_project_result_row(font, r, x + pad, row_y, row_text_w)
@@ -8473,8 +8480,10 @@ function FSView:draw_open_content()
       fuzzy_searcher.draw_preview_info(px, py, preview_w, preview_h, r.is_folder and "Create Folder" or "Create File",
         style.good, display_root(r.path), nil, nil,
         r.is_folder and "Enter: create" or "Enter: create  ·  Ctrl+Enter: create and open in a new Pane Group")
-    elseif r and (r.kind == "project" or (r.kind == "path" and r.is_folder)) then
-      fuzzy_searcher.draw_preview_info(px, py, preview_w, preview_h, r.kind == "project" and "Recent Project" or "Folder",
+    elseif r and r.kind == "project" then
+      fuzzy_searcher.projects.draw_preview(fuzzy_searcher.projects.of(r), px, py, preview_w, preview_h)
+    elseif r and r.kind == "path" and r.is_folder then
+      fuzzy_searcher.draw_preview_info(px, py, preview_w, preview_h, "Folder",
         style.accent, display_root(r.project or r.path), r.match_spans, nil,
         "Enter: open here  ·  Ctrl+Enter: open in a new Anvil Window")
     else

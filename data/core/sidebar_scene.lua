@@ -34,12 +34,9 @@ local function terminal_tab(index, group, session, title, age, busy, focused)
     terminal = {session = session, state = "running", busy = busy, activity = os.time() - age}}
 end
 
--- mode is nil, "search" or "drag". The second Project is collapsed, so it shows only its agent's question.
-function Scene:new(mode)
-  Scene.super.new(self)
-  self.sidebar = SidebarView(function() end,
-    {["project:D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas"] = true}, {})
-  self.sidebar:set_model({
+-- Every row kind: loaded Projects in two Windows, a starting Project, and Dormant Projects of each age.
+function Scene.model()
+  return {
     project(1, "C:/Projects/anvil-editor", "ready", MINUTE, 1, {
       terminal("a", "[40 s] \u{03C0} - GLP4", 30, {busy = 1, agent_app = "pi", agent_model = "GPT Test", agent_state = "working", agent_since = os.time() - 400,
         agent_step = "bash: npm test -- --watch=false", agent_step_since = os.time() - 42}),
@@ -74,7 +71,15 @@ function Scene:new(mode)
     project(5, "C:/Projects/scratch", "dormant", 20 * DAY),
     project(6, "C:/Projects/old-tool", "dormant", 60 * DAY),
     windows = {{id = 1, selected_project = 1}, {id = 2, selected_project = 2}},
-  }, 1)
+  }
+end
+
+-- mode is nil, "search" or "drag". The second Project is collapsed, so it shows only its agent's question.
+function Scene:new(mode)
+  Scene.super.new(self)
+  self.sidebar = SidebarView(function() end,
+    {["project:D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas"] = true}, {})
+  self.sidebar:set_model(Scene.model(), 1)
   if mode == "search" then
     self.sidebar:on_focus(true)
     self.sidebar:on_text_input("shell")

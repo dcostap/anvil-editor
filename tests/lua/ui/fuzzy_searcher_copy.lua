@@ -111,16 +111,12 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     test.ok(draw_order.copy > draw_order.match, "expected copy feedback to overlay fuzzy matches")
   end)
 
-  test.it("starts symbol copy feedback at the rendered symbol label", function()
+  -- Copies the only result, draws the picker, and returns where `label` and the copy feedback start.
+  local function copy_feedback_start(results, label)
     local original_feedback_color = style.fuzzy_searcher_copy_feedback
     local probe_color = { 251, 2, 3, 255 }
     style.fuzzy_searcher_copy_feedback = probe_color
-    local picker = fuzzy_searcher.open_static_results("Project symbols", {
-      {
-        kind = "symbol", file = "src/basegame.cpp", line = 12,
-        label = "check_damage", name = "check_damage", symbol_kind = "method",
-      },
-    })
+    local picker = fuzzy_searcher.open_static_results("Results", results)
     picker.position.x, picker.position.y = 0, 0
     picker:set_size(1200, 500)
     picker.open_transition_complete = true
@@ -141,7 +137,7 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     end
     renderer.draw_rounded_rect = function() end
     renderer.draw_text = function(font, text, x)
-      if text == "check_damage" then label_x = x end
+      if text == label and not label_x then label_x = x end
       return x + (font and font:get_width(text) or 0)
     end
     renderer.draw_text_known_bounds = function() end
@@ -158,7 +154,16 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     renderer.draw_canvas_scaled = original_draw_canvas_scaled
     style.fuzzy_searcher_copy_feedback = original_feedback_color
     if not ok then error(err, 0) end
+    return label_x, feedback_x
+  end
 
+  test.it("starts symbol copy feedback at the rendered symbol label", function()
+    local label_x, feedback_x = copy_feedback_start({
+      {
+        kind = "symbol", file = "src/basegame.cpp", line = 12,
+        label = "check_damage", name = "check_damage", symbol_kind = "method",
+      },
+    }, "check_damage")
     test.not_nil(label_x, "expected the rendered symbol label")
     test.not_nil(feedback_x, "expected symbol copy feedback")
     test.equal(feedback_x, label_x)
@@ -210,21 +215,12 @@ test.describe("Fuzzy Searcher selected-result copy", function()
     test.equal(picker.copy_flash.text, "src/app.lua")
   end)
 
-  test.it("ends Project copy feedback at the rendered label", function()
+  test.it("starts Project copy feedback at the rendered Project name", function()
     local path = "C:" .. PATHSEP .. "Projects" .. PATHSEP .. "decomps" .. PATHSEP .. "oot"
-    local picker = fuzzy_searcher.open_static_results("Results", {
-      { kind = "project", label = path, project = path },
-    })
-    test.ok(picker:copy_selected())
-
-    local row_x, row_w = 100, 2000
-    local x, width = picker:copy_flash_bounds(
-      style.code_font, picker.results[1], row_x, row_w
-    )
-    local expected_x = row_x + style.code_font:get_width("@ ")
-
-    test.equal(x, expected_x)
-    test.equal(width, style.view_text_font:get_width(path))
+    local label_x, feedback_x = copy_feedback_start({ { kind = "project", label = path, project = path } }, "oot")
+    test.not_nil(label_x, "expected the rendered Project name")
+    test.not_nil(feedback_x, "expected Project copy feedback")
+    test.equal(feedback_x, label_x)
   end)
 
   test.it("keeps result rows tall enough for Prose when Code Zoom is smaller", function()

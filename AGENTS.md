@@ -175,6 +175,10 @@ It sends each other key with Ctrl or Alt, and each function key, to the cursor r
 A row without a Project sends the key to the Selected Project. Do not add Sidebar copies of editor commands.
 Run `ui/sidebar_view.lua` and `ui/sidebar_navigation.lua` after changes.
 
+Path Search lists Projects from the Project Sidebar model: Scratch, loaded Projects, then Dormant Projects by age.
+`core.project_look` draws a Project's name, badge and note for both, so a Project looks the same in each.
+Run `ui/fuzzy_searcher_path_search.lua` and `ui/sidebar_view.lua` after changes.
+
 The standalone option is `-Dembedded_runtime=true`. It is off by default.
 `scripts\build-standalone-windows.sh` enables it, strips the executable, runs
 the standalone smoke test, and promotes the result only after the test passes.

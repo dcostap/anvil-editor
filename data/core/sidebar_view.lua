@@ -6,6 +6,7 @@ local numbered_panes = require "core.numbered_panes"
 local common = require "core.common"
 local LineInput = require "core.line_input"
 local FocusFeedback = require "core.focus_feedback"
+local look = require "core.project_look"
 
 -- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions. A
 -- right-click on a Project asks the shell for its native actions menu: Move, Unload and the rest.
@@ -67,11 +68,6 @@ local GROUPS = {
 -- The groups take at most this part of the height below the list top, and at most this many Project rows.
 local GROUPS_HEIGHT = 0.5
 local GROUPS_ROWS = 16
-
-local function name_of(project)
-  if project.scratch then return "Scratch" end
-  return project.path:match("([^/\\]+)[/\\]*$") or project.path
-end
 
 ---@param action fun(name: string, ...)
 ---@param collapsed table<string, boolean>? This Window's saved folding state.
@@ -421,14 +417,6 @@ local function age_bucket(activity, now)
   return age < MONTH and "month" or "older"
 end
 
-local function project_activity(project)
-  local activity = project.activity or 0
-  for _, terminal in ipairs(project.terminals or {}) do
-    activity = math.max(activity, terminal.activity or 0)
-  end
-  return activity
-end
-
 function SidebarView:is_collapsed(key, default)
   local saved = self.collapsed[key]
   if saved == nil then return default end
@@ -587,7 +575,7 @@ function SidebarView:rebuild_rows()
     if project.scratch then
       -- It is listed first.
     elseif project.state == "dormant" then
-      local bucket = age_bucket(project_activity(project), now)
+      local bucket = age_bucket(look.activity(project), now)
       grouped[bucket] = grouped[bucket] or {}
       table.insert(grouped[bucket], project)
     else
@@ -617,7 +605,7 @@ function SidebarView:rebuild_rows()
     local filtered, matches = {}, {}
     for _, row in ipairs(rows) do
       if row.project and row.kind ~= "terminal_group" then
-        local project_match = common.fuzzy_match(name_of(row.project), self.query) ~= nil
+        local project_match = common.fuzzy_match(look.name(row.project), self.query) ~= nil
         row.matches = project_match or row.tab and common.fuzzy_match(row.tab.name or "", self.query) ~= nil
         if row.matches then matches[row.project] = true end
       end
@@ -1472,26 +1460,10 @@ end
 ------------------------------------------------------------------------------------------------------------------
 -- Drawing
 
-local function tint(color, alpha)
-  return {color[1], color[2], color[3], alpha}
-end
-
 -- The color with its alpha scaled. The color itself when the scale is 1, so callers can compare it.
 local function fade(color, amount)
   if amount >= 1 then return color end
   return {color[1], color[2], color[3], (color[4] or 255) * amount}
-end
-
-local function project_status(project)
-  if project.state == "failed" then return style.error, "failed" end
-  if project.state == "dormant" then
-    if not project.exists then return style.error, "unavailable" end
-    return nil
-  end
-  if project.close_choice or project.deferred_dialog then return style.warn, "needs answer" end
-  if project.state == "starting" then return style.warn, "starting" end
-  if project.state == "closing" then return style.warn, "closing" end
-  return nil
 end
 
 local function dot(x, cy, radius, color)
@@ -1547,20 +1519,6 @@ local function font_variant(name)
   return fonts[name]
 end
 
--- A Project's badge color: one of the theme's bright terminal colors, chosen by the Project's name, so the Project
--- keeps its color in every theme.
-local function badge_color(name)
-  local palette = style.terminal_palette
-  local hash = 0
-  for i = 1, #name do hash = (hash * 31 + name:byte(i)) % 65521 end
-  return palette and palette[10 + hash % 6] or style.accent
-end
-
-local function initial(name)
-  local first = name:match("[%w]") or name:match("^[%z\1-\127\194-\244][\128-\191]*") or "?"
-  return first:upper()
-end
-
 -- Seconds until the next spinner frame, elapsed-time update, animation frame or hover tooltip.
 function SidebarView:animation_delay(clock)
   local delay = self.spinning and tab.spinner_delay(clock) or nil
@@ -1575,27 +1533,6 @@ function SidebarView:animation_delay(clock)
   if self.chosen then delay = math.min(delay or math.huge, math.max(0, self.chosen.deadline - clock)) end
   if self.unload_ask then delay = math.min(delay or math.huge, math.max(0, self.unload_ask.deadline - clock)) end
   return delay
-end
-
--- The running Terminal Sessions of an unloaded Project, such as "3 terminals, 1 busy, 1 needs you", or nil when
--- none run. An agent that waits at its prompt is not busy. Shorter forms follow for a narrow Sidebar.
-local function terminal_hint(project)
-  local running, busy, blocked = 0, 0, 0
-  for _, terminal in ipairs(project.terminals or {}) do
-    if terminal.state == "running" then
-      running = running + 1
-      local agent = tab.agent(terminal)
-      if agent and agent.state == "blocked" then
-        blocked = blocked + 1
-      elseif tab.working(tab.describe_session(terminal).terminal, agent) then
-        busy = busy + 1
-      end
-    end
-  end
-  if running == 0 then return nil end
-  local count = running .. (running == 1 and " terminal" or " terminals")
-  local needs = blocked > 0 and ", " .. blocked .. " needs you" or ""
-  return count .. (busy > 0 and ", " .. busy .. " busy" or "") .. needs, count .. needs, count
 end
 
 -- Draws a label shortened before a right-aligned note, then the note. The note keeps the same inset from the
@@ -1649,7 +1586,6 @@ function SidebarView:draw_project(row, y, width, now)
   local cy = y + row.h / 2
   local left, right = m.pad, width - m.pad
   local project = row.project
-  local name = name_of(project)
   local dormant = project.state == "dormant"
   local asked = self.unload_shown
   local asking = asked and asked.key == row.id_key and asked.amount
@@ -1660,25 +1596,8 @@ function SidebarView:draw_project(row, y, width, now)
   end
   -- Keep the badge dim, including for the Window's Selected Project.
   local size = m.badge
-  local bx, by = left + 6 * SCALE, math.floor(cy - size / 2)
-  local color = badge_color(name)
-  local strength = dormant and 0.55 or 1
-  local radius = math.floor(size * 0.3)
-  local bold = font_variant("bold")
-  local letter = initial(name)
-  local letter_color = tint(color, 255 * strength)
-  renderer.draw_rounded_rect(bx, by, size, size, radius, tint(color, 64 * strength))
-  -- The letter's ink centres in the badge. Its line box has room for descenders, so centring the line would put a
-  -- capital too high.
-  local ink_top, ink_bottom = bold:get_ink_extent(letter)
-  local ly = ink_top and by + (size - ink_top - ink_bottom) / 2 or by + (size - bold:get_height()) / 2
-  text(letter, bx + math.floor((size - bold:get_width(letter)) / 2), math.floor(ly + 0.5), letter_color, bold)
-  local status, note = project_status(project)
-  if status then
-    -- A ring in the panel's colour separates the dot from the badge.
-    dot(bx + size - SCALE, by + size - SCALE, 5 * SCALE, style.background2)
-    dot(bx + size - SCALE, by + size - SCALE, 3.5 * SCALE, status)
-  end
+  local bx = left + 6 * SCALE
+  look.draw_badge(project, bx, math.floor(cy - size / 2), size, font_variant("bold"), style.background2)
   -- The chevron keeps its space, so the note does not move when it shows.
   if row.key and self.query == "" then
     local shows = row.collapsed or self.hover == row or self.focused and self:get_cursor() == row
@@ -1690,22 +1609,18 @@ function SidebarView:draw_project(row, y, width, now)
     if shows then chevron(right - 12 * SCALE, cy, self.chevrons[row.key], hovered and style.text or style.dim) end
     right = right - 20 * SCALE
   end
-  if not note and project.window_id and project.window_id ~= 0 and self.window_id
-    and project.window_id ~= self.window_id then
-    note = "Window " .. project.window_id
-  end
+  local note = look.note(project, self.window_id, now)
   local hints
   if dormant then
-    note = note or tab.age_text(project_activity(project), now)
-    hints = {terminal_hint(project)}
+    hints = {look.terminal_hint(project)}
   elseif row.collapsed and (row.tabs or 0) > 0 then
     hints = {row.tabs .. (row.tabs == 1 and " tab" or " tabs")}
   end
   local note_color
   if asking then note, note_color = "Unload?", fade(style.warn, asking) end
   local name_color = dormant and not project.exists and style.dim or style.text
-  self:label_with_note(name, name_color, note, bx + size + 8 * SCALE, y, row, right, hints,
-    dormant and style.font or bold, note_color)
+  self:label_with_note(look.name(project), name_color, note, bx + size + 8 * SCALE, y, row, right, hints,
+    dormant and style.font or font_variant("bold"), note_color)
 end
 
 function SidebarView:draw_row(row, y, width, now)

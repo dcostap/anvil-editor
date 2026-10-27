@@ -30,7 +30,8 @@ local function result_for_path(results, path)
   end
 end
 
-local function draw_without_window(draw)
+-- `texts`, when given, collects each drawn text.
+local function draw_without_window(draw, texts)
   local renderer = require "renderer"
   local saved = {}
   for name, fn in pairs(renderer) do
@@ -41,7 +42,10 @@ local function draw_without_window(draw)
       renderer[name] = function() end
     end
   end
-  renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
+  renderer.draw_text = function(font, text, x)
+    if texts then texts[#texts + 1] = text end
+    return x + font:get_width(text)
+  end
   local ok, err = pcall(draw)
   for name, fn in pairs(saved) do renderer[name] = fn end
   return ok, err
@@ -59,6 +63,7 @@ test.describe("Fuzzy Searcher Path Search", function()
     context.everything_state = helpers.everything_state()
     context.original_projects = core.projects
     context.original_recent_projects = core.recent_projects
+    context.original_project_sidebar = core.project_sidebar
     context.original_open_file = core.open_file
     context.original_cwd = system.getcwd()
     context.temp_root = common.normalize_path(USERDIR
@@ -83,6 +88,7 @@ test.describe("Fuzzy Searcher Path Search", function()
     project_paths.load_workspace_state(nil)
     core.projects = context.original_projects
     core.recent_projects = context.original_recent_projects
+    core.project_sidebar = context.original_project_sidebar
     core.open_file = context.original_open_file
     if context.original_cwd then pcall(system.chdir, context.original_cwd) end
     if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
@@ -510,5 +516,68 @@ test.describe("Fuzzy Searcher Path Search", function()
     test.not_nil(result)
     test.equal(result.kind, "project")
     test.equal(result.path_search, true)
+  end)
+
+  -- The shell's Project Sidebar model, with this test's Project loaded in Window 1.
+  local function sidebar_model(context)
+    local now, day = os.time(), 24 * 60 * 60
+    local function project(id, path, state, window_id, age, fields)
+      local item = {id = id, row_id = id, path = path, state = state, exists = true, window_id = window_id,
+        activity = now - age, panes = {}, terminals = {}}
+      for key, value in pairs(fields or {}) do item[key] = value end
+      return item
+    end
+    return {
+      project(1, "C:/Work/old-tool", "dormant", 0, 30 * day),
+      project(2, "C:/Work/api-server", "starting", 1, 60),
+      project(3, join_path(USERDIR, "scratch"), "dormant", 0, 5 * day, {scratch = true}),
+      project(4, "C:/Work/notes", "dormant", 0, 2 * day, {terminals = {
+        {id = "build", title = "npm run dev", state = "running", busy = 1, activity = now - 60},
+        {id = "shell", title = "pwsh", state = "running", busy = 0, activity = now - 60},
+      }}),
+      project(5, "C:/Work/website", "ready", 2, 3 * day),
+      project(6, context.project_root, "ready", 1, 0, {panes = {active = 1,
+        {id = "a", name = "main.lua", icon = {kind = "file", path = "main.lua"}},
+        {id = "b", name = "Build server", terminal = {session = "server", state = "running", busy = 0}},
+      }}),
+      windows = {{id = 1, selected_project = 6}, {id = 2, selected_project = 5}},
+    }
+  end
+
+  -- The normalized paths of the Project results, or of plain paths.
+  local function project_paths(results)
+    local paths = {}
+    for _, result in ipairs(results) do
+      local path = type(result) == "string" and result or result.kind == "project" and result.path
+      if path then paths[#paths + 1] = common.normalize_path(path) end
+    end
+    return paths
+  end
+
+  test.it("lists Scratch, then loaded Projects, then Dormant Projects by last activity", function(context)
+    core.project_sidebar = sidebar_model(context)
+    core.recent_projects = {"C:/Work/not-in-sidebar"}
+    fuzzy_searcher.open("@")
+    test.same(project_paths(core.fuzzy_searcher_active_view.results), project_paths({
+      join_path(USERDIR, "scratch"), "C:/Work/api-server", "C:/Work/website",
+      context.project_root, "C:/Work/notes", "C:/Work/old-tool",
+    }))
+  end)
+
+  test.it("shows each Project's Sidebar name and state", function(context)
+    core.project_sidebar = sidebar_model(context)
+    fuzzy_searcher.open("@")
+    local picker = core.fuzzy_searcher_active_view
+    picker.position.x, picker.position.y = 0, 0
+    picker:set_size(1400, 600)
+    picker.open_transition_complete = true
+    picker:update()
+    local texts = {}
+    local drawn, draw_error = draw_without_window(function() picker:draw() end, texts)
+    test.ok(drawn, draw_error)
+    local shown = table.concat(texts, " | ")
+    for _, expected in ipairs {"6 Projects", "Scratch", "starting", "Window 2", "1mo", "2 terminals, 1 busy"} do
+      test.ok(shown:find(expected, 1, true), expected .. " is missing from: " .. shown)
+    end
   end)
 end)

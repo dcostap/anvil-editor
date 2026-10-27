@@ -199,6 +199,7 @@ SCENARIOS["fuzzy-picker-files"] = dict(SCENARIOS["nag-bar"], window_width=1400, 
 SCENARIOS["fuzzy-picker-files-light"] = dict(SCENARIOS["fuzzy-picker-files"], theme="light")
 SCENARIOS["fuzzy-picker-text"] = dict(SCENARIOS["fuzzy-picker-files"])
 SCENARIOS["fuzzy-picker-commands"] = dict(SCENARIOS["fuzzy-picker-files"])
+SCENARIOS["fuzzy-picker-projects"] = dict(SCENARIOS["fuzzy-picker-files"])
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,
     "tab_count": 8,
