@@ -20,6 +20,7 @@
 #include "renderer.h"
 #include "d3d11_backend.h"
 #include "font_raster_internal.h"
+#include "image_scale.h"
 #include "renwindow.h"
 
 // uncomment the line below for more debugging information through printf
@@ -3548,20 +3549,9 @@ void ren_draw_canvas(RenSurface *rs, SDL_Surface *surface, int x, int y) {
 }
 
 void ren_draw_canvas_scaled(RenSurface *rs, SDL_Surface *surface, RenRect rect, RenColor color) {
-  if (!surface || rect.width <= 0 || rect.height <= 0) return;
-  SDL_Rect dst_pos = {.x = rect.x, .y = rect.y, .w = rect.width, .h = rect.height};
-  Uint8 old_r, old_g, old_b, old_a;
-  SDL_BlendMode old_blend;
-  SDL_GetSurfaceColorMod(surface, &old_r, &old_g, &old_b);
-  SDL_GetSurfaceAlphaMod(surface, &old_a);
-  SDL_GetSurfaceBlendMode(surface, &old_blend);
-  SDL_SetSurfaceColorMod(surface, color.r, color.g, color.b);
-  SDL_SetSurfaceAlphaMod(surface, color.a);
-  if (color.a < 255) SDL_SetSurfaceBlendMode(surface, SDL_BLENDMODE_BLEND);
-  SDL_BlitSurfaceScaled(surface, NULL, rs->surface, &dst_pos, SDL_SCALEMODE_LINEAR);
-  SDL_SetSurfaceColorMod(surface, old_r, old_g, old_b);
-  SDL_SetSurfaceAlphaMod(surface, old_a);
-  SDL_SetSurfaceBlendMode(surface, old_blend);
+  image_scale_blit(surface, rs->surface, rect.x * rs->scale_x, rect.y * rs->scale_y,
+                   rect.width * rs->scale_x, rect.height * rs->scale_y,
+                   (SDL_Color){ color.r, color.g, color.b, color.a });
 }
 
 /******************** Pixels ***********************/

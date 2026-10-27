@@ -58,6 +58,7 @@ anvil_sources = [
     'process_exit.c',
     'resize_diagnostics.c',
     'renderer.c',
+    'image_scale.c',
     'display_packet.c',
     'renwindow.c',
     'rencache.c',
@@ -304,6 +305,14 @@ font_raster_test = executable('font_raster_test',
     c_args: anvil_cargs,
 )
 test('font-raster', font_raster_test, env: anvil_test_env)
+
+image_scale_test = executable('image_scale_test',
+    ['../tests/native/image_scale_test.c', 'image_scale.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('image-scale', image_scale_test, env: anvil_test_env, suite: 'anvil')
 
 drop_events_test = executable('drop_events_test',
     ['../tests/native/drop_events_test.c', 'system_events.c', 'resize_diagnostics.c', 'input_latency_probe.c'],

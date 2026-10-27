@@ -808,6 +808,10 @@ local function setup_scenario()
     local button = overlay.button_rect("copy")
     overlay.on_mouse_moved(button.x + button.w / 2, button.y + button.h / 2, 0, 0)
     overlay.show_toast("Image copied")
+  elseif benchmark.scenario == "image-zoom" then
+    -- The Image Overlay at a new zoom and pan on each frame, so each frame draws the whole image again.
+    config.transitions = false
+    require("core.image_overlay").open_image(sample_image(), { label = "Zoom sample.png" })
   elseif benchmark.scenario == "terminal-images" then
     view = require("core.terminal_image_scene")()
     require("core.panes").place(function() return view end, {
@@ -1098,6 +1102,16 @@ local function perform_action()
     local line = benchmark.start_line + benchmark.action_count * benchmark.scroll_lines
     if line > #view.buffer.lines then line = benchmark.start_line end
     set_position(view, line)
+    benchmark.action_count = benchmark.action_count + 1
+  elseif benchmark.scenario == "image-zoom" then
+    -- Zoom from fit to the largest scale and back in 120 frames, at a point that moves across the image.
+    local image_view = require("core.image_overlay").get_view()
+    local phase = benchmark.action_count % 120 / 60
+    if phase > 1 then phase = 2 - phase end
+    local fit, max = image_view:get_fit_scale(), image_view:get_max_scale()
+    local bx, by, bw, bh = image_view:get_box()
+    image_view:set_zoom(fit * (max / fit) ^ phase,
+      image_view.position.x + bx + bw * (0.25 + 0.5 * phase), image_view.position.y + by + bh * 0.4)
     benchmark.action_count = benchmark.action_count + 1
   elseif benchmark.scenario == "specimen-soak" then
     local span = math.max(1, #view.buffer.lines - benchmark.start_line)

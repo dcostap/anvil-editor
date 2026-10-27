@@ -473,6 +473,10 @@ This focused scene is not in the default suites. It does not yet have a full-sui
 Use `--scenario image-overlay` for the Image Overlay above an Editor: the backdrop, the title, the actions, a tooltip, a message, and the zoom controls.
 Like `image-viewer`, it has no baseline. Run it with `--report-only` and look at the captured screenshot.
 
+Use `--scenario image-zoom` on both renderers to measure the Image Overlay while it zooms and pans on each frame.
+The zoom goes from fit to the largest scale and back. Compare the frame times and the final screenshots of the two renderers.
+The software renderer must draw only the visible part of a zoomed image. `anvil:image-scale` checks that function.
+
 Use `--scenario titlebar-file-drop` to check external-drop feedback over a Title Bar with several Tabs.
 The scene sends internal drop events. It does not move the mouse or use a user's window.
 

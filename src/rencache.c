@@ -233,6 +233,16 @@ static RenRect transform_rect(RenRect rect, RenTransform transform) {
   );
 }
 
+/* Images keep fractional positions, as on the D3D11 path. Rounding would move a zoomed image by up to a pixel. */
+static RenRect transform_image_rect(RenRect rect, RenTransform transform) {
+  return (RenRect){
+    transform.offset_x + (double)rect.x * transform.scale,
+    transform.offset_y + (double)rect.y * transform.scale,
+    (double)rect.width * transform.scale,
+    (double)rect.height * transform.scale
+  };
+}
+
 static RenColor transform_color(RenColor color, RenTransform transform) {
   int alpha = (int)lroundf((float)color.a * transform.opacity);
   color.a = (uint8_t)(alpha < 0 ? 0 : (alpha > 255 ? 255 : alpha));
@@ -1141,7 +1151,7 @@ void rencache_end_frame(RenCache *ren_cache) {
           rencache_end_frame(cvcmd->canvas);
           ren_draw_canvas_scaled(
             &rs, cvcmd->canvas->rensurface.surface,
-            transform_rect(cvcmd->rect, transform),
+            transform_image_rect(cvcmd->rect, transform),
             transform_color(cvcmd->color, transform)
           );
           break;
@@ -1166,7 +1176,7 @@ void rencache_end_frame(RenCache *ren_cache) {
               ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE
           );
           ren_draw_canvas_scaled(
-            &rs, surface, transform_rect(pcmd->rect, transform),
+            &rs, surface, transform_image_rect(pcmd->rect, transform),
             transform_color((RenColor){255, 255, 255, 255}, transform)
           );
           SDL_DestroySurface(surface);
