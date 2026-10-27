@@ -4,6 +4,7 @@ local config = require "core.config"
 local style = require "core.style"
 local prompt_bar_renderer = require "core.prompt_bar_renderer"
 local card = require "core.card"
+local RowHighlight = require "core.row_highlight"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local View = require "core.view"
@@ -114,6 +115,7 @@ local function divider_gap() return 4 * SCALE end
 function GlobalPromptBar:new()
   GlobalPromptBar.super.new(self, SingleLineBuffer())
   self.suggestion_idx = 1
+  self.suggestion_highlight = RowHighlight(RowHighlight.selection)
   self.suggestions = {}
   self.notified_suggestion = nil
   self.suggestions_height = 0
@@ -330,6 +332,7 @@ function GlobalPromptBar:enter(label, ...)
     })
   end
   self:update_suggestions()
+  self.suggestion_highlight:reset()
   self.label = label
   self.progress = 0
   core.log_quiet("Global Prompt Bar: entered %q%s", label, self.pane_scope and " in a Pane" or "")
@@ -609,12 +612,12 @@ local function draw_suggestions(self)
   local draw_text = self.state.draw_text
   local font = self:get_font()
   local x, w = rx + label_inset(), rw - label_inset() * 2
+  local highlight = self.suggestion_highlight
+  if current >= first and current <= last then highlight:step((current - first) * lh, lh) else highlight:step() end
+  highlight:draw(rx, ry, rw, 4 * SCALE, style.card_selection)
   for i = first, last do
     local item = self.suggestions[i]
     local y = ry + (i - first) * lh
-    if i == current then
-      renderer.draw_rounded_rect(rx, y, rw, lh, 4 * SCALE, style.card_selection)
-    end
     if not draw_text then
       common.draw_text(font, style.text, item.display_text or item.text, nil, x, y, 0, lh)
     else

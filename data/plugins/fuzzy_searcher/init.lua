@@ -3697,6 +3697,9 @@ function FSView:new(prefix, opts)
   self.dirty = true
   self.scrollable = false
   self.hovered_result = nil
+  local RowHighlight = require "core.row_highlight"
+  self.selection_highlight = RowHighlight(RowHighlight.selection)
+  self.hover_highlight = RowHighlight(RowHighlight.hover)
   self.pressed_result = nil
   self.pressed_clicks = 0
   self.forward_mouse_to_child = false
@@ -8297,6 +8300,26 @@ function FSView:draw_open_content()
       previous_rendered_file = file
     end
   end
+  -- Row backgrounds go below the highlights, which glide across them in list coordinates.
+  local row_x, row_w = x + inset, list_w - 2 * inset
+  local range_first = self.range_anchor and math.min(self.range_anchor, self.selected)
+  local range_last = self.range_anchor and math.max(self.range_anchor, self.selected)
+  for idx = first, last do
+    local r = self.results[idx]
+    if not r.header and idx ~= self.selected and (range_first and idx >= range_first and idx <= range_last
+        or self:can_mark_result(idx) and self.marked_result_keys[self:result_selection_key(r)]) then
+      renderer.draw_rounded_rect(row_x, m.results_top + (idx - first) * lh - scroll_shift, row_w, lh, row_radius,
+        style.fuzzy_searcher_result_mark_background)
+    end
+  end
+  local list_top = m.results_top - (first - 1) * lh - scroll_shift
+  local function highlight_row(highlight, idx, color)
+    local r = idx and self.results[idx]
+    if r and not r.header then highlight:step((idx - 1) * lh, lh) else highlight:step() end
+    highlight:draw(row_x, list_top, row_w, row_radius, color)
+  end
+  highlight_row(self.selection_highlight, self.selected, style.card_selection)
+  highlight_row(self.hover_highlight, self.hovered_result, style.fuzzy_searcher_result_hover_background)
   for idx = first, last do
     local r = self.results[idx]
     local yy = m.results_top + (idx - first) * lh - scroll_shift
@@ -8316,19 +8339,6 @@ function FSView:draw_open_content()
           yy + math.floor((lh - header_font:get_height()) / 2), style.dim)
       end
     else
-      local marked = self:can_mark_result(idx)
-        and self.marked_result_keys[self:result_selection_key(r)]
-      local range_first = self.range_anchor and math.min(self.range_anchor, self.selected)
-      local range_last = self.range_anchor and math.max(self.range_anchor, self.selected)
-      local row_x, row_w = x + inset, list_w - 2 * inset
-      if idx == self.selected then
-        renderer.draw_rounded_rect(row_x, yy, row_w, lh, row_radius, style.card_selection)
-      elseif marked or range_first and idx >= range_first and idx <= range_last then
-        renderer.draw_rounded_rect(row_x, yy, row_w, lh, row_radius, style.fuzzy_searcher_result_mark_background)
-      end
-      if idx == self.hovered_result then
-        renderer.draw_rounded_rect(row_x, yy, row_w, lh, row_radius, style.fuzzy_searcher_result_hover_background)
-      end
       if not r.revision and (r.kind == "file" or (r.kind == "path" and r.file)) then
         local path = fullpath(r)
         local marker = path and pane_markers[common.path_compare_key(path)]

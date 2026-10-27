@@ -6,6 +6,7 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local card = require "core.card"
+local RowHighlight = require "core.row_highlight"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
 local View = require "core.view"
@@ -524,6 +525,7 @@ local partial = ""
 local suggestions_offset = 1
 local suggestions_idx = 1
 local suggestions = {}
+local selection_highlight = RowHighlight(RowHighlight.selection)
 local last_line, last_col
 local last_buffer
 local pending_tree_sitter_completion
@@ -1093,6 +1095,7 @@ local function reset_suggestions(skip_close)
   suggestions_offset = 1
   suggestions_idx = 1
   suggestions = {}
+  selection_highlight:reset()
   desc_rect = nil
   desc_view = nil
   desc_view_text = nil
@@ -1931,13 +1934,7 @@ local function draw_description_box(text, sx, sy, sw, sh)
   desc_rect = { x = x, y = y, w = width, h = height }
 end
 
-local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_width, selected)
-  if selected then
-    -- The selected row is a pill inset from the card's edges.
-    local inset = 4 * SCALE
-    renderer.draw_rounded_rect(rx + inset, y, rw - 2 * inset, lh, row_radius(), style.card_selection)
-  end
-
+local function draw_suggestion_row(font, suggestion, rx, y, rw, lh, icon_column_width)
   local icon_l_padding, icon_r_padding = 0, 0
   if icon_column_width > 0 then
     if config.plugins.autocomplete.icon_position == "left" then
@@ -2011,16 +2008,20 @@ function autocomplete.draw(av)
   local y = ry + style.padding.y / 2
   local show_count = math.min(#suggestions, visible_count)
   local start_index = suggestions_offset
-  local selected_item, selected_y, selected_desc
+  local selected_item, selected_desc
+
+  -- The selected row is a pill inset from the card's edges.
+  local shown = suggestions_idx - start_index
+  if shown >= 0 and shown < show_count then selection_highlight:step(shown * lh, lh) else selection_highlight:step() end
+  local inset = 4 * SCALE
+  selection_highlight:draw(rx + inset, y, rw - 2 * inset, row_radius(), style.card_selection)
 
   for i=start_index, start_index+show_count-1, 1 do
     local s = suggestions[i]
     if not s then break end
-    local selected = suggestions_idx == i
-    draw_suggestion_row(font, s, rx, y, rw, lh, icon_column_width, selected)
-    if selected then
+    draw_suggestion_row(font, s, rx, y, rw, lh, icon_column_width)
+    if suggestions_idx == i then
       selected_item = s
-      selected_y = y
       selected_desc = s.desc
       if s.onhover then
         s.onhover(suggestions_idx, s)
