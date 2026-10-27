@@ -540,6 +540,12 @@ static void dispatch_message(HostedMessage *message) {
       SDL_Log("Color Theme change event dropped: %s", SDL_GetError());
     goto complete;
   }
+  if (type == ANVIL_SURFACE_MSG_MENU_RESULT) {
+    CustomEvent event = {0};
+    event.code = ((AnvilSurfaceInt *)payload)->value;
+    if (!push_custom_event("menuchosen", &event)) SDL_Log("Sidebar menu result dropped: %s", SDL_GetError());
+    goto complete;
+  }
   if (type == ANVIL_SURFACE_MSG_ZOOM_WHEEL) {
     CustomEvent event = {0};
     event.code = ((AnvilSurfaceInt *)payload)->value;
@@ -789,6 +795,11 @@ static int SDLCALL reader_thread(void *data) {
         break;
       case ANVIL_SURFACE_MSG_ZOOM_CHANGED:
         if (size != sizeof(AnvilSurfaceZoom)) goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_MENU_RESULT:
+        if (!hosted.sidebar || size != sizeof(AnvilSurfaceInt) || ((AnvilSurfaceInt *)body)->value < 0 ||
+            ((AnvilSurfaceInt *)body)->value > ANVIL_SURFACE_MENU_LABELS)
+          goto failed;
         break;
       case ANVIL_SURFACE_MSG_DIALOG_RESULT:
         if (!anvil_surface_dialog_result_valid(body, size)) goto failed;
@@ -1107,6 +1118,18 @@ bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y) {
   if (!hosted.active || !hosted.sidebar || !row_id || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   AnvilSurfaceProjectMenu request = {row_id, x, y};
   send_message(ANVIL_SURFACE_MSG_PROJECT_MENU, &request, sizeof(request));
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_show_menu(int x, int y, const char *labels, size_t size) {
+  if (!hosted.active || !hosted.sidebar || size > ANVIL_SURFACE_MENU_BYTES || SDL_GetAtomicInt(&hosted.loss_cause))
+    return false;
+  uint8_t request[sizeof(AnvilSurfaceMenu) + ANVIL_SURFACE_MENU_BYTES];
+  *(AnvilSurfaceMenu *)request = (AnvilSurfaceMenu){x, y};
+  memcpy(request + sizeof(AnvilSurfaceMenu), labels, size);
+  uint32_t total = (uint32_t)(sizeof(AnvilSurfaceMenu) + size);
+  if (!anvil_surface_menu_valid(request, total)) return false;
+  send_message(ANVIL_SURFACE_MSG_MENU, request, total);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1629,6 +1652,9 @@ bool anvil_hosted_surface_zoom_saved(double interface_zoom, double code_zoom) {
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }
 bool anvil_hosted_surface_focus_sidebar(bool focused) { (void)focused; return false; }
 bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y) { (void)row_id; (void)x; (void)y; return false; }
+bool anvil_hosted_surface_show_menu(int x, int y, const char *labels, size_t size) {
+  (void)x; (void)y; (void)labels; (void)size; return false;
+}
 bool anvil_hosted_surface_set_panes(const char *panes) { (void)panes; return false; }
 void anvil_hosted_surface_runtime_ready(void) {}
 void anvil_hosted_surface_complete_pane_request(uint64_t request) { (void)request; }

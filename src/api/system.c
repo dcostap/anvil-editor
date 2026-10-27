@@ -2068,6 +2068,30 @@ static int f_show_project_menu(lua_State *L) {
   return 1;
 }
 
+/* The Sidebar's own menu at a point in Sidebar surface pixels. `labels` is a list of strings. A label that starts
+ * with a tab belongs to the submenu of the label above it, and "-" is a separator. The shell answers with the
+ * "menuchosen" event and the chosen label's index, or 0. Returns false outside a shell. */
+static int f_show_menu(lua_State *L) {
+  lua_Integer x = luaL_checkinteger(L, 1), y = luaL_checkinteger(L, 2);
+  luaL_argcheck(L, x >= INT32_MIN && x <= INT32_MAX && y >= INT32_MIN && y <= INT32_MAX, 1, "invalid point");
+  luaL_checktype(L, 3, LUA_TTABLE);
+  char labels[ANVIL_SURFACE_MENU_BYTES];
+  size_t size = 0, count = lua_rawlen(L, 3);
+  luaL_argcheck(L, count > 0 && count <= ANVIL_SURFACE_MENU_LABELS, 3, "invalid label count");
+  for (size_t i = 1; i <= count; i++) {
+    lua_rawgeti(L, 3, (lua_Integer)i);
+    size_t length = 0;
+    const char *label = lua_tolstring(L, -1, &length);
+    luaL_argcheck(L, label && length && !memchr(label, 0, length) && size + length + 1 <= sizeof(labels), 3,
+                  "invalid label");
+    memcpy(labels + size, label, length + 1);
+    size += length + 1;
+    lua_pop(L, 1);
+  }
+  lua_pushboolean(L, anvil_hosted_surface_show_menu((int)x, (int)y, labels, size));
+  return 1;
+}
+
 /* Returns false outside a shell, which has no Project Sidebar. */
 static int f_toggle_project_sidebar(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_toggle_sidebar());
@@ -2246,6 +2270,11 @@ static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   (void)event;
   lua_pushstring(L, "colorthemechanged");
   return 1;
+}
+static int menuchosen_callback(lua_State *L, SDL_Event *event) {
+  lua_pushstring(L, "menuchosen");
+  lua_pushinteger(L, event->user.code);
+  return 2;
 }
 static int zoomwheel_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, "zoomwheel");
@@ -2898,6 +2927,7 @@ static const luaL_Reg lib[] = {
   { "toggle_project_sidebar", f_toggle_project_sidebar },
   { "focus_project_sidebar", f_focus_project_sidebar },
   { "show_project_menu",     f_show_project_menu     },
+  { "show_menu",             f_show_menu             },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
   { "zoom_saved",            f_zoom_saved            },
@@ -2963,6 +2993,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Zoom event: %s", SDL_GetError());
   if (!register_custom_event("zoomwheel", zoomwheel_callback))
     return luaL_error(L, "Unable to register the Sidebar Zoom wheel event: %s", SDL_GetError());
+  if (!register_custom_event("menuchosen", menuchosen_callback))
+    return luaL_error(L, "Unable to register the Sidebar menu event: %s", SDL_GetError());
   if (!register_custom_event("focusterminal", focusterminal_callback))
     return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
   if (!register_custom_event("terminaleditor", terminaleditor_callback))

@@ -274,11 +274,11 @@ function tab.width(item, row_height, opts)
   return width
 end
 
--- The space for the name, and the note that fits beside it.
+-- The space for the name, and the note that fits beside it. `note = false` leaves the note out.
 function tab.name_width(item, width, row_height, opts)
   opts = opts or {}
   local available = width - prefix_width(item, row_height, opts)
-  local note = tab.note(item, opts.now or os.time())
+  local note = opts.note ~= false and tab.note(item, opts.now or os.time())
   local note_w = note and style.font:get_width(note) + gap() * 2 or 0
   if note_w > available / 2 then note, note_w = nil, 0 end
   return math.max(0, available - note_w), note
@@ -288,7 +288,7 @@ end
 -- Returns true when it drew a spinner frame, so the caller can draw the next one, and the name's left edge.
 -- `shimmer` is the phase of a shimmer through the name, from 0 to 1. `number_gutter` is the right edge of a gutter
 -- left of the Tab. The number draws there, so Tabs with and without a number align.
----@param opts {name_color: renderer.color, number_font: renderer.font?, number_gutter: number?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?}
+---@param opts {name_color: renderer.color, number_font: renderer.font?, number_gutter: number?, name_font: renderer.font?, now: number?, clock: number?, shimmer: number?, note: boolean?}
 function tab.draw(item, x, y, w, h, opts)
   local number_font, name_font = opts.number_font or style.font, opts.name_font or style.font
   local right = x + w

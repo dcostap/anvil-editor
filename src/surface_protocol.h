@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 38u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 39u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -53,6 +53,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_TERMINAL_EDITOR = 15,
   /* Ctrl-wheel over the Sidebar. Payload: AnvilSurfaceInt, signed Zoom direction. */
   ANVIL_SURFACE_MSG_ZOOM_WHEEL = 16,
+  /* The Sidebar's menu closed. Payload: AnvilSurfaceInt, the chosen label's number from 1, or 0 for none. */
+  ANVIL_SURFACE_MSG_MENU_RESULT = 17,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -114,6 +116,10 @@ typedef enum {
   ANVIL_SURFACE_MSG_TIMING_CAPTURE = 105,
   /* Focus the Sidebar or return to the Selected Project. Payload: AnvilSurfaceInt. */
   ANVIL_SURFACE_MSG_SIDEBAR_FOCUS = 106,
+  /* Show a menu that the Sidebar describes, and answer with ANVIL_SURFACE_MSG_MENU_RESULT. Payload: AnvilSurfaceMenu,
+   * then at most ANVIL_SURFACE_MENU_LABELS labels, each followed by NUL. A label that starts with a tab belongs to
+   * the submenu of the label above it. A label "-" is a separator. */
+  ANVIL_SURFACE_MSG_MENU = 107,
 } AnvilSurfaceMessageType;
 
 /* Static stage names only. Times use the same performance clock as system.get_time().
@@ -132,6 +138,11 @@ typedef struct { uint32_t project_id, target_window_id; } AnvilSurfaceMoveProjec
 typedef struct { double interface_zoom, code_zoom; } AnvilSurfaceZoom;
 /* A Sidebar row id and the pointer position in Sidebar surface pixels. */
 typedef struct { uint32_t row_id; int32_t x, y; } AnvilSurfaceProjectMenu;
+/* The pointer position in Sidebar surface pixels. */
+typedef struct { int32_t x, y; } AnvilSurfaceMenu;
+#define ANVIL_SURFACE_MENU_LABELS 32
+#define ANVIL_SURFACE_MENU_BYTES 4096
+bool anvil_surface_menu_valid(const void *packet, uint32_t size);
 
 typedef struct {
   uint32_t userdir_size;

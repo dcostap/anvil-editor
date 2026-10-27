@@ -2,6 +2,8 @@
 local core = require "core"
 local saved_event = core.on_event
 local surfaces, current = {}, nil
+-- The Window whose Sidebar asked for the open menu. The menu's result goes to that surface.
+local menu_surface
 local SidebarView, font, base_font_size
 local fonts, style = {}, nil
 local color_theme = require "core.color_theme"
@@ -168,7 +170,7 @@ local function add_surface(id, window)
       if action == "seen" then
         core.log_quiet("Sidebar result read: Window=%d session=%s pruned=%d", id, row_id, save_seen())
       else
-        core.log_quiet("Sidebar Reminder ended: Window=%d session=%s pruned=%d", id, row_id, save_reminders())
+        core.log_quiet("Sidebar Reminder saved: Window=%d session=%s pruned=%d", id, row_id, save_reminders())
       end
       -- Other surfaces show the same result. It is read there too.
       for _, other in pairs(surfaces) do
@@ -198,6 +200,19 @@ local function add_surface(id, window)
           return
         end
       end
+      return
+    end
+    if action == "show_menu" then
+      local x, y, labels = row_id, target, ...
+      menu_surface = id
+      local sent = system.show_menu(x, y, labels)
+      core.log_quiet("Sidebar menu: Window=%d labels=%d sent=%s", id, #labels, tostring(sent))
+      if not sent then menu_surface = nil; surface.view:on_menu_chosen(0) end
+      return
+    end
+    if action == "focus" then
+      local sent = system.focus_project_sidebar(true)
+      core.log_quiet("Sidebar takes the keyboard: Window=%d sent=%s", id, tostring(sent))
       return
     end
     if action == "menu" then
@@ -324,7 +339,7 @@ function core.init()
   for _, name in ipairs(LineInput.COMMANDS) do
     local sidebar_name = "sidebar:" .. name
     command.add(function()
-      return current ~= nil and current.view.focused and (current.view.query ~= "" or name == "paste")
+      return current ~= nil and current.view:edits(name)
     end, {[sidebar_name] = function() current.view:edit(name) end})
     for _, binding in ipairs(line_bindings[name]) do keymap.add {[binding] = sidebar_name} end
   end
@@ -365,6 +380,10 @@ function core.on_event(name, ...)
     core.project_sidebar_request = nil
     current.query_needed = true
   elseif name == "projectsidebar" then saved_event(name, ...)
+  elseif name == "menuchosen" then
+    core.log_quiet("Sidebar menu result: Window=%d choice=%d", current.id, (...))
+    current.view:on_menu_chosen(...)
+    core.redraw = true
   elseif name == "focusgained" or name == "focuslost" then
     keymap.modkeys = {}
     current.suppress_text = false
@@ -457,6 +476,11 @@ function core.run_step()
     elseif event[1] == "zoomchanged" then
       -- Each surface takes the new scale when it next activates.
       set_zoom(event[2])
+    elseif event[1] == "menuchosen" then
+      -- The result has no Window. It goes to the surface that asked for the menu.
+      local id = menu_surface
+      menu_surface = nil
+      if id and activate(id) then core.on_event(table.unpack(event, 1, event.n)) end
     elseif event[1] == "projectsidebarchanged" and not native_id then
       for _, surface in pairs(surfaces) do surface.request, surface.query_needed = nil, true end
       core.project_sidebar_request = nil

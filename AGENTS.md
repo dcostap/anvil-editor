@@ -148,6 +148,13 @@ The Project Sidebar marks only an Unread Result or an agent that waits for an an
 The mark is a dot, a bold name, and a coloured stripe that fades out to the right.
 It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
 
+A right-click on a Terminal row in the Sidebar sets or removes a Reminder.
+The Sidebar saves each Reminder as a Unix time in `storage/sidebar/reminders`, beside the seen times.
+`tab.attention` holds a Terminal's attention until that time. The Sidebar wakes at the next Reminder time.
+The Sidebar describes its menu; the shell only shows it and returns the chosen label (`system.show_menu`).
+A Reminder whose time has not come stays saved, even when the model does not list its Terminal Session.
+Run `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
+
 Tabs show shared Pane numbers, not Tab positions. `core.numbered_panes` selects `core.pending_panes`.
 Unread Results and agents waiting for an answer get numbers 1 to 5, oldest pending event first.
 The Sidebar passes its shared seen times. Projects read the persisted seen times with a short cache.

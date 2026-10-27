@@ -1105,6 +1105,73 @@ test.describe("Sidebar Reminders", function()
       test.equal(seen.done, start + 600)
     end)
   end)
+
+  -- Right-clicks the Terminal Tab `name` and returns the menu labels that the view asks the shell to show.
+  local function open_menu(view, actions, name)
+    local y = row_y(view, "tab", 1, function(row) return row.tab.name == name end)
+    view:on_mouse_pressed("right", 100, y)
+    view:on_mouse_released("right", 100, y)
+    local last = test.not_nil(actions[#actions], "The right-click did nothing")
+    test.same({last[1], last[2], last[3]}, {"show_menu", 100, y})
+    return last[4]
+  end
+  local function choose(view, labels, label)
+    for index, item in ipairs(labels) do
+      if item == label then return view:on_menu_chosen(index) end
+    end
+    error("no menu label " .. label .. " in " .. table.concat(labels, ","))
+  end
+
+  test.it("offers Reminder times on a Terminal's right-click and sets or removes the chosen one", function()
+    with_clock(function()
+      local actions, action = recorder()
+      local reminders = {}
+      local view = SidebarView(action, {}, {}, false, reminders)
+      view:set_model(model(), 1)
+      local labels = open_menu(view, actions, "done")
+      test.ok(labels[1] == "Remind Me In" and labels[#labels] ~= "Remove Reminder", table.concat(labels, ","))
+      choose(view, labels, "\t2 Hours")
+      test.equal(reminders.done, start + 2 * 3600)
+      test.same(actions[#actions], {"reminder", "done"})
+      test.equal(attention(view), "asks=blocked")
+      choose(view, open_menu(view, actions, "done"), "Remove Reminder")
+      test.is_nil(reminders.done)
+      test.same(actions[#actions], {"reminder", "done"})
+      test.equal(attention(view), "done=done,asks=blocked")
+      -- A closed menu without a choice changes nothing.
+      open_menu(view, actions, "done")
+      local count = #actions
+      view:on_menu_chosen(0)
+      test.equal(#actions, count)
+    end)
+  end)
+
+  test.it("sets a Reminder in a typed number of hours, and Escape cancels it", function()
+    with_clock(function()
+      local actions, action = recorder()
+      local reminders = {}
+      local view = SidebarView(action, {}, {}, false, reminders)
+      view:set_model(model(), 1)
+      choose(view, open_menu(view, actions, "done"), "\tCustom…")
+      test.same(actions[#actions], {"focus"})
+      view:on_focus(true)
+      view:on_text_input("1x2")
+      test.ok(find_text(drawn_texts(view), "12"), "The hours field does not show the typed hours")
+      test.ok(view:edit("backspace"))
+      view:on_key_pressed("return")
+      test.equal(reminders.done, start + 3600)
+      test.same(actions[#actions], {"return_focus"})
+
+      choose(view, open_menu(view, actions, "asks"), "\tCustom…")
+      view:on_focus(true)
+      view:on_text_input("5")
+      view:on_key_pressed("escape")
+      test.is_nil(reminders.asks)
+      test.same(actions[#actions], {"return_focus"})
+      view:on_text_input("5")
+      test.equal(view.query, "5", "Typing after Escape does not search")
+    end)
+  end)
 end)
 
 test.describe("Sidebar search field", function()

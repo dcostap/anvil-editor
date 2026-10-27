@@ -297,7 +297,7 @@ def main() -> int:
                         config["environment"]["ANVIL_PROBE_LINKED_EXE"] = native_path(case_dir / "app-link/bin/anvil.exe")
                     if action == "windows-sidebar-folding":
                         config["environment"]["ANVIL_INPUT_ROUTING_PROBE"] = "1"
-                    if action in ("project-menu", "project-menu-background") or action.startswith("windows-move"):
+                    if action in ("project-menu", "project-menu-background", "terminal-focus") or action.startswith("windows-move"):
                         config["environment"]["ANVIL_SHELL_MENU_PROBE"] = native_path(case_dir / "menu-choice.txt")
                     if action == "dialog-error":
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"

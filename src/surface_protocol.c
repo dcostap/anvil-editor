@@ -238,6 +238,24 @@ bool anvil_surface_pane_request_valid(const void *packet, uint32_t size) {
   return !memchr(request + 1, 0, size - sizeof(*request));
 }
 
+bool anvil_surface_menu_valid(const void *packet, uint32_t size) {
+  if (!packet || size <= sizeof(AnvilSurfaceMenu) || size > sizeof(AnvilSurfaceMenu) + ANVIL_SURFACE_MENU_BYTES)
+    return false;
+  const char *label = (const char *)packet + sizeof(AnvilSurfaceMenu), *end = (const char *)packet + size;
+  if (end[-1]) return false;
+  /* A submenu label needs a label above it that can open the submenu. */
+  const char *above = NULL;
+  for (int count = 0; label < end; label += strlen(label) + 1) {
+    if (++count > ANVIL_SURFACE_MENU_LABELS) return false;
+    bool child = label[0] == '\t';
+    const char *name = label + child;
+    if (!*name) return false;
+    if (child && (!above || !strcmp(above, "-"))) return false;
+    if (!child) above = name;
+  }
+  return true;
+}
+
 bool anvil_surface_pane_delivery_valid(const void *packet, uint32_t size) {
   return packet && size > sizeof(AnvilSurfacePaneDelivery) && size <= ANVIL_SURFACE_MAX_PAYLOAD &&
          !memchr((const char *)packet + sizeof(AnvilSurfacePaneDelivery), 0,

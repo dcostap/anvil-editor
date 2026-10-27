@@ -450,6 +450,7 @@ static void start_sidebar(void);
 static void set_sidebar_hidden(ShellWindow *window, bool hidden);
 static void focus_sidebar(ShellWindow *window, bool focused);
 static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y);
+static void show_sidebar_menu(ShellWindow *window, const AnvilSurfaceMenu *request, uint32_t size);
 static void schedule_sidebar_restart(void);
 static ShellWindow *create_window(const AnvilShellWindowState *placement, bool show_sidebar);
 static bool destroy_window(ShellWindow *window);
@@ -1048,7 +1049,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     case ANVIL_SURFACE_MSG_FRAME: case ANVIL_SURFACE_MSG_CURSOR: case ANVIL_SURFACE_MSG_HIT_TEST:
     case ANVIL_SURFACE_MSG_SELECT_PROJECT: case ANVIL_SURFACE_MSG_UNLOAD_PROJECT:
     case ANVIL_SURFACE_MSG_MOVE_PROJECT: case ANVIL_SURFACE_MSG_SELECT_TERMINAL: case ANVIL_SURFACE_MSG_PROJECT_MENU:
-    case ANVIL_SURFACE_MSG_PANE_REQUEST: case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
+    case ANVIL_SURFACE_MSG_MENU: case ANVIL_SURFACE_MSG_PANE_REQUEST: case ANVIL_SURFACE_MSG_SIDEBAR_QUERY: case ANVIL_SURFACE_MSG_SIDEBAR_REFRESH:
     case ANVIL_SURFACE_MSG_TEXT_INPUT: case ANVIL_SURFACE_MSG_TITLE: case ANVIL_SURFACE_MSG_SIDEBAR_FOCUS:
     case ANVIL_SURFACE_MSG_VISIBLE: case ANVIL_SURFACE_MSG_SET_BOUNDS: case ANVIL_SURFACE_MSG_BORDERED:
       return valid_project_message(packet->type, packet + 1, size - sizeof(*packet));
@@ -1082,6 +1083,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
     return size == sizeof(uint32_t) && *(const uint32_t *)payload != 0;
   case ANVIL_SURFACE_MSG_PROJECT_MENU:
     return size == sizeof(AnvilSurfaceProjectMenu) && ((const AnvilSurfaceProjectMenu *)payload)->row_id;
+  case ANVIL_SURFACE_MSG_MENU:
+    return anvil_surface_menu_valid(payload, size);
   case ANVIL_SURFACE_MSG_MOVE_PROJECT:
     return size == sizeof(AnvilSurfaceMoveProject) && ((const AnvilSurfaceMoveProject *)payload)->project_id &&
            ((const AnvilSurfaceMoveProject *)payload)->target_window_id;
@@ -3419,7 +3422,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       message->type != ANVIL_SURFACE_MSG_MOVE_PROJECT &&
       message->type != ANVIL_SURFACE_MSG_SELECT_TERMINAL &&
       message->type != ANVIL_SURFACE_MSG_PANE_REQUEST &&
-      message->type != ANVIL_SURFACE_MSG_PROJECT_MENU &&
+      message->type != ANVIL_SURFACE_MSG_PROJECT_MENU && message->type != ANVIL_SURFACE_MSG_MENU &&
       message->type != ANVIL_SURFACE_MSG_FRAME &&
       message->type != ANVIL_SURFACE_MSG_EXIT_INTENT && message->type != ANVIL_SURFACE_MSG_CURSOR &&
       message->type != ANVIL_SURFACE_MSG_HIT_TEST)
@@ -3565,6 +3568,9 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     if (project->sidebar && !window->closing) show_project_menu(window, request->row_id, request->x, request->y);
     break;
   }
+  case ANVIL_SURFACE_MSG_MENU:
+    if (project->sidebar) show_sidebar_menu(window, payload, message->size);
+    break;
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
     SDL_Log("Shell Sidebar toggle requested: Window=%u", window->id);
     if (!window->closing) set_sidebar_hidden(window, !window->sidebar_hidden);
@@ -6844,6 +6850,48 @@ static void match_menu_theme(ShellWindow *window) {
 enum { PROJECT_MENU_OPEN_WINDOW = 1, PROJECT_MENU_NEW_WINDOW, PROJECT_MENU_UNLOAD, PROJECT_MENU_COPY_PATH,
        PROJECT_MENU_EXPLORER, PROJECT_MENU_MOVE = 0x100 };
 
+/* An isolated probe names the label to choose in the file ANVIL_SHELL_MENU_PROBE, and the shell shows no menu.
+ * Returns false outside such a probe. */
+static bool menu_probe_choice(char *label, size_t size) {
+  const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
+  const char *choice_file = probe && !strcmp(probe, "1") ? SDL_getenv("ANVIL_SHELL_MENU_PROBE") : NULL;
+  if (!choice_file) return false;
+  FILE *file = fopen(choice_file, "rb");
+  size_t read = file ? fread(label, 1, size - 1, file) : 0;
+  if (file) fclose(file);
+  label[read] = 0;
+  return true;
+}
+
+/* Shows a menu at a point in Sidebar surface pixels and returns the chosen command, or 0. The menu's loop can
+ * close the Window; *window is NULL then. */
+static UINT track_sidebar_menu(ShellWindow **window, HMENU menu, int x, int y) {
+  ShellWindow *owner = *window;
+  Uint32 id = owner->id, held = 0;
+  /* The Sidebar reports surface pixels; a sliding Sidebar shows its surface moved left. */
+  POINT point = {x - (owner->sidebar_full_w - owner->sidebar_w), y};
+  ClientToScreen(owner->hwnd, &point);
+  match_menu_theme(owner);
+  cancel_input(owner);
+  SetForegroundWindow(owner->hwnd);
+  UINT chosen = (UINT)TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, point.x, point.y,
+                                      owner->hwnd, NULL);
+  PostMessageW(owner->hwnd, WM_NULL, 0, 0);
+  /* GetAsyncKeyState reports physical buttons; SDL reports the primary button as left. */
+  bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+  if (GetAsyncKeyState(swapped ? VK_RBUTTON : VK_LBUTTON) & 0x8000) held |= SDL_BUTTON_LMASK;
+  if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) held |= SDL_BUTTON_MMASK;
+  if (GetAsyncKeyState(swapped ? VK_LBUTTON : VK_RBUTTON) & 0x8000) held |= SDL_BUTTON_RMASK;
+  owner = window_for_id(id) == owner ? owner : NULL;
+  if (owner && held) {
+    owner->menu_buttons = held;
+    owner->menu_closed_ns = SDL_GetTicksNS();
+    SDL_Log("Shell Sidebar menu closed by a click: buttons=%u", held);
+  }
+  *window = owner;
+  return chosen;
+}
+
 /* The Sidebar's actions menu for one Project. The shell performs the chosen command itself. */
 static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y) {
   sync_sidebar_model();
@@ -6867,19 +6915,9 @@ static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y
   /* Labels go to the log, and an isolated probe chooses one by its label. */
   char labels[1024] = "";
   size_t length = 0;
-  /* An isolated probe names the label in the file ANVIL_SHELL_MENU_PROBE, and the shell shows no menu. */
-  const char *probe = SDL_getenv("ANVIL_SURFACE_FAULT_PROBE");
-  const char *choice_file = probe && !strcmp(probe, "1") ? SDL_getenv("ANVIL_SHELL_MENU_PROBE") : NULL;
   char choice_label[128] = "";
-  if (choice_file) {
-    FILE *file = fopen(choice_file, "rb");
-    size_t read = file ? fread(choice_label, 1, sizeof(choice_label) - 1, file) : 0;
-    if (file) fclose(file);
-    choice_label[read] = 0;
-  }
-  const char *choice = choice_file ? choice_label : NULL;
+  const char *choice = menu_probe_choice(choice_label, sizeof(choice_label)) ? choice_label : NULL;
   UINT chosen = 0;
-  Uint32 held = 0;
 #define MENU_ITEM(id, label)                                                                                       \
   do {                                                                                                         \
     AppendMenuW(menu, MF_STRING, (id), L##label);                                                              \
@@ -6909,33 +6947,10 @@ static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y
   if (exists) MENU_ITEM(PROJECT_MENU_EXPLORER, "Show in File Explorer");
 #undef MENU_ITEM
   SDL_Log("Shell Project menu: Window=%u row=%u items=%s", window->id, row_id, labels);
-  if (choice) {
-    SDL_Log("Shell Project menu probe chose: %s", chosen ? choice : "nothing");
-  } else {
-    /* The Sidebar reports surface pixels; a sliding Sidebar shows its surface moved left. */
-    POINT point = {x - (window->sidebar_full_w - window->sidebar_w), y};
-    ClientToScreen(window->hwnd, &point);
-    match_menu_theme(window);
-    cancel_input(window);
-    SetForegroundWindow(window->hwnd);
-    chosen = (UINT)TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, point.x, point.y,
-                                    window->hwnd, NULL);
-    PostMessageW(window->hwnd, WM_NULL, 0, 0);
-    /* GetAsyncKeyState reports physical buttons; SDL reports the primary button as left. */
-    bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
-    if (GetAsyncKeyState(swapped ? VK_RBUTTON : VK_LBUTTON) & 0x8000) held |= SDL_BUTTON_LMASK;
-    if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) held |= SDL_BUTTON_MMASK;
-    if (GetAsyncKeyState(swapped ? VK_LBUTTON : VK_RBUTTON) & 0x8000) held |= SDL_BUTTON_RMASK;
-  }
+  if (choice) SDL_Log("Shell Project menu probe chose: %s", chosen ? choice : "nothing");
+  else chosen = track_sidebar_menu(&window, menu, x, y);
   DestroyMenu(menu);
   if (chosen) SDL_Log("Shell Project menu command: %u row=%u", chosen, row_id);
-  /* The menu's loop can close the Window. */
-  window = window_for_id(window->id) == window ? window : NULL;
-  if (window && held) {
-    window->menu_buttons = held;
-    window->menu_closed_ns = SDL_GetTicksNS();
-    SDL_Log("Shell Project menu closed by a click: buttons=%u", held);
-  }
   if (!window || window->closing) chosen = 0;
   if (chosen >= PROJECT_MENU_MOVE) {
     move_project(window, project_id, chosen - PROJECT_MENU_MOVE, false);
@@ -6958,6 +6973,48 @@ static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y
     }
   }
   free(path);
+}
+
+/* A menu that the Sidebar describes. The Sidebar performs the chosen label itself, so the shell always answers,
+ * also when nothing was chosen. */
+static void show_sidebar_menu(ShellWindow *window, const AnvilSurfaceMenu *request, uint32_t size) {
+  const char *end = (const char *)request + size;
+  char labels[1024] = "";
+  size_t length = 0;
+  char choice_label[128] = "";
+  const char *choice = menu_probe_choice(choice_label, sizeof(choice_label)) ? choice_label : NULL;
+  HMENU menu = window->closing ? NULL : CreatePopupMenu(), submenu = NULL;
+  UINT chosen = 0, number = 0;
+  for (const char *label = (const char *)(request + 1); menu && label < end; label += strlen(label) + 1) {
+    number++;
+    bool child = label[0] == '\t';
+    const char *name = label + child;
+    const char *next = label + strlen(label) + 1;
+    HMENU target = child ? submenu : menu;
+    if (!child) submenu = NULL;
+    length += (size_t)snprintf(labels + length, sizeof(labels) - SDL_min(length, sizeof(labels)), "%s%s",
+                               length ? "|" : "", name);
+    if (!strcmp(name, "-")) {
+      AppendMenuW(target, MF_SEPARATOR, 0, NULL);
+      continue;
+    }
+    wchar_t *wide = (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", name, strlen(name) + 1);
+    if (!child && next < end && next[0] == '\t') {
+      submenu = CreatePopupMenu();
+      if (submenu) AppendMenuW(menu, MF_POPUP, (UINT_PTR)submenu, wide ? wide : L"?");
+    } else if (target) {
+      AppendMenuW(target, MF_STRING, number, wide ? wide : L"?");
+      if (choice && !strcmp(choice, name)) chosen = number;
+    }
+    SDL_free(wide);
+  }
+  SDL_Log("Shell Sidebar menu: Window=%u items=%s", window->id, labels);
+  if (choice) SDL_Log("Shell Sidebar menu probe chose: %s", chosen ? choice : "nothing");
+  else if (menu) chosen = track_sidebar_menu(&window, menu, request->x, request->y);
+  if (menu) DestroyMenu(menu);
+  if (!window || window->closing) chosen = 0;
+  SDL_Log("Shell Sidebar menu result: %u", chosen);
+  if (shell.sidebar_process) shell_send_int(shell.sidebar_process, ANVIL_SURFACE_MSG_MENU_RESULT, (int)chosen);
 }
 
 static BOOL CALLBACK add_visible_area(HMONITOR monitor, HDC dc, LPRECT bounds, LPARAM data) {

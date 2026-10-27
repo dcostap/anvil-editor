@@ -158,6 +158,8 @@ end
 
 function SidebarView:on_focus(focused)
   self.focused, self.unload_ask = focused, nil
+  -- The hours field asks for the keyboard and waits for it. It closes when the Sidebar loses the keyboard.
+  if not focused then self.hours = nil end
   self.focus_feedback:update(focused and self or nil)
   self.input:set_text("")
   self.query, self.cursor, self.selecting = "", nil, nil
@@ -180,18 +182,94 @@ end
 function SidebarView:on_text_input(text)
   if not self.focused then return end
   self.unload_ask = nil
+  if self.hours then
+    -- The hours field takes whole hours only.
+    self.hours.input:insert((text:gsub("%D", "")))
+    return
+  end
   self.input:insert(text)
   self:input_changed()
 end
 
--- Performs the editor's line command `name` in the search field, such as "select_to_previous_word_start". Without a
--- query it returns false, so the same keys move through the list. A paste can start a query.
+-- The field that takes the keyboard's text: the hours field while it is open, or else the search field.
+function SidebarView:field()
+  return self.hours and self.hours.input or self.input
+end
+
+-- Whether the line command `name` edits a field: the hours field, the search field while it has a query, or a
+-- paste that starts a query.
+function SidebarView:edits(name)
+  return self.focused == true and (self.hours ~= nil or self.query ~= "" or name == "paste")
+end
+
+-- Performs the editor's line command `name` in the field, such as "select_to_previous_word_start". Without a
+-- query it returns false, so the same keys move through the list.
 function SidebarView:edit(name)
-  if not self.focused or self.query == "" and name ~= "paste" then return false end
-  if not self.input:perform(name) then return false end
+  if not self:edits(name) then return false end
+  local input = self:field()
+  if not input:perform(name) then return false end
   self.unload_ask = nil
-  self:input_changed()
+  if self.hours then
+    input:set_text((input.text:gsub("%D", "")))
+  else
+    self:input_changed()
+  end
   return true
+end
+
+-- The Terminal menu's Reminder times, in hours.
+local REMINDER_HOURS = {1, 2, 3, 4, 24}
+
+-- Asks the shell for a Terminal Session's menu at the point. The shell reports the choice to `on_menu_chosen`.
+function SidebarView:open_terminal_menu(session, x, y)
+  local labels, choices = {"Remind Me In"}, {}
+  for _, hours in ipairs(REMINDER_HOURS) do
+    labels[#labels + 1] = "\t" .. (hours == 24 and "1 Day" or hours == 1 and "1 Hour" or hours .. " Hours")
+    choices[#labels] = hours
+  end
+  labels[#labels + 1] = "\tCustom…"
+  choices[#labels] = "custom"
+  if self.reminders[session] then
+    labels[#labels + 1] = "Remove Reminder"
+    choices[#labels] = "remove"
+  end
+  self.menu = {session = session, choices = choices}
+  self.action("show_menu", x, y, labels)
+end
+
+-- The menu closed with the label at `index` chosen, or with none for 0.
+function SidebarView:on_menu_chosen(index)
+  local menu = self.menu
+  self.menu = nil
+  local choice = menu and menu.choices[index]
+  if choice == "custom" then
+    self.hours = {session = menu.session, input = LineInput()}
+    self.action("focus")
+    self:rebuild_rows()
+  elseif choice == "remove" then
+    self:set_reminder(menu.session, nil)
+  elseif choice then
+    self:set_reminder(menu.session, choice)
+  end
+end
+
+-- Sets the Terminal Session's Reminder to `hours` from now, or removes it for nil.
+function SidebarView:set_reminder(session, hours)
+  self.reminders[session] = hours and os.time() + hours * 60 * 60 or nil
+  core.log_quiet("Sidebar Reminder: session=%s hours=%s", session, tostring(hours))
+  self.action("reminder", session)
+  self:rebuild_rows()
+end
+
+-- Closes the hours field. With `accept`, a whole number of hours above zero sets the Reminder; other text keeps
+-- the field open.
+function SidebarView:close_hours(accept)
+  local hours = self.hours
+  local count = accept and tonumber(hours.input.text)
+  if accept and not (count and count >= 1) then return end
+  self.hours = nil
+  if count then self:set_reminder(hours.session, count) else self:rebuild_rows() end
+  self.action("return_focus")
 end
 
 -- The shell keeps a Window's old selection until a chosen Pane renders, and opens a Terminal Session's Pane after
@@ -247,6 +325,11 @@ end
 ---@param repeating boolean? The key is held down and repeats.
 function SidebarView:on_key_pressed(key, repeating)
   if not self.focused then return end
+  if self.hours then
+    if key == "escape" then self:close_hours(false)
+    elseif key == "return" or key == "keypad enter" then self:close_hours(true) end
+    return
+  end
   local row = self:get_cursor()
   -- Each key ends the question. Only Left on the same Project continues it.
   local asked = self.unload_ask
@@ -612,7 +695,7 @@ function SidebarView:clamp_scroll()
   self.bottom_scroll = math.max(0, math.min(self.bottom_scroll, self.bottom_h + m.pad - bottom_height))
 end
 
-function SidebarView:search_open() return self.query ~= "" end
+function SidebarView:search_open() return self.query ~= "" or self.hours ~= nil end
 
 function SidebarView:list_top()
   local m = self:metrics()
@@ -701,7 +784,7 @@ end
 
 -- The caret offset at the pointer's `x` in the search field.
 function SidebarView:search_offset(x)
-  return self.input:offset_at(style.font, x - self:search_box() + self.search_scroll)
+  return self:field():offset_at(style.font, x - self:search_box() + self.search_scroll)
 end
 
 -- The Project arrow has its own hit area, even when the Project is not selected.
@@ -716,7 +799,7 @@ function SidebarView:on_mouse_pressed(button, x, y)
   if self:in_search(x, y) then
     -- A press places the caret. A drag from it selects.
     if button == "left" then
-      self.input:set_caret(self:search_offset(x))
+      self:field():set_caret(self:search_offset(x))
       self.selecting = true
     end
     return
@@ -737,7 +820,8 @@ function SidebarView:on_mouse_pressed(button, x, y)
     return
   end
   if row.kind == "terminal" then
-    if button == "left" then self:activate_row(row) end
+    if button == "left" then self:activate_row(row)
+    elseif button == "right" then self.click_row = {button = button, key = row.id_key, session = row.terminal.id} end
     return
   end
   if row.kind == "tab" then
@@ -747,6 +831,8 @@ function SidebarView:on_mouse_pressed(button, x, y)
       self.press = {key = row.id_key, x = x, y = y}
     elseif button == "middle" then
       self.click_row = {button = button, path = row.project.path, pane = row.tab.id}
+    elseif row.tab.terminal then
+      self.click_row = {button = button, key = row.id_key, session = row.tab.terminal.session}
     end
     return
   end
@@ -774,6 +860,10 @@ function SidebarView:on_mouse_released(button, x, y)
   if not pressed or pressed.button ~= button then return end
   -- The shell sends a release outside the Sidebar too.
   local row = x >= 0 and x < self.width and self:row_at(y)
+  if pressed.session then
+    if row and row.id_key == pressed.key then self:open_terminal_menu(pressed.session, x, y) end
+    return
+  end
   if pressed.pane then
     if row and row.kind == "tab" and row.tab.id == pressed.pane and row.project.path == pressed.path then
       self.action("request", "select", pressed.path, {action = "close", pane = pressed.pane})
@@ -822,7 +912,7 @@ end
 function SidebarView:on_mouse_moved(x, y)
   self.hover_x, self.hover_y = x, y
   if self.selecting then
-    self.input:set_caret(self:search_offset(x), true)
+    self:field():set_caret(self:search_offset(x), true)
     return true
   end
   if self.scroll_drag then
@@ -1663,21 +1753,27 @@ local function reminder_text(time, now)
   return rest > 0 and string.format("%dh %02dm", hours, rest) or hours .. "h"
 end
 
--- A Reminder's note, right-aligned at `right` on a line centred at `cy`: a small clock and the time left.
+-- A small clock, the Reminder icon, at the left edge `x` of a line centred at `cy`. Returns its width.
+local function clock(x, cy, color)
+  local size = math.floor(style.font:get_height() * 0.6 + 0.5)
+  local stroke = math.max(1, math.floor(1.25 * SCALE + 0.5))
+  local y, half = math.floor(cy - size / 2), math.floor(size / 2)
+  x = math.floor(x)
+  ring(x, y, size, size, size / 2, stroke, color)
+  renderer.draw_rect(x + half - stroke / 2, y + 3 * stroke, stroke, half - 3 * stroke, color)
+  renderer.draw_rect(x + half - stroke / 2, y + half - stroke / 2, half - 2 * stroke, stroke, color)
+  return size
+end
+
+-- A Reminder's note, right-aligned at `right` on a line centred at `cy`: the clock and the time left.
 -- Returns its width.
 local function draw_reminder(time, right, cy, now)
   local label = reminder_text(time, now)
-  local font, color = style.font, style.dim
+  local font = style.font
   local label_w = font:get_width(label)
-  text(label, right - label_w, math.floor(cy - font:get_height() / 2), color)
+  text(label, right - label_w, math.floor(cy - font:get_height() / 2), style.dim)
   local size = math.floor(font:get_height() * 0.6 + 0.5)
-  local stroke = math.max(1, math.floor(1.25 * SCALE + 0.5))
-  local cx = right - label_w - 4 * SCALE - size / 2
-  local x, y = math.floor(cx - size / 2), math.floor(cy - size / 2)
-  ring(x, y, size, size, size / 2, stroke, color)
-  local half = math.floor(size / 2)
-  renderer.draw_rect(x + half - stroke / 2, y + 3 * stroke, stroke, half - 3 * stroke, color)
-  renderer.draw_rect(x + half - stroke / 2, y + half - stroke / 2, half - 2 * stroke, stroke, color)
+  clock(right - label_w - 4 * SCALE - size, cy, style.dim)
   return label_w + 4 * SCALE + size
 end
 
@@ -1697,8 +1793,9 @@ function SidebarView:draw_tab(row, x, y, width, now)
     width = width - radius * 2 - 6 * SCALE
     name_font = font_variant("bold")
   end
+  -- A Reminder's time left replaces the Terminal's age.
   local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal, {name_color = style.text, now = now,
-    clock = self.clock, name_font = name_font, number_font = font_variant("number"), number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
+    clock = self.clock, name_font = name_font, note = not row.reminder, number_font = font_variant("number"), number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
   if spinning then self.spinning = true end
   local unread = row.attention == "done" or row.attention == "error"
   if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - name_x,
@@ -1802,11 +1899,13 @@ function SidebarView:draw_card(width, height, now)
 end
 
 -- The search field shows only while a query is typed. It grows in and fades as it opens, and keeps the last query
--- while it closes.
+-- while it closes. The hours field for a Reminder shows in its place.
 function SidebarView:draw_search(width, height)
   local open = self.shown.search
-  local input = self.input
-  if self:search_open() then self.shown_input = {text = input.text, caret = input.caret, anchor = input.anchor} end
+  local input = self:field()
+  if self:search_open() then
+    self.shown_input = {text = input.text, caret = input.caret, anchor = input.anchor, hours = self.hours ~= nil}
+  end
   local shown = self.shown_input
   if open <= 0.01 or not shown then return end
   local m = self:metrics()
@@ -1820,7 +1919,11 @@ function SidebarView:draw_search(width, height)
     style.background)
   local icon = style.icon_font
   local ix = x + 8 * SCALE
-  text("L", ix, y + math.floor((h - icon:get_height()) / 2), style.accent, icon)
+  if shown.hours then
+    clock(ix + (icon:get_width("L") - style.font:get_height() * 0.6) / 2, y + h / 2, style.accent)
+  else
+    text("L", ix, y + math.floor((h - icon:get_height()) / 2), style.accent, icon)
+  end
   local tx, _, available = self:search_box()
   local font = style.font
   local ty = y + math.floor((h - font:get_height()) / 2)
@@ -1837,6 +1940,7 @@ function SidebarView:draw_search(width, height)
     local left = offset_x(first)
     renderer.draw_rect(tx - scroll + left, ty, offset_x(last) - left, font:get_height(), style.selection)
   end
+  if shown.hours and shown.text == "" then text("Hours", tx + SCALE + caret_w * 2, ty, style.dim) end
   text(shown.text, tx - scroll, ty, style.text)
   renderer.draw_rect(tx - scroll + caret_x + SCALE, ty, caret_w, font:get_height(), style.accent)
   renderer.set_clip_rect(0, 0, width, height)

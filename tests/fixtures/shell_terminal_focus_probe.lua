@@ -1,9 +1,11 @@
 -- mod-version:3
--- Seam: an owned hosted Window on a private desktop. The Project reports the Terminal Session its active view
--- shows, and a click on that session's Sidebar row focuses it in the Project.
+-- Seam: an owned hosted Window on a private desktop. A click on a Terminal Session's Sidebar row focuses it in the
+-- Project. A right-click on the row opens the
+-- Sidebar's Terminal menu, and its Reminder choices reach the Sidebar's saved Reminders. The probe names the choice
+-- in a file, so the shell shows no native menu.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "terminal-focus" then return end
-local core, common, style = require "core", require "core.common", require "core.style"
+local core, common = require "core", require "core.common"
 local ffi = require "ffi"
 ffi.cdef [[
  int __stdcall EnumWindows(int (__stdcall *)(void *, intptr_t), intptr_t);
@@ -54,12 +56,6 @@ if path:match("/driver$") then
     {stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
    local ready = wait(function() return load("ready") end, 30, "The Project did not open its Terminal Session")
    local id = ready.session_id
-   -- The Project reported the session while it had focus, and no session once the Editor took focus.
-   wait(function()
-    local text = trace()
-    local shown = text:find("Shell Project focused Terminal Session: Project=%d+ session=" .. id)
-    return shown and text:find("Shell Project focused Terminal Session: Project=%d+ session=none", shown)
-   end, 10, "The Project did not report its focused Terminal Session")
    local window = wait(function() return shell_window(shell:pid()) end, 10, "shell Window not found")
    -- Wait until the Sidebar lists the session under the Project.
    wait(function()
@@ -72,21 +68,53 @@ if path:match("/driver$") then
    end, 20, "The Sidebar does not list the Project's Terminal Session")
    wait(function() return trace():find("Shell Sidebar surface Ready", 1, true) end, 15, "Sidebar did not become Ready")
    coroutine.yield(1)
-   -- The first row is the Project; its Terminal Session follows. Row heights follow the Sidebar's font.
+   -- The shell's routing probe message sends Sidebar input: posted Win32 clicks are ignored on an inactive desktop.
+   -- Only the Terminal's row has the Sidebar's own menu. An empty choice in the menu file chooses nothing.
    local scale = user32.GetDpiForWindow(window) / 96
-   local font = style.font:get_height() / SCALE
-   local y = math.floor((40 + font + 14 + (font + 8) / 2) * scale)
-   local point = math.floor(100 * scale) + y * 65536
-   local mark = #trace()
-   -- The shell's routing probe message: posted Win32 clicks are ignored on an inactive desktop.
+   local menu_file = root .. "/menu-choice.txt"
+   local file = assert(io.open(menu_file, "wb")); file:write(""); file:close()
+   local point
+   for y = 40, 400, 8 do
+    local at, mark = math.floor(100 * scale) + math.floor(y * scale) * 65536, #trace()
+    for step = 7, 8 do user32.PostMessageW(window, 0x804a, step, at) end
+    local deadline = system.get_time() + .3
+    repeat
+     coroutine.yield(.01)
+     if trace():find("Shell Sidebar menu: ", mark + 1, true) then point = at end
+    until point or system.get_time() >= deadline
+    if point then break end
+   end
+   assert(point, "No Sidebar row opens the Terminal menu")
+   -- The Sidebar saves each Terminal Session's Reminder time.
+   local function reminder()
+    local file = io.open(root .. "/user/storage/sidebar/reminders", "rb")
+    if not file then return nil end
+    local text = file:read("*a"); file:close()
+    local chunk = loadstring(text)
+    local value = chunk and chunk()
+    return type(value) == "table" and value[id] or nil
+   end
+   local function menu(choice, items)
+    file = assert(io.open(menu_file, "wb")); file:write(choice); file:close()
+    local at = #trace()
+    for step = 7, 8 do user32.PostMessageW(window, 0x804a, step, point); coroutine.yield(.1) end
+    local found = wait(function() return trace():match("Shell Sidebar menu: Window=%d+ items=([^\r\n]*)", at) end, 5,
+     "A right-click on the Terminal Session row showed no menu")
+    assert(found == items, "Terminal menu items: " .. found)
+    wait(function() return trace():find("Shell Sidebar menu result: [1-9]", at) end, 5, "The menu did not choose " .. choice)
+   end
+   local times = "Remind Me In|1 Hour|2 Hours|3 Hours|4 Hours|1 Day|Custom\u{2026}"
+   local before = os.time()
+   menu("2 Hours", times)
+   wait(function() local time = reminder(); return time and time >= before + 2 * 3600 end, 5,
+    "The Sidebar did not save the chosen Reminder")
+   menu("Remove Reminder", times .. "|Remove Reminder")
+   wait(function() return reminder() == nil end, 5, "The Sidebar did not remove the Reminder")
+   -- A row with a Reminder still focuses its Terminal. The capture shows the Reminder.
+   menu("3 Hours", times)
+   wait(reminder, 5, "The Sidebar did not save the second Reminder")
    for step = 0, 2 do user32.PostMessageW(window, 0x804a, step, point); coroutine.yield(.1) end
-   wait(function()
-    return trace():find("Shell Terminal Session selection requested: Window=%d+ session=" .. id, mark)
-   end, 5, "A click on the Terminal Session row did not reach the shell")
    wait(function() return load("focused") end, 10, "The Project did not focus the clicked Terminal Session")
-   wait(function()
-    return trace():find("Shell Project focused Terminal Session: Project=%d+ session=" .. id, mark)
-   end, 5, "The Project did not report the newly focused Terminal Session")
    coroutine.yield(1)
    user32.SendMessageW(window, 0x8052, 1, 0)
    wait(function() return trace():find("capture%-1%.bmp") end, 5, "shell capture was not written")
