@@ -228,6 +228,35 @@ test.describe("Text Search in Terminals", function()
     end, 10), "the find card did not select the requested line")
   end)
 
+  test.it("answers another Project's Text Search with its Terminal lines and the lines near them", function(context)
+    local marker = "ANVIL_TERMINAL_SEARCH_ANSWER"
+    local view = shell(marker)
+    -- The shell is the boundary: record each request that would go to it.
+    local answers, pane_request = {}, system.pane_request
+    system.pane_request = function(_, _, text)
+      local request = assert(load("return " .. text))()
+      if request.action == "project_results" then answers[#answers + 1] = request end
+      return true
+    end
+    local ok, err = pcall(function()
+      test.ok(require("core.pane_requests").perform(common.serialize({ action = "project_search",
+        from = context.root .. PATHSEP .. "other", id = 3, mode = "text", query = marker, case_sensitive = false,
+        limit = 5 }, { escape = true })))
+      test.ok(wait_for(nil, function() return #answers > 0 end, 10), "no answer was sent")
+      local row
+      for _, candidate in ipairs(answers[1].rows) do
+        if candidate.terminal and candidate.text == marker then row = candidate end
+      end
+      test.not_nil(row, "the answer has no Terminal line")
+      test.equal(row.terminal.id, view.session_id)
+      local lines = {}
+      for text in (row.terminal.context.text .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = text end
+      test.equal(lines[row.line - row.terminal.context.first + 1], marker)
+    end)
+    system.pane_request = pane_request
+    test.ok(ok, err)
+  end)
+
   test.it("finds Terminal lines for a query of several words", function()
     local marker = "ANVIL_TERMINAL_SEARCH_WORDS"
     shell(marker .. " alpha beta")

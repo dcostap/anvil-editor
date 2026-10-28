@@ -487,11 +487,23 @@ elseif names[path] then
      times[#times + 1] = (system.get_time() - started) * 1000
     end
     table.sort(times)
+    -- Text Search asks Project too. Project runs ripgrep while it stays in the background.
+    local text_times = {}
+    for index, query in ipairs {"instance", "second instance", "nstance", "secon instan"} do
+     local started = system.get_time()
+     picker.input:set_text("#" .. query)
+     wait(function() return row(picker, query) end, 10, "Project did not answer the Text Search " .. query)
+     text_times[index] = (system.get_time() - started) * 1000
+    end
+    table.sort(text_times)
+    picker.input:set_text(queries[#queries])
+    wait(function() return row(picker, queries[#queries]) end, 10, "Project did not answer " .. queries[#queries])
     picker.selected = row(picker, queries[#queries])
     picker:confirm(false)
     local opened = wait(function() return load("file-search-opened") end, 20, "Project did not open the chosen file")
     assert(common.path_equals(opened.project, project), "the chosen file opened in another Project")
-    return {rounds = #times, min_ms = times[1], p50_ms = times[math.ceil(#times / 2)], max_ms = times[#times]}
+    return {rounds = #times, min_ms = times[1], p50_ms = times[math.ceil(#times / 2)], max_ms = times[#times],
+     text_min_ms = text_times[1], text_max_ms = text_times[#text_times]}
    end)
    save("file-search", {ok = ok, error = not ok and tostring(latency) or nil, latency = ok and latency or nil})
   end

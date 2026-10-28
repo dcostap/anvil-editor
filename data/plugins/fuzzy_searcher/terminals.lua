@@ -226,6 +226,17 @@ function terminals.preview_text(result, around)
   return string.rep("\n", first - 1) .. entry.text:sub(from, to) .. string.rep("\n", #starts - last)
 end
 
+-- The lines near `line` for the preview of another Project: `first` is the number of the first line. The text stays
+-- below 4 KB, so the rows of one Project fit in one Pane request.
+function terminals.excerpt(entry, line)
+  for around = 8, 0, -1 do
+    local first, lines = math.max(1, line - around), {}
+    for index = first, line + around do lines[#lines + 1] = terminals.line(entry, index) end
+    local text = table.concat(lines, "\n")
+    if #text <= 4096 or around == 0 then return {first = first, text = text} end
+  end
+end
+
 -- Shows the Terminal at the match, as a Sidebar click does, with its find card on the query's seed.
 function terminals.open(result)
   local terminal = result.terminal

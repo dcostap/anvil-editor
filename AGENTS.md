@@ -182,13 +182,17 @@ Run `ui/fuzzy_searcher_path_search.lua` and `ui/sidebar_view.lua` after changes.
 The Fuzzy Searcher shows this Project's badge and name at the left of the query, with the same `core.project_look`.
 Path Search searches beyond this Project, so it does not show it. Pickers with their own list, such as the file picker, do not show it either. Run `ui/fuzzy_searcher_project_chip.lua` after changes.
 
-Project File Search also shows Other Project Results. Each query goes to the other ready Projects as a `file_search` Pane request.
-Each Project searches its own file index and answers with up to 5 rows in a `file_results` request. A Project without an index or a match does not answer.
-The picker ignores answers to an earlier query. Opening a row sends `open_file` to its Project through the select route.
-Run `ui/fuzzy_searcher_other_projects.lua` and the `launch-file-search` shell probe after changes. The probe reports the answer time.
-Each group has a divider and a small, dim header. Check the `fuzzy-picker-other-projects` render scenario after visual changes.
+Project File Search and Text Search also show Other Project Results. Each query goes to the other ready Projects as a `project_search` Pane request.
+Its `mode` is `files` or `text`. A path or line number in a Text Search query keeps the search in this Project.
+Each Project searches itself and answers with up to 5 rows in a `project_results` request. A Project that cannot search, or has no match, does not answer.
+File Search uses the Project's file index. Text Search runs ripgrep in the Project's roots and searches its Terminal Sessions.
+A Terminal row carries the lines near its match for the preview, at most 4 KB.
+The picker ignores answers to an earlier query. Opening a file row sends `open_file` to its Project through the select route. A Terminal row sends `terminal_find`.
+This Project's "No matches" status is hidden while other Projects show rows.
+Run `ui/fuzzy_searcher_other_projects.lua`, `ui/fuzzy_searcher_terminals.lua` and the `launch-file-search` shell probe after changes. The probe reports the answer times of both modes.
+Each group has a divider and a small, dim header. Check the `fuzzy-picker-other-projects` and `fuzzy-picker-other-text` render scenarios after visual changes.
 
-Text Search also searches the Terminal Sessions of this Project. It does not search the Terminals of other Projects.
+Text Search also searches the Terminal Sessions of this Project. Other Projects search their own Terminals.
 A Terminal that this Project shows gives its live text. Other Terminals give the screen that their host saved last.
 That screen can be up to about 20 seconds old. A worker reads it (`terminal_snapshot_text`).
 Terminal lines rank with file lines. On equal scores, the file line goes first. A path or line number in the query skips Terminals.

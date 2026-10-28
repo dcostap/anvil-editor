@@ -98,8 +98,8 @@ local schemas = {
   transferred = {transfer = true, ok = true, error = true},
   drag = {phase = true, source = true, pane = true},
   terminal_find = {session = true, query = true, case_sensitive = true, row = true},
-  file_search = {from = true, id = true, query = true, case_sensitive = true, limit = true},
-  file_results = {source = true, id = true, rows = true},
+  project_search = {from = true, id = true, mode = true, query = true, case_sensitive = true, limit = true},
+  project_results = {source = true, id = true, rows = true},
   open_file = {file = true, line = true, col = true},
 }
 for _, schema in pairs(schemas) do schema.action = true end
@@ -136,9 +136,10 @@ local function validate(request)
     and positive(request.col or 1) and positive(request.limit or 1)) then
     return nil, "invalid number"
   end
-  if request.action == "file_search" and (not identifier(request.query)
-    or type(request.case_sensitive) ~= "boolean") then return nil, "invalid File Search" end
-  if request.action == "file_results" and type(request.rows) ~= "table" then return nil, "invalid File Search rows" end
+  if request.action == "project_search" and (not identifier(request.query)
+    or (request.mode ~= "files" and request.mode ~= "text")
+    or type(request.case_sensitive) ~= "boolean") then return nil, "invalid search" end
+  if request.action == "project_results" and type(request.rows) ~= "table" then return nil, "invalid search rows" end
   if request.action == "open_file" and (not identifier(request.file) or not common.is_absolute_path(request.file)) then
     return nil, "invalid file path"
   end
@@ -173,9 +174,9 @@ local function execute(request, x, y)
   if action == "export" or action == "import" or action == "transferred" then
     return require("core.pane_transfer").perform(request)
   end
-  -- Project File Search in another Project, and this Project's answer to one.
-  if action == "file_search" then return require("plugins.fuzzy_searcher.other_projects").answer(request) end
-  if action == "file_results" then return require("plugins.fuzzy_searcher.other_projects").receive(request) end
+  -- A search in another Project, and this Project's answer to one.
+  if action == "project_search" then return require("plugins.fuzzy_searcher.other_projects").answer(request) end
+  if action == "project_results" then return require("plugins.fuzzy_searcher.other_projects").receive(request) end
   -- A file that another Project's File Search chose. It opens as a result of this Project's own search does.
   if action == "open_file" then
     local view, err = core.open_file(request.file,
@@ -257,8 +258,8 @@ function M.perform(text, x, y)
   local valid
   valid, err = validate(request)
   if not valid then return fail(err) end
-  -- A drag sends a request for each pointer move, and File Search one for each query.
-  local quiet = request.phase == "move" or request.action == "file_search" or request.action == "file_results"
+  -- A drag sends a request for each pointer move, and a search one for each query.
+  local quiet = request.phase == "move" or request.action == "project_search" or request.action == "project_results"
   if not quiet then
     core.log_quiet("Pane request: %s pointer=%s,%s", request.action, tostring(x), tostring(y))
   end

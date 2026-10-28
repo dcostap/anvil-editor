@@ -5137,7 +5137,7 @@ end
 
 -- This Project's best `limit` files for the File Search of another Project, as rows that a Pane request can carry.
 -- Runs in a thread. Returns nil without a file index, or when `alive()` turns false.
-fuzzy_searcher.other_projects.search_files = function(query, case_sensitive, limit, alive)
+fuzzy_searcher.other_projects.search.files = function(query, case_sensitive, limit, alive)
   if not native_file_index_ready() then return nil end
   local task = fuzzy_searcher.files_fuzzy_index:search_async(query,
     { limit = limit + 32, spans = true, case_sensitive = case_sensitive })
@@ -5166,6 +5166,71 @@ fuzzy_searcher.other_projects.search_files = function(query, case_sensitive, lim
   return rows
 end
 
+-- This Project's best `limit` Text Search lines, from its files and its Terminals, as rows that a Pane request can
+-- carry. Runs in a thread. Returns nil when `alive()` turns false.
+fuzzy_searcher.other_projects.search.text = function(query, case_sensitive, limit, alive)
+  local matcher = fuzzy_searcher.compile_grep(query, case_sensitive)
+  if not matcher.seed or matcher.seed == "" then return {} end
+  local best, scanned, max_scanned = {}, 0, fuzzy_searcher.fuzzy_scan_limit or 10000
+  local function add(source)
+    local match = matcher.match(source.text or "")
+    if match then
+      local r = common.merge(source, match)
+      r.col = match.content_match_start or source.col
+      fuzzy_searcher.grep_order.retain_top(best, r, limit)
+    end
+  end
+  for _, root in ipairs(project_paths.search_roots("grep")) do
+    local args = {
+      fuzzy_searcher.rg, "--line-number", "--column", "--no-heading", "--with-filename",
+      "--color", "never", "--max-columns", tostring(fuzzy_searcher.search.max_columns),
+    }
+    if not case_sensitive then args[#args + 1] = "-i" end
+    args[#args + 1] = "-F"
+    project_files.add_filter_arguments(args, false)
+    args[#args + 1], args[#args + 2], args[#args + 3] = "-e", matcher.seed, "."
+    local stream, start_error = process_stream.start(args, { cwd = root.path })
+    if not stream then
+      core.log_quiet("Other Project search: Text Search could not start under %s: %s", root.path,
+        tostring(start_error))
+    else
+      local slice = system.get_time()
+      while scanned < max_scanned and alive() do
+        local line = stream:read_line()
+        if line then
+          scanned = scanned + 1
+          local source = decorate_grep_result(parse_vimgrep(line), root.path)
+          if source and not fuzzy_searcher.search.omitted_long_line(source.text) then add(source) end
+          slice = yield_if_over_budget(slice)
+        elseif stream.done then
+          break
+        else
+          coroutine.yield(0.004)
+          slice = system.get_time()
+        end
+      end
+      stream:cancel()
+    end
+    if not alive() then return nil end
+  end
+  fuzzy_searcher.terminals.search(matcher, add, alive, max_scanned)
+  if not alive() then return nil end
+  local rows = {}
+  for index, r in ipairs(fuzzy_searcher.grep_order.results(best)) do
+    local row = { label = r.file, line = r.line, col = r.col, text = r.text, spans = r.content_spans,
+      exact = r.exact }
+    if r.terminal then
+      row.terminal = { id = r.terminal.id, item = r.terminal.item, query = r.terminal.query,
+        context = fuzzy_searcher.terminals.excerpt(r.terminal.entry, r.line) }
+    else
+      row.abs_path, row.root_label, row.root_role, row.prefix_span = r.abs_path, r.root_label, r.root_role,
+        r.prefix_span
+    end
+    rows[index] = row
+  end
+  return rows
+end
+
 -- Shows the rows that other Projects sent, after this Project's rows. The selected row stays selected.
 function FSView:show_other_projects()
   if not self.own_results then return end
@@ -5182,7 +5247,7 @@ end
 function FSView:start_file_search(query, line, reset_selection)
   kill_file_search()
   self.own_results = nil
-  fuzzy_searcher.other_projects.request(self, query, line)
+  fuzzy_searcher.other_projects.request(self, "files", query, line)
   local gen = file_search_generation
   local direct = self.direct_path_result
   local keep_limit = self:max_result_limit() + 1
@@ -6168,7 +6233,7 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
     local committed_results, committed_keys = {}, {}
 
     local function commit_visible_prefix()
-      local existing = self.results or {}
+      local existing = self.own_results or {}
       if #existing == 0 then return end
       local metrics = self:list_metrics()
       local visible_bottom = math.min(
@@ -6324,21 +6389,24 @@ function FSView:start_grep_fuzzy_stream(base, line, grep, terms, scope, root, ge
         end
       end
       self:cancel_deferred_loading_feedback()
-      self.results = out
+      self.own_results = out
+      self.results = fuzzy_searcher.other_projects.with_rows(self, out)
       self.has_more = has_more
+      local count = math.max(1, #self.results)
       if self.pending_select_index then
-        self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
+        self.selected = common.clamp(self.pending_select_index, 1, count)
         self.pending_select_index = nil
       elseif selected_key then
         local selected_index
-        for i, result in ipairs(out) do
+        for i, result in ipairs(self.results) do
           if fuzzy_searcher.grep_order.result_key(result) == selected_key then selected_index = i; break end
         end
-        self.selected = selected_index or common.clamp(self.selected, 1, math.max(1, #out))
+        self.selected = selected_index or common.clamp(self.selected, 1, count)
       else
-        self.selected = common.clamp(self.selected, 1, math.max(1, #out))
+        self.selected = common.clamp(self.selected, 1, count)
       end
-      self.viewport_offset = common.clamp(self.viewport_offset, 1, math.max(1, #out))
+      if self.results[self.selected] and self.results[self.selected].header then self:select_delta(1) end
+      self.viewport_offset = common.clamp(self.viewport_offset, 1, count)
       self:ensure_selection_visible()
       self.status = status
       if final and matched_candidate_count > #candidates then
@@ -6428,6 +6496,7 @@ function FSView:start_grep(base, line, grep)
   local gen = grep_generation
   kill_file_search()
   kill_grep()
+  self.own_results = nil
 
   self.loading_more = false
   self.loaded_limit = self:max_result_limit()
@@ -6443,6 +6512,10 @@ function FSView:start_grep(base, line, grep)
     return
   end
   self:defer_loading_feedback("Searching exact text matches…")
+  -- A path or a line number limits Text Search to this Project's files.
+  if fuzzy_searcher.searches_terminals(base, line) then
+    fuzzy_searcher.other_projects.request(self, "text", grep)
+  end
 
   local limit = self:max_result_limit()
   local roots = project_paths.search_roots("grep")
@@ -6485,10 +6558,12 @@ function FSView:start_grep(base, line, grep)
     local slice_yields = 0
     local last_progress_status = 0
     local stable_prefix_count = 0
+    -- This Project's rows. Other Projects' rows follow them.
+    local shown = {}
     local function remember_visible_prefix()
-      if #self.results == 0 then return end
+      if #shown == 0 then return end
       local visible_bottom = math.min(
-        #self.results,
+        #shown,
         (self.viewport_offset or 1) + self:list_metrics().result_rows - 1
       )
       stable_prefix_count = math.max(stable_prefix_count, visible_bottom)
@@ -6499,7 +6574,7 @@ function FSView:start_grep(base, line, grep)
       slice_yields = slice_yields + 1
       if results_started and now - last_progress_status >= 0.05 then
         self.status = string.format("%d exact matches — searching…", matched_count)
-        self.has_more = matched_count > #self.results
+        self.has_more = matched_count > #shown
         self:schedule_update(true)
         last_progress_status = now
       end
@@ -6510,7 +6585,8 @@ function FSView:start_grep(base, line, grep)
       if results_started then return end
       results_started = true
       self:cancel_deferred_loading_feedback()
-      self.results = {}
+      self.own_results = shown
+      self.results = fuzzy_searcher.other_projects.with_rows(self, shown)
       self.selected = 1
       self.viewport_offset = 1
       self.hovered_result = nil
@@ -6553,13 +6629,14 @@ function FSView:start_grep(base, line, grep)
       begin_results()
       matched_count = matched_count + 1
       fuzzy_searcher.grep_order.retain_top(candidates, r, limit)
-      if #self.results < limit then
-        self.results[#self.results+1] = r
-        if #self.results == 1 then self.selected = 1; self.viewport_offset = 1 end
-        if self.pending_select_index and #self.results >= self.pending_select_index then
+      if #shown < limit then
+        shown[#shown+1] = r
+        if #shown == 1 then self.selected = 1; self.viewport_offset = 1 end
+        if self.pending_select_index and #shown >= self.pending_select_index then
           self.selected = self.pending_select_index
           self.pending_select_index = nil
         end
+        self:show_other_projects()
         self:ensure_selection_visible()
         remember_visible_prefix()
         self:schedule_update(true)
@@ -6679,7 +6756,7 @@ function FSView:start_grep(base, line, grep)
     remember_visible_prefix()
     local out, committed = {}, {}
     for i = 1, stable_prefix_count do
-      local result = self.results[i]
+      local result = shown[i]
       local key = fuzzy_searcher.grep_order.result_key(result)
       out[#out+1] = result
       if key then committed[key] = true end
@@ -6694,13 +6771,14 @@ function FSView:start_grep(base, line, grep)
       if #out >= limit then break end
       out[#out+1] = result
     end
-    self.results = out
-    self.has_more = matched_count > #self.results
+    self.own_results = out
+    self:show_other_projects()
+    self.has_more = matched_count > #out
     self.status = matched_count == 0 and "No exact matches"
       or string.format("%d exact matches", matched_count)
     core.log_quiet(
       "Exact grep: finalized stable prefix=%d shown=%d matches=%d",
-      stable_prefix_count, #self.results, matched_count
+      stable_prefix_count, #out, matched_count
     )
     self:schedule_update(true)
   end)
@@ -8296,6 +8374,10 @@ end
 ---Fit the status and the active Search Modifiers into a width.
 function FSView:status_layout(font, max_width)
   local full_status = tostring(self.status or "")
+  -- "No matches" is true only for this Project. The rows of other Projects show below it.
+  if self.own_results and #self.own_results == 0 and #self.results > 0 and full_status:match("^No ") then
+    full_status = ""
+  end
   local modifier = self:search_modifier_text()
   if modifier ~= "" and (self.modifier_font_base ~= font or self.modifier_font_size ~= font:get_size()) then
     self.modifier_font = font:copy(font:get_size(), { italic = true })

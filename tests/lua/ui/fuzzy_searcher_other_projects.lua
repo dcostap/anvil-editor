@@ -107,12 +107,12 @@ test.describe("Project File Search in other Projects", function()
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
     test.ok(wait_until(function() return file_index(picker.results, context.local_file) end),
       "this Project's file did not appear: " .. tostring(picker.status))
-    local searches = sent(context, "file_search")
+    local searches = sent(context, "project_search")
     test.equal(#searches, 1, "expected one request, to the other loaded Project")
     test.ok(common.path_equals(searches[1].path, context.other))
     local other_file = context.other .. PATHSEP .. "alpha-other.txt"
     test.ok(pane_requests.perform(serialize {
-      action = "file_results", source = context.other, id = searches[1].request.id,
+      action = "project_results", source = context.other, id = searches[1].request.id,
       rows = { { label = "alpha-other.txt", abs_path = other_file, spans = { { 1, 5 } } } },
     }))
     return picker, other_file, searches[1].request
@@ -154,11 +154,11 @@ test.describe("Project File Search in other Projects", function()
   test.it("does not show rows that answer an earlier query", function(context)
     local picker, other_file, earlier = open_with_other_rows(context)
     picker.input:set_text("alph")
-    test.ok(wait_until(function() return #sent(context, "file_search") == 2 end), "the new query was not sent")
+    test.ok(wait_until(function() return #sent(context, "project_search") == 2 end), "the new query was not sent")
     test.ok(wait_until(function() return not file_index(picker.results, other_file) end),
       "the earlier rows stayed after the query changed")
     test.ok(pane_requests.perform(serialize {
-      action = "file_results", source = context.other, id = earlier.id,
+      action = "project_results", source = context.other, id = earlier.id,
       rows = { { label = "alpha-other.txt", abs_path = other_file } },
     }))
     test.is_nil(file_index(picker.results, other_file), "a reply to the earlier query was shown")
@@ -177,10 +177,11 @@ test.describe("Project File Search in other Projects", function()
 
   test.it("answers another Project's File Search with its best files", function(context)
     test.ok(pane_requests.perform(serialize {
-      action = "file_search", from = context.other, id = 7, query = "alpha", case_sensitive = false, limit = 5,
+      action = "project_search", from = context.other, id = 7, mode = "files", query = "alpha",
+      case_sensitive = false, limit = 5,
     }))
-    test.ok(wait_until(function() return #sent(context, "file_results") > 0 end), "no answer was sent")
-    local answer = sent(context, "file_results")[1]
+    test.ok(wait_until(function() return #sent(context, "project_results") > 0 end), "no answer was sent")
+    local answer = sent(context, "project_results")[1]
     test.ok(common.path_equals(answer.path, context.other))
     test.equal(answer.request.id, 7)
     test.ok(common.path_equals(answer.request.source, context.own))
@@ -192,5 +193,92 @@ test.describe("Project File Search in other Projects", function()
     local view = core.active_view
     test.ok(view.buffer and common.path_equals(view.buffer.abs_filename, context.local_file))
     test.equal(select(1, view.buffer:get_selection()), 2)
+  end)
+
+  local function open_text_search_with_other_rows(context, query)
+    query = query or "three"
+    fuzzy_searcher.open("#" .. query)
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    -- The answer can arrive before this Project's own lines.
+    test.ok(wait_until(function() return #sent(context, "project_search") > 0 end), "no request was sent")
+    local searches = sent(context, "project_search")
+    test.equal(#searches, 1, "expected one request, to the other loaded Project")
+    test.equal(searches[1].request.mode, "text")
+    test.equal(searches[1].request.query, query)
+    local other_file = context.other .. PATHSEP .. "notes.txt"
+    test.ok(pane_requests.perform(serialize {
+      action = "project_results", source = context.other, id = searches[1].request.id,
+      rows = {
+        { label = "notes.txt", abs_path = other_file, line = 4, col = 3, text = "  three", spans = { { 3, 7 } } },
+        { label = "PowerShell", line = 2, col = 1, text = "three", spans = { { 1, 5 } },
+          terminal = { id = "other-session", query = "three", item = { name = "pwsh", terminal = { session = "other-session" } },
+            context = { first = 1, text = "echo three\nthree" } } },
+      },
+    }))
+    test.ok(wait_until(function()
+      return file_index(picker.results, context.local_file) and file_index(picker.results, other_file)
+    end), "a line did not appear: " .. tostring(picker.status))
+    return picker, other_file
+  end
+
+  test.it("lists another Project's text matches below this Project's matches, under that Project", function(context)
+    local picker, other_file = open_text_search_with_other_rows(context)
+    local own_index = file_index(picker.results, context.local_file)
+    local header_index = index_of(picker.results, function(result) return result.project ~= nil end)
+    local other_index, other_row = file_index(picker.results, other_file)
+    local terminal_index = index_of(picker.results, function(result) return result.terminal ~= nil end)
+    test.ok(own_index and header_index and other_index and terminal_index, "a row is missing")
+    test.ok(own_index < header_index and header_index < other_index and header_index < terminal_index,
+      "expected this Project's line, then the other Project's header, then its lines")
+    test.equal(other_row.line, 4)
+    test.equal(other_row.text, "  three")
+  end)
+
+  test.it("lists another Project's matches for a query of several words", function(context)
+    local picker, other_file = open_text_search_with_other_rows(context, "thr ee")
+    local own_index = file_index(picker.results, context.local_file)
+    local other_index = file_index(picker.results, other_file)
+    test.ok(own_index and other_index and own_index < other_index,
+      "expected this Project's line, then the other Project's line")
+  end)
+
+  test.it("does not report no matches when only another Project has matches", function(context)
+    fuzzy_searcher.open("#nowhere")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return (picker.status or ""):match("^No ") end),
+      "this Project's search did not end: " .. tostring(picker.status))
+    local search = sent(context, "project_search")[1]
+    test.ok(pane_requests.perform(serialize {
+      action = "project_results", source = context.other, id = search.request.id,
+      rows = { { label = "notes.txt", abs_path = context.other .. PATHSEP .. "notes.txt", line = 1, col = 1,
+        text = "nowhere", spans = { { 1, 7 } }, exact = true } },
+    }))
+    test.equal(picker:status_layout(require("core.style").font, 1000).status, "")
+  end)
+
+  test.it("shows another Project's Terminal match in that Project", function(context)
+    local picker = open_text_search_with_other_rows(context)
+    picker.selected = index_of(picker.results, function(result) return result.terminal ~= nil end)
+    picker:confirm(false)
+    local finds = sent(context, "terminal_find")
+    test.equal(#finds, 1)
+    test.equal(finds[1].route, "select")
+    test.ok(common.path_equals(finds[1].path, context.other))
+    test.equal(finds[1].request.session, "other-session")
+    test.equal(finds[1].request.row, 1)
+  end)
+
+  test.it("answers another Project's Text Search with its matching lines", function(context)
+    test.ok(pane_requests.perform(serialize {
+      action = "project_search", from = context.other, id = 8, mode = "text", query = "two",
+      case_sensitive = false, limit = 5,
+    }))
+    test.ok(wait_until(function() return #sent(context, "project_results") > 0 end), "no answer was sent")
+    local answer = sent(context, "project_results")[1]
+    test.equal(answer.request.id, 8)
+    local row = answer.request.rows[1]
+    test.ok(common.path_equals(row.abs_path, context.local_file))
+    test.equal(row.line, 2)
+    test.equal(row.text, "two")
   end)
 end)

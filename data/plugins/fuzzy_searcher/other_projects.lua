@@ -1,6 +1,6 @@
--- Project File Search also lists the best files of the other loaded Projects, below this Project's results, in a
--- group for each Project. Each Project searches its own file index when a `file_search` Pane request arrives, and
--- sends its rows back in a `file_results` request. Opening a row selects its Project and opens the file there.
+-- Project File Search and Text Search also list the best rows of the other loaded Projects, below this Project's
+-- results, in a group for each Project. Each Project searches itself when a `project_search` Pane request arrives,
+-- and sends its rows back in a `project_results` request. Opening a row selects its Project and opens the row there.
 local core = require "core"
 local common = require "core.common"
 local look = require "core.project_look"
@@ -13,9 +13,10 @@ local LIMIT = 5
 -- The shell's Pane request header has four 32-bit fields. The Project path follows it without a terminator.
 local MAX_TEXT = 65536 - 16
 
--- The Fuzzy Searcher sets this: `search_files(query, case_sensitive, limit, alive)` returns this Project's best
--- rows, or nil without a file index. It runs in a thread.
-other.search_files = nil
+-- The Fuzzy Searcher sets one function for each search mode, "files" and "text". Each
+-- `search[mode](query, case_sensitive, limit, alive)` returns this Project's best rows, or nil when it cannot
+-- search, for example without a file index. They run in a thread.
+other.search = {}
 
 local sequence = 0
 -- The newest request from each Project, by path key. A search for an older request stops.
@@ -58,26 +59,57 @@ local function text(value)
   return type(value) == "string" and value ~= "" and value or nil
 end
 
--- A row of another Project, as Project File Search shows it. A row that has not the expected fields is nil.
-local function result_row(row, project, state)
-  if type(row) ~= "table" or not text(row.label) or not text(row.abs_path)
-    or not common.is_absolute_path(row.abs_path) then
-    return nil
-  end
-  return {
-    kind = "file", label = row.label, file = row.label, abs_path = row.abs_path,
-    root_label = text(row.root_label), root_role = text(row.root_role),
-    prefix_span = span(row.prefix_span, #row.label) and {row.prefix_span[1], row.prefix_span[2]} or nil,
-    match_spans = spans(row.spans, #row.label),
-    line = state.line or 1, col = 1, query = state.query,
-    other_project = project.path,
-  }
+local function positive(value)
+  return type(value) == "number" and value >= 1 and value % 1 == 0 and value or nil
 end
 
--- Sends the query to the other loaded Projects. The same query keeps the replies that it already has, so a file
--- index update in this Project does not ask again.
-function other.request(picker, query, line)
-  local key = table.concat({query, tostring(line or ""), tostring(picker.case_sensitive == true)}, "\0")
+local function path(value)
+  return text(value) and common.is_absolute_path(value) and value or nil
+end
+
+-- A Terminal of another Project. Its entry holds only the lines near the match, at their own line numbers, so the
+-- preview shows them.
+local function terminal(value, project)
+  if type(value) ~= "table" or not text(value.id) or not text(value.query) or type(value.item) ~= "table"
+    or type(value.item.name) ~= "string" or type(value.item.terminal) ~= "table" or type(value.context) ~= "table"
+    or not positive(value.context.first) or type(value.context.text) ~= "string" then
+    return nil
+  end
+  return {id = value.id, project = project.path, item = value.item, query = value.query,
+    entry = {text = string.rep("\n", value.context.first - 1) .. value.context.text}}
+end
+
+-- A row of another Project, as this Project's search shows it. A row that has not the expected fields is nil.
+local function result_row(row, project, state)
+  if type(row) ~= "table" or not text(row.label) then return nil end
+  local out = {
+    label = row.label, file = row.label, root_label = text(row.root_label), root_role = text(row.root_role),
+    prefix_span = span(row.prefix_span, #row.label) and {row.prefix_span[1], row.prefix_span[2]} or nil,
+    other_project = project.path,
+  }
+  if state.mode == "files" then
+    out.kind, out.abs_path, out.match_spans = "file", path(row.abs_path), spans(row.spans, #row.label)
+    out.line, out.col, out.query = state.line or 1, 1, state.query
+    return out.abs_path and out
+  end
+  if not positive(row.line) or type(row.text) ~= "string" then return nil end
+  out.kind, out.line, out.col, out.text, out.exact = "grep", row.line, positive(row.col) or 1, row.text,
+    row.exact == true
+  out.content_spans, out.grep_query, out.case_sensitive = spans(row.spans, #row.text), state.query,
+    state.case_sensitive
+  if row.terminal then
+    out.terminal = terminal(row.terminal, project)
+    out.abs_path = out.terminal and "terminal:" .. out.terminal.id
+  else
+    out.abs_path = path(row.abs_path)
+  end
+  return out.abs_path and out
+end
+
+-- Sends the query of a search mode, "files" or "text", to the other loaded Projects. The same query keeps the
+-- replies that it already has, so a file index update in this Project does not ask again.
+function other.request(picker, mode, query, line)
+  local key = table.concat({mode, query, tostring(line or ""), tostring(picker.case_sensitive == true)}, "\0")
   if picker.other_projects and picker.other_projects.key == key then return end
   picker.other_projects = nil
   query = query:match("^%s*(.-)%s*$")
@@ -85,12 +117,13 @@ function other.request(picker, query, line)
   -- Only the shell gives a Project the Sidebar model.
   if query == "" or not root or not core.project_sidebar then return end
   sequence = sequence + 1
-  local state = {id = sequence, key = key, query = query, line = line, targets = targets(), rows = {}, headers = {},
+  local state = {id = sequence, key = key, mode = mode, query = query, line = line,
+    case_sensitive = picker.case_sensitive == true, targets = targets(), rows = {}, headers = {},
     sent = system.get_time()}
   picker.other_projects = state
   for _, project in ipairs(state.targets) do
-    send("direct", project.path, {action = "file_search", from = root.path, id = state.id, query = query,
-      case_sensitive = picker.case_sensitive == true, limit = LIMIT})
+    send("direct", project.path, {action = "project_search", from = root.path, id = state.id, mode = mode,
+      query = query, case_sensitive = state.case_sensitive, limit = LIMIT})
   end
 end
 
@@ -118,20 +151,22 @@ function other.with_rows(picker, own)
   return out
 end
 
--- Searches this Project for another Project's File Search and sends the rows back. A Project without a file index,
--- or without a match, sends nothing.
+-- Searches this Project for another Project's search and sends the rows back. A Project that cannot search, or that
+-- has no match, sends nothing.
 function other.answer(request)
   local from, id = common.path_compare_key(request.from), request.id
   latest[from] = id
   local function alive() return latest[from] == id end
   core.add_thread(function()
-    local rows = other.search_files(request.query, request.case_sensitive, math.min(request.limit or LIMIT, LIMIT),
-      alive)
+    local rows = other.search[request.mode](request.query, request.case_sensitive,
+      math.min(request.limit or LIMIT, LIMIT), alive)
     if not alive() then return end
     latest[from] = nil
+    core.log_quiet("Other Project search: %s search for %s found %d rows", request.mode, request.from,
+      rows and #rows or 0)
     if not rows or #rows == 0 then return end
     local root = core.root_project()
-    send("direct", request.from, {action = "file_results", source = root.path, id = id, rows = rows})
+    send("direct", request.from, {action = "project_results", source = root.path, id = id, rows = rows})
   end)
   return true
 end
