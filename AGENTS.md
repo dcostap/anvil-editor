@@ -196,6 +196,10 @@ This Project's "No matches" status is hidden while other Projects show rows.
 Run `ui/fuzzy_searcher_other_projects.lua`, `ui/fuzzy_searcher_terminals.lua` and the `launch-file-search` shell probe after changes. The probe reports the answer times of both modes.
 Each group has a divider and a small, dim header. Check the `fuzzy-picker-other-projects` and `fuzzy-picker-other-text` render scenarios after visual changes.
 
+File Search shows all its rows at once. Paged lists load the next page one screen before their end. A refresh keeps the selected row.
+A picker that opens with the same non-empty query as at its last close selects the same row again, at the same place on the screen. An empty File Search starts at its first row.
+Run `ui/fuzzy_searcher_scrolling.lua` after changes.
+
 Text Search also searches the Terminal Sessions of this Project. Other Projects search their own Terminals.
 A Terminal that this Project shows gives its live text. Other Terminals give the screen that their host saved last.
 That screen can be up to about 20 seconds old. A worker reads it (`terminal_snapshot_text`).

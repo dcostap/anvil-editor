@@ -4194,6 +4194,7 @@ function FSView:scroll_results(delta)
   if #self.results == 0 or delta == 0 then return end
   local rows = self:list_metrics().result_rows
   self.manual_list_scroll = true
+  self.saved_position = nil
   if delta > 0 then self:load_ahead(self.viewport_offset + rows - 1 + delta) end
   self.viewport_offset = common.clamp(self.viewport_offset + delta, 1,
     math.max(1, #self.results - rows + 1))
@@ -4202,16 +4203,21 @@ end
 
 function FSView:select_delta(delta, extend)
   if #self.results == 0 then self.selected = 1; self.viewport_offset = 1; return end
+  self.saved_position = nil
   if delta > 0 and self.selected >= #self.results and self.has_more then
     if self:load_more(true) then return end
   end
   local previous = self.selected
-  local i = previous
-  repeat
-    i = common.clamp(i + delta, 1, #self.results)
-    if not self.results[i].header then break end
-    if i == 1 or i == #self.results then break end
-  until false
+  -- Skip headers in the direction of the move, or else back from the end of the list.
+  local step = delta > 0 and 1 or -1
+  local target = common.clamp(previous + delta, 1, #self.results)
+  local i = target
+  while self.results[i] and self.results[i].header do i = i + step end
+  if not self.results[i] then
+    i = target
+    while self.results[i] and self.results[i].header do i = i - step end
+  end
+  if not self.results[i] then i = previous end
   self.selected = i
   if extend and self:can_mark_result(i) then
     self.range_anchor = self.range_anchor or previous
@@ -4222,8 +4228,62 @@ function FSView:select_delta(delta, extend)
   if delta > 0 then self:load_ahead(self.selected) end
 end
 
+-- Moves the selection one screen, less one row, so the last row stays on the screen.
+function FSView:select_page(direction)
+  self:select_delta(direction * math.max(1, self:list_metrics().result_rows - 1))
+end
+
+-- Selects the last row. Loads all pages first.
+function FSView:select_last()
+  while self:load_more(false) do end
+  self:select_delta(#self.results)
+end
+
+-- The selected row of each search mode at close, so that the same query opens at the same row.
+fuzzy_searcher.saved_positions = {}
+
+function FSView:save_position()
+  if self.static_mode or self.file_picker or not self.input then return end
+  local text = self.input:get_text()
+  local _, query = split_mode_prefix(text)
+  local result = self:selected_result()
+  -- An empty File Search keeps its first row, which is usually the previous file.
+  fuzzy_searcher.saved_positions[fuzzy_searcher.prompt_mode(text)] = result and query ~= "" and {
+    text = text, key = self:result_selection_key(result), screen_row = self.selected - self.viewport_offset,
+    limit = self:result_limit(),
+  } or nil
+end
+
+-- Selects the saved row again, at its place on the screen. Loads pages up to the saved page count. Ends when the row
+-- shows, when the user moves the selection or changes the query, or when the search ends without the row.
+function FSView:restore_position()
+  local saved = self.saved_position
+  if not saved then return end
+  if self.input:get_text() ~= saved.text then self.saved_position = nil; return end
+  for index, result in ipairs(self.results) do
+    if not result.header and self:result_selection_key(result) == saved.key then
+      self.saved_position = nil
+      local metrics = self:list_metrics()
+      self.selected = index
+      self.viewport_offset = common.clamp(index - saved.screen_row, 1,
+        math.max(1, #self.results - metrics.result_rows + 1))
+      self:ensure_selection_visible(true)
+      self.list_scroll.y = (self.viewport_offset - 1) * metrics.lh
+      core.log_quiet("Fuzzy Searcher: restored row %d at screen row %d", index, index - self.viewport_offset)
+      return
+    end
+  end
+  -- The status of each running search ends with "…".
+  local status = self.status or ""
+  if self.loading_feedback_pending or self.loading_more or status:sub(-#"…") == "…" then return end
+  if self:result_limit() < saved.limit and self:load_more(false) then return end
+  core.log_quiet("Fuzzy Searcher: the saved row is not in the results of %q", saved.text)
+  self.saved_position = nil
+end
+
 function FSView:select_result(index, extend, toggle)
   if not self.results[index] or self.results[index].header then return false end
+  self.saved_position = nil
   local previous = self.selected
   if toggle and self:can_mark_result(index) then
     local previous_key = self:can_mark_result(previous) and self:result_selection_key(self.results[previous])
@@ -7589,6 +7649,7 @@ function FSView:close(reason)
   self.close_input_view = self.input and self.input.textview
   core.root_panel:pop_modal_input(self)
   core.root_panel:hide_app_overlay(self)
+  self:save_position()
   self:record_prompt_history()
   self:cancel_deferred_loading_feedback()
   self:cancel_deferred_everything_loading()
@@ -8326,6 +8387,7 @@ function FSView:update()
   end
   self:poll_modifier_result_metadata()
   self:refresh(self.input:get_text())
+  self:restore_position()
   if self.marked_results_snapshot ~= self.results then
     self.marked_results_snapshot = self.results
     self:prune_result_marks()
@@ -8847,6 +8909,11 @@ local function picker_previous()
   if view then view:select_delta(-1); view:schedule_update(true) end
 end
 
+function fuzzy_searcher.select_in_picker(method, ...)
+  local view = current_picker()
+  if view then view[method](view, ...); view:schedule_update(true) end
+end
+
 local function selected_text_for_search()
   local view = core.active_view
   local buffer = view and view.buffer
@@ -8978,6 +9045,8 @@ function open(prefix, opts)
   end
   active_view = FSView(initial_text, opts)
   core.fuzzy_searcher_active_view = active_view
+  local saved = fuzzy_searcher.saved_positions[fuzzy_searcher.prompt_mode(initial_text)]
+  if saved and saved.text == initial_text then active_view.saved_position = saved end
   if select_seeded_query then
     -- Keep the saved file scope and marker outside the selected search text.
     active_view.input.textview.buffer:set_selection(
@@ -9114,6 +9183,10 @@ end, {
   end,
   ["fuzzy:next"] = picker_next,
   ["fuzzy:previous"] = picker_previous,
+  ["fuzzy:page_next"] = function() fuzzy_searcher.select_in_picker("select_page", 1) end,
+  ["fuzzy:page_previous"] = function() fuzzy_searcher.select_in_picker("select_page", -1) end,
+  ["fuzzy:first"] = function() fuzzy_searcher.select_in_picker("select_delta", -math.huge) end,
+  ["fuzzy:last"] = function() fuzzy_searcher.select_in_picker("select_last") end,
   ["fuzzy:select_next"] = function()
     local view = current_picker()
     if view then view:select_delta(1, true); view:schedule_update(true) end
@@ -9211,6 +9284,10 @@ core.fuzzy_searcher_install_picker_keymaps = function()
     ["down"] = "fuzzy:next",
     ["shift+up"] = "fuzzy:select_previous",
     ["shift+down"] = "fuzzy:select_next",
+    ["pageup"] = "fuzzy:page_previous",
+    ["pagedown"] = "fuzzy:page_next",
+    ["ctrl+home"] = "fuzzy:first",
+    ["ctrl+end"] = "fuzzy:last",
     ["ctrl+space"] = "fuzzy:toggle_result_marks",
     ["alt+left"] = "fuzzy:prompt_history_previous",
     ["alt+right"] = "fuzzy:prompt_history_next",

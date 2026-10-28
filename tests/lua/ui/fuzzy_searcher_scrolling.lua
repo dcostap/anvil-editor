@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
@@ -115,5 +116,46 @@ test.describe("Fuzzy Searcher scrolling and selection", function()
     picker:select_delta(1)
     test.ok(wait_until(function() return #picker.results > loaded end), "the next page did not load")
     test.ok(picker.selected < loaded, "the selection reached the end before the next page")
+  end)
+
+  test.it("moves the selection one screen with the page commands", function()
+    local picker = open_files()
+    test.ok(wait_until(function() return file_rows(picker) == 60 end))
+    local rows = picker:list_metrics().result_rows
+    local start = picker.selected
+    test.ok(command.perform("fuzzy:page_next"))
+    test.ok(picker.selected >= start + rows - 1, "the selection moved less than one screen")
+    test.ok(picker.selected >= picker.viewport_offset and picker.selected < picker.viewport_offset + rows,
+      "the selected row is not on the screen")
+    test.ok(command.perform("fuzzy:page_previous"))
+    test.equal(picker.selected, start)
+    test.ok(command.perform("fuzzy:last"))
+    test.equal(picker.selected, #picker.results)
+    test.ok(command.perform("fuzzy:first"))
+    test.equal(picker.selected, start)
+  end)
+
+  test.it("selects the same row at the same place when the picker opens again with the same query", function()
+    fuzzy_searcher.open("#test")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker:set_size(1400, 600)
+    test.ok(wait_until(function() return #picker.results >= 60 end), "expected a line from each file")
+    -- A row on the second screen.
+    for _ = 1, picker:list_metrics().result_rows + 5 do picker:select_delta(1) end
+    local saved = picker:selected_result()
+    local screen_row = picker.selected - picker.viewport_offset
+    test.ok(screen_row > 0, "the selected row is at the top of the screen")
+    picker:close()
+    test.ok(wait_until(function() return core.fuzzy_searcher_active_view ~= picker end))
+
+    fuzzy_searcher.open("#")
+    local reopened = test.not_nil(core.fuzzy_searcher_active_view)
+    reopened:set_size(1400, 600)
+    test.equal(reopened.input:get_text(), "#test")
+    test.ok(wait_until(function()
+      local result = reopened:selected_result()
+      return result and common.path_equals(result.abs_path, saved.abs_path) and result.line == saved.line
+    end), "the picker did not select the same row again")
+    test.equal(reopened.selected - reopened.viewport_offset, screen_row)
   end)
 end)
