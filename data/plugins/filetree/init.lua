@@ -3434,18 +3434,11 @@ function FileTreeView:operation_lines(plan)
   end
 
   local lines = {}
+  -- string.format cannot pad wider than 99 characters, and paths are often longer.
+  local function pad(text, width) return text .. string.rep(" ", width - #text) end
   for _, row in ipairs(rows) do
-    if row.to then
-      lines[#lines + 1] = string.format(
-        "%-" .. verb_w .. "s  %-" .. type_w .. "s  %-" .. from_w .. "s  ->  %s",
-        row.verb, row.type, row.from, row.to
-      )
-    else
-      lines[#lines + 1] = string.format(
-        "%-" .. verb_w .. "s  %-" .. type_w .. "s  %s",
-        row.verb, row.type, row.from
-      )
-    end
+    local head = pad(row.verb, verb_w) .. "  " .. pad(row.type, type_w) .. "  "
+    lines[#lines + 1] = row.to and (head .. pad(row.from, from_w) .. "  ->  " .. row.to) or (head .. row.from)
   end
   return lines
 end
@@ -3494,7 +3487,7 @@ local function filetree_operation_message(lines)
   return message
 end
 
-function FileTreeView:confirm_apply_plan(plan)
+function FileTreeView:confirm_apply_plan(plan, on_cancel)
   local lines = self:operation_lines(plan)
   local message = filetree_operation_message(lines)
 
@@ -3502,7 +3495,7 @@ function FileTreeView:confirm_apply_plan(plan)
     { text = "Apply", default_yes = true },
     { text = "Cancel", default_no = true },
   }, function(item)
-    if item.text == "Apply" then self:apply_plan(plan) end
+    if item.text == "Apply" then self:apply_plan(plan) elseif on_cancel then on_cancel() end
   end)
 end
 
@@ -3575,7 +3568,9 @@ function FileTreeView:show_plan_errors(message, reasons, ambiguities)
   })
 end
 
-function FileTreeView:apply_edits()
+---Applies the edited rows after a confirmation. `opts.on_cancel` runs when the user cancels it.
+function FileTreeView:apply_edits(opts)
+  opts = opts or {}
   self:sync_meta()
   local plan, err, status, reasons, ambiguities = self:plan_changes()
   if not plan then
@@ -3596,7 +3591,121 @@ function FileTreeView:apply_edits()
   end
 
   core.log_quiet("File Tree validated edits: operations=%d", self:operation_count(plan))
-  self:confirm_apply_plan(plan)
+  self:confirm_apply_plan(plan, opts.on_cancel)
+end
+
+-- The selected entry that a menu command can rename or delete: an existing file or folder, not a Project Path.
+function FileTreeView:selected_existing_entry()
+  local line = self.buffer:get_selection(true)
+  local entry = self:entry_for_line(line)
+  local meta = entry and entry.meta
+  if not (entry and entry.original_abs) or (type(meta) == "table" and meta.project_path_root) then return nil end
+  return entry
+end
+
+-- Menu commands edit a tree without pending edits, then apply it. A cancelled confirmation reads the tree again.
+function FileTreeView:apply_menu_edit(reason, edit)
+  edit()
+  self:apply_edits({
+    on_cancel = function()
+      core.log_quiet("File Tree %s cancelled", reason)
+      self:refresh_preserving_selection_paths(true)
+    end,
+  })
+end
+
+---Asks for a new name for the selected entry, then renames it after the usual confirmation.
+function FileTreeView:rename_selected()
+  local entry = self:selected_existing_entry()
+  if not entry then return false end
+  local old_abs, old_name = entry.original_abs, common.basename(entry.original_abs)
+  core.global_prompt_bar:enter("Rename", {
+    text = old_name,
+    select_text = true,
+    submit = function(text)
+      local name = trim(text)
+      if name == "" or name == old_name or self.has_possible_edits then return end
+      local _, _, snapshot = self:build_entries(false)
+      for line, current in pairs(snapshot.by_line) do
+        if current.original_abs == old_abs then
+          local parsed = self:parse_line(line)
+          local name_end = parsed.name_col + #strip_dir_suffix(trim(line_text(self.buffer.lines[line])))
+          self:apply_menu_edit("rename", function()
+            self.buffer:apply_edits({
+              { line1 = line, col1 = parsed.name_col, line2 = line, col2 = name_end, text = name },
+            }, { type = "insert" })
+          end)
+          return
+        end
+      end
+    end,
+  })
+  return true
+end
+
+---Deletes the selected entries after the usual confirmation. A folder goes with its shown contents.
+function FileTreeView:delete_selected()
+  local ranges = {}
+  for _, slot in ipairs(self:selected_covered_line_slots()) do
+    for line = slot.first, slot.last do
+      local entry = self:entry_for_line(line)
+      if entry and entry.original_abs then
+        local last = line
+        if entry.type == "dir" then
+          local _, descendant_last = self:descendant_range(line, entry.level)
+          last = math.max(line, descendant_last)
+        end
+        ranges[#ranges + 1] = { first = line, last = last }
+      end
+    end
+  end
+  if #ranges == 0 then return false end
+  ranges = merge_line_ranges(ranges)
+  self:apply_menu_edit("delete", function()
+    for i = #ranges, 1, -1 do self:remove_line_range(ranges[i].first, ranges[i].last) end
+  end)
+  return true
+end
+
+---The Context Menu of the File Tree. A right-click on a row outside the selection selects that row.
+function FileTreeView:context_menu(x, y)
+  local line = x and y and self:entry_row_at_point(x, y)
+  if line then
+    local selected = false
+    for _, slot in ipairs(self:selected_covered_line_slots()) do
+      selected = selected or (line >= slot.first and line <= slot.last)
+    end
+    if not selected then self.buffer:set_selection(line, 1, line, #line_text(self.buffer.lines[line])) end
+  end
+  return {
+    { label = "Open", command = "filetree:open_selected" },
+    { label = "Open to the Right", command = "filetree:open_selected_right" },
+    "-",
+    { label = "New File…", command = "editor:new_file_with_path" },
+    { label = "New Folder…", command = "editor:new_folder_with_path" },
+    "-",
+    { label = "Cut", command = "core:cut" },
+    { label = "Copy", command = "core:copy" },
+    { label = "Paste", command = "core:paste" },
+    { label = "Rename…", command = "filetree:rename_selected" },
+    { label = "Delete", command = "filetree:delete_selected" },
+    "-",
+    { label = "Copy Path", command = "editor:copy_absolute_filepath" },
+    { label = "Copy Relative Path", command = "editor:copy_relative_filepath" },
+    { label = "Reveal in Explorer", command = "editor:reveal_active_file_in_explorer" },
+    { label = "Open Terminal Here", command = "terminal:open" },
+    "-",
+    { label = "Sort", items = {
+      { label = "By Name", command = "filetree:sort_by_name" },
+      { label = "By Date Modified", command = "filetree:sort_by_date_modified" },
+    } },
+  }
+end
+
+function FileTreeView:context_menu_point()
+  local line = self.buffer:get_selection(true)
+  local x, y = self:get_line_screen_position(line, 1)
+  return x, y + self:get_line_height()
 end
 
 FileTreeView._module_name = "plugins.filetree"
@@ -3898,6 +4007,16 @@ end, {
   ["filetree:select_all"] = function(view)
     view.buffer:set_selection(1, 1, #view.buffer.lines, #view.buffer.lines[#view.buffer.lines])
   end,
+})
+
+-- Rename and Delete act on existing entries in a tree without pending edits. Edited rows apply with Save instead.
+command.add(function()
+  local view = active_filetree()
+  if not view or view.has_possible_edits or not view:selected_existing_entry() then return false end
+  return true, view
+end, {
+  ["filetree:rename_selected"] = command.palette(function(view) view:rename_selected() end),
+  ["filetree:delete_selected"] = command.palette(function(view) view:delete_selected() end),
 })
 
 command.add(function()

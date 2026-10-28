@@ -581,21 +581,29 @@ local function create_empty_file(text, source_view)
   end
 end
 
+-- Asks for a path below the default folder. A folder prompt creates a folder even without a trailing separator.
+local function enter_new_path(label, folder)
+  local panes = require "core.panes"
+  local source_view = panes.owner_for_view(core.active_view) or core.active_view
+  core.global_prompt_bar:enter(label, {
+    text = default_new_file_text(),
+    submit = function(text)
+      local trimmed = trim_path_input(text)
+      if folder and trimmed ~= "" and not path_text_is_directory(trimmed) then text = trimmed .. PATHSEP end
+      create_empty_file(text, source_view)
+    end,
+    suggest = function(text)
+      return common.home_encode_list(common.path_suggest(
+        common.home_expand(common.sanitize_prompt_path(text)), nil,
+        config.max_visible_commands
+      ))
+    end,
+  })
+end
+
 command.add(nil, {
-  ["editor:new_file_with_path"] = function()
-    local panes = require "core.panes"
-    local source_view = panes.owner_for_view(core.active_view) or core.active_view
-    core.global_prompt_bar:enter("New File or Folder", {
-      text = default_new_file_text(),
-      submit = function(text) create_empty_file(text, source_view) end,
-      suggest = function(text)
-        return common.home_encode_list(common.path_suggest(
-          common.home_expand(common.sanitize_prompt_path(text)), nil,
-          config.max_visible_commands
-        ))
-      end,
-    })
-  end,
+  ["editor:new_file_with_path"] = function() enter_new_path("New File or Folder") end,
+  ["editor:new_folder_with_path"] = command.palette(function() enter_new_path("New Folder", true) end),
 })
 
 keymap.add_direct {
