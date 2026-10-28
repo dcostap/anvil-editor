@@ -255,6 +255,7 @@ local function show_conflict_prompt(buffer)
   local name = buffer.filename or buffer.abs_filename or "this file"
   local prompt_disk_state = capture_disk_state(buffer)
   local missing = not prompt_disk_state or not prompt_disk_state.exists
+  core.log_quiet("Autosave disk conflict prompt for %s (%s)", name, missing and "missing" or "changed")
   local changed_message = string.format(
     "%s has changed on disk since Anvil loaded or saved it.\n\nAnvil did not overwrite it. Reloading from disk will discard your unsaved Anvil edits. What do you want to do?",
     name

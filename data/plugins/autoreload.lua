@@ -77,6 +77,8 @@ end
 
 local function check_prompt_reload(buffer)
   if buffer and buffer.deferred_reload then
+    core.log_quiet("Reload prompt for \"%s\" (%s)", buffer.filename,
+      buffer:is_dirty() and "unsaved edits" or "always ask")
     core.nag_view:show(
       "File Changed",
       buffer.filename .. " has changed. Reload this file?",
