@@ -68,7 +68,6 @@ local function reload_buffer(buffer)
     old_lines = reload_diff_flash.clone_lines(buffer.lines)
   end
   buffer:reload()
-  update_time(buffer)
   if old_lines and reload_diff_flash and reload_diff_flash.flash then
     reload_diff_flash.flash(buffer, old_lines, buffer.lines, { reason = "autoreload" })
   end
@@ -183,6 +182,14 @@ Buffer.load = function(self, ...)
       update_time(self)
     end
   end)
+  return res
+end
+
+-- A reload applies the file as edits and does not call load.
+local reload = Buffer.reload
+Buffer.reload = function(self, ...)
+  local res = reload(self, ...)
+  if #core.get_views_referencing_buffer(self) > 0 then update_time(self) end
   return res
 end
 

@@ -10473,6 +10473,17 @@ Buffer.register_text_transaction_handler("textview-render-caches", function(buff
   end
   for view in pairs(TextView.registry[buffer] or {}) do
     if view and view.buffer == buffer then
+      -- A view without row measurements shows one row for each line. Keep its
+      -- top line in place when lines change above it, as measured views do.
+      if not view:has_visual_metric_providers() and not view.wrapping_enabled then
+        local line_height = view:get_line_height()
+        local top_line = math.floor(math.max(0, view.scroll.y - style.padding.y) / line_height) + 1
+        local delta = 0
+        for _, range in ipairs(transaction.changed_ranges or {}) do
+          if range.old_line2 and range.old_line2 < top_line then delta = delta + (range.line_delta or 0) end
+        end
+        if delta ~= 0 then shift_scroll_for_layout(view, delta * line_height) end
+      end
       view.__composed_visual_row_snapshot_kind = nil
       view.__composed_visual_row_snapshot_id = nil
       view.__composed_visual_row_snapshot_cache = nil

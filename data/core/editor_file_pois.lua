@@ -517,7 +517,9 @@ function M.on_text_transaction(view, transaction)
   end
   local ranges = transaction.changed_ranges or {}
   if not can_refresh_inline(view.buffer, ranges) then
-    new_cache(view, buffer_revision(view.buffer), source, project)
+    -- A reload of a growing log arrives as edits. Keep the scanned prefix.
+    new_cache(view, buffer_revision(view.buffer), source, project, cache,
+      is_append(cache.lines, view.buffer.lines))
     return true
   end
   if not refresh_changed_lines(view, cache, transaction) then

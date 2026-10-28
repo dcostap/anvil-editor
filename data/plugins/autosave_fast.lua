@@ -668,6 +668,16 @@ function Buffer:load(...)
   return result
 end
 
+-- A reload applies the file as edits and does not call load.
+local reload = Buffer.reload
+function Buffer:reload(...)
+  local result = reload(self, ...)
+  save_failures[self] = nil
+  update_disk_state(self)
+  clear_dirty_if_clean(self)
+  return result
+end
+
 local set_filename = Buffer.set_filename
 function Buffer:set_filename(...)
   local old_path = self.abs_filename

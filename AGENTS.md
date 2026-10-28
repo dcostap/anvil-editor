@@ -472,6 +472,15 @@ When adding new functionality, use `core.log_quiet(...)` liberally for diagnosti
 
 This is a personal fork with first-party ownership of the whole codebase, including bundled Lua plugins and defaults. Prefer clean refactors over compatibility adapters: when renaming concepts, APIs, fields, commands, or behavior, update all in-repo callers/configs/plugins/tests instead of leaving deprecated aliases, dead code, or compatibility slop. Only keep backward compatibility when the user explicitly asks for it or there is a concrete external boundary that cannot be migrated in the same change.
 
+## Reload from disk
+
+`Buffer:reload()` applies the file's text as edits through `Buffer:apply_lines`. It does not replace the Buffer.
+Selections, the visible text, bookmarks and other text positions move with the text. One undo reverts the reload.
+A reload does not call `Buffer:load`. Plugins that track the disk state hook `Buffer.reload` as well.
+A Text View without row measurements keeps its top line when lines change above it, like a measured view.
+See [shared editing](docs/shared-editing.md) for the plan: dirty-Buffer merges, Disk Conflicts and collaboration.
+Run `ui/buffer_reload.lua` and `runtime/buffer_apply_lines.lua` after changes.
+
 ## Background work infrastructure
 
 `core.add_thread` schedules a Lua coroutine on the UI thread. It is not an OS thread.

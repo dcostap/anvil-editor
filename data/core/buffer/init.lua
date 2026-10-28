@@ -1,6 +1,7 @@
 local Object = require "core.object"
 local Highlighter = require ".highlighter"
 local translate = require ".translate"
+local text_edits = require ".text_edits"
 local core = require "core"
 local syntax = require "core.syntax"
 local config = require "core.config"
@@ -305,18 +306,8 @@ function Buffer:replace_snapshot(text, opts)
 end
 
 
--- Prepared input lets background loads use the same load hooks as direct loads.
-function Buffer:load(filename, prepared)
-  if prepared then
-    self.loaded_file_size = prepared.info.size
-    self.encoding, self.bom = prepared.encoding, prepared.bom
-    publish_snapshot(self, prepared.lines, prepared.clean, prepared.highlights, prepared.crlf, prepared.binary)
-    self.load_error = nil
-    return
-  end
-  self:cancel_load()
-  local load_stage = file_open_stage_begin("buffer_load_contents")
-  if prompt_stale_backup then prompt_stale_backup(filename) end
+-- Read a file as UTF-8 text in this Buffer's encoding.
+local function read_text(self, filename)
   local file_info = system.get_file_info(filename)
   self.loaded_file_size = file_info and file_info.size or nil
   if not self.encoding then
@@ -348,7 +339,23 @@ function Buffer:load(filename, prepared)
     text = encoding.strip_bom(text, "UTF-8")
   end
   file_open_stage_end(read_stage)
-  self:replace_snapshot(text)
+  return text
+end
+
+
+-- Prepared input lets background loads use the same load hooks as direct loads.
+function Buffer:load(filename, prepared)
+  if prepared then
+    self.loaded_file_size = prepared.info.size
+    self.encoding, self.bom = prepared.encoding, prepared.bom
+    publish_snapshot(self, prepared.lines, prepared.clean, prepared.highlights, prepared.crlf, prepared.binary)
+    self.load_error = nil
+    return
+  end
+  self:cancel_load()
+  local load_stage = file_open_stage_begin("buffer_load_contents")
+  if prompt_stale_backup then prompt_stale_backup(filename) end
+  self:replace_snapshot(read_text(self, filename))
   self.load_error = nil
   file_open_stage_end(load_stage)
 end
@@ -487,12 +494,37 @@ function Buffer:load_async(filename, on_finish, opts)
 end
 
 
+---Change the Buffer to these lines with the fewest edits, as one undo step.
+---Selections, scroll positions and other text positions move with the text.
+---@param lines string[] Buffer lines, each with its "\n"
+---@param change_type? string The transaction type
+---@return table transaction
+function Buffer:apply_lines(lines, change_type)
+  local edits = text_edits.between(self.lines, lines)
+  return self:apply_edits(edits, { type = change_type, merge_undo = false, strict = true })
+end
+
+
+---Take the file's current text as edits, so the view and the selections stay
+---on their text. The reload is one undo step, and the Buffer is clean after it.
 function Buffer:reload()
-  if self.filename then
+  if not self.filename then return end
+  if self:is_loading() or self.load_error or self.binary then
     self:load(self.abs_filename)
     self:clean()
     sanitize_registered_selection_states(self)
+    return
   end
+  local text = read_text(self, self.abs_filename)
+  local lines, _, _, crlf, binary = encoding.split_lines(text)
+  if binary then
+    self:replace_snapshot(text)
+  else
+    local tx = self:apply_lines(lines, "reload")
+    self.crlf = crlf
+    core.log_quiet("Reloaded %s as %d edits", self:get_name(), #tx.edits)
+  end
+  self:clean()
 end
 
 

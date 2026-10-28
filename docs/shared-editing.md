@@ -327,7 +327,7 @@ This change stays in the undo and dirty-state code of `data/core/buffer/init.lua
 
 ## Order of work
 
-1. **Reload engine, clean Buffers.** Reload as small edits with no jump, one undo step, and the Buffer stays clean.
+1. **Reload engine, clean Buffers.** Reload as small edits with no jump, one undo step, and the Buffer stays clean. Done. Not checked: Standard Editors with line wrapping turned on.
 2. **Reload engine, dirty Buffers.** A three-way merge with words compared inside lines. Until step 3 exists, true conflicts keep today's prompt.
 3. **Disk Conflict blocks.** The inline block, the choices, the status, POI navigation, and the close question.
 4. **Nextcloud sync conflict copies** (level 1): detect a conflict copy and show it as Disk Conflict blocks.
