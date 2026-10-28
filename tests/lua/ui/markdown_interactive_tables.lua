@@ -504,6 +504,34 @@ test.describe("Markdown Interactive Table Editing", function()
     if not ok then error(err, 0) end
   end)
 
+  test.it("moves between rows of a table padded to a very wide column quickly", function()
+    -- Converted e-mails pad every row to the width of the widest cell.
+    local width = 400 * 1024
+    local function padded(text) return "| " .. text .. string.rep(" ", width - #text) .. " |" end
+    local rows = { padded("A"), "| " .. string.rep("-", width) .. " |" }
+    for index = 1, 4 do rows[#rows + 1] = padded("row " .. index) end
+    local view, buffer = make_view(table.concat(rows, "\n") .. "\n\nplain")
+    buffer:set_selection(3, 4)
+    refresh(view)
+
+    local old_active = core.active_view
+    core.active_view = view
+    local ok, err = pcall(function()
+      local started = system.get_time()
+      for _ = 1, 10 do
+        test.equal(command.perform("markdown:table_cell_down"), true)
+        test.equal(command.perform("markdown:table_cell_up"), true)
+      end
+      local elapsed = system.get_time() - started
+      test.equal((buffer:get_selection()), 3)
+      test.equal(command.perform("markdown:table_cell_down"), true)
+      test.equal((buffer:get_selection()), 4)
+      test.ok(elapsed < 0.5, string.format("20 moves took %.0f ms", elapsed * 1000))
+    end)
+    core.active_view = old_active
+    if not ok then error(err, 0) end
+  end)
+
   test.it("drag-selects a rectangle as full-content cell selections", function()
     local view, buffer = make_view(
       "| A | B |\n| --- | --- |\n| one | two |\n| four | five |\n\nplain"

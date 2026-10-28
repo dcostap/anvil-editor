@@ -6,6 +6,7 @@ local model = require "core.markdown.model"
 local tables = {}
 local collect_interactive_contexts
 local source_indexes = setmetatable({}, { __mode = "k" })
+local context_rows = setmetatable({}, { __mode = "k" })
 
 tables.MAX_PRESENTATION_ROWS = 256
 tables.MAX_PRESENTATION_COLUMNS = 64
@@ -217,6 +218,24 @@ local function source_row_at(buffer, line)
   return source_row(line_text(buffer, line))
 end
 
+-- Each key in a table can find its table context several times. Parse each
+-- row once per text revision, so long rows do not slow every key.
+local function context_row_at(buffer, line)
+  local revision, line_count = buffer.text_revision or 0, #buffer.lines
+  local cached = context_rows[buffer]
+  if not (cached and cached.revision == revision and cached.line_count == line_count) then
+    cached = { revision = revision, line_count = line_count, rows = {} }
+    context_rows[buffer] = cached
+  end
+  local row = cached.rows[line]
+  if row == nil then
+    row = source_row_at(buffer, line) or false
+    if row then row.line = line end
+    cached.rows[line] = row
+  end
+  return row or nil
+end
+
 ---Parse one Markdown table source row.
 ---The parsed row is shared by table commands and Markdown Live Preview so
 ---table discovery and presentation cannot drift into separate parsers.
@@ -389,7 +408,7 @@ local function context_at(view, line, col, require_canonical)
   end
   local rows, columns = {}, nil
   for row_line = line1, line2 do
-    local row = source_row(line_text(view.buffer, row_line))
+    local row = context_row_at(view.buffer, row_line)
     if not row then return nil, "table row is unavailable" end
     if require_canonical and not row.canonical then
       return nil, "table row is not canonical"
@@ -402,7 +421,6 @@ local function context_at(view, line, col, require_canonical)
     if columns > tables.MAX_PRESENTATION_COLUMNS then
       return nil, "table exceeds interactive column limit"
     end
-    row.line = row_line
     rows[#rows + 1] = row
   end
   local current = rows[line - line1 + 1]
