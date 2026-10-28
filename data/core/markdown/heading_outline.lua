@@ -10,7 +10,6 @@ local treesitter = require "core.treesitter"
 
 local heading_outline = {}
 
-local MAX_WIDTH = 260
 local MIN_WIDTH = 120
 local EDGE_GAP = 16
 local TEXT_GAP = 32
@@ -146,7 +145,7 @@ local function column(view)
   if not (centered and centered.should_center(view)) then return nil end
   local lane_x = centered.get_lane_rect(view)
   local x = view.position.x + scaled(EDGE_GAP)
-  local width = math.min(scaled(MAX_WIDTH), lane_x - scaled(TEXT_GAP) - x)
+  local width = lane_x - scaled(TEXT_GAP) - x
   if width < scaled(MIN_WIDTH) then return nil end
   return x, width
 end
