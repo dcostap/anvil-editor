@@ -425,6 +425,10 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
   }
   bool layout_changed = !had_config || previous.configuration != config->configuration;
   if (had_config && layout_changed) push_window_event(hosted.geometry_event);
+  /* A new epoch with the same layout asks for a complete frame, for example after the shell rebuilt its GPU
+   * device. The shell accepts only frames of the current epoch. */
+  if (had_config && layout_changed && !anvil_surface_layout_changed(&previous, config))
+    push_window_event(SDL_EVENT_WINDOW_EXPOSED);
 
   /* The shell waits for a frame of each new size while it live-resizes, so
    * resize frames must render immediately instead of at the refresh rate. */
@@ -463,17 +467,36 @@ static void apply_configure(const AnvilSurfaceConfigure *config) {
   }
 }
 
+/* Returns the first invalid part of a configuration, or NULL. */
+static const char *configure_problem(const AnvilSurfaceConfigure *config) {
+  if (!config->configuration) return "configuration";
+  if (config->origin_x < 0 || config->origin_x > 32768 || config->origin_y < 0 || config->origin_y > 32768)
+    return "origin";
+  if (config->pixel_w <= 0 || config->pixel_h <= 0 || config->pixel_w > 32768 || config->pixel_h > 32768)
+    return "surface size";
+  if (config->window_w <= 0 || config->window_h <= 0) return "window size";
+  if (config->window_mode < 0 || config->window_mode > ANVIL_SURFACE_WINDOW_FULLSCREEN) return "window mode";
+  if (config->render_enabled != 0 && config->render_enabled != 1) return "render_enabled";
+  if (!(config->display_scale > 0 && config->display_scale <= 16)) return "display scale";
+  if (!(config->refresh_hz >= 0 && config->refresh_hz <= 1000)) return "refresh rate";
+  if (config->controls_x < 0 || config->controls_y < 0 || config->controls_w < 0 || config->controls_h < 0 ||
+      config->controls_x > config->pixel_w || config->controls_w > config->pixel_w - config->controls_x ||
+      config->controls_y > config->pixel_h || config->controls_h > config->pixel_h - config->controls_y)
+    return "window controls";
+  if (config->content_x < 0 || config->content_x >= config->pixel_w) return "content_x";
+  return NULL;
+}
+
 static bool valid_configure(const AnvilSurfaceConfigure *config) {
-  return config->configuration && config->origin_x >= 0 && config->origin_x <= 32768 &&
-    config->origin_y >= 0 && config->origin_y <= 32768 &&
-    config->pixel_w > 0 && config->pixel_h > 0 && config->pixel_w <= 32768 && config->pixel_h <= 32768 &&
-    config->window_w > 0 && config->window_h > 0 && config->window_mode >= 0 && config->window_mode <= ANVIL_SURFACE_WINDOW_FULLSCREEN &&
-    (config->render_enabled == 0 || config->render_enabled == 1) &&
-    config->display_scale > 0 && config->display_scale <= 16 && config->refresh_hz >= 0 && config->refresh_hz <= 1000 &&
-    config->controls_x >= 0 && config->controls_y >= 0 && config->controls_w >= 0 && config->controls_h >= 0 &&
-    config->controls_x <= config->pixel_w && config->controls_w <= config->pixel_w - config->controls_x &&
-    config->controls_y <= config->pixel_h && config->controls_h <= config->pixel_h - config->controls_y &&
-    config->content_x >= 0 && config->content_x < config->pixel_w;
+  const char *problem = configure_problem(config);
+  if (problem)
+    SDL_Log("Hosted surface rejected configuration: %s; configuration=%llu Window=%u surface=%dx%d "
+            "window=%dx%d mode=%d render=%d scale=%.3f refresh=%.3f controls=%d,%d %dx%d content_x=%d",
+            problem, (unsigned long long)config->configuration, config->window_id, config->pixel_w,
+            config->pixel_h, config->window_w, config->window_h, config->window_mode, config->render_enabled,
+            config->display_scale, config->refresh_hz, config->controls_x, config->controls_y, config->controls_w,
+            config->controls_h, config->content_x);
+  return !problem;
 }
 
 static HostedView *sidebar_view(uint32_t id, bool create) {

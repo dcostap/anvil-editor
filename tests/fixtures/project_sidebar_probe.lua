@@ -17,6 +17,7 @@ ffi.cdef [[
   long __stdcall NtSuspendProcess(void *handle);
   long __stdcall NtResumeProcess(void *handle);
   unsigned long __stdcall GetWindowThreadProcessId(void *window, unsigned long *pid);
+  intptr_t __stdcall SendMessageW(void *window, unsigned int message, uintptr_t wparam, intptr_t lparam);
   unsigned long __stdcall GetProcessId(void *process);
   int __stdcall GetExitCodeProcess(void *process, unsigned long *code);
   long __stdcall NtQuerySystemInformation(int kind, void *buffer, unsigned long size, unsigned long *needed);
@@ -174,7 +175,8 @@ core.add_background_thread(function()
         wait(function() return not subject:running() end, 15)
         return
       end
-      if action == "sidebar-process" or action == "sidebar-log" or action == "sidebar-recovery" or action == "sidebar-recovery-reset" then
+      if action == "sidebar-process" or action == "sidebar-log" or action == "sidebar-recovery" or action == "sidebar-recovery-reset"
+          or action == "sidebar-gpu" or action == "sidebar-minimized" then
         local function sidebar_pid(old)
           local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
           local text = file:read("*a"); file:close()
@@ -203,6 +205,37 @@ core.add_background_thread(function()
         end
         wait(function() return ready(first) end, 10, "Sidebar did not publish its first frame")
         assert(first ~= a.pid and first ~= a.shell_pid, "Sidebar shares a Project or shell process")
+        if action == "sidebar-minimized" then
+          user32.PostMessageW(hwnd, 0x112, 0xF020, 0)
+          wait(function() return user32.IsIconic(hwnd) ~= 0 end, 2, "Owned Window did not minimize")
+          user32.PostMessageW(hwnd, 0x804c, 5, 0)
+          local replacement = wait(function() return sidebar_pid(first) end, 15, "Sidebar Restart did not connect")
+          coroutine.yield(1)
+          user32.PostMessageW(hwnd, 0x112, 0xF120, 0)
+          wait(function() return user32.IsIconic(hwnd) == 0 end, 2, "Owned Window did not restore")
+          wait(function() return ready(replacement) end, 10, "A Sidebar restarted in a minimized Window did not recover")
+          save("sidebar-process-finish", true)
+          wait(function() return not subject:running() end, 15)
+          return
+        end
+        if action == "sidebar-gpu" then
+          -- A driver update removes the GPU device of every process. The shell's presentation fails,
+          -- and the Sidebar process ends with its own device.
+          local sidebar = kernel.OpenProcess(0x1fffff, 0, first)
+          assert(sidebar ~= nil); handles[#handles + 1] = sidebar
+          user32.SendMessageW(hwnd, 0x804b, 5, 0)
+          assert(kernel.TerminateProcess(sidebar, 107))
+          wait_exit(sidebar)
+          local replacement = wait(function() return sidebar_pid(first) end, 15,
+            "The shell did not restart the Sidebar after a GPU failure")
+          wait(function() return ready(replacement) end, 20, "The Sidebar did not recover after a GPU failure")
+          -- The shell rebuilds its presentation. The Project keeps running through the failure.
+          assert(kernel.WaitForSingleObject(handles[1], 0) ~= 0, "The GPU failure ended the Project")
+          assert(read("a-started").pid == a.pid, "The GPU failure replaced the Project")
+          save("sidebar-process-finish", true)
+          wait(function() return not subject:running() end, 15)
+          return
+        end
         if action == "sidebar-recovery-reset" then
           local last = first
           for _ = 1, 3 do
@@ -406,6 +439,11 @@ core.add_background_thread(function()
         file:close()
       end
       save("a-started", state())
+      if action == "sidebar-minimized" or action == "sidebar-gpu" then
+        wait(function() return read("sidebar-process-finish") end, 60)
+        quit()
+        return
+      end
       local initial = model_until(function(model)
         local recent = row(model, "Recent")
         return recent and recent.exists and #recent.terminals == 2 and row(model, "Replacement")

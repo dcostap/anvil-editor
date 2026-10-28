@@ -365,6 +365,12 @@ The shell composes the latest surfaces when capacity becomes available. Vsync st
 Window destruction cancels and joins its wait before releasing its renderer.
 Run the Sidebar-hover latency probe and focused shell rendering, resize, GPU-failure, and Window-close probes after changes.
 
+A lost GPU device, for example during a driver update, does not fail a Project or the Sidebar.
+The shell rebuilds the Window's presentation after 1 second. Repeated failures double the delay, up to 60 seconds.
+After the rebuild, the shell sends a new configuration epoch, so each visible surface draws a complete frame.
+A hosted process that loses its own device creates a new device and a new shared texture on its next frame.
+Run the `fault-present`, `fault-resize`, `fault-release`, `fault-device`, `sidebar-gpu` and `windows-close-gpu` shell probes after changes.
+
 ## Renderer selection
 
 The dev portable build defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.

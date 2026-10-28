@@ -64,6 +64,11 @@
  * it shows what it has. */
 #define SHELL_REVEAL_MS 2000
 #define SHELL_REVEAL_TIMER 0x8101u
+/* A driver update or reset removes the GPU device. The shell rebuilds a failed Window's presentation after this
+ * delay. A failure soon after a rebuild doubles the delay, up to the maximum. */
+#define SHELL_GPU_REBUILD_MS 1000
+#define SHELL_GPU_REBUILD_MAX_MS 60000
+#define SHELL_GPU_REBUILD_TIMER 0x8105u
 #define SHELL_CLOSE_TIMEOUT_MS 5000
 /* Covers the Project's shell-loss save, which can take up to its 5 s deadline. */
 #define SHELL_ADOPTION_REQUEST_MS 8000
@@ -182,6 +187,8 @@ typedef struct ShellProject {
   bool frame_pending;
   SDL_Condition *frame_cond;
   AnvilSurfaceConfigure last_config;
+  /* The next configure starts a new epoch with the same layout, so the surface draws a complete frame. */
+  bool repaint;
   AnvilSurfaceHitTest hit;
   AnvilSurfaceShellColors shell_colors;
   bool has_shell_colors;
@@ -269,6 +276,8 @@ struct ShellWindow {
   ID3D11RenderTargetView *rtv;
   bool render_failed;
   const char *gpu_failure;
+  Uint64 gpu_rebuild_attempt;
+  Uint32 gpu_rebuild_delay_ms;
   int buffer_w, buffer_h;
 
   /* Frames coalesce: the main thread composites only the newest one. */
@@ -1465,9 +1474,17 @@ static void send_configure(ShellProject *project) {
       config.window_h = rect.bottom - rect.top;
     }
   } else if (project->last_config.window_id != window->id) {
-    /* A newly assigned surface has no prior geometry in this minimized Window. */
+    /* A newly assigned surface has no prior geometry in this minimized Window. Use the restored bounds. */
     config.pixel_w = SDL_max(1, project->sidebar ? window->sidebar_full_w : window->buffer_w);
     config.pixel_h = SDL_max(1, window->buffer_h);
+    WINDOWPLACEMENT placement = {.length = sizeof(placement)};
+    if (GetWindowPlacement(window->hwnd, &placement)) {
+      RECT bounds = placement.rcNormalPosition;
+      config.window_x = bounds.left;
+      config.window_y = bounds.top;
+      config.window_w = bounds.right - bounds.left;
+      config.window_h = bounds.bottom - bounds.top;
+    }
   }
   config.display_scale = window->scale;
   config.origin_x = 0;
@@ -1494,9 +1511,11 @@ static void send_configure(ShellProject *project) {
     SDL_Log("Shell Sidebar rendering enabled=%u Window=%u", config.render_enabled, window->id);
   if (project->sidebar)
     config.controls_x = config.controls_y = config.controls_w = config.controls_h = 0;
-  if (memcmp(&config, &project->last_config, sizeof(config)) == 0 && project->last_config.pixel_w)
+  if (memcmp(&config, &project->last_config, sizeof(config)) == 0 && project->last_config.pixel_w &&
+      !project->repaint)
     return;
-  if (!config.configuration || anvil_surface_layout_changed(&project->last_config, &config)) {
+  if (!config.configuration || project->repaint || anvil_surface_layout_changed(&project->last_config, &config)) {
+    project->repaint = false;
     config.configuration++;
     if (project == window->selected)
       SDL_ClearComposition(window->window);
@@ -1656,14 +1675,43 @@ static void fail_gpu(ShellWindow *window, const char *operation, HRESULT error) 
   InvalidateRect(window->hwnd, NULL, FALSE);
 }
 
+static void arm_gpu_rebuild(ShellWindow *window) {
+  bool recent = window->gpu_rebuild_delay_ms &&
+                SDL_GetTicks() - window->gpu_rebuild_attempt < SHELL_GPU_REBUILD_MAX_MS;
+  window->gpu_rebuild_delay_ms =
+      recent ? SDL_min(window->gpu_rebuild_delay_ms * 2, SHELL_GPU_REBUILD_MAX_MS) : SHELL_GPU_REBUILD_MS;
+  SDL_Log("Shell GPU rebuild scheduled: Window=%u in %u ms", window->id, window->gpu_rebuild_delay_ms);
+  SetTimer(window->hwnd, SHELL_GPU_REBUILD_TIMER, window->gpu_rebuild_delay_ms, NULL);
+}
+
+/* The Projects keep running while the Window has no GPU presentation. After the rebuild, each visible surface
+ * draws a complete frame for the new device. */
+static bool rebuild_gpu(ShellWindow *window) {
+  KillTimer(window->hwnd, SHELL_GPU_REBUILD_TIMER);
+  if (!window->render_failed) return true;
+  window->gpu_rebuild_attempt = SDL_GetTicks();
+  if (!init_d3d11(window)) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Shell GPU rebuild failed: Window=%u", window->id);
+    release_d3d11(window);
+    arm_gpu_rebuild(window);
+    InvalidateRect(window->hwnd, NULL, FALSE);
+    return false;
+  }
+  window->render_failed = false;
+  SDL_Log("Shell rebuilt GPU presentation: Window=%u", window->id);
+  window->selected->repaint = true;
+  if (window->sidebar_client) window->sidebar_client->repaint = true;
+  send_configure(window->selected);
+  composite_and_present(window);
+  return true;
+}
+
 static void check_gpu_failure(ShellWindow *window) {
-  ShellProject *project = window->selected;
   if (!window->gpu_failure)
     return;
-  const char *cause = window->gpu_failure;
   window->gpu_failure = NULL;
   release_d3d11(window);
-  fail_connection(project, cause);
+  arm_gpu_rebuild(window);
 }
 
 static void resize_buffers(ShellWindow *window) {
@@ -1749,6 +1797,7 @@ static bool load_d3d11_frame(ShellProject *project, ShellPresentation *surface,
       return false;
     }
     SDL_strlcpy(surface->shared_name, frame->name, sizeof(surface->shared_name));
+    SDL_Log("Shell opened surface %s: Window=%u Project=%u", frame->name, window->id, project->id);
   }
   D3D11_TEXTURE2D_DESC desc;
   surface->shared->lpVtbl->GetDesc(surface->shared, &desc);
@@ -2718,7 +2767,7 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
       if (project->latest_frame.generation == frame->generation)
         project->frame_pending = true;
       SDL_UnlockMutex(project->lock);
-    } else if (project->state != SHELL_FAILED) {
+    } else if (project->state != SHELL_FAILED && !window->render_failed) {
       HRESULT removed = window->device->lpVtbl->GetDeviceRemovedReason(window->device);
       if (FAILED(removed))
         fail_gpu(window, "surface device failed", removed);
@@ -4112,6 +4161,7 @@ static void perform_control(ShellWindow *window, int control) {
     if (sidebar && sidebar->process.hProcess &&
         WaitForSingleObject(sidebar->process.hProcess, 0) == WAIT_TIMEOUT)
       anvil_process_terminate(sidebar->process.hProcess, 125);
+    rebuild_gpu(window);
     start_sidebar();
     return;
   }
@@ -4136,15 +4186,7 @@ static void perform_control(ShellWindow *window, int control) {
       SDL_Log("Shell Restart refused: previous Project has not exited");
       return;
     }
-    if (window->render_failed) {
-      SDL_Log("Shell explicit Restart: initialize presentation once");
-      if (!init_d3d11(window)) {
-        release_d3d11(window);
-        InvalidateRect(window->hwnd, NULL, FALSE);
-        return;
-      }
-      window->render_failed = false;
-    }
+    if (!rebuild_gpu(window)) return;
     project->restart_path = _strdup(project->project_path);
     window->closing = false;
     if (!project->restart_path || !start_project(project, 0, NULL)) {
@@ -4925,6 +4967,10 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   }
   if (msg == WM_TIMER && wparam == SHELL_SIDEBAR_SLIDE_TIMER) {
     slide_sidebar(window);
+    return 0;
+  }
+  if (msg == WM_TIMER && wparam == SHELL_GPU_REBUILD_TIMER) {
+    rebuild_gpu(window);
     return 0;
   }
   if (msg == WM_TIMER && wparam == SHELL_SELECTION_HOLD_TIMER) {

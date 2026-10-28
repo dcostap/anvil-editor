@@ -273,6 +273,18 @@ if project:find("/driver$", 1) then
           user32.ShowWindow(window, 9)
           user32.SendMessageW(window, 0x804b, 0, 0)
           save(root .. "/continue.lua", {continue = true})
+        elseif fault == "present" or fault == "resize" or fault == "release" or fault == "device" then
+          -- A lost GPU device gets a new device. The Project keeps running and presents again.
+          local mark = fault == "device" and "D3D11 device lost" or "Shell rebuilt GPU presentation"
+          local opened = "Shell opened surface Local\\AnvilSurface-" .. state.pid .. "-"
+          assert(wait_for(function()
+            local text = trace():sub(trace_start + 1)
+            local at = text:find(mark, 1, true)
+            return at and text:find(opened, at, true)
+          end, 8), "the " .. fault .. " GPU failure did not recover")
+          assert(not trace():sub(trace_start + 1):find("Shell state: Failed", 1, true), "a GPU failure failed the Project")
+          assert(kernel.WaitForSingleObject(process_handle, 0) == 258, "a GPU failure ended the Project")
+          save(root .. "/continue.lua", {continue = true})
         else
           assert(wait_for(function() return owned_dialog(state, "Anvil - Project failed") end, fault == "startup" and 35 or 3),
             "surface failure did not enter Failed")

@@ -513,11 +513,10 @@ static bool d3d11_device_lost(HRESULT hr) {
          hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR;
 }
 
+/* A driver update or reset removes the device. The next frame creates a new one. A hosted window then
+ * publishes a new shared texture name, and the shell opens that texture. */
 static void d3d11_reset_device(void) {
-  if (anvil_hosted_surface_active()) {
-    anvil_hosted_surface_render_failed("Project GPU device failed; no automatic renderer recovery");
-    return;
-  }
+  SDL_Log("D3D11 device lost; the next frame creates a new device");
   anvil_d3d11_shutdown();
   g_d3d11.attempted_init = false;
 }
@@ -2138,11 +2137,8 @@ static bool d3d11_publish_hosted_frame(D3D11Window *w) {
                                                    0, 0, 0, (ID3D11Resource *)w->backbuffer, 0, &box);
     hr = w->shared_mutex->lpVtbl->ReleaseSync(w->shared_mutex, 0);
     if (SDL_CompareAndSwapAtomicInt(&test_sync_failure, 2, 0)) hr = E_FAIL;
-    if (hr != S_OK) {
-      acquired = false;
-      anvil_hosted_surface_render_failed("Project shared GPU mutex release failed");
-    }
-    g_d3d11.context->lpVtbl->Flush(g_d3d11.context);
+    acquired = hr == S_OK;
+    if (acquired) g_d3d11.context->lpVtbl->Flush(g_d3d11.context);
   }
   QueryPerformanceCounter(&copy_end);
   g_d3d11.stats.frame.present_ms = d3d11_ms_between(copy_start, copy_end);
@@ -2152,7 +2148,9 @@ static bool d3d11_publish_hosted_frame(D3D11Window *w) {
   if (!acquired) {
     g_d3d11.stats.frame.fail_reason = "hosted_sync";
     d3d11_stats_end(false, FAILED(hr) ? hr : E_ABORT);
-    if (hr != WAIT_TIMEOUT && hr != DXGI_ERROR_WAIT_TIMEOUT)
+    if (d3d11_device_lost(hr))
+      d3d11_reset_device();
+    else if (hr != WAIT_TIMEOUT && hr != DXGI_ERROR_WAIT_TIMEOUT)
       anvil_hosted_surface_render_failed("Project shared GPU mutex failed");
     return false;
   }

@@ -154,7 +154,7 @@ def main() -> int:
         "hidden-render", "hidden-close", "hidden-startup", "hidden-close-cancel",
         "loaded-switch", "loaded-launch", "loaded-restart", "identity-trailing", "identity-cwd",
         "identity-alias", "loaded-focus", "loaded-quit", "loaded-resolve", "identity-allocation", "identity-notice", "identity-notice-expiry", "identity-notice-stale",
-        "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart", "sidebar-model", "sidebar-worker", "sidebar-demand", "sidebar-process", "sidebar-log", "sidebar-recovery", "sidebar-recovery-reset", "sidebar-idle", "dormant-terminal-sidebar"],
+        "dormant-unload", "dormant-launch", "dormant-dialog", "dormant-last", "dormant-last-close", "dormant-terminal", "dormant-terminal-end", "dormant-terminal-cancel", "dormant-crash", "dormant-hang", "dormant-cancel", "dormant-background-quit", "dormant-unload-crash", "dormant-unload-restart", "sidebar-model", "sidebar-worker", "sidebar-demand", "sidebar-process", "sidebar-log", "sidebar-recovery", "sidebar-recovery-reset", "sidebar-gpu", "sidebar-minimized", "sidebar-idle", "dormant-terminal-sidebar"],
                         help="run an owned Project lifecycle check instead of typing")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--sidebar-hover", action="store_true",
