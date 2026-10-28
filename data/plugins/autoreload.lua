@@ -193,6 +193,26 @@ Buffer.reload = function(self, ...)
   return res
 end
 
+-- Undo can revert an external change by accident, and Autosave then writes
+-- that revert to disk. Show when an undo or redo applies a reload.
+local function wrap_history(name, message)
+  local apply = Buffer[name]
+  Buffer[name] = function(self, ...)
+    local old_lines = self.lines
+    local change_type = apply(self, ...)
+    if change_type == "reload" and #core.get_views_referencing_buffer(self) > 0 then
+      if reload_diff_flash and reload_diff_flash.flash then
+        reload_diff_flash.flash(self, old_lines, self.lines, { reason = name })
+      end
+      core.status_bar:show_message("i", style.text, message)
+      core.log_quiet("%s \"%s\"", message, self.filename)
+    end
+    return change_type
+  end
+end
+wrap_history("undo", "Undid reload from disk")
+wrap_history("redo", "Redid reload from disk")
+
 Buffer.mark_file_missing = function(self, ...)
   local res = mark_file_missing(self, ...)
   core.add_thread(function()

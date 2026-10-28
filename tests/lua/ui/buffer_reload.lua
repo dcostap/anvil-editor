@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local panes = require "core.panes"
 local test = require "core.test"
@@ -18,6 +19,10 @@ end
 local function caret(view)
   local selections = view:get_selection_state().selections
   return selections[1], selections[2]
+end
+
+local function status_text()
+  return core.status_bar.message and core.status_bar.message.text or ""
 end
 
 local function open(context, text, line, col)
@@ -116,5 +121,33 @@ test.describe("Reload from disk", function()
     buffer:undo()
     test.equal(table.concat(buffer.lines), old_text)
     test.ok(buffer:is_dirty())
+  end)
+
+  test.it("tells the user when undo or redo applies a reload", function(context)
+    local _, buffer = open(context, "one\n")
+    write_file(context.path, "one\ntwo\n")
+    buffer:reload()
+
+    core.status_bar.message = nil
+    command.perform("core:undo")
+    test.equal(table.concat(buffer.lines), "one\n")
+    test.ok(status_text():lower():find("reload", 1, true), "undo did not mention the reload")
+
+    core.status_bar.message = nil
+    command.perform("core:redo")
+    test.equal(table.concat(buffer.lines), "one\ntwo\n")
+    test.ok(status_text():lower():find("reload", 1, true), "redo did not mention the reload")
+  end)
+
+  test.it("does not mention a reload when undo reverts typing after it", function(context)
+    local _, buffer = open(context, "one\n")
+    write_file(context.path, "one\ntwo\n")
+    buffer:reload()
+    buffer:insert(2, 4, "!")
+
+    core.status_bar.message = nil
+    command.perform("core:undo")
+    test.equal(table.concat(buffer.lines), "one\ntwo\n")
+    test.not_ok(status_text():lower():find("reload", 1, true))
   end)
 end)

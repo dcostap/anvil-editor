@@ -1,6 +1,6 @@
 # Shared editing: seamless reload and Disk Conflicts
 
-This document is the plan for external changes and Disk Conflicts in Anvil. Step 1 of the order of work is shipped. The rest is a plan, not a description of shipped behavior.
+This document is the plan for external changes and Disk Conflicts in Anvil. Steps 1 and 2 of the order of work are shipped. The rest is a plan, not a description of shipped behavior.
 
 The near-term steps are general improvements. They help with any external writer: an agent, a script, a second Project process, or a sync tool. Shared notes with other people are not set up, and no sync tool is chosen. That work is in [Later: shared notes](#later-shared-notes).
 
@@ -65,7 +65,7 @@ Undo of a reload is useful, but it can also surprise the user. Example:
 3. The user presses undo a few times to remove a typo.
 4. The first undo reverts the agent's work. Autosave writes that revert to disk 3 seconds later.
 
-Keep the behavior, and make it visible. When an undo or redo applies a reload entry, flash the changed lines and show "Undid reload from disk" in the status. Nothing else changes.
+Anvil keeps the behavior and makes it visible. When an undo or redo applies a reload entry, Autoreload flashes the changed lines and shows "Undid reload from disk" or "Redid reload from disk" in the status. This is shipped.
 
 ### Known limit
 
@@ -158,7 +158,7 @@ The base rule handles this case. The base is the Disk text of the last merge, so
 ## Order of work
 
 1. **Reload engine, clean Buffers.** Reload as small edits with no jump, one undo step, and the Buffer stays clean. Done. Not checked: Standard Editors with line wrapping turned on.
-2. **Undo across a reload.** Flash the changed lines and show a status message.
+2. **Undo across a reload.** Flash the changed lines and show a status message. Done.
 3. **Reload engine, dirty Buffers.** Keep the base as described above. A three-way merge with words compared inside lines. Until step 4 exists, true conflicts keep today's prompt. Add Disk Conflict to `CONTEXT.md`.
 4. **Disk Conflict blocks.** The inline block, the choices, the status, POI navigation, and the close question.
 

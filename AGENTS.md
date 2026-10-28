@@ -485,9 +485,11 @@ This is a personal fork with first-party ownership of the whole codebase, includ
 
 `Buffer:reload()` applies the file's text as edits through `Buffer:apply_lines`. It does not replace the Buffer.
 Selections, the visible text, bookmarks and other text positions move with the text. One undo reverts the reload.
+`Buffer:undo()` and `Buffer:redo()` return the type of the step they applied. A reload step does not merge with other steps.
+Autoreload flashes the lines and shows a status message when an undo or redo applies a reload, because Autosave then writes it to disk.
 A reload does not call `Buffer:load`. Plugins that track the disk state hook `Buffer.reload` as well.
 A Text View without row measurements keeps its top line when lines change above it, like a measured view.
-See [shared editing](docs/shared-editing.md) for the plan: dirty-Buffer merges, Disk Conflicts and collaboration.
+See [shared editing](docs/shared-editing.md) for the plan: dirty-Buffer merges and Disk Conflicts.
 Run `ui/buffer_reload.lua` and `runtime/buffer_apply_lines.lua` after changes.
 
 ## Background work infrastructure

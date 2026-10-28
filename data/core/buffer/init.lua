@@ -1685,7 +1685,7 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
         after_selections = current_selections
         after_last_selection = current_last_selection
       end
-      push_batch_undo(
+      local entry = push_batch_undo(
         redo_stack,
         cmd.time,
         tx,
@@ -1694,6 +1694,9 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
         after_selections,
         after_last_selection
       )
+      -- The opposite entry is the same step, so a redone reload is still a reload.
+      entry.change_type = cmd.change_type
+      entry.merge_undo = cmd.merge_undo
     end
   elseif cmd.type == "selection" then
     if can_restore_selection_undo(self, cmd) then
@@ -1716,6 +1719,7 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
   if modified then
     self:on_text_change("undo")
   end
+  return cmd.change_type or cmd.type
 end
 
 local function update_clean_lines(self, line1, line2)
@@ -2388,15 +2392,19 @@ function Buffer:remove(line1, col1, line2, col2)
 end
 
 
+---Revert the last step. Steps that do not merge, such as a reload, revert alone.
+---@return string? change_type The type of the last step it reverted, such as "reload"
 function Buffer:undo()
   if self:is_loading() or self.load_error then return end
-  pop_undo(self, self.undo_stack, self.redo_stack, false)
+  return pop_undo(self, self.undo_stack, self.redo_stack, false)
 end
 
 
+---Apply the last reverted step again.
+---@return string? change_type The type of the last step it applied, such as "reload"
 function Buffer:redo()
   if self:is_loading() or self.load_error then return end
-  pop_undo(self, self.redo_stack, self.undo_stack, false)
+  return pop_undo(self, self.redo_stack, self.undo_stack, false)
 end
 
 local function plan_normalized_edits(self, edits, opts)
