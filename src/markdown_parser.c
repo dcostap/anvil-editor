@@ -463,6 +463,7 @@ static bool parse_inline_regions(
 static AnvilMarkdownTree *markdown_tree_parse_internal(
   AnvilTSSnapshot *snapshot,
   const AnvilMarkdownTree *previous,
+  bool parse_inline,
   uint32_t timeout_ms,
   AnvilMarkdownCancelCallback cancel_callback,
   void *cancel_payload,
@@ -537,7 +538,7 @@ static AnvilMarkdownTree *markdown_tree_parse_internal(
   }
   uint32_t previous_cursor = 0;
   uint64_t inline_started = SDL_GetTicks();
-  if (!parse_inline_regions(
+  if (parse_inline && !parse_inline_regions(
     result,
     inline_parser,
     ts_tree_root_node(result->block_tree),
@@ -568,7 +569,18 @@ AnvilMarkdownTree *anvil_markdown_tree_parse(
   char **error
 ) {
   return markdown_tree_parse_internal(
-    snapshot, NULL, timeout_ms, cancel_callback, cancel_payload, error
+    snapshot, NULL, true, timeout_ms, cancel_callback, cancel_payload, error
+  );
+}
+
+AnvilMarkdownTree *anvil_markdown_tree_parse_blocks(
+  AnvilTSSnapshot *snapshot,
+  AnvilMarkdownCancelCallback cancel_callback,
+  void *cancel_payload,
+  char **error
+) {
+  return markdown_tree_parse_internal(
+    snapshot, NULL, false, 0, cancel_callback, cancel_payload, error
   );
 }
 
@@ -581,7 +593,7 @@ AnvilMarkdownTree *anvil_markdown_tree_parse_incremental(
   char **error
 ) {
   return markdown_tree_parse_internal(
-    snapshot, previous, timeout_ms, cancel_callback, cancel_payload, error
+    snapshot, previous, true, timeout_ms, cancel_callback, cancel_payload, error
   );
 }
 

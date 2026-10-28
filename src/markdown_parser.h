@@ -22,6 +22,13 @@ AnvilMarkdownTree *anvil_markdown_tree_parse(
   void *cancel_payload,
   char **error
 );
+/* Parse only the block tree. The tree has no inline regions. */
+AnvilMarkdownTree *anvil_markdown_tree_parse_blocks(
+  AnvilTSSnapshot *snapshot,
+  AnvilMarkdownCancelCallback cancel_callback,
+  void *cancel_payload,
+  char **error
+);
 AnvilMarkdownTree *anvil_markdown_tree_parse_incremental(
   AnvilTSSnapshot *snapshot,
   const AnvilMarkdownTree *previous,

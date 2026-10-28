@@ -438,8 +438,8 @@ static StructuralLines parse_structural_lines(const char *text, size_t len,
   if (!owned_text) return lines;
   AnvilTSSnapshot *source = anvil_ts_snapshot_new_take_text(owned_text, (uint32_t)len, &error);
   if (!source) { SDL_free(error); return lines; }
-  AnvilMarkdownTree *tree = anvil_markdown_tree_parse(
-    source, 0, (AnvilMarkdownCancelCallback)cancelled_fn, cancel_userdata, &error
+  AnvilMarkdownTree *tree = anvil_markdown_tree_parse_blocks(
+    source, (AnvilMarkdownCancelCallback)cancelled_fn, cancel_userdata, &error
   );
   if (!tree) { SDL_free(error); anvil_ts_snapshot_free(source); return lines; }
   lines.count = source->line_count;
