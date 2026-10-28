@@ -524,19 +524,25 @@ For output that must stream while the process runs, such as ripgrep, use `core.p
 Cancel each stream you stop reading; an unread stream holds its worker once its output window fills.
 The UI loop drains named pools and shuts them down with the system pool.
 
-## Native code for hot loops
+## Native code and Lua garbage
 
-Keep editor behavior in Lua by default. This includes providers, Markdown semantics, and plugin logic.
+Lua must not limit the editor's speed. Move work to C when a measurement shows a cost, such as a profile, a scenario counter, or a heap census.
 
-An agent may suggest that a hot loop move to C. Suggest it only when all of these are true:
+Move these to C:
 
-- A measurement shows that the loop has a material cost, for example in a profile or a scenario counter.
-- The loop works on plain data, such as arrays of rows, heights, or text positions.
-- Lua can call the C code once for each edit, batch, or frame.
-  A LuaJIT trace stops at each C call, so a call for each item can be slower than Lua.
+- Hot loops over plain data, such as arrays of rows, heights, or text positions.
+- Large data that stays in memory, such as line layouts, token arrays, or document models.
+  LuaJIT's GC has no generations. Each GC cycle marks all live Lua objects again, also data that does not change.
+  Data in C memory adds no GC work.
 
-Do not move code to C without the user's permission.
-In the suggestion, give the measurement, the size of the C change, and the Lua code that it removes.
+Keep glue code, plugin logic, and editor behavior in Lua.
+C does not remove garbage from glue code, because the values still go back to Lua.
+Lua calls the C code once for each edit, batch, or frame.
+A LuaJIT trace stops at each C call, so a call for each item can be slower than Lua.
+
+Code that runs in each frame, such as `update`, `draw`, and caret moves, must not make new tables, closures, or strings when old ones can be used again.
+
+In the commit message, give the measurement before and after the change.
 
 Add native modules under `src/api` with the portable Lua C API, not FFI. The PUC Lua build must still work.
 
