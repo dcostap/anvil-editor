@@ -1494,6 +1494,20 @@ test.describe("Terminal View", function()
     system.set_clipboard(previous or "")
   end)
 
+  test.it("pastes the clipboard at a right-click without a selection", function(context)
+    local previous = system.get_clipboard()
+    system.set_clipboard("git status")
+    local view = terminal.open()
+    view.position.x, view.position.y = 0, 0
+    local session = context.sessions[1]
+    view.snapshot.mouse_tracking = false
+    test.ok(view:on_mouse_pressed("right", 20, 30))
+    test.ok(view:on_mouse_released("right", 20, 30))
+    test.equal(#session.pastes, 1)
+    test.equal(session.pastes[1][1], "git status")
+    system.set_clipboard(previous or "")
+  end)
+
   test.it("uses word and line selection gestures for repeated clicks", function(context)
     local view = terminal.open()
     view.position.x, view.position.y = 0, 0
