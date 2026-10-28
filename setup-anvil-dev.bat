@@ -32,7 +32,7 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Installing stripped portable Anvil to %DEST% ===
-"%BASH%" -lc "meson install -C build-windows-x86_64 --destdir \"%DEST%\" --strip"
+"%BASH%" -lc "meson install -C build-windows-x86_64 --no-rebuild --destdir \"%DEST%\" --strip"
 if errorlevel 1 exit /b 1
 
 echo.

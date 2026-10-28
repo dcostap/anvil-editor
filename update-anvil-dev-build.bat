@@ -11,7 +11,7 @@ cd /d "%REPO%" || exit /b 1
 
 echo.
 echo === Building Anvil incrementally ===
-"%BASH%" -lc "zig_dir=$(./scripts/ensure-zig.sh) && export PATH=$zig_dir:$PATH && ./scripts/ensure-luajit-cli.sh && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi"
+"%BASH%" -lc "zig_dir=$(./scripts/ensure-zig.sh) && export PATH=$zig_dir:$PATH && ./scripts/ensure-luajit-cli.sh && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && bash scripts/compile.sh -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi"
 if errorlevel 1 exit /b 1
 
 echo.
@@ -34,7 +34,7 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === Updating stripped portable Anvil at %DEST% ===
-"%BASH%" -lc "meson install -C build-windows-x86_64 --destdir \"%DEST%\" --strip"
+"%BASH%" -lc "meson install -C build-windows-x86_64 --no-rebuild --destdir \"%DEST%\" --strip"
 if errorlevel 1 exit /b 1
 
 echo.
