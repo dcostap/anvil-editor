@@ -2778,6 +2778,19 @@ local function renderer_present_paced()
 end
 
 local last_core_step_stats = {}
+
+-- LuaJIT runs the atomic phase of each GC cycle in one step. That phase clears
+-- weak references to unmarked objects, so a fresh table held only through a
+-- weak reference disappears in it. A check at each main loop phase boundary
+-- names the phase that contains the atomic step.
+local gc_sentinel = setmetatable({ {} }, { __mode = "v" })
+local gc_atomic_phases = {}
+local function gc_phase_end(phase)
+  if gc_sentinel[1] then return end
+  gc_atomic_phases[#gc_atomic_phases + 1] = phase
+  gc_sentinel[1] = {}
+end
+
 -- A hosted Project draws nothing while the shell hides it. Its first frame after that is logged.
 local render_resume_pending = false
 
@@ -3050,6 +3063,7 @@ function core.step(next_frame_time, options, frame_stats)
   end
   drain_input_trace()
   step_stats.event_ms = (system.get_time() - event_start_time) * 1000
+  gc_phase_end("events")
   if #event_type_order > 0 then
     local event_types = {}
     for i, event_type in ipairs(event_type_order) do
@@ -3064,6 +3078,7 @@ function core.step(next_frame_time, options, frame_stats)
   -- the frame draws real semantics rather than a provisional projection.
   local markdown_model = package.loaded["core.markdown.model"]
   if markdown_model then core.try(markdown_model.settle_pending) end
+  gc_phase_end("markdown_settle")
 
   local width, height = core.window:get_size()
 
@@ -3097,6 +3112,7 @@ function core.step(next_frame_time, options, frame_stats)
     end
   end
   step_stats.update_ms = (system.get_time() - update_start_time) * 1000
+  gc_phase_end("update")
   if core.redraw or event_received then require("core.pane_report").publish(not render_enabled) end
 
   if not render_enabled then
@@ -3143,6 +3159,7 @@ function core.step(next_frame_time, options, frame_stats)
 
   -- draw
   step_stats.pre_draw_ms = (system.get_time() - pre_draw_start_time) * 1000
+  gc_phase_end("pre_draw")
   local start_time = system.get_time()
   local startup_draw_stage = core.startup_trace_active and startup
     and startup.stage_begin("first_frame_draw") or nil
@@ -3167,12 +3184,14 @@ function core.step(next_frame_time, options, frame_stats)
   end
   core.render_frame_active = false
   step_stats.draw_emit_ms = (system.get_time() - draw_emit_start_time) * 1000
+  gc_phase_end("draw")
   if renderer.frame_failed and renderer.frame_failed() then
     core.redraw = true
   end
   local renderer_end_start_time = system.get_time()
   renderer.end_frame()
   step_stats.renderer_end_ms = (system.get_time() - renderer_end_start_time) * 1000
+  gc_phase_end("renderer_end")
   if core.startup_trace_active and startup then
     local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
     startup.stage_end(startup_draw_stage, "ok", string.format(
@@ -3650,6 +3669,9 @@ function core.run_step(options)
   core.in_live_resize_frame = immediate and options.live_resize or false
   if core.in_live_resize_frame then core.last_live_resize_frame_at = system.get_time() end
   local run_step_start = system.get_time()
+  -- Work after the previous iteration's report, such as the shell event callback, ends here.
+  for i = #gc_atomic_phases, 1, -1 do gc_atomic_phases[i] = nil end
+  gc_phase_end("between_steps")
   -- Worker callbacks and coroutine work belong to this frame, before core.step.
   core.perf_frame_stats = perf_stats_enabled() and new_perf_frame_stats() or nil
   local startup_run_step = startup and startup.run_step_begin(options) or nil
@@ -3704,6 +3726,7 @@ function core.run_step(options)
     -- A hosted Project wakes early for shell input, so a live-resize size never waits out a frame slot.
     system.idle(seconds)
     sleep_actual_ms = sleep_actual_ms + (system.get_time() - sleep_start) * 1000
+    gc_phase_end("sleep")
   end
 
   -- start a new 1s cycle
@@ -3734,6 +3757,7 @@ function core.run_step(options)
     time_to_wake = run_threads()
     threads_end_time = system.get_time() - threads_start
     now = now + threads_end_time
+    gc_phase_end("threads")
   end
   local run_threads_ms = threads_end_time * 1000
 
@@ -3769,6 +3793,7 @@ function core.run_step(options)
         end
       end
       worker_pool_drain_wall_ms = (system.get_time() - drain_started) * 1000
+      gc_phase_end("worker_callbacks")
       if worker_pool_drain_wall_ms > 20 then
         core.log_quiet(
           "Worker pool drain slow: wall=%.1fms drain=%.1fms messages=%d dispatch=%.1fms callback=%.1fms slow_dispatch=%.1fms/%s slow_callback=%.1fms/%s",
@@ -3833,6 +3858,7 @@ function core.run_step(options)
       did_core_step = true
       did_redraw    = core.step(run_next_frame_time, options, core.perf_frame_stats)
       core_step_ms  = (system.get_time() - core_step_start) * 1000
+      gc_phase_end("step_other")
       now           = system.get_time()
       -- Input can wake us before the next frame's update is due. Keep that
       -- deadline; otherwise an unchanged pointer event replaces a pending
@@ -3932,6 +3958,9 @@ function core.run_step(options)
     gc_ms = (system.get_time() - gc_start) * 1000
     core.collect_garbage = false
   end
+  gc_phase_end("run_step_other")
+  local gc_atomic_phase = table.concat(gc_atomic_phases, "+")
+  local lua_heap_kb = collectgarbage("count")
 
   local renderer_stats = renderer.get_last_frame_stats and renderer.get_last_frame_stats() or {}
   local step_stats = did_core_step and last_core_step_stats or {}
@@ -3989,7 +4018,7 @@ function core.run_step(options)
     local sleep_overrun_ms = math.max(0, sleep_actual_ms - sleep_requested_ms)
     local source = work_ms >= MAIN_LOOP_STALL_MS and "application" or "scheduler"
     core.log_quiet(
-      "Main loop stall: source=%s total_ms=%.1f work_ms=%.1f sleep_requested_ms=%.1f sleep_actual_ms=%.1f sleep_overrun_ms=%.1f threads_ms=%.1f slowest_thread_ms=%.1f slowest_thread=%s core_step_ms=%.1f event_count=%d event_ms=%.1f slowest_event=%s slowest_event_ms=%.1f update_ms=%.1f pre_draw_ms=%.1f draw_ms=%.1f renderer_end_ms=%.1f present_ms=%.1f gc_ms=%.1f pending=%s queue=%d active=%s focus=%s",
+      "Main loop stall: source=%s total_ms=%.1f work_ms=%.1f sleep_requested_ms=%.1f sleep_actual_ms=%.1f sleep_overrun_ms=%.1f threads_ms=%.1f slowest_thread_ms=%.1f slowest_thread=%s core_step_ms=%.1f event_count=%d event_ms=%.1f slowest_event=%s slowest_event_ms=%.1f update_ms=%.1f pre_draw_ms=%.1f draw_ms=%.1f renderer_end_ms=%.1f present_ms=%.1f gc_ms=%.1f gc_atomic=%s lua_heap_mb=%.1f pending=%s queue=%d active=%s focus=%s",
       source, total_ms, work_ms, sleep_requested_ms, sleep_actual_ms,
       sleep_overrun_ms, run_threads_ms, last_run_threads_slowest_ms,
       last_run_threads_slowest_loc, core_step_ms, step_stats.event_count,
@@ -3997,6 +4026,7 @@ function core.run_step(options)
       step_stats.slowest_event_ms or 0, step_stats.update_ms,
       step_stats.pre_draw_ms, step_stats.draw_emit_ms,
       step_stats.renderer_end_ms, renderer_stats.present_ms or 0, gc_ms,
+      gc_atomic_phase ~= "" and gc_atomic_phase or "none", lua_heap_kb / 1024,
       tostring(pending_events_at_start), queue_depth, active_view_name, tostring(window_has_focus)
     )
   end
@@ -4144,6 +4174,8 @@ function core.run_step(options)
     worker_pool_slowest_callback_name = worker_pool_slowest_callback_name,
     core_step_ms = core_step_ms,
     gc_ms = gc_ms,
+    gc_atomic_phase = gc_atomic_phase,
+    lua_heap_kb = lua_heap_kb,
     present_ms = renderer_stats.present_ms,
     sync_interval = renderer_stats.sync_interval,
     renderer_path = renderer_stats.path,

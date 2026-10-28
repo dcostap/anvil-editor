@@ -138,6 +138,22 @@ test.describe("performance frame cost report", function()
     test.equal(total, 7)
   end)
 
+  test.it("names the main loop phase that ran a GC atomic step", function()
+    frames = perf.start_recording { quiet = true, instruction_samples = false }
+    coroutine.yield(0.01)
+    -- Tests run as coroutines, so this complete GC cycle runs in the threads phase.
+    collectgarbage("forcecollect")
+    coroutine.yield(0.01)
+    local path = perf.stop_recording()
+    local file = assert(io.open(path, "rb"))
+    local text = file:read("*a")
+    file:close()
+    local steps, phases = text:match("Lua GC atomic steps: (%d+) %(([^)]*)%)")
+    test.ok(tonumber(steps) and tonumber(steps) >= 1, "Summary reported no GC atomic step")
+    test.match(phases, "threads=%d+")
+    test.match(text, "Lua heap: min=[%d.]+MB max=[%d.]+MB")
+  end)
+
   test.it("keeps draw scope reports balanced while drawing unwrapped text", function()
     local buffer = Buffer(nil, nil, true)
     buffer:insert(1, 1, "first line\nsecond line\nthird line")

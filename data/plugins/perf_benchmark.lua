@@ -103,7 +103,7 @@ local metric_fields = {
   "textview_line_packet_builds", "textview_line_packet_build_ms",
   "textview_line_packet_hits", "textview_line_packet_misses",
   "rootpanel_initial_layout_ms", "textview_body_ms", "textview_gutter_ms",
-  "lua_heap_kib", "run_threads_ms", "gc_ms", "text_width_calls",
+  "lua_heap_kib", "gc_atomic_steps", "run_threads_ms", "gc_ms", "text_width_calls",
   "text_width_bytes", "text_render_shaped_cache_hits", "text_render_shaped_cache_misses",
 }
 
@@ -1197,6 +1197,7 @@ local function metric_row(snapshot)
     completion_ms = (system.get_time() - benchmark.measure_start) * 1000,
     action_ms = benchmark.pending_action_ms,
     lua_heap_kib = collectgarbage("count"),
+    gc_atomic_steps = select(2, (snapshot.gc_atomic_phase or ""):gsub("[^+]+", "")),
     action_id = benchmark.actions and benchmark.actions.sequence or 0,
     action_age_ms = benchmark.actions and benchmark.actions.pending
       and (system.get_time() - benchmark.actions.pending.started) * 1000 or 0,

@@ -748,6 +748,7 @@ local function write_frame_header(file)
     "statusbar_selection_ms", "statusbar_selection_cache_hits", "statusbar_selection_cache_misses",
     "textview_line_hint_calls", "textview_line_hint_drawn", "textview_line_hint_ms", "textview_line_hint_get_ms", "textview_line_hint_normalize_ms", "textview_line_hint_layout_ms", "textview_line_hint_measure_ms", "textview_line_hint_truncate_ms", "textview_line_hint_draw_ms", "textview_line_hint_draw_text_calls", "textview_line_hint_draw_text_ms", "textview_line_hint_skip_no_hint", "textview_line_hint_skip_no_space", "textview_line_hint_skip_truncated",
     "filetree_line_hint_calls", "filetree_line_hint_ms", "filetree_line_hint_get_file_info_calls", "filetree_line_hint_get_file_info_ms", "filetree_line_hint_format_ms", "filetree_line_hint_git_ms", "filetree_line_hint_segments", "filetree_line_hint_cache_hits", "filetree_line_hint_cache_misses", "filetree_line_hint_folder_count_hits", "filetree_line_hint_folder_count_pending", "filetree_line_hint_entry_calls", "filetree_line_hint_entry_ms", "filetree_entry_snapshot_hits", "filetree_entry_snapshot_builds", "filetree_entry_snapshot_rows", "filetree_entry_snapshot_build_ms", "filetree_folder_row_background_calls", "filetree_folder_row_background_rects", "filetree_folder_row_background_ms", "filetree_line_is_dir_calls", "filetree_line_is_dir_ms", "filetree_draw_line_body_calls", "filetree_draw_line_body_ms", "filetree_draw_line_text_calls", "filetree_draw_line_text_ms", "filetree_draw_line_text_git_ms", "filetree_draw_line_text_colored_calls", "filetree_draw_line_text_plain_calls",
+    "gc_atomic_phase", "lua_heap_kb",
     "over_budget" .. (#diagnostic_frame_keys > 0 and "," .. table.concat(diagnostic_frame_keys, ",") or "")
   }, ",") .. "\n")
 end
@@ -973,6 +974,42 @@ local function record_cost(name, value)
   row.max = math.max(row.max, value)
 end
 
+-- Main loop timers for the phases that the GC probe names. Other phases have no timer.
+local gc_phase_ms_keys = {
+  threads = "run_threads_ms",
+  worker_callbacks = "worker_pool_drain_wall_ms",
+  events = "event_ms",
+  update = "update_ms",
+  pre_draw = "pre_draw_ms",
+  draw = "draw_emit_ms",
+  renderer_end = "renderer_end_ms",
+  sleep = "sleep_actual_ms",
+}
+
+local function record_gc(snapshot, now)
+  local heap_kb = snapshot.lua_heap_kb
+  if heap_kb then
+    record.heap_min_kb = math.min(record.heap_min_kb or heap_kb, heap_kb)
+    record.heap_max_kb = math.max(record.heap_max_kb or heap_kb, heap_kb)
+  end
+  local phases = snapshot.gc_atomic_phase
+  if not phases or phases == "" then return end
+  local timed = {}
+  for phase in phases:gmatch("[^+]+") do
+    record.gc_atomic_phase_counts[phase] = (record.gc_atomic_phase_counts[phase] or 0) + 1
+    local key = gc_phase_ms_keys[phase]
+    timed[#timed + 1] = key and string.format("%s:%.3f", phase, snapshot[key] or 0) or phase
+  end
+  local steps = record.gc_atomic_steps
+  steps[#steps + 1] = {
+    time = now,
+    did_redraw = snapshot.did_redraw,
+    work_ms = math.max(0, (snapshot.total_ms or 0) - (snapshot.sleep_actual_ms or 0)),
+    heap_kb = heap_kb or 0,
+    phases = table.concat(timed, " "),
+  }
+end
+
 function perf.on_frame(snapshot)
   if not recording or not record or not snapshot then return end
   perf.file_open_on_frame(snapshot)
@@ -990,6 +1027,7 @@ function perf.on_frame(snapshot)
     record.target_fps = snapshot.target_fps
   end
   record.iteration_count = record.iteration_count + 1
+  record_gc(snapshot, now)
   local ui_update_ms = math.max(
     snapshot.core_root_panel_update_ms or 0,
     snapshot.rootpanel_update_ms or 0
@@ -1027,6 +1065,7 @@ function perf.on_frame(snapshot)
         event_types = snapshot.event_types or "",
         pending_events = snapshot.pending_events,
         queue_depth = snapshot.queue_depth or 0,
+        gc_atomic_phase = snapshot.gc_atomic_phase or "",
       }
       table.sort(slow, function(a, b)
         local a_ms = math.max(a.core_root_panel_update_ms, a.rootpanel_update_ms, a.update_ms)
@@ -1108,6 +1147,7 @@ function perf.on_frame(snapshot)
         statusbar_selection_ms = snapshot.statusbar_selection_ms or 0,
         pending_events = snapshot.pending_events,
         queue_depth = snapshot.queue_depth or 0,
+        gc_atomic_phase = snapshot.gc_atomic_phase or "",
       }
       table.sort(slow, function(a, b) return a.total_ms > b.total_ms end)
       while #slow > 30 do table.remove(slow) end
@@ -1309,6 +1349,8 @@ function perf.on_frame(snapshot)
     string.format("%.3f", snapshot.filetree_draw_line_text_git_ms or 0),
     tostring(snapshot_value(snapshot, "filetree_draw_line_text_colored_calls")),
     tostring(snapshot_value(snapshot, "filetree_draw_line_text_plain_calls")),
+    csv_escape(snapshot.gc_atomic_phase or ""),
+    string.format("%.0f", snapshot.lua_heap_kb or 0),
     snapshot.over_budget and "1" or "0",
   }, ",")
   local diagnostic = diagnostic_frame_csv(snapshot)
@@ -1478,11 +1520,33 @@ local function write_summary(path)
     record.frame_count > 0 and (record.over_budget_count * 100 / record.frame_count) or 0
   ))
 
+  local gc_steps = record.gc_atomic_steps or {}
+  local gc_phase_counts = {}
+  for phase, count in pairs(record.gc_atomic_phase_counts or {}) do
+    gc_phase_counts[#gc_phase_counts + 1] = string.format("%s=%d", phase, count)
+  end
+  table.sort(gc_phase_counts)
+  file:write(string.format("Lua heap: min=%.1fMB max=%.1fMB\n",
+    (record.heap_min_kb or 0) / 1024, (record.heap_max_kb or 0) / 1024))
+  file:write(string.format("Lua GC atomic steps: %d (%s)\n", #gc_steps, table.concat(gc_phase_counts, " ")))
+  file:write("Each atomic step runs in one piece inside the named phase. The phase time includes the step.\n")
+  file:write("Iterations with an atomic step (top by work_ms):\n")
+  file:write("time,did_redraw,work_ms,heap_mb,phases\n")
+  local sorted_steps = {}
+  for i, row in ipairs(gc_steps) do sorted_steps[i] = row end
+  table.sort(sorted_steps, function(a, b) return a.work_ms > b.work_ms end)
+  for i = 1, math.min(#sorted_steps, 30) do
+    local row = sorted_steps[i]
+    file:write(string.format("%.6f,%d,%.3f,%.1f,%s\n",
+      row.time, row.did_redraw and 1 or 0, row.work_ms, row.heap_kb / 1024, csv_escape(row.phases)))
+  end
+  file:write("\n")
+
   file:write("Slow redraw frames (top by total_ms; thresholds total>25ms/frame>20ms/present>18ms):\n")
-  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,worker_pool_drain,worker_pool_messages,worker_pool_dispatch,worker_pool_callback,worker_pool_slowest_callback,worker_pool_slowest_callback_name,core,gc,event_count,event,event_types,slowest_event,slowest_event_ms,command_calls,command_total,slowest_command,slowest_command_name,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,textview_draw,textview_prepare,textview_prepare_caret,textview_prepare_selection,textview_gutter,textview_body,textview_text,textview_overlay,textview_text_calls,lsp_tokens_ms,lsp_offsets_ms,lsp_scan_ms,lsp_calls,lsp_hits,lsp_misses,buffer_get_selections_calls,buffer_get_selections_iters,buffer_set_selections_calls,buffer_set_selections_ms,statusbar_selection,pending_events,queue_depth\n")
+  file:write("time,total,run_threads,run_threads_runs,run_threads_slowest,run_threads_loc,worker_pool_drain,worker_pool_messages,worker_pool_dispatch,worker_pool_callback,worker_pool_slowest_callback,worker_pool_slowest_callback_name,core,gc,event_count,event,event_types,slowest_event,slowest_event_ms,command_calls,command_total,slowest_command,slowest_command_name,update,pre_draw,frame,draw_emit,renderer_end,present,draw_calls,textview_draw,textview_prepare,textview_prepare_caret,textview_prepare_selection,textview_gutter,textview_body,textview_text,textview_overlay,textview_text_calls,lsp_tokens_ms,lsp_offsets_ms,lsp_scan_ms,lsp_calls,lsp_hits,lsp_misses,buffer_get_selections_calls,buffer_get_selections_iters,buffer_set_selections_calls,buffer_set_selections_ms,statusbar_selection,pending_events,queue_depth,gc_atomic\n")
   for _, row in ipairs(record.slow_frames or {}) do
     file:write(string.format(
-      "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%d,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%d,%.3f,%s,%s,%.3f,%d,%.3f,%.3f,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%d,%d\n",
+      "%.6f,%.3f,%.3f,%d,%.3f,%s,%.3f,%d,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%d,%.3f,%s,%s,%.3f,%d,%.3f,%.3f,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d,%d,%.3f,%.3f,%d,%d,%s\n",
       row.time, row.total_ms, row.run_threads_ms, row.run_threads_runs,
       row.run_threads_slowest_ms, csv_escape(row.run_threads_slowest_loc),
       row.worker_pool_drain_ms, row.worker_pool_drain_messages,
@@ -1499,16 +1563,17 @@ local function write_summary(path)
       row.lsp_render_tokens_scan_ms, row.lsp_render_tokens_calls, row.lsp_render_tokens_cache_hits,
       row.lsp_render_tokens_cache_misses, row.buffer_get_selections_calls, row.buffer_get_selections_iters,
       row.buffer_set_selections_calls, row.buffer_set_selections_ms,
-      row.statusbar_selection_ms, row.pending_events and 1 or 0, row.queue_depth
+      row.statusbar_selection_ms, row.pending_events and 1 or 0, row.queue_depth,
+      csv_escape(row.gc_atomic_phase)
     ))
   end
   file:write("\n")
 
   file:write("Slow UI update iterations (top by update/rootpanel time; thresholds ui_update>10ms/update>10ms):\n")
-  file:write("time,did_redraw,total,update,core_root_panel,rootpanel,initial_layout,node_update,final_layout,node_update_inclusive,node_update_calls,node_layout_inclusive,node_layout_calls,scroll_tabs,active_view_update,tab_hover,textview_update,linewrap_update,linewrap_update_calls,event_count,event_types,pending_events,queue_depth\n")
+  file:write("time,did_redraw,total,update,core_root_panel,rootpanel,initial_layout,node_update,final_layout,node_update_inclusive,node_update_calls,node_layout_inclusive,node_layout_calls,scroll_tabs,active_view_update,tab_hover,textview_update,linewrap_update,linewrap_update_calls,event_count,event_types,pending_events,queue_depth,gc_atomic\n")
   for _, row in ipairs(record.slow_updates or {}) do
     file:write(string.format(
-      "%.6f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%s,%d,%d\n",
+      "%.6f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d,%s,%d,%d,%s\n",
       row.time, row.did_redraw and 1 or 0, row.total_ms, row.update_ms,
       row.core_root_panel_update_ms, row.rootpanel_update_ms,
       row.rootpanel_initial_layout_ms, row.rootpanel_node_update_ms, row.rootpanel_final_layout_ms,
@@ -1516,7 +1581,7 @@ local function write_summary(path)
       row.node_scroll_tabs_to_visible_ms, row.node_active_view_update_ms, row.node_tab_hover_update_ms,
       row.textview_update_ms, row.linewrapping_update_textview_breaks_ms,
       row.linewrapping_update_textview_breaks_calls, row.event_count, csv_escape(row.event_types),
-      row.pending_events and 1 or 0, row.queue_depth
+      row.pending_events and 1 or 0, row.queue_depth, csv_escape(row.gc_atomic_phase)
     ))
   end
   file:write("\n")
@@ -1913,6 +1978,8 @@ function perf.start_recording(options)
     last_redraw_time = nil,
     slow_frames = {},
     slow_updates = {},
+    gc_atomic_steps = {},
+    gc_atomic_phase_counts = {},
     linewrap_compute_rows = {},
     markdown_model_publication_rows = {},
     markdown_view_publication_rows = {},

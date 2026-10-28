@@ -11,6 +11,8 @@ The summary path is copied to the clipboard. The capture writes these adjacent f
 - `_shell.csv`: shell events, forwarded input, received frames, surface copying, composition, and presentation.
 - `_sidebar.csv`: Sidebar input delivery, event polling, loop boundaries, waits, and frame publication.
 
+`gc_atomic_phase` names the main loop phases that ran a LuaJIT GC atomic step, joined with `+`. `lua_heap_kb` is the Lua heap at the end of the iteration. The summary counts atomic steps by phase and lists the slowest iterations that contain one.
+
 The shell and Sidebar write their files asynchronously after stop. Their native logs report write failures.
 A direct Window has no shell or Sidebar capture. The summary reports whether native capture started.
 
