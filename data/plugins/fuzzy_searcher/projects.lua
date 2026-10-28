@@ -43,12 +43,20 @@ function projects.of(result)
   return result.sidebar or {path = result.path or result.project, state = "dormant", exists = true}
 end
 
+-- The Sidebar record of this Project. Without a Sidebar model, such as outside the shell, a record of its path.
+function projects.current()
+  local root = core.root_project and core.root_project()
+  if not root then return nil end
+  for _, project in ipairs(core.project_sidebar or {}) do
+    if common.path_equals(project.path, root.path) then return project end
+  end
+  return {path = root.path, state = "ready", exists = true, scratch = core.is_scratch_project(root.path)}
+end
+
 -- The Window that shows this Project, so its rows name only other Windows.
 function projects.own_window()
-  local root = core.root_project and core.root_project()
-  for _, project in ipairs(core.project_sidebar or {}) do
-    if root and common.path_equals(project.path, root.path) then return project.window_id end
-  end
+  local project = projects.current()
+  return project and project.window_id
 end
 
 -- What a Project row shows after the name: a Dormant Project's running Terminal Sessions, or a loaded Project's
@@ -68,6 +76,25 @@ local bold_fonts = setmetatable({}, {__mode = "k"})
 function projects.bold(font)
   if not bold_fonts[font] then bold_fonts[font] = font:copy(font:get_size(), {bold = true}) end
   return bold_fonts[font]
+end
+
+-- The chip at the left of the query: the Project's badge and name, at most `max_width` wide.
+local function chip_name(project, max_width)
+  local bold = projects.bold(style.font)
+  return bold, tab.fit(bold, look.name(project), max_width - style.font:get_height() - style.padding.x / 2)
+end
+
+function projects.chip_width(project, max_width)
+  local bold, name = chip_name(project, max_width)
+  return style.font:get_height() + style.padding.x / 2 + bold:get_width(name)
+end
+
+function projects.draw_chip(project, x, y, max_width)
+  local bold, name = chip_name(project, max_width)
+  local size = style.font:get_height()
+  look.draw_badge(project, x, y, size, bold, style.card)
+  renderer.draw_text(bold, name, x + size + style.padding.x / 2, y + math.floor((size - bold:get_height()) / 2),
+    style.text)
 end
 
 -- The Tabs and the Terminal Sessions that no Pane shows, as the Sidebar lists them under an expanded Project.

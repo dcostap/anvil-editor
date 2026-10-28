@@ -3892,12 +3892,21 @@ function FSView:layout()
   local y = ry + (rh - h) / 2
   self:set_size(w, h)
   self:set_position(x, y)
-  -- The query text starts at the same x as the result text. The status takes the right end of its row.
+  -- The query text starts at the same x as the result text, after the chip of the Project that the picker
+  -- searches. The status takes the right end of its row.
   local pad = style.padding.x
-  local input_x = pad - style.padding.x / 2
+  local project = self:chip_project()
+  local chip_w = project and fuzzy_searcher.projects.chip_width(project, self.size.x * 0.25) + pad or 0
+  local input_x = pad + chip_w - style.padding.x / 2
   local status_w = self:status_layout(style.view_text_font, self.size.x * 0.45).width
   self.input:set_position(input_x, fuzzy_searcher.card_inset())
   self.input:set_size(math.max(0, self.size.x - input_x - pad - (status_w > 0 and status_w + pad or 0)))
+end
+
+-- This Project, which the picker searches, or nil for a picker with its own list.
+function FSView:chip_project()
+  if self.static_mode or self.file_picker then return nil end
+  return fuzzy_searcher.projects.current()
 end
 
 function FSView:is_command_mode()
@@ -7249,7 +7258,7 @@ function FSView:refresh_bookmarks(text, reset_selection)
       if row.bookmark == selected.bookmark then self.selected = index; break end
     end
   end
-  self.status = string.format("%d Bookmarks — Selected Project — right-click for actions", #rows)
+  self.status = string.format("%d Bookmarks — right-click for actions", #rows)
   self.bookmark_generation = bookmarks.generation()
   self:ensure_selection_visible()
 end
@@ -8312,6 +8321,11 @@ function FSView:draw_open_content()
   self:ensure_selection_visible()
   local first, scroll_shift = self:displayed_list_offset(m)
 
+  local project = self:chip_project()
+  if project then
+    fuzzy_searcher.projects.draw_chip(project, x + pad,
+      self.input.position.y + math.floor((self.input.size.y - style.font:get_height()) / 2), self.size.x * 0.25)
+  end
   local status_font = style.view_text_font
   self:draw_status(status_font, x + w - pad,
     self.input.position.y + math.floor((self.input.size.y - status_font:get_height()) / 2), w * 0.45)
