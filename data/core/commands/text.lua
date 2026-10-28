@@ -1020,6 +1020,7 @@ end
 -- its source line. `source.from_string` marks text copied from inside a
 -- string literal, which is already escaped. `source` is nil for text copied
 -- outside Anvil.
+-- The second result is an earlier column on `line` where the paste starts.
 local function smart_paste_text(buffer, line, col, text, source)
   text = tostring(text or "")
   source = source or {}
@@ -1032,8 +1033,18 @@ local function smart_paste_text(buffer, line, col, text, source)
     end
     return escaped
   end
-  if not text:find("\n", 1, true) then return text end
   local line_text = buffer.lines[line] or ""
+  -- A pasted list item replaces an empty Markdown list item at the caret.
+  local replace_col
+  if markdown_empty_list_item(buffer, line, col, line_text)
+  and markdown_list_content_start(buffer, line, text:match("^[^\n]*")) then
+    replace_col = #leading_whitespace(line_text) + 1
+    core.log_quiet("Pasted list item replaced an empty list item in %s at line %d", buffer:get_name(), line)
+  end
+  if not text:find("\n", 1, true) then
+    if replace_col then text = text:gsub("^[\t ]+", "") end
+    return text, replace_col
+  end
   local before = line_text:sub(1, col - 1)
   local target_indent = before:match("^[\t ]*$") and before or leading_whitespace(line_text)
   local comment_lead = line_comment_lead(buffer, line, col)
@@ -1086,7 +1097,8 @@ local function smart_paste_text(buffer, line, col, text, source)
       parts[i] = target_indent .. stripped
     end
   end
-  return table.concat(parts, "\n")
+  if replace_col then parts[1] = parts[1]:gsub("^[\t ]+", "") end
+  return table.concat(parts, "\n"), replace_col
 end
 
 local function paste_all_normal_clipboards(buffer)

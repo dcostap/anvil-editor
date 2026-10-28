@@ -725,6 +725,46 @@ test.describe("smart indentation", function()
     test.equal(text(buffer), "f {\n  // note: first\n  //   second\n  //\n  // third\n}\n")
   end)
 
+  test.it("a pasted list item replaces the empty Markdown list item at the caret", function(context)
+    local buffer, view = new_editor(context, "- [ ] first\n- [ ] ", "notes.md")
+    core.set_active_view(view)
+    buffer:set_selection(2, 7, 2, 7)
+    system.set_clipboard("    - [ ] usar Anvil como editor?")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "- [ ] first\n- [ ] usar Anvil como editor?\n")
+    test.same(view:get_selection_state().selections, { 2, 30, 2, 30 })
+  end)
+
+  test.it("a pasted list keeps its own markers and nesting at the empty item's indentation", function(context)
+    local buffer, view = new_editor(context, "- a\n  - ", "notes.md")
+    core.set_active_view(view)
+    buffer:set_selection(2, 5, 2, 5)
+    system.set_clipboard("    - [x] b\n        - c\n    - d")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "- a\n  - [x] b\n      - c\n  - d\n")
+  end)
+
+  test.it("pasted text without a list marker fills the empty Markdown list item", function(context)
+    local buffer, view = new_editor(context, "1. ", "notes.md")
+    core.set_active_view(view)
+    buffer:set_selection(1, 4, 1, 4)
+    system.set_clipboard("plain")
+    core.cursor_clipboard = { full = "different" }
+    core.cursor_clipboard_whole_line = {}
+
+    test.ok(command.perform("core:paste"))
+
+    test.equal(text(buffer), "1. plain\n")
+  end)
+
   test.it("paste inside a string literal escapes quotes and backslashes", function(context)
     local buffer, view = new_editor(context, 'p := ""', "sample.odin")
     core.set_active_view(view)

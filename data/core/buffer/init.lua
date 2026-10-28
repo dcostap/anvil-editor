@@ -2571,9 +2571,16 @@ function Buffer:text_input_by_selection(text_by_idx, idx, opts)
   local edits = {}
   local final_by_idx = {}
   for sidx, line1, col1, line2, col2 in self:get_selections(true, idx or true) do
-    local text = type(text_by_idx) == "function" and text_by_idx(sidx, line1, col1, line2, col2) or text_by_idx[sidx]
+    -- A function can also return an earlier column on line1 where the edit starts.
+    local text, start_col
+    if type(text_by_idx) == "function" then
+      text, start_col = text_by_idx(sidx, line1, col1, line2, col2)
+    else
+      text = text_by_idx[sidx]
+    end
     text = tostring(text or "")
     local edit_line1, edit_col1, edit_line2, edit_col2 = line1, col1, line2, col2
+    if type(start_col) == "number" and start_col < col1 then edit_col1 = start_col end
 
     if opts.overwrite ~= false
     and self.overwrite
