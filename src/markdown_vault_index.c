@@ -194,14 +194,16 @@ static bool line_is_fence(const char *line) {
   return strncmp(line, "```", 3) == 0 || strncmp(line, "~~~", 3) == 0;
 }
 
-static bool position_in_code(const char *line, size_t position) {
-  bool code = false, escaped = false;
-  for (size_t i = 0; line[i] && i < position; i++) {
-    if (escaped) escaped = false;
-    else if (line[i] == '\\') escaped = true;
-    else if (line[i] == '`') code = !code;
+/* Code-span state of one line. Callers ask about increasing positions, so each line is read once. */
+typedef struct { size_t at; bool code, escaped; } CodeScan;
+
+static bool position_in_code(CodeScan *scan, const char *line, size_t position) {
+  for (; line[scan->at] && scan->at < position; scan->at++) {
+    if (scan->escaped) scan->escaped = false;
+    else if (line[scan->at] == '\\') scan->escaped = true;
+    else if (line[scan->at] == '`') scan->code = !scan->code;
   }
-  return code;
+  return scan->code;
 }
 
 static bool append_metadata(AnvilMarkdownVaultNoteView *note, const char *key, const char **values, uint32_t count, bool list) {
@@ -392,8 +394,9 @@ static bool append_link(AnvilMarkdownVaultNoteView *note, const char *kind, cons
 
 static bool parse_links(AnvilMarkdownVaultNoteView *note, const char *line, uint32_t line_number) {
   size_t len = strlen(line);
+  CodeScan scan = { 0 };
   for (size_t i = 0; i < len; i++) {
-    if (position_in_code(line, i)) continue;
+    if (position_in_code(&scan, line, i)) continue;
     bool embed = line[i] == '!' && i + 2 < len && line[i + 1] == '[' && line[i + 2] == '[';
     bool wiki = line[i] == '[' && i + 1 < len && line[i + 1] == '[';
     if (embed || wiki) {
@@ -510,7 +513,8 @@ static bool parse_note_text(OwnedNote *owned, char *text, size_t len, bool shall
           if (!append_heading(note, line, i + 1, *underline == '=' ? 1 : 2, hierarchy, slug_hierarchy)) { SDL_free(lines.items); SDL_free(structural.excluded); return false; }
         }
       }
-      for (size_t p = 0; line[p]; p++) if (line[p] == '^' && !position_in_code(line, p)) {
+      CodeScan scan = { 0 };
+      for (size_t p = 0; line[p]; p++) if (line[p] == '^' && !position_in_code(&scan, line, p)) {
         bool before = p == 0 || isspace((unsigned char)line[p - 1]);
         size_t end = p + 1; while (isalnum((unsigned char)line[end]) || line[end] == '-') end++;
         bool after = !line[end] || isspace((unsigned char)line[end]) || strchr(".,;:!?)]", line[end]);

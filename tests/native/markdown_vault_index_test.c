@@ -62,6 +62,25 @@ int main(void) {
   spec.previous = NULL;
   anvil_markdown_vault_snapshot_release(snapshot);
 
+  /* Pasted e-mails and tables can put a very long paragraph on one line. */
+  const char *head = "[[Before]] ", *tail = " `[[Code]] ^code` [[After]] \\`[[Escaped]] text ^tail";
+  size_t filler = 200 * 1024, long_len = strlen(head) + filler + strlen(tail);
+  char *long_line = (char *)SDL_malloc(long_len + 1); CHECK(long_line != NULL);
+  strcpy(long_line, head); memset(long_line + strlen(head), 'x', filler); strcpy(long_line + strlen(head) + filler, tail);
+  Uint64 long_started = SDL_GetTicksNS();
+  AnvilMarkdownVaultSnapshot *long_note = anvil_markdown_vault_overlay_build(
+    "Long.md", "Long.md", long_line, long_len, 0, NULL, NULL, &error);
+  double long_ms = (double)(SDL_GetTicksNS() - long_started) / 1000000.0;
+  SDL_free(long_line); CHECK(long_note != NULL);
+  anvil_markdown_vault_snapshot_summary(long_note, &summary);
+  CHECK(summary.links == 3 && summary.blocks == 1);
+  CHECK(anvil_markdown_vault_note_at(long_note, 0, &note));
+  CHECK(strcmp(note.links[0].path, "Before") == 0 && strcmp(note.links[1].path, "After") == 0);
+  CHECK(strcmp(note.links[2].path, "Escaped") == 0 && strcmp(note.blocks[0].id, "tail") == 0);
+  anvil_markdown_vault_snapshot_release(long_note);
+  if (long_ms > 2000.0) fprintf(stderr, "long line took %.1f ms\n", long_ms);
+  CHECK(long_ms <= 2000.0);
+
   spec.cancelled = cancel_now; snapshot = anvil_markdown_vault_snapshot_build(&spec, &error);
   CHECK(snapshot == NULL && error && strcmp(error, "cancelled") == 0); SDL_free(error);
   anvil_project_file_manifest_release(manifest);
