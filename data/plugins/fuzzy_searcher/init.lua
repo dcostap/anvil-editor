@@ -3903,9 +3903,10 @@ function FSView:layout()
   self.input:set_size(math.max(0, self.size.x - input_x - pad - (status_w > 0 and status_w + pad or 0)))
 end
 
--- This Project, which the picker searches, or nil for a picker with its own list.
+-- This Project, which the picker searches, or nil for Path Search, which searches beyond it, and for a picker with
+-- its own list.
 function FSView:chip_project()
-  if self.static_mode or self.file_picker then return nil end
+  if self.static_mode or self.file_picker or self:is_path_search() then return nil end
   return fuzzy_searcher.projects.current()
 end
 

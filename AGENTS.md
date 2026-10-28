@@ -180,7 +180,7 @@ Path Search lists Projects from the Project Sidebar model: Scratch, loaded Proje
 Run `ui/fuzzy_searcher_path_search.lua` and `ui/sidebar_view.lua` after changes.
 
 The Fuzzy Searcher shows this Project's badge and name at the left of the query, with the same `core.project_look`.
-Pickers with their own list, such as the file picker, do not show it. Run `ui/fuzzy_searcher_project_chip.lua` after changes.
+Path Search searches beyond this Project, so it does not show it. Pickers with their own list, such as the file picker, do not show it either. Run `ui/fuzzy_searcher_project_chip.lua` after changes.
 
 Text Search also searches the Terminal Sessions of this Project. It does not search the Terminals of other Projects.
 A Terminal that this Project shows gives its live text. Other Terminals give the screen that their host saved last.
