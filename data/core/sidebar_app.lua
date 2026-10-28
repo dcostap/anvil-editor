@@ -325,12 +325,16 @@ function core.init()
     end})
     for _, binding in ipairs(number_bindings[number]) do keymap.add {[binding] = name} end
   end
-  for _, key in ipairs {"up", "down", "left", "right", "home", "end", "return", "keypad enter", "escape"} do
+  for binding, key in pairs {
+    up = "up", down = "down", left = "left", right = "right", home = "home", ["end"] = "end",
+    ["return"] = "return", ["keypad enter"] = "keypad enter", escape = "escape",
+    ["ctrl+up"] = "previous_project", ["ctrl+down"] = "next_project",
+  } do
     local name = "sidebar:" .. key:gsub(" ", "_")
     command.add(nil, {[name] = function()
       if current then current.view:on_key_pressed(key, current.key_repeat) end
     end})
-    keymap.add {[key] = name}
+    keymap.add {[binding] = name}
   end
   -- Added last, so they go first. Without a query they decline, and Left, Right, Home and End move through the list.
   for _, name in ipairs(LineInput.COMMANDS) do

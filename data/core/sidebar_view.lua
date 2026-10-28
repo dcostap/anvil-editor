@@ -348,6 +348,18 @@ function SidebarView:on_key_pressed(key, repeating)
   self.unload_ask = nil
   if key == "escape" then self.action("return_focus")
   elseif key == "return" or key == "keypad enter" then self:activate_row(row, true)
+  elseif key == "previous_project" or key == "next_project" then
+    local step = key == "previous_project" and -1 or 1
+    local index = (self.cursor or 1) + step
+    while self.rows[index] do
+      local target = self.rows[index]
+      if target.kind == "project" and (not row or target.project ~= row.project) then
+        self.cursor = index
+        break
+      end
+      index = index + step
+    end
+    self:reveal_cursor()
   elseif key == "up" or key == "down" or key == "home" or key == "end" then
     local index = key == "home" and 1 or key == "end" and #self.rows
       or (self.cursor or 1) + (key == "up" and -1 or 1)
