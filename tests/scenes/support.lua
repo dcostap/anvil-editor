@@ -2,6 +2,7 @@
 -- Scenario runs and Lua tests use the same helpers, so both reach a state the same way.
 local core = require "core"
 local common = require "core.common"
+local command = require "core.command"
 
 local support = {}
 
@@ -43,6 +44,23 @@ end
 ---Send wheel ticks through the window event path. Positive ticks scroll down.
 function support.wheel(ticks)
   core.on_event("mousewheel", -ticks, 0)
+end
+
+---Put the caret on the last line that `view` shows, so each move down scrolls it,
+---as when the user holds an arrow key.
+function support.caret_to_bottom(view)
+  local line = view:resolve_screen_position(view.position.x + view.size.x / 2,
+    view.position.y + view.size.y - view:get_line_height())
+  view:with_selection_state(function() view.buffer:set_selection(line, 1) end)
+  return line
+end
+
+---Move the caret one line with the editor's command. Returns the line it left.
+function support.move_caret(view, down)
+  local line = view.buffer:get_selection()
+  assert(command.perform(down and "core:move_to_next_line" or "core:move_to_previous_line"),
+    "the view did not accept the caret move")
+  return line
 end
 
 ---Return the kinds of queued or running worker jobs, or nil when every pool is idle.

@@ -560,6 +560,19 @@ Code that runs in each frame, such as `update`, `draw`, and caret moves, must no
 
 In the commit message, give the measurement before and after the change.
 
+### Frame-time check
+
+Run scenarios before and after each change to code that runs in each frame. This includes `update`, `draw`, scrolling, caret moves, the File Tree and the Fuzzy Searcher.
+
+1. Before the change, run the smoke scenarios that use the changed code, for example `python tools/run_scenarios.py --scenario fuzzy-symbols-navigate-filetree-large --runs 1 --no-build`.
+2. Run `--suite smoke` for changes to shared drawing code, such as `data/core/textview.lua`. The suite takes about 40 minutes.
+3. After the change, run the same scenarios again.
+4. In the commit message, give the p95 frame work, the maximum frame and the KiB per frame from both reports.
+
+Do not commit a change that makes one of these numbers worse, unless the commit message explains why.
+Many scenarios are over budget now. A change must not move them further over.
+See [scenario runs](tools/SCENARIOS.md) for the budgets.
+
 Add native modules under `src/api` with the portable Lua C API, not FFI. The PUC Lua build must still work.
 
 ## Tree-sitter language support

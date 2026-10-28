@@ -39,6 +39,9 @@ RESULTS_ROOT = gate.ROOT / "tools" / "perf-results" / "scenarios"
 FRAME_BUDGET_MS = 4.0
 # No frame may miss 60 Hz. p95 hides single hitches, such as one slow frame per action.
 FRAME_SPIKE_MS = 16.7
+# Lua garbage per measured frame. LuaJIT's GC work grows with allocation, and its steps
+# land in whichever frame allocates next, so garbage shows up as random slow frames.
+ALLOCATION_BUDGET_KIB = 64.0
 ACTION_BUDGET_MS = 100.0
 
 REPO_MEDIUM = RepoSpec("repo-medium", files=6000, commits=20, modified=120, staged=20,
@@ -46,6 +49,8 @@ REPO_MEDIUM = RepoSpec("repo-medium", files=6000, commits=20, modified=120, stag
 REPO_HUGE = RepoSpec("repo-huge", files=100000, commits=40, modified=800, staged=60,
                      deleted=40, untracked=200, ignored=30000)
 FOLDER_MEDIUM = FolderSpec("folder-medium", files=6000)
+# Long source files for editor scrolling. Other fixtures keep files short.
+REPO_LONG = RepoSpec("repo-long", files=200, min_lines=3000, max_lines=6000, modified=10, untracked=4)
 # A folder that holds several repositories, like a directory of checkouts.
 WORKSPACE = ProjectSetSpec("workspace", projects=12,
                            repo=RepoSpec("member", files=400, modified=20, untracked=5))
@@ -60,6 +65,8 @@ GALLERY_SETTINGS = {"note": MARKDOWN_GALLERY.note, "start_note": MARKDOWN_GALLER
 GALLERY_MIDDLE_LINE = 8736
 # A to-do vault: a task note and 8 linked project notes of 300 lines each.
 MARKDOWN_VAULT = VaultSpec("markdown-vault")
+# A 1440p monitor: 1.6 times the rows and about 3 times the area of the default window.
+WINDOW_LARGE = (2560, 1440)
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,7 @@ class Scenario:
     launch: str = "direct"  # "direct" runs one Project process; "shell" runs the native shell.
     frame_budget_ms: float = FRAME_BUDGET_MS
     frame_spike_ms: float = FRAME_SPIKE_MS
+    allocation_budget_kib: float = ALLOCATION_BUDGET_KIB
     action_budget_ms: float = ACTION_BUDGET_MS
     # Budgets for named actions, such as cold and warm Project switches.
     action_budgets: dict[str, float] = field(default_factory=dict)
@@ -119,6 +127,14 @@ SCENARIOS: dict[str, Scenario] = {
         "filetree_scroll", WORKSPACE, actions=40, suites=("smoke",),
         settings={"rows": 600, "max_level": 2}, action_budget_ms=400.0),
     # Files change while the user scrolls, as during a build or an agent's edits.
+    # The window of a large monitor: the File Tree draws 1.6 times the rows.
+    "filetree-scroll-large": Scenario(
+        "filetree_scroll", REPO_MEDIUM, actions=40, suites=("smoke",), window=WINDOW_LARGE,
+        settings={"rows": 600, "max_level": 3}, action_budget_ms=400.0),
+    # Hold an arrow key in the File Tree. Each line move from the bottom row scrolls it.
+    "filetree-keys-large": Scenario(
+        "filetree_scroll", REPO_MEDIUM, actions=40, suites=("smoke",), window=WINDOW_LARGE,
+        settings={"rows": 600, "max_level": 3, "input": "keys"}, action_budget_ms=400.0),
     "filetree-scroll-churn-medium": Scenario(
         "filetree_scroll", REPO_MEDIUM, actions=40, suites=("smoke",),
         settings={"rows": 600, "max_level": 3}, action_budget_ms=400.0, churn_interval=0.25),
@@ -179,12 +195,49 @@ SCENARIOS: dict[str, Scenario] = {
         "markdown_vault_type", MARKDOWN_VAULT, actions=40, suites=("markdown",),
         settings={"note": MARKDOWN_VAULT.note, "notes": MARKDOWN_VAULT.project_notes,
                   "line": MARKDOWN_VAULT.typing_line}),
+    # Scroll a long source file with the wheel, and hold an arrow key in it.
+    "editor-scroll-wheel": Scenario(
+        "editor_scroll", REPO_LONG, actions=80, suites=("smoke",), targets=1,
+        settings={"input": "wheel"}, action_budget_ms=400.0),
+    "editor-scroll-wheel-large": Scenario(
+        "editor_scroll", REPO_LONG, actions=80, suites=("smoke",), targets=1, window=WINDOW_LARGE,
+        settings={"input": "wheel"}, action_budget_ms=400.0),
+    "editor-keys-large": Scenario(
+        "editor_scroll", REPO_LONG, actions=80, suites=("smoke",), targets=1, window=WINDOW_LARGE,
+        settings={"input": "keys"}, action_budget_ms=400.0),
     "fuzzy-files-medium": Scenario(
         "fuzzy_files", REPO_MEDIUM, actions=24, suites=("smoke",), targets=24,
         action_budgets={"first-query": 1000.0}),
     "fuzzy-files-huge": Scenario(
         "fuzzy_files", REPO_HUGE, actions=24, suites=("scale",), targets=24, timeout_seconds=420,
         action_budgets={"first-query": 3000.0}),
+    # The picker covers another View, and its preview follows the selection. The View
+    # behind it stays visible, so each picker frame also draws that View.
+    "fuzzy-symbols-navigate-filetree-large": Scenario(
+        "fuzzy_picker", REPO_MEDIUM, actions=48, suites=("smoke",), window=WINDOW_LARGE,
+        settings={"mode": "symbols", "query": "render", "behind": "filetree", "action": "navigate"}),
+    "fuzzy-symbols-navigate-editor": Scenario(
+        "fuzzy_picker", REPO_MEDIUM, actions=48, suites=("smoke",), targets=1,
+        settings={"mode": "symbols", "query": "render", "behind": "editor", "action": "navigate"}),
+    "fuzzy-symbols-type-filetree-large": Scenario(
+        "fuzzy_picker", REPO_MEDIUM, actions=36, suites=("smoke",), window=WINDOW_LARGE,
+        settings={"mode": "symbols", "query": "render_4", "behind": "filetree", "action": "type"},
+        action_budget_ms=150.0),
+    "fuzzy-files-navigate-filetree-large": Scenario(
+        "fuzzy_picker", REPO_MEDIUM, actions=48, suites=("smoke",), window=WINDOW_LARGE,
+        settings={"mode": "files", "query": "render", "behind": "filetree", "action": "navigate"}),
+    "fuzzy-text-navigate-editor-large": Scenario(
+        "fuzzy_picker", REPO_MEDIUM, actions=48, suites=("smoke",), targets=1, window=WINDOW_LARGE,
+        settings={"mode": "text", "query": "render", "behind": "editor", "action": "navigate"}),
+    # Each character starts a ripgrep search over the Project.
+    "fuzzy-text-type-editor": Scenario(
+        "fuzzy_picker", REPO_MEDIUM, actions=36, suites=("smoke",), targets=1,
+        settings={"mode": "text", "query": "return va", "behind": "editor", "action": "type"},
+        action_budget_ms=300.0),
+    "fuzzy-symbols-navigate-huge": Scenario(
+        "fuzzy_picker", REPO_HUGE, actions=48, suites=("scale",), window=WINDOW_LARGE,
+        timeout_seconds=600,
+        settings={"mode": "symbols", "query": "render", "behind": "filetree", "action": "navigate"}),
     # Status follows an edit from outside the editor within about a second.
     "git-refresh-medium": Scenario(
         "git_refresh", REPO_MEDIUM, actions=12, suites=("smoke",), targets=6, writes=True,
@@ -306,22 +359,17 @@ def read_allocation(path: Path, key: str, limit: int, kind: str | None = None) -
     return [{"name": row[key], "kib_per_frame": float(row["kib_per_frame"])} for row in rows[:limit]]
 
 
-def run_allocation(name: str, scenario: Scenario, args, exe: Path, work: Path, log) -> dict[str, Any]:
-    """Run once with the GC stopped for phase totals, then once with a hook for source lines."""
-    result: dict[str, Any] = {}
-    for label, variable, file_name in (("phases", "ANVIL_PERF_BENCHMARK_ALLOCATION", "allocation.csv"),
-                                       ("sites", "ANVIL_PERF_BENCHMARK_ALLOCATION_SITES", "allocation-sites.csv")):
-        root = scenario_root(scenario, args.project, args.fixture_cache, log)
-        run_dir = work / name / f"allocation-{label}"
-        run_one(name, scenario, exe=exe, work=work, root=root, run_dir=run_dir, renderer=args.renderer,
-                mode="metrics", details=False,
-                extra_environment={variable: gate.native_path(run_dir / file_name)})
-        if label == "phases":
-            result["phases"] = read_allocation(run_dir / file_name, "phase", 12)
-        else:
-            result["lines"] = read_allocation(run_dir / file_name, "site", 20, "line")
-            result["stacks"] = read_allocation(run_dir / file_name, "site", 10, "stack")
-    return result
+def run_allocation(name: str, scenario: Scenario, args, exe: Path, work: Path, log, label: str) -> Path:
+    """Run once with the GC stopped for the measured frames. Returns the allocation file.
+    `phases` totals each main loop phase. `sites` adds a line hook for source lines."""
+    variable, file_name = {"phases": ("ANVIL_PERF_BENCHMARK_ALLOCATION", "allocation.csv"),
+                           "sites": ("ANVIL_PERF_BENCHMARK_ALLOCATION_SITES", "allocation-sites.csv")}[label]
+    root = scenario_root(scenario, args.project, args.fixture_cache, log)
+    run_dir = work / name / f"allocation-{label}"
+    run_one(name, scenario, exe=exe, work=work, root=root, run_dir=run_dir, renderer=args.renderer,
+            mode="metrics", details=False,
+            extra_environment={variable: gate.native_path(run_dir / file_name)})
+    return run_dir / file_name
 
 
 def run_heap(name: str, scenario: Scenario, args, exe: Path, work: Path, log) -> str:
@@ -335,8 +383,10 @@ def run_heap(name: str, scenario: Scenario, args, exe: Path, work: Path, log) ->
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Score with the median of each run's p95, so one noisy run cannot pass or fail alone."""
+def score(scenario: Scenario, runs: list[dict[str, Any]],
+          allocation: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Score with the median of each run's p95, so one noisy run cannot pass or fail alone.
+    `allocation` comes from one run with the GC stopped, which is exact without repeats."""
     def median(values: list[float]) -> float:
         return statistics.median(values) if values else 0.0
     # A paced frame can include a vsync wait. Score response latency, not renderer throughput, there.
@@ -366,8 +416,12 @@ def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
         if values["latency_ms_p95"] > budget:
             findings.append({"metric": f"{action} latency p95", "value": values["latency_ms_p95"],
                              "budget": budget})
+    if allocation is not None and allocation["kib_per_frame"] > scenario.allocation_budget_kib:
+        findings.append({"metric": "allocation per frame", "value": allocation["kib_per_frame"],
+                         "budget": scenario.allocation_budget_kib, "unit": "KiB"})
     for finding in findings:
         finding["ratio"] = finding["value"] / finding["budget"]
+        finding.setdefault("unit", "ms")
     return {"frame": frame, "actions": actions, "findings": findings,
             "state": runs[-1].get("state", {})}
 
@@ -389,6 +443,9 @@ def markdown(report: dict[str, Any]) -> str:
                          f"max {case['frame_spike_ms']:.1f}). "
                          f"Lua heap {frame['lua_heap_kib_avg'] / 1024:.1f} MiB.")
             lines.append("")
+        if case.get("allocation"):
+            lines += [f"Allocation with the GC stopped: {case['allocation']['kib_per_frame']:.1f} KiB/frame "
+                      f"(budget {case['allocation_budget_kib']:.0f}).", ""]
         publication = case["scene"] == "markdown_gallery" and any(
             action in ("type", "newline") for action in case["actions"])
         completion = "Publication" if publication else "Completed"
@@ -407,8 +464,9 @@ def markdown(report: dict[str, Any]) -> str:
                       "Visible stops at the first redraw of the edited line. "
                       "Neither includes display scanout or OS input delivery.", ""]
         for finding in case["findings"]:
-            lines.append(f"- Over budget: {finding['metric']} {finding['value']:.2f} ms "
-                         f"> {finding['budget']:.2f} ms ({finding['ratio']:.1f}x)")
+            unit = finding["unit"]
+            lines.append(f"- Over budget: {finding['metric']} {finding['value']:.2f} {unit} "
+                         f"> {finding['budget']:.2f} {unit} ({finding['ratio']:.1f}x)")
         if case.get("attribution"):
             lines += ["", "Detail timers in the attribution run (nested timers overlap):", "",
                       "| Timer | ms/frame | max ms | calls/frame |", "| --- | ---: | ---: | ---: |"]
@@ -418,10 +476,10 @@ def markdown(report: dict[str, Any]) -> str:
                              f"| {'' if calls is None else f'{calls:.0f}'} |")
         allocation = case.get("allocation")
         if allocation:
-            total = sum(row["kib_per_frame"] for row in allocation["phases"])
-            lines += ["", f"Allocation with the GC stopped: {total:.0f} KiB/frame.", "",
+            lines += ["", "Allocation by main loop phase, GC stopped:", "",
                       "| Phase | KiB/frame |", "| --- | ---: |"]
             lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["phases"]]
+        if allocation and allocation.get("lines"):
             lines += ["", "Allocation sites in the interpreter (the hook turns off the JIT):", "",
                       "| Source line | KiB/frame |", "| --- | ---: |"]
             lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["lines"]]
@@ -445,6 +503,7 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
                             "fixture": None if args.project else scenario.fixture.key,
                             "frame_budget_ms": scenario.frame_budget_ms,
                             "frame_spike_ms": scenario.frame_spike_ms,
+                            "allocation_budget_kib": scenario.allocation_budget_kib,
                             "action_budget_ms": scenario.action_budget_ms}
     root = scenario_root(scenario, args.project, args.fixture_cache, log)
     mode = "throughput" if scenario.self_driven else "metrics"
@@ -465,19 +524,30 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
             log(f"  run {index + 1}: {action} {completion} p50 {values['latency_ms_p50']:.1f} ms, "
                 f"p95 {values['latency_ms_p95']:.1f} ms{visible}")
         runs.append(run)
-    case.update(score(scenario, runs))
+    # Paced and self-driven scenes score latency, not the work of each frame.
+    allocation = None
+    if not scenario.self_driven and scenario.settings.get("cadence") != "normal":
+        phases = read_allocation(run_allocation(name, scenario, args, exe, work, log, "phases"), "phase", 1000)
+        allocation = {"kib_per_frame": sum(row["kib_per_frame"] for row in phases), "phases": phases[:12]}
+        log(f"  allocation: {allocation['kib_per_frame']:.1f} KiB/frame ("
+            + ", ".join(f"{row['name']} {row['kib_per_frame']:.0f}" for row in phases[:4]) + ")")
+        case["allocation"] = allocation
+    case.update(score(scenario, runs, allocation))
     case["verdict"] = "over budget" if case["findings"] else "passed"
     # Detail timers and samples attribute frame time in the measured process.
     if scenario.self_driven:
         return case
-    if case["findings"] or args.attribute:
+    over_allocation = any(finding["unit"] == "KiB" for finding in case["findings"])
+    if allocation and (over_allocation or args.allocation):
+        path = run_allocation(name, scenario, args, exe, work, log, "sites")
+        allocation["lines"] = read_allocation(path, "site", 20, "line")
+        allocation["stacks"] = read_allocation(path, "site", 10, "stack")
+    if any(finding["unit"] == "ms" for finding in case["findings"]) or args.attribute:
         if scenario.writes or scenario.churn_interval:
             root = scenario_root(scenario, args.project, args.fixture_cache, log)
         run = run_one(name, scenario, exe=exe, work=work, root=root, run_dir=work / name / "attribution",
                       renderer=args.renderer, mode="metrics", details=True)
         case["attribution"] = read_details(Path(run["run_dir"]) / "details.csv")
-    if args.allocation:
-        case["allocation"] = run_allocation(name, scenario, args, exe, work, log)
     if args.heap:
         case["heap"] = run_heap(name, scenario, args, exe, work, log)
     if args.diagnose:
@@ -505,7 +575,7 @@ def main() -> int:
     parser.add_argument("--heap", action="store_true",
                         help="add a run that writes a Heap Census after the measured frames")
     parser.add_argument("--allocation", action="store_true",
-                        help="add runs with the GC stopped that report allocation by phase and source line")
+                        help="add a run that reports allocation by source line; over-budget scenarios add it anyway")
     parser.add_argument("--project", type=Path,
                         help="run read-only scenarios on this directory instead of a fixture")
     parser.add_argument("--fixture-cache", type=Path, default=perf_fixtures.default_cache_root())
@@ -540,16 +610,15 @@ def main() -> int:
                     "details": getattr(exc, "details", None)}
         log(f"  {case['verdict']}")
         for finding in case.get("findings", []):
-            log(f"    {finding['metric']}: {finding['value']:.2f} ms > {finding['budget']:.2f} ms")
+            unit = finding["unit"]
+            log(f"    {finding['metric']}: {finding['value']:.2f} {unit} > {finding['budget']:.2f} {unit}")
         for timer in case.get("attribution", [])[:6]:
             log(f"    {timer['key']}: {timer['ms_per_frame']:.2f} ms/frame")
         if case.get("heap"):
             for line in case["heap"].splitlines()[1:12]:
                 log("    " + line)
-        if case.get("allocation"):
-            phases = case["allocation"]["phases"]
-            log(f"    allocation: {sum(row['kib_per_frame'] for row in phases):.0f} KiB/frame ("
-                + ", ".join(f"{row['name']} {row['kib_per_frame']:.0f}" for row in phases[:4]) + ")")
+        for row in case.get("allocation", {}).get("lines", [])[:6]:
+            log(f"    {row['name']}: {row['kib_per_frame']:.1f} KiB/frame")
         report["scenarios"][name] = case
     (work / "report.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     (work / "report.md").write_text(markdown(report), encoding="utf-8")
