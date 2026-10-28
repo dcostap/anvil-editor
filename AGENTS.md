@@ -74,6 +74,7 @@ It ignores marks without the nonce, so a nested shell or TUI cannot end a runnin
 Run the `Terminal busy status` tests in `ui/terminal_quit.lua` after changes.
 
 Close and quit skip confirmation when Pi reports `idle` or `done`, even while its shell command remains busy.
+Quit still detaches those sessions unless the user chooses End, so Pi keeps running.
 Other agent states keep the normal busy check. Reconnecting sessions still require confirmation.
 The host sends the root Agent Status with its live status packet. Older hosts keep the normal busy check.
 Run `ui/terminal_quit.lua` and `ui/terminal_agent_status.lua` after changes.

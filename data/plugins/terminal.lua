@@ -2738,6 +2738,7 @@ keymap.add({
 })
 
 -- Pure decision seam. Unknown state is not proof that a shell is idle.
+-- An idle Pi needs no question, but it still runs, so only End closes it.
 function M.quit_decision(statuses, answer)
   local busy = {}
   local count = 0
@@ -2745,15 +2746,15 @@ function M.quit_decision(statuses, answer)
     local idle_pi = status.agent_app == "pi"
       and (status.agent_state == "idle" or status.agent_state == "done")
     busy[i] = status.kind == "reconnecting"
-      or (status.kind == "running" and status.busy ~= false and not idle_pi)
-    if busy[i] then count = count + 1 end
+      or (status.kind == "running" and status.busy ~= false)
+    if busy[i] and not (idle_pi and status.kind == "running") then count = count + 1 end
   end
   if count > 0 then
     if answer == "cancel" then return nil, "cancel", count end
     if answer ~= "keep" and answer ~= "end" then return nil, "ask", count end
   end
   local actions = {}
-  for i in ipairs(statuses) do actions[i] = busy[i] and answer == "keep" and "detach" or "close" end
+  for i in ipairs(statuses) do actions[i] = busy[i] and answer ~= "end" and "detach" or "close" end
   return actions, nil, count
 end
 

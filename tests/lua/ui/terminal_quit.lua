@@ -127,15 +127,25 @@ test.describe("Terminal quit confirmation", function()
 end)
 
 test.describe("Idle Pi close decisions", function()
-  test.it("closes Pi after its turn finishes", function()
+  test.it("keeps Pi after its turn finishes without asking", function()
     local status = { kind = "running", busy = true, agent_app = "pi", agent_state = "done" }
-    test.same(terminal.quit_decision({ status }), { "close" })
+    test.same(terminal.quit_decision({ status }), { "detach" })
     test.equal(status.busy, true)
   end)
-  test.it("closes idle Pi without changing its shell busy state", function()
+
+  test.it("keeps idle Pi without asking", function()
     local status = { kind = "running", busy = true, agent_app = "pi", agent_state = "idle" }
-    test.same(terminal.quit_decision({ status }), { "close" })
+    test.same(terminal.quit_decision({ status }), { "detach" })
     test.equal(status.busy, true)
+  end)
+
+  test.it("keeps idle Pi with a Keep answer and ends it with an End answer", function()
+    local statuses = {
+      { kind = "running", busy = true, agent_app = "pi", agent_state = "done" },
+      { kind = "running", busy = true },
+    }
+    test.same(terminal.quit_decision(statuses, "keep"), { "detach", "detach" })
+    test.same(terminal.quit_decision(statuses, "end"), { "close", "close" })
   end)
 
   test.it("keeps confirmation for other programs and uncertain Pi states", function()
