@@ -41,6 +41,14 @@ local GLIDE_FRICTION = 7
 local GLIDE_SAMPLE_WINDOW = 0.1
 local EPSILON = 1e-6
 
+local function finite(value)
+  return value == value and value > -math.huge and value < math.huge
+end
+
+local function diagnostic_number(value)
+  return value == nil and "n/a" or string.format("%.17g", value)
+end
+
 function ImageView:__tostring() return "ImageView" end
 
 function ImageView:new(path, zoom_mode, zoom_scale)
@@ -89,9 +97,18 @@ function ImageView:set_image(image, label, path, open_animation)
   self.image, self.label, self.path = image, label, path
   self.open_animation = open_animation
   self.errmsg, self.display_image, self.svg_size = nil, image, nil
+  self.invalid_transform_logged = nil
   if image then
-    -- Keep source dimensions for zoom. Reduce oversized display textures only once.
     local w, h = image:get_size()
+    local jit = LUAJIT and require "jit"
+    local status = jit and { jit.status() } or {}
+    local flags = {}
+    for i = 2, #status do flags[#flags + 1] = tostring(status[i]) end
+    core.log_quiet("Image View runtime: %s image=%dx%d lua=%s jit=%s enabled=%s os=%s arch=%s flags=%s renderer=%s",
+      self:get_name(), w, h, _VERSION, jit and jit.version or "none", tostring(status[1] == true),
+      jit and jit.os or PLATFORM, jit and jit.arch or tostring(ARCH), table.concat(flags, ","),
+      os.getenv("ANVIL_RENDERER") or "default")
+    -- Keep source dimensions for zoom. Reduce oversized display textures only once.
     local scale = math.min(1, MAX_TEXTURE_SIZE / w, MAX_TEXTURE_SIZE / h)
     if scale < 1 then
       self.display_image = image:scaled(math.max(1, math.floor(w * scale)), math.max(1, math.floor(h * scale)), "linear")
@@ -189,6 +206,13 @@ end
 ---Show one transform now. `free` skips the pan limits, for transition frames.
 function ImageView:apply_transform(scale, x, y, free)
   local iw, ih = self.image:get_size()
+  if not self.invalid_transform_logged and (not finite(scale) or scale <= 0 or not finite(x) or not finite(y)) then
+    self.invalid_transform_logged = true
+    core.log_quiet("Image View invalid transform: %s scale=%.17g x=%.17g y=%.17g free=%s"
+      .. " previous_scale=%.17g previous_x=%.17g previous_y=%.17g image=%dx%d view=%.17gx%.17g",
+      self:get_name(), scale, x, y, tostring(free == true), self.zoom_scale, self.image_x, self.image_y,
+      iw, ih, self.size.x, self.size.y)
+  end
   self.zoom_scale = scale
   self.width, self.height = iw * scale, ih * scale
   if not free then x, y = self:constrain(scale, x, y) end
@@ -221,9 +245,11 @@ local function interpolate(from, to, t)
   if math.abs(to.scale - from.scale) < EPSILON then
     return to.scale, common.lerp(from.x, to.x, t), common.lerp(from.y, to.y, t)
   end
-  local scale = from.scale * (to.scale / from.scale) ^ t
+  local ratio = to.scale / from.scale
+  local power = ratio ^ t
+  local scale = from.scale * power
   local k = (scale - from.scale) / (to.scale - from.scale)
-  return scale, from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k
+  return scale, from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k, ratio, power, k
 end
 
 ---End a transition or glide where it is now.
@@ -249,16 +275,21 @@ function ImageView:set_zoom(scale, x, y, mode)
   local tx, ty = self:constrain(scale, x - px * scale, y - py * scale)
   self.zoom_mode = mode or (math.abs(scale - fit) < EPSILON and "fit" or "fixed")
   self.panning = nil
-  core.log_quiet("Image View zoom: %s from=%.6f to=%.6f fit=%.6f mode=%s",
-    self:get_name(), self.zoom_scale, scale, fit, self.zoom_mode)
+  core.log_quiet("Image View zoom: %s from=%.17g to=%.17g fit=%.17g mode=%s"
+    .. " pointer_x=%.17g pointer_y=%.17g target_x=%.17g target_y=%.17g view=%.17gx%.17g",
+    self:get_name(), self.zoom_scale, scale, fit, self.zoom_mode, x, y, tx, ty, self.size.x, self.size.y)
   return self:animate_to(scale, tx, ty)
 end
 
 function ImageView:zoom_by(delta, x, y)
   if delta == 0 or not self.image then return false end
   local scale = self:get_target()
-  local target = common.clamp(scale * ZOOM_STEP ^ common.clamp(delta, -32, 32),
+  local exponent = common.clamp(delta, -32, 32)
+  local power = ZOOM_STEP ^ exponent
+  local target = common.clamp(scale * power,
     self:get_fit_scale(), self:get_max_scale())
+  core.log_quiet("Image View wheel: %s delta=%.17g base=%.17g exponent=%.17g power=%.17g from=%.17g target=%.17g",
+    self:get_name(), delta, ZOOM_STEP, exponent, power, scale, target)
   -- A zoom that passes source size stops there once.
   if (scale - 1) * (target - 1) < 0 then target = 1 end
   if math.abs(target - scale) < EPSILON then return true end
@@ -461,10 +492,22 @@ end
 function ImageView:update_motion()
   local move = self.transition
   if move then
-    local progress = common.clamp((system.get_time() - move.started) / move.duration, 0, 1)
+    local now = system.get_time()
+    local progress = common.clamp((now - move.started) / move.duration, 0, 1)
     if not config.transitions then progress = 1 end
     local t = 1 - (1 - progress) ^ 3
-    local scale, x, y = interpolate(move.from, move.to, t)
+    local scale, x, y, ratio, power, k = interpolate(move.from, move.to, t)
+    local invalid = not finite(scale) or scale <= 0 or not finite(x) or not finite(y) or not finite(t)
+    -- Record one interior frame and the first failure. Keep the actual power result; do not recompute it for the log.
+    if (invalid and not move.logged_invalid) or (not invalid and not move.logged_sample and progress > 0 and progress < 1) then
+      if invalid then move.logged_invalid = true else move.logged_sample = true end
+      core.log_quiet("Image View zoom frame: status=%s image=%s from=%.17g to=%.17g ratio=%s exponent=%.17g"
+        .. " power=%s fraction=%s scale=%.17g x=%.17g y=%.17g from_x=%.17g from_y=%.17g to_x=%.17g to_y=%.17g"
+        .. " now=%.17g started=%.17g duration=%.17g progress=%.17g",
+        invalid and "invalid" or "sample", self:get_name(), move.from.scale, move.to.scale,
+        diagnostic_number(ratio), t, diagnostic_number(power), diagnostic_number(k), scale, x, y,
+        move.from.x, move.from.y, move.to.x, move.to.y, now, move.started, move.duration, progress)
+    end
     self:apply_transform(scale, x, y, progress < 1)
     if progress == 1 then self.transition = nil end
     core.redraw = true
