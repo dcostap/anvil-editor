@@ -30,6 +30,17 @@ function links.parse_resize(text)
   end
 end
 
+-- An image label holds its size alone or as its last "|" part, as in
+-- Obsidian: "300", "Alt|300" or "Alt|640x480".
+local function split_resize(label)
+  local resize = links.parse_resize(trim(label))
+  if resize then return nil, resize end
+  local alt, last = label:match("^(.*)|([^|]*)$")
+  resize = last and links.parse_resize(trim(last))
+  if resize then return alt, resize end
+  return label, nil
+end
+
 local function parse_subtarget(raw_target)
   local path, fragment = split_once(raw_target or "", "#")
   if not fragment and path:sub(1, 1) == "^" then
@@ -103,8 +114,7 @@ function links.parse_wikilink_at(text, start_col, source_line)
   local resize
   local alias = suffix
   if is_embed and suffix then
-    resize = links.parse_resize(suffix)
-    if resize then alias = nil end
+    alias, resize = split_resize(suffix)
   end
 
   local result = apply_target_model({
@@ -192,19 +202,7 @@ function links.parse_markdown_link_at(text, start_col, source_line)
   local alias = label
   local resize
   if is_image then
-    resize = links.parse_resize(trim(label))
-    if resize then
-      alias = nil
-    else
-      local plain_alt, suffix = split_once(label, "|")
-      if suffix then
-        local parsed_resize = links.parse_resize(trim(suffix))
-        if parsed_resize then
-          alias = plain_alt
-          resize = parsed_resize
-        end
-      end
-    end
+    alias, resize = split_resize(label)
   end
 
   local result = apply_target_model({
@@ -250,8 +248,7 @@ function links.from_semantic_node(text, source_line, node)
       alias = source:find("|", 1, true) and "" or nil
     end
     if kind == "embed" and alias then
-      resize = links.parse_resize(alias)
-      if resize then alias = nil end
+      alias, resize = split_resize(alias)
     end
   elseif node.type == "link" or node.type == "image" then
     kind = node.type == "image" and "image" or "markdown"
@@ -265,16 +262,7 @@ function links.from_semantic_node(text, source_line, node)
       raw_target = raw_target:sub(2, -2)
     end
     if kind == "image" and alias then
-      resize = links.parse_resize(trim(alias))
-      if resize then
-        alias = nil
-      else
-        local plain_alt, suffix = split_once(alias, "|")
-        if suffix then
-          resize = links.parse_resize(trim(suffix))
-          if resize then alias = plain_alt end
-        end
-      end
+      alias, resize = split_resize(alias)
     end
   else
     return nil
@@ -291,6 +279,69 @@ function links.from_semantic_node(text, source_line, node)
   }, raw_target, alias)
   if kind == "image" then result.alt = alias end
   return result
+end
+
+-- The label and target columns of `source` when it is one complete image
+-- link. An end column is exclusive.
+local function image_parts(source)
+  if source:sub(1, 3) == "![[" then
+    local link, finish = links.parse_wikilink_at(source, 1)
+    if not link or finish ~= #source + 1 then return nil end
+    local bar = source:find("|", 4, true)
+    return {
+      wiki = true,
+      target_col1 = 4, target_col2 = bar or #source - 1,
+      label_col1 = bar and bar + 1 or #source - 1, label_col2 = #source - 1,
+    }
+  end
+  local link, finish = links.parse_markdown_link_at(source, 1)
+  if not (link and link.kind == "image" and finish == #source + 1) then return nil end
+  return {
+    target_col1 = link.link_destination_range.col1,
+    target_col2 = link.link_destination_range.col2,
+    label_col1 = link.link_text_range.col1,
+    label_col2 = link.link_text_range.col2,
+  }
+end
+
+-- Obsidian's rule: a size label becomes the new size; a label that ends
+-- with a size gets the new size there; another label gets it appended.
+local function label_with_width(label, width)
+  local size = width and tostring(width) or ""
+  if label == "" or links.parse_resize(trim(label)) then return size end
+  local alt, last = label:match("^(.*)|([^|]*)$")
+  if alt and links.parse_resize(trim(last)) then
+    return width and alt .. "|" .. size or alt
+  end
+  return width and label .. "|" .. size or label
+end
+
+---Return the source of an image link with its width set to `width`, or
+---with no size when `width` is nil. Returns nil when `source` is not one
+---complete image link, such as a reference image.
+---@param source string
+---@param width integer?
+---@return string?
+function links.with_image_width(source, width)
+  local parts = image_parts(source)
+  if not parts then return nil end
+  local label = label_with_width(source:sub(parts.label_col1, parts.label_col2 - 1), width)
+  if parts.wiki then
+    local target = source:sub(4, parts.target_col2 - 1)
+    return "![[" .. target .. (label ~= "" and "|" .. label or "") .. "]]"
+  end
+  return source:sub(1, parts.label_col1 - 1) .. label .. source:sub(parts.label_col2)
+end
+
+---Return the columns of the target in an image link's source. The end
+---column is exclusive.
+---@param source string
+---@return integer? col1
+---@return integer? col2
+function links.image_target_range(source)
+  local parts = image_parts(source)
+  if not parts then return nil end
+  return parts.target_col1, parts.target_col2
 end
 
 function links.find_links(text, source_line)

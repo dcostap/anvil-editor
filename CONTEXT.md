@@ -273,6 +273,13 @@ The magnification of an image inside its View or preview. It does not change the
 A viewer above the whole editor that shows one image clicked in Markdown Live Preview or a Terminal View. It is not a View in a Pane.
 _Avoid_: Lightbox, image popup, Markdown image overlay
 
+**Image Size**:
+The width, and optionally the height, that a Markdown image link sets for its image, such as `![[photo.png|300]]`. An image without an Image Size shows at its own size.
+
+**Image Controls**:
+The buttons and the resize corner that show on a Markdown Live Preview image under the pointer. They change the Image Size, open the Image Overlay, or select the link's target.
+_Avoid_: image toolbar, embed actions
+
 **Typography Role**:
 A globally configurable text style for a semantic use such as interface text, source code, prose, emphasis, or headings.
 _Avoid_: Global font, Markdown font

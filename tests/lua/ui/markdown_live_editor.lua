@@ -4718,7 +4718,8 @@ test.describe("Markdown Live Preview", function()
       end
       test.not_nil(image_fragment)
       test.ok(image_fragment.widget:on_mouse_pressed(
-        view, { line = 1, fragment = image_fragment }, "left"
+        view, { line = 1, fragment = image_fragment }, "left",
+        thumbnail[1] + thumbnail[3] / 2, thumbnail[2] + thumbnail[4] / 2, 1
       ))
       test.equal(opened_in_system, nil)
       test.ok(overlay.is_open())

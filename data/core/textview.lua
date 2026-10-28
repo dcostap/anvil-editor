@@ -6877,7 +6877,10 @@ local function update_render_hover_state(view, x, y)
   then
     local hit = view:get_render_widget_at_position(x, y)
     if hit and hit.widget.cursor then
-      view.cursor = hit.widget.cursor
+      -- `cursor_at` picks the cursor for a part of a widget, such as a
+      -- resize corner.
+      view.cursor = hit.widget.cursor_at and hit.widget.cursor_at(hit.widget, view, x, y)
+        or hit.widget.cursor
       if view.cursor == "hand" or hit.widget.track_hover then
         hovered_fragment = hit.fragment
       end

@@ -131,3 +131,46 @@ test.describe("Markdown link parsing", function()
     test.equal(found[2].resize.height, 145)
   end)
 end)
+
+test.describe("Markdown image width in source", function()
+  test.it("sets, replaces and removes the width as the label's last part", function()
+    local cases = {
+      { "![[photo.png]]", 300, "![[photo.png|300]]" },
+      { "![[photo.png|Alt]]", 300, "![[photo.png|Alt|300]]" },
+      { "![[photo.png|Alt|120]]", 300, "![[photo.png|Alt|300]]" },
+      { "![[photo.png|120x80]]", 300, "![[photo.png|300]]" },
+      { "![[photo.png|Alt|120]]", nil, "![[photo.png|Alt]]" },
+      { "![[photo.png|120]]", nil, "![[photo.png]]" },
+      { "![Alt](photo.png \"Title\")", 300, "![Alt|300](photo.png \"Title\")" },
+      { "![](photo.png)", 300, "![300](photo.png)" },
+      { "![Alt|120x80](photo.png)", nil, "![Alt](photo.png)" },
+      { "![120](photo.png)", nil, "![](photo.png)" },
+    }
+    for _, case in ipairs(cases) do
+      test.equal(links.with_image_width(case[1], case[2]), case[3], case[1])
+    end
+  end)
+
+  test.it("rejects text that is not one complete image link", function()
+    test.equal(links.with_image_width("[Alt](photo.png)", 300), nil)
+    test.equal(links.with_image_width("[[photo.png]]", 300), nil)
+    test.equal(links.with_image_width("![Alt][photo]", 300), nil)
+    test.equal(links.with_image_width("![[photo.png]] more", 300), nil)
+  end)
+
+  test.it("reads the width that it writes after an alias", function()
+    local wiki = links.find_links("![[photo.png|Alt|300]]", 1)[1]
+    test.equal(wiki.alias, "Alt")
+    test.equal(wiki.resize.width, 300)
+    local image = links.find_links("![A|B|300](photo.png)", 1)[1]
+    test.equal(image.alt, "A|B")
+    test.equal(image.resize.width, 300)
+  end)
+
+  test.it("finds the target of an image link", function()
+    test.same({ links.image_target_range("![[photo.png|Alt|300]]") }, { 4, 13 })
+    test.same({ links.image_target_range("![Alt](<my photo.png> \"t\")") }, { 9, 21 })
+    test.same({ links.image_target_range("![Alt](photo.png)") }, { 8, 17 })
+    test.equal(links.image_target_range("[Alt](photo.png)"), nil)
+  end)
+end)

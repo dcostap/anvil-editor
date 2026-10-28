@@ -215,8 +215,9 @@ static SDL_Cursor *grab_cursor(void) {
 }
 void anvil_window_cursor(AnvilSurfaceCursor cursor) {
   if (anvil_hosted_surface_active()) { anvil_hosted_surface_set_cursor(cursor); return; }
-  static const SDL_SystemCursor kinds[] = { SDL_SYSTEM_CURSOR_DEFAULT, SDL_SYSTEM_CURSOR_TEXT, SDL_SYSTEM_CURSOR_EW_RESIZE,
-    SDL_SYSTEM_CURSOR_NS_RESIZE, SDL_SYSTEM_CURSOR_POINTER, SDL_SYSTEM_CURSOR_CROSSHAIR, SDL_SYSTEM_CURSOR_MOVE };
+  static const SDL_SystemCursor kinds[ANVIL_SURFACE_CURSOR_COUNT] = { SDL_SYSTEM_CURSOR_DEFAULT, SDL_SYSTEM_CURSOR_TEXT, SDL_SYSTEM_CURSOR_EW_RESIZE,
+    SDL_SYSTEM_CURSOR_NS_RESIZE, SDL_SYSTEM_CURSOR_POINTER, SDL_SYSTEM_CURSOR_CROSSHAIR, SDL_SYSTEM_CURSOR_MOVE,
+    SDL_SYSTEM_CURSOR_MOVE, SDL_SYSTEM_CURSOR_NWSE_RESIZE };
   if (!cursor_cache[cursor]) cursor_cache[cursor] = cursor == ANVIL_SURFACE_CURSOR_GRAB ? grab_cursor() : SDL_CreateSystemCursor(kinds[cursor]);
   SDL_SetCursor(cursor_cache[cursor]);
 }

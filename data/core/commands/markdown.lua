@@ -6,6 +6,7 @@ local markdown_completion = require "core.markdown.completion"
 local markdown_live = require "core.markdown.live_render"
 local footnotes = require "core.markdown.footnotes"
 local markdown_format = require "core.markdown.format"
+local image_controls = require "core.markdown.image_controls"
 local markdown_tables = require "core.markdown.tables"
 local markdown_rename_links = require "core.markdown.rename_links"
 local markdown_vault_index = require "core.markdown.vault_index"
@@ -47,6 +48,42 @@ end, {
   ["markdown:remove_footnote"] = command.palette(function(view, note)
     footnotes.remove(view, note)
   end),
+})
+
+-- An image's Context Menu passes its Editor and the image's controls.
+local function image_command(test)
+  return function(view, image)
+    if view and image and view:extends(Editor) and image_controls.is_current(view, image)
+      and (not test or test(view, image))
+    then
+      return true, view, image
+    end
+    return false
+  end
+end
+
+local function editable_image(view)
+  return view:can_edit("image")
+end
+
+command.add(image_command(), {
+  ["markdown:copy_image"] = function(_, image)
+    image_controls.copy(image)
+  end,
+})
+
+command.add(image_command(editable_image), {
+  ["markdown:remove_image"] = function(view, image)
+    image_controls.remove(view, image)
+  end,
+})
+
+command.add(image_command(function(view, image)
+  return editable_image(view) and image_controls.has_size(view, image)
+end), {
+  ["markdown:reset_image_size"] = function(view, image)
+    image_controls.reset_size(view, image)
+  end,
 })
 
 command.add(function()

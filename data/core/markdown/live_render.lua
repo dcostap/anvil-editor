@@ -5,6 +5,7 @@ local Editor = require "core.editor"
 local attachments = require "core.markdown.attachments"
 local callouts = require "core.markdown.callouts"
 local images = require "core.markdown.images"
+local image_controls = require "core.markdown.image_controls"
 local image_animation = require "core.image_animation"
 local fence_highlight = require "core.markdown.fence_highlight"
 local link_completion = require "core.markdown.completion"
@@ -1061,66 +1062,48 @@ local function image_fragment(view, span, opts)
 
   if entry.status == "ready" and entry.image then
     local natural_w, natural_h = entry.image:get_size()
-    local width, height
-    if opts.block then
-      local available_width = math.max(1, math.floor(opts.available_width or image_available_width(view)))
-      width, height = images.scale_size(
-        natural_w, natural_h, available_width, link.resize, false
-      )
-    else
-      width, height = images.scale_size(
-        natural_w, natural_h, 320 * SCALE, link.resize, false
-      )
-    end
+    local max_width = math.max(1, math.floor(opts.available_width or image_available_width(view)))
+    local drag_width = image_controls.drag_width(view, reference_id)
+    local resize = drag_width and { width = drag_width } or link.resize
+    -- As in Obsidian, a width alone can make an image larger than its own size.
+    local upscale = resize ~= nil and resize.width ~= nil and resize.height == nil
+    local width, height = images.scale_size(
+      natural_w, natural_h, (opts.block or resize) and max_width or 320 * SCALE, resize, upscale
+    )
     local padding = image_vertical_padding()
     local embedded = images.is_data_image(image_source)
     local label = link.alias or link.alt
     if not label or label == "" then label = embedded and "Embedded image" or image_source end
-    return {
-      source_col1 = span.col1,
-      source_col2 = span.col2,
-      width = opts.width or width,
-      image_path = entry.path,
-      image_data = embedded or nil,
-      widget = {
-        type = "image",
-        width = width,
-        height = height + padding * 2,
-        image_height = height,
-        padding = padding,
-        hover_outline_padding = 0,
-        hover_outline_outside = true,
-        hover_outline_color = style.dim,
-        suppress_hover_background = true,
-        cursor = "hand",
-        on_mouse_pressed = function(_, owner, hit, button)
-          if button ~= "left" then return false end
-          owner.buffer:set_selection(hit.line, 1)
-          return require("core.image_overlay").open_image(entry.image, {
-            label = label,
-            path = not embedded and hit.fragment.image_path or nil,
-            open_animation = entry.animation_type and function() return images.open_animation(entry) end,
-          })
-        end,
-        draw = function(view, fragment, x, y, row_height)
-          local image_x = x + (fragment.draw_x_offset or 0)
-          local image_y
-          if fragment.draw_y_offset then
-            image_y = y + fragment.draw_y_offset
-          else
-            image_y = y + math.max(0, (row_height - height) / 2)
-          end
-          local frame = entry.animation_type and image_animation.frame(entry, {
-            version = entry.image,
-            open = images.open_animation,
-            width = natural_w,
-            height = natural_h,
-          })
-          if frame then
-            -- Frames change in place, so scale them while drawing.
-            renderer.draw_canvas_scaled(frame, image_x, image_y, width, height)
-            return
-          end
+    local widget = {
+      type = "image",
+      width = width,
+      height = height + padding * 2,
+      image_height = height,
+      padding = padding,
+      hover_outline_padding = 0,
+      hover_outline_outside = true,
+      hover_outline_color = style.dim,
+      suppress_hover_background = true,
+      cursor = "hand",
+      draw = function(view, fragment, x, y, row_height)
+        local image_x = x + (fragment.draw_x_offset or 0)
+        local image_y
+        if fragment.draw_y_offset then
+          image_y = y + fragment.draw_y_offset
+        else
+          image_y = y + math.max(0, (row_height - height) / 2)
+        end
+        local frame = entry.animation_type and image_animation.frame(entry, {
+          version = entry.image,
+          open = images.open_animation,
+          width = natural_w,
+          height = natural_h,
+        })
+        if frame or drag_width then
+          -- Frames change in place, and a drag changes the size each
+          -- frame, so scale while drawing.
+          renderer.draw_canvas_scaled(frame or entry.image, image_x, image_y, width, height)
+        else
           local image = entry.image
           if width ~= natural_w or height ~= natural_h then
             if not entry.scaled_image or entry.scaled_width ~= width or entry.scaled_height ~= height then
@@ -1130,8 +1113,38 @@ local function image_fragment(view, span, opts)
             image = entry.scaled_image
           end
           renderer.draw_canvas(image, image_x, image_y)
-        end,
-      },
+        end
+        image_controls.draw(fragment.widget, view, image_x, image_y, width, height)
+      end,
+    }
+    image_controls.attach(widget, {
+      line = span.line,
+      col1 = span.col1,
+      col2 = span.col2,
+      reference_id = reference_id,
+      max_width = max_width,
+      image = entry.image,
+      open = function(owner, hit)
+        owner.buffer:set_selection(hit.line, 1)
+        return require("core.image_overlay").open_image(entry.image, {
+          label = label,
+          path = not embedded and hit.fragment.image_path or nil,
+          open_animation = entry.animation_type and function() return images.open_animation(entry) end,
+        })
+      end,
+      invalidate = function(owner)
+        owner:invalidate_line_render(PROVIDER_ID, span.line, span.line)
+        owner:invalidate_visual_metrics(PROVIDER_ID, span.line, span.line)
+        core.redraw = true
+      end,
+    })
+    return {
+      source_col1 = span.col1,
+      source_col2 = span.col2,
+      width = opts.width or width,
+      image_path = entry.path,
+      image_data = embedded or nil,
+      widget = widget,
     }
   end
 
@@ -3532,13 +3545,20 @@ local function apply_inline_edit_to_render(render_line, current_text, edit)
     )
     return updated_text
   end
-  if owner and owner.hidden and owner.markdown_comment then
+  -- An edit in the source of a collapsed image, such as a new size from its
+  -- resize corner, keeps the image until the parser publishes the edit.
+  local image_owner = owner and (owner.image_attachment_link
+    or owner.widget and owner.widget.type == "image")
+  if (owner and owner.hidden and owner.markdown_comment) or image_owner then
     local delta = #replacement - (end_col - start_col)
     owner.source_col2 = (owner.source_col2 or owner.source_col1 or 1) + delta
     for i = owner_index + 1, #render_line.fragments do
       local fragment = render_line.fragments[i]
       fragment.source_col1 = (fragment.source_col1 or 1) + delta
       fragment.source_col2 = (fragment.source_col2 or fragment.source_col1) + delta
+      if fragment.image_block_col2 then
+        fragment.image_block_col2 = fragment.image_block_col2 + delta
+      end
     end
     current_text = current_text:sub(1, start_col - 1)
       .. replacement .. current_text:sub(end_col)

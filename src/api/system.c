@@ -656,6 +656,7 @@ static const char *cursor_opts[] = {
   "crosshair",
   "move",
   "grab",
+  "sizenwse",
   NULL
 };
 

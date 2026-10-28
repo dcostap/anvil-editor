@@ -267,6 +267,16 @@ local MARKDOWN_INSERT_MENU = {
 function Editor:context_menu(x, y)
   local live = require "core.markdown.live_render"
   if not live.is_markdown_buffer(self.buffer) then return Editor.super.context_menu(self, x, y) end
+  -- As in Obsidian, the image's menu keeps the caret, so the image does not
+  -- show its source.
+  local image = x and y and require("core.markdown.image_controls").at_point(self, x, y)
+  if image then
+    return {
+      { label = "Copy Image", icon = icons.copy, command = "markdown:copy_image", args = { self, image } },
+      { label = "Remove Image", icon = icons.delete, command = "markdown:remove_image", args = { self, image } },
+      { label = "Reset Size", icon = icons.reset, command = "markdown:reset_image_size", args = { self, image } },
+    }
+  end
   self:place_context_menu_caret(x, y)
   local editable = self:can_edit("context menu")
   local selected = self.buffer:has_selection()
