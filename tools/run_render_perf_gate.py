@@ -252,7 +252,6 @@ SCENARIOS["markdown-footnotes"] = {
 }
 # A file drop hovering over a Live Preview line marks its insertion point.
 SCENARIOS["markdown-file-drop"] = dict(SCENARIOS["markdown-footnotes"])
-SCENARIOS["markdown-format-buttons"] = dict(SCENARIOS["markdown-footnotes"])
 # The first footnote's card while its editor is open.
 SCENARIOS["markdown-footnotes-edit"] = dict(SCENARIOS["markdown-footnotes"], edit_note=True)
 # A view too narrow for the margin shows each card below its block.

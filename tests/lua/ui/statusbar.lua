@@ -277,52 +277,6 @@ test.describe("Pane Status Bars", function()
     test.same(context.performed, {})
   end)
 
-  local function markdown_pane(filename)
-    local Editor = require "core.editor"
-    local pane = panes.create { factory = function()
-      local buffer = Buffer(nil, nil, false)
-      buffer:set_filename(filename or "notes.md")
-      return Editor(buffer)
-    end }
-    root:update()
-    return pane
-  end
-
-  test.it("formats Markdown from its formatting buttons", function(context)
-    local pane = markdown_pane()
-    click(entry_center(pane, "markdown:bold"))
-    test.equal(context.performed[1].name, "markdown:surround_bold")
-    test.equal(context.performed[1].view, pane.current_view)
-  end)
-
-  test.it("offers the heading levels in a menu from the Heading button", function(context)
-    local context_menu = require "core.context_menu"
-    local pane = markdown_pane()
-    click(entry_center(pane, "markdown:heading"))
-    test.ok(context_menu.is_open())
-    test.ok(context_menu.choose("Heading 2"))
-    test.equal(context.performed[1].name, "markdown:heading_2")
-  end)
-
-  test.it("hides all formatting buttons when the Pane is too narrow for them beside the file", function()
-    local pane = markdown_pane()
-    test.not_nil(bar_of(pane):get_entry("markdown:table"))
-    root.size.x = 360
-    root:update()
-    test.is_nil(bar_of(pane):get_entry("markdown:bold"))
-    test.is_nil(bar_of(pane):get_entry("markdown:table"))
-    test.not_nil(bar_of(pane):get_entry("text:position"), "the caret position must stay")
-  end)
-
-  test.it("shows no formatting buttons for read-only Markdown or other files", function()
-    local pane = markdown_pane()
-    pane.current_view.buffer.read_only = true
-    root:update()
-    test.is_nil(bar_of(pane):get_entry("markdown:bold"))
-    local code = markdown_pane("main.lua")
-    test.is_nil(bar_of(code):get_entry("markdown:bold"))
-  end)
-
   test.it("asks for a line ending instead of toggling it on a click", function(context)
     local _, right = two_panes()
     click(entry_center(right, "text:line-ending"))

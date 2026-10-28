@@ -2,7 +2,6 @@ local core = require "core"
 local common = require "core.common"
 local command = require "core.command"
 local config = require "core.config"
-local keymap = require "core.keymap"
 local style = require "core.style"
 local project_paths = require "core.project_paths"
 local TextView = require "core.textview"
@@ -60,8 +59,7 @@ end
 
 
 ---@alias core.statusbar.item.predicate fun(view: core.view):boolean
----`chip` is the clicked chip's screen rectangle.
----@alias core.statusbar.item.onclick fun(view: core.view, button: string, x: number, y: number, chip: { x: number, y: number, w: number, h: number })
+---@alias core.statusbar.item.onclick fun(view: core.view, button: string, x: number, y: number)
 ---@alias core.statusbar.item.get_item fun(self: core.statusbar.item, view: core.view):core.statusbar.styledtext?
 ---@alias core.statusbar.item.ondraw fun(view: core.view, x, y, h, hovered: boolean, calc_only?: boolean):number
 ---Returns the tooltip text, which may contain newlines, and an optional dim action hint.
@@ -79,7 +77,6 @@ end
 ---@field can_click fun(view: core.view):boolean|nil Whether the click action applies now
 ---@field on_draw core.statusbar.item.ondraw|nil Custom drawing function
 ---@field shrink boolean Whether the item elides its start to fit the space left
----@field optional boolean Whether the item hides when the bar is too narrow for all items
 ---@field visible boolean Whether item is shown
 local StatusBarItem = Object:extend()
 
@@ -97,7 +94,6 @@ function StatusBarItem:__tostring() return "StatusBarItem" end
 ---@field tooltip? string|core.statusbar.item.gettooltip Text displayed on hover
 ---@field visible? boolean Initial visibility state
 ---@field shrink? boolean Elide the start of the content when space runs out
----@field optional? boolean Hide, with the other optional items, when the bar is too narrow for all items
 
 ---Align item on left side of status bar.
 ---@type integer
@@ -123,7 +119,6 @@ function StatusBarItem:new(options)
   self.tooltip = options.tooltip
   self.on_draw = options.on_draw
   self.shrink = options.shrink == true
-  self.optional = options.optional == true
   self.visible = options.visible == nil and true or options.visible
   self.get_item = options.get_item
 end
@@ -371,7 +366,6 @@ function StatusBar:new()
 
   self:register_textview_items()
   self:register_imageview_items()
-  self:register_markdown_items()
 end
 
 ---Get the Pane Status Bar for a Pane, creating it on first use.
@@ -620,58 +614,6 @@ function StatusBar:register_imageview_items()
     tooltip = function() return "Zoom", "Click to reset zoom" end,
     command = "image:zoom_reset",
   })
-end
-
-
-local HEADING_MENU = {
-  { label = "Normal Text", command = "markdown:normal_text" },
-  { label = "Heading 1", command = "markdown:heading_1" },
-  { label = "Heading 2", command = "markdown:heading_2" },
-  { label = "Heading 3", command = "markdown:heading_3" },
-}
-
--- Formatting buttons, from left to right. Each runs a command, or opens a menu of commands.
-local MARKDOWN_BUTTONS = {
-  { name = "heading", glyph = "\u{F027F}", label = "Heading", menu = HEADING_MENU },
-  { name = "bold", glyph = "\u{F0264}", label = "Bold", command = "markdown:surround_bold" },
-  { name = "italic", glyph = "\u{F0277}", label = "Italic", command = "markdown:surround_italic" },
-  { name = "strikethrough", glyph = "\u{F0280}", label = "Strikethrough", command = "markdown:surround_strikethrough" },
-  { name = "code", glyph = "\u{F0174}", label = "Inline Code", command = "markdown:surround_code" },
-  { name = "link", glyph = "\u{F0339}", label = "Link", command = "markdown:insert_link" },
-  { name = "bullets", glyph = "\u{F0279}", label = "Bulleted List", command = "markdown:toggle_bullet_list" },
-  { name = "numbers", glyph = "\u{F027B}", label = "Numbered List", command = "markdown:toggle_numbered_list" },
-  { name = "tasks", glyph = "\u{F0756}", label = "Task List", command = "markdown:toggle_task_list" },
-  { name = "quote", glyph = "\u{F0757}", label = "Quote", command = "markdown:toggle_quote" },
-  { name = "table", glyph = "\u{F04EB}", label = "Table", command = "markdown:insert_table" },
-}
-
----Register the Markdown formatting buttons. They show in the focused Pane while its Markdown can change.
-function StatusBar:register_markdown_items()
-  if self:get_item("markdown:heading") then return end
-  local function editable_markdown(view)
-    local Editor = require "core.editor"
-    return view ~= nil and view.extends ~= nil and view:extends(Editor)
-      and require("core.markdown.live_render").is_markdown_buffer(view.buffer)
-      and view:can_edit("format Markdown") == true
-  end
-  for _, button in ipairs(MARKDOWN_BUTTONS) do
-    self:add_item({
-      predicate = function(view)
-        return editable_markdown(view) and (button.menu ~= nil or command.is_valid(button.command))
-      end,
-      name = "markdown:" .. button.name,
-      alignment = StatusBar.Item.RIGHT,
-      optional = true,
-      get_item = function() return { style.format_icon_font, style.dim, button.glyph } end,
-      tooltip = function()
-        local binding = button.command and keymap.get_binding(button.command)
-        return button.label, binding and require("core.context_menu").shortcut_text(binding) or nil
-      end,
-      command = button.command or function(_, _, _, _, chip)
-        require("core.context_menu").open(chip.x, chip.y - math.floor(4 * SCALE), button.menu, { above = true })
-      end,
-    })
-  end
 end
 
 
