@@ -321,6 +321,19 @@ function SidebarView:forward_key(stroke)
   return true
 end
 
+-- The Pane close command unloads a Project header. Other rows keep their normal key forwarding.
+function SidebarView:unload_cursor_project(repeating)
+  if not self.focused or self.hours then return false end
+  local row = self:get_cursor()
+  if not row or row.kind ~= "project" then return false end
+  self.unload_ask = nil
+  local state = row.project.state
+  if not repeating and state ~= "dormant" and state ~= "closing" then
+    self.action("unload", row.project.row_id)
+  end
+  return true
+end
+
 -- Asks to unload the cursor's Project, or unloads it when the last key asked the same. A held key does neither.
 function SidebarView:ask_unload(row, asked, repeating)
   local state = row.project.state
