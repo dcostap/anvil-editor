@@ -82,7 +82,8 @@ function other.request(picker, query, line)
   picker.other_projects = nil
   query = query:match("^%s*(.-)%s*$")
   local root = core.root_project and core.root_project()
-  if query == "" or not root or not core.project_sidebar or not system.is_hosted_surface() then return end
+  -- Only the shell gives a Project the Sidebar model.
+  if query == "" or not root or not core.project_sidebar then return end
   sequence = sequence + 1
   local state = {id = sequence, key = key, query = query, line = line, targets = targets(), rows = {}, headers = {},
     sent = system.get_time()}
@@ -93,7 +94,8 @@ function other.request(picker, query, line)
   end
 end
 
--- This Project's rows, then each other Project that has rows: a header with its badge and name, then its rows.
+-- This Project's rows, then each other Project that has rows: a divider, a header with its badge and name, then
+-- its rows.
 function other.with_rows(picker, own)
   local state = picker.other_projects
   if not state then return own end
@@ -102,9 +104,14 @@ function other.with_rows(picker, own)
   for _, project in ipairs(state.targets) do
     local rows = state.rows[project.path]
     if rows and #rows > 0 then
-      state.headers[project.path] = state.headers[project.path]
-        or {header = true, project = project, label = look.name(project)}
-      out[#out + 1] = state.headers[project.path]
+      -- The rows keep their identity across replies, so the selection can follow its row.
+      local header = state.headers[project.path] or {
+        divider = {header = true, separator = true, label = ""},
+        {header = true, project = project, label = look.name(project)},
+      }
+      state.headers[project.path] = header
+      if #out > 0 then out[#out + 1] = header.divider end
+      out[#out + 1] = header[1]
       for _, row in ipairs(rows) do out[#out + 1] = row end
     end
   end

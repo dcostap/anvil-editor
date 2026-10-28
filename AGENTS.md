@@ -186,6 +186,7 @@ Project File Search also shows Other Project Results. Each query goes to the oth
 Each Project searches its own file index and answers with up to 5 rows in a `file_results` request. A Project without an index or a match does not answer.
 The picker ignores answers to an earlier query. Opening a row sends `open_file` to its Project through the select route.
 Run `ui/fuzzy_searcher_other_projects.lua` and the `launch-file-search` shell probe after changes. The probe reports the answer time.
+Each group has a divider and a small, dim header. Check the `fuzzy-picker-other-projects` render scenario after visual changes.
 
 Text Search also searches the Terminal Sessions of this Project. It does not search the Terminals of other Projects.
 A Terminal that this Project shows gives its live text. Other Terminals give the screen that their host saved last.

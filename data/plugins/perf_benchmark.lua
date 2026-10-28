@@ -935,10 +935,29 @@ local function setup_scenario()
 
   if benchmark.scenario:find("^fuzzy%-picker") then
     local query = ({ ["fuzzy-picker-text"] = "#value", ["fuzzy-picker-commands"] = ">editor",
-      ["fuzzy-picker-projects"] = "@" })[benchmark.scenario] or "bench"
+      ["fuzzy-picker-projects"] = "@", ["fuzzy-picker-other-projects"] = "render-bench" })[benchmark.scenario]
+      or "bench"
     if benchmark.scenario == "fuzzy-picker-projects" then
       -- The Project Sidebar's scene model, as the shell reports it.
       core.project_sidebar = require("core.sidebar_scene").model()
+    elseif benchmark.scenario == "fuzzy-picker-other-projects" then
+      -- The ready Projects of the Sidebar's scene model answer File Search. The shell carries their answers, so
+      -- the scene answers each request here.
+      core.project_sidebar = require("core.sidebar_scene").model()
+      system.pane_request = function(_, path, text)
+        local request = assert(load("return " .. text, "=request", "t", {}))()
+        if request.action ~= "file_search" then return true end
+        local rows = {}
+        for _, label in ipairs { "src/bench_render.lua", "docs/benchmarks.md", "tools/bench.py" } do
+          local first = label:find("bench", 1, true)
+          rows[#rows + 1] = { label = label, abs_path = path .. "/" .. label, spans = { { first, first + 4 } } }
+        end
+        core.add_thread(function()
+          require("core.pane_requests").perform(common.serialize({ action = "file_results", source = path,
+            id = request.id, rows = rows }, { escape = true }))
+        end)
+        return true
+      end
     end
     -- The picker needs the window's final layout.
     core.add_thread(function()

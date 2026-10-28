@@ -8502,7 +8502,7 @@ function FSView:draw_open_content()
         renderer.draw_rect(x + pad, yy + math.floor(lh / 2), math.max(0, row_text_w), border, style.card_border)
       elseif r.project then
         fuzzy_searcher.projects.draw_chip(r.project, x + pad,
-          yy + math.floor((lh - style.font:get_height()) / 2), row_text_w)
+          yy + math.floor((lh - header_font:get_height()) / 2), row_text_w, header_font, style.dim)
       else
         renderer.draw_text(header_font, truncate_text(header_font, r.label, row_text_w), x + pad,
           yy + math.floor((lh - header_font:get_height()) / 2), style.dim)

@@ -78,23 +78,25 @@ function projects.bold(font)
   return bold_fonts[font]
 end
 
--- The chip at the left of the query: the Project's badge and name, at most `max_width` wide.
-local function chip_name(project, max_width)
-  local bold = projects.bold(style.font)
-  return bold, tab.fit(bold, look.name(project), max_width - style.font:get_height() - style.padding.x / 2)
+-- A chip: the Project's badge and bold name in `font`, at most `max_width` wide. The query's chip uses the normal
+-- font. A group of Other Project Results has a smaller one in `color`.
+local function chip_name(project, max_width, font)
+  local bold = projects.bold(font)
+  return bold, tab.fit(bold, look.name(project), max_width - font:get_height() - style.padding.x / 2)
 end
 
 function projects.chip_width(project, max_width)
-  local bold, name = chip_name(project, max_width)
+  local bold, name = chip_name(project, max_width, style.font)
   return style.font:get_height() + style.padding.x / 2 + bold:get_width(name)
 end
 
-function projects.draw_chip(project, x, y, max_width)
-  local bold, name = chip_name(project, max_width)
-  local size = style.font:get_height()
+function projects.draw_chip(project, x, y, max_width, font, color)
+  font = font or style.font
+  local bold, name = chip_name(project, max_width, font)
+  local size = font:get_height()
   look.draw_badge(project, x, y, size, bold, style.card)
   renderer.draw_text(bold, name, x + size + style.padding.x / 2, y + math.floor((size - bold:get_height()) / 2),
-    style.text)
+    color or style.text)
 end
 
 -- The Tabs and the Terminal Sessions that no Pane shows, as the Sidebar lists them under an expanded Project.
