@@ -183,6 +183,18 @@ function PaneStatusBar:layout()
     end
   end
 
+  -- Optional right items hide together when they would cut the left items short.
+  local need = m.edge * 2 + style.padding.x
+  for _, entry in ipairs(lefts) do need = need + entry.w + m.gap end
+  for _, entry in ipairs(rights) do need = need + entry.w + m.gap end
+  if need > self.size.x then
+    local kept = {}
+    for _, entry in ipairs(rights) do
+      if not entry.item.optional then kept[#kept + 1] = entry end
+    end
+    rights = kept
+  end
+
   local x = self.size.x - m.edge
   for i = #rights, 1, -1 do
     local entry = rights[i]
@@ -306,7 +318,8 @@ function PaneStatusBar:on_mouse_released(button, x, y)
   if item.command then
     command.perform(item.command)
   elseif item.on_click then
-    item.on_click(view, button, x, y)
+    local h = self.size.y
+    item.on_click(view, button, x, y, { x = self.position.x + pressed.x, y = self.position.y, w = pressed.w, h = h })
   end
 end
 

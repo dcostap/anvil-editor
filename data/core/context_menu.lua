@@ -43,7 +43,7 @@ local function metrics()
 end
 
 ---"ctrl+shift+l" reads as "Ctrl+Shift+L".
-local function shortcut_text(binding)
+function context_menu.shortcut_text(binding)
   if not binding or binding == "" then return nil end
   local parts = {}
   for part in binding:gmatch("[^+]+") do
@@ -69,7 +69,7 @@ local function binding_for(item, chosen)
     if binding then break end
     binding = keymap.get_binding(name)
   end
-  return shortcut_text(binding)
+  return context_menu.shortcut_text(binding)
 end
 
 -- Removes items that cannot run, empty submenus, and extra separators.
@@ -100,7 +100,7 @@ end
 
 -- Lays out one level of rows with its top left corner near (x, y).
 -- `flip_x` is the x to use when the level does not fit to the right of x.
-local function layout_level(rows, x, y, flip_x)
+local function layout_level(rows, x, y, flip_x, above)
   local m = metrics()
   local w = m.min_w
   for _, row in ipairs(rows) do
@@ -116,6 +116,7 @@ local function layout_level(rows, x, y, flip_x)
   w = math.min(w, bw - m.margin * 2)
   if x + w > bx + bw - m.margin then x = (flip_x or x) - w end
   x = common.clamp(x, bx + m.margin, bx + bw - m.margin - w)
+  if above then y = y - h end
   if y + h > by + bh - m.margin then y = by + bh - m.margin - h end
   y = math.max(y, by + m.margin)
   local level = { rows = rows, x = math.floor(x), y = math.floor(y), w = math.floor(w), h = math.floor(h) }
@@ -186,7 +187,8 @@ end
 ---@param x number
 ---@param y number
 ---@param items table[]
----@param opts? { button: string? } The mouse button that opened the menu, so its release does not choose an item.
+---@param opts? { button: string?, above: boolean? } `button` opened the menu, so its release does not choose an item.
+---`above` puts the menu's bottom edge at the point, for a menu that opens from a bar at the bottom.
 function context_menu.open(x, y, items, opts)
   context_menu.close()
   local rows = resolve(items)
@@ -196,10 +198,10 @@ function context_menu.open(x, y, items, opts)
   end
   opts = opts or {}
   state = {
-    levels = { layout_level(rows, x + 1, y + 1, x - 1) },
+    levels = { layout_level(rows, x + 1, opts.above and y - 1 or y + 1, x - 1, opts.above) },
     started = now(),
     progress = config.transitions and 0 or 1,
-    origin = { x = x, y = y, button = opts.button },
+    origin = { x = x, y = y, button = opts.button, above = opts.above },
     root_size = { core.root_panel.size.x, core.root_panel.size.y },
   }
   core.root_panel:push_modal_input(context_menu, { label = "context-menu", handlers = modal_handlers })
@@ -364,7 +366,8 @@ function context_menu.update()
     -- The menu stays at its point, inside the new bounds. Submenus close.
     state.root_size = { core.root_panel.size.x, core.root_panel.size.y }
     local origin, selected = state.origin, state.levels[1].selected
-    state.levels = { layout_level(state.levels[1].rows, origin.x + 1, origin.y + 1, origin.x - 1) }
+    local y = origin.above and origin.y - 1 or origin.y + 1
+    state.levels = { layout_level(state.levels[1].rows, origin.x + 1, y, origin.x - 1, origin.above) }
     state.levels[1].selected = selected
     core.redraw = true
   end

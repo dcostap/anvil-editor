@@ -820,6 +820,9 @@ local function setup_scenario()
     local x, y = view.position.x + 260 * SCALE, view.position.y + 140 * SCALE
     require("core.context_menu").open(x, y, view:context_menu(x, y))
     core.on_event("keypressed", "c", {})
+  elseif benchmark.scenario == "markdown-format-buttons" then
+    -- scenario_is_ready opens the Heading menu after the window has its final size.
+    config.transitions = false
   elseif benchmark.scenario == "image-zoom" then
     -- The Image Overlay at a new zoom and pan on each frame, so each frame draws the whole image again.
     config.transitions = false
@@ -1028,6 +1031,18 @@ local function scenario_is_ready()
       return false
     end
     return view.find.delivered and not view.find.stale
+  end
+  if benchmark.scenario == "markdown-format-buttons" then
+    -- The formatting buttons of a Markdown note, with the Heading menu open from its button.
+    if require("core.context_menu").is_open() then return true end
+    local bar = core.status_bar:bar_for_pane(require("core.panes").active())
+    local entry = bar:get_entry("markdown:heading")
+    if not entry then return false end
+    local x, y = bar.position.x + entry.x + entry.w / 2, bar.position.y + bar.size.y / 2
+    core.on_event("mousemoved", x, y, 0, 0)
+    core.on_event("mousepressed", "left", x, y, 1)
+    core.on_event("mousereleased", "left", x, y)
+    return false
   end
   if benchmark.scenario == "find-bar-hover" then
     local layout = view:get_local_find_layout()

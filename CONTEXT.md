@@ -223,6 +223,10 @@ _Avoid_: margin note, sidenote, endnote
 A Footnote on a stretch of prose: highlighted text followed directly by an inline footnote. Markdown Live Preview shows the text tinted and the note in a card, with no number.
 _Avoid_: margin note, comment, annotation
 
+**Formatting Buttons**:
+Icon buttons at the right end of the focused Pane's Status Bar while it shows Markdown that can change. Each one runs a Markdown formatting command, such as Bold or Bulleted List. They hide together when the Pane is too narrow for them.
+_Avoid_: toolbar, format bar, ribbon
+
 **Markdown Source Mode**:
 An Editor mode that shows all Markdown source syntax normally instead of presenting formatted Markdown inline.
 _Avoid_: Raw rendering mode
