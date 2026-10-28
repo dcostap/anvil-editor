@@ -54,7 +54,11 @@ end
 ---LARGE_TABLE_BYTES, the totals, and the walk time.
 function heap_census.run()
   collectgarbage("forcecollect")
+  -- The second collection frees nothing, so its time is the cost of marking
+  -- and sweeping the live heap: the least work of one GC cycle.
+  local collect_started = system.get_time()
   collectgarbage("forcecollect")
+  local collect_ms = (system.get_time() - collect_started) * 1000
   local started = system.get_time()
   local heap_kb = collectgarbage("count")
 
@@ -187,6 +191,7 @@ function heap_census.run()
     owners = rows,
     large_tables = large,
     heap_kb = heap_kb,
+    collect_ms = collect_ms,
     estimate_bytes = total_bytes,
     objects = total_objects,
     walk_ms = (system.get_time() - started) * 1000,
@@ -203,8 +208,10 @@ function heap_census.format(report, limit)
   limit = limit or 60
   local lines = {
     "Lua heap census",
-    string.format("Heap after a full collection: %.1f MB. Census estimate: %.1f MB in %d objects. Walk: %.0f ms.",
-      report.heap_kb / 1024, mb(report.estimate_bytes), report.objects, report.walk_ms),
+    string.format("Heap after a full collection: %.1f MB. A full collection of it: %.0f ms.",
+      report.heap_kb / 1024, report.collect_ms),
+    string.format("Census estimate: %.1f MB in %d objects. Walk: %.0f ms.",
+      mb(report.estimate_bytes), report.objects, report.walk_ms),
     "Sizes are estimates. Each object counts once, for the shortest path that reaches it.",
     "",
     string.format("%9s %10s %9s %9s %9s  %s", "MB", "objects", "tables", "strings", "functions", "owner"),

@@ -26,7 +26,9 @@ test.describe("Heap Census", function()
     package.loaded[MODULE] = { rows = rows, again = rows }
     rows = nil
     local report = heap_census.run()
-    test.equal(test.not_nil(owner_row(report, MODULE .. ".rows[n]")).tables, 40000)
+    -- Both keys reach the rows. The first one that the walk reaches owns them, once.
+    local children = owner_row(report, MODULE .. ".rows[n]") or owner_row(report, MODULE .. ".again[n]")
+    test.equal(test.not_nil(children).tables, 40000)
     local large
     for _, row in ipairs(report.large_tables) do
       if row.owner == MODULE .. ".again" or row.owner == MODULE .. ".rows" then large = row end
