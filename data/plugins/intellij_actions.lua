@@ -1430,7 +1430,6 @@ core.intellij_actions_disable_conflict_shortcuts = function()
     ["ctrl+g"] = "core:disabled_intellij_conflict",
     ["ctrl+shift+k"] = "core:disabled_intellij_conflict",
     ["ctrl+alt+p"] = "editor:select_all_occurrences",
-    ["alt+return"] = "core:disabled_intellij_conflict",
     ["ctrl+alt+r"] = "core:disabled_intellij_conflict",
     ["shift+alt+i"] = "core:disabled_intellij_conflict",
     ["shift+alt+k"] = "core:disabled_intellij_conflict",
