@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
 local Editor = require "core.editor"
+local file_icons = require "core.file_icons"
 local attachments = require "core.markdown.attachments"
 local callouts = require "core.markdown.callouts"
 local images = require "core.markdown.images"
@@ -1656,12 +1657,27 @@ function live._image_attachment_link(view, line, span, opts)
   local fragment = {
     source_col1 = span.col1,
     source_col2 = span.col2,
-    text = "▧ " .. label,
+    text = label,
     background = style.markdown_live_attachment_bg,
     attachment_chip = true,
     image_attachment_link = true,
   }
-  return decorate_link_fragment(view, line, span, fragment, opts)
+  fragment = decorate_link_fragment(view, line, span, fragment, opts)
+  if fragment then
+    local font = fragment.font or live_fonts.body(view)
+    local icon = file_icons.prepare("image.png", font:get_height(), font:get_size())
+    if icon then
+      local width = font:get_width(label)
+      fragment.width = icon.width + width
+      -- Separate runs keep all of the label's font fallbacks.
+      fragment.text_lines = {{ runs = {
+        { text = icon.glyph, font = icon.font, x = icon.x_offset, width = icon.width },
+        { text = label, font = font, x = icon.width, width = width,
+          underline = fragment.underline, strikethrough = fragment.strikethrough },
+      } }}
+    end
+  end
+  return fragment
 end
 
 local function semantic_link_fragments(view, line_text, line, reveal_units, opts)

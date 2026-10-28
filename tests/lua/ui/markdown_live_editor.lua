@@ -4558,7 +4558,7 @@ test.describe("Markdown Live Preview", function()
           test.equal(rows[1].source_col1, 1)
           test.equal(rows[1].source_col2, #prefix + #source + 1)
           test.ok(render_line.layout_height > rows[1].height)
-          test.equal(visible_render_text(view, 1), prefix .. "▧ " .. filename)
+          test.equal(visible_render_text(view, 1), prefix .. filename)
           local link
           for _, fragment in ipairs(render_line.fragments) do
             if fragment.image_attachment_link then link = fragment break end
