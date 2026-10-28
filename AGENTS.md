@@ -352,6 +352,7 @@ Project Sidebar visibility belongs to each Window. The first Window and each New
 Restored Windows use their saved visibility, including a lone Window saved with its Sidebar hidden.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
 Loaded Projects start expanded unless this Window has a saved manual fold.
+Selecting a Project expands it and saves that state. It stays expanded after it loses the selection. The first selection in a restored Window keeps its saved fold.
 Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state.
 Run `anvil:shell-state`, `ui/sidebar_view.lua`, and the `windows-sidebar-layout`, `windows-sidebar-folding`, and `toggle-sidebar` shell probes after changes.
 

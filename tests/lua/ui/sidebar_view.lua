@@ -697,7 +697,7 @@ test.describe("Sidebar age groups", function()
     test.ok(text:find("2 terminals, 1 busy", 1, true), "The hint is missing: " .. text)
   end)
 
-  test.it("expands a Project each time it becomes selected and saves a collapse made there", function()
+  test.it("expands a Project when it becomes selected and keeps it expanded after it loses selection", function()
     local function model(selected)
       local function project(id, name)
         return {row_id=id,id=id,path="C:/" .. name,state="ready",window_id=1,terminals={},
@@ -719,21 +719,17 @@ test.describe("Sidebar age groups", function()
     end
     view:set_model(model(1), 1)
     test.equal(shown_tabs(), "A.lua", "The Selected Project does not expand")
-    test.same(view.collapsed, {["project:C:/A"]=true, ["project:C:/B"]=true})
-    -- A collapse while the Project is selected acts and is saved.
+    test.same(actions, {{"collapsed", "project:C:/A", false}}, "The expansion is not saved")
+    -- A collapse while the Project is selected stays after a model update.
     toggle_first()
-    test.equal(shown_tabs(), "", "The Selected Project does not collapse")
-    toggle_first()
-    test.equal(shown_tabs(), "A.lua")
-    test.same(actions, {{"collapsed", "project:C:/A", true}, {"collapsed", "project:C:/A", false}})
-    toggle_first()
-    test.equal(shown_tabs(), "")
-    -- Another Project's selection expands it and leaves A collapsed. Selecting A again expands it again.
+    view:set_model(model(1), 1)
+    test.equal(shown_tabs(), "", "The Selected Project does not stay collapsed")
+    -- B expands when it is selected. A keeps its state when it loses or gets the selection.
     view:set_model(model(2), 1)
     test.equal(shown_tabs(), "B.lua")
     view:set_model(model(1), 1)
-    test.equal(shown_tabs(), "A.lua", "A does not expand when it is selected again")
-    test.same(view.collapsed, {["project:C:/A"]=true, ["project:C:/B"]=true})
+    test.equal(shown_tabs(), "A.lua,B.lua", "A Project folds when it loses the selection")
+    test.same(view.collapsed, {["project:C:/A"]=false, ["project:C:/B"]=false})
   end)
 
   test.it("restores collapsed groups and reports changes for the next Sidebar", function()
@@ -976,10 +972,12 @@ test.describe("Sidebar unread results", function()
   end)
 
   test.it("marks a result read once its Tab was active, for every Window and the next Sidebar", function()
-    local actions, action = recorder()
+    local actions = {}
     local seen = {}
     local done = session("done", {agent_state="done",agent_since=now - 60})
-    local view = SidebarView(action, {["project:C:/P"]=true}, seen)
+    local view = SidebarView(function(name, ...)
+      if name == "seen" then actions[#actions + 1] = {name, ...} end
+    end, {["project:C:/P"]=true}, seen)
     view:set_model(model({done}, {selected=true, active=2}), 1)
     test.same(actions, {{"seen", "done"}})
     -- Another Window's Sidebar, or the next Sidebar process, starts from the same table.

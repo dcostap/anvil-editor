@@ -81,8 +81,8 @@ function SidebarView:new(action, collapsed, seen, restore_folds, reminders)
   self.seen = seen or {}
   -- Every surface shares the Reminders too.
   self.reminders = reminders or {}
-  -- The Selected Projects that show expanded over their saved state, and the Projects selected at the last layout.
-  self.opened, self.was_selected = {}, {}
+  -- The Projects selected at the last layout.
+  self.was_selected = {}
   -- Snapshot ownership separately: callers can update the same model table after a move.
   self.owned_projects = {}
   self.width, self.view_h = 240, 600
@@ -386,7 +386,7 @@ function SidebarView:set_model(projects, window_id)
     elseif window_id and owner and owner ~= 0 and self.owned_projects[project.path] then
       -- Fold once when a Project leaves this Window. Later manual expansion still acts.
       local key = "project:" .. project.path
-      self.opened[key], self.collapsed[key] = nil, true
+      self.collapsed[key] = true
       self.action("collapsed", key, true)
     end
   end
@@ -424,8 +424,7 @@ function SidebarView:is_collapsed(key, default)
 end
 
 function SidebarView:toggle(key, default)
-  local collapsed = self.opened[key] or not self:is_collapsed(key, default)
-  self.opened[key] = nil
+  local collapsed = not self:is_collapsed(key, default)
   self.collapsed[key] = collapsed
   self.action("collapsed", key, collapsed)
   self:rebuild_rows()
@@ -496,17 +495,19 @@ function SidebarView:rebuild_rows()
     -- The Selected Project's active Tab takes the highlight.
     local active = is_selected and panes[panes.active or 0] and panes.active
     local key = (#panes > 0 or #(project.terminals or {}) > 0) and ("project:" .. project.path) or nil
-    -- A Project expands when it becomes selected, over its saved state. A collapse while it is selected acts.
+    -- A Project expands when it becomes selected, and stays expanded after it loses the selection.
     if key then
       if is_selected and not self.was_selected[key] then
         -- A restored Window keeps its manual fold. Later selections still expand the chosen Project.
-        self.opened[key] = not self.restore_folds or self.selected_once or self.collapsed[key] == nil
+        if (not self.restore_folds or self.selected_once) and self.collapsed[key] then
+          self.collapsed[key] = false
+          self.action("collapsed", key, false)
+        end
         self.selected_once = true
       end
-      if not is_selected then self.opened[key] = nil end
       selected_keys[key] = is_selected or nil
     end
-    local collapsed = key and not self.opened[key] and self:is_collapsed(key, false) or false
+    local collapsed = key and self:is_collapsed(key, false) or false
     add({kind = "project", project = project, key = key, collapsed = collapsed, tabs = #panes,
       id_key = "project:" .. project.path, current = is_selected,
       selected = is_selected and (not active or collapsed and not searching)}, m.project)
