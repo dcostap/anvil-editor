@@ -154,6 +154,55 @@ function format.quote(view)
   return apply(view, changes, "quote")
 end
 
+-- Insert text before the first and after the last selected line. Carets keep their text.
+-- `prefix` goes at the start of each line in the block, and `shift` is its length.
+local function wrap_block(view, before, after, prefix, reason)
+  local buffer = view.buffer
+  local lines = selected_lines(buffer)
+  local first, last = lines[1], lines[#lines]
+  local edits = {}
+  for line = first, last do
+    local text = (line == first and before or "") .. (prefix or "")
+    if text ~= "" then edits[#edits + 1] = { line1 = line, col1 = 1, line2 = line, col2 = 1, text = text } end
+  end
+  if after then
+    local col = #buffer.lines[last]
+    local start = edits[#edits]
+    if col == 1 and start and start.line1 == last then
+      -- An empty last line takes both texts in one edit.
+      start.text = start.text .. after
+    else
+      edits[#edits + 1] = { line1 = last, col1 = col, line2 = last, col2 = col, text = after }
+    end
+  end
+  local added = select(2, before:gsub("\n", ""))
+  local selections = {}
+  for index = 1, #buffer.selections, 2 do
+    local line, col = buffer.selections[index], buffer.selections[index + 1]
+    if line >= first and line <= last then
+      line, col = line + added, col + #(prefix or "")
+    elseif line > last then
+      line = line + added + (after and 1 or 0)
+    end
+    selections[index], selections[index + 1] = line, col
+  end
+  buffer:apply_edits(edits, { selections = selections, merge_cursors = false, merge_undo = false })
+  core.log_quiet("Markdown format %s wrapped lines %d-%d in %s", reason, first, last, buffer:get_name())
+  return true
+end
+
+---Put the selected lines in a code block. On an empty line, the caret goes into a new empty block.
+---@param view core.editor
+function format.code_block(view)
+  return wrap_block(view, "```\n", "\n```", nil, "code block")
+end
+
+---Put the selected lines in a note Callout. On an empty line, the caret goes into a new empty Callout.
+---@param view core.editor
+function format.callout(view)
+  return wrap_block(view, "> [!note]\n", nil, "> ", "callout")
+end
+
 ---Make each selection a link. Selected text becomes the label and the caret goes to the address.
 ---A selected address becomes the address and the caret goes to the label.
 ---@param view core.editor

@@ -120,6 +120,8 @@ local format_commands = {
   ["markdown:toggle_task_list"] = formatter(markdown_format.list, "task"),
   ["markdown:toggle_quote"] = formatter(markdown_format.quote),
   ["markdown:insert_link"] = formatter(markdown_format.link),
+  ["markdown:insert_code_block"] = formatter(markdown_format.code_block),
+  ["markdown:insert_callout"] = formatter(markdown_format.callout),
 }
 for level = 1, 6 do
   format_commands["markdown:heading_" .. level] = formatter(markdown_format.heading, level)
