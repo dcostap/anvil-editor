@@ -48,7 +48,10 @@ Meson installs `conpty.dll` and `OpenConsole.exe` into `data/conpty`.
 The standalone runtime includes both files and their license.
 Keep both files together. Do not fall back to the system console host.
 That host can drop Pi's mouse mode when Pi sets raw input during startup.
-Run `ui/terminal_mouse_wheel.lua` and the standalone smoke test after ConPTY updates.
+A width change reflows wrapped lines differently in ConPTY and in the Terminal View, so their prompt rows can differ.
+ConPTY 1.25 and later then asks the terminal for the cursor position (DSR CPR) and moves its cursor there. The editor answers.
+Do not go back to an earlier ConPTY. Typed input then appears above the visible prompt.
+Run `ui/terminal_mouse_wheel.lua`, `ui/terminal_resize_prompt.lua` and the standalone smoke test after ConPTY updates.
 
 New Terminal Sessions start their host and shell on a background thread.
 They return in the reconnecting state, like restored sessions. Wait for running before sending input or reading the host ID.
