@@ -76,6 +76,67 @@ local function call_view(view, name, ...)
   return table.unpack(result, 1, result.n)
 end
 
+-- While the Fuzzy Searcher is open, the Panes behind it take no input. Each Pane View
+-- then draws a Draw Capture of its last draw until its rectangle, scroll, text, theme or
+-- scale changes. A View that changes without input, such as a Terminal View, sets
+-- `draws_while_covered`. Other changes, such as new Git colors, show when the picker closes.
+local covered = setmetatable({}, { __mode = "k" })
+
+local function text_revision(view)
+  return view.buffer and view.buffer.text_revision or 0
+end
+
+local function covered_draw_matches(record, view)
+  return record.x == view.position.x and record.y == view.position.y
+    and record.w == view.size.x and record.h == view.size.y
+    and record.scroll_x == view.scroll.x and record.scroll_y == view.scroll.y
+    and record.theme == core.color_theme_generation and record.scale == SCALE
+    and record.text == text_revision(view)
+end
+
+local function remember_covered_draw(record, view, capture)
+  record.capture = capture
+  record.x, record.y, record.w, record.h = view.position.x, view.position.y, view.size.x, view.size.y
+  record.scroll_x, record.scroll_y = view.scroll.x, view.scroll.y
+  record.theme, record.scale, record.text = core.color_theme_generation, SCALE, text_revision(view)
+end
+
+local function draw_pane_view(self, view)
+  if not core.fuzzy_searcher_active_view or view.draws_while_covered then
+    call_view(view, "draw")
+    return
+  end
+  local record = covered[view]
+  if record and record.capture and covered_draw_matches(record, view) then
+    local ok, reason = record.capture:draw()
+    if ok then return end
+    core.log_quiet("Covered Pane %s draws again: %s", tostring(view), reason)
+  end
+  -- A View that still scrolls would keep one frame of its animation.
+  local scroll = view.scroll
+  local settled = scroll.x == scroll.to.x and scroll.y == scroll.to.y
+  local deferred, above = #self.deferred_draws, #self.above_sidebar
+  local caret = self.caret_renderer.target
+  local capturing = settled and renderer.begin_capture()
+  call_view(view, "draw")
+  if not capturing then return end
+  local capture, reason = renderer.end_capture()
+  -- Work that the View left for later layers would not run again with the capture.
+  if capture and (#self.deferred_draws ~= deferred or #self.above_sidebar ~= above
+    or self.caret_renderer.target ~= caret) then
+    capture, reason = nil, "later layers"
+  end
+  if not record then
+    record = {}
+    covered[view] = record
+  end
+  if not capture and record.reason ~= reason then
+    core.log_quiet("Covered Pane %s draws live: %s", tostring(view), tostring(reason))
+  end
+  record.reason = reason
+  remember_covered_draw(record, view, capture)
+end
+
 local function point_in_view(view, x, y)
   return view and x >= view.position.x and y >= view.position.y
     and x < view.position.x + view.size.x
@@ -1149,9 +1210,12 @@ function RootPanel:draw()
   self.above_sidebar = {}
   self:draw_wallpaper(#pane_views > 0)
   local group = panes().visible_group()
+  if not core.fuzzy_searcher_active_view and next(covered) then
+    for view in pairs(covered) do covered[view] = nil end
+  end
   for _, view in ipairs(pane_views) do
     core.push_clip_rect(view.position.x, view.position.y, view.size.x, view.size.y)
-    call_view(view, "draw")
+    draw_pane_view(self, view)
     core.pop_clip_rect()
   end
   for _, bar in ipairs(self:pane_status_bars()) do call_view(bar, "draw") end

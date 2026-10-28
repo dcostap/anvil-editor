@@ -1371,6 +1371,10 @@ static int f_get_last_frame_stats(lua_State *L) {
   lua_setfield(L, -2, "rencache_command_replay_ms");
   lua_pushinteger(L, rc_stats ? rc_stats->display_packet_replays : 0);
   lua_setfield(L, -2, "display_packet_replays");
+  lua_pushinteger(L, rc_stats ? rc_stats->capture_replays : 0);
+  lua_setfield(L, -2, "capture_replays");
+  lua_pushinteger(L, rc_stats ? rc_stats->capture_commands_replayed : 0);
+  lua_setfield(L, -2, "capture_commands_replayed");
   lua_pushinteger(L, rc_stats ? rc_stats->display_packet_commands_replayed : 0);
   lua_setfield(L, -2, "display_packet_commands_replayed");
   lua_pushinteger(L, rc_stats ? rc_stats->display_packet_text_commands_replayed : 0);
@@ -1772,6 +1776,67 @@ static int f_display_packet_gc(lua_State *L) {
   return 0;
 }
 
+static RenCache *target_cache(lua_State *L) {
+  RenWindow *window = ren_get_target_window();
+  if (!window) luaL_error(L, "no target window found");
+  return &window->cache;
+}
+
+static int push_capture_result(lua_State *L, RenCaptureResult result) {
+  if (result == REN_CAPTURE_OK) {
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+  lua_pushboolean(L, 0);
+  lua_pushstring(L, rencache_capture_result_string(result));
+  return 2;
+}
+
+/* Starts a Draw Capture of the commands that follow. One capture can be open at a time. */
+static int f_begin_capture(lua_State *L) {
+  return push_capture_result(L, rencache_capture_begin(target_cache(L)));
+}
+
+/* Ends the open Draw Capture. Returns the capture, or nil and the reason. */
+static int f_end_capture(lua_State *L) {
+  RenCapture *capture = NULL;
+  RenCaptureResult result = rencache_capture_end(target_cache(L), &capture);
+  if (result != REN_CAPTURE_OK) {
+    lua_pushnil(L);
+    lua_pushstring(L, rencache_capture_result_string(result));
+    return 2;
+  }
+  RenCapture **userdata = lua_newuserdata(L, sizeof(RenCapture*));
+  *userdata = capture;
+  luaL_setmetatable(L, API_TYPE_DRAW_CAPTURE);
+  return 1;
+}
+
+static RenCapture *check_capture(lua_State *L) {
+  RenCapture **userdata = luaL_checkudata(L, 1, API_TYPE_DRAW_CAPTURE);
+  if (!*userdata) luaL_error(L, "Draw Capture has been collected");
+  return *userdata;
+}
+
+/* Draws the captured commands in the current frame. Returns true, or false and the reason. */
+static int f_capture_draw(lua_State *L) {
+  RenCapture *capture = check_capture(L);
+  return push_capture_result(L, rencache_capture_draw(target_cache(L), capture));
+}
+
+static int f_capture_gc(lua_State *L) {
+  RenCapture **userdata = luaL_checkudata(L, 1, API_TYPE_DRAW_CAPTURE);
+  rencache_capture_free(*userdata);
+  *userdata = NULL;
+  return 0;
+}
+
+static const luaL_Reg drawCaptureLib[] = {
+  { "__gc",  f_capture_gc    },
+  { "draw",  f_capture_draw  },
+  { NULL, NULL }
+};
+
 static const luaL_Reg lib[] = {
   { "show_debug",         f_show_debug         },
   { "get_size",           f_get_size           },
@@ -1798,6 +1863,8 @@ static const luaL_Reg lib[] = {
   { "draw_canvas",        f_draw_canvas        },
   { "draw_canvas_scaled", f_draw_canvas_scaled },
   { "to_canvas",          f_to_canvas          },
+  { "begin_capture",      f_begin_capture      },
+  { "end_capture",        f_end_capture        },
   { NULL,                 NULL                 }
 };
 
@@ -1861,6 +1928,11 @@ int luaopen_renderer(lua_State *L) {
   lua_setfield(L, -2, "font");
   luaL_newmetatable(L, API_TYPE_TEXT_LAYOUT);
   luaL_setfuncs(L, textLayoutLib, 0);
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -2, "__index");
+  lua_pop(L, 1);
+  luaL_newmetatable(L, API_TYPE_DRAW_CAPTURE);
+  luaL_setfuncs(L, drawCaptureLib, 0);
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, "__index");
   lua_pop(L, 1);

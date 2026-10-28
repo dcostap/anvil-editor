@@ -216,6 +216,8 @@ end
 
 ---@class plugins.terminal.view : core.view
 local TerminalView = View:extend()
+-- Programs write to a Terminal while the Fuzzy Searcher covers it.
+TerminalView.draws_while_covered = true
 TerminalView.view_icon = view_icons.register("terminal", view_icons.ui("t"))
 
 function TerminalView:__tostring() return "TerminalView" end

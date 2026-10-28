@@ -92,6 +92,8 @@ RenFont* ren_font_load(const char *filename, float size, ERenFontAntialiasing an
 RenFont* ren_font_copy(RenFont* font, float size, ERenFontAntialiasing antialiasing, ERenFontHinting hinting, int style, int ligatures);
 const char* ren_font_get_path(RenFont *font);
 void ren_font_free(RenFont *font);
+/* Counts freed Fonts. A copy of commands that point to Fonts is only safe while it is unchanged. */
+uint32_t ren_font_free_count(void);
 int ren_font_get_metadata(const char *path, FontMetaData **data, int *count, bool *monospaced);
 int ren_font_group_get_tab_size(RenFont **font);
 int ren_font_group_get_height(RenFont **font);

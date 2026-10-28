@@ -517,6 +517,16 @@ A Text View without row measurements keeps its top line when lines change above 
 See [shared editing](docs/shared-editing.md) for the plan: dirty-Buffer merges and Disk Conflicts.
 Run `ui/buffer_reload.lua` and `runtime/buffer_apply_lines.lua` after changes.
 
+## Panes behind the Fuzzy Searcher
+
+While the Fuzzy Searcher is open, each Pane View draws a Draw Capture of its last draw.
+A Draw Capture is a copy of the View's renderer commands (`renderer.begin_capture`, `renderer.end_capture`).
+The View draws again when its rectangle, scroll, text, Color Theme or scale changes.
+Other changes, such as new Git colors in the File Tree, show when the picker closes.
+Terminal Views set `draws_while_covered`, because programs write to them while they are covered.
+A replay stops after any Font or canvas is freed, or after a captured Font changes size.
+Run `ui/draw_capture.lua`, `ui/covered_panes.lua` and the `fuzzy-picker-*` render scenarios after changes.
+
 ## Background work infrastructure
 
 `core.add_thread` schedules a Lua coroutine on the UI thread. It is not an OS thread.
