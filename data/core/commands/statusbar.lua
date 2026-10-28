@@ -18,7 +18,8 @@ local function status_bar_items_data(names)
     local item = core.status_bar:get_item(name)
     table.insert(data, {
       text = item.name,
-      info = item.alignment == StatusBar.Item.LEFT and "Left" or "Right",
+      info = item.alignment == StatusBar.Item.LEFT and "Left"
+        or item.alignment == StatusBar.Item.CENTER and "Center" or "Right",
       name = item.name
     })
   end

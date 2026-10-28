@@ -304,6 +304,15 @@ test.describe("Pane Status Bars", function()
     test.equal(context.performed[1].name, "markdown:heading_2")
   end)
 
+  test.it("centers the formatting buttons on the bar", function()
+    local pane = markdown_pane()
+    local bar = bar_of(pane)
+    local first, last = bar:get_entry("markdown:heading"), bar:get_entry("markdown:table")
+    local middle = (first.x + last.x + last.w) / 2
+    test.ok(math.abs(middle - bar.size.x / 2) <= 1, "the buttons are not in the middle of the bar")
+    test.ok(first.x < bar:get_entry("text:position").x, "the buttons must be left of the caret position")
+  end)
+
   test.it("hides all formatting buttons when the Pane is too narrow for them beside the file", function()
     local pane = markdown_pane()
     test.not_nil(bar_of(pane):get_entry("markdown:table"))
