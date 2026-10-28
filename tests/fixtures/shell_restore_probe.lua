@@ -110,7 +110,7 @@ end
 local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b", [root .. "/Other"] = "c"}
 -- Cases that seed their own state file start without a first run.
 local seeded = action == "restore-crash" or action == "restore-sequential" or action == "restore-argument"
- or action == "restore-loaded"
+ or action == "restore-loaded" or action == "restore-select-late"
 -- Writes the shell's Window state, front to back, before the first shell starts.
 local function write_state(entries)
  local lines = {"anvil-shell-windows 2\n"}
@@ -190,6 +190,32 @@ if path:match("/driver$") then
     assert(selected.path == root .. "/Replacement", "restore changed the Selected Project")
     assert(selected.background_state == "ready", "restored background Project reports " .. tostring(selected.background_state))
     assert(selected.dormant == "dormant" and #ready("c", second:pid()) == 0, "restore loaded a Dormant Project")
+    return close_shell(second, "restored")
+   end
+   if action == "restore-select-late" then
+    -- A Project restored in the background draws nothing. Its first-frame deadline starts when it is shown,
+    -- so a selection just before the launch deadline does not fail it.
+    local first = launch(root .. "/Project")
+    wait(function() return ready("a", first:pid())[1] end, 30)
+    wait(function() return ready("b", first:pid())[1] end, 30)
+    close_shell(first, "first")
+    local second = launch()
+    local prefix = "shell%[" .. second:pid() .. "%][^\n]*"
+    wait(function() return trace():find(prefix .. "Shell started Project pid=%d+ path=[^\n]*[\\/]Project\r?\n") end, 30,
+     "background Project did not start")
+    local started = system.get_time()
+    local a = wait(function() return ready("a", second:pid())[1] end, 30, "background Project did not return")
+    wait(function() return ready("b", second:pid())[1] end, 30, "Selected Project did not return")
+    wait(function() return system.get_time() >= started + 29.2 end, 40)
+    save("select-a", true)
+    local id = wait(function()
+     return trace():match(prefix .. "Shell selected loaded Project: id=(%d+) pid=" .. a.pid)
+    end, 5, "background Project was not selected")
+    assert(system.get_time() < started + 30, "the probe selected the Project after its launch deadline")
+    local state = wait(function() return trace():match(prefix .. "Shell state: (%a+) Project=" .. id .. " ") end, 10,
+     "selected Project did not present")
+    assert(load("a-delayed"), "the selected Project did not delay its first frame")
+    assert(state == "Ready", "selecting a background Project failed it: " .. state)
     return close_shell(second, "restored")
    end
    if action == "restore-crash" then
@@ -458,7 +484,8 @@ elseif names[path] then
    save("a-seeded", true)
    core.set_active_view(core.open_file(path .. "/edited.txt"))
    core.save_workspace()
-   if action == "restore-loaded" then assert(core.open_project_in_same_window(root .. "/Replacement"))
+   if action == "restore-loaded" or action == "restore-select-late" then
+    assert(core.open_project_in_same_window(root .. "/Replacement"))
    elseif action ~= "restore-argument" then assert(core.open_project_in_new_window(root .. "/Replacement")) end
   end
   local editor, session
@@ -486,6 +513,23 @@ elseif names[path] then
   save(name .. "-ready-" .. pid, {pid=pid, shell_pid=system.get_window_process_id(),
    window_id=system.get_anvil_window_id(), active=view and view.buffer and view.buffer.abs_filename,
    host_pid=session and session:stats().host_pid})
+  if action == "restore-select-late" and #ready(name) > 1 then
+   if name == "a" then
+    -- The first frame after selection takes longer than the time left before the launch deadline.
+    local on_event = core.on_event
+    function core.on_event(kind, ...)
+     if load("select-a") and not load("a-delayed") then
+      save("a-delayed", true)
+      local resume = system.get_time() + 1.5
+      repeat until system.get_time() >= resume
+     end
+     return on_event(kind, ...)
+    end
+   else
+    wait(function() return load("select-a") end, 60)
+    assert(core.open_project_in_same_window(root .. "/Project"))
+   end
+  end
   if action == "restore-loaded" and name == "a" and #ready("a") > 1 then
    wait(function() return ready("b", system.get_window_process_id())[1] end, 30)
    local previous = core.project_sidebar

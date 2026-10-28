@@ -1521,6 +1521,11 @@ static void send_configure(ShellProject *project) {
       SDL_ClearComposition(window->window);
     project->hit = (AnvilSurfaceHitTest){0};
   }
+  /* A Project that starts hidden draws nothing. Its first-frame deadline starts when the shell shows it. */
+  if (config.render_enabled && !project->last_config.render_enabled && project->state == SHELL_STARTING &&
+      project->startup_timer)
+    SetTimer(project->sidebar ? shell.service_hwnd : window->hwnd, project->startup_timer, SHELL_CONNECT_TIMEOUT_MS,
+             NULL);
   project->last_config = config;
   if (!config.render_enabled && project == window->selected)
     set_surface_busy(window, &window->project_presentation, false);

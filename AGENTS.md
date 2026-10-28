@@ -347,6 +347,7 @@ Run the `windows-close-update-disconnect` shell probe after changes to shutdown 
 The Project Sidebar reports a Project ready after Lua startup and Workspace restore finish.
 Hosted processes report this separately from their first frame and repeat the report after adoption.
 Background Projects do not render. Keep the shell's first-frame guards separate from this status.
+A Project's 30-second first-frame deadline starts again when the shell first shows it. Run the `restore-select-late` shell probe after changes.
 The `restore-loaded` probe checks readiness without selecting the restored background Project.
 
 A Sidebar Pane selection keeps the previous Project's frame until the requested Pane has rendered.
