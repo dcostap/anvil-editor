@@ -184,6 +184,8 @@ SCENARIOS["nag-bar"] = {
 }
 SCENARIOS["nag-bar-light"] = dict(SCENARIOS["nag-bar"], theme="light")
 SCENARIOS["nag-bar-list"] = dict(SCENARIOS["nag-bar"])
+# A list longer than the card's height, in a tall Window: the card stops growing and its message scrolls.
+SCENARIOS["nag-bar-long"] = dict(SCENARIOS["nag-bar"], window_height=1200)
 SCENARIOS["autocomplete-popup"] = dict(SCENARIOS["nag-bar"])
 SCENARIOS["autocomplete-popup-light"] = dict(SCENARIOS["nag-bar"], theme="light")
 SCENARIOS["find-bar"] = dict(SCENARIOS["nag-bar"])

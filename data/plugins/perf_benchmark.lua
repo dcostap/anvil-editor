@@ -974,8 +974,22 @@ local function setup_scenario()
           {text = " build/cache.bin", font = style.code_font}},
       }}
       options = {{text = "Apply", default_yes = true}, {text = "Cancel", default_no = true}}
+    elseif benchmark.scenario == "nag-bar-long" then
+      -- More operations than the card can show, so the message scrolls.
+      local lines = {{{text = "File Tree will perform these filesystem operations:"}}, {}}
+      for i = 1, 60 do
+        lines[#lines + 1] = {{text = "DELETE", font = style.code_font, color = style.filetree_operation_delete},
+          {text = string.format(" file output/run_v1/checkpoint-%06d.safetensors", i), font = style.code_font}}
+      end
+      message = {filetree_styled_nag_message = true, lines = lines}
+      options = {{text = "Apply", default_yes = true}, {text = "Cancel", default_no = true}}
     end
     core.nag_view:show("Render scene", message, options)
+    if benchmark.scenario == "nag-bar-long" then
+      -- Scrolled partway, so text lies beyond both edges.
+      local scroll = core.nag_view.message_view.scroll
+      scroll.y, scroll.to.y = 200 * SCALE, 200 * SCALE
+    end
   end
   if benchmark.scenario:find("^autocomplete%-popup") then
     local autocomplete = require "plugins.autocomplete"
