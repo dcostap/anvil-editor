@@ -236,6 +236,20 @@ test.describe("Global title bar Pane entries", function()
     test.equal(panes.active(), one)
   end)
 
+  test.it("closes the right-clicked Tab's Pane from its Context Menu", function()
+    local context_menu = require "core.context_menu"
+    local one = panes.create { factory = factory("one") }
+    local two = panes.create { factory = factory("two") }
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local entry = title:get_pane_entries()[1]
+    test.ok(title:on_mouse_pressed("right", entry.x + 2, entry.y + 2, 1))
+    test.equal(panes.active(), one)
+    test.ok(context_menu.choose("Close"))
+    test.same(panes.ordered(), { two })
+  end)
+
   test.it("uses content-sized Tabs instead of filling the title lane", function()
     panes.create { factory = factory("one") }
     local title = TitleBar()
