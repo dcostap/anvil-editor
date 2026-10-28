@@ -60,6 +60,11 @@ style.font = renderer.font.load(DATADIR .. "/fonts/FiraSans-Regular.ttf", 14 * S
 style.big_font = style.font:copy(46 * SCALE)
 style.icon_font = renderer.font.load(DATADIR .. "/fonts/icons.ttf", 16 * SCALE, {antialiasing="grayscale", hinting="full"})
 style.icon_big_font = style.icon_font:copy(23 * SCALE)
+-- The Material Design icons of the bundled Nerd Font, for Context Menu items.
+-- This Mono font fits each icon in one character cell, so the size is larger than the text size.
+style.menu_icon_font = renderer.font.load(
+  DATADIR .. "/fonts/CaskaydiaCoveNerdFontMono-Regular.ttf", 20 * SCALE, {antialiasing="grayscale", hinting="full"}
+)
 style.code_font = renderer.font.load(DATADIR .. "/fonts/JetBrainsMono-Regular.ttf", 14 * SCALE)
 style.terminal_font = style.code_font
 style.terminal_bold_font = style.terminal_font:copy(

@@ -476,6 +476,9 @@ Like `image-viewer`, it has no baseline. Run it with `--report-only` and look at
 Use `--scenario context-menu` for the Editor's Context Menu over a document, with one row selected.
 It has no baseline. Run it with `--report-only` and look at the captured screenshot.
 
+Use `--scenario context-menu-markdown` for the Markdown Context Menu at a caret, with its Insert submenu open.
+It has no baseline. Run it with `--report-only` and look at the captured screenshot.
+
 Use `--scenario image-zoom` on both renderers to measure the Image Overlay while it zooms and pans on each frame.
 The zoom goes from fit to the largest scale and back. Compare the frame times and the final screenshots of the two renderers.
 The software renderer must draw only the visible part of a zoomed image. `anvil:image-scale` checks that function.

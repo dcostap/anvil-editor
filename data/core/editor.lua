@@ -214,46 +214,98 @@ function Editor.from_state(state)
   return editor
 end
 
+local icons = require("core.context_menu").icons
+
 local MARKDOWN_TABLE_MENU = {
-  { label = "Insert Row Above", command = "markdown:table_insert_row_above" },
-  { label = "Insert Row Below", command = "markdown:table_insert_row_below" },
-  { label = "Delete Row", command = "markdown:table_delete_row" },
+  { label = "Insert Row Above", icon = icons.row_above, command = "markdown:table_insert_row_above" },
+  { label = "Insert Row Below", icon = icons.row_below, command = "markdown:table_insert_row_below" },
+  { label = "Delete Row", icon = icons.row_delete, command = "markdown:table_delete_row" },
   "-",
-  { label = "Insert Column Left", command = "markdown:table_insert_column_left" },
-  { label = "Insert Column Right", command = "markdown:table_insert_column_right" },
-  { label = "Delete Column", command = "markdown:table_delete_column" },
+  { label = "Insert Column Left", icon = icons.column_left, command = "markdown:table_insert_column_left" },
+  { label = "Insert Column Right", icon = icons.column_right, command = "markdown:table_insert_column_right" },
+  { label = "Delete Column", icon = icons.column_delete, command = "markdown:table_delete_column" },
   "-",
-  { label = "Align Left", command = "markdown:table_align_column_left" },
-  { label = "Align Center", command = "markdown:table_align_column_center" },
-  { label = "Align Right", command = "markdown:table_align_column_right" },
+  { label = "Align Left", icon = icons.align_left, command = "markdown:table_align_column_left" },
+  { label = "Align Center", icon = icons.align_center, command = "markdown:table_align_column_center" },
+  { label = "Align Right", icon = icons.align_right, command = "markdown:table_align_column_right" },
   "-",
-  { label = "Sort Ascending", command = "markdown:table_sort_ascending" },
-  { label = "Sort Descending", command = "markdown:table_sort_descending" },
-  { label = "Format Table", command = "markdown:table_format" },
+  { label = "Sort Ascending", icon = icons.sort_ascending, command = "markdown:table_sort_ascending" },
+  { label = "Sort Descending", icon = icons.sort_descending, command = "markdown:table_sort_descending" },
+  { label = "Format Table", icon = icons.tidy, command = "markdown:table_format" },
 }
 
----A Markdown Editor adds formatting, Footnote, table and mode items to the Text View items.
+local MARKDOWN_PARAGRAPH_MENU = {
+  { label = "Normal Text", icon = icons.text, command = "markdown:normal_text" },
+  { label = "Heading 1", icon = icons.heading_1, command = "markdown:heading_1" },
+  { label = "Heading 2", icon = icons.heading_2, command = "markdown:heading_2" },
+  { label = "Heading 3", icon = icons.heading_3, command = "markdown:heading_3" },
+  "-",
+  { label = "Bulleted List", icon = icons.bullet_list, command = "markdown:toggle_bullet_list" },
+  { label = "Numbered List", icon = icons.numbered_list, command = "markdown:toggle_numbered_list" },
+  { label = "Task List", icon = icons.task_list, command = "markdown:toggle_task_list" },
+  { label = "Quote", icon = icons.quote, command = "markdown:toggle_quote" },
+}
+
+local MARKDOWN_FORMAT_MENU = {
+  { label = "Strikethrough", icon = icons.strikethrough, command = "markdown:surround_strikethrough" },
+  { label = "Inline Code", icon = icons.code, command = "markdown:surround_code" },
+  "-",
+  { label = "Code Block", icon = icons.code_block, command = "markdown:insert_code_block" },
+  { label = "Callout", icon = icons.callout, command = "markdown:insert_callout" },
+}
+
+local MARKDOWN_INSERT_MENU = {
+  { label = "Table", icon = icons.table, command = "markdown:insert_table" },
+  { label = "Link", icon = icons.link, command = "markdown:insert_link" },
+  { label = "Code Block", icon = icons.code_block, command = "markdown:insert_code_block" },
+  { label = "Callout", icon = icons.callout, command = "markdown:insert_callout" },
+  { label = "Footnote", icon = icons.footnote, command = "markdown:add_footnote" },
+}
+
+---A Markdown Editor offers writing commands instead of the code commands of a Text View.
+---Selected text gets formatting. A caret gets paragraph styles and things to insert.
 function Editor:context_menu(x, y)
-  local items = Editor.super.context_menu(self, x, y)
   local live = require "core.markdown.live_render"
-  if not live.is_markdown_buffer(self.buffer) then return items end
-  local markdown = { "-" }
-  if self.buffer:has_selection() then
-    markdown[#markdown + 1] = { label = "Bold", command = "markdown:surround_bold" }
-    markdown[#markdown + 1] = { label = "Italic", command = "markdown:surround_italic" }
-    markdown[#markdown + 1] = { label = "Add Text Note", command = "markdown:add_text_note" }
-  else
-    markdown[#markdown + 1] = { label = "Add Footnote", command = "markdown:add_footnote" }
+  if not live.is_markdown_buffer(self.buffer) then return Editor.super.context_menu(self, x, y) end
+  self:place_context_menu_caret(x, y)
+  local editable = self:can_edit("context menu")
+  local selected = self.buffer:has_selection()
+  local items = {}
+  local function add(item) items[#items + 1] = item end
+  if not selected and require("core.poi").point_at_caret(self, { activatable = true, silent = true }) then
+    add { label = "Open", icon = icons.open, command = "core:activate_point_of_interest" }
+    add "-"
   end
-  markdown[#markdown + 1] = { label = "Edit Footnote", command = "markdown:edit_footnote" }
-  markdown[#markdown + 1] = { label = "Remove Footnote", command = "markdown:remove_footnote" }
-  markdown[#markdown + 1] = { label = "Table", items = MARKDOWN_TABLE_MENU }
-  markdown[#markdown + 1] = "-"
-  markdown[#markdown + 1] = {
-    label = live.is_live_mode(self) and "Show Markdown Source" or "Show Live Preview",
+  if selected then
+    if editable then add { label = "Cut", icon = icons.cut, command = "core:cut" } end
+    add { label = "Copy", icon = icons.copy, command = "core:copy" }
+  end
+  if editable then
+    add { label = "Paste", icon = icons.paste, command = { "markdown:table_paste", "markdown:paste_table", "core:paste" } }
+  end
+  if not selected then add { label = "Select All", icon = icons.select_all, command = "core:select_all" } end
+  add "-"
+  if selected then
+    add { label = "Bold", icon = icons.bold, command = "markdown:surround_bold" }
+    add { label = "Italic", icon = icons.italic, command = "markdown:surround_italic" }
+    add { label = "Link", icon = icons.link, command = "markdown:insert_link" }
+    add { label = "Format", icon = icons.format, items = MARKDOWN_FORMAT_MENU }
+    add { label = "Paragraph", icon = icons.text, items = MARKDOWN_PARAGRAPH_MENU }
+    add { label = "Add Text Note", icon = icons.note, command = "markdown:add_text_note" }
+  else
+    add { label = "Paragraph", icon = icons.text, items = MARKDOWN_PARAGRAPH_MENU }
+    add { label = "Insert", icon = icons.insert, items = MARKDOWN_INSERT_MENU }
+    add { label = "Table", icon = icons.table, items = MARKDOWN_TABLE_MENU }
+    add { label = "Edit Footnote", icon = icons.edit, command = "markdown:edit_footnote" }
+    add { label = "Remove Footnote", icon = icons.delete, command = "markdown:remove_footnote" }
+  end
+  add "-"
+  local live_mode = live.is_live_mode(self)
+  add {
+    label = live_mode and "Show Markdown Source" or "Show Live Preview",
+    icon = live_mode and icons.source or icons.preview,
     command = "markdown:toggle_source_mode",
   }
-  for _, item in ipairs(markdown) do items[#items + 1] = item end
   return items
 end
 

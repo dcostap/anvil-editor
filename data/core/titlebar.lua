@@ -590,17 +590,18 @@ local function perform_caption(index)
 end
 
 -- The Context Menu of a Tab. A right-click focuses the Tab's Pane first, so the commands act on it.
+local icons = require("core.context_menu").icons
 local TAB_MENU = {
-  { label = "Close", command = "pane:close" },
-  { label = "Close Others", command = "pane:close_others" },
-  { label = "Reopen Closed Pane", command = "core:reopen_last_closed_pane" },
+  { label = "Close", icon = icons.close, command = "pane:close" },
+  { label = "Close Others", icon = icons.close_others, command = "pane:close_others" },
+  { label = "Reopen Closed Pane", icon = icons.reopen, command = "core:reopen_last_closed_pane" },
   "-",
-  { label = "Split Right", command = "pane:copy_view_to_split_right" },
-  { label = "Split Down", command = "pane:copy_view_to_split_down" },
+  { label = "Split Right", icon = icons.split_right, command = "pane:copy_view_to_split_right" },
+  { label = "Split Down", icon = icons.split_down, command = "pane:copy_view_to_split_down" },
   "-",
-  { label = "Copy Path", command = "editor:copy_absolute_filepath" },
-  { label = "Copy Relative Path", command = "editor:copy_relative_filepath" },
-  { label = "Reveal in Explorer", command = "editor:reveal_active_file_in_explorer" },
+  { label = "Copy Path", icon = icons.path, command = "editor:copy_absolute_filepath" },
+  { label = "Copy Relative Path", icon = icons.path, command = "editor:copy_relative_filepath" },
+  { label = "Reveal in Explorer", icon = icons.reveal, command = "editor:reveal_active_file_in_explorer" },
 }
 
 function TitleBar:on_mouse_pressed(button, x, y, clicks)

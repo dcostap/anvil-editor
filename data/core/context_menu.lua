@@ -12,10 +12,32 @@ local card = require "core.card"
 ---
 ---An item is `"-"` for a separator, or a table:
 ---  `label`   the visible name
+---  `icon`    an optional glyph from `context_menu.icons`
 ---  `command` a command name, or a list of names; the first valid one runs
 ---  `args`    arguments for the command and its predicate
 ---  `items`   a submenu instead of a command
 local context_menu = {}
+
+---Icons from the Material Design set of the bundled Nerd Font, for the `icon` field of items.
+context_menu.icons = {
+  open = "\u{F03CC}", definition = "\u{F0169}", search = "\u{F0349}",
+  cut = "\u{F0190}", copy = "\u{F018F}", paste = "\u{F0192}", select_all = "\u{F0486}",
+  bold = "\u{F0264}", italic = "\u{F0277}", strikethrough = "\u{F0280}", code = "\u{F0174}", link = "\u{F0339}",
+  text = "\u{F0284}", heading_1 = "\u{F026B}", heading_2 = "\u{F026C}", heading_3 = "\u{F026D}",
+  bullet_list = "\u{F0279}", numbered_list = "\u{F027B}", task_list = "\u{F0756}", quote = "\u{F0757}",
+  table = "\u{F04EB}", code_block = "\u{F0169}", callout = "\u{F02FD}", footnote = "\u{F0283}",
+  note = "\u{F1782}", edit = "\u{F0CB6}", delete = "\u{F09E7}", preview = "\u{F06D0}", source = "\u{F0F5B}",
+  row_above = "\u{F04F4}", row_below = "\u{F04F3}", row_delete = "\u{F04F5}",
+  column_left = "\u{F04ED}", column_right = "\u{F04EC}", column_delete = "\u{F04EE}",
+  align_left = "\u{F0262}", align_center = "\u{F0260}", align_right = "\u{F0263}",
+  sort_ascending = "\u{F05BD}", sort_descending = "\u{F05BF}", tidy = "\u{F0068}",
+  file = "\u{F0224}", split_right = "\u{F0BCC}", split_down = "\u{F0BCB}",
+  new_file = "\u{F0EED}", new_folder = "\u{F0B9D}", rename = "\u{F0455}", path = "\u{F0A38}",
+  reveal = "\u{F0DCF}", terminal = "\u{F018D}", sort = "\u{F04BA}",
+  close = "\u{F0156}", close_others = "\u{F0C5E}", reopen = "\u{F099B}",
+  insert = "\u{F0704}", format = "\u{F06D6}",
+}
+
 
 local OPEN_DURATION = 0.09
 local SUBMENU_DELAY = 0.18
@@ -30,6 +52,8 @@ local function metrics()
   local font = style.font
   return {
     font = font,
+    icon_font = style.menu_icon_font,
+    icon_w = math.floor(26 * SCALE),
     pad = math.floor(4 * SCALE),
     row_h = font:get_height() + math.floor(9 * SCALE),
     row_x = math.floor(10 * SCALE),
@@ -80,11 +104,11 @@ local function resolve(items)
       if #rows > 0 and not rows[#rows].separator then rows[#rows + 1] = { separator = true } end
     elseif item.items then
       local children = resolve(item.items)
-      if #children > 0 then rows[#rows + 1] = { label = item.label, items = children } end
+      if #children > 0 then rows[#rows + 1] = { label = item.label, icon = item.icon, items = children } end
     else
       local name = valid_command(item)
       if name then
-        rows[#rows + 1] = { label = item.label, command = name, args = item.args or {},
+        rows[#rows + 1] = { label = item.label, icon = item.icon, command = name, args = item.args or {},
           shortcut = binding_for(item, name) }
       end
     end
@@ -103,9 +127,14 @@ end
 local function layout_level(rows, x, y, flip_x)
   local m = metrics()
   local w = m.min_w
+  -- A level with an icon gives every row an icon column, so the labels line up.
+  local icon_w = 0
+  for _, row in ipairs(rows) do
+    if row.icon then icon_w = m.icon_w end
+  end
   for _, row in ipairs(rows) do
     if not row.separator then
-      local label_w = m.font:get_width(row.label)
+      local label_w = icon_w + m.font:get_width(row.label)
       local extra = row.shortcut and m.gap + m.font:get_width(row.shortcut) or (row.items and m.gap) or 0
       w = math.max(w, label_w + extra + m.row_x * 2 + m.pad * 2)
     end
@@ -118,7 +147,7 @@ local function layout_level(rows, x, y, flip_x)
   x = common.clamp(x, bx + m.margin, bx + bw - m.margin - w)
   if y + h > by + bh - m.margin then y = by + bh - m.margin - h end
   y = math.max(y, by + m.margin)
-  local level = { rows = rows, x = math.floor(x), y = math.floor(y), w = math.floor(w), h = math.floor(h) }
+  local level = { rows = rows, x = math.floor(x), y = math.floor(y), w = math.floor(w), h = math.floor(h), icon_w = icon_w }
   local ry = level.y + m.pad
   for _, row in ipairs(rows) do
     local rh = row.separator and m.sep_h or m.row_h
@@ -412,7 +441,10 @@ local function draw_level(level)
       local selected = level.selected == index
       if selected then renderer.draw_rounded_rect(row.x, row.y, row.w, row.h, m.row_radius, style.card_selection) end
       local tx, tw = row.x + m.row_x, row.w - m.row_x * 2
-      common.draw_text(m.font, style.text, row.label, "left", tx, row.y, tw, row.h)
+      if row.icon then
+        common.draw_text(m.icon_font, selected and style.text or style.card_text, row.icon, "left", tx, row.y, level.icon_w, row.h)
+      end
+      common.draw_text(m.font, style.text, row.label, "left", tx + level.icon_w, row.y, tw - level.icon_w, row.h)
       if row.shortcut then
         common.draw_text(m.font, style.card_text, row.shortcut, "right", tx, row.y, tw, row.h)
       elseif row.items then

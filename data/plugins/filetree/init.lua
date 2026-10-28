@@ -3677,25 +3677,26 @@ function FileTreeView:context_menu(x, y)
     end
     if not selected then self.buffer:set_selection(line, 1, line, #line_text(self.buffer.lines[line])) end
   end
+  local icons = require("core.context_menu").icons
   return {
-    { label = "Open", command = "filetree:open_selected" },
-    { label = "Open to the Right", command = "filetree:open_selected_right" },
+    { label = "Open", icon = icons.open, command = "filetree:open_selected" },
+    { label = "Open to the Right", icon = icons.split_right, command = "filetree:open_selected_right" },
     "-",
-    { label = "New File…", command = "editor:new_file_with_path" },
-    { label = "New Folder…", command = "editor:new_folder_with_path" },
+    { label = "New File…", icon = icons.new_file, command = "editor:new_file_with_path" },
+    { label = "New Folder…", icon = icons.new_folder, command = "editor:new_folder_with_path" },
     "-",
-    { label = "Cut", command = "core:cut" },
-    { label = "Copy", command = "core:copy" },
-    { label = "Paste", command = "core:paste" },
-    { label = "Rename…", command = "filetree:rename_selected" },
-    { label = "Delete", command = "filetree:delete_selected" },
+    { label = "Cut", icon = icons.cut, command = "core:cut" },
+    { label = "Copy", icon = icons.copy, command = "core:copy" },
+    { label = "Paste", icon = icons.paste, command = "core:paste" },
+    { label = "Rename…", icon = icons.rename, command = "filetree:rename_selected" },
+    { label = "Delete", icon = icons.delete, command = "filetree:delete_selected" },
     "-",
-    { label = "Copy Path", command = "editor:copy_absolute_filepath" },
-    { label = "Copy Relative Path", command = "editor:copy_relative_filepath" },
-    { label = "Reveal in Explorer", command = "editor:reveal_active_file_in_explorer" },
-    { label = "Open Terminal Here", command = "terminal:open" },
+    { label = "Copy Path", icon = icons.path, command = "editor:copy_absolute_filepath" },
+    { label = "Copy Relative Path", icon = icons.path, command = "editor:copy_relative_filepath" },
+    { label = "Reveal in Explorer", icon = icons.reveal, command = "editor:reveal_active_file_in_explorer" },
+    { label = "Open Terminal Here", icon = icons.terminal, command = "terminal:open" },
     "-",
-    { label = "Sort", items = {
+    { label = "Sort", icon = icons.sort, items = {
       { label = "By Name", command = "filetree:sort_by_name" },
       { label = "By Date Modified", command = "filetree:sort_by_date_modified" },
     } },

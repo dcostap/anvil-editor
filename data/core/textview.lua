@@ -2791,7 +2791,8 @@ end
 ---The Context Menu's items at a screen point. A right-click outside the selection moves the caret there first,
 ---so the items act on the clicked text.
 ---@return table[]
-function TextView:context_menu(x, y)
+---A right-click outside the selection moves the caret to the point first.
+function TextView:place_context_menu_caret(x, y)
   if x and y and x >= self.position.x + self:get_gutter_width() then
     local line, col = self:resolve_screen_position(x, y)
     local inside = false
@@ -2802,18 +2803,24 @@ function TextView:context_menu(x, y)
     end
     if not inside then self.buffer:set_selection(line, col) end
   end
+end
+
+function TextView:context_menu(x, y)
+  self:place_context_menu_caret(x, y)
+  local icons = require("core.context_menu").icons
   local items = {}
   local poi = require("core.poi").point_at_caret(self, { activatable = true, silent = true })
-  items[#items + 1] = { label = poi and "Open" or "Go to Definition", command = "core:activate_point_of_interest" }
-  items[#items + 1] = { label = "Find Usages", command = "editor:show_references" }
+  items[#items + 1] = {
+    label = poi and "Open" or "Go to Definition", icon = poi and icons.open or icons.definition,
+    command = "core:activate_point_of_interest",
+  }
+  items[#items + 1] = { label = "Find Usages", icon = icons.search, command = "editor:show_references" }
   items[#items + 1] = "-"
   local editable = self:can_edit("context menu")
-  if editable then items[#items + 1] = { label = "Cut", command = "core:cut" } end
-  items[#items + 1] = { label = "Copy", command = "core:copy" }
-  if editable then
-    items[#items + 1] = { label = "Paste", command = { "markdown:table_paste", "markdown:paste_table", "core:paste" } }
-  end
-  items[#items + 1] = { label = "Select All", command = "core:select_all" }
+  if editable then items[#items + 1] = { label = "Cut", icon = icons.cut, command = "core:cut" } end
+  items[#items + 1] = { label = "Copy", icon = icons.copy, command = "core:copy" }
+  if editable then items[#items + 1] = { label = "Paste", icon = icons.paste, command = "core:paste" } end
+  items[#items + 1] = { label = "Select All", icon = icons.select_all, command = "core:select_all" }
   return items
 end
 

@@ -1029,6 +1029,16 @@ local function scenario_is_ready()
     end
     return view.find.delivered and not view.find.stale
   end
+  if benchmark.scenario == "context-menu-markdown" then
+    -- The Markdown Context Menu at a caret, with its Insert submenu open.
+    local context_menu = require "core.context_menu"
+    if context_menu.is_open() then return true end
+    config.transitions = false
+    local x, y = view.position.x + 420 * SCALE, view.position.y + 205 * SCALE
+    context_menu.open(x, y, view:context_menu(x, y))
+    context_menu.choose("Insert")
+    return false
+  end
   if benchmark.scenario == "find-bar-hover" then
     local layout = view:get_local_find_layout()
     if not layout then return false end
