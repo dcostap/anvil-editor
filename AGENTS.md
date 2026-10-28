@@ -182,6 +182,11 @@ Run `ui/fuzzy_searcher_path_search.lua` and `ui/sidebar_view.lua` after changes.
 The Fuzzy Searcher shows this Project's badge and name at the left of the query, with the same `core.project_look`.
 Path Search searches beyond this Project, so it does not show it. Pickers with their own list, such as the file picker, do not show it either. Run `ui/fuzzy_searcher_project_chip.lua` after changes.
 
+Project File Search also shows Other Project Results. Each query goes to the other ready Projects as a `file_search` Pane request.
+Each Project searches its own file index and answers with up to 5 rows in a `file_results` request. A Project without an index or a match does not answer.
+The picker ignores answers to an earlier query. Opening a row sends `open_file` to its Project through the select route.
+Run `ui/fuzzy_searcher_other_projects.lua` and the `launch-file-search` shell probe after changes. The probe reports the answer time.
+
 Text Search also searches the Terminal Sessions of this Project. It does not search the Terminals of other Projects.
 A Terminal that this Project shows gives its live text. Other Terminals give the screen that their host saved last.
 That screen can be up to about 20 seconds old. A worker reads it (`terminal_snapshot_text`).

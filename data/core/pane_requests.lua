@@ -22,6 +22,10 @@ local function identifier(value)
   return type(value) == "string" and value ~= "" and not value:find("%z")
 end
 
+local function positive(value)
+  return type(value) == "number" and value >= 1 and value % 1 == 0
+end
+
 -- A position without an anchor is the end of the Tab order, so it needs no side.
 local function position(target)
   if not fields(target, {mode = true, anchor = true, side = true})
@@ -94,6 +98,9 @@ local schemas = {
   transferred = {transfer = true, ok = true, error = true},
   drag = {phase = true, source = true, pane = true},
   terminal_find = {session = true, query = true, case_sensitive = true, row = true},
+  file_search = {from = true, id = true, query = true, case_sensitive = true, limit = true},
+  file_results = {source = true, id = true, rows = true},
+  open_file = {file = true, line = true, col = true},
 }
 for _, schema in pairs(schemas) do schema.action = true end
 
@@ -111,7 +118,7 @@ local function validate(request)
     local ok, err = position(request.target)
     if not ok then return nil, err end
   end
-  for _, key in ipairs {"to", "source"} do
+  for _, key in ipairs {"to", "source", "from"} do
     if schema[key] and (not identifier(request[key]) or not common.is_absolute_path(request[key])) then
       return nil, "invalid Project path"
     end
@@ -124,6 +131,16 @@ local function validate(request)
     or type(request.case_sensitive) ~= "boolean" or type(request.row) ~= "number"
     or request.row % 1 ~= 0 or request.row < 0) then
     return nil, "invalid Terminal match"
+  end
+  if (schema.id or schema.line) and not (positive(request.id or 1) and positive(request.line or 1)
+    and positive(request.col or 1) and positive(request.limit or 1)) then
+    return nil, "invalid number"
+  end
+  if request.action == "file_search" and (not identifier(request.query)
+    or type(request.case_sensitive) ~= "boolean") then return nil, "invalid File Search" end
+  if request.action == "file_results" and type(request.rows) ~= "table" then return nil, "invalid File Search rows" end
+  if request.action == "open_file" and (not identifier(request.file) or not common.is_absolute_path(request.file)) then
+    return nil, "invalid file path"
   end
   if request.action == "drag" and request.phase ~= "move" and request.phase ~= "drop"
     and request.phase ~= "leave" then return nil, "invalid drag phase" end
@@ -155,6 +172,15 @@ local function execute(request, x, y)
   end
   if action == "export" or action == "import" or action == "transferred" then
     return require("core.pane_transfer").perform(request)
+  end
+  -- Project File Search in another Project, and this Project's answer to one.
+  if action == "file_search" then return require("plugins.fuzzy_searcher.other_projects").answer(request) end
+  if action == "file_results" then return require("plugins.fuzzy_searcher.other_projects").receive(request) end
+  -- A file that another Project's File Search chose. It opens as a result of this Project's own search does.
+  if action == "open_file" then
+    local view, err = core.open_file(request.file,
+      {placement = "current", line = request.line, col = request.col, focus = true})
+    return view and true, err
   end
   -- A Text Search match in a Terminal Session of this Project.
   if action == "terminal_find" then
@@ -231,8 +257,8 @@ function M.perform(text, x, y)
   local valid
   valid, err = validate(request)
   if not valid then return fail(err) end
-  -- A drag sends a request for each pointer move.
-  local quiet = request.phase == "move"
+  -- A drag sends a request for each pointer move, and File Search one for each query.
+  local quiet = request.phase == "move" or request.action == "file_search" or request.action == "file_results"
   if not quiet then
     core.log_quiet("Pane request: %s pointer=%s,%s", request.action, tostring(x), tostring(y))
   end

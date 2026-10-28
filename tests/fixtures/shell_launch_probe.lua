@@ -65,6 +65,8 @@ local function windows(pid)
  user32.EnumWindows(cb, 0); cb:free(); return found, count
 end
 local function quit() core.exit(function() core.quit_request = true end, true) end
+-- Measurements that the driver reports with its result.
+local detail
 local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b", [root .. "/user/scratch"] = "s"}
 
 if path:match("/driver$") then
@@ -119,6 +121,20 @@ if path:match("/driver$") then
     assert(result.ok, result.error)
     assert(#ready("a") == 1 and #ready("b") == 1, "the Terminal move started a duplicate Project runtime")
     return close_shell(shell, "Terminal move")
+   end
+
+   if action == "launch-file-search" then
+    -- Replacement's File Search lists Project's files from Project's own file index, while Project stays in the
+    -- background. Opening one selects Project and opens it there.
+    local shell = launch(root .. "/Project")
+    local a = wait(function() return ready("a")[1] end, 30)
+    assert(exits(launch(root .. "/Replacement"), 20, "second Project") == 0, "second Project launch failed")
+    local b = wait(function() return ready("b")[1] end, 30, "second Project did not load")
+    assert(a.window_id == b.window_id, "second Project opened in another Window")
+    local result = wait(function() return load("file-search") end, 90, "the File Search did not complete")
+    assert(result.ok, result.error)
+    detail = result.latency
+    return close_shell(shell, "File Search")
    end
 
    if action == "launch-forward" then
@@ -284,7 +300,8 @@ if path:match("/driver$") then
    error("unknown shell launch probe " .. action)
   end)
   local file = assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"), "wb"))
-  file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action}); file:close()
+  file:write("return ", common.serialize{ok=ok, error=ok and nil or tostring(err), action=action, detail=detail})
+  file:close()
   for _, handle in ipairs(handles) do ntdll.NtResumeProcess(handle) end
   for _, item in ipairs(launched) do
    if item:running() then item:terminate(); item:wait(1) end
@@ -416,6 +433,67 @@ elseif names[path] then
    end)
    if view then view:on_close() end
    if names[path] == "b" or not ok then save("terminal-move", {ok=ok, error=ok and nil or tostring(err)}) end
+  end
+  if action == "launch-file-search" and names[path] == "a" then
+   -- Report the file that Replacement's File Search opens here.
+   wait(function()
+    local buffer = core.active_view and core.active_view.buffer
+    return buffer and buffer.abs_filename and buffer.abs_filename:gsub("\\", "/") == root .. "/Project/second.txt"
+   end, 90, "Project did not open the chosen file")
+   save("file-search-opened", {project = core.root_project().path})
+  end
+  if action == "launch-file-search" and names[path] == "b" then
+   local ok, latency = pcall(function()
+    local fuzzy_searcher = require "plugins.fuzzy_searcher"
+    local project, second = root .. "/Project", root .. "/Project/second.txt"
+    wait(function()
+     for _, item in ipairs(core.project_sidebar or {}) do
+      if common.path_equals(item.path, project) and item.state == "ready" then return true end
+     end
+    end, 30, "Project is not ready in the Sidebar model")
+    -- The row of Project's file, once Project answered `query`. The list keeps the previous query's rows until
+    -- this Project's own results arrive, so the row must come from the answer to this query.
+    local function row(picker, query)
+     local state = picker.other_projects
+     if not state or state.query ~= query then return end
+     for _, rows in pairs(state.rows) do
+      for _, result in ipairs(rows) do
+       if result.abs_path:gsub("\\", "/") == second then
+        for index, shown in ipairs(picker.results) do
+         if shown == result then return index end
+        end
+       end
+      end
+     end
+    end
+    fuzzy_searcher.open("second")
+    local picker = assert(core.fuzzy_searcher_active_view)
+    -- Project builds its file index after startup, and answers nothing before. A new query asks again.
+    local warm = {"second", "second.txt"}
+    local round = 0
+    wait(function()
+     round = round + 1
+     picker.input:set_text(warm[round % 2 + 1])
+     local deadline = system.get_time() + 1
+     repeat coroutine.yield(.01) until row(picker, warm[round % 2 + 1]) or system.get_time() > deadline
+     return row(picker, warm[round % 2 + 1])
+    end, 45, "Project never answered File Search")
+    local queries, times = {"secon", "econd", "seco", "cond", "second.t", "sec", "ond.txt", "second"}, {}
+    for index = 1, 24 do
+     local query = queries[(index - 1) % #queries + 1]
+     local started = system.get_time()
+     picker.input:set_text(query)
+     wait(function() return row(picker, query) end, 10, "Project did not answer " .. query)
+     times[#times + 1] = (system.get_time() - started) * 1000
+    end
+    table.sort(times)
+    picker.selected = row(picker, queries[#queries])
+    picker:confirm(false)
+    local opened = wait(function() return load("file-search-opened") end, 20, "Project did not open the chosen file")
+    assert(common.path_equals(opened.project, project), "the chosen file opened in another Project")
+    return {rounds = #times, min_ms = times[1], p50_ms = times[math.ceil(#times / 2)], max_ms = times[#times]}
+   end)
+   save("file-search", {ok = ok, error = not ok and tostring(latency) or nil, latency = ok and latency or nil})
   end
   if action == "launch-files" then
    -- Report each opened file. Save new files so the isolated shell can close without a save prompt.

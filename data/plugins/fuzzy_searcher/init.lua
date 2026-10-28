@@ -43,6 +43,7 @@ local fuzzy_searcher = {
   open_transition = require "plugins.fuzzy_searcher.open_transition",
   projects = require "plugins.fuzzy_searcher.projects",
   terminals = require "plugins.fuzzy_searcher.terminals",
+  other_projects = require "plugins.fuzzy_searcher.other_projects",
   project_look = require "core.project_look",
   copy_feedback = require "core.copy_feedback",
   encoded_data = require "core.encoded_data",
@@ -5134,8 +5135,54 @@ function FSView:on_modal_mouse_wheel(y, x)
   return self:on_mouse_wheel(y, x)
 end
 
+-- This Project's best `limit` files for the File Search of another Project, as rows that a Pane request can carry.
+-- Runs in a thread. Returns nil without a file index, or when `alive()` turns false.
+fuzzy_searcher.other_projects.search_files = function(query, case_sensitive, limit, alive)
+  if not native_file_index_ready() then return nil end
+  local task = fuzzy_searcher.files_fuzzy_index:search_async(query,
+    { limit = limit + 32, spans = true, case_sensitive = case_sensitive })
+  local results = task:poll()
+  while not results do
+    coroutine.yield(0.001)
+    if not alive() then return nil end
+    results = task:poll()
+  end
+  local matches = {}
+  for _, match in ipairs(results) do
+    local text = adopt_native_file_match(match)
+    local meta = fuzzy_searcher.files_metadata[text] or (type(match) == "table" and match) or {}
+    if meta.abs_path and not meta.is_folder then
+      matches[#matches + 1] = { text = text, meta = meta, spans = match.spans,
+        score = fuzzy_searcher.adjusted_file_score(match.score or 0, match) }
+    end
+  end
+  table.sort(matches, fuzzy_result_better)
+  local rows = {}
+  for index = 1, math.min(limit, #matches) do
+    local match = matches[index]
+    rows[index] = { label = match.text, abs_path = match.meta.abs_path, root_label = match.meta.root_label,
+      root_role = match.meta.root_role, prefix_span = match.meta.prefix_span, spans = match.spans }
+  end
+  return rows
+end
+
+-- Shows the rows that other Projects sent, after this Project's rows. The selected row stays selected.
+function FSView:show_other_projects()
+  if not self.own_results then return end
+  local selected = self.results[self.selected]
+  self.results = fuzzy_searcher.other_projects.with_rows(self, self.own_results)
+  for index, result in ipairs(self.results) do
+    if result == selected then self.selected = index break end
+  end
+  if self.results[self.selected] and self.results[self.selected].header then self:select_delta(1) end
+  self:schedule_update(true)
+  core.redraw = true
+end
+
 function FSView:start_file_search(query, line, reset_selection)
   kill_file_search()
+  self.own_results = nil
+  fuzzy_searcher.other_projects.request(self, query, line)
   local gen = file_search_generation
   local direct = self.direct_path_result
   local keep_limit = self:max_result_limit() + 1
@@ -5147,7 +5194,8 @@ function FSView:start_file_search(query, line, reset_selection)
   local function apply_results(out, has_more)
     self:cancel_deferred_loading_feedback()
     out = path_search.prepend_direct(out, direct)
-    self.results = out
+    self.own_results = out
+    self.results = fuzzy_searcher.other_projects.with_rows(self, out)
     self.has_more = has_more
     if self.pending_select_index then
       self.selected = common.clamp(self.pending_select_index, 1, math.max(1, #out))
@@ -7297,6 +7345,8 @@ function FSView:refresh(text)
   end
 
   if query_changed then
+    -- Rows of other Projects belong to the query that asked for them.
+    self.other_projects = nil
     if self.bookmark_open_cancel then self.bookmark_open_cancel(); self.bookmark_open_cancel = nil end
     self.bookmark_activation = nil
     if self.open_revision_job then self.open_revision_job:cancel(); self.open_revision_job = nil end
@@ -8058,6 +8108,10 @@ function FSView:activate_selected_result(new_group)
     self:close()
     return fuzzy_searcher.terminals.open(r)
   end
+  if r.other_project then
+    self:close()
+    return fuzzy_searcher.other_projects.open(r)
+  end
   if r.buffer and r.line then
     return self:open_buffer_result(r, new_group)
   end
@@ -8446,6 +8500,9 @@ function FSView:draw_open_content()
       reset_rendered_file_group()
       if r.separator then
         renderer.draw_rect(x + pad, yy + math.floor(lh / 2), math.max(0, row_text_w), border, style.card_border)
+      elseif r.project then
+        fuzzy_searcher.projects.draw_chip(r.project, x + pad,
+          yy + math.floor((lh - style.font:get_height()) / 2), row_text_w)
       else
         renderer.draw_text(header_font, truncate_text(header_font, r.label, row_text_w), x + pad,
           yy + math.floor((lh - header_font:get_height()) / 2), style.dim)

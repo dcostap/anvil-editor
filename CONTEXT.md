@@ -551,6 +551,10 @@ _Avoid_: fuzzy file searcher
 A Project File Search result for a folder. Activating it opens a File Tree rooted at that folder.
 _Avoid_: directory action, Project result
 
+**Other Project Results**:
+Project File Search results from the other loaded Projects. They follow the Selected Project's results, in one group for each Project under that Project's badge and name. Activating one selects its Project and opens the file there. Dormant Projects give none.
+_Avoid_: cross-Project results, global results
+
 **Path Search**:
 A Fuzzy Searcher search for recent Projects, folders, and files outside the current Project Search Scope.
 _Avoid_: external mode, system search
