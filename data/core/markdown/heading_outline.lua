@@ -100,16 +100,14 @@ local function line_y(view, line)
   return y
 end
 
--- The heading that a click moved to stays current while the caret stays on
--- it and it shows, also when the end of the document stops it below the
--- reading line.
+-- The heading that a click moved to stays current while the view scrolls to
+-- it and after, until the user scrolls, presses elsewhere in the view, or
+-- moves the caret off its line. A short section after it, or the end of the
+-- document, can leave it below the reading line.
 local function picked_index(view, state, list)
   local line = state.pick_line
   if not line then return nil end
-  local y = line_y(view, line)
-  if view.buffer:get_selection() == line
-    and y >= view.position.y and y < view.position.y + view.size.y
-  then
+  if view.buffer:get_selection() == line then
     for index, heading in ipairs(list) do
       if heading.line == line then return index end
     end
@@ -209,22 +207,22 @@ function heading_outline.layout(view)
     offset_target = common.clamp((current - 0.5) * row_h - height / 2, 0, content_h - height)
   end
   local offset = math.min(state.offset, math.max(0, content_h - height))
-  local entries = {}
+  -- The headings stay until the outline changes, so each one keeps its
+  -- entry fields. A long document has thousands of headings, and layout runs
+  -- in each update and draw.
   for index, heading in ipairs(list) do
     local text_x = x + scaled(TITLE_GAP) + heading.depth * scaled(INDENT)
     local text_width = x + width - text_x
     if heading.fit_width ~= text_width or heading.fit_font ~= font then
       heading.fit_width, heading.fit_font = text_width, font
-      heading.fit_title = fit_text(font, heading.title, text_width)
+      heading.shown_title = fit_text(font, heading.title, text_width)
     end
-    entries[index] = {
-      line = heading.line, col = heading.col, title = heading.title, shown_title = heading.fit_title,
-      x = x, y = top + (index - 1) * row_h - offset, w = width, h = row_h, text_x = text_x,
-    }
+    heading.x, heading.y, heading.w, heading.h = x, top + (index - 1) * row_h - offset, width, row_h
+    heading.text_x = text_x
   end
   return {
     x = x, y = top, w = width, h = height, row_h = row_h, font = font,
-    entries = entries, current = current, offset = offset, offset_target = offset_target,
+    entries = list, current = current, offset = offset, offset_target = offset_target,
     content_h = content_h,
   }
 end
@@ -256,8 +254,12 @@ end
 
 -- Drawing -----------------------------------------------------------------
 
-local function faded(color, alpha)
-  return { color[1], color[2], color[3], (color[4] or 255) * alpha }
+-- Each color has one table in the view's state, written again in each draw.
+local function faded(state, key, color, alpha)
+  local result = state[key] or {}
+  state[key] = result
+  result[1], result[2], result[3], result[4] = color[1], color[2], color[3], (color[4] or 255) * alpha
+  return result
 end
 
 -- Animate the list scroll, the current-entry marker, and the fade-in.
@@ -294,13 +296,14 @@ function heading_outline.draw(view)
   local marker_w = scaled(3)
   core.push_clip_rect(layout.x, layout.y, layout.w, layout.h)
   renderer.draw_rect(layout.x + math.floor((marker_w - track_w) / 2), list_top,
-    track_w, layout.content_h, faded(style.divider, alpha))
+    track_w, layout.content_h, faded(state, "track_color", style.divider, alpha))
   if state.marker_y then
     local marker_h = math.floor(layout.row_h * MARKER_HEIGHT)
     renderer.draw_rounded_rect(layout.x, list_top + state.marker_y + math.floor((layout.row_h - marker_h) / 2),
-      marker_w, marker_h, marker_w / 2, faded(style.accent, alpha))
+      marker_w, marker_h, marker_w / 2, faded(state, "marker_color", style.accent, alpha))
   end
-  local dim, bright = faded(style.dim, alpha), faded(style.text, alpha)
+  local dim = faded(state, "dim_color", style.dim, alpha)
+  local bright = faded(state, "bright_color", style.text, alpha)
   local text_y = math.floor((layout.row_h - font:get_height()) / 2)
   for index, entry in ipairs(layout.entries) do
     if entry.y + entry.h >= layout.y and entry.y <= layout.y + layout.h then
@@ -331,14 +334,16 @@ local function on_mouse_moved(view, x, y)
 end
 
 local function on_mouse_pressed(view, button, x, y)
-  if button ~= "left" then return false end
   local _, entry = entry_at(heading_outline.layout(view), x, y)
-  if not entry then return false end
+  if not (entry and button == "left") then
+    view.__heading_outline.pick_line = nil
+    return false
+  end
   jump(view, entry)
   return true
 end
 
-local HOOKS = { "draw", "update", "on_mouse_moved", "on_mouse_pressed", "on_mouse_left" }
+local HOOKS = { "draw", "update", "on_mouse_moved", "on_mouse_pressed", "on_mouse_left", "on_mouse_wheel" }
 
 ---Install the outline on a Live Preview Text View. Each hook calls the
 ---view's earlier hook, so detach before the layers attached before it.
@@ -373,6 +378,10 @@ function heading_outline.attach(view)
   view.on_mouse_left = function(self, ...)
     set_hover(self.__heading_outline, nil)
     return previous(self, "on_mouse_left", ...)
+  end
+  view.on_mouse_wheel = function(self, ...)
+    self.__heading_outline.pick_line = nil
+    return previous(self, "on_mouse_wheel", ...)
   end
   return true
 end

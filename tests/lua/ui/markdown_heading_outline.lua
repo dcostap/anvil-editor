@@ -39,10 +39,10 @@ local function wait_until(predicate, message)
   test.ok(false, message)
 end
 
-local function open_view(context, width)
+local function open_view(context, width, text)
   local buffer = core.open_buffer()
   buffer:set_filename("outline.md", nil)
-  buffer:insert(1, 1, DOCUMENT)
+  buffer:insert(1, 1, text or DOCUMENT)
   buffer:clear_undo_redo()
   context.buffer = buffer
   local view = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
@@ -152,6 +152,24 @@ test.describe("Markdown Heading Outline", function()
     view.scroll.y = view.scroll.to.y
     view:update()
     test.equal(current_title(heading_outline.layout(view)), "End")
+  end)
+
+  test.it("keeps a clicked heading current until the user scrolls, also before a short section", function(context)
+    local view = open_view(context, nil, table.concat({
+      "# Top", filler(20), "## Short", "One line.", "## Next", filler(20), "## Last", filler(20),
+    }, "\n\n"))
+    local entry = test.not_nil(entry_titled(heading_outline.layout(view), "Short"))
+    view:on_mouse_pressed("left", entry.x + 2, entry.y + 2, 1)
+    view:on_mouse_released("left", entry.x + 2, entry.y + 2)
+    -- A frame before the view scrolls to the heading.
+    test.equal(current_title(heading_outline.layout(view)), "Short")
+    view.scroll.y = view.scroll.to.y
+    view:update()
+    test.equal(current_title(heading_outline.layout(view)), "Short")
+    view:on_mouse_wheel(-1, 0)
+    view.scroll.y = view.scroll.to.y
+    view:update()
+    test.equal(current_title(heading_outline.layout(view)), "Next")
   end)
 
   test.it("shows no outline when the margin has no room or the source shows", function(context)
