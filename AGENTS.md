@@ -179,7 +179,7 @@ Path Search lists Projects from the Project Sidebar model: Scratch, loaded Proje
 `core.project_look` draws a Project's name, badge and note for both, so a Project looks the same in each.
 Run `ui/fuzzy_searcher_path_search.lua` and `ui/sidebar_view.lua` after changes.
 
-Text Search also searches the Terminal Sessions of each loaded Project in every Window. Dormant Projects are not searched.
+Text Search also searches the Terminal Sessions of this Project. It does not search the Terminals of other Projects.
 A Terminal that this Project shows gives its live text. Other Terminals give the screen that their host saved last.
 That screen can be up to about 20 seconds old. A worker reads it (`terminal_snapshot_text`).
 Terminal lines rank with file lines. On equal scores, the file line goes first. A path or line number in the query skips Terminals.

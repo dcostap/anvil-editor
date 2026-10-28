@@ -152,6 +152,43 @@ test.describe("Text Search in Terminals", function()
     test.ok(ok, err)
   end)
 
+  test.it("does not search the Terminals of another Project", function(context)
+    local marker = "ANVIL_TERMINAL_SEARCH_OTHER"
+    -- The other Project starts the shell, so its saved screen belongs to that Project.
+    local root, other = core.projects[1], context.root .. PATHSEP .. "other"
+    test.ok(common.mkdirp(other))
+    core.projects = { Project(other) }
+    system.chdir(other)
+    local view = shell(marker)
+    local state = view:get_state()
+    local path = record(state.session_id).snapshot_path
+    test.ok(wait_for(view, function() return record(state.session_id).attached end))
+    os.remove(path)
+    view:detach_session()
+    test.ok(wait_for(nil, function() return system.get_file_info(path) end), "the host did not save its screen")
+    core.projects = { root }
+    system.chdir(context.root)
+    core.project_sidebar = {
+      { path = root.path, state = "loaded", panes = {}, terminals = {} },
+      { path = other, state = "loaded", panes = {},
+        terminals = { { id = state.session_id, state = "running", title = "Other shell" } } },
+    }
+    write_file(context.root .. PATHSEP .. "notes.txt", marker .. "\n")
+
+    local ok, err = pcall(function()
+      fuzzy_searcher.open("#" .. marker)
+      local picker = test.not_nil(core.fuzzy_searcher_active_view)
+      test.ok(wait_for(nil, function() return picker.results and picker.results[1] end, 10),
+        "no file result: " .. tostring(picker.status))
+      -- The saved screen arrives from a worker, so give it the time that a Terminal result would need.
+      wait_for(nil, function() return output_result(picker, marker) end, 2)
+      test.equal(#terminal_results(picker), 0, "Text Search listed a Terminal of another Project")
+    end)
+    if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
+    ready(terminal.from_state(state)):on_close()
+    test.ok(ok, err)
+  end)
+
   test.it("opens a Terminal result at its line with the Terminal's find card", function()
     local marker = "ANVIL_TERMINAL_SEARCH_OPEN"
     local view = shell(marker)

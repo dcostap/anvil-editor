@@ -22,8 +22,8 @@ local function snapshot_path(id)
   return USERDIR .. "/terminal-sessions/" .. id .. ".snapshot"
 end
 
--- The Terminal Sessions to search: each one that the Project Sidebar lists for a loaded Project, in every Window.
--- Without a Sidebar model, the Terminal Views of this Project. `item` describes the Terminal as a Tab does.
+-- The Terminal Sessions to search: each one that the Project Sidebar lists for this Project, and each Terminal View
+-- of this Project. `item` describes the Terminal as a Tab does.
 function terminals.sessions()
   local live = {}
   for _, view in ipairs(require("plugins.terminal").open_views()) do
@@ -35,8 +35,9 @@ function terminals.sessions()
     seen[id] = true
     out[#out + 1] = {id = id, project = project, item = item, view = live[id]}
   end
+  local root = core.root_project and core.root_project()
   for _, project in ipairs(core.project_sidebar or {}) do
-    if project.state ~= "dormant" then
+    if root and common.path_equals(project.path, root.path) then
       for _, pane in ipairs(project.panes or {}) do
         if pane.terminal then add(pane.terminal.session, project.path, pane) end
       end
@@ -45,7 +46,6 @@ function terminals.sessions()
       end
     end
   end
-  local root = core.root_project and core.root_project()
   for id, view in pairs(live) do
     local pane = panes.pane_for_view(view)
     if pane then add(id, root and root.path, tab.describe(pane)) end
