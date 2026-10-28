@@ -356,6 +356,8 @@ Run `anvil:shell-state` and the `restore-loaded` shell launch probe after change
 
 Project Sidebar visibility belongs to each Window. The first Window and each New Window start expanded. A Window that opens for one Project, such as Open Project in New Window or Move to New Window, starts collapsed.
 Restored Windows use their saved visibility, including a lone Window saved with its Sidebar hidden.
+Focus slides a hidden Sidebar open until the Sidebar loses focus. The Window still saves it as hidden.
+The toggle closes a visible Sidebar, also a hidden Sidebar that focus shows.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
 Loaded Projects start expanded unless this Window has a saved manual fold.
 Selecting a Project expands it and saves that state. It stays expanded after it loses the selection. The first selection in a restored Window keeps its saved fold.

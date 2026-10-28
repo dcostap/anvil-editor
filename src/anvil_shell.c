@@ -457,6 +457,7 @@ static AnvilSidebarProject *sidebar_project(const char *path);
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value);
 static void start_sidebar(void);
 static void set_sidebar_hidden(ShellWindow *window, bool hidden);
+static bool sidebar_shown(ShellWindow *window);
 static void focus_sidebar(ShellWindow *window, bool focused);
 static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y);
 static void show_sidebar_menu(ShellWindow *window, const AnvilSurfaceMenu *request, uint32_t size);
@@ -3627,7 +3628,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
     SDL_Log("Shell Sidebar toggle requested: Window=%u", window->id);
-    if (!window->closing) set_sidebar_hidden(window, !window->sidebar_hidden);
+    if (!window->closing) set_sidebar_hidden(window, sidebar_shown(window));
     break;
   case ANVIL_SURFACE_MSG_PANES: {
     const AnvilSurfacePaneReport *report = payload;
@@ -3866,8 +3867,13 @@ static void apply_sidebar_layout(ShellWindow *window) {
   if (window->shown) composite_and_present(window);
 }
 
+/* Focus shows a hidden Sidebar until it loses focus. The Window's saved layout keeps it hidden. */
+static bool sidebar_shown(ShellWindow *window) {
+  return !window->sidebar_hidden || window->sidebar_focused;
+}
+
 static void slide_sidebar(ShellWindow *window) {
-  float target = window->sidebar_hidden ? 0.0f : 1.0f;
+  float target = sidebar_shown(window) ? 1.0f : 0.0f;
   float t = (float)(SDL_GetTicks() - window->sidebar_slide_start) / SHELL_SIDEBAR_SLIDE_MS;
   if (t >= 1.0f || !window->shown || IsIconic(window->hwnd)) {
     KillTimer(window->hwnd, SHELL_SIDEBAR_SLIDE_TIMER);
@@ -3881,11 +3887,8 @@ static void slide_sidebar(ShellWindow *window) {
 }
 
 /* Only this Window slides its Sidebar. A Window that is not shown changes at once. */
-static void set_sidebar_hidden(ShellWindow *window, bool hidden) {
-  if (window->sidebar_hidden == hidden) return;
-  if (hidden) focus_sidebar(window, false);
-  window->sidebar_hidden = hidden;
-  SDL_Log("Shell Sidebar %s: Window=%u", hidden ? "hidden" : "shown", window->id);
+static void start_sidebar_slide(ShellWindow *window) {
+  bool hidden = !sidebar_shown(window);
   window->sidebar_dragging = window->sidebar_grip_hover = false;
   window->sidebar_slide_from = window->sidebar_open;
   window->sidebar_slide_start = SDL_GetTicks();
@@ -3898,6 +3901,15 @@ static void set_sidebar_hidden(ShellWindow *window, bool hidden) {
     window->sidebar_open = hidden ? 0.0f : 1.0f;
     apply_sidebar_layout(window);
   }
+}
+
+static void set_sidebar_hidden(ShellWindow *window, bool hidden) {
+  if (hidden) focus_sidebar(window, false);
+  if (window->sidebar_hidden == hidden) return;
+  bool shown = sidebar_shown(window);
+  window->sidebar_hidden = hidden;
+  SDL_Log("Shell Sidebar %s: Window=%u", hidden ? "hidden" : "shown", window->id);
+  if (sidebar_shown(window) != shown) start_sidebar_slide(window);
   windows_changed();
 }
 
@@ -4102,8 +4114,9 @@ static void focus_sidebar(ShellWindow *window, bool focused) {
       !shell.sidebar_process || !shell.sidebar_process->connected)) return;
   if (window->sidebar_focused == focused) return;
   clear_composition(window);
+  bool shown = sidebar_shown(window);
   window->sidebar_focused = focused;
-  if (focused) set_sidebar_hidden(window, false);
+  if (sidebar_shown(window) != shown) start_sidebar_slide(window);
   if (window->selected->connected)
     shell_send_int(window->selected, ANVIL_SURFACE_MSG_FOCUS, !focused && window_focused(window));
   if (window->sidebar_client && shell.sidebar_process && shell.sidebar_process->connected)
