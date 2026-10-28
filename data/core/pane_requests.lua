@@ -210,7 +210,7 @@ local function execute(request, x, y)
     for _, path in ipairs(request.files) do
       local opened, err = core.open_file(path, { placement = "new", reason = "launch" })
       core.log_quiet("Pane request: launch opened %s: %s", path, opened and "yes" or tostring(err))
-      if not opened then core.error("Cannot open %s: %s", path, tostring(err)) end
+      if opened == nil then core.error("Cannot open %s: %s", path, tostring(err)) end
     end
     return true
   end

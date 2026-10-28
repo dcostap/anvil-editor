@@ -496,6 +496,13 @@ That heading stays current until the user scrolls, presses elsewhere in the view
 This also holds while the view scrolls to it, before a short section, and at the end of the document.
 Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading-outline` render scenario after visual changes.
 
+## Binary files
+
+`core.open_file` asks how to open a binary file: with the default app, as text, or not at all. It returns `false` while the dialog asks.
+`common.is_binary` uses Git's rule: a NUL byte in the first 8000 bytes. Text with a UTF-16 or UTF-32 BOM is not binary.
+The File Search preview uses the same rule. `opts.as_text` skips the dialog.
+Run `ui/binary_file_open.lua` after changes.
+
 ## Reload from disk
 
 `Buffer:reload()` applies the file's text as edits through `Buffer:apply_lines`. It does not replace the Buffer.

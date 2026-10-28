@@ -1201,6 +1201,33 @@ function common.rm(path, recursively)
 end
 
 
+---Tell if text is binary data, by Git's rule: a NUL byte in the first 8000 bytes.
+---UTF-16 and UTF-32 text has NUL bytes, so text with their BOM is not binary.
+---@param text string
+---@return boolean
+function common.is_binary(text)
+  local head = text:sub(1, 4)
+  if head:sub(1, 2) == "\255\254" or head:sub(1, 2) == "\254\255"
+    or head == "\0\0\254\255" then
+    return false
+  end
+  local nul = text:find("\0", 1, true)
+  return nul ~= nil and nul <= 8000
+end
+
+
+---Tell if a file is binary data. It reads only the first 8000 bytes.
+---@param path string
+---@return boolean
+function common.is_binary_file(path)
+  local file = io.open(path, "rb")
+  if not file then return false end
+  local head = file:read(8000) or ""
+  file:close()
+  return common.is_binary(head)
+end
+
+
 ---Show a file or folder in the system file manager.
 ---Windows selects the item in its parent folder. Other platforms open the parent folder.
 ---@param path string

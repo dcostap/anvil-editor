@@ -1018,7 +1018,7 @@ function TerminalView:service_session(include_rows)
         for _, path in ipairs(request.paths) do
           core.log_quiet("Terminal Session %s opens file: %s", self.session_id, path)
           local opened, err = core.open_file(path, { pane = pane, placement = "new", reason = "terminal-open" })
-          if not opened then core.error("Cannot open %s: %s", path, tostring(err)) end
+          if opened == nil then core.error("Cannot open %s: %s", path, tostring(err)) end
         end
       end
     else

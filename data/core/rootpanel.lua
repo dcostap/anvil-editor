@@ -1015,7 +1015,7 @@ function RootPanel:open_dropped_file(filename, x, y, target)
     else
       view, err = core.open_file(filename, { placement = "new", reason = "file-drop" })
     end
-    if not view then core.error("Could not open dropped path: %s (%s)", filename, tostring(err)) end
+    if view == nil then core.error("Could not open dropped path: %s (%s)", filename, tostring(err)) end
     core.log_quiet("External drop: new Pane path=%s opened=%s", filename, tostring(view ~= nil))
     return view
   end

@@ -1526,14 +1526,7 @@ local function detect_binary_preview(path)
   if data:sub(1, 2) == "MZ" then return true, "Windows executable" end
   if data:sub(1, 4) == "PK\003\004" then return true, "ZIP container" end
   if data:sub(1, 7) == "\127ELF\002\001\001" or data:sub(1, 4) == "\127ELF" then return true, "ELF binary" end
-  if data:find("%z", 1, true) then return true, "Binary file" end
-
-  local weird = 0
-  for i = 1, #data do
-    local b = data:byte(i)
-    if b < 32 and b ~= 9 and b ~= 10 and b ~= 13 and b ~= 12 then weird = weird + 1 end
-  end
-  if #data > 0 and weird / #data > 0.05 then return true, "Binary file" end
+  if common.is_binary(data) then return true, "Binary file" end
   return false, nil
 end
 
