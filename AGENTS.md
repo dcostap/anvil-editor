@@ -53,6 +53,8 @@ Run `ui/terminal_mouse_wheel.lua` and the standalone smoke test after ConPTY upd
 New Terminal Sessions start their host and shell on a background thread.
 They return in the reconnecting state, like restored sessions. Wait for running before sending input or reading the host ID.
 Startup copies the launch options and environment. Closing an unaccepted new session ends its shell, including during editor shutdown.
+A new host answers only after its shell starts, so a launch waits up to 30 seconds. A stalled machine can take several seconds.
+A failed launch ends its host and deletes the record that the host wrote, so the Sidebar shows no lost copy.
 Run `ui/terminal_startup.lua` after startup changes. Tests that need a live Terminal View use `tests/fixtures/terminal_ready.lua`.
 
 The visible Selected Project prepares one unused Terminal Session after a short delay.

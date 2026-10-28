@@ -57,9 +57,12 @@ static bool pipe_transfer(AnvilIPCPipe *pipe, bool write, void *data, DWORD size
       : ReadFile(pipe->handle, cursor, size, NULL, &overlapped);
     if (!ok && GetLastError() != ERROR_IO_PENDING) return false;
     HANDLE events[] = { pipe->stop_event, event };
-    if (WaitForMultipleObjects(2, events, FALSE, pipe->timeout_ms) != WAIT_OBJECT_0 + 1) {
+    DWORD waited = WaitForMultipleObjects(2, events, FALSE, pipe->timeout_ms);
+    if (waited != WAIT_OBJECT_0 + 1) {
       CancelIoEx(pipe->handle, &overlapped);
       GetOverlappedResult(pipe->handle, &overlapped, &done, TRUE);
+      /* Report the time limit, not the cancelled I/O. */
+      if (waited == WAIT_TIMEOUT) SetLastError(ERROR_TIMEOUT);
       return false;
     }
     if (!GetOverlappedResult(pipe->handle, &overlapped, &done, TRUE)) return false;

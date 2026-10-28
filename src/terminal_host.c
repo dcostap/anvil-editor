@@ -15,6 +15,10 @@
 
 #define CLIENT_QUEUE_LIMIT (8u * 1024u * 1024u)
 #define CLIENT_STALL_TIMEOUT_MS 10000u
+/* A running host answers at once. A new host answers after it starts its shell,
+   which takes seconds when the machine stalls. */
+#define CONNECT_TIMEOUT_MS 5000u
+#define LAUNCH_TIMEOUT_MS 30000u
 #define ORPHAN_GRACE_MS (10u * 60u * 1000u)
 /* The longest agent status text the registry keeps, in bytes. Program status messages can be 2048 bytes. */
 #define ANVIL_TERMINAL_AGENT_TEXT_MAX 256
@@ -1278,10 +1282,10 @@ static size_t quote_arg(wchar_t *out, const wchar_t *arg) {
 
 static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                          DWORD *shell_pid, const char *id, AnvilTerminalSize *size,
-                         bool replay, DWORD *error) {
+                         bool replay, DWORD timeout_ms, DWORD *error) {
   if (!anvil_terminal_id_valid(id)) { *error = ERROR_INVALID_DATA; return false; }
   char name[128]; snprintf(name, sizeof(name), "\\\\.\\pipe\\anvil-terminal-%s", id);
-  uint64_t deadline = GetTickCount64() + 5000;
+  uint64_t deadline = GetTickCount64() + timeout_ms;
   HANDLE handle = INVALID_HANDLE_VALUE;
   *error = ERROR_PIPE_NOT_CONNECTED;
   while (GetTickCount64() < deadline && WaitForSingleObject(process, 0) == WAIT_TIMEOUT) {
@@ -1301,7 +1305,7 @@ static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
   if (!anvil_ipc_pipe_init(pipe, handle, ANVIL_TERMINAL_PROTOCOL_VERSION, ANVIL_TERMINAL_MAX_PAYLOAD)) {
     *error = ERROR_NOT_ENOUGH_MEMORY; return false;
   }
-  pipe->timeout_ms = 5000;
+  pipe->timeout_ms = timeout_ms;
   AnvilTerminalHello hello = { .size = *size, .client_pid = GetCurrentProcessId(), .replay = replay };
   memcpy(hello.id, id, sizeof(hello.id));
   if (!anvil_ipc_pipe_write(pipe, ANVIL_TERMINAL_HELLO, &hello, sizeof(hello), NULL, 0)) {
@@ -1326,13 +1330,13 @@ static bool host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
 
 bool anvil_terminal_host_connect(AnvilIPCPipe *pipe, HANDLE process, DWORD host_pid,
                                  DWORD *shell_pid, const char *id, AnvilTerminalSize *size, DWORD *error) {
-  return host_connect(pipe, process, host_pid, shell_pid, id, size, true, error);
+  return host_connect(pipe, process, host_pid, shell_pid, id, size, true, CONNECT_TIMEOUT_MS, error);
 }
 
 bool anvil_terminal_host_control(HANDLE process, DWORD host_pid, const char *id,
                                  uint16_t type, DWORD *error) {
   AnvilIPCPipe pipe = {0}; DWORD shell_pid; AnvilTerminalSize size = {0};
-  bool ok = host_connect(&pipe, process, host_pid, &shell_pid, id, &size, false, error);
+  bool ok = host_connect(&pipe, process, host_pid, &shell_pid, id, &size, false, CONNECT_TIMEOUT_MS, error);
   if (ok) {
     pipe.timeout_ms = 5000;
     ok = anvil_ipc_pipe_write(&pipe, type, NULL, 0, NULL, 0);
@@ -1389,5 +1393,19 @@ bool anvil_terminal_host_launch(AnvilIPCPipe *pipe, HANDLE *process,
   CloseHandle(info.hThread); *process = info.hProcess; *host_pid = info.dwProcessId;
   *replay_bytes = 0;
   if (revive_from) { size->cols = 0; size->rows = 0; }
-  return anvil_terminal_host_connect(pipe, *process, *host_pid, shell_pid, id, size, error);
+  return host_connect(pipe, *process, *host_pid, shell_pid, id, size, true, LAUNCH_TIMEOUT_MS, error);
+}
+
+void anvil_terminal_host_discard(const char *userdir, const char *id) {
+  if (!anvil_terminal_id_valid(id)) return;
+  HANDLE mutex = registry_lock(id);
+  if (!mutex) return;
+  static const char *extensions[] = { "lua", "snapshot", "agent" };
+  for (size_t i = 0; i < sizeof(extensions) / sizeof(extensions[0]); i++) {
+    char path[32800]; snprintf(path, sizeof(path), "%s/terminal-sessions/%s.%s", userdir, id, extensions[i]);
+    wchar_t *wide = wide_string(path);
+    if (wide) DeleteFileW(wide);
+    free(wide);
+  }
+  ReleaseMutex(mutex); CloseHandle(mutex);
 }
