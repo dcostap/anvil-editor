@@ -1,6 +1,6 @@
 project('anvil',
     ['c', 'cpp'],
-    version : '1.0.0',
+    version : '1.1.0',
     license : 'MIT',
     meson_version : '>= 0.63',
     default_options : [
