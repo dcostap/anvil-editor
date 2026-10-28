@@ -49,7 +49,6 @@ test.describe("session log", function()
 
     local logger = assert(SessionLog.start(root, {
       max_file_bytes = 180,
-      max_sessions = 20,
       max_total_bytes = 1024 * 1024,
       session_id = "anvil-20260817-212630-p123",
     }))
@@ -116,31 +115,41 @@ test.describe("session log", function()
     remove_tree(root)
   end)
 
-  test.it("keeps only the newest session files", function()
+  test.it("keeps every recent log, however many processes wrote them", function()
     local SessionLog = require "core.session_log"
-    local root = join(USERDIR, "session-log-prune")
+    local root = join(USERDIR, "session-log-recent")
     remove_tree(root)
     test.ok(common.mkdirp(root))
-    for index = 1, 4 do
+    for index = 1, 40 do
       local file = assert(io.open(join(root,
-        string.format("anvil-2026081%d-120000-p%d.log", index, index)), "wb"))
-      file:write(string.rep("x", 32))
+        string.format("anvil-20261027-120000-p%d-native.log", index)), "wb"))
+      file:write("x")
       file:close()
     end
 
+    local logger = assert(SessionLog.start(root, { session_id = "anvil-20261028-090000-p123" }))
+    logger:close()
+
+    test.equal(#log_files(root), 41)
+    remove_tree(root)
+  end)
+
+  test.it("removes logs older than the age limit", function()
+    local SessionLog = require "core.session_log"
+    local root = join(USERDIR, "session-log-age")
+    remove_tree(root)
+    test.ok(common.mkdirp(root))
+    local file = assert(io.open(join(root, "anvil-20261001-120000-p1.log"), "wb"))
+    file:write("x")
+    file:close()
+
     local logger = assert(SessionLog.start(root, {
-      max_file_bytes = 1024,
-      max_sessions = 3,
-      max_total_bytes = 1024 * 1024,
-      session_id = "anvil-20260817-212630-p123",
+      session_id = "anvil-20261028-090000-p123",
+      now = os.time() + 8 * 24 * 60 * 60,
     }))
     logger:close()
 
-    local files = log_files(root)
-    test.equal(#files, 3)
-    test.equal(files[1], "anvil-20260813-120000-p3.log")
-    test.equal(files[2], "anvil-20260814-120000-p4.log")
-    test.equal(files[3], "anvil-20260817-212630-p123.log")
+    test.same(log_files(root), { "anvil-20261028-090000-p123.log" })
     remove_tree(root)
   end)
 
@@ -158,7 +167,6 @@ test.describe("session log", function()
 
     local logger = assert(SessionLog.start(root, {
       max_file_bytes = 1024,
-      max_sessions = 20,
       max_total_bytes = 300,
       session_id = "anvil-20260817-212630-p123",
     }))

@@ -435,7 +435,10 @@ Windows also writes native diagnostics before Lua starts. These logs are always 
 Check the shell and hosted process logs for connection failures, rendering failures, and shell loss.
 The `D3D11 device:` line names the adapter. A frame that falls back to the software renderer logs `D3D11 frame failed: <reason>` once for each reason.
 Each record includes local time, elapsed time, process ID, thread ID, and priority.
-Each process keeps two parts, with up to 10 MiB per part. The session log cleaner removes old native logs.
+Each process keeps two parts, with up to 10 MiB per part.
+The session log cleaner removes Lua, shutdown and native logs that are older than 7 days.
+It keeps all logs to 100 MiB in total and removes the oldest logs above that limit.
+It does not limit the number of logs, because one launch writes logs for several processes.
 `ANVIL_SURFACE_LOG` selects an explicit shared file for probes. It does not control normal logging.
 
 Keyboard events include an always-on `Input trace:` diagnostic. See [keyboard input trace](tools/INPUT_TRACE.md) for stages and limits.

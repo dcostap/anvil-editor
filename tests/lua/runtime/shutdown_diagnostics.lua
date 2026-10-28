@@ -37,7 +37,7 @@ test.describe("shutdown diagnostics", function()
     local root = USERDIR .. PATHSEP .. "shutdown-retention"
     local old_id = "anvil-20260916-120000-p123"
     local new_id = "anvil-20260916-130000-p123"
-    local old = assert(SessionLog.start(root, { session_id = old_id, max_sessions = 1 }))
+    local old = assert(SessionLog.start(root, { session_id = old_id }))
     local old_path = old.path
     local old_shutdown = root .. PATHSEP .. old_id .. "-shutdown.log"
     test.ok(system.set_shutdown_log(old_shutdown))
@@ -46,7 +46,8 @@ test.describe("shutdown diagnostics", function()
     test.ok(system.get_file_info(old_path))
     test.ok(system.get_file_info(old_shutdown))
 
-    local current = assert(SessionLog.start(root, { session_id = new_id, max_sessions = 1 }))
+    local later = os.time() + 8 * 24 * 60 * 60
+    local current = assert(SessionLog.start(root, { session_id = new_id, now = later }))
     local current_path = current.path
     local current_shutdown = root .. PATHSEP .. new_id .. "-shutdown.log"
     test.ok(system.set_shutdown_log(current_shutdown))

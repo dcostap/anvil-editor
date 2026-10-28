@@ -4,7 +4,9 @@ local SessionLog = {}
 SessionLog.__index = SessionLog
 
 local DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
-local DEFAULT_MAX_SESSIONS = 20
+-- Each process writes its own logs, and one launch has several processes. Keep logs by age,
+-- so a restart or a burst of failed processes cannot remove the logs of the previous run.
+local MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 local DEFAULT_MAX_TOTAL_BYTES = 100 * 1024 * 1024
 local FLUSH_INTERVAL_SECONDS = 1
 local FLUSH_PENDING_BYTES = 64 * 1024
@@ -13,67 +15,55 @@ local function join(path, name)
   return path .. PATHSEP .. name
 end
 
-local function session_id_for_name(name)
-  if not name:match("^anvil%-%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-p%d+.*%.log$") then return nil end
-  return name:gsub("%-shutdown%.log$", ""):gsub("%-part%d+%.log$", ""):gsub("%.log$", "")
+-- Matches session logs, their parts, shutdown logs, and native logs.
+local function is_log_name(name)
+  return name:match("^anvil%-%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-p%d+.*%.log$") ~= nil
 end
 
-local function remove_session(session)
-  for _, path in ipairs(session.paths) do os.remove(path) end
-end
-
-local function discover_sessions(root)
-  local by_id = {}
+local function discover_logs(root)
+  local logs = {}
   for _, name in ipairs(system.list_dir(root) or {}) do
-    local id = session_id_for_name(name)
-    if id then
+    if is_log_name(name) then
       local path = join(root, name)
       local info = system.get_file_info(path)
       if info and info.type == "file" then
-        local session = by_id[id]
-        if not session then
-          session = { id = id, paths = {}, size = 0 }
-          by_id[id] = session
-        end
-        session.paths[#session.paths + 1] = path
-        session.size = session.size + (tonumber(info.size) or 0)
+        logs[#logs + 1] = {
+          name = name,
+          path = path,
+          size = tonumber(info.size) or 0,
+          modified = tonumber(info.modified) or 0,
+        }
       end
     end
   end
-  local sessions = {}
-  for _, session in pairs(by_id) do sessions[#sessions + 1] = session end
-  table.sort(sessions, function(a, b) return a.id > b.id end)
-  return sessions
+  table.sort(logs, function(a, b)
+    if a.modified ~= b.modified then return a.modified > b.modified end
+    return a.name > b.name
+  end)
+  return logs
 end
 
-local function prune(root, protected_id, max_sessions, max_total_bytes)
-  local sessions = discover_sessions(root)
-  local kept = {}
-  local protected_found = false
-  for _, session in ipairs(sessions) do
-    if session.id == protected_id then protected_found = true break end
+-- Removes logs older than the age limit, then the oldest logs above the size limit.
+-- Windows refuses to remove a log that another running process has open.
+local function prune(root, protected_id, max_total_bytes, now)
+  local oldest = (now or os.time()) - MAX_AGE_SECONDS
+  local function protected(log)
+    return log.name == protected_id .. ".log" or log.name:sub(1, #protected_id + 1) == protected_id .. "-"
   end
-  local other_limit = math.max(0, max_sessions - (protected_found and 1 or 0))
-  local other_count = 0
-  for _, session in ipairs(sessions) do
-    local protected = session.id == protected_id
-    local keep = protected or other_count < other_limit
-    if keep then
-      kept[#kept + 1] = session
-      if not protected then other_count = other_count + 1 end
+  local kept, total = {}, 0
+  for _, log in ipairs(discover_logs(root)) do
+    if protected(log) or log.modified >= oldest then
+      kept[#kept + 1] = log
+      total = total + log.size
     else
-      remove_session(session)
+      os.remove(log.path)
     end
   end
-
-  local total = 0
-  for _, session in ipairs(kept) do total = total + session.size end
   for index = #kept, 1, -1 do
-    local session = kept[index]
     if total <= max_total_bytes then break end
-    if session.id ~= protected_id then
-      remove_session(session)
-      total = total - session.size
+    local log = kept[index]
+    if not protected(log) and os.remove(log.path) then
+      total = total - log.size
     end
   end
 end
@@ -111,8 +101,12 @@ function SessionLog:_roll()
   end
   local opened, err = self:_open_part(self.part + 1)
   if not opened then return nil, err end
-  prune(self.root, self.session_id, self.max_sessions, self.max_total_bytes)
+  self:_prune()
   return true
+end
+
+function SessionLog:_prune()
+  prune(self.root, self.session_id, self.max_total_bytes, self.now)
 end
 
 function SessionLog:write(level, text, source)
@@ -163,7 +157,7 @@ function SessionLog:close()
   self.file:flush()
   self.file:close()
   self.file = nil
-  prune(self.root, self.session_id, self.max_sessions, self.max_total_bytes)
+  self:_prune()
 end
 
 function SessionLog.start(root, options)
@@ -185,13 +179,13 @@ function SessionLog.start(root, options)
     session_id = session_id,
     pid = pid,
     max_file_bytes = options.max_file_bytes or DEFAULT_MAX_FILE_BYTES,
-    max_sessions = options.max_sessions or DEFAULT_MAX_SESSIONS,
     max_total_bytes = options.max_total_bytes or DEFAULT_MAX_TOTAL_BYTES,
+    now = options.now,
     part = 0,
   }, SessionLog)
   local opened, err = self:_open_part(1)
   if not opened then return nil, err end
-  prune(root, session_id, self.max_sessions, self.max_total_bytes)
+  self:_prune()
   return self
 end
 
