@@ -745,6 +745,18 @@ function Model:table_nodes_for_lines(line1, line2, opts)
   return self:stabilize_node_ids(nodes), nodes.truncated and "limit" or nil
 end
 
+---Return link reference definitions with their attributes, without other nodes.
+function Model:reference_definition_nodes_for_lines(line1, line2, opts)
+  opts = opts or {}
+  if not self.result or (self.status ~= "ready"
+    and not (self.status == "pending" and opts.allow_pending_result))
+  then
+    return nil, self.status
+  end
+  local nodes = self.result:semantic_nodes_for_lines("reference_definition", line1, line2, opts)
+  return self:stabilize_node_ids(nodes), nodes.truncated and "limit" or nil
+end
+
 ---Return block quote identities and source ranges without other nodes.
 function Model:quote_nodes_for_lines(line1, line2, opts)
   opts = opts or {}

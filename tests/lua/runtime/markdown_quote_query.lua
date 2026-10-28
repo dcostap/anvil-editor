@@ -64,3 +64,38 @@ test.describe("Markdown quote discovery", function()
     test.same(quotes, full)
   end)
 end)
+
+test.describe("Markdown link reference definition discovery", function()
+  test.after_each(function()
+    if buffer then model.close(buffer, "test"); buffer = nil end
+  end)
+
+  test.it("returns the definitions that the full node query returns, with their label and destination", function()
+    buffer = Buffer("references.md", "references.md", true)
+    buffer:insert(1, 1, "See [the docs][docs] and [docs].\n\n[docs]: https://example.com/docs\n\n%%\n[hidden]: https://example.com/hidden\n%%\n")
+    local instance = model.get(buffer)
+    ready(instance)
+    local function definitions(nodes)
+      local result = {}
+      for _, node in ipairs(nodes) do
+        local attributes = node.attributes or {}
+        if node.type == "link_reference" and attributes.reference_destination then
+          result[#result + 1] = {
+            line = node.source.line1,
+            label = attributes.reference_label.col1,
+            destination = attributes.reference_destination.col1,
+          }
+        end
+      end
+      return result
+    end
+    local full = definitions(instance:nodes_for_lines(1, #buffer.lines))
+    local nodes, reason = instance:reference_definition_nodes_for_lines(1, #buffer.lines)
+    test.not_nil(nodes, reason)
+    -- The usage links and the definition in the comment are not definitions.
+    test.equal(#full, 1)
+    test.same(definitions(nodes), full)
+    test.equal(#nodes, #full)
+    test.equal(nodes[1].source.line1, 3)
+  end)
+end)

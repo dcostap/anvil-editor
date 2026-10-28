@@ -1193,7 +1193,7 @@ local function prepare_reference_definitions(view, instance)
   if not instance or instance.status ~= "ready" then return {} end
   local cache = view.__markdown_live_reference_cache
   if cache and cache.generation == instance.generation then return cache.definitions end
-  local nodes, reason = instance:nodes_for_lines(1, #view.buffer.lines, { limit = 8192 })
+  local nodes, reason = instance:reference_definition_nodes_for_lines(1, #view.buffer.lines, { limit = 8192 })
   local definitions = {}
   if reason ~= "limit" then
     for _, node in ipairs(nodes or {}) do

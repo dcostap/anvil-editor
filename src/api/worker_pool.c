@@ -1943,6 +1943,11 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
   /* Block discovery modes return one block type with identities and ranges. */
   const char *block_only = strcmp(requested, "table") == 0 ? "block.table"
     : strcmp(requested, "quote") == 0 ? "block.quote" : NULL;
+  /* Reference definition discovery reads the same captures as the full query,
+     so comments suppress the same definitions, and keeps their attributes. A
+     note can have thousands of other nodes, and each one costs Lua tables. */
+  const char *only_name = block_only ? block_only
+    : strcmp(requested, "reference_definition") == 0 ? "block.link_reference" : NULL;
   lua_Integer raw_line1 = luaL_checkinteger(L, 3);
   lua_Integer raw_line2 = luaL_checkinteger(L, 4);
   luaL_argcheck(L, raw_line1 > 0 && raw_line1 <= UINT32_MAX, 3, "invalid start line");
@@ -2025,7 +2030,7 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
   for (uint32_t index = 0; index < capture_count; index++) {
     SemanticCaptureView *capture = &captures[index];
     if (!capture->name || !semantic_parent(capture)) continue;
-    if (block_only && !capture_name_equal(capture, block_only)) continue;
+    if (only_name && !capture_name_equal(capture, only_name)) continue;
     nodes[node_count++].capture = *capture;
   }
   qsort(nodes, node_count, sizeof(*nodes), semantic_node_compare);
