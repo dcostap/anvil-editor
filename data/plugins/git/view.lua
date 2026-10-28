@@ -18,6 +18,7 @@ local View = require "core.view"
 local view_icons = require "core.view_icons"
 local GitModel = require "plugins.git.model"
 local git_graph = require "plugins.git.graph"
+local git_details = require "plugins.git.details"
 local path_tree = require "plugins.path_tree"
 local panes = require "core.panes"
 
@@ -100,6 +101,13 @@ local function draw_segments(view, x, y, segments)
   return view:get_line_height()
 end
 
+local function ref_color(kind)
+  if kind == "head" then return style.git_ref_head or style.good end
+  if kind == "tag" then return style.git_ref_tag or style.warn end
+  if kind == "remote" then return style.git_ref_remote or style.accent end
+  return style.git_ref_branch or style.accent
+end
+
 local function build_commit_packet(view, render_line)
   if not (renderer.display_packet and renderer.display_packet.new) then return nil end
   local builder = renderer.display_packet.new()
@@ -122,6 +130,40 @@ local function build_commit_packet(view, render_line)
     end
   end
   return builder:seal(), line_height, default_font
+end
+
+-- Ref labels sit on tinted pills. The wider gaps around each label hold the pill's padding.
+local function ref_pills(view, render_line)
+  local default_font, line_height = view:get_font(), view:get_line_height()
+  local pills = render_line.__git_ref_pills
+  if pills and pills.font == default_font and pills.line_height == line_height
+      and pills.theme == core.color_theme_generation then
+    return pills
+  end
+  pills = { font = default_font, line_height = line_height, theme = core.color_theme_generation }
+  local padding = 4 * SCALE
+  local tx = 0
+  for _, segment in ipairs(render_line.fragments or {}) do
+    local font = segment.font or default_font
+    local width = font:get_width(segment.text or "", { tab_offset = tx })
+    if segment.ref_kind then
+      local h = font:get_height() + 4 * SCALE
+      local color = ref_color(segment.ref_kind)
+      pills[#pills + 1] = {
+        x = tx - padding, y = math.floor((line_height - h) / 2), w = width + padding * 2, h = h,
+        fill = { color[1], color[2], color[3], math.floor((color[4] or 255) * 0.14) },
+      }
+    end
+    tx = tx + width
+  end
+  render_line.__git_ref_pills = pills
+  return pills
+end
+
+local function draw_ref_pills(view, render_line, x, y)
+  for _, pill in ipairs(ref_pills(view, render_line)) do
+    renderer.draw_rounded_rect(x + pill.x, y + pill.y, pill.w, pill.h, pill.h / 2, pill.fill)
+  end
 end
 
 local function draw_commit_segments(view, render_line, x, y, rebuilding)
@@ -154,16 +196,28 @@ local function draw_commit_segments(view, render_line, x, y, rebuilding)
   return draw_segments(view, x, y, render_line.fragments)
 end
 
-local function ref_color(kind)
-  if kind == "head" then return style.git_ref_head or style.good end
-  if kind == "tag" then return style.git_ref_tag or style.warn end
-  if kind == "remote" then return style.git_ref_remote or style.accent end
-  return style.git_ref_branch or style.accent
-end
-
 local function ref_text(ref)
   local marker = (ref.kind == "tag" or ref.kind == "remote") and "◇ " or "● "
   return marker .. tostring(ref.label or "")
+end
+
+-- A commit row shows its short hash, its ref labels and its subject. Ref labels have wider gaps, which hold their pills.
+local function commit_row_parts(commit)
+  local parts = {}
+  local hash = commit.short_hash or commit.hash or ""
+  if hash ~= "" then parts[#parts + 1] = { text = hash, role = "hash" } end
+  for _, ref in ipairs(commit.ref_labels or {}) do
+    if ref.label and ref.label ~= "" then parts[#parts + 1] = { text = ref_text(ref), role = "ref", kind = ref.kind } end
+  end
+  local subject = commit.subject or ""
+  if subject ~= "" then parts[#parts + 1] = { text = subject, role = "subject" } end
+  return parts
+end
+
+local function part_separator(previous, part)
+  if previous.role == "ref" and part.role == "ref" then return "    " end
+  if previous.role == "ref" or part.role == "ref" then return "   " end
+  return "  "
 end
 
 local COMMIT_LINE_RENDER_PROVIDER = {
@@ -173,47 +227,30 @@ local COMMIT_LINE_RENDER_PROVIDER = {
   render_line = function(_, view, line)
     local meta = view.git_commit_line_meta and view.git_commit_line_meta[line]
     if not (meta and meta.role == "commit") then return nil end
-    local hash = meta.hash or ""
-    local subject = meta.subject or ""
     local fragments = {}
     local col = 1
-    local has_prefix = false
-    if hash ~= "" then
-      fragments[#fragments + 1] = {
-        source_col1 = col, source_col2 = col + #hash,
-        text = hash, color = style.accent, font = style.code_font,
-      }
-      col = col + #hash
-      has_prefix = true
-    end
-    for _, ref in ipairs(meta.ref_labels or {}) do
-      local label = ref_text(ref)
-      if has_prefix then
+    local previous
+    for _, part in ipairs(commit_row_parts(meta)) do
+      if previous then
+        local separator = part_separator(previous, part)
         fragments[#fragments + 1] = {
-          source_col1 = col, source_col2 = col + 2,
-          text = "  ", color = style.dim,
+          source_col1 = col, source_col2 = col + #separator,
+          text = separator, color = style.dim,
         }
-        col = col + 2
+        col = col + #separator
       end
-      fragments[#fragments + 1] = {
-        source_col1 = col, source_col2 = col + #label,
-        text = label, color = ref_color(ref.kind), font = style.get_small_font(view:get_font()),
-      }
-      col = col + #label
-      has_prefix = true
-    end
-    if subject ~= "" then
-      if has_prefix then
-        fragments[#fragments + 1] = {
-          source_col1 = col, source_col2 = col + 2,
-          text = "  ", color = style.dim,
-        }
-        col = col + 2
+      local fragment = { source_col1 = col, source_col2 = col + #part.text, text = part.text }
+      if part.role == "hash" then
+        fragment.color, fragment.font = style.accent, style.code_font
+      elseif part.role == "ref" then
+        fragment.color, fragment.font = ref_color(part.kind), style.get_small_font(view:get_font())
+        fragment.ref_kind = part.kind
+      else
+        fragment.color = style.text
       end
-      fragments[#fragments + 1] = {
-        source_col1 = col, source_col2 = col + #subject,
-        text = subject, color = style.text,
-      }
+      fragments[#fragments + 1] = fragment
+      col = col + #part.text
+      previous = part
     end
     return { fragments = fragments }
   end,
@@ -347,12 +384,35 @@ function GitView:pane_view(name)
     view.git_owner_view = self
     view.git_pane = name
     if commit_list then
+      -- Commit rows have room around their text and ref pills, like list rows in the Project Sidebar.
+      view.get_line_height = function(v) return TextView.get_line_height(v) + math.floor(6 * SCALE) end
       view.get_row_count = function()
         local tab = name == "log-list" and self.model:log_tab() or self:model_tab()
         return tab and #(tab.commits or {}) or 0
       end
     elseif name == "details" then
       view:set_row_selection_mode(true)
+      view:add_visual_metric_provider("git-details-card", {
+        generation = function(_, v) return git_details.metric_generation(v) end,
+        line_height = function(_, v, line) return git_details.row_height(v, line) end,
+      })
+      -- Card rows wrap to the pane. Only the changed-file rows can be wider than the pane.
+      view.get_h_content_size = function(v)
+        local font = v:get_font()
+        local cache = v.git_tree_width
+        if not (cache and cache.revision == v.buffer.text_revision and cache.font == font) then
+          local width = 0
+          for line = (v.path_tree_line_offset or 0) + 1, #v.buffer.lines do
+            if not (v.git_detail_line_meta and v.git_detail_line_meta[line]) then
+              width = math.max(width, v:get_col_x_offset(line, #v.buffer.lines[line]))
+            end
+          end
+          cache = { revision = v.buffer.text_revision, font = font, width = width }
+          v.git_tree_width = cache
+        end
+        local _, _, scrollbar_w = v.v_scrollbar:get_track_rect()
+        return v:get_gutter_width() + cache.width + math.max(style.padding.x, scrollbar_w or 0)
+      end
     end
     view.open_text_capture = function()
       return self:open_text_capture()
@@ -405,45 +465,21 @@ function GitView:pane_view(name)
       elseif commit_meta and commit_meta.role == "commit" then
         local render_line = v:get_line_render(line)
         if render_line then
+          draw_ref_pills(v, render_line, x, y)
           return draw_commit_segments(v, render_line, x, y)
         end
       end
-      local detail_meta = v.git_detail_line_meta and v.git_detail_line_meta[line]
-      if detail_meta then
-        if detail_meta.role == "heading" then
-          return draw_segments(v, x, y, { { text = detail_meta.text or "", color = style.accent } })
-        elseif detail_meta.role == "subject" then
-          return draw_segments(v, x, y, { { text = detail_meta.text or "", color = style.text } })
-        elseif detail_meta.role == "field" then
-          return draw_segments(v, x, y, {
-            { text = detail_meta.label or "", color = style.dim },
-            {
-              text = detail_meta.value or "",
-              color = detail_meta.value_color or style.text,
-              font = detail_meta.value_is_code and style.code_font or nil,
-            },
-          })
-        elseif detail_meta.role == "message" then
-          return draw_segments(v, x, y, { { text = detail_meta.text or "", color = detail_meta.error and style.error or style.dim } })
-        end
-      end
+      local card_height = git_details.draw(v, line, x, y)
+      if card_height then return card_height end
       return draw_line_text(v, line, x, y)
     end
-    local draw_line_body = view.draw_line_body
-    view.draw_line_body = function(v, line, x, y)
-      local result = draw_line_body(v, line, x, y)
-      if line == v.git_hovered_action_line or line == v.git_pressed_action_line then
-        local text = v.buffer.lines[line] or ""
-        local width = math.max(0, v:get_col_x_offset(line, #text))
-        if width > 0 then
-          local color = line == v.git_pressed_action_line
-            and (style.interactive_hover_overlay or style.interactive_hover_background)
-            or style.interactive_hover_background
-          renderer.draw_rect(x, y, width, v:get_line_height(), color)
-        end
-      end
-      return result
+    -- The Row Text View draws the hover below the row, where a click acts.
+    view.get_hovered_row = function(v)
+      if v.git_pressed_action_line then return v.git_pressed_action_line, true end
+      return v.git_hovered_action_line, false
     end
+    -- Rows have rounded highlights inset from the pane's edges. An edge line through them would cut each row.
+    view.draw_content_left_edge = function() end
     local on_mouse_left = view.on_mouse_left
     view.on_mouse_left = function(v, ...)
       local result = on_mouse_left(v, ...)
@@ -951,15 +987,13 @@ function GitView:on_mouse_pressed(button, x, y, clicks)
 end
 
 local function commit_label(commit)
-  local hash = commit.short_hash or commit.hash or ""
-  local subject = commit.subject or ""
-  local parts = {}
-  if hash ~= "" then parts[#parts + 1] = hash end
-  for _, ref in ipairs(commit.ref_labels or {}) do
-    if ref.label and ref.label ~= "" then parts[#parts + 1] = ref_text(ref) end
+  local text, previous = {}, nil
+  for _, part in ipairs(commit_row_parts(commit)) do
+    if previous then text[#text + 1] = part_separator(previous, part) end
+    text[#text + 1] = part.text
+    previous = part
   end
-  if subject ~= "" then parts[#parts + 1] = subject end
-  return table.concat(parts, "  ")
+  return table.concat(text)
 end
 
 -- Commit objects can change in place. Compare source values, including refs,
@@ -1120,57 +1154,20 @@ local function commit_details_lines(commit, view, selection_error)
     add(text, { role = "message", text = text, error = selection_error ~= nil })
     return lines, line_meta
   end
-  add(commit.subject or "", { role = "subject", text = commit.subject or "" })
-  if commit.kind == "commit_range" then
-    local value = commit.left .. " → " .. commit.right
-    add("Compare: " .. value, { role = "field", label = "Compare: ", value = value, value_is_code = true })
-  elseif commit.kind ~= "working_tree" then
-    add("Hash: " .. tostring(commit.hash or ""), {
-      role = "field",
-      label = "Hash: ",
-      value = tostring(commit.hash or ""),
-      value_color = style.accent,
-      value_is_code = true,
-    })
-  end
-  if commit.author_name and commit.author_name ~= "" then
-    add("Author: " .. commit.author_name, { role = "field", label = "Author: ", value = commit.author_name })
-  end
-  if commit.author_email and commit.author_email ~= "" then
-    add("Email: " .. commit.author_email, { role = "field", label = "Email: ", value = commit.author_email })
-  end
-  local timestamp = tonumber(commit.commit_time or commit.author_time)
-  if timestamp and timestamp > 0 then
-    local date = os.date("%Y-%m-%d %H:%M:%S", timestamp)
-    add("Date: " .. date, { role = "field", label = "Date: ", value = date })
-  end
-  if commit.committer_name and commit.committer_name ~= ""
-      and commit.committer_name ~= commit.author_name then
-    add("Committer: " .. commit.committer_name, { role = "field", label = "Committer: ", value = commit.committer_name })
-  end
-  if commit.ref_labels and #commit.ref_labels > 0 then
-    local refs = {}
-    for _, ref in ipairs(commit.ref_labels) do refs[#refs + 1] = ref.label end
-    local value = table.concat(refs, ", ")
-    add("Refs: " .. value, { role = "field", label = "Refs: ", value = value, value_color = style.good })
-  end
-  if commit.body and commit.body ~= "" then
-    add("", nil)
-    for line in (commit.body .. "\n"):gmatch("(.-)\n") do
-      add(line, { role = "message", text = line })
-    end
-  end
-  add("", nil)
+  git_details.append_card(commit, add)
+  local files = commit.changed_files or {}
   if commit.changed_files_loading then
     add("Loading changed files...", { role = "message", text = "Loading changed files..." })
   elseif commit.changed_files_error then
     local text = "Git error: " .. tostring(commit.changed_files_error.message or commit.changed_files_error.kind or commit.changed_files_error)
     add(text, { role = "message", text = text, error = true })
-  elseif #(commit.changed_files or {}) == 0 then
+  elseif #files == 0 then
     local text = commit.changed_files_loaded and "No changed files" or "Select a commit to load changed files"
     add(text, { role = "message", text = text })
   else
-    local cache = changed_file_tree_cache(view, commit.changed_files, commit.details_tree_collapsed)
+    local summary = git_details.files_meta(files)
+    add(summary.text, summary)
+    local cache = changed_file_tree_cache(view, files, commit.details_tree_collapsed)
     tree = cache.tree
     tree_offset = #lines
     for _, text in ipairs(cache.lines) do add(text, nil) end
@@ -1878,9 +1875,15 @@ function GitView:update_pane_buffers(force)
     list_view.git_graph_rows = graph_rows
     self:sync_log_selection()
     local details = self:pane_view("details")
+    local detail_commit = self:detail_commit_for_tab(log_tab)
     local detail_lines, detail_meta, detail_tree, detail_tree_offset = commit_details_lines(
-      self:detail_commit_for_tab(log_tab), details, log_tab.selection_error
+      detail_commit, details, log_tab.selection_error
     )
+    -- Another commit's rows replace the pane. Its highlight starts on its own row, without a glide.
+    if details.git_detail_key ~= detail_key(detail_commit) then
+      details.git_detail_key = detail_key(detail_commit)
+      details.row_focus_highlight:reset()
+    end
     local detail_selection = details:get_path_tree_selection()
     local detail_revision = details.buffer.text_revision
     self:set_pane_lines("details", detail_lines)

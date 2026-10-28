@@ -206,6 +206,9 @@ SCENARIOS["fuzzy-picker-commands"] = dict(SCENARIOS["fuzzy-picker-files"])
 SCENARIOS["fuzzy-picker-projects"] = dict(SCENARIOS["fuzzy-picker-files"])
 SCENARIOS["fuzzy-picker-other-projects"] = dict(SCENARIOS["fuzzy-picker-files"])
 SCENARIOS["fuzzy-picker-other-text"] = dict(SCENARIOS["fuzzy-picker-files"])
+# The Git View Log over a small fixture repository, with the newest commit's details.
+SCENARIOS["git-view"] = dict(SCENARIOS["fuzzy-picker-files"])
+SCENARIOS["git-view-light"] = dict(SCENARIOS["git-view"], theme="light")
 SCENARIOS["titlebar-file-drop"] = {
     "start_line": 1700,
     "tab_count": 8,
@@ -788,6 +791,58 @@ def generate_filetree_fixture(work: Path) -> None:
         os.utime(path, (1700000000, 1700000000))
     for path in (folder, tree):
         os.utime(path, (1700000000, 1700000000))
+
+
+def generate_git_view_fixture(work: Path) -> None:
+    """A small repository with refs, a merge and a commit message body. Fixed dates keep the hashes fixed."""
+    repo = work / "fixtures" / "git-view-repo"
+    repo.mkdir(parents=True)
+    clock = [1790000000]
+
+    def git(*args: str, author: tuple[str, str] = ("Ada Lovelace", "ada@example.com")) -> None:
+        clock[0] += 5 * 60 * 60
+        stamp = f"{clock[0]} +0100"
+        env = dict(os.environ, GIT_AUTHOR_NAME=author[0], GIT_AUTHOR_EMAIL=author[1], GIT_AUTHOR_DATE=stamp,
+                   GIT_COMMITTER_NAME="Ada Lovelace", GIT_COMMITTER_EMAIL="ada@example.com",
+                   GIT_COMMITTER_DATE=stamp)
+        run(["git", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args], cwd=repo, env=env)
+
+    def write(path: str, text: str) -> None:
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8", newline="\n")
+
+    grace = ("Grace Hopper", "grace@example.com")
+    run(["git", "init", "-q", "-b", "main", str(repo)])
+    write("README.md", "# Engine\n\nA small analytical engine.\n")
+    write("src/engine.lua", "local engine = {}\n\nreturn engine\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "Start the analytical engine")
+    git("tag", "v0.1.0")
+    write("src/cards.lua", "local cards = {}\n\nfunction cards.read(deck)\n  return deck\nend\n\nreturn cards\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "Read punched cards", author=grace)
+    git("checkout", "-q", "-b", "feature/loops")
+    write("src/loops.lua", "local loops = {}\n\nfunction loops.repeat_card(card, n)\n  for _ = 1, n do card() end\nend\n\nreturn loops\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "Repeat a card sequence", author=grace)
+    git("checkout", "-q", "main")
+    write("docs/notes.md", "# Notes\n\nThe engine weaves algebraic patterns.\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "Write the first notes")
+    git("merge", "-q", "--no-ff", "feature/loops", "-m", "Merge branch 'feature/loops'")
+    write("src/engine.lua", "local cards = require \"cards\"\nlocal loops = require \"loops\"\n\n"
+          "local engine = {}\n\nfunction engine.run(deck)\n  for _, card in ipairs(cards.read(deck)) do\n"
+          "    loops.repeat_card(card, 1)\n  end\nend\n\nreturn engine\n")
+    write("src/mill.lua", "local mill = {}\n\nfunction mill.add(a, b) return a + b end\n\nreturn mill\n")
+    write("README.md", "# Engine\n\nA small analytical engine.\n\nRun `engine.run(deck)` with a deck of cards.\n")
+    (repo / "docs" / "notes.md").unlink()
+    git("add", "-A")
+    git("commit", "-q", "-m", "Run decks through the mill", "-m",
+        "The engine now reads each card and repeats it through the loop unit. "
+        "The mill does the arithmetic, so the store only keeps numbers.",
+        "-m", "The old notes moved into the README.")
+    git("tag", "v0.2.0")
 
 
 def read_key_values(path: Path) -> dict[str, str]:
@@ -2022,6 +2077,8 @@ def main() -> int:
         return 0
     if "filetree-edit-repeat" in selected_scenarios:
         generate_filetree_fixture(work)
+    if any(name.startswith("git-view") for name in selected_scenarios):
+        generate_git_view_fixture(work)
     workload_manifests = {}
     for name in selected_scenarios:
         if name in perf_workloads.SCENARIOS:

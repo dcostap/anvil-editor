@@ -256,6 +256,54 @@ test.describe("Git Log row selection", function()
     end)
   end
 
+  test.it("glides the commit highlight to the next row like other lists", function()
+    local _, list = open_log()
+    list.active_window_has_focus = function() return true end
+    local saved_transitions = config.transitions
+    config.transitions = true
+    local window = renwindow.create("git-log-highlight", 900, 600)
+    -- Draws one frame of the commit list and returns the top of the drawn selection highlight.
+    local function highlight_top()
+      local top
+      local function selection_color(color)
+        return color and color[1] == style.row_selection[1] and color[2] == style.row_selection[2]
+          and color[3] == style.row_selection[3]
+      end
+      local draw_rect, draw_rounded_rect = renderer.draw_rect, renderer.draw_rounded_rect
+      renderer.draw_rect = function(x, y, w, h, color, ...)
+        if selection_color(color) then top = y end
+        return draw_rect(x, y, w, h, color, ...)
+      end
+      renderer.draw_rounded_rect = function(x, y, w, h, radius, color, ...)
+        if selection_color(color) then top = y end
+        return draw_rounded_rect(x, y, w, h, radius, color, ...)
+      end
+      local old_clip = core.clip_rect_stack[1]
+      renderer.begin_frame(window)
+      core.clip_rect_stack[1] = { 0, 0, 900, 600 }
+      renderer.set_clip_rect(0, 0, 900, 600)
+      local ok, err = pcall(list.draw, list)
+      renderer.end_frame()
+      core.clip_rect_stack[1] = old_clip
+      renderer.draw_rect, renderer.draw_rounded_rect = draw_rect, draw_rounded_rect
+      if not ok then error(err, 0) end
+      return top
+    end
+    local ok, err = pcall(function()
+      local first
+      for _ = 1, 120 do first = highlight_top() end
+      command.perform("core:move_to_next_line")
+      local moving = highlight_top()
+      for _ = 1, 120 do highlight_top() end
+      local second = highlight_top()
+      test.ok(first and second and second > first)
+      test.ok(moving and moving > first and moving < second,
+        string.format("expected the highlight between %s and %s, got %s", first, second, moving))
+    end)
+    config.transitions = saved_transitions
+    if not ok then error(err, 0) end
+  end)
+
   for _, surface in ipairs { "log-list", "details" } do
   test.it(surface .. " paints row selection for its focus state, then restores text selection", function()
     local view, list = open_log()
@@ -276,9 +324,11 @@ test.describe("Git Log row selection", function()
     local saved, paints, carets = {}, {}, {}
     local root = core.root_panel
     local submit, clip, blink = root.submit_keyboard_caret, core.clip_rect_stack, config.disable_blink
+    local transitions = config.transitions
     local function restore()
       for name, fn in pairs(saved) do renderer[name] = fn end
       root.submit_keyboard_caret, core.clip_rect_stack, config.disable_blink = submit, clip, blink
+      config.transitions = transitions
     end
     for _, name in ipairs {
       "draw_rect", "draw_poly", "draw_rect_grid", "draw_rounded_rect", "draw_text",
@@ -289,7 +339,7 @@ test.describe("Git Log row selection", function()
     end
     renderer.display_packet = nil
     renderer.draw_text = function(font, text, x, _, _, opts) return x + font:get_width(text, opts) end
-    renderer.draw_rect = function(x, y, w, h, color)
+    local function paint(x, y, w, h, color)
       local bounds = core.clip_rect_stack[#core.clip_rect_stack]
       if color == style.selection or color == style.row_selection or color == style.row_selection_inactive then
         paints[#paints + 1] = {
@@ -299,6 +349,10 @@ test.describe("Git Log row selection", function()
       end
       if color == style.caret then carets[#carets + 1] = { x, y } end
     end
+    renderer.draw_rect = paint
+    renderer.draw_rounded_rect = function(x, y, w, h, _, color) paint(x, y, w, h, color) end
+    -- Row highlights glide and fade. Without transitions, each draw shows the settled highlight.
+    config.transitions = false
     root.submit_keyboard_caret = function(_, target) carets[#carets + 1] = target end
     core.clip_rect_stack = { { 0, 0, 900, 600 } }
     config.disable_blink = true
@@ -312,10 +366,11 @@ test.describe("Git Log row selection", function()
         end
       end
       for _, row in ipairs(list:get_selected_rows()) do
-        local _, y = list:get_line_screen_position(row)
+        local text_x, y = list:get_line_screen_position(row)
         y = y + list:get_line_height() / 2
-        test.ok(selected_at(list.position.x + 1, y), "the row highlight must include the gutter")
-        test.ok(selected_at(list.position.x + list.size.x - 1, y), "the row highlight must reach the right edge")
+        test.ok(selected_at(text_x - 1, y), "the row highlight must include the gutter")
+        test.ok(selected_at(list.position.x + list.size.x - style.padding.x, y),
+          "the row highlight must reach the right edge")
       end
       for row = 1, #list.buffer.lines do
         if not list:is_selectable_row(row) then

@@ -104,6 +104,7 @@ style.divider = p("tearline")
 style.selection = { common.color "rgba(107, 29, 29, 0.18)" }
 style.row_selection = { common.color "rgba(107, 29, 29, 0.16)" }
 style.row_selection_inactive = { common.color "rgba(107, 29, 29, 0.10)" }
+style.row_hover = { 107, 29, 29, 16 }
 style.line_number = p("ignored")
 style.line_number2 = c("4a4239")
 style.line_highlight = p("caret_row")
