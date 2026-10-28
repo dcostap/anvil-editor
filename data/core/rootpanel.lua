@@ -104,8 +104,13 @@ function RootPanel:new()
   self.focus_feedback = FocusFeedback()
 end
 
+-- The Root Panel draws in layers: Views, overlays, deferred popups, then the top layer.
+-- The keyboard caret draws at the end of the layer that drew its owner, so later layers cover it.
+local CARET_LAYER_VIEWS, CARET_LAYER_OVERLAYS, CARET_LAYER_DEFERRED, CARET_LAYER_TOP = 1, 2, 3, 4
+
 ---Submit the focused keyboard caret for global drawing.
 function RootPanel:submit_keyboard_caret(target)
+  target.layer = self.caret_layer or CARET_LAYER_TOP
   target.trail_color = target.trail_color or style.caret_trail or target.color
   local previous = self.caret_renderer.previous_target
   if previous and previous.owner ~= target.owner then
@@ -119,6 +124,17 @@ end
 
 function RootPanel:begin_keyboard_caret_frame()
   self.caret_renderer:begin_frame(config.animated_caret)
+end
+
+-- Draw the keyboard caret when the layer of its owner ends. The top layer draws it in any case.
+local function end_caret_layer(self)
+  local layer = self.caret_layer
+  local target = self.caret_renderer.target
+  if not self.caret_drawn and (layer == CARET_LAYER_TOP or (target and target.layer <= layer)) then
+    self.caret_drawn = true
+    self:draw_keyboard_caret()
+  end
+  self.caret_layer = layer + 1
 end
 
 function RootPanel:draw_keyboard_caret()
@@ -1128,6 +1144,7 @@ end
 function RootPanel:draw()
   local started, scope = perf_begin("rootpanel_core_draw")
   self:begin_keyboard_caret_frame()
+  self.caret_layer, self.caret_drawn = CARET_LAYER_VIEWS, false
   local pane_views = self:pane_views()
   self.above_sidebar = {}
   self:draw_wallpaper(#pane_views > 0)
@@ -1140,6 +1157,7 @@ function RootPanel:draw()
   for _, bar in ipairs(self:pane_status_bars()) do call_view(bar, "draw") end
   if group then draw_split_dividers(group.root) end
   for _, view in ipairs(self:shell_views()) do call_view(view, "draw") end
+  end_caret_layer(self)
   local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")
   self:draw_active_app_overlay()
   local drop_target = self:get_external_drop_target()
@@ -1177,12 +1195,14 @@ function RootPanel:draw()
   local navigation_history = package.loaded["core.navigation_history"]
   if navigation_history then navigation_history.draw_feedback(self) end
   perf_end("rootpanel_overlays_draw", overlay_started, overlay_scope)
+  end_caret_layer(self)
   local deferred_started, deferred_scope = perf_begin("rootpanel_deferred_draw")
   while #self.deferred_draws > 0 do
     local item = table.remove(self.deferred_draws)
     item.fn(table.unpack(item, 1, #item))
   end
   perf_end("rootpanel_deferred_draw", deferred_started, deferred_scope)
+  end_caret_layer(self)
   local focused = self.focus_feedback_view
   if focused then
     core.push_clip_rect(focused.position.x, focused.position.y, focused.size.x, focused.size.y)
@@ -1194,7 +1214,7 @@ function RootPanel:draw()
   local context_menu = package.loaded["core.context_menu"]
   if context_menu then context_menu.draw() end
   self:publish_surface_overlay()
-  self:draw_keyboard_caret()
+  end_caret_layer(self)
   self:draw_autoscroll()
   if core.cursor_change_req then
     system.set_cursor(core.cursor_change_req)
