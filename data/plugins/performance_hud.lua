@@ -112,6 +112,16 @@ command.add(nil, {
     end
     core.redraw = true
   end),
+  ["core:record_heap_census"] = command.palette(function()
+    local heap_census = require "core.heap_census"
+    local text = heap_census.format(heap_census.run())
+    local path = perf.output_path("anvil_heap_", ".txt")
+    local file = assert(io.open(path, "wb"))
+    file:write(text)
+    file:close()
+    system.set_clipboard(path)
+    core.log("Heap census saved and copied to clipboard: %s", path)
+  end),
 })
 
 keymap.add {

@@ -1905,6 +1905,11 @@ local function write_summary(path)
   file:close()
 end
 
+---Return a new output path that starts with `prefix` and ends with `suffix`.
+function perf.output_path(prefix, suffix)
+  return output_dir() .. PATHSEP .. timestamp_name():gsub("^anvil_perf_", prefix) .. suffix
+end
+
 function perf.is_recording()
   return recording
 end

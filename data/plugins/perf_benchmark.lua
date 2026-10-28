@@ -48,6 +48,7 @@ local benchmark = {
   details_file = env_string("ANVIL_PERF_BENCHMARK_DETAILS"),
   allocation_file = env_string("ANVIL_PERF_BENCHMARK_ALLOCATION"),
   allocation_sites_file = env_string("ANVIL_PERF_BENCHMARK_ALLOCATION_SITES"),
+  heap_file = env_string("ANVIL_PERF_BENCHMARK_HEAP"),
   details = {},
   workload_file = env_string("ANVIL_PERF_BENCHMARK_WORKLOAD"),
   profile_dir = env_string("ANVIL_PERF_BENCHMARK_PROFILE_DIR"),
@@ -278,8 +279,17 @@ local function write_allocation()
   end
 end
 
+-- A heap run writes a Heap Census after the measured frames.
+local function write_heap()
+  if benchmark.heap_file == "" or benchmark.heap_written then return end
+  benchmark.heap_written = true
+  local heap_census = require "core.heap_census"
+  write_atomic(benchmark.heap_file, heap_census.format(heap_census.run()))
+end
+
 local function write_metrics()
   write_allocation()
+  write_heap()
   if benchmark.mode == "throughput" or benchmark.mode == "visual" then return true end
   if benchmark.metrics_file == "" then return true end
   local lines = { table.concat(metric_fields, ",") }

@@ -324,6 +324,17 @@ def run_allocation(name: str, scenario: Scenario, args, exe: Path, work: Path, l
     return result
 
 
+def run_heap(name: str, scenario: Scenario, args, exe: Path, work: Path, log) -> str:
+    """Run once and write a Heap Census after the measured frames. Returns its text."""
+    root = scenario_root(scenario, args.project, args.fixture_cache, log)
+    run_dir = work / name / "heap"
+    path = run_dir / "heap.txt"
+    run_one(name, scenario, exe=exe, work=work, root=root, run_dir=run_dir, renderer=args.renderer,
+            mode="metrics", details=False,
+            extra_environment={"ANVIL_PERF_BENCHMARK_HEAP": gate.native_path(path)})
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
 def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
     """Score with the median of each run's p95, so one noisy run cannot pass or fail alone."""
     def median(values: list[float]) -> float:
@@ -416,6 +427,10 @@ def markdown(report: dict[str, Any]) -> str:
             lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["lines"]]
             lines += ["", "| Call stack | KiB/frame |", "| --- | ---: |"]
             lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["stacks"]]
+        if case.get("heap"):
+            lines += ["", "Heap Census after the measured frames:", "", "```text"]
+            lines += case["heap"].splitlines()[:40]
+            lines += ["```"]
         if case.get("hotspots"):
             lines += ["", "Draw-scope hotspots in the diagnostic run:", ""]
             for item in case["hotspots"]:
@@ -463,6 +478,8 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
         case["attribution"] = read_details(Path(run["run_dir"]) / "details.csv")
     if args.allocation:
         case["allocation"] = run_allocation(name, scenario, args, exe, work, log)
+    if args.heap:
+        case["heap"] = run_heap(name, scenario, args, exe, work, log)
     if args.diagnose:
         if scenario.writes or scenario.churn_interval:
             root = scenario_root(scenario, args.project, args.fixture_cache, log)
@@ -485,6 +502,8 @@ def main() -> int:
     parser.add_argument("--attribute", action="store_true",
                         help="record detail timers even when a scenario is within budget")
     parser.add_argument("--diagnose", action="store_true", help="add a LuaJIT sampling run")
+    parser.add_argument("--heap", action="store_true",
+                        help="add a run that writes a Heap Census after the measured frames")
     parser.add_argument("--allocation", action="store_true",
                         help="add runs with the GC stopped that report allocation by phase and source line")
     parser.add_argument("--project", type=Path,
@@ -524,6 +543,9 @@ def main() -> int:
             log(f"    {finding['metric']}: {finding['value']:.2f} ms > {finding['budget']:.2f} ms")
         for timer in case.get("attribution", [])[:6]:
             log(f"    {timer['key']}: {timer['ms_per_frame']:.2f} ms/frame")
+        if case.get("heap"):
+            for line in case["heap"].splitlines()[1:12]:
+                log("    " + line)
         if case.get("allocation"):
             phases = case["allocation"]["phases"]
             log(f"    allocation: {sum(row['kib_per_frame'] for row in phases):.0f} KiB/frame ("

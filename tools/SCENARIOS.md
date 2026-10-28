@@ -127,6 +127,10 @@ The second run uses a line hook and reports the allocation of each source line a
 The hook turns off the JIT, and compiled traces can sink some allocations, so read its sizes as an upper limit.
 LuaJIT's GC work grows with allocation. Use this option after changes to code that runs in each frame.
 
+`--heap` adds a run that writes a Heap Census (`core.heap_census`) after the measured frames. It groups the live Lua heap by the data that holds it.
+Each GC cycle marks all live objects again, so large live data makes each cycle longer.
+The `core:record_heap_census` command writes the same report for the running editor and copies its path.
+
 Frame details include worker-result callbacks before the UI step. Scripted input runs after a frame snapshot.
 The next measured frame includes its counters and dispatch time. Each dispatch counts once, including the first one.
 
