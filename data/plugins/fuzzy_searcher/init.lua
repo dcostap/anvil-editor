@@ -1384,34 +1384,19 @@ function fuzzy_searcher.file_match_row(match, query, line, recent)
   }
 end
 
+-- Matching recent files first, then the other matches.
 local function build_sectioned_file_results(recent_matches, general_matches, limit, query, line)
   local out = {}
-  local shown_recent, shown_general = 0, 0
   limit = math.max(0, limit or 0)
-
   for _, match in ipairs(recent_matches or {}) do
     if #out >= limit then break end
     out[#out+1] = fuzzy_searcher.file_match_row(match, query, line, true)
-    shown_recent = shown_recent + 1
   end
-
-  local general_available = #(general_matches or {}) > 0
-  local separator_visible = shown_recent > 0 and general_available and #out + 1 < limit
-  if separator_visible then
-    out[#out+1] = { header = true, separator = true, label = "" }
+  for _, match in ipairs(general_matches or {}) do
+    if #out >= limit then break end
+    out[#out+1] = fuzzy_searcher.file_match_row(match, query, line, false)
   end
-
-  if shown_recent == 0 or separator_visible then
-    for _, match in ipairs(general_matches or {}) do
-      if #out >= limit then break end
-      out[#out+1] = fuzzy_searcher.file_match_row(match, query, line, false)
-      shown_general = shown_general + 1
-    end
-  end
-
-  local hidden_recent = shown_recent < #(recent_matches or {})
-  local hidden_general = shown_general < #(general_matches or {})
-  return out, hidden_recent or hidden_general
+  return out, #out < #(recent_matches or {}) + #(general_matches or {})
 end
 
 function fuzzy_searcher.file_rank_penalty(item)

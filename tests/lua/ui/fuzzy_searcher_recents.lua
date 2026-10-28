@@ -91,7 +91,8 @@ test.describe("Fuzzy Searcher recent files", function()
     test.ok(rows[2].recent, "expected second row to be a recent file")
     test.equal(basename(rows[3].file), basename(recent_older))
     test.ok(rows[3].recent, "expected third row to be a recent file")
-    test.ok(rows[4] and rows[4].separator, "expected separator between recent and general sections")
+    test.equal(rows[4] and rows[4].file and basename(rows[4].file), basename(general),
+      "expected the general match right after the recent files")
 
     local seen = {}
     for _, row in ipairs(rows) do

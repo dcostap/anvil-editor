@@ -186,8 +186,8 @@ Path Search searches beyond this Project, so it does not show it. Pickers with t
 Project File Search and Text Search also show Other Project Results. Each query goes to the other ready Projects as a `project_search` Pane request.
 Its `mode` is `files` or `text`. A path or line number in a Text Search query keeps the search in this Project.
 Each Project searches itself and answers with up to 20 rows in a `project_results` request. `more = true` tells that more rows match. A Project that cannot search, or has no match, does not answer.
-While other Projects show rows, each group gets a share of the screen, at least 5 rows. A group with more rows ends with a More row.
-This Project's More row shows the rest of its rows in place. Another Project's More row sends `search` with the same query through the select route.
+This Project's rows come first and are never cut. Each other group shows all its rows. It ends with a More row when its Project has more rows.
+A More row sends `search` with the same query through the select route.
 Without other rows, this Project's list is not cut.
 File Search uses the Project's file index. Text Search runs ripgrep in the Project's roots and searches its Terminal Sessions.
 A Terminal row carries the lines near its match for the preview, at most 4 KB.

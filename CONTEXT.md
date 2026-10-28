@@ -552,7 +552,7 @@ A Project File Search result for a folder. Activating it opens a File Tree roote
 _Avoid_: directory action, Project result
 
 **Other Project Results**:
-Project File Search and Text Search results from the other loaded Projects, including the lines of their Terminal Sessions. They follow the Selected Project's results, in one group for each Project under that Project's badge and name. Activating one selects its Project and opens the file or Terminal there. Each group shows a share of the screen and ends with a More row when it has more results. Dormant Projects give none.
+Project File Search and Text Search results from the other loaded Projects, including the lines of their Terminal Sessions. They follow the Selected Project's results, in one group for each Project under that Project's badge and name. Activating one selects its Project and opens the file or Terminal there. The Selected Project's results all come first. Each other group ends with a More row when its Project has more results. Dormant Projects give none.
 _Avoid_: cross-Project results, global results
 
 **Path Search**:

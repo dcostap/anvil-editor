@@ -216,48 +216,38 @@ test.describe("Project File Search in other Projects", function()
     return rows
   end
 
-  test.it("cuts this Project's rows with a More row while other Projects show rows", function(context)
+  test.it("lists every row of this Project before the rows of other Projects", function(context)
     fuzzy_searcher.open("beta")
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
     picker:set_size(1400, 600)
     test.ok(wait_until(function() return own_file_rows(picker) == 40 end),
-      "expected every row of this Project without other rows, got " .. own_file_rows(picker))
+      "expected every row of this Project, got " .. own_file_rows(picker))
     test.ok(pane_requests.perform(serialize {
       action = "project_results", source = context.other, id = sent(context, "project_search")[1].request.id,
       rows = other_rows(context, 3),
     }))
-    local more_index = index_of(picker.results, function(result) return result.kind == "more" end)
     local header_index = index_of(picker.results, function(result) return result.project ~= nil end)
-    test.ok(more_index and header_index and more_index < header_index,
-      "expected a More row before the other Project's header")
-    test.ok(own_file_rows(picker) < 40, "this Project's rows were not cut")
-    test.ok(header_index <= picker:list_metrics().result_rows, "the other Project's group is not on the first screen")
-
-    picker.selected = more_index
-    picker:confirm(false)
-    test.equal(own_file_rows(picker), 40, "More did not show the rest of this Project's rows")
-    test.is_nil(index_of(picker.results, function(result) return result.kind == "more" end))
-    test.equal(picker.results[picker.selected].kind, "file")
-    test.not_nil(index_of(picker.results, function(result) return result.project ~= nil end),
-      "the other Project's group went away")
+    test.not_nil(header_index, "no header for the other Project")
+    test.equal(own_file_rows(picker), 40, "this Project's rows were cut")
+    test.is_nil(index_of(picker.results, function(result)
+      return result.kind == "more" and not result.project_path
+    end), "this Project has a More row")
   end)
 
-  test.it("gives the free rows of the screen to other Projects", function(context)
+  test.it("shows every row that another Project sends", function(context)
     fuzzy_searcher.open("alpha")
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
     test.ok(wait_until(function() return file_index(picker.results, context.local_file) end))
-    -- The picker sets its size again on each update, so set it just before the reply.
-    picker:set_size(1400, 1600)
-    test.ok(picker:list_metrics().result_rows >= 16, "the picker needs room for this Project's row and 9 more")
+    picker:set_size(1400, 300)
     test.ok(pane_requests.perform(serialize {
       action = "project_results", source = context.other, id = sent(context, "project_search")[1].request.id,
-      rows = other_rows(context, 9),
+      rows = other_rows(context, 20),
     }))
     local shown = 0
     for _, result in ipairs(picker.results) do
       if result.other_project then shown = shown + 1 end
     end
-    test.equal(shown, 9, "the other Project's rows were cut while the screen had room")
+    test.equal(shown, 20, "the other Project's rows were cut")
   end)
 
   test.it("opens the search in another Project from its More row", function(context)

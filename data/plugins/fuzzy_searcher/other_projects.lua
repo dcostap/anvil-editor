@@ -10,8 +10,6 @@ local other = {}
 
 -- The most rows that each other Project sends.
 local LIMIT = 20
--- The fewest rows that a group shows before its More row.
-local MIN_ROWS = 5
 -- The shell's Pane request header has four 32-bit fields. The Project path follows it without a terminator.
 local MAX_TEXT = 65536 - 16
 
@@ -129,62 +127,34 @@ function other.request(picker, mode, query, line)
   end
 end
 
--- This Project's rows, then each other Project that has rows: a divider, a header with its badge and name, then
--- its rows. While other Projects show rows, each group gets a share of the screen. A group with more rows ends with
--- a More row. Without other Projects, this Project's rows are not cut.
+-- All of this Project's rows, then each other Project that has rows: a divider, a header with its badge and name,
+-- then its rows. A group ends with a More row when its Project has more rows than it sent.
 function other.with_rows(picker, own)
   local state = picker.other_projects
   if not state then return own end
-  local groups = {}
-  for _, project in ipairs(state.targets) do
-    if state.rows[project.path] and #state.rows[project.path] > 0 then groups[#groups + 1] = project end
-  end
-  if #groups == 0 then return own end
-  local screen = picker:list_metrics().result_rows
-  local shown = #own
-  if not state.expanded then
-    -- Each other group needs a divider, a header, its rows and a More row.
-    shown = math.min(#own, math.max(MIN_ROWS, screen - #groups * (MIN_ROWS + 3) - 1))
-    -- A row that the user selected stays in the list.
-    local selected = picker.results and picker.results[picker.selected]
-    for index = shown + 1, #own do
-      if own[index] == selected then state.expanded, shown = true, #own end
-    end
-  end
   local out = {}
-  for index = 1, shown do out[index] = own[index] end
-  if shown < #own then
-    local current = projects.current()
-    state.own_more = state.own_more
-      or {kind = "more", own = true, label = "More in " .. (current and look.name(current) or "this Project")}
-    out[#out + 1] = state.own_more
-  end
-  local share = math.max(MIN_ROWS, math.floor((screen - #out) / #groups) - 3)
-  for _, project in ipairs(groups) do
+  for index = 1, #own do out[index] = own[index] end
+  for _, project in ipairs(state.targets) do
     local rows = state.rows[project.path]
-    -- The rows keep their identity across replies, so the selection can follow its row.
-    local group = state.headers[project.path] or {
-      divider = {header = true, separator = true, label = ""},
-      header = {header = true, project = project, label = look.name(project)},
-      more = {kind = "more", project_path = project.path, label = "More in " .. look.name(project)},
-    }
-    state.headers[project.path] = group
-    if #out > 0 then out[#out + 1] = group.divider end
-    out[#out + 1] = group.header
-    for index = 1, math.min(#rows, share) do out[#out + 1] = rows[index] end
-    if #rows > share or state.more[project.path] then out[#out + 1] = group.more end
+    if rows and #rows > 0 then
+      -- The rows keep their identity across replies, so the selection can follow its row.
+      local group = state.headers[project.path] or {
+        divider = {header = true, separator = true, label = ""},
+        header = {header = true, project = project, label = look.name(project)},
+        more = {kind = "more", project_path = project.path, label = "More in " .. look.name(project)},
+      }
+      state.headers[project.path] = group
+      if #out > 0 then out[#out + 1] = group.divider end
+      out[#out + 1] = group.header
+      for _, row in ipairs(rows) do out[#out + 1] = row end
+      if state.more[project.path] then out[#out + 1] = group.more end
+    end
   end
   return out
 end
 
--- Confirms a More row: this Project's shows the rest of its rows. Another Project's opens the same search in that
--- Project.
+-- Confirms a More row: opens the same search in its Project.
 function other.more(picker, result)
-  if result.own then
-    picker.other_projects.expanded = true
-    picker:show_other_projects()
-    return true
-  end
   local text = picker.input:get_text()
   picker:close()
   core.log_quiet("Other Project search: opening %q in %s", text, result.project_path)
