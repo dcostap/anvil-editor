@@ -108,8 +108,8 @@ const GhosttyAllocator terminal_allocator = {
 };
 
 bool anvil_terminal_model_options(GhosttyTerminal model, const size_t *scrollback_lines) {
-  /* ConPTY owns the live screen. Pulling saved history into it on growth moves
-     the visible prompt without moving the shell's input coordinates. */
+  /* ConPTY owns the live screen and keeps no history. Pulling saved history
+     into it on a resize moves the visible prompt away from ConPTY's prompt. */
   bool pull_scrollback = false;
   if (ghostty_terminal_set(model, GHOSTTY_TERMINAL_OPT_RESIZE_PULL_SCROLLBACK,
       &pull_scrollback) != GHOSTTY_SUCCESS) return false;

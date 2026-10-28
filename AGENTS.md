@@ -41,6 +41,7 @@ The standalone build needs MSYS2, MinGW64 GCC, Ninja, CMake, Python, Meson,
 and Zig. `scripts\ensure-zig.sh` downloads the pinned Zig release into
 `%LOCALAPPDATA%\anvil-build-tools` when it is missing. The build needs network
 access for this download and for Meson subprojects on a clean machine.
+Zig's own HTTP and Git clients fail on some Windows machines. `subprojects/packagefiles/ghostty/build-vt.sh` then gets each missing Ghostty dependency with curl or git and gives Zig the unpacked folder.
 
 Windows Terminal Sessions use bundled Microsoft ConPTY, not the system console host.
 `subprojects/conpty.wrap` pins the package and its SHA-256 hash.
@@ -935,16 +936,9 @@ Pi emits OSC 133 A as a zero-width marker during synchronized TUI repaints. Ghos
 
 When updating Ghostty, verify this patch still applies. Remove it only after Pi and Ghostty agree on OSC 133 A behavior during TUI repaints.
 
-Ghostty ConPTY resize patch:
-
-- `subprojects/packagefiles/ghostty-conpty-resize-history.patch`
-- listed after the semantic-prompt patch in `subprojects/ghostty.wrap`
-- prevents screen growth from pulling scrollback into the live ConPTY screen
-- keeps a restored prompt aligned with the shell's input coordinates after resize
-
-Keep saved history available for scrolling, but outside the live screen when it grows.
-Run `ui/terminal_revival.lua` after changes. It checks input through resize and reattachment.
-Keep this patch when updating Ghostty unless its resize API supports this behavior.
+Anvil sets Ghostty's `GHOSTTY_TERMINAL_OPT_RESIZE_PULL_SCROLLBACK` to false. ConPTY keeps no history, so a resize must not pull history into the live screen.
+A height change then adds blank rows at the bottom. A width change keeps the top of the live screen on the same text.
+Saved history stays available for scrolling. Run `ui/terminal_revival.lua` and `ui/terminal_resize_prompt.lua` after changes.
 
 Current Anvil Tree-sitter Markdown patch:
 

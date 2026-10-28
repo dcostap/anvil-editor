@@ -2790,8 +2790,8 @@ static int f_terminal_text_capture(lua_State *L) {
       ghostty_terminal_get(
         session->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar
       ) != GHOSTTY_SUCCESS ||
-      ghostty_render_state_colors_get(
-        session->render_state, &colors
+      ghostty_render_state_get(
+        session->render_state, GHOSTTY_RENDER_STATE_DATA_COLORS, &colors
       ) != GHOSTTY_SUCCESS) {
     return push_capture_error(L, "Could not read terminal capture state");
   }
@@ -3776,7 +3776,8 @@ static int f_terminal_snapshot(lua_State *L) {
   }
 
   GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
-  if (ghostty_render_state_colors_get(session->render_state, &colors) != GHOSTTY_SUCCESS) {
+  if (ghostty_render_state_get(session->render_state, GHOSTTY_RENDER_STATE_DATA_COLORS,
+      &colors) != GHOSTTY_SUCCESS) {
     lua_pushnil(L);
     return 1;
   }
