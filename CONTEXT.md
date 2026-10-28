@@ -462,7 +462,7 @@ _Avoid_: folder overwrite
 
 **Parent Directory Row**:
 The first File Tree row, shown as `../`, which opens the parent directory in the same File Tree.
-The previous directory remains expanded after navigation.
+It represents the current directory for actions other than navigation; the previous directory remains expanded after navigation.
 _Avoid_: up folder, parent link
 
 **Enter Directory**:

@@ -101,6 +101,18 @@ test.describe("File Tree instances", function()
     test.is_nil(target.line)
   end)
 
+  test.it("uses the current folder for path actions on the parent row", function()
+    local view = assert(filetree.new(folder))
+    view.buffer:set_selection(1, 1)
+    test.equal(view.buffer.lines[1], "../\n")
+
+    local target = test.not_nil(file_context.view_path_target(view))
+    test.ok(common.path_equals(target.path, folder))
+    test.is_nil(target.line)
+    test.ok(common.path_equals(file_context.view_context_path(view), folder))
+    test.ok(common.path_equals(file_context.source_directory(view), folder))
+  end)
+
   test.it("uses the Root Project when no target is given", function()
     local view = assert(filetree.new())
     test.equal(view.root_dir, common.normalize_path(core.root_project().path))
@@ -144,7 +156,7 @@ test.describe("File Tree instances", function()
     test.equal(view:operation_count(plan), 0)
 
     view.buffer:set_selection(1, 1)
-    test.ok(view:open_item())
+    test.ok(command.perform("core:activate_point_of_interest"))
 
     test.equal(view.current_dir, common.normalize_path(root))
     local _, _, snapshot = view:build_entries(false)

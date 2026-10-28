@@ -1397,6 +1397,12 @@ end
 function FileTreeView:get_context_path()
   local snapshot = self:capture_selection_paths()
   local selection = snapshot and snapshot.selections[snapshot.last_selection or 1]
+  if selection then
+    -- The parent row navigates up, but path actions use the displayed folder.
+    local line = self.buffer:get_selection(false)
+    local meta = self.line_meta[line]
+    if type(meta) == "table" and meta.parent_directory then return self.current_dir end
+  end
   return selection and selection.line1_abs or nil
 end
 
