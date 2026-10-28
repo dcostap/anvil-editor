@@ -2788,6 +2788,42 @@ function TextView:add_edit_guard(id, guard)
   self.edit_guards[id] = guard
 end
 
+---The Context Menu's items at a screen point. A right-click outside the selection moves the caret there first,
+---so the items act on the clicked text.
+---@return table[]
+function TextView:context_menu(x, y)
+  if x and y and x >= self.position.x + self:get_gutter_width() then
+    local line, col = self:resolve_screen_position(x, y)
+    local inside = false
+    for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
+      local after_start = line > line1 or (line == line1 and col >= col1)
+      local before_end = line < line2 or (line == line2 and col <= col2)
+      inside = inside or ((line1 ~= line2 or col1 ~= col2) and after_start and before_end)
+    end
+    if not inside then self.buffer:set_selection(line, col) end
+  end
+  local items = {}
+  local poi = require("core.poi").point_at_caret(self, { activatable = true, silent = true })
+  items[#items + 1] = { label = poi and "Open" or "Go to Definition", command = "core:activate_point_of_interest" }
+  items[#items + 1] = { label = "Find Usages", command = "editor:show_references" }
+  items[#items + 1] = "-"
+  local editable = self:can_edit("context menu")
+  if editable then items[#items + 1] = { label = "Cut", command = "core:cut" } end
+  items[#items + 1] = { label = "Copy", command = "core:copy" }
+  if editable then
+    items[#items + 1] = { label = "Paste", command = { "markdown:table_paste", "markdown:paste_table", "core:paste" } }
+  end
+  items[#items + 1] = { label = "Select All", command = "core:select_all" }
+  return items
+end
+
+---A keyboard-opened Context Menu opens below the caret.
+function TextView:context_menu_point()
+  local line, col = self.buffer:get_selection()
+  local x, y = self:get_caret_screen_position(line, col)
+  return x, y + self:get_line_height()
+end
+
 function TextView:remove_edit_guard(id)
   if not self.edit_guards or not self.edit_guards[id] then return false end
   self.edit_guards[id] = nil

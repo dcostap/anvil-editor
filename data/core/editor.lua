@@ -214,4 +214,47 @@ function Editor.from_state(state)
   return editor
 end
 
+local MARKDOWN_TABLE_MENU = {
+  { label = "Insert Row Above", command = "markdown:table_insert_row_above" },
+  { label = "Insert Row Below", command = "markdown:table_insert_row_below" },
+  { label = "Delete Row", command = "markdown:table_delete_row" },
+  "-",
+  { label = "Insert Column Left", command = "markdown:table_insert_column_left" },
+  { label = "Insert Column Right", command = "markdown:table_insert_column_right" },
+  { label = "Delete Column", command = "markdown:table_delete_column" },
+  "-",
+  { label = "Align Left", command = "markdown:table_align_column_left" },
+  { label = "Align Center", command = "markdown:table_align_column_center" },
+  { label = "Align Right", command = "markdown:table_align_column_right" },
+  "-",
+  { label = "Sort Ascending", command = "markdown:table_sort_ascending" },
+  { label = "Sort Descending", command = "markdown:table_sort_descending" },
+  { label = "Format Table", command = "markdown:table_format" },
+}
+
+---A Markdown Editor adds formatting, Footnote, table and mode items to the Text View items.
+function Editor:context_menu(x, y)
+  local items = Editor.super.context_menu(self, x, y)
+  local live = require "core.markdown.live_render"
+  if not live.is_markdown_buffer(self.buffer) then return items end
+  local markdown = { "-" }
+  if self.buffer:has_selection() then
+    markdown[#markdown + 1] = { label = "Bold", command = "markdown:surround_bold" }
+    markdown[#markdown + 1] = { label = "Italic", command = "markdown:surround_italic" }
+    markdown[#markdown + 1] = { label = "Add Text Note", command = "markdown:add_text_note" }
+  else
+    markdown[#markdown + 1] = { label = "Add Footnote", command = "markdown:add_footnote" }
+  end
+  markdown[#markdown + 1] = { label = "Edit Footnote", command = "markdown:edit_footnote" }
+  markdown[#markdown + 1] = { label = "Remove Footnote", command = "markdown:remove_footnote" }
+  markdown[#markdown + 1] = { label = "Table", items = MARKDOWN_TABLE_MENU }
+  markdown[#markdown + 1] = "-"
+  markdown[#markdown + 1] = {
+    label = live.is_live_mode(self) and "Show Markdown Source" or "Show Live Preview",
+    command = "markdown:toggle_source_mode",
+  }
+  for _, item in ipairs(markdown) do items[#items + 1] = item end
+  return items
+end
+
 return Editor

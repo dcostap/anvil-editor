@@ -704,6 +704,8 @@ function RootPanel:update()
   end
   local image_overlay = package.loaded["core.image_overlay"]
   if image_overlay then image_overlay.update() end
+  local context_menu = package.loaded["core.context_menu"]
+  if context_menu then context_menu.update() end
   perf_end("rootpanel_update", started, scope)
 end
 
@@ -832,6 +834,8 @@ end
 
 function RootPanel:on_focus_lost(...)
   self:stop_autoscroll("window focus lost")
+  local context_menu = package.loaded["core.context_menu"]
+  if context_menu then context_menu.on_focus_lost() end
   core.redraw = true
   local target = self:keyboard_target()
   local grabbed = self.grab and self.grab.view or nil
@@ -1187,6 +1191,8 @@ function RootPanel:draw()
   end
   local image_overlay = package.loaded["core.image_overlay"]
   if image_overlay then image_overlay.draw() end
+  local context_menu = package.loaded["core.context_menu"]
+  if context_menu then context_menu.draw() end
   self:publish_surface_overlay()
   self:draw_keyboard_caret()
   self:draw_autoscroll()

@@ -490,6 +490,10 @@ _Avoid_: Command prompt, command bar
 The Fuzzy Searcher mode used to find and run curated Anvil commands available to its source View. A command can continue into another input mode when it needs an argument.
 _Avoid_: Pane Command Bar, command prompt
 
+**Context Menu**:
+A small card of commands that opens at the pointer on a right-click, or at the caret from the keyboard. It lists only the commands that can run at that place, each with its shortcut.
+_Avoid_: right-click menu, popup menu
+
 **Command Palette Usage**:
 The number of times a command runs from the Command Palette. Runs from shortcuts or other sources do not count.
 _Avoid_: command frequency

@@ -813,6 +813,13 @@ local function setup_scenario()
       overlay.show_toast("Image copied")
       return update()
     end
+  elseif benchmark.scenario == "context-menu" then
+    -- The Editor's Context Menu over the fixture, with one row selected from the keyboard.
+    config.transitions = false
+    core.root_panel:update()
+    local x, y = view.position.x + 260 * SCALE, view.position.y + 140 * SCALE
+    require("core.context_menu").open(x, y, view:context_menu(x, y))
+    core.on_event("keypressed", "c", {})
   elseif benchmark.scenario == "image-zoom" then
     -- The Image Overlay at a new zoom and pan on each frame, so each frame draws the whole image again.
     config.transitions = false
