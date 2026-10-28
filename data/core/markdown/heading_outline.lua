@@ -12,7 +12,8 @@ local heading_outline = {}
 
 local MIN_WIDTH = 120
 local EDGE_GAP = 16
-local TEXT_GAP = 32
+-- From the text, so the gutter's Git change bars stay clear.
+local TEXT_GAP = 24
 local TOP_GAP = 28
 local BOTTOM_GAP = 28
 local TITLE_GAP = 14
@@ -143,9 +144,9 @@ end
 local function column(view)
   local centered = core.centered_editor
   if not (centered and centered.should_center(view)) then return nil end
-  local lane_x = centered.get_lane_rect(view)
+  local text_x = centered.get_lane_rect(view) + view:get_gutter_width()
   local x = view.position.x + scaled(EDGE_GAP)
-  local width = lane_x - scaled(TEXT_GAP) - x
+  local width = text_x - scaled(TEXT_GAP) - x
   if width < scaled(MIN_WIDTH) then return nil end
   return x, width
 end
