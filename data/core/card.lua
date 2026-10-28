@@ -55,16 +55,21 @@ end
 ---@param h number
 ---@param radius number Corner radius in pixels
 ---@param fill? fun(x: number, y: number, w: number, h: number) Draws the inside instead of the card color.
-function card.draw(x, y, w, h, radius, fill)
+---@param opacity? number From 0 to 1; 1 when nil. A `fill` draws its own opacity.
+function card.draw(x, y, w, h, radius, fill, opacity)
+  opacity = opacity or 1
+  local function faded(color, alpha)
+    return {color[1], color[2], color[3], (color[4] or 255) * (alpha or 1) * opacity}
+  end
   local shadow = style.card_shadow
   local border = card.border_width()
   local function draw_edge()
     for i = SHADOW_LAYERS, 1, -1 do
       local spread = i * 3 * SCALE
       renderer.draw_rounded_rect(x - spread, y - spread + 4 * SCALE, w + 2 * spread, h + 2 * spread, radius + spread,
-        {shadow[1], shadow[2], shadow[3], (shadow[4] or 255) * (SHADOW_LAYERS + 1 - i) / 6})
+        faded(shadow, (SHADOW_LAYERS + 1 - i) / 6))
     end
-    renderer.draw_rounded_rect(x, y, w, h, radius, style.card_border)
+    renderer.draw_rounded_rect(x, y, w, h, radius, faded(style.card_border))
   end
   -- The fill hides the shadow and the border, except at the edges and the corners.
   -- Draw them only there, so that a large card does not fill its area several times.
@@ -92,7 +97,7 @@ function card.draw(x, y, w, h, radius, fill)
   if fill then
     each_rounded_band(x + border, y + border, w - 2 * border, h - 2 * border, inner_radius, fill)
   else
-    renderer.draw_rounded_rect(x + border, y + border, w - 2 * border, h - 2 * border, inner_radius, style.card)
+    renderer.draw_rounded_rect(x + border, y + border, w - 2 * border, h - 2 * border, inner_radius, faded(style.card))
   end
 end
 

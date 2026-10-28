@@ -1,5 +1,6 @@
 local core = require "core"
 local common = require "core.common"
+local config = require "core.config"
 local style = require "core.style"
 local card = require "core.card"
 local system_icons = require "core.system_icons"
@@ -12,6 +13,9 @@ local image_controls = {}
 
 -- Obsidian's smallest width from a drag.
 local MIN_WIDTH = 20
+
+-- Obsidian fades the buttons in and out over this time.
+local FADE_SECONDS = 0.07
 
 -- Each action has a system icon glyph and a fallback text.
 local ACTIONS = {
@@ -96,8 +100,8 @@ end
 ---@param view core.textview
 ---@return table?
 function image_controls.at_point(view, x, y)
-  local hovered = view.hovered_render_fragment
-  local widget = hovered and hovered.widget
+  local hit = view:get_render_widget_at_position(x, y)
+  local widget = hit and hit.widget
   if widget and widget.image_controls and part_at(widget.image_layout, x, y) then
     return widget.image_controls
   end
@@ -178,12 +182,11 @@ end
 function image_controls.attach(widget, spec)
   widget.image_controls = spec
   widget.track_hover = true
-  widget.cursor_at = function(self, _, x, y)
+  widget.cursor_at = function(self, view, x, y)
     local part = part_at(self.image_layout, x, y)
-    if self.pointer_part ~= part then
-      self.pointer_part = part
-      core.redraw = true
-    end
+    local pointer = view.image_controls_pointer
+    if not pointer or pointer.part ~= part then core.redraw = true end
+    view.image_controls_pointer = { x = x, y = y, part = part }
     return part == "corner" and "sizenwse" or "hand"
   end
   widget.on_mouse_pressed = function(self, view, hit, button, x, y, clicks)
@@ -204,6 +207,41 @@ function image_controls.attach(widget, spec)
   end
 end
 
+-- Move the buttons of `spec`'s image one step toward `shown`, and return
+-- their opacity. The view keeps the fade, because each new layout of the
+-- line makes a new widget.
+local function fade(view, spec, shown)
+  local fades = view.image_controls_fades or {}
+  view.image_controls_fades = fades
+  local state = fades[spec.reference_id]
+  if not state then
+    if not shown then return 0 end
+    state = { progress = 0 }
+    fades[spec.reference_id] = state
+  end
+  local now = system.get_time()
+  -- One step covers at most one frame, as in Row Highlight.
+  local frame = 1 / core.fps
+  local dt = state.time and math.min(now - state.time, frame) or frame
+  state.time = now
+  if not config.transitions or core.in_live_resize_frame then dt = math.huge end
+  local step = dt / FADE_SECONDS
+  local progress = shown and math.min(1, state.progress + step)
+    or math.max(0, state.progress - step)
+  state.progress = progress
+  if progress == 0 then
+    fades[spec.reference_id] = nil
+  elseif progress < 1 or not shown then
+    core.redraw = true
+  end
+  -- CSS ease-out.
+  return 1 - (1 - progress) ^ 2
+end
+
+local function faded(color, opacity)
+  return { color[1], color[2], color[3], (color[4] or 255) * opacity }
+end
+
 ---Draw the controls of an image widget over its image at `x`, `y`.
 ---@param widget table
 ---@param view core.textview
@@ -217,39 +255,49 @@ function image_controls.draw(widget, view, x, y, w, h)
   }
   widget.image_layout = layout
   -- Text View draws a copy of the hovered fragment; both share the widget.
+  -- A new layout of the line makes a new widget for the same image, so match
+  -- the image, not the widget.
   local pointed = view.hovered_render_fragment
-  if not (active or pointed and pointed.widget == widget) then return end
+  local pointed_image = pointed and pointed.widget and pointed.widget.image_controls
+  local shown = active
+    or pointed_image ~= nil and pointed_image.reference_id == spec.reference_id
 
-  -- Obsidian hides the buttons on an image too narrow to hold them.
-  local pill
-  if w >= scaled(80) then
-    local button_w, button_h, gap, pad = scaled(28), scaled(24), scaled(2), scaled(2)
-    local pill_w = pad * 2 + #ACTIONS * button_w + (#ACTIONS - 1) * gap
-    pill = { x = x + w - scaled(8) - pill_w, y = y + scaled(8), w = pill_w, h = button_h + pad * 2 }
-    layout.buttons = {}
-    for index, action in ipairs(ACTIONS) do
-      layout.buttons[action.id] = {
-        x = pill.x + pad + (index - 1) * (button_w + gap), y = pill.y + pad,
-        w = button_w, h = button_h,
-      }
-    end
+  if shown then
+    local stroke, size, inset = math.max(1, scaled(1.75)), scaled(10), scaled(6)
+    local right, bottom = x + w - inset, y + h - inset
+    local color = active and style.accent or style.dim
+    renderer.draw_rect(right - size, bottom - stroke, size, stroke, color)
+    renderer.draw_rect(right - stroke, bottom - size, stroke, size - stroke, color)
   end
 
-  local stroke, size, inset = math.max(1, scaled(1.75)), scaled(10), scaled(6)
-  local right, bottom = x + w - inset, y + h - inset
-  local color = active and style.accent or style.dim
-  renderer.draw_rect(right - size, bottom - stroke, size, stroke, color)
-  renderer.draw_rect(right - stroke, bottom - size, stroke, size - stroke, color)
-  if not pill then return end
-  card.draw(pill.x, pill.y, pill.w, pill.h, scaled(6))
+  -- Obsidian hides the buttons on an image too narrow to hold them.
+  if w < scaled(80) then return end
+  local opacity = fade(view, spec, shown)
+  if opacity <= 0 then return end
+  local button_w, button_h, gap, pad = scaled(28), scaled(24), scaled(2), scaled(2)
+  local pill_w = pad * 2 + #ACTIONS * button_w + (#ACTIONS - 1) * gap
+  local pill = { x = x + w - scaled(8) - pill_w, y = y + scaled(8), w = pill_w, h = button_h + pad * 2 }
+  local buttons = {}
+  for index, action in ipairs(ACTIONS) do
+    buttons[action.id] = {
+      x = pill.x + pad + (index - 1) * (button_w + gap), y = pill.y + pad,
+      w = button_w, h = button_h,
+    }
+  end
+  -- Fading buttons are not under the pointer, so only shown buttons take clicks.
+  if shown then layout.buttons = buttons end
+
+  local pointer = view.image_controls_pointer
+  card.draw(pill.x, pill.y, pill.w, pill.h, scaled(6), nil, opacity)
   local icons = system_icons.font(scaled(14))
   for _, action in ipairs(ACTIONS) do
-    local rect = layout.buttons[action.id]
-    local hovered = widget.pointer_part == action.id and not active
+    local rect = buttons[action.id]
+    local hovered = shown and not active and pointer ~= nil
+      and contains(rect, pointer.x, pointer.y)
     if hovered then
-      renderer.draw_rounded_rect(rect.x, rect.y, rect.w, rect.h, scaled(4), style.card_selection)
+      renderer.draw_rounded_rect(rect.x, rect.y, rect.w, rect.h, scaled(4), faded(style.card_selection, opacity))
     end
-    common.draw_text(icons or style.font, hovered and style.accent or style.text,
+    common.draw_text(icons or style.font, faded(hovered and style.accent or style.text, opacity),
       icons and action.glyph or action.fallback, "center", rect.x, rect.y, rect.w, rect.h)
   end
 end
