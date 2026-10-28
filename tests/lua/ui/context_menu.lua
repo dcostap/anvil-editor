@@ -165,4 +165,54 @@ test.describe("Context Menu", function()
     test.ok(context_menu.choose("Insert Row Below"))
     test.equal(#view.buffer.lines, 5)
   end)
+
+  test.it("glides the highlight to the next row like other lists", function()
+    local config = require "core.config"
+    local style = require "core.style"
+    local saved_transitions = config.transitions
+    config.transitions = true
+    command.add(nil, {
+      ["context_menu_test:first_item"] = function() end,
+      ["context_menu_test:second_item"] = function() end,
+    })
+    context_menu.open(20, 20, {
+      { label = "One", command = "context_menu_test:first_item" },
+      { label = "Two", command = "context_menu_test:second_item" },
+    })
+    -- Draws one frame and returns the top of the drawn selection highlight.
+    local window = renwindow.create("context-menu-highlight", 800, 600)
+    local function highlight_top()
+      local top
+      local draw_rounded_rect = renderer.draw_rounded_rect
+      renderer.draw_rounded_rect = function(x, y, w, h, radius, color, ...)
+        if color and color[1] == style.card_selection[1] and color[2] == style.card_selection[2]
+          and color[3] == style.card_selection[3] then top = y end
+        return draw_rounded_rect(x, y, w, h, radius, color, ...)
+      end
+      local old_clip = core.clip_rect_stack[1]
+      renderer.begin_frame(window)
+      core.clip_rect_stack[1] = { 0, 0, 800, 600 }
+      renderer.set_clip_rect(0, 0, 800, 600)
+      local ok, err = pcall(context_menu.draw)
+      renderer.end_frame()
+      core.clip_rect_stack[1] = old_clip
+      renderer.draw_rounded_rect = draw_rounded_rect
+      if not ok then error(err, 0) end
+      return top
+    end
+    local ok, err = pcall(function()
+      core.on_event("keypressed", "down", {})
+      local first
+      for _ = 1, 120 do first = highlight_top() end
+      core.on_event("keypressed", "down", {})
+      local moving = highlight_top()
+      for _ = 1, 120 do highlight_top() end
+      local second = highlight_top()
+      test.ok(second > first)
+      test.ok(moving > first and moving < second,
+        string.format("expected the highlight between %s and %s, got %s", first, second, moving))
+    end)
+    config.transitions = saved_transitions
+    if not ok then error(err, 0) end
+  end)
 end)

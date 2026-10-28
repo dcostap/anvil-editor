@@ -5,6 +5,7 @@ local config = require "core.config"
 local keymap = require "core.keymap"
 local style = require "core.style"
 local card = require "core.card"
+local RowHighlight = require "core.row_highlight"
 
 ---A Context Menu: a small card of commands that opens at the pointer.
 ---Each item runs a command, so a menu adds no behavior of its own. Items whose command
@@ -147,7 +148,8 @@ local function layout_level(rows, x, y, flip_x)
   x = common.clamp(x, bx + m.margin, bx + bw - m.margin - w)
   if y + h > by + bh - m.margin then y = by + bh - m.margin - h end
   y = math.max(y, by + m.margin)
-  local level = { rows = rows, x = math.floor(x), y = math.floor(y), w = math.floor(w), h = math.floor(h), icon_w = icon_w }
+  local level = { rows = rows, x = math.floor(x), y = math.floor(y), w = math.floor(w), h = math.floor(h), icon_w = icon_w,
+    highlight = RowHighlight(RowHighlight.selection) }
   local ry = level.y + m.pad
   for _, row in ipairs(rows) do
     local rh = row.separator and m.sep_h or m.row_h
@@ -392,9 +394,9 @@ function context_menu.update()
   if state.root_size[1] ~= core.root_panel.size.x or state.root_size[2] ~= core.root_panel.size.y then
     -- The menu stays at its point, inside the new bounds. Submenus close.
     state.root_size = { core.root_panel.size.x, core.root_panel.size.y }
-    local origin, selected = state.origin, state.levels[1].selected
-    state.levels = { layout_level(state.levels[1].rows, origin.x + 1, origin.y + 1, origin.x - 1) }
-    state.levels[1].selected = selected
+    local origin, old = state.origin, state.levels[1]
+    state.levels = { layout_level(old.rows, origin.x + 1, origin.y + 1, origin.x - 1) }
+    state.levels[1].selected, state.levels[1].highlight = old.selected, old.highlight
     core.redraw = true
   end
   if state.progress < 1 then
@@ -433,13 +435,19 @@ local function draw_level(level)
   card.draw(level.x, level.y, level.w, level.h, m.radius)
   card.show_above_sidebar(level.x, level.y, level.w, level.h, m.radius)
   core.push_clip_rect(level.x, level.y, level.w, level.h)
+  local selected_row = level.rows[level.selected]
+  if selected_row then
+    level.highlight:step(selected_row.y - level.y, selected_row.h)
+  else
+    level.highlight:step()
+  end
+  level.highlight:draw(level.x + m.pad, level.y, level.w - m.pad * 2, m.row_radius, style.card_selection)
   for index, row in ipairs(level.rows) do
     if row.separator then
       local line_y = math.floor(row.y + row.h / 2)
       renderer.draw_rect(row.x + m.row_x, line_y, row.w - m.row_x * 2, card.border_width(), style.card_border)
     else
       local selected = level.selected == index
-      if selected then renderer.draw_rounded_rect(row.x, row.y, row.w, row.h, m.row_radius, style.card_selection) end
       local tx, tw = row.x + m.row_x, row.w - m.row_x * 2
       if row.icon then
         common.draw_text(m.icon_font, selected and style.text or style.card_text, row.icon, "left", tx, row.y, level.icon_w, row.h)
