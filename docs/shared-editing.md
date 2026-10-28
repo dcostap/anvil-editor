@@ -1,27 +1,18 @@
-# Shared editing: seamless reload, Disk Conflicts, and collaboration
+# Shared editing: seamless reload and Disk Conflicts
 
-This document is the plan for external changes, Disk Conflicts, and collaborative editing in Anvil. Step 1 of the order of work is shipped. The rest is a plan, not a description of shipped behavior.
+This document is the plan for external changes and Disk Conflicts in Anvil. Step 1 of the order of work is shipped. The rest is a plan, not a description of shipped behavior.
+
+The near-term steps are general improvements. They help with any external writer: an agent, a script, a second Project process, or a sync tool. Shared notes with other people are not set up, and no sync tool is chosen. That work is in [Later: shared notes](#later-shared-notes).
 
 ## Goal
 
-A file can change on disk while it is open in Anvil. An agent can rewrite it, or Nextcloud sync can deliver a colleague's change. Anvil must take that change into the open Buffer without friction:
+A file can change on disk while it is open in Anvil. For example, an agent can rewrite it. Anvil must take that change into the open Buffer without friction:
 
 - Nothing jumps. The caret, the selections, and the visible text stay in place.
 - Changes that do not touch the user's unsaved edits merge without a prompt.
 - True conflicts are rare. When they occur, Anvil shows them clearly and does not lose text.
 
-Later, people must also be able to edit the same note at the same time with the same smoothness.
-
 Out of scope: special integration for agents. Agents keep editing files on disk. Anvil treats their writes like any other external change.
-
-## Rejected options
-
-An earlier investigation proposed a web-editor stack: Nextcloud, Yjs, a Hocuspocus server, an agent editing API, and Git. These parts do not fit Anvil, which is a native editor with its own renderer and no webview:
-
-- **Embed Nextcloud Text.** Anvil has no webview. It would also replace Anvil's own Markdown Live Preview.
-- **Yjs editor bindings.** They are for JavaScript editors. The only in-process path is Yrs (Rust) through a Lua C module, which adds a Rust toolchain and a Hocuspocus protocol adapter.
-- **An agent editing API.** Agents keep editing files.
-- **Permission bridge, audit log, edit journal, change sets across notes.** Build each one only when live editing needs it.
 
 ## The reload engine
 
@@ -135,8 +126,6 @@ Special shapes:
 
 Autosave stops for that file until every conflict is resolved. A save would choose Keep Mine without telling the user, and the disk change would be lost.
 
-While Autosave stops, the user's other edits in that file are not saved either. Anvil has no recovery for unsaved text after a crash. Keep the signals clear, so that conflicts do not stay open for a long time.
-
 Signals:
 
 - The Pane Status Bar shows "2 disk conflicts" in the warning colour. A click goes to the next conflict.
@@ -158,55 +147,39 @@ The base rule handles this case. The base is the Disk text of the last merge, so
 - Git-style conflict markers would go into the text. Autosave would save them, agents would read them, and Markdown Live Preview would show broken text.
 - The Diff View cannot apply single changes.
 
-## Collaboration levels
+## Risks to keep in mind
 
-### Who does what
+- **Two Project processes.** Each loaded Project has its own process, and Buffer reuse works only inside one process. Two Projects can open the same file and both write it. The reload engine lets them converge through the disk, but each one sees the other's saves as external changes.
+- **Autosave timing.** Autosave saves 3 seconds after typing stops, at the latest after 30 seconds, and when focus moves. Each save is atomic, and it checks the disk first. An external writer can still save between that check and the write. Every editor has this window.
+- **Unsaved text while Autosave cannot save.** A failed save or an open Disk Conflict keeps edits only in memory. A crash during that time loses them. Anvil has no separate safety copy of unsaved text, by choice: the window is small, and a copy adds storage, cleanup, and a restore flow. Add one only if this loses text in real use.
+- **Line endings and encodings.** Loading converts text to UTF-8 with LF lines, and saving converts it back. Compare texts in Buffer form only.
+- **Rename and delete.** An external delete marks the Buffer's file missing. Anvil cannot tell a rename from a delete.
 
-| Job | Nextcloud | Anvil |
-|---|---|---|
-| User accounts and login | ✔ | |
-| Folder sharing, edit or read-only access | ✔ | |
-| File storage, backups, version history | ✔ | |
-| Access from a phone or a browser | ✔ | |
-| Editing, Markdown preview, agents | | ✔ |
-| Merge of changes that arrive during editing | | ✔ |
-| Live typing and cursors (level 2) | | ✔ and the edit server |
+## Order of work
 
-### Level 1: file sync
+1. **Reload engine, clean Buffers.** Reload as small edits with no jump, one undo step, and the Buffer stays clean. Done. Not checked: Standard Editors with line wrapping turned on.
+2. **Undo across a reload.** Flash the changed lines and show a status message.
+3. **Reload engine, dirty Buffers.** Keep the base as described above. A three-way merge with words compared inside lines. Until step 4 exists, true conflicts keep today's prompt. Add Disk Conflict to `CONTEXT.md`.
+4. **Disk Conflict blocks.** The inline block, the choices, the status, POI navigation, and the close question.
 
-```
- Alice's laptop                                      Bob's laptop
- ┌──────────────────────────┐                       ┌──────────────────────────┐
- │ Anvil                    │                       │ Anvil                    │
- │   ↕ reads/writes files   │                       │   ↕ reads/writes files   │
- │ Nextcloud folder         │                       │ Nextcloud folder         │
- │   ↕                      │                       │   ↕                      │
- │ Nextcloud desktop client │                       │ Nextcloud desktop client │
- └───────────┬──────────────┘                       └───────────┬──────────────┘
-             │                                                  │
-             └──────────────────► Nextcloud server ◄────────────┘
-```
+Steps 3 and 4 are worth it only if the reload prompt for dirty Buffers shows up in real use. If it is rare, stop after step 2.
 
-1. A user shares a folder in the Nextcloud web UI.
-2. The Nextcloud desktop client on each laptop syncs it to a local folder.
-3. Each user opens that folder in Anvil as a Project.
-4. When sync writes a colleague's change, the reload engine merges it into the open Buffer.
+## Later: shared notes
 
-Anvil makes no network connection. It sees a file that changed, as when an agent writes it.
+This section keeps the reasoning for shared notes with other people. It is not planned work. Start it only when a team needs shared notes and a sync tool is chosen. Steps 3 and 4 above are the base for it: any sync tool or live session merges through the same engine.
 
-What Anvil knows at level 1:
+### File sync
 
-- **What changed:** yes, from the text difference.
-- **When:** yes, the time of the disk change.
-- **Who:** no. The sync client writes the file. Anvil could ask Nextcloud for the author of the newest version, but that needs a Nextcloud login in Anvil. Check that the versions API returns the author first.
-- **Where others are:** no. Files hold no cursors. Cursor files that sync through the folder are rejected: they would show old positions and cause sync traffic and conflict copies.
+The first level uses a sync tool, such as Nextcloud, Syncthing, or Dropbox. Each person opens the synced folder as a Project. Anvil makes no network connection. A colleague's change is a changed file, like an agent's write. The reload engine merges it.
+
+Anvil cannot know who changed the file or where other people are. Files hold no cursors. Cursor files that sync through the folder are rejected: they would show old positions and cause sync traffic and conflict copies.
 
 #### Sync conflict copies
 
-This is the main risk of level 1, and the shipped clean reload already meets it:
+This is the main risk of file sync, and the shipped clean reload already meets it:
 
 1. Alice types. Autosave saves within 3 seconds, so her Buffer is clean again.
-2. Bob's change reaches the server first. The sync client keeps Bob's version at the original path and moves Alice's version to `name (conflicted copy …).md`.
+2. Bob's change reaches the server first. The sync tool keeps Bob's version at the original path and moves Alice's version to a conflict copy, for example `name (conflicted copy …).md`.
 3. Anvil sees a changed file and a clean Buffer. It reloads Bob's version.
 4. Alice's last edits leave her screen. Only the reload flash shows a change.
 
@@ -214,56 +187,38 @@ Autosave saves faster than sync delivers, so this is the normal result when two 
 
 Rules:
 
-- When a conflict copy of an open file appears, Anvil warns at once and names the copy. This comes before the full merge.
-- The full merge treats the copy as Mine and the original path as Disk. Overlaps show as Disk Conflict blocks. Anvil deletes the copy when the user resolves them.
+- When a conflict copy of an open file appears, Anvil warns at once and names the copy.
+- The merge treats the copy as Mine and the original path as Disk. Overlaps show as Disk Conflict blocks. Anvil deletes the copy when the user resolves them.
 - The merge needs the common ancestor: the last version that synced. Anvil cannot know it. Anvil uses the last text that it read from disk through a load or reload. That text can be older than the true ancestor. That is safe: the user's edits that already synced are in both versions, and the same change on both sides merges without UI.
 
-Other limits:
+Each sync tool names its conflict copies differently. Check the chosen tool's names and behavior first. Also check that it marks read-only shares as read-only files, so Anvil opens them as read-only Buffers.
 
-- Changes arrive after the sync delay, from a few seconds to about a minute.
-- Read-only shares: the sync client should mark those files read-only on disk, so Anvil opens them as read-only Buffers. Check this.
+### Live editing
 
-### Level 2: live editing
+Live editing lets people see each other type. It needs a small edit server, and each Anvil connects to it while a shared note is open:
 
-Level 2 is a sketch. Do not design it in detail before the questions at the end of this document have answers.
-
-```
- Alice's laptop                                      Bob's laptop
- ┌──────────────────────────┐                       ┌──────────────────────────┐
- │ Anvil ───────────────────┼─────► Edit server ◄───┼──────────────────── Anvil │
- │                          │            │          │                          │
- │ Nextcloud desktop client─┼─────► Nextcloud ◄─────┼─ Nextcloud desktop client│
- └──────────────────────────┘                       └──────────────────────────┘
-```
-
-- Each Anvil connects to a small edit server while a shared note is open. It sends edits and cursor positions.
 - The server gives each edit the next version number and sends it to the other clients. Each Anvil applies it as a small edit, about one network round trip later.
-- Anvil logs in to Nextcloud once, through Nextcloud's login page for desktop apps. The server checks the key with Nextcloud and writes the user ID on each message, so a client cannot claim another name.
+- The server checks each user's login with the system that holds the accounts, for example Nextcloud. It writes the user ID on each message, so a client cannot claim another name.
 - While online, edits do not conflict: the server orders them. After a long offline time, the client merges like a reload, with the server text in the place of the Disk text.
 - Remote carets and selections show in each person's colour.
 
 #### Who writes the file
 
-This is the central open question. During a live session, a note can have several writers: the Autosave of each client, through its sync client, and the edit server.
+This is the central open question. During a live session, a note can have several writers: the Autosave of each client, through its sync tool, and the edit server.
 
-- **Each Anvil keeps saving.** Local agents read fresh text. But several clients upload the same note, which can make conflict copies. Check whether the Nextcloud client resolves uploads with identical content without a conflict copy.
+- **Each Anvil keeps saving.** Local agents read fresh text. But several clients upload the same note, which can make conflict copies. Check whether the sync tool resolves uploads with identical content without a conflict copy.
 - **Only the server writes.** No upload races. But local agents read an old file until the server's save syncs back. A whole-file write from an agent then reverts other people's typing.
 
 In all cases, while a note is live, the session owns the text. Anvil ignores disk versions that it knows are copies of the session. It takes any other disk change, such as a local agent's write, into the session through the reload merge.
 
 #### Central ordering or a CRDT
 
-A CRDT is best without a central authority, for example peer to peer or long offline editing. This design has a central server anyway, because Nextcloud must check permissions. A server that orders edits removes CRDT-specific storage. It still needs rebase, selective undo, cursor mapping, duplicate detection, and recovery.
+A CRDT is best without a central authority, for example peer to peer or long offline editing. A shared vault has a central server anyway, because something must check permissions. A server that orders edits removes CRDT-specific storage. It still needs rebase, selective undo, cursor mapping, duplicate detection, and recovery.
 
-Options:
+- **Our own small server.** It uses the same Lua rules as Anvil for edit order and position mapping. Anvil's native `net` module already has TCP client and server sockets (`src/api/net.c`). Recommended.
+- **Yjs with Hocuspocus.** Less server code, much more client code: Anvil needs Yrs (Rust) through a Lua C module, plus the Hocuspocus protocol.
 
-| Option | Effect on Anvil |
-|---|---|
-| Our own small server | Uses the same Lua rules as Anvil for edit order and position mapping. Recommended |
-| Hocuspocus (Node.js, Yjs) | Anvil needs Yrs (Rust) and the Hocuspocus protocol. Less server code, much more client code |
-| Nextcloud Text's sync | No documented API for other editors. Not an option |
-
-Choose between our own ordering and Yrs only when level 2 starts, after the Anvil side is tested. Anvil's native `net` module already has TCP client and server sockets (`src/api/net.c`).
+Rejected: embedding a web editor such as Nextcloud Text, because Anvil has no webview. Also rejected: an agent editing API. Agents keep editing files.
 
 #### Undo in live mode
 
@@ -275,26 +230,10 @@ The reload engine needs no change to undo. Live editing does:
 
 This change stays in the undo and dirty-state code of `data/core/buffer/init.lua`. It can be tested without a network: two Buffers in one process, joined by a fake server in memory.
 
-## Risks to keep in mind
+### Questions before shared notes start
 
-- **Two Project processes.** Each loaded Project has its own process, and Buffer reuse works only inside one process. Two Projects can open the same note and both write it. The reload engine lets them converge through the disk, but each one sees the other's saves as external changes.
-- **Autosave timing.** Autosave saves 3 seconds after typing stops, at the latest after 30 seconds, and when focus moves. An external writer can still save between Anvil's read and write.
-- **Line endings and encodings.** Loading converts text to UTF-8 with LF lines, and saving converts it back. Compare texts in Buffer form only.
-- **Rename and delete.** An external delete marks the Buffer's file missing. Anvil cannot tell a rename from a delete.
-
-## Order of work
-
-1. **Reload engine, clean Buffers.** Reload as small edits with no jump, one undo step, and the Buffer stays clean. Done. Not checked: Standard Editors with line wrapping turned on.
-2. **Safety for the shipped reload.** Make undo across a reload visible. Warn when a sync conflict copy of an open file appears.
-3. **Reload engine, dirty Buffers.** Keep the base as described above. A three-way merge with words compared inside lines. Until step 4 exists, true conflicts keep today's prompt. Add Disk Conflict to `CONTEXT.md`.
-4. **Disk Conflict blocks.** The inline block, the choices, the status, POI navigation, and the close question.
-5. **Sync conflict copies** (level 1): merge a conflict copy into its Buffer and show overlaps as Disk Conflict blocks.
-6. **Live editing inside Anvil, with no network:** selective undo, remote cursors, an edit feed into and out of the Buffer, and a fake server in tests.
-7. **The edit server** (level 2).
-
-Before step 6, answer these questions:
-
+- Which sync tool, and does the team already use it?
 - How many people type in the same note at the same time?
 - Are they on one office network or on the internet?
-- Can the company host one small service beside Nextcloud?
+- Can the company host one small service beside the sync server?
 - Who writes the file during a live session?
