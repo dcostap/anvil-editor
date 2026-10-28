@@ -290,6 +290,12 @@ command.add(markdown_view, {
   ["markdown:surround_italic"] = command.palette(function(view)
     toggle_markdown_format(view, "_", "_")
   end),
+  ["markdown:surround_strikethrough"] = command.palette(function(view)
+    toggle_markdown_format(view, "~~", "~~")
+  end),
+  ["markdown:surround_code"] = command.palette(function(view)
+    toggle_markdown_format(view, "`", "`")
+  end),
 })
 
 keymap.add {

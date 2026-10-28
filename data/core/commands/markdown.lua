@@ -5,6 +5,7 @@ local Editor = require "core.editor"
 local markdown_completion = require "core.markdown.completion"
 local markdown_live = require "core.markdown.live_render"
 local footnotes = require "core.markdown.footnotes"
+local markdown_format = require "core.markdown.format"
 local markdown_tables = require "core.markdown.tables"
 local markdown_rename_links = require "core.markdown.rename_links"
 local markdown_vault_index = require "core.markdown.vault_index"
@@ -93,6 +94,37 @@ local function alternate_list_item_checkbox(view)
   end
   view:set_selection_state(selection_state)
 end
+
+-- Formatting works in Live Preview and in Markdown source.
+local function editable_markdown_editor()
+  local view = core.active_view
+  if view and view:extends(Editor) and markdown_live.is_markdown_buffer(view.buffer) then
+    return true, view
+  end
+  return false
+end
+
+local function formatter(fn, ...)
+  local args = { ... }
+  return command.palette(function(view)
+    if not view:can_edit("format Markdown", { warn = true }) then return end
+    view.buffer:clear_search_selections()
+    return fn(view, table.unpack(args))
+  end)
+end
+
+local format_commands = {
+  ["markdown:normal_text"] = formatter(markdown_format.heading, 0),
+  ["markdown:toggle_bullet_list"] = formatter(markdown_format.list, "bullet"),
+  ["markdown:toggle_numbered_list"] = formatter(markdown_format.list, "numbered"),
+  ["markdown:toggle_task_list"] = formatter(markdown_format.list, "task"),
+  ["markdown:toggle_quote"] = formatter(markdown_format.quote),
+  ["markdown:insert_link"] = formatter(markdown_format.link),
+}
+for level = 1, 6 do
+  format_commands["markdown:heading_" .. level] = formatter(markdown_format.heading, level)
+end
+command.add(editable_markdown_editor, format_commands)
 
 command.add(function()
   local view = core.active_view
