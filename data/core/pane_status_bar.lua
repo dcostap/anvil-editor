@@ -159,13 +159,12 @@ end
 
 ---Evaluate the items for the Pane's View and lay them out as chips.
 ---Right chips keep their full width; left chips use the space that is left.
----Centered chips sit in the middle of the bar, and hide when they would overlap the other chips at full width.
 ---Unfocused Panes show only their left items, which name the file.
 function PaneStatusBar:layout()
   local m = metrics()
   local view = self:get_view()
   local focused = self:is_focused()
-  local lefts, centers, rights = {}, {}, {}
+  local lefts, rights = {}, {}
   self.entries = {}
 
   for _, item in ipairs(view and self.controller.items or {}) do
@@ -179,10 +178,21 @@ function PaneStatusBar:layout()
       end
       if content_w > 0 then
         local entry = { item = item, styled = styled, w = content_w + m.chip * 2 }
-        local group = item.alignment == item.RIGHT and rights or item.alignment == item.CENTER and centers or lefts
-        table.insert(group, entry)
+        table.insert(item.alignment == item.RIGHT and rights or lefts, entry)
       end
     end
+  end
+
+  -- Optional right items hide together when they would cut the left items short.
+  local need = m.edge * 2 + style.padding.x
+  for _, entry in ipairs(lefts) do need = need + entry.w + m.gap end
+  for _, entry in ipairs(rights) do need = need + entry.w + m.gap end
+  if need > self.size.x then
+    local kept = {}
+    for _, entry in ipairs(rights) do
+      if not entry.item.optional then kept[#kept + 1] = entry end
+    end
+    rights = kept
   end
 
   local x = self.size.x - m.edge
@@ -195,24 +205,6 @@ function PaneStatusBar:layout()
   end
   local right_start = #rights > 0 and x + m.gap or self.size.x - m.edge
   self.left_limit = math.max(m.edge, right_start - style.padding.x)
-
-  if #centers > 0 then
-    local left_end = m.edge
-    for _, entry in ipairs(lefts) do left_end = left_end + entry.w + m.gap end
-    local center_w = -m.gap
-    for _, entry in ipairs(centers) do center_w = center_w + entry.w + m.gap end
-    x = common.round((self.size.x - center_w) / 2)
-    if x - style.padding.x < left_end or x + center_w + style.padding.x > right_start then
-      centers = {}
-    else
-      self.left_limit = x - style.padding.x
-      for _, entry in ipairs(centers) do
-        entry.x = x
-        entry.visible_w = entry.w
-        x = x + entry.w + m.gap
-      end
-    end
-  end
 
   x = m.edge
   for _, entry in ipairs(lefts) do
@@ -233,7 +225,6 @@ function PaneStatusBar:layout()
   end
 
   for _, entry in ipairs(lefts) do table.insert(self.entries, entry) end
-  for _, entry in ipairs(centers) do table.insert(self.entries, entry) end
   for _, entry in ipairs(rights) do table.insert(self.entries, entry) end
 
   -- Keep hover and press on the same item across layouts.
@@ -267,7 +258,7 @@ function PaneStatusBar:entry_at(x, y)
   if self.message_entry and hit(self.message_entry) then return self.message_entry end
   local left_replaced = self:left_replaced()
   for _, entry in ipairs(self.entries) do
-    if (entry.item.alignment ~= entry.item.LEFT or not left_replaced) and hit(entry) then
+    if (entry.item.alignment == entry.item.RIGHT or not left_replaced) and hit(entry) then
       return entry
     end
   end
@@ -440,7 +431,7 @@ function PaneStatusBar:draw()
   core.pop_clip_rect()
 
   for _, entry in ipairs(self.entries) do
-    if entry.item.alignment ~= entry.item.LEFT then draw_entry(entry) end
+    if entry.item.alignment == entry.item.RIGHT then draw_entry(entry) end
   end
 
   renderer.draw_rect(x0, y0, self.size.x, style.divider_size or 1, style.divider)

@@ -79,6 +79,7 @@ end
 ---@field can_click fun(view: core.view):boolean|nil Whether the click action applies now
 ---@field on_draw core.statusbar.item.ondraw|nil Custom drawing function
 ---@field shrink boolean Whether the item elides its start to fit the space left
+---@field optional boolean Whether the item hides when the bar is too narrow for all items
 ---@field visible boolean Whether item is shown
 local StatusBarItem = Object:extend()
 
@@ -96,6 +97,7 @@ function StatusBarItem:__tostring() return "StatusBarItem" end
 ---@field tooltip? string|core.statusbar.item.gettooltip Text displayed on hover
 ---@field visible? boolean Initial visibility state
 ---@field shrink? boolean Elide the start of the content when space runs out
+---@field optional? boolean Hide, with the other optional items, when the bar is too narrow for all items
 
 ---Align item on left side of status bar.
 ---@type integer
@@ -105,14 +107,9 @@ StatusBarItem.LEFT = 1
 ---@type integer
 StatusBarItem.RIGHT = 2
 
----Center the item on the status bar. All centered items hide when they would overlap the other items.
----@type integer
-StatusBarItem.CENTER = 3
-
 ---@alias core.statusbar.item.alignment
 ---|>`StatusBar.Item.LEFT`
 ---| `StatusBar.Item.RIGHT`
----| `StatusBar.Item.CENTER`
 
 ---Create a new status bar item.
 ---@param options core.statusbar.item.options
@@ -126,6 +123,7 @@ function StatusBarItem:new(options)
   self.tooltip = options.tooltip
   self.on_draw = options.on_draw
   self.shrink = options.shrink == true
+  self.optional = options.optional == true
   self.visible = options.visible == nil and true or options.visible
   self.get_item = options.get_item
 end
@@ -647,8 +645,7 @@ local MARKDOWN_BUTTONS = {
   { name = "table", glyph = "\u{F04EB}", label = "Table", command = "markdown:insert_table" },
 }
 
----Register the Markdown formatting buttons. They show in the middle of the focused Pane's bar while its
----Markdown can change.
+---Register the Markdown formatting buttons. They show in the focused Pane while its Markdown can change.
 function StatusBar:register_markdown_items()
   if self:get_item("markdown:heading") then return end
   local function editable_markdown(view)
@@ -663,7 +660,8 @@ function StatusBar:register_markdown_items()
         return editable_markdown(view) and (button.menu ~= nil or command.is_valid(button.command))
       end,
       name = "markdown:" .. button.name,
-      alignment = StatusBar.Item.CENTER,
+      alignment = StatusBar.Item.RIGHT,
+      optional = true,
       get_item = function() return { style.format_icon_font, style.dim, button.glyph } end,
       tooltip = function()
         local binding = button.command and keymap.get_binding(button.command)
@@ -683,14 +681,15 @@ end
 ---@param alignment core.statusbar.item.alignment
 ---@return integer position Normalized position index
 local function normalize_position(self, position, alignment)
-  -- The list holds the left items, then the centered items, then the right items.
-  local left = #self:get_items_list(StatusBarItem.LEFT)
-  local center = #self:get_items_list(StatusBarItem.CENTER)
-  local offset, items_count = 0, left
-  if alignment == StatusBarItem.CENTER then
-    offset, items_count = left, center
-  elseif alignment == StatusBarItem.RIGHT then
-    offset, items_count = left + center, #self:get_items_list(StatusBarItem.RIGHT)
+  local offset = 0
+  local items_count = 0
+  local left = self:get_items_list(1)
+  local right = self:get_items_list(2)
+  if alignment == 2 then
+    items_count = #right
+    offset = #left
+  else
+    items_count = #left
   end
   if position == 0 then
     position = offset +  1
@@ -699,9 +698,9 @@ local function normalize_position(self, position, alignment)
   else
     position = offset + position
   end
-  if position < offset + 1 then
+  if position < 1 then
     position = offset + 1
-  elseif position > offset + items_count + 1 then
+  elseif position > #left + #right then
     position = offset + items_count + 1
   end
   return position
