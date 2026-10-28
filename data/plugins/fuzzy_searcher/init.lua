@@ -4004,6 +4004,7 @@ end
 
 function FSView:reset_pagination()
   self.loaded_limit = self:list_metrics().result_rows
+  self.load_ahead_count = nil
   self.selected = 1
   self.viewport_offset = 1
   self.list_scroll.y = 0
@@ -4179,15 +4180,21 @@ function FSView:displayed_list_offset(metrics)
   return row + 1, pixels - row * metrics.lh
 end
 
+-- Loads the next page when `last_row` is within one screen of the end, so scrolling does not stop at the end of a
+-- page. One page loads at a time.
+function FSView:load_ahead(last_row)
+  if last_row <= #self.results - self:list_metrics().result_rows then return end
+  if self.load_ahead_count == #self.results or not self:can_load_more() then return end
+  self.load_ahead_count = #self.results
+  self:load_more(false)
+end
+
 function FSView:scroll_results(delta)
   delta = delta < 0 and -math.floor(-delta + 0.5) or math.floor(delta + 0.5)
   if #self.results == 0 or delta == 0 then return end
   local rows = self:list_metrics().result_rows
   self.manual_list_scroll = true
-  if delta > 0 and self.viewport_offset + rows - 1 + delta > #self.results
-      and self:can_load_more() then
-    self:load_more(false)
-  end
+  if delta > 0 then self:load_ahead(self.viewport_offset + rows - 1 + delta) end
   self.viewport_offset = common.clamp(self.viewport_offset + delta, 1,
     math.max(1, #self.results - rows + 1))
   self:schedule_update(true)
@@ -4212,6 +4219,7 @@ function FSView:select_delta(delta, extend)
     self.range_anchor = nil
   end
   self:ensure_selection_visible(true)
+  if delta > 0 then self:load_ahead(self.selected) end
 end
 
 function FSView:select_result(index, extend, toggle)
@@ -5256,8 +5264,12 @@ function FSView:start_file_search(query, line, reset_selection)
     or string.format("Searching %d files…", file_index_count())
   self:defer_loading_feedback(loading_status)
 
+  -- A new query starts at the top. A refresh of the same query keeps the selected row, wherever it moves.
+  local keep_selection = not reset_selection
   local function apply_results(out, has_more)
     self:cancel_deferred_loading_feedback()
+    local selected = keep_selection and self:result_selection_key(self.results[self.selected])
+    keep_selection = true
     out = path_search.prepend_direct(out, direct)
     self.own_results = out
     self.results = fuzzy_searcher.other_projects.with_rows(self, out)
@@ -5267,6 +5279,9 @@ function FSView:start_file_search(query, line, reset_selection)
       self.pending_select_index = nil
     else
       self.selected = common.clamp(self.selected, 1, math.max(1, #out))
+      for index, result in ipairs(selected and self.results or {}) do
+        if self:result_selection_key(result) == selected then self.selected = index break end
+      end
     end
     if self.results[self.selected] and self.results[self.selected].header then
       self:select_delta(1)
@@ -5319,7 +5334,7 @@ function FSView:start_file_search(query, line, reset_selection)
           general_matches, query, line, keep_limit, self.case_sensitive
         )
         table.sort(general_matches, function(a, b) return fuzzy_result_better(a, b) end)
-        local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
+        local out, hidden = build_sectioned_file_results(recent_matches, general_matches, keep_limit - 1, query, line)
         local has_more = hidden or native_results.has_more or folder_has_more
         local status
         if #recent_matches + #general_matches == 0 then
@@ -5358,7 +5373,7 @@ function FSView:start_file_search(query, line, reset_selection)
 
     local function publish(final)
       if gen ~= file_search_generation or active_view ~= self then return false end
-      local out, hidden = build_sectioned_file_results(recent_matches, general_matches, self:result_limit(), query, line)
+      local out, hidden = build_sectioned_file_results(recent_matches, general_matches, keep_limit - 1, query, line)
       local has_more = hidden or folder_has_more
         or matched_general + matched_folders > #general_matches
       local status
@@ -5918,7 +5933,8 @@ function FSView:refresh_normal(base, line, col, reset_selection, force_refresh)
         or self.everything_folder_has_more or self.everything_file_has_more
     end
   else
-    async = add_file_results(base, limit)
+    -- File Search fetches all its rows for each query, so it shows them all and does not page.
+    async = add_file_results(base, self:max_result_limit())
     if async then return end
     kill_file_search()
   end
