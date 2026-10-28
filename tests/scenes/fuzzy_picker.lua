@@ -25,13 +25,12 @@ local function picker()
   return core.fuzzy_searcher_active_view
 end
 
--- Each running search shows a status that ends with "…".
+-- Each running search shows "…" in its status, such as "12 fuzzy matches — scanning 'src'… 300 lines".
 local function search_settled(view, text)
   if view.input:get_text() ~= text then return false end
   if view.dirty or view.force_refresh or view.loading_feedback_pending or view.loading_more then return false end
   if view.symbol_search_request then return false end
-  local status = view.status or ""
-  return status:sub(-#"…") ~= "…"
+  return not (view.status or ""):find("…", 1, true)
 end
 
 -- Text Search shows its first rows while it still searches, so a user sees results then.
