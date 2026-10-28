@@ -2785,7 +2785,18 @@ local last_core_step_stats = {}
 -- names the phase that contains the atomic step.
 local gc_sentinel = setmetatable({ {} }, { __mode = "v" })
 local gc_atomic_phases = {}
+-- A benchmark that stops the GC sets core.allocation_by_phase. The heap then
+-- grows by each allocation, so its growth in each phase is that phase's
+-- allocation in KB. An explicit GC step can still shrink the heap; that phase
+-- then counts no allocation.
+local allocation_heap_kb
 local function gc_phase_end(phase)
+  local allocation = core.allocation_by_phase
+  if allocation then
+    local heap_kb = collectgarbage("count")
+    allocation[phase] = (allocation[phase] or 0) + math.max(0, heap_kb - (allocation_heap_kb or heap_kb))
+    allocation_heap_kb = heap_kb
+  end
   if gc_sentinel[1] then return end
   gc_atomic_phases[#gc_atomic_phases + 1] = phase
   gc_sentinel[1] = {}

@@ -121,6 +121,12 @@ them. `--attribute`
 records them for passing scenarios too. `--diagnose` adds a LuaJIT sampling
 run with draw scopes and a Speedscope profile.
 
+`--allocation` adds two runs that stop the GC for the measured frames. The heap then grows by each allocation.
+The first run reports the allocation of each main loop phase in KiB per frame, with the JIT on.
+The second run uses a line hook and reports the allocation of each source line and its callers. A C function counts on the line that called it.
+The hook turns off the JIT, and compiled traces can sink some allocations, so read its sizes as an upper limit.
+LuaJIT's GC work grows with allocation. Use this option after changes to code that runs in each frame.
+
 Frame details include worker-result callbacks before the UI step. Scripted input runs after a frame snapshot.
 The next measured frame includes its counters and dispatch time. Each dispatch counts once, including the first one.
 

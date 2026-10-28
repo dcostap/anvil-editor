@@ -246,7 +246,8 @@ def launch_options(scenario: Scenario, project: Path, run_dir: Path) -> dict[str
 
 
 def run_one(name: str, scenario: Scenario, *, exe: Path, work: Path, root: Path, run_dir: Path,
-            renderer: str, mode: str, details: bool) -> dict[str, Any]:
+            renderer: str, mode: str, details: bool,
+            extra_environment: dict[str, str] | None = None) -> dict[str, Any]:
     user = run_dir.with_name(run_dir.name + "-user")
     shutil.rmtree(user, ignore_errors=True)
     user.mkdir(parents=True)
@@ -258,6 +259,7 @@ def run_one(name: str, scenario: Scenario, *, exe: Path, work: Path, root: Path,
     if details:
         environment["ANVIL_DOCVIEW_STATS"] = "1"
         environment["ANVIL_PERF_BENCHMARK_DETAILS"] = gate.native_path(run_dir / "details.csv")
+    environment.update(extra_environment or {})
     settings = dict(scenario.settings, kind="scene", scene=scenario.scene, actions=scenario.actions,
                     root=gate.native_path(projects[0]), window_width=scenario.window[0],
                     window_height=scenario.window[1],
@@ -293,6 +295,33 @@ def read_details(path: Path, limit: int = 15) -> list[dict[str, Any]]:
     for timer in timers:
         timer["calls_per_frame"] = calls.get(timer["key"].removesuffix("_ms") + "_calls")
     return sorted(timers, key=lambda item: item["ms_per_frame"], reverse=True)[:limit]
+
+
+def read_allocation(path: Path, key: str, limit: int, kind: str | None = None) -> list[dict[str, Any]]:
+    """Return the largest allocation rows. Rows are sorted by size."""
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = [row for row in csv.DictReader(stream) if kind is None or row["kind"] == kind]
+    return [{"name": row[key], "kib_per_frame": float(row["kib_per_frame"])} for row in rows[:limit]]
+
+
+def run_allocation(name: str, scenario: Scenario, args, exe: Path, work: Path, log) -> dict[str, Any]:
+    """Run once with the GC stopped for phase totals, then once with a hook for source lines."""
+    result: dict[str, Any] = {}
+    for label, variable, file_name in (("phases", "ANVIL_PERF_BENCHMARK_ALLOCATION", "allocation.csv"),
+                                       ("sites", "ANVIL_PERF_BENCHMARK_ALLOCATION_SITES", "allocation-sites.csv")):
+        root = scenario_root(scenario, args.project, args.fixture_cache, log)
+        run_dir = work / name / f"allocation-{label}"
+        run_one(name, scenario, exe=exe, work=work, root=root, run_dir=run_dir, renderer=args.renderer,
+                mode="metrics", details=False,
+                extra_environment={variable: gate.native_path(run_dir / file_name)})
+        if label == "phases":
+            result["phases"] = read_allocation(run_dir / file_name, "phase", 12)
+        else:
+            result["lines"] = read_allocation(run_dir / file_name, "site", 20, "line")
+            result["stacks"] = read_allocation(run_dir / file_name, "site", 10, "stack")
+    return result
 
 
 def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -376,6 +405,17 @@ def markdown(report: dict[str, Any]) -> str:
                 calls = timer["calls_per_frame"]
                 lines.append(f"| {timer['key']} | {timer['ms_per_frame']:.2f} | {timer['max_ms']:.2f} "
                              f"| {'' if calls is None else f'{calls:.0f}'} |")
+        allocation = case.get("allocation")
+        if allocation:
+            total = sum(row["kib_per_frame"] for row in allocation["phases"])
+            lines += ["", f"Allocation with the GC stopped: {total:.0f} KiB/frame.", "",
+                      "| Phase | KiB/frame |", "| --- | ---: |"]
+            lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["phases"]]
+            lines += ["", "Allocation sites in the interpreter (the hook turns off the JIT):", "",
+                      "| Source line | KiB/frame |", "| --- | ---: |"]
+            lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["lines"]]
+            lines += ["", "| Call stack | KiB/frame |", "| --- | ---: |"]
+            lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["stacks"]]
         if case.get("hotspots"):
             lines += ["", "Draw-scope hotspots in the diagnostic run:", ""]
             for item in case["hotspots"]:
@@ -421,6 +461,8 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
         run = run_one(name, scenario, exe=exe, work=work, root=root, run_dir=work / name / "attribution",
                       renderer=args.renderer, mode="metrics", details=True)
         case["attribution"] = read_details(Path(run["run_dir"]) / "details.csv")
+    if args.allocation:
+        case["allocation"] = run_allocation(name, scenario, args, exe, work, log)
     if args.diagnose:
         if scenario.writes or scenario.churn_interval:
             root = scenario_root(scenario, args.project, args.fixture_cache, log)
@@ -443,6 +485,8 @@ def main() -> int:
     parser.add_argument("--attribute", action="store_true",
                         help="record detail timers even when a scenario is within budget")
     parser.add_argument("--diagnose", action="store_true", help="add a LuaJIT sampling run")
+    parser.add_argument("--allocation", action="store_true",
+                        help="add runs with the GC stopped that report allocation by phase and source line")
     parser.add_argument("--project", type=Path,
                         help="run read-only scenarios on this directory instead of a fixture")
     parser.add_argument("--fixture-cache", type=Path, default=perf_fixtures.default_cache_root())
@@ -480,6 +524,10 @@ def main() -> int:
             log(f"    {finding['metric']}: {finding['value']:.2f} ms > {finding['budget']:.2f} ms")
         for timer in case.get("attribution", [])[:6]:
             log(f"    {timer['key']}: {timer['ms_per_frame']:.2f} ms/frame")
+        if case.get("allocation"):
+            phases = case["allocation"]["phases"]
+            log(f"    allocation: {sum(row['kib_per_frame'] for row in phases):.0f} KiB/frame ("
+                + ", ".join(f"{row['name']} {row['kib_per_frame']:.0f}" for row in phases[:4]) + ")")
         report["scenarios"][name] = case
     (work / "report.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     (work / "report.md").write_text(markdown(report), encoding="utf-8")
