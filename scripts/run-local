@@ -80,7 +80,7 @@ build_anvil () {
     muon samu -C "$builddir"
   else
     echo "running meson compile"
-    bash scripts/compile.sh -C "$builddir"
+    meson compile -C "$builddir"
   fi
 }
 

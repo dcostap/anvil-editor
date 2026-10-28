@@ -210,7 +210,7 @@ main() {
     -Doptimization=3 \
     "${build_dir}"
 
-  bash scripts/compile.sh -C "${build_dir}"
+  meson compile -C "${build_dir}"
 
   if [[ $pgo != "" ]]; then
     echo "Generating Profiler Guided Optimizations data..."
@@ -233,7 +233,7 @@ main() {
       fi
     fi
     meson configure -Db_pgo=use "${build_dir}"
-    bash scripts/compile.sh -C "${build_dir}"
+    meson compile -C "${build_dir}"
   fi
 }
 
