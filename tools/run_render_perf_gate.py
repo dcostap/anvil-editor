@@ -260,6 +260,10 @@ SCENARIOS["markdown-footnotes-edit"] = dict(SCENARIOS["markdown-footnotes"], edi
 # A view too narrow for the margin shows each card below its block.
 SCENARIOS["markdown-footnotes-inline"] = dict(SCENARIOS["markdown-footnotes"], window_width=900)
 SCENARIOS["markdown-footnotes-inline-edit"] = dict(SCENARIOS["markdown-footnotes-inline"], edit_note=True)
+# The Heading Outline left of a Live Preview lane, scrolled into its third section.
+SCENARIOS["markdown-heading-outline"] = dict(
+    SCENARIOS["markdown-footnotes"], fixture="markdown-heading-outline", start_line=40,
+)
 FOOTNOTES_SOURCE = """# Chapter one
 
 From Terrahawks[^1] it went
@@ -285,6 +289,25 @@ A wide table uses the free space right of the lane and stops before the cards.
 | matching | 5,013 | 92.39% | 871.04 KB | 68.81% | byte for byte identical to the original build output |
 | drift | 140 | 2.58% | 59.00 KB | 4.66% | almost identical, with small differences in register use |
 """
+HEADING_OUTLINE_PARAGRAPH = (
+    "A paragraph of prose that wraps across more than one visual row in the reading lane, "
+    "so that each section is tall enough to scroll past.\n\n"
+)
+HEADING_OUTLINE_SOURCE = "".join(
+    f"{heading}\n\n" + HEADING_OUTLINE_PARAGRAPH * 3
+    for heading in (
+        "# Field guide",
+        "## Getting **started**",
+        "### Install",
+        "### First run",
+        "## Using `anvil` every day",
+        "### Projects and the Sidebar",
+        "#### Too deep to list",
+        "### A heading with a very long title that does not fit in the outline",
+        "## Settings",
+        "## Troubleshooting",
+    )
+)
 OPEN_NOTE_SECTION = """## Section {index}
 
 A paragraph with **bold**, *italic*, `code`, a [link](https://example.com/{index}) and a
@@ -1065,6 +1088,9 @@ def run_case(
     if settings.get("fixture") == "markdown-footnotes":
         case_fixture = work / "fixtures" / "markdown-footnotes.md"
         case_fixture.write_text(FOOTNOTES_SOURCE, encoding="utf-8", newline="\n")
+    if settings.get("fixture") == "markdown-heading-outline":
+        case_fixture = work / "fixtures" / "markdown-heading-outline.md"
+        case_fixture.write_text(HEADING_OUTLINE_SOURCE, encoding="utf-8", newline="\n")
     if settings.get("fixture") == "video-callout":
         case_fixture = work / "fixtures" / "markdown-callout.md"
     elif settings.get("fixture") == "video-task":

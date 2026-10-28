@@ -223,6 +223,10 @@ _Avoid_: margin note, sidenote, endnote
 A Footnote on a stretch of prose: highlighted text followed directly by an inline footnote. Markdown Live Preview shows the text tinted and the note in a card, with no number.
 _Avoid_: margin note, comment, annotation
 
+**Heading Outline**:
+A list of a Markdown document's headings in the free space left of the reading lane in Markdown Live Preview. It marks the section that the view shows, and a click on a heading goes to it. It lists the same headings as Current Buffer Symbol Search.
+_Avoid_: TOC, table of contents, minimap
+
 **Markdown Source Mode**:
 An Editor mode that shows all Markdown source syntax normally instead of presenting formatted Markdown inline.
 _Avoid_: Raw rendering mode

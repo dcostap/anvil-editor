@@ -6573,7 +6573,17 @@ function TextView:get_line_center_scroll_y(line)
   return math.max(0, y - oy - (self.size.y - scroll_h) / 2)
 end
 
----Scroll to center a line in the viewport.
+---Return the vertical scroll offset that shows a line `margin` pixels below
+---the top of the viewport.
+function TextView:get_line_top_scroll_y(line, margin)
+  local _, y = self:get_line_screen_position(line)
+  local _, oy = self:get_content_offset()
+  return math.max(0, y - oy - margin)
+end
+
+
+---Scroll to center a line in the viewport. With `opts.top_margin`, show the
+---line that many pixels below the top of the viewport instead.
 ---@param line integer Line number to scroll to
 ---@param ignore_if_visible? boolean Don't scroll if line already visible
 ---@param instant? boolean Jump immediately without animation
@@ -6600,14 +6610,16 @@ function TextView:scroll_to_line(line, ignore_if_visible, instant, opts)
     max = max - visible_margin_lines
   end
   if not (ignore_if_visible and line >= min and line <= max) then
-    self.scroll.to.y = self:get_line_center_scroll_y(line)
+    local top_margin = opts and opts.top_margin
+    self.scroll.to.y = top_margin and self:get_line_top_scroll_y(line, top_margin)
+      or self:get_line_center_scroll_y(line)
     if instant then
       self.scroll.y = self.scroll.to.y
       self.scroll.move_data_y = nil
     end
     local line1, col1, line2, col2 = self.buffer:get_selection()
     self.__line_scroll_anchor = {
-      line = line, target_y = self.scroll.to.y,
+      line = line, target_y = self.scroll.to.y, top_margin = top_margin,
       revision = self.buffer.text_revision,
       line1 = line1, col1 = col1, line2 = line2, col2 = col2,
     }
@@ -7452,10 +7464,12 @@ function TextView:update()
   end
 
   -- Rows above an active line jump can change height while the layout loads.
-  -- Keep the jump's line centered.
+  -- Keep the jump's line in its place.
   local active_jump = current_line_scroll_anchor(self)
   if active_jump and self.size.y > 0 then
-    local delta = self:get_line_center_scroll_y(active_jump.line) - active_jump.target_y
+    local top_margin = active_jump.top_margin
+    local delta = (top_margin and self:get_line_top_scroll_y(active_jump.line, top_margin)
+      or self:get_line_center_scroll_y(active_jump.line)) - active_jump.target_y
     if delta ~= 0 then shift_scroll_for_layout(self, delta) end
   end
 

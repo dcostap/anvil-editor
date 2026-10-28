@@ -481,6 +481,15 @@ When adding new functionality, use `core.log_quiet(...)` liberally for diagnosti
 
 This is a personal fork with first-party ownership of the whole codebase, including bundled Lua plugins and defaults. Prefer clean refactors over compatibility adapters: when renaming concepts, APIs, fields, commands, or behavior, update all in-repo callers/configs/plugins/tests instead of leaving deprecated aliases, dead code, or compatibility slop. Only keep backward compatibility when the user explicitly asks for it or there is a concrete external boundary that cannot be migrated in the same change.
 
+## Heading Outline
+
+Markdown Live Preview lists the headings left of the reading lane when the free space can hold the list.
+It reads the tree-sitter outline, the same list as Current Buffer Symbol Search.
+The top heading level and two levels below it show. The current section is the last heading above the top quarter of the view.
+A click moves the caret to the heading and scrolls it near the top with `scroll_to_line`'s `top_margin`.
+That heading stays current while the caret stays on it and it shows, also at the end of the document.
+Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading-outline` render scenario after visual changes.
+
 ## Reload from disk
 
 `Buffer:reload()` applies the file's text as edits through `Buffer:apply_lines`. It does not replace the Buffer.

@@ -9,6 +9,7 @@ local image_animation = require "core.image_animation"
 local fence_highlight = require "core.markdown.fence_highlight"
 local link_completion = require "core.markdown.completion"
 local footnotes = require "core.markdown.footnotes"
+local heading_outline = require "core.markdown.heading_outline"
 local live_fonts = require "core.markdown.live_fonts"
 local linewrapping = require "core.linewrapping"
 local markdown_links = require "core.markdown.links"
@@ -7840,6 +7841,7 @@ function live.attach(view)
   ensure_owner(view)
   live._install_code_copy_hover(view)
   footnotes.attach(view)
+  heading_outline.attach(view)
   -- All providers must observe the reading lane during their installation.
   view.__markdown_live_attached = true
   view:add_visual_metric_provider(PROVIDER_ID, provider)
@@ -7909,6 +7911,7 @@ end
 
 function live.detach(view)
   if not (view and view.__markdown_live_attached) then return false end
+  heading_outline.detach(view)
   live._remove_code_copy_hover(view)
   footnotes.detach(view)
   unbind_link_index(view)
