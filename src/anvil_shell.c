@@ -6366,20 +6366,41 @@ static void finish_resolutions(void) {
   }
 }
 
-/* Keep the closing Project's identity reserved until process exit. Select usable content now. */
+/* A Project's place in the Sidebar, which lists Scratch first and then the model's order. */
+static size_t sidebar_place(const ShellProject *project) {
+  const AnvilSidebarProject *row =
+      project->project_path ? anvil_sidebar_find(&shell.sidebar, project->project_path) : NULL;
+  if (row && row->scratch) return 0;
+  for (size_t i = 0; row && i < shell.sidebar.count; i++)
+    if (shell.sidebar.projects[i] == row) return i + 1;
+  return SIZE_MAX;
+}
+
+/* Keep the closing Project's identity reserved until process exit. Select the loaded Project above it in the
+ * Sidebar now, or else the one below it. A focused Sidebar keeps the keyboard, so an unload there stays there. */
 static void select_after_close(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window || window->selected != project) return;
+  size_t place = sidebar_place(project), above_place = 0, below_place = SIZE_MAX;
+  ShellProject *above = NULL, *below = NULL;
   for (ShellProject *item = shell.projects; item; item = item->next) {
-    if (item != project && item->window_id == window->id && !item->unloading &&
-        !item->exit_announced && !item->failed_close) {
-      select_project(item, false);
-      return;
+    if (item == project || item->window_id != window->id || item->unloading || item->exit_announced ||
+        item->failed_close)
+      continue;
+    size_t item_place = sidebar_place(item);
+    if (item_place < place) {
+      if (!above || item_place > above_place) above = item, above_place = item_place;
+    } else if (!below || item_place < below_place) {
+      below = item, below_place = item_place;
     }
+  }
+  if (above || below) {
+    select_project(above ? above : below, true);
+    return;
   }
   free(window->empty->project_path);
   window->empty->project_path = project->project_path ? _strdup(project->project_path) : NULL;
-  select_project(window->empty, false);
+  select_project(window->empty, true);
 }
 
 static void complete_unload(ShellProject *project) {

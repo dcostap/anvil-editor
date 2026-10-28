@@ -170,6 +170,35 @@ test.describe("Sidebar keyboard navigation", function()
     test.same(unloads(), {1})
   end)
 
+  test.it("moves the cursor to the Project above an unloaded Project, or else below it", function()
+    local function model(dormant, selected)
+      local projects = {windows={{id=7,selected_project=selected}}}
+      for id, name in ipairs({"Alpha", "Beta", "Gamma"}) do
+        local path = "C:/" .. name
+        projects[id] = dormant == path and {id=id,row_id=id,path=path,state="dormant",exists=true}
+          or {id=id,row_id=id,path=path,state="ready",panes={active=1,{id=name,name=name .. ".lua"}}}
+      end
+      return projects
+    end
+    local view = SidebarView(function() end)
+    view:set_model(model(nil, 1), 7)
+    view:on_focus(true)
+    view:on_key_pressed("end")
+    view:on_key_pressed("left")
+    test.equal(view:get_cursor().project.path, "C:/Gamma")
+    view:set_model(model("C:/Gamma", 1), 7)
+    test.equal(view:get_cursor().kind, "project")
+    test.equal(view:get_cursor().project.path, "C:/Beta")
+
+    view = SidebarView(function() end)
+    view:set_model(model(nil, 1), 7)
+    view:on_focus(true)
+    test.equal(view:get_cursor().tab.id, "Alpha")
+    view:set_model(model("C:/Alpha", 2), 7)
+    test.equal(view:get_cursor().kind, "project")
+    test.equal(view:get_cursor().project.path, "C:/Beta")
+  end)
+
   test.it("does not unload a Dormant Project", function()
     local view, actions = sidebar()
     view:on_focus(true)
