@@ -968,7 +968,7 @@ local function setup_scenario()
         end
         core.add_thread(function()
           require("core.pane_requests").perform(common.serialize({ action = "project_results", source = path,
-            id = request.id, rows = rows }, { escape = true }))
+            id = request.id, rows = rows, more = true }, { escape = true }))
         end)
         return true
       end

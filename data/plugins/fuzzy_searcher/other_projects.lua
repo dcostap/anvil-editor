@@ -8,8 +8,10 @@ local projects = require "plugins.fuzzy_searcher.projects"
 
 local other = {}
 
--- The most rows that each other Project shows.
-local LIMIT = 5
+-- The most rows that each other Project sends.
+local LIMIT = 20
+-- The fewest rows that a group shows before its More row.
+local MIN_ROWS = 5
 -- The shell's Pane request header has four 32-bit fields. The Project path follows it without a terminator.
 local MAX_TEXT = 65536 - 16
 
@@ -118,7 +120,7 @@ function other.request(picker, mode, query, line)
   if query == "" or not root or not core.project_sidebar then return end
   sequence = sequence + 1
   local state = {id = sequence, key = key, mode = mode, query = query, line = line,
-    case_sensitive = picker.case_sensitive == true, targets = targets(), rows = {}, headers = {},
+    case_sensitive = picker.case_sensitive == true, targets = targets(), rows = {}, more = {}, headers = {},
     sent = system.get_time()}
   picker.other_projects = state
   for _, project in ipairs(state.targets) do
@@ -128,27 +130,65 @@ function other.request(picker, mode, query, line)
 end
 
 -- This Project's rows, then each other Project that has rows: a divider, a header with its badge and name, then
--- its rows.
+-- its rows. While other Projects show rows, each group gets a share of the screen. A group with more rows ends with
+-- a More row. Without other Projects, this Project's rows are not cut.
 function other.with_rows(picker, own)
   local state = picker.other_projects
   if not state then return own end
-  local out = {}
-  for index, row in ipairs(own) do out[index] = row end
+  local groups = {}
   for _, project in ipairs(state.targets) do
-    local rows = state.rows[project.path]
-    if rows and #rows > 0 then
-      -- The rows keep their identity across replies, so the selection can follow its row.
-      local header = state.headers[project.path] or {
-        divider = {header = true, separator = true, label = ""},
-        {header = true, project = project, label = look.name(project)},
-      }
-      state.headers[project.path] = header
-      if #out > 0 then out[#out + 1] = header.divider end
-      out[#out + 1] = header[1]
-      for _, row in ipairs(rows) do out[#out + 1] = row end
+    if state.rows[project.path] and #state.rows[project.path] > 0 then groups[#groups + 1] = project end
+  end
+  if #groups == 0 then return own end
+  local screen = picker:list_metrics().result_rows
+  local shown = #own
+  if not state.expanded then
+    -- Each other group needs a divider, a header, its rows and a More row.
+    shown = math.min(#own, math.max(MIN_ROWS, screen - #groups * (MIN_ROWS + 3) - 1))
+    -- A row that the user selected stays in the list.
+    local selected = picker.results and picker.results[picker.selected]
+    for index = shown + 1, #own do
+      if own[index] == selected then state.expanded, shown = true, #own end
     end
   end
+  local out = {}
+  for index = 1, shown do out[index] = own[index] end
+  if shown < #own then
+    local current = projects.current()
+    state.own_more = state.own_more
+      or {kind = "more", own = true, label = "More in " .. (current and look.name(current) or "this Project")}
+    out[#out + 1] = state.own_more
+  end
+  local share = math.max(MIN_ROWS, math.floor((screen - #out) / #groups) - 3)
+  for _, project in ipairs(groups) do
+    local rows = state.rows[project.path]
+    -- The rows keep their identity across replies, so the selection can follow its row.
+    local group = state.headers[project.path] or {
+      divider = {header = true, separator = true, label = ""},
+      header = {header = true, project = project, label = look.name(project)},
+      more = {kind = "more", project_path = project.path, label = "More in " .. look.name(project)},
+    }
+    state.headers[project.path] = group
+    if #out > 0 then out[#out + 1] = group.divider end
+    out[#out + 1] = group.header
+    for index = 1, math.min(#rows, share) do out[#out + 1] = rows[index] end
+    if #rows > share or state.more[project.path] then out[#out + 1] = group.more end
+  end
   return out
+end
+
+-- Confirms a More row: this Project's shows the rest of its rows. Another Project's opens the same search in that
+-- Project.
+function other.more(picker, result)
+  if result.own then
+    picker.other_projects.expanded = true
+    picker:show_other_projects()
+    return true
+  end
+  local text = picker.input:get_text()
+  picker:close()
+  core.log_quiet("Other Project search: opening %q in %s", text, result.project_path)
+  return send("select", result.project_path, {action = "search", text = text})
 end
 
 -- Searches this Project for another Project's search and sends the rows back. A Project that cannot search, or that
@@ -158,15 +198,16 @@ function other.answer(request)
   latest[from] = id
   local function alive() return latest[from] == id end
   core.add_thread(function()
-    local rows = other.search[request.mode](request.query, request.case_sensitive,
+    local rows, more = other.search[request.mode](request.query, request.case_sensitive,
       math.min(request.limit or LIMIT, LIMIT), alive)
     if not alive() then return end
     latest[from] = nil
-    core.log_quiet("Other Project search: %s search for %s found %d rows", request.mode, request.from,
-      rows and #rows or 0)
+    core.log_quiet("Other Project search: %s search for %s found %d rows, more=%s", request.mode, request.from,
+      rows and #rows or 0, tostring(more == true))
     if not rows or #rows == 0 then return end
     local root = core.root_project()
-    send("direct", request.from, {action = "project_results", source = root.path, id = id, rows = rows})
+    send("direct", request.from, {action = "project_results", source = root.path, id = id, rows = rows,
+      more = more or nil})
   end)
   return true
 end
@@ -184,6 +225,7 @@ function other.receive(request)
         if #rows >= LIMIT then break end
       end
       state.rows[project.path] = rows
+      state.more[project.path] = request.more == true
       core.log_quiet("Other Project search: %d rows from %s after %.1f ms", #rows, project.path,
         (system.get_time() - state.sent) * 1000)
       picker:show_other_projects()

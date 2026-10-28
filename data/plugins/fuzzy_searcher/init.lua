@@ -5143,8 +5143,8 @@ function FSView:on_modal_mouse_wheel(y, x)
   return self:on_mouse_wheel(y, x)
 end
 
--- This Project's best `limit` files for the File Search of another Project, as rows that a Pane request can carry.
--- Runs in a thread. Returns nil without a file index, or when `alive()` turns false.
+-- This Project's best `limit` files for the File Search of another Project, as rows that a Pane request can carry,
+-- and true when more files match. Runs in a thread. Returns nil without a file index, or when `alive()` turns false.
 fuzzy_searcher.other_projects.search.files = function(query, case_sensitive, limit, alive)
   if not native_file_index_ready() then return nil end
   local task = fuzzy_searcher.files_fuzzy_index:search_async(query,
@@ -5171,18 +5171,19 @@ fuzzy_searcher.other_projects.search.files = function(query, case_sensitive, lim
     rows[index] = { label = match.text, abs_path = match.meta.abs_path, root_label = match.meta.root_label,
       root_role = match.meta.root_role, prefix_span = match.meta.prefix_span, spans = match.spans }
   end
-  return rows
+  return rows, #matches > limit or results.has_more == true
 end
 
 -- This Project's best `limit` Text Search lines, from its files and its Terminals, as rows that a Pane request can
--- carry. Runs in a thread. Returns nil when `alive()` turns false.
+-- carry, and true when more lines match. Runs in a thread. Returns nil when `alive()` turns false.
 fuzzy_searcher.other_projects.search.text = function(query, case_sensitive, limit, alive)
   local matcher = fuzzy_searcher.compile_grep(query, case_sensitive)
   if not matcher.seed or matcher.seed == "" then return {} end
-  local best, scanned, max_scanned = {}, 0, fuzzy_searcher.fuzzy_scan_limit or 10000
+  local best, scanned, max_scanned, matched = {}, 0, fuzzy_searcher.fuzzy_scan_limit or 10000, 0
   local function add(source)
     local match = matcher.match(source.text or "")
     if match then
+      matched = matched + 1
       local r = common.merge(source, match)
       r.col = match.content_match_start or source.col
       fuzzy_searcher.grep_order.retain_top(best, r, limit)
@@ -5236,7 +5237,7 @@ fuzzy_searcher.other_projects.search.text = function(query, case_sensitive, limi
     end
     rows[index] = row
   end
-  return rows
+  return rows, matched > limit
 end
 
 -- Shows the rows that other Projects sent, after this Project's rows. The selected row stays selected.
@@ -8202,6 +8203,7 @@ function FSView:activate_selected_result(new_group)
     self:close()
     return fuzzy_searcher.terminals.open(r)
   end
+  if r.kind == "more" then return fuzzy_searcher.other_projects.more(self, r) end
   if r.other_project then
     self:close()
     return fuzzy_searcher.other_projects.open(r)
@@ -8685,6 +8687,12 @@ function FSView:draw_open_content()
       elseif r.kind == "new_project" then
         reset_rendered_file_group()
         draw_new_project_result_row(font, r, x + pad, row_y, row_text_w)
+      elseif r.kind == "more" then
+        reset_rendered_file_group()
+        -- The label lines up with the file names above it, in their font.
+        local indent, label_font = fuzzy_searcher.file_icons.column_width(font:get_height()), style.view_text_font
+        renderer.draw_text(label_font, truncate_text(label_font, r.label, row_text_w - indent), x + pad + indent,
+          row_y + math.floor((font:get_height() - label_font:get_height()) / 2), style.dim)
       else
         local label, spans, prefix = result_list_label_and_spans(r)
         draw_prefixed_highlighted_text(font, prefix, label, x + pad, row_y, row_text_w, style.text, spans)
