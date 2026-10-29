@@ -559,7 +559,27 @@ The UI loop drains named pools and shuts them down with the system pool.
 
 ## Native code and Lua garbage
 
-Lua must not limit the editor's speed. Move work to C when a measurement shows a cost, such as a profile, a scenario counter, or a heap census.
+Lua must not limit the editor's speed. We port slow Lua to C, but only where a measurement shows that the port is worth it.
+
+### Measure first
+
+Do not port code to C because it looks slow. Measure it first.
+
+1. Run the scenario that shows the problem with `--diagnose`. It writes a sampled profile, timers by phase, and allocation sites. See [scenario runs](tools/SCENARIOS.md).
+2. Find where the time goes: the timers in the attribution `details.csv`, the profile stacks, and the KiB per frame by line.
+3. Ask if the work is necessary. Work that is not necessary is the largest win, in any language. Examples:
+   - The Heading Outline ran the outline query on the whole note for each key. The worker's parse already had the headings.
+   - Two callers joined the whole note into a Lua string for each edit, only to give it to C.
+4. Port to C only work that is necessary and slow in Lua.
+
+A port is worth it when the measurement shows one of these:
+
+- A hot loop over plain data, such as rows, heights, or text positions.
+- Work for each line or item of a document, where the count grows with the document.
+- Large data that stays in memory, as a heap census shows.
+- High GC or interpreter time in the profile for that code.
+
+A port is not worth it when the profile shows the time elsewhere, or when the code is glue, decisions, or behavior that changes often. A Lua error is caught. A crash in C ends the editor.
 
 Move these to C:
 
@@ -576,6 +596,30 @@ A LuaJIT trace stops at each C call, so a call for each item can be slower than 
 Code that runs in each frame, such as `update`, `draw`, and caret moves, must not make new tables, closures, or strings when old ones can be used again.
 
 In the commit message, give the measurement before and after the change.
+
+### How to port
+
+Port in small slices. Do not rewrite a module at once. For each slice:
+
+1. Measure the slice before the change.
+2. Keep the old Lua path until the new path gives the same output. Compare both outputs on many real documents and edits. Use the repo's Markdown files and the scenario fixtures.
+3. Add tests that fail on the old code (red-green).
+4. Run the full `lua-runtime` and `lua-ui` suites. Compare their failures with a baseline worktree, because some tests are flaky.
+5. Run A/B scenarios against the baseline. Alternate the two versions, so machine load affects both. Give the numbers in the commit message.
+
+### Known target: the document layout pipeline
+
+Measured on the 19,185-line gallery note (`markdown-gallery-open`):
+
+- Building Markdown render lines in Lua took 3.8 s. Cache lookups and fragment preparation took about 0.9 s more.
+- The full row-height rebuild in Lua took 0.65 s. One rebuild took 465 ms in one frame.
+- The C wrap call (`renderer.wrap_fragment_lines`) took 0.08 s.
+
+The cost is Lua work for each line, spread over many functions. No single loop is hot. So port the pipeline, not the editor:
+
+- C keeps the data for each line: style runs, wrap breaks, row heights, and line metrics. A worker thread can make them from the Buffer text and the tree-sitter parse.
+- Lua keeps the decisions: what shows at the caret, widgets, clicks, and editing behavior. Lua reads results with a few calls for each frame.
+- Before each slice, measure which line kinds cost the most, such as prose, headings, lists, tables, or code. Port the most costly kind first.
 
 ### Frame-time check
 
