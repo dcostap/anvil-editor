@@ -1,6 +1,7 @@
 -- Heading Outline: the document's headings, listed in the free space left of
 -- the reading lane in Markdown Live Preview. It marks the section at the top
--- of the view, and a click on a heading moves the caret and the view to it.
+-- of the view, or the caret's section after the caret moves. A click on a
+-- heading moves the caret and the view to it.
 -- It shows the headings that Current Buffer Symbol Search finds.
 local core = require "core"
 local common = require "core.common"
@@ -96,46 +97,53 @@ end
 
 -- Where you are -----------------------------------------------------------
 
-local function line_y(view, line)
-  local _, y = view:get_line_screen_position(line)
+local function heading_line(view, heading)
+  return heading.line
+end
+
+local function heading_y(view, heading)
+  local _, y = view:get_line_screen_position(heading.line)
   return y
 end
 
--- The heading that a click moved to stays current while the view scrolls to
--- it and after, until the user scrolls, presses elsewhere in the view, or
--- moves the caret off its line. A short section after it, or the end of the
--- document, can leave it below the reading line.
-local function picked_index(view, state, list)
-  local line = state.pick_line
-  if not line then return nil end
-  if view.buffer:get_selection() == line then
-    for index, heading in ipairs(list) do
-      if heading.line == line then return index end
-    end
-  end
-  state.pick_line = nil
-end
-
--- The last heading above the reading line. At the end of the document, the
--- last heading on screen.
-local function current_index(view, state, list)
-  local picked = picked_index(view, state, list)
-  if picked then return picked end
-  local limit = view.position.y + view.size.y * READING_LINE
-  local max_scroll = view:get_scrollable_size() - view.size.y
-  if max_scroll > 0 and view.scroll.y >= max_scroll - 1 then
-    limit = view.position.y + view.size.y - view:get_line_height()
-  end
+-- The index of the last heading whose key is at or above the limit.
+local function last_index(view, list, key, limit)
   local low, high, found = 1, #list, nil
   while low <= high do
     local middle = math.floor((low + high) / 2)
-    if line_y(view, list[middle].line) <= limit then
+    if key(view, list[middle]) <= limit then
       found, low = middle, middle + 1
     else
       high = middle - 1
     end
   end
   return found
+end
+
+-- After the caret moves, the caret's section is current: the last heading at
+-- or above the caret's line. A click on an entry moves the caret too. The
+-- current section goes back to the reading line when the user scrolls.
+local function follows_caret(view, state)
+  local line, col = view.buffer:get_selection()
+  if line ~= state.caret_line or col ~= state.caret_col then
+    if state.caret_line then state.follow_caret = true end
+    state.caret_line, state.caret_col = line, col
+  end
+  return state.follow_caret
+end
+
+-- The last heading above the reading line. At the end of the document, the
+-- last heading on screen.
+local function current_index(view, state, list)
+  if follows_caret(view, state) then
+    return last_index(view, list, heading_line, state.caret_line)
+  end
+  local limit = view.position.y + view.size.y * READING_LINE
+  local max_scroll = view:get_scrollable_size() - view.size.y
+  if max_scroll > 0 and view.scroll.y >= max_scroll - 1 then
+    limit = view.position.y + view.size.y - view:get_line_height()
+  end
+  return last_index(view, list, heading_y, limit)
 end
 
 -- Layout ------------------------------------------------------------------
@@ -248,7 +256,7 @@ local function jump(view, entry)
     view.buffer:set_selection(entry.line, entry.col)
     view:scroll_to_line(entry.line, false, false, { top_margin = view:get_line_height() })
   end)
-  state_for(view).pick_line = entry.line
+  state_for(view).follow_caret = true
   core.set_active_view(view)
   core.log_quiet("Heading Outline: moved to %q at line %d", entry.title, entry.line)
 end
@@ -348,7 +356,7 @@ end
 local function on_mouse_pressed(view, button, x, y)
   local _, entry = entry_at(heading_outline.layout(view), x, y)
   if not (entry and button == "left") then
-    view.__heading_outline.pick_line = nil
+    if view:scrollbar_overlaps_point(x, y) then view.__heading_outline.follow_caret = false end
     return false
   end
   jump(view, entry)
@@ -392,7 +400,7 @@ function heading_outline.attach(view)
     return previous(self, "on_mouse_left", ...)
   end
   view.on_mouse_wheel = function(self, ...)
-    self.__heading_outline.pick_line = nil
+    self.__heading_outline.follow_caret = false
     return previous(self, "on_mouse_wheel", ...)
   end
   return true

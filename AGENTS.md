@@ -494,9 +494,8 @@ This is a personal fork with first-party ownership of the whole codebase, includ
 Markdown Live Preview lists the headings left of the reading lane when the free space can hold the list.
 It reads the tree-sitter outline, the same list as Current Buffer Symbol Search.
 The top heading level and two levels below it show. The current section is the last heading above the top quarter of the view.
-A click moves the caret to the heading and scrolls it near the top with `scroll_to_line`'s `top_margin`.
-That heading stays current until the user scrolls, presses elsewhere in the view, or moves the caret off its line.
-This also holds while the view scrolls to it, before a short section, and at the end of the document.
+After the caret moves, the current section is the caret's section instead, until the user scrolls with the wheel or the scrollbar.
+A click moves the caret to the heading and scrolls it near the top with `scroll_to_line`'s `top_margin`. That heading is then the caret's section.
 Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading-outline` render scenario after visual changes.
 
 ## Binary files
