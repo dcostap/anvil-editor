@@ -7011,11 +7011,9 @@ function TextView:on_mouse_moved(x, y, ...)
       end
       self:set_added_mouse_selection(l1, c1, l2, c2)
     elseif self.mouse_selecting.column then
-      if l1 > l2 then l1, l2 = l2, l1 end
-      self.buffer.selections = { }
-      for i = l1, l2 do
-        self.buffer:set_selections(i - l1 + 1, i, math.min(c1, #self.buffer.lines[i]), i, math.min(c2, #self.buffer.lines[i]))
-      end
+      self:set_column_carets(x, l1, l2)
+      -- Line-end affinity below reads the pointer's own resolved position.
+      self:resolve_screen_position(x, y)
     else
       if snap_type then
         l1, c1, l2, c2 = self:mouse_selection(self.buffer, snap_type, l1, c1, l2, c2)
@@ -7026,6 +7024,27 @@ function TextView:on_mouse_moved(x, y, ...)
   if selecting then
     apply_resolved_line_end_affinity(self)
   end
+end
+
+---Place one caret on each line from `line1` to `line2`, under screen x.
+---A line that ends before x gets its caret at the line end.
+---@param x number Screen x coordinate
+---@param line1 integer Pointer line, which gets the last selection
+---@param line2 integer Anchor line
+function TextView:set_column_carets(x, line1, line2)
+  local list, last = {}, 1
+  local lh = self:get_line_height()
+  for line = math.min(line1, line2), math.max(line1, line2) do
+    local _, y = self:get_line_screen_position(line)
+    local resolved, col = self:resolve_screen_position(x, y + lh / 2)
+    -- A line inside a collapsed fold resolves to the fold's line.
+    if resolved == line then
+      local n = #list
+      list[n + 1], list[n + 2], list[n + 3], list[n + 4] = line, col, line, col
+      if line == line1 then last = n / 4 + 1 end
+    end
+  end
+  self.buffer:set_selection_list(list, last)
 end
 
 ---Set the selection that a Ctrl+click adds, beside the selections that
