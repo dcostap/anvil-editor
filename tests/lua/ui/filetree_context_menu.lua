@@ -32,13 +32,19 @@ test.describe("File Tree Context Menu", function()
 
   test.before_each(function(context)
     panes.reset_for_tests()
-    saved = { trash = config.plugins.filetree.delete_to_trash, size = { core.root_panel.size.x, core.root_panel.size.y } }
+    saved = {
+      trash = config.plugins.filetree.delete_to_trash,
+      size = { core.root_panel.size.x, core.root_panel.size.y },
+      open_in_system = common.open_in_system,
+    }
     config.plugins.filetree.delete_to_trash = false
     core.root_panel.size.x, core.root_panel.size.y = 800, 600
     context.root = USERDIR .. PATHSEP .. "filetree-context-menu-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.root .. PATHSEP .. "docs"))
     write_file(context.root .. PATHSEP .. "notes.txt", "notes")
+    write_file(context.root .. PATHSEP .. "page.html", "<html></html>")
+    write_file(context.root .. PATHSEP .. "data.bin", "\0data")
     context.tree = assert(filetree.new(context.root))
     context.pane = panes.create { factory = function() return context.tree end }
     panes.focus(context.pane)
@@ -49,9 +55,30 @@ test.describe("File Tree Context Menu", function()
     context_menu.close()
     if core.nag_view.visible then command.perform("core:select_dialog_no") end
     config.plugins.filetree.delete_to_trash = saved.trash
+    common.open_in_system = saved.open_in_system
     core.root_panel.size.x, core.root_panel.size.y = saved.size[1], saved.size[2]
     panes.reset_for_tests()
     test.ok(test.remove_tree(context.root))
+  end)
+
+  test.it("opens text, HTML and binary files with the OS default app from their menu", function(context)
+    local opened
+    common.open_in_system = function(path) opened = path; return true end
+    for _, name in ipairs({ "notes.txt", "page.html", "data.bin" }) do
+      opened = nil
+      right_click_row(context.tree, name)
+      test.ok(context_menu.choose("Open with OS Default App"))
+      test.equal(opened, system.absolute_path(context.root .. PATHSEP .. name))
+      test.equal(core.active_view, context.tree)
+      test.ok(not core.nag_view.visible, "the OS action must not ask how to open binary files")
+    end
+  end)
+
+  test.it("does not offer the default file app for a directory", function(context)
+    right_click_row(context.tree, "docs/")
+    for _, label in ipairs(context_menu.labels()) do
+      test.ok(label ~= "Open with OS Default App")
+    end
   end)
 
   test.it("deletes the right-clicked file after the confirmation", function(context)

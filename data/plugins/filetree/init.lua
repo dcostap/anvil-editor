@@ -3687,6 +3687,7 @@ function FileTreeView:context_menu(x, y)
   return {
     { label = "Open", icon = icons.open, command = "filetree:open_selected" },
     { label = "Open to the Right", icon = icons.split_right, command = "filetree:open_selected_right" },
+    { label = "Open with OS Default App", icon = icons.open, command = "editor:open_file_in_associated_program" },
     "-",
     { label = "New File…", icon = icons.new_file, command = "editor:new_file_with_path" },
     { label = "New Folder…", icon = icons.new_folder, command = "editor:new_folder_with_path" },

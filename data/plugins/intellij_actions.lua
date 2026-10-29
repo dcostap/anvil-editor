@@ -357,7 +357,9 @@ local function open_file_in_associated_program(dv)
     return
   end
 
-  if not common.open_in_system(path) then
+  local opened = common.open_in_system(path)
+  core.log_quiet("Open with OS default app: %s (%s)", path, opened and "ok" or "failed")
+  if not opened then
     core.error("Could not open file in associated OS program: %s", path)
   end
 end
@@ -1377,9 +1379,18 @@ end, {
   ["editor:copy_relative_filepath"] = command.palette(copy_relative_filepath),
   ["editor:copy_filename"] = command.palette(copy_filename),
   ["editor:open_file_as_raw_text"] = open_file_as_raw_text,
-  ["editor:open_file_in_associated_program"] = open_file_in_associated_program,
   ["editor:reveal_active_file_in_explorer"] = reveal_active_file_in_explorer,
   ["editor:open_terminal_at_current_file"] = open_terminal_at_active_file,
+})
+
+command.add(function(target)
+  local view = type(target) == "string" and target ~= "" and target or core.active_view
+  if type(view) ~= "string" and not is_file_bound_view(view) then return false end
+  local path = active_file_path(view)
+  local info = path and system.get_file_info(path)
+  return info and info.type == "file", view
+end, {
+  ["editor:open_file_in_associated_program"] = open_file_in_associated_program,
 })
 
 keymap.add({
