@@ -2,6 +2,7 @@ local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local config = require "core.config"
 local linewrapping = require "core.linewrapping"
+local preview_text_view = require "plugins.fuzzy_searcher.preview_text_view"
 local test = require "core.test"
 
 local function make_view(context, text)
@@ -22,6 +23,14 @@ end
 
 local function layout_width(view, line)
   return view:get_plain_text_layout(line).width
+end
+
+local function make_preview(context, text)
+  local buffer = Buffer(nil, nil, true)
+  buffer:insert(1, 1, text)
+  local view = preview_text_view.new(buffer)
+  context.views[#context.views + 1] = view
+  return view, buffer
 end
 
 test.describe("TextView shared text layouts", function()
@@ -80,5 +89,36 @@ test.describe("TextView shared text layouts", function()
 
     buffer:insert(1, 1, "new ")
     test.equal(layout_width(view, 1), font:get_width("new 漢"))
+  end)
+
+  test.it("keeps preview text measurements separate across Buffers", function(context)
+    local first, buffer = make_preview(context, "漢\n")
+    local second = make_preview(context, "abc\n")
+    local font = first:get_font()
+    test.ok(font:get_width("漢") ~= font:get_width("abc"))
+
+    test.equal(layout_width(first, 1), font:get_width("漢"))
+    test.equal(layout_width(second, 1), font:get_width("abc"))
+    test.equal(layout_width(first, 1), font:get_width("漢"))
+
+    buffer:insert(1, 1, "new ")
+    test.equal(layout_width(first, 1), font:get_width("new 漢"))
+    test.equal(layout_width(second, 1), font:get_width("abc"))
+  end)
+
+  test.it("uses each preview Font and follows its size changes", function(context)
+    local first = make_preview(context, "shared text\n")
+    local second = make_preview(context, "shared text\n")
+    local font = first:get_font()
+    local larger = font:copy(font:get_size() * 2)
+    second.get_font = function() return larger end
+
+    test.equal(layout_width(first, 1), font:get_width("shared text"))
+    test.equal(layout_width(second, 1), larger:get_width("shared text"))
+    test.ok(layout_width(second, 1) > layout_width(first, 1))
+
+    larger:set_size(font:get_size() * 3)
+    test.equal(layout_width(second, 1), larger:get_width("shared text"))
+    test.equal(layout_width(first, 1), font:get_width("shared text"))
   end)
 end)

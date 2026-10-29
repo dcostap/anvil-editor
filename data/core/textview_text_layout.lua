@@ -37,6 +37,15 @@ local function same_tokens(a, b)
   return true
 end
 
+-- The bounded cache owns text and Fonts, not Buffers or Views.
+function Layout.new_cache()
+  -- Ring buffer: eviction costs no shifting.
+  return {
+    slots = {}, head = 1, count = 0,
+    line_entries = {}, line_slots = {}, line_head = 1,
+  }
+end
+
 local function remember_line(cache, line, layout)
   local slot = cache.line_entries[line]
   if slot then
@@ -57,6 +66,10 @@ local function remember_line(cache, line, layout)
 end
 
 function Layout.get(view, line, first, last, leading, wrapped)
+  local stats = core.perf_frame_stats
+  if stats then
+    stats.textview_text_layout_requests = (stats.textview_text_layout_requests or 0) + 1
+  end
   local default_font = view:get_font()
   local _, tabs = view.buffer:get_indent_info()
   local override = view:decoration_text_color(line)
@@ -79,11 +92,7 @@ function Layout.get(view, line, first, last, leading, wrapped)
   key = table.concat(key, "\0")
   local cache = view.__plain_text_layouts
   if not cache then
-    -- Ring buffer: reuse keeps the newest rows, and eviction costs no shifting.
-    cache = {
-      slots = {}, head = 1, count = 0,
-      line_entries = {}, line_slots = {}, line_head = 1,
-    }
+    cache = Layout.new_cache()
     view.__plain_text_layouts = cache
     core.log_quiet("Shared text layout enabled for %s", view.buffer:get_name())
   end
@@ -114,6 +123,9 @@ function Layout.get(view, line, first, last, leading, wrapped)
     end
   end
 
+  if stats then
+    stats.textview_text_layout_builds = (stats.textview_text_layout_builds or 0) + 1
+  end
   local self = setmetatable({ key = key, tokens = {}, runs = {}, first = first,
     last = last, leading = leading, width = leading }, Layout)
   for i = 1, #tokens do self.tokens[i] = tokens[i] end

@@ -4,6 +4,8 @@ local Editor = require "core.editor"
 local TextView = require "core.textview"
 
 local PreviewTextView = TextView:extend()
+-- Closing a source preview releases its Buffer, but keeps reusable line layouts.
+local source_layouts
 
 local function initialize(view, buffer, wrapping)
   TextView.new(view, buffer)
@@ -15,6 +17,11 @@ end
 
 function PreviewTextView:new(buffer)
   initialize(self, buffer, false)
+  if not source_layouts then
+    source_layouts = require("core.textview_text_layout").new_cache()
+    require("core").log_quiet("Fuzzy Searcher: source previews share a bounded text layout cache")
+  end
+  self.__plain_text_layouts = source_layouts
 end
 
 function PreviewTextView:set_interactive(interactive)
