@@ -2840,12 +2840,12 @@ local commands = {
   end)
 }
 
-command.add(function(x, y)
+command.add(function(x, y, clicks)
   if x == nil or y == nil or not core.active_view
       or not core.active_view:extends(TextView) then return false end
   local dv = core.active_view
   local x1,y1,x2,y2 = dv.position.x, dv.position.y, dv.position.x + dv.size.x, dv.position.y + dv.size.y
-  return x >= x1 + dv:get_gutter_width() and x < x2 and y >= y1 and y < y2, dv, x, y
+  return x >= x1 + dv:get_gutter_width() and x < x2 and y >= y1 and y < y2, dv, x, y, clicks
 end, selection_commands({
   ["core:set_cursor"] = function(dv, x, y)
     set_cursor(dv, x, y, "set")
@@ -2859,22 +2859,33 @@ end, selection_commands({
     set_cursor(dv, x, y, "lines")
   end,
 
+  ["core:set_cursor_column"] = function(dv, x, y)
+    set_cursor(dv, x, y, "set")
+    dv.mouse_selecting.column = true
+  end,
+
+  -- Adds a caret, word or line beside the other selections. A drag changes
+  -- only the added selection, also after the modifier is released.
   ["core:split_cursor"] = function(dv, x, y, clicks)
     if dv.begin_line_render_interaction then dv:begin_line_render_interaction("mouse-selection") end
     local line, col = dv:resolve_screen_position(x, y)
-    local removal_target = nil
-    for idx, line1, col1 in dv.buffer:get_selections(true) do
-      if line1 == line and col1 == col and #buffer().selections > 4 then
-        removal_target = idx
+    local snap_type = ({ "set", "word", "lines" })[((clicks or 1) - 1) % 3 + 1]
+    local base = { table.unpack(dv.buffer.selections) }
+    local removed = false
+    if snap_type == "set" and #base > 4 then
+      for idx, line1, col1 in dv.buffer:get_selections(true) do
+        if line1 == line and col1 == col then
+          common.splice(base, (idx - 1) * 4 + 1, 4)
+          removed = true
+          break
+        end
       end
     end
-    if removal_target then
-      dv.buffer:remove_selection(removal_target)
-    else
-      dv.buffer:add_selection(line, col, line, col)
-    end
+    dv.mouse_selecting = { line, col, snap_type, added_to = base, removed = removed }
+    dv:set_added_mouse_selection(dv:mouse_selection(dv.buffer, snap_type, line, col, line, col))
     apply_resolved_wrap_affinity(dv)
-    dv.mouse_selecting = { line, col, "set" }
+    core.log_quiet("Added mouse selection: snap=%s removed=%s selections=%d",
+      snap_type, tostring(removed), #dv.buffer.selections / 4)
   end
 }))
 

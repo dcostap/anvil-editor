@@ -425,6 +425,9 @@ keymap.add_direct {
 
   ["shift+1lclick"] = "core:select_to_cursor",
   ["ctrl+1lclick"] = "core:split_cursor",
+  ["ctrl+2lclick"] = "core:split_cursor",
+  ["ctrl+3lclick"] = "core:split_cursor",
+  ["alt+1lclick"] = "core:set_cursor_column",
   ["1lclick"] = "core:set_cursor",
   ["2lclick"] = "core:set_cursor_word",
   ["3lclick"] = "core:set_cursor_line",
