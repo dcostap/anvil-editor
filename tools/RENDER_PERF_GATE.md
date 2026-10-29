@@ -9,6 +9,8 @@ To find performance problems on generated codebases with absolute budgets,
 use [scenario runs](SCENARIOS.md). Both runners share this runner's hidden
 desktop launcher. Do not create another hidden-window runner.
 
+The Windows launcher limits each benchmark process tree to 4 GiB of committed memory, including child processes. The kernel enforces the limit before the app starts. A refused allocation stops the tree with `memory_limit` and exit code 125. It is a failed measurement, not a timeout. The launcher reports the limit and peak job memory in bytes. Launch JSON can set a positive `memory_limit_mb`; zero does not disable protection. See [scenario runs](SCENARIOS.md) for the removed allocation profiler and safe diagnostic options.
+
 ### Editor render regression baseline
 
 Run this fixed matrix before renderer changes. It covers small and large C++

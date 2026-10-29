@@ -37,8 +37,7 @@ A scenario names four things:
   shell, and the benchmark runs in the named Project's process.
 - **Budgets**: absolute limits. The p95 frame work time must stay within
   4 ms, well under one 165 Hz frame (6.06 ms). No frame may take more than
-  16.7 ms, one 60 Hz frame. Each measured frame may allocate 64 KiB of Lua
-  memory. Each scenario sets its action latency budget.
+16.7 ms, one 60 Hz frame. Each scenario sets its action latency budget.
 
 Scenarios use a 1400×900 window. Scenarios named `-large` use 2560×1440, the
 window of a large monitor. A larger window draws more rows, so some costs show
@@ -139,14 +138,13 @@ them. `--attribute`
 records them for passing scenarios too. `--diagnose` adds a LuaJIT sampling
 run with draw scopes and a Speedscope profile.
 
-Each frame scenario adds one run that stops the GC for the measured frames. The heap then grows by each allocation.
-This run reports the allocation of each main loop phase in KiB per frame, with the JIT on. Their sum is scored against the allocation budget.
-LuaJIT's GC work grows with allocation, and its steps land in whichever frame allocates next. Garbage therefore shows up as random slow frames, not in the code that makes it.
-Response and self-driven scenarios have no allocation run.
+Allocation profiling is disabled. `--allocation` fails before a build or launch. Normal runs keep garbage collection enabled and do not report allocation budgets.
 
-A scenario over its allocation budget adds one more run, and `--allocation` adds it for passing scenarios too.
-That run uses a line hook and reports the allocation of each source line and its callers. A C function counts on the line that called it.
-The hook turns off the JIT, and compiled traces can sink some allocations, so read its sizes as an upper limit.
+The removed profiler stopped garbage collection and allocated tables and strings in a hook on each Lua line. Its own garbage stayed in memory. A gallery diagnostic reached 23.8 GiB and exhausted system commit memory. Do not use stopped-GC runs to measure allocation. Use the existing timers, `--diagnose`, and `--heap` instead. A heap census measures retained objects, not allocation rate.
+
+The shared Windows launcher limits each benchmark process tree to 4 GiB of committed memory. The kernel applies the limit before the app starts, including child processes. On a refused allocation, the launcher stops the tree and reports `memory_limit`, not a timeout or a passing measurement. Each run saves `launcher.json`, with `memory_limit_bytes` and `peak_job_memory_bytes`. Windows' peak counter can include a refused allocation.
+
+An explicit launch JSON can set a positive `memory_limit_mb`. It cannot disable the limit. Raise it only for a measured workload that needs more memory, not to keep a failed diagnostic running. The limit applies per launched tree, not to all programs on the machine. Old launch files that request allocation profiling fail before launch.
 
 `--heap` adds a run that writes a Heap Census (`core.heap_census`) after the measured frames. It groups the live Lua heap by the data that holds it.
 Each GC cycle marks all live objects again, so large live data makes each cycle longer.

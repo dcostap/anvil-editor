@@ -1265,6 +1265,7 @@ def run_case(
     config_path.write_text(json.dumps(launch_config, indent=2), encoding="utf-8")
     timeout_seconds = total_timeout_seconds or max(90, int((frames + warmup_frames) / 20) + 60)
     launcher = invoke_hidden(config_path, timeout_seconds)
+    (run_dir / "launcher.json").write_text(json.dumps(launcher, indent=2), encoding="utf-8")
     values = read_key_values(result_file)
     heartbeat = read_key_values(heartbeat_file)
     if launcher.get("timed_out") or int(launcher.get("exit_code", 0)) != 0:

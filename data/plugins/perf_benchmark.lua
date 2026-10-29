@@ -46,8 +46,6 @@ local benchmark = {
   metrics_file = env_string("ANVIL_PERF_BENCHMARK_METRICS"),
   actions_file = env_string("ANVIL_PERF_BENCHMARK_ACTIONS"),
   details_file = env_string("ANVIL_PERF_BENCHMARK_DETAILS"),
-  allocation_file = env_string("ANVIL_PERF_BENCHMARK_ALLOCATION"),
-  allocation_sites_file = env_string("ANVIL_PERF_BENCHMARK_ALLOCATION_SITES"),
   heap_file = env_string("ANVIL_PERF_BENCHMARK_HEAP"),
   details = {},
   workload_file = env_string("ANVIL_PERF_BENCHMARK_WORKLOAD"),
@@ -201,84 +199,6 @@ write_result {
   error = "benchmark did not complete",
 }
 
--- An allocation run stops the GC for the measured frames, so the heap grows
--- by each allocation. The main loop adds the growth of each phase. A line
--- hook adds the growth between two line events to the earlier line, so a C
--- function counts on the line that called it. The callers come from the
--- later event; they differ only when the earlier line returned. The hook
--- needs the interpreter, so a sites run reports what the interpreter
--- allocates. Compiled traces can sink some of it.
-local SITE_FRAMES = 6
-
-local function site_name(source, line)
-  source = source:gsub("\\", "/")
-  return (source:match("/anvil/(.+)$") or source:match("[^/]+$") or source) .. ":" .. line
-end
-
-local function start_allocation_capture()
-  if benchmark.allocation_file == "" and benchmark.allocation_sites_file == "" then return end
-  collectgarbage("stop")
-  if benchmark.allocation_file ~= "" then core.allocation_by_phase = {} end
-  if benchmark.allocation_sites_file == "" then return end
-  jit.off()
-  local lines, stacks = {}, {}
-  benchmark.allocation_lines, benchmark.allocation_stacks = lines, stacks
-  local last_kb = collectgarbage("count")
-  local last_source, last_line
-  debug.sethook(function(_, line)
-    local grown = collectgarbage("count") - last_kb
-    if grown > 0 and last_source then
-      local site = site_name(last_source, last_line)
-      lines[site] = (lines[site] or 0) + grown
-      local parts = { site }
-      for level = 3, SITE_FRAMES + 1 do
-        local caller = debug.getinfo(level, "Sl")
-        if not caller then break end
-        parts[#parts + 1] = site_name(caller.short_src, caller.currentline)
-      end
-      local stack = table.concat(parts, " < ")
-      stacks[stack] = (stacks[stack] or 0) + grown
-    end
-    last_source, last_line = debug.getinfo(2, "S").short_src, line
-    last_kb = collectgarbage("count")
-  end, "l")
-end
-
-local function sorted_kb(totals)
-  local rows = {}
-  for key, kb in pairs(totals) do rows[#rows + 1] = { key = key, kb = kb } end
-  table.sort(rows, function(a, b) return a.kb > b.kb end)
-  return rows
-end
-
-local function csv_field(text)
-  return '"' .. text:gsub('"', '""') .. '"'
-end
-
-local function write_allocation()
-  local frames = math.max(1, #benchmark.rows)
-  local phases = core.allocation_by_phase
-  if phases then
-    core.allocation_by_phase = nil
-    local lines = { "phase,kib,kib_per_frame" }
-    for _, row in ipairs(sorted_kb(phases)) do
-      lines[#lines + 1] = string.format("%s,%.1f,%.3f", row.key, row.kb, row.kb / frames)
-    end
-    write_atomic(benchmark.allocation_file, table.concat(lines, "\n") .. "\n")
-  end
-  if benchmark.allocation_lines then
-    debug.sethook()
-    local lines = { "kind,site,kib,kib_per_frame" }
-    for kind, totals in pairs { line = benchmark.allocation_lines, stack = benchmark.allocation_stacks } do
-      for _, row in ipairs(sorted_kb(totals)) do
-        lines[#lines + 1] = string.format("%s,%s,%.1f,%.3f", kind, csv_field(row.key), row.kb, row.kb / frames)
-      end
-    end
-    benchmark.allocation_lines, benchmark.allocation_stacks = nil, nil
-    write_atomic(benchmark.allocation_sites_file, table.concat(lines, "\n") .. "\n")
-  end
-end
-
 -- A heap run writes a Heap Census after the measured frames.
 local function write_heap()
   if benchmark.heap_file == "" or benchmark.heap_written then return end
@@ -288,7 +208,6 @@ local function write_heap()
 end
 
 local function write_metrics()
-  write_allocation()
   write_heap()
   if benchmark.mode == "throughput" or benchmark.mode == "visual" then return true end
   if benchmark.metrics_file == "" then return true end
@@ -1919,7 +1838,6 @@ function perf.on_frame(snapshot)
       benchmark.warmup_count = benchmark.warmup_count + 1
       if benchmark.warmup_count >= benchmark.warmup_frames then
         collectgarbage("collect")
-        start_allocation_capture()
         set_phase("measure", "measurement_started")
         if benchmark.details_file ~= "" then core.thread_time_stats = {} end
         benchmark.measure_start = system.get_time()

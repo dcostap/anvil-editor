@@ -585,8 +585,8 @@ Lua must not limit the editor's speed. We port slow Lua to C, but only where a m
 
 Do not port code to C because it looks slow. Measure it first.
 
-1. Run the scenario that shows the problem with `--diagnose`. It writes a sampled profile, timers by phase, and allocation sites. See [scenario runs](tools/SCENARIOS.md).
-2. Find where the time goes: the timers in the attribution `details.csv`, the profile stacks, and the KiB per frame by line.
+1. Run the scenario that shows the problem with `--diagnose`. It writes a sampled profile and timers by phase. See [scenario runs](tools/SCENARIOS.md).
+2. Find where the time goes in the attribution `details.csv` and profile stacks. Use `--heap` to measure retained Lua objects.
 3. Ask if the work is necessary. Work that is not necessary is the largest win, in any language. Examples:
    - The Heading Outline ran the outline query on the whole note for each key. The worker's parse already had the headings.
    - Two callers joined the whole note into a Lua string for each edit, only to give it to C.
@@ -649,11 +649,13 @@ Run scenarios before and after each change to code that runs in each frame. This
 1. Before the change, run the smoke scenarios that use the changed code, for example `python tools/run_scenarios.py --scenario fuzzy-symbols-navigate-filetree-large --runs 1 --no-build`.
 2. Run `--suite smoke` for changes to shared drawing code, such as `data/core/textview.lua`. The suite takes about 40 minutes.
 3. After the change, run the same scenarios again.
-4. In the commit message, give the p95 frame work, the maximum frame and the KiB per frame from both reports.
+4. In the commit message, give the p95 frame work, the maximum frame and the Lua heap size from both reports.
 
 Do not commit a change that makes one of these numbers worse, unless the commit message explains why.
 Many scenarios are over budget now. A change must not move them further over.
 See [scenario runs](tools/SCENARIOS.md) for the budgets.
+
+Do not stop garbage collection to measure allocations. The removed allocation profiler exhausted system memory and crashed other programs. `--allocation` is disabled. The shared Windows launcher limits each benchmark process tree to 4 GiB of committed memory. A `memory_limit` failure is not a passing measurement. Keep this protection in baseline worktrees too.
 
 Add native modules under `src/api` with the portable Lua C API, not FFI. The PUC Lua build must still work.
 
