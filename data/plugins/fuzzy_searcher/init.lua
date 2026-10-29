@@ -4316,7 +4316,7 @@ function FSView:fill_prompt_from_selected()
   if #tokens > 0 then prefix = table.concat(tokens, " ") .. " " .. prefix end
   local prompt = prefix .. text
   self.input:set_text(prompt, false)
-  self.input.textview.buffer:set_selection(1, #prefix + 1, 1, #prompt + 1)
+  self.input.textview.buffer:set_selection(1, #prompt + 1)
   ensure_input_focus(self, "fill-prompt-from-selected")
   core.log_quiet(
     "Fuzzy Searcher: filled prompt from selected %s result (%d bytes)",

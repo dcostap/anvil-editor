@@ -119,7 +119,7 @@ test.describe("Fuzzy Searcher input", function()
     test.equal(buffer:get_text(line1, column1, line2, column2), "camel")
   end)
 
-  test.it("fills the query from the selected result and selects the new text", function()
+  test.it("fills the query from the selected result with an unselected caret at the end", function()
     fuzzy_searcher.open(">old query")
     local picker = test.not_nil(core.fuzzy_searcher_active_view)
     picker.results = {
@@ -131,6 +131,24 @@ test.describe("Fuzzy Searcher input", function()
 
     local buffer = picker.input.textview.buffer
     test.equal(picker.input:get_text(), ">core:open_file")
-    test.same({ buffer:get_selection() }, { 1, 2, 1, #">core:open_file" + 1 })
+    test.same({ buffer:get_selection() }, { 1, #">core:open_file" + 1, 1, #">core:open_file" + 1 })
+  end)
+
+  test.it("appends typed text after filling a selected Path Search result", function()
+    fuzzy_searcher.open("@old path")
+    local picker = test.not_nil(core.fuzzy_searcher_active_view)
+    picker.results = {
+      { kind = "path", path = "C:/Projects/café/" },
+    }
+    picker.selected = 1
+
+    test.ok(command.perform("fuzzy:fill_prompt_from_selected"))
+    test.equal(picker.input:get_text(), "@C:/Projects/café/")
+    test.same({ picker.input.textview.buffer:get_selection() },
+      { 1, #"@C:/Projects/café/" + 1, 1, #"@C:/Projects/café/" + 1 })
+
+    core.on_event("textinput", "notes")
+
+    test.equal(picker.input:get_text(), "@C:/Projects/café/notes")
   end)
 end)
