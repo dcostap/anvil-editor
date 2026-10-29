@@ -3546,12 +3546,12 @@ static void flush_background_span(
 }
 
 /* The row buffer holds the text, then REN_TEXT_CELL_BYTES for each cell. */
-static size_t snapshot_text_bytes(TerminalSession *session) {
-  return (size_t)session->cols * sizeof(((TerminalRenderCell *)0)->utf8);
+static size_t snapshot_text_bytes(uint16_t cols) {
+  return (size_t)cols * sizeof(((TerminalRenderCell *)0)->utf8);
 }
 
 static void push_render_row(
-  lua_State *L, TerminalSession *session, GhosttyRenderStateColors *colors
+  lua_State *L, TerminalSession *session, GhosttyRenderStateColors *colors, uint16_t cols
 ) {
   lua_createtable(L, 0, 2);
   int row_index = lua_absindex(L, -1);
@@ -3562,7 +3562,7 @@ static void push_render_row(
 
   TerminalTextRun run = {
     .text = session->snapshot_text,
-    .cells = session->snapshot_text + snapshot_text_bytes(session),
+    .cells = session->snapshot_text + snapshot_text_bytes(cols),
   };
   TerminalBackgroundSpan span = {0};
   int run_count = 0;
@@ -3623,9 +3623,8 @@ static void push_render_row(
   lua_setfield(L, row_index, "text_runs");
 }
 
-static bool ensure_snapshot_text(TerminalSession *session) {
-  size_t capacity = snapshot_text_bytes(session)
-    + (size_t)session->cols * REN_TEXT_CELL_BYTES;
+static bool ensure_snapshot_text(TerminalSession *session, uint16_t cols) {
+  size_t capacity = snapshot_text_bytes(cols) + (size_t)cols * REN_TEXT_CELL_BYTES;
   if (session->snapshot_text_capacity >= capacity) return true;
   uint8_t *text = session->snapshot_text
     ? (uint8_t *)HeapReAlloc(GetProcessHeap(), 0, session->snapshot_text, capacity)
@@ -3780,8 +3779,14 @@ static int f_terminal_snapshot(lua_State *L) {
   }
 
   GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
-  if (ghostty_render_state_get(session->render_state, GHOSTTY_RENDER_STATE_DATA_COLORS,
-      &colors) != GHOSTTY_SUCCESS) {
+  /* Replay and synchronized output can retain rows at the old size after a
+   * resize request. Allocate and describe those rows using their published size. */
+  uint16_t cols = 0, rows = 0;
+  GhosttyRenderStateData keys[] = {
+    GHOSTTY_RENDER_STATE_DATA_COLORS, GHOSTTY_RENDER_STATE_DATA_COLS, GHOSTTY_RENDER_STATE_DATA_ROWS,
+  };
+  void *values[] = { &colors, &cols, &rows };
+  if (ghostty_render_state_get_multi(session->render_state, 3, keys, values, NULL) != GHOSTTY_SUCCESS) {
     lua_pushnil(L);
     return 1;
   }
@@ -3790,8 +3795,8 @@ static int f_terminal_snapshot(lua_State *L) {
   bool include_rows = lua_isnoneornil(L, 3) || lua_toboolean(L, 3) != 0;
   if (reuse) lua_pushvalue(L, 2);
   else lua_createtable(L, 0, 9);
-  set_integer_field(L, "cols", session->cols);
-  set_integer_field(L, "row_count", session->rows);
+  set_integer_field(L, "cols", cols);
+  set_integer_field(L, "row_count", rows);
   set_integer_field(L, "foreground", color_value(colors.foreground));
   set_integer_field(L, "background", color_value(colors.background));
   set_boolean_field(L, "running", session->state == TERMINAL_STATE_RUNNING);
@@ -3884,14 +3889,14 @@ static int f_terminal_snapshot(lua_State *L) {
     if (reuse) lua_getfield(L, -1, "rows");
     if (!reuse || !lua_istable(L, -1)) {
       if (reuse) lua_pop(L, 1);
-      lua_createtable(L, session->rows, 0);
+      lua_createtable(L, rows, 0);
     }
     if ((!reuse || dirty != GHOSTTY_RENDER_STATE_DIRTY_FALSE) &&
         ghostty_render_state_get(
           session->render_state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
           &session->row_iterator
         ) == GHOSTTY_SUCCESS) {
-      if (!ensure_snapshot_text(session)) {
+      if (!ensure_snapshot_text(session, cols)) {
         return luaL_error(L, "Could not allocate a terminal text row");
       }
       int row_index = 1;
@@ -3905,7 +3910,7 @@ static int f_terminal_snapshot(lua_State *L) {
             session->row_iterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
             &session->row_cells
           ) == GHOSTTY_SUCCESS) {
-            push_render_row(L, session, &colors);
+            push_render_row(L, session, &colors, cols);
           } else lua_createtable(L, 0, 0);
           lua_rawseti(L, -2, row_index);
         }
@@ -3917,7 +3922,7 @@ static int f_terminal_snapshot(lua_State *L) {
       }
     }
     int existing_rows = (int)lua_rawlen(L, -1);
-    for (int row_index = session->rows + 1; row_index <= existing_rows; row_index++) {
+    for (int row_index = rows + 1; row_index <= existing_rows; row_index++) {
       lua_pushnil(L);
       lua_rawseti(L, -2, row_index);
     }
