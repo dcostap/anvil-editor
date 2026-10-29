@@ -61,13 +61,10 @@ local function metadata_signature(buffer)
   }, "\0")
 end
 
-local function source_text(buffer)
-  return table.concat(buffer and buffer.lines or {})
-end
-
-local function parse_payload(text, previous_result)
+-- The native side joins the lines, so a parse makes no Lua copy of the note.
+local function parse_payload(lines, previous_result)
   return {
-    text = text,
+    lines = lines,
     outline_query = queries.block,
     usage_query = queries.inline,
     parse_timeout_ms = 5000,
@@ -366,7 +363,8 @@ function Model:submit(reason)
   local generation = self.parse_generation
   local revision = buffer.text_revision
   local signature = metadata_signature(buffer)
-  local text = source_text(buffer)
+  local bytes = 0
+  for _, line in ipairs(buffer.lines) do bytes = bytes + #line end
   local changed_range = self.pending_changed_range
   if self.active_changed_range then
     changed_range = changed_range or {}
@@ -386,7 +384,7 @@ function Model:submit(reason)
   self.status = "pending"
   self.reason = reason or "parse requested"
   self.diagnostics.requests = self.diagnostics.requests + 1
-  self.diagnostics.bytes_submitted = self.diagnostics.bytes_submitted + #text
+  self.diagnostics.bytes_submitted = self.diagnostics.bytes_submitted + bytes
   self.diagnostics.lines_submitted = self.diagnostics.lines_submitted + #buffer.lines
 
   local pool = worker_pool.system()
@@ -395,7 +393,7 @@ function Model:submit(reason)
     native = true,
     native_kind = "markdown_parse",
     generation = generation,
-    native_payload = parse_payload(text, self.result),
+    native_payload = parse_payload(buffer.lines, self.result),
     is_stale = function()
       return not self:is_current(revision, signature, generation)
     end,
@@ -430,13 +428,13 @@ function Model:submit(reason)
   end
   self.request = handle
   self.pending_submission = {
-    text = text, revision = revision, signature = signature,
+    revision = revision, signature = signature,
     generation = generation, changed_range = changed_range,
   }
   settle_queue[self] = true
   core.log_quiet(
     "Markdown model scheduled generation=%d revision=%d bytes=%d reason=%s",
-    generation, revision, #text, tostring(reason or "initial")
+    generation, revision, bytes, tostring(reason or "initial")
   )
   self:notify("pending")
   return true
@@ -473,7 +471,9 @@ function Model:settle(budget_ms)
   end
   local started = system.get_time()
   local result, err, over_budget = native_pool.markdown_parse_now(
-    parse_payload(submission.text, self.result), math.max(1, math.floor(budget_ms))
+    -- is_current confirmed the revision, so the Buffer's lines are the
+    -- submitted text.
+    parse_payload(self:buffer().lines, self.result), math.max(1, math.floor(budget_ms))
   )
   local elapsed = elapsed_ms(started)
   if not result then

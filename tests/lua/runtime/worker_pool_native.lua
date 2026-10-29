@@ -297,6 +297,62 @@ test.describe("worker_pool_native", function()
     test.ok(captures.next_offset >= 2)
   end)
 
+  test.test("native parse jobs read a table of lines as their joined text", function()
+    local pool = new_pool("lua-native-lines-input", 1)
+    local lines = { "int first(void) { return 1; }\r\n", "", "int second(void) { return first(); }\n" }
+    -- A node ID is a native address, so it differs between parses.
+    local function without_node_ids(captures)
+      for _, capture in ipairs(captures) do capture.node_id = nil end
+      return captures
+    end
+    local function outline(spec)
+      local result = submit_result(pool, spec)
+      local summary = result:summary()
+      return { byte_len = summary.byte_len, captures = without_node_ids(result:captures("outline")) }
+    end
+    local spec = {
+      kind = "treesitter_index_text", language = "c",
+      outline_query = "(function_definition) @definition.function",
+      parse_timeout_ms = 1000, query_timeout_ms = 100, max_captures = 100,
+    }
+    local from_text = outline(common.merge(spec, { text = table.concat(lines) }))
+    local from_lines = outline(common.merge(spec, { lines = lines }))
+    test.equal(from_text.captures.total, 2)
+    test.same(from_lines, from_text)
+
+    local note = { "# One\n", "\n", "Body *text*.\n", "\n", "## Two\n" }
+    local markdown = {
+      kind = "markdown_parse", outline_query = "(atx_heading) @heading",
+      usage_query = "(emphasis) @emphasis",
+      parse_timeout_ms = 1000, query_timeout_ms = 100, max_captures = 100,
+      usage_query_timeout_ms = 100, usage_max_captures = 100,
+    }
+    local function captures(result)
+      return {
+        outline = without_node_ids(result:captures("outline")),
+        usages = without_node_ids(result:captures("usages")),
+      }
+    end
+    local expected = captures(submit_result(pool, common.merge(markdown, { text = table.concat(note) })))
+    test.equal(expected.outline.total, 2)
+    test.same(captures(submit_result(pool, common.merge(markdown, { lines = note }))), expected)
+    test.same(captures(test.not_nil(native_pool.markdown_parse_now(common.merge(markdown, { lines = note }), 1000))),
+      expected)
+  end)
+
+  test.test("native parse jobs reject a line that is not a string", function()
+    local pool = new_pool("lua-native-lines-invalid", 1)
+    local ok, err = pcall(pool.submit, pool, {
+      kind = "treesitter_index_text", language = "c", lines = { "int a;\n", false },
+      outline_query = "(declaration) @declaration",
+    })
+    test.equal(ok, false)
+    test.ok(tostring(err):find("line 2 is not a string", 1, true), tostring(err))
+    ok, err = pcall(native_pool.markdown_parse_now, { lines = { "# One\n", 3 } }, 100)
+    test.equal(ok, false)
+    test.ok(tostring(err):find("line 2 is not a string", 1, true), tostring(err))
+  end)
+
   test.test("Tree-sitter Project capabilities skip line indexes and normalize length-aware input", function()
     local pool = new_pool("lua-native-treesitter-project-capabilities", 1)
     local source = "int first(void) { return 1; }\r\nint second(void) { return first(); }\r\n"
