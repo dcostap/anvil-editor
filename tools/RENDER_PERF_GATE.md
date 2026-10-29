@@ -38,7 +38,7 @@ a regression.
 
 The gate compares frame and action costs with the baseline. It compares exact
 pixels at fixed action checkpoints and at the settled end state. It also checks three
-consecutive end captures for stability. The metrics pass records native command
+consecutive end captures for stability. Captures use `config.transitions = false`, so each animation is at its end. A run turns it off when its measurement ends, and the visual replay turns it off at startup. The metrics pass records native command
 replay, glyph bitmap misses, packet builds, Editor draw, and layout costs.
 Use `--diagnose` when a measured cost needs draw scopes and LuaJIT samples.
 Capture frames are excluded from the performance scores.

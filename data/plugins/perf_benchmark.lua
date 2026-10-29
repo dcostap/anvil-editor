@@ -842,6 +842,8 @@ local function setup_scenario()
   config.disable_blink = true
   config.animated_caret = false
   config.draw_stats = false
+  -- The visual replay has no scores. Without animations, each capture shows the end of its action.
+  if benchmark.mode == "visual" then config.transitions = false end
   core.perf_capture_active = true
   -- Frame-work measurements stay uncapped. Response scenes select normal cadence below.
   core.perf_cadence_uncapped = true
@@ -1379,6 +1381,8 @@ local function capture_settle_expired(count, deadline)
 end
 
 local function begin_state_settle()
+  -- The measurement has ended. Animations jump to their end, so the captures show one settled frame.
+  if benchmark.screenshot_file ~= "" then config.transitions = false end
   benchmark.state_settle_count = 0
   benchmark.state_settle_scroll_frames = 0
   benchmark.state_settle_deadline = system.get_time() + CAPTURE_DECORATION_TIMEOUT
