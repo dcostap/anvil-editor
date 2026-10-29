@@ -1020,8 +1020,8 @@ test.describe("Sidebar unread results", function()
   end)
 end)
 
-test.describe("Sidebar Reminders", function()
-  -- A whole minute plus 10 seconds, so a Reminder can come due inside the minute that the rows were built in.
+test.describe("Sidebar Snoozes", function()
+  -- A whole minute plus 10 seconds, so a Snooze can come due inside the minute that the rows were built in.
   local start = (math.floor(os.time() / 60) + 1) * 60 + 10
 
   -- Runs `fn` with os.time returning `clock`, which `fn` can change through the setter it receives.
@@ -1034,8 +1034,8 @@ test.describe("Sidebar Reminders", function()
   end
 
   -- Project P shows a file and the Terminal Tabs "done", "asks" and "works". Project Q is the Window's Selected
-  -- Project unless `active` selects P with that Pane active.
-  local function model(active)
+  -- Project unless `active` selects P with that Pane active. `snoozed` names P's Snoozed Panes.
+  local function model(active, snoozed)
     local records = {
       {id="done",title="done",state="running",activity=start,agent_state="done",agent_since=start - 60},
       {id="asks",title="asks",state="running",activity=start,agent_state="blocked",agent_since=start - 60},
@@ -1043,7 +1043,8 @@ test.describe("Sidebar Reminders", function()
     }
     local panes = {active=active or 1,visible=1,{id="file",group=1,name="init.lua"}}
     for index, record in ipairs(records) do
-      panes[#panes + 1] = {id=record.id,group=index + 1,name=record.id,terminal={session=record.id,state="running"}}
+      panes[#panes + 1] = {id=record.id,group=index + 1,name=record.id,terminal={session=record.id,state="running"},
+        snoozed=snoozed and snoozed[record.id] or nil}
     end
     return {{row_id=1,id=1,path="C:/P",state="ready",window_id=1,terminals=records,panes=panes},
       {row_id=2,id=2,path="C:/Q",state="ready",window_id=1,terminals={},panes={active=1,visible=1,
@@ -1062,44 +1063,44 @@ test.describe("Sidebar Reminders", function()
     return table.concat(names, ",")
   end
 
-  test.it("holds a Terminal's result and question until its Reminder time, then shows them", function()
+  test.it("holds a Terminal's result and question until its Snooze time, then shows them", function()
     with_clock(function(set_clock)
-      local reminders = {done=start + 20, asks=start + 20, works=start + 20}
-      local view = SidebarView(function() end, {}, {}, false, reminders)
+      local snoozes = {done=start + 20, asks=start + 20, works=start + 20}
+      local view = SidebarView(function() end, {}, {}, false, snoozes)
       view:set_model(model(), 1)
       test.equal(attention(view), "")
       set_clock(start + 19)
       test.not_ok(view:refresh_ages())
       set_clock(start + 20)
-      test.ok(view:refresh_ages(), "The Sidebar does not show a Reminder that came due inside a minute")
-      test.equal(attention(view), "done=done,asks=blocked,works=reminder")
+      test.ok(view:refresh_ages(), "The Sidebar does not show a Snooze that came due inside a minute")
+      test.equal(attention(view), "done=done,asks=blocked,works=snooze")
     end)
   end)
 
-  test.it("dims a Terminal with a Reminder and shows the time left", function()
+  test.it("dims a Terminal with a Snooze and shows the time left", function()
     with_clock(function()
       local view = SidebarView(function() end, {}, {}, false, {done=start + 2 * 3600 + 30 * 60})
       view:set_model(model(), 1)
       local texts = drawn_texts(view)
       local done = test.not_nil(find_text(texts, "done"), "The Terminal is missing: " .. joined(texts))
       local file = test.not_nil(find_text(texts, "init.lua"))
-      test.ok(done.opacity < file.opacity, "The Terminal with a Reminder is not dimmed")
+      test.ok(done.opacity < file.opacity, "The Terminal with a Snooze is not dimmed")
       test.ok(find_text(texts, "2h 30m"), "The time left is missing: " .. joined(texts))
     end)
   end)
 
-  test.it("keeps a Reminder when the user looks early, and ends it when the user looks after its time", function()
+  test.it("keeps a Snooze when the user looks early, and ends it when the user looks after its time", function()
     with_clock(function(set_clock)
       local actions, action = recorder()
-      local seen, reminders = {}, {done=start + 600}
-      local view = SidebarView(action, {}, seen, false, reminders)
+      local seen, snoozes = {}, {done=start + 600}
+      local view = SidebarView(action, {}, seen, false, snoozes)
       view:set_model(model(2), 1)
       test.same(actions, {})
-      test.equal(reminders.done, start + 600)
+      test.equal(snoozes.done, start + 600)
       set_clock(start + 600)
       view:refresh_ages()
-      test.same(actions, {{"seen", "done"}, {"reminder", "done"}})
-      test.is_nil(reminders.done)
+      test.same(actions, {{"seen", "done"}, {"snooze", "done"}})
+      test.is_nil(snoozes.done)
       test.equal(seen.done, start + 600)
     end)
   end)
@@ -1120,21 +1121,23 @@ test.describe("Sidebar Reminders", function()
     error("no menu label " .. label .. " in " .. table.concat(labels, ","))
   end
 
-  test.it("offers Reminder times on a Terminal's right-click and sets or removes the chosen one", function()
+  test.it("offers Snooze times on a Terminal's right-click and sets or removes the chosen one", function()
     with_clock(function()
       local actions, action = recorder()
-      local reminders = {}
-      local view = SidebarView(action, {}, {}, false, reminders)
+      local snoozes = {}
+      local view = SidebarView(action, {}, {}, false, snoozes)
       view:set_model(model(), 1)
       local labels = open_menu(view, actions, "done")
-      test.ok(labels[1] == "Remind Me In" and labels[#labels] ~= "Remove Reminder", table.concat(labels, ","))
+      test.ok(labels[1] == "Remind Me In" and labels[#labels] ~= "Remove Snooze", table.concat(labels, ","))
       choose(view, labels, "\t2 Hours")
-      test.equal(reminders.done, start + 2 * 3600)
-      test.same(actions[#actions], {"reminder", "done"})
+      test.equal(snoozes.done, start + 2 * 3600)
+      test.same(actions[#actions - 1], {"snooze", "done"})
+      test.same(actions[#actions], {"request", "direct", "C:/P", {action = "snooze", pane = "done"}})
       test.equal(attention(view), "asks=blocked")
-      choose(view, open_menu(view, actions, "done"), "Remove Reminder")
-      test.is_nil(reminders.done)
-      test.same(actions[#actions], {"reminder", "done"})
+      choose(view, open_menu(view, actions, "done"), "Remove Snooze")
+      test.is_nil(snoozes.done)
+      test.same(actions[#actions - 1], {"snooze", "done"})
+      test.same(actions[#actions], {"request", "direct", "C:/P", {action = "unsnooze", pane = "done"}})
       test.equal(attention(view), "done=done,asks=blocked")
       -- A closed menu without a choice changes nothing.
       open_menu(view, actions, "done")
@@ -1144,11 +1147,87 @@ test.describe("Sidebar Reminders", function()
     end)
   end)
 
-  test.it("sets a Reminder in a typed number of hours, and Escape cancels it", function()
+  -- The kinds and names of P's rows after its Project row, as "kind:name".
+  local function project_rows(view)
+    local names = {}
+    for _, row in ipairs(view.rows) do
+      if row.project and row.project.path == "C:/P" and row.kind ~= "project" then
+        names[#names + 1] = row.kind .. ":" .. (row.tab and row.tab.name or row.label or "")
+      end
+    end
+    return table.concat(names, ",")
+  end
+  local function snoozed_fold(row) return row.label == "Snoozed" end
+
+  test.it("lists Snoozed Panes in a collapsed Snoozed fold at the end of their Project", function()
+    with_clock(function()
+      local view = SidebarView(function() end, {}, {}, false, {done=start + 3600})
+      view:set_model(model(nil, {done=true}), 1)
+      test.equal(project_rows(view), "tab:init.lua,tab:asks,tab:works,terminal_group:Snoozed")
+      view:on_mouse_pressed("left", 100, row_y(view, "terminal_group", 1, snoozed_fold))
+      test.equal(project_rows(view), "tab:init.lua,tab:asks,tab:works,terminal_group:Snoozed,tab:done")
+    end)
+  end)
+
+  test.it("shows a question from a Snoozed Pi on the Snoozed fold, also in a collapsed Project", function()
+    with_clock(function()
+      local view = SidebarView(function() end, {["project:C:/P"] = true}, {}, false, {asks=start + 3600})
+      view:set_model(model(nil, {asks=true}), 1)
+      test.equal(project_rows(view), "tab:done,terminal_group:Snoozed")
+      for _, row in ipairs(view.rows) do
+        if snoozed_fold(row) then test.equal(row.attention, "blocked") end
+      end
+    end)
+  end)
+
+  -- The first row of `kind` that `predicate` accepts.
+  local function find_row(view, kind, predicate)
+    for _, row in ipairs(view.rows) do
+      if row.kind == kind and (not predicate or predicate(row)) then return row end
+    end
+  end
+  local function is_p(row) return row.project and row.project.path == "C:/P" end
+
+  test.it("counts the Terminals that need the user on a collapsed Project, also a Snoozed Pi's question", function()
+    with_clock(function()
+      local view = SidebarView(function() end, {["project:C:/P"] = true}, {}, false, {asks=start + 3600})
+      view:set_model(model(nil, {asks=true}), 1)
+      local project = test.not_nil(find_row(view, "project", is_p))
+      test.same(project.pending, {count = 2, kind = "blocked"})
+      test.ok(find_text(drawn_texts(view), "2"), "The collapsed Project does not show its count")
+      -- The Project's chevron expands it.
+      view:on_mouse_pressed("left", view.width - 16 * SCALE, row_y(view, "project", 1, is_p))
+      test.not_ok(find_row(view, "project", is_p).collapsed)
+      test.is_nil(find_text(drawn_texts(view), "2"), "The expanded Project still shows its count")
+    end)
+  end)
+
+  test.it("counts the Terminals that need the user on a Dormant Project and its collapsed group", function()
+    with_clock(function()
+      local records = {
+        {id="done",title="done",state="running",activity=start,agent_state="done",agent_since=start - 60},
+        {id="asks",title="asks",state="running",activity=start,agent_state="blocked",agent_since=start - 60},
+        {id="later",title="later",state="running",activity=start,agent_state="done",agent_since=start - 60},
+        {id="works",title="works",state="running",activity=start,agent_state="working",agent_since=start - 60},
+      }
+      local projects = {{row_id=1,path="C:/P",state="dormant",exists=true,activity=start,terminals=records},
+        windows={{id=1,selected_project=0}}}
+      local view = SidebarView(function() end, {}, {}, false, {asks=start + 3600, later=start + 3600})
+      view:set_model(projects, 1)
+      local group = test.not_nil(find_row(view, "group"))
+      test.ok(group.collapsed)
+      test.same(group.pending, {count = 2, kind = "blocked"})
+      test.ok(find_text(drawn_texts(view), "2"), "The collapsed group does not show its count")
+      view:on_mouse_pressed("left", 100, row_y(view, "group"))
+      test.same(test.not_nil(find_row(view, "project", is_p)).pending, {count = 2, kind = "blocked"})
+    end)
+  end)
+
+  test.it("sets a Snooze in a typed number of hours, and Escape cancels it", function()
     with_clock(function()
       local actions, action = recorder()
-      local reminders = {}
-      local view = SidebarView(action, {}, {}, false, reminders)
+      local snoozes = {}
+      local view = SidebarView(action, {}, {}, false, snoozes)
       view:set_model(model(), 1)
       choose(view, open_menu(view, actions, "done"), "\tCustom…")
       test.same(actions[#actions], {"focus"})
@@ -1157,14 +1236,15 @@ test.describe("Sidebar Reminders", function()
       test.ok(find_text(drawn_texts(view), "12"), "The hours field does not show the typed hours")
       test.ok(view:edit("backspace"))
       view:on_key_pressed("return")
-      test.equal(reminders.done, start + 3600)
+      test.equal(snoozes.done, start + 3600)
+      test.same(actions[#actions - 1], {"request", "direct", "C:/P", {action = "snooze", pane = "done"}})
       test.same(actions[#actions], {"return_focus"})
 
       choose(view, open_menu(view, actions, "asks"), "\tCustom…")
       view:on_focus(true)
       view:on_text_input("5")
       view:on_key_pressed("escape")
-      test.is_nil(reminders.asks)
+      test.is_nil(snoozes.asks)
       test.same(actions[#actions], {"return_focus"})
       view:on_text_input("5")
       test.equal(view.query, "5", "Typing after Escape does not search")

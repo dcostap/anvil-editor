@@ -945,6 +945,8 @@ local function target_edit_for_link(line_text, link, target)
     if not close then return nil end
     local pipe = source:find("|", opener + 1, true)
     local finish = pipe and pipe - 1 or close - 1
+    -- Tables write the alias separator as `\|`.
+    if pipe and source:sub(pipe - 1, pipe - 1) == "\\" then finish = finish - 1 end
     local raw = source:sub(opener + 1, finish)
     local leading = #(raw:match("^%s*") or "")
     local trailing = #(raw:match("%s*$") or "")

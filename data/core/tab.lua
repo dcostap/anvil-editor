@@ -115,24 +115,24 @@ end
 -- What a running Terminal needs the user for: "blocked" while its agent waits for an answer, or an Unread Result:
 -- "done" or "error" when its agent finished, or "bell" when it rang, after `seen`, the time the user last looked
 -- at it. A shell command's result is not an Unread Result. Returns nil when it needs nothing.
--- A Reminder at the time `reminder` holds all of these until then. After that time, a Terminal that needs nothing
--- else needs the user for its "reminder" until the user looks at it.
-function tab.attention(item, seen, reminder)
+-- A Snooze until the time `snooze` holds all of these until then. After that time, a Terminal that needs nothing
+-- else needs the user for its ended "snooze" until the user looks at it.
+function tab.attention(item, seen, snooze)
   local terminal, agent = item.terminal, item.agent
   if not terminal or terminal.state ~= "running" then return nil end
-  if reminder and reminder > os.time() then return nil end
+  if snooze and snooze > os.time() then return nil end
   seen = seen or 0
   if agent and not agent.command then
     if agent.state == "blocked" then return "blocked" end
     if (agent.state == "done" or agent.state == "error") and (agent.since or 0) > seen then return agent.state end
   end
   if (terminal.bell or 0) > seen then return "bell" end
-  if reminder and reminder > seen then return "reminder" end
+  if snooze and snooze > seen then return "snooze" end
 end
 
 -- The colour of an attention state's dot.
 function tab.attention_color(attention)
-  if attention == "done" or attention == "reminder" then return style.accent end
+  if attention == "done" or attention == "snooze" then return style.accent end
   if attention == "error" then return style.error end
   return style.warn
 end

@@ -6972,6 +6972,16 @@ local function call_render_widget_drag(view, drag, name, ...)
   end
 end
 
+-- A drag that reaches a render fragment with `select_whole`, such as a
+-- Markdown image link, selects all of its source.
+function TextView:whole_fragment_col(x, y, line, col, anchor_line, anchor_col)
+  local hit = self:get_render_fragment_at_position(x, y)
+  local fragment = hit and hit.fragment
+  if not (fragment and fragment.select_whole and hit.line == line) then return col end
+  local forward = line > anchor_line or line == anchor_line and col >= anchor_col
+  return forward and fragment.source_col2 or fragment.source_col1
+end
+
 function TextView:on_mouse_moved(x, y, ...)
   local drag = self.render_widget_drag
   if drag then
@@ -7005,13 +7015,18 @@ function TextView:on_mouse_moved(x, y, ...)
     end
     if special_handled then
       -- The rendered interaction owns Selection State for this drag.
-    elseif keymap.modkeys["ctrl"] then
-      if l1 > l2 then l1, l2 = l2, l1 end
-      self.buffer.selections = { }
-      for i = l1, l2 do
-        self.buffer:set_selections(i - l1 + 1, i, math.min(c1, #self.buffer.lines[i]), i, math.min(c2, #self.buffer.lines[i]))
+    elseif self.mouse_selecting.added_to then
+      c1 = self:whole_fragment_col(x, y, l1, c1, l2, c2)
+      if snap_type then
+        l1, c1, l2, c2 = self:mouse_selection(self.buffer, snap_type, l1, c1, l2, c2)
       end
+      self:set_added_mouse_selection(l1, c1, l2, c2)
+    elseif self.mouse_selecting.column then
+      self:set_column_carets(x, l1, l2)
+      -- Line-end affinity below reads the pointer's own resolved position.
+      self:resolve_screen_position(x, y)
     else
+      c1 = self:whole_fragment_col(x, y, l1, c1, l2, c2)
       if snap_type then
         l1, c1, l2, c2 = self:mouse_selection(self.buffer, snap_type, l1, c1, l2, c2)
       end
@@ -7021,6 +7036,84 @@ function TextView:on_mouse_moved(x, y, ...)
   if selecting then
     apply_resolved_line_end_affinity(self)
   end
+end
+
+---Place one caret on each line from `line1` to `line2`, under screen x.
+---A line that ends before x gets its caret at the line end.
+---@param x number Screen x coordinate
+---@param line1 integer Pointer line, which gets the last selection
+---@param line2 integer Anchor line
+function TextView:set_column_carets(x, line1, line2)
+  local list, last = {}, 1
+  local lh = self:get_line_height()
+  for line = math.min(line1, line2), math.max(line1, line2) do
+    local _, y = self:get_line_screen_position(line)
+    local resolved, col = self:resolve_screen_position(x, y + lh / 2)
+    -- A line inside a collapsed fold resolves to the fold's line.
+    if resolved == line then
+      local n = #list
+      list[n + 1], list[n + 2], list[n + 3], list[n + 4] = line, col, line, col
+      if line == line1 then last = n / 4 + 1 end
+    end
+  end
+  self.buffer:set_selection_list(list, last)
+end
+
+---Set the selection that a Ctrl+click adds, beside the selections that
+---existed at the press (`mouse_selecting.added_to`). The new selection takes
+---in each selection that it covers, so a drag that moves back gives it back.
+---@param line1 integer Caret line
+---@param col1 integer Caret column
+---@param line2 integer Anchor line
+---@param col2 integer Anchor column
+function TextView:set_added_mouse_selection(line1, col1, line2, col2)
+  local function position_before(l1, c1, l2, c2)
+    return l1 < l2 or l1 == l2 and c1 < c2
+  end
+  local selecting = self.mouse_selecting
+  local base = selecting.added_to
+  -- A press that removed a caret adds nothing until the pointer leaves it.
+  if selecting.removed and line1 == line2 and col1 == col2
+    and line1 == selecting[1] and col1 == selecting[2]
+  then
+    self.buffer:set_selection_list(base, #base / 4)
+    return
+  end
+  local caret_first = position_before(line1, col1, line2, col2)
+  local s1, sc1, s2, sc2 = line1, col1, line2, col2
+  if not caret_first then s1, sc1, s2, sc2 = line2, col2, line1, col1 end
+  local kept = {}
+  for i = 1, #base, 4 do
+    local b1, bc1, b2, bc2 = base[i], base[i + 1], base[i + 2], base[i + 3]
+    if position_before(b2, bc2, b1, bc1) then b1, bc1, b2, bc2 = b2, bc2, b1, bc1 end
+    -- Ranges that only touch stay apart. A caret at either end joins.
+    local touch_ok = (b1 ~= b2 or bc1 ~= bc2) and (s1 ~= s2 or sc1 ~= sc2)
+    local apart = position_before(b2, bc2, s1, sc1) or position_before(s2, sc2, b1, bc1)
+      or touch_ok and ((b2 == s1 and bc2 == sc1) or (s2 == b1 and sc2 == bc1))
+    if apart then
+      kept[#kept + 1] = { b1, bc1, base[i], base[i + 1], base[i + 2], base[i + 3] }
+    else
+      if position_before(b1, bc1, s1, sc1) then s1, sc1 = b1, bc1 end
+      if position_before(s2, sc2, b2, bc2) then s2, sc2 = b2, bc2 end
+    end
+  end
+  local list, added = {}, nil
+  local function append(l1, c1, l2, c2)
+    local n = #list
+    list[n + 1], list[n + 2], list[n + 3], list[n + 4] = l1, c1, l2, c2
+  end
+  for _, sel in ipairs(kept) do
+    if not added and position_before(s1, sc1, sel[1], sel[2]) then
+      added = #list / 4 + 1
+      if caret_first then append(s1, sc1, s2, sc2) else append(s2, sc2, s1, sc1) end
+    end
+    append(sel[3], sel[4], sel[5], sel[6])
+  end
+  if not added then
+    added = #list / 4 + 1
+    if caret_first then append(s1, sc1, s2, sc2) else append(s2, sc2, s1, sc1) end
+  end
+  self.buffer:set_selection_list(list, added)
 end
 
 function TextView:on_mouse_left()
@@ -8176,6 +8269,11 @@ local function draw_render_fragment_text(
         draw_render_text_runs(line.runs, x + line_x_offset, line_y, font, color)
         line_text = nil
       end
+      -- A line can draw itself, such as an image in a table cell.
+      if type(line) == "table" and line.draw then
+        line.draw(x + line_x_offset, line_y)
+        line_text = nil
+      end
       if fragment.text_line_background and line_text and line_text ~= "" then
         local padding = fragment.text_line_background_padding or 0
         renderer.draw_rect(
@@ -8191,7 +8289,7 @@ local function draw_render_fragment_text(
           font, line_text, x + line_x_offset, line_y, color, opts
         )
       end
-      line_y = line_y + line_height
+      line_y = line_y + (type(line) == "table" and line.height or line_height)
     end
     return x + width
   end

@@ -269,6 +269,10 @@ SCENARIOS["markdown-footnotes-inline-edit"] = dict(SCENARIOS["markdown-footnotes
 SCENARIOS["markdown-heading-outline"] = dict(
     SCENARIOS["markdown-footnotes"], fixture="markdown-heading-outline", start_line=40,
 )
+# Table cells that hold only an image draw it. A cell with text keeps a label.
+SCENARIOS["markdown-table-images"] = dict(
+    SCENARIOS["markdown-footnotes"], fixture="markdown-table-images", window_width=900,
+)
 FOOTNOTES_SOURCE = """# Chapter one
 
 From Terrahawks[^1] it went
@@ -313,6 +317,37 @@ HEADING_OUTLINE_SOURCE = "".join(
         "## Troubleshooting",
     )
 )
+TABLE_IMAGES_SOURCE = """# Table images
+
+| Image | Name | Notes |
+| --- | --- | --- |
+| ![Logo](data:image/png;base64,{logo}) | Acme | An embedded image |
+| ![[table-photo.png\\|80]] | Beta | A file image with a width |
+| ![[table-photo.png]] | Gamma | A file image |
+| text ![[table-photo.png]] | Delta | Text and an image |
+
+After the table.
+"""
+
+
+def write_table_images_fixture(path: Path) -> None:
+    import base64
+    import io
+
+    def png(width: int, height: int, color: tuple[int, int, int]) -> bytes:
+        image = Image.new("RGB", (width, height), color)
+        for x in range(width):
+            for y in range(max(0, x * height // width - 4), min(height, x * height // width + 4)):
+                image.putpixel((x, y), (250, 250, 250))
+        data = io.BytesIO()
+        image.save(data, "PNG")
+        return data.getvalue()
+
+    (path.parent / "table-photo.png").write_bytes(png(240, 150, (70, 130, 180)))
+    logo = base64.b64encode(png(96, 48, (200, 120, 40))).decode("ascii")
+    path.write_text(TABLE_IMAGES_SOURCE.format(logo=logo), encoding="utf-8", newline="\n")
+
+
 OPEN_NOTE_SECTION = """## Section {index}
 
 A paragraph with **bold**, *italic*, `code`, a [link](https://example.com/{index}) and a
@@ -1148,6 +1183,9 @@ def run_case(
     if settings.get("fixture") == "markdown-heading-outline":
         case_fixture = work / "fixtures" / "markdown-heading-outline.md"
         case_fixture.write_text(HEADING_OUTLINE_SOURCE, encoding="utf-8", newline="\n")
+    if settings.get("fixture") == "markdown-table-images":
+        case_fixture = work / "fixtures" / "markdown-table-images.md"
+        write_table_images_fixture(case_fixture)
     if settings.get("fixture") == "video-callout":
         case_fixture = work / "fixtures" / "markdown-callout.md"
     elif settings.get("fixture") == "video-task":
@@ -1227,6 +1265,7 @@ def run_case(
     config_path.write_text(json.dumps(launch_config, indent=2), encoding="utf-8")
     timeout_seconds = total_timeout_seconds or max(90, int((frames + warmup_frames) / 20) + 60)
     launcher = invoke_hidden(config_path, timeout_seconds)
+    (run_dir / "launcher.json").write_text(json.dumps(launcher, indent=2), encoding="utf-8")
     values = read_key_values(result_file)
     heartbeat = read_key_values(heartbeat_file)
     if launcher.get("timed_out") or int(launcher.get("exit_code", 0)) != 0:

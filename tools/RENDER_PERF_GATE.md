@@ -9,6 +9,8 @@ To find performance problems on generated codebases with absolute budgets,
 use [scenario runs](SCENARIOS.md). Both runners share this runner's hidden
 desktop launcher. Do not create another hidden-window runner.
 
+The Windows launcher limits each benchmark process tree to 4 GiB of committed memory, including child processes. The kernel enforces the limit before the app starts. A refused allocation stops the tree with `memory_limit` and exit code 125. It is a failed measurement, not a timeout. The launcher reports the limit and peak job memory in bytes. Launch JSON can set a positive `memory_limit_mb`; zero does not disable protection. See [scenario runs](SCENARIOS.md) for the removed allocation profiler and safe diagnostic options.
+
 ### Editor render regression baseline
 
 Run this fixed matrix before renderer changes. It covers small and large C++
@@ -38,7 +40,7 @@ a regression.
 
 The gate compares frame and action costs with the baseline. It compares exact
 pixels at fixed action checkpoints and at the settled end state. It also checks three
-consecutive end captures for stability. The metrics pass records native command
+consecutive end captures for stability. Captures use `config.transitions = false`, so each animation is at its end. A run turns it off when its measurement ends, and the visual replay turns it off at startup. The metrics pass records native command
 replay, glyph bitmap misses, packet builds, Editor draw, and layout costs.
 Use `--diagnose` when a measured cost needs draw scopes and LuaJIT samples.
 Capture frames are excluded from the performance scores.
@@ -472,6 +474,9 @@ This focused scene is not in the default suites. It does not yet have a full-sui
 
 Use `--scenario image-overlay` for the Image Overlay above an Editor: the backdrop, the title, the actions, a tooltip, a message, and the zoom controls.
 Like `image-viewer`, it has no baseline. Run it with `--report-only` and look at the captured screenshot.
+
+Use `--scenario markdown-table-images` for images in Markdown table cells: an embedded image, a file image with an escaped width, and a cell with text and an image.
+It has no baseline. Run it with `--report-only` and look at the captured screenshot.
 
 Use `--scenario context-menu` for the Editor's Context Menu over a document, with one row selected.
 It has no baseline. Run it with `--report-only` and look at the captured screenshot.

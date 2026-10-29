@@ -449,6 +449,7 @@ local mouse_commands = {
   "core:set_cursor_word",
   "core:set_cursor_line",
   "core:split_cursor",
+  "core:set_cursor_column",
   "core:select_to_cursor",
   "core:paste_primary_selection",
 }

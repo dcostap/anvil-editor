@@ -390,7 +390,9 @@ local function reveal_units_for_line(view, line, state)
           end
         end
         local list_marker, list_node, list_marker_token_col2 = list_marker_for_line(view, line)
-        if list_marker then
+        -- Selecting across items keeps their marker lanes unchanged. A local
+        -- selection can still reveal a prefix for source editing.
+        if list_marker and line1 == line2 then
           local marker_source = {
             line1 = line, col1 = list_marker.col1,
             line2 = line, col2 = list_marker_token_col2,
@@ -404,7 +406,7 @@ local function reveal_units_for_line(view, line, state)
           end
         end
         local task_marker, task_node = task_marker_for_line(view, line)
-        if task_marker and source_intersects_selection(
+        if task_marker and line1 == line2 and source_intersects_selection(
           task_marker, line1, col1, line2, col2
         ) then
           units[#units + 1] = {
@@ -1006,6 +1008,24 @@ local function remote_image_allowed(view, url, project)
     and config.markdown_live_trusted_remote_image_projects[key] == true or false
 end
 
+---Forget the table layouts that hold `line`, because an image in one of its
+---cells changed. Return the lines that the change can resize.
+local function drop_table_layouts_at(view, line)
+  local line1, line2 = line, line
+  local cache = view.__markdown_live_table_layout_cache
+  for _, buckets in ipairs({ cache and cache.buckets or {}, cache and cache.previous_buckets or {} }) do
+    for _, bucket in pairs(buckets) do
+      for id, layout in pairs(bucket.layouts) do
+        if layout and line >= layout.line1 and line <= layout.line2 then
+          line1, line2 = math.min(line1, layout.line1), math.max(line2, layout.line2)
+          bucket.layouts[id], bucket.sources[id] = nil, nil
+        end
+      end
+    end
+  end
+  return line1, line2
+end
+
 local function image_fragment(view, span, opts)
   perf_frame_add("markdown_live_image_fragment_calls", 1)
   opts = opts or {}
@@ -1053,8 +1073,9 @@ local function image_fragment(view, span, opts)
       local lines = {}
       for _, line in pairs(record.consumers) do lines[line] = true end
       for line in pairs(lines) do
-        view:invalidate_line_render(PROVIDER_ID, line, line)
-        view:invalidate_visual_metrics(PROVIDER_ID, line, line)
+        local line1, line2 = drop_table_layouts_at(view, line)
+        view:invalidate_line_render(PROVIDER_ID, line1, line2)
+        view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
       end
       core.redraw = true
     end)
@@ -1114,6 +1135,22 @@ local function image_fragment(view, span, opts)
             image = entry.scaled_image
           end
           renderer.draw_canvas(image, image_x, image_y)
+        end
+        -- Use the live selection, not the frozen reveal state of a mouse drag.
+        -- Images cover the ordinary selection background, so tint them last.
+        -- Only a selection of the whole link selects the image.
+        local spec = fragment.widget.image_controls
+        if view:get_selection_background_color() then
+          for _, line1, col1, line2, col2 in view.buffer:get_selections(true) do
+            if line1 > spec.line then break end
+            if (line1 < spec.line or col1 <= spec.col1)
+              and (line2 > spec.line or line2 == spec.line and col2 >= spec.col2)
+              and not view.buffer:is_search_selection(line1, col1, line2, col2)
+            then
+              renderer.draw_rect(image_x, image_y, width, height, style.markdown_live_image_selection)
+              break
+            end
+          end
         end
         image_controls.draw(fragment.widget, view, image_x, image_y, width, height)
       end,
@@ -1588,7 +1625,15 @@ revealed_link_fragments = function(view, line_text, line, span, opts)
     text = line_text:sub(linked_col1, linked_col2 - 1),
     semantic_id = span.semantic_id,
   }, opts)
-  if linked then fragments[#fragments + 1] = linked end
+  if linked then
+    -- Revealed image source takes clicks and drags as text, not as a link.
+    if span.link and (span.link.kind == "image" or span.link.kind == "embed")
+      and is_image_target(span.link.path)
+    then
+      linked.on_mouse_pressed, linked.cursor = nil, nil
+    end
+    fragments[#fragments + 1] = linked
+  end
   marker(linked_col2, span.col2)
   return fragments
 end
@@ -1661,9 +1706,16 @@ function live._image_attachment_link(view, line, span, opts)
     background = style.markdown_live_attachment_bg,
     attachment_chip = true,
     image_attachment_link = true,
+    select_whole = true,
   }
   fragment = decorate_link_fragment(view, line, span, fragment, opts)
   if fragment then
+    -- A click shows the source, as the image's edit button does. The image
+    -- opens the Image Overlay.
+    fragment.on_mouse_pressed = function(_, owner, _, button, x, y)
+      if button ~= "left" then return false end
+      return image_controls.press_link(owner, { line = line, col1 = span.col1, col2 = span.col2 }, x, y)
+    end
     local font = fragment.font or live_fonts.body(view)
     local icon = file_icons.prepare("image.png", font:get_height(), font:get_size())
     if icon then
@@ -1831,6 +1883,20 @@ table_presentation.inline_pieces = function(view, line_text, line, reveal, base)
     end
   end
   return pieces
+end
+
+---Return the drawn image of a table cell that holds only an image link, at
+---most `width` wide, or nil.
+table_presentation.cell_image = function(view, line_text, line, col1, col2, width)
+  for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
+    local link = span.link
+    if span.col1 == col1 and span.col2 == col2 and link
+      and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)
+    then
+      local fragment = image_fragment(view, span, { block = true, available_width = width })
+      return fragment and fragment.widget and fragment or nil
+    end
+  end
 end
 
 local view_in_source_mode
@@ -2766,7 +2832,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local width = target_x - source_leading_width
       -- Keep unindented lazy continuations at their source margin.
       -- Caret reveal must not change their geometry.
-      if (leading ~= "" or line_text == "") and width > 0.1 then
+      -- A blank separator has no list content to align. Keep its selection
+      -- and caret at the source margin, even between two list items.
+      if leading ~= "" and line_text:find("%S") and width > 0.1 then
         continuation_indent = width
       end
     end
@@ -3740,10 +3808,8 @@ function edit_visual_projection.selection_reveals_list_prefix(
           then
             return true
           end
-        else
-          local from = line == line1 and col1 or 1
-          local to = line == line2 and col2 or math.huge
-          if from < content_col and to > 1 then return true end
+        elseif line1 == line2 then
+          if col1 < content_col and col2 > 1 then return true end
         end
       end
     end

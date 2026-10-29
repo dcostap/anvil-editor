@@ -1,12 +1,14 @@
 -- Heading Outline: the document's headings, listed in the free space left of
 -- the reading lane in Markdown Live Preview. It marks the section at the top
--- of the view, and a click on a heading moves the caret and the view to it.
+-- of the view, or the caret's section after the caret moves. A click on a
+-- heading moves the caret and the view to it.
 -- It shows the headings that Current Buffer Symbol Search finds.
 local core = require "core"
 local common = require "core.common"
 local style = require "core.style"
 local navigation_history = require "core.navigation_history"
-local treesitter = require "core.treesitter"
+local RowHighlight = require "core.row_highlight"
+local markdown_model = require "core.markdown.model"
 
 local heading_outline = {}
 
@@ -37,11 +39,11 @@ end
 
 -- Headings ----------------------------------------------------------------
 
-local function heading_level(buffer, symbol)
-  local hashes = (buffer.lines[symbol.start_line] or ""):match("^ ? ? ?(#+)")
+local function heading_level(buffer, line1, line2)
+  local hashes = (buffer.lines[line1] or ""):match("^ ? ? ?(#+)")
   if hashes then return #hashes end
   -- A setext heading: `=` underlines level 1 and `-` level 2.
-  for line = symbol.start_line + 1, symbol.end_line do
+  for line = line1 + 1, line2 do
     local text = buffer.lines[line] or ""
     if text:match("^%s*=+%s*$") then return 1 end
     if text:match("^%s*%-+%s*$") then return 2 end
@@ -63,22 +65,61 @@ local function plain_title(text)
   return (text:gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
 end
 
--- The headings that show, rebuilt when the outline changes. While the tree
--- is parsing an edit, the last headings stay.
+-- A heading's name as the document outline gives it: the content text with
+-- its whitespace collapsed, and without an ATX heading's closing hashes.
+local function heading_name(buffer, heading_line, heading_col, line1, col1, line2, col2)
+  local text
+  if line1 == line2 then
+    text = (buffer.lines[line1] or ""):sub(col1, math.max(col1 - 1, col2 - 1))
+  else
+    local parts = { (buffer.lines[line1] or ""):sub(col1) }
+    for line = line1 + 1, line2 - 1 do parts[#parts + 1] = buffer.lines[line] or "" end
+    parts[#parts + 1] = (buffer.lines[line2] or ""):sub(1, math.max(0, col2 - 1))
+    text = table.concat(parts)
+  end
+  local name = text:gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+  if (buffer.lines[heading_line] or ""):sub(heading_col, heading_col) == "#" then
+    name = name:gsub("[ \t]+#+$", "")
+  end
+  return name
+end
+
+-- The headings that show, rebuilt for each parse that the Markdown model
+-- publishes. While the worker parses an edit, the last headings stay. The
+-- parse lists the headings, so an edit does not query the whole document on
+-- the UI thread.
 local function headings(view, state)
-  local symbols, reason = treesitter.get_buffer_outline(view.buffer)
-  if reason or symbols == state.symbols then return state.headings or {} end
-  local buffer, list, top = view.buffer, {}, math.huge
-  for _, symbol in ipairs(symbols) do
-    if symbol.kind == "heading" then
-      local level = heading_level(buffer, symbol)
+  local buffer = view.buffer
+  local instance = markdown_model.peek(buffer)
+  if not instance or instance.status ~= "ready"
+    or instance.published_revision ~= buffer.text_revision
+    or (instance == state.model and instance.generation == state.generation)
+  then
+    return state.headings or {}
+  end
+  -- An edit changes few headings. A heading that keeps its name keeps its
+  -- record, so its title and its fitted title are not made again.
+  local previous, by_name = state.by_name or {}, {}
+  local list, top = {}, math.huge
+  local found = instance:headings() or {}
+  for index = 1, #found, 7 do
+    local line1, col1, line2 = found[index], found[index + 1], found[index + 2]
+    local content_col1 = found[index + 4]
+    local name = heading_name(
+      buffer, line1, col1, found[index + 3], content_col1, found[index + 5], found[index + 6]
+    )
+    if name ~= "" then
+      local level = heading_level(buffer, line1, line2)
       top = math.min(top, level)
-      list[#list + 1] = {
-        line = symbol.start_line,
-        col = symbol.name_range.start.col,
-        level = level,
-        title = plain_title(symbol.name),
-      }
+      local record = previous[name]
+      if record then
+        previous[name] = nil
+      else
+        record = { name = name, title = plain_title(name) }
+      end
+      record.line, record.col, record.level = line1, content_col1, level
+      by_name[name] = by_name[name] or record
+      list[#list + 1] = record
     end
   end
   local shown = {}
@@ -89,52 +130,60 @@ local function headings(view, state)
     end
   end
   core.log_quiet("Heading Outline: %d of %d headings for %s", #shown, #list, buffer:get_name())
-  state.symbols, state.headings = symbols, shown
+  state.model, state.generation, state.headings = instance, instance.generation, shown
+  state.by_name = by_name
   return shown
 end
 
 -- Where you are -----------------------------------------------------------
 
-local function line_y(view, line)
-  local _, y = view:get_line_screen_position(line)
+local function heading_line(view, heading)
+  return heading.line
+end
+
+local function heading_y(view, heading)
+  local _, y = view:get_line_screen_position(heading.line)
   return y
 end
 
--- The heading that a click moved to stays current while the view scrolls to
--- it and after, until the user scrolls, presses elsewhere in the view, or
--- moves the caret off its line. A short section after it, or the end of the
--- document, can leave it below the reading line.
-local function picked_index(view, state, list)
-  local line = state.pick_line
-  if not line then return nil end
-  if view.buffer:get_selection() == line then
-    for index, heading in ipairs(list) do
-      if heading.line == line then return index end
-    end
-  end
-  state.pick_line = nil
-end
-
--- The last heading above the reading line. At the end of the document, the
--- last heading on screen.
-local function current_index(view, state, list)
-  local picked = picked_index(view, state, list)
-  if picked then return picked end
-  local limit = view.position.y + view.size.y * READING_LINE
-  local max_scroll = view:get_scrollable_size() - view.size.y
-  if max_scroll > 0 and view.scroll.y >= max_scroll - 1 then
-    limit = view.position.y + view.size.y - view:get_line_height()
-  end
+-- The index of the last heading whose key is at or above the limit.
+local function last_index(view, list, key, limit)
   local low, high, found = 1, #list, nil
   while low <= high do
     local middle = math.floor((low + high) / 2)
-    if line_y(view, list[middle].line) <= limit then
+    if key(view, list[middle]) <= limit then
       found, low = middle, middle + 1
     else
       high = middle - 1
     end
   end
   return found
+end
+
+-- After the caret moves, the caret's section is current: the last heading at
+-- or above the caret's line. A click on an entry moves the caret too. The
+-- current section goes back to the reading line when the user scrolls.
+-- Each Text View has its own caret. The Buffer's selection belongs to the
+-- focused view, so the outline listens to its own view.
+local function on_selection_changed(view, selection_state)
+  local state = view.__heading_outline
+  local selections = selection_state.selections
+  state.caret_line = selections[(selection_state.last_selection - 1) * 4 + 1] or selections[1]
+  state.follow_caret = true
+end
+
+-- The last heading above the reading line. At the end of the document, the
+-- last heading on screen.
+local function current_index(view, state, list)
+  if state.follow_caret and state.caret_line then
+    return last_index(view, list, heading_line, state.caret_line)
+  end
+  local limit = view.position.y + view.size.y * READING_LINE
+  local max_scroll = view:get_scrollable_size() - view.size.y
+  if max_scroll > 0 and view.scroll.y >= max_scroll - 1 then
+    limit = view.position.y + view.size.y - view:get_line_height()
+  end
+  return last_index(view, list, heading_y, limit)
 end
 
 -- Layout ------------------------------------------------------------------
@@ -180,7 +229,7 @@ end
 local function state_for(view)
   local state = view.__heading_outline
   if not state then
-    state = { offset = 0, alpha = 0 }
+    state = { offset = 0, alpha = 0, marker = RowHighlight(RowHighlight.selection) }
     view.__heading_outline = state
   end
   return state
@@ -244,10 +293,11 @@ end
 -- the view, one line below its edge.
 local function jump(view, entry)
   navigation_history.perform_jump_with_options(view, { departure = { prefer_incoming_state = true } }, function()
-    view.buffer:set_selection(entry.line, entry.col)
+    view:with_selection_state(function() view.buffer:set_selection(entry.line, entry.col) end)
     view:scroll_to_line(entry.line, false, false, { top_margin = view:get_line_height() })
   end)
-  state_for(view).pick_line = entry.line
+  local state = state_for(view)
+  state.follow_caret, state.caret_line = true, entry.line
   core.set_active_view(view)
   core.log_quiet("Heading Outline: moved to %q at line %d", entry.title, entry.line)
 end
@@ -262,25 +312,40 @@ local function faded(state, key, color, alpha)
   return result
 end
 
--- Animate the list scroll, the current-entry marker, and the fade-in.
+-- The current entry's text color. While the marker glides, the entry that it
+-- leaves dims as the entry that it reaches brightens. At most two entries are
+-- between those colors, one with an odd index and one with an even index.
+local function entry_color(state, index, row_h, dim, bright)
+  local marker = state.marker
+  if not marker.alpha then return dim end
+  local near = 1 - math.abs(marker.y + marker.h / 2 - (index - 0.5) * row_h) / row_h
+  local amount = common.clamp(near, 0, 1) * marker.alpha
+  if amount <= 0 then return dim end
+  if amount >= 1 then return bright end
+  local key = index % 2 == 0 and "even_color" or "odd_color"
+  local result = state[key] or {}
+  state[key] = result
+  for i = 1, 4 do result[i] = dim[i] + (bright[i] - dim[i]) * amount end
+  return result
+end
+
+-- Animate the list scroll, the current-entry marker, and the fade-in. The
+-- marker glides like the Project Sidebar's selection.
 local function animate(view)
   local state = view.__heading_outline
   local layout = heading_outline.layout(view)
   if not layout then
-    state.alpha, state.marker_y = 0, nil
+    state.alpha = 0
+    state.marker:reset()
     return
   end
   view:move_towards(state, "alpha", 1, 0.15, TRANSITION)
   view:move_towards(state, "offset", layout.offset_target, 0.25, TRANSITION)
   if layout.current then
-    local target = (layout.current - 1) * layout.row_h
-    if state.marker_y then
-      view:move_towards(state, "marker_y", target, 0.3, TRANSITION)
-    else
-      state.marker_y = target
-    end
+    local marker_h = math.floor(layout.row_h * MARKER_HEIGHT)
+    state.marker:step((layout.current - 1) * layout.row_h + math.floor((layout.row_h - marker_h) / 2), marker_h)
   else
-    state.marker_y = nil
+    state.marker:step()
   end
 end
 
@@ -297,17 +362,13 @@ function heading_outline.draw(view)
   core.push_clip_rect(layout.x, layout.y, layout.w, layout.h)
   renderer.draw_rect(layout.x + math.floor((marker_w - track_w) / 2), list_top,
     track_w, layout.content_h, faded(state, "track_color", style.divider, alpha))
-  if state.marker_y then
-    local marker_h = math.floor(layout.row_h * MARKER_HEIGHT)
-    renderer.draw_rounded_rect(layout.x, list_top + state.marker_y + math.floor((layout.row_h - marker_h) / 2),
-      marker_w, marker_h, marker_w / 2, faded(state, "marker_color", style.accent, alpha))
-  end
+  state.marker:draw(layout.x, list_top, marker_w, marker_w / 2, faded(state, "marker_color", style.accent, alpha))
   local dim = faded(state, "dim_color", style.dim, alpha)
   local bright = faded(state, "bright_color", style.text, alpha)
   local text_y = math.floor((layout.row_h - font:get_height()) / 2)
   for index, entry in ipairs(layout.entries) do
     if entry.y + entry.h >= layout.y and entry.y <= layout.y + layout.h then
-      local color = (index == layout.current or index == state.hover) and bright or dim
+      local color = index == state.hover and bright or entry_color(state, index, layout.row_h, dim, bright)
       renderer.draw_text(font, entry.shown_title, entry.text_x, entry.y + text_y, color)
     end
   end
@@ -336,7 +397,7 @@ end
 local function on_mouse_pressed(view, button, x, y)
   local _, entry = entry_at(heading_outline.layout(view), x, y)
   if not (entry and button == "left") then
-    view.__heading_outline.pick_line = nil
+    if view:scrollbar_overlaps_point(x, y) then view.__heading_outline.follow_caret = false end
     return false
   end
   jump(view, entry)
@@ -353,6 +414,7 @@ function heading_outline.attach(view)
   for _, name in ipairs(HOOKS) do saved[name] = rawget(view, name) or false end
   view.__heading_outline_hooks = saved
   state_for(view)
+  view:add_selection_listener("heading_outline", on_selection_changed)
   local function previous(self, name, ...)
     local fn = saved[name] or getmetatable(self)[name]
     return fn(self, ...)
@@ -380,7 +442,7 @@ function heading_outline.attach(view)
     return previous(self, "on_mouse_left", ...)
   end
   view.on_mouse_wheel = function(self, ...)
-    self.__heading_outline.pick_line = nil
+    self.__heading_outline.follow_caret = false
     return previous(self, "on_mouse_wheel", ...)
   end
   return true
@@ -390,6 +452,7 @@ function heading_outline.detach(view)
   local saved = view.__heading_outline_hooks
   if not saved then return false end
   for _, name in ipairs(HOOKS) do view[name] = saved[name] or nil end
+  view:remove_selection_listener("heading_outline")
   view.__heading_outline_hooks, view.__heading_outline = nil, nil
   return true
 end

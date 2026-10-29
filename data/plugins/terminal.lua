@@ -2369,8 +2369,20 @@ function TerminalView:reattach_session()
 end
 
 function TerminalView:on_workspace_close()
-  if core.terminal_quit_actions and core.terminal_quit_actions[self] == "close" then self:on_close()
+  if core.terminal_quit_actions and core.terminal_quit_actions[self] == "end" then self:end_session()
   else self:detach_session() end
+end
+
+-- Ends the shell at quit, but its host keeps the session record and screen. The next start revives the session
+-- in this Pane with the same ID, so its Snooze, seen time and Pi session stay.
+function TerminalView:end_session()
+  self:clear_point_hover()
+  if not self.session then return end
+  if self.vt_trace_path then self:stop_vt_trace() end
+  self.session:stop()
+  self.session = nil
+  self.running, self.state = false, "ended"
+  core.log_quiet("Terminal session %d ended for revival: id=%s", self.log_id, tostring(self.session_id))
 end
 
 function TerminalView:on_close()
@@ -2740,7 +2752,8 @@ keymap.add({
 })
 
 -- Pure decision seam. Unknown state is not proof that a shell is idle.
--- An idle Pi needs no question, but it still runs, so only End closes it.
+-- An idle Pi needs no question, but it still runs, so only End ends it.
+-- An ended session revives in its Pane on the next start.
 function M.quit_decision(statuses, answer)
   local busy = {}
   local count = 0
@@ -2756,7 +2769,7 @@ function M.quit_decision(statuses, answer)
     if answer ~= "keep" and answer ~= "end" then return nil, "ask", count end
   end
   local actions = {}
-  for i in ipairs(statuses) do actions[i] = busy[i] and answer ~= "end" and "detach" or "close" end
+  for i in ipairs(statuses) do actions[i] = busy[i] and answer ~= "end" and "detach" or "end" end
   return actions, nil, count
 end
 

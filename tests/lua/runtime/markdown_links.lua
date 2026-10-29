@@ -40,6 +40,16 @@ test.describe("Markdown link parsing", function()
     test.equal(image[2].resize.height, nil)
   end)
 
+  test.it("reads an escaped pipe as the alias separator, as tables need", function()
+    local found = links.find_links("| [[Note\\|Alias]] | ![[pic.png\\|Alt\\|200]] |", 1)
+    test.equal(#found, 2)
+    test.equal(found[1].path, "Note")
+    test.equal(found[1].alias, "Alias")
+    test.equal(found[2].path, "pic.png")
+    test.equal(found[2].alias, "Alt")
+    test.equal(found[2].resize.width, 200)
+  end)
+
   test.it("adopts exact semantic Wikilink and image ranges", function()
     local text = "[[Note#Head|Alias]] ![Alt|100x145](image.png)"
     local wiki = test.not_nil(links.from_semantic_node(text, 1, {
@@ -145,6 +155,9 @@ test.describe("Markdown image width in source", function()
       { "![](photo.png)", 300, "![300](photo.png)" },
       { "![Alt|120x80](photo.png)", nil, "![Alt](photo.png)" },
       { "![120](photo.png)", nil, "![](photo.png)" },
+      { "![[photo.png\\|120]]", 300, "![[photo.png\\|300]]" },
+      { "![[photo.png\\|Alt]]", 300, "![[photo.png\\|Alt\\|300]]" },
+      { "![[photo.png\\|Alt\\|120]]", nil, "![[photo.png\\|Alt]]" },
     }
     for _, case in ipairs(cases) do
       test.equal(links.with_image_width(case[1], case[2]), case[3], case[1])

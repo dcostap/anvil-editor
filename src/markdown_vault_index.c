@@ -405,6 +405,8 @@ static bool parse_links(AnvilMarkdownVaultNoteView *note, const char *line, uint
       if (close + 1 >= len) continue;
       const char *pipe = memchr(line + open, '|', close - open);
       size_t target_len = pipe ? (size_t)(pipe - (line + open)) : close - open;
+      /* Tables write the alias separator as `\|`. */
+      if (pipe && target_len > 0 && pipe[-1] == '\\') target_len--;
       if (!append_link(note, embed ? "embed" : "wiki", line + open, target_len,
           pipe ? pipe + 1 : NULL, pipe ? (size_t)(line + close - pipe - 1) : 0,
           line_number, (uint32_t)i + 1, (uint32_t)close + 3)) return false;

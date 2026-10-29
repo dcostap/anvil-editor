@@ -42,6 +42,38 @@ local function table_cell_text(text, cell)
   return (table_cell_content(text, cell))
 end
 
+-- A cell that holds only an image draws it, as a prose line that holds only
+-- an image does. Live Preview supplies the image; the cell never reveals its
+-- source, and a caret that lands in it selects the whole cell.
+local function image_cell_presentation(view, line_text, line, source_col1, source_col2, header)
+  local provider = table_presentation.cell_image
+  if not provider or source_col1 >= source_col2 then return nil end
+  local function image(width)
+    local ok, fragment = pcall(provider, view, line_text, line, source_col1, source_col2, width)
+    if ok then return fragment end
+    core.log_quiet("Markdown table image failed at %s:%d: %s",
+      view.buffer:get_name(), line, tostring(fragment))
+  end
+  local natural = image(table_presentation.available_width(view))
+  if not natural then return nil end
+  return {
+    text = "",
+    source_col1 = source_col1,
+    source_col2 = source_col2,
+    font = header and live_fonts.inline_style(view, "strong") or live_fonts.body(view),
+    color = header and style.markdown_live_table_header or style.markdown_live_table_cell,
+    image = image,
+    natural_width = natural.widget.width,
+  }
+end
+
+---Return the height of a cell's visual lines. An image line has its own.
+local function lines_height(lines, line_height)
+  local height = 0
+  for _, line in ipairs(lines) do height = height + (line.height or line_height) end
+  return height
+end
+
 local function table_cell_presentation(view, text, source_col1, source_col2, header)
   local image_alt = text:match("^!%[([^%]]*)%]%(%s*data:image/[%w%+%.%-]+[;,]")
   if image_alt or #text > TABLE_MAX_CELL_PRESENTATION_BYTES then
@@ -533,6 +565,16 @@ end
 
 local function presentation_lines(presentation, width)
   if presentation.runs then return rich_cell_lines(presentation, width) end
+  if presentation.image then
+    local fragment = presentation.image(width)
+    local widget = fragment and fragment.widget
+    if widget then
+      return { {
+        text = "", col1 = 1, col2 = presentation.source_col2 - presentation.source_col1 + 1,
+        image = widget, width = widget.width, height = widget.height,
+      } }
+    end
+  end
   return table_wrap_cell_text(
     presentation.font, presentation.text, width, presentation.literal_breaks
   )
@@ -540,6 +582,7 @@ end
 
 local function presentation_natural_width(presentation)
   if presentation.runs then return rich_cell_natural_width(presentation) end
+  if presentation.image then return presentation.natural_width end
   return table_cell_natural_width(
     presentation.font, presentation.text, presentation.literal_breaks
   )
@@ -750,15 +793,22 @@ function table_presentation.layout(view, table_node, instance)
       active_presentations[line] = {}
       for column, cell in ipairs(row.cells) do
         local text, source_col1, source_col2 = table_cell_content(row.text, cell)
-        local presentation, code_ticks = table_cell_presentation(
-          view, text, source_col1, source_col2, line == line1
+        local presentation, code_ticks = image_cell_presentation(
+          view, row.text, line, source_col1, source_col2, line == line1
         )
-        if not presentation.source_elided then
+        if not presentation then
+          presentation, code_ticks = table_cell_presentation(
+            view, text, source_col1, source_col2, line == line1
+          )
+        end
+        if not (presentation.source_elided or presentation.image) then
           presentation = rich_presentation(runs, text, source_col1, source_col2, base)
             or presentation
         end
         presentations[line][column] = presentation
-        if presentation.source_elided or presentation_has_link(presentation) then
+        if presentation.image then
+          -- An image cell keeps its image while it holds the caret.
+        elseif presentation.source_elided or presentation_has_link(presentation) then
           -- Revealing elided source or a link destination can add lines.
           selection_stable_layout = false
         else
@@ -849,20 +899,20 @@ function table_presentation.layout(view, table_node, instance)
     if row_line ~= line1 + 1 then
       wrapped_cells[row_line] = {}
       local row = rows[row_line]
-      local max_lines = 1
+      local content_height = text_line_height
       for column in ipairs(row.cells) do
         local presentation = presentations[row_line][column]
         local wrapped = presentation_lines(presentation, widths[column] - pad * 2)
         wrapped_cells[row_line][column] = wrapped
-        max_lines = math.max(max_lines, #wrapped)
+        content_height = math.max(content_height, lines_height(wrapped, text_line_height))
         local active = active_presentations[row_line][column]
         if active then
-          max_lines = math.max(
-            max_lines, #presentation_lines(active, widths[column] - pad * 2)
-          )
+          content_height = math.max(content_height, lines_height(
+            presentation_lines(active, widths[column] - pad * 2), text_line_height
+          ))
         end
       end
-      row_heights[row_line] = max_lines * text_line_height + vertical_pad * 2
+      row_heights[row_line] = content_height + vertical_pad * 2
     end
   end
   local scroll_max = handle_size * 2 + total_width > available_width
@@ -1501,7 +1551,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     end
     return false
   end
-  local max_lines = 1
+  local content_height = layout.text_line_height
   local base = inline_base(view, header)
   local active_runs
   local active_columns = {}
@@ -1510,7 +1560,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     local wrapped = layout.wrapped_cells[line][column]
     local active = cell_active(cell)
     active_columns[column] = active
-    if active then
+    if active and not presentation.image then
       -- An active cell reveals the Markdown source of the span holding the
       -- caret, like prose. Elided cells reveal their complete source.
       local text, source_col1, source_col2 = table_cell_content(row.text, cell)
@@ -1531,12 +1581,9 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       )
     end
     row_presentations[column], row_wrapped[column] = presentation, wrapped
-    max_lines = math.max(max_lines, #wrapped)
+    content_height = math.max(content_height, lines_height(wrapped, layout.text_line_height))
   end
-  row_height = math.max(
-    row_height,
-    max_lines * layout.text_line_height + layout.vertical_padding * 2
-  )
+  row_height = math.max(row_height, content_height + layout.vertical_padding * 2)
   local function border_fragment(separator, id, first)
     local line_width = math.max(1, math.floor(SCALE))
     return {
@@ -1581,7 +1628,8 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
     local text_lines = {}
     for _, wrapped in ipairs(row_wrapped[column]) do
       local wrapped_text = wrapped.text or ""
-      local text_width = wrapped.runs and wrapped.width or cell_font:get_width(wrapped_text)
+      local text_width = (wrapped.runs or wrapped.image) and wrapped.width
+        or cell_font:get_width(wrapped_text)
       local offset = alignment == "right"
         and math.max(layout.padding, layout.widths[column] - text_width - layout.padding)
         or alignment == "center"
@@ -1595,6 +1643,11 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
           or presentation.source_col1 + (wrapped.col1 or 1) - 1,
         source_col2 = wrapped.runs and wrapped.source_col2
           or presentation.source_col1 + (wrapped.col2 or 1) - 1,
+        height = wrapped.height,
+        draw = wrapped.image and function(x, y)
+          local widget = wrapped.image
+          widget.draw(view, { widget = widget, draw_y_offset = widget.padding }, x, y, widget.height)
+        end or nil,
       }
     end
     local separator = row.separators[column]
@@ -1626,6 +1679,12 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
       background_border_bottom = not header and style.markdown_live_table_separator or nil,
       semantic_id = table_node.id .. ":cell:" .. line .. ":" .. column,
       table_cell = true, table_header = header, table_column = column,
+      image_cell = presentation.image and true or nil,
+      on_mouse_pressed = presentation.image and function(_, owner, _, button)
+        if button ~= "left" then return false end
+        owner.buffer:set_selection(line, presentation.source_col2, line, presentation.source_col1)
+        return true
+      end or nil,
     }
   end
   local separator = row.separators[#row.cells + 1]
@@ -1666,8 +1725,10 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
         x2 = fragment_x + (fragment.width or 0),
       }
       local text_lines = fragment.text_lines or {}
+      local line_y = band + (fragment.text_y_padding or 0)
       for visual_index, text_line in ipairs(text_lines) do
         local last = visual_index == #text_lines
+        local line_height = text_line.height or fragment.text_line_height or layout.text_line_height
         position_rows[#position_rows + 1] = {
           source_col1 = text_line.source_col1,
           source_col2 = text_line.source_col2,
@@ -1680,9 +1741,8 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
           x_offset = fragment_x + (text_line.x_offset or 0),
           hit_x1 = fragment_x,
           hit_x2 = fragment_x + (fragment.width or 0),
-          y_offset = band + (fragment.text_y_padding or 0)
-            + (visual_index - 1) * (fragment.text_line_height or layout.text_line_height),
-          height = fragment.text_line_height or layout.text_line_height,
+          y_offset = line_y,
+          height = line_height,
           runs = text_line.runs,
           navigation_group = fragment.table_column,
           navigation_index = visual_index,
@@ -1709,6 +1769,7 @@ function table_presentation.row_fragments(view, table_node, line, instance, sele
           -- The active cell's tint marks the caret row inside a table.
           suppress_line_highlight = true,
         }
+        line_y = line_y + line_height
       end
     end
     fragment_x = fragment_x + (fragment.width or 0)

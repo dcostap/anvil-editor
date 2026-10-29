@@ -55,6 +55,7 @@ local function compare(buffer, instance, label)
   for index = 1, #actual do test.same(actual[index], expected[index], label .. " node " .. index) end
   test.same(instance:footnote_definitions(), fresh:footnote_definitions(), label)
   test.same(instance:footnote_lines(), fresh:footnote_lines(), label)
+  test.same(instance:headings(), fresh:headings(), label .. " headings")
   model.close(fresh_buffer, "test")
 end
 
@@ -101,6 +102,7 @@ local function raw_sequence(label, texts)
         return list
       end
       test.same(semantic(current), semantic(fresh), label .. " step " .. index)
+      test.same(current:markdown_headings(), fresh:markdown_headings(), label .. " headings " .. index)
       fresh:close()
       if previous then previous:close() end
       previous = current
@@ -123,6 +125,12 @@ test.describe("Markdown incremental semantic publication", function()
       { text, defined }, { defined, text }, { text, defined }, { defined, text },
     })
   end
+  sequence("matches headings through renames, inserts, Setext conversions, and deletes",
+    "# One\n\nBody *text*.\n\n## Two ##\n\nTail.\n", {
+      { "# One", "# One renamed" }, { "Body", "### Added\n\nBody" },
+      { "## Two ##\n", "Two\n---\n" }, { "Two\n---\n", "Two\n\n" },
+      { "### Added\n\n", "" }, { "# One renamed\n\n", "" },
+    })
   sequence("matches paragraph merges and splits", "First *one*.\n\nSecond **two**.\n", {
     { "\n\n", "\n" }, { "\nSecond", "\n\nSecond" },
   })
@@ -161,6 +169,44 @@ test.describe("Markdown incremental semantic publication", function()
     { "a\n", "é\n" }, { "é\n", "€\n" }, { "€\n", "😀\n" },
     { "😀\n", "a\n" },
   })
+
+  test.it("submits a parse of a long note without a Lua copy of its text", function()
+    local paragraphs = {}
+    for index = 1, 4000 do paragraphs[index] = "## Part " .. index .. "\n\nSome *body* text for part " .. index .. ".\n" end
+    local buffer = buffer_with(table.concat(paragraphs, "\n"))
+    local instance = model.get(buffer)
+    ready(instance)
+    local bytes = 0
+    for _, line in ipairs(buffer.lines) do bytes = bytes + #line end
+    buffer:insert(2, 1, "New line.\n")
+    collectgarbage("collect")
+    collectgarbage("stop")
+    local before = collectgarbage("count")
+    test.ok(instance:submit("test"))
+    local allocated = (collectgarbage("count") - before) * 1024
+    collectgarbage("restart")
+    test.ok(allocated < bytes / 8,
+      string.format("submitting allocated %d bytes for a note of %d bytes", allocated, bytes))
+    ready(instance)
+    local fresh_buffer = buffer_with(table.concat(buffer.lines))
+    local fresh = model.get(fresh_buffer)
+    ready(fresh)
+    test.equal(#instance:headings(), 4000 * 7)
+    test.same(instance:headings(), fresh:headings())
+    model.close(fresh_buffer, "test")
+    model.close(buffer, "test")
+  end)
+
+  test.it("reuses unchanged block captures with the Markdown block query", function()
+    local spec = { text = "# One\n\nBody *text*.\n\n## Two\n\nTail.\n",
+      outline_query = queries.block, usage_query = queries.inline }
+    local first = test.not_nil(native_pool.markdown_parse_now(spec, 5000))
+    spec.text, spec.previous_result = spec.text .. "\nMore.\n", first
+    local second = test.not_nil(native_pool.markdown_parse_now(spec, 5000))
+    test.ok(second:summary().metrics.reused_block_captures > 0)
+    first:close()
+    second:close()
+  end)
 
   test.it("keeps identities with their nodes across edits and shifts", function()
     local buffer = buffer_with("**one**\n\n**two**\n\n**end**\n")

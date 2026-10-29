@@ -79,8 +79,18 @@ The host also reports a command that runs inside the shell, such as `Start-Sleep
 It ignores marks without the nonce, so a nested shell or TUI cannot end a running command.
 Run the `Terminal busy status` tests in `ui/terminal_quit.lua` after changes.
 
+The PowerShell prompt clears stale mouse, focus, paste and extended keyboard modes after a crashed program.
+It sends control sequences through ConPTY before the custom prompt runs, and shows the cursor again.
+It keeps terminal text, scrollback and ConPTY's input mode. It does not send a full terminal reset.
+Existing shells need a new Terminal Session to load the updated integration.
+Run `ui/terminal_stale_modes.lua` after changes.
+
 Close and quit skip confirmation when Pi reports `idle` or `done`, even while its shell command remains busy.
 Quit still detaches those sessions unless the user chooses End, so Pi keeps running.
+Quit ends idle shells, and End ends all shells. An ended session is not closed. It revives in its Pane on the next start.
+The host gets `ANVIL_TERMINAL_END`. It stops the shell, but keeps the record, the screen and the Pi report.
+The session keeps its ID, so its Snooze, seen time and Pi session stay. Only a Pane close removes them.
+Older hosts read `END` as a disconnect and keep running. Run `ui/terminal_quit.lua`, `ui/terminal_revival.lua` and `ui/terminal_agent_resume.lua` after changes.
 Other agent states keep the normal busy check. Reconnecting sessions still require confirmation.
 The host sends the root Agent Status with its live status packet. Older hosts keep the normal busy check.
 Run `ui/terminal_quit.lua` and `ui/terminal_agent_status.lua` after changes.
@@ -155,12 +165,21 @@ The Project Sidebar marks only an Unread Result or an agent that waits for an an
 The mark is a dot, a bold name, and a coloured stripe that fades out to the right.
 It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
 
-A right-click on a Terminal row in the Sidebar sets or removes a Reminder.
-The Sidebar saves each Reminder as a Unix time in `storage/sidebar/reminders`, beside the seen times.
-`tab.attention` holds a Terminal's attention until that time. The Sidebar wakes at the next Reminder time.
+A right-click on a Terminal Tab in the Sidebar sets or removes a Snooze.
+The Sidebar saves each Snooze as a Unix time in `storage/sidebar/snoozes`, beside the seen times.
+`tab.attention` holds a Terminal's attention until that time. The Sidebar wakes at the next Snooze time.
 The Sidebar describes its menu; the shell only shows it and returns the chosen label (`system.show_menu`).
-A Reminder whose time has not come stays saved, even when the model does not list its Terminal Session.
-Run `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
+A Snooze whose time has not come stays saved, even when the model does not list its Terminal Session.
+The Sidebar then sends `snooze` or `unsnooze` to the Pane's Project through the direct route.
+The Project moves a Snoozed Pane into its own Pane Group with the `snoozed` flag, saved in the Workspace.
+Pane navigation, Pane numbers, the Title Bar and the close fallback skip it. A focus request still shows it.
+The Pane report marks it, and the Sidebar lists it in the collapsed Snoozed fold at the end of its Project.
+The fold shows the mark of a Snoozed Pane that needs the user, also in a collapsed Project.
+Collapsed Projects and Dormant Projects show a coloured count of Terminals that need the user. Collapsed age groups show their total.
+A Pi question counts during a Snooze. Other attention stays hidden until the Snooze ends.
+Each Project checks the saved times every 5 seconds (`core.snoozed_panes`). It does not change focus.
+Due Panes wake into new Pane Groups at the end, at most three side by side, oldest Snooze first. A shown Pane wakes in place.
+Run `ui/snoozed_panes.lua`, `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
 
 Tabs show shared Pane numbers, not Tab positions. `core.numbered_panes` selects `core.pending_panes`.
 Unread Results and agents waiting for an answer get numbers 1 to 5, oldest pending event first.
@@ -494,9 +513,9 @@ This is a personal fork with first-party ownership of the whole codebase, includ
 Markdown Live Preview lists the headings left of the reading lane when the free space can hold the list.
 It reads the tree-sitter outline, the same list as Current Buffer Symbol Search.
 The top heading level and two levels below it show. The current section is the last heading above the top quarter of the view.
-A click moves the caret to the heading and scrolls it near the top with `scroll_to_line`'s `top_margin`.
-That heading stays current until the user scrolls, presses elsewhere in the view, or moves the caret off its line.
-This also holds while the view scrolls to it, before a short section, and at the end of the document.
+After the caret moves, the current section is the caret's section instead, until the user scrolls with the wheel or the scrollbar.
+Each Pane's outline follows its own caret. The Buffer's selection belongs to the focused Pane, so the outline uses a selection listener on its Text View.
+A click moves the caret to the heading and scrolls it near the top with `scroll_to_line`'s `top_margin`. That heading is then the caret's section.
 Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading-outline` render scenario after visual changes.
 
 ## Binary files
@@ -505,6 +524,14 @@ Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading
 `common.is_binary` uses Git's rule: a NUL byte in the first 8000 bytes. Text with a UTF-16 or UTF-32 BOM is not binary.
 The File Search preview uses the same rule. `opts.as_text` skips the dialog.
 Run `ui/binary_file_open.lua` after changes.
+
+## Table images
+
+A table cell that holds only an image link draws the image, scaled to its column. A cell with text and an image keeps the link label.
+An image cell never reveals its source in Live Preview. A click, Up or Down selects the whole cell, so Delete and Copy act on the whole image.
+Image cells have no resize controls yet. Edit the source in Source mode.
+A Wikilink reads `\|` as its alias separator, because a table needs it: `![[image.png\|200]]`.
+Run `ui/markdown_interactive_tables.lua` after changes. Check the `markdown-table-images` render scenario after visual changes.
 
 ## Reload from disk
 
@@ -552,7 +579,27 @@ The UI loop drains named pools and shuts them down with the system pool.
 
 ## Native code and Lua garbage
 
-Lua must not limit the editor's speed. Move work to C when a measurement shows a cost, such as a profile, a scenario counter, or a heap census.
+Lua must not limit the editor's speed. We port slow Lua to C, but only where a measurement shows that the port is worth it.
+
+### Measure first
+
+Do not port code to C because it looks slow. Measure it first.
+
+1. Run the scenario that shows the problem with `--diagnose`. It writes a sampled profile and timers by phase. See [scenario runs](tools/SCENARIOS.md).
+2. Find where the time goes in the attribution `details.csv` and profile stacks. Use `--heap` to measure retained Lua objects.
+3. Ask if the work is necessary. Work that is not necessary is the largest win, in any language. Examples:
+   - The Heading Outline ran the outline query on the whole note for each key. The worker's parse already had the headings.
+   - Two callers joined the whole note into a Lua string for each edit, only to give it to C.
+4. Port to C only work that is necessary and slow in Lua.
+
+A port is worth it when the measurement shows one of these:
+
+- A hot loop over plain data, such as rows, heights, or text positions.
+- Work for each line or item of a document, where the count grows with the document.
+- Large data that stays in memory, as a heap census shows.
+- High GC or interpreter time in the profile for that code.
+
+A port is not worth it when the profile shows the time elsewhere, or when the code is glue, decisions, or behavior that changes often. A Lua error is caught. A crash in C ends the editor.
 
 Move these to C:
 
@@ -570,6 +617,31 @@ Code that runs in each frame, such as `update`, `draw`, and caret moves, must no
 
 In the commit message, give the measurement before and after the change.
 
+### How to port
+
+Port in small slices. Do not rewrite a module at once. For each slice:
+
+1. Measure the slice before the change.
+2. Keep the old Lua path until the new path gives the same output. Compare both outputs on many real documents and edits. Use the repo's Markdown files and the scenario fixtures.
+3. For a slice that changes what the editor draws or where, also compare pixels. Before the change, record golden images with the [render gate](tools/RENDER_PERF_GATE.md) (`--update-baseline --update-goldens`). After the change, the same scenes must match exactly. Add scenes when the existing ones do not show the changed line kinds.
+4. Add tests that fail on the old code (red-green).
+5. Run the full `lua-runtime` and `lua-ui` suites. Compare their failures with a baseline worktree, because some tests are flaky.
+6. Run A/B scenarios against the baseline. Alternate the two versions, so machine load affects both. Give the numbers in the commit message.
+
+### Known target: the document layout pipeline
+
+Measured on the 19,185-line gallery note (`markdown-gallery-open`):
+
+- Building Markdown render lines in Lua took 3.8 s. Cache lookups and fragment preparation took about 0.9 s more.
+- The full row-height rebuild in Lua took 0.65 s. One rebuild took 465 ms in one frame.
+- The C wrap call (`renderer.wrap_fragment_lines`) took 0.08 s.
+
+The cost is Lua work for each line, spread over many functions. No single loop is hot. So port the pipeline, not the editor:
+
+- C keeps the data for each line: style runs, wrap breaks, row heights, and line metrics. A worker thread can make them from the Buffer text and the tree-sitter parse.
+- Lua keeps the decisions: what shows at the caret, widgets, clicks, and editing behavior. Lua reads results with a few calls for each frame.
+- Before each slice, measure which line kinds cost the most, such as prose, headings, lists, tables, or code. Port the most costly kind first.
+
 ### Frame-time check
 
 Run scenarios before and after each change to code that runs in each frame. This includes `update`, `draw`, scrolling, caret moves, the File Tree and the Fuzzy Searcher.
@@ -577,11 +649,13 @@ Run scenarios before and after each change to code that runs in each frame. This
 1. Before the change, run the smoke scenarios that use the changed code, for example `python tools/run_scenarios.py --scenario fuzzy-symbols-navigate-filetree-large --runs 1 --no-build`.
 2. Run `--suite smoke` for changes to shared drawing code, such as `data/core/textview.lua`. The suite takes about 40 minutes.
 3. After the change, run the same scenarios again.
-4. In the commit message, give the p95 frame work, the maximum frame and the KiB per frame from both reports.
+4. In the commit message, give the p95 frame work, the maximum frame and the Lua heap size from both reports.
 
 Do not commit a change that makes one of these numbers worse, unless the commit message explains why.
 Many scenarios are over budget now. A change must not move them further over.
 See [scenario runs](tools/SCENARIOS.md) for the budgets.
+
+Do not stop garbage collection to measure allocations. The removed allocation profiler exhausted system memory and crashed other programs. `--allocation` is disabled. The shared Windows launcher limits each benchmark process tree to 4 GiB of committed memory. A `memory_limit` failure is not a passing measurement. Keep this protection in baseline worktrees too.
 
 Add native modules under `src/api` with the portable Lua C API, not FFI. The PUC Lua build must still work.
 

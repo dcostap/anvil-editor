@@ -39,9 +39,6 @@ RESULTS_ROOT = gate.ROOT / "tools" / "perf-results" / "scenarios"
 FRAME_BUDGET_MS = 4.0
 # No frame may miss 60 Hz. p95 hides single hitches, such as one slow frame per action.
 FRAME_SPIKE_MS = 16.7
-# Lua garbage per measured frame. LuaJIT's GC work grows with allocation, and its steps
-# land in whichever frame allocates next, so garbage shows up as random slow frames.
-ALLOCATION_BUDGET_KIB = 64.0
 ACTION_BUDGET_MS = 100.0
 
 REPO_MEDIUM = RepoSpec("repo-medium", files=6000, commits=20, modified=120, staged=20,
@@ -79,7 +76,6 @@ class Scenario:
     launch: str = "direct"  # "direct" runs one Project process; "shell" runs the native shell.
     frame_budget_ms: float = FRAME_BUDGET_MS
     frame_spike_ms: float = FRAME_SPIKE_MS
-    allocation_budget_kib: float = ALLOCATION_BUDGET_KIB
     action_budget_ms: float = ACTION_BUDGET_MS
     # Budgets for named actions, such as cold and warm Project switches.
     action_budgets: dict[str, float] = field(default_factory=dict)
@@ -350,28 +346,6 @@ def read_details(path: Path, limit: int = 15) -> list[dict[str, Any]]:
     return sorted(timers, key=lambda item: item["ms_per_frame"], reverse=True)[:limit]
 
 
-def read_allocation(path: Path, key: str, limit: int, kind: str | None = None) -> list[dict[str, Any]]:
-    """Return the largest allocation rows. Rows are sorted by size."""
-    if not path.exists():
-        return []
-    with path.open(newline="", encoding="utf-8") as stream:
-        rows = [row for row in csv.DictReader(stream) if kind is None or row["kind"] == kind]
-    return [{"name": row[key], "kib_per_frame": float(row["kib_per_frame"])} for row in rows[:limit]]
-
-
-def run_allocation(name: str, scenario: Scenario, args, exe: Path, work: Path, log, label: str) -> Path:
-    """Run once with the GC stopped for the measured frames. Returns the allocation file.
-    `phases` totals each main loop phase. `sites` adds a line hook for source lines."""
-    variable, file_name = {"phases": ("ANVIL_PERF_BENCHMARK_ALLOCATION", "allocation.csv"),
-                           "sites": ("ANVIL_PERF_BENCHMARK_ALLOCATION_SITES", "allocation-sites.csv")}[label]
-    root = scenario_root(scenario, args.project, args.fixture_cache, log)
-    run_dir = work / name / f"allocation-{label}"
-    run_one(name, scenario, exe=exe, work=work, root=root, run_dir=run_dir, renderer=args.renderer,
-            mode="metrics", details=False,
-            extra_environment={variable: gate.native_path(run_dir / file_name)})
-    return run_dir / file_name
-
-
 def run_heap(name: str, scenario: Scenario, args, exe: Path, work: Path, log) -> str:
     """Run once and write a Heap Census after the measured frames. Returns its text."""
     root = scenario_root(scenario, args.project, args.fixture_cache, log)
@@ -383,10 +357,8 @@ def run_heap(name: str, scenario: Scenario, args, exe: Path, work: Path, log) ->
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-def score(scenario: Scenario, runs: list[dict[str, Any]],
-          allocation: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Score with the median of each run's p95, so one noisy run cannot pass or fail alone.
-    `allocation` comes from one run with the GC stopped, which is exact without repeats."""
+def score(scenario: Scenario, runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score with the median of each run's p95, so one noisy run cannot pass or fail alone."""
     def median(values: list[float]) -> float:
         return statistics.median(values) if values else 0.0
     # A paced frame can include a vsync wait. Score response latency, not renderer throughput, there.
@@ -416,9 +388,6 @@ def score(scenario: Scenario, runs: list[dict[str, Any]],
         if values["latency_ms_p95"] > budget:
             findings.append({"metric": f"{action} latency p95", "value": values["latency_ms_p95"],
                              "budget": budget})
-    if allocation is not None and allocation["kib_per_frame"] > scenario.allocation_budget_kib:
-        findings.append({"metric": "allocation per frame", "value": allocation["kib_per_frame"],
-                         "budget": scenario.allocation_budget_kib, "unit": "KiB"})
     for finding in findings:
         finding["ratio"] = finding["value"] / finding["budget"]
         finding.setdefault("unit", "ms")
@@ -443,9 +412,6 @@ def markdown(report: dict[str, Any]) -> str:
                          f"max {case['frame_spike_ms']:.1f}). "
                          f"Lua heap {frame['lua_heap_kib_avg'] / 1024:.1f} MiB.")
             lines.append("")
-        if case.get("allocation"):
-            lines += [f"Allocation with the GC stopped: {case['allocation']['kib_per_frame']:.1f} KiB/frame "
-                      f"(budget {case['allocation_budget_kib']:.0f}).", ""]
         publication = case["scene"] == "markdown_gallery" and any(
             action in ("type", "newline") for action in case["actions"])
         completion = "Publication" if publication else "Completed"
@@ -474,17 +440,6 @@ def markdown(report: dict[str, Any]) -> str:
                 calls = timer["calls_per_frame"]
                 lines.append(f"| {timer['key']} | {timer['ms_per_frame']:.2f} | {timer['max_ms']:.2f} "
                              f"| {'' if calls is None else f'{calls:.0f}'} |")
-        allocation = case.get("allocation")
-        if allocation:
-            lines += ["", "Allocation by main loop phase, GC stopped:", "",
-                      "| Phase | KiB/frame |", "| --- | ---: |"]
-            lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["phases"]]
-        if allocation and allocation.get("lines"):
-            lines += ["", "Allocation sites in the interpreter (the hook turns off the JIT):", "",
-                      "| Source line | KiB/frame |", "| --- | ---: |"]
-            lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["lines"]]
-            lines += ["", "| Call stack | KiB/frame |", "| --- | ---: |"]
-            lines += [f"| {row['name']} | {row['kib_per_frame']:.1f} |" for row in allocation["stacks"]]
         if case.get("heap"):
             lines += ["", "Heap Census after the measured frames:", "", "```text"]
             lines += case["heap"].splitlines()[:40]
@@ -503,7 +458,6 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
                             "fixture": None if args.project else scenario.fixture.key,
                             "frame_budget_ms": scenario.frame_budget_ms,
                             "frame_spike_ms": scenario.frame_spike_ms,
-                            "allocation_budget_kib": scenario.allocation_budget_kib,
                             "action_budget_ms": scenario.action_budget_ms}
     root = scenario_root(scenario, args.project, args.fixture_cache, log)
     mode = "throughput" if scenario.self_driven else "metrics"
@@ -524,24 +478,11 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
             log(f"  run {index + 1}: {action} {completion} p50 {values['latency_ms_p50']:.1f} ms, "
                 f"p95 {values['latency_ms_p95']:.1f} ms{visible}")
         runs.append(run)
-    # Paced and self-driven scenes score latency, not the work of each frame.
-    allocation = None
-    if not scenario.self_driven and scenario.settings.get("cadence") != "normal":
-        phases = read_allocation(run_allocation(name, scenario, args, exe, work, log, "phases"), "phase", 1000)
-        allocation = {"kib_per_frame": sum(row["kib_per_frame"] for row in phases), "phases": phases[:12]}
-        log(f"  allocation: {allocation['kib_per_frame']:.1f} KiB/frame ("
-            + ", ".join(f"{row['name']} {row['kib_per_frame']:.0f}" for row in phases[:4]) + ")")
-        case["allocation"] = allocation
-    case.update(score(scenario, runs, allocation))
+    case.update(score(scenario, runs))
     case["verdict"] = "over budget" if case["findings"] else "passed"
     # Detail timers and samples attribute frame time in the measured process.
     if scenario.self_driven:
         return case
-    over_allocation = any(finding["unit"] == "KiB" for finding in case["findings"])
-    if allocation and (over_allocation or args.allocation):
-        path = run_allocation(name, scenario, args, exe, work, log, "sites")
-        allocation["lines"] = read_allocation(path, "site", 20, "line")
-        allocation["stacks"] = read_allocation(path, "site", 10, "stack")
     if any(finding["unit"] == "ms" for finding in case["findings"]) or args.attribute:
         if scenario.writes or scenario.churn_interval:
             root = scenario_root(scenario, args.project, args.fixture_cache, log)
@@ -575,11 +516,13 @@ def main() -> int:
     parser.add_argument("--heap", action="store_true",
                         help="add a run that writes a Heap Census after the measured frames")
     parser.add_argument("--allocation", action="store_true",
-                        help="add a run that reports allocation by source line; over-budget scenarios add it anyway")
+                        help="disabled: the stopped-GC profiler exhausts system memory")
     parser.add_argument("--project", type=Path,
                         help="run read-only scenarios on this directory instead of a fixture")
     parser.add_argument("--fixture-cache", type=Path, default=perf_fixtures.default_cache_root())
     args = parser.parse_args()
+    if args.allocation:
+        parser.error("allocation profiling is disabled: it exhausts system memory; use --diagnose or --heap")
     if args.list:
         for name, scenario in SCENARIOS.items():
             print(f"{name:28} {scenario.launch:6} {','.join(scenario.suites):10} {scenario.scene}")
@@ -617,8 +560,6 @@ def main() -> int:
         if case.get("heap"):
             for line in case["heap"].splitlines()[1:12]:
                 log("    " + line)
-        for row in case.get("allocation", {}).get("lines", [])[:6]:
-            log(f"    {row['name']}: {row['kib_per_frame']:.1f} KiB/frame")
         report["scenarios"][name] = case
     (work / "report.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     (work / "report.md").write_text(markdown(report), encoding="utf-8")

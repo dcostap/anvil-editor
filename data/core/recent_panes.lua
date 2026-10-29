@@ -39,7 +39,7 @@ function recent_panes.order(projects)
   local list = {}
   for _, project in ipairs(projects or {}) do
     for _, item in ipairs(project.panes or {}) do
-      if type(item.focused) == "number" then
+      if type(item.focused) == "number" and not item.snoozed then
         list[#list + 1] = {path = project.path, id = item.id, focused = item.focused}
       end
     end
@@ -82,7 +82,9 @@ local function model()
     if common.path_compare_key(item.path) ~= own then projects[#projects + 1] = item end
   end
   local items = {}
-  for _, pane in ipairs(panes.ordered()) do items[#items + 1] = {id = pane.id, focused = focused_at[pane.id]} end
+  for _, pane in ipairs(panes.ordered()) do
+    items[#items + 1] = {id = pane.id, focused = focused_at[pane.id], snoozed = pane.group.snoozed}
+  end
   projects[#projects + 1] = {path = path, panes = items}
   return projects, path
 end

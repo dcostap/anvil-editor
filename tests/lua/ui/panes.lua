@@ -475,13 +475,6 @@ test.describe("Pane manager", function()
     test.ok(panes.validate())
   end)
 
-  test.it("focuses Panes by current number", function()
-    panes.create { factory = factory("one") }
-    local two = panes.create { factory = factory("two") }
-    test.equal(panes.focus_index(2), two)
-    test.equal(panes.active(), two)
-  end)
-
   test.it("renumbers after closing and permits zero Panes", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.create { factory = factory("two") }

@@ -543,6 +543,7 @@ function core.run(...)
     diffview.load_workspace_state(workspace and workspace.diff_layout)
     workspace_restored = true
   end
+  require("core.snoozed_panes").start()
   core.run = run
   return core.run(...)
 end

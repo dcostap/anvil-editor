@@ -6,7 +6,7 @@ local recent = require "core.recent_panes"
 local storage = require "core.storage"
 local pending = {COUNT = recent.COUNT, key = recent.key, request = recent.request}
 
--- Sidebar surfaces supply their shared live tables. Projects read the same persisted seen times and Reminders.
+-- Sidebar surfaces supply their shared live tables. Projects read the same persisted seen times and Snoozes.
 local cache = {}
 local function saved(key)
   local now, entry = system.get_time(), cache[key]
@@ -20,8 +20,8 @@ local function saved(key)
   return entry.value
 end
 
-function pending.order(projects, seen, reminders)
-  seen, reminders = seen or saved("seen"), reminders or saved("reminders")
+function pending.order(projects, seen, snoozes)
+  seen, snoozes = seen or saved("seen"), snoozes or saved("snoozes")
   local list = {}
   local selected = {}
   for _, window in ipairs(projects and projects.windows or {}) do selected[window.selected_project] = true end
@@ -30,19 +30,19 @@ function pending.order(projects, seen, reminders)
     for _, record in ipairs(project.terminals or {}) do records[record.id] = record end
     for index, item in ipairs(project.panes or {}) do
       local terminal = item.terminal
-      if terminal then
+      if terminal and not item.snoozed then
         local record = records[terminal.session]
         local agent = record and record.state == "running" and tab.agent(record) or nil
-        local reminder = reminders[terminal.session]
-        local attention = tab.attention({terminal = terminal, agent = agent}, seen[terminal.session], reminder)
+        local snooze = snoozes[terminal.session]
+        local attention = tab.attention({terminal = terminal, agent = agent}, seen[terminal.session], snooze)
         local active = (project.selected or selected[project.id]) and index == project.panes.active
         if attention and (not active or attention == "blocked") then
-          local since = attention == "bell" and terminal.bell or attention == "reminder" and reminder
+          local since = attention == "bell" and terminal.bell or attention == "snooze" and snooze
             or agent.since or 0
           -- A still-unread bell can precede the agent's result.
           if (terminal.bell or 0) > (seen[terminal.session] or 0) then since = math.min(since, terminal.bell) end
-          -- A held Terminal joins the queue at its Reminder time.
-          if reminder then since = math.max(since, reminder) end
+          -- A held Terminal joins the queue at its Snooze time.
+          if snooze then since = math.max(since, snooze) end
           list[#list + 1] = {path = project.path, id = item.id, since = since}
         end
       end
@@ -55,8 +55,8 @@ function pending.order(projects, seen, reminders)
   return list
 end
 
-function pending.numbers(projects, seen, reminders)
-  local order, numbers = pending.order(projects, seen, reminders), {}
+function pending.numbers(projects, seen, snoozes)
+  local order, numbers = pending.order(projects, seen, snoozes), {}
   local included = {}
   for _, item in ipairs(order) do included[pending.key(item.path, item.id)] = true end
   -- Skip the current Pane before filtering duplicates. It can itself be pending.
@@ -77,8 +77,8 @@ function pending.numbers(projects, seen, reminders)
   return numbers, order
 end
 
-function pending.target(projects, number, seen, reminders)
-  local _, order = pending.numbers(projects, seen, reminders)
+function pending.target(projects, number, seen, snoozes)
+  local _, order = pending.numbers(projects, seen, snoozes)
   return number >= 1 and number <= pending.COUNT and order[number] or nil, #order
 end
 

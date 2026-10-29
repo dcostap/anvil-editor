@@ -12,6 +12,27 @@ local function split_once(text, sep)
   return text:sub(1, index - 1), text:sub(index + #sep)
 end
 
+-- Tables write the separator as `\|`. A note name cannot hold `|` or `\`,
+-- so the first pipe separates the target from the alias either way.
+local function split_wiki_inner(inner)
+  local raw_target, alias = split_once(inner, "|")
+  if alias then
+    raw_target = raw_target:gsub("\\$", "")
+    alias = alias:gsub("\\|", "|")
+  end
+  return raw_target, alias
+end
+
+local function split_last(text, sep)
+  local index = nil
+  while true do
+    local found = text:find(sep, (index or 0) + 1, true)
+    if not found then break end
+    index = found
+  end
+  if index then return text:sub(1, index - 1), text:sub(index + #sep) end
+end
+
 local function percent_decode(text)
   return (text or ""):gsub("%%(%x%x)", function(hex)
     return string.char(tonumber(hex, 16))
@@ -107,7 +128,7 @@ function links.parse_wikilink_at(text, start_col, source_line)
   if not close_col then return nil end
 
   local inner = text:sub(open_col + 2, close_col - 1)
-  local raw_target, suffix = split_once(inner, "|")
+  local raw_target, suffix = split_wiki_inner(inner)
   raw_target = trim(raw_target)
   suffix = suffix and trim(suffix) or nil
 
@@ -242,7 +263,7 @@ function links.from_semantic_node(text, source_line, node)
     kind = node.type == "embed" and "embed" or "wiki"
     raw_target = trim(semantic_range_text(text, attributes.target))
     if attributes.alias then
-      alias = trim(semantic_range_text(text, attributes.alias))
+      alias = trim(semantic_range_text(text, attributes.alias):gsub("\\|", "|"))
     else
       local source = semantic_range_text(text, node.source) or ""
       alias = source:find("|", 1, true) and "" or nil
@@ -288,9 +309,10 @@ local function image_parts(source)
     local link, finish = links.parse_wikilink_at(source, 1)
     if not link or finish ~= #source + 1 then return nil end
     local bar = source:find("|", 4, true)
+    local escaped = bar and source:sub(bar - 1, bar - 1) == "\\"
     return {
-      wiki = true,
-      target_col1 = 4, target_col2 = bar or #source - 1,
+      wiki = true, bar = escaped and "\\|" or "|",
+      target_col1 = 4, target_col2 = bar and (escaped and bar - 1 or bar) or #source - 1,
       label_col1 = bar and bar + 1 or #source - 1, label_col2 = #source - 1,
     }
   end
@@ -301,19 +323,20 @@ local function image_parts(source)
     target_col2 = link.link_destination_range.col2,
     label_col1 = link.link_text_range.col1,
     label_col2 = link.link_text_range.col2,
+    bar = "|",
   }
 end
 
 -- Obsidian's rule: a size label becomes the new size; a label that ends
 -- with a size gets the new size there; another label gets it appended.
-local function label_with_width(label, width)
+local function label_with_width(label, width, bar)
   local size = width and tostring(width) or ""
   if label == "" or links.parse_resize(trim(label)) then return size end
-  local alt, last = label:match("^(.*)|([^|]*)$")
+  local alt, last = split_last(label, bar)
   if alt and links.parse_resize(trim(last)) then
-    return width and alt .. "|" .. size or alt
+    return width and alt .. bar .. size or alt
   end
-  return width and label .. "|" .. size or label
+  return width and label .. bar .. size or label
 end
 
 ---Return the source of an image link with its width set to `width`, or
@@ -325,10 +348,12 @@ end
 function links.with_image_width(source, width)
   local parts = image_parts(source)
   if not parts then return nil end
-  local label = label_with_width(source:sub(parts.label_col1, parts.label_col2 - 1), width)
+  local label = label_with_width(
+    source:sub(parts.label_col1, parts.label_col2 - 1), width, parts.bar
+  )
   if parts.wiki then
     local target = source:sub(4, parts.target_col2 - 1)
-    return "![[" .. target .. (label ~= "" and "|" .. label or "") .. "]]"
+    return "![[" .. target .. (label ~= "" and parts.bar .. label or "") .. "]]"
   end
   return source:sub(1, parts.label_col1 - 1) .. label .. source:sub(parts.label_col2)
 end

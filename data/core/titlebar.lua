@@ -223,7 +223,7 @@ function TitleBar:get_pane_entries()
   local result = {}
   local active = panes().active()
   local visible = panes().visible_group()
-  local ordered = panes().ordered()
+  local ordered = panes().navigable()
   local numbers = numbered_panes.local_numbers()
   for i, pane in ipairs(ordered) do
     local geometry = self.entries[i] or {}

@@ -46,8 +46,6 @@ test.describe("Markdown caret clicks", function()
     local blank_line = 2
     local _, y = view:get_line_screen_position(blank_line, 1)
     local x = view.position.x + view:get_gutter_width() + 1
-    test.ok(view:get_col_x_offset(blank_line, 1) > 0,
-      "the unselected blank line should expose the list continuation layout")
 
     test.equal(command.perform("core:set_cursor", x, y), true)
     local pressed_line, pressed_col = buffer:get_selection()

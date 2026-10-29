@@ -150,6 +150,39 @@ static const char *opt_lstring_field(lua_State *L, int table, const char *key, s
   return out;
 }
 
+/* Joins the strings of a `lines` table, such as a Buffer's lines, into one
+   C string. A whole-document parse then makes no Lua copy of the document.
+   The first pass checks each line, so an error leaks nothing. Returns NULL
+   when the field is absent; the caller frees the result. */
+static char *opt_joined_lines_field(lua_State *L, int table, const char *key, size_t *len) {
+  *len = 0;
+  lua_getfield(L, table, key);
+  if (lua_isnil(L, -1)) { lua_pop(L, 1); return NULL; }
+  luaL_checktype(L, -1, LUA_TTABLE);
+  size_t count = lua_rawlen(L, -1), total = 0;
+  for (size_t i = 1; i <= count; i++) {
+    lua_rawgeti(L, -1, (lua_Integer)i);
+    if (lua_type(L, -1) != LUA_TSTRING) luaL_error(L, "%s: line %d is not a string", key, (int)i);
+    total += lua_rawlen(L, -1);
+    lua_pop(L, 1);
+  }
+  char *text = (char *)SDL_malloc(total + 1);
+  if (!text) luaL_error(L, "out of memory joining %s", key);
+  size_t used = 0;
+  for (size_t i = 1; i <= count; i++) {
+    lua_rawgeti(L, -1, (lua_Integer)i);
+    size_t line_len = 0;
+    const char *line = lua_tolstring(L, -1, &line_len);
+    memcpy(text + used, line, line_len);
+    used += line_len;
+    lua_pop(L, 1);
+  }
+  text[used] = '\0';
+  lua_pop(L, 1);
+  *len = used;
+  return text;
+}
+
 static bool opt_bool_field(lua_State *L, int table, const char *key, bool *present) {
   bool out = false;
   lua_getfield(L, table, key);
@@ -462,8 +495,14 @@ static int pool_submit(lua_State *L) {
     }
   }
   lua_pop(L, 1);
+  /* `lines` replaces `text`. The job copies its text, so it does not see
+     later edits to the table. */
+  size_t joined_len = 0;
+  char *joined = opt_joined_lines_field(L, 2, "lines", &joined_len);
+  if (joined) { spec.text = joined; spec.text_len = joined_len; }
   char *error = NULL;
   AnvilWorkerJob *job = anvil_worker_pool_submit(pool->pool, &spec, &error);
+  SDL_free(joined);
   SDL_free((void *)spec.project_scan_paths);
   SDL_free((void *)spec.project_remove_paths);
   SDL_free((void *)spec.project_excluded_paths);
@@ -2136,6 +2175,73 @@ static int treesitter_index_result_semantic_nodes_for_lines(lua_State *L) {
   return 1;
 }
 
+/* Each Markdown heading that has content, in document order, as 7 numbers
+   in one flat array: line1, col1, line2 of the heading node, then
+   line1, col1, line2, col2 of its content. The Heading Outline reads these
+   from the published parse, so an edit does not run the outline query on the
+   UI thread. One flat array makes far less garbage than a table for each of
+   a long note's thousands of headings. The content capture matches the
+   outline query's heading name. */
+static int treesitter_index_result_markdown_headings(lua_State *L) {
+  LuaTreeSitterIndexResult *lua_result = check_treesitter_index_result(L, 1);
+  AnvilWorkerTreeSitterIndexResult *result = lua_result->result;
+  uint32_t count = anvil_worker_treesitter_index_result_capture_count(result, "outline");
+  uint32_t capacity = count > 0 ? count : 1;
+  SemanticNodeView *headings = (SemanticNodeView *)SDL_malloc(sizeof(*headings) * capacity);
+  SemanticCaptureView *contents = (SemanticCaptureView *)SDL_malloc(sizeof(*contents) * capacity);
+  int32_t *content_of = (int32_t *)SDL_malloc(sizeof(*content_of) * capacity);
+  if (!headings || !contents || !content_of) {
+    SDL_free(headings); SDL_free(contents); SDL_free(content_of);
+    return luaL_error(L, "out of memory listing Markdown headings");
+  }
+  uint32_t heading_count = 0, content_count = 0;
+  for (uint32_t index = 0; index < count; index++) {
+    SemanticCaptureView capture;
+    if (!capture_view_at(result, "outline", index, &capture)) continue;
+    if (capture_name_equal(&capture, "block.heading")) headings[heading_count++].capture = capture;
+    else if (capture_name_equal(&capture, "heading_content")) contents[content_count++] = capture;
+  }
+  qsort(headings, heading_count, sizeof(*headings), semantic_node_compare);
+  uint32_t unique_count = 0;
+  for (uint32_t index = 0; index < heading_count; index++) {
+    if (unique_count == 0 || !same_semantic_node(&headings[unique_count - 1], &headings[index].capture))
+      headings[unique_count++] = headings[index];
+  }
+  heading_count = unique_count;
+  for (uint32_t index = 0; index < heading_count; index++) content_of[index] = -1;
+  /* Headings do not nest, so the content belongs to the last heading that
+     starts at or before it. */
+  for (uint32_t index = 0; index < content_count; index++) {
+    const SemanticCaptureView *content = &contents[index];
+    uint32_t low = 0, high = heading_count;
+    while (low < high) {
+      uint32_t middle = low + (high - low) / 2;
+      if (headings[middle].capture.start_byte <= content->start_byte) low = middle + 1;
+      else high = middle;
+    }
+    if (low == 0) continue;
+    const SemanticCaptureView *heading = &headings[low - 1].capture;
+    if (heading->end_byte < content->end_byte || content_of[low - 1] >= 0) continue;
+    content_of[low - 1] = (int32_t)index;
+  }
+  lua_createtable(L, (int)heading_count * 7, 0);
+  int slot = 0;
+  for (uint32_t index = 0; index < heading_count; index++) {
+    if (content_of[index] < 0) continue;
+    const SemanticCaptureView *heading = &headings[index].capture;
+    const SemanticCaptureView *content = &contents[content_of[index]];
+    lua_pushinteger(L, heading->start_line); lua_rawseti(L, -2, ++slot);
+    lua_pushinteger(L, heading->start_col); lua_rawseti(L, -2, ++slot);
+    lua_pushinteger(L, heading->end_line); lua_rawseti(L, -2, ++slot);
+    lua_pushinteger(L, content->start_line); lua_rawseti(L, -2, ++slot);
+    lua_pushinteger(L, content->start_col); lua_rawseti(L, -2, ++slot);
+    lua_pushinteger(L, content->end_line); lua_rawseti(L, -2, ++slot);
+    lua_pushinteger(L, content->end_col); lua_rawseti(L, -2, ++slot);
+  }
+  SDL_free(headings); SDL_free(contents); SDL_free(content_of);
+  return 1;
+}
+
 static void push_result(lua_State *L, AnvilWorkerResult *result) {
   lua_createtable(L, 0, 8);
   lua_pushinteger(L, (lua_Integer)anvil_worker_result_job_id(result));
@@ -2479,6 +2585,7 @@ static const luaL_Reg treesitter_index_result_methods[] = {
   { "captures", treesitter_index_result_captures },
   { "captures_for_lines", treesitter_index_result_captures_for_lines },
   { "semantic_nodes_for_lines", treesitter_index_result_semantic_nodes_for_lines },
+  { "markdown_headings", treesitter_index_result_markdown_headings },
   { "close", treesitter_index_result_close },
   { "__gc", treesitter_index_result_gc },
   { NULL, NULL }
@@ -2546,7 +2653,6 @@ static int f_markdown_parse_now(lua_State *L) {
   memset(&spec, 0, sizeof(spec));
   spec.kind = "markdown_parse";
   spec.text = opt_lstring_field(L, 1, "text", &spec.text_len);
-  luaL_argcheck(L, spec.text != NULL, 1, "Markdown parse requires text");
   spec.outline_query = opt_lstring_field(L, 1, "outline_query", &spec.outline_query_len);
   spec.usage_query = opt_lstring_field(L, 1, "usage_query", &spec.usage_query_len);
   spec.parse_timeout_ms = opt_uint32_field(L, 1, "parse_timeout_ms", 0);
@@ -2562,10 +2668,15 @@ static int f_markdown_parse_now(lua_State *L) {
     spec.previous_result = previous->result;
   }
   lua_pop(L, 1);
+  size_t joined_len = 0;
+  char *joined = opt_joined_lines_field(L, 1, "lines", &joined_len);
+  if (joined) { spec.text = joined; spec.text_len = joined_len; }
+  luaL_argcheck(L, spec.text != NULL, 1, "Markdown parse requires text or lines");
   bool over_budget = false;
   char *error = NULL;
   AnvilWorkerTreeSitterIndexResult *result =
     anvil_worker_markdown_parse_now(&spec, budget_ms, &over_budget, &error);
+  SDL_free(joined);
   if (!result) {
     lua_pushnil(L);
     lua_pushstring(L, error ? error : "Markdown parse failed");

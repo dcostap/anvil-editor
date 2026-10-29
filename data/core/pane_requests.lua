@@ -48,8 +48,8 @@ function M.place(pane, target)
   local unchanged = false
   if target.mode == "group" then
     if not anchor then
-      local ordered = panes.ordered()
-      anchor = ordered[#ordered]
+      local ordered = panes.navigable()
+      anchor = ordered[#ordered] or panes.ordered()[1]
     end
     local side = target.anchor and target.side or "after"
     if #layout.leaves(pane.group.root) == 1 then
@@ -90,6 +90,7 @@ end
 local schemas = {
   key = {pane = true, stroke = true},
   focus = {pane = true, feedback = true}, close = {pane = true}, move = {pane = true, target = true},
+  snooze = {pane = true}, unsnooze = {pane = true},
   open = {files = true, text = true, target = true},
   launch = {files = true},
   drop = {pane = true, files = true, text = true},
@@ -216,6 +217,8 @@ local function execute(request, x, y)
   end
   if action == "focus" then panes.focus(pane, request.feedback); return true end
   if action == "close" then panes.close(pane); return true end
+  if action == "snooze" then return require("core.snoozed_panes").snooze(pane) end
+  if action == "unsnooze" then return require("core.snoozed_panes").wake(pane) end
   if action == "move" then
     local placed, err = M.place(pane, request.target)
     return placed and true, err

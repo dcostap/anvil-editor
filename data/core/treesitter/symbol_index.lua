@@ -1986,9 +1986,8 @@ local function submit_open_buffer_overlay(index, buffer, path, reason)
   if not language then return false, "missing-language" end
   local lines = buffer.lines
   if type(lines) ~= "table" then return false, "missing-lines" end
-  -- Reject oversized revisions before copying their text.
+  -- Reject oversized revisions before the native side copies their text.
   if not buffer_text_within(lines, MAX_FILE_BYTES) then return false, "too-large" end
-  local text = table.concat(lines)
 
   local change_id = buffer_change_id(buffer)
   local project_paths_generation = index.project_paths_generation or project_paths_module().generation()
@@ -2020,7 +2019,7 @@ local function submit_open_buffer_overlay(index, buffer, path, reason)
       path = path,
       relpath = common.relative_path(index.root, path),
       language = language.grammar,
-      text = text,
+      lines = lines,
       outline_query = sources.outline,
       usage_query = usage_kind and sources[usage_kind] or nil,
       parse_timeout_ms = language.parse_timeout_ms or DEFAULT_PARSE_TIMEOUT_MS,

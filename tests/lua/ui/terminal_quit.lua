@@ -4,17 +4,17 @@ local test = require "core.test"
 local terminal = require "plugins.terminal"
 
 test.describe("Terminal quit decision", function()
-  test.it("closes idle sessions even with a remembered Keep answer", function()
-    test.same(terminal.quit_decision({ { kind = "running", busy = false } }, "keep"), { "close" })
+  test.it("ends idle sessions even with a remembered Keep answer", function()
+    test.same(terminal.quit_decision({ { kind = "running", busy = false } }, "keep"), { "end" })
   end)
 
-  test.it("asks once for busy sessions and preserves idle close decisions", function()
+  test.it("asks once for busy sessions and preserves idle end decisions", function()
     local statuses = { { kind = "running", busy = false }, { kind = "running", busy = true } }
     local decision, reason = terminal.quit_decision(statuses)
     test.equal(decision, nil)
     test.equal(reason, "ask")
-    test.same(terminal.quit_decision(statuses, "keep"), { "close", "detach" })
-    test.same(terminal.quit_decision(statuses, "end"), { "close", "close" })
+    test.same(terminal.quit_decision(statuses, "keep"), { "end", "detach" })
+    test.same(terminal.quit_decision(statuses, "end"), { "end", "end" })
     decision, reason = terminal.quit_decision(statuses, "cancel")
     test.equal(decision, nil)
     test.equal(reason, "cancel")
@@ -31,7 +31,7 @@ test.describe("Terminal quit decision", function()
 end)
 
 test.describe("Terminal quit confirmation", function()
-  test.it("cancels, remembers Keep, closes idle shells, and preserves busy shells", function()
+  test.it("cancels, remembers Keep, ends idle shells, and preserves busy shells", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local command = require "core.command"
     local storage = require "core.storage"
@@ -85,7 +85,7 @@ test.describe("Terminal quit confirmation", function()
       local accepted = core.quit_request
       core.quit_request = previous_quit
       test.ok(accepted)
-      test.equal(idle.state, "closed")
+      test.equal(idle.state, "ended")
       test.equal(busy.state, "detached")
       test.equal(storage.load("plugins.terminal", "quit_choice"), "keep")
       restored = terminal.from_state(busy_state)
@@ -145,7 +145,7 @@ test.describe("Idle Pi close decisions", function()
       { kind = "running", busy = true },
     }
     test.same(terminal.quit_decision(statuses, "keep"), { "detach", "detach" })
-    test.same(terminal.quit_decision(statuses, "end"), { "close", "close" })
+    test.same(terminal.quit_decision(statuses, "end"), { "end", "end" })
   end)
 
   test.it("keeps confirmation for other programs and uncertain Pi states", function()

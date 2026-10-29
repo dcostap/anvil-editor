@@ -28,8 +28,17 @@ local function existing_pane_target(text, item, source)
     return item.pane
   end
   local number = tonumber(tostring(text or ""):match("^%s*(%d+)%s*$"))
-  local target = number and panes.ordered()[number] or nil
+  local target = number and panes.navigable()[number] or nil
   return target ~= source and target or nil
+end
+
+-- The Panes that navigation reaches, and the position of `pane` among them. A Snoozed Pane has none.
+local function navigable_position(pane)
+  local ordered = panes.navigable()
+  for index, member in ipairs(ordered) do
+    if member == pane then return ordered, index end
+  end
+  return ordered, nil
 end
 
 local function view_copy_factory(view)
@@ -63,7 +72,7 @@ local function destination_items(source, include_splits)
     end
   end
   items[#items + 1] = { text = "New Pane Group", kind = "new_group" }
-  for number, pane in ipairs(panes.ordered()) do
+  for number, pane in ipairs(panes.navigable()) do
     if pane ~= source then
       local view = pane.current_view
       local name = view and view.get_name and view:get_name() or "Pane"
@@ -201,18 +210,19 @@ local commands = {
   ["pane:close_all"] = command.palette(function() return panes.close_all() end),
   ["pane:close_others"] = command.palette(function(pane)
     local result = true
-    for index = #panes.ordered(), 1, -1 do
-      local candidate = panes.ordered()[index]
+    local others = panes.navigable()
+    for index = #others, 1, -1 do
+      local candidate = others[index]
       if candidate ~= pane and not panes.close(candidate) then result = false end
     end
     return result
   end),
   ["pane:move_before"] = command.palette(function(pane)
-    local ordered, index = panes.ordered(), panes.number(pane)
+    local ordered, index = navigable_position(pane)
     if index and index > 1 then return panes.move(pane, ordered[index - 1], "left") end
   end),
   ["pane:move_after"] = command.palette(function(pane)
-    local ordered, index = panes.ordered(), panes.number(pane)
+    local ordered, index = navigable_position(pane)
     if index and index < #ordered then return panes.move(pane, ordered[index + 1], "right") end
   end),
   ["pane:rotate_group_clockwise"] = command.palette(function(pane)
@@ -233,12 +243,12 @@ local commands = {
     return move_pane_to(pane)
   end, { keywords = { "history", "navigation" } }),
   ["pane:focus_previous"] = function(pane)
-    local ordered, index = panes.ordered(), panes.number(pane)
-    if #ordered > 0 then return panes.focus_index((index - 2) % #ordered + 1) end
+    local ordered, index = navigable_position(pane)
+    if #ordered > 0 then return panes.focus(ordered[((index or 1) - 2) % #ordered + 1]) end
   end,
   ["pane:focus_next"] = function(pane)
-    local ordered, index = panes.ordered(), panes.number(pane)
-    if #ordered > 0 then return panes.focus_index(index % #ordered + 1) end
+    local ordered, index = navigable_position(pane)
+    if #ordered > 0 then return panes.focus(ordered[(index or 0) % #ordered + 1]) end
   end,
   ["pane:focus_local_next"] = command.palette(function(pane)
     return focus_local(pane, 1)

@@ -5,6 +5,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 $configData = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
+# Reject old launch files before they can start a stopped-GC profiler.
+foreach ($name in @('ANVIL_PERF_BENCHMARK_ALLOCATION', 'ANVIL_PERF_BENCHMARK_ALLOCATION_SITES')) {
+  if ($configData.environment.$name -or [Environment]::GetEnvironmentVariable($name, 'Process')) {
+    throw "Allocation profiling is disabled: it exhausts system memory. Use timing or heap diagnostics."
+  }
+}
+$memoryLimitMb = 4096L
+if ($configData.PSObject.Properties.Name -contains 'memory_limit_mb') {
+  $memoryLimitMb = [long]$configData.memory_limit_mb
+}
+if ($memoryLimitMb -lt 1 -or $memoryLimitMb -gt 1048576) {
+  throw 'memory_limit_mb must be between 1 and 1048576. The memory limit cannot be disabled.'
+}
 $exe = (Resolve-Path -LiteralPath ([string]$configData.exe)).Path
 $workingDirectory = [string]$configData.working_directory
 if (!(Test-Path -LiteralPath $workingDirectory)) {
@@ -29,6 +42,8 @@ public sealed class AnvilHiddenDesktopResult {
   public bool ProcessTreeTerminated;
   public long PeakWorkingSetBytes;
   public long PeakPrivateBytes;
+  public long PeakJobMemoryBytes;
+  public long MemoryLimitBytes;
   public bool DumpWritten;
   public string DumpPath;
   public int UiProcessor;
@@ -83,6 +98,24 @@ public static class AnvilHiddenDesktopLauncher {
     public UIntPtr PeakProcessMemoryUsed;
     public UIntPtr PeakJobMemoryUsed;
   }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+    public IntPtr CompletionKey;
+    public IntPtr CompletionPort;
+  }
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr CreateIoCompletionPort(
+    IntPtr file, IntPtr existingPort, UIntPtr key, uint threads);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetQueuedCompletionStatus(
+    IntPtr port, out uint message, out UIntPtr key, out IntPtr overlapped, uint milliseconds);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool QueryInformationJobObject(
+    IntPtr job, int infoClass, out JOBOBJECT_EXTENDED_LIMIT_INFORMATION info, uint size, IntPtr length);
 
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern IntPtr CreateDesktop(
@@ -150,6 +183,9 @@ public static class AnvilHiddenDesktopLauncher {
   private const uint WAIT_TIMEOUT = 0x00000102;
   private const uint WAIT_OBJECT_0 = 0;
   private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+  private const uint JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200;
+  private const uint JOB_OBJECT_MSG_JOB_MEMORY_LIMIT = 10;
+  private const int JobObjectAssociateCompletionPortInformation = 7;
   private const int JobObjectExtendedLimitInformation = 9;
   private const uint MiniDumpWithUnloadedModules = 0x00000020;
   private const uint MiniDumpWithThreadInfo = 0x00001000;
@@ -173,11 +209,12 @@ public static class AnvilHiddenDesktopLauncher {
     return quoted.ToString();
   }
 
-  private static IntPtr CreateKillOnCloseJob() {
+  private static IntPtr CreateKillOnCloseJob(long memoryLimit, IntPtr port) {
     IntPtr job = CreateJobObject(IntPtr.Zero, null);
     if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_JOB_MEMORY;
+    limits.JobMemoryLimit = new UIntPtr((ulong)memoryLimit);
     int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
     IntPtr buffer = Marshal.AllocHGlobal(size);
     try {
@@ -190,7 +227,33 @@ public static class AnvilHiddenDesktopLauncher {
     } finally {
       Marshal.FreeHGlobal(buffer);
     }
+    JOBOBJECT_ASSOCIATE_COMPLETION_PORT association = new JOBOBJECT_ASSOCIATE_COMPLETION_PORT();
+    association.CompletionKey = new IntPtr(1);
+    association.CompletionPort = port;
+    size = Marshal.SizeOf(typeof(JOBOBJECT_ASSOCIATE_COMPLETION_PORT));
+    buffer = Marshal.AllocHGlobal(size);
+    try {
+      Marshal.StructureToPtr(association, buffer, false);
+      if (!SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, buffer, (uint)size)) {
+        int error = Marshal.GetLastWin32Error();
+        CloseHandle(job);
+        throw new Win32Exception(error);
+      }
+    } finally {
+      Marshal.FreeHGlobal(buffer);
+    }
     return job;
+  }
+
+  private static bool MemoryLimitReached(IntPtr port) {
+    uint message;
+    UIntPtr key;
+    IntPtr process;
+    bool reached = false;
+    while (GetQueuedCompletionStatus(port, out message, out key, out process, 0)) {
+      if (message == JOB_OBJECT_MSG_JOB_MEMORY_LIMIT) reached = true;
+    }
+    return reached;
   }
 
   private static string ReadPhase(string heartbeatPath) {
@@ -253,15 +316,18 @@ public static class AnvilHiddenDesktopLauncher {
     string desktopName, int timeoutMilliseconds, string heartbeatPath,
     int startupTimeoutMilliseconds, int heartbeatTimeoutMilliseconds,
     string resourceSamplesPath, string timeoutDumpPath, bool stableUiScheduling,
-    string[] endPhases) {
+    string[] endPhases, long memoryLimitBytes) {
     IntPtr desktop = CreateDesktop(
       desktopName, IntPtr.Zero, IntPtr.Zero, 0, DESKTOP_ALL_ACCESS, IntPtr.Zero);
     if (desktop == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
 
     PROCESS_INFORMATION pi = new PROCESS_INFORMATION();
     IntPtr job = IntPtr.Zero;
+    IntPtr port = IntPtr.Zero;
     try {
-      job = CreateKillOnCloseJob();
+      port = CreateIoCompletionPort(new IntPtr(-1), IntPtr.Zero, UIntPtr.Zero, 1);
+      if (port == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+      job = CreateKillOnCloseJob(memoryLimitBytes, port);
       STARTUPINFO si = new STARTUPINFO();
       si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
       si.lpDesktop = desktopName;
@@ -313,6 +379,12 @@ public static class AnvilHiddenDesktopLauncher {
       long nextResourceSampleMs = 0;
       while (true) {
         uint wait = WaitForSingleObject(pi.hProcess, 50);
+        // The kernel refuses excess commit, including allocations in descendants.
+        // Read notifications before exit status: a refused allocation can end a process.
+        if (MemoryLimitReached(port)) {
+          terminationReason = "memory_limit";
+          break;
+        }
         if (wait == WAIT_OBJECT_0) break;
         long elapsed = timer.ElapsedMilliseconds;
         if (!String.IsNullOrEmpty(heartbeatPath) && System.IO.File.Exists(heartbeatPath)) {
@@ -352,13 +424,16 @@ public static class AnvilHiddenDesktopLauncher {
           break;
         }
       }
-      bool timedOut = !String.IsNullOrEmpty(terminationReason);
+      bool memoryLimited = terminationReason == "memory_limit";
+      bool timedOut = !memoryLimited && !String.IsNullOrEmpty(terminationReason);
       bool processTreeTerminated = false;
       bool dumpWritten = false;
-      if (timedOut) {
-        dumpWritten = WriteTimeoutDump(pi.hProcess, pi.dwProcessId, timeoutDumpPath);
-        processTreeTerminated = TerminateJobObject(job, 124);
-        if (!processTreeTerminated) TerminateProcess(pi.hProcess, 124);
+      if (timedOut || memoryLimited) {
+        // Do not allocate a dump while the process tree is out of memory.
+        if (timedOut) dumpWritten = WriteTimeoutDump(pi.hProcess, pi.dwProcessId, timeoutDumpPath);
+        uint code = memoryLimited ? 125u : 124u;
+        processTreeTerminated = TerminateJobObject(job, code);
+        if (!processTreeTerminated) TerminateProcess(pi.hProcess, code);
         WaitForSingleObject(pi.hProcess, 5000);
       } else if (endedPhase != "") {
         uint endCode = endedPhase == "finished" ? 0u : 1u;
@@ -373,10 +448,15 @@ public static class AnvilHiddenDesktopLauncher {
       if (!GetExitCodeProcess(pi.hProcess, out exitCode)) {
         throw new Win32Exception(Marshal.GetLastWin32Error());
       }
+      JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobUsage;
+      if (!QueryInformationJobObject(job, JobObjectExtendedLimitInformation, out jobUsage,
+          (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)), IntPtr.Zero)) {
+        throw new Win32Exception(Marshal.GetLastWin32Error());
+      }
       return new AnvilHiddenDesktopResult {
         ProcessId = pi.dwProcessId,
         UiProcessor = uiProcessor,
-        ExitCode = unchecked((int)exitCode),
+        ExitCode = memoryLimited ? 125 : unchecked((int)exitCode),
         TimedOut = timedOut,
         TerminationReason = terminationReason,
         LastPhase = lastPhase,
@@ -385,6 +465,8 @@ public static class AnvilHiddenDesktopLauncher {
         ProcessTreeTerminated = processTreeTerminated,
         PeakWorkingSetBytes = peakWorkingSet,
         PeakPrivateBytes = peakPrivate,
+        PeakJobMemoryBytes = (long)jobUsage.PeakJobMemoryUsed.ToUInt64(),
+        MemoryLimitBytes = memoryLimitBytes,
         DumpWritten = dumpWritten,
         DumpPath = dumpWritten ? timeoutDumpPath : ""
       };
@@ -399,6 +481,7 @@ public static class AnvilHiddenDesktopLauncher {
       if (pi.hThread != IntPtr.Zero) CloseHandle(pi.hThread);
       if (pi.hProcess != IntPtr.Zero) CloseHandle(pi.hProcess);
       if (job != IntPtr.Zero) CloseHandle(job);
+      if (port != IntPtr.Zero) CloseHandle(port);
       CloseDesktop(desktop);
     }
   }
@@ -440,7 +523,7 @@ try {
   $result = [AnvilHiddenDesktopLauncher]::Run(
     $exe, $arguments, $workingDirectory, $desktopName, $TimeoutSeconds * 1000,
     $heartbeatPath, $startupTimeoutSeconds * 1000, $heartbeatTimeoutSeconds * 1000,
-    $resourceSamplesPath, $timeoutDumpPath, $stableUiScheduling, [string[]]$endPhases)
+    $resourceSamplesPath, $timeoutDumpPath, $stableUiScheduling, [string[]]$endPhases, $memoryLimitMb * 1MB)
   $output = [ordered]@{
     pid = $result.ProcessId
     ui_processor = $result.UiProcessor
@@ -453,6 +536,8 @@ try {
     process_tree_terminated = $result.ProcessTreeTerminated
     peak_working_set_bytes = $result.PeakWorkingSetBytes
     peak_private_bytes = $result.PeakPrivateBytes
+    peak_job_memory_bytes = $result.PeakJobMemoryBytes
+    memory_limit_bytes = $result.MemoryLimitBytes
     dump_written = $result.DumpWritten
     dump_path = $result.DumpPath
     desktop = $desktopName

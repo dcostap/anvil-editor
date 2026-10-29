@@ -5,9 +5,14 @@ queries.list_markers = [[
     (list_marker_dot) (list_marker_parenthesis) ] @marker.list
 ]]
 
+-- Use only `(node) @capture` and `(parent (child) @capture)` patterns. Then an
+-- incremental parse reuses the captures outside the changed ranges. One pattern
+-- of another form makes each edit run the whole query again.
 queries.block = [[
   (atx_heading) @block.heading
   (setext_heading) @block.heading
+  (atx_heading (inline) @heading_content)
+  (setext_heading (paragraph) @heading_content)
   (atx_h1_marker) @marker.heading.h1
   (atx_h2_marker) @marker.heading.h2
   (atx_h3_marker) @marker.heading.h3

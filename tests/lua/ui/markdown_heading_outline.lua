@@ -28,6 +28,39 @@ local DOCUMENT = table.concat({
   "Short.",
 }, "\n\n")
 
+-- Headings whose names need the outline's rules: closing hashes, Setext
+-- lines, containers, whitespace, inline syntax, and UTF-8.
+local EDGE_DOCUMENT = table.concat({
+  "# Closed heading ##",
+  "",
+  "Setext title",
+  "spread on two lines",
+  "===",
+  "",
+  "> ## Quoted heading",
+  "",
+  "- ### Listed heading",
+  "",
+  "#",
+  "",
+  "###\tTabs\tand  gaps   ",
+  "",
+  "Title with *emphasis* and [[Note|alias]]",
+  "---",
+  "",
+  "### Escaped \\# hash #",
+  "",
+  "  ## Indented heading",
+  "",
+  "## Ends with hashes#",
+  "",
+  "## Héllo wörld",
+  "",
+  "```",
+  "# not a heading",
+  "```",
+}, "\n")
+
 local function wait_until(predicate, message)
   local deadline = system.get_time() + 5
   repeat
@@ -123,11 +156,90 @@ test.describe("Markdown Heading Outline", function()
     test.ok(guide.text_x < use.text_x and use.text_x < details.text_x, "deeper headings are indented further")
   end)
 
+  test.it("lists the headings that Current Buffer Symbol Search finds, at their names", function(context)
+    local view, buffer = open_view(context, nil, EDGE_DOCUMENT)
+    local layout = test.not_nil(heading_outline.layout(view))
+    test.same(titles(layout), {
+      "Closed heading", "Setext title spread on two lines", "Quoted heading", "Listed heading",
+      "Tabs and gaps", "Title with emphasis and alias", "Escaped # hash", "Indented heading",
+      "Ends with hashes#", "Héllo wörld",
+    })
+    local symbols = {}
+    for _, symbol in ipairs(treesitter.get_buffer_outline(buffer)) do symbols[symbol.start_line] = symbol end
+    for _, entry in ipairs(layout.entries) do
+      local symbol = test.not_nil(symbols[entry.line], entry.title)
+      test.equal(entry.col, symbol.name_range.start.col, entry.title)
+    end
+  end)
+
+  test.it("shows a heading that the user adds", function(context)
+    local view, buffer = open_view(context)
+    buffer:insert(#buffer.lines, math.huge, "\n\n## Added later")
+    wait_until(function()
+      treesitter.poll_buffer(buffer)
+      view:update()
+      local layout = heading_outline.layout(view)
+      return layout and entry_titled(layout, "Added later") ~= nil
+    end, "the added heading did not show")
+  end)
+
+  test.it("follows a heading that the user renames or moves to another level", function(context)
+    local view, buffer = open_view(context)
+    buffer:insert(line_of(buffer, "## Use"), 1, "#")
+    buffer:insert(line_of(buffer, "## Install"), math.huge, " today")
+    wait_until(function()
+      treesitter.poll_buffer(buffer)
+      view:update()
+      local layout = heading_outline.layout(view)
+      return layout and entry_titled(layout, "Install now today") ~= nil
+    end, "the renamed heading did not show")
+    local layout = heading_outline.layout(view)
+    test.same(titles(layout), { "Guide", "Install now today", "Use anvil", "Details link", "End" })
+    test.equal(entry_titled(layout, "Use anvil").text_x, entry_titled(layout, "Details link").text_x,
+      "a heading at the level of Details has its indent")
+  end)
+
   test.it("marks the section at the top of the view as current", function(context)
     local view, buffer = open_view(context)
     test.equal(current_title(heading_outline.layout(view)), "Guide")
     scroll_line_to_top(view, line_of(buffer, "## Use") + 4)
     test.equal(current_title(heading_outline.layout(view)), "Use anvil")
+  end)
+
+  test.it("marks the caret's section as current after the caret moves, until the user scrolls", function(context)
+    local view, buffer = open_view(context)
+    local use = line_of(buffer, "## Use")
+    -- The heading shows below the reading line, so the section above it is current.
+    scroll_line_to_top(view, use - 10)
+    test.equal(current_title(heading_outline.layout(view)), "Install now")
+    buffer:set_selection(use, 1)
+    view:update()
+    test.equal(current_title(heading_outline.layout(view)), "Use anvil")
+    buffer:set_selection(use + 2, 3)
+    view:update()
+    test.equal(current_title(heading_outline.layout(view)), "Use anvil")
+    view:on_mouse_wheel(1, 0)
+    view.scroll.y = view.scroll.to.y
+    view:update()
+    test.equal(current_title(heading_outline.layout(view)), "Install now")
+  end)
+
+  test.it("follows its own Pane's caret when another Pane shows the same note", function(context)
+    local view, buffer = open_view(context)
+    local install, use = line_of(buffer, "## Install"), line_of(buffer, "## Use")
+    scroll_line_to_top(view, use - 10)
+    local other = panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
+    core.set_active_view(other)
+    view.position.x, view.position.y = 0, 0
+    view.size.x, view.size.y = 1400, 600
+    view:update()
+    test.equal(current_title(heading_outline.layout(view)), "Install now")
+    other:with_selection_state(function() buffer:set_selection(use, 1) end)
+    view:update()
+    test.equal(current_title(heading_outline.layout(view)), "Install now")
+    view:with_selection_state(function() buffer:set_selection(install - 1, 1) end)
+    view:update()
+    test.equal(current_title(heading_outline.layout(view)), "Guide")
   end)
 
   test.it("moves the caret and the view to a heading when its entry is clicked", function(context)
