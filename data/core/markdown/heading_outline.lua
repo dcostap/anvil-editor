@@ -6,6 +6,7 @@ local core = require "core"
 local common = require "core.common"
 local style = require "core.style"
 local navigation_history = require "core.navigation_history"
+local RowHighlight = require "core.row_highlight"
 local treesitter = require "core.treesitter"
 
 local heading_outline = {}
@@ -180,7 +181,7 @@ end
 local function state_for(view)
   local state = view.__heading_outline
   if not state then
-    state = { offset = 0, alpha = 0 }
+    state = { offset = 0, alpha = 0, marker = RowHighlight(RowHighlight.selection) }
     view.__heading_outline = state
   end
   return state
@@ -262,25 +263,40 @@ local function faded(state, key, color, alpha)
   return result
 end
 
--- Animate the list scroll, the current-entry marker, and the fade-in.
+-- The current entry's text color. While the marker glides, the entry that it
+-- leaves dims as the entry that it reaches brightens. At most two entries are
+-- between those colors, one with an odd index and one with an even index.
+local function entry_color(state, index, row_h, dim, bright)
+  local marker = state.marker
+  if not marker.alpha then return dim end
+  local near = 1 - math.abs(marker.y + marker.h / 2 - (index - 0.5) * row_h) / row_h
+  local amount = common.clamp(near, 0, 1) * marker.alpha
+  if amount <= 0 then return dim end
+  if amount >= 1 then return bright end
+  local key = index % 2 == 0 and "even_color" or "odd_color"
+  local result = state[key] or {}
+  state[key] = result
+  for i = 1, 4 do result[i] = dim[i] + (bright[i] - dim[i]) * amount end
+  return result
+end
+
+-- Animate the list scroll, the current-entry marker, and the fade-in. The
+-- marker glides like the Project Sidebar's selection.
 local function animate(view)
   local state = view.__heading_outline
   local layout = heading_outline.layout(view)
   if not layout then
-    state.alpha, state.marker_y = 0, nil
+    state.alpha = 0
+    state.marker:reset()
     return
   end
   view:move_towards(state, "alpha", 1, 0.15, TRANSITION)
   view:move_towards(state, "offset", layout.offset_target, 0.25, TRANSITION)
   if layout.current then
-    local target = (layout.current - 1) * layout.row_h
-    if state.marker_y then
-      view:move_towards(state, "marker_y", target, 0.3, TRANSITION)
-    else
-      state.marker_y = target
-    end
+    local marker_h = math.floor(layout.row_h * MARKER_HEIGHT)
+    state.marker:step((layout.current - 1) * layout.row_h + math.floor((layout.row_h - marker_h) / 2), marker_h)
   else
-    state.marker_y = nil
+    state.marker:step()
   end
 end
 
@@ -297,17 +313,13 @@ function heading_outline.draw(view)
   core.push_clip_rect(layout.x, layout.y, layout.w, layout.h)
   renderer.draw_rect(layout.x + math.floor((marker_w - track_w) / 2), list_top,
     track_w, layout.content_h, faded(state, "track_color", style.divider, alpha))
-  if state.marker_y then
-    local marker_h = math.floor(layout.row_h * MARKER_HEIGHT)
-    renderer.draw_rounded_rect(layout.x, list_top + state.marker_y + math.floor((layout.row_h - marker_h) / 2),
-      marker_w, marker_h, marker_w / 2, faded(state, "marker_color", style.accent, alpha))
-  end
+  state.marker:draw(layout.x, list_top, marker_w, marker_w / 2, faded(state, "marker_color", style.accent, alpha))
   local dim = faded(state, "dim_color", style.dim, alpha)
   local bright = faded(state, "bright_color", style.text, alpha)
   local text_y = math.floor((layout.row_h - font:get_height()) / 2)
   for index, entry in ipairs(layout.entries) do
     if entry.y + entry.h >= layout.y and entry.y <= layout.y + layout.h then
-      local color = (index == layout.current or index == state.hover) and bright or dim
+      local color = index == state.hover and bright or entry_color(state, index, layout.row_h, dim, bright)
       renderer.draw_text(font, entry.shown_title, entry.text_x, entry.y + text_y, color)
     end
   end
