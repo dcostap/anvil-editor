@@ -178,6 +178,51 @@ test.describe("Terminal agent resume", function()
     end)
   end
 
+  test.it("resumes the Pi session after quit's End answer ends its Terminal", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local exe = find_runtime("node")
+    test.skip_if(not exe, "node is not installed")
+    terminal._set_native_for_tests(nil)
+    local storage = require "core.storage"
+    storage.save("plugins.terminal", "quit_choice", "end")
+    local dir = USERDIR .. "/pi sessions ended"
+    system.mkdir(dir)
+    local cli = system.getcwd() .. "/tests/fixtures/fake-pi/dist/cli.js"
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
+    local state = view:get_state()
+    local kernel = require("ffi").load("kernel32")
+    local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
+    local previous_quit = core.quit_request
+    local restored
+    local ok, err = pcall(function()
+      test.ok(view.session:write(string.format('"%s" "%s" --session-dir "%s"\r', exe, cli, dir)))
+      test.ok(wait_for(view, function()
+        local saved = record(state.session_id)
+        return screen_text(view):find("FAKE_PI_READY", 1, true)
+          and saved.interrupted_command and saved.interrupted_command:find("cli.js", 1, true)
+      end), "Pi did not start: " .. screen_text(view))
+      core.quit(true)
+      test.ok(core.quit_request ~= previous_quit, "the remembered End answer did not accept quit")
+      core.quit_request = previous_quit
+      require("terminal_native").finish_close_commands()
+      test.equal(kernel.WaitForSingleObject(handle, 10000), 0, "End did not end the host")
+      restored = panes.place(function() return terminal.from_state(state) end, { placement = "current" })
+      test.ok(wait_for(restored, function() return #launches(dir) == 2 end, 15),
+        "the ended Terminal did not resume Pi: " .. screen_text(restored))
+      test.equal(restored.session_id, state.session_id)
+      local resumed = without_extension(launches(dir)[2])
+      test.equal(resumed[1], "--session")
+      test.equal(resumed[2]:match("[^/\\]+$"), session_file_name(dir))
+    end)
+    core.quit_request = previous_quit
+    storage.clear("plugins.terminal", "quit_choice")
+    if restored then restored:on_close() end
+    view:on_close()
+    if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end
+    kernel.CloseHandle(handle)
+    test.ok(ok, err)
+  end)
+
   test.it("reports Pi's step in an Anvil that a Terminal Session started", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local exe = find_runtime("node")

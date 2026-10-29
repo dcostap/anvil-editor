@@ -89,6 +89,41 @@ test.describe("Terminal revival", function()
     test.ok(ok, err)
   end)
 
+  test.it("revives a shell that quit ended in its Pane with the same session and screen", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
+    local state = view:get_state()
+    local kernel = require("ffi").load("kernel32")
+    local handle = kernel.OpenProcess(0x100001, 0, view.session:stats().host_pid)
+    local previous_quit = core.quit_request
+    local restored
+    local ok, err = pcall(function()
+      test.ok(view.session:write("echo ANVIL_ENDED_SCREEN_MARKER\r"))
+      test.ok(wait_for(view, function()
+        local _, status = view.session:update()
+        return status.busy == false and screen_text(view):find("ANVIL_ENDED_SCREEN_MARKER", 1, true)
+      end), "the shell did not print the marker and go idle")
+      core.quit(true)
+      test.ok(core.quit_request ~= previous_quit, "quit asked about an idle shell")
+      core.quit_request = previous_quit
+      test.equal(view.state, "ended")
+      require("terminal_native").finish_close_commands()
+      test.equal(kernel.WaitForSingleObject(handle, 10000), 0, "quit did not end the host")
+      restored = panes.place(function() return terminal.from_state(state) end, { placement = "current" })
+      test.ok(wait_for(restored, function()
+        return restored.state == "running" and screen_text(restored):find("ANVIL_ENDED_SCREEN_MARKER", 1, true)
+      end), "the ended session did not revive: " .. screen_text(restored))
+      test.equal(restored.session_id, state.session_id)
+    end)
+    core.quit_request = previous_quit
+    if restored then restored:on_close() end
+    view:on_close()
+    if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end
+    kernel.CloseHandle(handle)
+    test.ok(ok, err)
+  end)
+
   test.it("retires a lost session's record when a new shell replaces it", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)

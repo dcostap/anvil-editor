@@ -625,6 +625,8 @@ static DWORD WINAPI host_client(void *userdata) {
     } else if (header.type == ANVIL_TERMINAL_CLOSE && !header.size) {
       host->explicit_close = true;
       host_log(host, "close requested"); stop_host(host); return 0;
+    } else if (header.type == ANVIL_TERMINAL_END && !header.size) {
+      host_log(host, "end requested; keep the record for revival"); stop_host(host); return 0;
     } else if (header.type == ANVIL_TERMINAL_CLEAR && !header.size) {
       static const uint8_t clear[] = "\033[2J\033[3J\033[H";
       EnterCriticalSection(&host->lock);
@@ -693,6 +695,8 @@ static bool attach_client(TerminalHost *host) {
       if (header.type == ANVIL_TERMINAL_CLOSE) {
         host->explicit_close = true;
         host_log(host, "close requested through control connection"); stop_host(host);
+      } else if (header.type == ANVIL_TERMINAL_END) {
+        host_log(host, "end requested through control connection; keep the record for revival"); stop_host(host);
       } else if (header.type == ANVIL_TERMINAL_DETACH) {
         /* Unused clients send CLOSE. DETACH means a view accepted this shell. */
         if (host->prepared) {

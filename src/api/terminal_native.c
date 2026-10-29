@@ -71,7 +71,7 @@ typedef struct {
   volatile LONG replay_complete;
   GhosttySnapshotDecoder decoder;
   bool replay_finished;
-  bool detached;
+  bool detached, ended;
   bool revived, host_gone, prepared, activated_prepared;
   wchar_t *prepared_environment;
   volatile LONG host_exited;
@@ -835,6 +835,9 @@ typedef struct {
 
 static volatile LONG pending_close_commands;
 
+/* Shutdown waits for the commands that end a host. */
+static bool ends_host(uint16_t type) { return type == ANVIL_TERMINAL_CLOSE || type == ANVIL_TERMINAL_END; }
+
 /* Called after Lua teardown, not from a normal UI update. One budget for all jobs. */
 void anvil_terminal_wait_for_close(void) {
   uint64_t deadline = GetTickCount64() + 1000;
@@ -846,7 +849,7 @@ static DWORD WINAPI final_command_main(void *userdata) {
   FinalCommand *command = userdata;
   DWORD error;
   anvil_terminal_host_control(command->process, command->host_pid, command->id, command->type, &error);
-  if (command->type == ANVIL_TERMINAL_CLOSE) InterlockedDecrement(&pending_close_commands);
+  if (ends_host(command->type)) InterlockedDecrement(&pending_close_commands);
   if (command->process) CloseHandle(command->process);
   free(command);
   return 0;
@@ -865,11 +868,11 @@ static void send_final_command(TerminalSession *session, HANDLE process, uint16_
   if (!command) { CloseHandle(process); return; }
   *command = (FinalCommand){ .process = process, .type = type, .host_pid = session->host_pid };
   memcpy(command->id, session->id, sizeof(command->id));
-  if (type == ANVIL_TERMINAL_CLOSE) InterlockedIncrement(&pending_close_commands);
+  if (ends_host(type)) InterlockedIncrement(&pending_close_commands);
   HANDLE thread = CreateThread(NULL, 0, final_command_main, command, 0, NULL);
   if (thread) CloseHandle(thread);
   else {
-    if (type == ANVIL_TERMINAL_CLOSE) InterlockedDecrement(&pending_close_commands);
+    if (ends_host(type)) InterlockedDecrement(&pending_close_commands);
     CloseHandle(process); free(command);
   }
 }
@@ -931,7 +934,7 @@ static DWORD WINAPI reconnect_main(void *userdata) {
   }
   /* Reconnecting views request updates while this job runs. Do not access SDL:
      a cancelled job can outlive the editor's window and Lua state. */
-  if (final_type == ANVIL_TERMINAL_CLOSE) InterlockedDecrement(&pending_close_commands);
+  if (ends_host(final_type)) InterlockedDecrement(&pending_close_commands);
   release_reconnect(job);
   return 0;
 }
@@ -994,7 +997,7 @@ static bool cancel_reconnect(TerminalSession *session, uint16_t type) {
     /* An unaccepted restore does not own another client's shell. */
     if (session->initial_restore && !job->connected && !job->userdir) type = ANVIL_TERMINAL_DETACH;
     job->final_type = type;
-    if (type == ANVIL_TERMINAL_CLOSE) InterlockedIncrement(&pending_close_commands);
+    if (ends_host(type)) InterlockedIncrement(&pending_close_commands);
   } else if (job->connected) {
     session->attach_count = session->attach_count ? session->attach_count : 1;
     if (job->userdir) {
@@ -1030,7 +1033,8 @@ static void close_session(TerminalSession *session) {
   session->closed = true;
   if (session->prepared_environment) FreeEnvironmentStringsW(session->prepared_environment);
   session->prepared_environment = NULL;
-  uint16_t final_type = session->detached && !session->prepared ? ANVIL_TERMINAL_DETACH : ANVIL_TERMINAL_CLOSE;
+  uint16_t final_type = session->prepared ? ANVIL_TERMINAL_CLOSE : session->ended ? ANVIL_TERMINAL_END
+    : session->detached ? ANVIL_TERMINAL_DETACH : ANVIL_TERMINAL_CLOSE;
   HANDLE process = retain_handle(session->process);
   bool job_owns_command = cancel_reconnect(session, final_type);
   if (session->vt_trace_file) {
@@ -3938,6 +3942,14 @@ static int f_terminal_detach(lua_State *L) {
   return 0;
 }
 
+/* Ends the shell, but the host keeps its record and screen, so the session can revive later. */
+static int f_terminal_stop(lua_State *L) {
+  TerminalSession *session = check_session(L, 1);
+  session->ended = true;
+  close_session(session);
+  return 0;
+}
+
 /* External transport fault injection; tests assert recovery, not worker details. */
 static int f_break_transport_for_tests(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
@@ -3980,6 +3992,7 @@ static const luaL_Reg terminal_methods[] = {
   { "close", f_terminal_close },
   { "activate", f_terminal_activate },
   { "detach", f_terminal_detach },
+  { "stop", f_terminal_stop },
   { "__gc", f_terminal_gc },
   { NULL, NULL },
 };

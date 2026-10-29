@@ -15,6 +15,9 @@ enum {
   /* The UTF-8 path of the Project that now owns the session, without a terminator. Hosts that write
      movable = true in their record accept it. */
   ANVIL_TERMINAL_PROJECT,
+  /* Ends the shell but keeps the record, the screen and the agent report for revival. Older hosts read it as a
+     disconnect and keep running. */
+  ANVIL_TERMINAL_END,
   ANVIL_TERMINAL_WELCOME = 64, ANVIL_TERMINAL_REPLAY, ANVIL_TERMINAL_REPLAY_END,
   ANVIL_TERMINAL_OUTPUT, ANVIL_TERMINAL_EXITED, ANVIL_TERMINAL_STATUS,
   /* The request token. This reply also reports that the shell is idle. */
