@@ -159,12 +159,19 @@ static bool emit(ExtensionScan *scan, const char *name, uint32_t start, uint32_t
   return scan->capture_callback && scan->capture_callback(&capture, scan->capture_payload);
 }
 
-static uint32_t find_unescaped_pipe(ExtensionScan *scan, uint32_t start, uint32_t end) {
+/* A table needs `\|` inside a Wikilink, and a note name cannot hold `|`,
+   so an escaped pipe also separates the target from the alias. */
+static uint32_t find_alias_pipe(ExtensionScan *scan, uint32_t start, uint32_t end) {
   for (uint32_t cursor = start; cursor < end; cursor++) {
     if ((cursor & 0x3fff) == 0 && cancelled(scan)) return UINT32_MAX;
-    if (scan->source[cursor] == '|' && !escaped_at(scan, cursor)) return cursor;
+    if (scan->source[cursor] == '|') return cursor;
   }
   return UINT32_MAX;
+}
+
+static uint32_t alias_target_end(ExtensionScan *scan, uint32_t close, uint32_t pipe) {
+  if (pipe == UINT32_MAX) return close;
+  return escaped_at(scan, pipe) ? pipe - 1 : pipe;
 }
 
 static bool emit_wikilink(
@@ -181,7 +188,7 @@ static bool emit_wikilink(
   const char *parent = embed ? "span.embed" : "span.wiki_link";
   if (!emit(scan, parent, start, close + 2) ||
       !emit(scan, embed ? "marker.embed_open" : "marker.wiki_open", start, content_start) ||
-      !emit(scan, "content.target", content_start, pipe == UINT32_MAX ? close : pipe) ||
+      !emit(scan, "content.target", content_start, alias_target_end(scan, close, pipe)) ||
       (pipe != UINT32_MAX && !emit(scan, "content.alias", pipe + 1, close)) ||
       !emit(scan, embed ? "marker.embed_close" : "marker.wiki_close", close, close + 2)) {
     return false;
@@ -292,9 +299,9 @@ static bool scan_extensions(ExtensionScan *scan) {
         scan->source[cursor + 1] == '[' && scan->source[cursor + 2] == '[') {
       uint32_t close = find_delimiter(scan, cursor + 3, ']', ']', false, false);
       uint32_t pipe = close == UINT32_MAX ? UINT32_MAX
-        : find_unescaped_pipe(scan, cursor + 3, close);
+        : find_alias_pipe(scan, cursor + 3, close);
       if (cancelled(scan)) return false;
-      uint32_t target_end = pipe == UINT32_MAX ? close : pipe;
+      uint32_t target_end = alias_target_end(scan, close, pipe);
       if (close != UINT32_MAX) {
         if (target_end > cursor + 3 && !emit_wikilink(scan, cursor, 3, close, pipe, true)) return false;
         cursor = close + 2;
@@ -307,9 +314,9 @@ static bool scan_extensions(ExtensionScan *scan) {
         scan->source[cursor] == '[' && scan->source[cursor + 1] == '[') {
       uint32_t close = find_delimiter(scan, cursor + 2, ']', ']', false, false);
       uint32_t pipe = close == UINT32_MAX ? UINT32_MAX
-        : find_unescaped_pipe(scan, cursor + 2, close);
+        : find_alias_pipe(scan, cursor + 2, close);
       if (cancelled(scan)) return false;
-      uint32_t target_end = pipe == UINT32_MAX ? close : pipe;
+      uint32_t target_end = alias_target_end(scan, close, pipe);
       if (close != UINT32_MAX) {
         if (target_end > cursor + 2 && !emit_wikilink(scan, cursor, 2, close, pipe, false)) return false;
         cursor = close + 2;
