@@ -390,7 +390,9 @@ local function reveal_units_for_line(view, line, state)
           end
         end
         local list_marker, list_node, list_marker_token_col2 = list_marker_for_line(view, line)
-        if list_marker then
+        -- Selecting across items keeps their marker lanes unchanged. A local
+        -- selection can still reveal a prefix for source editing.
+        if list_marker and line1 == line2 then
           local marker_source = {
             line1 = line, col1 = list_marker.col1,
             line2 = line, col2 = list_marker_token_col2,
@@ -404,7 +406,7 @@ local function reveal_units_for_line(view, line, state)
           end
         end
         local task_marker, task_node = task_marker_for_line(view, line)
-        if task_marker and source_intersects_selection(
+        if task_marker and line1 == line2 and source_intersects_selection(
           task_marker, line1, col1, line2, col2
         ) then
           units[#units + 1] = {
@@ -1133,6 +1135,22 @@ local function image_fragment(view, span, opts)
             image = entry.scaled_image
           end
           renderer.draw_canvas(image, image_x, image_y)
+        end
+        -- Use the live selection, not the frozen reveal state of a mouse drag.
+        -- Images cover the ordinary selection background, so tint them last.
+        local spec = fragment.widget.image_controls
+        if view:get_selection_background_color() then
+          for _, line1, col1, line2, col2 in view.buffer:get_selections(true) do
+            if line1 > spec.line then break end
+            if (line1 < spec.line or line1 == spec.line and col1 < spec.col2)
+              and (line2 > spec.line or line2 == spec.line and col2 > spec.col1)
+              and not (line1 == line2 and col1 == col2)
+              and not view.buffer:is_search_selection(line1, col1, line2, col2)
+            then
+              renderer.draw_rect(image_x, image_y, width, height, style.markdown_live_image_selection)
+              break
+            end
+          end
         end
         image_controls.draw(fragment.widget, view, image_x, image_y, width, height)
       end,
@@ -2799,7 +2817,9 @@ local function semantic_block_fragments(view, line_text, line, reveal_units)
       local width = target_x - source_leading_width
       -- Keep unindented lazy continuations at their source margin.
       -- Caret reveal must not change their geometry.
-      if (leading ~= "" or line_text == "") and width > 0.1 then
+      -- A blank separator has no list content to align. Keep its selection
+      -- and caret at the source margin, even between two list items.
+      if leading ~= "" and line_text:find("%S") and width > 0.1 then
         continuation_indent = width
       end
     end
@@ -3773,10 +3793,8 @@ function edit_visual_projection.selection_reveals_list_prefix(
           then
             return true
           end
-        else
-          local from = line == line1 and col1 or 1
-          local to = line == line2 and col2 or math.huge
-          if from < content_col and to > 1 then return true end
+        elseif line1 == line2 then
+          if col1 < content_col and col2 > 1 then return true end
         end
       end
     end
