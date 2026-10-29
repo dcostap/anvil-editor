@@ -8,7 +8,7 @@ local common = require "core.common"
 local style = require "core.style"
 local navigation_history = require "core.navigation_history"
 local RowHighlight = require "core.row_highlight"
-local treesitter = require "core.treesitter"
+local markdown_model = require "core.markdown.model"
 
 local heading_outline = {}
 
@@ -39,11 +39,11 @@ end
 
 -- Headings ----------------------------------------------------------------
 
-local function heading_level(buffer, symbol)
-  local hashes = (buffer.lines[symbol.start_line] or ""):match("^ ? ? ?(#+)")
+local function heading_level(buffer, line1, line2)
+  local hashes = (buffer.lines[line1] or ""):match("^ ? ? ?(#+)")
   if hashes then return #hashes end
   -- A setext heading: `=` underlines level 1 and `-` level 2.
-  for line = symbol.start_line + 1, symbol.end_line do
+  for line = line1 + 1, line2 do
     local text = buffer.lines[line] or ""
     if text:match("^%s*=+%s*$") then return 1 end
     if text:match("^%s*%-+%s*$") then return 2 end
@@ -65,22 +65,61 @@ local function plain_title(text)
   return (text:gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
 end
 
--- The headings that show, rebuilt when the outline changes. While the tree
--- is parsing an edit, the last headings stay.
+-- A heading's name as the document outline gives it: the content text with
+-- its whitespace collapsed, and without an ATX heading's closing hashes.
+local function heading_name(buffer, heading_line, heading_col, line1, col1, line2, col2)
+  local text
+  if line1 == line2 then
+    text = (buffer.lines[line1] or ""):sub(col1, math.max(col1 - 1, col2 - 1))
+  else
+    local parts = { (buffer.lines[line1] or ""):sub(col1) }
+    for line = line1 + 1, line2 - 1 do parts[#parts + 1] = buffer.lines[line] or "" end
+    parts[#parts + 1] = (buffer.lines[line2] or ""):sub(1, math.max(0, col2 - 1))
+    text = table.concat(parts)
+  end
+  local name = text:gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+  if (buffer.lines[heading_line] or ""):sub(heading_col, heading_col) == "#" then
+    name = name:gsub("[ \t]+#+$", "")
+  end
+  return name
+end
+
+-- The headings that show, rebuilt for each parse that the Markdown model
+-- publishes. While the worker parses an edit, the last headings stay. The
+-- parse lists the headings, so an edit does not query the whole document on
+-- the UI thread.
 local function headings(view, state)
-  local symbols, reason = treesitter.get_buffer_outline(view.buffer)
-  if reason or symbols == state.symbols then return state.headings or {} end
-  local buffer, list, top = view.buffer, {}, math.huge
-  for _, symbol in ipairs(symbols) do
-    if symbol.kind == "heading" then
-      local level = heading_level(buffer, symbol)
+  local buffer = view.buffer
+  local instance = markdown_model.peek(buffer)
+  if not instance or instance.status ~= "ready"
+    or instance.published_revision ~= buffer.text_revision
+    or (instance == state.model and instance.generation == state.generation)
+  then
+    return state.headings or {}
+  end
+  -- An edit changes few headings. A heading that keeps its name keeps its
+  -- record, so its title and its fitted title are not made again.
+  local previous, by_name = state.by_name or {}, {}
+  local list, top = {}, math.huge
+  local found = instance:headings() or {}
+  for index = 1, #found, 7 do
+    local line1, col1, line2 = found[index], found[index + 1], found[index + 2]
+    local content_col1 = found[index + 4]
+    local name = heading_name(
+      buffer, line1, col1, found[index + 3], content_col1, found[index + 5], found[index + 6]
+    )
+    if name ~= "" then
+      local level = heading_level(buffer, line1, line2)
       top = math.min(top, level)
-      list[#list + 1] = {
-        line = symbol.start_line,
-        col = symbol.name_range.start.col,
-        level = level,
-        title = plain_title(symbol.name),
-      }
+      local record = previous[name]
+      if record then
+        previous[name] = nil
+      else
+        record = { name = name, title = plain_title(name) }
+      end
+      record.line, record.col, record.level = line1, content_col1, level
+      by_name[name] = by_name[name] or record
+      list[#list + 1] = record
     end
   end
   local shown = {}
@@ -91,7 +130,8 @@ local function headings(view, state)
     end
   end
   core.log_quiet("Heading Outline: %d of %d headings for %s", #shown, #list, buffer:get_name())
-  state.symbols, state.headings = symbols, shown
+  state.model, state.generation, state.headings = instance, instance.generation, shown
+  state.by_name = by_name
   return shown
 end
 

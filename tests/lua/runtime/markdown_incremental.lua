@@ -55,6 +55,7 @@ local function compare(buffer, instance, label)
   for index = 1, #actual do test.same(actual[index], expected[index], label .. " node " .. index) end
   test.same(instance:footnote_definitions(), fresh:footnote_definitions(), label)
   test.same(instance:footnote_lines(), fresh:footnote_lines(), label)
+  test.same(instance:headings(), fresh:headings(), label .. " headings")
   model.close(fresh_buffer, "test")
 end
 
@@ -101,6 +102,7 @@ local function raw_sequence(label, texts)
         return list
       end
       test.same(semantic(current), semantic(fresh), label .. " step " .. index)
+      test.same(current:markdown_headings(), fresh:markdown_headings(), label .. " headings " .. index)
       fresh:close()
       if previous then previous:close() end
       previous = current
@@ -123,6 +125,12 @@ test.describe("Markdown incremental semantic publication", function()
       { text, defined }, { defined, text }, { text, defined }, { defined, text },
     })
   end
+  sequence("matches headings through renames, inserts, Setext conversions, and deletes",
+    "# One\n\nBody *text*.\n\n## Two ##\n\nTail.\n", {
+      { "# One", "# One renamed" }, { "Body", "### Added\n\nBody" },
+      { "## Two ##\n", "Two\n---\n" }, { "Two\n---\n", "Two\n\n" },
+      { "### Added\n\n", "" }, { "# One renamed\n\n", "" },
+    })
   sequence("matches paragraph merges and splits", "First *one*.\n\nSecond **two**.\n", {
     { "\n\n", "\n" }, { "\nSecond", "\n\nSecond" },
   })
@@ -161,6 +169,17 @@ test.describe("Markdown incremental semantic publication", function()
     { "a\n", "é\n" }, { "é\n", "€\n" }, { "€\n", "😀\n" },
     { "😀\n", "a\n" },
   })
+
+  test.it("reuses unchanged block captures with the Markdown block query", function()
+    local spec = { text = "# One\n\nBody *text*.\n\n## Two\n\nTail.\n",
+      outline_query = queries.block, usage_query = queries.inline }
+    local first = test.not_nil(native_pool.markdown_parse_now(spec, 5000))
+    spec.text, spec.previous_result = spec.text .. "\nMore.\n", first
+    local second = test.not_nil(native_pool.markdown_parse_now(spec, 5000))
+    test.ok(second:summary().metrics.reused_block_captures > 0)
+    first:close()
+    second:close()
+  end)
 
   test.it("keeps identities with their nodes across edits and shifts", function()
     local buffer = buffer_with("**one**\n\n**two**\n\n**end**\n")

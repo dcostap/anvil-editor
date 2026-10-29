@@ -757,6 +757,14 @@ function Model:reference_definition_nodes_for_lines(line1, line2, opts)
   return self:stabilize_node_ids(nodes), nodes.truncated and "limit" or nil
 end
 
+---Return each heading with content in document order, as 7 numbers in one
+---flat array: `line1`, `col1`, `line2` of the heading, then `line1`, `col1`,
+---`line2`, `col2` of its content. The ranges refer to `published_revision`.
+function Model:headings()
+  if not self.result or self.status ~= "ready" then return nil, self.status end
+  return self.result:markdown_headings()
+end
+
 ---Return block quote identities and source ranges without other nodes.
 function Model:quote_nodes_for_lines(line1, line2, opts)
   opts = opts or {}
