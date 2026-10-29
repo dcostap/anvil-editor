@@ -603,9 +603,10 @@ Port in small slices. Do not rewrite a module at once. For each slice:
 
 1. Measure the slice before the change.
 2. Keep the old Lua path until the new path gives the same output. Compare both outputs on many real documents and edits. Use the repo's Markdown files and the scenario fixtures.
-3. Add tests that fail on the old code (red-green).
-4. Run the full `lua-runtime` and `lua-ui` suites. Compare their failures with a baseline worktree, because some tests are flaky.
-5. Run A/B scenarios against the baseline. Alternate the two versions, so machine load affects both. Give the numbers in the commit message.
+3. For a slice that changes what the editor draws or where, also compare pixels. Before the change, record golden images with the [render gate](tools/RENDER_PERF_GATE.md) (`--update-baseline --update-goldens`). After the change, the same scenes must match exactly. Add scenes when the existing ones do not show the changed line kinds.
+4. Add tests that fail on the old code (red-green).
+5. Run the full `lua-runtime` and `lua-ui` suites. Compare their failures with a baseline worktree, because some tests are flaky.
+6. Run A/B scenarios against the baseline. Alternate the two versions, so machine load affects both. Give the numbers in the commit message.
 
 ### Known target: the document layout pipeline
 
