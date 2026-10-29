@@ -135,11 +135,40 @@ function image_controls.copy(spec)
   if not ok then core.warn("Could not copy the image: %s", tostring(err)) end
 end
 
-local function edit_source(view, spec)
+---Show the source of the image link at `spec` and select its target, as the
+---edit button does.
+function image_controls.edit(view, spec)
   local source = (view.buffer.lines[spec.line] or ""):sub(spec.col1, spec.col2 - 1)
   local col1, col2 = links.image_target_range(source)
   if not col1 then return false end
   view.buffer:set_selection(spec.line, spec.col1 + col2 - 1, spec.line, spec.col1 + col1 - 1)
+  return true
+end
+
+---A click edits the image target. A drag selects its whole link without
+---revealing the source under the pointer.
+function image_controls.press_link(view, spec, x, y)
+  view:begin_line_render_interaction("mouse-selection")
+  view:begin_render_widget_drag({
+    cursor = "ibeam",
+    on_move = function(drag, owner, move_x, move_y)
+      if not drag.moved and (move_x - x) ^ 2 + (move_y - y) ^ 2 < (5 * SCALE) ^ 2 then
+        return
+      end
+      drag.moved = true
+      local line, col = owner:resolve_screen_position(move_x, move_y)
+      local forward = line > spec.line or line == spec.line and col >= spec.col1
+      local anchor = forward and spec.col1 or spec.col2
+      col = owner:whole_fragment_col(move_x, move_y, line, col, spec.line, anchor)
+      if line == spec.line then
+        col = forward and math.max(col, spec.col2) or math.min(col, spec.col1)
+      end
+      owner.buffer:set_selection(line, col, spec.line, anchor)
+    end,
+    on_release = function(drag, owner)
+      if not drag.moved then image_controls.edit(owner, spec) end
+    end,
+  })
   return true
 end
 
@@ -201,7 +230,7 @@ function image_controls.attach(widget, spec)
       end
       return true
     elseif part == "edit" then
-      return edit_source(view, spec)
+      return image_controls.edit(view, spec)
     end
     return spec.open(view, hit)
   end

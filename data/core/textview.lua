@@ -6972,6 +6972,16 @@ local function call_render_widget_drag(view, drag, name, ...)
   end
 end
 
+-- A drag that reaches a render fragment with `select_whole`, such as a
+-- Markdown image link, selects all of its source.
+function TextView:whole_fragment_col(x, y, line, col, anchor_line, anchor_col)
+  local hit = self:get_render_fragment_at_position(x, y)
+  local fragment = hit and hit.fragment
+  if not (fragment and fragment.select_whole and hit.line == line) then return col end
+  local forward = line > anchor_line or line == anchor_line and col >= anchor_col
+  return forward and fragment.source_col2 or fragment.source_col1
+end
+
 function TextView:on_mouse_moved(x, y, ...)
   local drag = self.render_widget_drag
   if drag then
@@ -7006,6 +7016,7 @@ function TextView:on_mouse_moved(x, y, ...)
     if special_handled then
       -- The rendered interaction owns Selection State for this drag.
     elseif self.mouse_selecting.added_to then
+      c1 = self:whole_fragment_col(x, y, l1, c1, l2, c2)
       if snap_type then
         l1, c1, l2, c2 = self:mouse_selection(self.buffer, snap_type, l1, c1, l2, c2)
       end
@@ -7015,6 +7026,7 @@ function TextView:on_mouse_moved(x, y, ...)
       -- Line-end affinity below reads the pointer's own resolved position.
       self:resolve_screen_position(x, y)
     else
+      c1 = self:whole_fragment_col(x, y, l1, c1, l2, c2)
       if snap_type then
         l1, c1, l2, c2 = self:mouse_selection(self.buffer, snap_type, l1, c1, l2, c2)
       end

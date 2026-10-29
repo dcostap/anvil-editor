@@ -1138,13 +1138,13 @@ local function image_fragment(view, span, opts)
         end
         -- Use the live selection, not the frozen reveal state of a mouse drag.
         -- Images cover the ordinary selection background, so tint them last.
+        -- Only a selection of the whole link selects the image.
         local spec = fragment.widget.image_controls
         if view:get_selection_background_color() then
           for _, line1, col1, line2, col2 in view.buffer:get_selections(true) do
             if line1 > spec.line then break end
-            if (line1 < spec.line or line1 == spec.line and col1 < spec.col2)
-              and (line2 > spec.line or line2 == spec.line and col2 > spec.col1)
-              and not (line1 == line2 and col1 == col2)
+            if (line1 < spec.line or col1 <= spec.col1)
+              and (line2 > spec.line or line2 == spec.line and col2 >= spec.col2)
               and not view.buffer:is_search_selection(line1, col1, line2, col2)
             then
               renderer.draw_rect(image_x, image_y, width, height, style.markdown_live_image_selection)
@@ -1625,7 +1625,15 @@ revealed_link_fragments = function(view, line_text, line, span, opts)
     text = line_text:sub(linked_col1, linked_col2 - 1),
     semantic_id = span.semantic_id,
   }, opts)
-  if linked then fragments[#fragments + 1] = linked end
+  if linked then
+    -- Revealed image source takes clicks and drags as text, not as a link.
+    if span.link and (span.link.kind == "image" or span.link.kind == "embed")
+      and is_image_target(span.link.path)
+    then
+      linked.on_mouse_pressed, linked.cursor = nil, nil
+    end
+    fragments[#fragments + 1] = linked
+  end
   marker(linked_col2, span.col2)
   return fragments
 end
@@ -1698,9 +1706,16 @@ function live._image_attachment_link(view, line, span, opts)
     background = style.markdown_live_attachment_bg,
     attachment_chip = true,
     image_attachment_link = true,
+    select_whole = true,
   }
   fragment = decorate_link_fragment(view, line, span, fragment, opts)
   if fragment then
+    -- A click shows the source, as the image's edit button does. The image
+    -- opens the Image Overlay.
+    fragment.on_mouse_pressed = function(_, owner, _, button, x, y)
+      if button ~= "left" then return false end
+      return image_controls.press_link(owner, { line = line, col1 = span.col1, col2 = span.col2 }, x, y)
+    end
     local font = fragment.font or live_fonts.body(view)
     local icon = file_icons.prepare("image.png", font:get_height(), font:get_size())
     if icon then
