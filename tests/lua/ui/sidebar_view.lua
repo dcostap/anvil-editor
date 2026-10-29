@@ -1180,6 +1180,49 @@ test.describe("Sidebar Snoozes", function()
     end)
   end)
 
+  -- The first row of `kind` that `predicate` accepts.
+  local function find_row(view, kind, predicate)
+    for _, row in ipairs(view.rows) do
+      if row.kind == kind and (not predicate or predicate(row)) then return row end
+    end
+  end
+  local function is_p(row) return row.project and row.project.path == "C:/P" end
+
+  test.it("counts the Terminals that need the user on a collapsed Project, also a Snoozed Pi's question", function()
+    with_clock(function()
+      local view = SidebarView(function() end, {["project:C:/P"] = true}, {}, false, {asks=start + 3600})
+      view:set_model(model(nil, {asks=true}), 1)
+      local project = test.not_nil(find_row(view, "project", is_p))
+      test.same(project.pending, {count = 2, kind = "blocked"})
+      test.ok(find_text(drawn_texts(view), "2"), "The collapsed Project does not show its count")
+      -- The Project's chevron expands it.
+      view:on_mouse_pressed("left", view.width - 16 * SCALE, row_y(view, "project", 1, is_p))
+      test.not_ok(find_row(view, "project", is_p).collapsed)
+      test.is_nil(find_text(drawn_texts(view), "2"), "The expanded Project still shows its count")
+    end)
+  end)
+
+  test.it("counts the Terminals that need the user on a Dormant Project and its collapsed group", function()
+    with_clock(function()
+      local records = {
+        {id="done",title="done",state="running",activity=start,agent_state="done",agent_since=start - 60},
+        {id="asks",title="asks",state="running",activity=start,agent_state="blocked",agent_since=start - 60},
+        {id="later",title="later",state="running",activity=start,agent_state="done",agent_since=start - 60},
+        {id="works",title="works",state="running",activity=start,agent_state="working",agent_since=start - 60},
+      }
+      local projects = {{row_id=1,path="C:/P",state="dormant",exists=true,activity=start,terminals=records},
+        windows={{id=1,selected_project=0}}}
+      local view = SidebarView(function() end, {}, {}, false, {asks=start + 3600, later=start + 3600})
+      view:set_model(projects, 1)
+      local group = test.not_nil(find_row(view, "group"))
+      test.ok(group.collapsed)
+      test.same(group.pending, {count = 2, kind = "blocked"})
+      test.ok(find_text(drawn_texts(view), "2"), "The collapsed group does not show its count")
+      view:on_mouse_pressed("left", 100, row_y(view, "group"))
+      test.same(test.not_nil(find_row(view, "project", is_p)).pending, {count = 2, kind = "blocked"})
+    end)
+  end)
+
   test.it("sets a Snooze in a typed number of hours, and Escape cancels it", function()
     with_clock(function()
       local actions, action = recorder()

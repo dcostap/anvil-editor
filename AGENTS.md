@@ -169,6 +169,8 @@ The Project moves a Snoozed Pane into its own Pane Group with the `snoozed` flag
 Pane navigation, Pane numbers, the Title Bar and the close fallback skip it. A focus request still shows it.
 The Pane report marks it, and the Sidebar lists it in the collapsed Snoozed fold at the end of its Project.
 The fold shows the mark of a Snoozed Pane that needs the user, also in a collapsed Project.
+Collapsed Projects and Dormant Projects show a coloured count of Terminals that need the user. Collapsed age groups show their total.
+A Pi question counts during a Snooze. Other attention stays hidden until the Snooze ends.
 Each Project checks the saved times every 5 seconds (`core.snoozed_panes`). It does not change focus.
 Due Panes wake into new Pane Groups at the end, at most three side by side, oldest Snooze first. A shown Pane wakes in place.
 Run `ui/snoozed_panes.lua`, `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.

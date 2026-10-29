@@ -518,6 +518,18 @@ function SidebarView:rebuild_rows()
   end
   -- A collapsed Project shows only the Terminals that need the user.
   local only_attention = false
+  -- What a Terminal needs from the user: its attention mark, or its agent's question, also during a Snooze.
+  local function needs_user(attention, agent)
+    return attention or agent and agent.state == "blocked" and "blocked" or nil
+  end
+  -- Adds `count` Terminals that need `kind` to the count of a hidden Project or group. A question sets the kind.
+  local function add_pending(pending, kind, count)
+    if not kind then return pending end
+    pending = pending or {count = 0}
+    pending.count = pending.count + (count or 1)
+    if not pending.kind or kind == "blocked" then pending.kind = kind end
+    return pending
+  end
   local function mark(row, agent)
     row.agent = agent
     local session = row.tab.terminal and row.tab.terminal.session
@@ -558,9 +570,10 @@ function SidebarView:rebuild_rows()
       selected_keys[key] = is_selected or nil
     end
     local collapsed = key and self:is_collapsed(key, false) or false
-    add({kind = "project", project = project, key = key, collapsed = collapsed, tabs = #panes,
+    local project_row = {kind = "project", project = project, key = key, collapsed = collapsed, tabs = #panes,
       id_key = "project:" .. project.path, current = is_selected,
-      selected = is_selected and (not active or collapsed and not searching)}, m.project)
+      selected = is_selected and (not active or collapsed and not searching)}
+    add(project_row, m.project)
     only_attention = collapsed and not searching
     local shown, sizes, records, snoozed = {}, {}, {}, {}
     for _, item in ipairs(panes) do sizes[item.group or 0] = (sizes[item.group or 0] or 0) + 1 end
@@ -591,6 +604,7 @@ function SidebarView:rebuild_rows()
       else
         add_tab(row, item.agent)
       end
+      project_row.pending = add_pending(project_row.pending, needs_user(row.attention, row.agent))
     end
     -- Terminal Sessions that no Pane shows. Recent ones and those that need the user show directly, and so do
     -- those from hosts that do not report activity. Older ones fold into groups. A Session in a Pane's history
@@ -600,6 +614,9 @@ function SidebarView:rebuild_rows()
     for _, terminal in ipairs(project.terminals or {}) do
       local bucket = (terminal.activity or 0) > 0 and age_bucket(terminal.activity, now)
       local attention = tab.attention(tab.describe_session(terminal), self.seen[terminal.id], self.snoozes[terminal.id])
+      if not shown[terminal.id] and terminal.state == "running" then
+        project_row.pending = add_pending(project_row.pending, needs_user(attention, tab.agent(terminal)))
+      end
       if shown[terminal.id] or held[terminal.id] and not attention then
         -- Its Tab shows it, or its Pane's history keeps it.
       elseif bucket and bucket ~= "week" and not attention then
@@ -627,9 +644,7 @@ function SidebarView:rebuild_rows()
       local fold_key = "snoozed:" .. project.path
       local fold = {kind = "terminal_group", project = project, label = "Snoozed", count = #snoozed, key = fold_key,
         id_key = fold_key, collapsed = self:is_collapsed(fold_key, true)}
-      for _, row in ipairs(snoozed) do
-        fold.attention = fold.attention or row.attention or row.agent and row.agent.state == "blocked" and "blocked"
-      end
+      for _, row in ipairs(snoozed) do fold.attention = fold.attention or needs_user(row.attention, row.agent) end
       if not only_attention or fold.attention then add(fold, m.terminal) end
       if not only_attention and (searching or not fold.collapsed) then
         for _, row in ipairs(snoozed) do add(row, row.agent and m.agent or m.terminal) end
@@ -663,11 +678,21 @@ function SidebarView:rebuild_rows()
     if members then
       local key = "group:" .. group.bucket
       local collapsed = self:is_collapsed(key, group.collapsed)
-      add({kind = "group", bucket = group.bucket, label = group.label, count = #members, key = key, id_key = key,
-        collapsed = collapsed}, m.group)
-      if searching or not collapsed then
-        for _, project in ipairs(members) do
-          add({kind = "project", project = project, id_key = "project:" .. project.path}, m.project)
+      local group_row = {kind = "group", bucket = group.bucket, label = group.label, count = #members, key = key,
+        id_key = key, collapsed = collapsed}
+      add(group_row, m.group)
+      for _, project in ipairs(members) do
+        local pending
+        for _, terminal in ipairs(project.terminals or {}) do
+          if terminal.state == "running" then
+            local attention = tab.attention(tab.describe_session(terminal), self.seen[terminal.id],
+              self.snoozes[terminal.id])
+            pending = add_pending(pending, needs_user(attention, tab.agent(terminal)))
+          end
+        end
+        if pending then group_row.pending = add_pending(group_row.pending, pending.kind, pending.count) end
+        if searching or not collapsed then
+          add({kind = "project", project = project, id_key = "project:" .. project.path, pending = pending}, m.project)
         end
       end
     end
@@ -1635,7 +1660,21 @@ function SidebarView:label_with_note(label, color, note, x, y, row, right, hints
   if note then text(note, right - note_w + 8 * SCALE, note_ty, note_color or style.dim) end
 end
 
--- A section header: a chevron, a small uppercase label, a line and a count.
+-- The count of a hidden Project's or group's Terminals that need the user: a pill in their attention colour, which
+-- ends at `right`. Returns the pill's left edge.
+function SidebarView:draw_pending(pending, right, cy)
+  local font = font_variant("small")
+  local label = tostring(pending.count)
+  local h = font:get_height() + 2 * SCALE
+  local w = math.max(h, font:get_width(label) + 8 * SCALE)
+  local y = math.floor(cy - h / 2)
+  renderer.draw_rounded_rect(right - w, y, w, h, h / 2, tab.attention_color(pending.kind))
+  text(label, right - w + math.floor((w - font:get_width(label)) / 2), y + SCALE, style.background, font)
+  return right - w
+end
+
+-- A section header: a chevron, a small uppercase label, a line and a count. A collapsed group also shows the count
+-- of its Terminals that need the user.
 function SidebarView:draw_section(row, x, y, right)
   local cy = y + row.h / 2
   local hovered = self.hover == row
@@ -1653,6 +1692,7 @@ function SidebarView:draw_section(row, x, y, right)
   text(count, right - count_w, ty, style.dim, font)
   local line_x = lx + font:get_width(label) + 8 * SCALE
   local line_right = right - count_w - 8 * SCALE
+  if row.pending and row.collapsed then line_right = self:draw_pending(row.pending, line_right, cy) - 6 * SCALE end
   if line_right > line_x then
     renderer.draw_rect(line_x, math.floor(cy), line_right - line_x, math.max(1, math.floor(SCALE)), style.divider)
   end
@@ -1686,6 +1726,7 @@ function SidebarView:draw_project(row, y, width, now)
     if shows then chevron(right - 12 * SCALE, cy, self.chevrons[row.key], hovered and style.text or style.dim) end
     right = right - 20 * SCALE
   end
+  if row.pending and (row.collapsed or dormant) then right = self:draw_pending(row.pending, right, cy) end
   local note = look.note(project, self.window_id, now)
   local hints
   if dormant then

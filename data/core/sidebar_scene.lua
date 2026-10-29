@@ -74,12 +74,21 @@ function Scene.model()
   }
 end
 
--- mode is nil, "search" or "drag". The second Project is collapsed, so it shows only its agent's question.
+-- mode is nil, "search" or "drag". The second Project is collapsed, so it shows only its agent's question and its
+-- count. The first Project's "npm run dev" Pane is snoozed. A Dormant Project in the collapsed "Last week" group
+-- has an Unread Result.
 function Scene:new(mode)
   Scene.super.new(self)
+  local model = Scene.model()
+  local snoozed = terminal_tab(6, 5, "c", "npm run dev", 3 * DAY, false, 10)
+  snoozed.snoozed = true
+  table.insert(model[1].panes, snoozed)
+  model[4].terminals[2] = terminal("j", "\u{03C0} - notes", 5 * 60 * 60, {agent_app = "pi", agent_state = "done",
+    agent_since = os.time() - 4 * 60 * 60})
   self.sidebar = SidebarView(function() end,
-    {["project:D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas"] = true}, {})
-  self.sidebar:set_model(Scene.model(), 1)
+    {["project:D:/Work/Israel Mallo Mart\u{00ED}nez - ManualSistemas"] = true}, {}, false,
+    {c = os.time() + 3 * 60 * 60})
+  self.sidebar:set_model(model, 1)
   if mode == "search" then
     self.sidebar:on_focus(true)
     self.sidebar:on_text_input("shell")
