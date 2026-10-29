@@ -1577,7 +1577,8 @@ local function install_find_shortcut_override()
     ["shift+tab"] = { "editor:find_toggle_replace_field", "core:unindent" },
     ["return"] = { "editor:find_submit_or_replace", "core:submit_prompt", "core:newline", "core:select_dialog_entry" },
     ["keypad enter"] = { "editor:find_submit_or_replace", "core:submit_prompt", "core:newline", "core:select_dialog_entry" },
-    ["ctrl+return"] = { "editor:find_replace_all_confirm", "core:newline_below" },
+    ["ctrl+return"] = "editor:find_replace_all_confirm",
+    ["ctrl+keypad enter"] = "editor:find_replace_all_confirm",
   }
 
   prioritize_key("escape", "editor:find_close")
@@ -1586,6 +1587,7 @@ local function install_find_shortcut_override()
   prioritize_key("return", "editor:find_submit_or_replace")
   prioritize_key("keypad enter", "editor:find_submit_or_replace")
   prioritize_key("ctrl+return", "editor:find_replace_all_confirm")
+  prioritize_key("ctrl+keypad enter", "editor:find_replace_all_confirm")
 end
 
 core.intellij_find_install_shortcut_override = install_find_shortcut_override

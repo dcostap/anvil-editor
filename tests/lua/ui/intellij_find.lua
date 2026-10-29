@@ -1,5 +1,6 @@
 local core = require "core"
 local command = require "core.command"
+local keymap = require "core.keymap"
 local config = require "core.config"
 local style = require "core.style"
 local test = require "core.test"
@@ -63,6 +64,7 @@ end
 
 test.describe("TextView Prompt Bar find", function()
   test.after_each(function(context)
+    if context.warning then MessageBox.warning = context.warning end
     if core.active_view and core.active_view.local_find_input then
       command.perform("editor:find_close")
     end
@@ -71,6 +73,52 @@ test.describe("TextView Prompt Bar find", function()
     for _, buffer in ipairs(context.buffers or {}) do
       if buffer:is_dirty() then buffer:clean() end
       remove_buffer(buffer)
+    end
+  end)
+
+  test.it("keeps Markdown list actions available after Find installs its commands", function(context)
+    local view, buffer = open_editor(context, "- task")
+    buffer:set_filename("task.md", nil)
+    core.intellij_find_install_shortcut_override()
+    for _, binding in ipairs(keymap.get_bindings("markdown:alternate_list_item_checkbox")) do
+      view:with_selection_state(function()
+        buffer:apply_lines({ "- task\n" })
+        buffer:set_selection(1, 3)
+      end)
+      test.ok(keymap.perform(binding))
+      test.equal(table.concat(buffer.lines), "- [ ] task\n")
+    end
+  end)
+
+  test.it("keeps line insertion available outside Find", function(context)
+    local view, buffer = open_editor(context, "  alpha")
+    core.intellij_find_install_shortcut_override()
+    for _, binding in ipairs(keymap.get_bindings("core:newline_below")) do
+      view:with_selection_state(function()
+        buffer:apply_lines({ "  alpha\n" })
+        buffer:set_selection(1, 4)
+      end)
+      test.ok(keymap.perform(binding))
+      test.equal(table.concat(buffer.lines), "  alpha\n  \n")
+      assert_selection(view, 2, 3, 2, 3)
+    end
+  end)
+
+  test.it("confirms Replace All instead of inserting text through the editor's configured actions", function(context)
+    local view, buffer = open_editor(context, "alpha")
+    core.intellij_find_install_shortcut_override()
+    test.ok(command.perform("editor:replace"))
+    active_find_input_for(view):set_text("alpha")
+    test.ok(command.perform("editor:find_toggle_replace_field"))
+    active_find_input_for(view):set_text("omega")
+    context.warning = MessageBox.warning
+    MessageBox.warning = function(_, _, callback) callback(nil, 1) end
+
+    for _, binding in ipairs(keymap.get_bindings("core:newline_below")) do
+      view:with_selection_state(function() buffer:apply_lines({ "alpha\n" }) end)
+      test.ok(keymap.perform(binding))
+      test.equal(table.concat(buffer.lines), "omega\n")
+      test.equal(core.active_view:get_text(), "omega")
     end
   end)
 
