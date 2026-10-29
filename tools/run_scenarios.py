@@ -539,9 +539,15 @@ def run_scenario(name: str, scenario: Scenario, args, exe: Path, work: Path, log
         return case
     over_allocation = any(finding["unit"] == "KiB" for finding in case["findings"])
     if allocation and (over_allocation or args.allocation):
-        path = run_allocation(name, scenario, args, exe, work, log, "sites")
-        allocation["lines"] = read_allocation(path, "site", 20, "line")
-        allocation["stacks"] = read_allocation(path, "site", 10, "stack")
+        # The line hook turns off the JIT. A heavy scene can then miss its deadline;
+        # the other detail runs must still run.
+        try:
+            path = run_allocation(name, scenario, args, exe, work, log, "sites")
+            allocation["lines"] = read_allocation(path, "site", 20, "line")
+            allocation["stacks"] = read_allocation(path, "site", 10, "stack")
+        except Exception as exc:
+            allocation["sites_error"] = str(exc)
+            log(f"  allocation sites: {exc}")
     if any(finding["unit"] == "ms" for finding in case["findings"]) or args.attribute:
         if scenario.writes or scenario.churn_interval:
             root = scenario_root(scenario, args.project, args.fixture_cache, log)
