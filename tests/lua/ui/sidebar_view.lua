@@ -1034,8 +1034,8 @@ test.describe("Sidebar Snoozes", function()
   end
 
   -- Project P shows a file and the Terminal Tabs "done", "asks" and "works". Project Q is the Window's Selected
-  -- Project unless `active` selects P with that Pane active.
-  local function model(active)
+  -- Project unless `active` selects P with that Pane active. `snoozed` names P's Snoozed Panes.
+  local function model(active, snoozed)
     local records = {
       {id="done",title="done",state="running",activity=start,agent_state="done",agent_since=start - 60},
       {id="asks",title="asks",state="running",activity=start,agent_state="blocked",agent_since=start - 60},
@@ -1043,7 +1043,8 @@ test.describe("Sidebar Snoozes", function()
     }
     local panes = {active=active or 1,visible=1,{id="file",group=1,name="init.lua"}}
     for index, record in ipairs(records) do
-      panes[#panes + 1] = {id=record.id,group=index + 1,name=record.id,terminal={session=record.id,state="running"}}
+      panes[#panes + 1] = {id=record.id,group=index + 1,name=record.id,terminal={session=record.id,state="running"},
+        snoozed=snoozed and snoozed[record.id] or nil}
     end
     return {{row_id=1,id=1,path="C:/P",state="ready",window_id=1,terminals=records,panes=panes},
       {row_id=2,id=2,path="C:/Q",state="ready",window_id=1,terminals={},panes={active=1,visible=1,
@@ -1130,17 +1131,52 @@ test.describe("Sidebar Snoozes", function()
       test.ok(labels[1] == "Remind Me In" and labels[#labels] ~= "Remove Snooze", table.concat(labels, ","))
       choose(view, labels, "\t2 Hours")
       test.equal(snoozes.done, start + 2 * 3600)
-      test.same(actions[#actions], {"snooze", "done"})
+      test.same(actions[#actions - 1], {"snooze", "done"})
+      test.same(actions[#actions], {"request", "direct", "C:/P", {action = "snooze", pane = "done"}})
       test.equal(attention(view), "asks=blocked")
       choose(view, open_menu(view, actions, "done"), "Remove Snooze")
       test.is_nil(snoozes.done)
-      test.same(actions[#actions], {"snooze", "done"})
+      test.same(actions[#actions - 1], {"snooze", "done"})
+      test.same(actions[#actions], {"request", "direct", "C:/P", {action = "unsnooze", pane = "done"}})
       test.equal(attention(view), "done=done,asks=blocked")
       -- A closed menu without a choice changes nothing.
       open_menu(view, actions, "done")
       local count = #actions
       view:on_menu_chosen(0)
       test.equal(#actions, count)
+    end)
+  end)
+
+  -- The kinds and names of P's rows after its Project row, as "kind:name".
+  local function project_rows(view)
+    local names = {}
+    for _, row in ipairs(view.rows) do
+      if row.project and row.project.path == "C:/P" and row.kind ~= "project" then
+        names[#names + 1] = row.kind .. ":" .. (row.tab and row.tab.name or row.label or "")
+      end
+    end
+    return table.concat(names, ",")
+  end
+  local function snoozed_fold(row) return row.label == "Snoozed" end
+
+  test.it("lists Snoozed Panes in a collapsed Snoozed fold at the end of their Project", function()
+    with_clock(function()
+      local view = SidebarView(function() end, {}, {}, false, {done=start + 3600})
+      view:set_model(model(nil, {done=true}), 1)
+      test.equal(project_rows(view), "tab:init.lua,tab:asks,tab:works,terminal_group:Snoozed")
+      view:on_mouse_pressed("left", 100, row_y(view, "terminal_group", 1, snoozed_fold))
+      test.equal(project_rows(view), "tab:init.lua,tab:asks,tab:works,terminal_group:Snoozed,tab:done")
+    end)
+  end)
+
+  test.it("shows a question from a Snoozed Pi on the Snoozed fold, also in a collapsed Project", function()
+    with_clock(function()
+      local view = SidebarView(function() end, {["project:C:/P"] = true}, {}, false, {asks=start + 3600})
+      view:set_model(model(nil, {asks=true}), 1)
+      test.equal(project_rows(view), "tab:done,terminal_group:Snoozed")
+      for _, row in ipairs(view.rows) do
+        if snoozed_fold(row) then test.equal(row.attention, "blocked") end
+      end
     end)
   end)
 
@@ -1158,6 +1194,7 @@ test.describe("Sidebar Snoozes", function()
       test.ok(view:edit("backspace"))
       view:on_key_pressed("return")
       test.equal(snoozes.done, start + 3600)
+      test.same(actions[#actions - 1], {"request", "direct", "C:/P", {action = "snooze", pane = "done"}})
       test.same(actions[#actions], {"return_focus"})
 
       choose(view, open_menu(view, actions, "asks"), "\tCustom…")

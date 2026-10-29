@@ -1,8 +1,9 @@
 -- mod-version:3
 -- Seam: an owned hosted Window on a private desktop. A click on a Terminal Session's Sidebar row focuses it in the
 -- Project. A right-click on the row opens the
--- Sidebar's Terminal menu, and its Snooze choices reach the Sidebar's saved Snoozes. The probe names the choice
--- in a file, so the shell shows no native menu.
+-- Sidebar's Terminal menu, and its Snooze choices reach the Sidebar's saved Snoozes. A Snooze moves the Pane into
+-- its Project's Snoozed fold, and a click there still focuses it. The probe names the choice in a file, so the shell
+-- shows no native menu.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "terminal-focus" then return end
 local core, common = require "core", require "core.common"
@@ -73,18 +74,37 @@ if path:match("/driver$") then
    local scale = user32.GetDpiForWindow(window) / 96
    local menu_file = root .. "/menu-choice.txt"
    local file = assert(io.open(menu_file, "wb")); file:write(""); file:close()
-   local point
-   for y = 40, 400, 8 do
-    local at, mark = math.floor(100 * scale) + math.floor(y * scale) * 65536, #trace()
-    for step = 7, 8 do user32.PostMessageW(window, 0x804a, step, at) end
-    local deadline = system.get_time() + .3
-    repeat
-     coroutine.yield(.01)
-     if trace():find("Shell Sidebar menu: ", mark + 1, true) then point = at end
-    until point or system.get_time() >= deadline
-    if point then break end
+   -- The point of the row that opens the Terminal menu.
+   local function find_point()
+    file = assert(io.open(menu_file, "wb")); file:write(""); file:close()
+    for y = 40, 400, 8 do
+     local at, mark = math.floor(100 * scale) + math.floor(y * scale) * 65536, #trace()
+     for step = 7, 8 do user32.PostMessageW(window, 0x804a, step, at) end
+     local deadline = system.get_time() + .3
+     repeat
+      coroutine.yield(.01)
+      if trace():find("Shell Sidebar menu: ", mark + 1, true) then return at end
+     until system.get_time() >= deadline
+    end
+    error("No Sidebar row opens the Terminal menu")
    end
-   assert(point, "No Sidebar row opens the Terminal menu")
+   local point = find_point()
+   -- Waits until the Project's Pane report shows the Pane snoozed, or not.
+   local function snoozed_pane(state)
+    wait(function()
+     user32.PostMessageW(window, 0x804d, 0, 0)
+     coroutine.yield(.2)
+     local page = load("sidebar-0")
+     for _, item in ipairs(page and page.items or {}) do
+      if item.kind == "project" and item.panes ~= "" then
+       return (item.panes:find("[\"snoozed\"]=true", 1, true) ~= nil) == state
+      end
+     end
+    end, 10, state and "The Project did not snooze the Pane" or "The Project did not wake the Pane")
+   end
+   local function click(at)
+    for step = 0, 2 do user32.PostMessageW(window, 0x804a, step, at); coroutine.yield(.1) end
+   end
    -- The Sidebar saves each Terminal Session's Snooze time.
    local function snooze()
     local file = io.open(root .. "/user/storage/sidebar/snoozes", "rb")
@@ -103,17 +123,25 @@ if path:match("/driver$") then
     assert(found == items, "Terminal menu items: " .. found)
     wait(function() return trace():find("Shell Sidebar menu result: [1-9]", at) end, 5, "The menu did not choose " .. choice)
    end
-   local times = "Remind Me In|1 Hour|2 Hours|3 Hours|4 Hours|1 Day|Custom\u{2026}"
+   local times = "Remind Me In|1 Hour|2 Hours|3 Hours|4 Hours|24 Hours|Custom\u{2026}"
    local before = os.time()
    menu("2 Hours", times)
    wait(function() local time = snooze(); return time and time >= before + 2 * 3600 end, 5,
     "The Sidebar did not save the chosen Snooze")
+   -- The collapsed Snoozed fold takes the Tab's row. A click opens it.
+   snoozed_pane(true)
+   click(point)
+   point = find_point()
    menu("Remove Snooze", times .. "|Remove Snooze")
    wait(function() return snooze() == nil end, 5, "The Sidebar did not remove the Snooze")
-   -- A row with a Snooze still focuses its Terminal. The capture shows the Snooze.
+   snoozed_pane(false)
+   -- A Snoozed Pane's row still focuses its Terminal. The capture shows the open Snoozed fold.
+   point = find_point()
    menu("3 Hours", times)
    wait(snooze, 5, "The Sidebar did not save the second Snooze")
-   for step = 0, 2 do user32.PostMessageW(window, 0x804a, step, point); coroutine.yield(.1) end
+   snoozed_pane(true)
+   point = find_point()
+   click(point)
    wait(function() return load("focused") end, 10, "The Project did not focus the clicked Terminal Session")
    coroutine.yield(1)
    user32.SendMessageW(window, 0x8052, 1, 0)

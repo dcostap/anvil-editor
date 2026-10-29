@@ -159,12 +159,19 @@ The Project Sidebar marks only an Unread Result or an agent that waits for an an
 The mark is a dot, a bold name, and a coloured stripe that fades out to the right.
 It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
 
-A right-click on a Terminal row in the Sidebar sets or removes a Snooze.
+A right-click on a Terminal Tab in the Sidebar sets or removes a Snooze.
 The Sidebar saves each Snooze as a Unix time in `storage/sidebar/snoozes`, beside the seen times.
 `tab.attention` holds a Terminal's attention until that time. The Sidebar wakes at the next Snooze time.
 The Sidebar describes its menu; the shell only shows it and returns the chosen label (`system.show_menu`).
 A Snooze whose time has not come stays saved, even when the model does not list its Terminal Session.
-Run `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
+The Sidebar then sends `snooze` or `unsnooze` to the Pane's Project through the direct route.
+The Project moves a Snoozed Pane into its own Pane Group with the `snoozed` flag, saved in the Workspace.
+Pane navigation, Pane numbers, the Title Bar and the close fallback skip it. A focus request still shows it.
+The Pane report marks it, and the Sidebar lists it in the collapsed Snoozed fold at the end of its Project.
+The fold shows the mark of a Snoozed Pane that needs the user, also in a collapsed Project.
+Each Project checks the saved times every 5 seconds (`core.snoozed_panes`). It does not change focus.
+Due Panes wake into new Pane Groups at the end, at most three side by side, oldest Snooze first. A shown Pane wakes in place.
+Run `ui/snoozed_panes.lua`, `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
 
 Tabs show shared Pane numbers, not Tab positions. `core.numbered_panes` selects `core.pending_panes`.
 Unread Results and agents waiting for an answer get numbers 1 to 5, oldest pending event first.
