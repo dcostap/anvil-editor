@@ -2445,6 +2445,7 @@ function core.on_event(type, ...)
     end
     local modal, action = dispatch_modal_input("text_input", ...)
     if not modal or action == "target" then core.root_panel:on_text_input(...) end
+    require("core.recent_panes").typed(require("core.panes").active())
   elseif type == "textediting" then
     if fuzzy_input_debug then
       local text, start, len = ...

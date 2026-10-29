@@ -34,7 +34,7 @@ test.describe("Recent Pane numbers", function()
 end)
 
 test.describe("Recent Panes in a Project", function()
-  local saved, reports, requests, fetches, focused
+  local saved, reports, requests, fetches, focused, now
 
   test.before_each(function()
     panes.reset_for_tests()
@@ -42,8 +42,9 @@ test.describe("Recent Panes in a Project", function()
     recent_panes.reset_for_tests()
     saved = {hosted = system.is_hosted_surface, send = system.set_project_panes, focus = system.window_has_focus,
       request = system.pane_request, set_active_view = core.set_active_view, root = core.root_project,
-      model = core.project_sidebar, fetch = core.request_project_sidebar}
-    reports, requests, fetches, focused = {}, {}, 0, true
+      model = core.project_sidebar, fetch = core.request_project_sidebar, time = system.get_time}
+    reports, requests, fetches, focused, now = {}, {}, 0, true, 1000
+    system.get_time = function() return now end
     system.is_hosted_surface = function() return true end
     system.set_project_panes = function(text) reports[#reports + 1] = text; return true end
     system.window_has_focus = function() return focused end
@@ -60,6 +61,7 @@ test.describe("Recent Panes in a Project", function()
     recent_panes.reset_for_tests()
     system.is_hosted_surface, system.set_project_panes, system.window_has_focus, system.pane_request =
       saved.hosted, saved.send, saved.focus, saved.request
+    system.get_time = saved.time
     core.set_active_view, core.root_project, core.project_sidebar, core.request_project_sidebar =
       saved.set_active_view, saved.root, saved.model, saved.fetch
   end)
@@ -68,11 +70,60 @@ test.describe("Recent Panes in a Project", function()
     return assert(load("return " .. reports[#reports], "=Pane report", "t", {}))()
   end
 
-  -- Focuses a Pane and lets the Project report it, as a frame does.
-  local function focus(pane)
+  -- Focuses a Pane and lets the Project report it, as a frame does. The user then stays `seconds` there.
+  local function focus(pane, seconds)
     panes.focus(pane)
     pane_report.publish()
+    now = now + (seconds or 5)
   end
+
+  -- Focuses another Project's Pane: this Project loses keyboard focus.
+  local function leave(seconds)
+    focused = false
+    pane_report.publish()
+    now = now + (seconds or 5)
+  end
+
+  test.it("does not count a Pane that the user only passes", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.create { factory = factory("two") }
+    local three = panes.create { factory = factory("three") }
+    focus(one)
+    focus(two, 0.2)
+    focus(three)
+    test.ok(recent_panes.focus(1))
+    test.equal(panes.active(), one, "The first Recent Pane is a Pane that the user only passed")
+  end)
+
+  test.it("counts a short visit when the user types in the Pane", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.create { factory = factory("two") }
+    local three = panes.create { factory = factory("three") }
+    focus(one)
+    focus(two, 0.1)
+    core.on_event("textinput", "y")
+    now = now + 0.1
+    focus(three)
+    test.ok(recent_panes.focus(1))
+    test.equal(panes.active(), two)
+  end)
+
+  test.it("does not count the old active Pane when a Pane request follows the Project's focus", function()
+    local one = panes.create { factory = factory("one") }
+    local two = panes.create { factory = factory("two") }
+    focus(one)
+    leave()
+    core.project_sidebar = {{path = "C:/Other", panes = {{id = "far", focused = now}}}}
+    now = now + 5
+    -- The Project takes keyboard focus and draws a frame before the Pane request runs.
+    focused = true
+    pane_report.publish()
+    now = now + 0.3
+    focus(two)
+    test.ok(recent_panes.focus(1))
+    test.equal(#requests, 1, "The first Recent Pane is not in the other Project")
+    test.same({requests[1][1], requests[1][2]}, {"select", "C:/Other"})
+  end)
 
   test.it("stamps a Pane when it takes focus while the Project has keyboard focus", function()
     local one = panes.create { factory = factory("one") }
@@ -126,8 +177,8 @@ test.describe("Recent Panes in a Project", function()
     focus(one)
     -- The fetched model holds an old report of this Project. Its live Panes replace it.
     core.project_sidebar = {
-      {path = "C:/Here", panes = {{id = one.id, focused = system.get_time() + 1000}}},
-      {path = "C:/Other", panes = {{id = "far", focused = system.get_time()}}},
+      {path = "C:/Here", panes = {{id = one.id, focused = now + 1000}}},
+      {path = "C:/Other", panes = {{id = "far", focused = now - 1}}},
     }
     focus(two)
     recent_panes.focus(1)

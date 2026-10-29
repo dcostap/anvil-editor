@@ -49,10 +49,15 @@ test.describe("Fuzzy Searcher Pane markers", function()
     local three = panes.split(two, "right", { factory = function() return FileView(shared_path) end })
     local current = panes.split(three, "right", { factory = function() return FileView(other_path) end })
     -- The current Pane has no number, so the other file shows only the number of Pane two.
+    local now = system.get_time()
+    local get_time = system.get_time
+    system.get_time = function() return now end
     for _, pane in ipairs {three, two, one, current} do
       panes.focus(pane)
       pane_report.publish()
+      now = now + 5
     end
+    system.get_time = get_time
     local other_number = "2"
     local shared_numbers, shared_compact = "1·3", "1+"
     local picker = fuzzy_searcher.open_static_results("Files", {

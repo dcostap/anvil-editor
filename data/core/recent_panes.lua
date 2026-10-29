@@ -8,20 +8,39 @@ local common = require "core.common"
 local recent_panes = {}
 
 recent_panes.COUNT = 5
+-- A Pane counts as a visit when it keeps focus this many seconds, or when the user types in it.
+recent_panes.VISIT = 1
 
 -- When each Pane of this Project last took focus, by Pane ID. The active Pane and the keyboard focus at the last
 -- observation.
 local focused_at, last_active, had_focus = {}, nil, false
+-- The Pane that took focus last, while it is not a visit yet: {id, since, previous stamp}.
+local visit
 
 -- Stamps the active Pane when it takes focus: the active Pane changes while the Project has keyboard focus, or the
 -- Project takes keyboard focus. Then the other Projects' stamps can have changed, so it fetches them too.
+-- A Pane that loses focus before it is a visit gets its previous stamp again. Examples are a Pane that a cycle
+-- passes, and the old active Pane in the frame before a Pane request moves focus.
 function recent_panes.observe(active)
   local has_focus = core.window ~= nil and system.window_has_focus(core.window)
+  local now = system.get_time()
+  if visit and now - visit.since >= recent_panes.VISIT then visit = nil end
+  if visit and not (has_focus and active and active.id == visit.id) then
+    focused_at[visit.id] = visit.previous
+    core.log_quiet("Recent Pane: %s lost focus after %.2fs; not a visit", tostring(visit.id), now - visit.since)
+    visit = nil
+  end
   if has_focus and active and (active ~= last_active or not had_focus) then
-    focused_at[active.id] = system.get_time()
+    visit = {id = active.id, since = now, previous = focused_at[active.id]}
+    focused_at[active.id] = now
   end
   if has_focus and not had_focus then core.request_project_sidebar() end
   last_active, had_focus = active, has_focus
+end
+
+-- The user typed text while `active` had focus: its focus is a visit.
+function recent_panes.typed(active)
+  if visit and active and active.id == visit.id then visit = nil end
 end
 
 function recent_panes.focused_at(pane)
@@ -116,7 +135,7 @@ function recent_panes.focus(number)
 end
 
 function recent_panes.reset_for_tests()
-  focused_at, last_active, had_focus = {}, nil, false
+  focused_at, last_active, had_focus, visit = {}, nil, false, nil
 end
 
 return recent_panes

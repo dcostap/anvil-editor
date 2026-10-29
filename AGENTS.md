@@ -187,6 +187,8 @@ The Sidebar passes its shared seen times. Projects read the persisted seen times
 Recent Panes fill unused numbers after Pending Panes, without duplicates. The current Pane gets no focus-history slot.
 `core.recent_panes` supplies the focus history. There is no numbering setting.
 Each Project stamps its active Pane when the Pane takes keyboard focus. The Pane report sends the stamps.
+A Pane that loses focus within 1 second, without typed text, gets its previous stamp again (`recent_panes.VISIT`).
+So a Pane cycle, or a Project's old Pane in the frame before a Pane request, adds no Recent Pane.
 A Project fetches the reports when it takes keyboard focus. Focus-history numbering ranks these stamps across Projects.
 The shell also notifies each Window's Selected Project when the Sidebar model changes.
 Selected Projects fetch the changed state, so Pending Pane commands work without a keyboard focus change.
