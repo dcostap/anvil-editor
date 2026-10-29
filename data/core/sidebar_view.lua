@@ -72,15 +72,15 @@ local GROUPS_ROWS = 16
 ---@param action fun(name: string, ...)
 ---@param collapsed table<string, boolean>? This Window's saved folding state.
 ---@param restore_folds boolean? Restore saved folds on first selection.
----@param reminders table<string, number>? The Reminder time of each Terminal Session, by its ID.
-function SidebarView:new(action, collapsed, seen, restore_folds, reminders)
+---@param snoozes table<string, number>? The Snooze time of each Terminal Session, by its ID.
+function SidebarView:new(action, collapsed, seen, restore_folds, snoozes)
   self.action, self.rows, self.scroll, self.bottom_scroll = action, {}, 0, 0
   self.collapsed = collapsed or {}
   self.restore_folds = restore_folds == true
   -- When the user last looked at each Terminal Session, by its ID. Every surface shares it.
   self.seen = seen or {}
-  -- Every surface shares the Reminders too.
-  self.reminders = reminders or {}
+  -- Every surface shares the Snoozes too.
+  self.snoozes = snoozes or {}
   -- The Projects selected at the last layout.
   self.was_selected = {}
   -- Snapshot ownership separately: callers can update the same model table after a move.
@@ -213,20 +213,20 @@ function SidebarView:edit(name)
   return true
 end
 
--- The Terminal menu's Reminder times, in hours.
-local REMINDER_HOURS = {1, 2, 3, 4, 24}
+-- The Terminal menu's Snooze times, in hours.
+local SNOOZE_HOURS = {1, 2, 3, 4, 24}
 
 -- Asks the shell for a Terminal Session's menu at the point. The shell reports the choice to `on_menu_chosen`.
 function SidebarView:open_terminal_menu(session, x, y)
   local labels, choices = {"Remind Me In"}, {}
-  for _, hours in ipairs(REMINDER_HOURS) do
+  for _, hours in ipairs(SNOOZE_HOURS) do
     labels[#labels + 1] = "\t" .. (hours == 1 and "1 Hour" or hours .. " Hours")
     choices[#labels] = hours
   end
   labels[#labels + 1] = "\tCustom…"
   choices[#labels] = "custom"
-  if self.reminders[session] then
-    labels[#labels + 1] = "Remove Reminder"
+  if self.snoozes[session] then
+    labels[#labels + 1] = "Remove Snooze"
     choices[#labels] = "remove"
   end
   self.menu = {session = session, choices = choices}
@@ -243,28 +243,28 @@ function SidebarView:on_menu_chosen(index)
     self.action("focus")
     self:rebuild_rows()
   elseif choice == "remove" then
-    self:set_reminder(menu.session, nil)
+    self:set_snooze(menu.session, nil)
   elseif choice then
-    self:set_reminder(menu.session, choice)
+    self:set_snooze(menu.session, choice)
   end
 end
 
--- Sets the Terminal Session's Reminder to `hours` from now, or removes it for nil.
-function SidebarView:set_reminder(session, hours)
-  self.reminders[session] = hours and os.time() + hours * 60 * 60 or nil
-  core.log_quiet("Sidebar Reminder: session=%s hours=%s", session, tostring(hours))
-  self.action("reminder", session)
+-- Sets the Terminal Session's Snooze to `hours` from now, or removes it for nil.
+function SidebarView:set_snooze(session, hours)
+  self.snoozes[session] = hours and os.time() + hours * 60 * 60 or nil
+  core.log_quiet("Sidebar Snooze: session=%s hours=%s", session, tostring(hours))
+  self.action("snooze", session)
   self:rebuild_rows()
 end
 
--- Closes the hours field. With `accept`, a whole number of hours above zero sets the Reminder; other text keeps
+-- Closes the hours field. With `accept`, a whole number of hours above zero sets the Snooze; other text keeps
 -- the field open.
 function SidebarView:close_hours(accept)
   local hours = self.hours
   local count = accept and tonumber(hours.input.text)
   if accept and not (count and count >= 1) then return end
   self.hours = nil
-  if count then self:set_reminder(hours.session, count) else self:rebuild_rows() end
+  if count then self:set_snooze(hours.session, count) else self:rebuild_rows() end
   self.action("return_focus")
 end
 
@@ -471,18 +471,18 @@ function SidebarView:toggle(key, default)
   self:rebuild_rows()
 end
 
--- The user looks at a Terminal Session: this reads its Unread Result, and ends its Reminder once the time came.
+-- The user looks at a Terminal Session: this reads its Unread Result, and ends its Snooze once the time came.
 -- Looking at an agent's question does not answer it.
 function SidebarView:look(item, session, now)
-  local reminder = self.reminders[session]
-  local attention = tab.attention(item, self.seen[session], reminder)
+  local snooze = self.snoozes[session]
+  local attention = tab.attention(item, self.seen[session], snooze)
   if attention and attention ~= "blocked" then
     self.seen[session] = now
     self.action("seen", session)
   end
-  if reminder and reminder <= now then
-    self.reminders[session] = nil
-    self.action("reminder", session)
+  if snooze and snooze <= now then
+    self.snoozes[session] = nil
+    self.action("snooze", session)
   end
 end
 
@@ -505,11 +505,11 @@ function SidebarView:rebuild_rows()
     selected_projects[window.selected_project] = true
     if window.id == window_id then selected = window.selected_project end
   end
-  local numbers = numbered_panes.numbers(projects, self.seen, self.reminders)
-  -- The next Reminder time. The rows change then.
-  self.next_reminder = nil
-  for _, time in pairs(self.reminders) do
-    if time > now and time < (self.next_reminder or math.huge) then self.next_reminder = time end
+  local numbers = numbered_panes.numbers(projects, self.seen, self.snoozes)
+  -- The next Snooze time. The rows change then.
+  self.next_snooze = nil
+  for _, time in pairs(self.snoozes) do
+    if time > now and time < (self.next_snooze or math.huge) then self.next_snooze = time end
   end
   -- A collapsed Project shows only the Terminals that need the user.
   local only_attention = false
@@ -517,9 +517,9 @@ function SidebarView:rebuild_rows()
     row.agent = agent
     local session = row.tab.terminal and row.tab.terminal.session
     if session then
-      local reminder = self.reminders[session]
-      row.attention = tab.attention(row.tab, self.seen[session], reminder)
-      if reminder and reminder > now and row.tab.terminal.state == "running" then row.reminder = reminder end
+      local snooze = self.snoozes[session]
+      row.attention = tab.attention(row.tab, self.seen[session], snooze)
+      if snooze and snooze > now and row.tab.terminal.state == "running" then row.snooze = snooze end
     end
     if only_attention and not row.attention then return end
     add(row, agent and m.agent or m.terminal)
@@ -584,7 +584,7 @@ function SidebarView:rebuild_rows()
     for _, id in ipairs(panes.held or {}) do held[id] = true end
     for _, terminal in ipairs(project.terminals or {}) do
       local bucket = (terminal.activity or 0) > 0 and age_bucket(terminal.activity, now)
-      local attention = tab.attention(tab.describe_session(terminal), self.seen[terminal.id], self.reminders[terminal.id])
+      local attention = tab.attention(tab.describe_session(terminal), self.seen[terminal.id], self.snoozes[terminal.id])
       if shown[terminal.id] or held[terminal.id] and not attention then
         -- Its Tab shows it, or its Pane's history keeps it.
       elseif bucket and bucket ~= "week" and not attention then
@@ -1262,7 +1262,7 @@ end
 -- Whether a minute passed since the last layout, so ages and groups need an update.
 function SidebarView:refresh_ages()
   local now = os.time()
-  if math.floor(now / 60) == self.built_minute and not (self.next_reminder and now >= self.next_reminder) then
+  if math.floor(now / 60) == self.built_minute and not (self.next_snooze and now >= self.next_snooze) then
     return false
   end
   self:rebuild_rows()
@@ -1477,14 +1477,14 @@ function SidebarView:autoscroll_speed(y)
   if y > self.view_h - zone then return "bottom_scroll", speed(y - self.view_h + zone) end
 end
 
--- Working agents and Terminals with a Reminder stay dim unless selected. Other Windows' Projects and their children
+-- Working agents and Terminals with a Snooze stay dim unless selected. Other Windows' Projects and their children
 -- also stay dim.
 -- A dragged or moved Tab dims further at its old place.
 function SidebarView:dim_target(row)
   local key = row.id_key
   local drag, pending = self.drag, self.pending
   if drag and drag.key == key or pending and pending.key == key then return 0.35 end
-  if not row.selected and (row.reminder or row.agent and not row.agent.command
+  if not row.selected and (row.snooze or row.agent and not row.agent.command
     and tab.working(row.tab.terminal or {}, row.agent)) then return 0.5 end
   local owner = row.project and row.project.window_id
   if self.window_id and owner and owner ~= 0 and owner ~= self.window_id then return 0.7 end
@@ -1724,15 +1724,15 @@ function SidebarView:draw_attention(row, y, width)
   renderer.draw_rounded_rect(m.rail_x, y + 1, m.rail, h, m.rail / 2, color)
 end
 
--- The time until a Reminder in whole minutes, rounded up: "45m" or "2h 30m".
-local function reminder_text(time, now)
+-- The time until a Snooze in whole minutes, rounded up: "45m" or "2h 30m".
+local function snooze_text(time, now)
   local minutes = math.max(1, math.ceil((time - now) / 60))
   if minutes < 60 then return minutes .. "m" end
   local hours, rest = math.floor(minutes / 60), minutes % 60
   return rest > 0 and string.format("%dh %02dm", hours, rest) or hours .. "h"
 end
 
--- A small clock, the Reminder icon, at the left edge `x` of a line centred at `cy`. Returns its width.
+-- A small clock, the Snooze icon, at the left edge `x` of a line centred at `cy`. Returns its width.
 local function clock(x, cy, color)
   local size = math.floor(style.font:get_height() * 0.6 + 0.5)
   local stroke = math.max(1, math.floor(1.25 * SCALE + 0.5))
@@ -1744,10 +1744,10 @@ local function clock(x, cy, color)
   return size
 end
 
--- A Reminder's note, right-aligned at `right` on a line centred at `cy`: the clock and the time left.
+-- A Snooze's note, right-aligned at `right` on a line centred at `cy`: the clock and the time left.
 -- Returns its width.
-local function draw_reminder(time, right, cy, now)
-  local label = reminder_text(time, now)
+local function draw_snooze(time, right, cy, now)
+  local label = snooze_text(time, now)
   local font = style.font
   local label_w = font:get_width(label)
   text(label, right - label_w, math.floor(cy - font:get_height() / 2), style.dim)
@@ -1763,8 +1763,8 @@ function SidebarView:draw_tab(row, x, y, width, now)
   local shimmer = tab.working(row.tab.terminal or {}, row.agent) and self:shimmer_phase() or nil
   -- A Terminal that needs the user has a dot at the right edge of its name's line and a bold name.
   local name_font, right = nil, x + width
-  if row.reminder then
-    width = width - draw_reminder(row.reminder, x + width, y + m.terminal / 2, now) - 6 * SCALE
+  if row.snooze then
+    width = width - draw_snooze(row.snooze, x + width, y + m.terminal / 2, now) - 6 * SCALE
   end
   if row.attention then
     local radius = 3 * SCALE
@@ -1772,9 +1772,9 @@ function SidebarView:draw_tab(row, x, y, width, now)
     width = width - radius * 2 - 6 * SCALE
     name_font = font_variant("bold")
   end
-  -- A Reminder's time left replaces the Terminal's age.
+  -- A Snooze's time left replaces the Terminal's age.
   local spinning, name_x = tab.draw(row.tab, x, y, width, m.terminal, {name_color = style.text, now = now,
-    clock = self.clock, name_font = name_font, note = not row.reminder, number_font = font_variant("number"), number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
+    clock = self.clock, name_font = name_font, note = not row.snooze, number_font = font_variant("number"), number_gutter = m.number_gutter, shimmer = not row.agent and shimmer or nil})
   if spinning then self.spinning = true end
   local unread = row.attention == "done" or row.attention == "error"
   if row.agent and tab.draw_agent(row.agent, name_x, y + m.terminal - 6 * SCALE, right - name_x,
@@ -1878,7 +1878,7 @@ function SidebarView:draw_card(width, height, now)
 end
 
 -- The search field shows only while a query is typed. It grows in and fades as it opens, and keeps the last query
--- while it closes. The hours field for a Reminder shows in its place.
+-- while it closes. The hours field for a Snooze shows in its place.
 function SidebarView:draw_search(width, height)
   local open = self.shown.search
   local input = self:field()

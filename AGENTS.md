@@ -83,7 +83,7 @@ Close and quit skip confirmation when Pi reports `idle` or `done`, even while it
 Quit still detaches those sessions unless the user chooses End, so Pi keeps running.
 Quit ends idle shells, and End ends all shells. An ended session is not closed. It revives in its Pane on the next start.
 The host gets `ANVIL_TERMINAL_END`. It stops the shell, but keeps the record, the screen and the Pi report.
-The session keeps its ID, so its Reminder, seen time and Pi session stay. Only a Pane close removes them.
+The session keeps its ID, so its Snooze, seen time and Pi session stay. Only a Pane close removes them.
 Older hosts read `END` as a disconnect and keep running. Run `ui/terminal_quit.lua`, `ui/terminal_revival.lua` and `ui/terminal_agent_resume.lua` after changes.
 Other agent states keep the normal busy check. Reconnecting sessions still require confirmation.
 The host sends the root Agent Status with its live status packet. Older hosts keep the normal busy check.
@@ -159,11 +159,11 @@ The Project Sidebar marks only an Unread Result or an agent that waits for an an
 The mark is a dot, a bold name, and a coloured stripe that fades out to the right.
 It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
 
-A right-click on a Terminal row in the Sidebar sets or removes a Reminder.
-The Sidebar saves each Reminder as a Unix time in `storage/sidebar/reminders`, beside the seen times.
-`tab.attention` holds a Terminal's attention until that time. The Sidebar wakes at the next Reminder time.
+A right-click on a Terminal row in the Sidebar sets or removes a Snooze.
+The Sidebar saves each Snooze as a Unix time in `storage/sidebar/snoozes`, beside the seen times.
+`tab.attention` holds a Terminal's attention until that time. The Sidebar wakes at the next Snooze time.
 The Sidebar describes its menu; the shell only shows it and returns the chosen label (`system.show_menu`).
-A Reminder whose time has not come stays saved, even when the model does not list its Terminal Session.
+A Snooze whose time has not come stays saved, even when the model does not list its Terminal Session.
 Run `ui/sidebar_view.lua`, `ui/pending_panes.lua` and the `terminal-focus` shell probe after changes.
 
 Tabs show shared Pane numbers, not Tab positions. `core.numbered_panes` selects `core.pending_panes`.

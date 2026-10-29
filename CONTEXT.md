@@ -383,7 +383,7 @@ One of the Panes that had focus most recently before the current Pane, in any Pr
 _Avoid_: Pane number, Tab number
 
 **Pending Pane**:
-A Pane with an Unread Result or an agent waiting for an answer. The first five Pending Panes have numbers 1 to 5 across Projects and Anvil Windows, oldest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
+A Pane with an Unread Result, an agent waiting for an answer, or an ended Snooze. The first five Pending Panes have numbers 1 to 5 across Projects and Anvil Windows, oldest pending event first. Reading a result removes it from the queue. An agent waiting for an answer stays pending until it stops waiting.
 
 **Constrained Pane**:
 A Pane dedicated to one owner, such as a Git Log, commit comparison, or nonempty Untitled Editor.
@@ -609,9 +609,13 @@ _Avoid_: agent state, program status, agent activity
 An agent's done or failed Agent Status, or a terminal bell, that came after the user last looked at its Terminal Session. The user looks at a Terminal Session when its Tab is the active Tab of a Selected Project.
 _Avoid_: notification, unseen result, badge
 
-**Reminder**:
-A time at which a Terminal Session needs the user again. Until then, the Terminal Session needs nothing: its Unread Result, its agent's question, and its bell wait. Looking at it earlier does not end the Reminder; only the user can remove it. At that time, it needs the user until the user looks at it, even when nothing else happened.
-_Avoid_: snooze, timer, remind-me
+**Snooze**:
+A time until which a Terminal's Pane is a Snoozed Pane. Until then, the Terminal Session needs nothing: its Unread Result, its agent's question, and its bell wait. Looking at it earlier does not end the Snooze; only the user can remove it. At that time, the Pane returns to the work area and needs the user until the user looks at it, even when nothing else happened.
+_Avoid_: Reminder, timer
+
+**Snoozed Pane**:
+A Terminal's Pane with a Snooze. It is its own Pane Group, listed in its Project's Snoozed section at the end of the Project in the Project Sidebar. Pane navigation and Pane numbers skip it, but Text Search still finds its Terminal.
+_Avoid_: hidden Pane, held Pane
 
 **Terminal Text Capture**:
 A Text Capture containing stable text from a Terminal View while that terminal continues to run.

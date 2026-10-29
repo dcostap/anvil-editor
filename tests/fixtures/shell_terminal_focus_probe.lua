@@ -1,7 +1,7 @@
 -- mod-version:3
 -- Seam: an owned hosted Window on a private desktop. A click on a Terminal Session's Sidebar row focuses it in the
 -- Project. A right-click on the row opens the
--- Sidebar's Terminal menu, and its Reminder choices reach the Sidebar's saved Reminders. The probe names the choice
+-- Sidebar's Terminal menu, and its Snooze choices reach the Sidebar's saved Snoozes. The probe names the choice
 -- in a file, so the shell shows no native menu.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "terminal-focus" then return end
@@ -85,9 +85,9 @@ if path:match("/driver$") then
     if point then break end
    end
    assert(point, "No Sidebar row opens the Terminal menu")
-   -- The Sidebar saves each Terminal Session's Reminder time.
-   local function reminder()
-    local file = io.open(root .. "/user/storage/sidebar/reminders", "rb")
+   -- The Sidebar saves each Terminal Session's Snooze time.
+   local function snooze()
+    local file = io.open(root .. "/user/storage/sidebar/snoozes", "rb")
     if not file then return nil end
     local text = file:read("*a"); file:close()
     local chunk = loadstring(text)
@@ -106,13 +106,13 @@ if path:match("/driver$") then
    local times = "Remind Me In|1 Hour|2 Hours|3 Hours|4 Hours|1 Day|Custom\u{2026}"
    local before = os.time()
    menu("2 Hours", times)
-   wait(function() local time = reminder(); return time and time >= before + 2 * 3600 end, 5,
-    "The Sidebar did not save the chosen Reminder")
-   menu("Remove Reminder", times .. "|Remove Reminder")
-   wait(function() return reminder() == nil end, 5, "The Sidebar did not remove the Reminder")
-   -- A row with a Reminder still focuses its Terminal. The capture shows the Reminder.
+   wait(function() local time = snooze(); return time and time >= before + 2 * 3600 end, 5,
+    "The Sidebar did not save the chosen Snooze")
+   menu("Remove Snooze", times .. "|Remove Snooze")
+   wait(function() return snooze() == nil end, 5, "The Sidebar did not remove the Snooze")
+   -- A row with a Snooze still focuses its Terminal. The capture shows the Snooze.
    menu("3 Hours", times)
-   wait(reminder, 5, "The Sidebar did not save the second Reminder")
+   wait(snooze, 5, "The Sidebar did not save the second Snooze")
    for step = 0, 2 do user32.PostMessageW(window, 0x804a, step, point); coroutine.yield(.1) end
    wait(function() return load("focused") end, 10, "The Project did not focus the clicked Terminal Session")
    coroutine.yield(1)

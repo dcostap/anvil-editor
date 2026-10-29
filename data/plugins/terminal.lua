@@ -2374,7 +2374,7 @@ function TerminalView:on_workspace_close()
 end
 
 -- Ends the shell at quit, but its host keeps the session record and screen. The next start revives the session
--- in this Pane with the same ID, so its Reminder, seen time and Pi session stay.
+-- in this Pane with the same ID, so its Snooze, seen time and Pi session stay.
 function TerminalView:end_session()
   self:clear_point_hover()
   if not self.session then return end
