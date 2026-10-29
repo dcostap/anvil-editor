@@ -345,13 +345,6 @@ local FILENAMES = {
   ["geckodriver"] = "firefox", [".ds_store"] = "ignored",
 }
 
-local extension_order = {}
-for extension in pairs(EXTENSIONS) do extension_order[#extension_order + 1] = extension end
-table.sort(extension_order, function(a, b)
-  if #a ~= #b then return #a > #b end
-  return a < b
-end)
-
 local font_cache = {}
 local font_failures = {}
 
@@ -385,11 +378,13 @@ local function resolve_name(path)
   end
   if normalized:find("/.github/workflows/", 1, true) and name:match("%.ya?ml$") then return "github" end
 
-  for _, extension in ipairs(extension_order) do
-    local suffix = "." .. extension
-    if #name > #suffix and name:sub(-#suffix) == suffix then
-      return EXTENSIONS[extension]
-    end
+  -- Check only this name's suffixes, longest first. Skip a leading dot:
+  -- a bare hidden name such as .lua has no basename before its extension.
+  local dot = name:find(".", 2, true)
+  while dot do
+    local icon = EXTENSIONS[name:sub(dot + 1)]
+    if icon then return icon end
+    dot = name:find(".", dot + 1, true)
   end
   return "default"
 end

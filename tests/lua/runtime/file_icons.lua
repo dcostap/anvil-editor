@@ -1,0 +1,33 @@
+local icons = require "core.file_icons"
+local test = require "core.test"
+
+test.describe("File icon selection", function()
+  test.it("uses the longest known extension and skips unknown prefixes", function()
+    test.equal(icons.resolve("src/main.cpp"), "cpp")
+    test.equal(icons.resolve("infra/state.tf.json"), "terraform")
+    test.equal(icons.resolve("infra/state.backup.tf.json"), "terraform")
+    test.equal(icons.resolve("views/page.erb.html"), "html_erb")
+    test.equal(icons.resolve("src/component.test.tsx"), "react")
+    test.equal(icons.resolve("assets/theme.css.map"), "css")
+    test.equal(icons.resolve("data/unrelated.part.json"), "json")
+  end)
+
+  test.it("keeps named files and path rules ahead of extensions", function()
+    test.equal(icons.resolve("C:\\PROJECT\\README.MD"), "info")
+    test.equal(icons.resolve("config/Dockerfile.release"), "docker")
+    test.equal(icons.resolve("config/requirements-dev.txt"), "python")
+    test.equal(icons.resolve("config/.env.local"), "config")
+    test.equal(icons.resolve("repo/.github/workflows/build.yml"), "github")
+    test.equal(icons.resolve("repo/build.yml"), "yml")
+  end)
+
+  test.it("requires a filename before an extension and omits directory icons", function()
+    test.equal(icons.resolve(".lua"), "default")
+    test.equal(icons.resolve(".local.lua"), "lua")
+    test.equal(icons.resolve(".tf.json"), "json")
+    test.equal(icons.resolve("main."), "default")
+    test.equal(icons.resolve("unknown.extension"), "default")
+    test.equal(icons.resolve("no-extension"), "default")
+    test.equal(icons.resolve("src.lua", true), nil)
+  end)
+end)
