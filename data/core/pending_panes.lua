@@ -30,7 +30,7 @@ function pending.order(projects, seen, snoozes)
     for _, record in ipairs(project.terminals or {}) do records[record.id] = record end
     for index, item in ipairs(project.panes or {}) do
       local terminal = item.terminal
-      if terminal then
+      if terminal and not item.snoozed then
         local record = records[terminal.session]
         local agent = record and record.state == "running" and tab.agent(record) or nil
         local snooze = snoozes[terminal.session]

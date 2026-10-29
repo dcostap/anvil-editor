@@ -335,12 +335,6 @@ function M.focus(target, feedback)
   return pane
 end
 
-function M.focus_index(index)
-  local pane = M.ordered()[tonumber(index)]
-  if not pane then return nil end
-  return M.focus(pane)
-end
-
 function M.neighbor(target, direction)
   local source = M.find(target)
   if not source then return nil end
@@ -1572,6 +1566,89 @@ local function nearest_after_removal(old_order, old_index)
   return old_order[math.min(old_index, #old_order)] or old_order[old_index - 1]
 end
 
+-- A Snoozed Pane is its own Pane Group with `snoozed` set. Pane navigation and Pane numbers skip it.
+function M.navigable()
+  local result = {}
+  for _, group in ipairs(M.groups) do
+    if not group.snoozed then
+      for _, pane in ipairs(layout.leaves(group.root)) do result[#result + 1] = pane end
+    end
+  end
+  return result
+end
+
+function M.is_snoozed(target)
+  local pane = M.find(target)
+  return pane ~= nil and pane.group.snoozed == true
+end
+
+-- The position that `pane` has, or would have, among the Panes that navigation reaches.
+local function navigable_index(pane)
+  local index = 1
+  for _, member in ipairs(M.ordered()) do
+    if member == pane then return index end
+    if not member.group.snoozed then index = index + 1 end
+  end
+  return index
+end
+
+-- Snoozes `target`: it leaves its Pane Group for its own Snoozed one. If it had focus, the nearest Pane that
+-- navigation reaches takes focus. Without one, the Snoozed Pane stays shown.
+function M.snooze(target)
+  local pane = M.find(target)
+  if not pane then return nil, "invalid Pane" end
+  if pane.group.snoozed then return pane end
+  local old_group, old_index = pane.group, navigable_index(pane)
+  local old_members, member_index = layout.leaves(old_group.root), nil
+  for index, member in ipairs(old_members) do
+    if member == pane then member_index = index end
+  end
+  if #old_members > 1 then
+    remove_from_group(pane)
+    create_group(pane, group_index(old_group) + 1)
+  end
+  pane.group.snoozed = true
+  if M.active_pane == pane or M.visible_group_value == pane.group then
+    local survivors = old_group ~= pane.group and layout.leaves(old_group.root) or {}
+    local next_pane = nearest_after_removal(survivors, member_index)
+      or nearest_after_removal(M.navigable(), old_index)
+    if next_pane then
+      M.active_pane, M.visible_group_value = next_pane, next_pane.group
+      focus_view(next_pane)
+    end
+  end
+  after_mutation("snoozed " .. pane.id)
+  return pane
+end
+
+-- Ends the Snooze of each Pane in `list`, which comes oldest Snooze first. A shown Pane stays where it is. The
+-- others go to new Pane Groups at the end, at most three Panes side by side in each. Focus does not change.
+function M.wake(list)
+  local hidden, woken = {}, {}
+  for _, target in ipairs(list) do
+    local pane = M.find(target)
+    if pane and pane.group.snoozed then
+      woken[#woken + 1] = pane.id
+      if pane.group == M.visible_group_value then pane.group.snoozed = nil
+      else hidden[#hidden + 1] = pane end
+    end
+  end
+  for first = 1, #hidden, 3 do
+    local group = hidden[first].group
+    group.snoozed = nil
+    table.remove(M.groups, group_index(group))
+    M.groups[#M.groups + 1] = group
+    for index = first + 1, math.min(first + 2, #hidden) do
+      local pane = hidden[index]
+      remove_from_group(pane)
+      pane.group = group
+      group.root = layout.split(group.root, hidden[index - 1], "right", pane)
+    end
+  end
+  if #woken > 0 then after_mutation("woke " .. table.concat(woken, ",")) end
+  return #woken
+end
+
 local function save_closed_pane(pane)
   local snapshot = { views = {}, history = {}, index = pane.history.index,
     constrained = M.constraint(pane) ~= nil, limit = pane.history.limit }
@@ -1663,8 +1740,7 @@ local function commit_close(pane)
   closed_panes[#closed_panes + 1] = ok and snapshot or { error = tostring(snapshot) }
   if #closed_panes > 20 then table.remove(closed_panes, 1) end
   quiet("Pane close snapshot: %s (%s)", pane.id, ok and "saved" or tostring(snapshot))
-  local old_order = M.ordered()
-  local old_index = M.number(pane)
+  local old_index = navigable_index(pane)
   local closed_active_view = M.pane_for_view(core.active_view) == pane
   local group = pane.group
   local old_group_order = layout.leaves(group.root)
@@ -1688,7 +1764,7 @@ local function commit_close(pane)
   local survivors = M.ordered()
   local group_survivors = group.root and layout.leaves(group.root) or {}
   local next_pane = nearest_after_removal(group_survivors, old_group_index)
-    or nearest_after_removal(survivors, old_index)
+    or nearest_after_removal(M.navigable(), old_index) or survivors[1]
   if #survivors == 0 then
     M.active_pane = nil
     M.visible_group_value = nil
@@ -1846,7 +1922,7 @@ function M.save_workspace_state(save_view)
   for _, group in ipairs(M.groups) do
     local saved_layout = serialize_pruned_layout(group.root, valid)
     if saved_layout then
-      state.groups[#state.groups + 1] = { id = group.id, layout = saved_layout }
+      state.groups[#state.groups + 1] = { id = group.id, layout = saved_layout, snoozed = group.snoozed }
       saved_groups[group] = true
     end
   end
@@ -1974,7 +2050,7 @@ function M.restore_workspace_state(state, load_view)
       local pruned = prune_restored_layout(record.layout, restored, attached)
       if pruned then
         local root = layout.deserialize(pruned, restored)
-        local group = { id = record.id, root = root }
+        local group = { id = record.id, root = root, snoozed = record.snoozed == true or nil }
         group_ids[group.id] = true
         M.groups[#M.groups + 1] = group
         M.groups_by_id[group.id] = group
@@ -1995,7 +2071,8 @@ function M.restore_workspace_state(state, load_view)
     end
   end
 
-  local visible = M.groups_by_id[state.visible_group_id] or M.groups[1]
+  local first = M.navigable()[1]
+  local visible = M.groups_by_id[state.visible_group_id] or first and first.group or M.groups[1]
   local focused = M.panes_by_id[state.focused_pane_id]
   if not focused or not visible or focused.group ~= visible then
     focused = visible and layout.leaves(visible.root)[1] or nil
