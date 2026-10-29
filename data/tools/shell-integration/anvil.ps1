@@ -16,6 +16,10 @@ function Global:prompt {
   $code = $Global:LASTEXITCODE
   $state = $Global:__AnvilShellIntegration
   $e = [char]27; $b = [char]7; $tag = "anvil=$($state.Nonce)"
+  # A crashed program can leave mouse and key reports enabled at the prompt.
+  # Send cleanup through ConPTY before the custom prompt can set its own modes.
+  # Keep the screen, scrollback and ConPTY's input mode. Do not send a full reset.
+  [Console]::Write("$e[?1000l$e[?1002l$e[?1003l$e[?1006l$e[?1004l$e[?2004l$e[<99u$e[>4;0m$e[?25h")
   $marks = ""
   if ($state.Running) {
     $exit = if ($success) { 0 } elseif ($code) { $code } else { 1 }

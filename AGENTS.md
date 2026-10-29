@@ -79,6 +79,12 @@ The host also reports a command that runs inside the shell, such as `Start-Sleep
 It ignores marks without the nonce, so a nested shell or TUI cannot end a running command.
 Run the `Terminal busy status` tests in `ui/terminal_quit.lua` after changes.
 
+The PowerShell prompt clears stale mouse, focus, paste and extended keyboard modes after a crashed program.
+It sends control sequences through ConPTY before the custom prompt runs, and shows the cursor again.
+It keeps terminal text, scrollback and ConPTY's input mode. It does not send a full terminal reset.
+Existing shells need a new Terminal Session to load the updated integration.
+Run `ui/terminal_stale_modes.lua` after changes.
+
 Close and quit skip confirmation when Pi reports `idle` or `done`, even while its shell command remains busy.
 Quit still detaches those sessions unless the user chooses End, so Pi keeps running.
 Quit ends idle shells, and End ends all shells. An ended session is not closed. It revives in its Pane on the next start.
