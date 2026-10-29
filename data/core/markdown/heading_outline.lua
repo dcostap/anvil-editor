@@ -163,19 +163,19 @@ end
 -- After the caret moves, the caret's section is current: the last heading at
 -- or above the caret's line. A click on an entry moves the caret too. The
 -- current section goes back to the reading line when the user scrolls.
-local function follows_caret(view, state)
-  local line, col = view.buffer:get_selection()
-  if line ~= state.caret_line or col ~= state.caret_col then
-    if state.caret_line then state.follow_caret = true end
-    state.caret_line, state.caret_col = line, col
-  end
-  return state.follow_caret
+-- Each Text View has its own caret. The Buffer's selection belongs to the
+-- focused view, so the outline listens to its own view.
+local function on_selection_changed(view, selection_state)
+  local state = view.__heading_outline
+  local selections = selection_state.selections
+  state.caret_line = selections[(selection_state.last_selection - 1) * 4 + 1] or selections[1]
+  state.follow_caret = true
 end
 
 -- The last heading above the reading line. At the end of the document, the
 -- last heading on screen.
 local function current_index(view, state, list)
-  if follows_caret(view, state) then
+  if state.follow_caret and state.caret_line then
     return last_index(view, list, heading_line, state.caret_line)
   end
   local limit = view.position.y + view.size.y * READING_LINE
@@ -293,10 +293,11 @@ end
 -- the view, one line below its edge.
 local function jump(view, entry)
   navigation_history.perform_jump_with_options(view, { departure = { prefer_incoming_state = true } }, function()
-    view.buffer:set_selection(entry.line, entry.col)
+    view:with_selection_state(function() view.buffer:set_selection(entry.line, entry.col) end)
     view:scroll_to_line(entry.line, false, false, { top_margin = view:get_line_height() })
   end)
-  state_for(view).follow_caret = true
+  local state = state_for(view)
+  state.follow_caret, state.caret_line = true, entry.line
   core.set_active_view(view)
   core.log_quiet("Heading Outline: moved to %q at line %d", entry.title, entry.line)
 end
@@ -413,6 +414,7 @@ function heading_outline.attach(view)
   for _, name in ipairs(HOOKS) do saved[name] = rawget(view, name) or false end
   view.__heading_outline_hooks = saved
   state_for(view)
+  view:add_selection_listener("heading_outline", on_selection_changed)
   local function previous(self, name, ...)
     local fn = saved[name] or getmetatable(self)[name]
     return fn(self, ...)
@@ -450,6 +452,7 @@ function heading_outline.detach(view)
   local saved = view.__heading_outline_hooks
   if not saved then return false end
   for _, name in ipairs(HOOKS) do view[name] = saved[name] or nil end
+  view:remove_selection_listener("heading_outline")
   view.__heading_outline_hooks, view.__heading_outline = nil, nil
   return true
 end
