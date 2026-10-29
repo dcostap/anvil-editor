@@ -457,6 +457,7 @@ static AnvilSidebarProject *sidebar_project(const char *path);
 static void probe_sidebar_model(ShellWindow *window, WPARAM action, LPARAM value);
 static void start_sidebar(void);
 static void set_sidebar_hidden(ShellWindow *window, bool hidden);
+static bool sidebar_shown(ShellWindow *window);
 static void focus_sidebar(ShellWindow *window, bool focused);
 static void show_project_menu(ShellWindow *window, uint32_t row_id, int x, int y);
 static void show_sidebar_menu(ShellWindow *window, const AnvilSurfaceMenu *request, uint32_t size);
@@ -3627,7 +3628,7 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
     SDL_Log("Shell Sidebar toggle requested: Window=%u", window->id);
-    if (!window->closing) set_sidebar_hidden(window, !window->sidebar_hidden);
+    if (!window->closing) set_sidebar_hidden(window, sidebar_shown(window));
     break;
   case ANVIL_SURFACE_MSG_PANES: {
     const AnvilSurfacePaneReport *report = payload;
@@ -3866,8 +3867,13 @@ static void apply_sidebar_layout(ShellWindow *window) {
   if (window->shown) composite_and_present(window);
 }
 
+/* Focus shows a hidden Sidebar until it loses focus. The Window's saved layout keeps it hidden. */
+static bool sidebar_shown(ShellWindow *window) {
+  return !window->sidebar_hidden || window->sidebar_focused;
+}
+
 static void slide_sidebar(ShellWindow *window) {
-  float target = window->sidebar_hidden ? 0.0f : 1.0f;
+  float target = sidebar_shown(window) ? 1.0f : 0.0f;
   float t = (float)(SDL_GetTicks() - window->sidebar_slide_start) / SHELL_SIDEBAR_SLIDE_MS;
   if (t >= 1.0f || !window->shown || IsIconic(window->hwnd)) {
     KillTimer(window->hwnd, SHELL_SIDEBAR_SLIDE_TIMER);
@@ -3881,11 +3887,8 @@ static void slide_sidebar(ShellWindow *window) {
 }
 
 /* Only this Window slides its Sidebar. A Window that is not shown changes at once. */
-static void set_sidebar_hidden(ShellWindow *window, bool hidden) {
-  if (window->sidebar_hidden == hidden) return;
-  if (hidden) focus_sidebar(window, false);
-  window->sidebar_hidden = hidden;
-  SDL_Log("Shell Sidebar %s: Window=%u", hidden ? "hidden" : "shown", window->id);
+static void start_sidebar_slide(ShellWindow *window) {
+  bool hidden = !sidebar_shown(window);
   window->sidebar_dragging = window->sidebar_grip_hover = false;
   window->sidebar_slide_from = window->sidebar_open;
   window->sidebar_slide_start = SDL_GetTicks();
@@ -3898,6 +3901,15 @@ static void set_sidebar_hidden(ShellWindow *window, bool hidden) {
     window->sidebar_open = hidden ? 0.0f : 1.0f;
     apply_sidebar_layout(window);
   }
+}
+
+static void set_sidebar_hidden(ShellWindow *window, bool hidden) {
+  if (hidden) focus_sidebar(window, false);
+  if (window->sidebar_hidden == hidden) return;
+  bool shown = sidebar_shown(window);
+  window->sidebar_hidden = hidden;
+  SDL_Log("Shell Sidebar %s: Window=%u", hidden ? "hidden" : "shown", window->id);
+  if (sidebar_shown(window) != shown) start_sidebar_slide(window);
   windows_changed();
 }
 
@@ -4102,8 +4114,9 @@ static void focus_sidebar(ShellWindow *window, bool focused) {
       !shell.sidebar_process || !shell.sidebar_process->connected)) return;
   if (window->sidebar_focused == focused) return;
   clear_composition(window);
+  bool shown = sidebar_shown(window);
   window->sidebar_focused = focused;
-  if (focused) set_sidebar_hidden(window, false);
+  if (sidebar_shown(window) != shown) start_sidebar_slide(window);
   if (window->selected->connected)
     shell_send_int(window->selected, ANVIL_SURFACE_MSG_FOCUS, !focused && window_focused(window));
   if (window->sidebar_client && shell.sidebar_process && shell.sidebar_process->connected)
@@ -6366,20 +6379,41 @@ static void finish_resolutions(void) {
   }
 }
 
-/* Keep the closing Project's identity reserved until process exit. Select usable content now. */
+/* A Project's place in the Sidebar, which lists Scratch first and then the model's order. */
+static size_t sidebar_place(const ShellProject *project) {
+  const AnvilSidebarProject *row =
+      project->project_path ? anvil_sidebar_find(&shell.sidebar, project->project_path) : NULL;
+  if (row && row->scratch) return 0;
+  for (size_t i = 0; row && i < shell.sidebar.count; i++)
+    if (shell.sidebar.projects[i] == row) return i + 1;
+  return SIZE_MAX;
+}
+
+/* Keep the closing Project's identity reserved until process exit. Select the loaded Project above it in the
+ * Sidebar now, or else the one below it. A focused Sidebar keeps the keyboard, so an unload there stays there. */
 static void select_after_close(ShellProject *project) {
   ShellWindow *window = window_for_id(project->window_id);
   if (!window || window->selected != project) return;
+  size_t place = sidebar_place(project), above_place = 0, below_place = SIZE_MAX;
+  ShellProject *above = NULL, *below = NULL;
   for (ShellProject *item = shell.projects; item; item = item->next) {
-    if (item != project && item->window_id == window->id && !item->unloading &&
-        !item->exit_announced && !item->failed_close) {
-      select_project(item, false);
-      return;
+    if (item == project || item->window_id != window->id || item->unloading || item->exit_announced ||
+        item->failed_close)
+      continue;
+    size_t item_place = sidebar_place(item);
+    if (item_place < place) {
+      if (!above || item_place > above_place) above = item, above_place = item_place;
+    } else if (!below || item_place < below_place) {
+      below = item, below_place = item_place;
     }
+  }
+  if (above || below) {
+    select_project(above ? above : below, true);
+    return;
   }
   free(window->empty->project_path);
   window->empty->project_path = project->project_path ? _strdup(project->project_path) : NULL;
-  select_project(window->empty, false);
+  select_project(window->empty, true);
 }
 
 static void complete_unload(ShellProject *project) {

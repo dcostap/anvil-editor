@@ -1,5 +1,8 @@
--- Wheel-scroll a File Tree over a Git repository with changed files.
+-- Scroll a File Tree over a Git repository with changed files.
 -- Rows show Git colors, change counts, folder counts, and metadata hints.
+-- Settings:
+--   input  "wheel" scrolls with the mouse wheel. "keys" moves the caret one line from
+--          the bottom row, so each move scrolls the tree.
 local support = require "scenes.support"
 
 local scene = {}
@@ -13,18 +16,32 @@ function scene.setup(context)
   return view
 end
 
-function scene.ready(context)
-  local view = context.view
-  return support.git_settled(context.root, true) and support.scroll_settled(view)
-    and support.file_tree_counts_ready(view)
+local function keys(context)
+  return context.settings.input == "keys"
 end
 
-function scene.action_name(_, index)
+function scene.ready(context)
+  local view = context.view
+  if not (support.git_settled(context.root, true) and support.scroll_settled(view)
+    and support.file_tree_counts_ready(view)) then return false end
+  if keys(context) and not context.caret_placed then
+    context.caret_placed = support.caret_to_bottom(view)
+    return false
+  end
+  return true
+end
+
+function scene.action_name(context, index)
+  if keys(context) then return index <= DOWN_TICKS and "line-down" or "line-up" end
   return index <= DOWN_TICKS and "wheel-down" or "wheel-up"
 end
 
 function scene.dispatch(context, index)
   local view = context.view
+  if keys(context) then
+    context.left_line = support.move_caret(view, index <= DOWN_TICKS)
+    return
+  end
   if index == 1 then support.hover(view) end
   local before = view.scroll.to.y
   support.wheel(index <= DOWN_TICKS and 1 or -1)
@@ -33,6 +50,7 @@ end
 
 function scene.action_ready(context)
   local view = context.view
+  if keys(context) and view.buffer:get_selection() == context.left_line then return false end
   if not support.scroll_settled(view) then return false end
   return true, string.format("y=%d", math.floor(view.scroll.y + 0.5))
 end

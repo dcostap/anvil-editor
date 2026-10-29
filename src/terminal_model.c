@@ -1,4 +1,5 @@
 #include "terminal_model.h"
+#include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
 #include <SDL3/SDL.h>
@@ -53,13 +54,13 @@ static bool terminal_images_init(void) {
   return InitOnceExecuteOnce(&once, init_terminal_images, NULL, NULL) != 0;
 }
 
+/* Ghostty passes alignment as a power of two. It asks for page-aligned terminal pages. */
 static void *terminal_alloc(
   void *ctx, size_t len, uint8_t alignment, uintptr_t ret_addr
 ) {
   (void)ctx;
-  (void)alignment;
   (void)ret_addr;
-  return HeapAlloc(GetProcessHeap(), 0, len);
+  return _aligned_malloc(len, (size_t)1 << alignment);
 }
 
 static bool terminal_resize(
@@ -79,9 +80,8 @@ static void *terminal_remap(
 ) {
   (void)ctx;
   (void)memory_len;
-  (void)alignment;
   (void)ret_addr;
-  return HeapReAlloc(GetProcessHeap(), 0, memory, new_len);
+  return _aligned_realloc(memory, new_len, (size_t)1 << alignment);
 }
 
 static void terminal_free(
@@ -92,7 +92,7 @@ static void terminal_free(
   (void)memory_len;
   (void)alignment;
   (void)ret_addr;
-  if (memory) HeapFree(GetProcessHeap(), 0, memory);
+  _aligned_free(memory);
 }
 
 static const GhosttyAllocatorVtable terminal_allocator_vtable = {
@@ -108,8 +108,8 @@ const GhosttyAllocator terminal_allocator = {
 };
 
 bool anvil_terminal_model_options(GhosttyTerminal model, const size_t *scrollback_lines) {
-  /* ConPTY owns the live screen. Pulling saved history into it on growth moves
-     the visible prompt without moving the shell's input coordinates. */
+  /* ConPTY owns the live screen and keeps no history. Pulling saved history
+     into it on a resize moves the visible prompt away from ConPTY's prompt. */
   bool pull_scrollback = false;
   if (ghostty_terminal_set(model, GHOSTTY_TERMINAL_OPT_RESIZE_PULL_SCROLLBACK,
       &pull_scrollback) != GHOSTTY_SUCCESS) return false;

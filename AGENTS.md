@@ -41,6 +41,7 @@ The standalone build needs MSYS2, MinGW64 GCC, Ninja, CMake, Python, Meson,
 and Zig. `scripts\ensure-zig.sh` downloads the pinned Zig release into
 `%LOCALAPPDATA%\anvil-build-tools` when it is missing. The build needs network
 access for this download and for Meson subprojects on a clean machine.
+Zig's own HTTP and Git clients fail on some Windows machines. `subprojects/packagefiles/ghostty/build-vt.sh` then gets each missing Ghostty dependency with curl or git and gives Zig the unpacked folder.
 
 Windows Terminal Sessions use bundled Microsoft ConPTY, not the system console host.
 `subprojects/conpty.wrap` pins the package and its SHA-256 hash.
@@ -48,11 +49,16 @@ Meson installs `conpty.dll` and `OpenConsole.exe` into `data/conpty`.
 The standalone runtime includes both files and their license.
 Keep both files together. Do not fall back to the system console host.
 That host can drop Pi's mouse mode when Pi sets raw input during startup.
-Run `ui/terminal_mouse_wheel.lua` and the standalone smoke test after ConPTY updates.
+A width change reflows wrapped lines differently in ConPTY and in the Terminal View, so their prompt rows can differ.
+ConPTY 1.25 and later then asks the terminal for the cursor position (DSR CPR) and moves its cursor there. The editor answers.
+Do not go back to an earlier ConPTY. Typed input then appears above the visible prompt.
+Run `ui/terminal_mouse_wheel.lua`, `ui/terminal_resize_prompt.lua` and the standalone smoke test after ConPTY updates.
 
 New Terminal Sessions start their host and shell on a background thread.
 They return in the reconnecting state, like restored sessions. Wait for running before sending input or reading the host ID.
 Startup copies the launch options and environment. Closing an unaccepted new session ends its shell, including during editor shutdown.
+A new host answers only after its shell starts, so a launch waits up to 30 seconds. A stalled machine can take several seconds.
+A failed launch ends its host and deletes the record that the host wrote, so the Sidebar shows no lost copy.
 Run `ui/terminal_startup.lua` after startup changes. Tests that need a live Terminal View use `tests/fixtures/terminal_ready.lua`.
 
 The visible Selected Project prepares one unused Terminal Session after a short delay.
@@ -350,6 +356,8 @@ Run `anvil:shell-state` and the `restore-loaded` shell launch probe after change
 
 Project Sidebar visibility belongs to each Window. The first Window and each New Window start expanded. A Window that opens for one Project, such as Open Project in New Window or Move to New Window, starts collapsed.
 Restored Windows use their saved visibility, including a lone Window saved with its Sidebar hidden.
+Focus slides a hidden Sidebar open until the Sidebar loses focus. The Window still saves it as hidden.
+The toggle closes a visible Sidebar, also a hidden Sidebar that focus shows.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
 Loaded Projects start expanded unless this Window has a saved manual fold.
 Selecting a Project expands it and saves that state. It stays expanded after it loses the selection. The first selection in a restored Window keeps its saved fold.
@@ -491,6 +499,13 @@ That heading stays current until the user scrolls, presses elsewhere in the view
 This also holds while the view scrolls to it, before a short section, and at the end of the document.
 Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading-outline` render scenario after visual changes.
 
+## Binary files
+
+`core.open_file` asks how to open a binary file: with the default app, as text, or not at all. It returns `false` while the dialog asks.
+`common.is_binary` uses Git's rule: a NUL byte in the first 8000 bytes. Text with a UTF-16 or UTF-32 BOM is not binary.
+The File Search preview uses the same rule. `opts.as_text` skips the dialog.
+Run `ui/binary_file_open.lua` after changes.
+
 ## Reload from disk
 
 `Buffer:reload()` applies the file's text as edits through `Buffer:apply_lines`. It does not replace the Buffer.
@@ -501,6 +516,16 @@ A reload does not call `Buffer:load`. Plugins that track the disk state hook `Bu
 A Text View without row measurements keeps its top line when lines change above it, like a measured view.
 See [shared editing](docs/shared-editing.md) for the plan: dirty-Buffer merges and Disk Conflicts.
 Run `ui/buffer_reload.lua` and `runtime/buffer_apply_lines.lua` after changes.
+
+## Panes behind the Fuzzy Searcher
+
+While the Fuzzy Searcher is open, each Pane View draws a Draw Capture of its last draw.
+A Draw Capture is a copy of the View's renderer commands (`renderer.begin_capture`, `renderer.end_capture`).
+The View draws again when its rectangle, scroll, text, Color Theme or scale changes.
+Other changes, such as new Git colors in the File Tree, show when the picker closes.
+Terminal Views set `draws_while_covered`, because programs write to them while they are covered.
+A replay stops after any Font or canvas is freed, or after a captured Font changes size.
+Run `ui/draw_capture.lua`, `ui/covered_panes.lua` and the `fuzzy-picker-*` render scenarios after changes.
 
 ## Background work infrastructure
 
@@ -544,6 +569,19 @@ A LuaJIT trace stops at each C call, so a call for each item can be slower than 
 Code that runs in each frame, such as `update`, `draw`, and caret moves, must not make new tables, closures, or strings when old ones can be used again.
 
 In the commit message, give the measurement before and after the change.
+
+### Frame-time check
+
+Run scenarios before and after each change to code that runs in each frame. This includes `update`, `draw`, scrolling, caret moves, the File Tree and the Fuzzy Searcher.
+
+1. Before the change, run the smoke scenarios that use the changed code, for example `python tools/run_scenarios.py --scenario fuzzy-symbols-navigate-filetree-large --runs 1 --no-build`.
+2. Run `--suite smoke` for changes to shared drawing code, such as `data/core/textview.lua`. The suite takes about 40 minutes.
+3. After the change, run the same scenarios again.
+4. In the commit message, give the p95 frame work, the maximum frame and the KiB per frame from both reports.
+
+Do not commit a change that makes one of these numbers worse, unless the commit message explains why.
+Many scenarios are over budget now. A change must not move them further over.
+See [scenario runs](tools/SCENARIOS.md) for the budgets.
 
 Add native modules under `src/api` with the portable Lua C API, not FFI. The PUC Lua build must still work.
 
@@ -923,16 +961,9 @@ Pi emits OSC 133 A as a zero-width marker during synchronized TUI repaints. Ghos
 
 When updating Ghostty, verify this patch still applies. Remove it only after Pi and Ghostty agree on OSC 133 A behavior during TUI repaints.
 
-Ghostty ConPTY resize patch:
-
-- `subprojects/packagefiles/ghostty-conpty-resize-history.patch`
-- listed after the semantic-prompt patch in `subprojects/ghostty.wrap`
-- prevents screen growth from pulling scrollback into the live ConPTY screen
-- keeps a restored prompt aligned with the shell's input coordinates after resize
-
-Keep saved history available for scrolling, but outside the live screen when it grows.
-Run `ui/terminal_revival.lua` after changes. It checks input through resize and reattachment.
-Keep this patch when updating Ghostty unless its resize API supports this behavior.
+Anvil sets Ghostty's `GHOSTTY_TERMINAL_OPT_RESIZE_PULL_SCROLLBACK` to false. ConPTY keeps no history, so a resize must not pull history into the live screen.
+A height change then adds blank rows at the bottom. A width change keeps the top of the live screen on the same text.
+Saved history stays available for scrolling. Run `ui/terminal_revival.lua` and `ui/terminal_resize_prompt.lua` after changes.
 
 Current Anvil Tree-sitter Markdown patch:
 

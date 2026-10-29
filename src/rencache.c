@@ -432,8 +432,13 @@ void rencache_init(RenCache *rc) {
 }
 
 
+/* Counts freed caches, which include canvases. A Draw Capture that points to a canvas
+   is only safe while it is unchanged. */
+static uint32_t cache_free_count = 0;
+
 void rencache_uninit(RenCache *rc) {
   if (rc) {
+    cache_free_count++;
     if (rc->command_buf)
       SDL_free(rc->command_buf);
     rencache_init(rc);
@@ -714,10 +719,12 @@ void rencache_begin_frame(RenCache *ren_cache) {
     rencache_invalidate(ren_cache);
   }
   ren_cache->last_clip_rect = ren_cache->screen_rect;
+  ren_cache->capture_open = false;
 }
 
 void rencache_abandon_frame(RenCache *ren_cache) {
   if (!ren_cache) return;
+  ren_cache->capture_open = false;
   ren_cache->command_buf_idx = 0;
   ren_cache->resize_issue = false;
   ren_cache->frame_failed = false;
@@ -1211,6 +1218,149 @@ void rencache_end_frame(RenCache *ren_cache) {
   }
   ren_cache->command_buf_idx = 0;
   ren_cache->frame_active = false;
+}
+
+struct RenCapture {
+  const RenCache *cache;
+  RenRect screen_rect;
+  uint32_t font_free_count;
+  uint32_t cache_free_count;
+  /* The clip that the range leaves active, so later commands cull the same way. */
+  bool sets_clip;
+  RenRect clip;
+  size_t commands;
+  size_t len;
+  uint8_t bytes[];
+};
+
+RenCaptureResult rencache_capture_begin(RenCache *ren_cache) {
+  if (!ren_cache || !ren_cache->frame_active) return REN_CAPTURE_NO_FRAME;
+  if (ren_cache->frame_failed) return REN_CAPTURE_FRAME_FAILED;
+  if (ren_cache->capture_open) return REN_CAPTURE_ALREADY_OPEN;
+  ren_cache->capture_open = true;
+  ren_cache->capture_start = ren_cache->command_buf_idx;
+  return REN_CAPTURE_OK;
+}
+
+RenCaptureResult rencache_capture_end(RenCache *ren_cache, RenCapture **out) {
+  *out = NULL;
+  if (!ren_cache || !ren_cache->frame_active) return REN_CAPTURE_NO_FRAME;
+  if (!ren_cache->capture_open) return REN_CAPTURE_NOT_OPEN;
+  ren_cache->capture_open = false;
+  /* A failed frame drops its commands, so the start no longer marks a command. */
+  if (ren_cache->frame_failed || ren_cache->capture_start > ren_cache->command_buf_idx)
+    return REN_CAPTURE_FRAME_FAILED;
+
+  size_t start = ren_cache->capture_start, end = ren_cache->command_buf_idx;
+  bool sets_clip = false;
+  RenRect clip = { 0 };
+  size_t commands = 0;
+  int depth = 0;
+  for (size_t at = start; at < end; ) {
+    Command *cmd = (Command*)(ren_cache->command_buf + at);
+    switch (cmd->type) {
+      case DRAW_PIXELS: return REN_CAPTURE_PIXELS;
+      case SET_CLIP:
+        sets_clip = true;
+        clip = ((SetClipCommand*)&cmd->command)->rect;
+        break;
+      case PUSH_TRANSFORM: depth++; break;
+      case POP_TRANSFORM:
+        if (--depth < 0) return REN_CAPTURE_TRANSFORM;
+        break;
+      default: break;
+    }
+    commands++;
+    at += cmd->size;
+  }
+  if (depth != 0) return REN_CAPTURE_TRANSFORM;
+
+  RenCapture *capture = SDL_malloc(sizeof(RenCapture) + (end - start));
+  if (!capture) return REN_CAPTURE_NO_MEMORY;
+  capture->cache = ren_cache;
+  capture->screen_rect = ren_cache->screen_rect;
+  capture->font_free_count = ren_font_free_count();
+  capture->cache_free_count = cache_free_count;
+  capture->sets_clip = sets_clip;
+  capture->clip = clip;
+  capture->commands = commands;
+  capture->len = end - start;
+  memcpy(capture->bytes, ren_cache->command_buf + start, end - start);
+  *out = capture;
+  return REN_CAPTURE_OK;
+}
+
+RenCaptureResult rencache_capture_draw(RenCache *ren_cache, const RenCapture *capture) {
+  if (!ren_cache || !ren_cache->frame_active) return REN_CAPTURE_NO_FRAME;
+  if (ren_cache->frame_failed) return REN_CAPTURE_FRAME_FAILED;
+  if (capture->cache != ren_cache) return REN_CAPTURE_OTHER_TARGET;
+  if (capture->screen_rect.width != ren_cache->screen_rect.width
+    || capture->screen_rect.height != ren_cache->screen_rect.height) {
+    return REN_CAPTURE_SCREEN_CHANGED;
+  }
+  /* A freed Font can leave a pointer to freed memory, so check before reading any. */
+  if (capture->font_free_count != ren_font_free_count()) return REN_CAPTURE_FONT_FREED;
+  if (capture->cache_free_count != cache_free_count) return REN_CAPTURE_CANVAS_FREED;
+  for (size_t at = 0; at < capture->len; ) {
+    const Command *cmd = (const Command*)(capture->bytes + at);
+    if (cmd->type == DRAW_TEXT) {
+      const DrawTextCommand *text = (const DrawTextCommand*)&cmd->command;
+      for (int index = 0; index < FONT_FALLBACK_MAX && text->fonts[index]; index++) {
+        if (ren_font_get_generation(text->fonts[index]) != text->font_generations[index]
+          || ren_font_get_surface_scale(text->fonts[index]) != text->font_surface_scales[index]) {
+          return REN_CAPTURE_STALE_FONT;
+        }
+      }
+    }
+    at += cmd->size;
+  }
+
+  if (!reserve_command_bytes(ren_cache, capture->len, false)) return REN_CAPTURE_FRAME_FAILED;
+  uint8_t *copy = ren_cache->command_buf + ren_cache->command_buf_idx;
+  memcpy(copy, capture->bytes, capture->len);
+  ren_cache->command_buf_idx += capture->len;
+  /* Prepare each canvas as a live draw does. Its current content shows. */
+  for (size_t at = 0; at < capture->len; ) {
+    Command *cmd = (Command*)(copy + at);
+    if (cmd->type == DRAW_CANVAS) {
+      DrawCanvasCommand *canvas_cmd = (DrawCanvasCommand*)&cmd->command;
+      canvas_cmd->content_version = canvas_cmd->canvas->content_version;
+      rencache_begin_frame(canvas_cmd->canvas);
+      if (ren_cache->window) g_rencache_frame_stats.canvas_commands++;
+    }
+    at += cmd->size;
+  }
+  if (capture->sets_clip) ren_cache->last_clip_rect = capture->clip;
+  if (ren_cache->window) {
+    g_rencache_frame_stats.commands += (int)capture->commands;
+    g_rencache_frame_stats.command_bytes += capture->len;
+    g_rencache_frame_stats.capture_replays++;
+    g_rencache_frame_stats.capture_commands_replayed += (int)capture->commands;
+  }
+  return REN_CAPTURE_OK;
+}
+
+void rencache_capture_free(RenCapture *capture) {
+  SDL_free(capture);
+}
+
+const char *rencache_capture_result_string(RenCaptureResult result) {
+  switch (result) {
+    case REN_CAPTURE_OK: return "ok";
+    case REN_CAPTURE_NO_FRAME: return "no_frame";
+    case REN_CAPTURE_ALREADY_OPEN: return "already_open";
+    case REN_CAPTURE_NOT_OPEN: return "not_open";
+    case REN_CAPTURE_PIXELS: return "pixels";
+    case REN_CAPTURE_TRANSFORM: return "transform";
+    case REN_CAPTURE_NO_MEMORY: return "no_memory";
+    case REN_CAPTURE_OTHER_TARGET: return "other_target";
+    case REN_CAPTURE_SCREEN_CHANGED: return "screen_changed";
+    case REN_CAPTURE_FONT_FREED: return "font_freed";
+    case REN_CAPTURE_CANVAS_FREED: return "canvas_freed";
+    case REN_CAPTURE_STALE_FONT: return "stale_font";
+    case REN_CAPTURE_FRAME_FAILED: return "frame_failed";
+  }
+  return "unknown";
 }
 
 RenSurface rencache_get_surface(RenCache *ren_cache) {

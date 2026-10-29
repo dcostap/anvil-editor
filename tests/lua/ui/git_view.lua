@@ -1535,6 +1535,38 @@ test.describe("Git View command", function()
     test.ok(not details_text:find("Changed files", 1, true))
   end)
 
+  test.it("wraps a long commit message to the details pane instead of scrolling sideways", function(context)
+    local _, view = open_fake_git_view(context.project)
+    local paragraph = string.rep("The engine reads each card and repeats it through the loop unit. ", 12)
+    view.model:log_tab().commits = {
+      {
+        hash = "wrapping", subject = "Wrap the message", author_name = "Ada", body = paragraph,
+        changed_files = { { status = "modified", old_path = "src/app.lua", new_path = "src/app.lua" } },
+        changed_files_loaded = true,
+      },
+    }
+    view.model:log_tab().selected_commit = 1
+    view:update_pane_buffers()
+
+    local details = view:pane_view("details")
+    details.position.x, details.position.y = 0, 0
+    details.size.x, details.size.y = 400, 600
+    details:update()
+    local body_line
+    for line = 1, #details.buffer.lines do
+      if details.buffer.lines[line]:find("engine reads", 1, true) then body_line = line end
+    end
+    test.not_nil(body_line)
+    test.equal(details:get_h_scrollable_size(), details.size.x)
+    test.ok(details:get_position_visual_row_height(body_line, 1) > details:get_line_height() * 2,
+      "the message must take several wrapped rows")
+    local file_line = details.path_tree_line_offset + details.path_tree:line_for_record(1)
+    local _, body_y = details:get_line_screen_position(body_line)
+    local _, file_y = details:get_line_screen_position(file_line)
+    test.ok(file_y >= body_y + details:get_position_visual_row_height(body_line, 1),
+      "changed files must follow the complete message")
+  end)
+
   test.test("Local Focus Cycle enters and wraps through Git Log targets", function(context)
     local session, view = open_fake_git_view(context.project)
     core.active_view = view

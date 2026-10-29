@@ -1587,7 +1587,14 @@ const char* ren_font_get_path(RenFont *font) {
   return font->path;
 }
 
+static uint32_t font_free_count = 0;
+
+uint32_t ren_font_free_count(void) {
+  return font_free_count;
+}
+
 void ren_font_free(RenFont* font) {
+  font_free_count++;
   font_clear_glyph_cache(font);
   font_free_text_resolve_cache(font);
   // free codepoint cache as well

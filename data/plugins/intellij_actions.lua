@@ -344,7 +344,7 @@ end
 local function open_file_as_raw_text(dv)
   local path = active_file_or_error(dv)
   if not path then return end
-  core.open_file(path)
+  core.open_file(path, { as_text = true })
 end
 
 local function open_file_in_associated_program(dv)

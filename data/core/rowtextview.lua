@@ -2,6 +2,7 @@ local core = require "core"
 local common = require "core.common"
 local keymap = require "core.keymap"
 local style = require "core.style"
+local RowHighlight = require "core.row_highlight"
 local TextView = require "core.textview"
 local View = require "core.view"
 
@@ -20,6 +21,8 @@ end
 function RowTextView:new(buffer, enable_row_selection)
   RowTextView.super.new(self, buffer)
   self.row_selection_marks = {}
+  self.row_focus_highlight = RowHighlight(RowHighlight.selection)
+  self.row_hover_highlight = RowHighlight(RowHighlight.hover)
   self:add_edit_guard("row-selection-mode", function(view)
     if view.row_selection_mode then
       return false, "Disable Row Selection Mode to edit"
@@ -318,32 +321,76 @@ function RowTextView:get_selection_background_color()
   if not self.row_selection_mode then return RowTextView.super.get_selection_background_color(self) end
 end
 
-function RowTextView:draw_row_selection(line, x, y, width)
-  if self.row_selection_mode and self:is_selectable_row(line) then
+local function row_selection_color(view)
+  return core.active_view == view and view:active_window_has_focus()
+    and style.row_selection or style.row_selection_inactive
+end
+
+local function focus_row(view)
+  local state = view:get_selection_state()
+  return state.selections[(state.last_selection - 1) * 4 + 1]
+end
+
+-- Highlights are rounded and inset from the view's edges, like list rows in the Fuzzy Searcher.
+local function row_inset() return 4 * SCALE end
+local function row_radius() return 4 * SCALE end
+
+---The row under the pointer that a click acts on, or nil. Views with pointer targets override this.
+---@return integer? line
+---@return boolean? pressed
+function RowTextView:get_hovered_row()
+  return nil
+end
+
+local function step_highlight(view, highlight, line, top)
+  if line and line >= 1 and line <= #view.buffer.lines then
+    local _, y = view:get_line_screen_position(line)
+    highlight:step(y - top, view:get_position_visual_row_height(line, 1))
+  else
+    highlight:step()
+  end
+end
+
+---Draw the row highlights below the rows: the hover, the other selected rows, and the focus row.
+---The hover and the focus row glide from row to row in content coordinates, so scrolling moves them with their rows.
+function RowTextView:draw_row_highlights(minline, maxline)
+  local _, top = self:get_content_offset()
+  local x, w = self.position.x + row_inset(), self.size.x - row_inset() * 2
+  local hovered, pressed = self:get_hovered_row()
+  step_highlight(self, self.row_hover_highlight, hovered, top)
+  self.row_hover_highlight:draw(x, top, w, row_radius(),
+    pressed and style.interactive_hover_overlay or style.row_hover)
+  local focus = self.row_selection_mode and focus_row(self)
+  if focus and not self:is_selectable_row(focus) then focus = nil end
+  local color = row_selection_color(self)
+  if self.row_selection_mode then
     local s = self:get_selection_state().selections
     for i = 1, #s, 4 do
-      if line >= math.min(s[i], s[i + 2]) and line <= math.max(s[i], s[i + 2]) then
-        local color = core.active_view == self and self:active_window_has_focus()
-          and style.row_selection or style.row_selection_inactive
-        local focus = s[(self.buffer.last_selection - 1) * 4 + 1]
-        if line == focus and self.row_selection_marks[line] then
-          color = increase_opacity(color, 43)
+      for line = math.max(minline, math.min(s[i], s[i + 2])), math.min(maxline, math.max(s[i], s[i + 2])) do
+        if line ~= focus and self:is_selectable_row(line) then
+          local _, y = self:get_line_screen_position(line)
+          renderer.draw_rounded_rect(x, y, w, self:get_position_visual_row_height(line, 1), row_radius(), color)
         end
-        renderer.draw_rect(x, y, width, self:get_line_height(), color)
-        if self.row_selection_marks[line] then
-          local border = increase_opacity(
-            core.active_view == self and self:active_window_has_focus()
-              and style.row_selection or style.row_selection_inactive,
-            75
-          )
-          local thickness = math.max(1, style.divider_size or 1)
-          renderer.draw_rect(x, y, width, thickness, border)
-          renderer.draw_rect(x, y + self:get_line_height() - thickness, width, thickness, border)
-        end
-        break
       end
     end
   end
+  step_highlight(self, self.row_focus_highlight, focus, top)
+  if focus and self.row_selection_marks[focus] then color = increase_opacity(color, 43) end
+  self.row_focus_highlight:draw(x, top, w, row_radius(), color)
+end
+
+function RowTextView:draw_current_line_underlay_highlights(minline, maxline)
+  RowTextView.super.draw_current_line_underlay_highlights(self, minline, maxline)
+  self:draw_row_highlights(minline, maxline)
+end
+
+---Draw the mark border of one row. The selection highlights are drawn below all rows.
+function RowTextView:draw_row_selection(line, x, y, width)
+  if not (self.row_selection_mode and self.row_selection_marks[line] and self:is_selectable_row(line)) then return end
+  local border = increase_opacity(row_selection_color(self), 75)
+  local thickness = math.max(1, style.divider_size or 1)
+  renderer.draw_rect(x, y, width, thickness, border)
+  renderer.draw_rect(x, y + self:get_line_height() - thickness, width, thickness, border)
 end
 
 function RowTextView:draw_line_body(line, x, y)

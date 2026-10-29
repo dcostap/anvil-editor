@@ -421,6 +421,22 @@ function SidebarView:set_model(projects, window_id)
   self:rebuild_rows()
 end
 
+-- The index in `rows` of the main list's Project row nearest the cursor in the current rows: above it first, then
+-- below it.
+function SidebarView:nearest_project(rows)
+  local headers = {}
+  for index, row in ipairs(rows) do
+    if row.kind == "project" and row.area == "main" then headers[row.id_key] = index end
+  end
+  local old = self.rows
+  for index = self.cursor - 1, 1, -1 do
+    if headers[old[index].id_key] then return headers[old[index].id_key] end
+  end
+  for index = self.cursor + 1, #old do
+    if headers[old[index].id_key] then return headers[old[index].id_key] end
+  end
+end
+
 function SidebarView:row_by_key(key)
   for index, row in ipairs(self.rows) do
     if row.id_key == key then return row, index end
@@ -691,7 +707,13 @@ function SidebarView:rebuild_rows()
       core.log_quiet("Sidebar close selection: cleared search to show Project=%s", cursor_row.project.path)
       return self:rebuild_rows()
     end
-  elseif not cursor then
+  end
+  -- The cursor's row left the main list, for example when its Project unloaded. The cursor takes the nearest
+  -- Project row above it, or else below it.
+  if cursor_row and cursor_row.area == "main" and not (cursor and rows[cursor].area == "main") then
+    cursor = self:nearest_project(rows) or cursor
+  end
+  if not cursor then
     for index, row in ipairs(rows) do
       if row.kind ~= "empty" and (not searching or row.matches) then cursor = index; break end
     end

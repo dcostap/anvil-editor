@@ -1,11 +1,11 @@
 diff --git a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
-index 1474106..0d7b6d3 100644
+index b58655659..85f35f8ec 100644
 --- a/include/ghostty/vt/terminal.h
 +++ b/include/ghostty/vt/terminal.h
-@@ -1226,6 +1226,19 @@ typedef enum GHOSTTY_ENUM_TYPED {
-    * Input type: GhosttyString*
+@@ -2780,6 +2780,19 @@ typedef enum GHOSTTY_ENUM_TYPED {
+    * Input type: GhosttyTerminalResizeWindowFn
     */
-   GHOSTTY_TERMINAL_OPT_TERMINFO_NAME = 37,
+   GHOSTTY_TERMINAL_OPT_RESIZE_WINDOW = 47,
 +
 +  /**
 +   * Set whether OSC 133 A enforces its fresh-line action during synchronized
@@ -18,44 +18,44 @@ index 1474106..0d7b6d3 100644
 +   *
 +   * Input type: bool*
 +   */
-+  GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE_IN_SYNCHRONIZED_OUTPUT = 38,
++  GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT_FRESH_LINE_IN_SYNCHRONIZED_OUTPUT = 48,
    GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
  } GhosttyTerminalOption;
  
 diff --git a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
-index 99a45e1..033563b 100644
+index 5f047f489..fd695c11d 100644
 --- a/src/terminal/c/terminal.zig
 +++ b/src/terminal/c/terminal.zig
-@@ -968,6 +968,7 @@ pub const Option = enum(c_int) {
-     unknown_sequence = 35,
-     unknown_max_bytes = 36,
-     terminfo_name = 37,
-+    semantic_prompt_fresh_line_in_synchronized_output = 38,
+@@ -1485,6 +1485,7 @@ pub const Option = enum(c_int) {
+     xt_checksum_extension = 45,
+     program_status = 46,
+     resize_window = 47,
++    semantic_prompt_fresh_line_in_synchronized_output = 48,
  
      /// Input type expected for setting the option.
      pub fn InType(comptime self: Option) type {
-@@ -994,6 +995,7 @@ pub const Option = enum(c_int) {
-             .kitty_image_medium_shared_mem,
-             .glyph_protocol,
+@@ -1520,6 +1521,7 @@ pub const Option = enum(c_int) {
              .title_report,
+             .xt_checksum_report,
+             .resize_pull_scrollback,
 +            .semantic_prompt_fresh_line_in_synchronized_output,
              => ?*const bool,
              .kitty_image_medium_temp_file => ?*const lib.String,
              .apc_max_bytes,
-@@ -1064,6 +1066,8 @@ fn setTyped(
-             ptr.*
-         else
-             false,
+@@ -1764,6 +1766,8 @@ fn setTyped(
+             if (value) |ptr| ptr.* else kitty_clipboard.max_write_size,
+         .resize_pull_scrollback => wrapper.terminal.flags.resize_pull_scrollback =
+             if (value) |ptr| ptr.* else true,
 +        .semantic_prompt_fresh_line_in_synchronized_output => wrapper.stream.handler.semantic_prompt_fresh_line_in_synchronized_output =
 +            if (value) |ptr| ptr.* else true,
-         .title => {
-             const str = if (value) |v| v.ptr[0..v.len] else "";
-             wrapper.terminal.setTitle(str) catch return .out_of_memory;
+         .xt_checksum_extension => {
+             const bits = if (value) |ptr| ptr.* else 0;
+             const flags = std.math.cast(u5, bits) orelse return .invalid_value;
 diff --git a/src/terminal/stream_terminal.zig b/src/terminal/stream_terminal.zig
-index 2599097..e5c8993 100644
+index aa61fb9eb..796128d78 100644
 --- a/src/terminal/stream_terminal.zig
 +++ b/src/terminal/stream_terminal.zig
-@@ -37,6 +37,9 @@ pub const Handler = struct {
+@@ -43,6 +43,9 @@ pub const Handler = struct {
      /// The terminal state to modify.
      terminal: *Terminal,
  
@@ -65,11 +65,11 @@ index 2599097..e5c8993 100644
      /// True after an error prevented a terminal-owned semantic update.
      ///
      /// When an error happens during terminal processing, streams continue
-@@ -347,7 +350,18 @@ pub const Handler = struct {
-             .full_reset => self.terminal.fullReset(),
+@@ -745,7 +748,18 @@ pub const Handler = struct {
+             },
              .start_hyperlink => try self.terminal.screens.active.startHyperlink(value.uri, value.id),
              .end_hyperlink => self.terminal.screens.active.endHyperlink(),
--            .semantic_prompt => try self.terminal.semanticPrompt(value),
+-            .semantic_prompt => try self.semanticPrompt(value),
 +            .semantic_prompt => {
 +                var prompt = value;
 +                // Some TUIs use A as a marker while they control all cursor movement.
@@ -80,8 +80,8 @@ index 2599097..e5c8993 100644
 +                {
 +                    prompt.action = .prompt_start;
 +                }
-+                try self.terminal.semanticPrompt(prompt);
++                try self.semanticPrompt(prompt);
 +            },
              .mouse_shape => self.terminal.mouse_shape = value,
+             .mouse_shape_reset => self.terminal.mouse_shape = .text,
              .color_operation => self.colorOperation(
-                 &value.requests,

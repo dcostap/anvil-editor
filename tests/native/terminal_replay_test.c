@@ -173,7 +173,29 @@ static int disk_atomic_and_quota(void) {
   return 0;
 }
 
+/* Ghostty asks for page-aligned terminal pages. The allocator must honor each requested alignment. */
+static int allocator_alignment(void) {
+  const GhosttyAllocatorVtable *vt = terminal_allocator.vtable;
+  for (uint8_t alignment = 0; alignment <= 12; alignment++) {
+    for (size_t len = 1; len <= 1 << 20; len *= 16) {
+      size_t size = len;
+      uint8_t *memory = vt->alloc(terminal_allocator.ctx, size, alignment, 0);
+      CHECK(memory && (uintptr_t)memory % ((uintptr_t)1 << alignment) == 0);
+      memset(memory, 0x5a, size);
+      uint8_t *grown = vt->remap(terminal_allocator.ctx, memory, size, alignment, size * 4, 0);
+      if (grown) {
+        CHECK((uintptr_t)grown % ((uintptr_t)1 << alignment) == 0);
+        CHECK(grown[0] == 0x5a && grown[size - 1] == 0x5a);
+        memory = grown; size *= 4;
+      }
+      vt->free(terminal_allocator.ctx, memory, size, alignment, 0);
+    }
+  }
+  return 0;
+}
+
 int main(void) {
+  CHECK(allocator_alignment() == 0);
   CHECK(disk_bounds() == 0);
   CHECK(disk_atomic_and_quota() == 0);
   for (int alternate = 0; alternate <= 1; alternate++)

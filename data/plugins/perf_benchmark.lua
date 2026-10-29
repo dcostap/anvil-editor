@@ -944,6 +944,10 @@ local function setup_scenario()
     require("core.panes").place(function() return view end, {
       placement = "current", focus = true, reason = "perf-project-sidebar",
     })
+  elseif benchmark.scenario:find("^git%-view") then
+    local root = common.dirname(benchmark.fixture) .. PATHSEP .. "git-view-repo"
+    local _, git_view = require("plugins.git_view").open_log({ path = root }, { focus = true })
+    view = git_view
   elseif benchmark.scenario == "filetree-edit-repeat" then
     local root = common.dirname(benchmark.fixture) .. PATHSEP .. "editable-tree"
     view = require("plugins.filetree").new()
@@ -974,8 +978,22 @@ local function setup_scenario()
           {text = " build/cache.bin", font = style.code_font}},
       }}
       options = {{text = "Apply", default_yes = true}, {text = "Cancel", default_no = true}}
+    elseif benchmark.scenario == "nag-bar-long" then
+      -- More operations than the card can show, so the message scrolls.
+      local lines = {{{text = "File Tree will perform these filesystem operations:"}}, {}}
+      for i = 1, 60 do
+        lines[#lines + 1] = {{text = "DELETE", font = style.code_font, color = style.filetree_operation_delete},
+          {text = string.format(" file output/run_v1/checkpoint-%06d.safetensors", i), font = style.code_font}}
+      end
+      message = {filetree_styled_nag_message = true, lines = lines}
+      options = {{text = "Apply", default_yes = true}, {text = "Cancel", default_no = true}}
     end
     core.nag_view:show("Render scene", message, options)
+    if benchmark.scenario == "nag-bar-long" then
+      -- Scrolled partway, so text lies beyond both edges.
+      local scroll = core.nag_view.message_view.scroll
+      scroll.y, scroll.to.y = 200 * SCALE, 200 * SCALE
+    end
   end
   if benchmark.scenario:find("^autocomplete%-popup") then
     local autocomplete = require "plugins.autocomplete"
@@ -1162,6 +1180,13 @@ local function scenario_is_ready()
     context_menu.open(x, y, view:context_menu(x, y))
     context_menu.choose("Insert")
     return false
+  end
+  if benchmark.scenario:find("^git%-view") then
+    -- The log and the selected commit's changed files load from Git in the background.
+    local tab = view.model:log_tab()
+    if tab.loading or #tab.commits == 0 then return false end
+    local commit = view.model:selected_log_revision()
+    return commit ~= nil and commit.changed_files_loaded == true
   end
   if benchmark.scenario == "find-bar-hover" then
     local layout = view:get_local_find_layout()

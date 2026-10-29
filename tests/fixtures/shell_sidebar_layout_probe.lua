@@ -1,6 +1,7 @@
 -- mod-version:3
 -- Seam: owned hosted Windows on a private desktop. A drag on the Project Sidebar's edge sets its width, and the
--- Project's Sidebar toggle slides it closed and open. The next shell starts with the saved layout.
+-- Project's Sidebar toggle slides it closed and open. Focus slides the hidden Sidebar open until it loses focus,
+-- and the Sidebar stays hidden in the saved layout. The next shell starts with the saved layout.
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if action ~= "toggle-sidebar" then return end
 local core, common = require "core", require "core.common"
@@ -131,6 +132,8 @@ if path:match("/driver$") then
    user32.SendMessageW(window, 0x8052, 3, 0)
    wait(function() return trace():find("capture%-3%.bmp") end, 5, "shell capture was not written")
    toggle(1, 3, 0, width(320), "The toggle did not hide the Sidebar again")
+   toggle(1, 4, width(320), width(320), "Focus did not show the hidden Sidebar")
+   toggle(1, 5, 0, width(320), "The hidden Sidebar did not slide closed when it lost focus")
    save("finish-1", {go = true})
    stop_shell(shell)
    shell = nil
@@ -166,7 +169,8 @@ if path:match("/driver$") then
   quit()
  end)
 elseif path == root .. "/Project" then
- -- The first shell's Project toggles three times. The restored Project toggles once.
+ -- The first shell's Project toggles three times, then focuses the hidden Sidebar and takes focus back.
+ -- The restored Project toggles once.
  local phase = load("finish-1") and 2 or 1
  -- Reports each Project area start the shell configures, and every value since the last toggle.
  local seen, last = {}, nil
@@ -185,12 +189,18 @@ elseif path == root .. "/Project" then
   local command = require "core.command"
   local finish = "finish-" .. phase
   local ok, err = pcall(function()
-   for step = 1, phase == 1 and 3 or 1 do
+   for step = 1, phase == 1 and 5 or 1 do
     local name = phase .. "-" .. step
     wait(function() return load("toggle-" .. name) or load(finish) end, 90)
     if load(finish) then return end
     seen = {last}
-    assert(command.perform("core:toggle_project_sidebar"), "The Sidebar toggle command is unavailable")
+    if phase == 1 and step == 4 then
+     assert(command.perform("core:focus_project_sidebar"), "The Sidebar focus command is unavailable")
+    elseif phase == 1 and step == 5 then
+     assert(system.focus_project_sidebar(false), "The Project did not take focus back")
+    else
+     assert(command.perform("core:toggle_project_sidebar"), "The Sidebar toggle command is unavailable")
+    end
     wait(function() return load("toggled-" .. name) or load(finish) end, 15)
    end
   end)

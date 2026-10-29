@@ -36,6 +36,8 @@ typedef struct {
   size_t display_packet_frame_bytes_copied;
   double display_packet_replay_ms;
   int display_packet_frame_allocation_failures;
+  int capture_replays;
+  int capture_commands_replayed;
   bool rencache_frame_failed;
 } RenCacheFrameStats;
 
@@ -58,6 +60,9 @@ typedef struct RenCache {
   RenSurface rensurface;
   /* Bumped when a canvas surface changes outside its command buffer. */
   unsigned content_version;
+  /* The start of the open Draw Capture in this frame's commands. */
+  bool capture_open;
+  size_t capture_start;
 #ifdef ANVIL_USE_SDL_RENDERER
   int window_width;
   int window_height;
@@ -107,6 +112,29 @@ void rencache_record_display_packet_replay(
   uint64_t started
 );
 void rencache_test_fail_next_packet_reserve(void);
+/* A Draw Capture keeps a copy of a range of one frame's commands, so a later frame
+   can draw them again without the code that made them. */
+typedef struct RenCapture RenCapture;
+typedef enum {
+  REN_CAPTURE_OK,
+  REN_CAPTURE_NO_FRAME,
+  REN_CAPTURE_ALREADY_OPEN,
+  REN_CAPTURE_NOT_OPEN,
+  REN_CAPTURE_PIXELS,
+  REN_CAPTURE_TRANSFORM,
+  REN_CAPTURE_NO_MEMORY,
+  REN_CAPTURE_OTHER_TARGET,
+  REN_CAPTURE_SCREEN_CHANGED,
+  REN_CAPTURE_FONT_FREED,
+  REN_CAPTURE_CANVAS_FREED,
+  REN_CAPTURE_STALE_FONT,
+  REN_CAPTURE_FRAME_FAILED,
+} RenCaptureResult;
+RenCaptureResult rencache_capture_begin(RenCache *rc);
+RenCaptureResult rencache_capture_end(RenCache *rc, RenCapture **capture);
+RenCaptureResult rencache_capture_draw(RenCache *rc, const RenCapture *capture);
+void rencache_capture_free(RenCapture *capture);
+const char *rencache_capture_result_string(RenCaptureResult result);
 RenSurface rencache_get_surface(RenCache *rc);
 void rencache_get_size(RenCache *rc, int *w, int *h);
 void rencache_update_rects(RenCache *rc, RenRect *rects, int count);

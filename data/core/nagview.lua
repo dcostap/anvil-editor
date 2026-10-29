@@ -3,6 +3,7 @@ local command = require "core.command"
 local common = require "core.common"
 local config = require "core.config"
 local View = require "core.view"
+local Scrollbar = require "core.scrollbar"
 local card = require "core.card"
 local style = require "core.style"
 
@@ -10,7 +11,7 @@ local style = require "core.style"
 -- and dims the rest of the Window, including a hosted shell's Sidebar. Dialogs queue and show one at a time.
 -- A message is a string, or a table of styled lines:
 --   {filetree_styled_nag_message = true, lines = {{{text = "MOVE", font = ..., color = ...}, ...}, ...}}
--- The card floats over the Panes. It does not move them.
+-- The card floats over the Panes. It does not move them. A long message scrolls inside the card.
 
 -- How fast the card fades in and out, per second.
 local SHOW_RATE, HIDE_RATE = 18, 26
@@ -39,15 +40,32 @@ local noop = function() end
 ---@field hovered_item integer? The selected choice: Enter performs it, and a focus ring marks it
 ---@field pointer_item integer? The choice under the pointer
 ---@field pressed_item integer? The choice pressed with the left mouse button
+---@field message_view core.view The message's scroll area
 local NagView = View:extend()
 
 function NagView:__tostring() return "NagView" end
+
+-- The message's scroll area. It gives the card the shared smooth scrolling and scrollbar.
+local MessageView = View:extend()
+
+function MessageView:__tostring() return "NagView.MessageView" end
+
+function MessageView:new()
+  MessageView.super.new(self)
+  self.scrollable = true
+  self.content_h = 0
+  self.v_scrollbar = Scrollbar({direction = "v", alignment = "e"})
+end
+
+function MessageView:get_scrollable_size() return self.content_h end
+function MessageView:get_h_scrollable_size() return 0 end
 
 function NagView:new()
   NagView.super.new(self)
   self.queue = {}
   self.visible = false
   self.progress = 0
+  self.message_view = MessageView()
 end
 
 function NagView:get_title()
@@ -61,7 +79,9 @@ local function metrics()
     -- Space between the Title Bar and the card, and the least space beside and below it.
     top = 12 * SCALE, side = 24 * SCALE,
     pad = 20 * SCALE, radius = 10 * SCALE,
-    min_width = 380 * SCALE, text_width = 560 * SCALE,
+    min_width = 380 * SCALE, text_width = 560 * SCALE, max_height = 560 * SCALE,
+    -- A slim scrollbar in the card's right padding, beside the message.
+    scrollbar = 5 * SCALE, scrollbar_expanded = 9 * SCALE, scrollbar_edge = 3 * SCALE, edge_fade = 28 * SCALE,
     title_gap = 6 * SCALE, buttons_gap = 18 * SCALE,
     button_h = math.floor(h + 14 * SCALE + 0.5), button_min = 76 * SCALE,
     button_pad = 14 * SCALE, button_gap = 8 * SCALE, button_radius = 6 * SCALE,
@@ -162,7 +182,7 @@ end
 -- Card layout
 
 -- The card's place and content. The card is centred on the Window, below the Title Bar, and grows with its message
--- up to a readable width. Its buttons can make it wider.
+-- up to a readable width and height. Its buttons can make it wider. A taller message scrolls.
 function NagView:layout()
   local bx, _, bw, bh = core.root_panel:backdrop_rect()
   local cache = self.layout_cache
@@ -184,13 +204,14 @@ function NagView:layout()
   local available_w = math.max(1, bw - 2 * m.side)
   local w = math.min(math.max(math.min(math.max(header_w, natural_w) + 2 * m.pad, m.text_width), m.min_width,
     buttons_w + 2 * m.pad), available_w)
-  local lines, _, message_h = layout_message(self.message, math.max(1, w - 2 * m.pad))
+  local lines, _, content_h = layout_message(self.message, math.max(1, w - 2 * m.pad))
   local fixed_h = 2 * m.pad + line_height(title_font():get_height()) + m.title_gap + m.buttons_gap + m.button_h
-  local h = math.min(fixed_h + message_h, math.max(fixed_h, bh - self.position.y - m.top - m.side))
+  local max_h = math.min(m.max_height, bh - self.position.y - m.top - m.side)
+  local h = math.min(fixed_h + content_h, math.max(fixed_h, max_h))
   local x, y = math.floor(bx + (bw - w) / 2), math.floor(self.position.y + m.top)
   local layout = {x = x, y = y, w = w, h = h, lines = lines, queued = queued,
     title_y = y + m.pad, message_y = y + m.pad + line_height(title_font():get_height()) + m.title_gap,
-    message_h = h - fixed_h, buttons = buttons}
+    message_h = h - fixed_h, content_h = content_h, buttons = buttons}
   -- Buttons sit at the card's lower right, in their order.
   local button_x = x + w - m.pad - buttons_w
   for _, button in ipairs(buttons) do
@@ -237,7 +258,8 @@ function NagView:on_mouse_moved(mx, my, ...)
   if not self.visible then return end
   core.set_active_view(self)
   NagView.super.on_mouse_moved(self, mx, my, ...)
-  local pointed = self:option_at(mx, my)
+  local on_scrollbar = self.message_view:on_mouse_moved(mx, my, ...)
+  local pointed = not on_scrollbar and self:option_at(mx, my) or nil
   if pointed ~= self.pointer_item then self.pointer_item, core.redraw = pointed, true end
   self.cursor = pointed and "hand" or "arrow"
   core.request_cursor(self.cursor)
@@ -246,12 +268,13 @@ end
 
 function NagView:on_mouse_left()
   NagView.super.on_mouse_left(self)
+  self.message_view:on_mouse_left()
   if self.pointer_item then self.pointer_item, core.redraw = nil, true end
 end
 
 function NagView:on_mouse_pressed(button, mx, my, clicks)
   if not self.visible then return false end
-  if NagView.super.on_mouse_pressed(self, button, mx, my, clicks) then return true end
+  if self.message_view:on_mouse_pressed(button, mx, my, clicks) then return true end
   self.pressed_item = button == "left" and self:option_at(mx, my) or nil
   if self.pressed_item then self:change_hovered(self.pressed_item) end
   core.redraw = true
@@ -261,6 +284,7 @@ end
 ---A choice acts when the left button is released over the button it pressed.
 function NagView:on_mouse_released(button, mx, my)
   NagView.super.on_mouse_released(self, button, mx, my)
+  self.message_view:on_mouse_released(button, mx, my)
   local pressed = self.pressed_item
   self.pressed_item = nil
   core.redraw = true
@@ -269,6 +293,14 @@ function NagView:on_mouse_released(button, mx, my)
     command.perform "core:select_dialog_entry"
   end
   return self.visible or pressed ~= nil
+end
+
+---The wheel scrolls a long message, wherever the pointer is.
+function NagView:on_mouse_wheel(y)
+  if not self.visible then return false end
+  local view = self.message_view
+  view.scroll.to.y = view.scroll.to.y - y * config.mouse_wheel_scroll
+  return true
 end
 
 ---Y and N choose the default yes and no choices.
@@ -292,6 +324,9 @@ function NagView:on_key_pressed(key, event)
     command.perform "core:select_dialog_entry"
   elseif key == "escape" then
     command.perform "core:select_dialog_no"
+  elseif key == "pageup" or key == "pagedown" then
+    local view = self.message_view
+    view.scroll.to.y = view.scroll.to.y + (key == "pageup" and -1 or 1) * view.size.y
   elseif key == "left" or key == "up" or key == "tab" and event and event.shift then
     command.perform "core:select_previous_dialog_entry"
   elseif key == "right" or key == "down" or key == "tab" then
@@ -323,6 +358,17 @@ function NagView:update()
     self.title, self.message, self.options, self.on_selected = nil, nil, nil, nil
     self.pointer_item, self.pressed_item, self.layout_cache = nil, nil, nil
   end
+  if self.title then self:update_message_view() end
+end
+
+-- Puts the message's scroll area over the message, with its scrollbar in the card's right padding.
+function NagView:update_message_view(shift)
+  local m, layout, view = metrics(), self:layout(), self.message_view
+  view.position.x, view.position.y = layout.x + m.pad, layout.message_y + (shift or 0)
+  view.size.x, view.size.y = layout.w - m.pad - m.scrollbar_edge, layout.message_h
+  view.content_h = layout.content_h
+  view.v_scrollbar.contracted_size, view.v_scrollbar.expanded_size = m.scrollbar, m.scrollbar_expanded
+  if shift then view:sync_scrollbar_geometry() else view:update() end
 end
 
 -- Dims the Window below the Title Bar, and the hosted shell's Sidebar.
@@ -356,6 +402,22 @@ function NagView:draw_button(i, option, button)
     x, y, w, h)
 end
 
+-- A fade from the card's colour at the message edge `y` to clear, `h` pixels into the message. `direction` is 1 for
+-- the top edge and -1 for the bottom edge. The renderer has no gradients, so thin strips draw the fade.
+local edge_color = {0, 0, 0, 0}
+local function draw_edge_fade(x, y, w, h, strength, direction)
+  if strength <= 0 then return end
+  local step = math.max(1, math.floor(2 * SCALE))
+  local color = style.card
+  edge_color[1], edge_color[2], edge_color[3] = color[1], color[2], color[3]
+  for offset = 0, h - 1, step do
+    local alpha = strength * (1 - offset / h)
+    local strip = math.min(step, h - offset)
+    edge_color[4] = (color[4] or 255) * alpha * alpha
+    renderer.draw_rect(x, direction > 0 and y + offset or y - offset - strip, w, strip, edge_color)
+  end
+end
+
 local function draw_nagview(self)
   local p = self.progress
   self:draw_dim()
@@ -384,18 +446,33 @@ local function draw_nagview(self)
     style.text)
   core.pop_clip_rect()
 
-  local message_y = layout.message_y + shift
-  core.push_clip_rect(x + m.pad, message_y, w - 2 * m.pad, layout.message_h)
+  local top = layout.message_y + shift
+  local bottom = top + layout.message_h
+  local message_y = top - common.round(self.message_view.scroll.y)
+  core.push_clip_rect(x + m.pad, top, w - 2 * m.pad, layout.message_h)
   for _, line in ipairs(layout.lines) do
-    local lx = x + m.pad
-    for _, part in ipairs(line.parts) do
-      renderer.draw_text(part.font, part.text, lx, message_y + (line.height - part.font:get_height()) / 2,
-        part.color)
-      lx = lx + part.width
+    if message_y >= bottom then break end
+    if message_y + line.height > top then
+      local lx = x + m.pad
+      for _, part in ipairs(line.parts) do
+        renderer.draw_text(part.font, part.text, lx, message_y + (line.height - part.font:get_height()) / 2,
+          part.color)
+        lx = lx + part.width
+      end
     end
     message_y = message_y + line.height
   end
   core.pop_clip_rect()
+  if layout.content_h > layout.message_h then
+    -- Each edge of the message fades into the card while more text is beyond it.
+    local scroll = self.message_view.scroll.y
+    local beyond_bottom = layout.content_h - layout.message_h - scroll
+    draw_edge_fade(x + m.pad, top, w - 2 * m.pad, m.edge_fade, math.min(1, scroll / m.edge_fade), 1)
+    draw_edge_fade(x + m.pad, bottom, w - 2 * m.pad, m.edge_fade, math.min(1, beyond_bottom / m.edge_fade), -1)
+    -- The scrollbar moves with the card while it settles into place.
+    if shift ~= 0 then self:update_message_view(shift) end
+    self.message_view.v_scrollbar:draw()
+  end
 
   for i, button in ipairs(layout.buttons) do
     self:draw_button(i, self.options[i], {x = button.x, y = button.y + shift, w = button.w, h = button.h})
@@ -420,6 +497,7 @@ function NagView:next()
       opts.on_selected
     self.pressed_item = nil
     self.hovered_item = nil
+    self.message_view = MessageView()
     self:change_hovered(common.find_index(self.options, "default_yes"))
     -- Focus stays on the card while it is open. A focus request waits in core.next_active_view.
     self.force_focus = true

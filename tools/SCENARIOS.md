@@ -37,7 +37,12 @@ A scenario names four things:
   shell, and the benchmark runs in the named Project's process.
 - **Budgets**: absolute limits. The p95 frame work time must stay within
   4 ms, well under one 165 Hz frame (6.06 ms). No frame may take more than
-  16.7 ms, one 60 Hz frame. Each scenario sets its action latency budget.
+  16.7 ms, one 60 Hz frame. Each measured frame may allocate 64 KiB of Lua
+  memory. Each scenario sets its action latency budget.
+
+Scenarios use a 1400×900 window. Scenarios named `-large` use 2560×1440, the
+window of a large monitor. A larger window draws more rows, so some costs show
+only there.
 
 A scenario can set `targets` to pass that many clean tracked files to its scene
 as `settings.targets`. A scene that edits them sets `writes`, and the next run
@@ -103,6 +108,19 @@ The gallery typing and newline scenes report two latencies:
 The scene observes text drawing. It does not wait for the semantic worker to measure visible latency.
 Both metrics exclude OS input delivery and physical display scanout. The report gives p50 and p95 for each.
 
+The `fuzzy_picker` scene opens the Fuzzy Searcher with its preview over the
+File Tree or the editor. Its `mode` setting selects Project File Search,
+Project Symbol Search, or Text Search. A `navigate` action moves the selection
+and ends when the preview shows the new result. A `type` action types the next
+character of the query and ends when the search for the new text has ended.
+Text Search ends the action at its first rows, because it can search for a
+long time.
+
+`filetree_scroll` and `editor_scroll` scroll with the wheel, or with `input =
+"keys"` move the caret one line at a time from the bottom row. Each move then
+scrolls, as when the user holds an arrow key. `editor_scroll` uses the
+`repo-long` fixture, whose files have 3000 to 6000 lines.
+
 `editor-type-baseline` types short lines into a small file after the
 Project's startup scans and indexes finish. It shows the cost of the cheapest
 real input frame. `editor-type-startup` types while that startup work runs.
@@ -121,11 +139,14 @@ them. `--attribute`
 records them for passing scenarios too. `--diagnose` adds a LuaJIT sampling
 run with draw scopes and a Speedscope profile.
 
-`--allocation` adds two runs that stop the GC for the measured frames. The heap then grows by each allocation.
-The first run reports the allocation of each main loop phase in KiB per frame, with the JIT on.
-The second run uses a line hook and reports the allocation of each source line and its callers. A C function counts on the line that called it.
+Each frame scenario adds one run that stops the GC for the measured frames. The heap then grows by each allocation.
+This run reports the allocation of each main loop phase in KiB per frame, with the JIT on. Their sum is scored against the allocation budget.
+LuaJIT's GC work grows with allocation, and its steps land in whichever frame allocates next. Garbage therefore shows up as random slow frames, not in the code that makes it.
+Response and self-driven scenarios have no allocation run.
+
+A scenario over its allocation budget adds one more run, and `--allocation` adds it for passing scenarios too.
+That run uses a line hook and reports the allocation of each source line and its callers. A C function counts on the line that called it.
 The hook turns off the JIT, and compiled traces can sink some allocations, so read its sizes as an upper limit.
-LuaJIT's GC work grows with allocation. Use this option after changes to code that runs in each frame.
 
 `--heap` adds a run that writes a Heap Census (`core.heap_census`) after the measured frames. It groups the live Lua heap by the data that holds it.
 Each GC cycle marks all live objects again, so large live data makes each cycle longer.
@@ -138,7 +159,7 @@ The next measured frame includes its counters and dispatch time. Each dispatch c
 
 `tests/scenes/support.lua` holds setup and readiness helpers such as
 `open_file_tree`, `expand_file_tree`, `git_settled`, `background_settled`,
-`hover`, and `wheel`. `background_settled` waits until no worker job has run
+`hover`, `wheel`, `caret_to_bottom`, and `move_caret`. `background_settled` waits until no worker job has run
 for 2 seconds.
 Scenario runs load scenes through `data/core/perf_scene.lua`.
 `tests/run-lua-tests.sh` copies `tests/scenes` into the test app, so a Lua test

@@ -1,4 +1,4 @@
-project('conpty', version: '1.24.261001001', license: 'MIT')
+project('conpty', version: '1.25.260930003', license: 'MIT')
 
 arch = {'x86_64': 'x64', 'x86': 'x86', 'aarch64': 'arm64'}.get(host_machine.cpu_family())
 conpty_runtime_files = [

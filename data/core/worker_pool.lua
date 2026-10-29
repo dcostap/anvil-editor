@@ -9,6 +9,9 @@ worker_pool.__index = worker_pool
 local system_pool
 local named_pools = {}
 local pool_sequence = 0
+-- After shutdown_all starts, new pools start closed. A cancel callback that runs during the
+-- shutdown can look up its pool again; a new pool there would leave live threads at exit.
+local stopped = false
 
 local DEFAULT_DRAIN_BUDGET_MS = 1.0
 local DEFAULT_DRAIN_MAX_MESSAGES = 64
@@ -94,7 +97,7 @@ function worker_pool.new(options)
   self.jobs = {}
   self.native_jobs = {}
   self.native = nil
-  self.closed = false
+  self.closed = stopped
   self.diagnostics = {
     submitted = 0,
     completed = 0,
@@ -103,6 +106,10 @@ function worker_pool.new(options)
     stale = 0,
     messages = 0,
   }
+  if stopped then
+    log_quiet("worker_pool %s requested after shutdown; it starts closed", tostring(self.name))
+    return self
+  end
 
   for i = 1, self.worker_count do
     local input_name = unique_name(self.name .. "-in-" .. i)
@@ -169,6 +176,7 @@ function worker_pool.open_pools()
 end
 
 function worker_pool.shutdown_all(options)
+  stopped = true
   for name, pool in pairs(named_pools) do
     pool:shutdown(options)
     named_pools[name] = nil

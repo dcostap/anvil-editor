@@ -2104,10 +2104,39 @@ function core.open_image(filename, opts)
 end
 
 
+local executable_extensions = { exe = true, com = true, msi = true, scr = true }
+
+---Ask how to open a binary file. The default app runs a program.
+local function ask_binary_open(abs_filename, opts)
+  local extension = (abs_filename:match("%.([^%.\\/]+)$") or ""):lower()
+  core.log_quiet("Binary file: asking how to open %s", abs_filename)
+  core.nag_view:show(
+    "Binary File",
+    string.format("How do you want to open \"%s\"?", common.basename(abs_filename)),
+    {
+      { text = executable_extensions[extension] and "Run" or "Open with Default App", action = "system",
+        default_yes = true },
+      { text = "Open as Text", action = "text" },
+      { text = "Cancel", action = "cancel", default_no = true },
+    },
+    function(option)
+      core.log_quiet("Binary file: chose %s for %s", option.action, abs_filename)
+      if option.action == "system" then
+        if not common.open_in_system(abs_filename) then core.error("Could not open %s", abs_filename) end
+      elseif option.action == "text" then
+        core.open_file(abs_filename, common.merge(opts, { as_text = true }))
+      end
+    end
+  )
+end
+
+
 ---Opens the given file path in its appropriate View in the Root Panel.
+---A binary file opens a dialog that asks how to open it, and the result is false.
+---`opts.as_text` opens a binary file as text without the dialog.
 ---@param filename string Path to the file to open
 ---@param opts? table
----@return core.view?
+---@return core.view|false|nil
 function core.open_file(filename, opts)
   local operation = file_open_begin(filename, "core.open_file")
   local total_stage = operation and file_open_stage_begin("core_open_file")
@@ -2126,6 +2155,12 @@ function core.open_file(filename, opts)
     file_open_stage_end(total_stage)
     if view then file_open_attach_view(view) else file_open_fail("image_load") end
     return view
+  end
+  if info and not (opts and opts.as_text) and common.is_binary_file(abs_filename) then
+    ask_binary_open(abs_filename, opts)
+    file_open_stage_end(total_stage)
+    file_open_fail("binary")
+    return false
   end
   local result = table.pack(core.root_panel:open_file(filename, opts))
   local view = result[1]

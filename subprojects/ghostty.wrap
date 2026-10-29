@@ -1,7 +1,7 @@
 [wrap-git]
 url = https://github.com/ghostty-org/ghostty.git
-revision = f64f4aca2c29b554d111b36c3d946a9bddd159ff
+revision = 83fb95624b0439ee660c2679b43b38c8b63769cd
 depth = 1
 clone-recursive = false
 patch_directory = ghostty
-diff_files = ghostty-semantic-prompt-fresh-line-option.patch, ghostty-conpty-resize-history.patch
+diff_files = ghostty-semantic-prompt-fresh-line-option.patch

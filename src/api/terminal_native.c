@@ -911,7 +911,12 @@ static DWORD WINAPI reconnect_main(void *userdata) {
         job->has_scrollback_lines ? &job->scrollback_lines : NULL, &job->error)
     : anvil_terminal_host_connect(&job->pipe, job->process, job->host_pid,
         &job->shell_pid, job->id, &job->size, &job->error);
-  if (!connected && job->userdir && job->process) TerminateProcess(job->process, 1);
+  if (!connected && job->userdir && job->process) {
+    TerminateProcess(job->process, 1);
+    /* A new host can write its record before it answers. Nothing can revive its shell. */
+    if (!job->revive_from && WaitForSingleObject(job->process, 5000) == WAIT_OBJECT_0)
+      anvil_terminal_host_discard(job->userdir, job->id);
+  }
   EnterCriticalSection(&job->lock);
   job->connected = connected;
   uint16_t final_type = job->final_type;
@@ -1517,7 +1522,7 @@ static void push_status(lua_State *L, TerminalSession *session) {
     if (error == ERROR_INVALID_DATA) message = "The Terminal Session snapshot or protocol is invalid";
     else if (error == ERROR_PIPE_BUSY) message = "The Terminal Session already has a client";
     else if (error == ERROR_ACCESS_DENIED) message = "Cannot access the Terminal Session";
-    else if (error == ERROR_TIMEOUT) message = "Terminal Session reconnect timed out";
+    else if (error == ERROR_TIMEOUT) message = "The Terminal Session did not respond in time";
     lua_pushstring(L, message);
     lua_setfield(L, -2, "error");
     set_integer_field(L, "transport_error", read_failed ? session->read_error : session->write_error);
@@ -2785,8 +2790,8 @@ static int f_terminal_text_capture(lua_State *L) {
       ghostty_terminal_get(
         session->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar
       ) != GHOSTTY_SUCCESS ||
-      ghostty_render_state_colors_get(
-        session->render_state, &colors
+      ghostty_render_state_get(
+        session->render_state, GHOSTTY_RENDER_STATE_DATA_COLORS, &colors
       ) != GHOSTTY_SUCCESS) {
     return push_capture_error(L, "Could not read terminal capture state");
   }
@@ -3771,7 +3776,8 @@ static int f_terminal_snapshot(lua_State *L) {
   }
 
   GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
-  if (ghostty_render_state_colors_get(session->render_state, &colors) != GHOSTTY_SUCCESS) {
+  if (ghostty_render_state_get(session->render_state, GHOSTTY_RENDER_STATE_DATA_COLORS,
+      &colors) != GHOSTTY_SUCCESS) {
     lua_pushnil(L);
     return 1;
   }

@@ -1,9 +1,9 @@
 # Microsoft ConPTY
 
-Anvil includes Microsoft.Windows.Console.ConPTY version 1.24.261001001.
+Anvil includes Microsoft.Windows.Console.ConPTY version 1.25.260930003.
 The runtime files are `conpty.dll` and `OpenConsole.exe`.
 Source: https://github.com/microsoft/terminal
-Package: https://www.nuget.org/packages/Microsoft.Windows.Console.ConPTY/1.24.261001001
+Package: https://www.nuget.org/packages/Microsoft.Windows.Console.ConPTY/1.25.260930003
 
 ## MIT License
 
