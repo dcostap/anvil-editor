@@ -8176,6 +8176,11 @@ local function draw_render_fragment_text(
         draw_render_text_runs(line.runs, x + line_x_offset, line_y, font, color)
         line_text = nil
       end
+      -- A line can draw itself, such as an image in a table cell.
+      if type(line) == "table" and line.draw then
+        line.draw(x + line_x_offset, line_y)
+        line_text = nil
+      end
       if fragment.text_line_background and line_text and line_text ~= "" then
         local padding = fragment.text_line_background_padding or 0
         renderer.draw_rect(
@@ -8191,7 +8196,7 @@ local function draw_render_fragment_text(
           font, line_text, x + line_x_offset, line_y, color, opts
         )
       end
-      line_y = line_y + line_height
+      line_y = line_y + (type(line) == "table" and line.height or line_height)
     end
     return x + width
   end

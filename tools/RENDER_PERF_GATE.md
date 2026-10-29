@@ -473,6 +473,9 @@ This focused scene is not in the default suites. It does not yet have a full-sui
 Use `--scenario image-overlay` for the Image Overlay above an Editor: the backdrop, the title, the actions, a tooltip, a message, and the zoom controls.
 Like `image-viewer`, it has no baseline. Run it with `--report-only` and look at the captured screenshot.
 
+Use `--scenario markdown-table-images` for images in Markdown table cells: an embedded image, a file image with an escaped width, and a cell with text and an image.
+It has no baseline. Run it with `--report-only` and look at the captured screenshot.
+
 Use `--scenario context-menu` for the Editor's Context Menu over a document, with one row selected.
 It has no baseline. Run it with `--report-only` and look at the captured screenshot.
 

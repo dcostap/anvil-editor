@@ -1006,6 +1006,24 @@ local function remote_image_allowed(view, url, project)
     and config.markdown_live_trusted_remote_image_projects[key] == true or false
 end
 
+---Forget the table layouts that hold `line`, because an image in one of its
+---cells changed. Return the lines that the change can resize.
+local function drop_table_layouts_at(view, line)
+  local line1, line2 = line, line
+  local cache = view.__markdown_live_table_layout_cache
+  for _, buckets in ipairs({ cache and cache.buckets or {}, cache and cache.previous_buckets or {} }) do
+    for _, bucket in pairs(buckets) do
+      for id, layout in pairs(bucket.layouts) do
+        if layout and line >= layout.line1 and line <= layout.line2 then
+          line1, line2 = math.min(line1, layout.line1), math.max(line2, layout.line2)
+          bucket.layouts[id], bucket.sources[id] = nil, nil
+        end
+      end
+    end
+  end
+  return line1, line2
+end
+
 local function image_fragment(view, span, opts)
   perf_frame_add("markdown_live_image_fragment_calls", 1)
   opts = opts or {}
@@ -1053,8 +1071,9 @@ local function image_fragment(view, span, opts)
       local lines = {}
       for _, line in pairs(record.consumers) do lines[line] = true end
       for line in pairs(lines) do
-        view:invalidate_line_render(PROVIDER_ID, line, line)
-        view:invalidate_visual_metrics(PROVIDER_ID, line, line)
+        local line1, line2 = drop_table_layouts_at(view, line)
+        view:invalidate_line_render(PROVIDER_ID, line1, line2)
+        view:invalidate_visual_metrics(PROVIDER_ID, line1, line2)
       end
       core.redraw = true
     end)
@@ -1831,6 +1850,20 @@ table_presentation.inline_pieces = function(view, line_text, line, reveal, base)
     end
   end
   return pieces
+end
+
+---Return the drawn image of a table cell that holds only an image link, at
+---most `width` wide, or nil.
+table_presentation.cell_image = function(view, line_text, line, col1, col2, width)
+  for _, span in ipairs(semantic_link_spans(view, line_text, line)) do
+    local link = span.link
+    if span.col1 == col1 and span.col2 == col2 and link
+      and (link.kind == "image" or link.kind == "embed") and is_image_target(link.path)
+    then
+      local fragment = image_fragment(view, span, { block = true, available_width = width })
+      return fragment and fragment.widget and fragment or nil
+    end
+  end
 end
 
 local view_in_source_mode

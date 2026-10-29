@@ -506,6 +506,14 @@ Run `ui/markdown_heading_outline.lua` after changes. Check the `markdown-heading
 The File Search preview uses the same rule. `opts.as_text` skips the dialog.
 Run `ui/binary_file_open.lua` after changes.
 
+## Table images
+
+A table cell that holds only an image link draws the image, scaled to its column. A cell with text and an image keeps the link label.
+An image cell never reveals its source in Live Preview. A click, Up or Down selects the whole cell, so Delete and Copy act on the whole image.
+Image cells have no resize controls yet. Edit the source in Source mode.
+A Wikilink reads `\|` as its alias separator, because a table needs it: `![[image.png\|200]]`.
+Run `ui/markdown_interactive_tables.lua` after changes. Check the `markdown-table-images` render scenario after visual changes.
+
 ## Reload from disk
 
 `Buffer:reload()` applies the file's text as edits through `Buffer:apply_lines`. It does not replace the Buffer.

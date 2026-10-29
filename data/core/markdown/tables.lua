@@ -483,6 +483,18 @@ local function selection_for_cell(row, column, caret_at_start)
   return { row.line, cell.content_col2, row.line, cell.content_col1 }
 end
 
+-- A cell that draws an image is one object. Return the selection of the whole
+-- cell when the cell at `line` and `column` draws one.
+local function image_cell_selection(view, line, column)
+  local render = view:get_line_render(line)
+  for _, fragment in ipairs(render and render.fragments or {}) do
+    if fragment.table_cell and fragment.table_column == column then
+      if not fragment.image_cell then return nil end
+      return { line, fragment.text_source_col2, line, fragment.text_source_col1 }
+    end
+  end
+end
+
 local function same_table(a, b)
   return a and b and a.line1 == b.line1 and a.line2 == b.line2
 end
@@ -1058,7 +1070,11 @@ function tables.move_char(view, direction, selecting)
       )
     end
     local line, col
-    if has_selection and not selecting then
+    local image_cell = not selecting and image_cell_selection(view, context.line, context.column)
+    if image_cell then
+      line, col = image_cell[1], image_cell[2]
+      anchor_line, anchor_col = image_cell[3], image_cell[4]
+    elseif has_selection and not selecting then
       line = context.line
       col = direction < 0 and math.min(caret_col, anchor_col)
         or math.max(caret_col, anchor_col)
@@ -1073,8 +1089,8 @@ function tables.move_char(view, direction, selecting)
     col = common.clamp(col, context.cell.content_col1, context.cell.content_col2)
     selections[#selections + 1] = line
     selections[#selections + 1] = col
-    selections[#selections + 1] = selecting and anchor_line or line
-    selections[#selections + 1] = selecting and anchor_col or col
+    selections[#selections + 1] = (selecting or image_cell) and anchor_line or line
+    selections[#selections + 1] = (selecting or image_cell) and anchor_col or col
   end
   view.buffer:set_selection_list(selections, view.buffer.last_selection, { merge_cursors = true })
   return true
@@ -1141,6 +1157,7 @@ function tables.move_vertical(view, direction, selecting)
     local old_offset = (context.selection_index - 1) * 4
     local old_line2 = view.buffer.selections[old_offset + 3]
     local old_col2 = view.buffer.selections[old_offset + 4]
+    local image_cell
     local line, col = view:move_within_line_render_position_rows(
       context.line, context.col, direction
     )
@@ -1158,16 +1175,21 @@ function tables.move_vertical(view, direction, selecting)
         line = target_row.line
         col = view:land_on_line_render_position_row(line, fallback, direction, x)
         col = common.clamp(col, target_cell.content_col1, target_cell.content_col2)
+        image_cell = not selecting and image_cell_selection(view, line, context.column)
       else
         line = direction < 0 and math.max(1, context.line1 - 1)
           or math.min(#view.buffer.lines, context.line2 + 1)
         col = direction < 0 and context.line1 > 1 and #view.buffer.lines[line] or 1
       end
     end
-    selections[#selections + 1] = line
-    selections[#selections + 1] = col
-    selections[#selections + 1] = selecting and old_line2 or line
-    selections[#selections + 1] = selecting and old_col2 or col
+    if image_cell then
+      for _, value in ipairs(image_cell) do selections[#selections + 1] = value end
+    else
+      selections[#selections + 1] = line
+      selections[#selections + 1] = col
+      selections[#selections + 1] = selecting and old_line2 or line
+      selections[#selections + 1] = selecting and old_col2 or col
+    end
   end
   view.buffer:set_selection_list(selections, view.buffer.last_selection, {
     merge_cursors = true,
