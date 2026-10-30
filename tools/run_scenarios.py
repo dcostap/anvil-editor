@@ -133,6 +133,11 @@ SCENARIOS: dict[str, Scenario] = {
         settings={"workload": "poi_many_locations", "limit": 32}, targets=1),
     "quick-command-output": Scenario(
         "quick_command_output", RUNTIME_WORKLOADS, actions=1, suites=("smoke",), targets=1),
+    "quick-command-response": Scenario(
+        "quick_command_output", RUNTIME_WORKLOADS, actions=1, suites=("response",), targets=1,
+        settings={"cadence": "normal"}),
+    "editor-file-locations": Scenario(
+        "editor_file_locations", RUNTIME_WORKLOADS, actions=1, suites=("smoke",), targets=1),
     "trimwhitespace-long-line": Scenario(
         "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
         settings={"workload": "trimwhitespace_long_line"}, targets=1),

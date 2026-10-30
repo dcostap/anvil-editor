@@ -2,7 +2,7 @@ local core = require "core"
 local command = require "core.command"
 local terminal = require "plugins.terminal"
 local support = require "scenes.support"
-require "plugins.quick_commands"
+local quick_commands = require "plugins.quick_commands"
 
 local scene = {}
 
@@ -15,7 +15,10 @@ function scene.setup(context)
   assert(command.perform("quick_command:set_a"))
   core.global_prompt_bar:set_text("build")
   core.global_prompt_bar:submit()
-  assert(command.perform("quick_command:run_a_without_moving_focus"))
+  if not quick_commands.run(1, { focus = false }) then
+    shell:on_close()
+    error("Quick Command fixture could not start its command")
+  end
   local target = assert(context.settings.targets[1])
   context.sessions[1].capture = "PS> build\n"
     .. string.rep("missing.lua:9:4 ", 22000) .. target .. ":2:1\nPS> "

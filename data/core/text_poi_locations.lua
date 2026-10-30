@@ -53,9 +53,7 @@ function locations.resolve_path(path, root)
   return existing_file(candidate) and candidate or nil
 end
 
-function locations.resolve_candidate(candidate, root, kind)
-  local path = locations.resolve_path(candidate and candidate.source_path, root)
-  if not path then return nil end
+local function resolved_candidate(candidate, path, kind)
   return {
     line = candidate.line,
     col = candidate.col,
@@ -68,6 +66,11 @@ function locations.resolve_candidate(candidate, root, kind)
     target_col = candidate.target_col,
     text_bounds = true,
   }
+end
+
+function locations.resolve_candidate(candidate, root, kind)
+  local path = locations.resolve_path(candidate and candidate.source_path, root)
+  return path and resolved_candidate(candidate, path, kind) or nil
 end
 
 local function add_candidate(
@@ -322,18 +325,32 @@ function locations.extract_candidates(text, limit)
   return sort(candidates)
 end
 
-function locations.resolve_candidates(candidates, root, kind)
-  local points = {}
+function locations.resolve_candidates(candidates, roots, kind, cancelled)
+  -- A diagnostic can name one file many times. Resolve each path once for
+  -- this snapshot, but do not retain filesystem results across calls.
+  local points, paths = {}, {}
   for _, candidate in ipairs(candidates or {}) do
-    local point = locations.resolve_candidate(candidate, root, kind)
-    if point then points[#points + 1] = point end
+    if cancelled and cancelled() then return nil end
+    local source = candidate.source_path
+    if source then
+      local path = paths[source]
+      if path == nil then
+        path = false
+        for _, root in ipairs(roots) do
+          path = locations.resolve_path(source, root) or false
+          if path then break end
+        end
+        paths[source] = path
+      end
+      if path then points[#points + 1] = resolved_candidate(candidate, path, kind) end
+    end
   end
   return sort(points)
 end
 
 function locations.extract(text, opts)
   opts = opts or {}
-  return locations.resolve_candidates(locations.extract_candidates(text), opts.root, opts.kind)
+  return locations.resolve_candidates(locations.extract_candidates(text), { opts.root or system.getcwd() }, opts.kind)
 end
 
 return locations

@@ -17,14 +17,16 @@ function worker.run(payload, context)
   if context.cancelled() then return end
   local candidates = locations.extract_candidates(text)
   if context.cancelled() then return end
-  local points = {}
-  for _, candidate in ipairs(candidates) do
-    if context.cancelled() then return end
-    if candidate.line > 1 then
-      local point = locations.resolve_candidate(candidate, payload.root, "terminal-location")
-      if point then points[#points + 1] = point end
+  local points = locations.resolve_candidates(candidates, { payload.root }, "terminal-location", context.cancelled)
+  if not points then return end
+  local count = 0
+  for _, point in ipairs(points) do
+    if point.line > 1 then
+      count = count + 1
+      points[count] = point
     end
   end
+  for index = #points, count + 1, -1 do points[index] = nil end
   context.send { type = "result", payload = { text = text, points = points } }
 end
 

@@ -59,6 +59,10 @@ function Output:new(view)
   self.terminal = view
 end
 
+-- The Terminal draws this source. Keep its text position for navigation,
+-- but do not lay out a hidden capture just to scroll it horizontally.
+function Output:scroll_to_make_visible() end
+
 function Output:cancel_scan()
   local request = self.request
   self.request = nil
@@ -101,14 +105,17 @@ function Output:prepare_points_of_interest(on_ready)
       local result = request.result
       if not result then failed("worker returned no output") return end
       self.request = nil
-      self.captured_text, self.captured_root = request.text, root
       local buffer = self.buffer
-      buffer:remove(1, 1, #buffer.lines, #buffer.lines[#buffer.lines])
-      buffer:insert(1, 1, result.text)
-      buffer:clear_undo_redo()
-      buffer:clean()
-      buffer:set_selection(1, 1)
+      local last, col = #buffer.lines, #buffer.lines[#buffer.lines]
+      if buffer:get_text(1, 1, last, col) ~= result.text then
+        buffer:remove(1, 1, last, col)
+        buffer:insert(1, 1, result.text)
+        buffer:clear_undo_redo()
+        buffer:clean()
+        buffer:set_selection(1, 1)
+      end
       self.text_capture_data.points = result.points
+      self.captured_text, self.captured_root = request.text, root
       core.log_quiet("Quick Command output ready: lines=%d locations=%d", #buffer.lines, #result.points)
       request.on_ready(true)
     end,

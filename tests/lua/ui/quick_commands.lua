@@ -380,6 +380,29 @@ test.describe("Quick Commands", function()
     test.equal(core.active_view, other)
   end)
 
+  test.it("keeps the output position when only earlier terminal history changes", function(context)
+    local buffer, path = file_buffer(context, "stable-output.txt")
+    buffer:insert(1, 1, "one\ntwo\nthree\n")
+    buffer:save()
+    local shell = open_terminal("current")
+    set_quick_command(shell, "a", "build")
+    local editor = open_editor("new")
+    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    local output = "PS> build\n" .. path .. ":1:1\n" .. path .. ":3:1\n"
+    context.sessions[1].capture = output
+    test.ok(command.perform("core:next_remote_point_of_interest"))
+    local deadline = system.get_time() + 30
+    while core.active_view == editor and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(common.normalize_path(core.active_view.buffer.abs_filename), common.normalize_path(path))
+    buffer = core.active_view.buffer
+    test.equal(buffer:get_selection(), 1)
+    context.sessions[1].capture = "older output\n" .. output
+    test.ok(command.perform("core:next_remote_point_of_interest"))
+    deadline = system.get_time() + 30
+    while buffer:get_selection() ~= 3 and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(buffer:get_selection(), 3)
+  end)
+
   test.it("discards a pending navigation when a new Quick Command replaces its output", function(context)
     local _, old_path = file_buffer(context, "replaced-result.txt")
     local _, new_path = file_buffer(context, "current-result.txt")
