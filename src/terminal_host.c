@@ -601,7 +601,12 @@ static DWORD WINAPI host_client(void *userdata) {
       while (offset < header.size && !host->client_stop) {
         DWORD written = 0;
         if (!WriteFile(host->pty.input_write, bytes + offset, header.size - offset, &written, NULL) || !written) {
-          stop_client(host); break;
+          /* A terminal reply can arrive after a short command exits. Keep the client
+             connected so the output drain can send that command's exit status. */
+          if (WaitForSingleObject(host->pty.process, 0) == WAIT_OBJECT_0)
+            host_log(host, "input arrived after shell exit; keep client for output drain");
+          else stop_client(host);
+          break;
         }
         offset += written;
       }
