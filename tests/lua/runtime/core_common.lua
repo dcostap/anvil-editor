@@ -73,6 +73,15 @@ test.describe("core.common", function()
     if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
+  test.describe("serialize", function()
+    test.test("keeps Windows paths whose folders start with digits when it escapes", function()
+      local value = { path = [[C:\Users\a\96\7z\8\11\12\13\notes]], text = "tab\tline\nbell\a" }
+      local text = common.serialize(value, { escape = true })
+      test.same(load("return " .. text)(), value)
+      test.ok(text:find([[tab\tline\nbell\a]], 1, true), text)
+    end)
+  end)
+
   test.describe("sanitize_prompt_path", function()
     test.test("trims pasted path framing", function()
       test.equal(

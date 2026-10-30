@@ -666,23 +666,23 @@ end
 -- From gvx/Ser
 local oddvals = {[tostring(1/0)] = "1/0", [tostring(-1/0)] = "-1/0", [tostring(-(0/0))] = "-(0/0)", [tostring(0/0)] = "0/0"}
 
+local string_escapes = {
+  ["\a"] = "\\a", ["\b"] = "\\b", ["\t"] = "\\t", ["\n"] = "\\n", ["\v"] = "\\v", ["\f"] = "\\f",
+  ["\r"] = "\\r", ["\\"] = "\\\\", ['"'] = '\\"',
+}
+
 local function serialize(val, pretty, indent_str, escape, sort, limit, level)
   local space = pretty and " " or ""
   local indent = pretty and string.rep(indent_str, level) or ""
   local newline = pretty and "\n" or ""
   local ty = type(val)
   if ty == "string" then
-    local out = string.format("%q", val)
     if escape then
-      out = string.gsub(out, "\\\n", "\\n")
-      out = string.gsub(out, "\\7", "\\a")
-      out = string.gsub(out, "\\8", "\\b")
-      out = string.gsub(out, "\\9", "\\t")
-      out = string.gsub(out, "\\11", "\\v")
-      out = string.gsub(out, "\\12", "\\f")
-      out = string.gsub(out, "\\13", "\\r")
+      return '"' .. val:gsub('[%c"\\]', function(c)
+        return string_escapes[c] or string.format("\\%03d", c:byte())
+      end) .. '"'
     end
-    return out
+    return string.format("%q", val)
   elseif ty == "table" then
     -- early exit
     if level >= limit then return tostring(val) end
