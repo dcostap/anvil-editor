@@ -1,4 +1,5 @@
 local core = require "core"
+local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
 
@@ -10,6 +11,7 @@ local ui = {}
 ui.icons = {
   add = "\u{F0415}", close = "\u{F0156}", remove = "\u{F09E7}", reveal = "\u{F0DCF}",
   warning = "\u{F05D6}", folder = "\u{F0256}", home = "\u{F10B6}", link = "\u{F0339}", package = "\u{F03D7}",
+  check = "\u{F012C}", open_in_new = "\u{F03CC}",
 }
 
 ---The text font of Dialogs: the proportional font of the Sidebar and the Title Bar.
@@ -85,6 +87,19 @@ function ui.draw_focus_ring(x, y, w, h, radius)
   renderer.draw_rounded_rect(x - gap, y - gap, w + 2 * gap, h + 2 * gap, radius + gap, style.accent)
   renderer.draw_rounded_rect(x - gap + m.ring, y - gap + m.ring, w + 2 * (gap - m.ring), h + 2 * (gap - m.ring),
     radius + gap - m.ring, style.card)
+end
+
+---A check box with its top left corner at (x, y). `amount` goes from 0, clear, to 1, checked, so the box can fade.
+function ui.draw_check_box(x, y, size, amount)
+  local m = ui.metrics()
+  local r = m.radius * 0.75
+  renderer.draw_rounded_rect(x, y, size, size, r, style.card_text)
+  renderer.draw_rounded_rect(x + m.border, y + m.border, size - 2 * m.border, size - 2 * m.border,
+    math.max(0, r - m.border), style.card)
+  if amount <= 0 then return end
+  renderer.draw_rounded_rect(x, y, size, size, r, ui.fade(style.accent, amount))
+  common.draw_text(ui.icon_font(), ui.fade(style.button_primary_text, amount), ui.icons.check, "center",
+    x, y, size, size)
 end
 
 ---`text` cut at its end with "…" to fit `width`. `from_start` cuts at its start instead, for paths.

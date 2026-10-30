@@ -1931,6 +1931,96 @@ static int f_show_in_folder(lua_State *L) {
   lua_pushboolean(L, SUCCEEDED(shown));
   return 1;
 }
+
+// Registry access for File Types. Each key path is relative to HKEY_CURRENT_USER, so no call needs admin rights.
+// An empty or nil value name is the key's default value.
+
+static LPWSTR registry_name(lua_State *L, int index) {
+  return utfconv_utf8towc(luaL_optstring(L, index, ""));
+}
+
+// A table of the key's string values by name, or nil when the key does not exist. Other value types read as "".
+// Names and values that do not fit the buffers are left out.
+static int f_get_registry_values(lua_State *L) {
+  LPWSTR path = registry_name(L, 1);
+  HKEY key = NULL;
+  LSTATUS status = path ? RegOpenKeyExW(HKEY_CURRENT_USER, path, 0, KEY_QUERY_VALUE, &key) : ERROR_INVALID_PARAMETER;
+  SDL_free(path);
+  if (status != ERROR_SUCCESS) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_newtable(L);
+  wchar_t name[1024];
+  BYTE data[8192];
+  for (DWORD i = 0;; i++) {
+    DWORD name_len = sizeof(name) / sizeof(name[0]), data_len = sizeof(data) - sizeof(wchar_t), type = 0;
+    status = RegEnumValueW(key, i, name, &name_len, NULL, &type, data, &data_len);
+    if (status == ERROR_NO_MORE_ITEMS) break;
+    if (status != ERROR_SUCCESS) continue;
+    char *utf8_name = utfconv_wctoutf8(name);
+    if (!utf8_name) continue;
+    char *utf8_value = NULL;
+    if (type == REG_SZ || type == REG_EXPAND_SZ) {
+      data[data_len] = 0;
+      data[data_len + 1] = 0;
+      utf8_value = utfconv_wctoutf8((LPCWSTR) data);
+    }
+    lua_pushstring(L, utf8_value ? utf8_value : "");
+    lua_setfield(L, -2, utf8_name);
+    SDL_free(utf8_value);
+    SDL_free(utf8_name);
+  }
+  RegCloseKey(key);
+  return 1;
+}
+
+// Set a string value, and make its key when it does not exist.
+static int f_set_registry_value(lua_State *L) {
+  LPWSTR path = registry_name(L, 1), name = registry_name(L, 2);
+  LPWSTR value = utfconv_utf8towc(luaL_checkstring(L, 3));
+  HKEY key = NULL;
+  LSTATUS status = ERROR_INVALID_PARAMETER;
+  if (path && name && value) {
+    status = RegCreateKeyExW(HKEY_CURRENT_USER, path, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL);
+  }
+  if (status == ERROR_SUCCESS) {
+    status = RegSetValueExW(key, name, 0, REG_SZ, (const BYTE *) value, (DWORD) ((wcslen(value) + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+  }
+  SDL_free(path);
+  SDL_free(name);
+  SDL_free(value);
+  lua_pushboolean(L, status == ERROR_SUCCESS);
+  return 1;
+}
+
+// Delete a value. A value or key that does not exist counts as deleted.
+static int f_delete_registry_value(lua_State *L) {
+  LPWSTR path = registry_name(L, 1), name = registry_name(L, 2);
+  LSTATUS status = path && name ? RegDeleteKeyValueW(HKEY_CURRENT_USER, path, name) : ERROR_INVALID_PARAMETER;
+  SDL_free(path);
+  SDL_free(name);
+  lua_pushboolean(L, status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND);
+  return 1;
+}
+
+// Delete a key with all its subkeys and values. A key that does not exist counts as deleted.
+static int f_delete_registry_key(lua_State *L) {
+  LPWSTR path = registry_name(L, 1);
+  LSTATUS status = path && *path ? RegDeleteTreeW(HKEY_CURRENT_USER, path) : ERROR_INVALID_PARAMETER;
+  if (status == ERROR_SUCCESS) status = RegDeleteKeyW(HKEY_CURRENT_USER, path);
+  SDL_free(path);
+  lua_pushboolean(L, status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND);
+  return 1;
+}
+
+// Tell Explorer that file associations changed, so it shows new icons and Open With entries.
+static int f_notify_file_types_changed(lua_State *L) {
+  (void) L;
+  SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, NULL, NULL);
+  return 0;
+}
 #endif
 
 static int f_set_window_opacity(lua_State *L) {
@@ -2969,6 +3059,11 @@ static const luaL_Reg lib[] = {
 #ifdef _WIN32
   { "open_in_system",        f_open_in_system        },
   { "show_in_folder",        f_show_in_folder        },
+  { "get_registry_values",   f_get_registry_values   },
+  { "set_registry_value",    f_set_registry_value    },
+  { "delete_registry_value", f_delete_registry_value },
+  { "delete_registry_key",   f_delete_registry_key   },
+  { "notify_file_types_changed", f_notify_file_types_changed },
 #endif
   { "set_window_opacity",    f_set_window_opacity    },
   { "load_native_plugin",    f_load_native_plugin    },

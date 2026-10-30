@@ -589,6 +589,17 @@ Style keys for Dialogs and buttons are in `data/colors/default.lua`. `config.dis
 The Project Paths Dialog (`plugins.project_paths`) is the first Dialog. `project_paths:manage` opens it. `project_paths:add` and `filetree:add_to_project_paths` add a folder.
 Run `ui/dialog.lua`, `ui/project_paths_dialog.lua` and `ui/filetree_project_paths.lua` after changes. Check the `project-paths-dialog` render scenario after visual changes.
 
+## File Types
+
+The File Types Dialog (`plugins.file_types`, `file_types:manage`) lists the file types in `config.plugins.file_types.types`. It is on Windows only.
+A check registers the type's extensions for this `anvil.exe` at once. A clear removes them. A type that another `anvil.exe` opens shows "Another Anvil". A check takes it over.
+All keys are under `HKEY_CURRENT_USER`: one `Anvil.<ext>` ProgID for each extension, its `OpenWithProgids` value, and Anvil's `Capabilities` and `RegisteredApplications` entry. The entry exists while Anvil opens at least one extension.
+Windows does not let an app make itself the default. "Set as Default" opens Anvil's page in Windows Settings, where the user does that.
+The registry stores the executable's path. After a move, the user checks the types again.
+`system.get_registry_values`, `set_registry_value`, `delete_registry_value` and `delete_registry_key` read and write `HKEY_CURRENT_USER` only.
+Tests set `plugins.file_types.root` to a private key, so they never change the user's file types.
+Run `ui/file_types_dialog.lua` after changes. Check the `file-types-dialog` render scenario after visual changes. It uses fixed rows and does not read the registry.
+
 ## Heading Outline
 
 Markdown Live Preview lists the headings left of the reading lane when the free space can hold the list.

@@ -27,6 +27,7 @@ local core_plugins = {
   centered_editor = true,
   custom_welcome = true,
   document_format = true,
+  file_types = true,
   filetree = true,
   project_paths = true,
   global_prompt_bar_sanitize = true,
@@ -140,6 +141,34 @@ plugin_defaults("diffview", {
   fold_unchanged_by_default = false,
   fold_context_lines = 6,
   fold_min_lines = 16,
+})
+-- The file types in the File Types Dialog. Each one registers its extensions together.
+plugin_defaults("file_types", {
+  types = {
+    { name = "Markdown", extensions = { "md", "markdown" } },
+    { name = "Text", extensions = { "txt" } },
+    { name = "Log", extensions = { "log" } },
+    { name = "CSV", extensions = { "csv" } },
+    { name = "JSON", extensions = { "json", "jsonc" } },
+    { name = "YAML", extensions = { "yaml", "yml" } },
+    { name = "TOML", extensions = { "toml" } },
+    { name = "INI", extensions = { "ini", "cfg", "conf" } },
+    { name = "XML", extensions = { "xml" } },
+    { name = "HTML", extensions = { "html", "htm" } },
+    { name = "CSS", extensions = { "css" } },
+    { name = "JavaScript", extensions = { "js", "mjs", "cjs" } },
+    { name = "TypeScript", extensions = { "ts", "tsx" } },
+    { name = "Lua", extensions = { "lua" } },
+    { name = "Python", extensions = { "py" } },
+    { name = "C", extensions = { "c", "h" } },
+    { name = "C++", extensions = { "cpp", "cc", "cxx", "hpp", "hh" } },
+    { name = "Rust", extensions = { "rs" } },
+    { name = "Kotlin", extensions = { "kt", "kts" } },
+    { name = "Odin", extensions = { "odin" } },
+    { name = "SQL", extensions = { "sql" } },
+    { name = "PowerShell", extensions = { "ps1", "psm1" } },
+    { name = "Shell", extensions = { "sh" } },
+  },
 })
 plugin_defaults("filetree", {
   show_hidden = true,

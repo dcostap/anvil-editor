@@ -141,6 +141,7 @@ SCENARIOS["image-overlay"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["image-zoom"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["context-menu"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["project-paths-dialog"] = dict(SCENARIOS["image-viewer"])
+SCENARIOS["file-types-dialog"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["terminal-images"] = dict(SCENARIOS["image-viewer"])
 SCENARIOS["glyph-cache-growth"] = {
     "start_line": 1,

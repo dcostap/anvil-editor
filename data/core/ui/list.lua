@@ -8,12 +8,13 @@ local RowHighlight = require "core.row_highlight"
 -- A scrolling list of rows with one selected row. The editor's line moves select rows, with the user's bindings.
 -- The selection and the hover highlights glide from row to row, as in the Context Menu and the Sidebar.
 -- `draw_row(row, x, y, w, h, state)` draws one row. `state` has `selected`, `hovered` and `focused`.
--- `on_select(row, index)` follows each new selection. `on_activate(row, index)` follows Enter and a double click.
+-- `on_select(row, index)` follows each new selection. `on_activate(row, index)` follows Enter and a double click,
+-- or each click with `click_activates`, as in a list of check boxes.
 local List = Control:extend()
 
 List.focusable = true
 
----@param options { rows: table[]?, row_height: number, draw_row: function, on_select: function?, on_activate: function? }
+---@param options { rows: table[]?, row_height: number, draw_row: function, on_select: function?, on_activate: function?, click_activates: boolean? }
 function List:new(options)
   List.super.new(self, options)
   self.rows = options.rows or {}
@@ -21,6 +22,7 @@ function List:new(options)
   self.draw_row = options.draw_row
   self.on_select = options.on_select
   self.on_activate = options.on_activate
+  self.click_activates = options.click_activates
   self.selected = #self.rows > 0 and 1 or nil
   self.scroll, self.scroll_to = 0, 0
   self.selection_highlight = RowHighlight(RowHighlight.selection)
@@ -112,7 +114,7 @@ function List:on_mouse_pressed(x, y, clicks)
   local index = self:index_at(y)
   if not index then return true end
   self:select(index)
-  if clicks and clicks >= 2 then self:activate() end
+  if self.click_activates or (clicks and clicks >= 2) then self:activate() end
   return true
 end
 

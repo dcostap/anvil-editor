@@ -1108,6 +1108,24 @@ local function scenario_is_ready()
     require("plugins.project_paths").open({ select = DATADIR .. PATHSEP .. "colors" })
     return false
   end
+  if benchmark.scenario == "file-types-dialog" then
+    -- The File Types Dialog with checked, clear and Another Anvil rows. The rows are fixed, so the scene
+    -- does not read or change this machine's registry.
+    if require("core.ui.dialog").current() then return true end
+    config.transitions = false
+    local file_types = require "plugins.file_types"
+    local checked = { Markdown = true, Text = true, JSON = true, Lua = true, C = true }
+    file_types.types = function()
+      local rows = {}
+      for _, file_type in ipairs(config.plugins.file_types.types) do
+        rows[#rows + 1] = { name = file_type.name, extensions = file_type.extensions,
+          checked = checked[file_type.name] == true, other = file_type.name == "YAML" }
+      end
+      return rows
+    end
+    file_types.open()
+    return false
+  end
   if benchmark.scenario == "context-menu-markdown" then
     -- The Markdown Context Menu at a caret, with its Insert submenu open.
     local context_menu = require "core.context_menu"
