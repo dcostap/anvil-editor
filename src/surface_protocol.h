@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 40u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 41u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -53,8 +53,6 @@ typedef enum {
   ANVIL_SURFACE_MSG_TERMINAL_EDITOR = 15,
   /* Ctrl-wheel over the Sidebar. Payload: AnvilSurfaceInt, signed Zoom direction. */
   ANVIL_SURFACE_MSG_ZOOM_WHEEL = 16,
-  /* The Sidebar's menu closed. Payload: AnvilSurfaceInt, the chosen label's number from 1, or 0 for none. */
-  ANVIL_SURFACE_MSG_MENU_RESULT = 17,
   /* Terminal quit scope and the choice already made for this Window. Payload: AnvilSurfaceInt. */
   ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT = 18,
   /* The answer to ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION. Payload: AnvilSurfaceInt, 1 when Alt Navigation is on. */
@@ -100,8 +98,6 @@ typedef enum {
   ANVIL_SURFACE_MSG_SELECT_TERMINAL = 96,
   /* Hide the Project Sidebar in every Window, or show it again. No payload. */
   ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR = 97,
-  /* Show the actions menu for one Sidebar row's Project. Payload: AnvilSurfaceProjectMenu. */
-  ANVIL_SURFACE_MSG_PROJECT_MENU = 98,
   /* This Project shows a Color Theme it has not saved. The shell forwards it to the Sidebar. Payload: the
    * preview + NUL, or only NUL when the Project shows the saved Color Theme again. */
   ANVIL_SURFACE_MSG_COLOR_THEME_PREVIEW = 99,
@@ -120,10 +116,6 @@ typedef enum {
   ANVIL_SURFACE_MSG_TIMING_CAPTURE = 105,
   /* Focus the Sidebar or return to the Selected Project. Payload: AnvilSurfaceInt. */
   ANVIL_SURFACE_MSG_SIDEBAR_FOCUS = 106,
-  /* Show a menu that the Sidebar describes, and answer with ANVIL_SURFACE_MSG_MENU_RESULT. Payload: AnvilSurfaceMenu,
-   * then at most ANVIL_SURFACE_MENU_LABELS labels, each followed by NUL. A label that starts with a tab belongs to
-   * the submenu of the label above it. A label "-" is a separator. */
-  ANVIL_SURFACE_MSG_MENU = 107,
   /* Request the current Terminal quit scope. No payload. */
   ANVIL_SURFACE_MSG_TERMINAL_QUIT_QUERY = 108,
   /* Save Keep or End for the rest of this Window Close. Payload: AnvilSurfaceInt. */
@@ -153,13 +145,6 @@ typedef struct { uint32_t project_id, target_window_id; } AnvilSurfaceMoveProjec
 /* The Zoom as ratios over the base scale. The message carries it, so receivers never read a file that a
  * Project replaces during a fast Zoom. */
 typedef struct { double interface_zoom, code_zoom; } AnvilSurfaceZoom;
-/* A Sidebar row id and the pointer position in Sidebar surface pixels. */
-typedef struct { uint32_t row_id; int32_t x, y; } AnvilSurfaceProjectMenu;
-/* The pointer position in Sidebar surface pixels. */
-typedef struct { int32_t x, y; } AnvilSurfaceMenu;
-#define ANVIL_SURFACE_MENU_LABELS 32
-#define ANVIL_SURFACE_MENU_BYTES 4096
-bool anvil_surface_menu_valid(const void *packet, uint32_t size);
 
 typedef struct {
   uint32_t userdir_size;
@@ -223,7 +208,8 @@ typedef struct {
   int32_t button_width, title_height, resize_border;
   int32_t controls_x, controls_y, controls_w, controls_h;
   /* The surface covers the whole client area. The Project lays out its UI right of content_x and draws only
-   * its backdrop to the left of it, where the shell blends the Sidebar. */
+   * its backdrop to the left of it, where the shell blends the Sidebar. The Sidebar lays out its strip left of
+   * content_x and draws only popups right of it. */
   int32_t content_x;
 } AnvilSurfaceConfigure;
 
@@ -275,8 +261,9 @@ typedef struct {
   /* The dim the Project draws over its UI while a modal overlay is open, in the same layout; zero when none.
    * The shell applies it over the Sidebar, so the overlay covers the whole window. */
   uint32_t overlay;
-  /* While the overlay is shown, the frame areas the shell shows above the Sidebar, such as a modal popup and a
-   * warning bar that extend over it. Surface pixels; an empty area shows none. */
+  /* Frame areas that the shell shows above the other layer. Surface pixels; an empty area shows none. A Project's
+   * areas, such as a modal popup and a warning bar, show above the Sidebar while the overlay is shown. A Sidebar's
+   * areas are its popup, such as a menu, which shows above the Project and takes all pointer input. */
   AnvilSurfaceArea raised[ANVIL_SURFACE_RAISED_MAX];
   char name[ANVIL_SURFACE_NAME_MAX];
 } AnvilSurfaceFrame;

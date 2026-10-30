@@ -1965,13 +1965,14 @@ static int f_set_surface_overlay(lua_State *L) {
     }
     overlay = channel[0] | channel[1] << 8 | channel[2] << 16 | channel[3] << 24;
   }
-  /* The optional areas above the Sidebar: a list of {x, y, w, h} in surface pixels. */
+  /* The optional areas that the shell shows above the other layer: a list of {x, y, w, h} in surface pixels. A
+   * Project's areas show above the Sidebar while its overlay covers it; a Sidebar's areas are its popup. */
   AnvilSurfaceArea raised[ANVIL_SURFACE_RAISED_MAX] = {0};
   int count = 0;
-  if (overlay && !lua_isnoneornil(L, 6)) {
+  if (!lua_isnoneornil(L, 6)) {
     luaL_checktype(L, 6, LUA_TTABLE);
     count = (int)lua_rawlen(L, 6);
-    luaL_argcheck(L, count <= ANVIL_SURFACE_RAISED_MAX, 6, "too many areas above the Sidebar");
+    luaL_argcheck(L, count <= ANVIL_SURFACE_RAISED_MAX, 6, "too many raised areas");
     for (int i = 0; i < count; i++) {
       lua_rawgeti(L, 6, i + 1);
       luaL_checktype(L, -1, LUA_TTABLE);
@@ -2079,39 +2080,6 @@ static int f_pane_request(lua_State *L) {
   return 1;
 }
 
-/* The Sidebar's right-click on a Project row. The shell shows the menu and performs its command. */
-static int f_show_project_menu(lua_State *L) {
-  lua_Integer row = luaL_checkinteger(L, 1);
-  luaL_argcheck(L, row > 0 && row <= UINT32_MAX, 1, "invalid Sidebar row");
-  lua_pushboolean(L, anvil_hosted_surface_project_menu((uint32_t)row, (int)luaL_checknumber(L, 2),
-                                                       (int)luaL_checknumber(L, 3)));
-  return 1;
-}
-
-/* The Sidebar's own menu at a point in Sidebar surface pixels. `labels` is a list of strings. A label that starts
- * with a tab belongs to the submenu of the label above it, and "-" is a separator. The shell answers with the
- * "menuchosen" event and the chosen label's index, or 0. Returns false outside a shell. */
-static int f_show_menu(lua_State *L) {
-  lua_Integer x = luaL_checkinteger(L, 1), y = luaL_checkinteger(L, 2);
-  luaL_argcheck(L, x >= INT32_MIN && x <= INT32_MAX && y >= INT32_MIN && y <= INT32_MAX, 1, "invalid point");
-  luaL_checktype(L, 3, LUA_TTABLE);
-  char labels[ANVIL_SURFACE_MENU_BYTES];
-  size_t size = 0, count = lua_rawlen(L, 3);
-  luaL_argcheck(L, count > 0 && count <= ANVIL_SURFACE_MENU_LABELS, 3, "invalid label count");
-  for (size_t i = 1; i <= count; i++) {
-    lua_rawgeti(L, 3, (lua_Integer)i);
-    size_t length = 0;
-    const char *label = lua_tolstring(L, -1, &length);
-    luaL_argcheck(L, label && length && !memchr(label, 0, length) && size + length + 1 <= sizeof(labels), 3,
-                  "invalid label");
-    memcpy(labels + size, label, length + 1);
-    size += length + 1;
-    lua_pop(L, 1);
-  }
-  lua_pushboolean(L, anvil_hosted_surface_show_menu((int)x, (int)y, labels, size));
-  return 1;
-}
-
 /* Returns false outside a shell, which has no Project Sidebar. */
 static int f_toggle_project_sidebar(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_toggle_sidebar());
@@ -2211,7 +2179,7 @@ static int f_activate_sidebar_surface(lua_State *L) {
 static int f_move_project(lua_State *L) {
   lua_Integer project = luaL_checkinteger(L, 1), target = luaL_checkinteger(L, 2);
   luaL_argcheck(L, project > 0 && project <= UINT32_MAX, 1, "invalid Project ID");
-  luaL_argcheck(L, target > 0 && target <= UINT32_MAX, 2, "invalid target Window ID");
+  luaL_argcheck(L, target >= 0 && target <= UINT32_MAX, 2, "invalid target Window ID");
   lua_pushboolean(L, anvil_hosted_surface_move_project((uint32_t)project, (uint32_t)target));
   return 1;
 }
@@ -2300,11 +2268,6 @@ static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
 static int altnavigation_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, "altnavigation");
   lua_pushboolean(L, event->user.code != 0);
-  return 2;
-}
-static int menuchosen_callback(lua_State *L, SDL_Event *event) {
-  lua_pushstring(L, "menuchosen");
-  lua_pushinteger(L, event->user.code);
   return 2;
 }
 static int zoomwheel_callback(lua_State *L, SDL_Event *event) {
@@ -2958,8 +2921,6 @@ static const luaL_Reg lib[] = {
   { "toggle_project_sidebar", f_toggle_project_sidebar },
   { "toggle_alt_navigation", f_toggle_alt_navigation },
   { "focus_project_sidebar", f_focus_project_sidebar },
-  { "show_project_menu",     f_show_project_menu     },
-  { "show_menu",             f_show_menu             },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },
   { "zoom_saved",            f_zoom_saved            },
@@ -3027,8 +2988,6 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Zoom event: %s", SDL_GetError());
   if (!register_custom_event("zoomwheel", zoomwheel_callback))
     return luaL_error(L, "Unable to register the Sidebar Zoom wheel event: %s", SDL_GetError());
-  if (!register_custom_event("menuchosen", menuchosen_callback))
-    return luaL_error(L, "Unable to register the Sidebar menu event: %s", SDL_GetError());
   if (!register_custom_event("altnavigation", altnavigation_callback))
     return luaL_error(L, "Unable to register the Alt Navigation event: %s", SDL_GetError());
   if (!register_custom_event("focusterminal", focusterminal_callback))

@@ -17,6 +17,10 @@ local RowHighlight = require "core.row_highlight"
 ---  `command` a command name, or a list of names; the first valid one runs
 ---  `args`    arguments for the command and its predicate
 ---  `items`   a submenu instead of a command
+---
+---The menu opens over a host panel: the Root Panel, or a Project Sidebar's surface. The host has `position` and
+---`size`, takes the menu's input through `push_modal_input` and `pop_modal_input`, gets a press outside the menu
+---through `on_mouse_pressed`, and shows the menu above the other layer through `show_above_sidebar`.
 local context_menu = {}
 
 ---Icons from the Material Design set of the bundled Nerd Font, for the `icon` field of items.
@@ -119,8 +123,8 @@ local function resolve(items)
 end
 
 local function bounds()
-  local root = core.root_panel
-  return root.position.x, root.position.y, root.size.x, root.size.y
+  local host = state.host
+  return host.position.x, host.position.y, host.size.x, host.size.y
 end
 
 -- Lays out one level of rows with its top left corner near (x, y).
@@ -208,8 +212,9 @@ function context_menu.is_open() return state ~= nil end
 ---Closes the open menu without running a command.
 function context_menu.close()
   if not state then return end
+  local host = state.host
   state = nil
-  core.root_panel:pop_modal_input(context_menu)
+  host:pop_modal_input(context_menu)
   core.redraw = true
 end
 
@@ -217,7 +222,8 @@ end
 ---@param x number
 ---@param y number
 ---@param items table[]
----@param opts? { button: string? } The mouse button that opened the menu, so its release does not choose an item.
+---@param opts? { button: string?, host: table? } `button` is the mouse button that opened the menu, so its release
+---does not choose an item. `host` is the panel that the menu opens over, the Root Panel by default.
 function context_menu.open(x, y, items, opts)
   context_menu.close()
   local rows = resolve(items)
@@ -226,14 +232,16 @@ function context_menu.open(x, y, items, opts)
     return false
   end
   opts = opts or {}
+  local host = opts.host or core.root_panel
   state = {
-    levels = { layout_level(rows, x + 1, y + 1, x - 1) },
+    host = host,
     started = now(),
     progress = config.transitions and 0 or 1,
     origin = { x = x, y = y, button = opts.button },
-    root_size = { core.root_panel.size.x, core.root_panel.size.y },
+    root_size = { host.size.x, host.size.y },
   }
-  core.root_panel:push_modal_input(context_menu, { label = "context-menu", handlers = modal_handlers })
+  state.levels = { layout_level(rows, x + 1, y + 1, x - 1) }
+  host:push_modal_input(context_menu, { label = "context-menu", handlers = modal_handlers })
   core.log_quiet("Context Menu opened: %d row(s) at %d,%d", #rows, x, y)
   core.redraw = true
   return true
@@ -349,9 +357,10 @@ local function on_mouse_pressed(button, x, y, clicks)
     state.pressed = { depth = depth, index = index }
     return true
   end
+  local host = state.host
   context_menu.close()
   -- A right-click elsewhere opens the menu of that place instead.
-  if button == "right" and not core.root_panel:on_mouse_pressed(button, x, y, clicks) then
+  if button == "right" and not host:on_mouse_pressed(button, x, y, clicks) then
     keymap.on_mouse_pressed(button, x, y, clicks)
   end
   return true
@@ -389,11 +398,13 @@ modal_handlers = {
   mouse_left = function() return true end,
 }
 
+---Returns true while the menu animates, so its host draws another frame.
 function context_menu.update()
-  if not state then return end
-  if state.root_size[1] ~= core.root_panel.size.x or state.root_size[2] ~= core.root_panel.size.y then
+  if not state then return false end
+  local size = state.host.size
+  if state.root_size[1] ~= size.x or state.root_size[2] ~= size.y then
     -- The menu stays at its point, inside the new bounds. Submenus close.
-    state.root_size = { core.root_panel.size.x, core.root_panel.size.y }
+    state.root_size = { size.x, size.y }
     local origin, old = state.origin, state.levels[1]
     state.levels = { layout_level(old.rows, origin.x + 1, origin.y + 1, origin.x - 1) }
     state.levels[1].selected, state.levels[1].highlight = old.selected, old.highlight
@@ -415,6 +426,7 @@ function context_menu.update()
       core.redraw = true
     end
   end
+  return state.progress < 1 or state.pending ~= nil
 end
 
 ---The Window lost focus.
@@ -433,7 +445,7 @@ end
 local function draw_level(level)
   local m = metrics()
   card.draw(level.x, level.y, level.w, level.h, m.radius)
-  card.show_above_sidebar(level.x, level.y, level.w, level.h, m.radius)
+  card.show_above_sidebar(level.x, level.y, level.w, level.h, m.radius, state.host)
   core.push_clip_rect(level.x, level.y, level.w, level.h)
   local selected_row = level.rows[level.selected]
   if selected_row then

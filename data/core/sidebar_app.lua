@@ -2,9 +2,10 @@
 local core = require "core"
 local saved_event = core.on_event
 local surfaces, current = {}, nil
--- The Window whose Sidebar asked for the open menu. The menu's result goes to that surface.
+-- The surface whose Context Menu is open. One menu is open at a time.
 local menu_surface
-local SidebarView, font, base_font_size
+local SidebarView, context_menu, font, icon_font, base_font_size, base_icon_size
+-- The text and menu icon fonts at each scale.
 local fonts, style = {}, nil
 local color_theme = require "core.color_theme"
 local storage = require "core.storage"
@@ -135,10 +136,10 @@ local function activate(id)
   SCALE = scale
   if font then
     if not fonts[scale] then
-      fonts[scale] = font:copy(base_font_size * scale)
+      fonts[scale] = {text = font:copy(base_font_size * scale), icon = icon_font:copy(base_icon_size * scale)}
       core.log_quiet("Sidebar font created: scale=%g", scale)
     end
-    style.font = fonts[scale]
+    style.font, style.menu_icon_font = fonts[scale].text, fonts[scale].icon
   end
   if surface.scale ~= scale then
     surface.view.scroll = surface.view.scroll * scale / surface.scale
@@ -151,10 +152,89 @@ local function activate(id)
   end
   return true
 end
+-- The Sidebar's surface covers the whole Window, so a Context Menu can extend over the Project. The Sidebar's own
+-- strip ends at the content edge.
+local function strip_size(window)
+  local width, height = renwindow.get_size(window)
+  return math.max(1, math.min(width, system.get_window_content_x())), height
+end
+
+-- The most areas that one frame shows above the Project: two for each open menu level.
+local RAISED_MAX = 4
+-- The panel that a surface's Context Menu opens over: the whole surface. The menu takes the surface's input while
+-- it is open, and the shell shows its areas above the Project.
+local function menu_host(surface)
+  local host = {position = {x = 0, y = 0}, size = {x = 0, y = 0}, areas = {}}
+  function host:push_modal_input(_, options)
+    self.handlers, menu_surface = options.handlers, surface
+  end
+  function host:pop_modal_input()
+    self.handlers = nil
+    if menu_surface == surface then menu_surface = nil end
+    -- The next frame reports no areas, so the shell hides the menu.
+    surface.redraw = true
+    if current == surface then core.redraw = true end
+    return true
+  end
+  -- A right-click outside the menu opens the menu of the Sidebar row there.
+  function host:on_mouse_pressed(button, x, y)
+    if x < surface.view.width then surface.view:on_mouse_pressed(button, x, y) end
+    return true
+  end
+  function host:show_above_sidebar(x, y, w, h)
+    if #self.areas >= RAISED_MAX then
+      core.log_quiet("Sidebar menu area dropped: %d already shown", RAISED_MAX)
+      return
+    end
+    local left, top = math.floor(x), math.floor(y)
+    self.areas[#self.areas + 1] = {left, top, math.ceil(x + w) - left, math.ceil(y + h) - top}
+  end
+  return host
+end
+
+-- While a Context Menu is open, it takes the pointer and the keyboard. Returns true for an event that it takes.
+local function menu_event(handlers, name, ...)
+  if name == "keypressed" then handlers.key_pressed((...))
+  elseif name == "keyreleased" then keymap.on_key_released(...)
+  elseif name == "mousepressed" then handlers.mouse_pressed(...)
+  elseif name == "mousereleased" then handlers.mouse_released(...)
+  elseif name == "mousemoved" then handlers.mouse_moved(...)
+  elseif name == "mousewheel" then handlers.mouse_wheel()
+  elseif name == "focuslost" then
+    -- The Window lost focus. The Sidebar View also takes the event.
+    context_menu.close()
+    return false
+  elseif name ~= "textinput" and name ~= "mouseleft" then
+    return false
+  end
+  core.redraw = true
+  return true
+end
+
+-- Draws the surface's open Context Menu over the whole surface, and reports its areas, which the shell shows above
+-- the Project. Without a menu, the report is empty. Returns true while the menu animates.
+local function draw_menu(surface, width, height)
+  local host = surface.menu_host
+  host.size.x, host.size.y, host.areas = width, height, {}
+  local moves = false
+  if menu_surface == surface then
+    core.redraw = false
+    moves = context_menu.update()
+    core.clip_rect_stack = {{0, 0, width, height}}
+    renderer.set_clip_rect(0, 0, width, height)
+    context_menu.draw()
+    -- The row highlight glides.
+    moves = moves or core.redraw
+  end
+  system.set_surface_overlay(surface.window, nil, nil, nil, nil, #host.areas > 0 and host.areas or nil)
+  return moves
+end
+
 local function add_surface(id, window)
   collapsed[id] = collapsed[id] or {}
   local surface = {id = id, window = window, native_id = system.get_window_id(window), scale = system.get_scale(window),
     redraw = true, query_needed = true}
+  surface.menu_host = menu_host(surface)
   surface.view = SidebarView(function(action, row_id, target, ...)
     if action == "return_focus" then
       core.log_quiet("Sidebar return focus: Window=%d", id)
@@ -204,12 +284,15 @@ local function add_surface(id, window)
       end
       return
     end
-    if action == "show_menu" then
-      local x, y, labels = row_id, target, ...
-      menu_surface = id
-      local sent = system.show_menu(x, y, labels)
-      core.log_quiet("Sidebar menu: Window=%d labels=%d sent=%s", id, #labels, tostring(sent))
-      if not sent then menu_surface = nil; surface.view:on_menu_chosen(0) end
+    if action == "menu" then
+      local items, x, y, button, row = row_id, target, ...
+      local host = surface.menu_host
+      host.size.x, host.size.y = renwindow.get_size(surface.window)
+      local opened = context_menu.open(x, y, items, {button = button, host = host})
+      -- Shell probes read the row and the labels at once.
+      core.log_quiet("Sidebar menu: Window=%d row=%d labels=%s opened=%s", id, row,
+        table.concat(context_menu.labels(), "|"), tostring(opened))
+      if core.session_log then core.session_log:flush() end
       return
     end
     if action == "focus" then
@@ -217,21 +300,27 @@ local function add_surface(id, window)
       core.log_quiet("Sidebar takes the keyboard: Window=%d sent=%s", id, tostring(sent))
       return
     end
-    if action == "menu" then
-      local x, y = target, ...
-      local sent = system.show_project_menu(row_id, x, y)
-      core.log_quiet("Sidebar Project menu: Window=%d row=%d sent=%s", id, row_id, tostring(sent))
-      return
-    end
     for _, project in ipairs(core.project_sidebar or {}) do
       if project.row_id == row_id then
+        local sent
         if action == "select" then
           core.log_quiet("Sidebar selection: Window=%d Project=%d owner=%d", id, project.id, project.window_id)
           system.select_project(project.path)
+          return
         elseif action == "unload" then
-          local sent = system.unload_project(project.path)
-          core.log_quiet("Sidebar unload: Window=%d Project=%d sent=%s", id, project.id or 0, tostring(sent))
+          sent = system.unload_project(project.path)
+        elseif action == "move" then
+          sent = system.move_project(project.id, target)
+        elseif action == "open_window" then
+          sent = system.open_project_window(project.path)
+        elseif action == "copy_path" then
+          system.set_clipboard((project.path:gsub("/", PATHSEP)))
+          sent = true
+        elseif action == "show_in_folder" then
+          sent = common.show_in_folder(project.path)
         end
+        core.log_quiet("Sidebar %s: Window=%d Project=%d target=%s sent=%s", action, id, project.id or 0,
+          tostring(target), tostring(sent))
         return
       end
     end
@@ -316,6 +405,16 @@ function core.init()
       return current.view:unload_cursor_project(current.key_repeat) or current.view:forward_key(binding)
     end}
   end
+  -- The Context Menu keys open the cursor row's menu. A row without one forwards the key to its Pane or Project.
+  -- Mouse bindings stay out: a right-click on a row opens its menu.
+  for _, binding in ipairs(bindings_for("core:show_context_menu")) do
+    if not binding:find("click") then
+      keymap.add {[binding] = function()
+        if not current then return false end
+        return current.view:open_cursor_menu() or current.view:forward_key(binding)
+      end}
+    end
+  end
   -- Numbered Panes can be in any Project. Focusing one gives the keyboard back to the Projects.
   for number = 1, numbered_panes.COUNT do
     local name = "pane:focus_number_" .. number
@@ -356,12 +455,15 @@ function core.init()
   local window = renwindow.create("Sidebar", 240, 600)
   core.window, core.active_window = window, window
   SCALE = system.get_scale(window)
+  -- Highlights in Context Menus step at this rate.
+  core.fps = require("core.config").fps
   load_collapsed()
   load_seen()
   load_snoozes()
   load_zoom()
   apply_color_theme()
   SidebarView = require "core.sidebar_view"
+  context_menu = require "core.context_menu"
   style = require "core.style"
   -- Terminal titles carry spinners and symbols the text font lacks. The editor's fallbacks draw them.
   local font_fallbacks = require "core.font_fallbacks"
@@ -374,7 +476,9 @@ function core.init()
     core.log_quiet("Sidebar font uses grayscale antialiasing on a transparent surface")
   end
   base_font_size = font:get_size() / SCALE
-  fonts[SCALE] = font
+  icon_font = style.menu_icon_font
+  base_icon_size = icon_font:get_size() / SCALE
+  fonts[SCALE] = {text = font, icon = icon_font}
   local id = system.get_anvil_window_id()
   add_surface(id, window)
   activate(id)
@@ -384,14 +488,13 @@ function core.run() end
 function core.on_event(name, ...)
   if name == "quit" or name == "shelllost" then core.quit_request = true; return end
   if not current then return end
-  if name == "projectsidebarchanged" then
+  local handlers = current.menu_host.handlers
+  if handlers and menu_event(handlers, name, ...) then
+    -- The open Context Menu took the event.
+  elseif name == "projectsidebarchanged" then
     core.project_sidebar_request = nil
     current.query_needed = true
   elseif name == "projectsidebar" then saved_event(name, ...)
-  elseif name == "menuchosen" then
-    core.log_quiet("Sidebar menu result: Window=%d choice=%d", current.id, (...))
-    current.view:on_menu_chosen(...)
-    core.redraw = true
   elseif name == "focusgained" or name == "focuslost" then
     keymap.modkeys = {}
     current.suppress_text = false
@@ -414,8 +517,7 @@ function core.on_event(name, ...)
   elseif name == "mousepressed" then
     local button, x, y = ...
     core.log_quiet("Sidebar press: Window=%d button=%s x=%d y=%d", current.id, button, x, y)
-    local width, height = renwindow.get_size(core.window)
-    current.view:set_size(width, height)
+    current.view:set_size(strip_size(core.window))
     current.view:on_mouse_pressed(button, x, y); core.redraw = true
   elseif name == "mousereleased" then
     local button, x, y = ...
@@ -424,8 +526,7 @@ function core.on_event(name, ...)
     current.view:on_mouse_released(button, x, y); core.redraw = true
   elseif name == "mousemoved" then
     local x, y = ...
-    local width, height = renwindow.get_size(core.window)
-    current.view:set_size(width, height)
+    current.view:set_size(strip_size(core.window))
     if current.view:on_mouse_moved(x, y) then core.redraw = true end
     current.pointer_y = y
   elseif name == "mouseleft" then
@@ -449,7 +550,7 @@ function core.on_event(name, ...)
   elseif name == "mousewheel" then
     local _, height = renwindow.get_size(core.window)
     current.view:on_mouse_wheel((...), height, current.pointer_y); core.redraw = true
-  elseif name == "resized" or name == "exposed" or name == "displaychanged" then
+  elseif name == "resized" or name == "exposed" or name == "displaychanged" or name == "windowconfiguration" then
     if name == "resized" then
       local width, height = renwindow.get_size(core.window)
       local configured_w, configured_h = ...
@@ -459,7 +560,7 @@ function core.on_event(name, ...)
     core.redraw = true
   end
   if name:find("^mouse") and name ~= "mouseleft" then
-    local cursor = current.view:pointer_cursor()
+    local cursor = current.menu_host.handlers and "arrow" or current.view:pointer_cursor()
     if cursor ~= current.cursor then
       current.cursor = cursor
       system.set_cursor(cursor)
@@ -487,11 +588,6 @@ function core.run_step()
     elseif event[1] == "zoomchanged" then
       -- Each surface takes the new scale when it next activates.
       set_zoom(event[2])
-    elseif event[1] == "menuchosen" then
-      -- The result has no Window. It goes to the surface that asked for the menu.
-      local id = menu_surface
-      menu_surface = nil
-      if id and activate(id) then core.on_event(table.unpack(event, 1, event.n)) end
     elseif event[1] == "projectsidebarchanged" and not native_id then
       for _, surface in pairs(surfaces) do surface.request, surface.query_needed = nil, true end
       core.project_sidebar_request = nil
@@ -528,10 +624,12 @@ function core.run_step()
       if visible and core.redraw then
         local width, height = renwindow.get_size(core.window)
         renderer.begin_frame(core.window)
-        surface.view:draw(width, height)
+        surface.view:draw(strip_size(core.window), height)
+        local menu_moves = draw_menu(surface, width, height)
         renderer.end_frame()
         core.redraw = false
         local delay = surface.view:animation_delay(now)
+        if menu_moves then delay = math.min(delay or math.huge, 1 / core.fps) end
         surface.spin_at = delay and now + delay
       end
       if not visible then surface.spin_at = nil end

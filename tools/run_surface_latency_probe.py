@@ -190,6 +190,8 @@ def main() -> int:
         if args.project_case:
             shutil.copy2(ROOT / "tests/fixtures/hosted_project_probe.lua",
                          work / "app/share/anvil/plugins/hosted_project_probe.lua")
+            # Probes that open Sidebar menus load this helper from DATADIR.
+            shutil.copy2(ROOT / "tests/fixtures/shell_sidebar_menu.lua", work / "app/share/anvil/shell_sidebar_menu.lua")
             failed = False
             for mode in args.mode or ["shell"]:
                 for action in args.project_case:
@@ -300,8 +302,6 @@ def main() -> int:
                         config["environment"]["ANVIL_PROBE_LINKED_EXE"] = native_path(case_dir / "app-link/bin/anvil.exe")
                     if action == "windows-sidebar-folding":
                         config["environment"]["ANVIL_INPUT_ROUTING_PROBE"] = "1"
-                    if action in ("project-menu", "project-menu-background", "terminal-focus") or action.startswith("windows-move"):
-                        config["environment"]["ANVIL_SHELL_MENU_PROBE"] = native_path(case_dir / "menu-choice.txt")
                     if action == "dialog-error":
                         config["environment"]["SDL_FILE_DIALOG_DRIVER"] = "invalid-probe-driver"
                     if action in ("windows-picker", "windows-picker-command", "windows-picker-late", "shell-empty"):

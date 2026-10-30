@@ -90,11 +90,6 @@ bool anvil_hosted_surface_pane_request(uint32_t route, const char *path, const c
 void anvil_hosted_surface_complete_pane_request(uint64_t request);
 /* The Sidebar asks the shell to select a Project and focus one of its Terminal Sessions. */
 bool anvil_hosted_surface_select_terminal(const char *path, const char *id);
-/* The Sidebar asks the shell for a row's Project actions menu at a point in Sidebar surface pixels. */
-bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y);
-/* The Sidebar asks the shell for its own menu. `labels` holds NUL-terminated labels; see ANVIL_SURFACE_MSG_MENU.
- * The choice arrives as the "menuchosen" event. */
-bool anvil_hosted_surface_show_menu(int x, int y, const char *labels, size_t size);
 /* Asks the shell to hide the Project Sidebar in every Window, or to show it again. */
 bool anvil_hosted_surface_toggle_sidebar(void);
 /* Asks the shell to turn Alt Navigation on or off. The shell answers with an "altnavigation" event. */

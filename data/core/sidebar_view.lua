@@ -7,11 +7,12 @@ local common = require "core.common"
 local LineInput = require "core.line_input"
 local FocusFeedback = require "core.focus_feedback"
 local look = require "core.project_look"
+local command = require "core.command"
+local icons = require("core.context_menu").icons
 
--- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions. A
--- right-click on a Project asks the shell for its native actions menu: Move, Unload and the rest.
--- The menu opens at the button's release. A menu opened at the press takes the release into its own loop, and the
--- shell then reports a stray left press that selects the Project.
+-- The shell owns identity and lifecycle. This view sends only Project, Pane and Terminal Session actions.
+-- A right-click on a Project or a Terminal Tab, or the Context Menu key on the cursor's row, opens that row's
+-- Context Menu. The menu can extend over the Project, because the Sidebar's surface covers the whole Window.
 -- Left on a collapsed loaded Project asks to unload it. A second Left unloads it; any other input cancels.
 -- Layout: a search field below the window caption, then the main list: loaded Projects with their Tabs, one for
 -- each Pane, and the Terminal Sessions that no Pane shows. Unloaded Projects sit in collapsible age groups aligned
@@ -216,39 +217,87 @@ end
 -- The Terminal menu's Snooze times, in hours.
 local SNOOZE_HOURS = {1, 2, 3, 4, 24}
 
--- Asks the shell for the menu of a Terminal's Pane at the point: `target` has the Pane's Terminal Session, its ID
--- and its Project's path. The shell reports the choice to `on_menu_chosen`.
-function SidebarView:open_terminal_menu(target, x, y)
-  local session = target.session
-  local labels, choices = {"Snooze"}, {}
-  for _, hours in ipairs(SNOOZE_HOURS) do
-    labels[#labels + 1] = "\t" .. (hours == 1 and "1 Hour" or hours .. " Hours")
-    choices[#labels] = hours
+-- The Context Menu commands. Each takes the Sidebar View first, so the command list never offers them alone.
+command.add(function(view, ...)
+  return SidebarView:is_class_of(view), view, ...
+end, {
+  ["sidebar:snooze"] = function(view, target, hours) view:set_snooze(target, hours) end,
+  ["sidebar:snooze_custom"] = function(view, target) view:ask_snooze_hours(target) end,
+  ["sidebar:remove_snooze"] = function(view, target) view:set_snooze(target, nil) end,
+  ["sidebar:move_project"] = function(view, project, window_id) view.action("move", project.row_id, window_id) end,
+  ["sidebar:open_project_window"] = function(view, project) view.action("open_window", project.row_id) end,
+  ["sidebar:unload_project"] = function(view, project) view.action("unload", project.row_id) end,
+  ["sidebar:copy_project_path"] = function(view, project) view.action("copy_path", project.row_id) end,
+  ["sidebar:show_project_in_folder"] = function(view, project) view.action("show_in_folder", project.row_id) end,
+})
+
+-- The Context Menu items of a row. A Project has Move and Unload while it is loaded, or else Open in New Window. A
+-- Terminal Tab has Snooze times. Other rows have no menu.
+function SidebarView:context_menu(row)
+  if row.kind == "tab" and row.tab.terminal then
+    local target = {session = row.tab.terminal.session, pane = row.tab.id, path = row.project.path}
+    local times = {}
+    for _, hours in ipairs(SNOOZE_HOURS) do
+      times[#times + 1] = {label = hours == 1 and "1 Hour" or hours .. " Hours", command = "sidebar:snooze",
+        args = {self, target, hours}}
+    end
+    times[#times + 1] = {label = "Custom…", command = "sidebar:snooze_custom", args = {self, target}}
+    local items = {{label = "Snooze", items = times}}
+    if self.snoozes[target.session] then
+      items[#items + 1] = {label = "Remove Snooze", command = "sidebar:remove_snooze", args = {self, target}}
+    end
+    return items
   end
-  labels[#labels + 1] = "\tCustom…"
-  choices[#labels] = "custom"
-  if self.snoozes[session] then
-    labels[#labels + 1] = "Remove Snooze"
-    choices[#labels] = "remove"
+  if row.kind ~= "project" then return nil end
+  local project, items = row.project, {}
+  local owner = project.window_id or 0
+  if owner ~= 0 and project.id and project.state ~= "dormant" then
+    for _, window in ipairs((self.projects or {}).windows or {}) do
+      if window.id ~= owner then
+        items[#items + 1] = {label = "Move to Window " .. window.id, command = "sidebar:move_project",
+          args = {self, project, window.id}}
+      end
+    end
+    items[#items + 1] = {label = "Move to New Window", icon = icons.split_right, command = "sidebar:move_project",
+      args = {self, project, 0}}
+    items[#items + 1] = {label = "Unload", icon = icons.close, command = "sidebar:unload_project",
+      args = {self, project}}
+  elseif project.exists then
+    items[#items + 1] = {label = "Open in New Window", icon = icons.split_right,
+      command = "sidebar:open_project_window", args = {self, project}}
   end
-  self.menu = {target = target, choices = choices}
-  self.action("show_menu", x, y, labels)
+  items[#items + 1] = "-"
+  items[#items + 1] = {label = "Copy Path", icon = icons.path, command = "sidebar:copy_project_path",
+    args = {self, project}}
+  if project.exists then
+    items[#items + 1] = {label = "Show in File Explorer", icon = icons.reveal,
+      command = "sidebar:show_project_in_folder", args = {self, project}}
+  end
+  return items
 end
 
--- The menu closed with the label at `index` chosen, or with none for 0.
-function SidebarView:on_menu_chosen(index)
-  local menu = self.menu
-  self.menu = nil
-  local choice = menu and menu.choices[index]
-  if choice == "custom" then
-    self.hours = {session = menu.target.session, target = menu.target, input = LineInput()}
-    self.action("focus")
-    self:rebuild_rows()
-  elseif choice == "remove" then
-    self:set_snooze(menu.target, nil)
-  elseif choice then
-    self:set_snooze(menu.target, choice)
-  end
+-- Opens the Context Menu of `row` at the point. `button` is the mouse button that opened it, if any. The action
+-- also names the row's Project for diagnostics.
+function SidebarView:open_menu(row, x, y, button)
+  local items = row and self:context_menu(row)
+  if not items then return false end
+  self.unload_ask = nil
+  self.action("menu", items, x, y, button, row.project.row_id)
+  return true
+end
+
+-- Opens the Context Menu of the cursor's row below the row, as the Context Menu key does at the editor's caret.
+function SidebarView:open_cursor_menu()
+  if not self.focused or self.hours or not self.cursor then return false end
+  local row, m = self:get_cursor(), self:metrics()
+  return self:open_menu(row, row.kind == "project" and m.pad or m.tab_x, self:row_y(self.cursor) + row.h)
+end
+
+-- Opens the field that takes a Snooze time in whole hours for the Pane `target`.
+function SidebarView:ask_snooze_hours(target)
+  self.hours = {session = target.session, target = target, input = LineInput()}
+  self.action("focus")
+  self:rebuild_rows()
 end
 
 -- Snoozes the Pane `target` for `hours` from now, or removes its Snooze for nil. The time is saved first, so the
@@ -929,6 +978,10 @@ function SidebarView:on_mouse_pressed(button, x, y)
     if button == "left" then self:activate_row(row) end
     return
   end
+  if button == "right" then
+    self:open_menu(row, x, y, button)
+    return
+  end
   if row.kind == "tab" then
     if button == "left" then
       self:activate_row(row)
@@ -936,9 +989,6 @@ function SidebarView:on_mouse_pressed(button, x, y)
       self.press = {key = row.id_key, x = x, y = y}
     elseif button == "middle" then
       self.click_row = {button = button, path = row.project.path, pane = row.tab.id}
-    elseif row.tab.terminal then
-      self.click_row = {button = button, key = row.id_key,
-        menu = {session = row.tab.terminal.session, pane = row.tab.id, path = row.project.path}}
     end
     return
   end
@@ -947,8 +997,8 @@ function SidebarView:on_mouse_pressed(button, x, y)
     self:toggle(row.key, row.collapsed)
     return
   end
-  if button == "right" or button == "middle" then
-    -- The release acts, so the menu's loop never takes the press's own release.
+  if button == "middle" then
+    -- A middle-click unloads at its release, so a press that moves to another row does nothing.
     self.click_row = {button = button, row_id = row.project.row_id}
   else
     self:activate_row(row)
@@ -966,22 +1016,13 @@ function SidebarView:on_mouse_released(button, x, y)
   if not pressed or pressed.button ~= button then return end
   -- The shell sends a release outside the Sidebar too.
   local row = x >= 0 and x < self.width and self:row_at(y)
-  if pressed.menu then
-    if row and row.id_key == pressed.key then self:open_terminal_menu(pressed.menu, x, y) end
-    return
-  end
   if pressed.pane then
     if row and row.kind == "tab" and row.tab.id == pressed.pane and row.project.path == pressed.path then
       self.action("request", "select", pressed.path, {action = "close", pane = pressed.pane})
     end
     return
   end
-  if not (row and row.kind == "project" and row.project.row_id == pressed.row_id) then return end
-  if button == "right" then
-    self.action("menu", pressed.row_id, x, y)
-  else
-    self.action("unload", pressed.row_id)
-  end
+  if row and row.kind == "project" and row.project.row_id == pressed.row_id then self.action("unload", pressed.row_id) end
 end
 
 function SidebarView:update_hover()

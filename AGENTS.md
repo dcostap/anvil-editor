@@ -170,10 +170,17 @@ The Project Sidebar marks only an Unread Result or an agent that waits for an an
 The mark is a dot, a bold name, and a coloured stripe that fades out to the right.
 It saves when the user last looked at each Terminal Session. Run `ui/sidebar_view.lua` after changes.
 
+A right-click on a Sidebar row opens its Context Menu. The Context Menu key opens the cursor row's menu.
+The Sidebar draws it with `core.context_menu`, the same menu as in the editor. Its items are `sidebar:` commands.
+The Sidebar surface covers the whole Window. Its strip ends at `content_x`, so a menu can extend over the Project.
+The Sidebar reports the menu's rectangles as raised areas. The shell draws them above the Project.
+While they show, the shell sends all pointer and keyboard input to the Sidebar.
+Project rows offer Move, Unload or Open in New Window, Copy Path and Show in File Explorer. Terminal Tabs offer Snooze.
+Run `ui/sidebar_view.lua`, `ui/context_menu.lua` and the `project-menu`, `project-menu-background`, `terminal-focus` and `windows-move` shell probes after changes.
+
 A right-click on a Terminal Tab in the Sidebar sets or removes a Snooze.
 The Sidebar saves each Snooze as a Unix time in `storage/sidebar/snoozes`, beside the seen times.
 `tab.attention` holds a Terminal's attention until that time. The Sidebar wakes at the next Snooze time.
-The Sidebar describes its menu; the shell only shows it and returns the chosen label (`system.show_menu`).
 A Snooze whose time has not come stays saved, even when the model does not list its Terminal Session.
 The Sidebar then sends `snooze` or `unsnooze` to the Pane's Project through the direct route.
 The Project moves a Snoozed Pane into its own Pane Group with the `snoozed` flag, saved in the Workspace.

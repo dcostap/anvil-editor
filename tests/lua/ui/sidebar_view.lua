@@ -25,6 +25,36 @@ local function recorder()
   return actions, function(...) actions[#actions + 1] = {...} end
 end
 
+local function row_index(view, predicate)
+  for index, row in ipairs(view.rows) do
+    if predicate(row) then return index, row end
+  end
+  error("no matching row")
+end
+
+-- The labels of Context Menu items, with "-" for a separator.
+local function menu_labels(items)
+  local labels = {}
+  for _, item in ipairs(items) do labels[#labels + 1] = item == "-" and "-" or item.label end
+  return table.concat(labels, "|")
+end
+
+-- Runs the menu item at the label path, such as "Snooze", "2 Hours", as the Context Menu does when it is chosen.
+local function choose(items, ...)
+  local item
+  for _, label in ipairs({...}) do
+    item = nil
+    for _, candidate in ipairs(items) do
+      if candidate ~= "-" and candidate.label == label then item = candidate end
+    end
+    if not item then error("no menu label " .. label .. " in " .. menu_labels(items)) end
+    items = item.items
+  end
+  local command = require "core.command"
+  test.ok(command.is_valid(item.command, table.unpack(item.args)), item.command .. " is not valid")
+  command.perform(item.command, table.unpack(item.args))
+end
+
 -- Runs `fn` with the renderer's draw calls replaced. `calls` records the ones that a test reads; the others do
 -- nothing, because tests draw outside a frame.
 local DRAW_CALLS = {"draw_rect", "draw_rounded_rect", "draw_text", "draw_poly", "set_clip_rect", "push_transform",
@@ -132,34 +162,53 @@ test.describe("Sidebar title tooltips", function()
 end)
 
 test.describe("Sidebar list actions", function()
-  test.it("asks the shell for a Project's actions menu when a right-click releases on it", function()
+  test.it("opens a Project's Context Menu at a right-click, and its items move or unload the Project", function()
     local actions, action = recorder()
     local view = SidebarView(action, {["group:week"]=false})
-    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={}},
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",exists=true,window_id=5,terminals={}},
       {row_id=9,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}},
       windows={{id=5,selected_project=31},{id=8,selected_project=0}}}, 8)
     local y = row_y(view, "project", 1)
-    -- The menu waits for the release, so its loop never takes the press's own release.
     view:on_mouse_pressed("right", 20, y, 240)
-    test.same(actions, {})
     view:on_mouse_released("right", 21, y)
-    test.same(actions, {{"menu", 7, 21, y}})
-    -- A Dormant Project has a menu too, and the right-click neither selects nor starts it.
+    test.equal(#actions, 1)
+    local menu = actions[1]
+    test.same({menu[1], menu[3], menu[4], menu[5], menu[6]}, {"menu", 20, y, "right", 7})
+    test.equal(menu_labels(menu[2]),
+      "Move to Window 8|Move to New Window|Unload|-|Copy Path|Show in File Explorer")
+    choose(menu[2], "Move to Window 8")
+    choose(menu[2], "Move to New Window")
+    choose(menu[2], "Unload")
+    test.same({actions[2], actions[3], actions[4]}, {{"move", 7, 8}, {"move", 7, 0}, {"unload", 7}})
+    -- A Dormant Project opens in a new Window instead, and the right-click neither selects nor starts it.
     local dormant_y = row_y(view, "project", 2)
     view:on_mouse_pressed("right", 230, dormant_y, 240)
     view:on_mouse_released("right", 230, dormant_y)
-    test.same(actions[2], {"menu", 9, 230, dormant_y})
-    test.equal(#actions, 2)
+    test.equal(#actions, 5)
+    test.equal(menu_labels(actions[5][2]), "Open in New Window|-|Copy Path|Show in File Explorer")
+    choose(actions[5][2], "Open in New Window")
+    choose(actions[5][2], "Copy Path")
+    test.same({actions[6], actions[7]}, {{"open_window", 9}, {"copy_path", 9}})
   end)
 
-  test.it("shows no menu when a right-click releases on another row", function()
+  test.it("opens the cursor row's Context Menu below the row from the keyboard", function()
     local actions, action = recorder()
     local view = SidebarView(action, {["group:week"]=false})
-    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",window_id=5,terminals={}},
-      {row_id=9,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}}}, 5)
-    view:on_mouse_pressed("right", 20, row_y(view, "project", 1), 240)
-    view:on_mouse_released("right", 20, row_y(view, "project", 2))
-    test.same(actions, {})
+    view:set_model({{row_id=7,id=31,path="C:/A",state="ready",exists=true,window_id=5,terminals={}},
+      {row_id=9,path="C:/B",state="dormant",exists=true,activity=os.time(),terminals={}},
+      windows={{id=5,selected_project=31}}}, 5)
+    test.not_ok(view:open_cursor_menu(), "An unfocused Sidebar opened a menu")
+    view:on_focus(true)
+    view.cursor = row_index(view, function(row) return row.kind == "project" and row.project.row_id == 9 end)
+    test.ok(view:open_cursor_menu())
+    local menu = test.not_nil(actions[1])
+    test.equal(menu[1], "menu")
+    test.equal(menu_labels(menu[2]), "Open in New Window|-|Copy Path|Show in File Explorer")
+    test.ok(menu[4] > row_y(view, "project", 2), "The menu does not open below the cursor's row")
+    -- An age group has no menu, so the key goes on to the Project.
+    view.cursor = row_index(view, function(row) return row.kind == "group" end)
+    test.not_ok(view:open_cursor_menu())
+    test.equal(#actions, 1)
   end)
 
   test.it("unloads a Project when a middle-click releases on it", function()
@@ -439,13 +488,6 @@ local function titles(view)
     if row.kind == "terminal" then list[#list + 1] = row.terminal.title end
   end
   return list
-end
-
-local function row_index(view, predicate)
-  for index, row in ipairs(view.rows) do
-    if predicate(row) then return index, row end
-  end
-  error("no matching row")
 end
 
 test.describe("Sidebar Window folding", function()
@@ -1105,20 +1147,13 @@ test.describe("Sidebar Snoozes", function()
     end)
   end)
 
-  -- Right-clicks the Terminal Tab `name` and returns the menu labels that the view asks the shell to show.
+  -- Right-clicks the Terminal Tab `name` and returns the Context Menu items that the view opens.
   local function open_menu(view, actions, name)
     local y = row_y(view, "tab", 1, function(row) return row.tab.name == name end)
     view:on_mouse_pressed("right", 100, y)
-    view:on_mouse_released("right", 100, y)
     local last = test.not_nil(actions[#actions], "The right-click did nothing")
-    test.same({last[1], last[2], last[3]}, {"show_menu", 100, y})
-    return last[4]
-  end
-  local function choose(view, labels, label)
-    for index, item in ipairs(labels) do
-      if item == label then return view:on_menu_chosen(index) end
-    end
-    error("no menu label " .. label .. " in " .. table.concat(labels, ","))
+    test.same({last[1], last[3], last[4]}, {"menu", 100, y})
+    return last[2]
   end
 
   test.it("offers Snooze times on a Terminal's right-click and sets or removes the chosen one", function()
@@ -1127,23 +1162,21 @@ test.describe("Sidebar Snoozes", function()
       local snoozes = {}
       local view = SidebarView(action, {}, {}, false, snoozes)
       view:set_model(model(), 1)
-      local labels = open_menu(view, actions, "done")
-      test.ok(labels[1] == "Snooze" and labels[#labels] ~= "Remove Snooze", table.concat(labels, ","))
-      choose(view, labels, "\t2 Hours")
+      local items = open_menu(view, actions, "done")
+      test.equal(menu_labels(items), "Snooze")
+      test.equal(menu_labels(items[1].items), "1 Hour|2 Hours|3 Hours|4 Hours|24 Hours|Custom…")
+      choose(items, "Snooze", "2 Hours")
       test.equal(snoozes.done, start + 2 * 3600)
       test.same(actions[#actions - 1], {"snooze", "done"})
       test.same(actions[#actions], {"request", "direct", "C:/P", {action = "snooze", pane = "done"}})
       test.equal(attention(view), "asks=blocked")
-      choose(view, open_menu(view, actions, "done"), "Remove Snooze")
+      items = open_menu(view, actions, "done")
+      test.equal(menu_labels(items), "Snooze|Remove Snooze")
+      choose(items, "Remove Snooze")
       test.is_nil(snoozes.done)
       test.same(actions[#actions - 1], {"snooze", "done"})
       test.same(actions[#actions], {"request", "direct", "C:/P", {action = "unsnooze", pane = "done"}})
       test.equal(attention(view), "done=done,asks=blocked")
-      -- A closed menu without a choice changes nothing.
-      open_menu(view, actions, "done")
-      local count = #actions
-      view:on_menu_chosen(0)
-      test.equal(#actions, count)
     end)
   end)
 
@@ -1229,7 +1262,7 @@ test.describe("Sidebar Snoozes", function()
       local snoozes = {}
       local view = SidebarView(action, {}, {}, false, snoozes)
       view:set_model(model(), 1)
-      choose(view, open_menu(view, actions, "done"), "\tCustom…")
+      choose(open_menu(view, actions, "done"), "Snooze", "Custom…")
       test.same(actions[#actions], {"focus"})
       view:on_focus(true)
       view:on_text_input("1x2")
@@ -1240,7 +1273,7 @@ test.describe("Sidebar Snoozes", function()
       test.same(actions[#actions - 1], {"request", "direct", "C:/P", {action = "snooze", pane = "done"}})
       test.same(actions[#actions], {"return_focus"})
 
-      choose(view, open_menu(view, actions, "asks"), "\tCustom…")
+      choose(open_menu(view, actions, "asks"), "Snooze", "Custom…")
       view:on_focus(true)
       view:on_text_input("5")
       view:on_key_pressed("escape")

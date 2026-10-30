@@ -40,6 +40,8 @@ local function trace()
  local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
  local text = file:read("*a"); file:close(); return text
 end
+local menus = dofile(DATADIR .. "/shell_sidebar_menu.lua"){trace = trace, logs = root .. "/user/logs",
+ post = function(window, action, value) user32.PostMessageW(window, 0x804a, action, value) end}
 local function windows(pid)
  local found = {}
  local property = ffi.new("wchar_t[17]", {65,110,118,105,108,83,104,101,108,108,87,105,110,100,111,119,0})
@@ -93,27 +95,16 @@ if path:match("/driver$") then
    local page = model(); local ar, br, cr = row(page,a.pid), row(page,b.pid), row(page,c.pid)
    assert(selected(page,a.window_id) == cr.id, "A's original Project was not unpresented")
    wait(function() return trace():find("Shell Sidebar surface Ready: Window=" .. b.window_id, 1, true) end)
-   -- The probe names the Project menu item in a file, so the shell shows no native menu. An empty name chooses
-   -- nothing.
-   local function choose(label)
-    local file = assert(io.open(root .. "/menu-choice.txt", "wb")); file:write(label); file:close()
-   end
    -- Finds A's row in B's Sidebar. Terminal rows appear while the Projects start, so rows have no fixed position. A
-   -- right-click on a Project row makes the shell log that row. Other rows ignore a right-click.
+   -- right-click on a Project row opens its menu, which names the row, and Escape closes it. A Terminal Tab's menu
+   -- names its Project's row too, but it offers no Move.
    local function a_row_y()
-    choose("")
     for y = 46, 600, 12 do
-     local mark = #trace()
-     user32.PostMessageW(bw,0x804a,7,20+y*65536); user32.PostMessageW(bw,0x804a,8,20+y*65536)
-     local deadline = system.get_time() + .3
-     repeat
-      coroutine.yield(.01)
-      local row_id = trace():match("Shell Project menu: Window=" .. b.window_id .. " row=(%d+)", mark + 1)
-      if row_id then
-       if tonumber(row_id) == ar.row_id then return y end
-       break
-      end
-     until system.get_time() >= deadline
+     local menu = menus.open(bw, 20 + y * 65536, .3)
+     if menu then
+      menus.choose(bw)
+      if menu.window == b.window_id and menu.row == ar.row_id and menu.labels:find("Move to", 1, true) then return y end
+     end
     end
     error("A's row is missing from B's Sidebar")
    end
@@ -128,13 +119,12 @@ if path:match("/driver$") then
    assert(row(page,a.pid).window_id == a.window_id, "Sidebar selection silently moved the Project")
    save("inspect-0",{target=a.window_id}); local before = wait(function() return load("a-state-0") end)
    local function sidebar_move()
-    -- Right-click A's row in B's Sidebar and choose B in the Project menu.
+    -- Right-click A's row in B's Sidebar and choose B in the Project menu. Its first item moves A to B.
     y = a_row_y()
-    choose("Move to Window " .. b.window_id)
-    local mark = #trace()
-    user32.PostMessageW(bw,0x804a,7,20+y*65536); user32.PostMessageW(bw,0x804a,8,20+y*65536)
-    wait(function() return trace():find("Shell Project menu command:", mark + 1, true) end, 5,
-     "A right-click on A's row did not choose Move")
+    local menu = menus.open(bw, 20 + y * 65536)
+    assert(menu, "A right-click on A's row showed no menu")
+    assert(menu.labels:find("^Move to Window " .. b.window_id .. "|"), "Project menu items: " .. menu.labels)
+    menus.choose(bw, "Move to Window " .. b.window_id)
    end
    local function move(target, stage)
     save("move-"..stage,{project_id=ar.id,target=target})

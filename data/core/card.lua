@@ -17,13 +17,15 @@ function card.border_width()
   return math.max(1, math.floor(SCALE + 0.5))
 end
 
----Report a card's shape to a hosted shell, which shows it above the Sidebar.
+---Report a card's shape to a hosted shell, which shows it above the other layer: a Project's card above the
+---Sidebar, or a Sidebar's card above the Project. `host` reports it, the Root Panel by default.
 ---The shell copies whole rectangles, so two of them follow the rounded corners.
----The shadow stays out: the shell would show it as a band over the Sidebar.
-function card.show_above_sidebar(x, y, w, h, radius)
+---The shadow stays out: the shell would show it as a band over the other layer.
+function card.show_above_sidebar(x, y, w, h, radius, host)
+  host = host or core.root_panel
   local cut = math.ceil(radius * (1 - math.sqrt(0.5)))
-  core.root_panel:show_above_sidebar(x + cut, y, w - 2 * cut, h)
-  core.root_panel:show_above_sidebar(x, y + cut, w, h - 2 * cut)
+  host:show_above_sidebar(x + cut, y, w - 2 * cut, h)
+  host:show_above_sidebar(x, y + cut, w, h - 2 * cut)
 end
 
 ---Call fill(x, y, w, h) for each rectangle of a rounded area, from the top down.
