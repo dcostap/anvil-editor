@@ -411,6 +411,14 @@ function TextView:on_mouse_pressed(button, x, y, clicks, ...)
   end, button, x, y, clicks, ...)
 end
 
+-- The text starts at the lane, not at the view's left edge.
+save_textview_method("point_is_on_text")
+function TextView:point_is_on_text(...)
+  return M.with_editor_geometry(self, function(...)
+    return originals.textview.point_is_on_text(self, ...)
+  end, ...)
+end
+
 save_textview_method("on_mouse_released")
 function TextView:on_mouse_released(...)
   return M.with_editor_geometry(self, function(...)

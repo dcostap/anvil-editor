@@ -267,6 +267,7 @@ local MARKDOWN_INSERT_MENU = {
 function Editor:context_menu(x, y)
   local live = require "core.markdown.live_render"
   if not live.is_markdown_buffer(self.buffer) then return Editor.super.context_menu(self, x, y) end
+  if x and y and not self:point_is_on_text(x, y) then return nil end
   -- As in Obsidian, the image's menu keeps the caret, so the image does not
   -- show its source.
   local image = x and y and require("core.markdown.image_controls").at_point(self, x, y)

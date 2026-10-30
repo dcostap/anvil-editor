@@ -111,6 +111,38 @@ test.describe("Context Menu", function()
     test.ok(not contains(labels, "Paste"))
   end)
 
+  test.it("opens no menu for a right-click left of the reading lane, such as on the heading outline", function()
+    core.root_panel.size.x = 1400
+    local view = open_editor("# One\n\nalpha\n\n## Two\n\nbeta", "note.md")
+    refresh_markdown(view)
+    core.root_panel:update()
+    view.buffer:set_selection(3, 2)
+    local text_x, y = point(view, 5, 1)
+    test.ok(text_x > view.position.x + 100, "the note has a margin left of its lane")
+    right_click(view.position.x + 20, y)
+    test.ok(not context_menu.is_open())
+    test.same({ view.buffer:get_selection() }, { 3, 2, 3, 2 })
+  end)
+
+  test.it("opens no menu for a right-click on the gutter", function()
+    local view = open_editor("alpha\nbeta")
+    test.ok(view:get_gutter_width() > 0)
+    local _, y = point(view, 2, 1)
+    right_click(view.position.x + 2, y)
+    test.ok(not context_menu.is_open())
+  end)
+
+  test.it("opens no menu for a right-click on the scrollbar", function()
+    local view = open_editor(string.rep("alpha\n", 400))
+    view:update()
+    local y = view.position.y + view.size.y / 2
+    local x = view.position.x + view.size.x
+    while x > view.position.x and not view:scrollbar_overlaps_point(x, y) do x = x - 1 end
+    test.ok(view:scrollbar_overlaps_point(x, y), "the view shows a scrollbar")
+    right_click(x, y)
+    test.ok(not context_menu.is_open())
+  end)
+
   test.it("closes with Escape without running a command", function()
     local view = open_editor("alpha")
     system.set_clipboard("X")

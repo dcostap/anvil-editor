@@ -2788,12 +2788,16 @@ function TextView:add_edit_guard(id, guard)
   self.edit_guards[id] = guard
 end
 
----The Context Menu's items at a screen point. A right-click outside the selection moves the caret there first,
----so the items act on the clicked text.
----@return table[]
+---Whether a screen point is on the text: right of the gutter and off the scrollbars.
+function TextView:point_is_on_text(x, y)
+  return x > self.position.x + self:get_gutter_width() and x < self.position.x + self.size.x
+    and y >= self.position.y and y < self.position.y + self.size.y
+    and not self:scrollbar_overlaps_point(x, y)
+end
+
 ---A right-click outside the selection moves the caret to the point first.
 function TextView:place_context_menu_caret(x, y)
-  if x and y and x >= self.position.x + self:get_gutter_width() then
+  if x and y then
     local line, col = self:resolve_screen_position(x, y)
     local inside = false
     for _, line1, col1, line2, col2 in self.buffer:get_selections(true) do
@@ -2805,7 +2809,11 @@ function TextView:place_context_menu_caret(x, y)
   end
 end
 
+---The Context Menu's items at a screen point, so the items act on the clicked text.
+---A point beside the text, such as the gutter or a margin, gets no menu.
+---@return table[]?
 function TextView:context_menu(x, y)
+  if x and y and not self:point_is_on_text(x, y) then return nil end
   self:place_context_menu_caret(x, y)
   local icons = require("core.context_menu").icons
   local items = {}
