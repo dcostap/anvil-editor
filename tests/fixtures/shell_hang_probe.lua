@@ -129,6 +129,6 @@ elseif path == root .. "/Project" then
   coroutine.yield(.5)
   save("layout", {pid=tonumber(kernel.GetCurrentProcessId())})
   wait(function() return load("overlay-go") end, 30)
-  core.root_panel:show_app_overlay({}, "nagbar_dim")
+  core.root_panel:show_app_overlay({}, "dialog_dim")
  end)
 end

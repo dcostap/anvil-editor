@@ -374,7 +374,7 @@ end
 -- Dims the Window below the Title Bar, and the hosted shell's Sidebar.
 function NagView:draw_dim()
   local x, _, w, h = core.root_panel:backdrop_rect()
-  local color = fade(style.nagbar_dim, self.progress)
+  local color = fade(style.dialog_dim, self.progress)
   renderer.draw_rect(x, self.position.y, w, h - self.position.y, color)
   core.root_panel:dim_sidebar(color)
 end
@@ -391,14 +391,14 @@ function NagView:draw_button(i, option, button)
     renderer.draw_rounded_rect(x - gap + ring, y - gap + ring, w + 2 * (gap - ring), h + 2 * (gap - ring),
       r + gap - ring, style.card)
   end
-  renderer.draw_rounded_rect(x, y, w, h, r, primary and style.accent or style.nagbar_button)
+  renderer.draw_rounded_rect(x, y, w, h, r, primary and style.accent or style.button)
   local pressed = i == self.pressed_item and self.pointer_item == i
   if pressed then
-    renderer.draw_rounded_rect(x, y, w, h, r, style.nagbar_button_pressed)
+    renderer.draw_rounded_rect(x, y, w, h, r, style.button_pressed)
   elseif i == self.pointer_item then
-    renderer.draw_rounded_rect(x, y, w, h, r, style.nagbar_button_hover)
+    renderer.draw_rounded_rect(x, y, w, h, r, style.button_hover)
   end
-  common.draw_text(style.view_text_font, primary and style.nagbar_primary_text or style.text, option.text, "center",
+  common.draw_text(style.view_text_font, primary and style.button_primary_text or style.text, option.text, "center",
     x, y, w, h)
 end
 

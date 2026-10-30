@@ -1,6 +1,7 @@
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
+local dialog = require "core.ui.dialog"
 
 command.add("core.nagview", {
   ["core:select_previous_dialog_entry"] = function(v)
@@ -26,4 +27,15 @@ command.add("core.nagview", {
       if v.on_selected(v.options[v.hovered_item]) ~= false then v:next() end
     end
   end
+})
+
+-- The open Dialog's keys. Its modal input runs them before the other bindings of the same key.
+command.add(function()
+  local open = dialog.current()
+  return open ~= nil, open
+end, {
+  ["dialog:close"] = function(open) open:cancel() end,
+  ["dialog:confirm"] = function(open) open:confirm() end,
+  ["dialog:focus_next"] = function(open) open:focus_next(1) end,
+  ["dialog:focus_previous"] = function(open) open:focus_next(-1) end,
 })

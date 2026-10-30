@@ -781,6 +781,8 @@ function RootPanel:update()
   end
   local image_overlay = package.loaded["core.image_overlay"]
   if image_overlay then image_overlay.update() end
+  local dialog = package.loaded["core.ui.dialog"]
+  if dialog then dialog.update() end
   local context_menu = package.loaded["core.context_menu"]
   if context_menu then context_menu.update() end
   perf_end("rootpanel_update", started, scope)
@@ -1224,6 +1226,9 @@ function RootPanel:draw()
   end_caret_layer(self)
   local overlay_started, overlay_scope = perf_begin("rootpanel_overlays_draw")
   self:draw_active_app_overlay()
+  -- A Dialog draws above the Panes. A confirmation and a Context Menu draw above it.
+  local dialog = package.loaded["core.ui.dialog"]
+  if dialog then dialog.draw() end
   local drop_target = self:get_external_drop_target()
   local drop_caret = drop_target and drop_target.caret
   if drop_caret then

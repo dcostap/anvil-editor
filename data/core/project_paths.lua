@@ -517,6 +517,15 @@ local function find_mutable_entry(id_or_path)
       return workspace_entries, index, entry
     end
   end
+  -- An extra open Project is a Project Path without an entry of its own. A change gives it one.
+  for _, entry in ipairs(cached_merged_entries()) do
+    if entry.implicit_project
+    and (entry.id == id_or_path or (normalized_key and path_key(entry.path) == normalized_key)) then
+      local copy = copy_entry(entry)
+      workspace_entries[#workspace_entries + 1] = copy
+      return workspace_entries, #workspace_entries, copy
+    end
+  end
 end
 
 function project_paths.remove_entry(id_or_path)

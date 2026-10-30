@@ -196,7 +196,7 @@ elseif path == root .. "/Project" then
    tabs_right=lane.x + lane.w, controls_x=controls_x, window_h=height})
   wait(function() return load("overlay-go") end, 30)
   local owner = {}
-  core.root_panel:show_app_overlay(owner, "nagbar_dim")
+  core.root_panel:show_app_overlay(owner, "dialog_dim")
   wait(function() return load("overlay-hide") end, 30)
   core.root_panel:hide_app_overlay(owner)
   wait(function() return load("picker-go") end, 30)

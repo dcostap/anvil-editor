@@ -497,9 +497,13 @@ _Avoid_: file list, mini File Tree
 A Path Tree row that presents consecutive single-child directories as one slash-separated directory path. Its visible children are one hierarchy level below the compacted row regardless of how many directory names it contains.
 _Avoid_: merged folder
 
-**Project Paths View**:
-A Project tool for reviewing and changing Project Path Roles, labels, and locations.
-_Avoid_: external folder manager, path rules dialog
+**Project Paths Dialog**:
+The Dialog that lists the Root Project and each Project Path, and changes their labels and Project Path Roles. It also adds and removes Project Paths.
+_Avoid_: Project Paths View, external folder manager
+
+**Dialog**:
+A modal card over the app for a task that needs more than a prompt, such as managing a list of settings. It holds keyboard focus until it closes. Each change applies at once.
+_Avoid_: popup window, modal window
 
 **File Tree Sort Mode**:
 The user-facing ordering applied to File Tree entries. Folder entries remain grouped before file entries.

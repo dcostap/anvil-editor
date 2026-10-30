@@ -3193,7 +3193,7 @@ function FileTreeView:on_drop(drop)
     folders[#folders + 1] = path
   end
   for _, path in ipairs(folders) do
-    command.perform("project_paths:add_external_directory", path)
+    command.perform("project_paths:add", path)
   end
   return true
 end
@@ -3252,10 +3252,10 @@ function FileTreeView:apply_plan(plan)
   local selection_path_map = { __moves = {} }
   local selection_paths = self:capture_selection_paths()
 
-  local ok_project_paths_view, project_paths_view = pcall(require, "plugins.project_paths_view")
-  if ok_project_paths_view and project_paths_view then
+  local ok_project_path_changes, project_path_changes = pcall(require, "plugins.project_paths")
+  if ok_project_path_changes and project_path_changes then
     for _, op in ipairs(plan.project_path_label_updates or {}) do
-      if project_paths_view.set_label(op.id, op.label) then
+      if project_path_changes.set_label(op.id, op.label) then
         core.log("File Tree: renamed Project Path label to %s", op.label)
         changed = true
         project_paths_changed = true
@@ -3265,7 +3265,7 @@ function FileTreeView:apply_plan(plan)
       end
     end
     for _, op in ipairs(plan.project_path_removals or {}) do
-      if project_paths_view.remove_entry(op.id) then
+      if project_path_changes.remove(op.id) then
         core.log("File Tree: removed Project Path %s", op.label or op.path or op.id)
         changed = true
         project_paths_changed = true
@@ -3702,6 +3702,7 @@ function FileTreeView:context_menu(x, y)
     { label = "Copy Relative Path", icon = icons.path, command = "editor:copy_relative_filepath" },
     { label = "Reveal in Explorer", icon = icons.reveal, command = "editor:reveal_active_file_in_explorer" },
     { label = "Open Terminal Here", icon = icons.terminal, command = "terminal:open" },
+    { label = "Add to Project Paths", icon = icons.new_folder, command = "filetree:add_to_project_paths" },
     "-",
     { label = "Sort", icon = icons.sort, items = {
       { label = "By Name", command = "filetree:sort_by_name" },
@@ -4035,6 +4036,9 @@ command.add(function()
 end, {
   ["filetree:enter_selected"] = command.palette(function(view, entry)
     return view:enter_directory(entry)
+  end),
+  ["filetree:add_to_project_paths"] = command.palette(function(_, entry)
+    return command.perform("project_paths:add", entry.abs)
   end),
 })
 

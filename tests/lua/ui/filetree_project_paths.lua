@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local common = require "core.common"
 local Project = require "core.project"
 local project_paths = require "core.project_paths"
@@ -309,5 +310,22 @@ test.describe("File Tree Project Path Roles", function()
     filetree:apply_plan(plan)
     test.is_nil(project_paths.resolve(context.external))
     test.ok(system.get_file_info(context.external), "removing the Project Path must not delete the real folder")
+  end)
+
+  test.it("adds the selected folder to Project Paths", function(context)
+    local filetree = setup_project_paths(context)
+    local previous_view = core.active_view
+    filetree.buffer:set_selection(test.not_nil(find_line(filetree, "src/")), 1)
+    core.active_view = filetree
+
+    local added = command.perform("filetree:add_to_project_paths")
+    local open = require("core.ui.dialog").current()
+    if open then open:close() end
+    core.active_view = previous_view
+
+    test.ok(added)
+    local resolved = test.not_nil(project_paths.resolve(join_path(context.root, "src")))
+    test.equal(resolved.entry.role, "vendored")
+    test.equal(resolved.entry.label, "src")
   end)
 end)

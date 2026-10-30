@@ -1092,6 +1092,22 @@ local function scenario_is_ready()
     end
     return view.find.delivered and not view.find.stale
   end
+  if benchmark.scenario == "project-paths-dialog" then
+    -- The Project Paths Dialog with an External, a Vendored and a missing Project Path.
+    -- It opens after the Workspace restore, which replaces the Project Paths.
+    if require("core.ui.dialog").current() then return true end
+    config.transitions = false
+    local fixtures = common.dirname(benchmark.fixture)
+    require("core.project_paths").configure_workspace {
+      external = {
+        { path = DATADIR .. PATHSEP .. "colors", label = "anvil-colors" },
+        { path = fixtures .. PATHSEP .. "missing-sdk", label = "missing-sdk" },
+      },
+      vendored = { { path = fixtures .. PATHSEP .. "tabs", label = "tabs" } },
+    }
+    require("plugins.project_paths").open({ select = DATADIR .. PATHSEP .. "colors" })
+    return false
+  end
   if benchmark.scenario == "context-menu-markdown" then
     -- The Markdown Context Menu at a caret, with its Insert submenu open.
     local context_menu = require "core.context_menu"

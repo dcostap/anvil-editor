@@ -210,6 +210,34 @@ end
 --------------------------------------------------------------------------------
 -- Events listening
 --------------------------------------------------------------------------------
+---The stroke of a key press with the event's modifiers, such as "ctrl+shift+a".
+---It also takes the event's modifiers as the held modifiers.
+---@param k string
+---@param event? table
+---@return string
+function keymap.stroke_for_event(k, event)
+  -- Focus changes clear our cached modifiers. A held key does not send another press to the new surface.
+  if type(event) == "table" and event.modifiers ~= nil and event.alt ~= nil then
+    keymap.modkeys.shift = event.shift == true
+    keymap.modkeys.ctrl = event.ctrl == true and not event.altgr
+    if macos then
+      keymap.modkeys.alt, keymap.modkeys.altgr = false, false
+      keymap.modkeys.option = event.alt == true
+      keymap.modkeys.cmd = event.super == true
+    else
+      keymap.modkeys.alt = event.alt == true and not event.altgr
+      keymap.modkeys.altgr = event.altgr == true
+      keymap.modkeys.super = event.super == true
+    end
+  end
+  return key_to_stroke(k)
+end
+
+---True for a key that is only a modifier, such as "left ctrl".
+function keymap.is_modifier_key(k)
+  return modkey_map[k] ~= nil
+end
+
 function keymap.on_key_pressed(k, ...)
   local mk = modkey_map[k]
   if mk then
@@ -219,22 +247,7 @@ function keymap.on_key_pressed(k, ...)
       keymap.modkeys["ctrl"] = false
     end
   else
-    -- Focus changes clear our cached modifiers. A held key does not send another press to the new surface.
-    local event = ...
-    if type(event) == "table" and event.modifiers ~= nil and event.alt ~= nil then
-      keymap.modkeys.shift = event.shift == true
-      keymap.modkeys.ctrl = event.ctrl == true and not event.altgr
-      if macos then
-        keymap.modkeys.alt, keymap.modkeys.altgr = false, false
-        keymap.modkeys.option = event.alt == true
-        keymap.modkeys.cmd = event.super == true
-      else
-        keymap.modkeys.alt = event.alt == true and not event.altgr
-        keymap.modkeys.altgr = event.altgr == true
-        keymap.modkeys.super = event.super == true
-      end
-    end
-    local stroke = key_to_stroke(k)
+    local stroke = keymap.stroke_for_event(k, (...))
     return keymap.perform(stroke, ...), stroke
   end
   return false
@@ -374,10 +387,10 @@ keymap.add_direct {
   ["insert"] = "core:toggle_overwrite",
   ["ctrl+insert"] = "core:copy",
   ["shift+insert"] = { "markdown:table_paste", "markdown:paste_table", "core:paste" },
-  ["escape"] = { "core:close_prompt", "markdown:cancel_footnote", "core:select_none", "core:select_dialog_no" },
+  ["escape"] = { "dialog:close", "core:close_prompt", "markdown:cancel_footnote", "core:select_none", "core:select_dialog_no" },
   ["alt+m"] = "markdown:add_footnote",
-  ["tab"] = { "core:complete_prompt", "markdown:table_next_cell", "core:indent" },
-  ["shift+tab"] = { "markdown:table_previous_cell", "core:unindent" },
+  ["tab"] = { "dialog:focus_next", "core:complete_prompt", "markdown:table_next_cell", "core:indent" },
+  ["shift+tab"] = { "dialog:focus_previous", "markdown:table_previous_cell", "core:unindent" },
   ["backspace"] = { "markdown:table_backspace", "core:backspace" },
   ["shift+backspace"] = { "markdown:table_backspace", "core:backspace" },
   ["ctrl+backspace"] = "core:delete_to_previous_word_start",
@@ -386,8 +399,8 @@ keymap.add_direct {
   ["shift+delete"] = { "markdown:table_delete", "core:delete" },
   ["ctrl+delete"] = "core:delete_to_next_word_end",
   ["ctrl+shift+delete"] = "core:delete_to_next_word_end",
-  ["return"] = { "core:submit_prompt", "markdown:save_footnote", "markdown:table_cell_below", "markdown:table_from_header_row", "core:newline", "core:select_dialog_entry" },
-  ["keypad enter"] = { "core:submit_prompt", "markdown:save_footnote", "markdown:table_cell_below", "markdown:table_from_header_row", "core:newline", "core:select_dialog_entry" },
+  ["return"] = { "dialog:confirm", "core:submit_prompt", "markdown:save_footnote", "markdown:table_cell_below", "markdown:table_from_header_row", "core:newline", "core:select_dialog_entry" },
+  ["keypad enter"] = { "dialog:confirm", "core:submit_prompt", "markdown:save_footnote", "markdown:table_cell_below", "markdown:table_from_header_row", "core:newline", "core:select_dialog_entry" },
   ["shift+return"] = "markdown:table_insert_cell_break",
   ["shift+keypad enter"] = "markdown:table_insert_cell_break",
   ["ctrl+return"] = { "markdown:alternate_list_item_checkbox", "core:newline_below" },

@@ -269,24 +269,6 @@ local function open_project_directory_with_system_file_picker()
   end)
 end
 
-local function add_project_directory()
-  open_directory("Add Directory", true, function(abs_path)
-    local project_paths_view = require "plugins.project_paths_view"
-    for _, dir in ipairs(abs_path) do
-      project_paths_view.add_entry(system.absolute_path(dir), "external")
-    end
-  end)
-end
-
-local function add_project_directory_with_system_file_picker()
-  open_directory_with_system_file_picker("Add Directory", true, function(abs_path)
-    local project_paths_view = require "plugins.project_paths_view"
-    for _, dir in ipairs(abs_path) do
-      project_paths_view.add_entry(system.absolute_path(dir), "external")
-    end
-  end)
-end
-
 command.add(function() return system.is_hosted_surface() end, {
   ["core:unload_project"] = command.palette(function() return core.unload_project() end),
   ["core:focus_project_sidebar"] = command.palette(function()
@@ -424,14 +406,6 @@ command.add(nil, {
 
   ["core:open_project_folder_in_new_window"] = function()
     open_project_directory_in_new_window()
-  end,
-
-  ["core:add_directory"] = function()
-    add_project_directory()
-  end,
-
-  ["core:add_directory_system_file_picker"] = function()
-    add_project_directory_with_system_file_picker()
   end,
 
   ["core:open_project_github_page"] = command.palette(function()

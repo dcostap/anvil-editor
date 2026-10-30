@@ -578,6 +578,17 @@ This is a personal fork with first-party ownership of the whole codebase, includ
 
 AGENTS.md and docs describe what exists now. When you remove a feature, remove its text. Do not write that it is gone. Put that history in the commit message.
 
+## Dialogs
+
+A Dialog is a modal card over the app, for management tasks that need more than a prompt. `core.ui.dialog` owns it. Only one Dialog is open at a time.
+Its controls are in `data/core/ui`: Button, Text Field, Segmented Control and List. Use them for new management UIs. Do not use the old `data/widget` library for new UIs.
+The Dialog takes modal input. A text field gets typed text and the user's bindings for the editor's line commands. Other `core:` commands go to the focused control. Tab, Enter and Escape run `dialog:` commands.
+Each change applies at once. There is no Save or Cancel. Escape first reverts an unsubmitted field edit, then closes the Dialog.
+The Context Menu and confirmations draw above a Dialog.
+Style keys for Dialogs and buttons are in `data/colors/default.lua`. `config.disabled_transitions.dialog` turns off its animation.
+The Project Paths Dialog (`plugins.project_paths`) is the first Dialog. `project_paths:manage` opens it. `project_paths:add` and `filetree:add_to_project_paths` add a folder.
+Run `ui/dialog.lua`, `ui/project_paths_dialog.lua` and `ui/filetree_project_paths.lua` after changes. Check the `project-paths-dialog` render scenario after visual changes.
+
 ## Heading Outline
 
 Markdown Live Preview lists the headings left of the reading lane when the free space can hold the list.

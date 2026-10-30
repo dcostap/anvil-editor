@@ -2467,11 +2467,12 @@ function core.on_event(type, ...)
     local modal, action = dispatch_modal_input("key_pressed", key, event)
     if modal and action ~= "keymap" then
       trace_keyboard_input("route", type, key, event,
-        action == "target" and "modal-target" or "modal-consumed")
+        action == "target" and "modal-target" or action == "text" and "modal-text" or "modal-consumed")
       if action == "target" then core.root_panel:on_key_pressed(key, event) end
       -- SDL emits printable text separately through textinput only when the
-      -- keypressed event remains unconsumed.
-      did_keymap = action ~= "target"
+      -- keypressed event remains unconsumed. "text" keeps the key from the
+      -- target, but lets its text through to the modal owner.
+      did_keymap = action ~= "target" and action ~= "text"
     else
       trace_keyboard_input("route", type, key, event, modal and "modal-keymap" or "keymap")
       local modifier_key = key == "left ctrl" or key == "right ctrl"
