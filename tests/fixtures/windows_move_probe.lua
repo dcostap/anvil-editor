@@ -130,15 +130,31 @@ if path:match("/driver$") then
     save("move-"..stage,{project_id=ar.id,target=target})
     wait(function() return load("requested-"..stage) end,5)
    end
+   -- A's Project gives the keyboard to the Sidebar of A's Window. Returns the trace length at that point.
+   local sidebar_focus = "Shell Sidebar focus: Window=" .. a.window_id .. " focused="
+   local function focus_sidebar(stage)
+    local mark = #trace()
+    save("focus-sidebar-"..stage,true)
+    wait(function() return trace():find(sidebar_focus.."1",mark+1,true) end,5,"A's Sidebar did not take the keyboard")
+    return #trace()
+   end
    if action ~= "windows-move" then
     local blocked = action == "windows-move-dialog" and "dialog" or "close"
+    local mark = action == "windows-move-close" and focus_sidebar("0")
     save("block", {kind=blocked})
     wait(function() return load("blocked") end)
     local native
     if blocked == "dialog" then
      native = wait(function() return dialog(a.shell_pid,"Move dialog probe") end,8)
      assert(user32.GetWindow(native,4) == aw,"native dialog lost its source parent")
-    else wait(function() return trace():find("Shell close decision: waiting for user",1,true) end,8) end
+    else
+     wait(function() return trace():find("Shell close decision: waiting for user",1,true) end,8)
+     -- The Close choice of the Selected Project needs the keyboard, also when the Sidebar had it.
+     if mark then
+      wait(function() return trace():find(sidebar_focus.."0",mark+1,true) end,5,
+       "The Close choice left the keyboard in the Sidebar")
+     end
+    end
     -- A closing Window shows no Project menu, and other menus do not offer it as a target. The hosted API still
     -- reaches the shell, which must reject the Move.
     move(b.window_id,"reject")
@@ -155,8 +171,11 @@ if path:match("/driver$") then
     coroutine.yield(.3)
     assert(row(model(),a.pid).window_id == a.window_id, "rejected Move ran after the blocker ended")
    end
+   local focused = focus_sidebar("1")
    sidebar_move()
    wait(function() return row(model(),a.pid).window_id == b.window_id end,5,"Move to occupied Window did not change assignment")
+   -- The source Window selects another Project, as after an unload. Its focused Sidebar keeps the keyboard.
+   assert(not trace():find(sidebar_focus.."0",focused+1,true),"A Move out of the Window took the keyboard from its Sidebar")
    page = model()
    assert(selected(page,b.window_id)==ar.id and selected(page,a.window_id)==cr.id)
    assert(row(page,b.pid).window_id==b.window_id and row(page,b.pid).pid==b.pid,"Move lost target's prior Project")
@@ -253,7 +272,13 @@ elseif path == root .. "/Project" then
   assert(system.select_project(root.."/Other"))
   local inspected={}
   local blocking=false
+  local focused={}
   while not load("finish") do
+   for _,stage in ipairs{"0","1"} do
+    if load("focus-sidebar-"..stage) and not focused[stage] then
+     assert(system.focus_project_sidebar(true)); focused[stage]=true
+    end
+   end
    for i=0,2 do
     local request=load("inspect-"..i)
     if request and not inspected[i] and request.target==system.get_anvil_window_id() then

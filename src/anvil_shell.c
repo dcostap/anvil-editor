@@ -3421,8 +3421,8 @@ static void close_decision(ShellProject *project, int decision) {
     }
     set_state(project, SHELL_CLOSING);
     if (decision == ANVIL_SURFACE_CLOSE_WAITING) {
-      if (project != window->selected)
-        select_project(project, false);
+      /* The Close choice needs the keyboard, also when the Sidebar has it. */
+      select_project(project, false);
       stop_close_timer(project);
       project->close_waiting = true;
       project->close_serial++;
@@ -5987,14 +5987,15 @@ static bool move_project(ShellWindow *requester, uint32_t project_id, uint32_t t
     }
   }
   retain_project(project);
-  /* Revoke the old surface before changing ownership. Keep the Project retained during native callbacks. */
+  /* Revoke the old surface before changing ownership. Keep the Project retained during native callbacks. A focused
+   * Sidebar in the source Window keeps the keyboard, as after an unload. */
   if (source->selected == project) {
     ShellProject *replacement = source->empty;
     for (ShellProject *item = shell.projects; item; item = item->next)
       if (item != project && item->window_id == source->id && !item->unloading && !item->failed_close) {
         replacement = item; break;
       }
-    select_project(replacement, false);
+    select_project(replacement, true);
   } else {
     shell_send_int(project, ANVIL_SURFACE_MSG_FOCUS, 0);
     send_configure(project);
