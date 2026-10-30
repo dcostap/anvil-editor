@@ -116,6 +116,23 @@ test.describe("process", function()
     test.type(proc:wait(process.WAIT_INFINITE, 0.01), "number")
   end)
 
+  test.test("reads lines and byte counts across native output chunks", function()
+    local chunks, index = { "first\nsec", "ond\n\nlast" }, 0
+    local stream = process.stream.new({ process = {
+      read = function()
+        index = index + 1
+        return chunks[index]
+      end,
+    } }, process.STREAM_STDOUT)
+    test.equal(stream:read("*l"), "first")
+    test.equal(stream:read("L"), "second\n")
+    test.equal(stream:read(0), "")
+    test.equal(stream:read("line"), "")
+    test.equal(stream:read(2), "la")
+    test.equal(stream:read("*a"), "st")
+    test.equal(stream:read("line"), nil)
+  end)
+
   test.test("wait timeout uses milliseconds in the Lua wrapper", function()
     local command = PLATFORM == "Windows"
       and "ping -n 4 127.0.0.1 > nul"
