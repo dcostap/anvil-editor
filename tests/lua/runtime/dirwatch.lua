@@ -41,19 +41,25 @@ test.describe("core.dirwatch", function()
     test.same(changes, { path, path, path }, "Stop scanning after unwatch")
   end)
 
-  test.it("resolves multiple-backend leaf events against their watched directory", function()
+  test.it("resolves multiple-backend leaf events against their registered directory", function(context)
     local watch = DirWatch()
-    local watched = common.normalize_path(USERDIR .. PATHSEP .. "dirwatch-leaf-root")
+    local watched = common.normalize_path(USERDIR .. PATHSEP .. "dirwatch-leaf-root-" .. system.get_process_id())
+    test.ok(common.mkdirp(watched))
+    context.temp_root = watched
     local watch_id = 41
-    watch.reverse_watched[watch_id] = watched
-    watch.watched[watched] = watch_id
     watch.monitor = {
       mode = function() return "multiple" end,
+      watch = function(_, path)
+        test.equal(path, watched)
+        return watch_id
+      end,
       check = function(_, callback)
         callback("active-session.log", watch_id, dirmonitor.CHANGE_CONTENT)
       end,
       unwatch = function() end,
     }
+    watch:watch(watched)
+    test.equal(watch.reverse_watched[watch_id], watched)
 
     local parent, changed, precise, kind
     watch:check(function(path, changed_path, has_leaf, change_kind)
@@ -64,6 +70,7 @@ test.describe("core.dirwatch", function()
     test.equal(changed, common.normalize_path(watched .. PATHSEP .. "active-session.log"))
     test.ok(precise)
     test.equal(kind, "content")
+    watch:unwatch(watched)
   end)
 
   test.it("queues one native wake notification for an unread change batch", function(context)

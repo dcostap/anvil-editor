@@ -670,10 +670,14 @@ test.describe("plugins.git.backend", function()
         calls = calls + 1
         result, callback_err = res, e
       end)
+      local pool = require("core.worker_pool").named("git")
       job:cancel()
 
       wait_until(function() return calls > 0 end, 5, "cancel callback did not run")
-      coroutine.yield(0.05)
+      wait_until(function()
+        local status = pool:status(job.handle)
+        return status and (status.status == "cancelled" or status.status == "complete")
+      end, 30, "cancelled Git worker did not finish")
       test.equal(calls, 1)
       test.equal(result, nil)
       test.equal(callback_err.kind, "cancelled")

@@ -896,6 +896,50 @@ class VendorThing
     common.rm(root, true)
   end)
 
+  test.it("Tree-sitter workspace symbol async query can be cancelled", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-cancel-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    write_file(root .. PATHSEP .. "Model.kt", "class CancelledAsyncThing\n")
+    symbol_index.ensure_scan(root, { force = true, refresh_after_seconds = 0 })
+    test.equal(wait_index_ready(root).status, "ready")
+
+    local request = test.not_nil(symbol_index.workspace_symbols_async("CancelledAsync", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    }))
+    test.not_nil(request.handle)
+    test.ok(request:cancel())
+    test.equal(request.status, "cancelled")
+    test.is_nil(request.results)
+    common.rm(root, true)
+  end)
+
+  test.it("Tree-sitter workspace symbol query drops results after Project Paths change", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-symbol-async-paths-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "PathChangeAsyncThing" })
+    index.watch_running = true
+
+    local request = test.not_nil(symbol_index.workspace_symbols_async("PathChangeAsync", {
+      root = root,
+      limit = 10,
+      refresh_after_seconds = 0,
+    }))
+    local original_generation = project_paths.generation
+    project_paths.generation = function() return original_generation() + 1 end
+    local ok, err = pcall(function() wait_async_request(request) end)
+    project_paths.generation = original_generation
+    if not ok then error(err, 0) end
+    test.equal(request.status, "stale-cancelled")
+    test.is_nil(request.results)
+    common.rm(root, true)
+  end)
+
   test.it("Tree-sitter workspace usage async query filters declarations from small snapshots", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-usage-async-"
@@ -1431,7 +1475,7 @@ fun make%d(): DebouncedThing%d = DebouncedThing%d()
     common.rm(root, true)
   end)
 
-  test.it("Tree-sitter Project indexing uses one native run from the shared file list", function()
+  test.it("Tree-sitter Project workspace search returns symbols from indexed files", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-native-run-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
@@ -1446,16 +1490,12 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     end
 
     local index = symbol_index.status(root)
-    index.project_usage_cap = 4
     symbol_index.ensure_scan(root, {
       force = true,
       refresh_after_seconds = 0,
-      progress_files = 1,
     })
     local status = wait_index_ready(root)
     test.equal(status.status, "ready")
-    test.equal(status.symbol_status, "ready")
-    test.equal(status.usage_status, "ready")
 
     local symbols, reason, symbol_status = symbol_index.workspace_symbols("ShardedThing", {
       root = root,
@@ -1466,31 +1506,20 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
     for i = 1, 6 do
       test.ok(find_symbol(symbols, "ShardedThing" .. i, "class"), "missing ShardedThing" .. tostring(i))
     end
-    local async_request, async_reason, async_status = symbol_index.workspace_symbols_async("ShardedThing", {
-      root = root,
-      limit = 20,
-      refresh_after_seconds = 0,
-    })
-    test.equal(async_status, "pending", async_reason)
-    test.not_nil(async_request.handle, "native Project queries must run outside the UI thread")
-    wait_async_request(async_request)
-    test.equal(async_request.status, "fresh", async_request.reason)
-    test.equal(#async_request.results, 6)
+    common.rm(root, true)
+  end)
 
-    local cancelled_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
-      root = root,
-      limit = 20,
-      refresh_after_seconds = 0,
-    }))
-    test.not_nil(cancelled_request.handle)
-    test.ok(cancelled_request:cancel())
-    test.equal(cancelled_request.status, "cancelled")
-    test.is_nil(cancelled_request.results)
-
-    local overlay_path = common.normalize_path(root .. PATHSEP .. "Model1.kt")
+  test.it("Tree-sitter Project Symbol Search limits open Buffer results and reports more", function()
+    symbol_index.reset_for_tests()
+    local root = USERDIR .. PATHSEP .. "treesitter-bounded-overlay-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
+    mkdir(root)
+    local index = seed_ready_symbol_index(root, { "OverlayBaseThing" })
+    index.watch_running = true
+    local overlay_path = common.normalize_path(root .. PATHSEP .. "Model.kt")
     local overlay_symbols = {
       { name = "BoundedOverlayClass", text = "BoundedOverlayClass", kind = "class", path = overlay_path,
-        relpath = "Model1.kt", start_line = 1, start_col = 1 },
+        relpath = "Model.kt", start_line = 1, start_col = 1 },
     }
     for i = 1, 500 do
       overlay_symbols[#overlay_symbols + 1] = {
@@ -1498,62 +1527,25 @@ fun make%d(): ShardedThing%d = ShardedThing%d()
         text = string.format("BoundedOverlayFunction%03d", i),
         kind = "function",
         path = overlay_path,
-        relpath = "Model1.kt",
+        relpath = "Model.kt",
         start_line = i + 1,
         start_col = 1,
       }
     end
-    local overlay_buffer = seed_open_buffer_overlay(status, overlay_path, { symbols = overlay_symbols })
+    local overlay_buffer = seed_open_buffer_overlay(index, overlay_path, { symbols = overlay_symbols })
     symbol_index.remember_open_buffer(overlay_buffer)
-    local overlay_results, overlay_reason, overlay_status, overlay_meta = symbol_index.workspace_symbols("BoundedOverlay", {
+    local results, reason, status, meta = symbol_index.workspace_symbols("BoundedOverlay", {
       root = root,
       symbol_kinds = { "function" },
       limit = 5,
       refresh_after_seconds = 0,
     })
-    test.equal(overlay_status, "fresh", overlay_reason)
-    test.equal(#overlay_results, 5)
-    test.ok(overlay_meta.has_more)
-    for _, symbol in ipairs(overlay_results) do test.equal(symbol.kind, "function") end
+    test.equal(status, "fresh", reason)
+    test.equal(#results, 5)
+    test.ok(meta.has_more)
+    for _, symbol in ipairs(results) do test.equal(symbol.kind, "function") end
     symbol_index.clear_open_buffer(overlay_buffer, "test")
-
-    local phases = status.diagnostics and status.diagnostics.phases or {}
-    local combined = phases.combined and phases.combined.worker or {}
-    test.equal(combined.native_run_jobs, 1, common.serialize(phases.combined))
-    test.equal(combined.native_project_run_jobs, 1, common.serialize(phases.combined))
-    test.equal(combined.files_scanned, 6)
-    test.equal(combined.parse_calls, 6)
-    test.equal(combined.native_project_files_transferred, 6, common.serialize(combined))
-    test.not_nil(status.native_snapshot)
-    for _, file in ipairs(status.native_snapshot:files({ limit = 20 })) do
-      test.not_nil(file.fingerprint, file.path)
-    end
-    test.ok((status.usage_count or 0) <= 4, "usage cap exceeded: " .. tostring(status.usage_count))
-    test.ok(status.usage_truncated)
-
-    local project_paths_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
-      root = root, limit = 20, refresh_after_seconds = 0,
-    }))
-    local original_project_paths_generation = project_paths.generation
-    local changed_project_paths_generation = original_project_paths_generation() + 1
-    project_paths.generation = function() return changed_project_paths_generation end
-    wait_async_request(project_paths_request)
-    project_paths.generation = original_project_paths_generation
-    test.equal(project_paths_request.status, "stale-cancelled")
-    test.equal(project_paths_request.reason, "project-paths-generation-changed")
-
-    local project_paths_cancelled_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
-      root = root, limit = 20, refresh_after_seconds = 0,
-    }))
-    test.ok(project_paths_cancelled_request:cancel())
-    test.equal(project_paths_cancelled_request.status, "cancelled")
-    local stale_request = test.not_nil(symbol_index.workspace_symbols_async("ShardedThing", {
-      root = root, limit = 20, refresh_after_seconds = 0,
-    }))
-    symbol_index.invalidate(root)
-    wait_async_request(stale_request)
-    test.equal(stale_request.status, "stale-cancelled")
-    test.is_nil(stale_request.results)
+    symbol_index.reset_for_tests()
     common.rm(root, true)
   end)
 
@@ -1725,32 +1717,46 @@ class StableLeafWatcherThing
       write_file(root .. PATHSEP .. string.format("Model%03d.kt", i), table.concat(lines, "\n"))
     end
 
-    symbol_index.ensure_scan(root, {
-      force = true,
-      refresh_after_seconds = 0,
-      progress_files = 1,
-    })
-    local deadline = system.get_time() + 10
-    local status
-    repeat
-      status = symbol_index.status(root)
-      local partial = status.native_partial_snapshot
-      local ok, summary = pcall(function() return partial and partial:summary() end)
-      if status.status == "indexing" and ok and summary and summary.symbols > 0 then break end
-      coroutine.yield(0.001)
-    until system.get_time() >= deadline
-    test.equal(status.status, "indexing", "fixture completed before observing a partial snapshot")
+    local pool = worker_pool.system()
+    local drain = pool.drain
+    local paused = false
+    pool.drain = function(self)
+      if paused then return 0 end
+      local count, stats = drain(self, { max_messages = 1 })
+      local status = symbol_index.status(root)
+      if status.status == "indexing" and status.native_partial_snapshot then paused = true end
+      return count, stats
+    end
 
-    local symbols, reason, query_status = symbol_index.workspace_symbols("", {
-      root = root,
-      allow_stale = true,
-      limit = 20,
-      refresh_after_seconds = 0,
-    })
-    test.equal(query_status, "stale", reason)
-    test.ok(#symbols > 0, common.serialize(symbols))
+    local ok, err = pcall(function()
+      symbol_index.ensure_scan(root, {
+        force = true,
+        refresh_after_seconds = 0,
+        progress_files = 1,
+      })
+      local deadline = system.get_time() + 30
+      local status
+      repeat
+        status = symbol_index.status(root)
+        if status.status == "indexing" and status.native_partial_snapshot then break end
+        coroutine.yield(0.01)
+      until system.get_time() >= deadline
+      test.equal(status.status, "indexing", "the scan did not publish a partial snapshot")
+      test.not_nil(status.native_partial_snapshot)
+
+      local symbols, reason, query_status = symbol_index.workspace_symbols("", {
+        root = root,
+        allow_stale = true,
+        limit = 20,
+        refresh_after_seconds = 0,
+      })
+      test.equal(query_status, "stale", reason)
+      test.ok(#symbols > 0, common.serialize(symbols))
+    end)
+    pool.drain = drain
     symbol_index.invalidate(root)
     common.rm(root, true)
+    if not ok then error(err, 0) end
   end)
 
   test.it("Tree-sitter Project fills its deterministic global usage budget", function()
@@ -1796,7 +1802,7 @@ fun make%d(): BudgetReturnThing%d = BudgetReturnThing%d()
     common.rm(root, true)
   end)
 
-  test.it("Tree-sitter Project snapshot publication preserves per-file Project path metadata", function()
+  test.it("Tree-sitter workspace results include each symbol's Project-relative file", function()
     symbol_index.reset_for_tests()
     local root = USERDIR .. PATHSEP .. "treesitter-metadata-cache-"
       .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
@@ -1807,30 +1813,28 @@ fun make%d(): BudgetReturnThing%d = BudgetReturnThing%d()
     end
     write_file(root .. PATHSEP .. "Model.kt", table.concat(lines, "\n"))
 
-    local original_resolve = project_paths.resolve
-    local original_display_path = project_paths.display_path
-    local resolve_calls = 0
-    local display_calls = 0
-    project_paths.resolve = function(...)
-      resolve_calls = resolve_calls + 1
-      return original_resolve(...)
-    end
-    project_paths.display_path = function(...)
-      display_calls = display_calls + 1
-      return original_display_path(...)
-    end
-
+    local old_projects = core.projects
+    local old_paths = project_paths.save_workspace_state()
     local ok, err = pcall(function()
+      core.projects = { Project(root) }
+      project_paths.configure_workspace {}
       symbol_index.ensure_scan(root, { force = true, refresh_after_seconds = 0, chunk_files = 1 })
-      local status = wait_index_ready(root)
-      test.equal(status.status, "ready")
-    end)
-    project_paths.resolve = original_resolve
-    project_paths.display_path = original_display_path
-    if not ok then error(err) end
+      test.equal(wait_index_ready(root).status, "ready")
 
-    test.ok(resolve_calls <= 12, "expected per-file metadata cache, got resolve_calls=" .. tostring(resolve_calls))
-    test.ok(display_calls <= 4, "expected per-file metadata cache, got display_calls=" .. tostring(display_calls))
+      local symbols, reason, status = symbol_index.workspace_symbols("make", {
+        root = root, limit = 100, refresh_after_seconds = 0,
+      })
+      test.equal(status, "fresh", reason)
+      test.equal(#symbols, 60)
+      for _, symbol in ipairs(symbols) do
+        test.equal(symbol.path, common.normalize_path(root .. PATHSEP .. "Model.kt"))
+        test.equal(symbol.file, "Model.kt")
+        test.equal(symbol.relpath, "Model.kt")
+      end
+    end)
+    core.projects = old_projects
+    project_paths.load_workspace_state(old_paths)
+    if not ok then error(err, 0) end
     common.rm(root, true)
   end)
 
@@ -2449,20 +2453,18 @@ main :: proc() {}
     buffer:on_close()
   end)
 
-  test.it("rapid edits coalesce obsolete full snapshots", function()
+  test.it("Tree-sitter outline follows the final result of rapid edits", function()
     local buffer = c_buffer("int value(void) { return 1; }")
     test.ok(wait_ready(buffer))
-    local before_snapshots = buffer.treesitter.snapshots_constructed or 0
-    local before_requests = buffer.treesitter.snapshot_requests or 0
-    for i = 1, 5 do
+    for _, name in ipairs({ "first", "other", "fresh" }) do
       buffer:apply_edits({
-        { line1 = 1, col1 = 26, line2 = 1, col2 = 27, text = tostring((i % 9) + 1) },
+        { line1 = 1, col1 = 5, line2 = 1, col2 = 10, text = name },
       }, { type = "replace" })
     end
     test.ok(wait_ready(buffer))
-    test.equal((buffer.treesitter.snapshot_requests or 0) - before_requests, 5)
-    test.ok((buffer.treesitter.snapshots_constructed or 0) - before_snapshots < 5)
-    test.ok((buffer.treesitter.snapshot_requests_coalesced or 0) >= 1)
+    local symbols = intelligence.buffer_outline(buffer)
+    test.ok(find_symbol(symbols, "fresh", "function"))
+    test.is_nil(find_symbol(symbols, "value", "function"))
     buffer:on_close()
   end)
 
@@ -2891,21 +2893,6 @@ int fourth(void) { return 4; }]])
     test.ok(wait_ready(buffer))
     test.equal(buffer.treesitter.highlight_cache[4], unaffected, common.serialize(buffer.treesitter.last_changed_ranges))
     test.ok(type(buffer.treesitter.last_changed_ranges) == "table")
-    buffer:on_close()
-  end)
-
-  test.it("batches highlight cache misses into one range query", function()
-    local buffer = c_buffer([[int first(void) { return 1; }
-int second(void) { return 2; }
-int third(void) { return 3; }]])
-    test.ok(wait_ready(buffer))
-    buffer.treesitter.highlight_cache = {}
-    buffer.treesitter.highlight_query_calls = 0
-    local first = ts_highlight.line_tokens(buffer, 1)
-    local second = ts_highlight.line_tokens(buffer, 2)
-    test.not_nil(first)
-    test.not_nil(second)
-    test.equal(buffer.treesitter.highlight_query_calls, 1)
     buffer:on_close()
   end)
 

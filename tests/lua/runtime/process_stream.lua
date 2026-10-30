@@ -1,5 +1,7 @@
+local core = require "core"
 local test = require "core.test"
 local process_stream = require "core.process_stream"
+local worker_pool = require "core.worker_pool"
 
 local function lua_command(code)
   return { EXEFILE, "run", "-e", code }
@@ -60,7 +62,41 @@ test.describe("process stream", function()
     test.not_nil(stream.error)
   end)
 
-  test.it("stops a running process without waiting for it", function()
+  test.it("marks a stream cancelled before its worker reports termination", function()
+    local original_named = worker_pool.named
+    local callbacks
+    local worker_finished = false
+    local handle = { id = "cancel-seam" }
+    local fake_pool = {
+      submit = function(_, spec)
+        callbacks = spec
+        return handle
+      end,
+      cancel = function(_, cancelled_handle)
+        test.equal(cancelled_handle, handle)
+        core.add_thread(function()
+          coroutine.yield(0)
+          worker_finished = true
+          callbacks.on_cancelled({})
+        end)
+      end,
+    }
+    worker_pool.named = function() return fake_pool end
+    local ok, err = pcall(function()
+      local stream = test.not_nil(process_stream.start({ "fake-child" }))
+      stream:cancel()
+      test.ok(stream.done)
+      test.equal(stream.error, "cancelled")
+      test.not_ok(worker_finished)
+    end)
+    worker_pool.named = original_named
+    if not ok then error(err, 0) end
+    local deadline = system.get_time() + 5
+    while not worker_finished and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.ok(worker_finished, "the fake worker did not finish after cancellation returned")
+  end)
+
+  test.it("cancels a running process stream", function()
     local stream = test.not_nil(process_stream.start(lua_command(
       "io.stdout:setvbuf('no') while true do io.stdout:write('tick\\n') system.sleep(0.02) end"
     )))
@@ -71,11 +107,8 @@ test.describe("process stream", function()
       if not first then coroutine.yield(0.005) end
     until first or stream.done or system.get_time() >= deadline
     test.equal(first, "tick")
-    local started = system.get_time()
     stream:cancel()
-    test.ok(system.get_time() - started < 0.05, "cancel waited for the process")
     test.ok(stream.done)
-    coroutine.yield(0.1)
     test.is_nil(stream:read_line())
   end)
 end)

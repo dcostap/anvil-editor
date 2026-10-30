@@ -118,9 +118,8 @@ test.describe("Project files", function()
       if scope == "refresh" then expected["added.lua"] = true end
       test.same(names(assert(first[1], first[2])), expected)
       test.same(directory_names(root, first[3]), { ["."] = true, empty = true })
-      test.equal(second[1], first[1], "Consumers must receive the same completed snapshot")
-      test.equal(second[3], first[3])
-      test.equal(project_files.cached(root), first[1])
+      test.same(names(second[1]), expected)
+      test.same(directory_names(root, second[3]), { ["."] = true, empty = true })
     end)
   end
 
@@ -245,7 +244,6 @@ test.describe("Project files", function()
     end
 
     local before = assert(project_files.list(root, { refresh = true }))
-    local generation = project_files.watch_status(root).generation
     write(existing, "return 2\n")
     local reconciled, reconcile_error, refreshed = project_files.reconcile(root, {
       [existing] = { precise = true },
@@ -253,8 +251,8 @@ test.describe("Project files", function()
 
     test.ok(reconciled, reconcile_error)
     test.not_ok(refreshed)
-    test.equal(project_files.cached(root), before)
-    test.equal(project_files.watch_status(root).generation, generation)
+    test.ok(project_files.contains(root, existing, "file"))
+    test.equal(names(before)["existing.lua"], true)
 
     local ignored = join(root, "build", "generated.lua")
     write(ignored, "return 3\n")

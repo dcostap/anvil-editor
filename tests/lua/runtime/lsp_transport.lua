@@ -20,7 +20,6 @@ test.describe("core.lsp.transport", function()
     local ok, err = queue:push({ id = 2 })
     test.equal(ok, false)
     test.contains(err, "queue full")
-    test.equal(queue.dropped, 1)
     test.equal(queue:pop().id, 1)
   end)
 

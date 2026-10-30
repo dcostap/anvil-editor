@@ -158,7 +158,10 @@ test.describe("core.lsp.config", function()
     test.equal(selected[1].identity.server_id, "fake-cpp")
     test.equal(selected[1].identity.root_uri, uri.path_to_uri(project))
     test.equal(selected[1].identity.settings_generation, 3)
-    test.contains(selected[1].identity.key, "fake-cpp")
+    local second = test.not_nil(lsp_config.select_for_path({ fake_server_definition({ id = "fake-cpp-other" }) }, buffer, {
+      settings_generation = 3,
+    }))
+    test.not_equal(selected[1].identity.key, second[1].identity.key)
   end)
 
   test.test("client identity includes config fingerprint, root, language, toolchain, and settings generation", function()

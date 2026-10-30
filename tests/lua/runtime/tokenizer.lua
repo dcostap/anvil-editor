@@ -10,6 +10,17 @@ local function collect_each_token(tokens, scol)
   return items
 end
 
+local function with_native_tokenizer(fn)
+  local original_backend = tokenizer.is_using_native()
+  local original_config = config.native_tokenizer
+  config.native_tokenizer = true
+  tokenizer.set_use_native(true)
+  local ok, err = pcall(fn)
+  config.native_tokenizer = original_config
+  tokenizer.set_use_native(original_backend)
+  if not ok then error(err, 0) end
+end
+
 test.describe("tokenizer", function()
   test.test("publishes backend identity and cache generations", function()
     local original = tokenizer.is_using_native()
@@ -38,31 +49,24 @@ test.describe("tokenizer", function()
   end)
 
   test.test("toggles the native module while keeping each_token", function()
-    local original = config.native_tokenizer
     local syntax = {
       patterns = {
         { pattern = "%d+", type = "number" }
       },
       symbols = {}
     }
-    config.native_tokenizer = true
-    test.ok(tokenizer.set_use_native(true))
-    test.equal(tokenizer.is_using_native(), true)
-    tokenizer.tokenize(syntax, "123", string.char(0))
-    test.type(tokenizer._tokenizer_native_text_arena, "userdata")
-    test.type(tokenizer._tokenizer_native_token_arena, "userdata")
-    tokenizer.set_use_native(false)
-    test.equal(tokenizer.is_using_native(), false)
-    test.equal(tokenizer._tokenizer_native_text_arena, nil)
-    test.equal(tokenizer._tokenizer_native_token_arena, nil)
-    tokenizer.set_use_native(true)
-    test.equal(tokenizer.is_using_native(), true)
-    config.native_tokenizer = original
-    tokenizer.set_use_native(original ~= false)
-    test.type(tokenizer.each_token, "function")
+    with_native_tokenizer(function()
+      local native_tokens = tokenizer.tokenize(syntax, "123", string.char(0))
+      local native = collect_each_token(native_tokens)
+      tokenizer.set_use_native(false)
+      local lua_tokens = tokenizer.tokenize(syntax, "123", string.char(0))
+      local lua = collect_each_token(lua_tokens)
+      test.same(native, { { "number", "123" } })
+      test.same(lua, native)
+    end)
   end)
 
-  test.test("clears cached native syntax userdata", function()
+  test.test("clearing native syntax cache applies changed syntax", function()
     local nested = {
       patterns = {
         { pattern = "%d+", type = "number" }
@@ -77,16 +81,21 @@ test.describe("tokenizer", function()
       symbols = {}
     }
 
-    tokenizer.set_use_native(true)
-    tokenizer.tokenize(syntax, [["123"]], string.char(0))
-    test.type(tokenizer._tokenizer_native_text_arena, "userdata")
-    test.type(tokenizer._tokenizer_native_token_arena, "userdata")
-    test.type(syntax._tokenizer_native_cache, "userdata")
-    test.type(nested._tokenizer_native_cache, "userdata")
+    with_native_tokenizer(function()
+      local tokenized = tokenizer.tokenize(syntax, [["123"]], string.char(0))
+      local tokens = collect_each_token(tokenized)
+      test.same(tokens, {
+        { "string", '"' }, { "number", "123" }, { "string", '"' },
+      })
 
-    tokenizer.clear_native_cache(syntax)
-    test.equal(syntax._tokenizer_native_cache, nil)
-    test.equal(nested._tokenizer_native_cache, nil)
+      nested.patterns[1].type = "constant"
+      tokenizer.clear_native_cache(syntax)
+      tokenized = tokenizer.tokenize(syntax, [["123"]], string.char(0))
+      tokens = collect_each_token(tokenized)
+      test.same(tokens, {
+        { "string", '"' }, { "constant", "123" }, { "string", '"' },
+      })
+    end)
   end)
 
   test.test("native tokenizer defaults missing token type to normal", function()

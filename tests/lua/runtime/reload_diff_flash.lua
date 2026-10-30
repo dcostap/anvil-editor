@@ -1,41 +1,61 @@
+local Buffer = require "core.buffer"
+local TextView = require "core.textview"
 local test = require "core.test"
 local flash = require "plugins.reload_diff_flash"
 
-local function model(old_lines, new_lines, opts)
-  return flash._build_model_for_test(old_lines, new_lines, opts)
+local function make_view(text)
+  local buffer = Buffer(nil, nil, true)
+  buffer:insert(1, 1, text)
+  buffer:clear_undo_redo()
+  return TextView(buffer), buffer
+end
+
+local function flash_provider(view, buffer, old_lines, line, opts)
+  local model, err = flash.flash(buffer, old_lines, buffer.lines, opts)
+  test.not_nil(model, tostring(err))
+  for _, entry in ipairs(view:decoration_provider_entries()) do
+    local provider = entry.provider
+    if provider.inline_ranges and provider:inline_ranges(view, line) then return entry end
+    if provider.line_background and provider:line_background(view, line) then return entry end
+  end
+  test.fail("reload flash did not add a TextView decoration provider")
+end
+
+local function close_view(view, buffer, entry)
+  if entry then view:remove_decoration_provider(entry.id) end
+  buffer:on_close()
 end
 
 test.describe("reload diff flash", function()
-  test.test("builds inline ranges for modified new text", function()
-    local m = model({ "alpha\n", "two\n", "omega\n" }, { "alpha\n", "too\n", "omega\n" })
-    test.not_ok(m.meta.clean)
-    local line = m.lines[2]
-    test.not_nil(line)
-    test.same(line.inline, { { col1 = 2, col2 = 3, tag = "modify" } })
+  test.test("exposes inline marks for changed text through the TextView", function()
+    local view, buffer = make_view("alpha\ntoo\nomega")
+    local entry = flash_provider(view, buffer, { "alpha\n", "two\n", "omega\n" }, 2)
+    local ranges = test.not_nil(entry.provider:inline_ranges(view, 2))
+    test.same({ ranges[1].col1, ranges[1].col2 }, { 2, 3 })
+    close_view(view, buffer, entry)
   end)
 
-  test.test("builds line and inline flash for inserted lines", function()
-    local m = model({ "alpha\n", "omega\n" }, { "alpha\n", "bravo\n", "omega\n" })
-    local line = m.lines[2]
-    test.not_nil(line)
-    test.equal(line.tag, "insert")
-    test.equal(line.line, true)
-    test.same(line.inline, { { col1 = 1, col2 = 6, tag = "insert" } })
+  test.test("exposes line and inline marks for inserted text through the TextView", function()
+    local view, buffer = make_view("alpha\nbravo\nomega")
+    local entry = flash_provider(view, buffer, { "alpha\n", "omega\n" }, 2)
+    test.not_nil(entry.provider:line_background(view, 2))
+    local ranges = test.not_nil(entry.provider:inline_ranges(view, 2))
+    test.same({ ranges[1].col1, ranges[1].col2 }, { 1, 6 })
+    close_view(view, buffer, entry)
   end)
 
-  test.test("anchors pure deletions in the reloaded buffer", function()
-    local m = model({ "alpha\n", "bravo\n", "omega\n" }, { "alpha\n", "omega\n" })
-    local line = m.lines[2]
-    test.not_nil(line)
-    test.equal(line.tag, "delete")
-    test.equal(line.line, true)
+  test.test("anchors a deleted line in the reloaded TextView", function()
+    local view, buffer = make_view("alpha\nomega")
+    local entry = flash_provider(view, buffer, { "alpha\n", "bravo\n", "omega\n" }, 2)
+    test.not_nil(entry.provider:line_background(view, 2))
+    close_view(view, buffer, entry)
   end)
 
-  test.test("falls back to coarse line flashes when over budget", function()
-    local m = model({ "one\n", "two\n" }, { "three\n", "four\n" }, { max_diff_cells = 1 })
-    test.ok(m.meta.too_large)
-    test.equal(m.meta.reason, "too_many_cells")
-    test.ok(m.lines[1] and m.lines[1].line)
-    test.ok(m.lines[2] and m.lines[2].line)
+  test.test("shows line marks when a large diff cannot use inline ranges", function()
+    local view, buffer = make_view("three\nfour")
+    local entry = flash_provider(view, buffer, { "one\n", "two\n" }, 1, { max_diff_cells = 1 })
+    test.not_nil(entry.provider:line_background(view, 1))
+    test.not_nil(entry.provider:line_background(view, 2))
+    close_view(view, buffer, entry)
   end)
 end)

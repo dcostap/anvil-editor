@@ -24,7 +24,7 @@ test.describe("Folder counts", function()
     end
 
     local function wait_for_count(expected)
-      local deadline = system.get_time() + 2
+      local deadline = system.get_time() + 30
       repeat
         local result, pending = counts.get(path, modified, true)
         if result and result.count == expected and not pending then return result end

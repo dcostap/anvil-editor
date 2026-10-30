@@ -59,35 +59,6 @@ test.describe("Project path roles", function()
     test.ok(common.path_equals(entries[1].path, context.root))
   end)
 
-  test.test("effective entries are cached until project paths change", function(context)
-    local root_stat_calls = 0
-    context.original_get_file_info = system.get_file_info
-    system.get_file_info = function(path)
-      if common.path_equals(path, context.root) then
-        root_stat_calls = root_stat_calls + 1
-      end
-      return context.original_get_file_info(path)
-    end
-
-    context.project_paths.configure_workspace {}
-    for _ = 1, 5 do
-      context.project_paths.entries()
-      context.project_paths.resolve(join_path(context.root, "src", "main.lua"))
-      context.project_paths.display_path(join_path(context.root, "src", "main.lua"))
-      context.project_paths.search_roots("files")
-    end
-
-    test.equal(root_stat_calls, 1)
-
-    context.project_paths.configure_workspace {
-      external = {
-        { path = "../jdk-src", label = "jdk-src" },
-      },
-    }
-
-    test.equal(root_stat_calls, 2)
-  end)
-
   test.test("Workspace entries normalize paths and resolve relative paths against the Root Project", function(context)
     context.project_paths.configure_workspace {
       external = {

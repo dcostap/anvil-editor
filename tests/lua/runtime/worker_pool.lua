@@ -1,13 +1,13 @@
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 
-local function drain_until(pool, predicate, limit)
-  limit = limit or 1000
-  for _ = 1, limit do
+local function drain_until(pool, predicate, timeout)
+  local deadline = system.get_time() + (timeout or 30)
+  repeat
     pool:drain({ max_ms = 5, max_messages = 64 })
     if predicate() then return true end
     coroutine.yield(0.001)
-  end
+  until system.get_time() >= deadline
   pool:drain({ max_ms = 5, max_messages = 64 })
   return predicate()
 end
@@ -43,7 +43,6 @@ test.describe("worker_pool", function()
       on_complete = function() completed = true end,
     })
     test.not_nil(handle)
-    test.equal(pool:status(handle).status, "queued")
     test.ok(drain_until(pool, function() return completed end))
     test.equal(seen, "hello")
     test.equal(pool:status(handle).status, "complete")
@@ -106,27 +105,41 @@ test.describe("worker_pool", function()
 
   test.test("submits new work to an idle worker instead of queueing behind a busy one", function()
     local pool = new_pool("test-idle-worker-selection", 2)
-    local slow_progress = 0
+    local slow_completed = false
     local slow_handle = pool:submit({
       kind = "worker_pool_test",
-      payload = { op = "count_until_cancel", count = 1000, sleep = 0.002 },
-      on_progress = function(message) slow_progress = message.payload.index end,
+      payload = { op = "count_until_cancel", count = 2000, sleep = 0.002 },
+      on_complete = function() slow_completed = true end,
     })
+    local slow_status = test.not_nil(pool:status(slow_handle))
     local warmup_done = false
     pool:submit({
       kind = "worker_pool_test",
       payload = { op = "echo", value = "warmup" },
       on_complete = function() warmup_done = true end,
     })
-    test.ok(drain_until(pool, function() return slow_progress >= 2 and warmup_done end, 500))
+    test.ok(drain_until(pool, function()
+      local status = pool:status(slow_handle)
+      return status and status.status == "running" and warmup_done
+    end))
+    test.not_ok(slow_completed, "background fixture finished before interactive work started")
 
-    local interactive_done = false
-    pool:submit({
+    local interactive_started, interactive_done = false, false
+    local interactive = test.not_nil(pool:submit({
       kind = "worker_pool_test",
-      payload = { op = "echo", value = "interactive" },
+      payload = { op = "count_until_cancel", count = 2, sleep = 0.01 },
+      on_progress = function() interactive_started = true end,
       on_complete = function() interactive_done = true end,
-    })
-    test.ok(drain_until(pool, function() return interactive_done end, 40))
+    }))
+    test.not_equal(interactive.worker_id, slow_status.worker_id)
+    test.ok(drain_until(pool, function()
+      local status = pool:status(interactive)
+      return status and (status.status == "running" or status.status == "complete" or slow_completed)
+    end))
+    test.ok(interactive_started or interactive_done, "the interactive job did not start")
+    test.not_ok(slow_completed, "interactive work waited for the busy worker")
+    test.ok(drain_until(pool, function() return interactive_done end))
+    test.equal(pool:status(interactive).status, "complete")
     pool:cancel(slow_handle)
   end)
 

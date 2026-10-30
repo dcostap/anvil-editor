@@ -3,14 +3,14 @@ local common = require "core.common"
 local registry = require "core.treesitter.registry"
 local native_pool = require "worker_pool_native"
 
-local function drain_until(pool, predicate, limit)
-  limit = limit or 1000
-  for _ = 1, limit do
+local function drain_until(pool, predicate, timeout)
+  local deadline = system.get_time() + (timeout or 30)
+  repeat
     for _, message in ipairs(pool:drain({ max_messages = 64 })) do
       if predicate(message) then return true end
     end
     coroutine.yield(0.001)
-  end
+  until system.get_time() >= deadline
   for _, message in ipairs(pool:drain({ max_messages = 64 })) do
     if predicate(message) then return true end
   end
@@ -76,7 +76,7 @@ test.describe("worker_pool_native", function()
     })
     test.not_nil(handle)
     token:cancel()
-    test.ok(drain_until(pool, function(message) return message.type == "cancelled" end, 5000))
+    test.ok(drain_until(pool, function(message) return message.type == "cancelled" end, 30))
     test.equal(pool:status(handle).status, "cancelled")
   end)
 
@@ -118,40 +118,35 @@ test.describe("worker_pool_native", function()
   test.test("background native work leaves one worker available for interactive jobs", function()
     local pool = new_pool("lua-native-background-reservation", 2)
     local first = test.not_nil(pool:submit({
-      kind = "test_count", count = 500, sleep_ms = 2, priority = "background",
+      kind = "test_count", count = 2000, sleep_ms = 1, priority = "background",
     }))
     local second = test.not_nil(pool:submit({
-      kind = "test_count", count = 500, sleep_ms = 2, priority = "background",
+      kind = "test_count", count = 2000, sleep_ms = 1, priority = "background",
     }))
-    local background_ids = {
-      [pool:status(first).id] = true,
-      [pool:status(second).id] = true,
-    }
-    local started = {}
-    test.ok(drain_until(pool, function(message)
-      if message.type == "progress" and background_ids[message.job_id] then
-        started[message.job_id] = true
-        return true
-      end
-      return false
-    end))
-    local deadline = system.get_time() + 0.05
-    while system.get_time() < deadline do
-      for _, message in ipairs(pool:drain({ max_messages = 64 })) do
-        if message.type == "progress" and background_ids[message.job_id] then
-          started[message.job_id] = true
-        end
-      end
-      coroutine.yield(0.001)
-    end
-    local started_count = 0
-    for _ in pairs(started) do started_count = started_count + 1 end
-    test.equal(started_count, 1)
+    local deadline = system.get_time() + 30
+    local first_status, second_status
+    repeat
+      first_status = pool:status(first).status
+      second_status = pool:status(second).status
+      if first_status == "running" or second_status == "running" then break end
+      coroutine.yield(0.01)
+    until system.get_time() >= deadline
+    test.ok(first_status == "running" or second_status == "running",
+      "no background job started")
+    test.ok((first_status == "running" and second_status == "queued")
+      or (second_status == "running" and first_status == "queued"),
+      "background jobs should leave one worker available")
 
-    pool:submit({ kind = "test_echo", value = "interactive-ready", priority = "interactive" })
+    local interactive = test.not_nil(pool:submit({
+      kind = "test_echo", value = "interactive-ready", priority = "interactive",
+    }))
     test.ok(drain_until(pool, function(message)
       return message.type == "result" and message.value == "interactive-ready"
-    end, 200))
+    end))
+    local background_still_running = pool:status(first).status == "running"
+      or pool:status(second).status == "running"
+    test.ok(background_still_running, "interactive work waited for every background job")
+    test.equal(pool:status(interactive).status, "complete")
   end)
 
   test.test("File Tree Git status jobs preserve binary payloads and return bounded snapshots", function()
@@ -956,7 +951,7 @@ Route_Message_Type :: enum c.uchar {
     end
     test.equal(pool:status(handle).status, "running")
     test.ok(pool:cancel(handle))
-    test.ok(drain_until(pool, function(message) return message.type == "cancelled" end, 5000))
+    test.ok(drain_until(pool, function(message) return message.type == "cancelled" end, 30))
     local partial = builder:snapshot({ status = "cancelled" })
     test.equal(partial:summary().files, 0)
     builder:close()

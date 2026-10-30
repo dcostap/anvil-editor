@@ -18,67 +18,72 @@ local function new_buffer(text)
   return buffer
 end
 
-local function cached_line(text, state)
-  return { text = text, state = state, tokens = { "normal", text } }
+local function set_test_syntax(buffer)
+  buffer.syntax = {
+    patterns = { { pattern = "%a+", type = "word" } },
+    symbols = {},
+  }
+end
+
+local function tokens(buffer, line)
+  local result = {}
+  for _, kind, text in buffer.highlighter:each_token(line) do
+    result[#result + 1] = { kind, text }
+  end
+  return result
 end
 
 test.describe("core.buffer.highlighter batch edits", function()
-  test.it("keeps cached token lines before the edited line", function()
+  test.it("updates tokens on an edited line", function()
     local buffer = new_buffer("one\ntwo\nthree")
-    local line1 = cached_line("one\n", "s1")
-    local line3 = cached_line("three\n", "s3")
-    buffer.highlighter.lines = {
-      line1,
-      cached_line("two\n", "s2"),
-      line3,
-    }
-    buffer.highlighter.first_invalid_line = 4
+    set_test_syntax(buffer)
+    tokens(buffer, 1)
+    tokens(buffer, 2)
+    tokens(buffer, 3)
 
     buffer:insert(2, 1, "changed ")
 
-    test.equal(buffer.highlighter.lines[1], line1)
-    test.equal(buffer.highlighter.lines[2], false)
-    test.equal(buffer.highlighter.lines[3], line3)
-    test.equal(buffer.highlighter.first_invalid_line, 2)
+    test.same(tokens(buffer, 2), {
+      { "word", "changed" }, { "word", " two" },
+      { "normal", "\n" },
+    })
   end)
 
-  test.it("shifts cached token lines below inserted lines", function()
+  test.it("keeps tokens aligned with lines after inserted lines", function()
     local buffer = new_buffer("one\ntwo\nthree")
-    local old_line2 = cached_line("two\n", "s2")
-    local old_line3 = cached_line("three\n", "s3")
-    buffer.highlighter.lines = {
-      cached_line("one\n", "s1"),
-      old_line2,
-      old_line3,
-    }
-    buffer.highlighter.first_invalid_line = 4
+    set_test_syntax(buffer)
+    tokens(buffer, 1)
+    tokens(buffer, 2)
+    tokens(buffer, 3)
 
     buffer:insert(1, 1, "zero\n")
 
-    test.equal(buffer.highlighter.lines[1], false)
-    test.equal(buffer.highlighter.lines[2], false)
-    test.equal(buffer.highlighter.lines[3], old_line2)
-    test.equal(buffer.highlighter.lines[4], old_line3)
-    test.equal(buffer.highlighter.first_invalid_line, 1)
+    test.same(tokens(buffer, 1), {
+      { "word", "zero" }, { "normal", "\n" },
+    })
+    test.same(tokens(buffer, 3), {
+      { "word", "two" }, { "normal", "\n" },
+    })
+    test.same(tokens(buffer, 4), {
+      { "word", "three" }, { "normal", "\n" },
+    })
   end)
 
-  test.it("splices cached token lines across deleted lines", function()
+  test.it("keeps tokens aligned with lines after deleted lines", function()
     local buffer = new_buffer("one\ntwo\nthree\nfour")
-    local old_line1 = cached_line("one\n", "s1")
-    local old_line4 = cached_line("four\n", "s4")
-    buffer.highlighter.lines = {
-      old_line1,
-      cached_line("two\n", "s2"),
-      cached_line("three\n", "s3"),
-      old_line4,
-    }
-    buffer.highlighter.first_invalid_line = 5
+    set_test_syntax(buffer)
+    for line = 1, 4 do tokens(buffer, line) end
 
     buffer:remove(2, 1, 3, 1)
 
-    test.equal(buffer.highlighter.lines[1], old_line1)
-    test.equal(buffer.highlighter.lines[2], false)
-    test.equal(buffer.highlighter.lines[3], old_line4)
-    test.equal(buffer.highlighter.first_invalid_line, 2)
+    test.same(tokens(buffer, 1), {
+      { "word", "one" }, { "normal", "\n" },
+    })
+    test.same(tokens(buffer, 2), {
+      { "word", "three" }, { "normal", "\n" },
+    })
+    test.same(tokens(buffer, 3), {
+      { "word", "four" }, { "normal", "\n" },
+    })
   end)
 end)

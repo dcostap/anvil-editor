@@ -130,6 +130,8 @@ test.describe("Workspace persistence", function()
     context.original_filetree_module = package.loaded["plugins.filetree"]
     context.original_panes_save_workspace_state = panes.save_workspace_state
     context.original_panes_restore_workspace_state = panes.restore_workspace_state
+    context.original_panes_ordered = panes.ordered
+    context.original_panes_views = panes.views
     context.original_interface_scale = scale.get()
     context.original_code_scale = scale.get_code()
     panes.save_workspace_state = function(save_view)
@@ -187,6 +189,9 @@ test.describe("Workspace persistence", function()
     package.loaded["plugins.filetree"] = context.original_filetree_module
     panes.save_workspace_state = context.original_panes_save_workspace_state
     panes.restore_workspace_state = context.original_panes_restore_workspace_state
+    panes.ordered = context.original_panes_ordered
+    panes.views = context.original_panes_views
+    if context.filetree then context.filetree:on_close() end
     scale.set(context.original_interface_scale)
     scale.set_code(context.original_code_scale)
     if context.original_cwd then
@@ -413,17 +418,49 @@ test.describe("Workspace persistence", function()
   end)
 
   test.test("refreshes File Tree after Workspace Project Paths are loaded", function(context)
-    local calls = 0
-    package.loaded["plugins.filetree"] = {
-      refresh_preserving_selection_paths = function(_, preserve_expansion)
-        calls = calls + 1
-        test.equal(preserve_expansion, true)
-      end,
-    }
+    local project_path = join_path(context.temp_root, "test_project")
+    local source_path = join_path(context.temp_root, "source_project")
+    local external_path = join_path(context.temp_root, "external_project")
+    test.ok(common.mkdirp(external_path))
+    local external_file = assert(io.open(join_path(external_path, "External.lua"), "wb"))
+    external_file:write("return true\n")
+    external_file:close()
+    storage.save("ws", "test_project-10", {
+      path = project_path,
+      pane_state = empty_leaf_state(),
+      project_paths = {
+        entries = {
+          { path = external_path, label = "external-project", role = "external" },
+        },
+      },
+      visited_files = {},
+    })
 
-    test.not_nil(core.refresh_project_path_consumers)
-    core.refresh_project_path_consumers("test")
-    test.equal(calls, 1)
+    local panel, view = make_fake_pane_host("source")
+    core.projects = { Project(source_path) }
+    core.recent_projects = {}
+    replace_buffers()
+    core.visited_files = {}
+    core.root_panel = panel
+    core.active_view = view
+
+    local filetree = test.not_nil(require("plugins.filetree").new(project_path))
+    context.filetree = filetree
+    panes.ordered = function() return { {} } end
+    panes.views = function() return { filetree } end
+
+    local function shows_external_root()
+      for _, line in ipairs(filetree.buffer.lines) do
+        if line:find("external-project/", 1, true) then return true end
+      end
+      return false
+    end
+    test.not_ok(shows_external_root(), "File Tree showed an unloaded Project Path")
+
+    core.set_project(project_path)
+    run_last_captured_thread(context)
+
+    test.ok(shows_external_root(), "File Tree did not show the loaded Project Path")
   end)
 
   test.test("saves two-pane Workspace state", function(context)

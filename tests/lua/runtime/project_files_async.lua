@@ -64,7 +64,7 @@ test.describe("Project file worker I/O", function()
     assert(project_files.list(root))
     local check, pending = DirWatch.check, false
     local id, events = {}, {}
-    local release, finished, overlap = false, false, false
+    local release, finished, overlap, second_batch_seen = false, false, false, false
     context.cleanup = function()
       release = true
       DirWatch.check = check
@@ -75,6 +75,7 @@ test.describe("Project file worker I/O", function()
     DirWatch.check = function(_, callback)
       if pending then
         pending = false
+        second_batch_seen = true
         callback(root, path, true)
       end
       return false
@@ -94,8 +95,9 @@ test.describe("Project file worker I/O", function()
     test.equal(#events, 1)
     assert(os.remove(path))
     pending = true
-    -- Give the next batch time to arrive while the first subscriber is suspended.
-    coroutine.yield(0.3)
+    deadline = system.get_time() + 30
+    while not second_batch_seen and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.ok(second_batch_seen, "the watcher did not observe the second batch")
     release = true
     deadline = system.get_time() + 30
     while #events < 2 and system.get_time() < deadline do coroutine.yield(0) end

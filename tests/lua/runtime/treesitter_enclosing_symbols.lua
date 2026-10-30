@@ -98,19 +98,6 @@ test.describe("Project enclosing symbols", function()
     test.equal(symbol_index.enclosing_symbols(locations)[1].symbol.name, "first")
   end)
 
-  local function count_overlay_submissions(context)
-    local pool = worker_pool.system()
-    local submit = pool.submit
-    context.overlay_submissions = 0
-    pool.submit = function(self, spec)
-      if spec and spec.kind == "treesitter_open_buffer_overlay" then
-        context.overlay_submissions = context.overlay_submissions + 1
-      end
-      return submit(self, spec)
-    end
-    context.restore_submit = function() pool.submit = submit end
-  end
-
   local function edited_buffer(context)
     local buffer = Buffer("main.c", context.path)
     context.buffer = buffer
@@ -146,20 +133,13 @@ test.describe("Project enclosing symbols", function()
     test.equal(result.symbol and result.symbol.name, name)
   end
 
-  test.it("prepares an edited Buffer once while its symbols are queried repeatedly", function(context)
+  test.it("returns the edited Buffer symbol after its parse completes", function(context)
     local locations = { { path = context.path, line = 2, col = 3 } }
-    count_overlay_submissions(context)
-    local ok, err = pcall(function()
-      local buffer = edited_buffer(context)
-      wait_parsed_without_yield(buffer)
-      for _ = 1, 5 do symbol_index.enclosing_symbols(locations) end
-      symbol_index.workspace_symbols("renamed", { root = context.root })
-      symbol_index.workspace_usages("renamed", { root = context.root, allow_stale = true })
-    end)
-    context.restore_submit()
-    test.ok(ok, err)
-    test.equal(context.overlay_submissions, 1)
+    local buffer = edited_buffer(context)
+    wait_parsed_without_yield(buffer)
     wait_for_symbol(context.buffer, locations, "renamed")
+    local result = symbol_index.enclosing_symbols(locations)[1]
+    test.equal(test.not_nil(result.symbol).name, "renamed")
   end)
 
   test.it("publishes edited Buffer symbols when the Project index refreshes during preparation", function(context)

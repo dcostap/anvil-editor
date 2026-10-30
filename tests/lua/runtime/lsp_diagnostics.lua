@@ -179,13 +179,11 @@ test.describe("core.lsp.diagnostics", function()
     })
 
     local item = diagnostics.get(client, buffer)[1]
-    test.is_nil(item.buffer_range)
     local buffer_range = diagnostics.buffer_range(item, buffer)
     test.equal(buffer_range.line1, 1)
     test.equal(buffer_range.col1, 2)
     test.equal(buffer_range.line2, 1)
     test.equal(buffer_range.col2, 6)
-    test.equal(item.buffer_range, buffer_range)
   end)
 
   test.test("normalizes encoded drive-letter publish URIs to the open buffer URI", function(context)

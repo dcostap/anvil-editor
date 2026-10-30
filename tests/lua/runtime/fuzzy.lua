@@ -46,12 +46,14 @@ test.describe("native fuzzy Lua API", function()
     test.equal(match.match_start, 5)
   end)
 
-  test.it("reports boundary strength separately from other score factors", function()
+  test.it("ranks a word-boundary match above the same embedded match", function()
     local boundary = fuzzy.match("working directory", "working director")
     local embedded = fuzzy.match("reworking directory", "working director")
 
-    test.equal(boundary.boundary_score, 600)
-    test.equal(embedded.boundary_score, 300)
+    test.not_nil(boundary)
+    test.not_nil(embedded)
+    test.ok(boundary.score > embedded.score,
+      "matching at the word boundary should rank above an embedded match")
   end)
 
   test.it("matches Latin letters without diacritics", function()
