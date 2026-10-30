@@ -88,7 +88,7 @@ local SHELL_COLORS = {
   {"close_hover", "titlebar_close_hover"}, {"close_pressed", "titlebar_close_pressed"},
   {"close_text", "titlebar_close_text"},
   {"card", "card"}, {"card_border", "card_border"}, {"card_shadow", "card_shadow"},
-  {"card_button", "nagbar_button"}, {"accent", "accent"}, {"accent_text", "nagbar_primary_text"},
+  {"card_button", "button"}, {"accent", "accent"}, {"accent_text", "button_primary_text"},
 }
 
 ---The colours the shell needs from a style, for system.set_shell_colors.

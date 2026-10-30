@@ -64,4 +64,13 @@ test.describe("theme selection preview", function()
     test.equal("light2", settings.config.theme)
     test.same({245, 234, 215, 255}, style.background)
   end)
+
+  test.it("supplies the shell's card colours from the current theme", function()
+    local colors = color_theme.shell_colors(style)
+    test.same(style.button, colors.card_button)
+    test.same(style.button_primary_text, colors.accent_text)
+    test.ok(color_theme.same_shell_colors(style, colors))
+    colors.card_button[1] = colors.card_button[1] + 1
+    test.ok(not color_theme.same_shell_colors(style, colors))
+  end)
 end)
