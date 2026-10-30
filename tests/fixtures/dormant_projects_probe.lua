@@ -469,8 +469,6 @@ else
         local ready = state()
         local terminal
         if with_terminal then
-          local command = require "core.command"
-          assert(command.perform("terminal:reset_quit_choice"))
           terminal = require("plugins.terminal").open {cwd = directory, shell = "cmd.exe /D /Q"}
           wait_for(function() return terminal.session and terminal.state == "running" and terminal.session:stats().host_pid > 0 end, 10)
           -- cmd shows the title while the command runs. The Sidebar shows the same live title.

@@ -155,7 +155,6 @@ elseif path == root .. "/Project" then
  core.add_background_thread(function()
   local ok, err = pcall(function()
    local terminal_plugin = require "plugins.terminal"
-   assert(require("core.command").perform("terminal:reset_quit_choice"))
    local editor = core.open_file(path .. "/edited.txt")
    local terminal = terminal_plugin.open {cwd = path, shell = "cmd.exe /D /Q", focus = true}
    wait(function()

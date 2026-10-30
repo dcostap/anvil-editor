@@ -2646,10 +2646,6 @@ local function prompt_color_setting(label, key, minimum, maximum)
 end
 
 command.add(nil, {
-  ["terminal:reset_quit_choice"] = function()
-    require("core.storage").clear("plugins.terminal", "quit_choice")
-    core.log_quiet("Terminal remembered quit choice cleared")
-  end,
   ["terminal:set_minimum_text_contrast"] = command.palette(function()
     prompt_color_setting("Terminal Minimum Text Contrast (1-21; 1 = off)", "minimum_contrast", 1, 21)
   end, {
@@ -2879,9 +2875,8 @@ function M.confirm_quit(accept, cancel)
       end
     end
   end
-  local storage = require "core.storage"
   local window_close = false
-  local function apply(answer, remember)
+  local function apply(answer)
     for i, view in ipairs(views) do
       statuses[i] = view.session and view:close_status() or { kind = "closed" }
     end
@@ -2891,7 +2886,6 @@ function M.confirm_quit(accept, cancel)
       if cancel then cancel() end
       return
     end
-    if remember then storage.save("plugins.terminal", "quit_choice", answer) end
     if window_close and (answer == "keep" or answer == "end") then system.terminal_quit_choice(answer) end
     local by_view = {}
     for i, view in ipairs(views) do by_view[view] = actions[i] end
@@ -2900,28 +2894,18 @@ function M.confirm_quit(accept, cancel)
   local function choose(scope)
     window_close = scope ~= "project"
     core.log_quiet("Terminal quit scope: scope=%s sessions=%d", scope, #views)
-    local remembered = window_close and scope or storage.load("plugins.terminal", "quit_choice")
-    local actions, _, count = M.quit_decision(statuses, remembered)
-    if actions then apply(remembered); return end
-    local remember = false
+    local actions, _, count = M.quit_decision(statuses, scope)
+    if actions then apply(scope); return end
     core.wait_for_quit_choice()
-    local toggle = { text = "[ ] Remember my choice" }
     local options = {
       { text = "Keep running", action = "keep", default_yes = true },
       { text = "End all", action = "end" },
       { text = "Cancel", action = "cancel", default_no = true },
     }
-    if not window_close then options[#options + 1] = toggle end
     local message = window_close and "Keep this Window's Terminal Sessions running in the background?"
       or string.format("Keep %d Terminal Sessions running in the background?", count)
     core.nag_view:show("Running Terminals", message, options, function(item)
-      if item == toggle then
-        remember = not remember
-        toggle.text = remember and "[x] Remember my choice" or "[ ] Remember my choice"
-        core.redraw = true
-        return false
-      end
-      apply(item.action, remember)
+      apply(item.action)
     end)
   end
   local _, _, count = M.quit_decision(statuses)

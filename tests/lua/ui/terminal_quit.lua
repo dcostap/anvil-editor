@@ -35,11 +35,39 @@ test.describe("Terminal quit decision", function()
 end)
 
 test.describe("Terminal quit confirmation", function()
-  test.it("cancels, remembers Keep, and preserves idle and busy shells", function()
+  test.it("asks on each Project close even when an old saved answer exists", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local command = require "core.command"
     local storage = require "core.storage"
+    terminal._set_native_for_tests(nil)
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q", placement = "new" })
+    local ok, err = pcall(function()
+      storage.save("plugins.terminal", "quit_choice", "keep")
+      for _ = 1, 2 do
+        local accepted
+        terminal.confirm_quit(function(actions) accepted = actions end)
+        test.ok(core.nag_view.visible, "Project close skipped confirmation")
+        local actions = {}
+        for i, option in ipairs(core.nag_view.options) do
+          test.ok(option.action, "quit dialog offers a non-decision option")
+          actions[i] = option.action
+        end
+        test.same(actions, { "keep", "end", "cancel" })
+        core.nag_view:change_hovered(1)
+        test.ok(command.perform "core:select_dialog_entry")
+        test.equal(accepted[view], "detach")
+        storage.clear("plugins.terminal", "quit_choice")
+      end
+    end)
+    if core.nag_view.visible then command.perform "core:select_dialog_no" end
     storage.clear("plugins.terminal", "quit_choice")
+    view:on_close()
+    test.ok(ok, err)
+  end)
+
+  test.it("cancels, asks again, and preserves idle and busy shells", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local command = require "core.command"
     terminal._set_native_for_tests(nil)
     local idle = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q", placement = "new" })
     local busy = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q", placement = "new" })
@@ -83,7 +111,6 @@ test.describe("Terminal quit confirmation", function()
       test.equal(core.quit_request, previous_quit)
       test.ok(idle.session and busy.session)
       core.quit(true)
-      select("[ ] Remember my choice")
       test.ok(core.nag_view.visible)
       select("Keep running")
       test.equal(decisions[#decisions], "accepted", "Terminal Keep did not accept the native close")
@@ -92,7 +119,6 @@ test.describe("Terminal quit confirmation", function()
       test.ok(accepted)
       test.equal(idle.state, "detached")
       test.equal(busy.state, "detached")
-      test.equal(storage.load("plugins.terminal", "quit_choice"), "keep")
       restored = terminal.from_state(busy_state)
       require("core.panes").place(function() return restored end, { placement = "current", focus = true })
       deadline = system.get_time() + 8
@@ -108,10 +134,12 @@ test.describe("Terminal quit confirmation", function()
         coroutine.yield(0.01)
       until system.get_time() >= deadline
       core.quit(true)
+      test.ok(core.nag_view.visible, "a later quit skipped confirmation")
+      select("Keep running")
       accepted = core.quit_request
       core.quit_request = previous_quit
-      test.ok(accepted, "remembered Keep did not accept quit")
-      test.ok(not core.nag_view.visible, "remembered choice asked again")
+      test.ok(accepted, "Keep did not accept quit")
+      test.ok(not core.nag_view.visible)
       test.equal(restored.state, "detached")
     end)
     core.quit_request = previous_quit
@@ -133,7 +161,6 @@ test.describe("Terminal quit confirmation", function()
     cleanup:on_close()
     if restored then restored:on_close() end
     busy:on_close(); idle:on_close()
-    storage.clear("plugins.terminal", "quit_choice")
     test.ok(ok, err)
   end)
 end)

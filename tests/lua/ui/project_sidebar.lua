@@ -1,9 +1,6 @@
 local core = require "core"
 local test = require "core.test"
 
--- End the isolated startup Terminal without a shutdown dialog.
-require("core.storage").save("plugins.terminal", "quit_choice", "end")
-
 -- Seam: asynchronous snapshots at the native Window event boundary.
 test.describe("Project Sidebar snapshots", function()
   local saved, offsets

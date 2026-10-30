@@ -361,8 +361,6 @@ elseif names[path] then
   local editor
   local terminal
   if terminals then
-   -- A saved choice from Project unload must not suppress a Window's choice.
-   require("core.storage").save("plugins.terminal", "quit_choice", "end")
    terminal = require("plugins.terminal").open {shell="cmd.exe /D /Q", cwd=path, placement="new"}
    wait(function()
     terminal:service_session(true)

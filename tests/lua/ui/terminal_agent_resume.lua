@@ -183,8 +183,6 @@ test.describe("Terminal agent resume", function()
     local exe = find_runtime("node")
     test.skip_if(not exe, "node is not installed")
     terminal._set_native_for_tests(nil)
-    local storage = require "core.storage"
-    storage.save("plugins.terminal", "quit_choice", "end")
     local dir = USERDIR .. "/pi sessions ended"
     system.mkdir(dir)
     local cli = system.getcwd() .. "/tests/fixtures/fake-pi/dist/cli.js"
@@ -202,7 +200,15 @@ test.describe("Terminal agent resume", function()
           and saved.interrupted_command and saved.interrupted_command:find("cli.js", 1, true)
       end), "Pi did not start: " .. screen_text(view))
       core.quit(true)
-      test.ok(core.quit_request ~= previous_quit, "the remembered End answer did not accept quit")
+      test.ok(core.nag_view.visible, "quit did not ask about the Terminal")
+      for i, option in ipairs(core.nag_view.options) do
+        if option.action == "end" then
+          core.nag_view:change_hovered(i)
+          test.ok(require("core.command").perform "core:select_dialog_entry")
+          break
+        end
+      end
+      test.ok(core.quit_request ~= previous_quit, "the End answer did not accept quit")
       core.quit_request = previous_quit
       require("terminal_native").finish_close_commands()
       test.equal(kernel.WaitForSingleObject(handle, 10000), 0, "End did not end the host")
@@ -215,7 +221,6 @@ test.describe("Terminal agent resume", function()
       test.equal(resumed[2]:match("[^/\\]+$"), session_file_name(dir))
     end)
     core.quit_request = previous_quit
-    storage.clear("plugins.terminal", "quit_choice")
     if restored then restored:on_close() end
     view:on_close()
     if kernel.WaitForSingleObject(handle, 0) == 258 then kernel.TerminateProcess(handle, 99) end

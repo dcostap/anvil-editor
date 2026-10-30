@@ -920,7 +920,6 @@ else
       state.host_pid = view.session:stats().host_pid
       state.session_id = view.session_id
       if action == "end-loss" then
-        require("core.storage").save("plugins.terminal", "quit_choice", "end")
         view.session:write("ping -t 127.0.0.1\r")
         assert(wait_for(function() local _, status = view.session:update(); return status.busy == true end, 5), "Terminal command did not become busy")
       end

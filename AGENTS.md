@@ -98,7 +98,7 @@ Pane Close skips confirmation when Pi reports `idle` or `done`, even while its s
 Window Close asks once for its live Terminal Sessions, including idle shells and idle Pi.
 Keep running detaches them. End all ends them but keeps their revival records. Cancel stops Window Close.
 The shell shares the choice across that Window's Projects, not other Windows. A later Window Close asks again.
-Remembered Project quit choices do not suppress the Window prompt. Project unload and direct mode keep their remembered choices.
+Project unload and direct mode ask each time. Quit dialogs have no saved choice.
 An ended session is not closed. It revives in its Pane on the next start.
 The host gets `ANVIL_TERMINAL_END`. It stops the shell, but keeps the record, the screen and the Pi report.
 The session keeps its ID, so its Snooze, seen time and Pi session stay. Only a Pane close removes them.

@@ -1075,7 +1075,7 @@ end
 
 function core.prepare_update()
   core.log_quiet("Update requested: save Workspace and keep Terminal Sessions")
-  -- Use Workspace exit, not the remembered End/Keep policy for a normal quit.
+  -- Use Workspace exit without the normal Terminal quit confirmation.
   if not core.begin_quit() then return end
   core.confirm_close_buffers(core.buffers, core.exit, core.cancel_quit, function()
     core.window:_persist()

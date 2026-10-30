@@ -1,10 +1,6 @@
 local test = require "core.test"
 local numbered = require "core.numbered_panes"
 
--- The isolated test Project can open its initial Terminal during startup.
--- End that test shell without a shutdown dialog after the tests finish.
-require("core.storage").save("plugins.terminal", "quit_choice", "end")
-
 -- Seam: the shared numbering and navigation API consumes Project reports and seen times.
 test.describe("Pending Pane numbers", function()
   test.it("fills spare numbers from focus history without repeating pending or current Panes", function()
