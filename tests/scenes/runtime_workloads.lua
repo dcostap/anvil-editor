@@ -145,7 +145,7 @@ local workloads = {
       context.line = string.rep("target.lua:9:4 ", 22000)
     end,
     run = function(context)
-      local candidates = locations.extract_line_candidates(context.line, 1, 24000)
+      local candidates = locations.extract_line_candidates(context.line, 1, context.settings.limit or 24000)
       local first, last = candidates[1], candidates[#candidates]
       context.poi_result = {
         count = #candidates,
@@ -155,7 +155,8 @@ local workloads = {
     end,
     verify = function(context)
       local result = context.poi_result or {}
-      local ok = result.count == 22000 and result.first_path == "target.lua" and result.last_line == 9
+      local expected = math.min(context.settings.limit or 22000, 22000)
+      local ok = result.count == expected and result.first_path == "target.lua" and result.last_line == 9
       return ok, string.format("%d locations", result.count or 0)
     end,
   },

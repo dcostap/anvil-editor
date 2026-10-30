@@ -122,6 +122,9 @@ SCENARIOS: dict[str, Scenario] = {
     "text-poi-many-locations": Scenario(
         "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
         settings={"workload": "poi_many_locations"}, targets=1),
+    "text-poi-limited-locations": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "poi_many_locations", "limit": 32}, targets=1),
     "trimwhitespace-long-line": Scenario(
         "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
         settings={"workload": "trimwhitespace_long_line"}, targets=1),

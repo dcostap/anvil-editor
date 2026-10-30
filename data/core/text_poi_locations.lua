@@ -5,11 +5,18 @@ local locations = {}
 
 local function is_uri_like_path(path)
   path = tostring(path or "")
+  if not path:find(":", 1, true) then return false end
   if path:match("^%a[%w+.-]*://") then return true end
   return path:match("^%a[%w+.-]*:") ~= nil and not path:match("^%a:[/\\]")
 end
 
 local function clean_path(path)
+  -- Most matches are already plain paths. Avoid repeated trim scans and
+  -- replacements, especially for long fields that resemble file names.
+  if type(path) == "string" and path:byte(1) ~= 45 and path:byte(-1) ~= 46
+      and path:find("^[%w_./\\~+-]+$") then
+    return path
+  end
   path = tostring(path or ""):match("^%s*(.-)%s*$") or ""
   path = path:gsub("^[\"']", ""):gsub("[\"']$", "")
   path = path:gsub("^[%-%>:%s]+", ""):gsub("[%s,;]+$", "")
@@ -71,9 +78,9 @@ local function add_candidate(
   if path == "" or (is_uri_like_path(path) and not uri.is_file_uri(path)) then return end
   target_line = math.max(1, math.floor(tonumber(target_line) or 1))
   target_col = math.max(1, math.floor(tonumber(target_col) or 1))
-  col1 = math.max(1, math.floor(tonumber(col1) or 1))
-  col2 = math.max(col1 + 1, math.floor(tonumber(col2) or col1 + 1))
-  local key = table.concat({ line_no, col1, col2, path, target_line, target_col }, "\0")
+  -- Columns come directly from string matching and are already valid offsets.
+  local key = line_no .. "\0" .. col1 .. "\0" .. col2 .. "\0"
+    .. path .. "\0" .. target_line .. "\0" .. target_col
   if seen[key] then return end
   seen[key] = true
   list[#list + 1] = {
@@ -83,31 +90,25 @@ local function add_candidate(
   }
 end
 
-local function uri_ranges(line)
-  local ranges = {}
-  for start, token in line:gmatch("()([^%s\"']+)") do
+local function starts_in_uri(scan, col)
+  -- Matches advance within each format pass. Keep only the current token,
+  -- and restart when another format returns to an earlier column. A result
+  -- limit must not first allocate URI ranges for the complete line.
+  if col < scan.start then
+    scan.start, scan.finish, scan.next = 1, 1, 1
+  end
+  while col >= scan.finish do
+    local first, last = scan.line:find("[^%s\"']+", scan.next)
+    if not first then return false end
+    scan.start, scan.finish, scan.next = first, last + 1, last + 1
+    local token = scan.line:sub(first, last)
+    local _, colon
     if token:find(":", 1, true) then
-      local _, colon = token:find("%a[%w+.-]*:")
-      if colon then ranges[#ranges + 1] = { start + colon - 1, start + #token } end
+      _, colon = token:find("%a[%w+.-]*:")
     end
+    scan.colon = colon and first + colon - 1 or last + 1
   end
-  return ranges
-end
-
-local function starts_in_uri(ranges, col)
-  local first, last = 1, #ranges
-  while first <= last do
-    local middle = math.floor((first + last) / 2)
-    local range = ranges[middle]
-    if col <= range[1] then
-      last = middle - 1
-    elseif col >= range[2] then
-      first = middle + 1
-    else
-      return true
-    end
-  end
-  return false
+  return col > scan.colon and col < scan.finish
 end
 
 -- Every supported source location puts its line number directly after ":"
@@ -120,8 +121,8 @@ end
 
 -- Keep scan data in arguments. A JIT trace can retain a helper closure and
 -- all candidate tables captured by its upvalues after the scan returns.
-local function add(list, seen, limit, line_no, ranges, col1, col2, path, target_line, target_col, label)
-  if #list < limit and not starts_in_uri(ranges, col1) then
+local function add(list, seen, limit, line_no, uri_scan, col1, col2, path, target_line, target_col, label)
+  if #list < limit and not starts_in_uri(uri_scan, col1) then
     add_candidate(
       list, seen, limit, line_no, col1, col2, path, target_line, target_col, label
     )
@@ -137,98 +138,155 @@ local function add_file_uri(list, seen, limit, line_no, col1, col2, path, target
 end
 
 local function add_line_matches(list, seen, limit, line, line_no)
-  if not may_have_location(line) then return end
-  local ranges = uri_ranges(line)
+  if #list >= limit or not may_have_location(line) then return end
+  local uri_scan = { line = line, start = 1, finish = 1, next = 1 }
+  local windows = line:find(":/", 1, true) or line:find(":\\", 1, true)
+  local parentheses = line:find("(", 1, true)
   local init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find(
-      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+):(%d+)", init
-    )
-    if not s then break end
-    add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, target_col)
-    init = e + 1
-  end
-  init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find(
-      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+),(%d+)", init
-    )
-    if not s then break end
-    add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, target_col)
-    init = e + 1
-  end
-  init = 1
-  while true do
-    local s, e, path, target_line = line:find(
-      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+)", init
-    )
-    if not s then break end
-    if not line:find("^[:,]%d", e + 1) then
-      add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, 1)
+  if line:find("://", 1, true) then
+    while #list < limit do
+      local s, e, path, target_line, target_col = line:find(
+        "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+):(%d+)", init
+      )
+      if not s then break end
+      add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, target_col)
+      init = e + 1
     end
-    init = e + 1
-  end
-  init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find(
-      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+)%((%d+),(%d+)%)", init
-    )
-    if not s then break end
-    add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, target_col)
-    init = e + 1
-  end
-  init = 1
-  while true do
-    local s, e, path, target_line = line:find(
-      "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+)%((%d+)%)", init
-    )
-    if not s then break end
-    if line:sub(e + 1, e + 1) ~= "," then
-      add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, 1)
+    init = 1
+    while #list < limit do
+      local s, e, path, target_line, target_col = line:find(
+        "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+),(%d+)", init
+      )
+      if not s then break end
+      add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, target_col)
+      init = e + 1
     end
-    init = e + 1
+    init = 1
+    while #list < limit do
+      local s, e, path, target_line = line:find(
+        "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+)", init
+      )
+      if not s then break end
+      if not line:find("^[:,]%d", e + 1) then
+        add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, 1)
+      end
+      init = e + 1
+    end
+    init = 1
+    while #list < limit do
+      local s, e, path, target_line, target_col = line:find(
+        "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+)%((%d+),(%d+)%)", init
+      )
+      if not s then break end
+      add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, target_col)
+      init = e + 1
+    end
+    init = 1
+    while #list < limit do
+      local s, e, path, target_line = line:find(
+        "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+)%((%d+)%)", init
+      )
+      if not s then break end
+      if line:sub(e + 1, e + 1) ~= "," then
+        add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, 1)
+      end
+      init = e + 1
+    end
   end
-  init = 1
-  while true do
-    local s, e, path, target_line = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)", init)
-    if not s then break end
-    if not line:find("^,%s*column", e + 1) then add(list, seen, limit, line_no, ranges, s, e + 1, path, target_line, 1, line:sub(s, e)) end
-    init = e + 1
+  if line:find('"', 1, true) and line:find("line", 1, true) then
+    init = 1
+    while #list < limit do
+      local s, e, path, target_line = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)", init)
+      if not s then break end
+      if not line:find("^,%s*column", e + 1) then
+        add(list, seen, limit, line_no, uri_scan, s, e + 1, path, target_line, 1, line:sub(s, e))
+      end
+      init = e + 1
+    end
+    init = 1
+    while #list < limit do
+      local s, e, path, target_line, target_col = line:find("\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
+      if not s then break end
+      if line:sub(math.max(1, s - 5), s - 1) ~= "File " then
+        add(list, seen, limit, line_no, uri_scan, s, e + 1, path, target_line, target_col, line:sub(s, e))
+      end
+      init = e + 1
+    end
+    init = 1
+    while #list < limit do
+      local s, e, path, target_line, target_col = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
+      if not s then break end
+      add(list, seen, limit, line_no, uri_scan, s, e + 1, path, target_line, target_col, line:sub(s, e))
+      init = e + 1
+    end
   end
-  init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find("\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
-    if not s then break end
-    if line:sub(math.max(1, s - 5), s - 1) ~= "File " then add(list, seen, limit, line_no, ranges, s, e + 1, path, target_line, target_col, line:sub(s, e)) end
-    init = e + 1
+  if line:find("-->", 1, true) then
+    init = 1
+    while #list < limit do
+      local s, e, path, target_line, target_col = line:find("%-%-%>%s*([^:%s][^:\r\n]-):(%d+):(%d+)", init)
+      if not s then break end
+      local path_offset = line:find(path, s, true) or s
+      add(list, seen, limit, line_no, uri_scan, path_offset, e + 1, path, target_line, target_col, line:sub(path_offset, e))
+      init = e + 1
+    end
   end
-  init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
-    if not s then break end
-    add(list, seen, limit, line_no, ranges, s, e + 1, path, target_line, target_col, line:sub(s, e))
-    init = e + 1
+  if #list >= limit then return end
+  if windows then
+    for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+):(%d+)()") do
+      add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, target_col)
+      if #list >= limit then return end
+    end
+    for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+),(%d+)()") do
+      add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, target_col)
+      if #list >= limit then return end
+    end
+    for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+)()") do
+      if not line:find("^[:,]%d", e) then
+        add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, 1)
+      end
+      if #list >= limit then return end
+    end
   end
-  init = 1
-  while true do
-    local s, e, path, target_line, target_col = line:find("%-%-%>%s*([^:%s][^:\r\n]-):(%d+):(%d+)", init)
-    if not s then break end
-    local path_offset = line:find(path, s, true) or s
-    add(list, seen, limit, line_no, ranges, path_offset, e + 1, path, target_line, target_col, line:sub(path_offset, e))
-    init = e + 1
-  end
-  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+):(%d+)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
-  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+),(%d+)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+)()") do if not line:find("^[:,]%d", e) then add(list, seen, limit, line_no, ranges, s, e, path, target_line, 1) end end
   -- Start at token boundaries. Retrying a failed path at every byte makes a
   -- long JSONL field with one :number take quadratic time on the UI thread.
-  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+):(%d+)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
-  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+),(%d+)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+)()") do if not line:find("^[:,]%d", e) then add(list, seen, limit, line_no, ranges, s, e, path, target_line, 1) end end
-  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%,(%d+)%)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%)()") do if line:sub(e, e) ~= "," then add(list, seen, limit, line_no, ranges, s, e, path, target_line, 1) end end
-  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%,(%d+)%)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%)()") do if line:sub(e, e) ~= "," then add(list, seen, limit, line_no, ranges, s, e, path, target_line, 1) end end
+  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+):(%d+)()") do
+    add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, target_col)
+    if #list >= limit then return end
+  end
+  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+),(%d+)()") do
+    add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, target_col)
+    if #list >= limit then return end
+  end
+  for s, path, target_line, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+)()") do
+    if not line:find("^[:,]%d", e) then
+      add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, 1)
+    end
+    if #list >= limit then return end
+  end
+  if parentheses and windows then
+    for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%,(%d+)%)()") do
+      add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, target_col)
+      if #list >= limit then return end
+    end
+    for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%)()") do
+      if line:sub(e, e) ~= "," then
+        add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, 1)
+      end
+      if #list >= limit then return end
+    end
+  end
+  if parentheses then
+    for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%,(%d+)%)()") do
+      add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, target_col)
+      if #list >= limit then return end
+    end
+    for s, path, target_line, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%)()") do
+      if line:sub(e, e) ~= "," then
+        add(list, seen, limit, line_no, uri_scan, s, e, path, target_line, 1)
+      end
+      if #list >= limit then return end
+    end
+  end
 end
 
 local function sort(candidates)
@@ -243,10 +301,11 @@ function locations.extract_line_candidates(text, line_no, limit)
   -- File scans call this for every line. Skip the copy without its line break.
   if not may_have_location(text) then return {} end
   limit = math.max(0, math.floor(tonumber(limit) or math.huge))
+  local ending = text:byte(-1)
+  if ending == 10 or ending == 13 then text = text:gsub("[\r\n]+$", "") end
   local candidates = {}
   add_line_matches(
-    candidates, {}, limit,
-    text:gsub("[\r\n]+$", ""),
+    candidates, {}, limit, text,
     math.max(1, math.floor(tonumber(line_no) or 1))
   )
   return sort(candidates)
