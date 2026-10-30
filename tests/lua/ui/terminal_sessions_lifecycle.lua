@@ -23,6 +23,23 @@ local function mark(view, marker)
   test.ok(wait_for(view, function() return printed(view, marker) end))
 end
 
+local function wait_for_project_workspace(path)
+  local deadline = system.get_time() + 30
+  while system.get_time() < deadline do
+    local project = core.root_project()
+    if project and common.path_equals(project.path, path) then
+      for _, pane in ipairs(panes.ordered()) do
+        for _, view in ipairs(panes.views(pane)) do
+          local name = view.get_name and view:get_name() or ""
+          if name:match("^File Tree:") then return true end
+        end
+      end
+    end
+    coroutine.yield(0.01)
+  end
+  return false
+end
+
 test.describe("Terminal Session lifecycle", function()
   test.before_each(function(context)
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
@@ -30,11 +47,13 @@ test.describe("Terminal Session lifecycle", function()
     context.project = core.root_project().path
     context.views = {}
     context.processes = {}
+    context.restart = core.restart
     context.restart_request = core.restart_request
     context.quit_request = core.quit_request
   end)
 
   test.after_each(function(context)
+    core.restart = context.restart
     core.restart_request = context.restart_request
     core.quit_request = context.quit_request
     if context.project and not common.path_equals(core.root_project().path, context.project) then
@@ -185,12 +204,19 @@ test.describe("Terminal Session lifecycle", function()
     local view = open(context)
     mark(view, "project_switch_marker")
     local state, stats = view:get_state(), view.session:stats()
-    context.directory = USERDIR .. "/terminal-session-project"
+    context.directory = USERDIR .. "/terminal-session-project-"
+      .. system.get_process_id() .. "-" .. math.floor(system.get_time() * 1000000)
     test.ok(common.mkdirp(context.directory))
-    test.ok(core.open_project_in_same_window(context.directory))
-    core.restart_request = context.restart_request
+    local restart = core.restart
+    core.restart = function() end
+    local ok, opened = pcall(core.open_project_in_same_window, context.directory)
+    core.restart = restart
+    test.ok(ok, opened)
+    test.ok(opened)
     test.equal(view.session, nil)
-    coroutine.yield(0.01) -- Let the new Project's Workspace load before switching back.
+    local old_pane = panes.pane_for_view(view)
+    if old_pane then test.ok(panes.close(old_pane, { force = true })) end
+    test.ok(wait_for_project_workspace(context.directory), "the new Project Workspace did not load")
     test.ok(core.set_project(context.project))
     local restored
     test.ok(wait_for(view, function()

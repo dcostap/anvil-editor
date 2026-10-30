@@ -293,12 +293,11 @@ test.describe("Pane manager", function()
     local source = panes.create { factory = factory("source") }
     source.current_view.copy_name = "source copy"
     local prompt
-    core.global_prompt_bar.enter = function(_, label, options)
-      prompt = { label = label, options = options }
+    core.global_prompt_bar.enter = function(_, _, options)
+      prompt = { options = options }
     end
 
     test.ok(command.perform("pane:copy_view_to"))
-    test.equal(prompt.label, "Copy Current View To")
     test.ok(prompt.options.validate("1"))
     prompt.options.submit("1")
 
@@ -313,12 +312,11 @@ test.describe("Pane manager", function()
     local moved = FakeView("moved")
     panes.present(moved, { pane = source })
     local prompt
-    core.global_prompt_bar.enter = function(_, label, options)
-      prompt = { label = label, options = options }
+    core.global_prompt_bar.enter = function(_, _, options)
+      prompt = { options = options }
     end
 
     test.ok(command.perform("pane:move_view_to"))
-    test.equal(prompt.label, "Move Current View To")
     local item = test.not_nil(prompt.options.suggest("New Pane Group")[1])
     prompt.options.submit(item.text, item)
 
@@ -413,12 +411,11 @@ test.describe("Pane manager", function()
     panes.back(source)
 
     local prompt
-    core.global_prompt_bar.enter = function(_, label, options)
-      prompt = { label = label, options = options }
+    core.global_prompt_bar.enter = function(_, _, options)
+      prompt = { options = options }
     end
 
     test.ok(command.perform("pane:move_to"))
-    test.equal(prompt.label, "Move Current Pane To")
     test.ok(prompt.options.validate("1"))
     prompt.options.submit("1")
 

@@ -7,7 +7,6 @@ local test = require "core.test"
 local tokenizer = require "core.tokenizer"
 local treesitter = require "core.treesitter"
 local intelligence = require "core.language_intelligence"
-local line_packets = require "core.textview_line_packets"
 
 local function set_text(buffer, text)
   buffer.lines = {}
@@ -71,6 +70,25 @@ local function with_fake_draw_text(fn)
   return calls
 end
 
+local function draw_line_text(view, line)
+  local x, y = view:get_line_screen_position(line)
+  return with_fake_draw_text(function()
+    view:draw_line_text(line, x, y)
+  end)
+end
+
+local function drawn_text(calls)
+  local text = {}
+  for _, call in ipairs(calls) do text[#text + 1] = call.text end
+  return table.concat(text)
+end
+
+local function color_for_text(calls, text)
+  for _, call in ipairs(calls) do
+    if call.text:find(text, 1, true) then return table.concat(call.color, ",") end
+  end
+end
+
 local function capture_status_messages(fn)
   local old_show_message = core.status_bar.show_message
   local messages = {}
@@ -126,15 +144,14 @@ test.describe("Tree-sitter TextView highlighting", function()
     view.__test_force_line_packets = true
     view:set_wrapping_enabled(true)
 
-    pcall(line_packets.draw_content, view, 1, 0, 0)
-    local before = line_packets.diagnostics(view)
-    test.equal(before.builds, 1)
+    local before = draw_line_text(view, 1)
+    local before_value_color = test.not_nil(color_for_text(before, "VALUE"))
 
     test.ok(wait_ready(buffer))
-    pcall(line_packets.draw_content, view, 1, 0, 0)
-    local after = line_packets.diagnostics(view)
-    test.ok(after.builds > before.builds,
-      "expected Tree-sitter readiness to rebuild the cached line packet")
+    local after = draw_line_text(view, 1)
+    test.equal(drawn_text(after), buffer.lines[1]:sub(1, -2))
+    test.not_equal(color_for_text(after, "VALUE"), before_value_color,
+      "Tree-sitter did not change the rendered constant highlight")
     buffer:on_close()
   end)
 
@@ -155,39 +172,15 @@ test.describe("Tree-sitter TextView highlighting", function()
     return view
   end
 
-  local function draw_packet_lines(view)
-    local line_height = view:get_line_height()
-    for line = 1, #view.buffer.lines do
-      pcall(line_packets.draw_content, view, line, 0, (line - 1) * line_height)
-    end
-  end
-
-  local function packet_text_colors(view, line)
-    local colors = {}
-    for _, command in ipairs(line_packets.inspect_line(view, line) or {}) do
-      if command.type == "text" and command.text:match("%S") then
-        colors[#colors + 1] = table.concat(command.color, ",")
-      end
-    end
-    return colors
-  end
-
-  test.it("keeps cached line packets for lines a one-line edit does not change", function()
+  test.it("draws edited and unchanged lines correctly after a one-line edit", function()
     local buffer = packet_buffer("ui_tree_sitter_packet_edit.cpp")
     test.ok(wait_ready(buffer))
     local view = packet_view(buffer)
-    draw_packet_lines(view)
-    local before = line_packets.diagnostics(view).builds
-    test.equal(before, 6)
-
     buffer:insert(4, 10, "0")
     test.ok(wait_ready(buffer))
-    draw_packet_lines(view)
-
-    local rebuilt = line_packets.diagnostics(view).builds - before
-    test.ok(rebuilt >= 1, "the edited line should rebuild its packet")
-    test.ok(rebuilt < 6, string.format(
-      "a one-line edit rebuilt all %d line packets", rebuilt))
+    test.equal(drawn_text(draw_line_text(view, 1)), "int a = 1;")
+    test.equal(drawn_text(draw_line_text(view, 4)), "int d = 40;")
+    test.equal(drawn_text(draw_line_text(view, 6)), "int f = 6;")
     buffer:on_close()
   end)
 
@@ -198,17 +191,14 @@ test.describe("Tree-sitter TextView highlighting", function()
       "int a = 1;\nint b = 2;\nint c = 3;\nint d = 4;\nint e = 5;\n*/")
     test.ok(wait_ready(buffer))
     local view = packet_view(buffer)
-    draw_packet_lines(view)
     local comment = table.concat(style.syntax.comment, ",")
-    test.ok(packet_text_colors(view, 5)[1] ~= comment)
+    local before = draw_line_text(view, 5)
+    test.not_equal(color_for_text(before, "e"), comment)
 
     buffer:insert(2, 1, "/* ")
     test.ok(wait_ready(buffer))
-    draw_packet_lines(view)
-
-    local colors = packet_text_colors(view, 5)
-    test.ok(#colors > 0)
-    for _, color in ipairs(colors) do test.equal(color, comment) end
+    local after = draw_line_text(view, 5)
+    test.equal(color_for_text(after, "e"), comment)
     buffer:on_close()
   end)
 

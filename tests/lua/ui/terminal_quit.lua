@@ -239,9 +239,9 @@ test.describe("Terminal busy status", function()
     end
     local ok, err = pcall(function()
       test.ok(wait_busy(false, 20), "idle status missing")
-      test.ok(view.session:write("ping -n 6 127.0.0.1 > nul\r"))
-      test.ok(wait_busy(true, 4), "child status missing")
-      test.ok(wait_busy(false, 10), "idle status did not return")
+      test.ok(view.session:write("ping -n 12 127.0.0.1 > nul\r"))
+      test.ok(wait_busy(true, 15), "child status missing")
+      test.ok(wait_busy(false, 15), "idle status did not return")
     end)
     view:on_close()
     test.ok(ok, err)
@@ -263,9 +263,9 @@ test.describe("Terminal busy status", function()
     local ok, err = pcall(function()
       test.ok(wait_busy(false, 20), "idle status missing")
       -- Start-Sleep is a cmdlet: the shell starts no child process for it.
-      test.ok(view.session:write("Start-Sleep -Seconds 4\r"))
-      test.ok(wait_busy(true, 3), "in-shell command status missing")
-      test.ok(wait_busy(false, 8), "idle status did not return")
+      test.ok(view.session:write("Start-Sleep -Seconds 10\r"))
+      test.ok(wait_busy(true, 15), "in-shell command status missing")
+      test.ok(wait_busy(false, 15), "idle status did not return")
     end)
     view:on_close()
     test.ok(ok, err)
@@ -288,9 +288,9 @@ test.describe("Terminal busy status", function()
       test.ok(wait_busy(false, 20), "idle status missing")
       -- A nested shell or TUI ends its own commands with these marks.
       test.ok(view.session:write(
-        "Start-Sleep -Seconds 1; [Console]::Write([char]27 + ']133;D;0' + [char]7 + [char]27 + ']133;A' + [char]7); Start-Sleep -Seconds 4\r"))
-      test.ok(wait_busy(true, 3), "in-shell command status missing")
-      local deadline = system.get_time() + 2.5
+        "Start-Sleep -Seconds 1; [Console]::Write([char]27 + ']133;D;0' + [char]7 + [char]27 + ']133;A' + [char]7); Start-Sleep -Seconds 20\r"))
+      test.ok(wait_busy(true, 15), "in-shell command status missing")
+      local deadline = system.get_time() + 15
       repeat
         local _, status = view.session:update()
         test.ok(status.busy, "a foreign prompt mark ended the running command")

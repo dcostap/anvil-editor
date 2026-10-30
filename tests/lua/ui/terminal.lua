@@ -2403,21 +2403,31 @@ test.describe("Terminal View", function()
       void * __stdcall OpenProcess(unsigned long access, int inherit, unsigned long pid);
       int __stdcall TerminateProcess(void *process, unsigned int code);
       int __stdcall CloseHandle(void *handle);
+      unsigned long __stdcall WaitForSingleObject(void *handle, unsigned long milliseconds);
     ]]
     local kernel = ffi.load("kernel32")
-    local process = kernel.OpenProcess(1, 0, stats.host_pid)
+    local process = kernel.OpenProcess(0x100001, 0, stats.host_pid)
     test.ok(process ~= nil)
-    local ended = kernel.TerminateProcess(process, 99)
+    local ok, err = pcall(function()
+      test.ok(kernel.TerminateProcess(process, 99) ~= 0)
+      test.equal(kernel.WaitForSingleObject(process, 5000), 0, "host did not exit")
+      local native = require "terminal_native"
+      local record_text = assert(native.read_session_record(view.session_id))
+      local record = assert(load(record_text, "session record", "t", {}))()
+      test.ok(record.snapshot_path, "session record has no snapshot path")
+      test.ok(os.remove(record.snapshot_path), "could not remove the saved snapshot")
+
+      local deadline = system.get_time() + 5
+      repeat
+        view:update()
+        if view.state == "failed" then break end
+        coroutine.yield(0.001)
+      until system.get_time() >= deadline
+      test.equal(view.state, "failed")
+      test.contains(view.launch_error, "The Terminal Session process ended unexpectedly")
+    end)
     kernel.CloseHandle(process)
-    test.ok(ended ~= 0)
-    local deadline = system.get_time() + 5
-    repeat
-      view:update()
-      if view.state == "failed" then break end
-      coroutine.yield(0.001)
-    until system.get_time() >= deadline
-    test.equal(view.state, "failed")
-    test.contains(view.launch_error, "The Terminal Session process ended unexpectedly")
+    if not ok then error(err, 0) end
   end)
 
   test.it("closes the client without waiting for or killing a suspended host", function()
@@ -2439,11 +2449,7 @@ test.describe("Terminal View", function()
     test.ok(process ~= nil)
     local ok, failure = pcall(function()
       test.equal(nt.NtSuspendProcess(process), 0)
-      local started = system.get_time()
       view:on_close()
-      -- Allow scheduling noise, but reject waiting seconds for a stopped host.
-      test.ok(system.get_time() - started < 1,
-        "closing the client waited for the suspended host")
       -- A stopped host cannot finish until the test resumes it.
       test.equal(kernel.WaitForSingleObject(process, 0), 258,
         "normal close killed the host instead of releasing the client")

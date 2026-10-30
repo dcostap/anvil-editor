@@ -24,8 +24,17 @@ test.describe("Terminal Windows Rerun", function()
           coroutine.yield(.01)
         until ready or system.get_time() - started > 10
         test.ok(ready, "prompt helper did not start")
-        local deadline = system.get_time() + 1.5
-        repeat view:service_session(true); coroutine.yield(.01) until system.get_time() >= deadline
+        local function wait_busy(expected, seconds)
+          local deadline = system.get_time() + seconds
+          repeat
+            view:service_session(true)
+            if view.busy == expected then return true end
+            coroutine.yield(.01)
+          until system.get_time() >= deadline
+          return false
+        end
+        test.ok(wait_busy(true, 15), "prompt helper did not report busy")
+        test.ok(wait_busy(false, 30), "prompt helper did not finish")
         local record = assert(load(assert(native.read_session_record(view.session_id)), "record", "t", {}))()
         test.equal(record.interrupted_command or "", "", "a prompt helper became the interrupted command")
       end)

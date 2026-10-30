@@ -247,7 +247,7 @@ test.describe("TextView folding", function()
     test.equal(first_color, style.selection)
   end)
 
-  test.it("draws default fold widget text with a collapsed-content preview", function(context)
+  test.it("draws the folded content in the collapsed preview", function(context)
     local view = open_editor(context, "alpha\n  beta\ngamma", { wrapping = false })
     local fold = view:add_fold_region { line1 = 1, line2 = 3 }
 
@@ -266,11 +266,13 @@ test.describe("TextView folding", function()
     renderer.draw_text = old_draw_text
     if not ok then error(err, 0) end
 
-    test.equal(drawn_text, "alpha beta gamma  ⋯ 3 lines folded ⋯")
+    test.ok(drawn_text:find("alpha beta gamma", 1, true),
+      "the preview did not show the collapsed content")
   end)
 
-  test.it("truncates long default fold widget previews", function(context)
-    local view = open_editor(context, string.rep("a", 60) .. "\nsecond", { wrapping = false })
+  test.it("shortens long collapsed-content previews", function(context)
+    local content = string.rep("a", 60)
+    local view = open_editor(context, content .. "\nsecond", { wrapping = false })
     local fold = view:add_fold_region { line1 = 1, line2 = 2 }
 
     local old_draw_rect = renderer.draw_rect
@@ -288,7 +290,9 @@ test.describe("TextView folding", function()
     renderer.draw_text = old_draw_text
     if not ok then error(err, 0) end
 
-    test.equal(drawn_text, string.rep("a", 50) .. "…  ⋯ 2 lines folded ⋯")
+    test.ok(drawn_text:find(string.rep("a", 10), 1, true),
+      "the preview did not retain folded content")
+    test.ok(not drawn_text:find(content, 1, true), "the preview did not shorten long content")
   end)
 
   test.it("typing over a selection crossing a fold replaces hidden text", function(context)

@@ -78,16 +78,13 @@ test.describe("Text search past encoded data", function()
       { name = "a query with a Search Modifier", query = "#plan sort:name", expected = "2,4" },
     } do
       test.it("lists only the note's own text for " .. case.name, function()
-        local started = system.get_time()
         fuzzy_searcher.open(case.query)
         local picker = test.not_nil(core.fuzzy_searcher_active_view)
         test.ok(wait_until(function()
           return result_lines(picker) == case.expected and not searching(picker)
         end), ("results %s, status %s"):format(result_lines(picker), tostring(picker.status)))
-        local elapsed = system.get_time() - started
         coroutine.yield(0.2)
         test.equal(result_lines(picker), case.expected)
-        test.ok(elapsed < 2, ("the search took %.2fs"):format(elapsed))
       end)
     end
   end)

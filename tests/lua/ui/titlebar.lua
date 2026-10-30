@@ -9,6 +9,7 @@ local style = require "core.style"
 local TitleBar = require "core.titlebar"
 local View = require "core.view"
 local view_icons = require "core.view_icons"
+local renwindow = require "renwindow"
 local test = require "core.test"
 
 local NamedView = View:extend()
@@ -137,31 +138,52 @@ test.describe("Global title bar Pane entries", function()
     panes.focus(one)
     local title = TitleBar()
     title.size.x = 900
-    title:update()
-    local old_draw_rect = renderer.draw_rect
-    local old_draw_rounded_rect = renderer.draw_rounded_rect
-    local old_draw_text = renderer.draw_text
-    local active_tile = false
-    local rounded_tile_count = 0
-    local group_indicator = false
-    renderer.draw_rect = function(_, _, _, _, color)
-      if color == style.titlebar_group_indicator then group_indicator = true end
-    end
-    renderer.draw_rounded_rect = function(_, _, _, _, _, color)
-      rounded_tile_count = rounded_tile_count + 1
-      if color == style.titlebar_tab_active then active_tile = true end
-    end
-    renderer.draw_text = function() end
-    local ok, err = pcall(title.draw, title)
-    renderer.draw_rect = old_draw_rect
-    renderer.draw_rounded_rect = old_draw_rounded_rect
-    renderer.draw_text = old_draw_text
+    local old_window = core.window
+    local old_get_controls = system.get_window_controls
+    local old_get_content_x = system.get_window_content_x
+    local test_clip = renderer.set_clip_rect
+    local old_root_clip = core.clip_rect_stack[1]
+    local render_window = renwindow.create("inactive-titlebar-tabs", 900, 80)
+    core.window = nil
+    system.get_window_controls = function() return nil end
+    system.get_window_content_x = function() return 0 end
+    renderer.set_clip_rect = set_clip_rect
+    core.clip_rect_stack[1] = { 0, 0, 900, 80 }
+    local ok, err = pcall(function()
+      title:update()
+      local entries = title:get_pane_entries()
+      test.ok(entries[1].active)
+      test.not_ok(entries[2].active)
 
+      renderer.begin_frame(render_window)
+      renderer.set_clip_rect(0, 0, 900, 80)
+      local draw_ok, draw_err = pcall(title.draw, title)
+      renderer.end_frame()
+      test.ok(draw_ok, draw_err)
+
+      local function tab_pixel(entry)
+        local x = math.floor(entry.x + entry.w / 2)
+        local y = math.floor(entry.y + entry.h - 6)
+        return renwindow.get_color(render_window, x, y)
+      end
+      local active = tab_pixel(entries[1])
+      local inactive = tab_pixel(entries[2])
+      local blank_x = math.floor(entries[#entries].x + entries[#entries].w + 8)
+      local blank = renwindow.get_color(render_window, blank_x, math.floor(entries[1].h - 6))
+      test.not_equal(active, blank, "the active Tab has no visible background")
+      test.same(inactive, blank, "an inactive Tab has a special background")
+      local group_mark = renwindow.get_color(render_window,
+        math.floor(entries[1].x + entries[1].w / 2), math.floor(entries[1].h - 1))
+      local blank_group_mark = renwindow.get_color(render_window, blank_x, math.floor(entries[1].h - 1))
+      test.not_equal(group_mark, blank_group_mark, "the visible Pane Group has no indicator")
+    end)
+    renderer.set_clip_rect = test_clip
+    core.clip_rect_stack[1] = old_root_clip
+    core.window = old_window
+    system.get_window_controls = old_get_controls
+    system.get_window_content_x = old_get_content_x
+    renwindow.close(render_window)
     test.ok(ok, err)
-    test.not_nil(style.titlebar_group_indicator)
-    test.ok(active_tile)
-    test.equal(rounded_tile_count, 1)
-    test.ok(group_indicator)
   end)
 
   test.it("renders pending Pane numbers and names with their requested fonts", function()

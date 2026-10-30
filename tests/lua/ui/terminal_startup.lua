@@ -71,11 +71,12 @@ test.describe("Terminal startup", function()
     local existing = children()
     local view = terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" }
     -- Suspend the new host before it answers, like a machine that stalls during startup.
-    local host, deadline = nil, system.get_time() + 5
+    local host, deadline = nil, system.get_time() + 30
     while not host and system.get_time() < deadline do
       for pid in pairs(children()) do
         if not existing[pid] then host = kernel.OpenProcess(0x800, 0, pid) end
       end
+      if not host then coroutine.yield(0.01) end
     end
     local ok, err = pcall(function()
       test.ok(host ~= nil, "the host did not start")

@@ -327,11 +327,14 @@ test.describe("Pane Status Bars", function()
       context.drawn = {}
       root.deferred_draws = {}
       bar:draw()
+      context.drawn = {}
       while #root.deferred_draws > 0 do
         local item = table.remove(root.deferred_draws)
         item.fn(table.unpack(item, 1, #item))
       end
-      return table.concat(context.drawn):find("Click to copy the full path", 1, true) ~= nil
+      local drew_tooltip = #context.drawn > 0
+      context.drawn = {}
+      return drew_tooltip
     end
 
     root:on_mouse_moved(x, y, 0, 0)

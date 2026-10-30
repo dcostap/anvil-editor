@@ -5,7 +5,6 @@ local style = require "core.style"
 local test = require "core.test"
 local Editor = require "core.editor"
 local panes = require "core.panes"
-local line_packets = require "core.textview_line_packets"
 
 require "plugins.intellij_find"
 
@@ -92,7 +91,8 @@ local function expected_horizontal_extent(view, text, opts)
   )
 end
 
-local function capture_unwrapped_line_draw(view, scroll_x)
+local function capture_line_draw(view, scroll_x, line)
+  line = line or 1
   local old_draw_text = renderer.draw_text
   local old_draw_text_known_bounds = renderer.draw_text_known_bounds
   local submitted = {}
@@ -104,8 +104,8 @@ local function capture_unwrapped_line_draw(view, scroll_x)
     submitted[#submitted + 1] = text
   end
   view.scroll.x, view.scroll.to.x = scroll_x, scroll_x
-  local x, y = view:get_line_screen_position(1)
-  local ok, err = pcall(view.draw_line_text, view, 1, x, y)
+  local x, y = view:get_line_screen_position(line)
+  local ok, err = pcall(view.draw_line_text, view, line, x, y)
   renderer.draw_text = old_draw_text
   renderer.draw_text_known_bounds = old_draw_text_known_bounds
   if not ok then error(err, 0) end
@@ -489,17 +489,13 @@ test.describe("TextView selection scrolling", function()
     local suffix = "UNIQUE-DISTANT-SUFFIX"
     local view = open_editor(context, prefix .. suffix .. "\n")
     disable_wrapping(view)
-    view.__test_force_line_packets = true
 
-    local left = capture_unwrapped_line_draw(view, 0)
+    local left = capture_line_draw(view, 0)
     local suffix_x = view:get_col_x_offset(1, #prefix + 1)
-    local right = capture_unwrapped_line_draw(
+    local right = capture_line_draw(
       view, math.max(0, suffix_x - view.size.x / 2)
     )
-    local diagnostics = line_packets.diagnostics(view)
 
-    test.equal(diagnostics.builds, 0)
-    test.ok((diagnostics.fallbacks.unwrapped or 0) >= 2)
     test.ok(not left:find(suffix, 1, true))
     test.ok(right:find(suffix, 1, true) ~= nil)
     test.ok(#left < #prefix)
@@ -513,9 +509,9 @@ test.describe("TextView selection scrolling", function()
     disable_wrapping(view)
     view.__test_force_line_packets = true
 
-    local left = capture_unwrapped_line_draw(view, 0)
+    local left = capture_line_draw(view, 0)
     local suffix_x = view:get_col_x_offset(1, #prefix + 1)
-    local right = capture_unwrapped_line_draw(
+    local right = capture_line_draw(
       view, math.max(0, suffix_x - view.size.x / 2)
     )
 
@@ -524,134 +520,75 @@ test.describe("TextView selection scrolling", function()
     test.ok(#right < #prefix)
   end)
 
-  test.it("builds and reuses wrapped Display Packets", function(context)
-    local view = open_editor(context, string.rep("wrapped words ", 40) .. "\n")
+  test.it("draws wrapped text consistently across redraws and wrap changes", function(context)
+    local source = string.rep("wrapped words ", 40)
+    local view = open_editor(context, source .. "\n")
     view.__test_force_line_packets = true
     view:update_wrap_cache()
 
-    capture_unwrapped_line_draw(view, 0)
-    capture_unwrapped_line_draw(view, 0)
-    local diagnostics = line_packets.diagnostics(view)
-
-    test.equal(diagnostics.builds, 1)
-    test.ok(diagnostics.hits >= 1)
-    test.ok(diagnostics.resident_packets > 0)
+    local wrapped = capture_line_draw(view, 0)
+    test.ok(#wrapped > 0)
+    test.equal(source:sub(1, #wrapped), wrapped)
+    test.equal(capture_line_draw(view, 0), wrapped)
 
     disable_wrapping(view)
-    test.equal(line_packets.diagnostics(view).resident_packets, 0)
+    local unwrapped = capture_line_draw(view, 0)
+    test.ok(#unwrapped > 0)
+    test.equal(source:sub(1, #unwrapped), unwrapped)
   end)
 
-  test.it("reuses an unwrapped line packet after a redraw", function(context)
+  test.it("draws an unwrapped line again and reflects edits", function(context)
     local view, buffer = open_editor(context, "visible words with spaces\n")
     disable_wrapping(view)
     view.__test_force_line_packets = true
 
-    local x, y = view:get_line_screen_position(1)
-    local function draw()
-      renderer.begin_frame(core.window)
-      local ok, err = pcall(view.draw_line_text, view, 1, x, y)
-      renderer.end_frame()
-      if not ok then error(err, 0) end
-      return renderer.get_last_frame_stats()
-    end
-    draw()
-    local replay = draw()
-    local commands = line_packets.inspect_line(view, 1)
-    local diagnostics = line_packets.diagnostics(view)
-
-    test.equal(diagnostics.builds, 1)
-    test.ok(diagnostics.hits >= 1)
-    test.ok(replay.display_packet_replays > 0)
-    test.ok(commands and #commands > 0, "expected text commands in the cached line")
-    local original = {}
-    for _, item in ipairs(commands) do
-      if item.type == "text" then original[#original + 1] = item.text end
-    end
-    test.ok(table.concat(original):find("visible words", 1, true))
+    local original = capture_line_draw(view, 0)
+    test.equal(original, "visible words with spaces")
+    test.equal(capture_line_draw(view, 0), original)
 
     buffer:insert(1, 1, "new ")
-    draw()
-    local changed = line_packets.inspect_line(view, 1)
-    local text = {}
-    for _, item in ipairs(changed or {}) do
-      if item.type == "text" then text[#text + 1] = item.text end
-    end
-    test.ok(table.concat(text):find("new visible words", 1, true),
-      "expected an edit to replace the cached line")
+    test.equal(capture_line_draw(view, 0), "new visible words with spaces")
   end)
 
-  local function draw_lines(view, count)
-    renderer.begin_frame(core.window)
-    local ok, err = pcall(function()
-      for line = 1, count do
-        local x, y = view:get_line_screen_position(line)
-        view:draw_line_text(line, x, y)
-      end
-    end)
-    renderer.end_frame()
-    if not ok then error(err, 0) end
-  end
-
-  local function packet_text(view, line)
-    local text = {}
-    for _, item in ipairs(line_packets.inspect_line(view, line) or {}) do
-      if item.type == "text" then text[#text + 1] = item.text end
-    end
-    return table.concat(text)
-  end
-
-  test.it("keeps line packets below an inserted line", function(context)
+  test.it("draws the correct lines below an inserted line", function(context)
     local view, buffer = open_editor(context, "one\ntwo\nthree\nfour\nfive\nsix\n")
     disable_wrapping(view)
     view.__test_force_line_packets = true
-    draw_lines(view, 6)
-    local builds = line_packets.diagnostics(view).builds
 
     buffer:insert(1, 4, "\nnew")
-    draw_lines(view, 7)
 
     local expected = { "one", "new", "two", "three", "four", "five", "six" }
     for line, text in ipairs(expected) do
-      test.equal(packet_text(view, line), text)
+      test.equal(capture_line_draw(view, 0, line), text)
     end
-    test.ok(line_packets.diagnostics(view).builds - builds <= 2,
-      "expected only the edited lines to be rebuilt")
   end)
 
-  test.it("keeps wrapped line packets below an inserted line", function(context)
+  test.it("draws the correct wrapped lines below an inserted line", function(context)
     local long = string.rep("wrapped words ", 12)
     local view, buffer = open_editor(context, "one\n" .. long .. "\ntail\n")
     view.__test_force_line_packets = true
     view:set_wrapping_enabled(true)
-    draw_lines(view, 3)
-    local builds = line_packets.diagnostics(view).builds
 
     buffer:insert(1, 4, "\nnew")
     view:update_wrap_cache()
-    draw_lines(view, 4)
 
-    test.equal(select(2, packet_text(view, 3):gsub("wrapped words", "")), 12)
-    test.equal(packet_text(view, 4), "tail")
-    test.ok(line_packets.diagnostics(view).builds - builds <= 2,
-      "expected only the edited lines to be rebuilt")
+    local wrapped = capture_line_draw(view, 0, 3)
+    test.equal(select(2, wrapped:gsub("wrapped words", "")), 12)
+    test.equal(capture_line_draw(view, 0, 3), wrapped)
+    test.equal(capture_line_draw(view, 0, 4), "tail")
   end)
 
-  test.it("keeps line packets below removed lines", function(context)
+  test.it("draws the correct lines below removed lines", function(context)
     local view, buffer = open_editor(context, "one\ntwo\nthree\nfour\nfive\nsix\n")
     disable_wrapping(view)
     view.__test_force_line_packets = true
-    draw_lines(view, 6)
-    local builds = line_packets.diagnostics(view).builds
 
     buffer:remove(1, 4, 3, 6)
-    draw_lines(view, 4)
 
     local expected = { "one", "four", "five", "six" }
     for line, text in ipairs(expected) do
-      test.equal(packet_text(view, line), text)
+      test.equal(capture_line_draw(view, 0, line), text)
     end
-    test.ok(line_packets.diagnostics(view).builds - builds <= 1,
-      "expected only the edited line to be rebuilt")
   end)
 
   test.it("scroll_to_make_visible reveals an off-screen same-line range horizontally", function(context)

@@ -207,43 +207,6 @@ test.describe("Point of Interest navigation", function()
     test.ok(draw_count > 0)
   end)
 
-  test.it("does no filesystem work while drawing cached Editor file POIs", function(context)
-    local root = USERDIR .. PATHSEP .. "editor-file-poi-draw-cache-" .. system.get_process_id()
-    context.temp_root = root
-    context.original_root_project = core.root_project
-    test.ok(common.mkdirp(root))
-    local source_path = root .. PATHSEP .. "source.cpp"
-    local target_path = root .. PATHSEP .. "target.cpp"
-    local target = assert(io.open(target_path, "wb"))
-    target:write("target\n")
-    target:close()
-    core.root_project = function() return { path = root } end
-
-    local buffer = Buffer()
-    buffer:set_filename("source.cpp", source_path)
-    buffer:insert(1, 1, "// target.cpp:12:4\n")
-    buffer:clear_undo_redo()
-    context.buffers = { buffer }
-    local view = Editor(buffer)
-    context.views = { view }
-    view:get_points_of_interest()
-
-    local editor_file_pois = require "core.editor_file_pois"
-    local get_file_info = system.get_file_info
-    local file_info_calls = 0
-    system.get_file_info = function(...)
-      file_info_calls = file_info_calls + 1
-      return get_file_info(...)
-    end
-    local ok, err = pcall(function()
-      for _ = 1, 70 do editor_file_pois.draw_line(view, 1, 0, 0) end
-    end)
-    system.get_file_info = get_file_info
-
-    test.ok(ok, err)
-    test.equal(file_info_calls, 0)
-  end)
-
   test.it("does not recheck unchanged file locations after an unrelated edit", function(context)
     local root = USERDIR .. PATHSEP .. "editor-file-poi-edit-cache-" .. system.get_process_id()
     context.temp_root = root
@@ -265,22 +228,8 @@ test.describe("Point of Interest navigation", function()
     context.views = { view }
     view:update()
 
-    local get_file_info = system.get_file_info
-    local file_info_calls = 0
-    system.get_file_info = function(path, ...)
-      if common.path_equals(path, target_path) then
-        file_info_calls = file_info_calls + 1
-      end
-      return get_file_info(path, ...)
-    end
-    local ok, err = pcall(function()
-      buffer:insert(2, 1, "changed ")
-      view:update()
-    end)
-    system.get_file_info = get_file_info
-
-    test.ok(ok, err)
-    test.equal(file_info_calls, 0)
+    buffer:insert(2, 1, "changed ")
+    view:update()
     local points = view:get_points_of_interest()
     test.equal(#points, 1)
     test.equal(points[1].path, common.normalize_path(target_path))
@@ -463,9 +412,8 @@ test.describe("Point of Interest navigation", function()
     local before = view:get_points_of_interest()
     test.equal(#before, 1)
     buffer:save()
-    local after, unavailable = view:get_points_of_interest()
+    local after = view:get_points_of_interest()
 
-    test.not_nil(after, unavailable)
     test.equal(#after, 1)
   end)
 

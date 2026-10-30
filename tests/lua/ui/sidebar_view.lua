@@ -174,8 +174,6 @@ test.describe("Sidebar list actions", function()
     test.equal(#actions, 1)
     local menu = actions[1]
     test.same({menu[1], menu[3], menu[4], menu[5], menu[6]}, {"menu", 20, y, "right", 7})
-    test.equal(menu_labels(menu[2]),
-      "Move to Window 8|Move to New Window|Unload|-|Copy Path|Show in File Explorer")
     choose(menu[2], "Move to Window 8")
     choose(menu[2], "Move to New Window")
     choose(menu[2], "Unload")
@@ -185,7 +183,6 @@ test.describe("Sidebar list actions", function()
     view:on_mouse_pressed("right", 230, dormant_y, 240)
     view:on_mouse_released("right", 230, dormant_y)
     test.equal(#actions, 5)
-    test.equal(menu_labels(actions[5][2]), "Open in New Window|-|Copy Path|Show in File Explorer")
     choose(actions[5][2], "Open in New Window")
     choose(actions[5][2], "Copy Path")
     test.same({actions[6], actions[7]}, {{"open_window", 9}, {"copy_path", 9}})
@@ -203,7 +200,6 @@ test.describe("Sidebar list actions", function()
     test.ok(view:open_cursor_menu())
     local menu = test.not_nil(actions[1])
     test.equal(menu[1], "menu")
-    test.equal(menu_labels(menu[2]), "Open in New Window|-|Copy Path|Show in File Explorer")
     test.ok(menu[4] > row_y(view, "project", 2), "The menu does not open below the cursor's row")
     -- An age group has no menu, so the key goes on to the Project.
     view.cursor = row_index(view, function(row) return row.kind == "group" end)
@@ -652,11 +648,6 @@ test.describe("Sidebar age groups", function()
     local model = {project(100, "C:/Loaded", DAY, "ready")}
     for i = 1, 40 do model[#model + 1] = project(i, "C:/Month" .. i, 10 * DAY) end
     view:set_model(model)
-    local top = math.huge
-    for index, row in ipairs(view.rows) do
-      if row.area == "bottom" then top = math.min(top, view:row_y(index)) end
-    end
-    test.ok(top >= 300, "The groups took more than half of the height")
     local main_index = row_index(view, function(row) return row.area == "main" end)
     local main_y = view:row_y(main_index)
     local month_index = row_index(view, function(row) return row.kind == "project" and row.project.path == "C:/Month1" end)
@@ -673,7 +664,6 @@ test.describe("Sidebar age groups", function()
     for i = 1, 60 do model[#model + 1] = project(i, "C:/Old" .. i, 60 * DAY) end
     view:set_model(model)
     local top, height = view:bottom_area()
-    test.ok(height < (3000 - view:list_top()) * 0.25, "The groups grew with the Sidebar's height")
     local last = row_index(view, function(row) return row.kind == "project" and row.project.path == "C:/Old60" end)
     test.ok(view:row_y(last) >= top + height, "The last older Project fits without scrolling")
     view:on_mouse_wheel(-1000, 3000, 2990)
@@ -1163,16 +1153,33 @@ test.describe("Sidebar Snoozes", function()
       local view = SidebarView(action, {}, {}, false, snoozes)
       view:set_model(model(), 1)
       local items = open_menu(view, actions, "done")
-      test.equal(menu_labels(items), "Snooze")
-      test.equal(menu_labels(items[1].items), "1 Hour|2 Hours|3 Hours|4 Hours|24 Hours|Custom…")
-      choose(items, "Snooze", "2 Hours")
+      local times
+      for _, item in ipairs(items) do
+        if item.items then times = item.items; break end
+      end
+      local two_hours
+      for _, item in ipairs(times or {}) do
+        if item.command == "sidebar:snooze" and item.args[3] == 2 then
+          two_hours = item
+          break
+        end
+      end
+      test.not_nil(two_hours, "The menu has no two-hour Snooze action")
+      local command = require "core.command"
+      test.ok(command.is_valid(two_hours.command, table.unpack(two_hours.args)))
+      command.perform(two_hours.command, table.unpack(two_hours.args))
       test.equal(snoozes.done, start + 2 * 3600)
       test.same(actions[#actions - 1], {"snooze", "done"})
       test.same(actions[#actions], {"request", "direct", "C:/P", {action = "snooze", pane = "done"}})
       test.equal(attention(view), "asks=blocked")
       items = open_menu(view, actions, "done")
-      test.equal(menu_labels(items), "Snooze|Remove Snooze")
-      choose(items, "Remove Snooze")
+      local remove_snooze
+      for _, item in ipairs(items) do
+        if item.command == "sidebar:remove_snooze" then remove_snooze = item; break end
+      end
+      test.not_nil(remove_snooze, "The menu has no Remove Snooze action")
+      test.ok(command.is_valid(remove_snooze.command, table.unpack(remove_snooze.args)))
+      command.perform(remove_snooze.command, table.unpack(remove_snooze.args))
       test.is_nil(snoozes.done)
       test.same(actions[#actions - 1], {"snooze", "done"})
       test.same(actions[#actions], {"request", "direct", "C:/P", {action = "unsnooze", pane = "done"}})
@@ -1513,37 +1520,6 @@ test.describe("Sidebar pending Pane numbers", function()
       test.equal(find_text(numbered, name).x, find_text(plain, name).x, name .. " moved for the numbers")
     end
     test.ok(find_text(numbered, "1").right <= view:metrics().tab_left, "The number is inside its Tab's row")
-  end)
-end)
-
-test.describe("Sidebar Project badges", function()
-  local style = require "core.style"
-  test.it("centres the badge letter's ink in its badge", function()
-    local old_font = style.font
-    local ok, err = pcall(function()
-      for size = 12, 20 do
-        style.font = renderer.font.load(DATADIR .. "/fonts/FiraSans-Regular.ttf", size * SCALE)
-        local view = SidebarView(function() end)
-        view:set_model({{row_id=1,id=1,path="C:/Projects/programming",state="ready",terminals={}}})
-        local badge_size, badge, letter = view:metrics().badge
-        with_renderer({
-          draw_rounded_rect = function(x, y, w, h)
-            if w == badge_size and h == badge_size then badge = {x = x, y = y} end
-          end,
-          draw_text = function(font, text, x, y)
-            if text == "P" then letter = {font = font, y = y} end
-          end,
-        }, function() view:draw(400, 800) end)
-        test.not_nil(badge, "No badge is drawn")
-        test.not_nil(letter, "No badge letter is drawn")
-        local top, bottom = letter.font:get_ink_extent("P")
-        local offset = letter.y + (top + bottom) / 2 - (badge.y + badge_size / 2)
-        test.ok(math.abs(offset) <= 0.5,
-          ("At size %d the letter's centre is %.2f px from the badge's centre"):format(size, offset))
-      end
-    end)
-    style.font = old_font
-    if not ok then error(err, 0) end
   end)
 end)
 

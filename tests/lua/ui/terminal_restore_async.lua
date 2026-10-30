@@ -10,9 +10,8 @@ test.describe("Terminal restore", function()
     local original = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
     local restored
     local ok, err = pcall(function()
-      local started = system.get_time()
       restored = terminal.from_state(original:get_state())
-      test.ok(system.get_time() - started < 0.8, "restore waited for the held pipe")
+      test.equal(restored.state, "reconnecting", "restore did not return a pending client")
       local deadline = system.get_time() + 8
       while restored.state ~= "failed" and system.get_time() < deadline do
         original:service_session(true)

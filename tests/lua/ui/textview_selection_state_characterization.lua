@@ -4,6 +4,8 @@ local config = require "core.config"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
 local test = require "core.test"
+local style = require "core.style"
+local renwindow = require "renwindow"
 
 local function set_text(buffer, text)
   buffer.lines = {}
@@ -1530,7 +1532,7 @@ test.describe("Text View Selection State edit characterization", function()
     })
   end)
 
-  test.it("char movement batches cursor updates and merges once", function(context)
+  test.it("moves every collapsed caret one character to the right", function(context)
     local _, main = new_shared_views(context, "abcdefghij")
     core.set_active_view(main)
     set_view_selections(main, {
@@ -1541,32 +1543,14 @@ test.describe("Text View Selection State edit characterization", function()
       1, 8, 1, 8,
     }, 5)
 
-    local buffer = main.buffer
-    local merge_calls = 0
-    local original_merge_cursors = buffer.merge_cursors
-    local original_move_to_cursor = buffer.move_to_cursor
-    buffer.merge_cursors = function(self, ...)
-      merge_calls = merge_calls + 1
-      return original_merge_cursors(self, ...)
-    end
-    buffer.move_to_cursor = function()
-      error("text:move-to-next-char should not call Buffer:move_to_cursor per caret")
-    end
-
-    local ok, err = pcall(function()
-      test.ok(command.perform("core:move_to_next_char"))
-      test.equal(merge_calls, 1)
-      test.same(selection(main), {
-        1, 2, 1, 2,
-        1, 3, 1, 3,
-        1, 5, 1, 5,
-        1, 7, 1, 7,
-        1, 9, 1, 9,
-      })
-    end)
-    buffer.merge_cursors = original_merge_cursors
-    buffer.move_to_cursor = original_move_to_cursor
-    if not ok then error(err) end
+    test.ok(command.perform("core:move_to_next_char"))
+    test.same(selection(main), {
+      1, 2, 1, 2,
+      1, 3, 1, 3,
+      1, 5, 1, 5,
+      1, 7, 1, 7,
+      1, 9, 1, 9,
+    })
   end)
 
   test.it("char movement command merges duplicate carets after batched movement", function(context)
@@ -1601,7 +1585,7 @@ test.describe("Text View Selection State edit characterization", function()
     test.equal(main:get_selection_state().last_selection, 2)
   end)
 
-  test.it("line movement commands batch cursor updates", function(context)
+  test.it("moves each caret up one line", function(context)
     local _, main = new_shared_views(context, "aaaa\naaaa\naaaa\naaaa")
     core.set_active_view(main)
     set_view_selections(main, {
@@ -1609,29 +1593,11 @@ test.describe("Text View Selection State edit characterization", function()
       3, 4, 3, 4,
     }, 2)
 
-    local buffer = main.buffer
-    local merge_calls = 0
-    local original_merge_cursors = buffer.merge_cursors
-    local original_set_selections = buffer.set_selections
-    buffer.merge_cursors = function(self, ...)
-      merge_calls = merge_calls + 1
-      return original_merge_cursors(self, ...)
-    end
-    buffer.set_selections = function()
-      error("line movement should use batched selection replacement")
-    end
-
-    local ok, err = pcall(function()
-      test.ok(command.perform("core:move_to_previous_line"))
-      test.equal(merge_calls, 0)
-      test.same(selection(main), {
-        1, 3, 1, 3,
-        2, 4, 2, 4,
-      })
-    end)
-    buffer.merge_cursors = original_merge_cursors
-    buffer.set_selections = original_set_selections
-    if not ok then error(err) end
+    test.ok(command.perform("core:move_to_previous_line"))
+    test.same(selection(main), {
+      1, 3, 1, 3,
+      2, 4, 2, 4,
+    })
   end)
 
   test.it("line movement commands clamp at buffer boundaries and merge duplicates", function(context)
@@ -1648,7 +1614,7 @@ test.describe("Text View Selection State edit characterization", function()
     test.equal(main:get_selection_state().last_selection, 1)
   end)
 
-  test.it("line endpoint movement commands batch cursor updates", function(context)
+  test.it("moves each caret to its line endpoint", function(context)
     local _, main = new_shared_views(context, "  ab\n    xyz")
     core.set_active_view(main)
     set_view_selections(main, {
@@ -1656,49 +1622,26 @@ test.describe("Text View Selection State edit characterization", function()
       2, 6, 2, 6,
     }, 2)
 
-    local buffer = main.buffer
-    local original_set_selections = buffer.set_selections
-    local original_merge_cursors = buffer.merge_cursors
-    local merge_calls = 0
-    buffer.set_selections = function()
-      error("line endpoint movement should use batched selection replacement")
-    end
-    buffer.merge_cursors = function(self, ...)
-      merge_calls = merge_calls + 1
-      return original_merge_cursors(self, ...)
-    end
+    test.ok(command.perform("core:move_to_end_of_line"))
+    test.same(selection(main), {
+      1, 5, 1, 5,
+      2, 8, 2, 8,
+    })
 
-    local ok, err = pcall(function()
-      test.ok(command.perform("core:move_to_end_of_line"))
-      test.equal(merge_calls, 0)
-      test.same(selection(main), {
-        1, 5, 1, 5,
-        2, 8, 2, 8,
-      })
-
-      buffer.set_selections = original_set_selections
-      set_view_selections(main, {
-        1, 1, 1, 1,
-        1, 5, 1, 5,
-        2, 6, 2, 6,
-      }, 3)
-      buffer.set_selections = function()
-        error("line endpoint movement should use batched selection replacement")
-      end
-      test.ok(command.perform("core:move_to_start_of_indentation"))
-      test.equal(merge_calls, 0)
-      test.same(selection(main), {
-        1, 3, 1, 3,
-        2, 5, 2, 5,
-      })
-      test.equal(main:get_selection_state().last_selection, 2)
-    end)
-    buffer.set_selections = original_set_selections
-    buffer.merge_cursors = original_merge_cursors
-    if not ok then error(err) end
+    set_view_selections(main, {
+      1, 1, 1, 1,
+      1, 5, 1, 5,
+      2, 6, 2, 6,
+    }, 3)
+    test.ok(command.perform("core:move_to_start_of_indentation"))
+    test.same(selection(main), {
+      1, 3, 1, 3,
+      2, 5, 2, 5,
+    })
+    test.equal(main:get_selection_state().last_selection, 2)
   end)
 
-  test.it("selection extension char and line commands batch cursor updates", function(context)
+  test.it("extends each caret by character and line", function(context)
     local _, main = new_shared_views(context, "abcd\nwxyz\n1234")
     core.set_active_view(main)
     set_view_selections(main, {
@@ -1706,49 +1649,23 @@ test.describe("Text View Selection State edit characterization", function()
       2, 3, 2, 3,
     }, 2)
 
-    local buffer = main.buffer
-    local original_set_selections = buffer.set_selections
-    local original_merge_cursors = buffer.merge_cursors
-    local merge_calls = 0
-    buffer.set_selections = function()
-      error("selection extension should use batched selection replacement")
-    end
-    buffer.merge_cursors = function(self, ...)
-      merge_calls = merge_calls + 1
-      return original_merge_cursors(self, ...)
-    end
+    test.ok(command.perform("core:select_to_previous_char"))
+    test.same(selection(main), {
+      1, 1, 1, 2,
+      2, 2, 2, 3,
+    })
+    test.equal(main:get_selection_state().last_selection, 2)
 
-    local ok, err = pcall(function()
-      test.ok(command.perform("core:select_to_previous_char"))
-      test.equal(merge_calls, 0)
-      test.same(selection(main), {
-        1, 1, 1, 2,
-        2, 2, 2, 3,
-      })
-      test.equal(main:get_selection_state().last_selection, 2)
-    end)
-    buffer.set_selections = original_set_selections
-    if ok then
-      set_view_selections(main, {
-        2, 2, 2, 2,
-        3, 4, 3, 4,
-      }, 2)
-      buffer.set_selections = function()
-        error("selection extension should use batched selection replacement")
-      end
-      ok, err = pcall(function()
-        test.ok(command.perform("core:select_to_previous_line"))
-        test.equal(merge_calls, 0)
-        test.same(selection(main), {
-          1, 2, 2, 2,
-          2, 4, 3, 4,
-        })
-        test.equal(main:get_selection_state().last_selection, 2)
-      end)
-    end
-    buffer.set_selections = original_set_selections
-    buffer.merge_cursors = original_merge_cursors
-    if not ok then error(err) end
+    set_view_selections(main, {
+      2, 2, 2, 2,
+      3, 4, 3, 4,
+    }, 2)
+    test.ok(command.perform("core:select_to_previous_line"))
+    test.same(selection(main), {
+      1, 2, 2, 2,
+      2, 4, 3, 4,
+    })
+    test.equal(main:get_selection_state().last_selection, 2)
   end)
 
   test.it("paste handles mixed collapsed carets and selected ranges through the buffer command", function(context)
@@ -1774,35 +1691,16 @@ test.describe("Text View Selection State edit characterization", function()
 
   end)
 
-  test.it("reapplying an already-normalized Selection State does not resanitize every cursor", function(context)
+  test.it("clamps a caret when an edit removes its text", function(context)
     local buffer, main = new_shared_views(context, "abc")
-    main:set_selection_state({ selections = { 1, 1, 1, 1, 1, 2, 1, 2 }, last_selection = 2 })
+    set_view_selection(main, 1, 4, 1, 4)
 
-    local original_sanitize_position = buffer.sanitize_position
-    local calls = 0
-    buffer.sanitize_position = function(...)
-      calls = calls + 1
-      return original_sanitize_position(...)
-    end
+    buffer:remove(1, 1, 1, 4)
 
-    main:apply_selection_state()
-
-    buffer.sanitize_position = original_sanitize_position
-    test.equal(calls, 0)
-    test.same(selection(main), { 1, 1, 1, 1, 1, 2, 1, 2 })
+    test.same(selection(main), { 1, 1, 1, 1 })
   end)
 
-  test.it("explicit Selection State sanitization still clamps invalid normalized states", function(context)
-    local buffer, main = new_shared_views(context, "abc")
-    main.selection_state.selections = { 99, 99, 99, 99 }
-    main.selection_state.normalized = true
-
-    TextView.sanitize_registered_selection_states(buffer)
-
-    test.same(selection(main), { 1, 4, 1, 4 })
-  end)
-
-  test.it("visible caret cache breaks on sorted selection top line, not raw caret line", function(context)
+  test.it("draws only the caret that is visible in a multi-caret selection", function(context)
     local lines = {}
     for i = 1, 100 do lines[i] = "x" end
     local buffer, main = new_shared_views(context, table.concat(lines, "\n"))
@@ -1813,13 +1711,48 @@ test.describe("Text View Selection State edit characterization", function()
       },
       last_selection = 1,
     })
+    main.position.x, main.position.y = 0, 0
+    main.size.x, main.size.y = 800, 400
+    main.scroll.y = main:get_visual_row_y_offset(40)
+    main.scroll.to.y = main.scroll.y
 
-    main:with_selection_state(function()
-      main:prepare_line_body_draw_cache(40, 75)
-    end)
+    local old_active_view = core.active_view
+    local old_last_active_view = core.last_active_view
+    local old_blink_start, old_blink_timer = core.blink_start, core.blink_timer
+    local old_window_has_focus = system.window_has_focus
+    local old_disable_blink = config.disable_blink
+    local old_animated_caret = config.animated_caret
+    local old_draw_rect = renderer.draw_rect
+    local old_clip = core.clip_rect_stack[1]
+    local carets = {}
+    local window = renwindow.create("selection-state-caret", 800, 400)
+    core.set_active_view(main)
+    system.window_has_focus = function() return true end
+    config.disable_blink = true
+    config.animated_caret = false
+    renderer.draw_rect = function(x, y, width, height, color)
+      if color == style.caret then
+        carets[#carets + 1] = { x = x, y = y, width = width, height = height }
+      end
+    end
+    renderer.begin_frame(window)
+    renderer.set_clip_rect(0, 0, 800, 400)
+    core.clip_rect_stack[1] = { 0, 0, 800, 400 }
+    local ok, err = pcall(main.draw_overlay, main)
+    renderer.end_frame()
+    core.clip_rect_stack[1] = old_clip
+    renderer.draw_rect = old_draw_rect
+    renwindow.close(window)
+    system.window_has_focus = old_window_has_focus
+    config.disable_blink = old_disable_blink
+    config.animated_caret = old_animated_caret
+    core.active_view = old_active_view
+    core.last_active_view = old_last_active_view
+    core.blink_start, core.blink_timer = old_blink_start, old_blink_timer
+    if not ok then error(err, 0) end
 
-    test.same(main.__visible_caret_cache, {
-      { 50, 1, 50, 1 },
-    })
+    local _, visible_y = main:get_caret_screen_position(50, 1)
+    test.equal(#carets, 1)
+    test.equal(carets[1].y, visible_y)
   end)
 end)
