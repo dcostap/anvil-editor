@@ -63,9 +63,12 @@ local function check_input_after(widths)
     test.ok(wait_for(view, function() return cursor_line(view):find("PS .*ANVIL_$") end))
     for _, cols in ipairs(widths) do
       test.ok(view.session:resize(cols, 30, 8, 16))
-      -- The local snapshot changes before ConPTY processes its resize pipe.
-      test.ok(wait_for(view, function() return console_width(width_path) == cols end),
-        "the shell did not receive width " .. cols)
+      -- The shell's width changes before its repaint reaches the output pipe.
+      local snapshot
+      test.ok(wait_for(view, function()
+        snapshot = view.session:snapshot(snapshot)
+        return console_width(width_path) == cols and snapshot.title == "ANVIL_WIDTH_" .. cols
+      end), "the resized shell did not publish width " .. cols)
     end
     test.ok(view.session:write("TYPED"))
     test.ok(wait_for(view, function()

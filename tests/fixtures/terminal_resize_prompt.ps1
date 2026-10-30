@@ -15,6 +15,7 @@ public static class AnvilResizeReport {
           int width = Console.WindowWidth;
           if (width != previous) {
             File.WriteAllText(path, width.ToString());
+            Console.Write("\u001b]2;ANVIL_WIDTH_" + width + "\u0007");
             previous = width;
           }
         } catch (IOException) {
