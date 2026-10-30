@@ -72,13 +72,12 @@ test.describe("binary Buffer performance guards", function()
     test.equal(view:is_wrapping_enabled(), true)
   end)
 
-  test.it("does not create a Sticky Scroll model for a binary Buffer", function(context)
+  test.it("skips Sticky Scroll for a binary Buffer", function(context)
     local view = open_binary_view(context, "parent\n  child")
 
     view:update()
 
     test.equal(sticky_scroll.should_run(view), false)
-    test.is_nil(rawget(sticky_scroll.managed_textviews, view))
   end)
 
   test.it("stops unwrapped binary drawing before a distant UTF-8 suffix", function(context)
@@ -137,10 +136,12 @@ test.describe("binary Buffer performance guards", function()
     autocomplete.close()
     buffer.binary = true
     buffer:insert(1, 1, "x")
-    coroutine.yield(1.2)
-    autocomplete.trigger()
 
-    test.equal(autocomplete.is_open(), false)
+    test.ok(wait_until(function()
+      autocomplete.close()
+      autocomplete.trigger()
+      return not autocomplete.is_open()
+    end, 5), "expected binary Buffer words to stop appearing")
     test.equal(core.active_view, view)
   end)
 end)

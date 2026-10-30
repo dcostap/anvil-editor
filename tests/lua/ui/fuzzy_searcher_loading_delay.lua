@@ -82,9 +82,8 @@ test.describe("Fuzzy Searcher loading feedback delay", function()
     picker:on_text_input("x")
     test.equal(picker.input:get_text(), "priorx")
     test.not_nil(find_file_result(picker, "prior.lua"))
-    coroutine.yield((fuzzy_searcher.loading_feedback_delay or 0.20) + 0.05)
-
-    test.ok(context.refined_file_search_started)
+    test.ok(wait_until(function() return context.refined_file_search_started end),
+      "expected the refined search to start")
     test.not_nil(find_file_result(picker, "prior.lua"))
 
     context.release_refined_file_search = true
@@ -120,9 +119,8 @@ test.describe("Fuzzy Searcher loading feedback delay", function()
     picker:on_text_input("e")
     test.equal(picker.input:get_text(), "$$needle")
     test.equal(picker.results[1].label, "prior")
-    coroutine.yield((fuzzy_searcher.loading_feedback_delay or 0.20) + 0.05)
-
-    test.ok(context.replacement_search_started)
+    test.ok(wait_until(function() return context.replacement_search_started end),
+      "expected the replacement symbol search to start")
     test.equal(picker.results[1].label, "prior")
 
     context.release_replacement_search = true
@@ -157,8 +155,8 @@ test.describe("Fuzzy Searcher loading feedback delay", function()
     picker:on_text_input("g")
     test.equal(picker.input:get_text(), "$$missing")
     test.equal(picker.results[1].label, "prior")
-    coroutine.yield((fuzzy_searcher.loading_feedback_delay or 0.20) + 0.05)
-    test.ok(context.empty_search_started)
+    test.ok(wait_until(function() return context.empty_search_started end),
+      "expected the empty symbol search to start")
     test.equal(picker.results[1].label, "prior")
 
     context.release_empty_search = true

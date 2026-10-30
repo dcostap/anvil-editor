@@ -22,6 +22,11 @@ local function write_file(path, text)
   handle:close()
 end
 
+local function selection_positions(buffer)
+  local line1, col1, line2, col2 = buffer:get_selection(true)
+  return { line1, col1, line2, col2 }
+end
+
 test.describe("File Tree instances", function()
   local root
   local folder
@@ -59,10 +64,16 @@ test.describe("File Tree instances", function()
     local two = assert(filetree.new(file))
     test.equal(one.root_dir, common.normalize_path(root))
     test.equal(two.root_dir, common.normalize_path(folder))
-    one.buffer:set_selection(1, 1)
-    two.buffer:set_selection(math.min(2, #two.buffer.lines), 1)
     test.not_equal(one.buffer, two.buffer)
-    test.not_equal(one.selection_state, two.selection_state)
+
+    one.buffer:set_selection(1, 1)
+    two.buffer:set_selection(2, 1)
+    local two_selection = selection_positions(two.buffer)
+    one.buffer:set_selection(1, 2)
+
+    test.same(selection_positions(one.buffer), { 1, 2, 1, 2 })
+    test.same(selection_positions(two.buffer), two_selection,
+      "changing one File Tree must not move the other Tree's selection")
   end)
 
   test.it("shows dot-named files and folders, including Git metadata", function()

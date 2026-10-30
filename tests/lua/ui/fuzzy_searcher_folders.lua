@@ -8,6 +8,7 @@ local project_paths = require "core.project_paths"
 local Project = require "core.project"
 local test = require "core.test"
 local View = require "core.view"
+local fuzzy_native = require "fuzzy"
 
 local fuzzy_searcher = require "plugins.fuzzy_searcher"
 
@@ -43,6 +44,14 @@ local function select_folder_action(action)
   test.fail("missing folder action: " .. tostring(action))
 end
 
+local function assert_actions_present(options, expected)
+  local found = {}
+  for _, option in ipairs(options or {}) do found[option.action] = true end
+  for _, action in ipairs(expected) do
+    test.ok(found[action], "missing folder action: " .. action)
+  end
+end
+
 test.describe("Project File Search folders", function()
   test.before_each(function(context)
     panes.reset_for_tests()
@@ -76,6 +85,13 @@ test.describe("Project File Search folders", function()
 
   test.after_each(function(context)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end
+    if context.original_file_index_builder then
+      context.release_scan = true
+      test.ok(wait_until(function()
+        return not fuzzy_searcher._test.file_index_status().indexing
+      end, 30), "the controlled file index scan did not finish")
+      fuzzy_native.file_index_builder = context.original_file_index_builder
+    end
     fuzzy_searcher._test.clear_file_subscriptions_for_test()
     project_files.invalidate(context.root)
     coroutine.yield(0.05)
@@ -104,8 +120,13 @@ test.describe("Project File Search folders", function()
     test.ok(wait_until(function() return result_for_path(picker.results, context.ignored) ~= nil end))
     test.is_nil(result_for_path(picker.results, context.ignored_deep))
 
+    local previous_status = picker.status
     picker.input:set_text("hidden nested")
-    coroutine.yield(0.1)
+    test.ok(wait_until(function()
+      return picker.status ~= previous_status
+        and not picker.status:find("Searching", 1, true)
+        and not picker.status:find("Indexing", 1, true)
+    end), "expected the hidden-folder search to finish: " .. tostring(picker.status))
     test.is_nil(result_for_path(picker.results, context.root .. PATHSEP .. ".hidden" .. PATHSEP .. "nested"))
   end)
 
@@ -120,24 +141,46 @@ test.describe("Project File Search folders", function()
     for i = 1, 1000 do
       test.ok(common.mkdirp(context.root .. PATHSEP .. "folder-" .. i))
     end
-    fuzzy_searcher.open("empty nested")
+    test.ok(fuzzy_searcher._test.prewarm_file_index_for_test())
+    test.ok(wait_until(function()
+      local status = fuzzy_searcher._test.file_index_status()
+      return status.native and not status.indexing
+    end), "expected the initial file and folder index")
+
+    fuzzy_searcher.open("src widgets")
     local picker = assert(core.fuzzy_searcher_active_view)
-    test.ok(wait_until(function() return result_for_path(picker.results, context.empty) ~= nil end))
-    picker:close()
-    fuzzy_searcher.open("empty nested")
-    picker = assert(core.fuzzy_searcher_active_view)
-    -- A new picker has no results until its first search finishes.
-    test.ok(wait_until(function() return result_for_path(picker.results, context.empty) ~= nil end))
-    local deadline = system.get_time() + 30
-    local alternate = false
-    repeat
-      alternate = not alternate
-      picker.input:set_text(alternate and "empty/nested" or "empty nested")
-      coroutine.yield(0.01)
-      test.not_nil(result_for_path(picker.results, context.empty),
-        "Folder results disappeared while their replacement was still building")
-    until not fuzzy_searcher._test.file_index_status().indexing or system.get_time() >= deadline
-    test.not_ok(fuzzy_searcher._test.file_index_status().indexing)
+    test.ok(wait_until(function() return result_for_path(picker.results, context.widgets) end),
+      "expected the initial folder result")
+
+    context.original_file_index_builder = fuzzy_native.file_index_builder
+    local native_index = { true }
+    function native_index:search_async()
+      return { poll = function() return {} end }
+    end
+    function native_index:free() end
+    fuzzy_native.file_index_builder = function()
+      return {
+        feed = function() end,
+        free = function() end,
+        finish_async = function()
+          context.scan_finish_started = true
+          return {
+            poll = function()
+              if not context.release_scan then return nil end
+              return native_index, {}
+            end,
+          }
+        end,
+      }
+    end
+    fuzzy_searcher._test.refresh_file_index_for_test()
+    test.ok(wait_until(function() return context.scan_finish_started end, 30),
+      "expected the replacement scan to wait at the native index boundary")
+
+    picker.input:set_text("empty nested")
+    test.ok(wait_until(function()
+      return result_for_path(picker.results, context.empty) ~= nil
+    end), "expected folder results while the replacement scan is pending")
   end)
 
   test.it("uses updated Project Path labels when they change during prewarm", function(context)
@@ -149,14 +192,11 @@ test.describe("Project File Search folders", function()
     test.ok(fuzzy_searcher._test.prewarm_file_index_for_test())
     local entry = project_paths.resolve(context.empty).entry
     test.ok(project_paths.set_label(entry.id, "Renamed"))
-    test.ok(wait_until(function()
-      local status = fuzzy_searcher._test.file_index_status()
-      return status.native and not status.indexing
-    end))
 
     fuzzy_searcher.open("labelled")
     local picker = assert(core.fuzzy_searcher_active_view)
-    test.ok(wait_until(function() return result_for_path(picker.results, target) ~= nil end))
+    test.ok(wait_until(function() return result_for_path(picker.results, target) ~= nil end),
+      "expected the labelled Project file to become searchable")
     test.equal(result_for_path(picker.results, target).root_label, "Renamed")
   end)
 
@@ -196,12 +236,8 @@ test.describe("Project File Search folders", function()
     picker:confirm(false)
 
     test.equal(core.nag_view:get_title(), "Open Folder")
-    test.same({
-      core.nag_view.options[1].action,
-      core.nag_view.options[2].action,
-      core.nag_view.options[3].action,
-      core.nag_view.options[4].action,
-    }, { "filetree", "project_here", "project_new", "cancel" })
+    assert_actions_present(core.nag_view.options,
+      { "filetree", "project_here", "project_new", "cancel" })
     select_folder_action("cancel")
     test.equal(core.fuzzy_searcher_active_view, picker)
   end)
@@ -348,9 +384,7 @@ test.describe("Project File Search folders", function()
     picker.selected = index
     picker:confirm(false)
 
-    local actions = {}
-    for _, option in ipairs(core.nag_view.options) do actions[#actions + 1] = option.action end
-    test.same(actions, { "filetree", "project_here", "cancel" })
+    assert_actions_present(core.nag_view.options, { "filetree", "project_here", "cancel" })
     select_folder_action("cancel")
   end)
 

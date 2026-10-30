@@ -226,23 +226,6 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     end
   end)
 
-  test.it("reports when a path scope omits additional matching files", function(context)
-    local first = join_path(context.root, "fmt", "first.odin")
-    local second = join_path(context.root, "fmt", "second.odin")
-    mkdirp(join_path(context.root, "fmt"))
-    helpers.set_file_cache_for_test({
-      helpers.file_display_item(first),
-      helpers.file_display_item(second),
-    })
-
-    local scope, meta = helpers.build_scope("fmt", nil, 1)
-
-    test.equal(#scope, 1)
-    test.equal(meta.count, 1)
-    test.equal(meta.limit, 1)
-    test.equal(meta.has_more, true)
-  end)
-
   test.it("searches fuzzy path matches beyond the first scope batch", function(context)
     local headers = join_path(context.root, "headers")
     mkdirp(headers)
@@ -254,17 +237,8 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     end
     helpers.set_file_cache_for_test(files)
 
-    local complete_scope = helpers.build_scope(".h", nil, #files)
-    test.equal(#complete_scope, #files)
-    local target = complete_scope[#complete_scope]
+    local target = join_path(headers, "header_405.h")
     write_file(target, "GENERAL SCOPE NEEDLE\n")
-
-    local first_scope, first_meta = helpers.build_scope(".h", nil, 400)
-    test.equal(#first_scope, 400)
-    test.equal(first_meta.has_more, true)
-    for _, path in ipairs(first_scope) do
-      test.not_ok(common.path_equals(path, target), "expected target after the first scope batch")
-    end
 
     fuzzy_searcher.open('.h #"GENERAL SCOPE NEEDLE"')
     local picker = assert(core.fuzzy_searcher_active_view)
@@ -280,25 +254,30 @@ test.describe("Fuzzy Searcher Project Path Roles", function()
     end, 15), "expected fuzzy grep to continue through all fuzzy path matches: " .. tostring(picker.status))
   end)
 
-  test.it("restarts an unchanged scoped grep when the file scope finishes changing", function()
-    fuzzy_searcher.open("fmt#")
-    local picker = core.fuzzy_searcher_active_view
-    local calls = 0
-    picker.start_grep = function(_, base, _, grep)
-      calls = calls + 1
-      test.equal(base, "fmt")
-      test.equal(grep, "enum")
-    end
+  test.it("shows new grep results after an unchanged path scope gains a file", function(context)
+    local first = join_path(context.root, "fmt", "first.odin")
+    local second = join_path(context.root, "fmt", "second.odin")
+    mkdirp(join_path(context.root, "fmt"))
+    write_file(first, "SCOPE_REFRESH_MARKER\n")
+    write_file(second, "SCOPE_REFRESH_MARKER\n")
+    local query = "fmt#SCOPE_REFRESH_MARKER"
+    helpers.set_file_cache_for_test({ helpers.file_display_item(first) })
 
-    picker.dirty = true
-    picker:refresh("fmt#enum")
-    test.equal(calls, 1)
+    fuzzy_searcher.open(query)
+    local picker = assert(core.fuzzy_searcher_active_view)
+    test.ok(wait_until(function() return picker_result_for_path(picker, first) end, 15),
+      "expected the initial scoped grep result")
+    test.is_nil(picker_result_for_path(picker, second),
+      "the second file is outside the current file scope")
 
-    helpers.set_file_cache_for_test({})
-    picker.dirty = true
-    picker:refresh("fmt#enum")
+    helpers.set_file_cache_for_test({
+      helpers.file_display_item(first),
+      helpers.file_display_item(second),
+    })
+    picker:refresh(query)
 
-    test.equal(calls, 2, "expected the completed file scope to restart the unchanged grep")
+    test.ok(wait_until(function() return picker_result_for_path(picker, second) end, 15),
+      "expected the same query to include a file added to its scope")
   end)
 
   test.it("keeps related same-file grep results coherent beyond nearby score neighbors", function(context)

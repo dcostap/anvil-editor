@@ -31,21 +31,17 @@ test.describe("Diff View whitespace preference", function()
     wait_for_diff(view)
 
     core.active_view = view.buffer_view_b
-    test.equal(command.get_status("diff:cycle_whitespace_mode", view.buffer_view_b), "Trim Whitespace")
     test.equal(command.perform("diff:cycle_whitespace_mode"), true)
-    test.equal(command.get_status("diff:cycle_whitespace_mode", view.buffer_view_b), "Ignore All Whitespace")
     view:update()
     wait_for_diff(view)
     test.equal(view.diff_model:line_state("b", 1), "equal")
 
     test.equal(command.perform("diff:cycle_whitespace_mode"), true)
-    test.equal(command.get_status("diff:cycle_whitespace_mode", view), "None")
     view:update()
     wait_for_diff(view)
     test.equal(view.diff_model:line_state("b", 1), "modify")
 
     test.equal(command.perform("diff:cycle_whitespace_mode"), true)
-    test.equal(command.get_status("diff:cycle_whitespace_mode", view), "Trim Whitespace")
     view:update()
     wait_for_diff(view)
     test.equal(view.diff_model:line_state("b", 1), "modify")

@@ -180,8 +180,11 @@ test.describe("Text Search in Terminals", function()
       local picker = test.not_nil(core.fuzzy_searcher_active_view)
       test.ok(wait_for(nil, function() return picker.results and picker.results[1] end, 10),
         "no file result: " .. tostring(picker.status))
-      -- The saved screen arrives from a worker, so give it the time that a Terminal result would need.
-      wait_for(nil, function() return output_result(picker, marker) end, 2)
+      test.ok(wait_for(nil, function()
+        return picker.status:find("exact matches", 1, true)
+          and not picker.status:find("scanning", 1, true)
+          and not picker.status:find("Searching", 1, true)
+      end, 10), "the complete exact search did not finish: " .. tostring(picker.status))
       test.equal(#terminal_results(picker), 0, "Text Search listed a Terminal of another Project")
     end)
     if core.fuzzy_searcher_active_view then core.fuzzy_searcher_active_view:close() end

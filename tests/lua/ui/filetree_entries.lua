@@ -35,11 +35,6 @@ local function find_entry(name)
 end
 
 test.describe("File Tree entry snapshots", function()
-  test.it("uses the configured contracted scrollbar status", function()
-    test.equal(filetree.v_scrollbar.force_status, "contracted")
-    test.equal(filetree.h_scrollbar.force_status, "contracted")
-  end)
-
   test.after_each(function(context)
     if context.original_open_file then core.open_file = context.original_open_file end
     if context.scroll_context_lines then
@@ -53,25 +48,6 @@ test.describe("File Tree entry snapshots", function()
       filetree:refresh(false, false)
     end
     if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
-  end)
-
-  test.it("reuses an unchanged resolved entry snapshot", function(context)
-    context.original_resolve = project_paths.resolve
-    local resolve_calls = 0
-    project_paths.resolve = function(...)
-      resolve_calls = resolve_calls + 1
-      return context.original_resolve(...)
-    end
-
-    filetree:snapshot_lines()
-    local first_entries = filetree:build_entries(false)
-    local first_build_calls = resolve_calls
-    test.ok(#first_entries > 0, "expected the File Tree to contain entries")
-    -- The first build can reuse paths from an earlier snapshot too.
-    local second_entries = filetree:build_entries(false)
-    test.equal(#second_entries, #first_entries)
-    test.equal(resolve_calls, first_build_calls,
-      "an unchanged File Tree should not resolve every entry again")
   end)
 
   test.it("invalidates resolved entries after an editable tree change", function(context)

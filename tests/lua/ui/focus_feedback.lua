@@ -116,6 +116,16 @@ test.describe("Focus feedback surfaces", function()
     end
   end
 
+  local function wait_for_feedback(root, view)
+    local deadline = clock + 2
+    while #rectangles == 0 and clock < deadline do
+      clock = clock + 0.05
+      root:update()
+      draw(function() root:draw() end)
+    end
+    inside(view)
+  end
+
   test.it("dims pointer focus without changing ordinary focus feedback", function()
     local left = panes.create {factory=function() return View() end}
     local right = panes.split(left, "right", {factory=function() return View() end})
@@ -154,10 +164,7 @@ test.describe("Focus feedback surfaces", function()
     root:update()
     draw(function() root:draw() end)
     test.same(rectangles, {}, "Numbered focus must wait before drawing feedback")
-    clock = clock + 0.3
-    root:update()
-    draw(function() root:draw() end)
-    inside(first.current_view)
+    wait_for_feedback(root, first.current_view)
   end)
 
   test.it("starts remote numbered feedback only after the destination gains focus", function()
@@ -178,10 +185,7 @@ test.describe("Focus feedback surfaces", function()
     root:update()
     draw(function() root:draw() end)
     test.same(rectangles, {}, "Remote numbered focus must wait after the Project gains focus")
-    clock = clock + 0.3
-    root:update()
-    draw(function() root:draw() end)
-    inside(pane.current_view)
+    wait_for_feedback(root, pane.current_view)
   end)
 
   test.it("follows Pane and nested surface focus and stops when the Window loses focus", function()

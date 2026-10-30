@@ -46,7 +46,7 @@ test.describe("Fuzzy Searcher Text Search context", function()
     file_icons.draw = function() end
     symbol_icons.draw = function() end
 
-    helpers.draw_grep_result_row(style.font, {
+    local line_end, context_x = helpers.draw_grep_result_row(style.font, {
       kind = "grep",
       file = "src/parser.lua",
       abs_path = "C:/project/src/parser.lua",
@@ -72,7 +72,9 @@ test.describe("Fuzzy Searcher Text Search context", function()
     test.not_nil(context_call, "expected the enclosing function name in the Text Search row")
     test.is_nil(signature_call, "did not expect function parameters in the Text Search row")
     test.equal(context_call.color, style.text)
-    test.ok(context_call.x > 200, "expected the function context on the right of the file column")
+    test.not_nil(line_end, "expected the file location to be drawn")
+    test.ok(context_call.x >= context_x and context_x > line_end,
+      "expected the function context after the rendered file location")
   end)
 
   test.it("keeps only edit-time metadata in text results", function()

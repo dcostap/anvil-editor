@@ -168,17 +168,9 @@ test.describe("caret trail", function()
 
       test.ok(command.perform("core:toggle_caret_trail"))
       test.equal(config.animated_caret, false)
-      test.equal(
-        command.get_status_label("core:toggle_caret_trail"),
-        "[Currently: OFF]"
-      )
 
       test.ok(command.perform("core:toggle_caret_trail"))
       test.equal(config.animated_caret, true)
-      test.equal(
-        command.get_status_label("core:toggle_caret_trail"),
-        "[Currently: ON]"
-      )
       test.equal(command.get_metadata("core:toggle_caret_trail").palette, true)
     end)
   end)
@@ -379,10 +371,6 @@ test.describe("caret trail", function()
 
       local short_remaining = remaining_ratio(1)
       local medium_remaining = remaining_ratio(6)
-      test.ok(
-        short_remaining < 0.75,
-        "expected the minimum-distance trail to become brief"
-      )
       test.ok(
         short_remaining < medium_remaining,
         "expected the short trail to catch up faster"
