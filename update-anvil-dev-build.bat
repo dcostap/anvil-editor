@@ -9,6 +9,21 @@ set "APP=%DEST%\anvil.exe"
 
 cd /d "%REPO%" || exit /b 1
 
+rem One update at a time. The open lock file is the lock, so Windows releases it
+rem when the update ends, also after a crash. Child processes inherit it until
+rem they exit. The restarted app does not, because Explorer starts it.
+set "UPDATE_STARTED="
+if not exist "%DEST%" mkdir "%DEST%"
+9>"%DEST%\update.lock" call :Update
+if not defined UPDATE_STARTED (
+  echo Another update of %DEST% is running. Wait for it to finish, then retry.
+  exit /b 1
+)
+exit /b %ERRORLEVEL%
+
+
+:Update
+set "UPDATE_STARTED=1"
 echo.
 echo === Building Anvil incrementally ===
 "%BASH%" -lc "zig_dir=$(./scripts/ensure-zig.sh) && export PATH=$zig_dir:$PATH && ./scripts/ensure-luajit-cli.sh && if [ -f build-windows-x86_64/build.ninja ]; then meson configure build-windows-x86_64 -Drenderer=true && meson compile -C build-windows-x86_64; else ./scripts/build.sh -f -P; fi"
