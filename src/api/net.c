@@ -313,6 +313,22 @@ static int f_create_server(lua_State* L) {
   return 1;
 }
 
+/* Local control credentials must not use Lua's predictable random generator. */
+static int f_random_token(lua_State *L) {
+  unsigned char bytes[32];
+  char text[65];
+  if (psa_crypto_init() != PSA_SUCCESS || psa_generate_random(bytes, sizeof(bytes)) != PSA_SUCCESS)
+    return luaL_error(L, "Cannot generate a local control credential");
+  static const char hex[] = "0123456789abcdef";
+  for (size_t i = 0; i < sizeof(bytes); i++) {
+    text[i * 2] = hex[bytes[i] >> 4];
+    text[i * 2 + 1] = hex[bytes[i] & 15];
+  }
+  text[64] = 0;
+  lua_pushlstring(L, text, 64);
+  return 1;
+}
+
 static int f_gc(lua_State *L) {
   NET_Quit();
   return 0;
@@ -404,6 +420,7 @@ static int mm_address_gc(lua_State* L) {
 
 static int m_server_accept(lua_State* L) {
   Server* self = (Server*) luaL_checkudata(L, 1, API_TYPE_NET_SERVER);
+  if (!self->server) return luaL_error(L, "Server is closed");
 
   NET_StreamSocket *client_socket = NULL;
   bool accepted = NET_AcceptClient(self->server, &client_socket);
@@ -414,9 +431,12 @@ static int m_server_accept(lua_State* L) {
     return 2;
   } else if(client_socket) {
     Connection* client = lua_newuserdata(L, sizeof(Connection));
+    memset(client, 0, sizeof(*client));
     client->type = TCP;
     client->socket = client_socket;
     luaL_setmetatable(L, API_TYPE_NET_TCP);
+  } else {
+    lua_pushnil(L);
   }
 
   return 1;
@@ -431,6 +451,7 @@ static int m_server_get_port(lua_State* L) {
 static int mm_server_gc(lua_State* L) {
   Server* self = (Server*) luaL_checkudata(L, 1, API_TYPE_NET_SERVER);
   NET_DestroyServer(self->server);
+  self->server = NULL;
   return 0;
 }
 
@@ -789,6 +810,7 @@ static const struct luaL_Reg net_lib[] = {
   { "open_tcp",            f_open_tcp            },
   { "open_udp",            f_open_udp            },
   { "create_server",       f_create_server       },
+  { "random_token",        f_random_token        },
   { "__gc",                f_gc                  },
   { NULL, NULL}
 };
@@ -806,6 +828,7 @@ static const struct luaL_Reg net_address_object[] = {
 static const struct luaL_Reg net_server_object[] = {
   { "accept",   m_server_accept   },
   { "get_port", m_server_get_port },
+  { "close",    mm_server_gc      },
   { "__gc",     mm_server_gc      },
   { NULL, NULL}
 };
