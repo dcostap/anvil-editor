@@ -113,7 +113,7 @@ function SidebarView:metrics()
     pad = pad,
     gap = 16 * SCALE,
     -- The space above each loaded Project after the first.
-    project_gap = 14 * SCALE,
+    project_gap = 17 * SCALE,
     search_y = caption + 2 * SCALE,
     search = math.floor(h + 12 * SCALE + 0.5),
     group = h + 16 * SCALE,
