@@ -4,6 +4,7 @@ local panes = require "core.panes"
 local poi = require "core.poi"
 local View = require "core.view"
 local GitView = require "plugins.git.view"
+local DiffViewModule = require "plugins.diffview"
 local test = require "core.test"
 
 local function wait_until(predicate, timeout, message)
@@ -23,6 +24,20 @@ test.describe("Commit remote POIs", function()
   test.before_each(function(context)
     panes.reset_for_tests()
     context.diff_layout = config.plugins.diffview.layout
+    context.diffview_load_workspace_state = DiffViewModule.load_workspace_state
+    DiffViewModule.load_workspace_state = function(layout)
+      local result = context.diffview_load_workspace_state(layout)
+      if context.force_side_by_side_layout then
+        config.plugins.diffview.layout = "side-by-side"
+      end
+      return result
+    end
+    context.root = core.root_panel
+    context.root_rect = {
+      context.root.position.x, context.root.position.y,
+      context.root.size.x, context.root.size.y,
+    }
+    context.root.size.x, context.root.size.y = 800, 600
     context.source = GitView(core.root_project(), {
       defer_refresh = true, tab_id = "test-commit",
       backend = {
@@ -58,6 +73,11 @@ test.describe("Commit remote POIs", function()
   test.after_each(function(context)
     panes.reset_for_tests()
     config.plugins.diffview.layout = context.diff_layout
+    context.force_side_by_side_layout = false
+    DiffViewModule.load_workspace_state = context.diffview_load_workspace_state
+    context.root.position.x, context.root.position.y = context.root_rect[1], context.root_rect[2]
+    context.root.size.x, context.root.size.y = context.root_rect[3], context.root_rect[4]
+    context.root:update_layout()
   end)
 
   for _, source_kind in ipairs { "Commit Diff View", "Git Log" } do
@@ -82,13 +102,16 @@ test.describe("Commit remote POIs", function()
         .. table.concat(unchanged, "\n") .. "\n" .. revision .. " end\n")
     end
     local destination = panes.create { factory = function() return View() end }
+    config.plugins.diffview.layout = "side-by-side"
     local function ready()
       local view = destination.current_view
-      panes.present(view, { pane = destination })
-      view.size.x, view.size.y = 800, 600
-      view:update()
+      test.equal(panes.pane_for_view(view), destination,
+        "the comparison must be attached through normal Pane placement")
+      test.ok(core.root_panel:contains_view(view),
+        "the comparison must be visible in the Root Panel")
       test.ok(wait_until(function()
-        view:update()
+        config.plugins.diffview.layout = "side-by-side"
+        core.root_panel:update()
         local points = poi.points_for_view(view.buffer_view_b)
         local changes = {}
         for _, point in ipairs(points or {}) do
@@ -96,16 +119,41 @@ test.describe("Commit remote POIs", function()
         end
         return changes[1] == 2 and changes[2] == 23
       end, 3), "Diff View did not publish its local changes")
+      test.not_ok(view.unified, "the reveal checks require a visible Diff Side")
       return view, view.buffer_view_b
     end
+    test.equal(config.plugins.diffview.layout, "side-by-side",
+      "the test must select side-by-side layout before remote navigation")
+    context.force_side_by_side_layout = true
     test.ok(poi.navigate_remote(1))
     destination = panes.active()
     local first, side = ready()
-    side:with_selection_state(function() side.buffer:set_selection(2, 1) end)
-    test.equal(selected_line(side), 2)
+    local reveal_failures = {}
+    local function expect_line(view, diff_view, expected, label)
+      local actual = selected_line(view)
+      if actual ~= expected then
+        reveal_failures[#reveal_failures + 1] = string.format(
+          "%s: Diff Side=%s, Buffer=%s, pending=%s",
+          label, tostring(actual), tostring(view.buffer:get_selection()),
+          tostring(diff_view.pending_first_change_reveal)
+        )
+      end
+    end
+    local function expect_value(actual, expected, label)
+      if actual ~= expected then
+        reveal_failures[#reveal_failures + 1] = string.format(
+          "%s: expected %s, got %s", label, tostring(expected), tostring(actual)
+        )
+      end
+    end
+    expect_line(side, first, 2, "forward entry must reveal the first local change")
     local next_change = poi.next(side, 1)
-    test.equal(next_change and next_change.line, 23)
-    poi.navigate(side, 1)
+    expect_value(next_change and next_change.line, 23,
+      "forward navigation must find the next local change")
+    while next_change do
+      poi.navigate(side, 1)
+      next_change = poi.next(side, 1)
+    end
     test.equal(destination.current_view, first)
     test.equal(selected_line(side), 23)
     -- Moving the source selection must not change this comparison's position.
@@ -121,8 +169,7 @@ test.describe("Commit remote POIs", function()
     local second
     second, side = ready()
     test.contains(table.concat(side.buffer.lines), "after src/b.lua")
-    side:with_selection_state(function() side.buffer:set_selection(2, 1) end)
-    test.equal(selected_line(side), 2)
+    expect_line(side, second, 2, "forward file navigation must reveal its first local change")
     poi.navigate(side, -1)
     test.equal(destination.current_view, second)
     deadline = system.get_time() + 3
@@ -130,17 +177,20 @@ test.describe("Commit remote POIs", function()
     test.not_equal(destination.current_view, second)
     first, side = ready()
     test.contains(table.concat(side.buffer.lines), "after src/a.lua")
-    -- Set a known point before checking local reverse navigation after re-entry.
-    side:with_selection_state(function() side.buffer:set_selection(23, 1) end)
-    test.equal(selected_line(side), 23)
-    poi.navigate(side, -1)
-    test.equal(selected_line(side), 2)
-    poi.navigate(side, -1)
-    test.equal(destination.current_view, first)
-    poi.navigate(side, 1)
-    poi.clear_remote_source(tree)
-    poi.navigate(side, 1)
-    test.equal(destination.current_view, first)
+    expect_line(side, first, 23, "reverse entry must reveal the last local change")
+    if selected_line(side) == 23 then
+      poi.navigate(side, -1)
+      test.equal(selected_line(side), 2)
+      poi.navigate(side, -1)
+      test.equal(destination.current_view, first)
+      poi.navigate(side, 1)
+      poi.clear_remote_source(tree)
+      poi.navigate(side, 1)
+      test.equal(destination.current_view, first)
+    else
+      poi.clear_remote_source(tree)
+    end
+    test.equal(table.concat(reveal_failures, "\n"), "")
   end)
   end
 
