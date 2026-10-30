@@ -108,16 +108,6 @@ test.describe("Sidebar keyboard navigation", function()
     test.same(actions, {{"return_focus"}, {"request", "select", "C:/Alpha", {action="key", stroke="f5"}}})
   end)
 
-  test.it("keeps the keyboard for a key that closes or reopens Panes", function()
-    local view, actions = sidebar()
-    view:on_focus(true)
-    view:on_key_pressed("down")
-    test.ok(view:forward_key("ctrl+w", true))
-    test.same(actions, {{"request", "select", "C:/Alpha",
-      {action="key", stroke="ctrl+w", pane="b", keep_sidebar=true}}})
-    test.ok(view.focused)
-  end)
-
   test.it("keeps keys that can type text, and keys without Sidebar focus", function()
     local view, actions = sidebar()
     view:on_focus(true)

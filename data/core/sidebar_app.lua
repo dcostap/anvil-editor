@@ -381,9 +381,11 @@ function core.init()
   local ok, settings = pcall(dofile, USERDIR .. "/user_settings.lua")
   local saved_config = ok and type(settings) == "table" and settings.config
   local custom = type(saved_config) == "table" and saved_config.custom_keybindings
+  -- Keep the editor's bindings after the Sidebar replaces the active keymap below.
+  local editor_bindings = keymap.reverse_map
   local function bindings_for(name)
     local saved = type(custom) == "table" and custom[name]
-    return type(saved) == "table" and saved or keymap.get_bindings(name) or {}
+    return type(saved) == "table" and saved or editor_bindings[name] or {}
   end
   local bindings = bindings_for("core:focus_project_sidebar")
   local LineInput, line_bindings = require "core.line_input", {}
