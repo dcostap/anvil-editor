@@ -399,7 +399,13 @@ static int test_offset_conversion(void) {
   CHECK(pos.byte == 9);
   CHECK(pos.point.row == 2);
   CHECK(pos.point.column == 1);
-  CHECK(!anvil_ts_snapshot_position_from_anvil(snapshot, 3, 3, &pos));
+
+  /* The position after the final newline maps to the end of the snapshot. */
+  CHECK(anvil_ts_snapshot_position_from_anvil(snapshot, 3, 3, &pos));
+  CHECK(pos.byte == snapshot->byte_len);
+  CHECK(pos.point.row == 2);
+  CHECK(pos.point.column == 2);
+  CHECK(!anvil_ts_snapshot_position_from_anvil(snapshot, 3, 4, &pos));
   anvil_ts_snapshot_free(snapshot);
 
   return 0;
