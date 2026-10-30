@@ -88,7 +88,7 @@ function M.place(pane, target)
 end
 
 local schemas = {
-  key = {pane = true, stroke = true, keep_sidebar = true},
+  key = {pane = true, stroke = true, keep_sidebar = true}, perform = {pane = true, command = true},
   focus = {pane = true, feedback = true}, close = {pane = true}, move = {pane = true, target = true},
   snooze = {pane = true}, unsnooze = {pane = true},
   open = {files = true, text = true, target = true},
@@ -112,8 +112,10 @@ local function validate(request)
   if not schema or not fields(request, schema) then return nil, "unknown action or field" end
   if request.action == "key" and (not identifier(request.stroke)
     or request.keep_sidebar ~= nil and request.keep_sidebar ~= true) then return nil, "invalid key" end
-  -- A key without a Pane acts in the Project's active Pane.
-  if schema.pane and (request.action ~= "key" or request.pane ~= nil) and not identifier(request.pane) then
+  if request.action == "perform" and not identifier(request.command) then return nil, "invalid command" end
+  -- A key or command without a Pane acts in the Project's active Pane.
+  local optional = request.action == "key" or request.action == "perform"
+  if schema.pane and (not optional or request.pane ~= nil) and not identifier(request.pane) then
     return nil, "invalid Pane ID"
   end
   if request.feedback ~= nil and request.feedback ~= "numbered" then return nil, "invalid focus feedback" end
@@ -210,6 +212,17 @@ local function execute(request, x, y)
     if request.keep_sidebar and asks then system.focus_project_sidebar(false) end
     core.log_quiet("Sidebar key: %s Pane=%s performed=%s keep_sidebar=%s asks=%s", request.stroke,
       tostring(request.pane), tostring(performed), tostring(request.keep_sidebar), tostring(asks))
+    return true
+  end
+  -- A Sidebar Context Menu item runs its command in the named Pane, or in this Project. A View that it opens takes
+  -- a new Pane.
+  if action == "perform" then
+    local command = require "core.command"
+    if not command.map[request.command] then return nil, "unknown command" end
+    if pane then panes.focus(pane) end
+    local performed = command.perform_with_context(request.command, {placement = "new"})
+    core.log_quiet("Sidebar command: %s Pane=%s performed=%s", request.command, tostring(request.pane),
+      tostring(performed))
     return true
   end
   -- An external launch names files, including new ones. Each opens in a new Pane, as from a Terminal.

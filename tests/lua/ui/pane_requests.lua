@@ -60,6 +60,17 @@ test.describe("Pane requests", function()
     test.same(ran, {b, b})
   end)
 
+  test.it("runs a Sidebar menu command in the named Pane or this Project, and opens its View in a new Pane", function()
+    local ran = {}
+    command.add(nil, {["test:sidebar_menu"] = function() ran[#ran + 1] = panes.active() end})
+    local a, b = create(), create()
+    request {action = "perform", pane = a.id, command = "test:sidebar_menu"}
+    test.same(ran, {a})
+    request {action = "perform", command = "editor:open"}
+    test.equal(#panes.ordered(), 3, "The new View replaced a Pane's View")
+    test.ok(panes.active() ~= a and panes.active() ~= b, "The new Pane does not have focus")
+  end)
+
   test.it("takes the keyboard from the Sidebar only when a Sidebar close asks first", function()
     local NagView = require "core.nagview"
     local stroke, taken = "ctrl+alt+shift+f12", {}
@@ -208,6 +219,7 @@ test.describe("Pane requests", function()
       {action = "open", files = {"relative.txt"}, target = {mode = "group", side = "after"}},
       {action = "drop", pane = a.id, text = false},
       {action = "focus", pane = a.id, surprise = true},
+      {action = "perform", command = 1}, {action = "perform", command = "pane:close", pane = "missing"},
     } do request(value) end
     core.on_event("panerequest", "not valid Lua", -1, -1, 0)
     test.same(panes.ordered(), {a, b})

@@ -119,11 +119,11 @@ if path:match("/driver$") then
    assert(row(page,a.pid).window_id == a.window_id, "Sidebar selection silently moved the Project")
    save("inspect-0",{target=a.window_id}); local before = wait(function() return load("a-state-0") end)
    local function sidebar_move()
-    -- Right-click A's row in B's Sidebar and choose B in the Project menu. Its first item moves A to B.
+    -- Right-click A's row in B's Sidebar and choose B in the Project menu. Its first Move item moves A to B.
     y = a_row_y()
     local menu = menus.open(bw, 20 + y * 65536)
     assert(menu, "A right-click on A's row showed no menu")
-    assert(menu.labels:find("^Move to Window " .. b.window_id .. "|"), "Project menu items: " .. menu.labels)
+    assert(menu.labels:find("|-|Move to Window " .. b.window_id .. "|", 1, true), "Project menu items: " .. menu.labels)
     menus.choose(bw, "Move to Window " .. b.window_id)
    end
    local function move(target, stage)

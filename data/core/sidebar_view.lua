@@ -224,6 +224,17 @@ end, {
   ["sidebar:snooze"] = function(view, target, hours) view:set_snooze(target, hours) end,
   ["sidebar:snooze_custom"] = function(view, target) view:ask_snooze_hours(target) end,
   ["sidebar:remove_snooze"] = function(view, target) view:set_snooze(target, nil) end,
+  ["sidebar:mark_read"] = function(view, item, session)
+    view:look(item, session, os.time())
+    view:rebuild_rows()
+  end,
+  -- These show their Project, so the user sees the new Pane or an unsaved-file question.
+  ["sidebar:perform"] = function(view, path, name, pane)
+    view.action("request", "select", path, {action = "perform", command = name, pane = pane})
+  end,
+  ["sidebar:close_pane"] = function(view, path, pane)
+    view.action("request", "select", path, {action = "close", pane = pane})
+  end,
   ["sidebar:move_project"] = function(view, project, window_id) view.action("move", project.row_id, window_id) end,
   ["sidebar:open_project_window"] = function(view, project) view.action("open_window", project.row_id) end,
   ["sidebar:unload_project"] = function(view, project) view.action("unload", project.row_id) end,
@@ -231,27 +242,52 @@ end, {
   ["sidebar:show_project_in_folder"] = function(view, project) view.action("show_in_folder", project.row_id) end,
 })
 
--- The Context Menu items of a row. A Project has Move and Unload while it is loaded, or else Open in New Window. A
--- Terminal Tab has Snooze times. Other rows have no menu.
+-- The Context Menu items of a row. A Project has New Terminal and New Pi. While it is loaded, it also has Reopen
+-- Closed Pane, Move and Unload, or else Open in New Window. A Tab has Duplicate and Close, and a Terminal Tab also
+-- has Snooze times. Other rows have no menu.
 function SidebarView:context_menu(row)
-  if row.kind == "tab" and row.tab.terminal then
-    local target = {session = row.tab.terminal.session, pane = row.tab.id, path = row.project.path}
-    local times = {}
-    for _, hours in ipairs(SNOOZE_HOURS) do
-      times[#times + 1] = {label = hours == 1 and "1 Hour" or hours .. " Hours", command = "sidebar:snooze",
-        args = {self, target, hours}}
+  if row.kind == "tab" then
+    local path, pane, items = row.project.path, row.tab.id, {}
+    if row.tab.terminal then
+      local target = {session = row.tab.terminal.session, pane = pane, path = path}
+      -- An agent's question needs an answer, not a look.
+      if row.attention and row.attention ~= "blocked" then
+        items[#items + 1] = {label = "Mark as Read", command = "sidebar:mark_read",
+          args = {self, row.tab, target.session}}
+      end
+      local times = {}
+      for _, hours in ipairs(SNOOZE_HOURS) do
+        times[#times + 1] = {label = hours == 1 and "1 Hour" or hours .. " Hours", command = "sidebar:snooze",
+          args = {self, target, hours}}
+      end
+      times[#times + 1] = {label = "Custom…", command = "sidebar:snooze_custom", args = {self, target}}
+      items[#items + 1] = {label = "Snooze", items = times}
+      if self.snoozes[target.session] then
+        items[#items + 1] = {label = "Remove Snooze", command = "sidebar:remove_snooze", args = {self, target}}
+      end
+      items[#items + 1] = "-"
     end
-    times[#times + 1] = {label = "Custom…", command = "sidebar:snooze_custom", args = {self, target}}
-    local items = {{label = "Snooze", items = times}}
-    if self.snoozes[target.session] then
-      items[#items + 1] = {label = "Remove Snooze", command = "sidebar:remove_snooze", args = {self, target}}
-    end
+    items[#items + 1] = {label = "Duplicate", icon = icons.split_right, command = "sidebar:perform",
+      args = {self, path, "pane:copy_view_to_new_group", pane}}
+    items[#items + 1] = {label = "Close", icon = icons.close, command = "sidebar:close_pane", args = {self, path, pane}}
     return items
   end
   if row.kind ~= "project" then return nil end
   local project, items = row.project, {}
   local owner = project.window_id or 0
-  if owner ~= 0 and project.id and project.state ~= "dormant" then
+  local loaded = owner ~= 0 and project.id and project.state ~= "dormant"
+  if project.exists then
+    items[#items + 1] = {label = "New Terminal", icon = icons.terminal, command = "sidebar:perform",
+      args = {self, project.path, "terminal:open_at_project_root"}}
+    items[#items + 1] = {label = "New Pi", command = "sidebar:perform", args = {self, project.path, "terminal:open_pi"}}
+    -- A Project keeps its closed Panes in memory, so an unloaded Project has none.
+    if loaded then
+      items[#items + 1] = {label = "Reopen Closed Pane", icon = icons.reopen, command = "sidebar:perform",
+        args = {self, project.path, "core:reopen_last_closed_pane"}}
+    end
+    items[#items + 1] = "-"
+  end
+  if loaded then
     for _, window in ipairs((self.projects or {}).windows or {}) do
       if window.id ~= owner then
         items[#items + 1] = {label = "Move to Window " .. window.id, command = "sidebar:move_project",

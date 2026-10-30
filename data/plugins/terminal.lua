@@ -2757,6 +2757,22 @@ command.add(nil, {
     supports_placement = true,
     opens_view = true,
   }),
+  ["terminal:open_pi"] = command.palette(function()
+    local context = command.get_invocation_context() or {}
+    return M.open {
+      pane = context.source_pane,
+      placement = context.placement or "current",
+      direction = context.direction,
+      focus = true,
+      cwd = start_directory("project"),
+      pi = true,
+      reason = "terminal-open-pi",
+    } ~= nil
+  end, {
+    keywords = { "agent", "shell", "view" },
+    supports_placement = true,
+    opens_view = true,
+  }),
   ["terminal:open_at_path"] = command.palette(function()
     local context = command.get_invocation_context() or {}
     local pane = panes.find(context.source_pane or panes.active())

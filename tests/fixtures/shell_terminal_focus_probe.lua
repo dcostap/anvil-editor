@@ -118,19 +118,19 @@ if path:match("/driver$") then
     menus.choose(window, ...)
    end
    local before = os.time()
-   menu("Snooze", "Snooze", "2 Hours")
+   menu("Snooze|-|Duplicate|Close", "Snooze", "2 Hours")
    wait(function() local time = snooze(); return time and time >= before + 2 * 3600 end, 5,
     "The Sidebar did not save the chosen Snooze")
    -- The collapsed Snoozed fold takes the Tab's row. A click opens it.
    snoozed_pane(true)
    click(point)
    point = find_point()
-   menu("Snooze|Remove Snooze", "Remove Snooze")
+   menu("Snooze|Remove Snooze|-|Duplicate|Close", "Remove Snooze")
    wait(function() return snooze() == nil end, 5, "The Sidebar did not remove the Snooze")
    snoozed_pane(false)
    -- A Snoozed Pane's row still focuses its Terminal. The capture shows the open Snoozed fold.
    point = find_point()
-   menu("Snooze", "Snooze", "3 Hours")
+   menu("Snooze|-|Duplicate|Close", "Snooze", "3 Hours")
    wait(snooze, 5, "The Sidebar did not save the second Snooze")
    snoozed_pane(true)
    point = find_point()

@@ -96,17 +96,21 @@ if path:match("/driver$") then
    local point = find_row(window, original.row_id, "The Project has no Sidebar row")
    -- Right-clicks the Project's row with the shell's routing probe message: posted Win32 input is ignored on an
    -- inactive desktop. Checks the menu's items and chooses `choice`, or nothing for "".
+   local LOADED = "New Terminal|New Pi|Reopen Closed Pane|-|Move to New Window|Unload|-|Copy Path|Show in File Explorer"
    local function menu(choice, items)
     local found = menus.open(window, point)
     assert(found, "A right-click on the Project's row showed no menu")
     assert(found.labels == items, "Project menu items: " .. found.labels)
     if choice ~= "" then menus.choose(window, choice) else menus.choose(window) end
    end
-   menu("Copy Path", "Move to New Window|Unload|-|Copy Path|Show in File Explorer")
+   menu("Copy Path", LOADED)
+   -- New Terminal opens a Terminal in a new Pane of the Project. The Project closes it again.
+   menu("New Terminal", LOADED)
+   wait(function() return load("terminal") end, 15, "New Terminal did not open a Terminal in the Project")
    local expected = (root .. "/Project"):gsub("/", "\\"):lower()
    wait(function() return (system.get_clipboard() or ""):lower() == expected end, 5,
     "Copy Path did not copy the Project's path")
-   menu("Move to New Window", "Move to New Window|Unload|-|Copy Path|Show in File Explorer")
+   menu("Move to New Window", LOADED)
    wait(function() return load("project").window == 2 end, 15, "The Project did not move to a new Window")
    if background then
     assert(#shell_windows(shell:pid()) == 2, "Move closed the Window with the other Project")
@@ -131,7 +135,7 @@ if path:match("/driver$") then
     "The new Window did not show its Sidebar")
    coroutine.yield(.5)
    point = find_row(window, original.row_id, "The moved Project has no Sidebar row")
-   menu("Unload", "Move to New Window|Unload|-|Copy Path|Show in File Explorer")
+   menu("Unload", LOADED)
    wait(function() return trace():find("Shell Project is Dormant: id=", 1, true) end, 15,
     "Unload did not unload the Project")
    -- The Dormant Project is in a group in the Sidebar's bottom area. Groups start collapsed. The only group is at the
@@ -142,7 +146,7 @@ if path:match("/driver$") then
    for step = 1, 2 do user32.PostMessageW(window, 0x804a, step, header) end
    coroutine.yield(.3)
    point = find_row(window, original.row_id, "The Dormant Project has no row in the Sidebar")
-   menu("", "Open in New Window|-|Copy Path|Show in File Explorer")
+   menu("", "New Terminal|New Pi|-|Open in New Window|-|Copy Path|Show in File Explorer")
    -- After the first Window closed, a click on the Dormant Project in the other Window's Sidebar loads it there.
    os.remove(root .. "/project.lua")
    coroutine.yield(.5)
@@ -161,12 +165,20 @@ if path:match("/driver$") then
   quit()
  end)
 elseif path == root .. "/Project" then
- -- Reports the Window that shows this Project, and toggles its Sidebar when the driver asks.
+ -- Reports the Window that shows this Project and a Terminal that opens in it, and toggles its Sidebar when the
+ -- driver asks.
+ local panes = require "core.panes"
  core.add_background_thread(function()
   local last
   while not load("finish") do
    local window = system.get_anvil_window_id()
    if window ~= last then last = window; save("project", {window = window}) end
+   for _, pane in ipairs(panes.ordered()) do
+    if pane.current_view.terminal_view then
+     save("terminal", {opened = true})
+     panes.close(pane, {force = true})
+    end
+   end
    if load("toggle-sidebar") then
     os.remove(root .. "/toggle-sidebar.lua")
     require("core.command").perform("core:toggle_project_sidebar")

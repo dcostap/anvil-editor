@@ -193,7 +193,10 @@ The Sidebar draws it with `core.context_menu`, the same menu as in the editor. I
 The Sidebar surface covers the whole Window. Its strip ends at `content_x`, so a menu can extend over the Project.
 The Sidebar reports the menu's rectangles as raised areas. The shell draws them above the Project.
 While they show, the shell sends all pointer and keyboard input to the Sidebar.
-Project rows offer Move, Unload or Open in New Window, Copy Path and Show in File Explorer. Terminal Tabs offer Snooze.
+Project rows offer New Terminal, New Pi, Move, Unload or Open in New Window, Copy Path and Show in File Explorer. A loaded Project also offers Reopen Closed Pane.
+Tabs offer Duplicate and Close. Terminal Tabs also offer Snooze, and Mark as Read for an Unread Result.
+New items, Reopen, Duplicate and Close go through the select route, so the user sees the result or a close question.
+The `perform` Pane request runs a named command in its Pane, or in the Project. A View that it opens takes a new Pane.
 Run `ui/sidebar_view.lua`, `ui/context_menu.lua` and the `project-menu`, `project-menu-background`, `terminal-focus` and `windows-move` shell probes after changes.
 
 A right-click on a Terminal Tab in the Sidebar sets or removes a Snooze.
