@@ -313,6 +313,26 @@ test.describe("Project File Search folders", function()
     test.ok(picker_closed, "expected the picker to close before the Project request")
   end)
 
+  test.it("opens a Project in a new Anvil Window with alternate activation under the shell", function(context)
+    local opened, same_window
+    context.is_hosted_surface = system.is_hosted_surface
+    system.is_hosted_surface = function() return true end
+    core.open_project_in_same_window = function(path) same_window = path; return true end
+    core.open_project_in_new_window = function(path) opened = path; return true end
+
+    fuzzy_searcher.open_static_results("Projects", {
+      { kind = "project", label = context.empty, project = context.empty },
+    })
+    local picker = assert(core.fuzzy_searcher_active_view)
+    picker.selected = 1
+    picker:confirm(true)
+
+    test.ok(not core.nag_view.visible, "expected no Open Folder prompt")
+    test.ok(wait_until(function() return opened ~= nil or same_window ~= nil end))
+    test.is_nil(same_window, "alternate activation must not select the Project in this Window")
+    test.ok(common.path_equals(opened, context.empty))
+  end)
+
   test.it("offers a folder as a File Tree or Project in this Anvil Window under the shell", function(context)
     context.is_hosted_surface = system.is_hosted_surface
     system.is_hosted_surface = function() return true end

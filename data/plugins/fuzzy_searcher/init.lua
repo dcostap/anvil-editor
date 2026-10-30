@@ -7997,14 +7997,18 @@ end
 function FSView:confirm_folder_open(r, new_group)
   local path = common.normalize_path(r.abs_path or r.path or r.project)
   if not path then return false end
-  -- The shell loads Projects beside each other in one Anvil Window, so a
-  -- Project result opens there. A new Window is an explicit command.
+  -- Normal activation selects the Project here. Alternate activation opens a new Window.
   local shell = system.is_hosted_surface()
   if shell and (r.kind == "project" or r.kind == "new_project") then
-    core.log_quiet("Fuzzy Searcher: opening Project in this Anvil Window without a prompt")
+    core.log_quiet("Fuzzy Searcher: opening Project in %s Anvil Window without a prompt",
+      new_group and "a new" or "this")
     if not new_group then self:close("project_switch") end
     core.add_thread(function()
-      core.open_project_in_same_window(path)
+      if new_group then
+        core.open_project_in_new_window(path)
+      else
+        core.open_project_in_same_window(path)
+      end
       self:restore_activation_focus(new_group)
     end)
     return true
