@@ -38,6 +38,22 @@ local function start_process_finalization_workload(context)
 end
 
 local workloads = {
+  scheduler_yield = {
+    run = function(context)
+      core.add_thread(function()
+        system.sleep(0.2)
+        local finished_at = system.get_time()
+        coroutine.yield(0)
+        context.continuation_delay = system.get_time() - finished_at
+        core.log_quiet("Scheduler workload: continuation after slow work %.3f ms",
+          context.continuation_delay * 1000)
+      end)
+    end,
+    verify = function(context)
+      return context.continuation_delay ~= nil, "zero-delay continuation after slow work"
+    end,
+  },
+
   process_finalize = {
     setup = function(context)
       context.processes_started = false

@@ -105,6 +105,11 @@ SCENARIOS: dict[str, Scenario] = {
         suites=("terminal",), frame_budget_ms=1500.0, frame_spike_ms=1500.0,
         action_budget_ms=2000.0),
     # Keep removed runtime timing workloads in the scenario runner, not correctness tests.
+    # The fixture deliberately spends 200 ms in one slice. Yielding must not add that delay again.
+    "scheduler-yield-after-work": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "scheduler_yield"}, targets=1,
+        frame_budget_ms=250.0, frame_spike_ms=350.0, action_budget_ms=350.0),
     "process-finalize-handles": Scenario(
         "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
         settings={"workload": "process_finalize"}, targets=1),
