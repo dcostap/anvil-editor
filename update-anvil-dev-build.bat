@@ -9,6 +9,13 @@ set "APP=%DEST%\anvil.exe"
 
 cd /d "%REPO%" || exit /b 1
 
+rem The daily app runs the main checkout. A linked worktree has a .git file,
+rem not a .git folder. Its update would point the app's junctions at it.
+if not exist "%REPO%\.git\" (
+  echo This is a linked worktree. Merge to master, then run this update from the main checkout.
+  exit /b 1
+)
+
 rem One update at a time. The open lock file is the lock, so Windows releases it
 rem when the update ends, also after a crash. Child processes inherit it until
 rem they exit. The restarted app does not, because Explorer starts it.
