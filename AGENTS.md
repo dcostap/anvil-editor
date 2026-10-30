@@ -540,6 +540,18 @@ When adding or changing first-party plugin behavior, do not parameterize every c
 
 When adding a new first-party style key, ensure the base style schema remains complete so switching themes does not leave missing keys. Themes should override keys, not be the only place where required first-party keys are defined.
 
+## Agent control
+
+`core.control` owns editor operations. `core.control_server` exposes them through authenticated loopback MCP. `core.control_runtime` publishes private discovery files and follows Terminal ownership. Cross-Project discovery runs in a worker. Do not move editor behavior into the transport or Pi extension.
+
+Interactive Pi gets `data/tools/agent-sessions/pi-control.cjs` through the existing preload. It registers Anvil's MCP server and handles attributed messages, steering, interruption, and settled results. Pi remains a TUI. Pi launches require explicit provider, model, and thinking choices.
+
+Keep focus by default. Keep normal close confirmations. Use stable Pane, Terminal, and conversation IDs, not navigation numbers. A wait timeout never cancels a task. Retry keys last for the Project process; Pi persists accepted delivery receipts separately.
+
+See [agent control](docs/agent-control.md) for tools, discovery, security, and limits. Run `runtime/net_server.lua`, `ui/agent_control.lua`, `ui/control_transport.lua`, and `ui/control_pi.lua` after changes. Also run `node --test tests/pi-control.test.cjs tests/agent-sessions.test.cjs`.
+
+`ui/control_pi.lua` runs real Pi TUI sessions against a local scripted model server. It uses no provider, API key, or inference. Keep these checks isolated from user sessions and settings.
+
 ## Logging / diagnostics
 
 Anvil writes persistent session logs to:

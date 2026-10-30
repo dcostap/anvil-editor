@@ -723,6 +723,7 @@ function TerminalView:log_session_attach()
   core.log_quiet("Terminal session %d attached: host=%d shell=%d replay=%d bytes",
     self.log_id, stats.host_pid, stats.shell_pid, stats.replay_bytes)
   self:claim_session()
+  require("core.control_runtime").observe(self)
 end
 
 -- A View that attaches to a session of another Project claims the session for its own Project. A Pane that
@@ -2369,6 +2370,7 @@ end
 
 function TerminalView:detach_session()
   self:clear_point_hover()
+  require("core.control_runtime").release(self)
   if not self.session then return end
   if self.vt_trace_path then self:stop_vt_trace() end
   self.session:detach()
@@ -2432,6 +2434,7 @@ end
 -- in this Pane with the same ID, so its Snooze, seen time and Pi session stay.
 function TerminalView:end_session()
   self:clear_point_hover()
+  require("core.control_runtime").release(self)
   if not self.session then return end
   if self.vt_trace_path then self:stop_vt_trace() end
   self.session:stop()
@@ -2441,6 +2444,7 @@ function TerminalView:end_session()
 end
 
 function TerminalView:on_close(reopen)
+  require("core.control_runtime").release(self)
   local retained = false
   -- A detached session belongs to its host or another Workspace. Only a live session ends for Reopen.
   if reopen and self.session and self.session_id then

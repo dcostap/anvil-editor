@@ -51,4 +51,61 @@ test.describe("Agent editor control", function()
     approve()
     test.is_nil(panes.find(pane.id))
   end)
+
+  test.it("sends a task once to the selected Pi instance and keeps its result", function()
+    control:exchange("terminal-b", {instance = "pi-one", session = "session.jsonl", busy = false,
+      receipts = {}, tasks = {}})
+    local args = {terminal = "terminal-b", instance = "pi-one", text = "Review the change",
+      delivery = "queue", request_id = "review"}
+    local sent = control:call("agent_send", args, "terminal-a")
+    local response = control:exchange("terminal-b", {instance = "pi-one", busy = false, receipts = {}, tasks = {}})
+    test.equal(#response.commands, 1)
+    test.equal(response.commands[1].id, sent.task)
+    test.equal(response.commands[1].from, "terminal-a")
+    test.equal(control:call("agent_send", args, "terminal-a").task, sent.task)
+    control:exchange("terminal-b", {instance = "pi-one", busy = false,
+      receipts = {{id = sent.task, status = "accepted"}},
+      tasks = {{id = sent.task, status = "completed", result = "No issues"}}})
+    local result = control:call("agent_read", {terminal = "terminal-b", instance = "pi-one", task = sent.task}, "terminal-a")
+    test.equal(result.status, "completed")
+    test.equal(result.result, "No issues")
+    control:exchange("terminal-b", {instance = "pi-two", busy = false, receipts = {}, tasks = {}})
+    test.equal(pcall(function()
+      control:call("agent_send", {terminal = "terminal-b", instance = "pi-one", text = "Again",
+        delivery = "queue", request_id = "review-new"}, "terminal-a")
+    end), false, "A stale request cannot target a replacement conversation")
+  end)
+
+  test.it("opens a file and a Terminal in explicit Panes without changing focus", function()
+    test.skip_if(PLATFORM ~= "Windows", "Windows Terminal test")
+    local folder = USERDIR .. "/control-open"
+    require("core.common").mkdirp(folder)
+    local file = assert(io.open(folder .. "/note.txt", "wb"))
+    file:write("first\nsecond\n"); file:close()
+    local source = panes.create {factory = function() return View() end}
+    local terminal
+    local ok, err = pcall(function()
+      local opened = control:call("open_file", {path = folder .. "/note.txt", line = 2,
+        pane = source.id, placement = "split", direction = "right", request_id = "open-note"}, "test-client")
+      test.equal(panes.find(opened.pane).current_view.buffer.abs_filename:gsub("\\", "/"), folder .. "/note.txt")
+      test.equal(panes.active(), source)
+      terminal = control:call("terminal_start", {cwd = folder, pane = source.id, placement = "split",
+        direction = "down", request_id = "open-terminal"}, "test-client")
+      test.equal(panes.active(), source)
+      local deadline = system.get_time() + 30
+      local result
+      repeat
+        panes.find(terminal.pane).current_view:update()
+        control:tick()
+        result = control:call("operation_read", {operation = terminal.operation}, "test-client")
+        coroutine.yield()
+      until result.status ~= "starting" or system.get_time() > deadline
+      test.equal(result.status, "ready")
+      test.ok(result.terminal)
+      test.equal(panes.active(), source)
+    end)
+    if terminal and panes.find(terminal.pane) then panes.close(terminal.pane, {force = true}) end
+    test.ok(test.remove_tree(folder))
+    assert(ok, err)
+  end)
 end)

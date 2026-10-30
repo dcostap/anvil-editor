@@ -10,6 +10,7 @@ A fast Windows code editor with built-in terminals, WYSIWYG Markdown live editin
 - Tree-sitter syntax and code navigation
 - Live Markdown editing with many Obsidian-style features
 - Built-in support for the Pi coding agent, easy to extend to other terminal agents
+- [MCP control](docs/agent-control.md) for Panes, terminals, and visible Pi sessions
 
 ![One Markdown note in each color theme](docs/screenshots/themes.png)
 

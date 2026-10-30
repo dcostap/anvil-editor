@@ -41,10 +41,11 @@ try { (() => {
     "--no-extensions", "--export", "--list-models"]);
   const given = process.argv.slice(2);
   const options = given.indexOf("--") >= 0 ? given.slice(0, given.indexOf("--")) : given;
-  const extension = path.join(__dirname, "pi-status.cjs");
-  if (process.env.ANVIL_PI_STATUS !== "0" && !subcommands.has(given[0]) &&
-      !options.some((arg) => skip.has(arg.split("=")[0])) && fs.existsSync(extension)) {
-    process.argv.splice(2, 0, "--extension", extension);
+  if (!subcommands.has(given[0]) && !options.some((arg) => skip.has(arg.split("=")[0]))) {
+    for (const [name, flag] of [["pi-status.cjs", "ANVIL_PI_STATUS"], ["pi-control.cjs", "ANVIL_PI_CONTROL"]]) {
+      const extension = path.join(__dirname, name);
+      if (process.env[flag] !== "0" && fs.existsSync(extension)) process.argv.splice(2, 0, "--extension", extension);
+    }
   }
 
   const { writeFileSync, renameSync, openSync, appendFileSync } = fs;

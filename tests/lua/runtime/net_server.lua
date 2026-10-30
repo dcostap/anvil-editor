@@ -3,6 +3,12 @@ local test = require "core.test"
 
 -- Seam: the public nonblocking network API used by local control clients.
 test.describe("Local network server", function()
+  test.it("creates a private directory for local server credentials", function()
+    local path = USERDIR .. "/private-control"
+    test.ok(net.private_directory(path))
+    test.ok(net.private_directory(path))
+    test.ok(test.remove_tree(path))
+  end)
   test.it("accepts a client without blocking and closes explicitly", function()
     local token = net.random_token()
     test.ok(token:match("^[0-9a-f]+$") and #token >= 64)

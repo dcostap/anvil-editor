@@ -906,6 +906,7 @@ function core.init()
     local ok = core.publish_project_sidebar()
     core.log_quiet("Project Sidebar recent source submitted: %s", tostring(ok))
   end
+  if cli.last_command == "default" then require("core.control_runtime").start() end
 end
 
 local published_sidebar_recents

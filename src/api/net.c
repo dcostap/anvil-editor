@@ -10,6 +10,13 @@
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
 #include <mbedtls/error.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <sddl.h>
+#else
+#include <sys/stat.h>
+#include <errno.h>
+#endif
 
 #define API_TYPE_NET_ADDRESS "NetAddress"
 #define API_TYPE_NET_TCP "NetTCP"
@@ -326,6 +333,46 @@ static int f_random_token(lua_State *L) {
   }
   text[64] = 0;
   lua_pushlstring(L, text, 64);
+  return 1;
+}
+
+/* Credential discovery is private even when the portable app's parent folder is shared. */
+static int f_private_directory(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+  bool ok = false;
+#ifdef _WIN32
+  wchar_t *wide = (wchar_t *)SDL_iconv_string("WCHAR_T", "UTF-8", path, strlen(path) + 1);
+  HANDLE token = NULL;
+  TOKEN_USER *user = NULL;
+  wchar_t *sid = NULL;
+  PSECURITY_DESCRIPTOR descriptor = NULL;
+  DWORD size = 0;
+  if (!wide) goto done;
+  if (!CreateDirectoryW(wide, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) goto done;
+  DWORD attrs = GetFileAttributesW(wide);
+  if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY) || (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) goto done;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) goto done;
+  GetTokenInformation(token, TokenUser, NULL, 0, &size);
+  user = SDL_malloc(size);
+  if (!user || !GetTokenInformation(token, TokenUser, user, size, &size) ||
+      !ConvertSidToStringSidW(user->User.Sid, &sid)) goto done;
+  wchar_t sddl[256];
+  if (_snwprintf(sddl, 256, L"D:P(A;OICI;FA;;;%ls)", sid) < 0) goto done;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor, NULL)) goto done;
+  ok = SetFileSecurityW(wide, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptor) != FALSE;
+done:
+  if (descriptor) LocalFree(descriptor);
+  if (sid) LocalFree(sid);
+  if (token) CloseHandle(token);
+  SDL_free(user);
+  SDL_free(wide);
+#else
+  struct stat info;
+  if (mkdir(path, 0700) == 0 || errno == EEXIST)
+    ok = lstat(path, &info) == 0 && S_ISDIR(info.st_mode) && chmod(path, 0700) == 0;
+#endif
+  if (!ok) return luaL_error(L, "Cannot create a private credential directory");
+  lua_pushboolean(L, true);
   return 1;
 }
 
@@ -811,6 +858,7 @@ static const struct luaL_Reg net_lib[] = {
   { "open_udp",            f_open_udp            },
   { "create_server",       f_create_server       },
   { "random_token",        f_random_token        },
+  { "private_directory",   f_private_directory   },
   { "__gc",                f_gc                  },
   { NULL, NULL}
 };
