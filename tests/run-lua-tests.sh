@@ -3,8 +3,9 @@ set -euo pipefail
 
 # Meson can start Git's bash with MSYS2's tools first on PATH. Tools from the
 # other runtime can fail to start under load, drop environment variables and
-# rewrite arguments, so this bash's own tools come first.
-PATH="/usr/bin:$PATH"
+# rewrite arguments, so this bash's own tools come first. Git for Windows keeps
+# git.exe in mingw64/bin, not usr/bin.
+PATH="/mingw64/bin:/usr/bin:$PATH"
 
 if [ "$#" -lt 5 ]; then
   echo "usage: $0 <build-dir> <source-dir> <anvil-exe> <test-path> <run-name>" >&2

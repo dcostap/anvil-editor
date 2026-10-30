@@ -260,9 +260,9 @@ if host_machine.system() == 'windows'
     # characters in PATH while preserving tools used by runtime tests.
     anvil_test_env.set('PATH', [
         'C:/msys64/mingw64/bin',
-        'C:/msys64/usr/bin',
-        'C:/Program Files/Git/usr/bin',
         'C:/Program Files/Git/mingw64/bin',
+        'C:/Program Files/Git/usr/bin',
+        'C:/msys64/usr/bin',
         'C:/Python312',
         'C:/Python312/Scripts',
         'C:/Windows/system32',
