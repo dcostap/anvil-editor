@@ -288,7 +288,7 @@ def main() -> int:
                             "ANVIL_USERDIR": native_path(case_dir / "user"),
                             "USERPROFILE": native_path(case_dir / "user"), "HOME": native_path(case_dir / "user"),
                             "ANVIL_PROJECT_PROBE": action, "ANVIL_PROJECT_PROBE_MODE": mode,
-                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("zoom-global", "navigate-sidebar", "routing", "windows-open", "layers", "hang-overlay", "terminal-focus", "toggle-sidebar", "alt-navigation", "project-menu", "project-menu-background", "recovery", "shell-empty", "shell-sidebar") or action.startswith("windows-move") else "",
+                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("zoom-global", "navigate-sidebar", "dormant-last", "dormant-last-close", "routing", "windows-open", "layers", "hang-overlay", "terminal-focus", "toggle-sidebar", "alt-navigation", "project-menu", "project-menu-background", "recovery", "shell-empty", "shell-sidebar") or action.startswith("windows-move") else "",
                             "ANVIL_PROJECT_PROBE_ROOT": native_path(case_dir).replace("\\", "/"),
                             "ANVIL_PROJECT_PROBE_RESULT": native_path(result),
                             "ANVIL_TEST_DISABLE_PLUGINS": "autorestart,autoreload,autosave_fast,autosaveonfocuslost",

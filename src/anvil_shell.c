@@ -349,7 +349,7 @@ struct ShellWindow {
   AnvilSurfaceShellColors ui_colors;
   bool ui_focused;
   RECT controls, restart_button, close_button, open_button;
-  RECT lifecycle_card;
+  RECT lifecycle_card, logged_card;
 };
 
 typedef struct {
@@ -439,6 +439,12 @@ static bool select_terminal_path(ShellWindow *window, const char *path, const ch
 static bool select_pane_path(ShellWindow *window, const char *path, const char *text, uint32_t size);
 static void select_project(ShellProject *project, bool keep_sidebar_focus);
 static void select_after_close(ShellProject *project);
+static bool is_scratch(const ShellProject *project);
+
+/* A Dormant, failed or absent Project has no process to take keys. */
+static bool takes_keyboard(const ShellProject *project) {
+  return project->state != SHELL_DORMANT && project->state != SHELL_FAILED;
+}
 static bool move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id, bool keep_source);
 static void open_new_window(ShellWindow *requester);
 static void present_deferred_dialogs(ShellProject *project);
@@ -857,6 +863,9 @@ static void set_state(ShellProject *project, ShellState state) {
     if (state == SHELL_STARTING || state == SHELL_FAILED)
       set_surface_busy(window, &window->project_presentation, false);
   }
+  /* The Sidebar takes the keyboard from a Project that loses its process, and again when the Sidebar returns. */
+  if (!takes_keyboard(window->selected) && (project == window->selected || (project->sidebar && state == SHELL_READY)))
+    focus_sidebar(window, true);
   static const char *names[] = {"Starting", "Ready", "Closing", "Failed", "Dormant"};
   if (project->sidebar && project != shell.sidebar_process)
     SDL_Log("Shell Sidebar surface state: Window=%u %s connection=%u", window->id, names[state], project->connection);
@@ -2045,29 +2054,127 @@ static COLORREF ui_mix(COLORREF base, COLORREF ink, unsigned alpha) {
              (GetBValue(base) * (255 - alpha) + GetBValue(ink) * alpha) / 255);
 }
 
+/* A Color Theme colour with alpha, drawn over an opaque colour. */
+static COLORREF ui_over(COLORREF base, uint32_t color) {
+  return ui_mix(base & 0xffffff, color & 0xffffff, color >> 24);
+}
+
+/* The shell draws its text in the Sidebar's typeface. The executable carries the font, so a standalone build needs
+ * no data folder. Without it, the shell uses Segoe UI. */
+static const wchar_t *ui_face(void) {
+  static const wchar_t *face;
+  if (face) return face;
+  HRSRC resource = FindResourceW(NULL, L"ANVIL_UI_FONT", MAKEINTRESOURCEW(10));
+  HGLOBAL data = resource ? LoadResource(NULL, resource) : NULL;
+  void *bytes = data ? LockResource(data) : NULL;
+  DWORD fonts = 0;
+  bool loaded = bytes && AddFontMemResourceEx(bytes, SizeofResource(NULL, resource), NULL, &fonts) && fonts;
+  SDL_Log("Shell UI font: %s", loaded ? "Fira Sans" : "Segoe UI, because the Fira Sans resource is unavailable");
+  face = loaded ? L"Fira Sans" : L"Segoe UI";
+  return face;
+}
+
 static HFONT ui_font(ShellWindow *window, int size, int weight) {
-  return CreateFontW(-(int)(size * window->scale), 0, 0, 0, weight, FALSE, FALSE, FALSE,
-                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                     ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+  return CreateFontW(-(int)(size * window->scale + 0.5f), 0, 0, 0, weight, FALSE, FALSE, FALSE,
+                     DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                     ANTIALIASED_QUALITY, DEFAULT_PITCH, ui_face());
 }
 
-static void ui_box(HDC dc, RECT rect, COLORREF fill, COLORREF border, int radius) {
-  HBRUSH brush = CreateSolidBrush(fill & 0xffffff);
-  HPEN pen = CreatePen(PS_SOLID, 1, border & 0xffffff);
-  HGDIOBJ old_brush = SelectObject(dc, brush), old_pen = SelectObject(dc, pen);
-  RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
-  SelectObject(dc, old_brush);
-  SelectObject(dc, old_pen);
-  DeleteObject(brush);
-  DeleteObject(pen);
+/* How much of the pixel at (x, y) lies inside a rounded rect, from 0 to 1. */
+static float rounded_coverage(float x, float y, float left, float top, float right, float bottom, float radius) {
+  float cx = SDL_clamp(x, left + radius, right - radius), cy = SDL_clamp(y, top + radius, bottom - radius);
+  float d = SDL_sqrtf((x - cx) * (x - cx) + (y - cy) * (y - cy));
+  return SDL_clamp(radius - d + 0.5f, 0.0f, 1.0f);
 }
 
-static void ui_path(HDC dc, const char *path, RECT rect) {
-  if (!path) return;
-  wchar_t *wide = (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", path, strlen(path) + 1);
-  if (!wide) return;
-  DrawTextW(dc, wide, -1, &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
-  SDL_free(wide);
+/* A rounded rect with a one-point border. The border's alpha blends it over the pixels below. GDI's RoundRect draws
+ * jagged corners, so the shell's own layer gets antialiased edges. Other device contexts, such as a GPU-failure
+ * paint, use RoundRect. */
+static void ui_box(ShellWindow *window, HDC dc, RECT rect, COLORREF fill, uint32_t border, int radius) {
+  fill &= 0xffffff;
+  float border_alpha = (border >> 24) / 255.0f;
+  if (dc != window->ui_dc || !window->ui_pixels) {
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, 1, ui_over(fill, border));
+    HGDIOBJ old_brush = SelectObject(dc, brush), old_pen = SelectObject(dc, pen);
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius * 2, radius * 2);
+    SelectObject(dc, old_brush);
+    SelectObject(dc, old_pen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+    return;
+  }
+  GdiFlush();
+  float width = SDL_max(1.0f, SDL_floorf(window->scale)), r = (float)radius;
+  for (int y = SDL_max(0, (int)rect.top); y < SDL_min((int)rect.bottom, window->buffer_h); y++) {
+    uint8_t *row = (uint8_t *)window->ui_pixels + (size_t)y * window->ui_w * 4;
+    for (int x = SDL_max(0, (int)rect.left); x < SDL_min((int)rect.right, window->buffer_w); x++) {
+      float px = x + 0.5f, py = y + 0.5f;
+      float outer = rounded_coverage(px, py, rect.left, rect.top, rect.right, rect.bottom, r);
+      if (outer <= 0.0f) continue;
+      float inner = rounded_coverage(px, py, rect.left + width, rect.top + width, rect.right - width,
+                                     rect.bottom - width, SDL_max(0.0f, r - width));
+      float ring = (outer - inner) * border_alpha, rest = 1.0f - inner - ring;
+      uint8_t *pixel = row + x * 4;
+      pixel[0] = (uint8_t)(GetBValue(fill) * inner + GetBValue(border) * ring + pixel[0] * rest + 0.5f);
+      pixel[1] = (uint8_t)(GetGValue(fill) * inner + GetGValue(border) * ring + pixel[1] * rest + 0.5f);
+      pixel[2] = (uint8_t)(GetRValue(fill) * inner + GetRValue(border) * ring + pixel[2] * rest + 0.5f);
+      pixel[3] = (uint8_t)(255.0f * (inner + ring) + pixel[3] * rest + 0.5f);
+    }
+  }
+}
+
+/* How far a card's shadow reaches past its edges. */
+static int ui_shadow_extent(ShellWindow *window) {
+  return (int)SDL_ceilf(13 * window->scale);
+}
+
+/* The editor's card shadow (core.card): three soft layers, a little below the card. */
+static void ui_shadow(ShellWindow *window, HDC dc, RECT rect, int radius, uint32_t shadow) {
+  if (dc != window->ui_dc || !window->ui_pixels) return;
+  GdiFlush();
+  int extent = ui_shadow_extent(window);
+  for (int layer = 3; layer >= 1; layer--) {
+    float spread = layer * 3 * window->scale, drop = 4 * window->scale;
+    float left = rect.left - spread, top = rect.top - spread + drop, right = rect.right + spread,
+          bottom = rect.bottom + spread + drop, alpha = (shadow >> 24) / 255.0f * (4 - layer) / 6.0f;
+    for (int y = SDL_max(0, (int)rect.top - extent); y < SDL_min((int)rect.bottom + extent, window->buffer_h); y++) {
+      uint8_t *row = (uint8_t *)window->ui_pixels + (size_t)y * window->ui_w * 4;
+      for (int x = SDL_max(0, (int)rect.left - extent); x < SDL_min((int)rect.right + extent, window->buffer_w);
+           x++) {
+        float a = alpha * rounded_coverage(x + 0.5f, y + 0.5f, left, top, right, bottom, radius + spread);
+        if (a <= 0.0f) continue;
+        uint8_t *pixel = row + x * 4;
+        pixel[0] = (uint8_t)(pixel[0] * (1.0f - a) + GetBValue(shadow) * a + 0.5f);
+        pixel[1] = (uint8_t)(pixel[1] * (1.0f - a) + GetGValue(shadow) * a + 0.5f);
+        pixel[2] = (uint8_t)(pixel[2] * (1.0f - a) + GetRValue(shadow) * a + 0.5f);
+        pixel[3] = (uint8_t)(pixel[3] * (1.0f - a) + 255.0f * a + 0.5f);
+      }
+    }
+  }
+}
+
+static wchar_t *ui_wide(const char *text) {
+  return text ? (wchar_t *)SDL_iconv_string("UTF-16LE", "UTF-8", text, strlen(text) + 1) : NULL;
+}
+
+static int ui_text_width(HDC dc, const wchar_t *text) {
+  SIZE size = {0};
+  GetTextExtentPoint32W(dc, text, (int)wcslen(text), &size);
+  return size.cx;
+}
+
+/* The Sidebar's name for a Project: Scratch, or else its folder's name. Free the result with SDL_free. */
+static wchar_t *project_name(const ShellProject *project) {
+  const char *name = project->project_path;
+  if (!name) return NULL;
+  if (is_scratch(project)) return ui_wide("Scratch");
+  for (const char *p = name; *p; p++)
+    if ((*p == '/' || *p == '\\') && p[1]) name = p + 1;
+  wchar_t *wide = ui_wide(name);
+  size_t length = wide ? wcslen(wide) : 0;
+  while (length && (wide[length - 1] == L'\\' || wide[length - 1] == L'/')) wide[--length] = 0;
+  return wide;
 }
 
 static bool no_project_selected(ShellWindow *window) {
@@ -2098,28 +2205,23 @@ static void draw_lifecycle_titlebar(ShellWindow *window, HDC dc, const AnvilSurf
   bar.left += (LONG)(20 * window->scale);
   bar.right -= (LONG)(12 * window->scale);
   SetTextColor(dc, colors->inactive_text & 0xffffff);
-  const char *name = window->selected->project_path;
-  for (const char *p = name; p && *p; p++)
-    if ((*p == '/' || *p == '\\') && p[1]) name = p + 1;
-  ui_path(dc, name ? name : "Anvil", bar);
+  wchar_t *name = project_name(window->selected);
+  DrawTextW(dc, name ? name : L"Anvil", -1, &bar, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+  SDL_free(name);
   SetTextColor(dc, colors->text & 0xffffff);
 }
 
-static void draw_native_button(ShellWindow *window, HDC dc, const AnvilSurfaceShellColors *colors,
+/* A button like the editor's dialog buttons, drawn over `base`. The primary button uses the accent colour. */
+static void draw_native_button(ShellWindow *window, HDC dc, const AnvilSurfaceShellColors *colors, COLORREF base,
                                RECT rect, int control, const wchar_t *label, bool primary) {
   bool hovered = window->hovered_control == control;
   bool pressed = hovered && window->pressed_control == control;
-  COLORREF fill = primary ? colors->text : colors->button;
-  COLORREF text = primary ? colors->background : colors->text;
-  if (hovered) {
-    uint32_t overlay = pressed ? colors->pressed : colors->hover;
-    fill = primary ? ui_mix(fill, text, pressed ? 48 : 24) : ui_mix(fill, overlay, overlay >> 24);
-  }
-  COLORREF border = primary ? fill : ui_mix(fill, text, hovered ? 96 : 48);
-  ui_fill(dc, rect, colors->background & 0xffffff);
-  ui_box(dc, rect, fill, border, (int)(8 * window->scale));
-  SetTextColor(dc, text & 0xffffff);
-  DrawTextW(dc, label, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  COLORREF fill = primary ? colors->accent & 0xffffff : ui_over(base, colors->card_button);
+  if (hovered) fill = ui_over(fill, pressed ? colors->pressed : colors->hover);
+  ui_fill(dc, rect, base & 0xffffff);
+  ui_box(window, dc, rect, fill, fill | 0xff000000u, (int)(6 * window->scale));
+  SetTextColor(dc, (primary ? colors->accent_text : colors->text) & 0xffffff);
+  DrawTextW(dc, label, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
   SetTextColor(dc, colors->text & 0xffffff);
 }
 
@@ -2140,6 +2242,25 @@ static void draw_notice(ShellWindow *window, HDC dc, const AnvilSurfaceShellColo
   DrawTextA(dc, window->notice, -1, &label, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
+/* The card's layer has premultiplied alpha, so it can blend over a failed Project's last frame. GDI text clears
+ * alpha, so the inside of the card becomes opaque again after its text. */
+static void ui_card_alpha(ShellWindow *window, HDC dc, RECT layer, RECT card, int radius, bool clear) {
+  if (dc != window->ui_dc || !window->ui_pixels) return;
+  GdiFlush();
+  RECT rect = clear ? layer : card;
+  for (int y = SDL_max(0, (int)rect.top); y < SDL_min((int)rect.bottom, window->buffer_h); y++) {
+    uint8_t *row = (uint8_t *)window->ui_pixels + (size_t)y * window->ui_w * 4;
+    for (int x = SDL_max(0, (int)rect.left); x < SDL_min((int)rect.right, window->buffer_w); x++) {
+      if (clear)
+        memset(row + x * 4, 0, 4);
+      else if (rounded_coverage(x + 0.5f, y + 0.5f, card.left, card.top, card.right, card.bottom, radius) >= 1.0f)
+        row[x * 4 + 3] = 255;
+    }
+  }
+}
+
+static bool project_area_covered(ShellWindow *window);
+
 static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellColors *colors) {
   ShellProject *project = window->selected;
   window->restart_button = (RECT){0};
@@ -2153,48 +2274,89 @@ static void draw_lifecycle(ShellWindow *window, HDC dc, const AnvilSurfaceShellC
     return;
   RECT area = {window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h};
   if (!empty && project->state == SHELL_STARTING) {
-    DrawTextW(dc, L"Starting Project\x2026", -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    wchar_t *name = project_name(project), label[512];
+    _snwprintf(label, SDL_arraysize(label), L"Starting %ls\x2026", name ? name : L"Project");
+    label[SDL_arraysize(label) - 1] = 0;
+    SDL_free(name);
+    SetTextColor(dc, colors->inactive_text & 0xffffff);
+    DrawTextW(dc, label, -1, &area, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    SetTextColor(dc, colors->text & 0xffffff);
     return;
   }
-  int pad = (int)(24 * window->scale), gap = (int)(12 * window->scale);
+  /* Sizes follow the editor's dialog (core.nagview), which uses the same font at the same size. */
+  float s = window->scale;
+  TEXTMETRICW metrics = {0};
+  GetTextMetricsW(dc, &metrics);
+  int pad = (int)(20 * s), gap = (int)(8 * s), button_h = metrics.tmHeight + (int)(14 * s + 0.5f);
+  int button_pad = (int)(14 * s), button_min = (int)(76 * s), radius = (int)(10 * s);
   int mid = (area.left + area.right) / 2;
   /* A Window without a Project shows only its one action. */
   if (empty) {
-    int button_w = SDL_min((int)(184 * window->scale), area.right - area.left - gap * 2);
-    int button_h = (int)(36 * window->scale), button_y = (area.top + area.bottom - button_h) / 2;
+    const wchar_t *label = L"Open Project\x2026";
+    int button_w = SDL_min(SDL_max(button_min, ui_text_width(dc, label) + 2 * button_pad),
+                           area.right - area.left - 2 * pad);
+    int button_y = (area.top + area.bottom - button_h) / 2;
     window->open_button = window->lifecycle_card =
         (RECT){mid - button_w / 2, button_y, mid + button_w / 2, button_y + button_h};
-    draw_native_button(window, dc, colors, window->open_button, 6, L"Open Project\x2026", true);
+    draw_native_button(window, dc, colors, colors->background, window->open_button, 6, label, true);
     return;
   }
-  int w = SDL_min((int)(440 * window->scale), area.right - area.left - gap * 2);
-  int h = SDL_min((int)(168 * window->scale), area.bottom - area.top - gap * 2);
-  int x = (area.left + area.right - w) / 2, y = (area.top + area.bottom - h) / 2;
-  RECT card = window->lifecycle_card = (RECT){x, y, x + w, y + h};
-  ui_box(dc, card, colors->background, ui_mix(colors->background, colors->text, 40), (int)(12 * window->scale));
-  RECT text = {x + pad, y + pad, x + w - pad, y + pad + (LONG)(28 * window->scale)};
-  HFONT title = ui_font(window, 20, FW_SEMIBOLD);
-  HGDIOBJ old_font = SelectObject(dc, title);
+  /* The card names the Project and its state. Its actions sit at the lower right, the primary action first. */
   bool dormant = project->state == SHELL_DORMANT;
-  DrawTextW(dc, dormant ? L"Project is Dormant" : L"Project failed", -1, &text,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+  const wchar_t *load = dormant ? L"Load Project" : L"Restart Project";
+  const wchar_t *close = dormant ? L"Close Window" : L"Unload Project";
+  int load_w = SDL_max(button_min, ui_text_width(dc, load) + 2 * button_pad);
+  int close_w = SDL_max(button_min, ui_text_width(dc, close) + 2 * button_pad);
+  HFONT title = ui_font(window, 14, FW_BOLD);
+  HGDIOBJ old_font = SelectObject(dc, title);
+  GetTextMetricsW(dc, &metrics);
+  int title_h = (int)(metrics.tmHeight * 1.2f + 0.5f);
+  /* A long name loses its end, not the state. */
+  const wchar_t *state = dormant ? L" is Dormant" : L" failed";
+  wchar_t *name = project_name(project), fitted[512];
+  _snwprintf(fitted, SDL_arraysize(fitted) - 4, L"%ls", name ? name : L"Project");
+  fitted[SDL_arraysize(fitted) - 5] = 0;
+  SDL_free(name);
+  int state_w = ui_text_width(dc, state);
+  int w = SDL_max(SDL_min(ui_text_width(dc, fitted) + state_w + 2 * pad, (int)(560 * s)),
+                  SDL_max((int)(380 * s), load_w + gap + close_w + 2 * pad));
+  w = SDL_min(w, area.right - area.left - 2 * pad);
+  int h = 2 * pad + title_h + (int)(6 * s) + (int)(18 * s) + button_h;
+  int x = (area.left + area.right - w) / 2, y = area.top + SDL_max(0, (area.bottom - area.top - h) * 2 / 5);
+  RECT card = {x, y, x + w, y + h};
+  int extent = ui_shadow_extent(window);
+  window->lifecycle_card = (RECT){x - extent, y - extent, x + w + extent, y + h + extent};
+  if (!project_area_covered(window)) ui_card_alpha(window, dc, window->lifecycle_card, card, radius, true);
+  ui_shadow(window, dc, card, radius, colors->card_shadow);
+  ui_box(window, dc, card, colors->card, colors->card_border, radius);
+  RECT text = {x + pad, y + pad, x + w - pad, y + pad + title_h};
+  RECT name_rect = text;
+  name_rect.right = SDL_max(text.left, text.right - state_w);
+  DrawTextW(dc, fitted, -1, &name_rect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_MODIFYSTRING | DT_NOPREFIX);
+  text.left += ui_text_width(dc, fitted);
+  DrawTextW(dc, state, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
   SelectObject(dc, old_font);
   DeleteObject(title);
-  if (h >= (int)(150 * window->scale)) {
-    text.top += (LONG)(36 * window->scale);
-    text.bottom = text.top + (LONG)(20 * window->scale);
-    SetTextColor(dc, colors->inactive_text & 0xffffff);
-    ui_path(dc, project->project_path, text);
-    SetTextColor(dc, colors->text & 0xffffff);
+  /* A narrow Window shrinks both buttons alike. */
+  int room = w - 2 * pad - gap;
+  if (load_w + close_w > room) {
+    load_w = room / 2;
+    close_w = room - load_w;
   }
-  int button_y = card.bottom - pad - (int)(36 * window->scale);
-  window->restart_button = (RECT){card.left + pad, button_y, mid - gap / 2, card.bottom - pad};
-  window->close_button = (RECT){mid + gap / 2, button_y, card.right - pad, card.bottom - pad};
-  bool narrow = window->restart_button.right - window->restart_button.left < (int)(125 * window->scale);
-  draw_native_button(window, dc, colors, window->restart_button, 3,
-                     dormant ? (narrow ? L"Load" : L"Load Project") : narrow ? L"Restart" : L"Restart Project", true);
-  draw_native_button(window, dc, colors, window->close_button, 4,
-                     dormant ? (narrow ? L"Close" : L"Close Window") : narrow ? L"Unload" : L"Unload Project", false);
+  int button_y = card.bottom - pad - button_h, button_x = card.right - pad - load_w - gap - close_w;
+  window->restart_button = (RECT){button_x, button_y, button_x + load_w, button_y + button_h};
+  window->close_button = (RECT){button_x + load_w + gap, button_y, card.right - pad, button_y + button_h};
+  draw_native_button(window, dc, colors, colors->card, window->restart_button, 3, load, true);
+  draw_native_button(window, dc, colors, colors->card, window->close_button, 4, close, false);
+  ui_card_alpha(window, dc, window->lifecycle_card, card, radius, false);
+  if (memcmp(&card, &window->logged_card, sizeof(card))) {
+    window->logged_card = card;
+    SDL_Log("Shell lifecycle card: Window=%u primary=%ld,%ld,%ld,%ld secondary=%ld,%ld,%ld,%ld", window->id,
+            window->restart_button.left, window->restart_button.top, window->restart_button.right,
+            window->restart_button.bottom, window->close_button.left, window->close_button.top,
+            window->close_button.right, window->close_button.bottom);
+  }
 }
 
 /* A new Window shows once it has the Color Theme, the selected Project's first frame or its card, and the
@@ -2232,7 +2394,8 @@ static AnvilSurfaceShellColors shell_colors(ShellWindow *window) {
   if (project && project->has_shell_colors) return project->shell_colors;
   if (shell.has_theme_colors) return shell.theme_colors;
   return (AnvilSurfaceShellColors){0xff1c1717u, 0xff3e3737u, 0xffe1dcdcu, 0xff8c8c8cu, 0x12ffffffu,
-                                   0x20ffffffu, 0xff1c2bc4u, 0xff201f99u, 0xffffffffu};
+                                   0x20ffffffu, 0xff1c2bc4u, 0xff201f99u, 0xffffffffu, 0xff37322fu,
+                                   0x14ffffffu, 0x78000000u, 0x10ffffffu, 0xfffaa059u, 0xffffffffu};
 }
 
 /* Without a Project frame, the Project area shows the Color Theme's background. */
@@ -2296,12 +2459,13 @@ static void paint_failed_window(ShellWindow *window, HDC dc) {
   ui_fill(dc, client, window->background & 0xffffff);
   SetBkMode(dc, TRANSPARENT);
   SetTextColor(dc, colors.text & 0xffffff);
-  HFONT font = ui_font(window, 13, FW_NORMAL);
+  HFONT font = ui_font(window, 14, FW_NORMAL);
   HGDIOBJ old = SelectObject(dc, font);
   draw_lifecycle(window, dc, &colors);
   draw_lifecycle_titlebar(window, dc, &colors);
   if (sidebar_restart_offered())
-    draw_native_button(window, dc, &colors, sidebar_restart_rect(window), 5, L"Restart Sidebar", false);
+    draw_native_button(window, dc, &colors, colors.background, sidebar_restart_rect(window), 5, L"Restart Sidebar",
+                       false);
   draw_window_controls(window, dc, colors.text & 0xffffff);
   SelectObject(dc, old);
   DeleteObject(font);
@@ -2345,13 +2509,6 @@ static void tint_coverage(ShellWindow *window, RECT rect, uint32_t color) {
       pixel[3] = (uint8_t)coverage;
     }
   }
-}
-
-/* How much of the pixel at (x, y) lies inside a rounded rect, from 0 to 1. */
-static float rounded_coverage(float x, float y, float left, float top, float right, float bottom, float radius) {
-  float cx = SDL_clamp(x, left + radius, right - radius), cy = SDL_clamp(y, top + radius, bottom - radius);
-  float d = SDL_sqrtf((x - cx) * (x - cx) + (y - cy) * (y - cy));
-  return SDL_clamp(radius - d + 0.5f, 0.0f, 1.0f);
 }
 
 static void round_notice(ShellWindow *window, const AnvilSurfaceShellColors *colors, bool opaque) {
@@ -2471,12 +2628,13 @@ static void update_ui(ShellWindow *window) {
   RECT strip = {0, 0, window->sidebar_w, window->controls.bottom};
   ui_fill(dc, strip, 0);
   ui_fill(dc, window->controls, 0);
-  HFONT font = ui_font(window, 13, FW_NORMAL);
+  HFONT font = ui_font(window, 14, FW_NORMAL);
   HGDIOBJ old_font = SelectObject(dc, font);
   SetBkMode(dc, TRANSPARENT);
   /* The recovery button is opaque. The rest of the strip stays transparent. */
   if (sidebar_restart_offered())
-    draw_native_button(window, dc, &colors, sidebar_restart_rect(window), 5, L"Restart Sidebar", false);
+    draw_native_button(window, dc, &colors, colors.background, sidebar_restart_rect(window), 5, L"Restart Sidebar",
+                       false);
   SetTextColor(dc, colors.text & 0xffffff);
   RECT status = {0, window->buffer_h - (LONG)(40 * window->scale), window->sidebar_w, window->buffer_h};
   DrawTextW(dc,
@@ -2809,7 +2967,7 @@ static void composite_and_present(ShellWindow *window) {
   if (project_area_covered(window))
     copy_ui(window, (RECT){window->sidebar_w, window->controls.bottom, window->buffer_w, window->buffer_h});
   else if (project->state == SHELL_FAILED)
-    copy_ui(window, window->lifecycle_card);
+    blend_ui(window, window->lifecycle_card);
   if (window->notice[0] && !project_area_covered(window)) blend_ui(window, window->notice_rect);
   /* A Sidebar popup, such as a menu, shows above everything. */
   if (sidebar_popup_shown(window)) {
@@ -4309,9 +4467,18 @@ static bool route_alt_navigation(ShellWindow *window, const SDL_Event *event) {
   return true;
 }
 
+/* The Sidebar keeps the keyboard while the Selected Project cannot take it, so a key always has a receiver. */
 static void focus_sidebar(ShellWindow *window, bool focused) {
-  if (focused && (overlay_covers_sidebar(window) || !window->sidebar_client ||
-      !shell.sidebar_process || !shell.sidebar_process->connected)) return;
+  bool available = !overlay_covers_sidebar(window) && window->sidebar_client && shell.sidebar_process &&
+                   shell.sidebar_process->connected && shell.sidebar_process->state != SHELL_FAILED;
+  /* A closing Window keeps the keyboard for its Close choices. */
+  if (focused && (!available || window->closing)) return;
+  if (!focused && available && window->sidebar_focused && !takes_keyboard(window->selected) &&
+      !window->closing) {
+    SDL_Log("Shell Sidebar keeps the keyboard: Window=%u Project=%u cannot take it", window->id,
+            window->selected->id);
+    return;
+  }
   if (window->sidebar_focused == focused) return;
   clear_composition(window);
   bool shown = sidebar_shown(window);
@@ -4414,6 +4581,8 @@ static void perform_control(ShellWindow *window, int control) {
     } else {
       free(project->restart_path);
       project->restart_path = NULL;
+      /* The restarted Project takes the keyboard back from the Sidebar. */
+      focus_sidebar(window, false);
       composite_and_present(window);
     }
   } else if (control == 4 && project->state != SHELL_DORMANT) {
@@ -6001,11 +6170,13 @@ static void select_project(ShellProject *project, bool keep_sidebar_focus) {
     window_notice(window, "Project is still closing");
     return;
   }
-  if (!keep_sidebar_focus) focus_sidebar(window, false);
   clear_window_notice(window);
   if (project->unresponsive) show_unresponsive_notice(window);
-  if (project == window->selected)
+  if (project == window->selected) {
+    if (!keep_sidebar_focus) focus_sidebar(window, false);
+    else if (!takes_keyboard(project)) focus_sidebar(window, true);
     return;
+  }
   ShellProject *previous = window->selected;
   windows_changed();
   note_project_activity(project);
@@ -6032,6 +6203,8 @@ static void select_project(ShellProject *project, bool keep_sidebar_focus) {
     content->have_surface = false;
   }
   window->selected = project;
+  /* The new selection decides who keeps the keyboard. */
+  if (!keep_sidebar_focus || !takes_keyboard(project)) focus_sidebar(window, !takes_keyboard(project));
   window->resize_wait_disabled = false;
   window->ui_dirty = true;
   window->hovered_control = window->pressed_control = -1;

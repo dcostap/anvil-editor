@@ -180,11 +180,24 @@ if path:match("/driver$") then
     coroutine.yield(.2)
    end
    fail(layout.pid)
-   local cx, cy = (layout.content_x + layout.width) / 2, (layout.title_h + layout.height) / 2
-   local restart, unload = point(cx - 80 * scale, cy + 54 * scale), point(cx + 80 * scale, cy + 54 * scale)
-   local outside = point(cx, cy + 160 * scale)
-   local function restart_pixels(bytes) return button_pixels(bytes, cx - 80 * scale, cy + 54 * scale) end
-   local function unload_pixels(bytes) return button_pixels(bytes, cx + 80 * scale, cy + 54 * scale) end
+   -- The shell logs the card's button rects when it lays them out.
+   local function centre(rect)
+    local l, t, r, b = rect:match("^(%-?%d+),(%-?%d+),(%-?%d+),(%-?%d+)$")
+    return (tonumber(l) + tonumber(r)) / 2, (tonumber(t) + tonumber(b)) / 2, tonumber(b)
+   end
+   local card = wait(function()
+    local last
+    for primary, secondary in trace():gmatch("Shell lifecycle card: Window=%d+ primary=(%S+) secondary=(%S+)") do
+     last = {primary, secondary}
+    end
+    return last
+   end, 5, "The recovery card was not laid out")
+   local rx, ry, bottom = centre(card[1])
+   local ux, uy = centre(card[2])
+   local restart, unload = point(rx, ry), point(ux, uy)
+   local outside = point((rx + ux) / 2, bottom + 80 * scale)
+   local function restart_pixels(bytes) return button_pixels(bytes, rx, ry) end
+   local function unload_pixels(bytes) return button_pixels(bytes, ux, uy) end
    input(0, outside)
    local idle = capture(window)
    input(0, restart)

@@ -2146,7 +2146,10 @@ static int f_set_shell_colors(lua_State *L) {
       check_shell_color(L, 1, "text"),        check_shell_color(L, 1, "inactive_text"),
       check_shell_color(L, 1, "hover"),       check_shell_color(L, 1, "pressed"),
       check_shell_color(L, 1, "close_hover"), check_shell_color(L, 1, "close_pressed"),
-      check_shell_color(L, 1, "close_text")};
+      check_shell_color(L, 1, "close_text"),
+      check_shell_color(L, 1, "card"),        check_shell_color(L, 1, "card_border"),
+      check_shell_color(L, 1, "card_shadow"), check_shell_color(L, 1, "card_button"),
+      check_shell_color(L, 1, "accent"),      check_shell_color(L, 1, "accent_text")};
   lua_pushboolean(L, anvil_hosted_surface_set_shell_colors(&colors));
   return 1;
 }

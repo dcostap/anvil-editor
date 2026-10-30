@@ -307,6 +307,9 @@ typedef struct {
   uint32_t text, inactive_text; /* card text and control glyphs; glyphs use inactive_text while unfocused */
   uint32_t hover, pressed;      /* minimize and maximize backgrounds */
   uint32_t close_hover, close_pressed, close_text;
+  /* The native cards look like the editor's dialogs. The border, shadow and button colours have alpha. */
+  uint32_t card, card_border, card_shadow, card_button;
+  uint32_t accent, accent_text; /* the primary button */
 } AnvilSurfaceShellColors;
 
 /* Windows always records SDL_Log output under USERDIR/logs, before Lua starts.

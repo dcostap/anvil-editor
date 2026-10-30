@@ -418,6 +418,17 @@ Selecting a Project expands it and saves that state. It stays expanded after it 
 Window IDs persist across restart. The saved allocation sequence prevents reuse of a closed Window's folding state.
 Run `anvil:shell-state`, `ui/sidebar_view.lua`, and the `windows-sidebar-layout`, `windows-sidebar-folding`, and `toggle-sidebar` shell probes after changes.
 
+A Dormant, failed or absent Selected Project has no process to take keys. Its Window's Sidebar then takes the keyboard and keeps it.
+Escape and the Sidebar focus command do not release it. A hidden Sidebar slides open.
+The keyboard goes back to the Project when the user selects a Project that can take keys, or restarts the failed Project.
+Run the `dormant-last`, `recovery` and `navigate-sidebar` shell probes after changes.
+
+The shell draws its own text, such as the Dormant card and the Title Bar name, in Fira Sans, the Sidebar's typeface.
+The executable carries the font as a resource (`resources/windows/ui_font.rc`), so the shell needs no data folder.
+The Dormant and failed cards look like the editor's dialogs (`core.nagview`): same sizes, card colours, shadow and buttons.
+`color_theme.shell_colors` sends those colours. Over a failed Project's last frame, the shell blends the card with its shadow.
+The card names the Project and its state. The shell logs the card's button rects, and the `recovery` probe reads them.
+
 The shell draws the Window controls with the Windows caption glyphs: Segoe Fluent Icons, or Segoe MDL2 Assets on Windows 10.
 Its hit test reports the Maximize button as `HTMAXBUTTON`, so Windows 11 shows Snap Layouts there.
 The shell handles that button's non-client press itself. Windows' own button tracking would draw its hidden button.

@@ -45,6 +45,11 @@ local function wait_for(fn, seconds, message)
   error(message or "Dormant Project probe timed out")
 end
 local function quit() core.exit(function() core.quit_request = true end, true) end
+local function surface_log()
+  local file = io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb")
+  if not file then return "" end
+  local text = file:read("*a"); file:close(); return text
+end
 local function state() return {pid = tonumber(kernel.GetCurrentProcessId()), shell_pid = system.get_window_process_id()} end
 local function shell_window(pid)
   local file = assert(io.open(os.getenv("ANVIL_SURFACE_LOG"), "rb"))
@@ -85,10 +90,22 @@ if directory:match("/driver$") then
       local a = wait_for(function() return read("a-ready") end, 15)
       local ah = kernel.OpenProcess(0x100000, 0, a.pid); assert(ah ~= nil); handles[#handles + 1] = ah
       if action == "dormant-last" or action == "dormant-last-close" then
+        local unloaded = #surface_log()
         save("unload-a", {continue = true})
         wait_for(function() return kernel.WaitForSingleObject(ah, 0) == 0 end, 12)
         assert(subject:running(), "Unloading the last Project closed the Window")
         local window = assert(shell_window(a.shell_pid))
+        -- The Dormant Project has no process, so the Sidebar keeps the keyboard. Escape cannot leave keys without
+        -- a receiver.
+        wait_for(function() return surface_log():find("Shell Sidebar focus: Window=%d+ focused=1", unloaded + 1) end, 10,
+          "The Sidebar did not take the keyboard from the Dormant Project")
+        local escaped = #surface_log()
+        user32.PostMessageW(window, 0x804a, 9, 27)
+        user32.PostMessageW(window, 0x804a, 10, 27)
+        wait_for(function() return surface_log():find("Shell Sidebar keeps the keyboard", escaped + 1, true) end, 10,
+          "Escape did not reach the Sidebar")
+        assert(not surface_log():find("Shell Sidebar focus: Window=%d+ focused=0", escaped + 1),
+          "Escape left the keyboard without a receiver")
         user32.PostMessageW(window, 0x112, 0xF020, 0)
         wait_for(function() return user32.IsIconic(window) ~= 0 end, 1)
         user32.PostMessageW(window, 0x112, 0xF120, 0)

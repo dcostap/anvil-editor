@@ -216,6 +216,10 @@ if host_machine.system() == 'windows'
         depend_files : files('../resources/icons/icon.ico')
     )
     anvil_rc += windows.compile_resources('../resources/windows/manifest.rc')
+    # The shell draws its own text in the Sidebar's typeface.
+    anvil_rc += windows.compile_resources('../resources/windows/ui_font.rc',
+        depend_files : files('../data/fonts/FiraSans-Regular.ttf')
+    )
 
     # solve missing symbols when building from sdl3 cmake subproject
     if sdl_dep.type_name() == 'internal'

@@ -79,14 +79,16 @@ function color_theme.load_preview(text)
   return preview.name
 end
 
--- The shell draws the Window controls, and the Project area while no Project frame covers it. Each shell
--- colour name maps to its style key.
+-- The shell draws the Window controls, and the Project area while no Project frame covers it. Its cards look like
+-- the editor's dialogs. Each shell colour name maps to its style key.
 local SHELL_COLORS = {
   {"background", "background"}, {"button", "background2"},
   {"text", "text"}, {"inactive_text", "dim"},
   {"hover", "titlebar_control_hover"}, {"pressed", "titlebar_control_pressed"},
   {"close_hover", "titlebar_close_hover"}, {"close_pressed", "titlebar_close_pressed"},
   {"close_text", "titlebar_close_text"},
+  {"card", "card"}, {"card_border", "card_border"}, {"card_shadow", "card_shadow"},
+  {"card_button", "nagbar_button"}, {"accent", "accent"}, {"accent_text", "nagbar_primary_text"},
 }
 
 ---The colours the shell needs from a style, for system.set_shell_colors.
