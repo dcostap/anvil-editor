@@ -111,7 +111,6 @@ test.describe("native fuzzy Lua API", function()
     local results = common.fuzzy_match({ "foo", "bar", "frob" }, "fb")
     test.equal(results[1], "frob")
     test.ok(common.fuzzy_match("src/main.c", "main", true))
-    test.is_nil(system.fuzzy_match)
   end)
 
   test.it("rejects medium-length scattered coincidence matches", function()

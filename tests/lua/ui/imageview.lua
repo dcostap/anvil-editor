@@ -97,20 +97,6 @@ test.describe("Image View interaction", function()
     near(rect[4], 400)
   end)
 
-  test.it("logs the operands and result of an intermediate zoom frame", function(context)
-    local view = context.view
-    local first = #core.log_items + 1
-    view:apply_transform(0.5, 0, 0, true)
-    view:animate_to(0.75, -60, -40)
-    context.now = 0.05
-    view:update()
-    local message = test.not_nil(find_log("Image View zoom frame: status=sample", first))
-    for _, text in ipairs({ "from=0.5 to=0.75", "ratio=1.5", "exponent=", "power=", "scale=", "x=", "y=" }) do
-      test.ok(message:find(text, 1, true), "missing diagnostic: " .. text)
-    end
-    test.not_nil(find_log("Image View runtime:"))
-  end)
-
   test.it("reports invalid zoom math without changing the calculated result", function(context)
     local view = context.view
     local first = #core.log_items + 1

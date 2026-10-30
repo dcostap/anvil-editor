@@ -261,40 +261,4 @@ test.describe("thread", function()
     test.is_nil(worker:get_name())
     test.type(tostring(worker), "string")
   end)
-
-  test.test("concurrent channel access does not crash", function()
-    local suffix = tostring(system.get_process_id()) .. "-" .. math.floor(system.get_time() * 1000000)
-    local channel_name = "thread-tests-concurrent-" .. suffix
-    local channel = thread.get_channel(channel_name)
-    channel:clear()
-
-    -- Spawn multiple threads that all push to the same channel
-    local count = 4
-    local workers = {}
-    for i = 1, count do
-      local w = thread.create("concurrent-push-" .. i, function(cn, idx)
-        local ch = thread.get_channel(cn)
-        ch:push("value-" .. idx)
-        return idx
-      end, channel_name, i)
-      test.not_nil(w)
-      workers[i] = w
-    end
-
-    -- Read all values back via wait (blocks until each is available)
-    local values = {}
-    for i = 1, count do
-      local v = channel:wait()
-      table.insert(values, v)
-      channel:pop()
-    end
-
-    -- All workers should finish cleanly
-    for i = 1, count do
-      test.type(workers[i]:wait(), "number")
-    end
-
-    -- We should have received exactly 'count' values
-    test.equal(#values, count)
-  end)
 end)

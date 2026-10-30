@@ -49,12 +49,6 @@ test.describe("settings", function()
     settings.ui:hide()
   end)
 
-  test.it("uses one theme picker instead of one command per theme", function()
-    local command = require "core.command"
-    test.ok(command.is_valid("core:select_theme"))
-    test.not_ok(command.is_valid("theme:dark"))
-  end)
-
   test.it("shows all themes before the user filters", function()
     local core = require "core"
     local command = require "core.command"

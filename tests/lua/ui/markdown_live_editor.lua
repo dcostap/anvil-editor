@@ -4089,18 +4089,8 @@ test.describe("Markdown Live Preview", function()
     )
     buffer:set_selection(6, 1)
     refresh(view)
-    local rendered = view:get_line_render(3)
-    if rendered then
-      local visible = {}
-      for _, fragment in ipairs(rendered.fragments or {}) do
-        if not fragment.hidden then visible[#visible + 1] = fragment.text or "" end
-      end
-      visible = table.concat(visible)
-      test.ok(
-        visible:find("select first_row", 1, true),
-        "the first code source line disappeared outside the caret"
-      )
-    end
+    test.ok(visible_render_text(view, 3):find("select first_row", 1, true),
+      "the first code source line disappeared outside the caret")
   end)
 
   test.it("presents inactive GFM tables as an aligned compact grid", function()
@@ -5115,18 +5105,28 @@ test.describe("Markdown Live Preview", function()
     local view, buffer = make_view("![[diagram.png]]\nother", root .. PATHSEP .. "Planificación Fabricación.md")
     buffer:set_selection(2, 1)
     local old_load_image = canvas.load_image
+    local loaded_path
     canvas.load_image = function(path)
-      test.equal(path, image_path)
+      loaded_path = path
       return {
         get_size = function() return 80, 40 end,
         scaled = function(self) return self end,
       }
     end
 
-    refresh(view)
+    local rendered_ok, rendered_err = pcall(function()
+      refresh(view)
+      local image_fragment
+      for _, fragment in ipairs(test.not_nil(view:get_line_render(1)).fragments or {}) do
+        if fragment.widget and fragment.widget.type == "image" then image_fragment = fragment break end
+      end
+      test.not_nil(image_fragment)
+      test.ok(common.path_equals(test.not_nil(loaded_path), image_path))
+    end)
     canvas.load_image = old_load_image
     os.remove(image_path)
     common.rm(root, true)
+    if not rendered_ok then error(rendered_err, 0) end
   end)
 
   test.it("renders wikilink images found by unique filename anywhere in an Obsidian vault", function()

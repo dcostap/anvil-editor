@@ -279,7 +279,6 @@ test.describe("Tree-sitter TextView highlighting", function()
     view.position.x, view.position.y = 0, 0
     view.size.x, view.size.y = 2000, 240
     view:set_wrapping_enabled(false)
-    view.__test_force_known_bounds = true
 
     local drawn_brace_x
     local old_draw_text = renderer.draw_text

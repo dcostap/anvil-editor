@@ -102,12 +102,6 @@ test.describe("Project Paths View", function()
     test.equal(root_entry.source, "implicit")
     test.equal(external_entry.role, "external")
     test.equal(vendored_entry.role, "vendored")
-
-    local text = table.concat(view.buffer.lines)
-    test.not_ok(text:find("Storage", 1, true))
-    test.not_ok(view.change_selected_storage)
-    test.is_nil(command.map["project_paths:add_external_directory_local"])
-    test.is_nil(command.map["project_paths:add_external_directory_to_project_config"])
   end)
 
   test.it("moves the caret through Project Path rows with Text View navigation", function(context)

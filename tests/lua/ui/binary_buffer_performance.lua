@@ -96,7 +96,6 @@ test.describe("binary Buffer performance guards", function()
     renderer.draw_text_known_bounds = function(_, text)
       submitted[#submitted + 1] = text
     end
-    view.__test_force_known_bounds = true
     local x, y = view:get_line_screen_position(1)
     local ok, err = pcall(view.draw_line_text, view, 1, x, y)
     renderer.draw_text = old_draw_text

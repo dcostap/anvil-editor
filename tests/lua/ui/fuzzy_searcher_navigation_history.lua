@@ -284,11 +284,6 @@ test.describe("Fuzzy Searcher Navigation History Search", function()
     local picker = fuzzy_searcher.open("^")
     local count = #picker.results
     test.ok(count >= 60)
-    -- Measure the public refresh operation without a machine-dependent limit.
-    local started = system.get_time()
-    for _ = 1, 5 do picker:refresh_navigation_history("^", false) end
-    print(string.format("Navigation History unchanged refresh probe: %.3f ms",
-      (system.get_time() - started) * 1000))
     buffer:insert(60, 1, "changed ")
     picker:refresh_navigation_history("^", false)
     local changed

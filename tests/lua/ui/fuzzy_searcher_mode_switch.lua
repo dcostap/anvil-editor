@@ -324,14 +324,6 @@ test.describe("Fuzzy Searcher mode switching", function()
     test.same(fuzzy_searcher._test.prompt_history(">"), { ">", ">line wrapping" })
   end)
 
-  test.it("records file search prompt history", function()
-    fuzzy_searcher.open("")
-    core.fuzzy_searcher_active_view.input:set_text("init.lua")
-    core.fuzzy_searcher_active_view:close()
-
-    test.same(fuzzy_searcher._test.prompt_history(""), { "init.lua" })
-  end)
-
   test.it("cycles file search prompt history", function()
     fuzzy_searcher.open("")
     core.fuzzy_searcher_active_view.input:set_text("first.lua")

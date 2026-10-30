@@ -574,7 +574,6 @@ test.describe("line wrapping visual navigation", function()
     local view, buffer = open_editor(context, text)
     view.wrapping_enabled = false
     view.wrapped_settings = nil
-    view.__test_force_known_bounds = true
     view.size.x = 2000
 
     local old_get_render_line = buffer.highlighter.get_render_line

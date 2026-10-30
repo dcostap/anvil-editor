@@ -949,10 +949,12 @@ Route_Message_Type :: enum c.uchar {
       project_builder_id = builder:id(),
       files = files,
     }))
-    for _ = 1, 100 do
-      if pool:status(handle).status == "running" then break end
+    -- Cancel a running batch. A queued job has nothing partial to publish.
+    local deadline = system.get_time() + 10
+    while pool:status(handle).status ~= "running" and system.get_time() < deadline do
       coroutine.yield(0.001)
     end
+    test.equal(pool:status(handle).status, "running")
     test.ok(pool:cancel(handle))
     test.ok(drain_until(pool, function(message) return message.type == "cancelled" end, 5000))
     local partial = builder:snapshot({ status = "cancelled" })

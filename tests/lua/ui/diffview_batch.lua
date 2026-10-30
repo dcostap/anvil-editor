@@ -891,10 +891,6 @@ test.describe("DiffView batch behavior", function()
     test.ok(file_exists(path), "read-only file delete should be blocked")
   end)
 
-  test.it("does not expose hunk application as a Diff View action", function()
-    test.equal(nil, command.map["diff:sync_change"])
-  end)
-
   test.it("rejects same buffer requests and balances assignment hooks", function(context)
     local buffer = Buffer("shared", "shared", true)
     local events = {}

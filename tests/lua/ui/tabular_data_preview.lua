@@ -291,13 +291,15 @@ test.describe("Tabular Data Preview", function()
     view.scroll.y, view.scroll.to.y = 10, 10
     renderer.draw_rect = function() end
     renderer.draw_rounded_rect = function() end
+    local drawn = 0
     renderer.draw_text = function(font, text, x)
+      drawn = drawn + 1
       return x + font:get_width(text)
     end
     renderer.set_clip_rect = function() end
     view:update()
     view:draw()
-    test.ok(true)
+    test.ok(drawn > 0, "the scrolled table drew no text")
   end)
 
   test.it("resizes one column through mouse input", function()

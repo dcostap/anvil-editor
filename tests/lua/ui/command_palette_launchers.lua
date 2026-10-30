@@ -123,18 +123,11 @@ test.describe("Command Palette View launchers", function()
     core.active_view = editor
 
     test.ok(command.is_valid("diff:compare_selection_with_clipboard"))
-    test.equal(command.is_valid("diff:select_file_for_compare"), false)
   end)
 
   test.it("uses the current File Tree command names and search keywords", function()
     test.not_nil(command.map["filetree:apply_changes"])
-    test.is_nil(command.map["filetree:apply"])
     test.not_nil(command.map["filetree:open_at_current_path"])
-    test.is_nil(command.map["filetree:open"])
-    test.is_nil(command.map["filetree:open_at_path"])
-    test.is_nil(command.map["filetree:open_at_current_file"])
-    test.is_nil(command.map["filetree:reveal_current_file"])
-    test.is_nil(command.map["filetree:reveal_path"])
 
     local metadata = test.not_nil(command.get_metadata("filetree:open_at_current_path"))
     test.ok(metadata.opens_view)

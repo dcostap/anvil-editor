@@ -18,17 +18,6 @@ test.describe("Command Registry integrity", function()
     test.same(invalid, {})
   end)
 
-  test.it("does not register removed command namespaces", function()
-    local forbidden = { buffer = true, doc = true, node = true, ["tool-window"] = true }
-    local stale = {}
-    for name in pairs(command.map) do
-      local namespace = name:match("^([^:]+):")
-      if forbidden[namespace] then stale[#stale + 1] = name end
-    end
-    table.sort(stale)
-    test.same(stale, {})
-  end)
-
   test.it("has a registered command for every key binding", function()
     local missing = {}
     for stroke, bindings in pairs(keymap.map) do

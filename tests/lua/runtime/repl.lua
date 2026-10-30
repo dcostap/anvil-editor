@@ -32,9 +32,10 @@ test.describe("repl", function()
     native_repl.save_history(history_file)
     native_repl.load_history(history_file)
 
-    local info = system.get_file_info(history_file)
-    test.not_nil(info)
-    test.equal(info.type, "file")
+    local file = assert(io.open(history_file, "rb"))
+    local saved = file:read("*a")
+    file:close()
+    test.ok(saved:find("print('hello')", 1, true), saved)
 
     local removed, remove_err = os.remove(history_file)
     test.ok(removed, remove_err)
