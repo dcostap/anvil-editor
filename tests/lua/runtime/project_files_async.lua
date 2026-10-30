@@ -192,7 +192,7 @@ test.describe("Project file worker I/O", function()
     assert(common.mkdirp(root .. PATHSEP .. "build"))
     local source = root .. PATHSEP .. "source.lua"
     local generated = root .. PATHSEP .. "build" .. PATHSEP .. "generated-0001.tmp"
-    local ignore_rule = root .. PATHSEP .. ".gitignore"
+    local ignore_rule = root .. PATHSEP .. ".ignore"
     write(ignore_rule, "build/\n")
     write(source, "return 1\n")
     write(generated, "generated\n")

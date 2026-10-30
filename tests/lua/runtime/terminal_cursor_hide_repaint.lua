@@ -11,7 +11,7 @@ local function snapshot_text(snapshot)
   return table.concat(parts)
 end
 
--- Runs the fixture and returns the final cursor state.
+-- Runs the fixture and reports cursor visibility during and after repaint.
 local function run_fixture(arguments, done_marker)
   local terminal_native = require "terminal_native"
   local session, start_error = terminal_native.new {
@@ -22,6 +22,7 @@ local function run_fixture(arguments, done_marker)
   test.ok(session, start_error)
   local snapshot, text
   local ready, shown, done = false, false, false
+  local hidden_during_repaint = 0
   local hidden_at_end = false
   local deadline = system.get_time() + 10
   while system.get_time() < deadline do
@@ -34,27 +35,31 @@ local function run_fixture(arguments, done_marker)
       done = true
       hidden_at_end = not snapshot.cursor.visible
       break
+    elseif shown and not snapshot.cursor.visible then
+      hidden_during_repaint = hidden_during_repaint + 1
     end
     coroutine.yield(0.001)
   end
   session:close()
   test.ok(ready, text)
-  return done, shown, hidden_at_end, text
+  return done, hidden_during_repaint, shown, hidden_at_end, text
 end
 
 test.describe("Terminal cursor visibility during repaints", function()
   test.it("keeps the cursor visible while an application briefly hides it to repaint", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
-    local done, shown, hidden_at_end, text = run_fixture("", "ANVIL_REPAINT_DONE")
+    local done, hidden_frames, shown, hidden_at_end, text = run_fixture("", "ANVIL_REPAINT_DONE")
     test.ok(done, text)
-    -- Check the published cursor state after the repaint completes.
+    -- The fixture has 30 short repaints. A slow frame can delay one show.
+    test.ok(hidden_frames <= 2, string.format(
+      "The terminal published %d frames without a cursor during repaints", hidden_frames))
     test.ok(shown, "The terminal did not show the cursor during the repaint")
     test.not_ok(hidden_at_end, "The terminal left the cursor hidden after the repaint")
   end)
 
   test.it("hides the cursor when an application leaves it hidden", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
-    local done, _, hidden_at_end, text = run_fixture("-StayHidden", "ANVIL_REPAINT_HIDDEN")
+    local done, _, _, hidden_at_end, text = run_fixture("-StayHidden", "ANVIL_REPAINT_HIDDEN")
     test.ok(done, text)
     test.ok(hidden_at_end, "The terminal kept showing a cursor the application hid")
   end)
