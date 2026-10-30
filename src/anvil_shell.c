@@ -123,6 +123,7 @@ enum {
   SHELL_EVENT_PICKER_RESULT,
   SHELL_EVENT_EXTERNAL,
   SHELL_EVENT_PRESENT_READY,
+  SHELL_EVENT_RETIRED,
 };
 
 typedef enum { SHELL_STARTING, SHELL_READY, SHELL_CLOSING, SHELL_FAILED, SHELL_DORMANT } ShellState;
@@ -467,7 +468,7 @@ static bool queue_resolution(ShellWindow *window, const char *path, int argc, ch
                              bool new_window, AnvilShellLaunchRequest *external);
 static bool unload_project_path(ShellWindow *window, const char *path);
 static void begin_unload(ShellProject *project);
-static void drain_retired_projects(void);
+static bool drain_retired_projects(void);
 static void service_sidebar(void);
 static void notify_sidebar_changes(void);
 static void broadcast_color_theme(ShellProject *source);
@@ -4913,6 +4914,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       accept_external(event->user.data1);
       return SDL_APP_CONTINUE;
     }
+    if (event->user.code == SHELL_EVENT_RETIRED) return SDL_APP_CONTINUE;
     if (event->user.code == SHELL_EVENT_MESSAGE) {
       ShellMessage *message = event->user.data1;
       SDL_AddAtomicInt(&message->owner->inbound_bytes, -(int)(sizeof(*message) + message->size));
@@ -5337,7 +5339,12 @@ static LRESULT CALLBACK shell_service_wndproc(HWND hwnd, UINT msg, WPARAM wparam
       return 0;
     }
     if (shell.retire_timer && wparam == shell.retire_timer) {
-      drain_retired_projects();
+      /* A closing Window waits for its retired Projects. The timer runs outside the event loop, so wake it. */
+      if (drain_retired_projects()) {
+        SDL_Event event = {.type = shell.event_type};
+        event.user.code = SHELL_EVENT_RETIRED;
+        SDL_PushEvent(&event);
+      }
       return 0;
     }
     if (shell.state_timer && wparam == shell.state_timer) {
@@ -6891,8 +6898,9 @@ static void retire_failed_placeholder(ShellProject *project) {
   if (!shell.retire_timer) shell.retire_timer = SetTimer(shell.service_hwnd, 0x8001, 100, NULL);
 }
 
-static void drain_retired_projects(void) {
+static bool drain_retired_projects(void) {
   ShellProject **link = &shell.retiring;
+  bool released = false;
   while (*link) {
     ShellProject *project = *link;
     if (!stop_transport(project, SDL_GetTicks())) {
@@ -6910,11 +6918,13 @@ static void drain_retired_projects(void) {
     }
     *link = project->next;
     release_project(project);
+    released = true;
   }
   if (!shell.retiring && shell.retire_timer) {
     KillTimer(shell.service_hwnd, shell.retire_timer);
     shell.retire_timer = 0;
   }
+  return released;
 }
 
 static AnvilSidebarProject *sidebar_project(const char *path) {
