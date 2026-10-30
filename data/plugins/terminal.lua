@@ -2442,7 +2442,8 @@ end
 
 function TerminalView:on_close(reopen)
   local retained = false
-  if reopen and self.session_id then
+  -- A detached session belongs to its host or another Workspace. Only a live session ends for Reopen.
+  if reopen and self.session and self.session_id then
     local file, err = io.open(closed_session_path(self.session_id), "wb")
     if file then retained, err = file:close() end
     if retained then
