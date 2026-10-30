@@ -118,30 +118,34 @@ local function may_have_location(line)
   return line:find(":%d") or line:find("%(%d") or line:find("line%s+%d")
 end
 
+-- Keep scan data in arguments. A JIT trace can retain a helper closure and
+-- all candidate tables captured by its upvalues after the scan returns.
+local function add(list, seen, limit, line_no, ranges, col1, col2, path, target_line, target_col, label)
+  if #list < limit and not starts_in_uri(ranges, col1) then
+    add_candidate(
+      list, seen, limit, line_no, col1, col2, path, target_line, target_col, label
+    )
+  end
+end
+
+local function add_file_uri(list, seen, limit, line_no, col1, col2, path, target_line, target_col)
+  if #list < limit then
+    add_candidate(
+      list, seen, limit, line_no, col1, col2, path, target_line, target_col
+    )
+  end
+end
+
 local function add_line_matches(list, seen, limit, line, line_no)
   if not may_have_location(line) then return end
   local ranges = uri_ranges(line)
-  local function add(col1, col2, path, target_line, target_col, label)
-    if #list < limit and not starts_in_uri(ranges, col1) then
-      add_candidate(
-        list, seen, limit, line_no, col1, col2, path, target_line, target_col, label
-      )
-    end
-  end
-  local function add_file_uri(col1, col2, path, target_line, target_col)
-    if #list < limit then
-      add_candidate(
-        list, seen, limit, line_no, col1, col2, path, target_line, target_col
-      )
-    end
-  end
   local init = 1
   while true do
     local s, e, path, target_line, target_col = line:find(
       "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+):(%d+)", init
     )
     if not s then break end
-    add_file_uri(s, e + 1, path, target_line, target_col)
+    add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, target_col)
     init = e + 1
   end
   init = 1
@@ -150,7 +154,7 @@ local function add_line_matches(list, seen, limit, line, line_no)
       "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+):(%d+),(%d+)", init
     )
     if not s then break end
-    add_file_uri(s, e + 1, path, target_line, target_col)
+    add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, target_col)
     init = e + 1
   end
   init = 1
@@ -160,7 +164,7 @@ local function add_line_matches(list, seen, limit, line, line_no)
     )
     if not s then break end
     if not line:find("^[:,]%d", e + 1) then
-      add_file_uri(s, e + 1, path, target_line, 1)
+      add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, 1)
     end
     init = e + 1
   end
@@ -170,7 +174,7 @@ local function add_line_matches(list, seen, limit, line, line_no)
       "([Ff][Ii][Ll][Ee]://[^%s\"'()<>|]+)%((%d+),(%d+)%)", init
     )
     if not s then break end
-    add_file_uri(s, e + 1, path, target_line, target_col)
+    add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, target_col)
     init = e + 1
   end
   init = 1
@@ -180,7 +184,7 @@ local function add_line_matches(list, seen, limit, line, line_no)
     )
     if not s then break end
     if line:sub(e + 1, e + 1) ~= "," then
-      add_file_uri(s, e + 1, path, target_line, 1)
+      add_file_uri(list, seen, limit, line_no, s, e + 1, path, target_line, 1)
     end
     init = e + 1
   end
@@ -188,21 +192,21 @@ local function add_line_matches(list, seen, limit, line, line_no)
   while true do
     local s, e, path, target_line = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)", init)
     if not s then break end
-    if not line:find("^,%s*column", e + 1) then add(s, e + 1, path, target_line, 1, line:sub(s, e)) end
+    if not line:find("^,%s*column", e + 1) then add(list, seen, limit, line_no, ranges, s, e + 1, path, target_line, 1, line:sub(s, e)) end
     init = e + 1
   end
   init = 1
   while true do
     local s, e, path, target_line, target_col = line:find("\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
     if not s then break end
-    if line:sub(math.max(1, s - 5), s - 1) ~= "File " then add(s, e + 1, path, target_line, target_col, line:sub(s, e)) end
+    if line:sub(math.max(1, s - 5), s - 1) ~= "File " then add(list, seen, limit, line_no, ranges, s, e + 1, path, target_line, target_col, line:sub(s, e)) end
     init = e + 1
   end
   init = 1
   while true do
     local s, e, path, target_line, target_col = line:find("File%s+\"([^\"]+)\"%,%s+line%s+(%d+)%,%s+column%s+(%d+)", init)
     if not s then break end
-    add(s, e + 1, path, target_line, target_col, line:sub(s, e))
+    add(list, seen, limit, line_no, ranges, s, e + 1, path, target_line, target_col, line:sub(s, e))
     init = e + 1
   end
   init = 1
@@ -210,21 +214,21 @@ local function add_line_matches(list, seen, limit, line, line_no)
     local s, e, path, target_line, target_col = line:find("%-%-%>%s*([^:%s][^:\r\n]-):(%d+):(%d+)", init)
     if not s then break end
     local path_offset = line:find(path, s, true) or s
-    add(path_offset, e + 1, path, target_line, target_col, line:sub(path_offset, e))
+    add(list, seen, limit, line_no, ranges, path_offset, e + 1, path, target_line, target_col, line:sub(path_offset, e))
     init = e + 1
   end
-  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+):(%d+)()") do add(s, e, path, target_line, target_col) end
-  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+),(%d+)()") do add(s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+)()") do if not line:find("^[:,]%d", e) then add(s, e, path, target_line, 1) end end
+  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+):(%d+)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
+  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+),(%d+)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
+  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^:\r\n]-):(%d+)()") do if not line:find("^[:,]%d", e) then add(list, seen, limit, line_no, ranges, s, e, path, target_line, 1) end end
   -- Start at token boundaries. Retrying a failed path at every byte makes a
   -- long JSONL field with one :number take quadratic time on the UI thread.
-  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+):(%d+)()") do add(s, e, path, target_line, target_col) end
-  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+),(%d+)()") do add(s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+)()") do if not line:find("^[:,]%d", e) then add(s, e, path, target_line, 1) end end
-  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%,(%d+)%)()") do add(s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%)()") do if line:sub(e, e) ~= "," then add(s, e, path, target_line, 1) end end
-  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%,(%d+)%)()") do add(s, e, path, target_line, target_col) end
-  for s, path, target_line, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%)()") do if line:sub(e, e) ~= "," then add(s, e, path, target_line, 1) end end
+  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+):(%d+)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
+  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+),(%d+)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
+  for s, path, target_line, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'()<>|]+):(%d+)()") do if not line:find("^[:,]%d", e) then add(list, seen, limit, line_no, ranges, s, e, path, target_line, 1) end end
+  for s, path, target_line, target_col, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%,(%d+)%)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
+  for s, path, target_line, e in line:gmatch("()([A-Za-z]:[/\\][^%(%)\r\n]-)%((%d+)%)()") do if line:sub(e, e) ~= "," then add(list, seen, limit, line_no, ranges, s, e, path, target_line, 1) end end
+  for s, path, target_line, target_col, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%,(%d+)%)()") do add(list, seen, limit, line_no, ranges, s, e, path, target_line, target_col) end
+  for s, path, target_line, e in line:gmatch("%f[^%z%s:\"'()<>|]()([^%s:\"'<>|]+)%((%d+)%)()") do if line:sub(e, e) ~= "," then add(list, seen, limit, line_no, ranges, s, e, path, target_line, 1) end end
 end
 
 local function sort(candidates)
