@@ -127,8 +127,8 @@ test.describe("Terminal native benchmark", function()
     }
     test.ok(report.update_ms.p95 < 5, "terminal native update p95 exceeded 5 ms")
     test.ok(report.snapshot_ms.p95 < 10, "terminal snapshot p95 exceeded 10 ms")
-    test.ok(report.no_match_search.max_step_ms < 50,
-      "terminal search step exceeded the UI responsiveness limit")
+    test.ok(report.no_match_find.max_step_ms < 50,
+      "terminal find step exceeded the UI responsiveness limit")
     test.ok(report.elapsed_ms < 30000, "terminal output benchmark exceeded 30 seconds")
     print("terminal-native-benchmark " .. common.serialize(report))
   end)

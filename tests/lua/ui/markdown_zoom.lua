@@ -76,6 +76,9 @@ test.describe("Markdown zoom", function()
       core.set_active_view(view)
       settle(view)
       local function draw_positions()
+        -- Zoom keeps the caret in view, so compare both samples from the top of a large view.
+        view.size.x, view.size.y = 1600, 1000
+        view.scroll.y, view.scroll.to.y = 0, 0
         local old_text, old_rect, old_round = renderer.draw_text, renderer.draw_rect, renderer.draw_rounded_rect
         local old_push, old_pop = core.push_clip_rect, core.pop_clip_rect
         local drawn = {}

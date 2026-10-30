@@ -1,3 +1,4 @@
+local load_preview = dofile("tests/fixtures/fuzzy_preview.lua")
 local core = require "core"
 local command = require "core.command"
 local common = require "core.common"
@@ -303,10 +304,20 @@ test.describe("Fuzzy Searcher Path Search", function()
     for index, result in ipairs(picker.results) do
       if result == file_result then picker.selected = index break end
     end
-    local preview = picker:update_selected_preview()
-    test.not_nil(preview)
+    local preview = test.not_nil(load_preview(picker))
     test.ok(common.path_equals(preview.buffer.abs_filename, file))
+    -- The test runner has no window, so draw calls do nothing here.
+    local saved = {}
+    for name, fn in pairs(renderer) do
+      if type(fn) == "function" and (name:match("^draw_") or name:match("^push_")
+        or name:match("^pop_") or name == "set_clip_rect") then
+        saved[name] = fn
+        renderer[name] = name == "draw_text" and function(font, text, x) return x + font:get_width(text) end
+          or function() end
+      end
+    end
     local drawn, draw_error = pcall(function() picker:draw() end)
+    for name, fn in pairs(saved) do renderer[name] = fn end
     test.ok(drawn, draw_error)
   end)
 

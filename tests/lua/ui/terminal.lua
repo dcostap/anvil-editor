@@ -1385,8 +1385,12 @@ test.describe("Terminal View", function()
     test.equal(pane.current_view, view)
     test.equal(panes.count(), 1)
     test.equal(#context.sessions[1].pastes, 1)
-    test.equal(context.sessions[1].pastes[1][1],
-      '"' .. system.absolute_path(spaced) .. '" ' .. system.absolute_path(plain))
+    -- Only paths with spaces are quoted. The test folder can contain a space too.
+    local function argument(path)
+      path = system.absolute_path(path)
+      return path:find(" ", 1, true) and '"' .. path .. '"' or path
+    end
+    test.equal(context.sessions[1].pastes[1][1], argument(spaced) .. " " .. argument(plain))
   end)
 
   test.it("pastes dropped text", function(context)

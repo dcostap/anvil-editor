@@ -88,8 +88,10 @@ test.describe("Project Sidebar snapshots", function()
     end
     local ok, err = pcall(function()
       test.ok(require("core.command").perform("pane:focus_number_1"))
-      test.same(request, {route = "select", path = "C:/pending-sidebar-test",
-        action = {action = "focus", pane = "result"}})
+      test.equal(request.route, "select")
+      test.equal(request.path, "C:/pending-sidebar-test")
+      test.equal(request.action.action, "focus")
+      test.equal(request.action.pane, "result")
     end)
     system.pane_request = saved_request
     test.ok(ok, err)

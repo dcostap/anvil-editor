@@ -7,7 +7,6 @@ local ime = require "core.ime"
 local linewrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local markdown_model = require "core.markdown.model"
-local style = require "core.style"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
 local autocomplete = require "plugins.autocomplete"
@@ -126,16 +125,15 @@ test.describe("wrapped caret geometry", function()
     test.ok(autocomplete.is_open())
     local _, caret_y = view:get_line_screen_position(1, end_col, true)
     local popup_y
-    local draw_rect, draw_text = renderer.draw_rect, renderer.draw_text
-    local set_clip_rect = renderer.set_clip_rect
-    renderer.set_clip_rect = function() end
-    renderer.draw_rect = function(_, y, _, _, color)
-      if color == style.background3 then popup_y = popup_y or y end
-    end
+    local card = require "core.card"
+    local card_draw, draw_rect, draw_rounded_rect = card.draw, renderer.draw_rect, renderer.draw_rounded_rect
+    local draw_text, set_clip_rect = renderer.draw_text, renderer.set_clip_rect
+    card.draw = function(_, y) popup_y = popup_y or y end
+    renderer.set_clip_rect, renderer.draw_rect, renderer.draw_rounded_rect = function() end, function() end, function() end
     renderer.draw_text = function(font, text, x) return x + font:get_width(text) end
     local ok, err = pcall(autocomplete.draw, view)
-    renderer.draw_rect, renderer.draw_text = draw_rect, draw_text
-    renderer.set_clip_rect = set_clip_rect
+    card.draw, renderer.draw_rect, renderer.draw_rounded_rect = card_draw, draw_rect, draw_rounded_rect
+    renderer.draw_text, renderer.set_clip_rect = draw_text, set_clip_rect
     if not ok then error(err, 0) end
 
     test.ok(test.not_nil(popup_y) >= caret_y + view:get_line_height(),
