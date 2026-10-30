@@ -357,6 +357,10 @@ if host_machine.system() == 'windows'
         ['../tests/native/project_sidebar_scan_test.c', 'project_sidebar.c', 'project_sidebar_scan.c'],
         include_directories: anvil_includes, dependencies: [sdl_dep, lua_dep], c_args: anvil_cargs)
     test('sidebar-scan', sidebar_scan_test, env: anvil_test_env, suite: 'anvil')
+    ipc_pipe_test = executable('ipc_pipe_test',
+        ['../tests/native/ipc_pipe_test.c', 'ipc_pipe.c'],
+        include_directories: anvil_includes, dependencies: [sdl_dep], c_args: anvil_cargs)
+    test('ipc-pipe', ipc_pipe_test, env: anvil_test_env, suite: 'anvil')
     hosted_routing_test = executable('hosted_routing_test',
         ['../tests/native/hosted_routing_test.c', 'hosted_surface.c', 'surface_protocol.c', 'process_exit.c',
          'ipc_pipe.c', 'system_events.c', 'custom_events.c', 'resize_diagnostics.c', 'input_latency_probe.c',

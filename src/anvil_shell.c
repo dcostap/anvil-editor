@@ -1233,6 +1233,9 @@ static int reader_loop(void *data) {
     while (anvil_ipc_pipe_read(&project->pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
       if (!valid_project_message(header.type, payload, header.size) ||
           (header.type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE && !project->sidebar)) {
+        SDL_Log("Shell rejected pipe message: Project=%u connection=%u pid=%lu Sidebar=%d type=%u bytes=%lu",
+                project->id, project->connection, (unsigned long)project->process.dwProcessId,
+                project->sidebar, header.type, (unsigned long)header.size);
         report_transport_failure(project, FAILURE_PACKET);
         break;
       }
