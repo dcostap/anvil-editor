@@ -475,22 +475,35 @@ test.describe("Global title bar Pane entries", function()
     local title = TitleBar()
     title.size.x = 420
     title:update()
-    local before = title.entries[1].x
-    test.ok(title:on_mouse_wheel(-0.25, 0))
-    test.equal(title.entries[1].x, before)
-    -- The eased scroll starts on the next frames, so sample it once it moves.
-    local moving = before
-    local deadline = system.get_time() + 2
-    while moving == before and system.get_time() < deadline do
-      coroutine.yield(0.001)
+    local get_time = system.get_time
+    local animation_type = config.scroll_animation_type
+    local duration = config.scroll_transition_duration
+    local now = get_time()
+    config.scroll_animation_type = "cubic"
+    config.scroll_transition_duration = 1
+    system.get_time = function() return now end
+    local ok, err = pcall(function()
+      local before = title.entries[1].x
+      test.ok(title:on_mouse_wheel(-0.25, 0))
+      test.equal(title.entries[1].x, before)
+
+      -- Advance the animation clock in fixed steps instead of waiting for real time.
       title:update()
-      moving = title.entries[1].x
-    end
-    test.ok(moving < before)
-    settle(title)
-    test.ok(title.entries[1].x < moving)
-    test.ok(title.entries[1].x + title.entries[1].w > before)
-    test.is_nil(title:entry_at(before - 1, title.position.y + 2))
+      now = now + 0.5
+      title:update()
+      local moving = title.entries[1].x
+      test.ok(moving < before)
+
+      now = now + 0.5
+      title:update()
+      test.ok(title.entries[1].x < moving)
+      test.ok(title.entries[1].x + title.entries[1].w > before)
+      test.is_nil(title:entry_at(before - 1, title.position.y + 2))
+    end)
+    system.get_time = get_time
+    config.scroll_animation_type = animation_type
+    config.scroll_transition_duration = duration
+    test.ok(ok, err)
   end)
 
   test.it("keeps an overflowing edge Tab visible and clickable", function()
