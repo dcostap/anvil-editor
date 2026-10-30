@@ -1141,6 +1141,12 @@ Current Anvil Tree-sitter Markdown patch:
 
 When updating Tree-sitter Markdown, verify this patch still applies. Remove it only after upstream includes equivalent scanner bounds.
 
+The LuaJIT wrap pins a commit, not the `v2.1` branch. A branch refresh can pull an untested compiler change.
+Upstream commit `b310887` miscompiles some table stores on x64. The JIT then writes through a tagged value, and the editor crashes.
+The crash showed as status 139 in `runtime/treesitter_rust.lua` and `runtime/treesitter_parse_followup.lua` under load.
+Move the pin past `b310887` only after upstream fixes `asm_ahustore` in `src/lj_asm_x86.h`. Then run those two files in parallel many times.
+Use the pinned Zig from `scripts/ensure-zig.sh` when a wrap change reconfigures the build. Another Zig on `PATH` fails the Ghostty build.
+
 ## Why not Program Files for dev?
 
 Do not use `C:\Program Files` for this dev install. It causes admin/write-permission issues and makes junction/rebuild workflows annoying. Use the writable folder of the dev portable app instead.
