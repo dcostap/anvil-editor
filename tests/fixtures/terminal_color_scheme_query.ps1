@@ -1,3 +1,5 @@
+param([switch]$Watch)
+
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -28,4 +30,24 @@ do {
 $response = [Text.Encoding]::UTF8.GetString($bytes.ToArray())
 if ($response -eq ($escape + '[?997;2n')) {
   [Console]::Write('ANVIL_LIGHT_SCHEME')
+}
+
+if ($Watch) {
+  [Console]::Write($escape + '[?2031h' + 'ANVIL_WATCH_READY')
+  foreach ($scheme in @(1, 2)) {
+    $bytes.Clear()
+    do {
+      $byte = $inputStream.ReadByte()
+      if ($byte -lt 0) { exit 4 }
+      $bytes.Add($byte)
+    } until ($byte -eq 110)
+    $response = [Text.Encoding]::UTF8.GetString($bytes.ToArray())
+    if ($response -ne ($escape + '[?997;' + $scheme + 'n')) { exit 5 }
+    [Console]::Write('ANVIL_CHANGED_' + $scheme)
+  }
+  # A same-appearance update must not add input before the test's sentinel.
+  if ($inputStream.ReadByte() -ne 33) { exit 6 }
+  [Console]::Write($escape + '[?2031l' + 'ANVIL_WATCH_OFF')
+  if ($inputStream.ReadByte() -ne 33) { exit 7 }
+  [Console]::Write('ANVIL_WATCH_DONE')
 }

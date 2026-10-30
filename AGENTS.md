@@ -1148,6 +1148,10 @@ A Terminal View pairs each text key with its SDL text input. A text key has layo
 The view encodes the key with the text that the OS typed, not SDL's keymap text. Kitty mode then gets both.
 Run `runtime/terminal_native.lua` and `ui/terminal.lua` after key input changes.
 
+A Terminal View reports light/dark appearance changes to programs that enable mode 2031.
+It sends the report after applying all new colors, so programs can query the new palette.
+Run `runtime/terminal_native.lua` after changes.
+
 Terminal Views display static Kitty graphics through Ghostty's image API.
 Only direct image transfers are enabled. File and shared-memory transfers remain disabled.
 The native bridge owns cropped image canvases and reuses them by image generation and source rectangle.

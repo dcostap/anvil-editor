@@ -1316,11 +1316,26 @@ static int f_terminal_set_colors(lua_State *L) {
   TerminalSession *session = check_session(L, 1);
   luaL_checktype(L, 2, LUA_TTABLE);
   TerminalColors colors = read_terminal_colors(L, 2);
+  bool had_color_scheme = session->color_scheme_known;
+  GhosttyColorScheme previous_scheme = session->color_scheme;
   bool ok = terminal_model_available(session) && set_terminal_colors(session, &colors) &&
     update_terminal_render_state(session) == GHOSTTY_SUCCESS;
   if (ok) {
     GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
     ghostty_render_state_set(session->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &dirty);
+    /* Programs must query the complete new palette, not the previous theme's colors. */
+    if (had_color_scheme && previous_scheme != session->color_scheme) {
+      GhosttyTerminalModeConfig mode = { .mode = GHOSTTY_MODE_COLOR_SCHEME_REPORT };
+      if (ghostty_terminal_get(session->terminal, GHOSTTY_TERMINAL_DATA_MODE, &mode)
+          == GHOSTTY_SUCCESS && mode.value) {
+        char report[32];
+        size_t length = 0;
+        if (ghostty_color_scheme_report_encode(session->color_scheme, report,
+            sizeof(report), &length) == GHOSTTY_SUCCESS) {
+          terminal_write_pty(session->terminal, session, (const uint8_t *)report, length);
+        }
+      }
+    }
   }
   lua_pushboolean(L, ok);
   return 1;

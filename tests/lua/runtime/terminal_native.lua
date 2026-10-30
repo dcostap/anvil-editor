@@ -117,6 +117,37 @@ test.describe("Native terminal session", function()
     test.ok(text:find("ANVIL_LIGHT_SCHEME", 1, true), text)
   end)
 
+  test.it("notifies subscribed programs when the terminal appearance changes", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local terminal_native = require "terminal_native"
+    local session, start_error = terminal_native.new({
+      cols = 100, rows = 8, cell_width = 8, cell_height = 16,
+      foreground = 0x080808, background = 0xffffff,
+      cwd = system.getcwd(),
+      shell = [[powershell.exe -NoLogo -NoProfile -File tests/fixtures/terminal_color_scheme_query.ps1 -Watch]],
+    })
+    test.ok(session, start_error)
+    local function expect_text(expected)
+      local text = wait_for_text(session, expected)
+      if not text:find(expected, 1, true) then
+        session:close()
+        test.fail("Missing " .. expected .. ": " .. text)
+      end
+    end
+    expect_text("ANVIL_WATCH_READY")
+    test.ok(session:set_colors({ background = 0x101010 }))
+    expect_text("ANVIL_CHANGED_1")
+    test.ok(session:set_colors({ background = 0xffffff }))
+    expect_text("ANVIL_CHANGED_2")
+    test.ok(session:set_colors({ background = 0xeeeeee }))
+    test.ok(session:write("!"))
+    expect_text("ANVIL_WATCH_OFF")
+    test.ok(session:set_colors({ background = 0x101010 }))
+    test.ok(session:write("!"))
+    expect_text("ANVIL_WATCH_DONE")
+    session:close()
+  end)
+
   test.it("keeps app-positioned text around OSC 133 semantic markers", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local terminal_native = require "terminal_native"
