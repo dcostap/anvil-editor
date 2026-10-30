@@ -943,6 +943,20 @@ Do not include unrelated working-tree changes.
 
 Use one clear commit message for each milestone. Report each new commit hash in the final response.
 
+## Worktree cleanup
+
+After your branch is in `master`, remove your worktree, your branch and your scratch folders. Do not wait for the user to ask.
+Remove only what you made. Other agents can still use their worktrees.
+
+A worktree's `subprojects` folder can hold directory symlinks into the main repo's `subprojects`.
+A delete that follows a link deletes the main repo's dependencies. Before `git worktree remove --force`, remove the links:
+
+```sh
+python -I -c "import os, sys; d = sys.argv[1]; [os.rmdir(p) for p in (os.path.join(d, n) for n in os.listdir(d)) if os.path.islink(p) or os.path.isjunction(p)]" D:/path/to/worktree/subprojects
+```
+
+`cmd rmdir` from Git Bash failed on these links. Then remove the worktree, delete the branch with `git branch -d`, and check that the main repo's `subprojects` is unchanged.
+
 ## Finalizing changes / updating the dev portable app
 
 When a change or feature is finished and non-Lua files were edited, run the relevant BAT file from the repo root so `..\anvil-portable` is updated. For non-Lua changes, usually run:
