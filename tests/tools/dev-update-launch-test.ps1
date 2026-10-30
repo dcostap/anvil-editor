@@ -1,5 +1,6 @@
 # Public seam: the update launcher must survive closure of its caller's kill job.
 # Only the test's windowless processes enter the job. Do not launch the real editor.
+param([ValidateSet('dev', 'release')][string]$LauncherKind = 'dev')
 $ErrorActionPreference = 'Stop'
 $session = (Get-Process -Id $PID).SessionId
 if (-not (Get-Process explorer -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session })) {
@@ -90,8 +91,24 @@ public static class UpdateLaunchProbe {
 
   $go = Join-Path $root 'go'
   $returned = Join-Path $root 'returned'
+  $launchCall = "& '$launcher' -AppRoot '$root'"
+  if ($LauncherKind -eq 'release') {
+    $releaseLauncher = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../data/tools/updater.ps1'))
+    $fixture = Join-Path $root "helper's script.ps1"
+    [IO.File]::WriteAllText($fixture, @'
+param($Mode, $RequestFile)
+if ($Mode -ne 'Apply' -or $RequestFile -notlike "*request's file.json") { exit 1 }
+$info = [Diagnostics.ProcessStartInfo]::new((Join-Path $PSScriptRoot 'anvil.exe'))
+$info.UseShellExecute = $false
+$process = [Diagnostics.Process]::Start($info)
+$process.WaitForExit()
+'@)
+    $quotedFixture = $fixture.Replace("'", "''")
+    $request = (Join-Path $root "request's file.json").Replace("'", "''")
+    $launchCall = ". '$releaseLauncher'; Start-AnvilUpdateHelper '$quotedFixture' '$request' '$root'"
+  }
   # Hold the caller until it belongs to the job, before it can launch a child.
-  $command = "while (-not (Test-Path -LiteralPath '$go')) { Start-Sleep -Milliseconds 25 }; & '$launcher' -AppRoot '$root' *> '$output'; if (-not `$?) { exit 1 }; [IO.File]::WriteAllText('$returned', ''); Start-Sleep -Seconds 300"
+  $command = "while (-not (Test-Path -LiteralPath '$go')) { Start-Sleep -Milliseconds 25 }; & { $launchCall } *> '$output'; if (-not `$?) { exit 1 }; [IO.File]::WriteAllText('$returned', ''); Start-Sleep -Seconds 300"
   $start = New-Object Diagnostics.ProcessStartInfo
   $start.FileName = Join-Path $PSHOME 'powershell.exe'
   $start.Arguments = '-NoProfile -ExecutionPolicy Bypass -EncodedCommand ' +

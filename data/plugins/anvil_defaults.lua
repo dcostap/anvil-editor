@@ -44,6 +44,7 @@ local core_plugins = {
   terminal = true,
   untitled_recovery = true,
   untitled_tabs = true,
+  updater = true,
 }
 core.first_party_core_plugins = core_plugins
 
@@ -75,6 +76,9 @@ plugin_defaults("reload_diff_flash", {
 })
 plugin_defaults("autorestart", {
   reload_type = "ask",
+})
+plugin_defaults("updater", {
+  check_automatically = true,
 })
 plugin_defaults("autosave_fast", {
   enabled = true,

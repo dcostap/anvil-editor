@@ -296,6 +296,17 @@ The workflow uses the same standalone script as the local build. Keep these
 paths and the smoke test aligned when changing release packaging. The release
 asset is unsigned, so Windows SmartScreen can show a warning.
 
+### Release updates
+
+Windows standalone builds check `dcostap/anvil-editor` for a newer stable GitHub release. `updater:check` opens the Updates Dialog. Background checks share a daily cache across Projects. `config.plugins.updater.check_automatically` controls them.
+The Dialog offers Update and Restart. Development builds and direct mode do not install release updates.
+The release needs an uploaded `anvil.exe` and its GitHub SHA-256 digest. The updater checks its size and digest before asking Anvil to close. HTTPS and the GitHub repository are the trust boundary; the digest is not a publisher signature.
+The bundled `data/tools/updater.ps1` starts through Windows Explorer, outside the caller's process group. It uses `--prepare-update` to save Workspaces and detach Terminal Sessions. It never force-closes the editor. A refused or timed-out close leaves the executable unchanged.
+The helper takes a per-executable file lock, downloads beside the executable, and keeps the previous executable in `<executable>.updates`. Locked previous images belong to running Terminal hosts and stay there. Extracted runtime folders stay because old hosts can still use their files.
+A replacement or immediate startup failure restores the previous executable and starts it again. This is not a health check for later crashes. Requests, progress, and logs stay under `USERDIR/updates`. A recovery error appears after restart.
+The release workflow checks out the requested tag and rejects an asset whose build version differs from that tag.
+Run `runtime/update_release.lua`, `ui/updater.lua`, `anvil:release-update` and `anvil:release-update-launch` after changes. Tests use private executables and a fake download, not the installed editor. Check the `update-dialog` render scenario after visual changes.
+
 The native Project symbol index accepts a bounded explicit path list. A very
 large Project can exceed that bound. The editor reports the submission error
 and stays open, but it does not index that complete Project.
