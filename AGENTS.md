@@ -54,6 +54,8 @@ ConPTY 1.25 and later then asks the terminal for the cursor position (DSR CPR) a
 Do not go back to an earlier ConPTY. Typed input then appears above the visible prompt.
 Run `ui/terminal_mouse_wheel.lua`, `ui/terminal_resize_prompt.lua` and the standalone smoke test after ConPTY updates.
 
+Middle-click scrolling uses Terminal history when the active screen has history. With no history, it sends wheel input through the normal wheel route. Reaching a history boundary does not send application input. Wheel input uses the original click position and keeps fractional movement between frames. Each frame sends a bounded number of events and discards excess whole ticks. Run `ui/middle_click_autoscroll.lua` and `ui/terminal_mouse_wheel.lua` after changes. Use the `terminal-autoscroll-history` scenario to measure history scrolling.
+
 New Terminal Sessions start their host and shell on a background thread.
 They return in the reconnecting state, like restored sessions. Wait for running before sending input or reading the host ID.
 Startup copies the launch options and environment. Closing an unaccepted new session ends its shell, including during editor shutdown.

@@ -877,6 +877,22 @@ end
 
 function TerminalView:autoscroll(dy)
   if not self.session then return 0 end
+  local scrollbar = self.snapshot and self.snapshot.scrollbar
+  if scrollbar and scrollbar.total <= scrollbar.len then
+    -- No history on the active screen. Use wheel input, not a failed scroll at a history boundary.
+    local step = self.cell_height * 3
+    local ticks = math.floor(math.abs(dy) / step)
+    if ticks == 0 then return dy end
+    local direction = dy < 0 and 1 or -1
+    local state = core.root_panel.autoscroll_state
+    local x, y
+    if state and state.view == self then x, y = state.x, state.y end
+    -- Discard excess whole ticks instead of building an input backlog.
+    for _ = 1, math.min(ticks, 8) do
+      if not self:scroll_wheel(direction, x, y) then break end
+    end
+    return dy + direction * ticks * step
+  end
   local rows = dy / self.cell_height
   rows = rows < 0 and math.ceil(rows) or math.floor(rows)
   if rows == 0 then return dy end
@@ -1808,13 +1824,13 @@ function TerminalView:on_key_released(key, event)
   return true
 end
 
-local function mouse_modifiers()
-  return {
-    shift = keymap.modkeys.shift == true,
-    ctrl = keymap.modkeys.ctrl == true,
-    alt = keymap.modkeys.alt == true or keymap.modkeys.altgr == true,
-    super = keymap.modkeys.super == true,
-  }
+local function mouse_modifiers(mods)
+  mods = mods or {}
+  mods.shift = keymap.modkeys.shift == true
+  mods.ctrl = keymap.modkeys.ctrl == true
+  mods.alt = keymap.modkeys.alt == true or keymap.modkeys.altgr == true
+  mods.super = keymap.modkeys.super == true
+  return mods
 end
 
 function TerminalView:mouse_position(x, y)
@@ -2254,13 +2270,18 @@ function TerminalView:on_mouse_released(button, x, y)
 end
 
 function TerminalView:on_mouse_wheel(delta_y)
+  return self:scroll_wheel(delta_y)
+end
+
+function TerminalView:scroll_wheel(delta_y, x, y)
   if not self.session then return false end
   if not keymap.modkeys.shift then
-    local x, y = core.root_panel.mouse.x, core.root_panel.mouse.y
+    x, y = x or core.root_panel.mouse.x, y or core.root_panel.mouse.y
     local _, _, pixel_x, pixel_y = self:mouse_position(x, y)
     local button = delta_y > 0 and "four" or "five"
     -- Input follows live terminal modes, not the last display snapshot.
-    local sent, encoded = self:send_mouse("press", button, pixel_x, pixel_y, mouse_modifiers())
+    self.wheel_modifiers = self.wheel_modifiers or {}
+    local sent, encoded = self:send_mouse("press", button, pixel_x, pixel_y, mouse_modifiers(self.wheel_modifiers))
     core.log_quiet(
       "Terminal session %d wheel: delta=%s position=%.1f,%.1f sent=%s encoded=%s snapshot_tracking=%s",
       self.log_id, tostring(delta_y), pixel_x, pixel_y, tostring(sent), tostring(encoded),

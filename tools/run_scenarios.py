@@ -95,6 +95,9 @@ class Scenario:
 
 
 SCENARIOS: dict[str, Scenario] = {
+    "terminal-autoscroll-history": Scenario(
+        "terminal_autoscroll", FolderSpec("terminal-scroll", files=1), actions=80,
+        suites=("terminal",)),
     # Response latency uses normal pacing and only producer-owned redraw requests.
     "autocomplete-navigation-latency": Scenario(
         "autocomplete_navigation", FolderSpec("response-small", files=1), actions=40,

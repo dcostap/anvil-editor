@@ -212,7 +212,7 @@ test.describe("Middle-click autoscroll", function()
         offset = offset + rows
         return true
       end,
-      snapshot = function() return { scrollbar = { offset = offset } } end,
+      snapshot = function() return { scrollbar = { total = 200, len = 24, offset = offset } } end,
     }
     local unused = view:autoscroll(15)
     test.equal(offset, 100)
@@ -221,6 +221,65 @@ test.describe("Middle-click autoscroll", function()
     test.equal(unused, 10)
     view:autoscroll(-50 + unused)
     test.equal(view.snapshot.scrollbar.offset, 99)
+  end)
+
+  local function terminal_screen(history, tracking)
+    local view = setmetatable({}, terminal.TerminalView)
+    View.new(view)
+    view.cell_height, view.cell_width, view.native_cell_width = 20, 10, 10
+    view.cols, view.rows, view.log_id, view.input_used = 80, 24, 0, true
+    view.snapshot = { scrollbar = { total = 24 + history, len = 24, offset = history } }
+    -- The native session owns history and encodes application input.
+    local input = {}
+    view.session = {
+      scroll = function(_, _, rows)
+        local bar = view.snapshot.scrollbar
+        local before = bar.offset
+        bar.offset = math.max(0, math.min(history, before + rows))
+        return bar.offset ~= before
+      end,
+      snapshot = function() return view.snapshot end,
+      mouse = function(_, action, button)
+        if tracking then input[#input + 1] = { action, button } end
+        return true, tracking
+      end,
+    }
+    return view, input
+  end
+
+  test.it("sends wheel input in both directions only when the terminal has no history", function()
+    local view, input = terminal_screen(0, true)
+    local remainder = view:autoscroll(0.25)
+    test.equal(#input, 0, "fractional movement must not send a whole wheel event")
+    for _ = 1, 400 do remainder = view:autoscroll(0.25 + remainder) end
+    test.ok(#input > 0, "fractional movement must accumulate into wheel input")
+    for _, event in ipairs(input) do test.same(event, { "press", "five" }) end
+    local before = #input
+    view:autoscroll(-200)
+    test.ok(#input > before, "movement above the anchor must send wheel input")
+    for i = before + 1, #input do test.same(input[i], { "press", "four" }) end
+    test.equal(view.snapshot.scrollbar.offset, 0)
+  end)
+
+  test.it("keeps terminal history at its boundaries without sending application input", function()
+    local view, input = terminal_screen(100, true)
+    view:autoscroll(200)
+    test.equal(view.snapshot.scrollbar.offset, 100)
+    view:autoscroll(-4000)
+    test.equal(view.snapshot.scrollbar.offset, 0)
+    view:autoscroll(-200)
+    test.equal(view.snapshot.scrollbar.offset, 0)
+    view:autoscroll(200)
+    test.ok(view.snapshot.scrollbar.offset > 0, "reversal must still scroll history")
+    test.equal(#input, 0)
+  end)
+
+  test.it("does not send application input when mouse reporting is off", function()
+    local view, input = terminal_screen(0, false)
+    view:autoscroll(200)
+    view:autoscroll(-200)
+    test.equal(#input, 0)
+    test.equal(view.snapshot.scrollbar.offset, 0)
   end)
 
   test.it("keeps both Diff Sides aligned while autoscrolling one side", function()
