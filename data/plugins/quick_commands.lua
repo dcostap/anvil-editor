@@ -7,7 +7,7 @@ local panes = require "core.panes"
 local poi = require "core.poi"
 local storage = require "core.storage"
 local text_capture = require "core.text_capture"
-local text_poi_locations = require "core.text_poi_locations"
+local worker_pool = require "core.worker_pool"
 local terminal = require "plugins.terminal"
 
 local M = {}
@@ -46,7 +46,7 @@ local function save(index, slot)
 end
 
 -- The output of a Terminal's latest Quick Command, as a remote Point of Interest source.
--- It rereads the terminal text when navigation asks for its points, so it follows output that is still arriving.
+-- Navigation captures current output, then a worker parses and resolves it.
 local Output = text_capture.View:extend()
 
 function Output:__tostring() return "QuickCommandOutput" end
@@ -59,40 +59,70 @@ function Output:new(view)
   self.terminal = view
 end
 
--- Line 1 holds the latest line that shows the command. Its output follows.
-local function latest_run_text(text, command_text)
-  local lines = {}
-  for line in (text .. "\n"):gmatch("(.-)\r?\n") do lines[#lines + 1] = line end
-  for i = #lines, 1, -1 do
-    if lines[i]:find(command_text, 1, true) then return table.concat(lines, "\n", i) end
-  end
-  return command_text .. "\n" .. text
+function Output:cancel_scan()
+  local request = self.request
+  self.request = nil
+  if request and request.handle then request.pool:cancel(request.handle) end
 end
 
-function Output:refresh()
+function Output:prepare_points_of_interest(on_ready)
   local session = self.terminal.session
   local capture = session and session:text_capture()
-  if not capture or type(capture.text) ~= "string" then return end
-  local text = latest_run_text(capture.text, self.command_text)
-  if text == self.captured_text then return end
-  self.captured_text = text
-  local buffer = self.buffer
-  buffer:remove(1, 1, #buffer.lines, #buffer.lines[#buffer.lines])
-  buffer:insert(1, 1, text)
-  buffer:clear_undo_redo()
-  buffer:clean()
-  buffer:set_selection(1, 1)
-  local points = {}
-  for _, point in ipairs(text_poi_locations.extract(text, { root = self.terminal:get_cwd(), kind = "terminal-location" })) do
-    if point.line > 1 then points[#points + 1] = point end
+  if not capture or type(capture.text) ~= "string" then on_ready(false) return end
+  local root = self.terminal:get_cwd()
+  if capture.text == self.captured_text and root == self.captured_root then
+    on_ready(true)
+    return
   end
-  self.text_capture_data.points = points
-  core.log_quiet("Quick Command output refreshed: lines=%d locations=%d", #buffer.lines, #points)
+  local request = self.request
+  if request and request.text == capture.text and request.root == root then
+    request.on_ready = on_ready
+    return
+  end
+  self:cancel_scan()
+  request = { text = capture.text, root = root, on_ready = on_ready, pool = worker_pool.system() }
+  self.request = request
+  local function current()
+    return self.request == request and self.terminal.session == session and not self.textview_closed
+  end
+  local function failed(reason)
+    if self.request ~= request then return end
+    self.request = nil
+    core.warn("Could not read Quick Command output: %s", tostring(reason))
+    request.on_ready(false)
+  end
+  local handle, err = request.pool:submit {
+    kind = "core.workers.command_output",
+    priority = "interactive",
+    payload = { text = capture.text, command = self.command_text, root = root },
+    is_stale = function() return not current() end,
+    on_result = function(message) request.result = message.payload end,
+    on_complete = function()
+      local result = request.result
+      if not result then failed("worker returned no output") return end
+      self.request = nil
+      self.captured_text, self.captured_root = request.text, root
+      local buffer = self.buffer
+      buffer:remove(1, 1, #buffer.lines, #buffer.lines[#buffer.lines])
+      buffer:insert(1, 1, result.text)
+      buffer:clear_undo_redo()
+      buffer:clean()
+      buffer:set_selection(1, 1)
+      self.text_capture_data.points = result.points
+      core.log_quiet("Quick Command output ready: lines=%d locations=%d", #buffer.lines, #result.points)
+      request.on_ready(true)
+    end,
+    on_error = function(message) failed(message.error) end,
+    on_stale = function() if self.request == request then self.request = nil end end,
+    on_cancelled = function() if self.request == request then self.request = nil end end,
+  }
+  request.handle = handle
+  if not handle then failed(err) end
 end
 
-function Output:get_points_of_interest()
-  self:refresh()
-  return self.text_capture_data.points
+function Output:on_close()
+  self:cancel_scan()
+  Output.super.on_close(self)
 end
 
 local outputs = setmetatable({}, { __mode = "k" })
@@ -103,6 +133,7 @@ local function select_output(view, command_text)
     output = Output(view)
     outputs[view] = output
   end
+  output:cancel_scan()
   output.command_text = command_text
   output.captured_text = nil
   -- Show Remote POI Source then presents the terminal.

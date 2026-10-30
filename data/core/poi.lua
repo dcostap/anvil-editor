@@ -301,11 +301,7 @@ function M.navigate(view, direction, opts)
   return selected
 end
 
-function M.navigate_remote(direction, opts)
-  opts = opts or {}
-  direction = normalize_direction(direction)
-  local source = M.remote_sources[opts.project or core.root_project()]
-  if not source then return navigation_feedback.none("Remote POIs") end
+local function navigate_remote_source(source, direction, opts)
   local view = source.view
   local point, status
   if source.initial then
@@ -325,6 +321,27 @@ function M.navigate_remote(direction, opts)
   })
   if not result then navigation_feedback.warning("Could not activate remote POI") end
   return result
+end
+
+function M.navigate_remote(direction, opts)
+  opts = opts or {}
+  direction = normalize_direction(direction)
+  local project = opts.project or core.root_project()
+  local source = M.remote_sources[project]
+  if not source then return navigation_feedback.none("Remote POIs") end
+  if not source.view.prepare_points_of_interest then
+    return navigate_remote_source(source, direction, opts)
+  end
+  local origin, pane = core.active_view, panes.active()
+  local request = (source.navigation_request or 0) + 1
+  source.navigation_request = request
+  source.view:prepare_points_of_interest(function(ready)
+    if ready and M.remote_sources[project] == source and source.navigation_request == request
+        and core.active_view == origin and panes.active() == pane then
+      navigate_remote_source(source, direction, opts)
+    end
+  end)
+  return true
 end
 
 function M.activate(view, poi, opts)

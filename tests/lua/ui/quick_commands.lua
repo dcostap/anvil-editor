@@ -11,46 +11,7 @@ local terminal = require "plugins.terminal"
 local quick_commands = require "plugins.quick_commands"
 require "plugins.autosave_fast"
 
-local next_session = 0
-
-local function fake_native(context)
-  local native = {}
-  function native.read_session_record(id) return context.records[id], 2 end
-  function native.new(options)
-    next_session = next_session + 1
-    local session = {
-      id = options.session_id or string.format("%032x", next_session),
-      writes = {},
-      busy = false,
-      capture = "",
-    }
-    function session:update()
-      return false, { kind = context.connecting and "reconnecting" or "running",
-        revision = 1, attach_count = 1, busy = self.busy }
-    end
-    function session:snapshot(previous)
-      return previous or {
-        rows = {}, cols = 80, row_count = 24, foreground = 0xffffff, background = 0,
-        cursor = { visible = true, x = 0, y = 0, style = "block" }, events = {},
-      }
-    end
-    function session:write(text)
-      self.writes[#self.writes + 1] = text
-      if context.on_write then context.on_write() end
-      return true
-    end
-    function session:text_capture()
-      return { text = self.capture, cursor_line = 1, cursor_col = 1, viewport_line = 1 }
-    end
-    function session:stats()
-      return { session_id = self.id, attach_count = 1, host_pid = 1, shell_pid = 1, replay_bytes = 0 }
-    end
-    setmetatable(session, { __index = function() return function() return true end end })
-    context.sessions[#context.sessions + 1] = session
-    return session
-  end
-  return native
-end
+local fake_native = require "scenes.quick_command_terminal"
 
 local function open_terminal(placement)
   local view = terminal.open { placement = placement, focus = true, cwd = USERDIR }
@@ -393,10 +354,48 @@ test.describe("Quick Commands", function()
       "PS> ",
     }, "\n")
     test.ok(command.perform("core:next_remote_point_of_interest"))
+    test.equal(core.active_view, editor, "navigation must let the UI run while output is checked")
+    local deadline = system.get_time() + 30
+    while core.active_view == editor and system.get_time() < deadline do coroutine.yield(0.01) end
 
     test.equal(common.normalize_path(core.active_view.buffer.abs_filename), common.normalize_path(new_path))
     test.equal(core.active_view.buffer:get_selection(), 3)
     command.perform("core:next_remote_point_of_interest")
+    test.equal(common.normalize_path(core.active_view.buffer.abs_filename), common.normalize_path(new_path))
+  end)
+
+  test.it("does not take focus after the user leaves a pending output navigation", function(context)
+    local _, path = file_buffer(context, "pending-result.txt")
+    local shell = open_terminal("current")
+    set_quick_command(shell, "a", "build")
+    open_editor("new")
+    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    context.sessions[1].capture = "PS> build\n" .. path .. ":1:1\n"
+    test.ok(command.perform("core:next_remote_point_of_interest"))
+    local other = open_editor("new")
+    local source = require("core.poi").get_remote_source()
+    local deadline = system.get_time() + 30
+    while #source:get_points_of_interest() == 0 and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.equal(#source:get_points_of_interest(), 1)
+    test.equal(core.active_view, other)
+  end)
+
+  test.it("discards a pending navigation when a new Quick Command replaces its output", function(context)
+    local _, old_path = file_buffer(context, "replaced-result.txt")
+    local _, new_path = file_buffer(context, "current-result.txt")
+    local shell = open_terminal("current")
+    set_quick_command(shell, "a", "first-build")
+    local editor = open_editor("new")
+    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    context.sessions[1].capture = "PS> first-build\n" .. old_path .. ":1:1\n"
+    test.ok(command.perform("core:next_remote_point_of_interest"))
+    set_quick_command(shell, "a", "second-build")
+    core.set_active_view(editor)
+    test.ok(command.perform("quick_command:run_a_without_moving_focus"))
+    context.sessions[1].capture = "PS> second-build\n" .. new_path .. ":1:1\n"
+    test.ok(command.perform("core:next_remote_point_of_interest"))
+    local deadline = system.get_time() + 30
+    while core.active_view == editor and system.get_time() < deadline do coroutine.yield(0.01) end
     test.equal(common.normalize_path(core.active_view.buffer.abs_filename), common.normalize_path(new_path))
   end)
 end)
