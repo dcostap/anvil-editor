@@ -515,7 +515,9 @@ Anvil writes persistent session logs to:
 ..\anvil-portable\user\logs\anvil-*.log
 ```
 
-Check the newest file first when you investigate a crash or unexpected behavior. These logs are machine-local state and must stay outside the repo.
+Start with the newest logs when you investigate a crash or unexpected behavior. Then find the affected process and incident time. These logs are machine-local state and must stay outside the repo.
+
+For Project failures, disconnects, startup failures, timeouts, or unexpected exits, read [native failure diagnostics](tools/NATIVE_DIAGNOSTICS.md) first. Match shell and Project or Sidebar records by process ID and connection ID. Read the first failure before cancellation and recovery records. Include the rotated native log when needed. A broken pipe does not prove a crash; exit code zero does not prove an expected exit. Check save records separately before claiming that unsaved text survived.
 
 Windows also writes native diagnostics before Lua starts. These logs are always on:
 
