@@ -97,6 +97,8 @@ Run `ui/terminal_stale_modes.lua` after changes.
 Pane Close skips confirmation when Pi reports `idle` or `done`, even while its shell command remains busy.
 Window Close asks once for its live Terminal Sessions, including idle shells and idle Pi.
 Keep running detaches them. End all ends them but keeps their revival records. Cancel stops Window Close.
+An idle shell that only a Pane's Navigation History keeps does not count. An accepted quit closes it and removes its history entry and record, so it does not restore.
+A history shell that is busy, starting or reconnecting, or that runs a program such as Pi, still counts.
 The shell shares the choice across that Window's Projects, not other Windows. A later Window Close asks again.
 Project unload and direct mode ask each time.
 An ended session is not closed. It revives in its Pane on the next start.

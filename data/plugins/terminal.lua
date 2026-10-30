@@ -2865,13 +2865,24 @@ function M.quit_decision(statuses, answer)
   return actions, nil, count
 end
 
+-- An idle shell that only Navigation History keeps is not worth a choice. Quit closes it and removes its history.
+local function idle_history_shell(pane, view)
+  if view == pane.current_view then return false end
+  local status = view:close_status()
+  return status.kind == "running" and status.busy == false
+end
+
 local pending_quit
 function M.confirm_quit(accept, cancel)
-  local views, statuses = {}, {}
+  local views, statuses, history_shells = {}, {}, {}
   for _, pane in ipairs(panes.ordered()) do
     for _, view in ipairs(panes.views(pane)) do
       if view:is(TerminalView) and view.context == "workspace" and view.session then
-        views[#views + 1], statuses[#statuses + 1] = view, view:close_status()
+        if idle_history_shell(pane, view) then
+          history_shells[#history_shells + 1] = view
+        else
+          views[#views + 1], statuses[#statuses + 1] = view, view:close_status()
+        end
       end
     end
   end
@@ -2885,6 +2896,14 @@ function M.confirm_quit(accept, cancel)
     if not actions then
       if cancel then cancel() end
       return
+    end
+    -- A shell that became busy meanwhile has no action, so the Workspace close detaches it.
+    for _, view in ipairs(history_shells) do
+      local pane = view.session and panes.pane_for_view(view)
+      if pane and idle_history_shell(pane, view) then
+        core.log_quiet("Terminal session %d closed from Navigation History at quit", view.log_id)
+        panes.close_view(pane, { view = view, focus = false, force = true })
+      end
     end
     if window_close and (answer == "keep" or answer == "end") then system.terminal_quit_choice(answer) end
     local by_view = {}

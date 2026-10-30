@@ -135,6 +135,50 @@ test.describe("Terminal quit confirmation", function()
   end)
 end)
 
+test.describe("Terminal quit with Navigation History", function()
+  test.it("ends an idle shell that only Navigation History keeps, without asking", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local Editor = require "core.editor"
+    local panes = require "core.panes"
+    terminal._set_native_for_tests(nil)
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q", placement = "new" })
+    local id = view.session_id
+    local path = USERDIR .. PATHSEP .. "history-idle.txt"
+    local previous_quit = core.quit_request
+    local ok, err = pcall(function()
+      -- A used shell stays in history. An unused one is replaced.
+      view:mark_input_used()
+      local deadline = system.get_time() + 20
+      repeat
+        view:service_session(true)
+        if view.busy == false then break end
+        coroutine.yield(0.01)
+      until system.get_time() >= deadline
+      test.equal(view.busy, false, "the shell did not report idle")
+      local pane = panes.pane_for_view(view)
+      local file = io.open(path, "w")
+      file:write("note")
+      file:close()
+      panes.place(function() return Editor(core.open_buffer(path)) end, { pane = pane, placement = "current" })
+      test.ok(pane.current_view ~= view and panes.pane_for_view(view) == pane, "history did not keep the shell")
+      core.quit(true)
+      test.ok(not core.nag_view.visible, "quit asked about a history-only idle shell")
+      local accepted = core.quit_request
+      core.quit_request = previous_quit
+      test.ok(accepted, "quit was not accepted")
+      test.equal(view.state, "closed")
+      -- The host deletes its record when it exits.
+      deadline = system.get_time() + 20
+      while terminal.session_available(id) and system.get_time() < deadline do coroutine.yield(0.05) end
+      test.ok(not terminal.session_available(id), "the session can still revive")
+    end)
+    core.quit_request = previous_quit
+    if view.session then view:on_close() end
+    os.remove(path)
+    test.ok(ok, err)
+  end)
+end)
+
 test.describe("Idle Pi quit decisions", function()
   test.it("asks what to do with Pi after its turn finishes", function()
     local status = { kind = "running", busy = true, agent_app = "pi", agent_state = "done" }
