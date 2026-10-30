@@ -35,36 +35,6 @@ test.describe("Terminal quit decision", function()
 end)
 
 test.describe("Terminal quit confirmation", function()
-  test.it("asks on each Project close even when an old saved answer exists", function()
-    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
-    local command = require "core.command"
-    local storage = require "core.storage"
-    terminal._set_native_for_tests(nil)
-    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q", placement = "new" })
-    local ok, err = pcall(function()
-      storage.save("plugins.terminal", "quit_choice", "keep")
-      for _ = 1, 2 do
-        local accepted
-        terminal.confirm_quit(function(actions) accepted = actions end)
-        test.ok(core.nag_view.visible, "Project close skipped confirmation")
-        local actions = {}
-        for i, option in ipairs(core.nag_view.options) do
-          test.ok(option.action, "quit dialog offers a non-decision option")
-          actions[i] = option.action
-        end
-        test.same(actions, { "keep", "end", "cancel" })
-        core.nag_view:change_hovered(1)
-        test.ok(command.perform "core:select_dialog_entry")
-        test.equal(accepted[view], "detach")
-        storage.clear("plugins.terminal", "quit_choice")
-      end
-    end)
-    if core.nag_view.visible then command.perform "core:select_dialog_no" end
-    storage.clear("plugins.terminal", "quit_choice")
-    view:on_close()
-    test.ok(ok, err)
-  end)
-
   test.it("cancels, asks again, and preserves idle and busy shells", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local command = require "core.command"

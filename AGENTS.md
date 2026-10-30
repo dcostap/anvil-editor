@@ -98,7 +98,7 @@ Pane Close skips confirmation when Pi reports `idle` or `done`, even while its s
 Window Close asks once for its live Terminal Sessions, including idle shells and idle Pi.
 Keep running detaches them. End all ends them but keeps their revival records. Cancel stops Window Close.
 The shell shares the choice across that Window's Projects, not other Windows. A later Window Close asks again.
-Project unload and direct mode ask each time. Quit dialogs have no saved choice.
+Project unload and direct mode ask each time.
 An ended session is not closed. It revives in its Pane on the next start.
 The host gets `ANVIL_TERMINAL_END`. It stops the shell, but keeps the record, the screen and the Pi report.
 The session keeps its ID, so its Snooze, seen time and Pi session stay. Only a Pane close removes them.
@@ -543,6 +543,8 @@ When adding new functionality, use `core.log_quiet(...)` liberally for diagnosti
 
 This is a personal fork with first-party ownership of the whole codebase, including bundled Lua plugins and defaults. Prefer clean refactors over compatibility adapters: when renaming concepts, APIs, fields, commands, or behavior, update all in-repo callers/configs/plugins/tests instead of leaving deprecated aliases, dead code, or compatibility slop. Only keep backward compatibility when the user explicitly asks for it or there is a concrete external boundary that cannot be migrated in the same change.
 
+AGENTS.md and docs describe what exists now. When you remove a feature, remove its text. Do not write that it is gone. Put that history in the commit message.
+
 ## Heading Outline
 
 Markdown Live Preview lists the headings left of the reading lane when the free space can hold the list.
@@ -824,9 +826,18 @@ If a visual/layout test is needed, test the durable behavior rather than a magic
 
 A test should generally fail when there is a bug, not merely because a preference was intentionally retuned. Tests should encode intent, not duplicate implementation/configuration.
 
+#### Keep the suite small
+
+Each test costs run time and upkeep. Add the fewest tests that prove the change.
+
+- Before you add a test, find the test that covers the nearest behavior. Extend it when you can. Add a new test only for a new durable rule.
+- When you remove a feature, delete its tests, fixtures and setup. Do not add a test to prove that the feature is gone.
+- A test of old behavior, a private detail, or a cosmetic order is a defect. Delete or merge it when you work in its file.
+- Each assertion must be able to fail on a real bug. Remove assertions that only repeat the setup.
+
 #### Bugfix regression tests
 
-For user-reported bugs, behavior discrepancies, and non-trivial feature changes, use a red-green regression workflow by default. Work in vertical slices: one chosen seam, one targeted failing test, the smallest implementation needed to pass it, then repeat if more behavior is needed. Do not write a broad speculative suite up front for imagined behavior.
+For user-reported bugs, behavior discrepancies, and new behavior, use a red-green regression workflow by default. Red-green does not apply to a removal. Work in vertical slices: one chosen seam, one targeted failing test, the smallest implementation needed to pass it, then repeat if more behavior is needed. Do not write a broad speculative suite up front for imagined behavior.
 
 Red-green applies after identifying a durable behavioral contract; it does not
 turn implementation details or preference tuning into regression requirements.
