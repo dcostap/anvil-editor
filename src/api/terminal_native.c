@@ -887,7 +887,7 @@ struct ReconnectJob {
   DWORD host_pid, shell_pid, error;
   AnvilTerminalSize size;
   char id[ANVIL_TERMINAL_ID_LENGTH + 1];
-  bool connected, prepared;
+  bool connected, prepared, wait_for_exit;
   char *userdir, *project, *shell, *cwd, *datadir, *revive_from;
   wchar_t *environment;
   size_t scrollback_lines;
@@ -907,7 +907,14 @@ static void release_reconnect(ReconnectJob *job) {
 static DWORD WINAPI reconnect_main(void *userdata) {
   ReconnectJob *job = userdata;
   uint64_t replay_bytes = 0;
-  bool connected = job->userdir
+  bool connected = false;
+  if (job->wait_for_exit) {
+    /* Reopen can arrive before End's control connection has stopped the old host. Let Lua use
+       normal disk revival after it exits, without attaching to a shell that is being stopped. */
+    DWORD waited = WaitForSingleObject(job->process, 30000);
+    job->error = waited == WAIT_OBJECT_0 ? ERROR_PROCESS_ABORTED
+      : waited == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
+  } else connected = job->userdir
     ? anvil_terminal_host_launch(&job->pipe, &job->process, &job->host_pid, &job->shell_pid,
         &replay_bytes, job->id, job->userdir, job->project, job->shell, job->cwd, job->datadir,
         job->revive_from, job->environment, job->prepared, &job->size,
@@ -939,12 +946,13 @@ static DWORD WINAPI reconnect_main(void *userdata) {
   return 0;
 }
 
-static bool start_reconnect(TerminalSession *session) {
+static bool start_reconnect(TerminalSession *session, bool wait_for_exit) {
   ReconnectJob *job = calloc(1, sizeof(*job));
   if (!job) return false;
   InitializeCriticalSection(&job->lock);
   job->references = 2;
   job->host_pid = session->host_pid;
+  job->wait_for_exit = wait_for_exit;
   job->size = (AnvilTerminalSize){ session->cols, session->rows, session->cell_width, session->cell_height };
   if (session->preserve_grid) job->size.cols = job->size.rows = 0;
   memcpy(job->id, session->id, sizeof(job->id));
@@ -1449,7 +1457,9 @@ static int f_terminal_new(lua_State *L) {
     session->transport_released = true;
     session->reconnect_started = GetTickCount64();
     session->reconnect_delay = 250;
-    if (!start_reconnect(session)) {
+    lua_getfield(L, 1, "wait_for_exit");
+    bool wait_for_exit = lua_toboolean(L, -1); lua_pop(L, 1);
+    if (!start_reconnect(session, wait_for_exit)) {
       close_session(session); lua_pop(L, 1); lua_pushnil(L);
       lua_pushliteral(L, "Could not start Terminal Session attach worker"); return 2;
     }
@@ -1566,7 +1576,7 @@ static bool service_transport(TerminalSession *session) {
     session->reconnect_started = GetTickCount64();
     session->reconnect_delay = 250;
     session->reconnect_at = 0;
-    if (!start_reconnect(session)) fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
+    if (!start_reconnect(session, false)) fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
   }
   if (session->state == TERMINAL_STATE_RECONNECTING) {
     uint64_t now = GetTickCount64();
@@ -1575,7 +1585,7 @@ static bool service_transport(TerminalSession *session) {
     }
     ReconnectJob *job = session->reconnect;
     if (!job) {
-      if (now >= session->reconnect_at && !start_reconnect(session))
+      if (now >= session->reconnect_at && !start_reconnect(session, false))
         fail_transport(session, ERROR_NOT_ENOUGH_MEMORY);
       return false;
     }

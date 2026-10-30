@@ -235,7 +235,7 @@ static void terminal_records(AnvilSidebarScan *job, lua_State *L) {
       job->limited = true;
       break;
     }
-    if (++files > 512 || !budget) {
+    if (!budget) {
       job->limited = true;
       break;
     }
@@ -251,6 +251,17 @@ static void terminal_records(AnvilSidebarScan *job, lua_State *L) {
     id[32] = 0;
     if (!valid_name || !anvil_terminal_id_valid(id))
       continue;
+    /* Closed Panes retain records for Reopen, not session discovery. */
+    snprintf(directory + length, 32768 - length, "%s.closed", id);
+    wchar_t *closed_path = wide(directory);
+    bool closed = closed_path && GetFileAttributesW(closed_path) != INVALID_FILE_ATTRIBUTES;
+    free(closed_path);
+    if (closed)
+      continue;
+    if (++files > 512) {
+      job->limited = true;
+      break;
+    }
     snprintf(directory + length, 32768 - length, "%s.lua", id);
     wchar_t *path = wide(directory);
     size_t bytes = 0;

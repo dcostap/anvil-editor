@@ -345,8 +345,9 @@ function View:can_close(approve)
   approve()
 end
 
----Release resources after an approved close transaction commits.
-function View:on_close()
+---Release resources after an approved close. `reopen` keeps saved state for Reopen Closed Pane.
+---@param reopen boolean?
+function View:on_close(reopen)
 end
 
 

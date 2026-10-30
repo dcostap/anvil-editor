@@ -103,11 +103,20 @@ The shell shares the choice across that Window's Projects, not other Windows. A 
 Project unload and direct mode ask each time.
 An ended session is not closed. It revives in its Pane on the next start.
 The host gets `ANVIL_TERMINAL_END`. It stops the shell, but keeps the record, the screen and the Pi report.
-The session keeps its ID, so its Snooze, seen time and Pi session stay. Only a Pane close removes them.
+The session keeps its ID, so its Snooze, seen time and Pi session stay.
 Older hosts read `END` as a disconnect and keep running. Run `ui/terminal_quit.lua`, `ui/terminal_revival.lua` and `ui/terminal_agent_resume.lua` after changes.
 Pane Close keeps the normal busy check for other agent states. Reconnecting sessions still require confirmation.
 The host sends the root Agent Status with its live status packet. Older hosts keep the normal busy check.
 Run `ui/terminal_quit.lua`, `ui/terminal_agent_status.lua`, and the `windows-close-terminals-keep` and `windows-close-terminals-end` shell probes after changes.
+
+Pane Close ends each Terminal through the same End path when it saves the Pane for Reopen Closed Pane.
+A separate `terminal-sessions/<id>.closed` marker hides its retained record from session discovery and the Sidebar.
+Reopen removes the marker and restores the View through `from_state`, as Workspace restore does.
+A Reopen during End waits on the attach worker for the old host to exit, then uses normal disk revival.
+The UI thread never waits.
+The Terminal keeps its ID and saved screen. Pi resumes its saved conversation through normal revival.
+The record cleaner removes old closed records and their markers after 30 days.
+Run `ui/reopen_pane.lua`, `ui/terminal_revival.lua`, `ui/terminal_agent_resume.lua` and `anvil:sidebar-scan` after changes.
 
 The PowerShell integration sets the Terminal title to the submitted command.
 The host records its start, finish, and exit status from the trusted OSC 133 marks.

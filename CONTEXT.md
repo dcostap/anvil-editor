@@ -428,7 +428,7 @@ A Pane whose only Navigation History entry is a blank Untitled Editor or an Ephe
 _Avoid_: void Pane, empty split
 
 **Reopen Closed Pane**:
-An action that restores the last closed Pane, including its Views and Navigation History. A restored Terminal starts a new session.
+An action that restores the last closed Pane, including its Views and Navigation History. A restored Terminal revives its Terminal Session and resumes its saved Agent Session.
 
 **Pane Move and Merge**:
 An action that appends one Pane's complete Navigation History after another Pane's history, then removes the source Pane. The source Current View becomes current in the destination. A disposable destination contributes no placeholder entry.

@@ -178,6 +178,44 @@ test.describe("Terminal agent resume", function()
     end)
   end
 
+  test.it("resumes the same idle Pi conversation when its closed Pane reopens", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    local exe = find_runtime("node")
+    test.skip_if(not exe, "node is not installed")
+    terminal._set_native_for_tests(nil)
+    local dir = USERDIR .. "/pi closed pane"
+    system.mkdir(dir)
+    local cli = system.getcwd() .. "/tests/fixtures/fake-pi/dist/cli.js"
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
+    local id = view.session_id
+    local restored
+    local ok, err = pcall(function()
+      test.ok(view:write_input(string.format('"%s" "%s" --session-dir "%s" --model-events\r', exe, cli, dir)))
+      test.ok(wait_for(view, function()
+        return screen_text(view):find("FAKE_PI_READY", 1, true)
+          and record(id).interrupted_pid > 0
+      end, 30), "Pi did not start: " .. screen_text(view))
+      test.ok(view:write_input("idle\r"))
+      test.ok(wait_for(view, function() return record(id).agent_state == "idle" end, 30))
+      test.ok(panes.close(panes.pane_for_view(view)), "closing idle Pi asked for confirmation")
+      test.not_ok(terminal.session_available(id), "a closed Terminal stayed available outside Reopen")
+      test.ok(require("core.command").perform("core:reopen_last_closed_pane"))
+      restored = panes.active().current_view
+      test.ok(wait_for(restored, function() return #launches(dir) == 2 end, 30),
+        "Reopen did not resume Pi: " .. screen_text(restored))
+      test.equal(restored.session_id, id)
+      local resumed = without_extension(launches(dir)[2])
+      test.equal(#resumed, 2)
+      test.equal(resumed[1], "--session")
+      test.equal(resumed[2]:match("[^/\\]+$"), session_file_name(dir))
+    end)
+    if restored then restored:on_close() end
+    view:on_close()
+    require("terminal_native").finish_close_commands()
+    test.ok(test.remove_tree(dir))
+    test.ok(ok, err)
+  end)
+
   test.it("resumes the Pi session after quit's End answer ends its Terminal", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local exe = find_runtime("node")

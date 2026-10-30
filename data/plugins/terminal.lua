@@ -293,6 +293,12 @@ local function session_record(id)
   return record
 end
 
+-- The host owns its record. A separate marker keeps a closed Pane out of session discovery while
+-- the normal End and revival paths keep its screen and Pi report, including on existing hosts.
+local function closed_session_path(id)
+  return USERDIR .. "/terminal-sessions/" .. id .. ".closed"
+end
+
 -- Anvil's agent preload reports the session file that a terminal's Pi writes.
 -- A report counts only when the busy child wrote it, or that child's own child,
 -- such as the Node process that an npm shim starts.
@@ -382,6 +388,13 @@ function TerminalView:new(options)
       return
     end
     if record then
+      local closed_path = closed_session_path(record.session_id)
+      if system.get_file_info(closed_path) then
+        -- End runs on a worker. Reopen must not attach to the shell that it is still stopping.
+        native_options.wait_for_exit = true
+        os.remove(closed_path)
+        core.log_quiet("Terminal Session %s restore waits for its ended host", record.session_id)
+      end
       -- Only hosts that write `movable` accept a new Project. Others drop the connection.
       self.record_project = record.movable and record.project_path or nil
       native_options.cols, native_options.rows = nil, nil
@@ -2415,7 +2428,7 @@ function TerminalView:on_workspace_close()
   else self:detach_session() end
 end
 
--- Ends the shell at quit, but its host keeps the session record and screen. The next start revives the session
+-- Ends the shell, but its host keeps the session record and screen. The next start revives the session
 -- in this Pane with the same ID, so its Snooze, seen time and Pi session stay.
 function TerminalView:end_session()
   self:clear_point_hover()
@@ -2427,7 +2440,18 @@ function TerminalView:end_session()
   core.log_quiet("Terminal session %d ended for revival: id=%s", self.log_id, tostring(self.session_id))
 end
 
-function TerminalView:on_close()
+function TerminalView:on_close(reopen)
+  local retained = false
+  if reopen and self.session_id then
+    local file, err = io.open(closed_session_path(self.session_id), "wb")
+    if file then retained, err = file:close() end
+    if retained then
+      self:end_session()
+      core.log_quiet("Terminal Session %s retained for Reopen Closed Pane", self.session_id)
+    else
+      core.error("Could not keep Terminal Session for Reopen: %s", tostring(err))
+    end
+  end
   self:clear_point_hover()
   self.find:close(true)
   self.running, self.state = false, "closed"
@@ -2443,7 +2467,7 @@ function TerminalView:on_close()
     )
   end
   TerminalView.super.on_close(self)
-  if self.session_id then M.cleanup_records(self.session_id) end
+  if self.session_id and not retained then M.cleanup_records(self.session_id) end
 end
 
 function M.open(options)
@@ -2956,9 +2980,9 @@ function core.quit(force, exit_code)
   end, core.cancel_quit)
 end
 
--- True when a Terminal Session can still reattach or revive. Closing its last view retires it.
+-- Closed Panes restore only through Reopen, not session discovery.
 function M.session_available(id)
-  return session_record(id) ~= nil
+  return session_record(id) ~= nil and not system.get_file_info(closed_session_path(id))
 end
 
 -- Opens a Terminal Session that the Project Sidebar lists. A session that cannot reattach or
@@ -2966,6 +2990,7 @@ end
 function M.open_session(id)
   local record, err = session_record(id)
   if not record then return nil, err end
+  if system.get_file_info(closed_session_path(id)) then return nil, "Terminal Pane is closed" end
   return M.open { session_id = id, focus = true, placement = "current", reason = "sidebar-terminal-focus" }
 end
 

@@ -56,6 +56,7 @@ return { run = function(payload, ctx)
           if ok and type(record) == "table" and record.session_id == id and dead(record) then
             os.remove(directory .. id .. ".snapshot")
             os.remove(directory .. id .. ".agent")
+            os.remove(directory .. id .. ".closed")
             if os.remove(path) then removed = removed + 1 end
           end
         end

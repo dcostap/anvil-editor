@@ -48,6 +48,11 @@ int main(void) {
             i, dir, dir, i, 1700000000u + i);
     fclose(f);
   }
+  /* A closed Pane keeps its Terminal for Reopen, not as a lost Sidebar row. */
+  snprintf(path, sizeof(path), "%s/terminal-sessions/%032x.closed", dir, 31);
+  FILE *closed = fopen(path, "wb");
+  CHECK(closed);
+  fclose(closed);
   char source[32768];
   size_t used = 0;
   source[used++] = '{';
@@ -71,7 +76,7 @@ int main(void) {
   const AnvilSidebarModel *result = anvil_sidebar_scan_result(job, &limited);
   CHECK(result && result->count == 256 && !limited);
   AnvilSidebarProject *project = anvil_sidebar_find(result, dir);
-  CHECK(project && project->terminal_count == 32);
+  CHECK(project && project->terminal_count == 31);
   /* The host's live title and last activity, not its shell command. */
   CHECK(!strcmp(project->terminals[3].title, "Session 3"));
   CHECK(project->terminals[3].activity == 1700000003);
@@ -79,6 +84,8 @@ int main(void) {
   CHECK(!anvil_sidebar_find(result, strcat(strcpy(path, dir), "/Recent-259")));
   anvil_sidebar_scan_free(job);
   anvil_sidebar_destroy(&known);
+  snprintf(path, sizeof(path), "%s/terminal-sessions/%032x.closed", dir, 31);
+  DeleteFileA(path);
   for (unsigned i = 0; i < 32; i++) {
     snprintf(path, sizeof(path), "%s/terminal-sessions/%032x.lua", dir, i);
     DeleteFileA(path);

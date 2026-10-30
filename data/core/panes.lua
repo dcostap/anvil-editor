@@ -619,8 +619,8 @@ function M.drop(source, x, y)
   return M.move(source, destination, direction)
 end
 
-local function call_lifecycle(view, method)
-  if view and view[method] then view[method](view) end
+local function call_lifecycle(view, method, ...)
+  if view and view[method] then view[method](view, ...) end
 end
 
 local function navigation_history_module()
@@ -1753,7 +1753,7 @@ local function commit_close(pane)
   M.panes_by_id[pane.id] = nil
   for _, view in ipairs(collect_owned_views(pane)) do
     release_view(pane, view)
-    call_lifecycle(view, "on_close")
+    call_lifecycle(view, "on_close", ok)
   end
   pane.group = nil
   if not group.root then

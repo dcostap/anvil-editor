@@ -36,6 +36,37 @@ local function checkpoint_on_detach(view, state)
 end
 
 test.describe("Terminal revival", function()
+  test.it("restores a closed Pane's Terminal screen and starts a usable shell", function()
+    test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
+    terminal._set_native_for_tests(nil)
+    local view = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q" })
+    local id = view.session_id
+    local restored
+    local ok, err = pcall(function()
+      test.ok(view:write_input("echo ANVIL_CLOSED_PANE_SCREEN\r"))
+      test.ok(wait_for(view, function()
+        local _, status = view.session:update()
+        return status.busy == false and screen_text(view):find("ANVIL_CLOSED_PANE_SCREEN", 1, true)
+      end))
+      test.ok(panes.close(panes.pane_for_view(view)))
+      test.ok(require("core.command").perform("core:reopen_last_closed_pane"))
+      restored = panes.active().current_view
+      test.ok(wait_for(restored, function()
+        local text = screen_text(restored)
+        return restored.state == "running" and text:find("Restored session", 1, true)
+          and text:find("ANVIL_CLOSED_PANE_SCREEN", 1, true)
+      end), "Reopen lost the Terminal screen: " .. screen_text(restored))
+      test.equal(restored.session_id, id)
+      test.ok(restored:write_input("echo ANVIL_REOPENED_PANE_INPUT\r"))
+      test.ok(wait_for(restored, function()
+        return screen_text(restored):find("ANVIL_REOPENED_PANE_INPUT", 1, true)
+      end), "the reopened shell did not accept input")
+    end)
+    if restored then restored:on_close() end
+    view:on_close()
+    test.ok(ok, err)
+  end)
+
   test.it("revives the latest disk screen after host loss and starts a usable new shell", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     terminal._set_native_for_tests(nil)
