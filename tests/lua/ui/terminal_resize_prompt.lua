@@ -35,12 +35,16 @@ local function check_input_after(widths)
       local line, text = cursor_line(view)
       return line:find("PS ", 1, true) and text:find("ANVIL_DONE\n", 1, true)
     end))
+    -- Start an input line before resizing. Seeing the prompt text alone does not
+    -- mean that PowerShell has finished positioning its line editor.
+    test.ok(view.session:write("echo ANVIL_"))
+    test.ok(wait_for(view, function() return cursor_line(view):find("PS .*ANVIL_$") end))
     for _, cols in ipairs(widths) do
       test.ok(view.session:resize(cols, 30, 8, 16))
       -- ConPTY reads resizes and input from separate pipes.
       coroutine.yield(0.5)
     end
-    test.ok(view.session:write("echo ANVIL_TYPED"))
+    test.ok(view.session:write("TYPED"))
     test.ok(wait_for(view, function()
       return cursor_line(view):find("PS .*ANVIL_TYPED")
     end, 10), "typed input left the prompt: " .. select(2, cursor_line(view)))
