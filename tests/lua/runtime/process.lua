@@ -117,7 +117,7 @@ test.describe("process", function()
   end)
 
   test.test("reads lines and byte counts across native output chunks", function()
-    local chunks, index = { "first\nsec", "ond\n\nlast" }, 0
+    local chunks, index = { "fir", "st", "\nsec", "ond\n\nlast" }, 0
     local stream = process.stream.new({ process = {
       read = function()
         index = index + 1
