@@ -46,6 +46,7 @@ REPO_MEDIUM = RepoSpec("repo-medium", files=6000, commits=20, modified=120, stag
 REPO_HUGE = RepoSpec("repo-huge", files=100000, commits=40, modified=800, staged=60,
                      deleted=40, untracked=200, ignored=30000)
 FOLDER_MEDIUM = FolderSpec("folder-medium", files=6000)
+RUNTIME_WORKLOADS = FolderSpec("runtime-workloads", files=1, min_lines=4, max_lines=4)
 # Long source files for editor scrolling. Other fixtures keep files short.
 REPO_LONG = RepoSpec("repo-long", files=200, min_lines=3000, max_lines=6000, modified=10, untracked=4)
 # A folder that holds several repositories, like a directory of checkouts.
@@ -98,6 +99,25 @@ SCENARIOS: dict[str, Scenario] = {
     "terminal-autoscroll-history": Scenario(
         "terminal_autoscroll", FolderSpec("terminal-scroll", files=1), actions=80,
         suites=("terminal",)),
+    # Keep removed runtime timing workloads in the scenario runner, not correctness tests.
+    "process-finalize-handles": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "process_finalize"}, targets=1),
+    "process-read-lines": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "process_read_lines"}, targets=1),
+    "text-poi-long-field": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "poi_long_field"}, targets=1),
+    "text-poi-many-locations": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "poi_many_locations"}, targets=1),
+    "trimwhitespace-long-line": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "trimwhitespace_long_line"}, targets=1),
+    "markdown-vault-long-padding": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("markdown",),
+        settings={"workload": "markdown_vault_long_padding"}, targets=1),
     # Response latency uses normal pacing and only producer-owned redraw requests.
     "autocomplete-navigation-latency": Scenario(
         "autocomplete_navigation", FolderSpec("response-small", files=1), actions=40,
