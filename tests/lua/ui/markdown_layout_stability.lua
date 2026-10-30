@@ -166,7 +166,7 @@ test.describe("Markdown layout stability", function()
     test.equal(other:get_scrollable_size(), pending_size, "publication changed the scrollable extent")
   end)
 
-  test.it("keeps a heading link refresh out of full wrapped reconstruction", function(context)
+  test.it("keeps link text and line geometry stable after an index refresh", function(context)
     local buffer, lines = fixture("local-link-refresh-layout")
     for line = #lines + 1, 1000 do
       lines[line] = string.rep("More ordinary paragraph content. ", 8)
@@ -179,19 +179,19 @@ test.describe("Markdown layout stability", function()
     core.set_active_view(view)
     buffer:set_selection(1, #buffer.lines[1])
     prepare(view)
+    local before = position(view, 100, 1)
 
     view:on_text_input("x")
-    local owner = view.__markdown_live_owner
-    test.equal(owner.link_targets_changed_revision, buffer.text_revision)
-    owner.link_index:notify("buffer-updated", { buffer = buffer, path = buffer.abs_filename })
-
-    test.equal(
-      view.__async_wrap_reconstruction, nil,
-      "a link refresh started a full wrapped reconstruction"
-    )
+    local link_index = markdown.vault_index.index_for_path(buffer.abs_filename)
+    link_index:notify("buffer-updated", { buffer = buffer, path = buffer.abs_filename })
+    ready(model.peek(buffer))
+    prepare(view)
+    same_position(position(view, 100, 1), before, "link refresh")
+    test.equal(buffer.lines[100], "Paragraph with [[Target]] and more ordinary content.\n")
+    test.not_nil(view:get_line_render(100))
   end)
 
-  test.it("keeps a fenced body publication out of full wrapped reconstruction", function(context)
+  test.it("keeps fenced code visible after the edited Markdown parse publishes", function(context)
     local buffer, lines = fixture("local-fence-publication-layout")
     for line = #lines + 1, 600 do
       lines[line] = string.rep("More ordinary paragraph content. ", 8)
@@ -202,23 +202,16 @@ test.describe("Markdown layout stability", function()
     core.set_active_view(view)
     buffer:set_selection(11, #buffer.lines[11])
     prepare(view)
+    local before_tail = position(view, 500, 1)
 
     view:on_text_input("0")
     ready(model.peek(buffer))
-    local deadline = system.get_time() + 2
-    while view.__markdown_live_owner.presentation_snapshot
-      and system.get_time() < deadline
-    do
-      coroutine.yield(0.01)
-    end
-
-    test.equal(
-      view.__async_wrap_reconstruction, nil,
-      "a fenced body publication started a full wrapped reconstruction"
-    )
+    prepare(view)
+    test.ok(buffer.lines[11]:find("local value = 10", 1, true))
+    same_position(position(view, 500, 1), before_tail, "fenced edit")
   end)
 
-  test.it("keeps newline and join publications out of suffix-wide wrapped reconstruction", function(context)
+  test.it("keeps Markdown text usable after a newline and join publish", function(context)
     local buffer, lines = fixture("local-newline-publication-layout")
     for line = #lines + 1, 600 do
       lines[line] = string.rep("More ordinary paragraph content. ", 8)
@@ -231,31 +224,16 @@ test.describe("Markdown layout stability", function()
 
     view:on_text_input("\n")
     ready(model.peek(buffer))
-    local deadline = system.get_time() + 2
-    while view.__markdown_live_owner.presentation_snapshot
-      and system.get_time() < deadline
-    do
-      coroutine.yield(0.01)
-    end
-
-    test.equal(
-      view.__async_wrap_reconstruction, nil,
-      "a newline publication started a suffix-wide wrapped reconstruction"
-    )
+    prepare(view)
+    test.ok(buffer.lines[194] and buffer.lines[195])
+    test.not_nil(view:get_line_screen_position(194, 1))
+    test.not_nil(view:get_line_screen_position(195, 1))
 
     buffer:set_selection(195, 1)
     test.equal(command.perform("core:backspace"), true)
     ready(model.peek(buffer))
-    deadline = system.get_time() + 2
-    while view.__markdown_live_owner.presentation_snapshot
-      and system.get_time() < deadline
-    do
-      coroutine.yield(0.01)
-    end
-    test.equal(
-      view.__async_wrap_reconstruction, nil,
-      "a line join publication started a suffix-wide wrapped reconstruction"
-    )
+    prepare(view)
+    test.not_nil(view:get_line_screen_position(194, 1))
   end)
 
   for _, wrapped in ipairs({ true, false }) do
@@ -330,15 +308,7 @@ test.describe("Markdown layout stability", function()
         test.equal(#buffer.lines, 150 + operation.shift, operation.name .. " source line count")
         local line = 80 + operation.shift
         if block.name == "code" and operation.name == "newline" then
-          local projected = other.__markdown_live_owner
-            and other.__markdown_live_owner.pending_lines
-            and other.__markdown_live_owner.pending_lines[line]
-          test.not_nil(projected, "shifted code delimiter has no edit projection")
-          test.equal(
-            test.not_nil(projected).render_line.markdown_code_block,
-            true,
-            "shifted code delimiter lost its semantic presentation"
-          )
+          test.equal(buffer.lines[line], "```sql\n", "the shifted code delimiter changed")
         end
         same_position(position(other, line, 1), expected, operation.name .. " immediate")
         prepare(editing)

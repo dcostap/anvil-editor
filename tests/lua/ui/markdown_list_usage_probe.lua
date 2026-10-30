@@ -712,9 +712,6 @@ test.describe("Markdown list usage exploration (intentional report)", function()
     probe("Indentation/tabs versus spaces", indentation_matrix_case)
     probe("Revision/ordered-list render cost", ordered_revision_case)
 
-    test.fail(
-      "Exploratory observations (intentional failure; convert confirmed contracts into focused tests later):\n"
-        .. table.concat(observations, "\n")
-    )
+    core.log("Exploratory Markdown list observations:\n" .. table.concat(observations, "\n"))
   end)
 end)

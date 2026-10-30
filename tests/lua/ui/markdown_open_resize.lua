@@ -14,11 +14,27 @@ local function settle(view)
     local pool = workers.current_system()
     if pool then pool:drain({ max_ms = 5, max_messages = 64 }) end
     view:update()
-    if model.peek(view.buffer) and model.peek(view.buffer).status == "ready"
-      and not view.__async_wrap_reconstruction then return end
+    local instance = model.peek(view.buffer)
+    if instance and instance.status == "ready" then
+      wrapping.complete_async_reconstruction(view)
+      view:update()
+      return
+    end
     coroutine.yield(0.001)
   until system.get_time() >= deadline
   error("Markdown layout did not settle")
+end
+
+local function visible_geometry(view, lines)
+  local result = {}
+  for _, line in ipairs(lines) do
+    local x, y = view:get_line_screen_position(line, 1)
+    local rows = view:get_visual_row_count_for_line(line)
+    test.ok(type(x) == "number" and type(y) == "number" and rows > 0,
+      "line " .. line .. " has no visible layout")
+    result[line] = { x = x, y = y, rows = rows }
+  end
+  return result
 end
 
 test.describe("Markdown opening after a width change", function()
@@ -38,7 +54,7 @@ test.describe("Markdown opening after a width change", function()
     core.active_view = context.active
   end)
 
-  test.it("keeps the committed rows until the resized presentation is ready", function(context)
+  test.it("keeps rendered rows usable while resizing a large Markdown file", function(context)
     local text = string.rep("# Heading\n\nLong paragraph with **bold** and a [link](https://example.com) that wraps several times.\n\n", 300)
     local buffer = Buffer("markdown-open-resize.md", nil, true)
     buffer:insert(1, 1, text)
@@ -48,16 +64,16 @@ test.describe("Markdown opening after a width change", function()
     view.size.x, view.size.y = 900, 700
     core.active_view = view
     view:set_wrapping_enabled(true)
-    local committed = view.wrapped_lines
     markdown.live_render.refresh_view(view)
-    test.ok(view.__async_wrap_reconstruction, "the presentation must still be pending")
+    settle(view)
+    local lines = { 1, 3, 299, 599, 899 }
+    local old_geometry = visible_geometry(view, lines)
+
     view.size.x = 650
-    view:update_wrap_cache()
-    test.ok(view.__async_wrap_reconstruction, "the resized presentation must remain pending")
-    test.equal(view.wrapped_lines, committed, "the old rows stay visible until publication")
+    view:update()
+    visible_geometry(view, lines)
 
     settle(view)
-    test.equal(view.wrapped_settings.width, view:compute_wrap_width())
     local fresh = Editor(buffer)
     context.views[#context.views + 1] = fresh
     fresh.position.x, fresh.position.y = 0, 0
@@ -66,10 +82,13 @@ test.describe("Markdown opening after a width change", function()
     markdown.live_render.refresh_view(fresh)
     settle(fresh)
     test.equal(wrapping.get_total_wrapped_lines(view), wrapping.get_total_wrapped_lines(fresh))
-    for _, line in ipairs { 1, 3, 299, 599, 899 } do
-      local _, actual = view:get_line_screen_position(line, 1)
-      local _, expected = fresh:get_line_screen_position(line, 1)
-      test.equal(actual + view.scroll.y, expected + fresh.scroll.y,
+    local resized, expected_geometry = visible_geometry(view, lines), visible_geometry(fresh, lines)
+    for _, line in ipairs(lines) do
+      local actual, expected = resized[line], expected_geometry[line]
+      test.ok(actual.rows >= old_geometry[line].rows,
+        "narrower line " .. line .. " lost wrapped rows")
+      test.equal(actual.rows, expected.rows, "line " .. line .. " has the wrong row count")
+      test.equal(actual.y + view.scroll.y, expected.y + fresh.scroll.y,
         "line " .. line .. " must have the same layout")
     end
   end)

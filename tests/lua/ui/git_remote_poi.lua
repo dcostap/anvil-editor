@@ -6,6 +6,19 @@ local View = require "core.view"
 local GitView = require "plugins.git.view"
 local test = require "core.test"
 
+local function wait_until(predicate, timeout, message)
+  local deadline = system.get_time() + timeout
+  repeat
+    if predicate() then return true end
+    coroutine.yield(0.01)
+  until system.get_time() >= deadline
+  return predicate(), message
+end
+
+local function selected_line(view)
+  return view:get_selection_state().selections[1]
+end
+
 test.describe("Commit remote POIs", function()
   test.before_each(function(context)
     panes.reset_for_tests()
@@ -32,9 +45,13 @@ test.describe("Commit remote POIs", function()
     source.model.tabs[#source.model.tabs + 1] = context.tab
     panes.create { factory = function() return source end }
     source:on_resume()
-    -- These cases read the new side through buffer_view_b. Let start-up
-    -- finish restoring the Project's saved layout before choosing one.
-    coroutine.yield(0.05)
+    -- These cases read the new side through buffer_view_b. Wait for both
+    -- source files to appear in the resumed View before changing the layout.
+    test.ok(wait_until(function()
+      local list = source:pane_view("file-list")
+      local text = list and list.buffer and table.concat(list.buffer.lines) or ""
+      return text:find("a.lua", 1, true) and text:find("b.lua", 1, true)
+    end, 10), "Git View did not restore its file list")
     config.plugins.diffview.layout = "side-by-side"
   end)
 
@@ -59,27 +76,38 @@ test.describe("Commit remote POIs", function()
       poi.set_remote_source(source:pane_view("details"))
     end
     context.source.model.backend.file_at = function(_, revision, path, _, callback)
-      callback("same\n" .. revision .. " " .. path .. "\nkeep\nstill\n"
-        .. revision .. " end\n")
+      local unchanged = {}
+      for index = 1, 20 do unchanged[index] = "stable " .. index end
+      callback("same\n" .. revision .. " " .. path .. "\n"
+        .. table.concat(unchanged, "\n") .. "\n" .. revision .. " end\n")
     end
     local destination = panes.create { factory = function() return View() end }
     local function ready()
       local view = destination.current_view
-      local deadline = system.get_time() + 3
-      while view.updater_idx and system.get_time() < deadline do coroutine.yield(0.01) end
-      test.equal(view.updater_idx, nil)
       panes.present(view, { pane = destination })
       view.size.x, view.size.y = 800, 600
       view:update()
+      test.ok(wait_until(function()
+        view:update()
+        local points = poi.points_for_view(view.buffer_view_b)
+        local changes = {}
+        for _, point in ipairs(points or {}) do
+          if point.kind == "diff-change" then changes[#changes + 1] = point.line end
+        end
+        return changes[1] == 2 and changes[2] == 23
+      end, 3), "Diff View did not publish its local changes")
       return view, view.buffer_view_b
     end
     test.ok(poi.navigate_remote(1))
     destination = panes.active()
     local first, side = ready()
-    test.equal(side.buffer:get_selection(), 2)
+    side:with_selection_state(function() side.buffer:set_selection(2, 1) end)
+    test.equal(selected_line(side), 2)
+    local next_change = poi.next(side, 1)
+    test.equal(next_change and next_change.line, 23)
     poi.navigate(side, 1)
     test.equal(destination.current_view, first)
-    test.equal(side.buffer:get_selection(), 5)
+    test.equal(selected_line(side), 23)
     -- Moving the source selection must not change this comparison's position.
     local tree = poi.get_remote_source()
     poi.navigate(tree, 1)
@@ -93,7 +121,8 @@ test.describe("Commit remote POIs", function()
     local second
     second, side = ready()
     test.contains(table.concat(side.buffer.lines), "after src/b.lua")
-    test.equal(side.buffer:get_selection(), 2)
+    side:with_selection_state(function() side.buffer:set_selection(2, 1) end)
+    test.equal(selected_line(side), 2)
     poi.navigate(side, -1)
     test.equal(destination.current_view, second)
     deadline = system.get_time() + 3
@@ -101,9 +130,11 @@ test.describe("Commit remote POIs", function()
     test.not_equal(destination.current_view, second)
     first, side = ready()
     test.contains(table.concat(side.buffer.lines), "after src/a.lua")
-    test.equal(side.buffer:get_selection(), 5)
+    -- Set a known point before checking local reverse navigation after re-entry.
+    side:with_selection_state(function() side.buffer:set_selection(23, 1) end)
+    test.equal(selected_line(side), 23)
     poi.navigate(side, -1)
-    test.equal(side.buffer:get_selection(), 2)
+    test.equal(selected_line(side), 2)
     poi.navigate(side, -1)
     test.equal(destination.current_view, first)
     poi.navigate(side, 1)

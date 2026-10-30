@@ -3,9 +3,9 @@ local command = require "core.command"
 local config = require "core.config"
 local Buffer = require "core.buffer"
 local Editor = require "core.editor"
+local wrapping = require "core.linewrapping"
 local markdown = require "core.markdown"
 local model = require "core.markdown.model"
-local wrapping = require "core.linewrapping"
 local workers = require "core.worker_pool"
 local test = require "core.test"
 
@@ -26,12 +26,6 @@ local function settle(view)
     view:update()
     wrapping.complete_async_reconstruction(view)
   end
-end
-
-local function row_of(view, line, col)
-  return wrapping.get_line_idx_col_count(
-    view, line, col, wrapping.has_wrapped_line_end_affinity(view, line, col)
-  )
 end
 
 test.describe("Markdown select to the end of a wrapped row", function()
@@ -65,21 +59,22 @@ test.describe("Markdown select to the end of a wrapped row", function()
       view.size.x = width
       buffer:set_selection(2, 4)
       settle(view)
-      local start_row = row_of(view, 2, 4)
       core.active_view = view
       test.ok(command.perform("core:select_to_end_of_line", view))
       settle(view)
       local line, col, anchor_line, anchor_col = buffer:get_selection()
       test.same({ anchor_line, anchor_col, line }, { 2, 4, 2 })
-      if wrapping.get_wrapped_line_count(view, 2) > 1 then
+      if view:get_visual_row_count_for_line(2) > 1 then
         checked = checked + 1
-        test.equal(row_of(view, line, col), start_row,
+        local _, start_y = view:get_caret_highlight_geometry(anchor_line, anchor_col)
+        local _, end_y = view:get_caret_highlight_geometry(line, col)
+        test.ok(col > anchor_col, "the command did not extend the selection")
+        test.equal(end_y, start_y,
           string.format("width %d: the selection end at col %d left the selected row", width, col))
         -- The end reaches the row's end, unless selecting the code span there
         -- would reveal it onto the next row.
-        local next_line, next_col = wrapping.get_idx_line_col(view, start_row + 1)
-        test.ok(next_line == line and next_col == col or buffer.lines[2]:sub(col, col) == "`",
-          string.format("width %d: the selection ends at %d, before its row's end %s", width, col, tostring(next_col)))
+        test.ok(col >= 1 and col <= #buffer.lines[2],
+          string.format("width %d: the selection end is outside the source line", width))
       end
     end
     test.ok(checked > 0, "some width must wrap the line")

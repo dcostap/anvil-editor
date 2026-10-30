@@ -7,6 +7,7 @@ local markdown = require "core.markdown"
 local footnotes = require "core.markdown.footnotes"
 local model = require "core.markdown.model"
 local panes = require "core.panes"
+local renderer = require "renderer"
 local style = require "core.style"
 local workers = require "core.worker_pool"
 local test = require "core.test"
@@ -66,6 +67,13 @@ local function click(view, x, y)
     keymap.on_mouse_pressed("left", x, y, 1)
   end
   view:on_mouse_released("left", x, y)
+end
+
+local function draw_view(view)
+  renderer.begin_frame(core.window)
+  local ok, err = pcall(view.draw, view)
+  renderer.end_frame()
+  if not ok then error(err, 0) end
 end
 
 -- The numbers of the footnote badges on a line, in order.
@@ -449,8 +457,8 @@ test.describe("Markdown footnotes", function()
     view.buffer:set_selection(1, 18)
     test.ok(command.perform("markdown:edit_footnote"))
     local input = footnotes.editing_input(view)
-    view:update()
-    view.__footnote_layout = footnotes.layout(view)
+    draw_view(view)
+    test.not_nil(footnotes.layout(view), "drawing did not prepare footnote hit testing")
     local x, y = input:get_line_screen_position(1, 3)
     click(view, x + 1, y + 2)
     local line, col = input.buffer:get_selection()
@@ -460,9 +468,8 @@ test.describe("Markdown footnotes", function()
 
   test.it("places the caret where the first click on a card lands", function(context)
     local view = open_note_view(context, "From Terrahawks[^1].\n\n[^1]: A great show\n\nend")
-    view:update()
+    draw_view(view)
     local layout = test.not_nil(footnotes.layout(view))
-    view.__footnote_layout = layout
     local x, y = layout.cards[1].text_view:get_line_screen_position(1, 3)
     click(view, x + 1, y + 2)
     local input = test.not_nil(footnotes.editing_input(view))

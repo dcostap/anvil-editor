@@ -7,6 +7,7 @@ local centered_editor = require "plugins.centered_editor"
 local wrapping = require "core.linewrapping"
 local test = require "core.test"
 local worker_pool = require "core.worker_pool"
+local renwindow = require "renwindow"
 
 local function wait_ready(buffer)
   local deadline = system.get_time() + 5
@@ -19,10 +20,7 @@ local function wait_ready(buffer)
   test.equal(instance.status, "ready", instance.reason)
 end
 
--- The reading lane draws with substituted geometry every frame. An image
--- block's layout depends on width, so a plan keyed by that temporary width
--- was rebuilt once for update and once for drawing, every frame.
-test.it("keeps a centered image block's render plan while the lane draws", function()
+test.it("draws a centered image block inside the reading lane", function()
   local cfg = config.plugins.centered_editor
   local old_pane_views_only = cfg.pane_views_only
   local old_live, old_images = config.markdown_live_editor, config.markdown_live_render_images
@@ -48,12 +46,27 @@ test.it("keeps a centered image block's render plan while the lane draws", funct
     wrapping.complete_async_reconstruction(view)
     test.ok(centered_editor.should_center(view), "the view is not centered")
 
-    local plan = test.not_nil(view:get_line_render(3))
-    local drawn = centered_editor.with_editor_geometry(view, function()
-      return view:get_line_render(3)
-    end)
-    test.ok(drawn == plan, "drawing in the reading lane rebuilt the image line's plan")
-    test.ok(view:get_line_render(3) == plan, "leaving the reading lane rebuilt the image line's plan")
+    local draws = {}
+    local old_draw, old_scaled = renderer.draw_canvas, renderer.draw_canvas_scaled
+    renderer.draw_canvas = function(image, x, y)
+      local width, height = image:get_size()
+      draws[#draws + 1] = { x = x, y = y, width = width, height = height }
+    end
+    renderer.draw_canvas_scaled = function(_, x, y, width, height)
+      draws[#draws + 1] = { x = x, y = y, width = width, height = height }
+    end
+    local window = renwindow.create("centered-image-plan", 1600, 700)
+    renderer.begin_frame(window)
+    local drawn, draw_error = pcall(view.draw, view)
+    renderer.end_frame()
+    renderer.draw_canvas, renderer.draw_canvas_scaled = old_draw, old_scaled
+    if not drawn then error(draw_error, 0) end
+    test.equal(#draws, 1, "the image block did not draw")
+    local editor_x, editor_width = centered_editor.get_editor_rect(view)
+    test.ok(draws[1].x >= editor_x, "the image starts outside the reading lane")
+    test.ok(draws[1].x + draws[1].width <= editor_x + editor_width,
+      "the image ends outside the reading lane")
+    test.ok(draws[1].width > 0 and draws[1].height > 0)
   end)
   markdown.live_render.release(view, "test")
   markdown_model.close(buffer, "test")
