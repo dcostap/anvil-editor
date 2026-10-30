@@ -14,8 +14,19 @@ _Avoid_: Host window, Project window
 
 **App State**:
 Global editor state that persists across launches, including recent Projects, Window placement, and previous find/replace text.
-It includes each Window's loaded Projects, Selected Project, and Project Sidebar visibility and folds; Dormant Projects remain dormant. It also includes whether Alt Navigation is on.
+It includes each Window's loaded Projects, Selected Project, and Project Sidebar visibility and folds; Dormant Projects remain dormant. It also includes whether Alt Navigation is on, and the recently closed Anvil Windows.
 _Avoid_: Session
+
+**Window Close**:
+An action that closes one Anvil Window. Its Projects become Dormant. Closing the last Anvil Window ends Anvil, and the next start opens that Window again.
+_Avoid_: Quit
+
+**Close All Windows**:
+An action that closes every Anvil Window and keeps them all for the next start. A Cancel keeps the Windows that are still open.
+_Avoid_: Quit, Exit
+
+**Reopen Closed Window**:
+An action that opens the Anvil Window that closed last, with its placement and Projects.
 
 **Project**:
 A loaded directory root in Anvil. A project is not the whole visible editor state.

@@ -401,6 +401,17 @@ Shutdown captures their paths before closing the hosted processes. Dormant Proje
 Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.
 Run `anvil:shell-state` and the `restore-loaded` shell launch probe after changes.
 
+Window Close (`core:close_current_window`, the Close button, Alt+F4) closes one Window. Its Projects become Dormant.
+The last Window's Close ends the shell, and App State keeps that Window. Other Windows go on the closed-Window list.
+Close All Windows (`core:close_all_windows`) saves every Window first, then turns off App State saves. The next start opens them all.
+It closes one Window at a time, front Window first. The next Window closes after each Project of the previous Window has decided.
+It asks once about the Terminal Sessions of all Windows (`ask_all`). Later Windows reuse that choice.
+A Cancel stops Close All and turns saves on again. Windows that closed before the Cancel go on the closed-Window list.
+The shell's quit event uses Close All. Taskbar "Close all windows" sends one Window Close to each Window.
+Reopen Closed Window (`core:reopen_closed_window`) opens the newest closed Window with its ID, bounds, Selected Project and other loaded Projects.
+App State keeps 10 closed Windows. A Window without a Project does not go on the list. A Project that another Window shows stays there.
+Run `anvil:shell-state` and the `windows-close-all-terminals`, `windows-close-all-cancel` and `windows-close-reopen` shell probes after changes.
+
 Alt Navigation copies the user's AutoHotkey script (`alt_navigation.ahk`) for a PC without it. `core:toggle_alt_navigation` turns it on or off.
 The shell owns it, because all keys pass through the shell. Shell App State saves it. The default is off.
 `src/alt_navigation.c` turns one Alt chord into key events, such as Alt+J into Ctrl+Left. Chords match physical keys, so the Ñ key is `;` on a US layout.
