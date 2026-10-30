@@ -1,6 +1,15 @@
 local ready = dofile("tests/fixtures/terminal_ready.lua")
 local test = require "core.test"
 local terminal = require "plugins.terminal"
+local next_id = 0
+
+local function console_width(path)
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  local width = file:read("*n")
+  file:close()
+  return width
+end
 
 local function wait_for(view, predicate, seconds)
   -- Shells start slowly on a loaded machine. The wait ends as soon as the predicate holds.
@@ -27,9 +36,22 @@ end
 local function check_input_after(widths)
   test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
   terminal._set_native_for_tests(nil)
-  local view = ready(terminal.open { cwd = system.getcwd(), shell = "powershell.exe -NoLogo -NoProfile" })
+  next_id = next_id + 1
+  local root = USERDIR .. PATHSEP .. "terminal-resize-" .. next_id
+  test.ok(system.mkdir(root))
+  local width_path = root .. PATHSEP .. "width.txt"
+  local view
   local ok, err = pcall(function()
+    view = terminal.open {
+      cwd = system.getcwd(),
+      shell = 'powershell.exe -NoLogo -NoProfile -NoExit -File tests/fixtures/terminal_resize_prompt.ps1 -WidthFile "'
+        .. width_path .. '"',
+    }
+    ready(view)
     test.ok(wait_for(view, function() return cursor_line(view):find("PS ", 1, true) end))
+    test.ok(view.session:resize(80, 24, 8, 16))
+    test.ok(wait_for(view, function() return console_width(width_path) == 80 end),
+      "the shell did not receive the initial width")
     test.ok(view.session:write("1..40 | % { 'w' * 300 }; 'ANVIL_DONE'\r"))
     test.ok(wait_for(view, function()
       local line, text = cursor_line(view)
@@ -41,15 +63,17 @@ local function check_input_after(widths)
     test.ok(wait_for(view, function() return cursor_line(view):find("PS .*ANVIL_$") end))
     for _, cols in ipairs(widths) do
       test.ok(view.session:resize(cols, 30, 8, 16))
-      -- ConPTY reads resizes and input from separate pipes.
-      coroutine.yield(0.5)
+      -- The local snapshot changes before ConPTY processes its resize pipe.
+      test.ok(wait_for(view, function() return console_width(width_path) == cols end),
+        "the shell did not receive width " .. cols)
     end
     test.ok(view.session:write("TYPED"))
     test.ok(wait_for(view, function()
       return cursor_line(view):find("PS .*ANVIL_TYPED")
     end, 10), "typed input left the prompt: " .. select(2, cursor_line(view)))
   end)
-  view:on_close()
+  if view then view:on_close() end
+  test.ok(test.remove_tree(root))
   test.ok(ok, err)
 end
 
