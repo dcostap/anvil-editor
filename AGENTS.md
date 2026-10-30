@@ -18,7 +18,7 @@ Compiling produces binaries in:
 - `build-windows-x86_64\src\anvil.com`
 
 These build-directory binaries retain native debug information. The dev
-portable install strips its executable so the daily launcher starts quickly.
+portable app strips its executable so it starts quickly.
 
 Dev builds load Lua/data files beside the exe. A runnable dev app is produced by `meson install` into `..\anvil-portable`.
 
@@ -34,7 +34,7 @@ Later runs reuse the same complete runtime. Users only distribute `anvil.exe`.
 The standalone build runs `tests\gui\smoke\standalone-runtime-test.ps1`.
 
 Keep the dev build external-data workflow. Do not embed source data in the
-daily dev executable. The standalone build uses its own
+dev portable app's executable. The standalone build uses its own
 `build-windows-x86_64-standalone` directory.
 
 The standalone build needs MSYS2, MinGW64 GCC, Ninja, CMake, Python, Meson,
@@ -330,7 +330,7 @@ Use the BAT files in the repo root
 - `setup-anvil-dev.bat`
   - first-time setup
   - builds the editor
-  - installs a dev portable app to `..\anvil-portable`
+  - installs the dev portable app to `..\anvil-portable`
   - creates Windows junctions for editable data directories, including `data\core`, `data\plugins`, `data\colors`, and `data\widget`
   - launches the app
 
@@ -349,20 +349,20 @@ Use the BAT files in the repo root
 
 - `launch-anvil-debug.bat`
   - explicitly launches the unstripped `build-windows-x86_64\src\anvil.exe`
-  - uses the normal dev portable data and user directory
+  - uses the data and user folders of the dev portable app
   - use this only when native debugger/symbol information is needed
 
 `scripts/start-dev-anvil.ps1` starts the app after setup and updates. Do not replace it with `Start-Process` or CMD `start`.
 Those calls keep the caller's Windows job. A later Terminal Close can then kill the restarted editor.
-Run `anvil:dev-update-launch` after changes. It uses a windowless test app, not the daily editor.
+Run `anvil:dev-update-launch` after changes. It uses a windowless test app, not the dev portable app.
 
-Daily launcher target:
+The dev portable app's executable:
 
 ```text
 ..\anvil-portable\anvil.exe
 ```
 
-The daily launcher is the stripped executable. Do not switch it back to the
+It is the stripped executable. Do not switch it back to the
 unstripped build output; use `launch-anvil-debug.bat` for native debugging.
 
 ## Launch mode
@@ -489,7 +489,7 @@ Run the `fault-present`, `fault-resize`, `fault-release`, `fault-device`, `sideb
 
 ## Renderer selection
 
-The dev portable build defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.
+The dev portable app defaults to the D3D11 command renderer on Windows. Do not use the old two-flag test setup (`ANVIL_D3D11` plus `ANVIL_D3D11_COMMANDS`) for normal launches.
 
 Use one runtime switch only when needed:
 
@@ -511,9 +511,9 @@ The old personal `~\.config\anvil` workflow has been promoted into the fork:
 
 Keep personal machine-only state out of the repo, such as app state, workspace data, logs, caches, and fuzzy-search recent command history.
 
-### DATADIR vs USERDIR in the dev portable install
+### DATADIR vs USERDIR in the dev portable app
 
-`DATADIR` is the bundled app data root. In the dev portable install, the editable data directories are Windows junctions back to this repo:
+`DATADIR` is the bundled app data root. In the dev portable app, the editable data directories are Windows junctions back to this repo:
 
 - `anvil-portable\data\core    -> anvil-editor\data\core`
 - `anvil-portable\data\plugins -> anvil-editor\data\plugins`
@@ -741,7 +741,7 @@ Do not add a separate query pattern for each pointer depth or similar syntax nes
 
 Built-in plugins live in this repo under `data\plugins`.
 
-The dev portable install uses junctions:
+The dev portable app uses junctions:
 
 - `anvil-portable\data\core    -> anvil-editor\data\core`
 - `anvil-portable\data\plugins -> anvil-editor\data\plugins`
@@ -964,7 +964,7 @@ When adding or changing runtime/editor behavior, prefer adding or adjusting Lua 
 Read [tools/RENDER_PERF_GATE.md](tools/RENDER_PERF_GATE.md) before checking rendered pixels.
 The existing runner uses a private desktop, isolated app data, and internal actions.
 It captures the D3D11 backbuffer or software surface, not the interactive desktop.
-It does not use the daily portable app or its user state.
+It does not use the dev portable app or its user state.
 
 Use a relevant scenario:
 
@@ -978,7 +978,7 @@ If no suitable scenario exists, use in-process UI tests until you add one.
 
 Do not capture the screen with `CopyFromScreen`, `PrintWindow`, or an ad hoc OS script.
 Do not find, focus, move, close, or reuse the user's windows for verification.
-Do not launch the daily portable app as an isolated test process.
+Do not launch the dev portable app as an isolated test process.
 Its adjacent `user` directory takes priority over `ANVIL_USERDIR`.
 ### README screenshots
 
@@ -1017,15 +1017,15 @@ python -I -c "import os, sys; d = sys.argv[1]; [os.rmdir(p) for p in (os.path.jo
 
 ## Finalizing changes / updating the dev portable app
 
-When a change or feature is finished and non-Lua files were edited, run the relevant BAT file from the repo root so `..\anvil-portable` is updated. For non-Lua changes, usually run:
+The dev portable app runs the main checkout. Its Lua shows after a reload. Its native code shows after `update-anvil-dev-build.bat`.
 
-```text
-.\update-anvil-dev-build.bat
-```
+In a worktree, build and test in the worktree's own build folder. Do not run the portable app's update there.
+
+After you merge to master, run the update from the main checkout if your change has non-Lua files.
+
+The update closes and restarts the user's dev portable app. If it stops at an unsaved-file prompt, report it and do not retry. If the build fails in code that you did not change, report it and do not fix it.
 
 From the agent/MSYS bash, use the `cmd.exe` double-slash form documented below.
-
-C/C++ edits require a rebuild and restart. For edits under junctioned data directories, validate syntax and reload or restart Anvil.
 
 
 ### Running BAT files from the agent/MSYS bash
@@ -1143,7 +1143,7 @@ When updating Tree-sitter Markdown, verify this patch still applies. Remove it o
 
 ## Why not Program Files for dev?
 
-Do not use `C:\Program Files` for this dev install. It causes admin/write-permission issues and makes junction/rebuild workflows annoying. Use the writable dev portable folder instead.
+Do not use `C:\Program Files` for this dev install. It causes admin/write-permission issues and makes junction/rebuild workflows annoying. Use the writable folder of the dev portable app instead.
 
 A real installer for `C:\Program Files\Anvil` can be created later for deployment.
 
