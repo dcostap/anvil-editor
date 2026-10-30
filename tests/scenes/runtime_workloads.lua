@@ -22,7 +22,7 @@ end
 local function start_process_finalization_workload(context)
   context.processes = {}
   context.weak_processes = setmetatable({}, { __mode = "v" })
-  for i = 1, 8 do
+  for i = 1, context.settings.process_count or 8 do
     local command = PLATFORM == "Windows"
       and { "ping", "-n", "31", "127.0.0.1" }
       or shell_command("trap '' TERM; exec sleep 30")
@@ -38,6 +38,29 @@ local function start_process_finalization_workload(context)
 end
 
 local workloads = {
+  idle_setup = {
+    setup = function(context)
+      -- Model an unfocused Window while setup waits for background work.
+      -- The private harness owns this process; no desktop focus changes.
+      local window_has_focus = system.window_has_focus
+      system.window_has_focus = function() return false end
+      core.add_background_thread(function()
+        coroutine.yield(10)
+        context.setup_ready = true
+        while not context.setup_completed do coroutine.yield(0.1) end
+      end)
+      repeat coroutine.yield(0.01) until context.setup_ready
+      system.window_has_focus = window_has_focus
+      context.setup_completed = true
+    end,
+    run = function(context)
+      context.setup_observed = context.setup_completed
+    end,
+    verify = function(context)
+      return context.setup_observed == true, "setup completed while unfocused"
+    end,
+  },
+
   scheduler_yield = {
     run = function(context)
       core.add_thread(function()
@@ -71,10 +94,11 @@ local workloads = {
       collectgarbage("collect")
     end,
     verify = function(context)
-      for i = 1, 8 do
+      local count = context.settings.process_count or 8
+      for i = 1, count do
         if context.weak_processes[i] then return false end
       end
-      return true, "8 process handles finalized"
+      return true, string.format("%d process wrappers collected through GC", count)
     end,
   },
 

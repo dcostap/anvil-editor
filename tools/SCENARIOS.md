@@ -51,6 +51,22 @@ A scenario can also set `churn_interval`. A background thread then edits
 modified files in the fixture during the run, as a build or a coding agent
 does. File watchers and Git status refreshes stay busy during measurement.
 
+## Focused runtime workloads
+
+`text-poi-long-field` parses a 16,000-byte field followed by a file location. `text-poi-many-locations` parses 22,000 locations. `text-poi-limited-locations` uses the same input but requests only 32 results. Keep the limited case: limiting returned rows must also stop unnecessary scanning.
+
+`process-finalize-handles` drops eight process wrappers and requests two large GC steps. It measures GC and finalization together. Run `process-finalize-gc-control` beside it to measure the same GC requests without process wrappers. Separate runs do not give an exact native-finalizer subtraction.
+
+These cases measure one action per process. Their frame p95 describes that heavy frame, not sustained editing.
+
+`benchmark-idle-setup` checks that setup continues while its private Window is idle and unfocused. It models loss of focus at the system API boundary; it does not change desktop focus. Run it after benchmark scheduling changes:
+
+```sh
+python tools/run_scenarios.py --scenario benchmark-idle-setup --runs 1 --no-build
+```
+
+Setup uses a background coroutine so it can continue while the Window is unfocused. This is still the UI thread. Setup must yield while waiting and use workers for expensive work.
+
 ## Fixtures
 
 Fixtures are deterministic. The first build of a spec is cached under

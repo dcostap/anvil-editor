@@ -96,6 +96,9 @@ class Scenario:
 
 
 SCENARIOS: dict[str, Scenario] = {
+    "benchmark-idle-setup": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("harness",),
+        settings={"workload": "idle_setup"}, targets=1, timeout_seconds=45),
     "terminal-autoscroll-history": Scenario(
         "terminal_autoscroll", FolderSpec("terminal-scroll", files=1), actions=80,
         suites=("terminal",)),
@@ -113,6 +116,9 @@ SCENARIOS: dict[str, Scenario] = {
     "process-finalize-handles": Scenario(
         "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
         settings={"workload": "process_finalize"}, targets=1),
+    "process-finalize-gc-control": Scenario(
+        "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
+        settings={"workload": "process_finalize", "process_count": 0}, targets=1),
     "process-read-lines": Scenario(
         "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
         settings={"workload": "process_read_lines"}, targets=1),

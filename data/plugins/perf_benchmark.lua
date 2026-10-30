@@ -1989,7 +1989,9 @@ function perf.on_frame(snapshot)
   if not ok then fail(err) end
 end
 
-core.add_thread(function()
+-- Setup can wait without redrawing. Keep it scheduled while the private
+-- Window is idle and unfocused, as with the benchmark's background work.
+core.add_background_thread(function()
   local ok, err = xpcall(setup_scenario, debug.traceback)
   if not ok then
     fail(err)
