@@ -733,14 +733,13 @@ static bool attach_client(TerminalHost *host) {
       offset += count;
     }
     ok = ok && queue_record(host, ANVIL_TERMINAL_REPLAY_END, NULL, 0);
-    if (!host->prepared) {
-      AnvilTerminalStatus status = { host->busy };
-      snprintf(status.agent_app, sizeof(status.agent_app), "%s", host->agent.app);
-      snprintf(status.agent_state, sizeof(status.agent_state), "%s", host->agent.state);
-      snprintf(status.agent_model, sizeof(status.agent_model), "%s", host->agent_model);
-      ok = ok && queue_record(host, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
-      host->status_pending = false;
-    }
+    /* Prepared clients need Pi's live status, but still have no saved session record. */
+    AnvilTerminalStatus status = { host->busy };
+    snprintf(status.agent_app, sizeof(status.agent_app), "%s", host->agent.app);
+    snprintf(status.agent_state, sizeof(status.agent_state), "%s", host->agent.state);
+    snprintf(status.agent_model, sizeof(status.agent_model), "%s", host->agent_model);
+    ok = ok && queue_record(host, ANVIL_TERMINAL_STATUS, &status, sizeof(status));
+    host->status_pending = false;
   }
   host->replaying = false;
   WakeAllConditionVariable(&host->space);
@@ -1136,7 +1135,9 @@ int anvil_terminal_host_main(int argc, char **argv) {
     }
     uint64_t sent_at = InterlockedCompareExchange64(&host.exit_sent_ms, 0, 0);
     if (exit_queued && (!host.attached || (sent_at && now - sent_at > 3000))) break;
-    if (!host.prepared && !exited_at && now >= busy_probe_at) {
+    /* Unused shells need no process scans. A prepared program needs them to clear stale agent status. */
+    if ((!host.prepared || InterlockedCompareExchange(&host.agent_revision, 0, 0)) &&
+        !exited_at && now >= busy_probe_at) {
       busy_probe_at = now + (host.attached ? 500 : 2000);
       /* Take the request before the snapshot. A cached idle status cannot release it. */
       LONG editor_request = InterlockedExchange(&host.editor_request, 0);
@@ -1181,7 +1182,7 @@ int anvil_terminal_host_main(int argc, char **argv) {
     }
     EnterCriticalSection(&host.lock);
     /* Never block the monitor on a full client queue. Send the latest status later. */
-    if (!host.prepared && host.attached && !host.replaying && !host.client_stop && host.status_pending &&
+    if (host.attached && !host.replaying && !host.client_stop && host.status_pending &&
         host.queued + sizeof(HostRecord) + sizeof(AnvilTerminalStatus) <= CLIENT_QUEUE_LIMIT) {
       AnvilTerminalStatus status = { host.busy };
       snprintf(status.agent_app, sizeof(status.agent_app), "%s", host.agent.app);

@@ -72,6 +72,13 @@ They also close when their client disconnects. An activated shell keeps the norm
 Preparation uses extra memory and runs the shell profile early.
 Run `runtime/terminal_prepared.lua` and `ui/terminal_prepared.lua` after changes.
 
+Copy View on a running Pi Terminal starts `pi` in a new Terminal with the same directory and shell. It starts a fresh conversation with Pi's normal defaults, not the source conversation or its command arguments.
+The visible Selected Project also prepares one Pi while at least one of its Panes runs Pi. The focused Pi supplies the directory and shell. Other Views keep the last Pi's choice while that Pi runs.
+A copy uses the prepared Pi only when its directory, shell, Project, scrollback limit and launch environment match. Other copies start normally. Normal Terminals never take a prepared Pi.
+The prepared Pi has no Terminal record or saved screen until a Pane takes it. It closes when its Project becomes hidden, its last Pi ends, or preparation is disabled. Startup must report Pi idle within 30 seconds. A failed preparation does not retry until its launch settings change or the Project becomes visible again.
+`config.plugins.terminal.prepare_pi` defaults to true and has a separate Terminal setting. It runs Pi startup, including extensions, early. It does not copy live model or thinking changes from the source Pi.
+Run `ui/terminal_pi_prepared.lua`, `ui/terminal_prepared.lua` and `runtime/terminal_prepared.lua` after changes.
+
 A Terminal Session is busy while its shell has a child process.
 A new shell is idle until its host reports busy state, so closing it during startup asks nothing.
 A session that attaches to an existing host counts as busy until that report, because a command can still run there.

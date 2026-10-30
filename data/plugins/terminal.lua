@@ -51,6 +51,13 @@ terminal_config.config_spec = {
     default = terminal_config.prepare_session,
   },
   {
+    label = "Prepare Pi",
+    description = "Keep one unused Pi ready while the visible Project has a Pi Pane. Runs Pi startup early.",
+    path = "prepare_pi",
+    type = "toggle",
+    default = terminal_config.prepare_pi,
+  },
+  {
     label = "Shell Command",
     description = "Command that starts new terminal sessions. Empty uses PowerShell.",
     path = "shell",
@@ -327,8 +334,9 @@ function TerminalView:new(options)
   TerminalView.super.new(self)
   self.terminal_capture_owner = {}
   options = options or {}
-  -- An attached session can contain work from another View or run.
-  self.input_used = options.session_id ~= nil
+  -- An attached session can contain work. A Pi copy must stay until its command starts.
+  self.input_used = options.session_id ~= nil or options.pi == true
+  self.start_pi = options.pi == true and not options.session_id
   self.context = "workspace"
   self.terminal_view = true
   self.find = TerminalFind(self)
@@ -385,7 +393,9 @@ function TerminalView:new(options)
       core.log_quiet("Terminal Session %s record rejected: %s", tostring(options.session_id), tostring(record_error))
     end
   end
-  local session = not options.session_id and take_prepared_session(native_options)
+  local session, pi_ready
+  if not options.session_id then session, pi_ready = take_prepared_session(native_options, options.pi) end
+  if pi_ready then self.start_pi = nil end
   local start_error, transport_error
   if not session then session, start_error, transport_error = native.new(native_options) end
   if record and not session and transport_error ~= 231 and transport_error ~= 5 then
@@ -653,6 +663,7 @@ function TerminalView:duplicate()
   return TerminalView {
     cwd = self:get_cwd(),
     shell = self.launch_options.shell,
+    pi = self.state == "running" and self.agent_app == "pi",
   }
 end
 
@@ -979,6 +990,13 @@ function TerminalView:service_session(include_rows)
     perf_detail("terminal_native_update_ms", (system.get_time() - update_started) * 1000)
   end
   local state_changed = self:apply_status(status)
+  if self.start_pi and status.kind == "running" and not status.replaying then
+    self.start_pi = nil
+    -- Use the shell's Pi command, including its normal PATH and profile setup.
+    local sent = self:write_input("pi\r")
+    core.log_quiet("Terminal Session %s fresh Pi launch: %s", tostring(self.session_id), sent and "sent" or "failed")
+    if not sent then core.error("Could not start Pi in the new Terminal.") end
+  end
   if status.revived and status.kind == "running" and not status.replaying then self:return_interrupted_command() end
   -- The native session may hold a screen update briefly (cursor repaint,
   -- synchronized output). Keep stepping so the held update is published even
@@ -2450,7 +2468,9 @@ function M.open_views()
   return open
 end
 
-local prepared_session, prepared_options, prepare_after, prepare_failed
+local prepared_shell = { name = "Terminal" }
+local prepared_pi = { name = "Pi", pi = true }
+local pi_source
 
 local function same_launch(a, b)
   return (a.shell or "") == (b.shell or "")
@@ -2459,32 +2479,30 @@ local function same_launch(a, b)
     and a.scrollback_lines == b.scrollback_lines
 end
 
-function M.discard_prepared_session()
-  if prepared_session then
-    prepared_session:close()
-    core.log_quiet("Prepared Terminal Session discarded")
+local function discard_prepared(slot)
+  if slot.session then
+    slot.session:close()
+    core.log_quiet("Prepared %s discarded", slot.name)
   end
-  prepared_session, prepared_options, prepare_after, prepare_failed = nil, nil, nil, nil
+  slot.session, slot.options, slot.after, slot.failed, slot.started, slot.command_sent = nil, nil, nil, nil, nil, nil
 end
 
--- The idle scheduler calls this only for the selected, visible Project.
-function M.prepare_session()
-  if not terminal_config.prepare_session or PLATFORM ~= "Windows" then
-    M.discard_prepared_session()
-    return false
-  end
-  local options = {
-    shell = terminal_config.shell,
-    cwd = start_directory(terminal_config.cwd_mode),
-    project_path = project_path("project"),
-    scrollback_lines = terminal_config.scrollback_lines,
-  }
-  if prepared_options and not same_launch(prepared_options, options) then M.discard_prepared_session() end
-  if not prepared_options then
-    prepared_options, prepare_after = options, system.get_time() + 1
-  end
-  if prepare_failed or system.get_time() < prepare_after then return false end
-  if not prepared_session then
+function M.discard_prepared_session()
+  discard_prepared(prepared_shell)
+  discard_prepared(prepared_pi)
+  pi_source = nil
+end
+
+local function prepared_ready(slot, status)
+  return status.kind == "running" and not status.replaying
+    and (not slot.pi or (status.agent_app == "pi" and status.agent_state == "idle"))
+end
+
+local function prepare(slot, options)
+  if slot.options and not same_launch(slot.options, options) then discard_prepared(slot) end
+  if not slot.options then slot.options, slot.after = options, system.get_time() + 1 end
+  if slot.failed or system.get_time() < slot.after then return false end
+  if not slot.session then
     local native, err = terminal_native()
     if native then
       local launch = common.merge(session_colors(), options)
@@ -2492,40 +2510,98 @@ function M.prepare_session()
       launch.cell_width = math.max(1, math.ceil(style.terminal_font:get_width("M")))
       launch.cell_height = math.max(1, math.ceil(style.terminal_font:get_height()))
       launch.prepared = true
-      prepared_session, err = native.new(launch)
+      slot.session, err = native.new(launch)
+      slot.started = system.get_time()
     end
-    if not prepared_session then
-      prepare_failed = true
-      core.log_quiet("Terminal preparation failed: %s", tostring(err))
+    if not slot.session then
+      slot.failed = true
+      core.log_quiet("%s preparation failed: %s", slot.name, tostring(err))
       return false
     end
-    core.log_quiet("Terminal preparation started: cwd=%s", options.cwd)
+    core.log_quiet("%s preparation started: cwd=%s", slot.name, options.cwd)
   end
-  local _, status = prepared_session:update()
-  if status.kind == "failed" or status.kind == "exited" or status.kind == "closed" then
-    prepared_session:close()
-    prepared_session, prepare_failed = nil, true
-    core.log_quiet("Terminal preparation ended: %s", status.error or status.kind)
+  local _, status = slot.session:update()
+  if slot.pi and not slot.command_sent and status.kind == "running" and not status.replaying then
+    slot.command_sent = slot.session:write("pi\r")
+  end
+  if prepared_ready(slot, status) then return true end
+  if status.kind == "failed" or status.kind == "exited" or status.kind == "closed"
+      or (slot.pi and system.get_time() - slot.started >= 30) then
+    slot.session:close()
+    slot.session, slot.failed = nil, true
+    core.log_quiet("%s preparation ended: %s", slot.name,
+      status.error or (status.kind == "running" and "Pi did not remain idle" or status.kind))
     return false
   end
-  return status.kind == "running" and not status.replaying
+  return false
 end
 
-take_prepared_session = function(options)
-  if not terminal_config.prepare_session then M.discard_prepared_session(); return end
-  if not prepared_session or not same_launch(prepared_options, options) then return end
-  local session = prepared_session
+-- The idle scheduler calls these only for the selected, visible Project.
+function M.prepare_session()
+  if not terminal_config.prepare_session or PLATFORM ~= "Windows" then
+    discard_prepared(prepared_shell)
+    return false
+  end
+  return prepare(prepared_shell, {
+    shell = terminal_config.shell,
+    cwd = start_directory(terminal_config.cwd_mode),
+    project_path = project_path("project"),
+    scrollback_lines = terminal_config.scrollback_lines,
+  })
+end
+
+local function running_pi(view)
+  return view and view.terminal_view and view.session and view.state == "running" and view.agent_app == "pi"
+end
+
+function M.prepare_pi_session()
+  if not terminal_config.prepare_pi or PLATFORM ~= "Windows" then
+    discard_prepared(prepared_pi)
+    pi_source = nil
+    return false
+  end
+  -- Prefer the focused Pi. Keep its directory while the user visits another kind of View.
+  if running_pi(core.active_view) then pi_source = core.active_view end
+  if not running_pi(pi_source) then
+    pi_source = nil
+    for _, view in ipairs(M.open_views()) do
+      if running_pi(view) then pi_source = view; break end
+    end
+  end
+  if not pi_source then discard_prepared(prepared_pi); return false end
+  return prepare(prepared_pi, {
+    shell = pi_source.launch_options.shell,
+    cwd = pi_source:get_cwd(),
+    project_path = project_path("project"),
+    scrollback_lines = terminal_config.scrollback_lines,
+  })
+end
+
+local function take_prepared(slot, options)
+  if not slot.session or not same_launch(slot.options, options) then return end
+  local session = slot.session
   local _, status = session:update()
-  if status.kind ~= "running" or status.replaying then return end
+  if not prepared_ready(slot, status) then return end
   if not session:set_colors(options) or not session:resize(
       options.cols, options.rows, options.cell_width, options.cell_height) or not session:activate() then
-    M.discard_prepared_session()
-    core.log_quiet("Prepared Terminal Session rejected; start a new shell")
+    discard_prepared(slot)
+    core.log_quiet("Prepared %s rejected; start normally", slot.name)
     return
   end
-  prepared_session, prepared_options, prepare_after, prepare_failed = nil, nil, nil, nil
-  core.log_quiet("Prepared Terminal Session used: id=%s", session:stats().session_id)
+  slot.session = nil
+  discard_prepared(slot)
+  core.log_quiet("Prepared %s used: id=%s", slot.name, session:stats().session_id)
   return session
+end
+
+take_prepared_session = function(options, pi)
+  if not terminal_config.prepare_pi then discard_prepared(prepared_pi) end
+  if not terminal_config.prepare_session then discard_prepared(prepared_shell) end
+  if pi and terminal_config.prepare_pi then
+    local session = take_prepared(prepared_pi, options)
+    if session then return session, true end
+  end
+  if terminal_config.prepare_session then return take_prepared(prepared_shell, options) end
 end
 
 function M._set_native_for_tests(native)
@@ -2985,7 +3061,9 @@ core.add_background_thread(function()
   while true do
     local mode = require("core.cli").last_command
     if not system.is_sidebar_surface() and (mode == "default" or mode == "edit") then
-      if system.window_should_render(core.window) then M.prepare_session()
+      if system.window_should_render(core.window) then
+        M.prepare_session()
+        M.prepare_pi_session()
       else M.discard_prepared_session() end
     end
     coroutine.yield(0.25)

@@ -433,6 +433,7 @@ _Avoid_: Selected View, Active View, Open View
 
 **Copy View**:
 An action that duplicates the Current View in another Pane without copying Navigation History. The source View and Pane stay unchanged. A View that cannot provide an independent duplicate cannot be copied.
+Copying a Terminal View running Pi starts a fresh Agent Session in the same directory. It does not copy the conversation.
 _Avoid_: copy Pane, copy Navigation History
 
 **Move View**:
