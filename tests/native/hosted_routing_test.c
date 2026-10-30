@@ -21,6 +21,17 @@ static bool dialogs;
 static bool sidebar_drop;
 static bool sidebar_change_drop;
 static bool ping;
+static bool loss_invalid, loss_disconnect;
+static char loss_diagnostic[4096];
+static SDL_AtomicInt loss_logged;
+static void SDLCALL capture_loss(void *data, int category, SDL_LogPriority priority, const char *message) {
+  (void)data; (void)category; (void)priority;
+  if (strstr(message, "Project shell loss cause:")) {
+    SDL_strlcpy(loss_diagnostic, message, sizeof(loss_diagnostic));
+    SDL_SetAtomicInt(&loss_logged, 1);
+  }
+  SetLastError(ERROR_ACCESS_DENIED);
+}
 static SDL_AtomicInt pong;
 static SDL_AtomicInt dialogs_checked;
 static SDL_AtomicInt pane_checked;
@@ -51,6 +62,19 @@ static int SDLCALL server(void *data) {
   if (!anvil_ipc_pipe_read(&pipe, &header, bytes, sizeof(bytes))) return 1;
   if (!anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_CONFIGURE, &config, sizeof(config), NULL, 0)) return 1;
   WaitForSingleObject(ready, 5000);
+  if (loss_invalid || loss_disconnect) {
+    if (loss_invalid) {
+      if (!anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_FOCUS, "private-text", 12, NULL, 0)) return 1;
+    } else {
+      /* Leave a valid message in the reader's last header, then close without discarding it. */
+      AnvilSurfaceInt focus = {1};
+      if (!anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_FOCUS, &focus, sizeof(focus), NULL, 0)) return 1;
+      anvil_ipc_pipe_close(&pipe);
+    }
+    SetEvent(sent);
+    WaitForSingleObject(finish, 10000);
+    return 0;
+  }
   AnvilSurfaceInt focus = {1};
   if (sidebar_change_drop)
     anvil_ipc_pipe_write(&pipe, ANVIL_SURFACE_MSG_SIDEBAR_CHANGED, NULL, 0, NULL, 0);
@@ -241,6 +265,8 @@ int main(int test_argc, char **test_argv) {
   motion_stall = test_argc > 1 && !strcmp(test_argv[1], "motion");
   dialogs = test_argc > 1 && !strcmp(test_argv[1], "dialogs");
   ping = test_argc > 1 && !strcmp(test_argv[1], "ping");
+  loss_invalid = test_argc > 1 && !strcmp(test_argv[1], "loss-invalid");
+  loss_disconnect = test_argc > 1 && !strcmp(test_argv[1], "loss-disconnect");
   AnvilSurfaceConfigure geometry = {.configuration = 7, .origin_x = 48, .origin_y = 24,
     .pixel_w = 320, .pixel_h = 240, .display_scale = 1.25f};
   AnvilSurfaceConfigure moved = geometry;
@@ -346,11 +372,31 @@ int main(int test_argc, char **test_argv) {
     for (int i = 0; i < 3; i++) CHECK(anvil_hosted_surface_show_dialog(41 + i, i, props, dialog_result, (void *)(intptr_t)i));
     SDL_DestroyProperties(props);
   }
-  if (!dialogs && !ping && !motion_stall)
+  if (loss_invalid || loss_disconnect) SDL_SetLogOutputFunction(capture_loss, NULL);
+  if (!dialogs && !ping && !motion_stall && !loss_invalid && !loss_disconnect)
     CHECK(anvil_hosted_surface_pane_request(ANVIL_SURFACE_PANE_ROUTE_DIRECT, "C:/Project",
                                            "{action=\"focus\",pane=\"pane-2\"}", 0, 0));
   SetEvent(ready);
   CHECK(WaitForSingleObject(sent, 5000) == WAIT_OBJECT_0);
+  if (loss_invalid || loss_disconnect) {
+    Uint64 deadline = SDL_GetTicks() + 10000;
+    while (!SDL_GetAtomicInt(&loss_logged) && SDL_GetTicks() < deadline) SDL_Delay(1);
+    CHECK(SDL_GetAtomicInt(&loss_logged));
+    CHECK(strstr(loss_diagnostic, "shell_pid="));
+    CHECK(!strstr(loss_diagnostic, "private-text"));
+    if (loss_invalid) {
+      CHECK(strstr(loss_diagnostic, "invalid shell packet"));
+      CHECK(strstr(loss_diagnostic, "error=13"));
+    } else {
+      CHECK(strstr(loss_diagnostic, "pipe read failed"));
+      CHECK(strstr(loss_diagnostic, "message=0 bytes=0"));
+      CHECK(strstr(loss_diagnostic, "error=109 "));
+    }
+    SetEvent(finish);
+    SDL_WaitThread(thread, NULL);
+    puts("PASS connection loss identifies the original cause without message contents or stale headers");
+    return 0;
+  }
   SDL_Delay(50);
   if (dialogs) {
     CHECK(SDL_GetAtomicInt(&dialogs_checked) == 1);

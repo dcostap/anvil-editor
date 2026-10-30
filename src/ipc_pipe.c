@@ -13,11 +13,19 @@ bool anvil_ipc_pipe_init(AnvilIPCPipe *pipe, HANDLE handle, uint16_t version,
   pipe->version = version;
   pipe->max_payload = max_payload;
   pipe->timeout_ms = INFINITE;
+  DWORD error = ERROR_SUCCESS;
   pipe->stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (!pipe->stop_event) error = GetLastError();
   pipe->read_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (!pipe->read_event && !error) error = GetLastError();
   pipe->write_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (!pipe->write_event && !error) error = GetLastError();
   if (!pipe->read_event || !pipe->write_event || !pipe->stop_event) {
+    SDL_Log("IPC pipe initialization failed: handle=%p read_event=%d write_event=%d stop_event=%d error=%lu",
+            (void *)handle, pipe->read_event != NULL, pipe->write_event != NULL,
+            pipe->stop_event != NULL, (unsigned long)error);
     anvil_ipc_pipe_close(pipe);
+    SetLastError(error);
     return false;
   }
   InitializeCriticalSection(&pipe->write_lock);
@@ -142,13 +150,24 @@ bool anvil_ipc_pipe_write(AnvilIPCPipe *pipe, uint16_t type,
                               const void *payload, uint32_t size,
                               const void *tail, uint32_t tail_size) {
   if (!pipe || !pipe->handle) return false;
-  if (size > pipe->max_payload || tail_size > pipe->max_payload - size) return false;
+  if (size > pipe->max_payload || tail_size > pipe->max_payload - size) {
+    SDL_Log("IPC outbound-size rejected: handle=%p type=%u bytes=%lu tail_bytes=%lu max_payload=%lu error=%lu",
+            (void *)pipe->handle, type, (unsigned long)size, (unsigned long)tail_size,
+            (unsigned long)pipe->max_payload, (unsigned long)ERROR_INVALID_DATA);
+    SetLastError(ERROR_INVALID_DATA);
+    return false;
+  }
   uint32_t total = size + tail_size;
 
   uint8_t stack_buffer[1024];
   size_t record_size = sizeof(AnvilIPCHeader) + total;
   uint8_t *record = record_size <= sizeof(stack_buffer) ? stack_buffer : malloc(record_size);
-  if (!record) return false;
+  if (!record) {
+    SDL_Log("IPC outbound allocation failed: handle=%p type=%u bytes=%llu error=%lu",
+            (void *)pipe->handle, type, (unsigned long long)record_size, (unsigned long)ERROR_NOT_ENOUGH_MEMORY);
+    SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    return false;
+  }
   AnvilIPCHeader header = { total, type, pipe->version };
   memcpy(record, &header, sizeof(header));
   if (size) memcpy(record + sizeof(header), payload, size);

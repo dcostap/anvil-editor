@@ -676,8 +676,14 @@ static void free_message(ShellMessage *message) {
   free(message);
 }
 enum { FAILURE_ALLOC = 1, FAILURE_EVENT, FAILURE_PACKET, FAILURE_OVERFLOW };
-static void report_transport_failure(ShellProject *project, int reason) {
-  SDL_CompareAndSwapAtomicInt(&project->transport_failure, 0, reason);
+static void report_transport_failure(ShellProject *project, int reason, const char *stage,
+                                      uint16_t type, size_t bytes) {
+  if (SDL_CompareAndSwapAtomicInt(&project->transport_failure, 0, reason))
+    SDL_Log("Shell transport failure: Project=%u connection=%u pid=%lu Sidebar=%d stage=%s reason=%d "
+            "type=%u bytes=%llu inbound_bytes=%d queue_limit=%u SDL=%s",
+            project->id, project->connection, (unsigned long)project->process.dwProcessId, project->sidebar,
+            stage, reason, type, (unsigned long long)bytes, SDL_GetAtomicInt(&project->inbound_bytes),
+            SHELL_WRITE_QUEUE_LIMIT, reason == FAILURE_EVENT ? SDL_GetError() : "not-applicable");
   SDL_Event event = {0};
   event.type = shell.event_type;
   event.user.code = SHELL_EVENT_FRAME;
@@ -716,6 +722,26 @@ static void fail_connection(ShellProject *project, const char *cause) {
   if (!window) return;
   SDL_Log("Shell connection failed: %s; Project=%u connection=%u", cause, project->id,
           project->connection);
+  if (project->state != SHELL_FAILED) {
+    DWORD code = 0;
+    bool known = project->process.hProcess && GetExitCodeProcess(project->process.hProcess, &code);
+    DWORD status = project->process.hProcess ? WaitForSingleObject(project->process.hProcess, 0) : WAIT_FAILED;
+    SDL_LockMutex(project->lock);
+    size_t outbound = project->queue_bytes;
+    bool frame_pending = project->frame_pending;
+    SDL_UnlockMutex(project->lock);
+    SDL_Log("Shell failure context: Project=%u connection=%u pid=%lu Window=%u Sidebar=%d state=%d "
+            "connected=%d runtime_ready=%d intentional_exit=%d exit_announced=%d closing=%d "
+            "process_wait=%lu exit_known=%d exit_hex=0x%08lx inbound_bytes=%d outbound_bytes=%llu "
+            "frame_pending=%d configuration=%llu render_enabled=%u reader_done=%d writer_done=%d path=%s",
+            project->id, project->connection, (unsigned long)project->process.dwProcessId, project->window_id,
+            project->sidebar, project->state, project->connected, project->runtime_ready,
+            project->intentional_exit, project->exit_announced, project->close_requested_ns != 0,
+            (unsigned long)status, known, (unsigned long)code, SDL_GetAtomicInt(&project->inbound_bytes),
+            (unsigned long long)outbound, frame_pending, (unsigned long long)project->last_config.configuration,
+            project->last_config.render_enabled, SDL_GetAtomicInt(&project->reader_done),
+            SDL_GetAtomicInt(&project->writer_done), project->project_path ? project->project_path : "Sidebar");
+  }
   project->connected = false;
   stop_close_timer(project);
   if (project == window->selected)
@@ -971,13 +997,18 @@ static int SDLCALL launch_thread(void *data) {
   if (!CreateProcessW(launch->exe, launch->command_line, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL,
                       NULL, &startup, &launch->process)) {
     launch->error = GetLastError();
+    SDL_Log("Shell process creation failed: Project=%u connection=%u error=%lu path=%s",
+            project->id, launch->connection, (unsigned long)launch->error,
+            project->project_path ? project->project_path : "Sidebar");
   } else {
     SDL_Log("Shell foreground grant to Project pid=%lu allowed=%d",
             (unsigned long)launch->process.dwProcessId,
             AllowSetForegroundWindow(launch->process.dwProcessId) != 0);
     ResumeThread(launch->process.hThread);
-    SDL_Log("Shell started Project pid=%lu path=%s", (unsigned long)launch->process.dwProcessId,
-            project->project_path ? project->project_path : "Sidebar (no Project)");
+    SDL_Log("Shell started Project pid=%lu path=%s Project=%u connection=%u pipe=%s",
+            (unsigned long)launch->process.dwProcessId,
+            project->project_path ? project->project_path : "Sidebar (no Project)",
+            project->id, launch->connection, launch->pipe_name);
   }
 launched:
   SDL_SetAtomicInt(&launch->done, 1);
@@ -986,7 +1017,7 @@ launched:
   event.user.code = SHELL_EVENT_LAUNCHED;
   event.user.windowID = launch->connection;
   if (!SDL_PushEvent(&event))
-    report_transport_failure(project, FAILURE_EVENT);
+    report_transport_failure(project, FAILURE_EVENT, "launch-notification", 0, 0);
   return 0;
 }
 
@@ -1015,6 +1046,8 @@ static bool launch_child(ShellProject *project, int argc, char **argv, const cha
   if (project->launcher)
     return true;
 failed:
+  SDL_Log("Shell launch setup failed: Project=%u connection=%u command_line=%d SDL=%s",
+          project->id, project->connection, launch->command_line != NULL, SDL_GetError());
   project->launch = NULL;
   free(launch->command_line);
   release_project(launch->project);
@@ -1040,7 +1073,9 @@ static bool push_shell_event(ShellProject *project, int code, void *data, int va
     SDL_AddAtomicInt(&project->inbound_bytes, -(int)(sizeof(*message) + message->size));
     free_message(message);
   }
-  report_transport_failure(project, FAILURE_EVENT);
+  SDL_Log("Shell event notification failed: Project=%u connection=%u event=%d SDL=%s",
+          project->id, project->connection, code, SDL_GetError());
+  report_transport_failure(project, FAILURE_EVENT, "event-notification", 0, 0);
   return false;
 }
 
@@ -1185,7 +1220,11 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
 
 static bool wait_for_child_connection(ShellProject *project) {
   HANDLE connect_event = CreateEventW(NULL, TRUE, FALSE, NULL);
-  if (!connect_event) return false;
+  if (!connect_event) {
+    SDL_Log("Shell pipe connect failed: Project=%u connection=%u stage=event error=%lu",
+            project->id, project->connection, (unsigned long)GetLastError());
+    return false;
+  }
   bool connected = false;
   for (;;) {
     OVERLAPPED overlapped;
@@ -1197,7 +1236,14 @@ static bool wait_for_child_connection(ShellProject *project) {
     if (error == ERROR_IO_PENDING) {
       HANDLE waits[3] = {connect_event, project->process.hProcess, project->pipe.stop_event};
       DWORD done = 0;
-      if (WaitForMultipleObjects(3, waits, FALSE, SHELL_CONNECT_TIMEOUT_MS) != WAIT_OBJECT_0) {
+      DWORD waited = WaitForMultipleObjects(3, waits, FALSE, SHELL_CONNECT_TIMEOUT_MS);
+      if (waited != WAIT_OBJECT_0) {
+        DWORD wait_error = waited == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+        SDL_Log("Shell pipe connect wait ended: Project=%u connection=%u pid=%lu wait=%lu error=%lu timeout_ms=%u "
+                "cause=%s", project->id, project->connection, (unsigned long)project->process.dwProcessId,
+                (unsigned long)waited, (unsigned long)wait_error, SHELL_CONNECT_TIMEOUT_MS,
+                waited == WAIT_OBJECT_0 + 1 ? "process-exited" : waited == WAIT_OBJECT_0 + 2 ? "cancelled"
+                : waited == WAIT_TIMEOUT ? "timeout" : "wait-failed");
         CancelIoEx(project->pipe.handle, &overlapped);
         GetOverlappedResult(project->pipe.handle, &overlapped, &done, TRUE);
         break;
@@ -1206,7 +1252,11 @@ static bool wait_for_child_connection(ShellProject *project) {
                   ? ERROR_PIPE_CONNECTED
                   : GetLastError();
     }
-    if (error != ERROR_PIPE_CONNECTED) break;
+    if (error != ERROR_PIPE_CONNECTED) {
+      SDL_Log("Shell pipe connect failed: Project=%u connection=%u stage=connect error=%lu",
+              project->id, project->connection, (unsigned long)error);
+      break;
+    }
     /* Only the process this shell started may drive its window. */
     ULONG client = 0;
     if (GetNamedPipeClientProcessId(project->pipe.handle, &client) &&
@@ -1214,7 +1264,8 @@ static bool wait_for_child_connection(ShellProject *project) {
       connected = true;
       break;
     }
-    SDL_Log("Anvil shell rejected a pipe client with pid %lu", (unsigned long)client);
+    SDL_Log("Anvil shell rejected a pipe client with pid %lu: Project=%u connection=%u expected_pid=%lu",
+            (unsigned long)client, project->id, project->connection, (unsigned long)project->process.dwProcessId);
     DisconnectNamedPipe(project->pipe.handle);
   }
   CloseHandle(connect_event);
@@ -1224,19 +1275,40 @@ static bool wait_for_child_connection(ShellProject *project) {
 static int reader_loop(void *data) {
   ShellProject *project = data;
   uint8_t *payload = malloc(ANVIL_SURFACE_MAX_PAYLOAD);
-  AnvilIPCHeader header;
-  if (payload && wait_for_child_connection(project) &&
-      anvil_ipc_pipe_read(&project->pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD) &&
-      header.type == ANVIL_SURFACE_MSG_HELLO && header.size == sizeof(AnvilSurfaceHello) &&
-      ((AnvilSurfaceHello *)payload)->pid == project->process.dwProcessId) {
+  AnvilIPCHeader header = {0};
+  if (!payload) {
+    report_transport_failure(project, FAILURE_ALLOC, "read-buffer", 0, ANVIL_SURFACE_MAX_PAYLOAD);
+    goto disconnected;
+  }
+  if (!wait_for_child_connection(project)) goto disconnected;
+  if (!anvil_ipc_pipe_read(&project->pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
+    SDL_Log("Shell handshake read failed: Project=%u connection=%u pid=%lu error=%lu",
+            project->id, project->connection, (unsigned long)project->process.dwProcessId, (unsigned long)GetLastError());
+    goto disconnected;
+  }
+  if (header.type != ANVIL_SURFACE_MSG_HELLO || header.size != sizeof(AnvilSurfaceHello) ||
+      ((AnvilSurfaceHello *)payload)->pid != project->process.dwProcessId) {
+    SDL_Log("Shell handshake rejected: Project=%u connection=%u expected_pid=%lu type=%u bytes=%u reported_pid=%lu",
+            project->id, project->connection, (unsigned long)project->process.dwProcessId, header.type, header.size,
+            header.size == sizeof(AnvilSurfaceHello) ? (unsigned long)((AnvilSurfaceHello *)payload)->pid : 0ul);
+    goto disconnected;
+  }
+  {
+    SDL_Log("Shell handshake accepted: Project=%u connection=%u pid=%lu handle=%p",
+            project->id, project->connection, (unsigned long)project->process.dwProcessId, (void *)project->pipe.handle);
     push_shell_event(project, SHELL_EVENT_CONNECTED, NULL, 0);
-    while (anvil_ipc_pipe_read(&project->pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
+    for (;;) {
+      if (!anvil_ipc_pipe_read(&project->pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
+        SDL_Log("Shell pipe read ended: Project=%u connection=%u pid=%lu error=%lu",
+                project->id, project->connection, (unsigned long)project->process.dwProcessId, (unsigned long)GetLastError());
+        break;
+      }
       if (!valid_project_message(header.type, payload, header.size) ||
           (header.type == ANVIL_SURFACE_MSG_SIDEBAR_SURFACE && !project->sidebar)) {
         SDL_Log("Shell rejected pipe message: Project=%u connection=%u pid=%lu Sidebar=%d type=%u bytes=%lu",
                 project->id, project->connection, (unsigned long)project->process.dwProcessId,
                 project->sidebar, header.type, (unsigned long)header.size);
-        report_transport_failure(project, FAILURE_PACKET);
+        report_transport_failure(project, FAILURE_PACKET, "packet-validation", header.type, header.size);
         break;
       }
       if (header.type == ANVIL_SURFACE_MSG_FRAME) {
@@ -1260,7 +1332,7 @@ static int reader_loop(void *data) {
       ShellMessage *message =
           take_fault(FAULT_ALLOC) ? NULL : malloc(sizeof(ShellMessage) + header.size);
       if (!message) {
-        report_transport_failure(project, FAILURE_ALLOC);
+        report_transport_failure(project, FAILURE_ALLOC, "inbound-message", header.type, header.size);
         break;
       }
       message->next = NULL;
@@ -1273,21 +1345,24 @@ static int reader_loop(void *data) {
           SHELL_WRITE_QUEUE_LIMIT) {
         SDL_AddAtomicInt(&project->inbound_bytes, -bytes);
         free_message(message);
-        report_transport_failure(project, FAILURE_OVERFLOW);
+        report_transport_failure(project, FAILURE_OVERFLOW, "inbound-queue", header.type, header.size);
         break;
       }
       if (!push_shell_event(project, SHELL_EVENT_MESSAGE, message, 0))
         break;
     }
-  } else if (!payload)
-    report_transport_failure(project, FAILURE_ALLOC);
+  }
+disconnected:
   free(payload);
 
   push_shell_event(project, SHELL_EVENT_DISCONNECTED, NULL, 0);
   /* A broken pipe ends transport, not process ownership. Only runtime teardown
    * may stop this wait before the Project exits. */
   HANDLE waits[] = {project->process.hProcess, project->exit_wait_stop};
-  WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+  DWORD waited = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+  if (waited == WAIT_FAILED)
+    SDL_Log("Shell process exit wait failed: Project=%u connection=%u pid=%lu error=%lu",
+            project->id, project->connection, (unsigned long)project->process.dwProcessId, (unsigned long)GetLastError());
   if (WaitForSingleObject(project->process.hProcess, 0) == WAIT_OBJECT_0) {
     DWORD exit_code = 1;
     GetExitCodeProcess(project->process.hProcess, &exit_code);
@@ -1316,9 +1391,16 @@ static int writer_loop(void *data) {
     SDL_UnlockMutex(project->lock);
     if (take_fault(FAULT_BLOCK_WRITE))
       WaitForSingleObject(project->pipe.stop_event, INFINITE);
+    bool injected = take_fault(FAULT_WRITE);
     bool written =
-        !take_fault(FAULT_WRITE) && anvil_ipc_pipe_write(&project->pipe, message->type,
+        !injected && anvil_ipc_pipe_write(&project->pipe, message->type,
                                                          message->payload, message->size, NULL, 0);
+    if (!written) {
+      DWORD error = injected ? ERROR_SUCCESS : GetLastError();
+      SDL_Log("Shell pipe write ended: Project=%u connection=%u pid=%lu type=%u bytes=%u error=%lu injected=%d",
+              project->id, project->connection, (unsigned long)project->process.dwProcessId,
+              message->type, message->size, (unsigned long)error, injected);
+    }
     free(message);
     if (!written) {
       push_shell_event(project, SHELL_EVENT_DISCONNECTED, NULL, 0);
@@ -1346,6 +1428,9 @@ static SDL_Thread *start_transport_thread(SDL_ThreadFunction function, const cha
   retain_project(project);
   SDL_Thread *thread = SDL_CreateThread(function, name, project);
   if (!thread)
+    SDL_Log("Shell transport thread creation failed: Project=%u connection=%u thread=%s SDL=%s",
+            project->id, project->connection, name, SDL_GetError());
+  if (!thread)
     release_project(project);
   return thread;
 }
@@ -1366,11 +1451,15 @@ static void shell_send(ShellProject *project, uint16_t type, const void *payload
     return;
   uint32_t total = size + tail_size + prefix;
   if (total > ANVIL_SURFACE_MAX_PAYLOAD) {
+    SDL_Log("Shell outbound packet rejected: Project=%u connection=%u type=%u inner_type=%u bytes=%u limit=%u",
+            project->id, project->connection, type, inner_type, total, ANVIL_SURFACE_MAX_PAYLOAD);
     fail_connection(project, "outbound packet too large");
     return;
   }
   ShellMessage *message = malloc(sizeof(ShellMessage) + total);
   if (!message) {
+    SDL_Log("Shell outbound allocation failed: Project=%u connection=%u type=%u bytes=%u",
+            project->id, project->connection, type, total);
     fail_connection(project, "outbound allocation failed");
     return;
   }
@@ -1404,7 +1493,10 @@ static void shell_send(ShellProject *project, uint16_t type, const void *payload
     return;
   }
   if (project->queue_bytes + sizeof(*message) + total > SHELL_WRITE_QUEUE_LIMIT) {
+    size_t queued = project->queue_bytes;
     SDL_UnlockMutex(project->lock);
+    SDL_Log("Shell outbound queue overflow: Project=%u connection=%u type=%u bytes=%u queued=%llu limit=%u",
+            project->id, project->connection, type, total, (unsigned long long)queued, SHELL_WRITE_QUEUE_LIMIT);
     free(message);
     fail_connection(project, "outbound queue overflow");
     return;
@@ -4689,6 +4781,10 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
     case SHELL_EVENT_CLOSE_TIMEOUT:
       if ((Uint32)(uintptr_t)event->user.data2 == project->close_serial &&
           project->close_requested_ns && !project->close_waiting) {
+        SDL_Log("Shell close deadline expired: Project=%u connection=%u pid=%lu Window=%u connected=%d "
+                "exit_announced=%d elapsed_ms=%.3f", project->id, project->connection,
+                (unsigned long)project->process.dwProcessId, project->window_id, project->connected,
+                project->exit_announced, (SDL_GetTicksNS() - project->close_requested_ns) / 1000000.0);
         project->close_timer = 0;
         if (project->process.hProcess &&
             WaitForSingleObject(project->process.hProcess, 0) == WAIT_OBJECT_0) {
@@ -4724,6 +4820,14 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
       break;
     }
     case SHELL_EVENT_EXITED:
+      SDL_Log("Anvil shell surface process exited with code %d: Project=%u Window=%u close_ms=%.3f "
+              "connection=%u pid=%lu Sidebar=%d exit_hex=0x%08lx intentional_exit=%d exit_announced=%d "
+              "close_requested=%d replacement=%d state=%d",
+              (int)(intptr_t)event->user.data2, project->id, project->window_id,
+              project->close_requested_ns ? (SDL_GetTicksNS() - project->close_requested_ns) / 1000000.0 : 0.0,
+              project->connection, (unsigned long)project->process.dwProcessId, project->sidebar,
+              (unsigned long)(DWORD)(intptr_t)event->user.data2, project->intentional_exit, project->exit_announced,
+              project->close_requested_ns != 0, project->restart_path != NULL, project->state);
       if (project->sidebar) {
         project->connected = false;
         stop_close_timer(project);
@@ -4733,9 +4837,6 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
         break;
       }
       stop_close_timer(project);
-      SDL_Log("Anvil shell surface process exited with code %d: Project=%u Window=%u close_ms=%.3f",
-              (int)(intptr_t)event->user.data2, project->id, project->window_id,
-              project->close_requested_ns ? (SDL_GetTicksNS() - project->close_requested_ns) / 1000000.0 : 0.0);
       end_color_theme_preview(project);
       if (project->restart_path) {
         char *path = _strdup(project->restart_path);
@@ -5114,7 +5215,7 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       event.user.code = SHELL_EVENT_START_TIMEOUT;
       event.user.windowID = project->connection;
       if (!SDL_PushEvent(&event))
-        report_transport_failure(project, FAILURE_EVENT);
+        report_transport_failure(project, FAILURE_EVENT, "startup-notification", 0, 0);
     }
     return 0;
   }
@@ -5398,12 +5499,17 @@ static bool create_pipe(ShellProject *project, char *name, size_t name_size) {
     name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
     PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
     1, SHELL_PIPE_BUFFER, SHELL_PIPE_BUFFER, 0, NULL);
-  if (handle == INVALID_HANDLE_VALUE) return false;
-  if (!anvil_ipc_pipe_init(&project->pipe, handle, ANVIL_SURFACE_PROTOCOL_VERSION,
-                           ANVIL_SURFACE_MAX_PAYLOAD)) {
-    CloseHandle(handle);
+  if (handle == INVALID_HANDLE_VALUE) {
+    SDL_Log("Shell pipe creation failed: Project=%u connection=%u error=%lu pipe=%s",
+            project->id, project->connection, (unsigned long)GetLastError(), name);
     return false;
   }
+  if (!anvil_ipc_pipe_init(&project->pipe, handle, ANVIL_SURFACE_PROTOCOL_VERSION,
+                           ANVIL_SURFACE_MAX_PAYLOAD)) {
+    return false;
+  }
+  SDL_Log("Shell pipe created: Project=%u connection=%u handle=%p protocol=%u pipe=%s",
+          project->id, project->connection, (void *)handle, ANVIL_SURFACE_PROTOCOL_VERSION, name);
   return true;
 }
 
@@ -5827,6 +5933,9 @@ static bool start_project(ShellProject *project, int argc, char **argv) {
   SDL_SetAtomicInt(&project->writer_done, 0);
   project->connection = ++shell.next_connection;
   project->launch_attempt++;
+  SDL_Log("Shell Project start: Project=%u connection=%u Window=%u Sidebar=%d attempt=%u adopt_pid=%lu path=%s",
+          project->id, project->connection, project->window_id, project->sidebar, project->launch_attempt,
+          (unsigned long)project->adopt_pid, project->project_path ? project->project_path : "Sidebar");
   project->runtime_ready = false;
   set_state(project, SHELL_STARTING);
   window->ui_dirty = true;
@@ -5873,6 +5982,9 @@ static void finish_launch(ShellProject *project) {
   }
   if (!project->reader || !project->writer ||
       (!project->startup_timer && !project->close_requested_ns)) {
+    SDL_Log("Shell transport setup incomplete: Project=%u connection=%u pid=%lu reader=%d writer=%d timer=%d",
+            project->id, project->connection, (unsigned long)project->process.dwProcessId,
+            project->reader != NULL, project->writer != NULL, project->startup_timer != 0);
     fail_connection(project, "Project transport setup failed");
     if (stop_transport(project, SDL_GetTicks() + 1000))
       anvil_ipc_pipe_close(&project->pipe);

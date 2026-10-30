@@ -1,5 +1,7 @@
 # Shutdown diagnostics
 
+For connection failures, startup failures, and process exits, see [native failure diagnostics](NATIVE_DIAGNOSTICS.md).
+
 Anvil creates a shutdown log when it accepts an exit or restart.
 No environment switch is needed.
 

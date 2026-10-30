@@ -370,6 +370,8 @@ if host_machine.system() == 'windows'
         c_args: anvil_cargs,
     )
     test('hosted-routing', hosted_routing_test, env: anvil_test_env, suite: 'anvil')
+    test('hosted-loss-invalid', hosted_routing_test, args: ['loss-invalid'], env: anvil_test_env, suite: 'anvil')
+    test('hosted-loss-disconnect', hosted_routing_test, args: ['loss-disconnect'], env: anvil_test_env, suite: 'anvil')
     test('hosted-motion-stall', hosted_routing_test, args: ['motion'], env: anvil_test_env, suite: 'anvil')
     test('hosted-dialogs', hosted_routing_test, args: ['dialogs'], env: anvil_test_env, suite: 'anvil')
     test('hosted-ping', hosted_routing_test, args: ['ping'], env: anvil_test_env, suite: 'anvil')

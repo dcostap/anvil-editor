@@ -30,6 +30,12 @@ int main(void) {
   SDL_GetLogOutputFunction(&old_output, &old_data);
   SDL_SetLogOutputFunction(capture, NULL);
 
+  SetLastError(ERROR_ACCESS_DENIED);
+  CHECK(!anvil_ipc_pipe_write(&writer, 73, NULL, 1025, NULL, 0));
+  CHECK(GetLastError() == ERROR_INVALID_DATA);
+  CHECK(strstr(diagnostic, "outbound-size") && strstr(diagnostic, "type=73"));
+  CHECK(strstr(diagnostic, "max_payload=1024"));
+
   AnvilIPCHeader invalid = {.version = 2, .type = 42, .size = 0}, header;
   char payload[16];
   reader.timeout_ms = 20;

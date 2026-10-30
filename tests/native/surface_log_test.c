@@ -34,6 +34,8 @@ static int check_log(const wchar_t *path, bool shared, unsigned *roles) {
   if (strstr(text, "shell[")) *roles |= 1;
   if (strstr(text, "hosted[")) *roles |= 2;
   if (!shared) CHECK(strstr(text, "thread="));
+  CHECK(strstr(text, "Native process:") && strstr(text, "exe="));
+  CHECK(strstr(text, "protocol=") && strstr(text, "version="));
   CHECK(strstr(text, "native test: connection failed"));
   CHECK(strstr(text, "native test: shell connection lost"));
   CHECK(DeleteFileW(path));
@@ -43,7 +45,9 @@ static int check_log(const wchar_t *path, bool shared, unsigned *roles) {
 int main(int argc, char **argv) {
   if (argc == 3 && !strcmp(argv[1], "child")) {
     anvil_surface_log_init(argv[2]);
+    SetLastError(ERROR_BROKEN_PIPE);
     SDL_Log("native test: connection failed");
+    CHECK(GetLastError() == ERROR_BROKEN_PIPE);
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "native test: shell connection lost");
     return 0;
   }

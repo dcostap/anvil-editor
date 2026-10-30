@@ -369,6 +369,7 @@ static void SDLCALL write_surface_log(void *userdata, int category, SDL_LogPrior
   (void)priority;
 #ifdef _WIN32
   (void)userdata;
+  DWORD saved_error = GetLastError();
   char line[4096];
   SYSTEMTIME now;
   GetLocalTime(&now);
@@ -399,6 +400,7 @@ static void SDLCALL write_surface_log(void *userdata, int category, SDL_LogPrior
   if (WriteFile(native_log.file, line, size, &written, NULL)) native_log.bytes += written;
   else OutputDebugStringA(line);
   ReleaseSRWLockExclusive(&native_log.lock);
+  SetLastError(saved_error);
 #else
   FILE *file = fopen((const char *)userdata, "ab");
   if (!file) return;
@@ -435,6 +437,14 @@ void anvil_surface_log_init(const char *role) {
   SDL_strlcpy(log_role, role, sizeof(log_role));
   SDL_SetLogOutputFunction(write_surface_log, NULL);
   if (native_log.owned) SDL_Log("Native diagnostics started");
+  wchar_t executable[32768];
+  char utf8[4096] = "unavailable";
+  DWORD length = GetModuleFileNameW(NULL, executable, SDL_arraysize(executable));
+  if (length && length < SDL_arraysize(executable) &&
+      !WideCharToMultiByte(CP_UTF8, 0, executable, -1, utf8, sizeof(utf8), NULL, NULL))
+    SDL_strlcpy(utf8, "path exceeds diagnostic limit", sizeof(utf8));
+  SDL_Log("Native process: exe=%s version=%s protocol=%u SDL=%d diagnostics_build=%s %s",
+          utf8, ANVIL_PROJECT_VERSION_STR, ANVIL_SURFACE_PROTOCOL_VERSION, SDL_GetVersion(), __DATE__, __TIME__);
 #else
   if (!path || !path[0]) return;
   SDL_strlcpy(log_role, role, sizeof(log_role));

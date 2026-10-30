@@ -227,12 +227,14 @@ static bool adopt(const char *name, DWORD pid) {
   SDL_Thread *reader = SDL_CreateThread(reader_thread, "anvil-hosted-input", pipe);
   if (reader) SDL_DetachThread(reader);
   else {
+    SDL_Log("Project adoption reader failed: shell_pid=%lu SDL=%s", (unsigned long)pid, SDL_GetError());
     SDL_SetAtomicInt(&hosted.reader_running, 0);
     SetEvent(hosted.loss_signal);
   }
   SDL_Event event = {0};
   event.type = hosted.adopted_event;
-  SDL_PushEvent(&event);
+  if (!SDL_PushEvent(&event))
+    SDL_Log("Project adoption notification failed: shell_pid=%lu SDL=%s", (unsigned long)pid, SDL_GetError());
   SDL_Log("Project adopted by shell pid=%lu configuration=%llu", (unsigned long)pid,
           (unsigned long long)config.configuration);
   return true;
@@ -262,15 +264,28 @@ static int SDLCALL loss_watchdog(void *data) {
   for (;;) {
     HANDLE signals[] = { hosted.shell_process, hosted.loss_signal };
     DWORD reason = WaitForMultipleObjects(2, signals, FALSE, INFINITE);
+    DWORD wait_error = reason == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
     if (SDL_GetAtomicInt(&hosted.intentional_exit)) return 0;
-    if (reason == WAIT_OBJECT_0) SDL_Log("Project shell loss cause: shell process exit pid=%lu", (unsigned long)hosted.shell_pid);
+    if (reason == WAIT_OBJECT_0) {
+      DWORD code = 0;
+      bool known = GetExitCodeProcess(hosted.shell_process, &code) != 0;
+      SDL_Log("Project shell loss cause: shell process exit shell_pid=%lu exit_known=%d exit_code=%lu exit_hex=0x%08lx",
+              (unsigned long)hosted.shell_pid, known, (unsigned long)code, (unsigned long)code);
+    } else if (reason != WAIT_OBJECT_0 + 1) {
+      SDL_Log("Project shell loss watchdog failed: shell_pid=%lu wait=%lu error=%lu",
+              (unsigned long)hosted.shell_pid, (unsigned long)reason, (unsigned long)wait_error);
+    }
     SDL_SetAtomicInt(&hosted.loss_cause, 1);
     anvil_ipc_pipe_cancel(hosted.pipe);
     SDL_LockMutex(hosted.queue_lock);
     hosted.lost = true;
+    size_t discarded = hosted.queued;
     free_messages(&hosted.head, &hosted.tail, false);
     hosted.queued = 0;
     SDL_UnlockMutex(hosted.queue_lock);
+    SDL_Log("Project connection recovery begins: shell_pid=%lu Sidebar=%d discarded_outbound_bytes=%llu inbound_bytes=%d",
+            (unsigned long)hosted.shell_pid, hosted.sidebar, (unsigned long long)discarded,
+            SDL_GetAtomicInt(&hosted.inbound_bytes));
     DWORD period = adoption_period();
     uint64_t deadline = GetTickCount64() + period;
     /* Only a Project whose shell ended waits for adoption. A live shell that dropped the connection has
@@ -283,9 +298,14 @@ static int SDLCALL loss_watchdog(void *data) {
       SDL_Log("Project offers no adoption: %s", render_failed ? "its rendering failed" : "the shell is still running");
     hosted.offer = hosted.sidebar || !hosted.project_path || !shell_ended || render_failed ? NULL
                  : anvil_adoption_offer_open(hosted.project_path, view->config.window_id);
+    SDL_Log("Project adoption decision: shell_pid=%lu shell_ended=%d render_failed=%d Sidebar=%d has_project=%d offer=%d",
+            (unsigned long)hosted.shell_pid, shell_ended, render_failed, hosted.sidebar,
+            hosted.project_path != NULL, hosted.offer != NULL);
     SDL_Log("Project shell connection lost; save %s; native deadline=%u ms",
             hosted.offer ? "and wait for adoption" : "and detach now", SHELL_LOSS_DEADLINE_MS);
-    SDL_Event event = {0}; event.type = hosted.loss_event; SDL_PushEvent(&event);
+    SDL_Event event = {0}; event.type = hosted.loss_event;
+    if (!SDL_PushEvent(&event))
+      SDL_Log("Project shell-loss notification failed: shell_pid=%lu SDL=%s", (unsigned long)hosted.shell_pid, SDL_GetError());
     if (!hosted.offer) loss_deadline();
     if (WaitForSingleObject(hosted.adoption_ready, SHELL_LOSS_DEADLINE_MS) != WAIT_OBJECT_0) {
       anvil_adoption_offer_close(hosted.offer);
@@ -307,7 +327,9 @@ static int SDLCALL loss_watchdog(void *data) {
     hosted.offer = NULL;
     if (!adopted) {
       SDL_Log("No shell adopted this Project within %lu ms; save, detach, and exit", (unsigned long)period);
-      SDL_Event gone = {0}; gone.type = hosted.gone_event; SDL_PushEvent(&gone);
+      SDL_Event gone = {0}; gone.type = hosted.gone_event;
+      if (!SDL_PushEvent(&gone))
+        SDL_Log("Project adoption expiry notification failed: shell_pid=%lu SDL=%s", (unsigned long)hosted.shell_pid, SDL_GetError());
       loss_deadline();
     }
   }
@@ -315,6 +337,7 @@ static int SDLCALL loss_watchdog(void *data) {
 
 bool anvil_hosted_surface_await_adoption(void) {
   if (!hosted.active || !hosted.offer) return false;
+  SDL_Log("Project shell-loss save completed; ready for adoption: shell_pid=%lu", (unsigned long)hosted.shell_pid);
   SetEvent(hosted.adoption_ready);
   return true;
 }
@@ -322,11 +345,19 @@ bool anvil_hosted_surface_adopted_event(Uint32 type) { return hosted.active && t
 bool anvil_hosted_surface_gone_event(Uint32 type) { return hosted.active && type == hosted.gone_event; }
 bool anvil_hosted_surface_update_event(Uint32 type) { return hosted.active && type == hosted.update_event; }
 
-static void signal_loss(const char *cause, uint16_t type, size_t bytes) {
+static void signal_loss_error(const char *cause, uint16_t type, size_t bytes, DWORD error) {
   if (SDL_GetAtomicInt(&hosted.intentional_exit)) return;
   if (SDL_CompareAndSwapAtomicInt(&hosted.loss_cause, 0, 1))
-    SDL_Log("Project shell loss cause: %s message=%u bytes=%llu error=%lu", cause, type, (unsigned long long)bytes, (unsigned long)GetLastError());
+    SDL_Log("Project shell loss cause: %s message=%u bytes=%llu error=%lu shell_pid=%lu Sidebar=%d "
+            "inbound_bytes=%d queue_limit=%u pipe=%s",
+            cause, type, (unsigned long long)bytes, (unsigned long)error, (unsigned long)hosted.shell_pid,
+            hosted.sidebar, SDL_GetAtomicInt(&hosted.inbound_bytes), HOSTED_QUEUE_LIMIT, hosted.pipe_name);
   SetEvent(hosted.loss_signal);
+}
+
+/* Logic, allocation and UI failures have no implied Windows error. */
+static void signal_loss(const char *cause, uint16_t type, size_t bytes) {
+  signal_loss_error(cause, type, bytes, ERROR_SUCCESS);
 }
 
 bool anvil_hosted_surface_active(void) {
@@ -780,7 +811,8 @@ static int SDLCALL reader_thread(void *data) {
     return 1;
   }
   AnvilIPCHeader header = {0};
-  const char *cause = "pipe EOF or invalid packet";
+  const char *cause = "invalid shell packet";
+  DWORD error = ERROR_INVALID_DATA;
   while (anvil_ipc_pipe_read(pipe, &header, payload, ANVIL_SURFACE_MAX_PAYLOAD)) {
     uint16_t type = header.type;
     uint32_t size = header.size;
@@ -888,12 +920,14 @@ static int SDLCALL reader_thread(void *data) {
     if ((size_t)SDL_AddAtomicInt(&hosted.inbound_bytes, (int)bytes) + bytes > HOSTED_QUEUE_LIMIT) {
       SDL_UnlockMutex(hosted.queue_lock);
       cause = "inbound queue overflow";
+      error = ERROR_NOT_ENOUGH_QUOTA;
       goto failed;
     }
     HostedMessage *message = malloc(bytes);
     if (!message) {
       SDL_UnlockMutex(hosted.queue_lock);
       cause = "inbound allocation failed";
+      error = ERROR_NOT_ENOUGH_MEMORY;
       goto failed;
     }
     message->type = header.type;
@@ -911,12 +945,18 @@ static int SDLCALL reader_thread(void *data) {
     event.type = hosted.receive_event;
     if (wake && !SDL_PushEvent(&event)) {
       cause = "inbound notification failed";
+      error = ERROR_SUCCESS;
+      SDL_Log("Project inbound notification failed: SDL=%s", SDL_GetError());
       goto failed;
     }
   }
+  error = GetLastError();
+  cause = "pipe read failed";
+  /* The pipe diagnostic owns partial headers. This header can be the previous message. */
+  header = (AnvilIPCHeader){0};
 failed:
   free(payload);
-  signal_loss(cause, header.type, header.size);
+  signal_loss_error(cause, header.type, header.size, error);
   SDL_SetAtomicInt(&hosted.reader_running, 0);
   return 0;
 }
@@ -934,14 +974,19 @@ static int SDLCALL writer_thread(void *data) {
     hosted.writing = true;
     SDL_UnlockMutex(hosted.queue_lock);
     bool ok = anvil_ipc_pipe_write(pipe, message->type, message->payload, message->size, NULL, 0);
+    DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    bool final = message->type == ANVIL_SURFACE_MSG_EXIT_INTENT || message->type == ANVIL_SURFACE_MSG_RESTART;
+    if (final || !ok)
+      SDL_Log("Project pipe write result: shell_pid=%lu handle=%p message=%u bytes=%u written=%d error=%lu intentional_exit=%d",
+              (unsigned long)hosted.shell_pid, (void *)pipe->handle, message->type, message->size, ok,
+              (unsigned long)error, SDL_GetAtomicInt(&hosted.intentional_exit));
+    /* Adoption can free this pipe after the writer releases it. */
     SDL_LockMutex(hosted.queue_lock);
     hosted.writing = false;
     SDL_UnlockMutex(hosted.queue_lock);
-    bool final = message->type == ANVIL_SURFACE_MSG_EXIT_INTENT || message->type == ANVIL_SURFACE_MSG_RESTART;
+    if (!ok) signal_loss_error("pipe write failed", message->type, message->size, error);
     free(message);
     if (final) SetEvent(hosted.exit_sent);
-    /* The writer outlives a lost connection. Messages are dropped until an adopting shell connects. */
-    if (!ok) signal_loss("pipe write failed", 0, 0);
   }
   return 0;
 }
@@ -1043,9 +1088,15 @@ static void send_exit(AnvilSurfaceMessageType type) {
   if (!hosted.active || !hosted.queue_lock) return;
   SDL_SetAtomicInt(&hosted.intentional_exit, 1);
   ResetEvent(hosted.exit_sent);
+  SDL_Log("Project exit notification requested: shell_pid=%lu message=%u connection_lost=%d",
+          (unsigned long)hosted.shell_pid, type, SDL_GetAtomicInt(&hosted.loss_cause));
   send_message(type, NULL, 0);
   /* Teardown only. Normal frame and window requests never wait for the pipe. */
-  if (WaitForSingleObject(hosted.exit_sent, 500) != WAIT_OBJECT_0) SDL_Log("Project exit-intent delivery timed out");
+  DWORD waited = WaitForSingleObject(hosted.exit_sent, 500);
+  if (waited != WAIT_OBJECT_0)
+    SDL_Log("Project exit-intent delivery timed out: shell_pid=%lu message=%u wait=%lu error=%lu",
+            (unsigned long)hosted.shell_pid, type, (unsigned long)waited,
+            (unsigned long)(waited == WAIT_FAILED ? GetLastError() : ERROR_TIMEOUT));
 }
 
 void anvil_hosted_surface_exit_intent(bool restart) {
@@ -1239,6 +1290,7 @@ static void send_int(uint16_t type, int value) {
 
 /* Opens a shell's surface pipe, checks its server, greets it, and reads its first configuration. */
 static AnvilIPCPipe *open_shell_pipe(const char *name, DWORD pid, AnvilSurfaceConfigure *config, HANDLE *process) {
+  SDL_Log("Project shell connection begins: shell_pid=%lu Sidebar=%d pipe=%s", (unsigned long)pid, hosted.sidebar, name);
   HANDLE handle = INVALID_HANDLE_VALUE;
   Uint64 deadline = SDL_GetTicks() + CONNECT_TIMEOUT_MS;
   for (;;) {
@@ -1247,23 +1299,32 @@ static AnvilIPCPipe *open_shell_pipe(const char *name, DWORD pid, AnvilSurfaceCo
                          FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
                          NULL);
     if (handle != INVALID_HANDLE_VALUE) break;
-    if (GetLastError() != ERROR_PIPE_BUSY || SDL_GetTicks() >= deadline) {
-      SDL_Log("Hosted surface could not open the shell pipe: %lu",
-              (unsigned long)GetLastError());
+    DWORD error = GetLastError();
+    if (error != ERROR_PIPE_BUSY || SDL_GetTicks() >= deadline) {
+      SDL_Log("Hosted surface could not open the shell pipe: error=%lu shell_pid=%lu pipe=%s",
+              (unsigned long)error, (unsigned long)pid, name);
       return NULL;
     }
     WaitNamedPipeA(name, 100);
   }
   AnvilIPCPipe *pipe = calloc(1, sizeof(*pipe));
   if (!pipe || !anvil_ipc_pipe_init(pipe, handle, ANVIL_SURFACE_PROTOCOL_VERSION, ANVIL_SURFACE_MAX_PAYLOAD)) {
+    SDL_Log("Project shell pipe setup failed: shell_pid=%lu allocated=%d", (unsigned long)pid, pipe != NULL);
+    /* Pipe initialization closes the handle on failure. */
+    if (!pipe) CloseHandle(handle);
     free(pipe);
-    CloseHandle(handle);
     return NULL;
   }
   ULONG server = 0;
-  if (!GetNamedPipeServerProcessId(handle, &server) || server != pid ||
-      !(*process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server))) {
-    SDL_Log("Project rejected shell pipe identity: expected=%lu actual=%lu", (unsigned long)pid, (unsigned long)server);
+  bool identified = GetNamedPipeServerProcessId(handle, &server) != 0;
+  DWORD identity_error = identified ? ERROR_SUCCESS : GetLastError();
+  if (identified && server == pid) {
+    *process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server);
+    if (!*process) identity_error = GetLastError();
+  }
+  if (!identified || server != pid || !*process) {
+    SDL_Log("Project rejected shell pipe identity: expected=%lu actual=%lu identified=%d error=%lu",
+            (unsigned long)pid, (unsigned long)server, identified, (unsigned long)identity_error);
     anvil_ipc_pipe_close(pipe);
     free(pipe);
     return NULL;
@@ -1275,9 +1336,10 @@ static AnvilIPCPipe *open_shell_pipe(const char *name, DWORD pid, AnvilSurfaceCo
   bool greeted = anvil_ipc_pipe_write(pipe, ANVIL_SURFACE_MSG_HELLO, &hello, sizeof(hello), NULL, 0);
   /* Startup reads the display scale and initial size, so wait for them. */
   bool read = greeted && anvil_ipc_pipe_read(pipe, &header, config, sizeof(*config));
+  DWORD error = read ? ERROR_INVALID_DATA : GetLastError();
   if (!read || header.type != ANVIL_SURFACE_MSG_CONFIGURE || header.size != sizeof(*config) || !valid_configure(config)) {
     SDL_Log("Hosted surface did not receive its first configuration: greeted=%d read=%d type=%u size=%u error=%lu",
-            greeted, read, (unsigned)header.type, (unsigned)header.size, (unsigned long)GetLastError());
+            greeted, read, (unsigned)header.type, (unsigned)header.size, (unsigned long)error);
     CloseHandle(*process);
     *process = NULL;
     anvil_ipc_pipe_close(pipe);
@@ -1285,6 +1347,9 @@ static AnvilIPCPipe *open_shell_pipe(const char *name, DWORD pid, AnvilSurfaceCo
     return NULL;
   }
   pipe->timeout_ms = INFINITE;
+  SDL_Log("Project shell connection ready: shell_pid=%lu handle=%p Window=%u configuration=%llu pipe=%s",
+          (unsigned long)pid, (void *)pipe->handle, config->window_id,
+          (unsigned long long)config->configuration, name);
   return pipe;
 }
 
@@ -1310,16 +1375,29 @@ bool anvil_hosted_surface_connect(void) {
   if (!hosted.queue_lock || !hosted.queue_condition || !hosted.loss_signal || !hosted.exit_sent ||
       !hosted.adoption_ready || hosted.loss_event == (Uint32)-1 || hosted.receive_event == (Uint32)-1 ||
       hosted.geometry_event == (Uint32)-1 || hosted.adopted_event == (Uint32)-1 || hosted.gone_event == (Uint32)-1 ||
-      hosted.update_event == (Uint32)-1)
+      hosted.update_event == (Uint32)-1) {
+    SDL_Log("Project connection setup failed: stage=events shell_pid=%lu mutex=%d condition=%d "
+            "loss_signal=%d inbound_signal=%d exit_sent=%d adoption_ready=%d SDL_last_error=%s",
+            (unsigned long)hosted.shell_pid, hosted.queue_lock != NULL, hosted.queue_condition != NULL,
+            hosted.loss_signal != NULL, hosted.inbound_signal != NULL, hosted.exit_sent != NULL,
+            hosted.adoption_ready != NULL, SDL_GetError());
     return false;
+  }
   SDL_Thread *writer = SDL_CreateThread(writer_thread, "anvil-project-writer", NULL);
   SDL_Thread *watchdog = SDL_CreateThread(loss_watchdog, "anvil-project-deadline", NULL);
-  if (!writer || !watchdog) return false;
+  if (!writer || !watchdog) {
+    SDL_Log("Project connection setup failed: stage=threads writer=%d watchdog=%d SDL=%s",
+            writer != NULL, watchdog != NULL, SDL_GetError());
+    return false;
+  }
   SDL_DetachThread(writer); SDL_DetachThread(watchdog);
 
   SDL_SetAtomicInt(&hosted.reader_running, 1);
   hosted.reader = SDL_CreateThread(reader_thread, "anvil-hosted-input", hosted.pipe);
-  if (!hosted.reader) return false;
+  if (!hosted.reader) {
+    SDL_Log("Project connection setup failed: stage=reader SDL=%s", SDL_GetError());
+    return false;
+  }
   SDL_DetachThread(hosted.reader);
   return true;
 }
