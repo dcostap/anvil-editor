@@ -61,6 +61,8 @@ These cases measure one action per process. Their frame p95 describes that heavy
 
 `quick-command-output` navigates from a Terminal capture with 22,000 missing-file references to one valid target. `editor-file-locations` edits a line with 2,000 missing-file references and checks the new target. These cases include path resolution and result publication, not only parsing. Worker results can span several frames. Compare completed-action latency and maximum frame work as well as p95.
 
+The Quick Command fixture supplies a fixed capture at the Terminal API boundary. It does not measure shell execution or native screen extraction.
+
 `benchmark-idle-setup` checks that setup continues while its private Window is idle and unfocused. It models loss of focus at the system API boundary; it does not change desktop focus. Run it after benchmark scheduling changes:
 
 ```sh
@@ -104,6 +106,8 @@ Existing scenarios keep their uncapped rendering-cost measurements.
 Latency excludes native input delivery, shell composition, and physical display scanout.
 
 `quick-command-response` repeats the output-navigation case with normal cadence. Keep its score separate from the uncapped case. A private-desktop presentation wait can dominate this result. Inspect `renderer_end_ms` and `present_ms` before attributing that wait to Lua. Disabling vsync is a diagnostic control, not a passing result for normal cadence.
+
+`quick-command-hosted` runs that case in a hosted Project, as the normal Windows app does. It measures completion of the Project's redraw, not the shell's presentation. Compare it with a hosted baseline, not a direct-window baseline. Keep both cases: direct-window presentation waits must not hide a slow Project or suggest that every hosted redraw blocks there.
 
 The harness guards use the private desktop launcher:
 

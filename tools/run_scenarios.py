@@ -136,6 +136,9 @@ SCENARIOS: dict[str, Scenario] = {
     "quick-command-response": Scenario(
         "quick_command_output", RUNTIME_WORKLOADS, actions=1, suites=("response",), targets=1,
         settings={"cadence": "normal"}),
+    "quick-command-hosted": Scenario(
+        "quick_command_output", RUNTIME_WORKLOADS, actions=1, suites=("response",), targets=1,
+        settings={"cadence": "normal"}, launch="shell"),
     "editor-file-locations": Scenario(
         "editor_file_locations", RUNTIME_WORKLOADS, actions=1, suites=("smoke",), targets=1),
     "trimwhitespace-long-line": Scenario(
