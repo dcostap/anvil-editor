@@ -99,6 +99,11 @@ SCENARIOS: dict[str, Scenario] = {
     "terminal-autoscroll-history": Scenario(
         "terminal_autoscroll", FolderSpec("terminal-scroll", files=1), actions=80,
         suites=("terminal",)),
+    # This shutdown-only API waits once for one second across every blocked host.
+    "terminal-close-drain": Scenario(
+        "terminal_close", FolderSpec("terminal-close-drain", files=1), actions=1,
+        suites=("terminal",), frame_budget_ms=1500.0, frame_spike_ms=1500.0,
+        action_budget_ms=2000.0),
     # Keep removed runtime timing workloads in the scenario runner, not correctness tests.
     "process-finalize-handles": Scenario(
         "runtime_workloads", RUNTIME_WORKLOADS, actions=1, suites=("smoke",),
