@@ -24,20 +24,6 @@ end
 local storage = {}
 
 
--- While another process replaces a file, Windows refuses to open it for a moment.
-local OPEN_RETRY_DELAYS = { 0.005, 0.01, 0.02, 0.04 }
-
-local function load_file(path)
-  local func, err = loadfile(path)
-  for _, delay in ipairs(OPEN_RETRY_DELAYS) do
-    if func or not tostring(err):find("cannot open", 1, true) or not system.get_file_info(path) then break end
-    system.sleep(delay)
-    func, err = loadfile(path)
-  end
-  return func, err
-end
-
-
 ---Loads data from a persistent storage file.
 ---
 ---@param module string The module under which the data is stored.
@@ -45,13 +31,11 @@ end
 ---@return string|table|number? data The stored data present for this module, at this key.
 function storage.load(module, key)
   local path = module_key_to_path(module, key)
-  if system.get_file_info(path) then
-    local func, err = load_file(path)
-    if func then
-      return func()
-    else
-      log("error", "error loading storage file for %s[%s]: %s", module, key, err)
-    end
+  local func, err, reason = system.load_file(path)
+  if func then
+    return func()
+  elseif reason ~= "not_found" then
+    log("error", "error loading storage file for %s[%s]: %s", module, key, err)
   end
   return nil
 end

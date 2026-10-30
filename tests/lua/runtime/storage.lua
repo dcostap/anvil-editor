@@ -19,6 +19,7 @@ test.describe("storage", function()
     if context.replace_file then system.replace_file = context.replace_file end
     if context.core_error then core.error = context.core_error end
     if context.pool then context.pool:shutdown() end
+    if context.reader then context.kernel.CloseHandle(context.reader) end
     storage.clear(MODULE)
   end)
 
@@ -42,7 +43,7 @@ test.describe("storage", function()
     test.equal(storage.load(MODULE, "a%2Fb"), "escaped")
   end)
 
-  test.it("loads a complete value while another process saves the same key", function(context)
+  test.it("loads a complete value while another worker saves the same key", function(context)
     local key = "shared"
     storage.save(MODULE, key, { value = 0 })
     local errors = {}
@@ -69,10 +70,55 @@ test.describe("storage", function()
       coroutine.yield(0)
     end
     test.ok(loads > 0)
-    test.equal(missing, 0, "loads without a value")
+    test.equal(missing, 0, "loads without a value: " .. table.concat(errors, "\n"))
     test.equal(table.concat(errors, "\n"), "")
     test.equal(table.concat(result.failures, "\n"), "")
     test.equal(storage.load(MODULE, key).value, 1000)
+  end)
+
+  test.it("reports invalid saved data but not a missing key", function(context)
+    local errors = {}
+    context.core_error = core.error
+    core.error = function(...) errors[#errors + 1] = string.format(...) end
+    test.equal(storage.load(MODULE, "missing"), nil)
+    test.equal(#errors, 0)
+
+    test.ok(storage.save(MODULE, "invalid", { value = "old" }))
+    local path = USERDIR .. PATHSEP .. "storage" .. PATHSEP .. MODULE .. PATHSEP .. "invalid"
+    local file = assert(io.open(path, "wb"))
+    assert(file:write("return {"))
+    assert(file:close())
+    test.equal(storage.load(MODULE, "invalid"), nil)
+    test.equal(#errors, 1)
+    test.ok(errors[1]:find("invalid", 1, true))
+  end)
+
+  test.it("replaces a value while an open reader keeps the old data", function(context)
+    test.skip_if(PLATFORM ~= "Windows", "Windows file sharing is platform-specific")
+    test.skip_if(not jit, "The Windows file-handle fixture needs LuaJIT")
+    local ffi = require "ffi"
+    ffi.cdef [[
+      int __stdcall MultiByteToWideChar(unsigned int, unsigned long, const char *, int, wchar_t *, int);
+      void * __stdcall CreateFileW(const wchar_t *, unsigned long, unsigned long, void *, unsigned long, unsigned long, void *);
+      int __stdcall ReadFile(void *, void *, unsigned long, unsigned long *, void *);
+      int __stdcall CloseHandle(void *);
+    ]]
+    context.kernel = ffi.load("kernel32")
+    test.ok(storage.save(MODULE, "held", { value = "old" }))
+    local path = USERDIR .. "/storage/" .. MODULE .. "/held"
+    local length = context.kernel.MultiByteToWideChar(65001, 0, path, -1, nil, 0)
+    test.ok(length > 0)
+    local wide = ffi.new("wchar_t[?]", length)
+    test.equal(context.kernel.MultiByteToWideChar(65001, 0, path, -1, wide, length), length)
+    local reader = context.kernel.CreateFileW(wide, 0x80000000, 7, nil, 3, 128, nil)
+    test.ok(reader ~= ffi.cast("void *", -1), "could not open a shared reader")
+    context.reader = reader
+    local saved, err = storage.save(MODULE, "held", { value = "new" })
+    test.ok(saved, err)
+    test.equal(storage.load(MODULE, "held").value, "new")
+    local bytes, count = ffi.new("char[1024]"), ffi.new("unsigned long[1]")
+    test.ok(context.kernel.ReadFile(reader, bytes, 1024, count, nil) ~= 0)
+    test.equal(assert(load(ffi.string(bytes, count[0])))().value, "old")
   end)
 
   for _, failure in ipairs { "open", "write", "replace" } do

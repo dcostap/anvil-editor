@@ -1610,9 +1610,9 @@ static int f_atomic_replace_file(lua_State *L) {
 }
 
 
-/* Renames source to target and replaces an existing target in one step. A
-   reader of target opens the old file or the new file, never a missing one.
-   ReplaceFileW keeps the target's metadata, but it takes several steps. */
+/* Publishes a replacement without first deleting the target. POSIX rename
+   keeps open readers on the old file; new readers get the replacement.
+   Windows filesystems without that support keep the legacy rename path. */
 static int f_replace_file(lua_State *L) {
   const char *source = luaL_checkstring(L, 1);
   const char *target = luaL_checkstring(L, 2);
@@ -1622,15 +1622,42 @@ static int f_replace_file(lua_State *L) {
   BOOL replaced = FALSE;
   DWORD error = ERROR_NO_UNICODE_TRANSLATION;
   if (wsource && wtarget) {
-    DWORD flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
-    replaced = MoveFileExW(wsource, wtarget, flags);
-    /* A reader that has target open blocks the replace until it closes. */
-    for (size_t i = 0; !replaced && i < SDL_arraysize(replace_retry_delays_ms); i++) {
-      if (!replace_error_is_transient(GetLastError())) break;
-      SDL_Delay(replace_retry_delays_ms[i]);
-      replaced = MoveFileExW(wsource, wtarget, flags);
+    size_t name_bytes = wcslen(wtarget) * sizeof(WCHAR);
+    size_t info_bytes = offsetof(FILE_RENAME_INFO, FileName) + name_bytes + sizeof(WCHAR);
+    FILE_RENAME_INFO *info = SDL_calloc(1, info_bytes);
+    error = ERROR_NOT_ENOUGH_MEMORY;
+    if (info) {
+      info->Flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+      info->FileNameLength = (DWORD)name_bytes;
+      memcpy(info->FileName, wtarget, name_bytes);
+      for (size_t attempt = 0;; attempt++) {
+        HANDLE file = CreateFileW(wsource, DELETE,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+          NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH, NULL);
+        if (file == INVALID_HANDLE_VALUE) error = GetLastError();
+        else {
+          /* MoveFileEx refuses an open target, even when its reader shares deletion.
+             FileRenameInfoEx (22) is hidden by the build's older SDK target. */
+          replaced = SetFileInformationByHandle(file, (FILE_INFO_BY_HANDLE_CLASS)22, info, (DWORD)info_bytes);
+          if (!replaced) error = GetLastError();
+          CloseHandle(file);
+          if (!replaced && (error == ERROR_INVALID_PARAMETER || error == ERROR_NOT_SUPPORTED ||
+              error == ERROR_INVALID_FUNCTION || error == ERROR_CALL_NOT_IMPLEMENTED)) {
+            /* Some filesystems cannot replace an open target. Keep their previous
+               rename behavior, without ever deleting the target first. */
+            static LONG reported_legacy_rename;
+            if (InterlockedCompareExchange(&reported_legacy_rename, 1, 0) == 0)
+              SDL_Log("File replace: POSIX rename is unavailable (Windows error %lu); use legacy rename",
+                (unsigned long)error);
+            replaced = MoveFileExW(wsource, wtarget, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+            if (!replaced) error = GetLastError();
+          }
+        }
+        if (replaced || !replace_error_is_transient(error) || attempt == SDL_arraysize(replace_retry_delays_ms)) break;
+        SDL_Delay(replace_retry_delays_ms[attempt]);
+      }
+      SDL_free(info);
     }
-    if (!replaced) error = GetLastError();
   }
   SDL_free(wsource);
   SDL_free(wtarget);
@@ -1650,6 +1677,79 @@ static int f_replace_file(lua_State *L) {
   return 1;
 }
 
+
+#ifdef _WIN32
+typedef struct {
+  HANDLE file;
+  DWORD error;
+  char bytes[4096];
+} SharedLuaFile;
+
+static const char *read_shared_lua_file(lua_State *L, void *userdata, size_t *size) {
+  (void)L;
+  SharedLuaFile *file = userdata;
+  DWORD read = 0;
+  if (!ReadFile(file->file, file->bytes, sizeof(file->bytes), &read, NULL))
+    file->error = GetLastError();
+  *size = read;
+  return read ? file->bytes : NULL;
+}
+#endif
+
+/* Loads a generated Lua data file. Windows readers permit atomic replacement
+   while the compiler reads the old file. A missing file returns "not_found"
+   as the third result, separately from access and syntax errors. */
+static int f_load_file(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+#ifdef _WIN32
+  const char *chunkname = lua_pushfstring(L, "@%s", path);
+  LPWSTR wide = utfconv_utf8towc(path);
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  DWORD error = ERROR_NO_UNICODE_TRANSLATION;
+  if (wide) {
+    for (size_t attempt = 0;; attempt++) {
+      handle = CreateFileW(wide, GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+      if (handle != INVALID_HANDLE_VALUE) break;
+      error = GetLastError();
+      if (!replace_error_is_transient(error) || attempt == SDL_arraysize(replace_retry_delays_ms)) break;
+      SDL_Delay(replace_retry_delays_ms[attempt]);
+    }
+    SDL_free(wide);
+  }
+  if (handle == INVALID_HANDLE_VALUE) {
+    lua_pushnil(L);
+    push_win32_error(L, error);
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+      lua_pushliteral(L, "not_found");
+      return 3;
+    }
+    return 2;
+  }
+  SharedLuaFile file = { .file = handle };
+  int status = lua_load(L, read_shared_lua_file, &file, chunkname, "t");
+  CloseHandle(handle);
+  if (file.error) {
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    push_win32_error(L, file.error);
+    return 2;
+  }
+#else
+  int status = luaL_loadfilex(L, path, "t");
+  if (status == LUA_ERRFILE && errno == ENOENT) {
+    lua_pushnil(L);
+    lua_insert(L, -2);
+    lua_pushliteral(L, "not_found");
+    return 3;
+  }
+#endif
+  if (status == LUA_OK) return 1;
+  lua_pushnil(L);
+  lua_insert(L, -2);
+  return 2;
+}
 
 static int f_mkdir(lua_State *L) {
   const char *path = luaL_checkstring(L, 1);
@@ -3074,6 +3174,7 @@ static const luaL_Reg lib[] = {
   { "sync_file",             f_sync_file             },
   { "atomic_replace_file",   f_atomic_replace_file   },
   { "replace_file",          f_replace_file          },
+  { "load_file",             f_load_file             },
   { "get_display_info",      f_get_display_info      },
   { "open_file_dialog",      f_open_file_dialog      },
   { "save_file_dialog",      f_save_file_dialog      },

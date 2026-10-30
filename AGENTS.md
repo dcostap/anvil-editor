@@ -637,6 +637,13 @@ Image cells have no resize controls yet. Edit the source in Source mode.
 A Wikilink reads `\|` as its alias separator, because a table needs it: `![[image.png\|200]]`.
 Run `ui/markdown_interactive_tables.lua` after changes. Check the `markdown-table-images` render scenario after visual changes.
 
+## Shared storage
+
+`core.storage` reads generated Lua data through `system.load_file`. Windows readers share deletion, so a replacement can leave them reading the old file.
+`system.replace_file` uses Windows POSIX rename semantics to publish the new file while those readers stay open. Do not replace this with `MoveFileExW` alone: it refuses an open target, even when the reader shares deletion.
+Filesystems without POSIX rename support keep the previous, bounded-retry rename behavior. The native log reports that fallback once. They do not have the same concurrent-reader guarantee.
+Run `runtime/storage.lua` after changes. It checks concurrent reads and saves, and replacement while a reader keeps the old data.
+
 ## Reload from disk
 
 `Buffer:reload()` applies the file's text as edits through `Buffer:apply_lines`. It does not replace the Buffer.
