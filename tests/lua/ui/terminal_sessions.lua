@@ -168,7 +168,7 @@ test.describe("Terminal Session restoration", function()
     local block = (string.rep("x", 78) .. "\r\n"):rep(1024)
     for _ = 1, 640 do assert(file:write(block)) end -- 50 MiB, beyond old raw replay.
     assert(file:close())
-    test.ok(view.session:write('type "' .. path:gsub("/", "\\") .. '"\r'))
+    test.ok(view.session:write('type "' .. path:gsub("/", "\\") .. '" & echo stall_output_done\r'))
     -- Fill both queues, then exceed the host's ten-second writer stall timeout.
     -- Allow queue fill time as well as the writer timeout on a loaded machine.
     local deadline = system.get_time() + 30
@@ -179,6 +179,10 @@ test.describe("Terminal Session restoration", function()
     test.not_equal(view.state, "failed", view.launch_error)
     test.equal(view.session:stats().host_pid, stats.host_pid)
     test.equal(view.session:stats().shell_pid, stats.shell_pid)
+    -- Reattach does not mean that TYPE has finished. It can consume input while
+    -- checking for cancellation, before CMD reads the next command line.
+    test.ok(wait_for(view, function() return printed(view, "stall_output_done") end, 120),
+      "the shell did not finish its output after reattach")
     mark(view, "stall_recovery_marker")
     local state = view:get_state()
     view:detach_session()
