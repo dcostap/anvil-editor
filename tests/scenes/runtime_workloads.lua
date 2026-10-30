@@ -6,7 +6,6 @@ local locations = require "core.text_poi_locations"
 local support = require "scenes.support"
 
 local scene = {}
-local LONG_LINE = string.rep(string.rep(" ", 1300) .. "x", 2000)
 local STREAM_LINE = string.rep("s", 1023)
 
 local function shell_command(command)
@@ -148,7 +147,7 @@ local workloads = {
   trimwhitespace_long_line = {
     setup = function(context)
       context.buffer = Buffer()
-      context.buffer:insert(1, 1, LONG_LINE)
+      context.buffer:insert(1, 1, string.rep(string.rep(" ", 1300) .. "x", 2000))
       context.revision = context.buffer.text_revision
       context.length = #context.buffer.lines[1]
     end,
