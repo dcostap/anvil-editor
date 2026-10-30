@@ -220,7 +220,7 @@ local SNOOZE_HOURS = {1, 2, 3, 4, 24}
 -- and its Project's path. The shell reports the choice to `on_menu_chosen`.
 function SidebarView:open_terminal_menu(target, x, y)
   local session = target.session
-  local labels, choices = {"Remind Me In"}, {}
+  local labels, choices = {"Snooze"}, {}
   for _, hours in ipairs(SNOOZE_HOURS) do
     labels[#labels + 1] = "\t" .. (hours == 1 and "1 Hour" or hours .. " Hours")
     choices[#labels] = hours

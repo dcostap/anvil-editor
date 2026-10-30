@@ -123,7 +123,7 @@ if path:match("/driver$") then
     assert(found == items, "Terminal menu items: " .. found)
     wait(function() return trace():find("Shell Sidebar menu result: [1-9]", at) end, 5, "The menu did not choose " .. choice)
    end
-   local times = "Remind Me In|1 Hour|2 Hours|3 Hours|4 Hours|24 Hours|Custom\u{2026}"
+   local times = "Snooze|1 Hour|2 Hours|3 Hours|4 Hours|24 Hours|Custom\u{2026}"
    local before = os.time()
    menu("2 Hours", times)
    wait(function() local time = snooze(); return time and time >= before + 2 * 3600 end, 5,
