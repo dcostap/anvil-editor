@@ -23,8 +23,12 @@ local function snapshot_text(snapshot)
 end
 
 
-local function wait_for_text(session, expected, timeout)
-  local deadline = system.get_time() + (timeout or 8)
+-- A new host waits up to 30 seconds for its shell on a loaded machine. Each wait ends as soon as its
+-- condition holds.
+local TIMEOUT = 30
+
+local function wait_for_text(session, expected)
+  local deadline = system.get_time() + TIMEOUT
   local text = ""
   local snapshot
   while system.get_time() < deadline and not text:find(expected, 1, true) do
@@ -53,7 +57,7 @@ local function start_key_reader(kitty_flags, terminator)
     shell = key_bytes_shell(kitty_flags, terminator),
   })
   test.ok(session, start_error)
-  local text = wait_for_text(session, "ANVIL_KEYS_READY", 5)
+  local text = wait_for_text(session, "ANVIL_KEYS_READY")
   test.ok(text:find("ANVIL_KEYS_READY", 1, true), text)
   return session
 end
@@ -123,7 +127,7 @@ test.describe("Native terminal session", function()
     })
     test.ok(session, start_error)
 
-    local text, snapshot = wait_for_text(session, "ANVIL_FRESH_LINE", 5)
+    local text, snapshot = wait_for_text(session, "ANVIL_FRESH_LINE")
     local capture, capture_error = session:text_capture()
     session:close()
 
@@ -191,7 +195,7 @@ test.describe("Native terminal session", function()
     })
     test.ok(session, start_error)
 
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + TIMEOUT
     local text = ""
     local changed_count = 0
     local snapshot
@@ -231,9 +235,12 @@ test.describe("Native terminal session", function()
     local session, start_error = terminal_native.new({
       cols = 80, rows = 8, cell_width = 8, cell_height = 16,
       cwd = system.getcwd(),
-      shell = [[powershell.exe -NoLogo -NoProfile -Command "Start-Sleep -Milliseconds 150; Write-Output 'ANVIL_DELAYED_OUTPUT'"]],
+      -- The shell prints after a line of input, so the output reaches the running session's
+      -- reader. Output that arrives before the attach comes as replay, which needs no wake.
+      shell = [[powershell.exe -NoLogo -NoProfile -Command "$null = [Console]::ReadLine(); Write-Output 'ANVIL_DELAYED_OUTPUT'"]],
     })
     test.ok(session, start_error)
+    wait_for_running(session)
 
     local woke = false
     local previous_on_event = core.on_event
@@ -241,12 +248,13 @@ test.describe("Native terminal session", function()
       if event_type == "terminaloutput" then woke = true end
       return previous_on_event(event_type, ...)
     end
-    local deadline = system.get_time() + 8
+    test.ok(session:key("return", {}))
+    local deadline = system.get_time() + TIMEOUT
     while system.get_time() < deadline and not woke do
       coroutine.yield(0.01)
     end
     core.on_event = previous_on_event
-    local text = wait_for_text(session, "ANVIL_DELAYED_OUTPUT", 8)
+    local text = wait_for_text(session, "ANVIL_DELAYED_OUTPUT")
     session:close()
     test.ok(woke, "terminal output did not wake the editor event loop")
     test.ok(text:find("ANVIL_DELAYED_OUTPUT", 1, true), text)
@@ -265,12 +273,12 @@ test.describe("Native terminal session", function()
     local started, trace_error = session:trace(trace_path)
     test.ok(started, trace_error)
 
-    local first = wait_for_text(session, "ANVIL_TRACE_FIRST", 5)
+    local first = wait_for_text(session, "ANVIL_TRACE_FIRST")
     test.ok(first:find("ANVIL_TRACE_FIRST", 1, true), first)
     local stopped, bytes, stop_error = session:trace()
     test.ok(stopped, stop_error)
     test.ok(bytes > 0)
-    wait_for_text(session, "ANVIL_TRACE_SECOND", 5)
+    wait_for_text(session, "ANVIL_TRACE_SECOND")
     session:close()
 
     local file = test.not_nil(io.open(trace_path, "rb"))
@@ -292,7 +300,7 @@ test.describe("Native terminal session", function()
     test.ok(session, start_error)
 
     local status = { kind = "running" }
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + TIMEOUT
     while system.get_time() < deadline and status.kind ~= "exited" do
       local _
       _, status = session:update()
@@ -358,7 +366,7 @@ test.describe("Native terminal session", function()
     })
     test.ok(session, start_error)
     local status = { kind = "running" }
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + TIMEOUT
     while system.get_time() < deadline and status.kind ~= "exited" do
       local _
       _, status = session:update()
@@ -384,7 +392,7 @@ test.describe("Native terminal session", function()
     test.ok(session:paste("Write-Output ANVIL_TERMINAL_INPUT", false))
     test.ok(session:key("return", {}))
 
-    local deadline = system.get_time() + 8
+    local deadline = system.get_time() + TIMEOUT
     local text = ""
     while system.get_time() < deadline and not text:find("ANVIL_TERMINAL_INPUT", 1, true) do
       session:update()
@@ -414,7 +422,7 @@ test.describe("Native terminal session", function()
         consumed_modifiers = key[5],
       }), "the terminal should encode " .. key[4])
     end
-    local text = wait_for_text(session, "ANVIL_KEYS=", 5)
+    local text = wait_for_text(session, "ANVIL_KEYS=")
     session:close()
     test.ok(text:find("ANVIL_KEYS=6F-4F-6D-28-29", 1, true), text)
   end)
@@ -428,7 +436,7 @@ test.describe("Native terminal session", function()
       unshifted_codepoint = string.byte("8"),
       consumed_modifiers = 0x0001,
     }))
-    local text = wait_for_text(session, "ANVIL_KEYS=", 5)
+    local text = wait_for_text(session, "ANVIL_KEYS=")
     session:close()
     -- CSI 56:40;2;40u is key 8 with shifted key (, Shift, and the text (.
     test.ok(text:find("ANVIL_KEYS=1B-5B-35-36-3A-34-30-3B-32-3B-34-30-75", 1, true), text)
@@ -443,7 +451,7 @@ test.describe("Native terminal session", function()
       unshifted_codepoint = string.byte("7"),
       consumed_modifiers = 1,
     }))
-    local text = wait_for_text(session, "ANVIL_KEYS=", 5)
+    local text = wait_for_text(session, "ANVIL_KEYS=")
     session:close()
     -- CSI 55:47;4u is key 7 with shifted key /, Shift and Alt.
     test.ok(text:find("ANVIL_KEYS=1B-5B-35-35-3A-34-37-3B-34-75", 1, true), text)
@@ -451,7 +459,7 @@ test.describe("Native terminal session", function()
 
   -- Polls until a scan of the current content ends.
   local function find_all(session, query, case_sensitive)
-    local deadline = system.get_time() + 10
+    local deadline = system.get_time() + TIMEOUT
     repeat
       session:update()
       local matches, stale, shift = session:find(query, case_sensitive)
@@ -476,7 +484,7 @@ test.describe("Native terminal session", function()
       shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Write-Output ('Needle needle '+[char]0x754c+'needle'); Start-Sleep -Milliseconds 1500; Write-Output 'needle later'; Start-Sleep -Seconds 30"]],
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "needle", 5)
+    local text = wait_for_text(session, "needle")
     test.ok(text:find("Needle needle", 1, true), text)
 
     local matches, shift = find_all(session, "needle", false)
@@ -487,7 +495,7 @@ test.describe("Native terminal session", function()
     test.ok(session:scroll("row", matches[1].row - shift))
     test.ok(session:row_text(0).text:find("^Needle needle"))
 
-    text = wait_for_text(session, "needle later", 5)
+    text = wait_for_text(session, "needle later")
     test.ok(text:find("needle later", 1, true), text)
     matches = find_all(session, "needle", false)
     session:close()
@@ -505,7 +513,7 @@ test.describe("Native terminal session", function()
       shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); 1..12 | ForEach-Object { Write-Output ('ANVIL_CAPTURE_ROW_'+$_) }; [Console]::Write('ANVIL_CURSOR_'+[char]0x754c); Start-Sleep -Seconds 1"]],
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "ANVIL_CURSOR_界", 5)
+    local text = wait_for_text(session, "ANVIL_CURSOR_界")
     test.ok(text:find("ANVIL_CURSOR_界", 1, true), text)
     local cursor_capture, cursor_capture_error = session:text_capture()
     test.ok(cursor_capture, cursor_capture_error)
@@ -547,7 +555,7 @@ test.describe("Native terminal session", function()
       shell = [[powershell.exe -NoLogo -NoProfile -Command "$e=[char]27; [Console]::Write($e+'[1;31mANVIL_CAPTURE_COLOR'+$e+'[0m')"]],
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "ANVIL_CAPTURE_COLOR", 5)
+    local text = wait_for_text(session, "ANVIL_CAPTURE_COLOR")
     test.ok(text:find("ANVIL_CAPTURE_COLOR", 1, true), text)
 
     local capture, capture_error = session:text_capture()
@@ -575,7 +583,7 @@ test.describe("Native terminal session", function()
       shell = [[powershell.exe -NoLogo -NoProfile -Command "$lines=1..1500 | ForEach-Object { 'ANVIL_SCROLLBACK_ROW_'+$_ }; [Console]::Write(($lines -join [Environment]::NewLine)+[Environment]::NewLine+'ANVIL_SCROLLBACK_DONE'); Start-Sleep -Seconds 1"]],
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "ANVIL_SCROLLBACK_DONE", 8)
+    local text = wait_for_text(session, "ANVIL_SCROLLBACK_DONE")
     test.ok(text:find("ANVIL_SCROLLBACK_DONE", 1, true), text)
 
     local capture, capture_error = session:text_capture()
@@ -596,7 +604,7 @@ test.describe("Native terminal session", function()
     })
     test.ok(session, start_error)
     local events = {}
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + TIMEOUT
     while system.get_time() < deadline and #events < 2 do
       session:update()
       local snapshot = session:snapshot()
@@ -620,7 +628,7 @@ test.describe("Native terminal session", function()
     })
     test.ok(session, start_error)
     local notification
-    local deadline = system.get_time() + 5
+    local deadline = system.get_time() + TIMEOUT
     while system.get_time() < deadline and not notification do
       session:update()
       for _, event in ipairs(session:snapshot().events or {}) do
@@ -671,9 +679,9 @@ test.describe("Native terminal session", function()
       shell = [[powershell.exe -NoLogo -NoProfile -Command "$e=[char]27; [Console]::WriteLine('ANVIL_PRIMARY_SCREEN'); [Console]::Write($e+'[?1049h'+$e+'[2J'+$e+'[3;7H'+$e+'[1;34mANVIL_TUI_SCREEN'+$e+'[0m'); Start-Sleep -Milliseconds 300; [Console]::Write($e+'[?1049l'); [Console]::WriteLine('ANVIL_TUI_EXIT')"]],
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "ANVIL_TUI_SCREEN", 5)
+    local text = wait_for_text(session, "ANVIL_TUI_SCREEN")
     test.ok(text:find("ANVIL_TUI_SCREEN", 1, true), text)
-    text = wait_for_text(session, "ANVIL_TUI_EXIT", 5)
+    text = wait_for_text(session, "ANVIL_TUI_EXIT")
     session:close()
     test.ok(text:find("ANVIL_TUI_EXIT", 1, true), text)
     test.ok(text:find("ANVIL_PRIMARY_SCREEN", 1, true), text)
@@ -689,10 +697,10 @@ test.describe("Native terminal session", function()
       shell = [[powershell.exe -NoLogo -NoProfile -Command "$answer=Read-Host 'ANVIL_INTERACTIVE_PROMPT'; Write-Output ('ANVIL_INTERACTIVE_REPLY='+$answer)"]],
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "ANVIL_INTERACTIVE_PROMPT", 5)
+    local text = wait_for_text(session, "ANVIL_INTERACTIVE_PROMPT")
     test.ok(text:find("ANVIL_INTERACTIVE_PROMPT", 1, true), text)
     test.ok(session:write("terminal reply\r"))
-    text = wait_for_text(session, "ANVIL_INTERACTIVE_REPLY=terminal reply", 5)
+    text = wait_for_text(session, "ANVIL_INTERACTIVE_REPLY=terminal reply")
     session:close()
     test.ok(text:find("ANVIL_INTERACTIVE_REPLY=terminal reply", 1, true), text)
   end)
@@ -727,7 +735,7 @@ test.describe("Native terminal session", function()
       shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::Write($env:TERM_PROGRAM+'|'+$env:TERM_PROGRAM_VERSION+'|'+$env:TERM+'|'+$env:COLORTERM)"]],
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "anvil|", 8)
+    local text = wait_for_text(session, "anvil|")
     session:close()
     test.ok(text:find("anvil|", 1, true), text)
     test.ok(text:find("|xterm-256color|truecolor", 1, true), text)
@@ -742,7 +750,7 @@ test.describe("Native terminal session", function()
       shell = [[powershell.exe -NoLogo -NoProfile -Command "[Console]::Write('hyperlinks=' + $env:PI_HYPERLINKS + '|')"]],
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "|", 8)
+    local text = wait_for_text(session, "|")
     session:close()
     test.ok(text:find("hyperlinks=1|", 1, true), text)
   end)
@@ -758,7 +766,7 @@ test.describe("Native terminal session", function()
         shell = string.format('cmd.exe /d /s /c "echo %s"', marker),
       })
       test.ok(session, start_error)
-      local text = wait_for_text(session, marker, 5)
+      local text = wait_for_text(session, marker)
       session:close()
       test.ok(text:find(marker, 1, true), text)
     end
@@ -821,7 +829,7 @@ test.describe("Native terminal session", function()
       cwd = system.getcwd(), shell = shell,
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "ANVIL_ACTIVE_READY", 5)
+    local text = wait_for_text(session, "ANVIL_ACTIVE_READY")
     test.ok(text:find("ANVIL_ACTIVE_READY", 1, true), text)
     session:close()
     coroutine.yield(3)
@@ -845,7 +853,7 @@ test.describe("Native terminal session", function()
       shell = [[wsl.exe -e sh -lc "printf ANVIL_WSL_TERMINAL"]],
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "ANVIL_WSL_TERMINAL", 15)
+    local text = wait_for_text(session, "ANVIL_WSL_TERMINAL")
     session:close()
     test.ok(text:find("ANVIL_WSL_TERMINAL", 1, true), text)
   end)
@@ -861,7 +869,7 @@ test.describe("Native terminal session", function()
       cwd = system.getcwd(), shell = string.format('"%s" -V', ssh),
     })
     test.ok(session, start_error)
-    local text = wait_for_text(session, "OpenSSH", 5)
+    local text = wait_for_text(session, "OpenSSH")
     session:close()
     test.ok(text:find("OpenSSH", 1, true), text)
   end)
