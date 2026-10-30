@@ -88,7 +88,7 @@ function M.place(pane, target)
 end
 
 local schemas = {
-  key = {pane = true, stroke = true},
+  key = {pane = true, stroke = true, keep_sidebar = true},
   focus = {pane = true, feedback = true}, close = {pane = true}, move = {pane = true, target = true},
   snooze = {pane = true}, unsnooze = {pane = true},
   open = {files = true, text = true, target = true},
@@ -110,7 +110,8 @@ local function validate(request)
   if type(request) ~= "table" or type(request.action) ~= "string" then return nil, "invalid request" end
   local schema = schemas[request.action]
   if not schema or not fields(request, schema) then return nil, "unknown action or field" end
-  if request.action == "key" and not identifier(request.stroke) then return nil, "invalid key" end
+  if request.action == "key" and (not identifier(request.stroke)
+    or request.keep_sidebar ~= nil and request.keep_sidebar ~= true) then return nil, "invalid key" end
   -- A key without a Pane acts in the Project's active Pane.
   if schema.pane and (request.action ~= "key" or request.pane ~= nil) and not identifier(request.pane) then
     return nil, "invalid Pane ID"
@@ -203,7 +204,12 @@ local function execute(request, x, y)
   if action == "key" then
     if pane then panes.focus(pane) end
     local performed = require("core.keymap").perform(request.stroke)
-    core.log_quiet("Sidebar key: %s Pane=%s performed=%s", request.stroke, tostring(request.pane), tostring(performed))
+    -- A key that left the keyboard in the Sidebar can ask a question, such as a close of an unsaved file. The
+    -- answer needs the keyboard.
+    local asks = core.active_view == core.nag_view or core.active_view == core.global_prompt_bar
+    if request.keep_sidebar and asks then system.focus_project_sidebar(false) end
+    core.log_quiet("Sidebar key: %s Pane=%s performed=%s keep_sidebar=%s asks=%s", request.stroke,
+      tostring(request.pane), tostring(performed), tostring(request.keep_sidebar), tostring(asks))
     return true
   end
   -- An external launch names files, including new ones. Each opens in a new Pane, as from a Terminal.

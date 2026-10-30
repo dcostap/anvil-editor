@@ -213,6 +213,9 @@ The Sidebar reads the user's bindings for the editor's line commands, such as `c
 The Sidebar keeps list navigation, search-field editing, Sidebar focus, and Numbered Panes.
 It sends each other key with Ctrl or Alt, and each function key, to the cursor row's Pane, or else to its Project.
 A row without a Project sends the key to the Selected Project. Do not add Sidebar copies of editor commands.
+A sent key gives the keyboard to the Project. The keys of Close Pane, Close Others and Reopen Closed Pane keep it in the Sidebar.
+The Project takes it when such a key asks a question, such as a close of an unsaved file.
+A Snooze hours field opened from the focused Sidebar keeps the keyboard there when it closes.
 Run `ui/sidebar_view.lua` and `ui/sidebar_navigation.lua` after changes.
 
 Path Search lists Projects from the Project Sidebar model: Scratch, loaded Projects, then Dormant Projects by age.

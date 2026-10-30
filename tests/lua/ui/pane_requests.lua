@@ -60,6 +60,38 @@ test.describe("Pane requests", function()
     test.same(ran, {b, b})
   end)
 
+  test.it("takes the keyboard from the Sidebar only when a Sidebar close asks first", function()
+    local NagView = require "core.nagview"
+    local stroke, taken = "ctrl+alt+shift+f12", {}
+    local saved_nag, saved_focus = core.nag_view, system.focus_project_sidebar
+    core.nag_view = NagView()
+    -- The shell is the boundary: record the keyboard request instead of sending it.
+    system.focus_project_sidebar = function(focused) taken[#taken + 1] = focused; return true end
+    keymap.add {[stroke] = "pane:close"}
+    local asking = panes.create {factory = function()
+      local view = View()
+      function view:can_close()
+        core.nag_view:show("Close", "Close this Pane?", {{text = "Close", default_yes = true},
+          {text = "Cancel", default_no = true}}, function() end)
+      end
+      return view
+    end}
+    local quiet = create()
+    local ok, err = pcall(function()
+      request {action = "key", pane = quiet.id, stroke = stroke, keep_sidebar = true}
+      test.same(panes.ordered(), {asking})
+      test.same(taken, {})
+      request {action = "key", pane = asking.id, stroke = stroke, keep_sidebar = true}
+      test.ok(core.nag_view.visible)
+      test.same(taken, {false})
+    end)
+    keymap.unbind(stroke, "pane:close")
+    core.nag_view.queue = {}
+    if core.nag_view.visible then core.nag_view:next() end
+    core.nag_view, system.focus_project_sidebar = saved_nag, saved_focus
+    assert(ok, err)
+  end)
+
   test.it("moves groups before, after, and to the end", function()
     local a, b, c = create(), create(), create()
     move(c, "group", a, "before")

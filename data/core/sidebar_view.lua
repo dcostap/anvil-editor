@@ -295,7 +295,8 @@ end
 
 -- Opens the field that takes a Snooze time in whole hours for the Pane `target`.
 function SidebarView:ask_snooze_hours(target)
-  self.hours = {session = target.session, target = target, input = LineInput()}
+  -- A field opened with the mouse gives the keyboard back when it closes. One opened from the keyboard keeps it.
+  self.hours = {session = target.session, target = target, input = LineInput(), return_focus = not self.focused}
   self.action("focus")
   self:rebuild_rows()
 end
@@ -319,7 +320,7 @@ function SidebarView:close_hours(accept)
   if accept and not (count and count >= 1) then return end
   self.hours = nil
   if count then self:set_snooze(hours.target, count) else self:rebuild_rows() end
-  self.action("return_focus")
+  if hours.return_focus then self.action("return_focus") end
 end
 
 -- The shell keeps a Window's old selection until a chosen Pane renders, and opens a Terminal Session's Pane after
@@ -363,15 +364,19 @@ local function forwardable(stroke)
 end
 
 -- A key that the Sidebar does not use acts as if the user pressed it in the cursor's Pane, or else in the cursor's
--- Project. A row without a Project, such as an age group, sends it to the Selected Project.
-function SidebarView:forward_key(stroke)
+-- Project. A row without a Project, such as an age group, sends it to the Selected Project. The key also gives the
+-- keyboard to the Project, unless `keep_sidebar` keeps it here, as for a key that closes Panes. The Project then
+-- takes the keyboard only to ask a question.
+function SidebarView:forward_key(stroke, keep_sidebar)
   if not self.focused or self.hours or not forwardable(stroke) then return false end
   local row = self:get_cursor()
   local project = row and row.project or self:selected_project()
   if not project then return false end
   self.unload_ask = nil
-  self.action("request", "select", project.path,
-    {action = "key", stroke = stroke, pane = row and row.kind == "tab" and row.tab.id or nil})
+  -- The shell gets both messages in this order.
+  if not keep_sidebar then self.action("return_focus") end
+  self.action("request", "select", project.path, {action = "key", stroke = stroke,
+    pane = row and row.kind == "tab" and row.tab.id or nil, keep_sidebar = keep_sidebar or nil})
   return true
 end
 
