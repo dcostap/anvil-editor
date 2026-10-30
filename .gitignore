@@ -16,7 +16,6 @@ __pycache__/
 *.DS_Store
 compile_commands.json
 tools/perf-results/
-tools/baselines/perf_capture_*.png
 !tools/baselines/render/
 !tools/baselines/render/*.png
 

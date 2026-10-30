@@ -1210,8 +1210,6 @@ def run_case(
         "ANVIL_TEST_DISABLE_PLUGINS": "ipc,autorestart,autoreload,autosave_fast,autosaveonfocuslost",
         "ANVIL_D3D11_PRESENT_SYNC_INTERVAL": "1" if mode == "paced-metrics" or settings.get("cadence") == "normal" else "0",
         "ANVIL_PERF_BENCHMARK": "1",
-        "ANVIL_PERF_CAPTURE": "0",
-        "ANVIL_PERF_CADENCE_ONLY": "0",
         "ANVIL_PERF_BENCHMARK_SCENARIO": scenario,
         "ANVIL_PERF_BENCHMARK_EDIT_NOTE": environment_edit_note,
         "ANVIL_PERF_BENCHMARK_THEME": str(settings.get("theme", "")),

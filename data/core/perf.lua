@@ -21,8 +21,6 @@ local function csv_escape(value)
 end
 
 local function output_dir()
-  local dir = os.getenv("ANVIL_PERF_OUTPUT_DIR")
-  if dir and dir ~= "" then return dir end
   return os.getenv("TEMP") or os.getenv("TMP") or "."
 end
 

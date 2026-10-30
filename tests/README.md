@@ -35,7 +35,6 @@ Anvil's Meson suite contains:
 
 - `anvil:fuzzy`
 - `anvil:render-perf-harness`
-- `anvil:idle-perf-harness`
 - `anvil:lua-runtime`
 - `anvil:lua-ui`
 
