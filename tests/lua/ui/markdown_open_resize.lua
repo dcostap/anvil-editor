@@ -32,9 +32,16 @@ local function visible_geometry(view, lines)
     local rows = view:get_visual_row_count_for_line(line)
     test.ok(type(x) == "number" and type(y) == "number" and rows > 0,
       "line " .. line .. " has no visible layout")
-    result[line] = { x = x, y = y, rows = rows }
+    result[line] = { x = x, y = y + view.scroll.y, rows = rows }
   end
   return result
+end
+
+local function same_rows(left, right, lines)
+  for _, line in ipairs(lines) do
+    if left[line].rows ~= right[line].rows or left[line].y ~= right[line].y then return false end
+  end
+  return true
 end
 
 test.describe("Markdown opening after a width change", function()
@@ -67,13 +74,6 @@ test.describe("Markdown opening after a width change", function()
     markdown.live_render.refresh_view(view)
     settle(view)
     local lines = { 1, 3, 299, 599, 899 }
-    local old_geometry = visible_geometry(view, lines)
-
-    view.size.x = 650
-    view:update()
-    visible_geometry(view, lines)
-
-    settle(view)
     local fresh = Editor(buffer)
     context.views[#context.views + 1] = fresh
     fresh.position.x, fresh.position.y = 0, 0
@@ -81,14 +81,25 @@ test.describe("Markdown opening after a width change", function()
     fresh:set_wrapping_enabled(true)
     markdown.live_render.refresh_view(fresh)
     settle(fresh)
+    local old_geometry = visible_geometry(view, lines)
+    local expected_geometry = visible_geometry(fresh, lines)
+
+    view.size.x = 650
+    view:update()
+    local pending_geometry = visible_geometry(view, lines)
+    test.ok(same_rows(pending_geometry, old_geometry, lines)
+      or same_rows(pending_geometry, expected_geometry, lines),
+      "resize exposed a partial row layout instead of a complete presentation")
+
+    settle(view)
     test.equal(wrapping.get_total_wrapped_lines(view), wrapping.get_total_wrapped_lines(fresh))
-    local resized, expected_geometry = visible_geometry(view, lines), visible_geometry(fresh, lines)
+    local resized = visible_geometry(view, lines)
     for _, line in ipairs(lines) do
       local actual, expected = resized[line], expected_geometry[line]
       test.ok(actual.rows >= old_geometry[line].rows,
         "narrower line " .. line .. " lost wrapped rows")
       test.equal(actual.rows, expected.rows, "line " .. line .. " has the wrong row count")
-      test.equal(actual.y + view.scroll.y, expected.y + fresh.scroll.y,
+      test.equal(actual.y, expected.y,
         "line " .. line .. " must have the same layout")
     end
   end)

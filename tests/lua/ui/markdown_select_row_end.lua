@@ -66,15 +66,25 @@ test.describe("Markdown select to the end of a wrapped row", function()
       test.same({ anchor_line, anchor_col, line }, { 2, 4, 2 })
       if view:get_visual_row_count_for_line(2) > 1 then
         checked = checked + 1
-        local _, start_y = view:get_caret_highlight_geometry(anchor_line, anchor_col)
-        local _, end_y = view:get_caret_highlight_geometry(line, col)
+        local start_y, height = view:get_caret_highlight_geometry(anchor_line, anchor_col)
+        local end_y = view:get_caret_highlight_geometry(line, col)
         test.ok(col > anchor_col, "the command did not extend the selection")
         test.equal(end_y, start_y,
           string.format("width %d: the selection end at col %d left the selected row", width, col))
         -- The end reaches the row's end, unless selecting the code span there
         -- would reveal it onto the next row.
-        test.ok(col >= 1 and col <= #buffer.lines[2],
-          string.format("width %d: the selection end is outside the source line", width))
+        local far_right = view.position.x + view.size.x + view:get_font():get_width(buffer.lines[2])
+        local hit_line, hit_col = view:resolve_screen_position(far_right, start_y + height / 2)
+        if hit_line ~= line or hit_col ~= col then
+          test.equal(buffer.lines[2]:sub(col, col), "`",
+            string.format("width %d: selection stopped at %d before row end %d", width, col, hit_col))
+          buffer:set_selection(line, col + 1, anchor_line, anchor_col)
+          settle(view)
+          test.ok(view:get_visual_row(line, col + 1) > view:get_visual_row(anchor_line, anchor_col),
+            "selecting the code delimiter did not move the endpoint to the next row")
+          buffer:set_selection(line, col, anchor_line, anchor_col)
+          settle(view)
+        end
       end
     end
     test.ok(checked > 0, "some width must wrap the line")
