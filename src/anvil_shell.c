@@ -250,6 +250,7 @@ struct ShellWindow {
   ShellProject *selected, *empty;
   ShellProject *sidebar_client; /* Surface state only; the shared record owns the transport. */
   bool closing;
+  AnvilSurfaceTerminalQuit terminal_quit_choice;
   Uint64 close_started_ns;
   bool removing;
   bool picker_pending;
@@ -564,6 +565,7 @@ static void begin_window_close(ShellWindow *window) {
     window->close_entry_valid = window_snapshot(window, &window->close_entry);
     if (!window->close_entry_valid) SDL_Log("Shell could not save the closing Window's loaded Projects");
     window->closing = true;
+    window->terminal_quit_choice = ANVIL_SURFACE_TERMINAL_QUIT_ASK;
     window->close_started_ns = SDL_GetTicksNS();
     SDL_Log("Shell Window Close begin: Window=%u", window->id);
     window->close_generation++;
@@ -1088,6 +1090,12 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_CLOSE_DECISION:
   case ANVIL_SURFACE_MSG_PONG:
     return size == sizeof(AnvilSurfaceInt);
+  case ANVIL_SURFACE_MSG_TERMINAL_QUIT_QUERY:
+    return size == 0;
+  case ANVIL_SURFACE_MSG_TERMINAL_QUIT_CHOICE:
+    return size == sizeof(AnvilSurfaceInt) &&
+      (((const AnvilSurfaceInt *)payload)->value == ANVIL_SURFACE_TERMINAL_QUIT_KEEP ||
+       ((const AnvilSurfaceInt *)payload)->value == ANVIL_SURFACE_TERMINAL_QUIT_END);
   case ANVIL_SURFACE_MSG_NEW_WINDOW:
   case ANVIL_SURFACE_MSG_OPEN_PROJECT_PICKER:
     return size == sizeof(uint32_t) && *(const uint32_t *)payload != 0;
@@ -3659,6 +3667,19 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
       fail_connection(project, "invalid close decision size");
     else
       close_decision(project, value);
+    break;
+  case ANVIL_SURFACE_MSG_TERMINAL_QUIT_QUERY:
+    if (!project->sidebar && project->close_requested_ns) {
+      shell_send_int(project, ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT,
+        window->closing && !project->unloading ? window->terminal_quit_choice : ANVIL_SURFACE_TERMINAL_QUIT_PROJECT);
+    }
+    break;
+  case ANVIL_SURFACE_MSG_TERMINAL_QUIT_CHOICE:
+    if (!project->sidebar && window->closing && !project->unloading && project->close_requested_ns) {
+      window->terminal_quit_choice = value;
+      SDL_Log("Shell Window Terminal choice: Window=%u choice=%s", window->id,
+              value == ANVIL_SURFACE_TERMINAL_QUIT_KEEP ? "keep" : "end");
+    }
     break;
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
     if (!message->size) {

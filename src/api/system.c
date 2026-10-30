@@ -2023,6 +2023,25 @@ static int f_project_close_decision(lua_State *L) {
   return 0;
 }
 
+static int f_request_terminal_quit(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_terminal_quit_query());
+  return 1;
+}
+
+static int f_terminal_quit_choice(lua_State *L) {
+  static const char *const names[] = {"keep", "end", NULL};
+  int choice = luaL_checkoption(L, 1, NULL, names);
+  anvil_hosted_surface_terminal_quit_choice(ANVIL_SURFACE_TERMINAL_QUIT_KEEP + choice);
+  return 0;
+}
+
+static int terminalquit_callback(lua_State *L, SDL_Event *event) {
+  static const char *const names[] = {"project", "ask", "keep", "end"};
+  lua_pushliteral(L, "terminalquit");
+  lua_pushstring(L, names[event->user.code]);
+  return 2;
+}
+
 static int f_select_project(lua_State *L) {
   size_t size = 0;
   const char *path = luaL_checklstring(L, 1, &size);
@@ -2952,6 +2971,8 @@ static const luaL_Reg lib[] = {
   { "get_startup_path_arguments", f_get_startup_path_arguments },
   { "hand_off_project",      f_hand_off_project      },
   { "project_close_decision", f_project_close_decision },
+  { "request_terminal_quit", f_request_terminal_quit },
+  { "terminal_quit_choice", f_terminal_quit_choice },
   { "test_surface_failure", f_test_surface_failure },
   { "sleep",                 f_sleep                 },
   { "idle",                  f_idle                  },
@@ -3000,6 +3021,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
   if (!register_custom_event("terminaleditor", terminaleditor_callback))
     return luaL_error(L, "Unable to register the Terminal editor event: %s", SDL_GetError());
+  if (!register_custom_event("terminalquit", terminalquit_callback))
+    return luaL_error(L, "Unable to register the Terminal quit event: %s", SDL_GetError());
   if (!register_custom_event("panerequest", panerequest_callback))
     return luaL_error(L, "Unable to register the Pane action event: %s", SDL_GetError());
   luaL_newmetatable(L, API_TYPE_NATIVE_PLUGIN);

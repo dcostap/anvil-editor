@@ -550,7 +550,7 @@ else
           end
           local chosen = false
           for i, option in ipairs(core.nag_view.options) do
-            if option.text == (action == "dormant-terminal-end" and "End" or "Keep") then
+            if option.action == (action == "dormant-terminal-end" and "end" or "keep") then
               core.nag_view:change_hovered(i)
               assert(require("core.command").perform("core:select_dialog_entry"))
               chosen = true; break

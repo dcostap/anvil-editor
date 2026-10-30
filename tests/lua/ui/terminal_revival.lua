@@ -105,7 +105,15 @@ test.describe("Terminal revival", function()
         return status.busy == false and screen_text(view):find("ANVIL_ENDED_SCREEN_MARKER", 1, true)
       end), "the shell did not print the marker and go idle")
       core.quit(true)
-      test.ok(core.quit_request ~= previous_quit, "quit asked about an idle shell")
+      test.ok(core.nag_view.visible, "quit did not ask about the idle shell")
+      for i, option in ipairs(core.nag_view.options) do
+        if option.action == "end" then
+          core.nag_view:change_hovered(i)
+          test.ok(require("core.command").perform("core:select_dialog_entry"))
+          break
+        end
+      end
+      test.ok(core.quit_request ~= previous_quit, "End all did not accept quit")
       core.quit_request = previous_quit
       test.equal(view.state, "ended")
       require("terminal_native").finish_close_commands()

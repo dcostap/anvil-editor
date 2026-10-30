@@ -4,16 +4,20 @@ local test = require "core.test"
 local terminal = require "plugins.terminal"
 
 test.describe("Terminal quit decision", function()
-  test.it("ends idle sessions even with a remembered Keep answer", function()
-    test.same(terminal.quit_decision({ { kind = "running", busy = false } }, "keep"), { "end" })
+  test.it("asks for idle shells and keeps them running when requested", function()
+    local statuses = { { kind = "running", busy = false } }
+    local decision, reason = terminal.quit_decision(statuses)
+    test.equal(decision, nil)
+    test.equal(reason, "ask")
+    test.same(terminal.quit_decision(statuses, "keep"), { "detach" })
   end)
 
-  test.it("asks once for busy sessions and preserves idle end decisions", function()
+  test.it("applies one choice to idle and busy sessions", function()
     local statuses = { { kind = "running", busy = false }, { kind = "running", busy = true } }
     local decision, reason = terminal.quit_decision(statuses)
     test.equal(decision, nil)
     test.equal(reason, "ask")
-    test.same(terminal.quit_decision(statuses, "keep"), { "end", "detach" })
+    test.same(terminal.quit_decision(statuses, "keep"), { "detach", "detach" })
     test.same(terminal.quit_decision(statuses, "end"), { "end", "end" })
     decision, reason = terminal.quit_decision(statuses, "cancel")
     test.equal(decision, nil)
@@ -31,7 +35,7 @@ test.describe("Terminal quit decision", function()
 end)
 
 test.describe("Terminal quit confirmation", function()
-  test.it("cancels, remembers Keep, ends idle shells, and preserves busy shells", function()
+  test.it("cancels, remembers Keep, and preserves idle and busy shells", function()
     test.skip_if(PLATFORM ~= "Windows", "ConPTY is Windows-specific")
     local command = require "core.command"
     local storage = require "core.storage"
@@ -40,6 +44,7 @@ test.describe("Terminal quit confirmation", function()
     local idle = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q", placement = "new" })
     local busy = ready(terminal.open { cwd = system.getcwd(), shell = "cmd.exe /D /Q", placement = "new" })
     local busy_state = busy:get_state()
+    local idle_state = idle:get_state()
     local busy_id = busy.session:stats().host_pid
     local previous_quit = core.quit_request
     local previous_close_decision = system.project_close_decision
@@ -80,12 +85,12 @@ test.describe("Terminal quit confirmation", function()
       core.quit(true)
       select("[ ] Remember my choice")
       test.ok(core.nag_view.visible)
-      select("Keep")
+      select("Keep running")
       test.equal(decisions[#decisions], "accepted", "Terminal Keep did not accept the native close")
       local accepted = core.quit_request
       core.quit_request = previous_quit
       test.ok(accepted)
-      test.equal(idle.state, "ended")
+      test.equal(idle.state, "detached")
       test.equal(busy.state, "detached")
       test.equal(storage.load("plugins.terminal", "quit_choice"), "keep")
       restored = terminal.from_state(busy_state)
@@ -119,6 +124,13 @@ test.describe("Terminal quit confirmation", function()
       coroutine.yield(0.01)
     end
     cleanup:on_close()
+    cleanup = terminal.from_state(idle_state)
+    deadline = system.get_time() + 20
+    while cleanup.state == "reconnecting" and system.get_time() < deadline do
+      cleanup:service_session(true)
+      coroutine.yield(0.01)
+    end
+    cleanup:on_close()
     if restored then restored:on_close() end
     busy:on_close(); idle:on_close()
     storage.clear("plugins.terminal", "quit_choice")
@@ -126,16 +138,20 @@ test.describe("Terminal quit confirmation", function()
   end)
 end)
 
-test.describe("Idle Pi close decisions", function()
-  test.it("keeps Pi after its turn finishes without asking", function()
+test.describe("Idle Pi quit decisions", function()
+  test.it("asks what to do with Pi after its turn finishes", function()
     local status = { kind = "running", busy = true, agent_app = "pi", agent_state = "done" }
-    test.same(terminal.quit_decision({ status }), { "detach" })
+    local actions, reason = terminal.quit_decision({ status })
+    test.equal(actions, nil)
+    test.equal(reason, "ask")
     test.equal(status.busy, true)
   end)
 
-  test.it("keeps idle Pi without asking", function()
+  test.it("asks what to do with idle Pi", function()
     local status = { kind = "running", busy = true, agent_app = "pi", agent_state = "idle" }
-    test.same(terminal.quit_decision({ status }), { "detach" })
+    local actions, reason = terminal.quit_decision({ status })
+    test.equal(actions, nil)
+    test.equal(reason, "ask")
     test.equal(status.busy, true)
   end)
 

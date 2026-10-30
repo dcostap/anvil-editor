@@ -43,6 +43,8 @@ void anvil_hosted_surface_exit_intent(bool restart);
 /* This Project exits because another instance shows it. The shell keeps its Window open. */
 void anvil_hosted_surface_hand_off(void);
 void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision);
+bool anvil_hosted_surface_terminal_quit_query(void);
+void anvil_hosted_surface_terminal_quit_choice(AnvilSurfaceTerminalQuit choice);
 void anvil_hosted_surface_dialog_result_failed(void);
 void anvil_hosted_surface_test_packet(bool stale);
 void anvil_hosted_surface_test_memory_release_failure(void);

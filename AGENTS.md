@@ -85,15 +85,18 @@ It keeps terminal text, scrollback and ConPTY's input mode. It does not send a f
 Existing shells need a new Terminal Session to load the updated integration.
 Run `ui/terminal_stale_modes.lua` after changes.
 
-Close and quit skip confirmation when Pi reports `idle` or `done`, even while its shell command remains busy.
-Quit still detaches those sessions unless the user chooses End, so Pi keeps running.
-Quit ends idle shells, and End ends all shells. An ended session is not closed. It revives in its Pane on the next start.
+Pane Close skips confirmation when Pi reports `idle` or `done`, even while its shell command remains busy.
+Window Close asks once for its live Terminal Sessions, including idle shells and idle Pi.
+Keep running detaches them. End all ends them but keeps their revival records. Cancel stops Window Close.
+The shell shares the choice across that Window's Projects, not other Windows. A later Window Close asks again.
+Remembered Project quit choices do not suppress the Window prompt. Project unload and direct mode keep their remembered choices.
+An ended session is not closed. It revives in its Pane on the next start.
 The host gets `ANVIL_TERMINAL_END`. It stops the shell, but keeps the record, the screen and the Pi report.
 The session keeps its ID, so its Snooze, seen time and Pi session stay. Only a Pane close removes them.
 Older hosts read `END` as a disconnect and keep running. Run `ui/terminal_quit.lua`, `ui/terminal_revival.lua` and `ui/terminal_agent_resume.lua` after changes.
-Other agent states keep the normal busy check. Reconnecting sessions still require confirmation.
+Pane Close keeps the normal busy check for other agent states. Reconnecting sessions still require confirmation.
 The host sends the root Agent Status with its live status packet. Older hosts keep the normal busy check.
-Run `ui/terminal_quit.lua` and `ui/terminal_agent_status.lua` after changes.
+Run `ui/terminal_quit.lua`, `ui/terminal_agent_status.lua`, and the `windows-close-terminals-keep` and `windows-close-terminals-end` shell probes after changes.
 
 The PowerShell integration sets the Terminal title to the submitted command.
 The host records its start, finish, and exit status from the trusted OSC 133 marks.

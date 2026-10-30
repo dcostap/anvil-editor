@@ -4,6 +4,7 @@
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if not action or not action:match("^windows%-close") then return end
 local dirty = action == "windows-close-dirty" or action == "windows-close-cleanup-cancel"
+local terminals = action == "windows-close-terminals-keep" or action == "windows-close-terminals-end"
 local core, common = require "core", require "core.common"
 local command = require "core.command"
 local ffi = require "ffi"
@@ -80,6 +81,7 @@ if path:match("/driver$") then
  core.add_background_thread(function()
   local subject
   local handles = {}
+  local terminal_states = {}
   local ok, err = pcall(function()
    subject = assert(require("core.process").start({EXEFILE,"--shell",root .. "/Project"}, {
     stdin=process.REDIRECT_DISCARD, stdout=process.REDIRECT_DISCARD, stderr=process.REDIRECT_DISCARD}))
@@ -140,6 +142,36 @@ if path:match("/driver$") then
    local c = wait(function() return load("c-ready") end, 20)
    assert(c.window_id == a.window_id, "Other did not load into Window A")
    local pc = open(c.pid)
+
+   if terminals then
+    local ta, tb, tc = open(a.host_pid), open(b.host_pid), open(c.host_pid)
+    terminal_states = {a.terminal, b.terminal, c.terminal}
+    user32.PostMessageW(aw, 0x10, 0, 0)
+    wait(function() return load("nag-c-1") end, 15, "Window Close did not ask about idle Terminals")
+    save("answer-c-1", "cancel")
+    wait(function() return load("cancelled-c-1") end, 10)
+    assert(running(pa) and running(pc) and running(ta) and running(tc), "Cancel ended a Project or Terminal")
+    user32.PostMessageW(aw, 0x10, 0, 0)
+    wait(function() return load("nag-c-2") end, 15, "Window Close did not ask again after Cancel")
+    save("answer-c-2", action == "windows-close-terminals-keep" and "keep" or "end")
+    wait(function() return count() == 1 end, 20, "one Terminal choice did not close both Projects")
+    assert(not load("nag-a-1"), "Window Close asked for each Project separately")
+    assert(not load("nag-b-1") and running(pb) and running(tb), "Window Close affected another Window")
+    if action == "windows-close-terminals-keep" then
+     assert(running(ta) and running(tc), "Keep running ended an idle Terminal")
+    else
+     wait(function() return not running(ta) and not running(tc) end, 20, "End all left a Terminal running")
+     for _, state in ipairs {a, c} do
+      local file = assert(io.open(state.record, "rb"), "End all removed the revival record")
+      file:close()
+     end
+    end
+    user32.PostMessageW(bw, 0x10, 0, 0)
+    wait(function() return load("nag-b-1") end, 15, "another Window reused the first Window's choice")
+    save("answer-b-1", "end")
+    wait(function() return not subject:running() and not running(tb) end, 20)
+    return
+   end
 
    if action == "windows-close-update-disconnect" then
     -- Hold the selected Project alive while its transport fails. Its later exit
@@ -296,6 +328,14 @@ if path:match("/driver$") then
    error("unknown Window Close probe " .. action)
   end)
   save("release-cleanup", true)
+  for _, state in ipairs(terminal_states) do
+   local view = require("plugins.terminal").from_state(state)
+   local deadline = system.get_time() + 20
+   while view.session and view.state == "reconnecting" and system.get_time() < deadline do
+    view:service_session(true); coroutine.yield(.01)
+   end
+   view:on_close()
+  end
   local file=assert(io.open(os.getenv("ANVIL_PROJECT_PROBE_RESULT"),"wb"))
   file:write("return ",common.serialize{ok=ok,error=ok and nil or tostring(err),action=action}); file:close()
   for _, handle in ipairs(handles) do ntdll.NtResumeProcess(handle); kernel.CloseHandle(handle) end
@@ -319,12 +359,24 @@ elseif names[path] then
   -- Let first-run Workspace setup finish before editing.
   coroutine.yield(.2)
   local editor
+  local terminal
+  if terminals then
+   -- A saved choice from Project unload must not suppress a Window's choice.
+   require("core.storage").save("plugins.terminal", "quit_choice", "end")
+   terminal = require("plugins.terminal").open {shell="cmd.exe /D /Q", cwd=path, placement="new"}
+   wait(function()
+    terminal:service_session(true)
+    return terminal.state == "running" and terminal:close_status().busy == false
+   end, 30, "Terminal did not start idle")
+  end
   if dirty then
    editor = core.open_file(path .. "/edited.txt"); core.set_active_view(editor)
    editor.buffer:insert(1, 1, "DIRTY_" .. name .. "_")
   end
   save(name .. "-ready", {pid=tonumber(kernel.GetCurrentProcessId()), shell_pid=system.get_window_process_id(),
-   window_id=system.get_anvil_window_id()})
+   window_id=system.get_anvil_window_id(), terminal=terminal and terminal:get_state(),
+   host_pid=terminal and terminal.session:stats().host_pid,
+   record=terminal and (USERDIR .. "/terminal-sessions/" .. terminal.session_id .. ".lua")})
   if name == "a" then
    -- The paused launch worker serves the second Project, so select Other before opening Window B.
    assert(system.select_project(root .. "/Other"))
@@ -335,12 +387,24 @@ elseif names[path] then
   while true do
    if load("unload-" .. name) then command.perform("core:unload_project"); return end
    if load("quit-" .. name) then quit(); return end
-   local visible = core.nag_view.visible and core.nag_view:get_title() == "Unsaved Changes"
+   local visible = core.nag_view.visible and core.nag_view:get_title() == (terminals and "Running Terminals" or "Unsaved Changes")
    if visible and not pending then asked = asked + 1; pending = true; save("nag-" .. name .. "-" .. asked, true) end
    local answer = pending and load("answer-" .. name .. "-" .. asked)
    if answer then
     pending = false
-    if answer == "discard" then
+    if terminals then
+     for i, option in ipairs(core.nag_view.options) do
+      if option.action == answer then
+       core.nag_view:change_hovered(i)
+       assert(command.perform("core:select_dialog_entry"))
+       break
+      end
+     end
+     if answer == "cancel" then
+      wait(function() return not core.nag_view.visible end, 5)
+      save("cancelled-" .. name .. "-" .. asked, true)
+     end
+    elseif answer == "discard" then
      command.perform("core:select_dialog_yes")
     else
      command.perform("core:select_dialog_no")

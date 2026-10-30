@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <SDL3/SDL.h>
 
-#define ANVIL_SURFACE_PROTOCOL_VERSION 39u
+#define ANVIL_SURFACE_PROTOCOL_VERSION 40u
 #define ANVIL_SURFACE_MAX_PAYLOAD (64u * 1024u)
 #define ANVIL_SURFACE_NAME_MAX 96
 /* A Terminal Session id: 32 lowercase hex digits. */
@@ -55,6 +55,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_ZOOM_WHEEL = 16,
   /* The Sidebar's menu closed. Payload: AnvilSurfaceInt, the chosen label's number from 1, or 0 for none. */
   ANVIL_SURFACE_MSG_MENU_RESULT = 17,
+  /* Terminal quit scope and the choice already made for this Window. Payload: AnvilSurfaceInt. */
+  ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT = 18,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -120,7 +122,18 @@ typedef enum {
    * then at most ANVIL_SURFACE_MENU_LABELS labels, each followed by NUL. A label that starts with a tab belongs to
    * the submenu of the label above it. A label "-" is a separator. */
   ANVIL_SURFACE_MSG_MENU = 107,
+  /* Request the current Terminal quit scope. No payload. */
+  ANVIL_SURFACE_MSG_TERMINAL_QUIT_QUERY = 108,
+  /* Save Keep or End for the rest of this Window Close. Payload: AnvilSurfaceInt. */
+  ANVIL_SURFACE_MSG_TERMINAL_QUIT_CHOICE = 109,
 } AnvilSurfaceMessageType;
+
+typedef enum {
+  ANVIL_SURFACE_TERMINAL_QUIT_PROJECT,
+  ANVIL_SURFACE_TERMINAL_QUIT_ASK,
+  ANVIL_SURFACE_TERMINAL_QUIT_KEEP,
+  ANVIL_SURFACE_TERMINAL_QUIT_END
+} AnvilSurfaceTerminalQuit;
 
 /* Static stage names only. Times use the same performance clock as system.get_time().
  * Records contain no key codes, text, or Buffer contents. Stop writes the CSV. */

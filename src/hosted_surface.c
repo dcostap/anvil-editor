@@ -672,6 +672,12 @@ static void dispatch_message(HostedMessage *message) {
     case ANVIL_SURFACE_MSG_CLOSE:
       push_window_event(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
       break;
+    case ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT: {
+      CustomEvent event = {.code = ((AnvilSurfaceInt *)payload)->value};
+      if (!push_custom_event("terminalquit", &event))
+        signal_loss("Terminal quit event delivery failed", message->type, message->size);
+      break;
+    }
     case ANVIL_SURFACE_MSG_PREPARE_UPDATE:
       push_window_event(hosted.update_event);
       break;
@@ -809,6 +815,11 @@ static int SDLCALL reader_thread(void *data) {
       case ANVIL_SURFACE_MSG_PING:
       case ANVIL_SURFACE_MSG_ZOOM_WHEEL:
         if (size != sizeof(AnvilSurfaceInt)) goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT:
+        if (hosted.sidebar || size != sizeof(AnvilSurfaceInt) ||
+            ((AnvilSurfaceInt *)body)->value < ANVIL_SURFACE_TERMINAL_QUIT_PROJECT ||
+            ((AnvilSurfaceInt *)body)->value > ANVIL_SURFACE_TERMINAL_QUIT_END) goto failed;
         break;
       case ANVIL_SURFACE_MSG_CLOSE:
       case ANVIL_SURFACE_MSG_PREPARE_UPDATE:
@@ -974,6 +985,18 @@ static void send_message(uint16_t type, const void *payload, uint32_t size) {
 void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) {
   AnvilSurfaceInt message = {decision};
   send_message(ANVIL_SURFACE_MSG_CLOSE_DECISION, &message, sizeof(message));
+}
+
+bool anvil_hosted_surface_terminal_quit_query(void) {
+  if (!hosted.active || hosted.sidebar || hosted.lost) return false;
+  send_message(ANVIL_SURFACE_MSG_TERMINAL_QUIT_QUERY, NULL, 0);
+  return true;
+}
+
+void anvil_hosted_surface_terminal_quit_choice(AnvilSurfaceTerminalQuit choice) {
+  AnvilSurfaceInt message = {choice};
+  if (hosted.active && !hosted.sidebar)
+    send_message(ANVIL_SURFACE_MSG_TERMINAL_QUIT_CHOICE, &message, sizeof(message));
 }
 
 void anvil_hosted_surface_dialog_result_failed(void) {
@@ -1634,6 +1657,8 @@ void anvil_hosted_surface_finish_adoption(void) {}
 void anvil_hosted_surface_exit_intent(bool restart) { (void)restart; }
 void anvil_hosted_surface_hand_off(void) {}
 void anvil_hosted_surface_close_decision(AnvilSurfaceCloseDecision decision) { (void)decision; }
+bool anvil_hosted_surface_terminal_quit_query(void) { return false; }
+void anvil_hosted_surface_terminal_quit_choice(AnvilSurfaceTerminalQuit choice) { (void)choice; }
 void anvil_hosted_surface_dialog_result_failed(void) {}
 void anvil_hosted_surface_render_failed(const char *cause) { (void)cause; }
 void anvil_hosted_surface_test_packet(bool stale) { (void)stale; }
