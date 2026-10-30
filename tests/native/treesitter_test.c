@@ -29,18 +29,6 @@
 } while (0)
 
 typedef struct {
-  uint32_t byte;
-  TSPoint point;
-} OffsetPosition;
-
-typedef struct {
-  uint32_t *line_starts;
-  uint32_t line_count;
-  char *normalized;
-  uint32_t normalized_len;
-} OffsetIndex;
-
-typedef struct {
   const char *data;
   uint32_t len;
 } InputBuffer;
@@ -56,60 +44,6 @@ typedef struct {
   uint32_t variables;
   uint32_t priority_constants;
 } CaptureStats;
-
-static void offset_index_free(OffsetIndex *index) {
-  free(index->line_starts);
-  free(index->normalized);
-  memset(index, 0, sizeof(*index));
-}
-
-static bool offset_index_build(OffsetIndex *index, const char *input) {
-  memset(index, 0, sizeof(*index));
-  size_t input_len = strlen(input);
-  index->normalized = (char *) malloc(input_len + 1);
-  if (!index->normalized) return false;
-
-  uint32_t out_len = 0;
-  for (size_t i = 0; i < input_len; i++) {
-    if (input[i] == '\r' && i + 1 < input_len && input[i + 1] == '\n') continue;
-    index->normalized[out_len++] = input[i];
-  }
-  index->normalized[out_len] = '\0';
-  index->normalized_len = out_len;
-
-  uint32_t line_count = 1;
-  for (uint32_t i = 0; i < out_len; i++) {
-    if (index->normalized[i] == '\n' && i + 1 < out_len) line_count++;
-  }
-
-  index->line_starts = (uint32_t *) malloc(sizeof(uint32_t) * line_count);
-  if (!index->line_starts) {
-    offset_index_free(index);
-    return false;
-  }
-  index->line_count = line_count;
-  index->line_starts[0] = 0;
-  uint32_t line = 1;
-  for (uint32_t i = 0; i < out_len && line < line_count; i++) {
-    if (index->normalized[i] == '\n') index->line_starts[line++] = i + 1;
-  }
-  return true;
-}
-
-static bool offset_position_from_anvil_pos(
-  const OffsetIndex *index,
-  uint32_t line,
-  uint32_t col,
-  OffsetPosition *out
-) {
-  if (line == 0 || col == 0 || line > index->line_count) return false;
-  uint32_t byte = index->line_starts[line - 1] + col - 1;
-  if (byte > index->normalized_len) return false;
-  out->byte = byte;
-  out->point.row = line - 1;
-  out->point.column = col - 1;
-  return true;
-}
 
 static const char *buffer_read(
   void *payload,
@@ -441,37 +375,32 @@ static int test_cpp_query(void) {
 }
 
 static int test_offset_conversion(void) {
-  OffsetIndex index;
-  OffsetPosition pos;
+  const char *lines[] = { "abc\n", "h\xc3\xa9\n", "z\n" };
+  uint32_t lengths[] = {
+    (uint32_t) strlen(lines[0]),
+    (uint32_t) strlen(lines[1]),
+    (uint32_t) strlen(lines[2]),
+  };
+  AnvilTSSnapshot *snapshot = anvil_ts_snapshot_new_from_lines(lines, lengths, 3, NULL);
+  CHECK(snapshot != NULL);
+  AnvilTSPosition pos;
 
-  CHECK(offset_index_build(&index, "abc\ndef\n"));
-  CHECK(offset_position_from_anvil_pos(&index, 2, 2, &pos));
+  CHECK(anvil_ts_snapshot_position_from_anvil(snapshot, 2, 2, &pos));
   CHECK(pos.byte == 5);
   CHECK(pos.point.row == 1);
   CHECK(pos.point.column == 1);
-  offset_index_free(&index);
 
-  CHECK(offset_index_build(&index, "h\xc3\xa9\nz\n"));
-  CHECK(offset_position_from_anvil_pos(&index, 1, 4, &pos));
-  CHECK(pos.byte == 3);
-  CHECK(pos.point.row == 0);
-  CHECK(pos.point.column == 3);
-  offset_index_free(&index);
-
-  CHECK(offset_index_build(&index, "a\r\nb\r\n"));
-  CHECK(strcmp(index.normalized, "a\nb\n") == 0);
-  CHECK(offset_position_from_anvil_pos(&index, 2, 1, &pos));
-  CHECK(pos.byte == 2);
+  CHECK(anvil_ts_snapshot_position_from_anvil(snapshot, 2, 4, &pos));
+  CHECK(pos.byte == 7);
   CHECK(pos.point.row == 1);
-  CHECK(pos.point.column == 0);
-  offset_index_free(&index);
-
-  CHECK(offset_index_build(&index, "abc\n"));
-  CHECK(offset_position_from_anvil_pos(&index, 1, 4, &pos));
-  CHECK(pos.byte == 3);
-  CHECK(pos.point.row == 0);
   CHECK(pos.point.column == 3);
-  offset_index_free(&index);
+
+  CHECK(anvil_ts_snapshot_position_from_anvil(snapshot, 3, 2, &pos));
+  CHECK(pos.byte == 9);
+  CHECK(pos.point.row == 2);
+  CHECK(pos.point.column == 1);
+  CHECK(!anvil_ts_snapshot_position_from_anvil(snapshot, 3, 3, &pos));
+  anvil_ts_snapshot_free(snapshot);
 
   return 0;
 }

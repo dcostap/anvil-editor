@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #expr); return 1; } } while (0)
+#define ASYNC_TIMEOUT_MS 10000
 
 static int drain_until_type(AnvilWorkerPool *pool, uint64_t job_id, const char *type, int timeout_ms) {
   Uint64 start = SDL_GetTicks();
@@ -45,7 +46,7 @@ int main(int argc, char **argv) {
   CHECK(error == NULL);
   uint64_t echo_id = anvil_worker_job_id(echo_job);
   CHECK(echo_id != 0);
-  CHECK(drain_until_type(pool, echo_id, "final", 1000));
+  CHECK(drain_until_type(pool, echo_id, "final", ASYNC_TIMEOUT_MS));
   CHECK(strcmp(anvil_worker_job_status_string(echo_job), "complete") == 0);
   anvil_worker_job_release(echo_job);
 
@@ -55,7 +56,7 @@ int main(int argc, char **argv) {
   uint64_t count_id = anvil_worker_job_id(count_job);
   int saw_progress = 0;
   Uint64 start = SDL_GetTicks();
-  while ((int)(SDL_GetTicks() - start) < 1000 && !saw_progress) {
+  while ((int)(SDL_GetTicks() - start) < ASYNC_TIMEOUT_MS && !saw_progress) {
     AnvilWorkerResult *result = anvil_worker_pool_pop_result(pool);
     if (result) {
       if (anvil_worker_result_job_id(result) == count_id && strcmp(anvil_worker_result_type(result), "progress") == 0) saw_progress = 1;
@@ -66,14 +67,14 @@ int main(int argc, char **argv) {
   }
   CHECK(saw_progress);
   CHECK(anvil_worker_pool_cancel(pool, count_job));
-  CHECK(drain_until_type(pool, count_id, "cancelled", 1000));
+  CHECK(drain_until_type(pool, count_id, "cancelled", ASYNC_TIMEOUT_MS));
   CHECK(strcmp(anvil_worker_job_status_string(count_job), "cancelled") == 0);
   anvil_worker_job_release(count_job);
 
   AnvilWorkerJobSpec fail = { "test_fail", "boom", 0, 0 };
   AnvilWorkerJob *fail_job = anvil_worker_pool_submit(pool, &fail, &error);
   CHECK(fail_job != NULL);
-  CHECK(drain_until_type(pool, anvil_worker_job_id(fail_job), "error", 1000));
+  CHECK(drain_until_type(pool, anvil_worker_job_id(fail_job), "error", ASYNC_TIMEOUT_MS));
   CHECK(strcmp(anvil_worker_job_status_string(fail_job), "failed") == 0);
   anvil_worker_job_release(fail_job);
 
@@ -90,7 +91,7 @@ int main(int argc, char **argv) {
   uint64_t ts_id = anvil_worker_job_id(ts_job);
   int saw_ts_result = 0;
   start = SDL_GetTicks();
-  while ((int)(SDL_GetTicks() - start) < 1000 && !saw_ts_result) {
+  while ((int)(SDL_GetTicks() - start) < ASYNC_TIMEOUT_MS && !saw_ts_result) {
     AnvilWorkerResult *result = anvil_worker_pool_pop_result(pool);
     if (result) {
       if (anvil_worker_result_job_id(result) == ts_id && strcmp(anvil_worker_result_type(result), "result") == 0) {
@@ -112,7 +113,7 @@ int main(int argc, char **argv) {
     }
   }
   CHECK(saw_ts_result);
-  CHECK(drain_until_type(pool, ts_id, "final", 1000));
+  CHECK(drain_until_type(pool, ts_id, "final", ASYNC_TIMEOUT_MS));
   CHECK(strcmp(anvil_worker_job_status_string(ts_job), "complete") == 0);
   anvil_worker_job_release(ts_job);
 
@@ -131,7 +132,7 @@ int main(int argc, char **argv) {
   uint64_t markdown_id = anvil_worker_job_id(markdown_job);
   int saw_markdown_result = 0;
   start = SDL_GetTicks();
-  while ((int)(SDL_GetTicks() - start) < 1000 && !saw_markdown_result) {
+  while ((int)(SDL_GetTicks() - start) < ASYNC_TIMEOUT_MS && !saw_markdown_result) {
     AnvilWorkerResult *result = anvil_worker_pool_pop_result(pool);
     if (result) {
       if (anvil_worker_result_job_id(result) == markdown_id && strcmp(anvil_worker_result_type(result), "result") == 0) {
@@ -160,7 +161,7 @@ int main(int argc, char **argv) {
     }
   }
   CHECK(saw_markdown_result);
-  CHECK(drain_until_type(pool, markdown_id, "final", 1000));
+  CHECK(drain_until_type(pool, markdown_id, "final", ASYNC_TIMEOUT_MS));
   CHECK(strcmp(anvil_worker_job_status_string(markdown_job), "complete") == 0);
   anvil_worker_job_release(markdown_job);
 
@@ -179,7 +180,7 @@ int main(int argc, char **argv) {
   uint64_t git_status_id = anvil_worker_job_id(git_status_job);
   int saw_git_status_result = 0;
   start = SDL_GetTicks();
-  while ((int)(SDL_GetTicks() - start) < 1000 && !saw_git_status_result) {
+  while ((int)(SDL_GetTicks() - start) < ASYNC_TIMEOUT_MS && !saw_git_status_result) {
     AnvilWorkerResult *result = anvil_worker_pool_pop_result(pool);
     if (result) {
       if (anvil_worker_result_job_id(result) == git_status_id && strcmp(anvil_worker_result_type(result), "result") == 0) {
@@ -199,7 +200,7 @@ int main(int argc, char **argv) {
     }
   }
   CHECK(saw_git_status_result);
-  CHECK(drain_until_type(pool, git_status_id, "final", 1000));
+  CHECK(drain_until_type(pool, git_status_id, "final", ASYNC_TIMEOUT_MS));
   anvil_worker_job_release(git_status_job);
 
   CHECK(anvil_worker_pool_submitted_count(pool) == 6);

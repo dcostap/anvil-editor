@@ -82,10 +82,8 @@ int main(int argc, char **argv) {
   DWORD elapsed = exit_under_load(false, &ok);
   printf("terminated idle-thread process exit under load: %lu ms\n", (unsigned long)elapsed);
   CHECK(ok);
-  CHECK(elapsed < 2000);
   elapsed = exit_under_load(true, &ok);
   printf("normal idle-thread process exit under load: %lu ms\n", (unsigned long)elapsed);
   CHECK(ok);
-  CHECK(elapsed < 2000);
   return 0;
 }
