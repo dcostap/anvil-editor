@@ -353,6 +353,55 @@ test.describe("Image View interaction", function()
     test.ok(button.y >= title.position.y + title.size.y, "actions must not cover Window controls")
   end)
 
+  test.it("shows and zooms the overlay across the Project Sidebar", function(context)
+    local root = core.root_panel
+    local old_x, old_width = root.position.x, root.size.x
+    local old_areas, old_color = root.above_sidebar, root.surface_overlay_color
+    local old_publish = system.set_surface_overlay
+    local saved, published = {}, nil
+    for _, name in ipairs({ "draw_canvas_scaled", "draw_rect", "draw_rounded_rect", "draw_text", "set_clip_rect",
+      "push_transform", "pop_transform" }) do
+      saved[name] = renderer[name]
+      renderer[name] = function() return 0 end
+    end
+    system.set_surface_overlay = function(_, _, _, _, _, areas) published = areas end
+    local ok, err = pcall(function()
+      config.transitions = false
+      local width = old_x + old_width
+      root.position.x, root.size.x = width / 2, width / 2
+      root.above_sidebar, root.surface_overlay_color = {}, nil
+      test.ok(overlay.open(context.path))
+      overlay.update()
+      local view = overlay.get_view()
+      test.equal(view.position.x, 0, "the overlay must start at the Window's left edge")
+      test.equal(view.size.x, width, "the Sidebar must not reduce the overlay width")
+      overlay.draw()
+      root:publish_surface_overlay()
+      local x, y, w, h = view:get_image_rect()
+      test.ok(x < root.position.x, "the image must extend over the Sidebar")
+      local mx, my = (x + root.position.x) / 2, y + h / 2
+      local covered = false
+      for _, area in ipairs(published or {}) do
+        covered = covered or (mx >= area[1] and mx < area[1] + area[3]
+          and my >= area[2] and my < area[2] + area[4])
+      end
+      test.ok(covered, "the shell must show the image above the Sidebar")
+      overlay.on_mouse_moved(mx, my, 0, 0)
+      test.ok(overlay.on_mouse_wheel(1))
+      local _, _, zoomed_width = view:get_image_rect()
+      test.ok(zoomed_width > w, "wheel input over the Sidebar must zoom the image")
+      root.position.x, root.size.x = 0, width
+      overlay.update()
+      test.equal(view.size.x, width, "hiding the Sidebar must not change the overlay width")
+    end)
+    overlay.close()
+    root.position.x, root.size.x = old_x, old_width
+    root.above_sidebar, root.surface_overlay_color = old_areas, old_color
+    system.set_surface_overlay = old_publish
+    for name, fn in pairs(saved) do renderer[name] = fn end
+    if not ok then error(err, 0) end
+  end)
+
   test.it("keeps the overlay image in place while opening and closing", function(context)
     test.ok(overlay.open(context.path))
     local view = overlay.get_view()

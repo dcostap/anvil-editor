@@ -39,8 +39,7 @@ local function now() return system.get_time() end
 local function ease_out(t) return 1 - (1 - t) ^ 3 end
 
 local function root_rect()
-  local root = core.root_panel
-  return root.position.x, root.position.y, root.size.x, root.size.y
+  return core.root_panel:backdrop_rect()
 end
 
 local function contains(rect, x, y)
@@ -493,6 +492,8 @@ function overlay.draw()
   local backdrop = with_alpha(style.image_overlay_background, p)
   renderer.draw_rect(x, y, w, h, backdrop)
   core.root_panel:dim_sidebar(backdrop)
+  -- Present the whole overlay above the shell's Sidebar, not only its dim.
+  core.root_panel:show_above_sidebar(x, y, w, h)
   core.push_clip_rect(x, y, w, h)
   -- Fade and scale in place. Do not move between the source and overlay positions.
   local fade = p < 0.999

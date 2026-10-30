@@ -270,7 +270,7 @@ _Avoid_: Scale in user-facing command names
 The magnification of an image inside its View or preview. It does not change the image file or interface size.
 
 **Image Overlay**:
-A viewer above the whole editor that shows one image clicked in Markdown Live Preview or a Terminal View. It is not a View in a Pane.
+A viewer above the whole Anvil Window, including the Project Sidebar. It shows one image clicked in Markdown Live Preview or a Terminal View. It is not a View in a Pane.
 _Avoid_: Lightbox, image popup, Markdown image overlay
 
 **Image Size**:
