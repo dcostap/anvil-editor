@@ -333,12 +333,20 @@ function M.navigate_remote(direction, opts)
     return navigate_remote_source(source, direction, opts)
   end
   local origin, pane = core.active_view, panes.active()
-  local request = (source.navigation_request or 0) + 1
-  source.navigation_request = request
+  local request = source.navigation_request
+  if not request or request.origin ~= origin or request.pane ~= pane then
+    request = { origin = origin, pane = pane }
+    source.navigation_request = request
+  end
+  request[#request + 1] = { direction = direction, pane = opts.pane }
   source.view:prepare_points_of_interest(function(ready)
-    if ready and M.remote_sources[project] == source and source.navigation_request == request
-        and core.active_view == origin and panes.active() == pane then
-      navigate_remote_source(source, direction, opts)
+    if source.navigation_request ~= request then return end
+    source.navigation_request = nil
+    if not ready or M.remote_sources[project] ~= source
+        or core.active_view ~= origin or panes.active() ~= pane then return end
+    for _, action in ipairs(request) do
+      if M.remote_sources[project] ~= source then break end
+      navigate_remote_source(source, action.direction, action)
     end
   end)
   return true
