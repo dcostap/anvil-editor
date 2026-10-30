@@ -144,7 +144,7 @@ def main() -> int:
         "windows-close-terminals-keep", "windows-close-terminals-end",
         "launch-terminal-editor", "launch-terminal-move", "launch-file-search",
         "restore-loaded", "restore-select-late", "navigate-sidebar", "windows-close-cleanup", "windows-close-cleanup-cancel", "windows-close-cleanup-unload", "windows-close-update-disconnect",
-        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-files", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "project-menu-background", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
+        "windows-new", "windows-open", "windows-menu", "windows-picker", "windows-picker-command", "windows-picker-late", "windows-picker-native", "windows-owner-close", "windows-sidebars", "windows-sidebars-recovery", "windows-move", "windows-move-close", "windows-move-target-close", "windows-move-dialog", "windows-close-dirty", "windows-close-launch", "windows-close-hang", "windows-close-crash", "windows-close-gpu", "windows-close-quit", "launch-forward", "launch-files", "launch-link", "launch-handoff", "launch-concurrent", "launch-stale", "launch-hung", "launch-userdir", "restore-crash", "restore-sequential", "restore-argument", "restore-invalid", "restore-missing", "restore-offscreen", "restore-stagger", "adopt-return", "adopt-timeout", "adopt-stale", "adopt-hung", "adopt-userdir", "resize-live", "resize-stall", "layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "alt-navigation", "project-menu", "project-menu-background", "launch", "arguments", "option-arguments", "invalid", "quit", "quit-error",
         "shell-loss", "end-loss", "stalled-loss", "restart", "switch", "new-window", "recovery", "shell-empty", "shell-sidebar",
         "duplicate", "foreground", "conflict", "controls", "routing", "move", "dialogs",
         "dialog-error", "dialog-late", "dialog-close", "dialog-blocked-close", "close", "force-close",
@@ -228,6 +228,8 @@ def main() -> int:
                         fixture = "shell_terminal_focus_probe.lua"
                     if action == "toggle-sidebar":
                         fixture = "shell_sidebar_layout_probe.lua"
+                    if action == "alt-navigation":
+                        fixture = "shell_alt_navigation_probe.lua"
                     if action in ("windows-sidebar-layout", "windows-sidebar-folding"):
                         fixture = "shell_sidebar_windows_probe.lua"
                     if action == "navigate-sidebar":
@@ -267,7 +269,7 @@ def main() -> int:
                     init = ('local open = shmem.open\nshmem.open = function(name, capacity)\n'
                             f'  return open(name == "anvil-ipc" and "{namespace}" or name, capacity)\nend\n')
                     # A hand-off needs the IPC check that finds the Project in another instance.
-                    if action != "launch-handoff" and (action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "project-menu", "project-menu-background", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch")):
+                    if action != "launch-handoff" and (action == "dialog-blocked-close" or action.startswith(("windows-", "fault-", "startup-", "identity-", "launch-", "restore-", "adopt-", "resize-")) or action in ("layers", "hang-overlay", "theme-global", "theme-empty", "reveal", "maximize-button", "zoom-global", "select-hold", "terminal-focus", "toggle-sidebar", "alt-navigation", "project-menu", "project-menu-background", "conflict", "arguments", "option-arguments", "controls", "routing", "move", "dialogs", "dialog-error", "dialog-late", "dialog-close", "close", "force-close", "hidden-render", "hidden-close", "loaded-switch")):
                         init += 'local config = require "core.config"\nconfig.plugins.ipc.single_instance = false\n'
                     (case_dir / "user/init.lua").write_text(init, encoding="utf-8")
                     if action in ("theme-global", "theme-empty", "reveal"):
@@ -284,7 +286,7 @@ def main() -> int:
                             "ANVIL_USERDIR": native_path(case_dir / "user"),
                             "USERPROFILE": native_path(case_dir / "user"), "HOME": native_path(case_dir / "user"),
                             "ANVIL_PROJECT_PROBE": action, "ANVIL_PROJECT_PROBE_MODE": mode,
-                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("zoom-global", "navigate-sidebar", "routing", "windows-open", "layers", "hang-overlay", "terminal-focus", "toggle-sidebar", "project-menu", "project-menu-background", "recovery", "shell-empty", "shell-sidebar") or action.startswith("windows-move") else "",
+                            "ANVIL_INPUT_ROUTING_PROBE": "1" if action in ("zoom-global", "navigate-sidebar", "routing", "windows-open", "layers", "hang-overlay", "terminal-focus", "toggle-sidebar", "alt-navigation", "project-menu", "project-menu-background", "recovery", "shell-empty", "shell-sidebar") or action.startswith("windows-move") else "",
                             "ANVIL_PROJECT_PROBE_ROOT": native_path(case_dir).replace("\\", "/"),
                             "ANVIL_PROJECT_PROBE_RESULT": native_path(result),
                             "ANVIL_TEST_DISABLE_PLUGINS": "autorestart,autoreload,autosave_fast,autosaveonfocuslost",

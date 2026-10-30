@@ -105,6 +105,24 @@ static void sidebar_layout(void) {
   }
 }
 
+/* Alt Navigation stays on after a restart. A file without it, from before or with the mode off, keeps it off. */
+static void alt_navigation(void) {
+  for (int on = 0; on < 2; on++) {
+    AnvilShellState state = {sample, 3, NULL, 0, 0, 0, on == 1}, decoded;
+    size_t size = 0;
+    char *data = anvil_shell_state_encode(&state, &size);
+    CHECK(data && anvil_shell_state_decode(data, size, &decoded), "Alt Navigation state did not round-trip");
+    CHECK(decoded.count == 3 && decoded.alt_navigation == (on == 1), "Alt Navigation state changed");
+    anvil_shell_state_free(&decoded);
+    free(data);
+  }
+  AnvilShellState decoded;
+  const char *old = "anvil-shell-windows 7\nsequence 1\nwindow 1 0 0 10 10 0 0 3 abc\n";
+  CHECK(anvil_shell_state_decode(old, strlen(old), &decoded) && decoded.count == 1 && !decoded.alt_navigation,
+        "Window state without Alt Navigation rejected");
+  anvil_shell_state_free(&decoded);
+}
+
 static void round_trip(void) {
   AnvilShellState state = {sample, 3}, decoded;
   size_t size = 0;
@@ -137,6 +155,9 @@ static void rejects(void) {
     "anvil-shell-windows 8\n",
     "anvil-shell-windows 7\nsequence -1\n",
     "anvil-shell-windows 7\nsequence 2\nsequence 3\n",
+    "anvil-shell-windows 7\nalt-navigation\nalt-navigation\n",
+    "anvil-shell-windows 7\nalt-navigation 1\n",
+    "anvil-shell-windows 6\nalt-navigation\n",
     "anvil-shell-windows 7\nsequence 2147483648\n",
     "anvil-shell-windows 7\nwindow 1 0 0 10 10 0 0 0 \nwindow 1 0 0 10 10 0 0 0 \n",
     "anvil-shell-windows 6\nwindow 1 0 0 10 10 0 2 0 \n",
@@ -270,6 +291,7 @@ int main(int argc, char **argv) {
   round_trip();
   project_activity();
   sidebar_layout();
+  alt_navigation();
   rejects();
   writer();
   adoption_records();

@@ -43,6 +43,8 @@ typedef struct {
   int sidebar_points;
   /* Highest allocated Window id, including Windows that closed. Never reuse their folding state. */
   uint32_t last_window_id;
+  /* Alt Navigation is on. */
+  bool alt_navigation;
 } AnvilShellState;
 
 /* Encodes `state`. Returns NULL when it exceeds the bounds above. */

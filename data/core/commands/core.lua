@@ -297,6 +297,12 @@ command.add(function() return system.is_hosted_surface() end, {
     core.log_quiet("Project Sidebar toggle requested")
     return system.toggle_project_sidebar()
   end, { keywords = { "show", "hide", "panel", "tabs" } }),
+
+  -- The shell answers with an "altnavigation" event.
+  ["core:toggle_alt_navigation"] = command.palette(function()
+    core.log_quiet("Alt Navigation toggle requested")
+    return system.toggle_alt_navigation()
+  end, { keywords = { "ahk", "autohotkey", "keys", "emulation" } }),
 })
 
 command.add(nil, {

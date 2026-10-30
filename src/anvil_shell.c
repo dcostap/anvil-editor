@@ -14,6 +14,7 @@
 #include "shell_state.h"
 #include "shell_adoption.h"
 #include "shell_compose_shader.h"
+#include "alt_navigation.h"
 
 #include <windowsx.h>
 #include <commctrl.h>
@@ -375,6 +376,9 @@ typedef struct {
   Uint32 theme_preview_project;
   /* The Project Sidebar's width in points. Every Window shares it. */
   int sidebar_points;
+  /* Alt Navigation applies to every Window. A held key whose press Alt Navigation replaced sends no release. */
+  bool alt_navigation;
+  bool alt_navigation_held[SDL_SCANCODE_COUNT];
   AnvilSidebarScan *sidebar_scan;
   char *sidebar_userdir, *sidebar_recents;
   /* The Scratch Project's canonical folder, USERDIR\scratch. Every Project Sidebar lists it. */
@@ -1145,6 +1149,7 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_RESTART:
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
+  case ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION:
   case ANVIL_SURFACE_MSG_RUNTIME_READY:
     return size == 0;
   case ANVIL_SURFACE_MSG_TITLE:
@@ -3638,6 +3643,12 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     SDL_Log("Shell Sidebar toggle requested: Window=%u", window->id);
     if (!window->closing) set_sidebar_hidden(window, sidebar_shown(window));
     break;
+  case ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION:
+    shell.alt_navigation = !shell.alt_navigation;
+    SDL_Log("Shell Alt Navigation: %s Project=%u", shell.alt_navigation ? "on" : "off", project->id);
+    shell_send_int(project, ANVIL_SURFACE_MSG_ALT_NAVIGATION, shell.alt_navigation);
+    windows_changed();
+    break;
   case ANVIL_SURFACE_MSG_PANES: {
     const AnvilSurfacePaneReport *report = payload;
     const char *text = (const char *)(report + 1);
@@ -4128,6 +4139,49 @@ static void send_sidebar_input(ShellWindow *window, const SDL_Event *event) {
   input.text_len = text ? (uint32_t)strlen(text) : 0;
   if (input.text_len > ANVIL_SURFACE_MAX_PAYLOAD - sizeof(input) - sizeof(AnvilSidebarSurfacePacket)) return;
   shell_send(window->sidebar_client, ANVIL_SURFACE_MSG_INPUT, &input, sizeof(input), text, input.text_len);
+}
+
+/* The focused Sidebar or else the Selected Project gets keyboard input. */
+static void route_keyboard(ShellWindow *window, const SDL_Event *event, const char *text) {
+  ShellProject *project = window->selected;
+  if (window->sidebar_focused) send_sidebar_input(window, event);
+  else if (project->state == SHELL_READY || project->state == SHELL_CLOSING) forward_event(window, event, text);
+}
+
+/* Alt Navigation sends the replacement keys of an Alt chord. Returns true when it handled the key event. */
+static bool route_alt_navigation(ShellWindow *window, const SDL_Event *event) {
+  SDL_Scancode scancode = event->key.scancode;
+  if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT) return false;
+  if (event->type == SDL_EVENT_KEY_UP) {
+    bool replaced = shell.alt_navigation_held[scancode];
+    shell.alt_navigation_held[scancode] = false;
+    return replaced;
+  }
+  if (!shell.alt_navigation) return false;
+  AnvilAltNavigationKey keys[ANVIL_ALT_NAVIGATION_MAX_KEYS];
+  size_t count = anvil_alt_navigation_keys(scancode, event->key.mod, keys);
+  if (!count) return false;
+  shell.alt_navigation_held[scancode] = true;
+  for (size_t i = 0; i < count; i++) {
+    SDL_Event key = *event;
+    key.type = keys[i].down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+    key.key.scancode = keys[i].scancode;
+    key.key.key = SDL_GetKeyFromScancode(keys[i].scancode, keys[i].mod, false);
+    key.key.mod = keys[i].mod;
+    key.key.raw = 0;
+    key.key.down = keys[i].down;
+    key.key.repeat = false;
+    route_keyboard(window, &key, NULL);
+    if (keys[i].space) {
+      SDL_Event text = {0};
+      text.type = SDL_EVENT_TEXT_INPUT;
+      text.text.timestamp = event->key.timestamp;
+      text.text.windowID = event->key.windowID;
+      text.text.text = " ";
+      route_keyboard(window, &text, text.text.text);
+    }
+  }
+  return true;
 }
 
 static void focus_sidebar(ShellWindow *window, bool focused) {
@@ -4815,19 +4869,13 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   case SDL_EVENT_KEY_DOWN:
   case SDL_EVENT_KEY_UP:
     anvil_latency_probe_note_event(event);
-    if (window->sidebar_focused) { send_sidebar_input(window, event); break; }
-    if (project->state == SHELL_READY || project->state == SHELL_CLOSING)
-      forward_event(window, event, NULL);
+    if (!route_alt_navigation(window, event)) route_keyboard(window, event, NULL);
     break;
   case SDL_EVENT_TEXT_INPUT:
-    if (window->sidebar_focused) { send_sidebar_input(window, event); break; }
-    if (project->state == SHELL_READY || project->state == SHELL_CLOSING)
-      forward_event(window, event, event->text.text);
+    route_keyboard(window, event, event->text.text);
     break;
   case SDL_EVENT_TEXT_EDITING:
-    if (window->sidebar_focused) { send_sidebar_input(window, event); break; }
-    if (project->state == SHELL_READY || project->state == SHELL_CLOSING)
-      forward_event(window, event, event->edit.text);
+    route_keyboard(window, event, event->edit.text);
     break;
   case SDL_EVENT_MOUSE_MOTION:
     route_motion(window, event);
@@ -7337,7 +7385,8 @@ static void save_windows(bool final) {
       activity[j] = activity[j - 1];
       activity[j - 1] = swap;
     }
-  AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.next_window};
+  AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.next_window,
+                           shell.alt_navigation};
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
   for (size_t i = 0; i < count; i++) if (owned[i]) anvil_shell_window_state_free(&entries[i]);
@@ -7605,6 +7654,8 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
                              ? SDL_clamp(saved.sidebar_points, SHELL_SIDEBAR_MIN_POINTS, SHELL_SIDEBAR_MAX_POINTS)
                              : SHELL_SIDEBAR_POINTS;
   SDL_Log("Shell Sidebar width: points=%d", shell.sidebar_points);
+  shell.alt_navigation = saved.alt_navigation;
+  SDL_Log("Shell Alt Navigation: %s", shell.alt_navigation ? "on" : "off");
   /* Projects from a shell that ended wait for this one. */
   static AnvilAdoptionRecord adoptable[ANVIL_ADOPTION_MAX_RECORDS];
   size_t adoptable_count = userdir ? anvil_adoption_scan(adoptable, SDL_arraysize(adoptable)) : 0;

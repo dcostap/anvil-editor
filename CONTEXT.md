@@ -14,7 +14,7 @@ _Avoid_: Host window, Project window
 
 **App State**:
 Global editor state that persists across launches, including recent Projects, Window placement, and previous find/replace text.
-It includes each Window's loaded Projects, Selected Project, and Project Sidebar visibility and folds; Dormant Projects remain dormant.
+It includes each Window's loaded Projects, Selected Project, and Project Sidebar visibility and folds; Dormant Projects remain dormant. It also includes whether Alt Navigation is on.
 _Avoid_: Session
 
 **Project**:
@@ -516,6 +516,10 @@ _Avoid_: command title, display name
 **Command Keyword**:
 An additional hidden search term that helps a Command Palette query match a Command Identifier.
 _Avoid_: command alias, command title
+
+**Alt Navigation**:
+A mode that turns Alt chords into navigation keys in every Anvil Window, such as Alt+J into Ctrl+Left. It copies the user's AutoHotkey script for a PC without that script. It is off by default and stays on or off across launches.
+_Avoid_: AHK mode, Alt mode
 
 **View Icon**:
 The icon shared by a View, its Tab, and Command Palette commands that use the same prefix. Standard Editors omit the icon from their Tabs. Markdown Live Preview shows the Markdown View Icon only in Live Preview mode.

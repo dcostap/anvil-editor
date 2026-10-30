@@ -57,6 +57,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_MENU_RESULT = 17,
   /* Terminal quit scope and the choice already made for this Window. Payload: AnvilSurfaceInt. */
   ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT = 18,
+  /* The answer to ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION. Payload: AnvilSurfaceInt, 1 when Alt Navigation is on. */
+  ANVIL_SURFACE_MSG_ALT_NAVIGATION = 19,
 
   /* Surface process to shell. */
   ANVIL_SURFACE_MSG_HELLO = 64,
@@ -126,6 +128,8 @@ typedef enum {
   ANVIL_SURFACE_MSG_TERMINAL_QUIT_QUERY = 108,
   /* Save Keep or End for the rest of this Window Close. Payload: AnvilSurfaceInt. */
   ANVIL_SURFACE_MSG_TERMINAL_QUIT_CHOICE = 109,
+  /* Turn Alt Navigation on or off in every Window. No payload. */
+  ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION = 110,
 } AnvilSurfaceMessageType;
 
 typedef enum {

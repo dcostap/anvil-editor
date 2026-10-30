@@ -2118,6 +2118,12 @@ static int f_toggle_project_sidebar(lua_State *L) {
   return 1;
 }
 
+/* Returns false outside a shell. The shell answers with an "altnavigation" event and the new state. */
+static int f_toggle_alt_navigation(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_toggle_alt_navigation());
+  return 1;
+}
+
 static int f_focus_project_sidebar(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_focus_sidebar(lua_toboolean(L, 1)));
   return 1;
@@ -2290,6 +2296,11 @@ static int colorthemechanged_callback(lua_State *L, SDL_Event *event) {
   (void)event;
   lua_pushstring(L, "colorthemechanged");
   return 1;
+}
+static int altnavigation_callback(lua_State *L, SDL_Event *event) {
+  lua_pushstring(L, "altnavigation");
+  lua_pushboolean(L, event->user.code != 0);
+  return 2;
 }
 static int menuchosen_callback(lua_State *L, SDL_Event *event) {
   lua_pushstring(L, "menuchosen");
@@ -2945,6 +2956,7 @@ static const luaL_Reg lib[] = {
   { "complete_pane_request", f_complete_pane_request },
   { "select_terminal",       f_select_terminal       },
   { "toggle_project_sidebar", f_toggle_project_sidebar },
+  { "toggle_alt_navigation", f_toggle_alt_navigation },
   { "focus_project_sidebar", f_focus_project_sidebar },
   { "show_project_menu",     f_show_project_menu     },
   { "show_menu",             f_show_menu             },
@@ -3017,6 +3029,8 @@ int luaopen_system(lua_State *L) {
     return luaL_error(L, "Unable to register the Sidebar Zoom wheel event: %s", SDL_GetError());
   if (!register_custom_event("menuchosen", menuchosen_callback))
     return luaL_error(L, "Unable to register the Sidebar menu event: %s", SDL_GetError());
+  if (!register_custom_event("altnavigation", altnavigation_callback))
+    return luaL_error(L, "Unable to register the Alt Navigation event: %s", SDL_GetError());
   if (!register_custom_event("focusterminal", focusterminal_callback))
     return luaL_error(L, "Unable to register the Terminal Session focus event: %s", SDL_GetError());
   if (!register_custom_event("terminaleditor", terminaleditor_callback))

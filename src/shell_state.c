@@ -21,7 +21,8 @@
  * Each Project activity is one line: `project <unix seconds> <path bytes> <path>`.
  * Other loaded Projects follow their Window: `loaded <window id> <path bytes> <path>`.
  * The shared Sidebar width is one optional line: `sidebar <points>`.
- * `sequence <last Window id>` prevents reuse of a closed Window's saved folds. */
+ * `sequence <last Window id>` prevents reuse of a closed Window's saved folds.
+ * The optional line `alt-navigation` turns Alt Navigation on. */
 char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   if (state->count > ANVIL_SHELL_STATE_MAX_WINDOWS) return NULL;
   size_t capacity = sizeof(STATE_HEADER) + 64;
@@ -55,6 +56,7 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   n += (size_t)snprintf(data + n, capacity - n, "sequence %u\n", last_window_id);
   if (state->sidebar_points > 0)
     n += (size_t)snprintf(data + n, capacity - n, "sidebar %d\n", state->sidebar_points);
+  if (state->alt_navigation) n += (size_t)snprintf(data + n, capacity - n, "alt-navigation\n");
   for (size_t i = 0; i < state->count; i++) {
     const AnvilShellWindowState *window = &state->windows[i];
     const char *path = window->path ? window->path : "";
@@ -156,6 +158,12 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
       if (sequence_seen || !read_long(&cursor, end, &id, '\n') || id < 0) break;
       if ((uint32_t)id > state->last_window_id) state->last_window_id = (uint32_t)id;
       sequence_seen = complete = true;
+      continue;
+    }
+    if (!shared_visibility && !version_6 && end - cursor >= 15 && !memcmp(cursor, "alt-navigation\n", 15)) {
+      if (state->alt_navigation) break;
+      cursor += 15;
+      state->alt_navigation = complete = true;
       continue;
     }
     if (!version_2 && !version_3 && !version_4 && end - cursor >= 7 && !memcmp(cursor, "loaded ", 7)) {

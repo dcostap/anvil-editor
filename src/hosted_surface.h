@@ -97,6 +97,8 @@ bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y);
 bool anvil_hosted_surface_show_menu(int x, int y, const char *labels, size_t size);
 /* Asks the shell to hide the Project Sidebar in every Window, or to show it again. */
 bool anvil_hosted_surface_toggle_sidebar(void);
+/* Asks the shell to turn Alt Navigation on or off. The shell answers with an "altnavigation" event. */
+bool anvil_hosted_surface_toggle_alt_navigation(void);
 bool anvil_hosted_surface_focus_sidebar(bool focused);
 /* Tells the shell that this Project saved a Color Theme, so other processes reload it. */
 bool anvil_hosted_surface_color_theme_saved(void);

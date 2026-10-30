@@ -672,6 +672,12 @@ static void dispatch_message(HostedMessage *message) {
     case ANVIL_SURFACE_MSG_CLOSE:
       push_window_event(SDL_EVENT_WINDOW_CLOSE_REQUESTED);
       break;
+    case ANVIL_SURFACE_MSG_ALT_NAVIGATION: {
+      CustomEvent event = {.code = ((AnvilSurfaceInt *)payload)->value != 0};
+      if (!push_custom_event("altnavigation", &event))
+        signal_loss("Alt Navigation event delivery failed", message->type, message->size);
+      break;
+    }
     case ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT: {
       CustomEvent event = {.code = ((AnvilSurfaceInt *)payload)->value};
       if (!push_custom_event("terminalquit", &event))
@@ -815,6 +821,9 @@ static int SDLCALL reader_thread(void *data) {
       case ANVIL_SURFACE_MSG_PING:
       case ANVIL_SURFACE_MSG_ZOOM_WHEEL:
         if (size != sizeof(AnvilSurfaceInt)) goto failed;
+        break;
+      case ANVIL_SURFACE_MSG_ALT_NAVIGATION:
+        if (hosted.sidebar || size != sizeof(AnvilSurfaceInt)) goto failed;
         break;
       case ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT:
         if (hosted.sidebar || size != sizeof(AnvilSurfaceInt) ||
@@ -1182,6 +1191,12 @@ bool anvil_hosted_surface_show_menu(int x, int y, const char *labels, size_t siz
 bool anvil_hosted_surface_toggle_sidebar(void) {
   if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR, NULL, 0);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_toggle_alt_navigation(void) {
+  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  send_message(ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION, NULL, 0);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1698,6 +1713,7 @@ bool anvil_hosted_surface_zoom_saved(double interface_zoom, double code_zoom) {
   (void)interface_zoom; (void)code_zoom; return false;
 }
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }
+bool anvil_hosted_surface_toggle_alt_navigation(void) { return false; }
 bool anvil_hosted_surface_focus_sidebar(bool focused) { (void)focused; return false; }
 bool anvil_hosted_surface_project_menu(uint32_t row_id, int x, int y) { (void)row_id; (void)x; (void)y; return false; }
 bool anvil_hosted_surface_show_menu(int x, int y, const char *labels, size_t size) {

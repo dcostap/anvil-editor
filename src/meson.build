@@ -49,6 +49,7 @@ anvil_sources = [
     'window_backend.c',
     'input_latency_probe.c',
     'anvil_shell.c',
+    'alt_navigation.c',
     'shell_launch.c',
     'shell_state.c',
     'shell_adoption.c',
@@ -329,6 +330,14 @@ key_text_test = executable('key_text_test',
     c_args: anvil_cargs,
 )
 test('key-text', key_text_test, env: anvil_test_env, suite: 'anvil')
+
+alt_navigation_test = executable('alt_navigation_test',
+    ['../tests/native/alt_navigation_test.c', 'alt_navigation.c'],
+    include_directories: anvil_includes,
+    dependencies: [sdl_dep],
+    c_args: anvil_cargs,
+)
+test('alt-navigation', alt_navigation_test, env: anvil_test_env, suite: 'anvil')
 
 launch_mode_test = executable('launch_mode_test',
     ['../tests/native/launch_mode_test.c'],

@@ -2583,6 +2583,8 @@ function core.on_event(type, ...)
       system.raise_window(core.window)
       core.open_file(filename)
     end
+  elseif type == "altnavigation" then
+    core.log((...) and "Alt Navigation is on" or "Alt Navigation is off")
   elseif type == "projectsidebarchanged" then
     -- The selected Project uses the same live state as the Sidebar for numbered Pane commands.
     if core.request_project_sidebar() then

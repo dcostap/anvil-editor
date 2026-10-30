@@ -380,6 +380,13 @@ Shutdown captures their paths before closing the hosted processes. Dormant Proje
 Restore starts Selected Projects first, then the other loaded Projects through the existing staggered startup.
 Run `anvil:shell-state` and the `restore-loaded` shell launch probe after changes.
 
+Alt Navigation copies the user's AutoHotkey script (`alt_navigation.ahk`) for a PC without it. `core:toggle_alt_navigation` turns it on or off.
+The shell owns it, because all keys pass through the shell. Shell App State saves it. The default is off.
+`src/alt_navigation.c` turns one Alt chord into key events, such as Alt+J into Ctrl+Left. Chords match physical keys, so the Ñ key is `;` on a US layout.
+Like AutoHotkey's Send, the events release Alt, press the result's modifiers, then restore Alt. Lua's modifier state stays correct, so a later click is not a Ctrl+Click.
+The shell drops the release of a replaced key. Alt+Space also sends a text-input space.
+Run `anvil:alt-navigation`, `anvil:shell-state` and the `alt-navigation` shell probe after changes.
+
 Project Sidebar visibility belongs to each Window. The first Window and each New Window start expanded. A Window that opens for one Project, such as Open Project in New Window or Move to New Window, starts collapsed.
 Restored Windows use their saved visibility, including a lone Window saved with its Sidebar hidden.
 Focus slides a hidden Sidebar open until the Sidebar loses focus. The Window still saves it as hidden.
