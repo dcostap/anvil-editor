@@ -107,6 +107,6 @@ else
     save("space", true)
     wait(function() return load("finish") end, "Finish request missing")
     buffer:clean()
-    command.perform("core:quit")
+    command.perform("core:close_current_window")
   end)
 end

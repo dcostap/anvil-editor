@@ -2037,7 +2037,7 @@ static int f_terminal_quit_choice(lua_State *L) {
 }
 
 static int terminalquit_callback(lua_State *L, SDL_Event *event) {
-  static const char *const names[] = {"project", "ask", "keep", "end"};
+  static const char *const names[] = {"project", "ask", "keep", "end", "ask_all"};
   lua_pushliteral(L, "terminalquit");
   lua_pushstring(L, names[event->user.code]);
   return 2;
@@ -2089,6 +2089,17 @@ static int f_toggle_project_sidebar(lua_State *L) {
 /* Returns false outside a shell. The shell answers with an "altnavigation" event and the new state. */
 static int f_toggle_alt_navigation(lua_State *L) {
   lua_pushboolean(L, anvil_hosted_surface_toggle_alt_navigation());
+  return 1;
+}
+
+/* Both return false outside a shell. */
+static int f_close_all_windows(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_close_all_windows());
+  return 1;
+}
+
+static int f_reopen_closed_window(lua_State *L) {
+  lua_pushboolean(L, anvil_hosted_surface_reopen_closed_window());
   return 1;
 }
 
@@ -2923,6 +2934,8 @@ static const luaL_Reg lib[] = {
   { "select_terminal",       f_select_terminal       },
   { "toggle_project_sidebar", f_toggle_project_sidebar },
   { "toggle_alt_navigation", f_toggle_alt_navigation },
+  { "close_all_windows",     f_close_all_windows     },
+  { "reopen_closed_window",  f_reopen_closed_window  },
   { "focus_project_sidebar", f_focus_project_sidebar },
   { "new_anvil_window",      f_new_anvil_window      },
   { "color_theme_saved",     f_color_theme_saved     },

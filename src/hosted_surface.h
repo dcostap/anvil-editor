@@ -94,6 +94,10 @@ bool anvil_hosted_surface_select_terminal(const char *path, const char *id);
 bool anvil_hosted_surface_toggle_sidebar(void);
 /* Asks the shell to turn Alt Navigation on or off. The shell answers with an "altnavigation" event. */
 bool anvil_hosted_surface_toggle_alt_navigation(void);
+/* Asks the shell to close every Window and keep them for the next start. */
+bool anvil_hosted_surface_close_all_windows(void);
+/* Asks the shell to open the Window that closed last. */
+bool anvil_hosted_surface_reopen_closed_window(void);
 bool anvil_hosted_surface_focus_sidebar(bool focused);
 /* Tells the shell that this Project saved a Color Theme, so other processes reload it. */
 bool anvil_hosted_surface_color_theme_saved(void);

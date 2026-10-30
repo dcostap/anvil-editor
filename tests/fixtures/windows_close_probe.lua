@@ -4,7 +4,9 @@
 local action = os.getenv("ANVIL_PROJECT_PROBE")
 if not action or not action:match("^windows%-close") then return end
 local dirty = action == "windows-close-dirty" or action == "windows-close-cleanup-cancel"
+  or action == "windows-close-all-cancel"
 local terminals = action == "windows-close-terminals-keep" or action == "windows-close-terminals-end"
+  or action == "windows-close-all-terminals"
 local core, common = require "core", require "core.common"
 local command = require "core.command"
 local ffi = require "ffi"
@@ -24,6 +26,8 @@ ffi.cdef [[
  int __stdcall CloseHandle(void *);
  long __stdcall NtSuspendProcess(void *);
  long __stdcall NtResumeProcess(void *);
+ typedef struct { long left, top, right, bottom; } AnvilProbeRect;
+ int __stdcall GetWindowRect(void *, AnvilProbeRect *);
 ]]
 local user32, kernel, ntdll = ffi.load("user32"), ffi.load("kernel32"), ffi.load("ntdll")
 local root = assert(os.getenv("ANVIL_PROJECT_PROBE_ROOT"))
@@ -75,6 +79,22 @@ local function dialog(pid, title)
  user32.EnumWindows(cb, 0); cb:free(); return found
 end
 local function quit() core.exit(function() core.quit_request = true end, true) end
+-- A reopened Project starts again and numbers its Close choices from 1.
+local function forget(name)
+ for _, kind in ipairs {"ready", "cleanup"} do os.remove(root .. "/" .. name .. "-" .. kind .. ".lua") end
+ for i = 1, 4 do
+  for _, kind in ipairs {"nag", "answer", "cancelled"} do os.remove(root .. "/" .. kind .. "-" .. name .. "-" .. i .. ".lua") end
+ end
+end
+-- App State lists the Windows that the next start opens.
+local function saved_windows()
+ local file = assert(io.open(root .. "/user/shell-windows.state", "rb"))
+ local text = file:read("*a"); file:close()
+ local ids = {}
+ for id in text:gmatch("\nwindow (%d+) ") do ids[#ids + 1] = tonumber(id) end
+ table.sort(ids)
+ return ids
+end
 local names = {[root .. "/Project"] = "a", [root .. "/Replacement"] = "b", [root .. "/Other"] = "c"}
 
 if path:match("/driver$") then
@@ -143,7 +163,7 @@ if path:match("/driver$") then
    assert(c.window_id == a.window_id, "Other did not load into Window A")
    local pc = open(c.pid)
 
-   if terminals then
+   if action == "windows-close-terminals-keep" or action == "windows-close-terminals-end" then
     local ta, tb, tc = open(a.host_pid), open(b.host_pid), open(c.host_pid)
     terminal_states = {a.terminal, b.terminal, c.terminal}
     user32.PostMessageW(aw, 0x10, 0, 0)
@@ -234,7 +254,7 @@ if path:match("/driver$") then
     return finish_b()
    end
 
-   if dirty then
+   if action == "windows-close-dirty" or action == "windows-close-cleanup-cancel" then
     -- Window A selects Other. Close asks it first, then Project. Cancel stops the remaining Close requests.
     user32.PostMessageW(aw, 0x10, 0, 0)
     wait(function() return load("nag-c-1") end, 8, "Window A Close did not ask its selected dirty Project")
@@ -317,6 +337,111 @@ if path:match("/driver$") then
     return finish_b()
    end
 
+   if action == "windows-close-all-terminals" then
+    -- Close All Windows asks once for the Terminal Sessions of every Window.
+    local ta, tb, tc = open(a.host_pid), open(b.host_pid), open(c.host_pid)
+    terminal_states = {a.terminal, b.terminal, c.terminal}
+    save("command-b", "core:close_all_windows")
+    local first = wait(function() return load("nag-c-1") and "c" or load("nag-b-1") and "b" end, 15,
+     "Close All Windows did not ask about idle Terminals")
+    save("answer-" .. first .. "-1", "keep")
+    wait(function() return not subject:running() end, 30, "Close All Windows did not end the shell")
+    assert(subject:returncode() == 0, "Close All Windows ended the shell with a failure")
+    assert(not load("nag-a-1") and not load(first == "c" and "nag-b-1" or "nag-c-1"),
+     "Close All Windows asked about Terminals more than once")
+    assert(running(ta) and running(tb) and running(tc), "Keep running ended a Terminal")
+    local ids = saved_windows()
+    assert(#ids == 2 and ids[1] == math.min(a.window_id, b.window_id) and ids[2] == math.max(a.window_id, b.window_id),
+     "Close All Windows did not keep both Windows for the next start")
+    return
+   end
+
+   if action == "windows-close-all-cancel" then
+    -- Close All Windows closes the front Window first. A Cancel in the next Window keeps that Window open.
+    save("command-b", "core:close_all_windows")
+    local first = wait(function() return load("nag-c-1") and "c" or load("nag-b-1") and "b" end, 10,
+     "Close All Windows did not ask its first dirty Project")
+    local closed, survivor
+    if first == "c" then
+     save("answer-c-1", "discard")
+     wait(function() return load("nag-a-1") end, 10, "Close All Windows did not ask the front Window's next Project")
+     assert(not load("nag-b-1"), "Close All Windows asked two Windows at once")
+     save("answer-a-1", "discard")
+     wait(function() return load("nag-b-1") end, 10, "Close All Windows did not continue with the next Window")
+     save("answer-b-1", "cancel")
+     wait(function() return load("cancelled-b-1") end, 5)
+     closed, survivor = {id=a.window_id, names={"a", "c"}}, "b"
+    else
+     save("answer-b-1", "discard")
+     wait(function() return load("nag-c-1") end, 10, "Close All Windows did not continue with the next Window")
+     save("answer-c-1", "cancel")
+     wait(function() return load("cancelled-c-1") end, 5)
+     closed, survivor = {id=b.window_id, names={"b"}}, "c"
+    end
+    coroutine.yield(1)
+    assert(subject:running() and count() == 1, "Cancel did not keep the remaining Window open")
+    assert(windows(shell)[closed.id] == nil, "Close All Windows closed the wrong Window")
+    -- Reopen Closed Window returns the Window that Close All Windows closed before the Cancel.
+    for _, name in ipairs(closed.names) do forget(name) end
+    save("command-" .. survivor, "core:reopen_closed_window")
+    wait(function() return count() == 2 end, 10, "Reopen Closed Window did not open the closed Window")
+    assert(windows(shell)[closed.id], "Reopen Closed Window changed the Window ID")
+    for _, name in ipairs(closed.names) do
+     local state = wait(function() return load(name .. "-ready") end, 20, "a reopened Project did not start")
+     assert(state.window_id == closed.id, "a reopened Project opened in another Window")
+    end
+    -- Close All Windows ends the shell when every Project accepts. The next start opens both Windows.
+    save("command-" .. survivor, "core:close_all_windows")
+    wait(function()
+     for _, name in ipairs {"a", "b", "c"} do
+      for i = 1, 4 do
+       if load("nag-" .. name .. "-" .. i) and not load("answer-" .. name .. "-" .. i) then
+        save("answer-" .. name .. "-" .. i, "discard")
+       end
+      end
+     end
+     return not subject:running()
+    end, 30, "the second Close All Windows did not end the shell")
+    assert(subject:returncode() == 0, "Close All Windows ended the shell with a failure")
+    assert(#saved_windows() == 2, "Close All Windows did not keep both Windows for the next start")
+    return
+   end
+
+   if action == "windows-close-reopen" then
+    local before = ffi.new("AnvilProbeRect")
+    assert(user32.GetWindowRect(aw, before) ~= 0)
+    user32.PostMessageW(aw, 0x10, 0, 0)
+    wait(function() return count() == 1 and not running(pa) and not running(pc) end, 15, "Window A did not close")
+    -- Window A comes back with its ID, bounds, Selected Project and other loaded Project.
+    forget("a"); forget("c")
+    save("command-b", "core:reopen_closed_window")
+    wait(function() return count() == 2 end, 10, "Reopen Closed Window did not open Window A")
+    local reopened = assert(windows(shell)[a.window_id], "Reopen Closed Window changed the Window ID")
+    local after = ffi.new("AnvilProbeRect")
+    assert(user32.GetWindowRect(reopened, after) ~= 0)
+    assert(after.left == before.left and after.top == before.top and after.right == before.right
+     and after.bottom == before.bottom, "Reopen Closed Window changed the Window bounds")
+    for _, name in ipairs {"a", "c"} do
+     local state = wait(function() return load(name .. "-ready") end, 20, "a reopened Project did not start")
+     assert(state.window_id == a.window_id, "a reopened Project opened in another Window")
+    end
+    wait(function()
+     local text = ffi.new("wchar_t[128]")
+     local length = user32.GetWindowTextW(reopened, text, 128)
+     local label = {}; for i=0,length-1 do label[#label+1] = string.char(text[i] < 128 and text[i] or 63) end
+     return table.concat(label) == "Other"
+    end, 10, "Reopen Closed Window did not select the Window's Selected Project")
+    -- The list is empty now, so a second request opens nothing.
+    save("command-b", "core:reopen_closed_window")
+    coroutine.yield(1)
+    assert(count() == 2, "Reopen Closed Window opened a Window that was not closed")
+    save("command-b", "core:close_all_windows")
+    wait(function() return not subject:running() end, 30, "Close All Windows did not end the shell")
+    assert(subject:returncode() == 0, "Close All Windows ended the shell with a failure")
+    assert(#saved_windows() == 2, "Close All Windows did not keep both Windows for the next start")
+    return
+   end
+
    if action == "windows-close-quit" then
     -- Quit inside a Project closes its assigned Window, including the Window's other Project.
     save("quit-c", true)
@@ -375,7 +500,7 @@ elseif names[path] then
    window_id=system.get_anvil_window_id(), terminal=terminal and terminal:get_state(),
    host_pid=terminal and terminal.session:stats().host_pid,
    record=terminal and (USERDIR .. "/terminal-sessions/" .. terminal.session_id .. ".lua")})
-  if name == "a" then
+  if name == "a" and not load("b-ready") then
    -- The paused launch worker serves the second Project, so select Other before opening Window B.
    assert(system.select_project(root .. "/Other"))
    assert(core.open_project_in_new_window(root .. "/Replacement"))
@@ -385,6 +510,11 @@ elseif names[path] then
   while true do
    if load("unload-" .. name) then command.perform("core:unload_project"); return end
    if load("quit-" .. name) then quit(); return end
+   local requested = load("command-" .. name)
+   if requested then
+    os.remove(root .. "/command-" .. name .. ".lua")
+    assert(command.perform(requested), requested .. " did not run")
+   end
    local visible = core.nag_view.visible and core.nag_view:get_title() == (terminals and "Running Terminals" or "Unsaved Changes")
    if visible and not pending then asked = asked + 1; pending = true; save("nag-" .. name .. "-" .. asked, true) end
    local answer = pending and load("answer-" .. name .. "-" .. asked)

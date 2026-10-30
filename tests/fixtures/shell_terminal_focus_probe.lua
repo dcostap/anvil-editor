@@ -182,6 +182,6 @@ elseif path == root .. "/Project" then
    end
    return true
   end, 5)
-  require("core.command").perform("core:quit")
+  require("core.command").perform("core:close_current_window")
  end)
 end

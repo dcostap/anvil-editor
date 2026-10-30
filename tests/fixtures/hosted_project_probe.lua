@@ -1119,7 +1119,7 @@ else
     elseif action == "new-window" then
       core.open_project_in_new_window(root .. "/Replacement")
       assert(wait_for(function() return load(root .. "/continue.lua") end, 20)); quit()
-    elseif action == "quit" then command.perform("core:quit")
+    elseif action == "quit" then command.perform("core:close_current_window")
     elseif action == "quit-error" then core.quit(true, 7)
     else
       assert(wait_for(function() return load(root .. "/continue.lua") end, 20))

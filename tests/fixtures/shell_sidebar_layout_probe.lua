@@ -206,6 +206,6 @@ elseif path == root .. "/Project" then
   end)
   if not ok then save("project-error-" .. phase, {error = tostring(err)}) end
   wait(function() return load(finish) end, 90)
-  command.perform("core:quit")
+  command.perform("core:close_current_window")
  end)
 end

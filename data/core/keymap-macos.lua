@@ -15,7 +15,7 @@ local function keymap_macos(keymap)
     ["cmd+ctrl+k"] = "pane:focus_down",
 
 
-    ["cmd+w"] = "core:close_pane_or_quit",
+    ["cmd+w"] = "core:close_pane_or_window",
     ["ctrl+tab"] = "pane:focus_next",
     ["ctrl+shift+tab"] = "pane:focus_previous",
     ["cmd+1"] = "pane:focus_number_1",

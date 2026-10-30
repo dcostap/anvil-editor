@@ -2921,7 +2921,8 @@ function M.confirm_quit(accept, cancel)
       { text = "End all", action = "end" },
       { text = "Cancel", action = "cancel", default_no = true },
     }
-    local message = window_close and "Keep this Window's Terminal Sessions running in the background?"
+    local message = scope == "ask_all" and "Keep the Terminal Sessions of all Windows running in the background?"
+      or window_close and "Keep this Window's Terminal Sessions running in the background?"
       or string.format("Keep %d Terminal Sessions running in the background?", count)
     core.nag_view:show("Running Terminals", message, options, function(item)
       apply(item.action)

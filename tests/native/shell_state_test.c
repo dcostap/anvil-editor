@@ -123,6 +123,37 @@ static void alt_navigation(void) {
   anvil_shell_state_free(&decoded);
 }
 
+/* Reopen Closed Window restores a closed Window with its placement and Projects. Closed Windows never open at startup. */
+static void closed_windows(void) {
+  char *background[] = {"C:\\Projects\\Background"};
+  AnvilShellWindowState closed[] = {
+    {9, 50, 60, 1000, 700, true, "C:\\Projects\\Closed", background, 1, true},
+    {4, 0, 0, 800, 600, false, NULL},
+  };
+  AnvilShellState state = {sample, 1, NULL, 0, 0, 0, false, closed, 2}, decoded;
+  size_t size = 0;
+  char *data = anvil_shell_state_encode(&state, &size);
+  CHECK(data && anvil_shell_state_decode(data, size, &decoded), "closed Windows did not round-trip");
+  CHECK(decoded.count == 1 && decoded.windows[0].id == 3 && decoded.windows[0].project_count == 0,
+        "closed Windows changed the open Windows");
+  CHECK(decoded.closed_count == 2, "closed Window count changed");
+  CHECK(decoded.last_window_id == 9, "a closed Window's ID could be reused");
+  if (decoded.closed_count == 2) {
+    AnvilShellWindowState *newest = &decoded.closed[0];
+    CHECK(newest->id == 9 && newest->x == 50 && newest->y == 60 && newest->w == 1000 && newest->h == 700 &&
+          newest->maximized && newest->sidebar_hidden, "closed Window placement changed");
+    CHECK(newest->path && !strcmp(newest->path, "C:\\Projects\\Closed") && newest->project_count == 1 &&
+          !strcmp(newest->projects[0], background[0]), "closed Window lost its Projects");
+    CHECK(decoded.closed[1].id == 4 && !decoded.closed[1].path, "closed Windows changed order");
+  }
+  anvil_shell_state_free(&decoded);
+  free(data);
+  AnvilShellWindowState many[ANVIL_SHELL_STATE_MAX_CLOSED + 1] = {0};
+  for (size_t i = 0; i < SDL_arraysize(many); i++) many[i].id = (uint32_t)i + 10, many[i].w = many[i].h = 10;
+  AnvilShellState too_many = {sample, 1, NULL, 0, 0, 0, false, many, SDL_arraysize(many)};
+  CHECK(!anvil_shell_state_encode(&too_many, &size), "closed Window bound not enforced");
+}
+
 static void round_trip(void) {
   AnvilShellState state = {sample, 3}, decoded;
   size_t size = 0;
@@ -152,7 +183,10 @@ static void rejects(void) {
   AnvilShellState decoded;
   const char *bad[] = {
     "anvil-shell-windows 1\nwindow 0 0 10 10 0 0 \n",
-    "anvil-shell-windows 8\n",
+    "anvil-shell-windows 9\n",
+    "anvil-shell-windows 7\nclosed 1 0 0 10 10 0 0 0 \n",
+    "anvil-shell-windows 8\nwindow 1 0 0 10 10 0 0 0 \nclosed 1 0 0 10 10 0 0 0 \n",
+    "anvil-shell-windows 8\nclosed 1 0 0 10 10 0 0 0 \nloaded 2 3 abc\n",
     "anvil-shell-windows 7\nsequence -1\n",
     "anvil-shell-windows 7\nsequence 2\nsequence 3\n",
     "anvil-shell-windows 7\nalt-navigation\nalt-navigation\n",
@@ -292,6 +326,7 @@ int main(int argc, char **argv) {
   project_activity();
   sidebar_layout();
   alt_navigation();
+  closed_windows();
   rejects();
   writer();
   adoption_records();

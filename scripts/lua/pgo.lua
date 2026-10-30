@@ -569,7 +569,7 @@ core.add_background_thread(function()
     coroutine.yield(1)
     if os.time() - start_time >= 5 * 60 then
       print "Maximum pgo stress time exceeded, quitting..."
-      command.perform "core:force_quit"
+      command.perform "core:force_close_current_window"
       break
     end
   end
@@ -684,5 +684,5 @@ core.add_background_thread(function()
 
   print(string.format("Elapsed Time: %.2fs", system.get_time() - start_time))
 
-  command.perform "core:quit"
+  command.perform "core:close_current_window"
 end)

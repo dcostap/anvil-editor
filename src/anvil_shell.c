@@ -263,6 +263,8 @@ struct ShellWindow {
   /* The Window's App State entry when its Close began. A Close changes the selection as it ends Projects. */
   bool close_entry_valid;
   AnvilShellWindowState close_entry;
+  /* Every Project of the closing Window has decided. Close All Windows then closes the next Window. */
+  bool close_settled;
   char notice[256];
   Uint64 notice_until;
   RECT notice_rect; /* the notice toast, from the last UI draw */
@@ -404,6 +406,14 @@ typedef struct {
   HWND service_hwnd;
   bool shutting_down;
   bool updating;
+  /* Close All Windows closes one Window at a time, front first, so one Cancel keeps the other Windows.
+   * App State keeps every Window as it was when Close All began. */
+  bool closing_all;
+  bool closing_all_saves;
+  AnvilSurfaceTerminalQuit close_all_choice;
+  /* Reopen Closed Window. Newest first. */
+  AnvilShellWindowState closed[ANVIL_SHELL_STATE_MAX_CLOSED];
+  size_t closed_count;
   ShellPicker *pickers;
   Uint32 event_type;
   SDL_Cursor *cursors[ANVIL_SURFACE_CURSOR_COUNT];
@@ -447,6 +457,9 @@ static bool takes_keyboard(const ShellProject *project) {
 }
 static bool move_project(ShellWindow *requester, uint32_t project_id, uint32_t target_id, bool keep_source);
 static void open_new_window(ShellWindow *requester);
+static void close_all_windows(void);
+static void advance_close_all(void);
+static void reopen_closed_window(ShellWindow *requester);
 static void present_deferred_dialogs(ShellProject *project);
 static void finish_launch(ShellProject *project);
 static void finish_resolutions(void);
@@ -584,6 +597,7 @@ static void begin_window_close(ShellWindow *window) {
     window->close_entry_valid = window_snapshot(window, &window->close_entry);
     if (!window->close_entry_valid) SDL_Log("Shell could not save the closing Window's loaded Projects");
     window->closing = true;
+    window->close_settled = false;
     window->terminal_quit_choice = ANVIL_SURFACE_TERMINAL_QUIT_ASK;
     window->close_started_ns = SDL_GetTicksNS();
     SDL_Log("Shell Window Close begin: Window=%u", window->id);
@@ -1198,6 +1212,8 @@ static bool valid_project_message(uint16_t type, const void *payload, uint32_t s
   case ANVIL_SURFACE_MSG_COLOR_THEME_SAVED:
   case ANVIL_SURFACE_MSG_TOGGLE_SIDEBAR:
   case ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION:
+  case ANVIL_SURFACE_MSG_CLOSE_ALL_WINDOWS:
+  case ANVIL_SURFACE_MSG_REOPEN_CLOSED_WINDOW:
   case ANVIL_SURFACE_MSG_RUNTIME_READY:
     return size == 0;
   case ANVIL_SURFACE_MSG_TITLE:
@@ -3642,6 +3658,13 @@ static void close_decision(ShellProject *project, int decision) {
     return;
   }
   if (decision == ANVIL_SURFACE_CLOSE_CANCELLED) {
+    if (shell.closing_all && window->closing && !project->unloading) {
+      /* Windows that closed before the Cancel stay closed, and Reopen Closed Window lists them. */
+      shell.closing_all = false;
+      shell.state_enabled = shell.closing_all_saves;
+      SDL_Log("Shell Close All Windows cancelled: Window=%u", window->id);
+      windows_changed();
+    }
     if (shell.updating) {
       shell.updating = false;
       shell.state_enabled = true;
@@ -3924,6 +3947,12 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     SDL_Log("Shell Sidebar toggle requested: Window=%u", window->id);
     if (!window->closing) set_sidebar_hidden(window, sidebar_shown(window));
     break;
+  case ANVIL_SURFACE_MSG_CLOSE_ALL_WINDOWS:
+    close_all_windows();
+    break;
+  case ANVIL_SURFACE_MSG_REOPEN_CLOSED_WINDOW:
+    reopen_closed_window(window);
+    break;
   case ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION:
     shell.alt_navigation = !shell.alt_navigation;
     SDL_Log("Shell Alt Navigation: %s Project=%u", shell.alt_navigation ? "on" : "off", project->id);
@@ -3962,15 +3991,18 @@ static void handle_message(ShellProject *project, ShellMessage *message) {
     break;
   case ANVIL_SURFACE_MSG_TERMINAL_QUIT_QUERY:
     if (!project->sidebar && project->close_requested_ns) {
-      shell_send_int(project, ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT,
-        window->closing && !project->unloading ? window->terminal_quit_choice : ANVIL_SURFACE_TERMINAL_QUIT_PROJECT);
+      AnvilSurfaceTerminalQuit choice =
+        window->closing && !project->unloading ? window->terminal_quit_choice : ANVIL_SURFACE_TERMINAL_QUIT_PROJECT;
+      if (choice == ANVIL_SURFACE_TERMINAL_QUIT_ASK && shell.closing_all) choice = shell.close_all_choice;
+      shell_send_int(project, ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT, choice);
     }
     break;
   case ANVIL_SURFACE_MSG_TERMINAL_QUIT_CHOICE:
     if (!project->sidebar && window->closing && !project->unloading && project->close_requested_ns) {
       window->terminal_quit_choice = value;
-      SDL_Log("Shell Window Terminal choice: Window=%u choice=%s", window->id,
-              value == ANVIL_SURFACE_TERMINAL_QUIT_KEEP ? "keep" : "end");
+      if (shell.closing_all) shell.close_all_choice = value;
+      SDL_Log("Shell Window Terminal choice: Window=%u choice=%s all=%d", window->id,
+              value == ANVIL_SURFACE_TERMINAL_QUIT_KEEP ? "keep" : "end", shell.closing_all);
     }
     break;
   case ANVIL_SURFACE_MSG_EXIT_INTENT:
@@ -5056,10 +5088,7 @@ SDL_AppResult anvil_shell_event(void *appstate, SDL_Event *event) {
   }
 
   if (event->type == SDL_EVENT_QUIT) {
-    for (ShellWindow *item = shell.windows; item; item = item->next) {
-      begin_window_close(item);
-      request_close(item->selected);
-    }
+    close_all_windows();
     return SDL_APP_CONTINUE;
   }
   /* A remote session can change a display's refresh rate under an open Window. */
@@ -7479,9 +7508,14 @@ static void save_windows(bool final) {
       activity[j - 1] = swap;
     }
   AnvilShellState state = {entries, count, activity, activity_count, shell.sidebar_points, shell.next_window,
-                           shell.alt_navigation};
+                           shell.alt_navigation, shell.closed, shell.closed_count};
   size_t size = 0;
   char *data = anvil_shell_state_encode(&state, &size);
+  /* Open Windows come first. The oldest closed Windows drop out when the file would exceed its bounds. */
+  while (!data && state.closed_count) {
+    state.closed_count--;
+    data = anvil_shell_state_encode(&state, &size);
+  }
   for (size_t i = 0; i < count; i++) if (owned[i]) anvil_shell_window_state_free(&entries[i]);
   if (!data) {
     SDL_Log("Shell Window state exceeds its bounds; keep the previous file");
@@ -7612,6 +7646,56 @@ static size_t restore_windows(AnvilShellState *saved, AnvilAdoptionRecord *adopt
   return restored;
 }
 
+/* Saves every Window first, so the next start restores them all. A Cancel stops at the Window that asked. */
+static void close_all_windows(void) {
+  if (shell.closing_all || shell.updating || shell.shutting_down) return;
+  save_windows(true);
+  shell.closing_all_saves = shell.state_enabled;
+  shell.state_enabled = false;
+  shell.closing_all = true;
+  shell.close_all_choice = ANVIL_SURFACE_TERMINAL_QUIT_ASK_ALL;
+  SDL_Log("Shell Close All Windows begin");
+  advance_close_all();
+}
+
+/* Closes the front Window after every Project of the previous Window has decided. */
+static void advance_close_all(void) {
+  if (!shell.closing_all) return;
+  for (ShellWindow *item = shell.windows; item; item = item->next)
+    if (item->closing && !item->close_settled) return;
+  ShellWindow *window = last_window();
+  if (!window) return;
+  SDL_Log("Shell Close All Windows closes Window=%u", window->id);
+  begin_window_close(window);
+  request_close(window->selected);
+}
+
+/* The reopened Window keeps its ID, so it keeps its saved Sidebar folds. A Project that another Window shows now
+ * stays there. */
+static void reopen_closed_window(ShellWindow *requester) {
+  if (shell.closing_all || shell.updating || shell.shutting_down) return;
+  if (!shell.closed_count) {
+    window_notice(requester, "No closed Window");
+    return;
+  }
+  AnvilShellWindowState entry = shell.closed[0];
+  memmove(shell.closed, shell.closed + 1, --shell.closed_count * sizeof(*shell.closed));
+  ShellWindow *window = create_window(&entry, false);
+  if (window) {
+    SDL_Log("Shell reopened closed Window: id=%u Projects=%u", window->id,
+            (unsigned)(entry.project_count + (entry.path != NULL)));
+    int rank = 0;
+    for (size_t i = 0; i <= entry.project_count; i++) {
+      const char *path = i == 0 ? entry.path : entry.projects[i - 1];
+      if (!path) continue;
+      ShellProject *project = restored_project(window, path, rank++);
+      if (project && i == 0) select_project(project, false);
+    }
+    windows_changed();
+  } else window_notice(requester, "Cannot create a Window");
+  anvil_shell_window_state_free(&entry);
+}
+
 static bool destroy_window(ShellWindow *window) {
   if (!window->removing) {
     window->removing = true;
@@ -7663,6 +7747,16 @@ static bool destroy_window(ShellWindow *window) {
   *link = window->next;
   release_project(window->empty);
   release_project(window->sidebar_client);
+  /* A Window that held a Project can reopen. App State keeps the last Window as an open Window instead. */
+  if (!last && window->close_entry_valid && (window->close_entry.path || window->close_entry.project_count)) {
+    if (shell.closed_count == ANVIL_SHELL_STATE_MAX_CLOSED)
+      anvil_shell_window_state_free(&shell.closed[--shell.closed_count]);
+    memmove(shell.closed + 1, shell.closed, shell.closed_count * sizeof(*shell.closed));
+    shell.closed[0] = window->close_entry;
+    shell.closed_count++;
+    window->close_entry = (AnvilShellWindowState){0};
+    SDL_Log("Shell remembers closed Window: id=%u closed=%u", window->id, (unsigned)shell.closed_count);
+  }
   anvil_shell_window_state_free(&window->close_entry);
   free(window);
   if (!last) windows_changed();
@@ -7758,6 +7852,10 @@ SDL_AppResult anvil_shell_init(void **appstate, int argc, char **argv) {
     saved.projects[i].path = NULL;
   }
   SDL_Log("Shell Project activity loaded: Projects=%u", (unsigned)shell.saved_activity_count);
+  for (size_t i = 0; i < saved.closed_count; i++) {
+    shell.closed[shell.closed_count++] = saved.closed[i];
+    saved.closed[i] = (AnvilShellWindowState){0};
+  }
   size_t restored = saved.count || adoptable_count ? restore_windows(&saved, adoptable, adoptable_count) : 0;
   anvil_shell_state_free(&saved);
   for (size_t i = 0; i < adoptable_count; i++) anvil_adoption_free(&adoptable[i]);
@@ -7846,6 +7944,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
     if (next) { select_project(next, false); request_close(next); continue; }
     /* Every Project finished its saves and Close choices. Keep ownership until process exit,
      * but do not keep the Window visible for Lua and renderer destruction. */
+    window->close_settled = true;
     if (window->shown) {
       SDL_HideWindow(window->window);
       window->shown = false;
@@ -7859,6 +7958,7 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
     if (assigned) continue;
     destroy_window(window);
   }
+  advance_close_all();
   /* Copy all queued surface updates before waiting for a refresh. Each Window gets one frame presentation
    * per iteration, so SDL can return to Windows input instead of presenting each incoming frame notice. */
   for (ShellWindow *window = shell.windows; window; window = window->next) {

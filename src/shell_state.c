@@ -6,7 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STATE_HEADER "anvil-shell-windows 7\n"
+#define STATE_HEADER "anvil-shell-windows 8\n"
+/* Version 7 kept no closed Windows. */
+#define STATE_HEADER_7 "anvil-shell-windows 7\n"
 /* Version 6 did not retain the Window ID allocation sequence. */
 #define STATE_HEADER_6 "anvil-shell-windows 6\n"
 /* Version 5 shared Sidebar visibility across Windows. */
@@ -18,21 +20,34 @@
 #define STATE_HEADER_2 "anvil-shell-windows 2\n"
 
 /* Each Window is one line: `window <id> <x> <y> <w> <h> <maximized> <sidebar hidden> <path bytes> <path>`.
+ * A closed Window has the same fields after `closed` instead of `window`.
  * Each Project activity is one line: `project <unix seconds> <path bytes> <path>`.
  * Other loaded Projects follow their Window: `loaded <window id> <path bytes> <path>`.
  * The shared Sidebar width is one optional line: `sidebar <points>`.
  * `sequence <last Window id>` prevents reuse of a closed Window's saved folds.
  * The optional line `alt-navigation` turns Alt Navigation on. */
+static size_t encode_window(char *data, size_t capacity, const char *kind, const AnvilShellWindowState *window) {
+  const char *path = window->path ? window->path : "";
+  size_t n = (size_t)snprintf(data, capacity, "%s %lu %ld %ld %ld %ld %d %d %zu %s\n", kind, (unsigned long)window->id,
+                              (long)window->x, (long)window->y, (long)window->w, (long)window->h,
+                              window->maximized ? 1 : 0, window->sidebar_hidden ? 1 : 0, strlen(path), path);
+  for (size_t j = 0; j < window->project_count; j++)
+    n += (size_t)snprintf(data + n, capacity - n, "loaded %lu %zu %s\n", (unsigned long)window->id,
+                          strlen(window->projects[j]), window->projects[j]);
+  return n;
+}
+
 char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
-  if (state->count > ANVIL_SHELL_STATE_MAX_WINDOWS) return NULL;
+  if (state->count > ANVIL_SHELL_STATE_MAX_WINDOWS || state->closed_count > ANVIL_SHELL_STATE_MAX_CLOSED) return NULL;
   size_t capacity = sizeof(STATE_HEADER) + 64;
   uint32_t last_window_id = state->last_window_id;
   size_t loaded = 0;
-  for (size_t i = 0; i < state->count; i++) {
-    size_t length = state->windows[i].path ? strlen(state->windows[i].path) : 0;
+  for (size_t i = 0; i < state->count + state->closed_count; i++) {
+    const AnvilShellWindowState *window =
+        i < state->count ? &state->windows[i] : &state->closed[i - state->count];
+    size_t length = window->path ? strlen(window->path) : 0;
     if (length > ANVIL_SHELL_STATE_MAX_PATH) return NULL;
     capacity += length + 96;
-    const AnvilShellWindowState *window = &state->windows[i];
     if (window->id > last_window_id) last_window_id = window->id;
     if (window->project_count > ANVIL_SHELL_STATE_MAX_PROJECTS - loaded) return NULL;
     loaded += window->project_count;
@@ -57,16 +72,9 @@ char *anvil_shell_state_encode(const AnvilShellState *state, size_t *size) {
   if (state->sidebar_points > 0)
     n += (size_t)snprintf(data + n, capacity - n, "sidebar %d\n", state->sidebar_points);
   if (state->alt_navigation) n += (size_t)snprintf(data + n, capacity - n, "alt-navigation\n");
-  for (size_t i = 0; i < state->count; i++) {
-    const AnvilShellWindowState *window = &state->windows[i];
-    const char *path = window->path ? window->path : "";
-    n += (size_t)snprintf(data + n, capacity - n, "window %lu %ld %ld %ld %ld %d %d %zu %s\n",
-                          (unsigned long)window->id, (long)window->x, (long)window->y, (long)window->w, (long)window->h, window->maximized ? 1 : 0,
-                          window->sidebar_hidden ? 1 : 0, strlen(path), path);
-    for (size_t j = 0; j < window->project_count; j++)
-      n += (size_t)snprintf(data + n, capacity - n, "loaded %lu %zu %s\n", (unsigned long)window->id,
-                            strlen(window->projects[j]), window->projects[j]);
-  }
+  for (size_t i = 0; i < state->count; i++) n += encode_window(data + n, capacity - n, "window", &state->windows[i]);
+  for (size_t i = 0; i < state->closed_count; i++)
+    n += encode_window(data + n, capacity - n, "closed", &state->closed[i]);
   for (size_t i = 0; i < projects; i++) {
     const AnvilShellProjectActivity *project = &state->projects[i];
     n += (size_t)snprintf(data + n, capacity - n, "project %ld %zu %s\n", (long)project->activity,
@@ -88,6 +96,10 @@ void anvil_shell_state_free(AnvilShellState *state) {
   free(state->windows);
   state->windows = NULL;
   state->count = 0;
+  for (size_t i = 0; i < state->closed_count; i++) anvil_shell_window_state_free(&state->closed[i]);
+  free(state->closed);
+  state->closed = NULL;
+  state->closed_count = 0;
   for (size_t i = 0; i < state->project_count; i++) free(state->projects[i].path);
   free(state->projects);
   state->projects = NULL;
@@ -134,14 +146,16 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
   bool version_4 = size >= header && !memcmp(data, STATE_HEADER_4, header);
   bool version_5 = size >= header && !memcmp(data, STATE_HEADER_5, header);
   bool version_6 = size >= header && !memcmp(data, STATE_HEADER_6, header);
+  bool version_7 = size >= header && !memcmp(data, STATE_HEADER_7, header);
   bool shared_visibility = version_2 || version_3 || version_4 || version_5;
   if (size > ANVIL_SHELL_STATE_MAX_BYTES || size < header ||
-      (memcmp(data, STATE_HEADER, header) && !shared_visibility && !version_6))
+      (memcmp(data, STATE_HEADER, header) && !shared_visibility && !version_6 && !version_7))
     return false;
   const char *cursor = data + header, *end = data + size;
   state->windows = calloc(ANVIL_SHELL_STATE_MAX_WINDOWS, sizeof(*state->windows));
+  state->closed = calloc(ANVIL_SHELL_STATE_MAX_CLOSED, sizeof(*state->closed));
   state->projects = version_2 ? NULL : calloc(ANVIL_SHELL_STATE_MAX_PROJECTS, sizeof(*state->projects));
-  if (!state->windows || (!version_2 && !state->projects)) {
+  if (!state->windows || !state->closed || (!version_2 && !state->projects)) {
     anvil_shell_state_free(state);
     return false;
   }
@@ -174,6 +188,8 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
       AnvilShellWindowState *window = NULL;
       for (size_t i = 0; i < state->count; i++)
         if (state->windows[i].id == (uint32_t)id) { window = &state->windows[i]; break; }
+      for (size_t i = 0; !window && i < state->closed_count; i++)
+        if (state->closed[i].id == (uint32_t)id) window = &state->closed[i];
       if (!window) break;
       char **paths = realloc(window->projects, (window->project_count + 1) * sizeof(*paths));
       if (!paths) break;
@@ -211,13 +227,18 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
       complete = true;
       continue;
     }
-    if (state->count >= ANVIL_SHELL_STATE_MAX_WINDOWS || end - cursor < 7 || memcmp(cursor, "window ", 7)) break;
+    bool closed = !shared_visibility && !version_6 && !version_7 && end - cursor >= 7 && !memcmp(cursor, "closed ", 7);
+    size_t *count = closed ? &state->closed_count : &state->count;
+    if (*count >= (closed ? ANVIL_SHELL_STATE_MAX_CLOSED : ANVIL_SHELL_STATE_MAX_WINDOWS) || end - cursor < 7 ||
+        (!closed && memcmp(cursor, "window ", 7)))
+      break;
     cursor += 7;
     bool ok = true;
     int fields = shared_visibility ? 7 : 8;
     for (int i = 0; ok && i < fields; i++) ok = read_long(&cursor, end, &values[i], ' ');
     for (size_t i = 0; ok && i < state->count; i++) ok = state->windows[i].id != (uint32_t)values[0];
-    AnvilShellWindowState *window = &state->windows[state->count];
+    for (size_t i = 0; ok && i < state->closed_count; i++) ok = state->closed[i].id != (uint32_t)values[0];
+    AnvilShellWindowState *window = closed ? &state->closed[*count] : &state->windows[*count];
     if (!ok || values[0] <= 0 || values[3] <= 0 || values[4] <= 0 || (values[5] != 0 && values[5] != 1) ||
         (!shared_visibility && values[6] != 0 && values[6] != 1) ||
         !read_path(&cursor, end, values[fields - 1], &window->path))
@@ -230,7 +251,7 @@ bool anvil_shell_state_decode(const char *data, size_t size, AnvilShellState *st
     window->h = values[4];
     window->maximized = values[5] == 1;
     window->sidebar_hidden = !shared_visibility && values[6] == 1;
-    state->count++;
+    (*count)++;
     complete = true;
   }
   /* A partial or malformed file restores nothing. */

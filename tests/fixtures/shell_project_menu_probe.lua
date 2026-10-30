@@ -173,6 +173,6 @@ elseif path == root .. "/Project" then
    end
    coroutine.yield(.05)
   end
-  require("core.command").perform("core:quit")
+  require("core.command").perform("core:close_current_window")
  end)
 end

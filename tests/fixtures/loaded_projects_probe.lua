@@ -223,7 +223,7 @@ else
       save("a-clean", {continue = true})
       if action == "loaded-quit" then
         wait_for(function() return load("quit-a") end, 5)
-        assert(require("core.command").perform("core:quit"))
+        assert(require("core.command").perform("core:close_current_window"))
       end
     else
       if load("b-restarting") then

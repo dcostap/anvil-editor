@@ -311,7 +311,7 @@ command.add(nil, {
   ["pane:new_group"] = command.palette(function()
     return panes.create { factory = new_untitled_editor }
   end),
-  ["core:close_pane_or_quit"] = function()
+  ["core:close_pane_or_window"] = function()
     local pane = panes.active()
     if pane then return panes.close(pane) end
     return core.quit()

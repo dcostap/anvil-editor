@@ -412,7 +412,7 @@ local style = require "core.style"
 --------------------------- Key bindings -------------------------------------
 
 -- key binding:
--- keymap.add { ["ctrl+escape"] = "core:quit" }
+-- keymap.add { ["ctrl+escape"] = "core:close_current_window" }
 
 -- pass 'true' for second parameter to overwrite an existing binding
 

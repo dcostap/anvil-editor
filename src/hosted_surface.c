@@ -854,7 +854,7 @@ static int SDLCALL reader_thread(void *data) {
       case ANVIL_SURFACE_MSG_TERMINAL_QUIT_CONTEXT:
         if (hosted.sidebar || size != sizeof(AnvilSurfaceInt) ||
             ((AnvilSurfaceInt *)body)->value < ANVIL_SURFACE_TERMINAL_QUIT_PROJECT ||
-            ((AnvilSurfaceInt *)body)->value > ANVIL_SURFACE_TERMINAL_QUIT_END) goto failed;
+            ((AnvilSurfaceInt *)body)->value > ANVIL_SURFACE_TERMINAL_QUIT_ASK_ALL) goto failed;
         break;
       case ANVIL_SURFACE_MSG_CLOSE:
       case ANVIL_SURFACE_MSG_PREPARE_UPDATE:
@@ -1218,6 +1218,18 @@ bool anvil_hosted_surface_toggle_sidebar(void) {
 bool anvil_hosted_surface_toggle_alt_navigation(void) {
   if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
   send_message(ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION, NULL, 0);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_close_all_windows(void) {
+  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  send_message(ANVIL_SURFACE_MSG_CLOSE_ALL_WINDOWS, NULL, 0);
+  return !SDL_GetAtomicInt(&hosted.loss_cause);
+}
+
+bool anvil_hosted_surface_reopen_closed_window(void) {
+  if (!hosted.active || hosted.sidebar || SDL_GetAtomicInt(&hosted.loss_cause)) return false;
+  send_message(ANVIL_SURFACE_MSG_REOPEN_CLOSED_WINDOW, NULL, 0);
   return !SDL_GetAtomicInt(&hosted.loss_cause);
 }
 
@@ -1762,6 +1774,8 @@ bool anvil_hosted_surface_zoom_saved(double interface_zoom, double code_zoom) {
 }
 bool anvil_hosted_surface_toggle_sidebar(void) { return false; }
 bool anvil_hosted_surface_toggle_alt_navigation(void) { return false; }
+bool anvil_hosted_surface_close_all_windows(void) { return false; }
+bool anvil_hosted_surface_reopen_closed_window(void) { return false; }
 bool anvil_hosted_surface_focus_sidebar(bool focused) { (void)focused; return false; }
 bool anvil_hosted_surface_set_panes(const char *panes) { (void)panes; return false; }
 void anvil_hosted_surface_runtime_ready(void) {}

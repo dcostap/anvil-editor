@@ -374,7 +374,7 @@ else
       wait_for(function() return not system.window_should_render(core.window) end, 10)
       if action == "dormant-background-quit" then
         wait_for(function() return read("quit-a") end, 15)
-        assert(require("core.command").perform("core:quit"))
+        assert(require("core.command").perform("core:close_current_window"))
         return
       end
       if action == "dormant-launch" then
@@ -434,7 +434,7 @@ else
       local restored = state()
       save("b-restored", restored)
       wait_for(function() return read("finish") end, 10)
-      assert(require("core.command").perform("core:quit"))
+      assert(require("core.command").perform("core:close_current_window"))
     elseif (action == "dormant-crash" or action == "dormant-hang") and read("b-crashed") then
       local editor = core.open_file(directory .. "/edited.txt")
       local restored = state()

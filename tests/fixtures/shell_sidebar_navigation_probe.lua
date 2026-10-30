@@ -111,6 +111,6 @@ else
     wait(function() return core.active_view == view end, "Matching Tab did not gain focus")
     save("activated", true)
     wait(function() return load("finish") end, "Finish request missing")
-    command.perform("core:quit")
+    command.perform("core:close_current_window")
   end)
 end

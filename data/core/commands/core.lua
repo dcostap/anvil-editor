@@ -310,9 +310,19 @@ command.add(nil, {
     command.repeat_last()
   end),
 
-  ["core:quit"] = command.palette(function()
+  ["core:close_current_window"] = command.palette(function()
     core.quit()
   end),
+
+  -- The shell saves every Window first, so the next start restores them all. Without a shell there is one Window.
+  ["core:close_all_windows"] = command.palette(function()
+    if system.is_hosted_surface() then return system.close_all_windows() end
+    core.quit()
+  end, { keywords = { "quit", "exit" } }),
+
+  ["core:reopen_closed_window"] = command.palette(function()
+    return system.reopen_closed_window()
+  end, { keywords = { "undo", "restore" } }),
 
   ["core:restart"] = command.palette(function()
     core.restart()
@@ -322,7 +332,7 @@ command.add(nil, {
     return core.open_new_window()
   end),
 
-  ["core:force_quit"] = function()
+  ["core:force_close_current_window"] = function()
     core.quit(true)
   end,
 

@@ -8,6 +8,8 @@
 /* The shell's App State for Anvil Windows. The shell alone writes this file. Lua never reads or writes it. */
 #define ANVIL_SHELL_STATE_FILE L"shell-windows.state"
 #define ANVIL_SHELL_STATE_MAX_WINDOWS 64
+/* Reopen Closed Window keeps this many closed Windows, newest first. */
+#define ANVIL_SHELL_STATE_MAX_CLOSED 10
 #define ANVIL_SHELL_STATE_MAX_PROJECTS 256
 #define ANVIL_SHELL_STATE_MAX_PATH 32768
 #define ANVIL_SHELL_STATE_MAX_BYTES (256 * 1024)
@@ -45,6 +47,9 @@ typedef struct {
   uint32_t last_window_id;
   /* Alt Navigation is on. */
   bool alt_navigation;
+  /* Closed Windows, newest first. Their loaded Projects count toward the same Project bound. */
+  AnvilShellWindowState *closed;
+  size_t closed_count;
 } AnvilShellState;
 
 /* Encodes `state`. Returns NULL when it exceeds the bounds above. */

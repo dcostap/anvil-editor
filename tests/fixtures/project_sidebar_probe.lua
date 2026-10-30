@@ -534,7 +534,7 @@ core.add_background_thread(function()
       if read("empty-load-b") then
         save("b-restored", state())
         wait(function() return read("finish") end, 10)
-        assert(require("core.command").perform("core:quit"))
+        assert(require("core.command").perform("core:close_current_window"))
         return
       end
       local editor = core.open_file(directory .. "/edited.txt")

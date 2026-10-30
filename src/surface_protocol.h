@@ -118,17 +118,23 @@ typedef enum {
   ANVIL_SURFACE_MSG_SIDEBAR_FOCUS = 106,
   /* Request the current Terminal quit scope. No payload. */
   ANVIL_SURFACE_MSG_TERMINAL_QUIT_QUERY = 108,
-  /* Save Keep or End for the rest of this Window Close. Payload: AnvilSurfaceInt. */
+  /* Save Keep or End for the rest of this Window Close, or of Close All Windows. Payload: AnvilSurfaceInt. */
   ANVIL_SURFACE_MSG_TERMINAL_QUIT_CHOICE = 109,
   /* Turn Alt Navigation on or off in every Window. No payload. */
   ANVIL_SURFACE_MSG_TOGGLE_ALT_NAVIGATION = 110,
+  /* Close every Window, and keep them all for the next start. No payload. */
+  ANVIL_SURFACE_MSG_CLOSE_ALL_WINDOWS = 111,
+  /* Open the Window that closed last, with its placement and Projects. No payload. */
+  ANVIL_SURFACE_MSG_REOPEN_CLOSED_WINDOW = 112,
 } AnvilSurfaceMessageType;
 
 typedef enum {
   ANVIL_SURFACE_TERMINAL_QUIT_PROJECT,
   ANVIL_SURFACE_TERMINAL_QUIT_ASK,
   ANVIL_SURFACE_TERMINAL_QUIT_KEEP,
-  ANVIL_SURFACE_TERMINAL_QUIT_END
+  ANVIL_SURFACE_TERMINAL_QUIT_END,
+  /* Close All Windows asks once for the Terminal Sessions of every Window. */
+  ANVIL_SURFACE_TERMINAL_QUIT_ASK_ALL
 } AnvilSurfaceTerminalQuit;
 
 /* Static stage names only. Times use the same performance clock as system.get_time().
