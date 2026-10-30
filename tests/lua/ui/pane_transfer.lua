@@ -20,7 +20,6 @@ end
 test.describe("Pane transfer", function()
   local sent, original_send
   test.before_each(function()
-    coroutine.yield(0.05)
     panes.reset_for_tests()
     sequence = sequence + 1
     transfer_id = "test-transfer-" .. sequence
@@ -165,7 +164,7 @@ test.describe("Pane transfer", function()
     local file = assert(io.open(filename, "wb")); file:write("old\n"); file:close()
     local buffer = core.open_buffer(filename)
     local pane = panes.create { factory = function() return Editor(buffer) end }
-    coroutine.yield(0.05)
+    test.equal(pane.current_view.buffer, buffer)
     buffer:insert(1, 1, "new ")
     test.ok(export(pane))
     test.not_ok(buffer:is_dirty())
