@@ -78,7 +78,7 @@ function M.place(pane, target)
       local vertical = parent and parent.axis == "y"
       local direction = target.side == "before" and (vertical and "up" or "left")
         or (vertical and "down" or "right")
-      pane, err = panes.move(pane, anchor, direction)
+      pane, err = panes.reorder(pane, anchor, direction)
     end
   end
   if not pane then return fail(err) end

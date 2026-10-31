@@ -219,11 +219,11 @@ local commands = {
   end),
   ["pane:move_before"] = command.palette(function(pane)
     local ordered, index = navigable_position(pane)
-    if index and index > 1 then return panes.move(pane, ordered[index - 1], "left") end
+    if index and index > 1 then return panes.reorder(pane, ordered[index - 1], "left") end
   end),
   ["pane:move_after"] = command.palette(function(pane)
     local ordered, index = navigable_position(pane)
-    if index and index < #ordered then return panes.move(pane, ordered[index + 1], "right") end
+    if index and index < #ordered then return panes.reorder(pane, ordered[index + 1], "right") end
   end),
   ["pane:rotate_group_clockwise"] = command.palette(function(pane)
     return panes.rotate_group_clockwise(pane)

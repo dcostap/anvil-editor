@@ -459,7 +459,7 @@ local function remove_from_group(pane)
   return group
 end
 
-function M.move(source_target, destination_target, direction)
+local function check_move(source_target, destination_target, direction)
   local source = M.find(source_target)
   local destination = M.find(destination_target)
   if not source or not destination then return nil, "invalid source or target Pane" end
@@ -468,6 +468,29 @@ function M.move(source_target, destination_target, direction)
     and direction ~= "up" and direction ~= "down" then
     return nil, "invalid Pane move direction"
   end
+  return source, destination
+end
+
+---Split the destination Pane in `direction` and put the source Pane there.
+function M.move(source_target, destination_target, direction)
+  local source, destination = check_move(source_target, destination_target, direction)
+  if not source then return nil, destination end
+  local destination_group = destination.group
+  remove_from_group(source)
+  source.group = destination_group
+  destination_group.root = layout.split(destination_group.root, destination, direction, source)
+  M.active_pane = source
+  M.visible_group_value = destination_group
+  focus_view(source)
+  after_mutation(string.format("moved %s %s of %s", source.id, direction, destination.id))
+  return source
+end
+
+---Put the source Pane before ("left", "up") or after ("right", "down") the destination in Pane order.
+---In one Pane Group the layout keeps its shape. Across Pane Groups this is a move.
+function M.reorder(source_target, destination_target, direction)
+  local source, destination = check_move(source_target, destination_target, direction)
+  if not source then return nil, destination end
   local destination_group = destination.group
   if source.group == destination_group then
     local ordered = layout.leaves(destination_group.root)
@@ -490,14 +513,7 @@ function M.move(source_target, destination_target, direction)
     after_mutation(string.format("reordered %s %s of %s", source.id, direction, destination.id))
     return source
   end
-  remove_from_group(source)
-  source.group = destination_group
-  destination_group.root = layout.split(destination_group.root, destination, direction, source)
-  M.active_pane = source
-  M.visible_group_value = destination_group
-  focus_view(source)
-  after_mutation(string.format("moved %s %s of %s", source.id, direction, destination.id))
-  return source
+  return M.move(source, destination, direction)
 end
 
 function M.swap(source_target, destination_target)

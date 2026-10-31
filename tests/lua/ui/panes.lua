@@ -113,14 +113,14 @@ test.describe("Pane manager", function()
     test.equal(panes.visible_group(), one.group)
   end)
 
-  test.it("rebalances a Pane Group after moving a Pane", function()
+  test.it("rebalances a Pane Group after reordering a Pane", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.split(one, "right", { factory = factory("two") })
     local three = panes.split(one, "down", { factory = factory("three") })
     local group = one.group
     group.root.a.ratio = 0.2
 
-    test.equal(panes.move(two, one, "left"), two)
+    test.equal(panes.reorder(two, one, "left"), two)
 
     layout.update_rects(group.root, { x = 0, y = 0, w = 200, h = 100 })
     test.equal(two.size.x, 100)

@@ -54,13 +54,13 @@ test.describe("Pane navigation and movement", function()
     test.equal(panes.number(two), 2)
   end)
 
-  test.it("moves a Pane within one split layout", function()
+  test.it("reorders a Pane within one split layout", function()
     local one = panes.create { factory = factory("one") }
     local two = panes.split(one, "right", { factory = factory("two") })
     local three = panes.split(two, "right", { factory = factory("three") })
     one.group.root.ratio = 0.35
     one.group.root.b.ratio = 0.7
-    panes.move(three, one, "left")
+    panes.reorder(three, one, "left")
     test.same(names(), { "three", "one", "two" })
     test.equal(three.group, one.group)
     test.equal(one.group.root.ratio, 1 / 3)
@@ -86,6 +86,24 @@ test.describe("Pane navigation and movement", function()
     test.equal(direction, "right")
     test.equal(panes.drop(two, 190, 50), two)
     test.same(names(), { "one", "two" })
+  end)
+
+  test.it("splits a Pane of the same Pane Group at an edge drop", function()
+    local one = panes.create { factory = factory("one") }
+    local three = panes.split(one, "down", { factory = factory("three") })
+    local two = panes.split(one, "right", { factory = factory("two") })
+    local group = one.group
+    layout.update_rects(group.root, { x = 0, y = 0, w = 200, h = 200 })
+
+    local target, direction = panes.drop_target_at(50, 95)
+    test.equal(target, one)
+    test.equal(direction, "down")
+    test.equal(panes.drop(two, 50, 95), two)
+
+    layout.update_rects(group.root, { x = 0, y = 0, w = 200, h = 300 })
+    test.same(names(), { "one", "two", "three" })
+    for _, pane in ipairs { one, two, three } do test.equal(pane.size.x, 200) end
+    test.ok(one.position.y < two.position.y and two.position.y < three.position.y)
   end)
 
   test.it("swaps split positions through the work-area center", function()

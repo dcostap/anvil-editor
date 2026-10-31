@@ -534,7 +534,7 @@ function TitleBar:apply_pane_drag_target(target)
   if target.kind == "work" then
     return panes().drop(source, self.drag_x, self.drag_y)
   elseif target.kind == "reorder" then
-    return panes().move(source, target.pane, target.direction)
+    return panes().reorder(source, target.pane, target.direction)
   elseif target.kind == "group-boundary" then
     return panes().move_to_group_boundary(source, target.pane, target.placement)
   end
