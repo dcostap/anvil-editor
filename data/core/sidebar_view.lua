@@ -153,25 +153,30 @@ function SidebarView:reveal_cursor()
   self:clamp_scroll()
 end
 
-function SidebarView:on_focus(focused)
+function SidebarView:reset_cursor_to_selection()
+  for index, row in ipairs(self.rows) do
+    if row.selected then self.cursor = index; break end
+  end
+  self:reveal_cursor()
+end
+
+function SidebarView:on_focus(focused, refresh_pending)
   self.focused, self.unload_ask = focused, nil
+  -- A hidden Sidebar can still hold the previous Pane report when it gets the keyboard.
+  self.focus_pending = focused and refresh_pending or nil
   -- The hours field asks for the keyboard and waits for it. It closes when the Sidebar loses the keyboard.
   if not focused then self.hours = nil end
   self.focus_feedback:update(focused and self or nil)
   self.input:set_text("")
   self.query, self.cursor, self.selecting = "", nil, nil
   self:rebuild_rows()
-  if focused then
-    for index, row in ipairs(self.rows) do
-      if row.selected then self.cursor = index; break end
-    end
-    self:reveal_cursor()
-  end
+  if focused then self:reset_cursor_to_selection() end
 end
 
 -- Filters the list again after the search field's text changed.
 function SidebarView:input_changed()
   if self.input.text == self.query then return end
+  self.focus_pending = nil
   self.query, self.cursor = self.input.text, nil
   self:rebuild_rows()
 end
@@ -317,6 +322,7 @@ end
 function SidebarView:open_menu(row, x, y, button)
   local items = row and self:context_menu(row)
   if not items then return false end
+  self.focus_pending = nil
   self.unload_ask = nil
   self.action("menu", items, x, y, button, row.project.row_id)
   return true
@@ -408,6 +414,7 @@ function SidebarView:forward_key(stroke, keep_sidebar)
   local row = self:get_cursor()
   local project = row and row.project or self:selected_project()
   if not project then return false end
+  self.focus_pending = nil
   self.unload_ask = nil
   -- The shell gets both messages in this order.
   if not keep_sidebar then self.action("return_focus") end
@@ -421,6 +428,7 @@ function SidebarView:unload_cursor_project(repeating)
   if not self.focused or self.hours then return false end
   local row = self:get_cursor()
   if not row or row.kind ~= "project" then return false end
+  self.focus_pending = nil
   self.unload_ask = nil
   local state = row.project.state
   if not repeating and state ~= "dormant" and state ~= "closing" then
@@ -445,6 +453,7 @@ end
 ---@param repeating boolean? The key is held down and repeats.
 function SidebarView:on_key_pressed(key, repeating)
   if not self.focused then return end
+  self.focus_pending = nil
   if self.hours then
     if key == "escape" then self:close_hours(false)
     elseif key == "return" or key == "keypad enter" then self:close_hours(true) end
@@ -514,6 +523,12 @@ function SidebarView:set_model(projects, window_id)
   -- A Tab moved inside its Project shows its result in the next report.
   if self.pending and not self.pending.transfer then self.pending = nil end
   self:rebuild_rows()
+  if self.focus_pending then
+    self.focus_pending = nil
+    self:reset_cursor_to_selection()
+    local row = self:get_cursor()
+    core.log_quiet("Sidebar focus refreshed: Window=%s row=%s", tostring(window_id), row and row.id_key or "none")
+  end
 end
 
 -- The index in `rows` of the main list's Project row nearest the cursor in the current rows: above it first, then
@@ -991,6 +1006,7 @@ end
 
 function SidebarView:on_mouse_pressed(button, x, y)
   if button ~= "left" and button ~= "right" and button ~= "middle" then return end
+  self.focus_pending = nil
   self.unload_ask = nil
   if self:in_search(x, y) then
     -- A press places the caret. A drag from it selects.

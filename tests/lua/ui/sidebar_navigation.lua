@@ -130,6 +130,18 @@ test.describe("Sidebar keyboard navigation", function()
     test.same(actions, {{"request","select","C:/Alpha",{action="focus",pane="b"}}})
   end)
 
+  test.it("starts at the current Tab when the hidden Sidebar's refresh arrives after focus", function()
+    local view, actions = sidebar()
+    view:on_focus(true, true)
+    view.projects[1].panes.active = 2
+    view:set_model(view.projects, 7)
+    test.equal(view:get_cursor().tab.id, "b")
+    view.projects[1].panes.active = 1
+    view:set_model(view.projects, 7)
+    test.equal(view:get_cursor().tab.id, "b", "Later reports must not reset the cursor")
+    test.same(actions, {})
+  end)
+
   test.it("collapses a Project and searches its hidden Tabs with Project context", function()
     local view = sidebar()
     view:on_focus(true)
@@ -231,12 +243,25 @@ test.describe("Sidebar keyboard navigation", function()
 
   test.it("keeps selection through model refresh and returns focus on Escape", function()
     local view, actions = sidebar()
-    view:on_focus(true)
-    view:on_key_pressed("down")
+    view:on_focus(true, true)
+    view:on_key_pressed("next_project")
+    view.projects[1].panes.active = 2
     view:set_model(view.projects, 7)
-    test.equal(view:get_cursor().tab.id, "b")
+    test.equal(view:get_cursor().project.id, 2)
+    test.equal(view:get_cursor().kind, "project")
     view:on_key_pressed("escape")
     test.same(actions, {{"return_focus"}})
+  end)
+
+  test.it("keeps search results when the focus refresh arrives", function()
+    local view = sidebar()
+    view:on_focus(true, true)
+    view:on_text_input("alpha")
+    view.projects[1].panes.active = 2
+    view:set_model(view.projects, 7)
+    test.equal(view.query, "alpha")
+    test.equal(view:get_cursor().kind, "project")
+    test.equal(view:get_cursor().project.id, 1)
   end)
 
   test.it("keeps keyboard selection visible and removes complete UTF-8 characters", function()

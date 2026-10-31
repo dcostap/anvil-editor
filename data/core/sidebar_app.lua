@@ -501,7 +501,10 @@ function core.on_event(name, ...)
   elseif name == "focusgained" or name == "focuslost" then
     keymap.modkeys = {}
     current.suppress_text = false
-    current.view:on_focus(name == "focusgained")
+    local model = core.project_sidebar
+    local refresh_pending = current.query_needed or core.project_sidebar_request ~= nil
+      or model and current.revision ~= model.revision
+    current.view:on_focus(name == "focusgained", refresh_pending)
     core.log_quiet("Sidebar keyboard focus: Window=%d focused=%s", current.id, tostring(current.view.focused))
     core.redraw = true
   elseif name == "keypressed" then
