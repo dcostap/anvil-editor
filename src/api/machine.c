@@ -32,18 +32,28 @@ static int f_frame(lua_State *L) {
   return 1;
 }
 
+static uint32_t check_limit(lua_State *L, int index, lua_Integer fallback) {
+  lua_Integer limit = luaL_optinteger(L, index, fallback);
+  luaL_argcheck(L, limit >= 0, index, "negative limit");
+  return limit > UINT32_MAX ? UINT32_MAX : (uint32_t)limit;
+}
+
 /* machine.decoder([max_json, max_bytes]) returns a decoder for one connection. */
 static int f_decoder(lua_State *L) {
-  lua_Integer max_json = luaL_optinteger(L, 1, ANVIL_MACHINE_FRAME_MAX_JSON);
-  lua_Integer max_bytes = luaL_optinteger(L, 2, ANVIL_MACHINE_FRAME_MAX_BYTES);
-  luaL_argcheck(L, max_json >= 0, 1, "negative limit");
-  luaL_argcheck(L, max_bytes >= 0, 2, "negative limit");
+  uint32_t max_json = check_limit(L, 1, ANVIL_MACHINE_FRAME_MAX_JSON);
+  uint32_t max_bytes = check_limit(L, 2, ANVIL_MACHINE_FRAME_MAX_BYTES);
   AnvilMachineDecoder *decoder = lua_newuserdata(L, sizeof(AnvilMachineDecoder));
-  anvil_machine_decoder_init(decoder,
-    max_json > UINT32_MAX ? UINT32_MAX : (uint32_t)max_json,
-    max_bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)max_bytes);
+  anvil_machine_decoder_init(decoder, max_json, max_bytes);
   luaL_setmetatable(L, API_TYPE_MACHINE_DECODER);
   return 1;
+}
+
+/* decoder:limits(max_json, max_bytes) applies from the next frame header. */
+static int m_decoder_limits(lua_State *L) {
+  AnvilMachineDecoder *decoder = luaL_checkudata(L, 1, API_TYPE_MACHINE_DECODER);
+  decoder->max_json = check_limit(L, 2, ANVIL_MACHINE_FRAME_MAX_JSON);
+  decoder->max_bytes = check_limit(L, 3, ANVIL_MACHINE_FRAME_MAX_BYTES);
+  return 0;
 }
 
 static int m_decoder_feed(lua_State *L) {
@@ -107,6 +117,7 @@ static const luaL_Reg machine_lib[] = {
 static const luaL_Reg decoder_object[] = {
   { "feed", m_decoder_feed },
   { "next", m_decoder_next },
+  { "limits", m_decoder_limits },
   { "__gc", mm_decoder_gc  },
   { NULL, NULL }
 };

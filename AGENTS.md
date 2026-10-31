@@ -565,9 +565,13 @@ The Machine ID is in `USERDIR/machine/id` and stays across restarts. Each start 
 A frame has a 13-byte header: the type (1 request, 2 reply), then the request ID, the JSON length and the byte length, each 4 bytes big-endian. The JSON body follows, then the raw bytes.
 The first request must be `hello` with `protocol` and `token`. The server checks the version first. A wrong version or token gets an error reply, then the server closes the connection.
 `files.read` takes an absolute `path` in one of the server's Projects. Its reply has `size` and `version` in the JSON and the file's bytes after it. The version is the SHA-256 of the bytes.
+`files.write` takes `path`, `base` and the new bytes. It replaces the whole file only while the file has the version `base`. Without `base`, it only creates a file.
+Otherwise it sends a `conflict` error with the current `version` and bytes. Request bodies can hold bytes only after `hello`. Both limits are 16 MiB.
 An error reply is `{"error": {"code": ..., "message": ...}}`. The server ignores unknown fields.
 The server polls its sockets. A link inside a Project can point outside it, as in a local Project.
-Run `runtime/machine_serve.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes.
+`--test-root <folder>` before the Projects maps each Machine path into that folder: `C:\a\b` is `<folder>\C\a\b`. Only tests use it, so one PC can hold a Client copy and a different Machine copy at the same path.
+`core.machine_client` is the Client. A scheduler thread connects through the discovery file and sends `hello`. `request` holds other requests until `hello` succeeds, and it never blocks the UI thread.
+Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes.
 
 ## Agent control
 

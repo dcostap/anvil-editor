@@ -1,6 +1,7 @@
 local common = require "core.common"
 local json = require "core.json"
 local machine = require "machine"
+local machine_server = dofile("tests/fixtures/machine_server.lua")
 local net = require "net"
 local test = require "core.test"
 
@@ -13,30 +14,13 @@ test.describe("Machine server", function()
   end
 
   local function start_server(context)
-    local discovery = context.user .. PATHSEP .. "machine" .. PATHSEP .. "server.json"
-    os.remove(discovery)
-    context.server = assert(process.start({ EXEFILE, "serve", context.project }, {
-      stdin = process.REDIRECT_DISCARD, stdout = process.REDIRECT_DISCARD, stderr = process.REDIRECT_DISCARD,
-      env = { ANVIL_USERDIR = context.user },
-    }))
-    local deadline = system.get_time() + 30
-    repeat
-      local file = io.open(discovery, "rb")
-      if file then
-        local found = json.decode(file:read("*a") or "")
-        file:close()
-        if type(found) == "table" and found.pid == context.server:pid() then return found end
-      end
-      coroutine.yield(0.05)
-    until system.get_time() >= deadline or not context.server:running()
-    error("The Machine server did not publish its discovery file")
+    local discovery
+    context.server, discovery = machine_server.start(context.user, { context.project })
+    return discovery
   end
 
   local function stop_server(context)
-    if context.server and context.server:running() then
-      context.server:kill()
-      context.server:wait(5000, 0.01)
-    end
+    machine_server.stop(context.server)
     context.server = nil
   end
 
