@@ -523,12 +523,12 @@ Start with one thin vertical slice. It tests the hardest assumptions before the 
 
 ### Step 0: decisions
 
-Decide before code. This doc already answers identity, ownership and the authority levels. The other answers below are proposals. Approve or change them before step 1.
+These decisions come before code. This doc answers identity, ownership and the authority levels. The answers below are also decided.
 
 - **Server language.** The transport and the message codec are C, because the Companion uses them too. The server runs Anvil's Lua without a window, in the same executable. So it reuses `project_files.lua`, the worker pool, `rg` and the Git plugin. New server logic that needs no Lua objects goes in C, as "C and Lua" in `AGENTS.md` says.
 - **Message format.** Each frame has a small binary header: type, request ID and length. Its body is JSON. File contents and Terminal output travel as raw bytes after the JSON. The `hello` exchange carries the protocol version.
 - **Machine ID.** A random ID that the server makes at its first start and saves in `USERDIR`. A path or a PC name can change, so the ID uses neither. One server runs for each executable and user folder, as the shell does (see "Launch mode" in `AGENTS.md`). So a second Anvil install with its own user folder is a second Machine.
-- **Repository.** Decided: one repo. See [Repository](#repository).
+- **Repository.** One repo. See [Repository](#repository).
 
 ### Desktop
 
