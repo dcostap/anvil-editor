@@ -572,6 +572,8 @@ The `hello` reply gives the `level`: `view` or `full`. A View device only reads.
 `pairing.start {level}` makes a 6-digit code. It works one time, for 5 minutes, and ends after 5 wrong attempts. A new code replaces the old one. A pairing `hello` reply also carries `device = {id, token}`.
 `USERDIR/machine/devices.json` keeps the paired devices with the SHA-256 of each token, not the token. `devices.revoke {device}` deletes the device and closes its connections at once.
 `--port <number>` before the Projects makes the server listen on that port. Tailscale Serve and other forwarders need a port that stays the same. The server still listens on loopback only.
+`anvil machine code full|view`, `anvil machine devices` and `anvil machine revoke <device>` manage the server that runs with the same user folder. `core.machine_cli` runs them without a window, like `anvil serve`, and exits.
+On a Client, the `machine:pair` command asks for `host:port` and the pairing code, then calls `MachineClient.pair`.
 `files.read` takes an absolute `path` in one of the server's Projects. Its reply has `size` and `version` in the JSON and the file's bytes after it. The version is the SHA-256 of the bytes.
 `files.write` takes `path`, `base` and the new bytes. It replaces the whole file only while the file has the version `base`. Without `base`, it only creates a file.
 Otherwise it sends a `conflict` error with the current `version` and bytes. Request bodies can hold bytes only after `hello`. Both limits are 16 MiB.
@@ -597,7 +599,7 @@ An edit writes it after 0.5 seconds. A save writes it before the request leaves.
 When a Machine file loads and has a record, the Buffer takes the record's text as one edit. The Machine's version decides: the same bytes mean clean, the base or the sent version mean dirty, other bytes mean a conflict.
 A record stays when the user closes a dirty Buffer without a save. The close prompt for unconfirmed saves comes later.
 Project lookup, Git and the Markdown vault index still use the local disk. The call-site audit (step 4 in the plan) moves them.
-Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Pass one file to each `--test-args`: the runner reads only the first path.
+Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Tests that need a fixed port must try ports until one opens: Windows reserves whole port ranges, and `get_port()` returns the requested port. Pass one file to each `--test-args`: the runner reads only the first path.
 
 ## Companion (Android)
 

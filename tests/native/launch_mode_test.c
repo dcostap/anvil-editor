@@ -41,6 +41,7 @@ int main(void) {
   CHECK(!LAUNCH("run", "script.lua"));
   CHECK(!LAUNCH("edit", "notes.md"));
   CHECK(!LAUNCH("serve", "C:\Projects\a"));
+  CHECK(!LAUNCH("machine", "devices"));
   CHECK(!LAUNCH("--version"));
   CHECK(!LAUNCH("-h"));
 

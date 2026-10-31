@@ -23,7 +23,7 @@ static inline bool anvil_launch_runs_shell(int *argc, char **argv) {
     if (!strncmp(argv[i], ANVIL_SURFACE_PIPE_ARG, strlen(ANVIL_SURFACE_PIPE_ARG))) shell = false;
   }
   if (*argc > 1) {
-    static const char *commands[] = { "test", "help", "list", "repl", "run", "edit", "serve", ANVIL_PROJECT_ARG };
+    static const char *commands[] = { "test", "help", "list", "repl", "run", "edit", "serve", "machine", ANVIL_PROJECT_ARG };
     for (unsigned k = 0; k < sizeof(commands) / sizeof(commands[0]); k++)
       if (!strcmp(argv[1], commands[k])) shell = false;
   }

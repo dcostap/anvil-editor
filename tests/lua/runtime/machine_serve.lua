@@ -226,9 +226,49 @@ test.describe("Machine server", function()
     client.socket:close()
   end)
 
+  -- Runs `anvil machine ...` for this test's user folder. Returns its exit code and output.
+  local function machine_command(context, ...)
+    local proc = assert(process.start({ EXEFILE, "machine", ... }, {
+      stdin = process.REDIRECT_DISCARD, stdout = process.REDIRECT_PIPE, stderr = process.REDIRECT_PIPE,
+      env = { ANVIL_USERDIR = context.user },
+    }))
+    local code = proc:wait(30000, 0.01)
+    return code, (proc:read_stdout(65536) or "") .. (proc:read_stderr(65536) or "")
+  end
+
+  test.it("makes pairing codes and revokes devices from the command line", function(context)
+    local code, output = machine_command(context, "code", "view")
+    test.equal(code, 0, output)
+    local pairing = output:match("Pairing code: (%d+)")
+    test.ok(pairing, output)
+    local client = connect(context.discovery)
+    local hello = call(client, "hello", {protocol = 1, pair = pairing, name = "Phone"}).result
+    test.equal(hello.level, "view")
+
+    code, output = machine_command(context, "devices")
+    test.equal(code, 0, output)
+    test.ok(output:find(hello.device.id, 1, true) and output:find("Phone", 1, true), output)
+    test.equal(machine_command(context, "revoke", hello.device.id), 0)
+    test.is_nil(call(client, "files.read", {path = context.project .. PATHSEP .. "notes.md"}))
+    test.equal(machine_command(context, "revoke", hello.device.id), 1)
+  end)
+
   test.it("listens on the port that --port names", function(context)
     stop_server(context)
-    local port = 49152 + tonumber(net.random_token():sub(1, 4), 16) % 16000
+    -- Windows reserves whole port ranges, so the test uses a port that it can open.
+    local address = assert(net.resolve_address("127.0.0.1"))
+    test.equal(address:wait_until_resolved(5000), "success")
+    local start, port = tonumber(net.random_token():sub(1, 4), 16)
+    for i = 1, 128 do
+      local candidate = 49152 + (start + i * 127) % 16384
+      local probe = net.create_server(address, candidate)
+      if probe then
+        probe:close()
+        port = candidate
+        break
+      end
+    end
+    test.ok(port, "No free port")
     context.server, context.discovery = machine_server.start(context.user, { "--port", tostring(port), context.project })
     test.equal(context.discovery.port, port)
     owner(context).socket:close()

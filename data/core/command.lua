@@ -452,7 +452,7 @@ function command.add_defaults()
   local reg = {
     "core", "root", "command", "text", "findreplace",
     "files", "dialog", "log", "statusbar", "image", "markdown", "language",
-    "navigation", "context_menu"
+    "navigation", "context_menu", "machine"
   }
   for _, name in ipairs(reg) do
     require("core.commands." .. name)

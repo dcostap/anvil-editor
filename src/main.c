@@ -248,6 +248,7 @@ static const char *init_code =
   "  local prefix = os.getenv('ANVIL_PREFIX') or match(exedir, '^(.*)" ANVIL_PATHSEP_PATTERN "bin$')\n"
   "  dofile((EMBEDDED_DATADIR or MACOS_RESOURCES or (prefix and prefix .. '/share/anvil' or exedir .. '/data')) .. '/core/start.lua')\n"
   "  core = require(system.is_sidebar_surface() and 'core.sidebar_app' or ARGS[2] == 'serve' and 'core.serve'\n"
+  "    or ARGS[2] == 'machine' and 'core.machine_cli'\n"
   "    or os.getenv('ANVIL_RUNTIME') or 'core')\n"
   "  core.init()\n"
   "  core.run()\n"
@@ -266,7 +267,7 @@ static const char *init_code =
   "    error_path = system.absolute_path(error_path)\n"
   "  end\n"
   "  if not RUNNING_LUA_TESTS and not os.getenv('ANVIL_HEADLESS_TEST') and not system.is_sidebar_surface()\n"
-  "      and ARGS[2] ~= 'serve' then\n"
+  "      and ARGS[2] ~= 'serve' and ARGS[2] ~= 'machine' then\n"
   "    system.show_fatal_error('Anvil internal error',\n"
   "      'An internal error occurred in a critical part of the application.\\n\\n'..\n"
   "      'Error: '..tostring(err)..'\\n\\n'..\n"
@@ -397,8 +398,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   }
   anvil_surface_log_init(hosted ? "hosted" : "direct");
   anvil_latency_probe_init(hosted ? "hosted" : "direct");
-  /* `anvil serve` is the headless Machine server. It shows no window and forwards nothing to an editor. */
-  bool serve = argc > 1 && strcmp(argv[1], "serve") == 0;
+  /* `anvil serve` is the headless Machine server, and `anvil machine` manages it.
+     They show no window and forward nothing to an editor. */
+  bool serve = argc > 1 && (strcmp(argv[1], "serve") == 0 || strcmp(argv[1], "machine") == 0);
 #ifdef _WIN32
   if (!hosted && !serve && anvil_single_instance_forward_or_own(argc, argv)) {
     return SDL_APP_SUCCESS;
