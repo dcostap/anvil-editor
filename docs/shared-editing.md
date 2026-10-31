@@ -159,7 +159,7 @@ The base rule handles this case. The base is the Disk text of the last merge, so
 
 1. **Reload engine, clean Buffers.** Reload as small edits with no jump, one undo step, and the Buffer stays clean. Done. Not checked: Standard Editors with line wrapping turned on.
 2. **Undo across a reload.** Flash the changed lines and show a status message. Done.
-3. **Reload engine, dirty Buffers.** Keep the base as described above. A three-way merge with words compared inside lines. Until step 4 exists, true conflicts keep today's prompt. Add Disk Conflict to `CONTEXT.md`.
+3. **Reload engine, dirty Buffers.** Keep the base as described above. A three-way merge with words compared inside lines. Until step 4 exists, true conflicts keep today's prompt. Add Disk Conflict to `CONTEXT.md`. Write the merge in C, and port the line and word comparison in `data/core/buffer/text_edits.lua` to C with it. The Companion app needs the same merge.
 4. **Disk Conflict blocks.** The inline block, the choices, the status, POI navigation, and the close question.
 
 Steps 3 and 4 are worth it only if the reload prompt for dirty Buffers shows up in real use. If it is rare, stop after step 2.
@@ -215,7 +215,7 @@ In all cases, while a note is live, the session owns the text. Anvil ignores dis
 
 A CRDT is best without a central authority, for example peer to peer or long offline editing. A shared vault has a central server anyway, because something must check permissions. A server that orders edits removes CRDT-specific storage. It still needs rebase, selective undo, cursor mapping, duplicate detection, and recovery.
 
-- **Our own small server.** It uses the same Lua rules as Anvil for edit order and position mapping. Anvil's native `net` module already has TCP client and server sockets (`src/api/net.c`). Recommended.
+- **Our own small server.** The rules for edit order and position mapping are a C module with no Lua headers. Anvil, the server and the Companion app use the same module, so they cannot disagree. Anvil's native `net` module already has TCP client and server sockets (`src/api/net.c`). Recommended. [Machines](machines.md#shared-editing) describes how this server fits the Machine API.
 - **Yjs with Hocuspocus.** Less server code, much more client code: Anvil needs Yrs (Rust) through a Lua C module, plus the Hocuspocus protocol.
 
 Rejected: embedding a web editor such as Nextcloud Text, because Anvil has no webview. Also rejected: an agent editing API. Agents keep editing files.
