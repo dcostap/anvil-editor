@@ -98,6 +98,7 @@ test.describe("Machine client", function()
 
   test.it("pairs with the Machine: Pair command and connects through the saved record", function(context)
     local _, pairing = call(context.client, "pairing.start", {level = "view"})
+    test.ok(command.get_metadata("machine:pair").palette, "The Command Palette lists Machine: Pair")
     command.perform("machine:pair")
     core.global_prompt_bar:set_text("127.0.0.1:" .. context.discovery.port)
     core.global_prompt_bar:submit()

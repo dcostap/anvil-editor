@@ -9,7 +9,7 @@ end
 
 command.add(nil, {
   -- On the Machine, `anvil machine code full` prints the pairing code and the port.
-  ["machine:pair"] = function()
+  ["machine:pair"] = command.palette(function()
     core.global_prompt_bar:enter("Machine address (host:port)", {
       validate = function(text) return parse_address(text) ~= nil end,
       submit = function(address)
@@ -25,5 +25,5 @@ command.add(nil, {
         })
       end,
     })
-  end,
+  end),
 })
