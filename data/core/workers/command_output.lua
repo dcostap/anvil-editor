@@ -1,4 +1,5 @@
 local locations = require "core.text_poi_locations"
+local location_list = require "core.file_location_list"
 
 local worker = {}
 
@@ -17,17 +18,18 @@ function worker.run(payload, context)
   if context.cancelled() then return end
   local candidates = locations.extract_candidates(text)
   if context.cancelled() then return end
-  local points = locations.resolve_candidates(candidates, { payload.root }, "terminal-location", context.cancelled)
-  if not points then return end
   local count = 0
-  for _, point in ipairs(points) do
-    if point.line > 1 then
+  for _, candidate in ipairs(candidates) do
+    if candidate.line > 1 then
       count = count + 1
-      points[count] = point
+      candidates[count] = candidate
     end
   end
-  for index = #points, count + 1, -1 do points[index] = nil end
-  context.send { type = "result", payload = { text = text, points = points } }
+  for index = #candidates, count + 1, -1 do candidates[index] = nil end
+  local points = location_list.new(candidates, payload.root, "terminal-location", context.cancelled)
+  if points then
+    context.send { type = "final", payload = { text = text, locations = location_list.encode(points) } }
+  end
 end
 
 return worker

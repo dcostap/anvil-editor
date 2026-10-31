@@ -109,6 +109,8 @@ Latency excludes native input delivery, shell composition, and physical display 
 
 `quick-command-hosted` runs that case in a hosted Project, as the normal Windows app does. It measures completion of the Project's redraw, not the shell's presentation. Compare it with a hosted baseline, not a direct-window baseline. Keep both cases: direct-window presentation waits must not hide a slow Project or suggest that every hosted redraw blocks there.
 
+`quick-command-valid` uses 22,000 valid references. It checks result transfer and navigation when every reference resolves. These scenes check the complete location count after scoring. They do not include that full-list request in navigation latency.
+
 The harness guards use the private desktop launcher:
 
 ```sh

@@ -7,6 +7,7 @@ local panes = require "core.panes"
 local poi = require "core.poi"
 local storage = require "core.storage"
 local text_capture = require "core.text_capture"
+local location_list = require "core.file_location_list"
 local worker_pool = require "core.worker_pool"
 local terminal = require "plugins.terminal"
 
@@ -114,9 +115,10 @@ function Output:prepare_points_of_interest(on_ready)
         buffer:clean()
         buffer:set_selection(1, 1)
       end
-      self.text_capture_data.points = result.points
+      local points = location_list.decode(result.locations)
+      self:set_file_locations(points)
       self.captured_text, self.captured_root = request.text, root
-      core.log_quiet("Quick Command output ready: lines=%d locations=%d", #buffer.lines, #result.points)
+      core.log_quiet("Quick Command output ready: lines=%d locations=%d", #buffer.lines, location_list.count(points))
       request.on_ready(true)
     end,
     on_error = function(message) failed(message.error) end,

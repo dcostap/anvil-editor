@@ -3,6 +3,7 @@ local command = require "core.command"
 local terminal = require "plugins.terminal"
 local support = require "scenes.support"
 local quick_commands = require "plugins.quick_commands"
+local poi = require "core.poi"
 
 local scene = {}
 
@@ -20,8 +21,10 @@ function scene.setup(context)
     error("Quick Command fixture could not start its command")
   end
   local target = assert(context.settings.targets[1])
-  context.sessions[1].capture = "PS> build\n"
-    .. string.rep("missing.lua:9:4 ", 22000) .. target .. ":2:1\nPS> "
+  local output = context.settings.valid_locations
+    and string.rep(target .. ":2:1 ", 22000)
+    or string.rep("missing.lua:9:4 ", 22000) .. target .. ":2:1"
+  context.sessions[1].capture = "PS> build\n" .. output .. "\nPS> "
   local view = assert(core.open_file(context.path(target), { placement = "current", focus = true }))
   view.buffer:set_selection(1, 1)
   context.target = view.buffer
@@ -40,11 +43,20 @@ function scene.action_ready(context)
   local view = core.active_view
   local ready = view and view.buffer == context.target and view.buffer:get_selection() == 2
   if ready and not context.closed then
+    context.output_source = poi.get_remote_source()
     context.shell:on_close()
     context.closed = true
   end
   return ready,
-    "opened the file location after repeated missing paths"
+    "opened the requested file location"
+end
+
+function scene.state(context)
+  -- Check completeness after scoring, without timing a request to expand every record.
+  if not context.output_source then return {} end
+  local count = #context.output_source:get_points_of_interest()
+  assert(count == (context.settings.valid_locations and 22000 or 1), "missing output locations")
+  return { locations = count }
 end
 
 return scene

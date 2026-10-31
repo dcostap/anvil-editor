@@ -183,8 +183,10 @@ function M.point_at_caret(view, opts)
   return with_selection_state(view, function()
     local line, col = view.buffer:get_selection()
     if type(view.get_point_of_interest_at) == "function" then
-      local poi = view:get_point_of_interest_at(line, col, opts)
+      local poi, complete = view:get_point_of_interest_at(line, col, opts)
       if poi and (not opts.activatable or M.is_activatable(view, poi)) then return poi end
+      -- An indexed provider can finish the lookup without expanding its complete list.
+      if complete == true then return provider_point_at_caret(view, opts, false) end
     end
     local points = M.points_for_view(view, opts)
     if points then
@@ -304,7 +306,9 @@ end
 local function navigate_remote_source(source, direction, opts)
   local view = source.view
   local point, status
-  if source.initial then
+  if source.initial and view.first_point_of_interest then
+    point, status = view:first_point_of_interest(direction, { remote = true })
+  elseif source.initial then
     local points
     points, status = M.points_for_view(view, { remote = true })
     point = points and (direction > 0 and points[1] or points[#points])
