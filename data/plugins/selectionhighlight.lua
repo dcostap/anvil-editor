@@ -70,7 +70,7 @@ end
 
 function TextView:draw_line_body(line, x, y)
   local scope = perf_scope_begin("selection_highlight")
-  if self.local_find_active then
+  if self.local_find_active or self.row_selection_mode then
     perf_scope_end(scope)
     local result = draw_line_body(self, line, x, y)
     return result

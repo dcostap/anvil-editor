@@ -1,6 +1,7 @@
 local config = require "core.config"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
+local RowTextView = require "core.rowtextview"
 local style = require "core.style"
 local test = require "core.test"
 
@@ -32,6 +33,45 @@ test.describe("selection highlight", function()
       cfg.wrapping_indent = context.wrap_config.wrapping_indent
       cfg.require_tokenization = context.wrap_config.require_tokenization
     end
+  end)
+
+  test.it("does not highlight matching text in unselected rows", function()
+    local buffer = Buffer(nil, nil, true)
+    buffer:insert(1, 1, "pane_requests.lua\npane_requests.lua\n")
+    local view = RowTextView(buffer)
+    view.size.x, view.size.y = 640, 240
+    view:select_row(1)
+
+    local function match_count()
+      local count = 0
+      local old_rect = renderer.draw_rect
+      local old_text = renderer.draw_text
+      local old_known_bounds = renderer.draw_text_known_bounds
+      renderer.draw_rect = function(_, _, _, _, color)
+        if color == style.selectionhighlight then count = count + 1 end
+      end
+      renderer.draw_text = function(font, text, x)
+        return x + font:get_width(text)
+      end
+      renderer.draw_text_known_bounds = function(_, _, x, _, _, _, w)
+        return x + w
+      end
+      local ok, err = pcall(function()
+        local x, y = view:get_line_screen_position(2)
+        view:draw_line_body(2, x, y)
+      end)
+      renderer.draw_rect = old_rect
+      renderer.draw_text = old_text
+      renderer.draw_text_known_bounds = old_known_bounds
+      if not ok then error(err, 0) end
+      return count
+    end
+
+    test.equal(match_count(), 0, "a row selection must not highlight another row's matching text")
+
+    view:set_row_selection_mode(false)
+    buffer:set_selection(1, 1, 1, 18)
+    test.equal(match_count(), 1, "ordinary text selection must still highlight matching text")
   end)
 
   test.it("draws an additional match on its Wrapped Visual Row", function(context)
