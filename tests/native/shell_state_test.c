@@ -179,11 +179,47 @@ static void round_trip(void) {
   free(data);
 }
 
+/* Snap keeps an unsnapped normal rectangle. Both rectangles must survive save, Close, and reload. */
+static void screen_rectangles(void) {
+  const char *saved = "anvil-shell-windows 9\n"
+    "window 1 100 100 800 600 0 0 0 \n"
+    "screen 1 -1920 40 960 1040\n"
+    "closed 2 120 150 900 700 1 0 0 \n"
+    "screen 2 2560 -1440 2560 1440\n";
+  AnvilShellState state = {0}, decoded = {0};
+  CHECK(anvil_shell_state_decode(saved, strlen(saved), &state), "visible placement did not load");
+  size_t size = 0;
+  char *data = anvil_shell_state_encode(&state, &size);
+  CHECK(data && anvil_shell_state_decode(data, size, &decoded), "visible placement did not round-trip");
+  CHECK(decoded.count == 1 && decoded.closed_count == 1, "visible placement changed the Window lists");
+  if (decoded.count == 1 && decoded.closed_count == 1) {
+    AnvilShellWindowState *open = &decoded.windows[0], *closed = &decoded.closed[0];
+    CHECK(open->x == 100 && open->y == 100 && open->w == 800 && open->h == 600 &&
+          open->screen_x == -1920 && open->screen_y == 40 && open->screen_w == 960 && open->screen_h == 1040,
+          "snapped Window lost its separate visible and normal rectangles");
+    CHECK(closed->maximized && closed->screen_x == 2560 && closed->screen_y == -1440 &&
+          closed->screen_w == 2560 && closed->screen_h == 1440 && closed->w == 900 && closed->h == 700,
+          "closed maximized Window lost its screen or normal size");
+  }
+  free(data);
+  anvil_shell_state_free(&state);
+  anvil_shell_state_free(&decoded);
+  const char *old = "anvil-shell-windows 8\nwindow 1 100 100 800 600 1 0 0 \n";
+  CHECK(anvil_shell_state_decode(old, strlen(old), &decoded) && decoded.count == 1 &&
+        !decoded.windows[0].screen_w && decoded.windows[0].maximized,
+        "existing Window placement did not load");
+  anvil_shell_state_free(&decoded);
+}
+
 static void rejects(void) {
   AnvilShellState decoded;
   const char *bad[] = {
     "anvil-shell-windows 1\nwindow 0 0 10 10 0 0 \n",
-    "anvil-shell-windows 9\n",
+    "anvil-shell-windows 10\n",
+    "anvil-shell-windows 9\nscreen 1 0 0 100 100\n",
+    "anvil-shell-windows 9\nwindow 1 0 0 100 100 0 0 0 \nscreen 1 0 0 0 100\n",
+    "anvil-shell-windows 9\nwindow 1 0 0 100 100 0 0 0 \nscreen 1 2147483647 0 100 100\n",
+    "anvil-shell-windows 9\nwindow 1 0 0 100 100 0 0 0 \nscreen 1 0 0 100 100\nscreen 1 0 0 100 100\n",
     "anvil-shell-windows 7\nclosed 1 0 0 10 10 0 0 0 \n",
     "anvil-shell-windows 8\nwindow 1 0 0 10 10 0 0 0 \nclosed 1 0 0 10 10 0 0 0 \n",
     "anvil-shell-windows 8\nclosed 1 0 0 10 10 0 0 0 \nloaded 2 3 abc\n",
@@ -323,6 +359,7 @@ int main(int argc, char **argv) {
   if (argc > 2 && !strcmp(argv[1], "identity"))
     return anvil_shell_same_identity(strtoul(argv[2], NULL, 10)) ? 0 : 1;
   round_trip();
+  screen_rectangles();
   project_activity();
   sidebar_layout();
   alt_navigation();

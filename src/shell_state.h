@@ -27,6 +27,9 @@ typedef struct {
   size_t project_count;
   /* This Window's Project Sidebar visibility. Width remains shared. */
   bool sidebar_hidden;
+  /* Last non-minimized outer rectangle in screen coordinates. Zero size means legacy state without it.
+   * Snap changes this rectangle without changing the normal bounds above. */
+  int32_t screen_x, screen_y, screen_w, screen_h;
 } AnvilShellWindowState;
 
 /* The last time the user worked in a Project, in Unix seconds. The Project Sidebar groups Projects by it. */

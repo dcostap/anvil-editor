@@ -29,6 +29,7 @@ ffi.cdef [[
  void * __stdcall MonitorFromWindow(void *, unsigned long);
  typedef struct { unsigned long size; ProbeRect monitor, work; unsigned long flags; } ProbeMonitor;
  int __stdcall GetMonitorInfoW(void *, ProbeMonitor *);
+ int __stdcall EnumDisplayMonitors(void *, const ProbeRect *, int (__stdcall *)(void *, void *, ProbeRect *, intptr_t), intptr_t);
 ]]
 local user32, kernel = ffi.load("user32"), ffi.load("kernel32")
 local root = assert(os.getenv("ANVIL_PROJECT_PROBE_ROOT"))
@@ -170,6 +171,60 @@ if path:match("/driver$") then
    assert(trace():find("Shell Window state queued: Windows=" .. count, 1, true))
   end
   local ok, err = pcall(function()
+   if action == "restore-placement" then
+    -- Persisted placement is the seam. A snapped Window's visible rectangle differs from its normal rectangle.
+    -- Use a second monitor when available, without sending input to the interactive desktop.
+    local monitors = {}
+    local cb = ffi.cast("int (__stdcall *)(void *, void *, ProbeRect *, intptr_t)", function(monitor)
+     local info = ffi.new("ProbeMonitor"); info.size = ffi.sizeof(info)
+     assert(user32.GetMonitorInfoW(monitor, info) ~= 0)
+     local r = info.work
+     monitors[#monitors + 1] = {tonumber(r.left), tonumber(r.top), tonumber(r.right-r.left), tonumber(r.bottom-r.top)}
+     return 1
+    end)
+    user32.EnumDisplayMonitors(nil, nil, cb, 0); cb:free()
+    assert(#monitors > 0)
+    local target = monitors[#monitors]
+    local snapped = {target[1], target[2], math.floor(target[3]/2), target[4]}
+    local file = assert(io.open(root .. "/user/shell-windows.state", "wb"))
+    file:write("anvil-shell-windows 9\n")
+    for id, name in ipairs({"Project", "Replacement"}) do
+     local folder = (root .. "/" .. name):gsub("/", "\\")
+     file:write(string.format("window %d 100 100 800 600 %d 0 %d %s\n", id, id-1, #folder, folder))
+     local r = id == 1 and snapped or target
+     file:write(string.format("screen %d %d %d %d %d\n", id, unpack(r)))
+    end
+    file:close()
+    local function rect(window)
+     local r = ffi.new("ProbeRect"); assert(user32.GetWindowRect(window, r) ~= 0)
+     return {tonumber(r.left), tonumber(r.top), tonumber(r.right-r.left), tonumber(r.bottom-r.top)}
+    end
+    for run = 1, 2 do
+     local item = launch()
+     local a = wait(function() return ready("a", item:pid())[1] end, 20, "visible placement did not restore Project")
+     local b = wait(function() return ready("b", item:pid())[1] end, 20, "visible placement did not restore Replacement")
+     local all = windows(item:pid())
+     local aw, bw = assert(all[a.window_id]), assert(all[b.window_id])
+     assert(common.serialize(rect(aw)) == common.serialize(snapped), "snapped Window lost its visible rectangle")
+     assert(user32.IsZoomed(bw) ~= 0, "maximized Window lost its mode")
+     local normal = placement(bw)
+     assert(normal[3] == 800 and normal[4] == 600, "maximized Window lost its normal size")
+     local info = ffi.new("ProbeMonitor"); info.size = ffi.sizeof(info)
+     assert(user32.GetMonitorInfoW(user32.MonitorFromWindow(bw, 2), info) ~= 0)
+     assert(info.work.left == target[1] and info.work.top == target[2], "maximized Window changed monitor")
+     -- Minimized Windows must retain their last visible rectangle, not the icon's off-screen coordinates.
+     user32.PostMessageW(aw, 0x112, 0xf020, 0)
+     wait(function() return user32.IsIconic(aw) ~= 0 end, 5)
+     user32.PostMessageW(bw, 0x112, 0xf020, 0)
+     wait(function() return user32.IsIconic(bw) ~= 0 end, 5)
+     -- Update shutdown saves every Window before it starts closing them.
+     local update = launch("--prepare-update")
+     wait(function() return not item:running() end, 20, "update did not close the shell")
+     wait(function() return not update:running() end, 10)
+     assert(item:returncode() == 0)
+    end
+    return
+   end
    if action == "restore-loaded" then
     local state = assert(io.open(root .. "/user/appstate.lua", "wb"))
     state:write("return ", common.serialize{recents={root .. "/Other"}}); state:close()

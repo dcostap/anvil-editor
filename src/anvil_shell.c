@@ -275,6 +275,8 @@ struct ShellWindow {
   SDL_Window *window;
   HWND hwnd;
   WNDPROC sdl_wndproc;
+  /* Keep the last visible rectangle when Windows moves a minimized Window off screen. */
+  RECT screen_bounds;
 
   ID3D11Device *device;
   ID3D11Device1 *device1;
@@ -2396,8 +2398,16 @@ static void reveal_window(ShellWindow *window, const char *reason) {
   composite_and_present(window);
   BOOL cloak = FALSE;
   DwmSetWindowAttribute(window->hwnd, DWMWA_CLOAK, &cloak, sizeof(cloak));
-  SDL_Log("Shell Window shown: id=%u %s after %.1f ms", window->id, reason,
-          (double)(SDL_GetTicksNS() - window->reveal_since) / SDL_NS_PER_MS);
+  RECT bounds = {0};
+  GetWindowRect(window->hwnd, &bounds);
+  MONITORINFO monitor = {.cbSize = sizeof(monitor)};
+  GetMonitorInfoW(MonitorFromWindow(window->hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
+  SDL_Log("Shell Window shown: id=%u %s after %.1f ms screen=%ld,%ld %ldx%ld max=%d minimized=%d "
+          "monitor=%ld,%ld %ldx%ld", window->id, reason,
+          (double)(SDL_GetTicksNS() - window->reveal_since) / SDL_NS_PER_MS,
+          bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
+          IsZoomed(window->hwnd) != 0, IsIconic(window->hwnd) != 0, monitor.rcMonitor.left, monitor.rcMonitor.top,
+          monitor.rcMonitor.right - monitor.rcMonitor.left, monitor.rcMonitor.bottom - monitor.rcMonitor.top);
 }
 
 static void reveal_when_ready(ShellWindow *window) {
@@ -5594,6 +5604,10 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
       return result;
     }
 
+    case WM_WINDOWPOSCHANGED:
+      if (!IsIconic(hwnd)) GetWindowRect(hwnd, &window->screen_bounds);
+      break;
+
     case WM_PAINT: {
       if (window->render_failed) {
         PAINTSTRUCT paint;
@@ -7311,28 +7325,61 @@ static BOOL CALLBACK add_visible_area(HMONITOR monitor, HDC dc, LPRECT bounds, L
   return TRUE;
 }
 
-/* Saved normal bounds in workspace coordinates. A Window that is not fully visible, for example on a removed
- * monitor, moves onto the nearest monitor's work area and shrinks to fit it. */
-static RECT visible_placement(const AnvilShellWindowState *placement) {
-  RECT bounds = {placement->x, placement->y, placement->x + placement->w, placement->y + placement->h};
-  MONITORINFO primary = {.cbSize = sizeof(primary)};
-  if (!GetMonitorInfoW(MonitorFromPoint((POINT){0, 0}, MONITOR_DEFAULTTOPRIMARY), &primary)) return bounds;
-  /* Workspace coordinates start at the primary work area. */
-  int dx = primary.rcWork.left - primary.rcMonitor.left, dy = primary.rcWork.top - primary.rcMonitor.top;
-  RECT screen = {bounds.left + dx, bounds.top + dy, bounds.right + dx, bounds.bottom + dy};
+/* A Window on a removed monitor moves onto the nearest work area and shrinks to fit it. */
+static RECT visible_screen_bounds(RECT screen) {
   LONGLONG visible = 0;
   LONG_PTR data[2] = {(LONG_PTR)&screen, (LONG_PTR)&visible};
   EnumDisplayMonitors(NULL, NULL, add_visible_area, (LPARAM)data);
-  if (visible >= (LONGLONG)(screen.right - screen.left) * (screen.bottom - screen.top)) return bounds;
+  if (visible >= (LONGLONG)(screen.right - screen.left) * (screen.bottom - screen.top)) return screen;
   MONITORINFO target = {.cbSize = sizeof(target)};
-  if (!GetMonitorInfoW(MonitorFromRect(&screen, MONITOR_DEFAULTTONEAREST), &target)) return bounds;
+  if (!GetMonitorInfoW(MonitorFromRect(&screen, MONITOR_DEFAULTTONEAREST), &target)) return screen;
   RECT work = target.rcWork;
   int w = SDL_min(screen.right - screen.left, work.right - work.left);
   int h = SDL_min(screen.bottom - screen.top, work.bottom - work.top);
   int x = SDL_clamp(screen.left, work.left, work.right - w), y = SDL_clamp(screen.top, work.top, work.bottom - h);
   SDL_Log("Shell moved a restored Window onto a visible monitor: saved=%ld,%ld %ldx%ld screen=%d,%d %dx%d",
-          (long)placement->x, (long)placement->y, (long)placement->w, (long)placement->h, x, y, w, h);
-  return (RECT){x - dx, y - dy, x - dx + w, y - dy + h};
+          screen.left, screen.top, screen.right - screen.left, screen.bottom - screen.top, x, y, w, h);
+  return (RECT){x, y, x + w, y + h};
+}
+
+/* Get/SetWindowPlacement use workspace coordinates. GetWindowRect and SetWindowPos use screen coordinates.
+ * Each monitor has its own taskbar offset. Never apply the primary monitor's offset to another monitor. */
+static RECT placement_coordinates(RECT bounds, bool to_screen) {
+  MONITORINFO info = {.cbSize = sizeof(info)};
+  if (GetMonitorInfoW(MonitorFromRect(&bounds, MONITOR_DEFAULTTONEAREST), &info)) {
+    int sign = to_screen ? 1 : -1;
+    OffsetRect(&bounds, sign * (info.rcWork.left - info.rcMonitor.left),
+                       sign * (info.rcWork.top - info.rcMonitor.top));
+  }
+  return bounds;
+}
+
+static RECT visible_placement(const AnvilShellWindowState *placement) {
+  RECT normal = {placement->x, placement->y, placement->x + placement->w, placement->y + placement->h};
+  normal = placement_coordinates(normal, true);
+  if (placement->screen_w > 0 && placement->screen_h > 0) {
+    RECT screen = {placement->screen_x, placement->screen_y,
+                   placement->screen_x + placement->screen_w, placement->screen_y + placement->screen_h};
+    if (!placement->maximized) {
+      /* Windows reports the old, unsnapped rectangle as rcNormalPosition. Restore what the user saw instead. */
+      normal = screen;
+    } else {
+      /* A maximized Window can be on a different monitor from its normal rectangle.
+       * Put its normal rectangle on the saved monitor before asking Windows to maximize it. */
+      HMONITOR from = MonitorFromRect(&normal, MONITOR_DEFAULTTONEAREST);
+      HMONITOR to = MonitorFromRect(&screen, MONITOR_DEFAULTTONEAREST);
+      MONITORINFO source = {.cbSize = sizeof(source)}, target = {.cbSize = sizeof(target)};
+      if (from != to && GetMonitorInfoW(from, &source) && GetMonitorInfoW(to, &target)) {
+        OffsetRect(&normal, target.rcWork.left - source.rcWork.left, target.rcWork.top - source.rcWork.top);
+        int w = SDL_min(normal.right - normal.left, target.rcWork.right - target.rcWork.left);
+        int h = SDL_min(normal.bottom - normal.top, target.rcWork.bottom - target.rcWork.top);
+        int x = SDL_clamp(normal.left, target.rcWork.left, target.rcWork.right - w);
+        int y = SDL_clamp(normal.top, target.rcWork.top, target.rcWork.bottom - h);
+        normal = (RECT){x, y, x + w, y + h};
+      }
+    }
+  }
+  return placement_coordinates(visible_screen_bounds(normal), false);
 }
 
 /* Without a placement, the first Window and New Window show their Sidebars. A Window for one Project hides it. */
@@ -7400,9 +7447,12 @@ static ShellWindow *create_window(const AnvilShellWindowState *placement, bool s
   if (placement) {
     AnvilShellWindowState actual;
     window_entry(window, &actual);
-    SDL_Log("Shell restored Window placement: id=%u saved=%ld,%ld %ldx%ld max=%d actual=%ld,%ld %ldx%ld max=%d",
+    SDL_Log("Shell restored Window placement: id=%u saved=%ld,%ld %ldx%ld max=%d actual=%ld,%ld %ldx%ld max=%d "
+            "saved_screen=%ld,%ld %ldx%ld actual_screen=%ld,%ld %ldx%ld",
             window->id, (long)placement->x, (long)placement->y, (long)placement->w, (long)placement->h,
-            placement->maximized, (long)actual.x, (long)actual.y, (long)actual.w, (long)actual.h, actual.maximized);
+            placement->maximized, (long)actual.x, (long)actual.y, (long)actual.w, (long)actual.h, actual.maximized,
+            (long)placement->screen_x, (long)placement->screen_y, (long)placement->screen_w, (long)placement->screen_h,
+            (long)actual.screen_x, (long)actual.screen_y, (long)actual.screen_w, (long)actual.screen_h);
   }
   window->shown = true;
   window->activated = ++shell.activation;
@@ -7441,6 +7491,12 @@ static void window_entry(ShellWindow *window, AnvilShellWindowState *entry) {
   entry->h = bounds.bottom - bounds.top;
   entry->maximized = placement.showCmd == SW_SHOWMAXIMIZED ||
                      (placement.showCmd == SW_SHOWMINIMIZED && (placement.flags & WPF_RESTORETOMAXIMIZED));
+  if (!IsIconic(window->hwnd)) GetWindowRect(window->hwnd, &window->screen_bounds);
+  bounds = window->screen_bounds;
+  entry->screen_x = bounds.left;
+  entry->screen_y = bounds.top;
+  entry->screen_w = bounds.right - bounds.left;
+  entry->screen_h = bounds.bottom - bounds.top;
   ShellProject *project = window->selected;
   entry->path = project && project != window->empty ? project->project_path : NULL;
 }
@@ -7500,6 +7556,13 @@ static void save_windows(bool final) {
       for (size_t j = 0; j <= i; j++) if (owned[j]) anvil_shell_window_state_free(&entries[j]);
       SDL_Log("Shell could not snapshot loaded Projects; keep the previous state file");
       return;
+    }
+    if (final) {
+      const AnvilShellWindowState *entry = &entries[i];
+      SDL_Log("Shell saved Window placement: id=%u normal=%ld,%ld %ldx%ld screen=%ld,%ld %ldx%ld max=%d",
+              entry->id, (long)entry->x, (long)entry->y, (long)entry->w, (long)entry->h,
+              (long)entry->screen_x, (long)entry->screen_y, (long)entry->screen_w, (long)entry->screen_h,
+              entry->maximized);
     }
   }
   /* Most recent first, so the bound drops the oldest. */

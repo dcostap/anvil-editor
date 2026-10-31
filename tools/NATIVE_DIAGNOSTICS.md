@@ -75,6 +75,16 @@ Connection recovery records report discarded outbound bytes and the adoption dec
 
 These logs do not guarantee recovery of unsaved file text. Check actual save records. See [shutdown diagnostics](SHUTDOWN_DIAGNOSTICS.md) for cleanup phases and pending Close recovery.
 
+## Window placement after restart
+
+`Shell saved Window placement` records each Window's normal and last visible rectangles before shutdown. `max` records its maximized state. The normal rectangle uses Windows workspace coordinates. The visible rectangle uses screen coordinates. These rectangles can differ when the user snaps a Window.
+
+`Shell restored Window placement` records the saved and initial restored rectangles. `Shell Window shown` records the actual screen rectangle, mode, and monitor after the content becomes ready. Compare both startup records with the previous shell's save record. An initial restore record alone does not prove the final visible placement.
+
+App State keeps the visible rectangle while a Window is minimized. Restart restores snapped positions and sizes as normal Windows, not Windows Snap group membership. Maximized Windows use the monitor nearest their saved visible rectangle and retain their normal size when it fits. An unavailable screen causes placement on the nearest available monitor.
+
+Run the isolated `restore-placement`, `restore-crash`, and `restore-offscreen` shell probes, plus `anvil:shell-state`, after placement changes. The placement probe checks distinct visible and normal rectangles, maximization, and a second restart after minimization. It checks another monitor when one is available.
+
 ## Focused checks
 
 Run the native logging and connection tests:
