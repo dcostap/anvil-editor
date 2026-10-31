@@ -3834,6 +3834,13 @@ local function target_state(target, source_view)
   return nil, nil, "File Tree target is not a file or directory"
 end
 
+-- Selects the path and expands it when it is a folder.
+local function reveal_target(view, path)
+  if not path or not focus_path(view, path) then return end
+  local info = system.get_file_info(path)
+  if info and info.type == "dir" then view:restore_expanded_paths({ [path] = true }) end
+end
+
 function M.new(target, opts)
   opts = opts or {}
   local root, selected, err = target_state(target, opts.source_view)
@@ -3878,28 +3885,37 @@ local function command_context()
   return context, pane, source_view
 end
 
+-- A path in the Project Paths opens the Project's tree at that path. Other paths open their own tree.
 local function open_root_in_context(target, context, pane, source_view)
-  local root, _, err = target_state(target, source_view)
+  local root, selected, err = target_state(target, source_view)
   if not root then return nil, err end
+  local project = core.root_project and core.root_project()
+  local path = selected or root
+  if project and project_paths.resolve(path) then
+    root, selected = project.path, not common.path_equals(path, project.path) and path or nil
+  end
   local placement = context.placement or "current"
   if placement == "current" then
     for _, candidate in ipairs(pane and panes.views(pane) or {}) do
       if candidate.extends and candidate:extends(FileTreeView)
           and common.path_equals(candidate.root_dir, root)
           and pane.current_view:can_open_view(candidate) then
+        reveal_target(candidate, selected)
         panes.present(candidate, { pane = pane, focus = true })
         return candidate
       end
     end
   end
-  return M.open(root, {
+  local view, err = M.open(root, {
     pane = pane,
     placement = placement,
     direction = context.direction,
     focus = true,
     source_view = source_view,
-    reason = "filetree-command-open-root",
+    reason = context.reason or "filetree-command-open-root",
   })
+  if view then reveal_target(view, selected) end
+  return view, err
 end
 
 local function reveal_path_in_context(target, context, pane, source_view)
@@ -3928,10 +3944,15 @@ local function open_path_in_context(target, context, pane, source_view)
   local path = file_context.resolve_path(target, source_view)
   local info = path and system.get_file_info(path)
   if not info then return nil, "File Tree target does not exist" end
-  if info.type == "dir" then
+  if info.type == "dir" or project_paths.resolve(path) then
     return open_root_in_context(path, context, pane, source_view)
   end
   return reveal_path_in_context(path, context, pane, source_view)
+end
+
+-- Opens a File Tree at a path that the user chose, with the same rules as the File Tree commands.
+function M.open_path(path, context)
+  return open_path_in_context(path, context or {})
 end
 
 command.add(nil, {
@@ -3970,12 +3991,6 @@ command.add(nil, {
     local path = type(target_path) == "string" and file_context.resolve_path(target_path, source_view)
       or file_context.view_context_path(source_view)
       or file_context.source_directory(source_view)
-    if path and project_paths.resolve(path) then
-      local project = core.root_project and core.root_project()
-      local view = project and open_root_in_context(project.path, context, pane, source_view)
-      if view and not common.path_equals(path, project.path) then focus_path(view, path) end
-      return view ~= nil
-    end
     return path and open_path_in_context(path, context, pane, source_view) ~= nil
   end, {
     keywords = { "reveal", "locate", "current", "files", "folders", "view" },

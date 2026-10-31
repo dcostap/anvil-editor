@@ -586,7 +586,7 @@ A Fuzzy Searcher search for files and folders under loaded Project Paths. Files 
 _Avoid_: fuzzy file searcher
 
 **Project Folder Result**:
-A Project File Search result for a folder. Activating it opens a File Tree rooted at that folder.
+A Project File Search result for a folder. Activating it can show that folder in a File Tree.
 _Avoid_: directory action, Project result
 
 **Other Project Results**:

@@ -181,7 +181,7 @@ test.describe("Command Palette View launchers", function()
     test.ok(entry and common.path_equals(entry.abs, context.folder))
   end)
 
-  test.it("opens a selected File Tree folder as the root", function(context)
+  test.it("reveals a selected File Tree folder from the Project root", function(context)
     local source = test.not_nil(filetree.new(context.root))
     local _, _, snapshot = source:build_entries(false)
     local selected
@@ -215,6 +215,28 @@ test.describe("Command Palette View launchers", function()
     test.equal(tree.root_dir, common.normalize_path(context.detached))
     local entry = tree:entry_for_line(tree.buffer:get_selection(true))
     test.ok(entry and common.path_equals(entry.abs, context.detached_file))
+  end)
+
+  test.it("opens a Project folder at the Project root with the folder expanded", function(context)
+    local pane = panes.create { factory = function() return View() end }
+    test.ok(command.perform_with_context("filetree:open_at_choose_path", {
+      source_pane = pane, placement = "current",
+    }, context.folder))
+
+    local tree = pane.current_view
+    test.equal(tree.root_dir, common.normalize_path(context.root))
+    local entry = tree:entry_for_line(tree.buffer:get_selection(true))
+    test.ok(entry and common.path_equals(entry.abs, context.folder))
+    test.ok(tree:capture_expanded_paths()[common.normalize_path(context.folder)])
+  end)
+
+  test.it("keeps an outside folder as its own root", function(context)
+    local pane = panes.create { factory = function() return View() end }
+    test.ok(command.perform_with_context("filetree:open_at_choose_path", {
+      source_pane = pane, placement = "current",
+    }, context.detached))
+
+    test.equal(pane.current_view.root_dir, common.normalize_path(context.detached))
   end)
 
   test.it("reveals External and Vendored Project Directory files from the Root Project", function(context)
@@ -322,7 +344,7 @@ test.describe("Command Palette View launchers", function()
     test.equal(selected.is_folder, false)
     picker:confirm(false)
 
-    test.equal(pane.current_view.root_dir, common.normalize_path(context.folder))
+    test.equal(pane.current_view.root_dir, common.normalize_path(context.root))
     local entry = pane.current_view:entry_for_line(pane.current_view.buffer:get_selection(true))
     test.ok(entry and common.path_equals(entry.abs, context.file))
     test.equal(core.root_project().path, common.normalize_path(context.root))
@@ -349,7 +371,8 @@ test.describe("Command Palette View launchers", function()
     test.not_nil(selected)
     picker:confirm(false)
 
-    test.equal(pane.current_view.root_dir, common.normalize_path(context.folder))
+    local entry = pane.current_view:entry_for_line(pane.current_view.buffer:get_selection(true))
+    test.ok(entry and common.path_equals(entry.abs, context.folder))
   end)
 
   test.it("opens a Terminal at a selected folder with new Pane Group placement", function(context)

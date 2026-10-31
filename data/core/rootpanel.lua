@@ -1072,7 +1072,7 @@ function RootPanel:open_dropped_file(filename, x, y, target)
     end
     local view
     if info.type == "dir" then
-      view, err = require("plugins.filetree").open(filename, {
+      view, err = require("plugins.filetree").open_path(filename, {
         placement = "new", reason = "directory-drop",
       })
     else

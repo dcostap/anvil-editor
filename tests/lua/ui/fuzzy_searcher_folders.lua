@@ -44,6 +44,11 @@ local function select_folder_action(action)
   test.fail("missing folder action: " .. tostring(action))
 end
 
+local function shows_project_folder(view, root, folder)
+  local entry = view and view.root_dir and view:entry_for_line(view.buffer:get_selection(true))
+  return common.path_equals(view.root_dir, root) and entry ~= nil and common.path_equals(entry.abs, folder)
+end
+
 local function assert_actions_present(options, expected)
   local found = {}
   for _, option in ipairs(options or {}) do found[option.action] = true end
@@ -256,7 +261,7 @@ test.describe("Project File Search folders", function()
     context.filetree_was_opened = true
     select_folder_action("filetree")
     test.ok(wait_until(function()
-      return context.pane.current_view.root_dir == common.normalize_path(context.empty)
+      return shows_project_folder(context.pane.current_view, context.root, context.empty)
     end))
   end)
 
@@ -276,7 +281,7 @@ test.describe("Project File Search folders", function()
     test.ok(wait_until(function() return panes.count() == 2 end))
     test.equal(context.pane.current_view, context.source)
     test.not_equal(panes.active().group, context.pane.group)
-    test.equal(panes.active().current_view.root_dir, common.normalize_path(context.empty))
+    test.ok(shows_project_folder(panes.active().current_view, context.root, context.empty))
   end)
 
   test.it("opens a folder as a Project in this window", function(context)
@@ -398,7 +403,7 @@ test.describe("Project File Search folders", function()
     context.filetree_was_opened = true
     select_folder_action("filetree")
     test.ok(wait_until(function()
-      return context.pane.current_view.root_dir == common.normalize_path(context.empty)
+      return shows_project_folder(context.pane.current_view, context.root, context.empty)
     end))
   end)
 end)
