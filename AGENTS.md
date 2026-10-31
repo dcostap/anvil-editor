@@ -597,9 +597,12 @@ Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_
 Its CMake build compiles the shared C files from `src/` and the grammars from `subprojects/`. It copies no files. Configure the desktop build first, so the Meson subprojects exist with their patches.
 `android/app/src/main/cpp/sdl` gives the shared modules the few SDL calls that they use. The Companion does not build SDL.
 The text stays the same. Live Preview only styles it, and markers outside the caret's element get a transparent, almost zero-width style. There is no offset mapping, so the keyboard always sees the real text.
+The editor uses `BasicTextField` with a `TextFieldState` and styles through an `OutputTransformation`. The older `TextFieldValue` field let the keyboard cover the tapped line.
+Compose's word selection takes the punctuation before a word when a long-press moves: `(niño)` becomes `(niño`, and `**niño**` becomes `**niño`. A plain field does the same, so Live Preview does not cause it.
 `markdown_styles.c` returns spans in UTF-16 units. Its instrumented test checks Spanish accents and an emoji.
 Tools: the Android SDK in `%LOCALAPPDATA%\Android\Sdk`, NDK 30.0.16248370, CMake 4.1.2, platform 37 and JDK 17 or later in `JAVA_HOME`. Set `sdk.dir` in the ignored `android/local.properties`. The Gradle wrapper checks the distribution's SHA-256.
-Build with `./gradlew assembleDebug` in `android/`. Run `./gradlew connectedDebugAndroidTest` with a phone or an emulator. The AVD `anvil-test-36` runs Android 36 with Gboard.
+Build with `./gradlew assembleDebug` in `android/`. Test on the emulator, not on the user's phone. Start the AVD `anvil-test-36` (Android 36 with Gboard) with `emulator -avd anvil-test-36 -no-window`, then run `./gradlew connectedDebugAndroidTest`.
+`NoteEditorTouchTest` drives the editor with touch input and the emulator's real keyboard. Add a scenario there for each touch or keyboard bug.
 The editor logs each selection and composing range. Read them with `adb logcat -s AnvilEditor`.
 
 ## Agent control
