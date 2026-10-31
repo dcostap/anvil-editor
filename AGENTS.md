@@ -702,51 +702,55 @@ For output that must stream while the process runs, such as ripgrep, use `core.p
 Cancel each stream you stop reading; an unread stream holds its worker once its output window fills.
 The UI loop drains named pools and shuts them down with the system pool.
 
-## Native code and Lua garbage
+## C and Lua
 
-Lua must not limit the editor's speed. We port slow Lua to C, but only where a measurement shows that the port is worth it.
+C is the target language for editor logic. Lua is legacy.
 
-### Measure first
+- Write new logic in C when it does not need Lua objects.
+- Keep existing Lua in Lua until a clean port is possible. Do not start a port that pulls in unrelated modules.
+- A port is clean when the code has a clear seam: plain data in, plain data out, and tests that cover the behavior.
+- Port a module when your task makes a large change to it and it has a clean seam. Otherwise, name it as a port candidate in your report. Do not grow a small task into a port.
+- Lua stays for glue: commands, config, keymaps, plugins, and the wiring between C modules.
 
-Do not port code to C because it looks slow. Measure it first.
+### C module shape
+
+Put the logic in a C module that includes no Lua headers, such as `src/markdown_parser.c`. A thin binding in `src/api` exposes it to Lua with the portable Lua C API, not FFI. The PUC Lua build must still work. Another binding can then use the same module.
+
+The module takes plain data and returns plain data, such as text, a parse tree, positions, edits, or styled ranges. It does not know about Buffers, Views, or Lua tables.
+
+A Lua error is caught. A crash in C ends the editor. Give each C module tests that cover its edge cases, such as empty input, invalid UTF-8, and very long lines.
+
+The Lua side calls C once for each edit, batch, or frame. A LuaJIT trace stops at each C call, so a call for each item can be slower than Lua. Values that go back to Lua still make garbage, so return results in bulk.
+
+### Speed work: measure first
+
+Some ports are for speed. For these, do not port code because it looks slow. Measure it first.
 
 1. Run the scenario that shows the problem with `--diagnose`. It writes a sampled profile and timers by phase. See [scenario runs](tools/SCENARIOS.md).
 2. Find where the time goes in the attribution `details.csv` and profile stacks. Use `--heap` to measure retained Lua objects.
 3. Ask if the work is necessary. Work that is not necessary is the largest win, in any language. Examples:
    - The Heading Outline ran the outline query on the whole note for each key. The worker's parse already had the headings.
    - Two callers joined the whole note into a Lua string for each edit, only to give it to C.
-4. Port to C only work that is necessary and slow in Lua.
+4. Port the work that is necessary.
 
-A port is worth it when the measurement shows one of these:
+These costs move to C first:
 
-- A hot loop over plain data, such as rows, heights, or text positions.
+- Hot loops over plain data, such as rows, heights, or text positions.
 - Work for each line or item of a document, where the count grows with the document.
-- Large data that stays in memory, as a heap census shows.
-- High GC or interpreter time in the profile for that code.
-
-A port is not worth it when the profile shows the time elsewhere, or when the code is glue, decisions, or behavior that changes often. A Lua error is caught. A crash in C ends the editor.
-
-Move these to C:
-
-- Hot loops over plain data, such as arrays of rows, heights, or text positions.
 - Large data that stays in memory, such as line layouts, token arrays, or document models.
   LuaJIT's GC has no generations. Each GC cycle marks all live Lua objects again, also data that does not change.
   Data in C memory adds no GC work.
-
-Keep glue code, plugin logic, and editor behavior in Lua.
-C does not remove garbage from glue code, because the values still go back to Lua.
-Lua calls the C code once for each edit, batch, or frame.
-A LuaJIT trace stops at each C call, so a call for each item can be slower than Lua.
+- High GC or interpreter time in the profile for that code.
 
 Code that runs in each frame, such as `update`, `draw`, and caret moves, must not make new tables, closures, or strings when old ones can be used again.
 
-In the commit message, give the measurement before and after the change.
+In the commit message of a speed port, give the measurement before and after the change.
 
 ### How to port
 
 Port in small slices. Do not rewrite a module at once. For each slice:
 
-1. Measure the slice before the change.
+1. For a speed port, measure the slice before the change.
 2. Keep the old Lua path until the new path gives the same output. Compare both outputs on many real documents and edits. Use the repo's Markdown files and the scenario fixtures.
 3. For a slice that changes what the editor draws or where, also compare pixels. Before the change, record golden images with the [render gate](tools/RENDER_PERF_GATE.md) (`--update-baseline --update-goldens`). After the change, the same scenes must match exactly. Add scenes when the existing ones do not show the changed line kinds.
 4. Add tests that fail on the old code (red-green).
@@ -761,10 +765,11 @@ Measured on the 19,185-line gallery note (`markdown-gallery-open`):
 - The full row-height rebuild in Lua took 0.65 s. One rebuild took 465 ms in one frame.
 - The C wrap call (`renderer.wrap_fragment_lines`) took 0.08 s.
 
-The cost is Lua work for each line, spread over many functions. No single loop is hot. So port the pipeline, not the editor:
+The cost is Lua work for each line, spread over many functions. No single loop is hot. So port the pipeline in slices:
 
 - C keeps the data for each line: style runs, wrap breaks, row heights, and line metrics. A worker thread can make them from the Buffer text and the tree-sitter parse.
-- Lua keeps the decisions: what shows at the caret, widgets, clicks, and editing behavior. Lua reads results with a few calls for each frame.
+- C also takes the presentation decisions: given the text, the parse tree, and the caret, which ranges to hide and which to style. Keep these decisions separate from wrapping and row heights, which depend on the renderer.
+- Lua keeps widgets, clicks, and command wiring until they have clean seams. Lua reads results with a few calls for each frame.
 - Before each slice, measure which line kinds cost the most, such as prose, headings, lists, tables, or code. Port the most costly kind first.
 
 ### Frame-time check
@@ -781,8 +786,6 @@ Many scenarios are over budget now. A change must not move them further over.
 See [scenario runs](tools/SCENARIOS.md) for the budgets.
 
 Do not stop garbage collection to measure allocations. The removed allocation profiler exhausted system memory and crashed other programs. `--allocation` is disabled. The shared Windows launcher limits each benchmark process tree to 4 GiB of committed memory. A `memory_limit` failure is not a passing measurement. Keep this protection in baseline worktrees too.
-
-Add native modules under `src/api` with the portable Lua C API, not FFI. The PUC Lua build must still work.
 
 ## Tree-sitter language support
 
