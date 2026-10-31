@@ -833,7 +833,19 @@ command.set_status("git:toggle_row_selection_mode", function()
   return core.active_view and core.active_view.row_selection_mode
 end)
 
+command.add(function()
+  local view = core.active_view
+  return view and view.git_owner_view and view.row_selection_mode == false
+    and view.set_row_selection_mode ~= nil, view
+end, {
+  ["git:exit_text_selection_mode"] = function(view)
+    view:set_row_selection_mode(true)
+    core.log_quiet("Git View %s returned to Row Selection Mode", view.git_pane)
+  end,
+})
+
 keymap.add({
+  ["escape"] = "git:exit_text_selection_mode",
   ["f2"] = "git:toggle_row_selection_mode",
   ["ctrl+k"] = "git:open_log",
   ["return"] = "git:activate_selected_row",
