@@ -1,15 +1,19 @@
 -- `anvil serve <project>...`: the Machine server. It runs Anvil's Lua without a window.
--- It listens on loopback only. Each Client sends `hello` with the token from the discovery file first.
+-- It listens on loopback only. Each Client sends `hello` first: the local owner with the token from the
+-- discovery file, a paired device with its own token, and a new device with a pairing code.
 local common = require "core.common"
 local json = require "core.json"
 local machine = require "machine"
 local net = require "net"
 
 local core = {}
-local PROTOCOL, FEATURES = 1, {"files.read", "files.write", "files.save_result"}
+local PROTOCOL = 1
+local FEATURES = {"files.read", "files.write", "files.save_result", "pairing.start", "devices.list", "devices.revoke"}
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
-local MAX_SAVES = 1024
-local server, test_root, lose_reply
+local MAX_SAVES, PAIRING_TIME, PAIRING_ATTEMPTS, MAX_NAME = 1024, 300, 5, 100
+-- A View device only reads. These methods need Full control.
+local FULL_CONTROL = {["files.write"] = true, ["pairing.start"] = true, ["devices.list"] = true, ["devices.revoke"] = true}
+local server, test_root, lose_reply, fixed_port
 
 -- A server often ends by a forced stop, and it logs little. So each record goes to disk at once.
 local function log(...)
@@ -38,9 +42,73 @@ local function machine_id(directory)
   return id
 end
 
+-- Paired devices stay in USERDIR. The file keeps the hash of each device's token, not the token.
+local function load_devices(path)
+  local file = io.open(path, "rb")
+  if not file then return {} end
+  local ok, found = pcall(json.decode, file:read("*a") or "")
+  file:close()
+  return ok and type(found) == "table" and type(found.devices) == "table" and found.devices or {}
+end
+
+local function save_devices()
+  write_file(server.devices_path, json.encode {version = 1, devices = server.devices})
+end
+
+local function find_device(id)
+  for i, device in ipairs(server.devices) do
+    if device.id == id then return device, i end
+  end
+end
+
+-- A pairing code works one time, for PAIRING_TIME seconds, with PAIRING_ATTEMPTS wrong attempts.
+-- Returns the new device and its token.
+local function pair_device(params)
+  local pairing = server.pairing
+  if not pairing or system.get_time() > pairing.expires then
+    server.pairing = nil
+    return nil
+  end
+  if params.pair ~= pairing.code then
+    pairing.attempts = pairing.attempts + 1
+    if pairing.attempts >= PAIRING_ATTEMPTS then server.pairing = nil end
+    log("Machine server refused a pairing code: attempt %d", pairing.attempts)
+    return nil
+  end
+  server.pairing = nil
+  local token = net.random_token()
+  local device = {id = net.random_token():sub(1, 16), level = pairing.level, paired = os.time(),
+    name = type(params.name) == "string" and params.name ~= "" and params.name:sub(1, MAX_NAME) or "Device",
+    token = machine.content_version(token)}
+  server.devices[#server.devices + 1] = device
+  save_devices()
+  log("Machine server paired device %s with %s access", device.id, device.level)
+  return device, token
+end
+
+-- Returns the access level and the device, or nothing when the credentials are not valid.
+local function log_in(params)
+  if params.pair ~= nil then
+    local device, token = pair_device(params)
+    if device then return device.level, device, token end
+  elseif params.device ~= nil then
+    local device = find_device(params.device)
+    if device and type(params.token) == "string" and machine.content_version(params.token) == device.token then
+      return device.level, device
+    end
+  elseif params.token == server.token then
+    return "full"
+  end
+end
+
 local function open_listener(token)
   local address = assert(net.resolve_address("127.0.0.1"))
   assert(address:wait_until_resolved(5000) == "success", "Cannot resolve the loopback address")
+  if fixed_port then
+    local listener, err = net.create_server(address, fixed_port)
+    if not listener then error("Cannot listen on port " .. fixed_port .. ": " .. tostring(err)) end
+    return listener, fixed_port
+  end
   local listener, port, err
   for i = 1, 128 do
     -- Spread attempts across the range: Windows can exclude many adjacent ports.
@@ -155,6 +223,39 @@ local function save_result(client, id, params)
   reply(client, id, {result = {version = version}})
 end
 
+-- `pairing.start {level}` makes a new pairing code. It replaces an earlier code.
+local function start_pairing(client, id, params)
+  if params.level ~= "view" and params.level ~= "full" then
+    return fail(client, id, "invalid_request", "The level must be view or full")
+  end
+  local code = string.format("%06d", tonumber(net.random_token():sub(1, 8), 16) % 1000000)
+  server.pairing = {code = code, level = params.level, attempts = 0, expires = system.get_time() + PAIRING_TIME}
+  log("Machine server started pairing for %s access", params.level)
+  reply(client, id, {result = {code = code, expires_in = PAIRING_TIME}})
+end
+
+local function list_devices(client, id)
+  local devices = {}
+  for _, device in ipairs(server.devices) do
+    devices[#devices + 1] = {id = device.id, name = device.name, level = device.level, paired = device.paired}
+  end
+  reply(client, id, {result = {devices = devices}})
+end
+
+-- `devices.revoke {device}` removes the device and closes its connections at once.
+local function revoke_device(client, id, params)
+  local _, index = find_device(params.device)
+  if not index then return fail(client, id, "unknown_device", "This Machine has no such device") end
+  table.remove(server.devices, index)
+  save_devices()
+  for _, other in ipairs(server.clients) do
+    if other.device == params.device and other ~= client then other.dead = true end
+  end
+  if client.device == params.device then client.closing = true end
+  log("Machine server revoked device %s", params.device)
+  reply(client, id, {result = true})
+end
+
 local function handle(client, id, body, bytes)
   local ok, request = pcall(json.decode, body)
   local params = ok and type(request) == "table" and (request.params or {})
@@ -169,23 +270,30 @@ local function handle(client, id, body, bytes)
       client.closing = true
       return fail(client, id, "protocol", "This Machine uses another protocol version", {protocol = PROTOCOL})
     end
-    if params.token ~= server.token then
+    local level, device, token = log_in(params)
+    if not level then
       client.closing = true
-      log("Machine server refused a Client: wrong token")
-      return fail(client, id, "unauthorized", "The token is not valid")
+      log("Machine server refused a Client: credentials not valid")
+      return fail(client, id, "unauthorized", "The credentials are not valid")
     end
-    client.authorized = true
+    client.authorized, client.level, client.device = true, level, device and device.id
     client.decoder:limits(MAX_REQUEST_JSON, MAX_FILE)
     return reply(client, id, {result = {protocol = PROTOCOL, machine = server.machine, epoch = server.epoch,
-      os = PLATFORM, features = FEATURES}})
+      os = PLATFORM, features = FEATURES, level = level, device = token and {id = device.id, token = token}}})
   end
   if not client.authorized then
     client.closing = true
     return fail(client, id, "unauthorized", "Send hello first")
   end
+  if FULL_CONTROL[request.method] and client.level ~= "full" then
+    return fail(client, id, "forbidden", "This device has View access")
+  end
   if request.method == "files.read" then return read_file(client, id, params) end
   if request.method == "files.write" then return write_file_request(client, id, params, bytes) end
   if request.method == "files.save_result" then return save_result(client, id, params) end
+  if request.method == "pairing.start" then return start_pairing(client, id, params) end
+  if request.method == "devices.list" then return list_devices(client, id) end
+  if request.method == "devices.revoke" then return revoke_device(client, id, params) end
   fail(client, id, "unknown_method", "This Machine has no method " .. request.method)
 end
 
@@ -237,6 +345,13 @@ function core.init()
       test_root = system.absolute_path(ARGS[first + 1] or ".")
     elseif ARGS[first] == "--test-lose-reply" then
       lose_reply = ARGS[first + 1]
+    elseif ARGS[first] == "--port" then
+      -- Tailscale Serve and other forwarders need a port that stays the same.
+      fixed_port = tonumber(ARGS[first + 1])
+      if not fixed_port then
+        io.stderr:write("--port needs a number\n")
+        os.exit(1)
+      end
     else
       break
     end
@@ -256,9 +371,10 @@ function core.init()
   local token = net.random_token()
   local listener, port = open_listener(token)
   server = {listener = listener, port = port, token = token, projects = projects, clients = {},
-    saves = {}, save_order = {},
+    saves = {}, save_order = {}, devices_path = directory .. PATHSEP .. "devices.json",
     machine = machine_id(directory), epoch = net.random_token():sub(1, 16),
     discovery = directory .. PATHSEP .. "server.json"}
+  server.devices = load_devices(server.devices_path)
   write_file(server.discovery, json.encode {version = 1, port = port, token = token,
     pid = system.get_process_id(), machine = server.machine, epoch = server.epoch})
   log("Machine server started: port=%d machine=%s epoch=%s projects=%d", port, server.machine, server.epoch, #projects)

@@ -144,4 +144,93 @@ test.describe("Machine server", function()
     test.equal(second.machine, first.machine)
     test.not_equal(second.epoch, first.epoch)
   end)
+
+  local function owner(context)
+    local client = connect(context.discovery)
+    test.equal(call(client, "hello", {protocol = 1, token = context.discovery.token}).result.level, "full")
+    return client
+  end
+
+  -- Returns the new device's credentials, from a connection that stays open.
+  local function pair(context, level)
+    local code = call(owner(context), "pairing.start", {level = level}).result.code
+    local client = connect(context.discovery)
+    local hello = call(client, "hello", {protocol = 1, pair = code, name = "Laptop"}).result
+    test.equal(hello.level, level)
+    return hello.device, client, code
+  end
+
+  test.it("pairs a device with a one-time code, and the device logs in with its own token", function(context)
+    local device, client, code = pair(context, "full")
+    local path = context.project .. PATHSEP .. "notes.md"
+    local _, bytes = call(client, "files.read", {path = path})
+    test.equal(bytes, "# Notes\n")
+    client.socket:close()
+
+    client = connect(context.discovery)
+    test.equal(call(client, "hello", {protocol = 1, pair = code, name = "Again"}).error.code, "unauthorized")
+    client.socket:close()
+    client = connect(context.discovery)
+    test.equal(call(client, "hello", {protocol = 1, device = device.id, token = string.rep("0", 64)}).error.code,
+      "unauthorized")
+    client.socket:close()
+
+    stop_server(context)
+    context.discovery = start_server(context)
+    client = connect(context.discovery)
+    test.equal(call(client, "hello", {protocol = 1, device = device.id, token = device.token}).result.level, "full")
+    _, bytes = call(client, "files.read", {path = path})
+    test.equal(bytes, "# Notes\n")
+    client.socket:close()
+  end)
+
+  test.it("lets a View device read but not write or pair", function(context)
+    local _, client = pair(context, "view")
+    local path = context.project .. PATHSEP .. "notes.md"
+    local reply = call(client, "files.read", {path = path})
+    test.equal(call(client, "files.write", {path = path, base = reply.result.version}).error.code, "forbidden")
+    test.equal(call(client, "pairing.start", {level = "view"}).error.code, "forbidden")
+    client.socket:close()
+    local file = io.open(path, "rb")
+    test.equal(file:read("*a"), "# Notes\n")
+    file:close()
+  end)
+
+  test.it("ends a pairing code after five wrong attempts", function(context)
+    local code = call(owner(context), "pairing.start", {level = "full"}).result.code
+    local wrong = code == "000000" and "111111" or "000000"
+    for _ = 1, 5 do
+      local client = connect(context.discovery)
+      test.equal(call(client, "hello", {protocol = 1, pair = wrong, name = "Guess"}).error.code, "unauthorized")
+      client.socket:close()
+    end
+    local client = connect(context.discovery)
+    test.equal(call(client, "hello", {protocol = 1, pair = code, name = "Laptop"}).error.code, "unauthorized")
+    client.socket:close()
+  end)
+
+  test.it("closes the connections of a revoked device at once", function(context)
+    local device, client = pair(context, "full")
+    local admin = owner(context)
+    local listed = call(admin, "devices.list", {}).result.devices
+    test.equal(#listed, 1)
+    test.equal(listed[1].name, "Laptop")
+    test.is_nil(listed[1].token)
+    test.ok(call(admin, "devices.revoke", {device = device.id}).result)
+    test.is_nil(call(client, "files.read", {path = context.project .. PATHSEP .. "notes.md"}))
+    test.equal(#call(admin, "devices.list", {}).result.devices, 0)
+
+    client = connect(context.discovery)
+    test.equal(call(client, "hello", {protocol = 1, device = device.id, token = device.token}).error.code,
+      "unauthorized")
+    client.socket:close()
+  end)
+
+  test.it("listens on the port that --port names", function(context)
+    stop_server(context)
+    local port = 49152 + tonumber(net.random_token():sub(1, 4), 16) % 16000
+    context.server, context.discovery = machine_server.start(context.user, { "--port", tostring(port), context.project })
+    test.equal(context.discovery.port, port)
+    owner(context).socket:close()
+  end)
 end)

@@ -566,7 +566,12 @@ It listens on loopback only. At start it writes `USERDIR/machine/server.json` wi
 The Machine ID is in `USERDIR/machine/id` and stays across restarts. Each start gets a new epoch and a new token.
 `src/machine_frame.c` is the frame codec. It has no Lua or SDL headers, because the Companion uses it too. `src/api/machine.c` exposes it to Lua as `machine`.
 A frame has a 13-byte header: the type (1 request, 2 reply), then the request ID, the JSON length and the byte length, each 4 bytes big-endian. The JSON body follows, then the raw bytes.
-The first request must be `hello` with `protocol` and `token`. The server checks the version first. A wrong version or token gets an error reply, then the server closes the connection.
+The first request must be `hello` with `protocol` and credentials. The server checks the version first. A wrong version or wrong credentials get an error reply, then the server closes the connection.
+There are three kinds of credentials. The local owner sends `token` from the discovery file. A paired device sends `device` and its own `token`. A new device sends `pair`, a pairing code, and `name`.
+The `hello` reply gives the `level`: `view` or `full`. A View device only reads. `files.write`, `pairing.start`, `devices.list` and `devices.revoke` need Full control and give `forbidden` otherwise.
+`pairing.start {level}` makes a 6-digit code. It works one time, for 5 minutes, and ends after 5 wrong attempts. A new code replaces the old one. A pairing `hello` reply also carries `device = {id, token}`.
+`USERDIR/machine/devices.json` keeps the paired devices with the SHA-256 of each token, not the token. `devices.revoke {device}` deletes the device and closes its connections at once.
+`--port <number>` before the Projects makes the server listen on that port. Tailscale Serve and other forwarders need a port that stays the same. The server still listens on loopback only.
 `files.read` takes an absolute `path` in one of the server's Projects. Its reply has `size` and `version` in the JSON and the file's bytes after it. The version is the SHA-256 of the bytes.
 `files.write` takes `path`, `base` and the new bytes. It replaces the whole file only while the file has the version `base`. Without `base`, it only creates a file.
 Otherwise it sends a `conflict` error with the current `version` and bytes. Request bodies can hold bytes only after `hello`. Both limits are 16 MiB.
