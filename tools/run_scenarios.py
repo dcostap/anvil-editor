@@ -31,7 +31,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import perf_diagnostics  # noqa: E402
 import perf_fixtures  # noqa: E402
-from perf_fixtures import FolderSpec, MarkdownSpec, NoteSpec, ProjectSetSpec, RepoSpec, VaultSpec  # noqa: E402
+from perf_fixtures import CompletionSpec, FolderSpec, MarkdownSpec, NoteSpec, ProjectSetSpec, RepoSpec, VaultSpec  # noqa: E402
 import run_render_perf_gate as gate  # noqa: E402
 
 RESULTS_ROOT = gate.ROOT / "tools" / "perf-results" / "scenarios"
@@ -47,6 +47,8 @@ REPO_HUGE = RepoSpec("repo-huge", files=100000, commits=40, modified=800, staged
                      deleted=40, untracked=200, ignored=30000)
 FOLDER_MEDIUM = FolderSpec("folder-medium", files=6000)
 RUNTIME_WORKLOADS = FolderSpec("runtime-workloads", files=1, min_lines=4, max_lines=4)
+COMPLETION_LIBRARY = CompletionSpec("completion-library")
+COMPLETION_SYMBOLS = COMPLETION_LIBRARY.files * COMPLETION_LIBRARY.symbols_per_file
 # Long source files for editor scrolling. Other fixtures keep files short.
 REPO_LONG = RepoSpec("repo-long", files=200, min_lines=3000, max_lines=6000, modified=10, untracked=4)
 # A folder that holds several repositories, like a directory of checkouts.
@@ -70,7 +72,7 @@ WINDOW_LARGE = (2560, 1440)
 @dataclass(frozen=True)
 class Scenario:
     scene: str
-    fixture: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | NoteSpec | VaultSpec
+    fixture: RepoSpec | FolderSpec | CompletionSpec | ProjectSetSpec | MarkdownSpec | NoteSpec | VaultSpec
     actions: int
     suites: tuple[str, ...]
     settings: dict[str, Any] = field(default_factory=dict)
@@ -154,6 +156,25 @@ SCENARIOS: dict[str, Scenario] = {
     "autocomplete-navigation-latency": Scenario(
         "autocomplete_navigation", FolderSpec("response-small", files=1), actions=40,
         suites=("response", "smoke"), settings={"cadence": "normal"}, action_budget_ms=50.0),
+    "autocomplete-project-small": Scenario(
+        "autocomplete_project", CompletionSpec("completion-small", files=4, symbols_per_file=50),
+        actions=24, suites=("autocomplete", "smoke"), settings={"mode": "type", "symbols": 200}, writes=True),
+    "autocomplete-project-type": Scenario(
+        "autocomplete_project", COMPLETION_LIBRARY, actions=24, suites=("autocomplete", "smoke"),
+        settings={"mode": "type", "symbols": COMPLETION_SYMBOLS}, writes=True),
+    "autocomplete-project-members": Scenario(
+        "autocomplete_project", COMPLETION_LIBRARY, actions=16, suites=("autocomplete", "smoke"),
+        settings={"mode": "members", "symbols": COMPLETION_SYMBOLS}, writes=True),
+    "autocomplete-project-refresh": Scenario(
+        "autocomplete_project", COMPLETION_LIBRARY, actions=24, suites=("autocomplete", "smoke"),
+        settings={"mode": "refresh", "symbols": COMPLETION_SYMBOLS}, writes=True),
+    "autocomplete-project-burst": Scenario(
+        "autocomplete_project", COMPLETION_LIBRARY, actions=8, suites=("autocomplete", "smoke"),
+        settings={"mode": "burst", "symbols": COMPLETION_SYMBOLS}, writes=True),
+    "autocomplete-project-response": Scenario(
+        "autocomplete_project", COMPLETION_LIBRARY, actions=24, suites=("autocomplete", "response"),
+        settings={"mode": "type", "symbols": COMPLETION_SYMBOLS, "cadence": "normal"},
+        action_budget_ms=50.0, writes=True),
     # The baseline: typing in a small file with nothing else open.
     "editor-type-baseline": Scenario(
         "editor_type", REPO_MEDIUM, actions=300, suites=("smoke",), targets=1, writes=True,

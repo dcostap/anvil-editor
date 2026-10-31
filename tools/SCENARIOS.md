@@ -26,6 +26,7 @@ A scenario names four things:
   - `RepoSpec`: a Git repository with history, modified, staged, deleted,
     untracked, and ignored files.
   - `FolderSpec`: generated code outside any Git repository.
+  - `CompletionSpec`: a small Odin file and a large symbol library.
   - `ProjectSetSpec`: a folder that holds several repositories.
   - `MarkdownSpec`: a generated note with an embedded image and tables.
   - `NoteSpec`: a checked-in note from `tests/fixtures`, for a hand-written
@@ -94,6 +95,39 @@ python tools/run_scenarios.py --scenario autocomplete-navigation-latency --runs 
 `autocomplete-navigation-latency` alternates Next and Previous commands in a real autocomplete popup.
 It checks the selected suggestion and observes its overlay draw before completing each action.
 Its p95 action budget is 50 ms. A missing redraw fails the action deadline.
+
+### Large-index autocomplete
+
+Run the focused suite to check completion searches, not only popup navigation:
+
+```sh
+python tools/run_scenarios.py --suite autocomplete --runs 3
+```
+
+The large-index scenes use a small Odin file and a generated library with 75,000 procedures. The small-index control uses 200 procedures. Setup rejects skipped source files and an incomplete native symbol index. Each library also supplies distinct completion targets and an enum. No fake completion provider or LSP supplies the results.
+
+| Scenario | Measured behavior |
+| --- | --- |
+| `autocomplete-project-small` | Repeat single-character completion against 200 generated procedures as a small-index control. |
+| `autocomplete-project-type` | Type and delete one character while Project symbol completion stays active. |
+| `autocomplete-project-members` | Type a receiver dot and member prefix, then delete them. The dot starts an empty-query member search. |
+| `autocomplete-project-refresh` | Dismiss completion before each typed character. Require a Project completion result after parsing finishes. |
+| `autocomplete-project-burst` | Send 30 separate text-input events without a redraw, then delete them. Repeat with no matching symbols. |
+| `autocomplete-project-response` | Repeat single-character completion with normal frame pacing and a 50 ms completed-action budget. |
+
+The small-index control and four uncapped large-index scenarios also run in `smoke`. They enforce the standard frame-work and action budgets. The normal-paced case also runs in `response`; presentation waits do not count as uncapped frame-work failures.
+
+Each action checks the typed text and waits for parsing. Completion actions require the expected symbol, icon, source path, and popup draw. Disabling completion cannot pass these checks. Visible latency ends when the edited line draws; completed latency also includes the verified completion draw.
+
+Burst events use `core.on_event` and editor commands. They cover repeated handler work before a redraw, not native OS delivery or queue delay. Setup and fixture generation stay outside measurement. Each run restores the fixture-owned edited file. These scenarios refuse `--project`.
+
+A failed scene readiness check reports its original error. It does not wait for the external timeout or record a performance score.
+
+Check fixture restoration and input-cost scoring with:
+
+```sh
+python -m unittest tests.tools.test_completion_scenarios -v
+```
 
 Response scenes set `settings.cadence = "normal"`.
 The benchmark keeps normal frame limits and enables D3D11 vsync.

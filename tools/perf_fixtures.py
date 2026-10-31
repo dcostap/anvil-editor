@@ -82,6 +82,20 @@ class FolderSpec:
 
 
 @dataclass(frozen=True)
+class CompletionSpec:
+    """A small Odin file beside a large generated symbol library."""
+    name: str
+    files: int = 750
+    symbols_per_file: int = 100
+
+    @property
+    def key(self) -> str:
+        payload = json.dumps({"version": GENERATOR_VERSION, "kind": "completion", **asdict(self)},
+                             sort_keys=True)
+        return f"{self.name}-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+
+
+@dataclass(frozen=True)
 class ProjectSetSpec:
     """Several small Git repositories, such as recent Projects for the Project Sidebar."""
     name: str
@@ -366,6 +380,22 @@ def build_folder(spec: FolderSpec, root: Path) -> None:
         write_text(root / path, source_text(path, line_count(spec, index), 1))
 
 
+def build_completion(spec: CompletionSpec, root: Path) -> None:
+    root.mkdir(parents=True)
+    library = root / "library"
+    library.mkdir()
+    for file in range(spec.files):
+        rows = ["package library\n"]
+        for symbol in range(spec.symbols_per_file):
+            number = file * spec.symbols_per_file + symbol
+            rows.append(f"latency_completion_{number:06d} :: proc() {{}}\n")
+        write_text(library / f"symbols_{file:04d}.odin", "".join(rows))
+    write_text(library / "targets.odin", "package library\n"
+               "latency_completion_target :: proc() {}\n"
+               f"burst_{'x' * 31}_t :: proc() {{}}\n"
+               "LatencyMode :: enum { READY, WAITING }\n")
+
+
 def noise_png(width: int, height: int, rng: random.Random) -> bytes:
     """Return an RGB PNG of random pixels, so compression keeps it large."""
     def chunk(kind: bytes, data: bytes) -> bytes:
@@ -539,7 +569,7 @@ def members(spec: ProjectSetSpec) -> list[tuple[str, RepoSpec]]:
             for index in range(spec.projects)]
 
 
-def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | NoteSpec | VaultSpec,
+def materialize(spec: RepoSpec | FolderSpec | CompletionSpec | ProjectSetSpec | MarkdownSpec | NoteSpec | VaultSpec,
                 cache_root: Path | None = None,
                 rebuild: bool = False, touched: list[str] | None = None) -> Path:
     """Return a ready fixture root, building it into the cache when needed.
@@ -557,6 +587,8 @@ def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | No
             root.mkdir(parents=True)
             for name, member in members(spec):
                 build_repo(member, root / name)
+        elif isinstance(spec, CompletionSpec):
+            build_completion(spec, root)
         elif isinstance(spec, FolderSpec):
             build_folder(spec, root)
         elif isinstance(spec, MarkdownSpec):
@@ -568,7 +600,11 @@ def materialize(spec: RepoSpec | FolderSpec | ProjectSetSpec | MarkdownSpec | No
         else:
             build_repo(spec, root)
         marker.write_text(json.dumps(asdict(spec), indent=2), encoding="utf-8")
-    if isinstance(spec, ProjectSetSpec):
+    if isinstance(spec, CompletionSpec):
+        # Autosave can write the measured Buffer. Restore only this fixture-owned file.
+        write_text(root / "main.odin", "package main\n\nmain :: proc() {\n"
+                   "    // Completion input\n    \n}\n")
+    elif isinstance(spec, ProjectSetSpec):
         for name, member in members(spec):
             apply_worktree(member, root / name)
     elif isinstance(spec, RepoSpec):
