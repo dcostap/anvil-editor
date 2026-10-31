@@ -12,9 +12,10 @@ local terminal = require "plugins.terminal"
 test.describe("Pi controls Anvil", function()
   test.it("starts a visible child and receives its answer without moving user focus", function()
     test.skip_if(PLATFORM ~= "Windows", "Windows Terminal test")
-    local programs = os.getenv("ProgramFiles") or "C:/Program Files"
-    local pi, node = programs .. "/pi/pi.exe", programs .. "/nodejs/node.exe"
-    test.skip_if(not system.get_file_info(pi) or not system.get_file_info(node), "Installed Pi and Node are required")
+    local pi, node = os.getenv("ANVIL_TEST_PI"), os.getenv("ANVIL_TEST_NODE")
+    test.skip_if(not pi or not node, "Meson must find Pi and Node on PATH; configure again after installing them")
+    test.ok(system.get_file_info(pi), "Pi moved since Meson configured the tests; configure again")
+    test.ok(system.get_file_info(node), "Node moved since Meson configured the tests; configure again")
     local root = USERDIR .. "/control-pi"
     assert(common.mkdirp(root))
     assert(common.mkdirp(root .. "/agent"))
@@ -27,7 +28,7 @@ test.describe("Pi controls Anvil", function()
     config.plugins.terminal.prepare_session, config.plugins.terminal.prepare_pi = false, false
     system.setenv("PI_CODING_AGENT_DIR", root .. "/agent")
     system.setenv("PI_CODING_AGENT_SESSION_DIR", root .. "/sessions")
-    system.setenv("PATH", programs .. "/pi;" .. saved.path)
+    system.setenv("PATH", common.dirname(common.normalize_path(pi)) .. ";" .. saved.path)
     local stream = assert(require("core.process_stream").start({node, system.getcwd() .. "/tests/fixtures/control-model.cjs", root}, {stderr = true}))
     local runtime = require "core.control_runtime"
     local function wait(check, seconds)

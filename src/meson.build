@@ -256,6 +256,13 @@ anvil_includes += include_directories('.')
 anvil_test_env = environment()
 anvil_test_env.set('SDL_VIDEO_DRIVER', 'dummy')
 if host_machine.system() == 'windows'
+    # Resolve optional integration tools before the test PATH is restricted.
+    foreach tool : ['node', 'pi']
+        program = find_program(tool, required: false)
+        if program.found()
+            anvil_test_env.set('ANVIL_TEST_' + tool.to_upper(), program.full_path())
+        endif
+    endforeach
     # Keep Meson failure output printable on machines with non-ASCII or hidden
     # characters in PATH while preserving tools used by runtime tests.
     anvil_test_env.set('PATH', [

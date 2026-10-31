@@ -84,3 +84,5 @@ Set `ANVIL_CONTROL=0` before starting Anvil to disable its server. Set `ANVIL_PI
 `ui/control_pi.lua` runs real Pi TUI processes inside real Terminal Sessions. A parent Pi uses MCP to launch a child, send work, and retrieve its answer. The test checks that the user's Pane keeps focus.
 
 The test uses `tests/fixtures/control-model.cjs`, a local scripted model endpoint. It uses isolated Pi settings and sessions. It does not use providers, real API keys, inference, or the user's Pi data.
+
+Meson finds Pi and Node on `PATH` before it restricts the test environment. Configure again after installing or moving either program. On Windows, the Pi UI test skips only when Meson did not find a required program.
