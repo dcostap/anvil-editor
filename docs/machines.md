@@ -41,7 +41,7 @@ The API is a set of services. Each service matches a part of Anvil, not a screen
 
 | Service | What it gives |
 |---|---|
-| Machine | Identity, the Machine's OS, pairing, and the Projects list (loaded and Dormant) from the Project Sidebar model |
+| Machine | Identity, the Machine's OS, pairing, the available tools, and the Machine's Project list (see [State](#state)) |
 | Files | File list snapshots, bounded reads, conditional whole-file writes, stat, and change hints |
 | Search | Text search as a stream of matches from `rg` on the Machine |
 | Git | Structured operations: status, branches, diffs and logs |
@@ -64,6 +64,20 @@ The Machine is not only a file server. Terminal Sessions and Pi live there. Each
 - **Anvil on the Machine itself is also a Client.** If you sit at PC A, your local Anvil uses the same Terminal hosts and the same Machine operations as a Client on PC B. PC A has no second owner.
 
 Two desktops can open the same Project on a Machine. Each one has its own Buffers and Views. They meet only through the Machine's files and Terminal Sessions.
+
+### State
+
+Each piece of state also has one owner:
+
+| State | Owner | Notes |
+|---|---|---|
+| Known Project paths | Machine | Saved on the Machine. Clients read this list. |
+| Project configuration: extra Project Paths and the search and index settings | Machine | The indexes and searches run with no UI, so they need this. Today, extra Project Paths are Workspace state (`data/core/project_paths.lua`). |
+| Terminal records and saved screens | Machine | As today |
+| Loaded state, Windows, Panes and Workspace layout | Client | Each Client saves its own |
+| Buffers, unsaved text and recovery records | Client | See [Recovery](#recovery) |
+
+The Project Sidebar model today describes one shell's Windows, Project processes, Pane reports and Dormant records (`src/anvil_shell.c`). The Machine does not send that model. A Client builds its Sidebar from the Machine's Project list plus its own loaded state.
 
 ### Pi control
 
@@ -118,9 +132,24 @@ The four kinds of data have different rules.
 1. **File list.** A snapshot with a generation. A change to the set of files gives a new snapshot. Today, `data/core/project_files.lua` scans again when the set of files changes, and increments the generation after each successful scan.
 2. **File content.** Each read returns a content version: a hash of the bytes. A file list generation says nothing about file text. A text change does not change the file list.
 3. **Change hints.** A hint says "this path changed, look again". A Client drops its cached text or metadata for that path and reads again when it needs it. It never patches state from a hint.
-4. **Ordered streams.** Terminal output, `rg` matches, Process streams and later live edits. Each record has a sequence number. After a gap or a reconnect, the stream starts again with a snapshot.
+4. **Streams.** Each service has its own simple recovery rule. There is no common replay system.
+   - **Terminal:** a snapshot with an exact boundary in the output. See [Handoff](#handoff).
+   - **Search:** a request. After a disconnect, the Client cancels it and runs it again.
+   - **Process:** after a disconnect, the server ends the process. Its owner starts and sets it up again.
+   - **Live Document:** deferred.
 
-Each server start gets a new **epoch**. A Client sends its epoch and generations at reconnect. If the epoch differs, the Client drops all cached state and starts from snapshots. A generation alone is not enough, because it starts at zero again after a restart.
+Each server start gets a new **epoch**. A generation alone is not enough, because it starts at zero again after a restart.
+
+### Reconnect
+
+A Client that was disconnected missed the change hints. A file can change without a change to the file list or the epoch, for example when Pi edits it. So at each reconnect, the Client does these steps:
+
+1. It drops its cached file text and metadata.
+2. It gets a new file list snapshot.
+3. It checks the content version of each open file. A clean Buffer whose file changed reloads. A dirty Buffer merges (see [Merges](#merges)).
+4. It asks for the result of each open save (see [Save IDs](#save-ids)).
+
+The Client keeps dirty Buffers, merge bases, open saves and recovery records. A new epoch never discards them. This needs no log of old hints.
 
 Start with whole file list snapshots. Send differences only if a measurement shows that snapshots are too large on a real link.
 
@@ -169,6 +198,21 @@ Today only clean Buffers reload as edits. The dirty-Buffer merge is step 3 of [S
 - Read-only access ships first.
 - Writes then ship with today's conflict prompt for dirty Buffers.
 - Smooth editing by several Clients needs the dirty merge. It becomes a required step when the Companion edits files that desktop Anvil also has open.
+
+### Recovery
+
+A disconnect can last hours. A crash, or Android when it stops a background app, then loses the edits that only memory holds. Both Clients keep a recovery record for each Buffer with unsaved text. The desktop keeps it under `USERDIR`. The Companion keeps it in its app storage.
+
+A record holds:
+
+- the Buffer text
+- the merge base and its content version
+- the encoding and line endings
+- each open save ID, with the revision and bytes that it sent
+
+The Client writes the record when the text changes, and deletes it when the Machine confirms the save. At the next start, it restores the Buffer and follows the [Reconnect](#reconnect) steps.
+
+Remote writes do not ship without recovery. Local Projects keep today's choice: no safety copy (see [Shared editing](shared-editing.md#risks-to-keep-in-mind)).
 
 ## Authority and pairing
 
@@ -267,7 +311,10 @@ Previews read at most a fixed number of bytes and can be cancelled. The server a
 
 ### LSP and formatters
 
-- The LSP client stays local. The Process service starts the LSP server on the Machine and carries its standard input and output. Today's transport in `data/core/lsp/process.lua` starts a local process. A Machine backend replaces only that process.
+- The LSP client, its settings and its document state stay local.
+- The Machine finds, checks and starts the LSP server, with its own `PATH`, environment and working directory. Today, `data/core/lsp/config.lua` finds the executable on the Client's `PATH`, and `data/core/lsp/manager.lua` puts that path into the launch command. A path from the Client means nothing on the Machine.
+- The Process service carries the server's standard input and output. Today's transport in `data/core/lsp/process.lua` starts a local process. A Machine backend replaces that transport.
+- Test a server that exists only on the Machine.
 - LSP paths are Machine paths, because each Project process uses one Machine.
 - After a disconnect, the LSP server stops. At reconnect, the client starts it again and sends the open documents again.
 - A formatter gets the text of one Buffer revision. Its result applies only if the Buffer still has that revision.
@@ -292,15 +339,17 @@ These features act on the local PC by nature. Each one needs a decision for a Pr
 
 ### Disconnects
 
-- A disconnect does not discard the live Buffer.
-- Saves, searches, LSP and Terminals stop until the link returns. Open saves follow the [save ID](#save-ids) rules.
+- A disconnect does not discard the live Buffer. Its recovery record keeps it through a crash (see [Recovery](#recovery)).
+- Saves, searches, LSP and Terminals stop until the link returns. Reconnects follow the [Reconnect](#reconnect) steps.
 - The Pane Status Bar shows the Machine as offline.
 - Closing a Project that has unconfirmed saves asks first. Its edits did not reach the Machine.
 - Terminal Sessions keep running on the Machine, and attach again with a snapshot.
 
 ### Bootstrap
 
-A Machine needs `anvil serve` and its tools, such as `rg` and Git. A Machine that runs Anvil already has them. The user installs Pi and its packages on each of their PCs.
+A Machine needs `anvil serve` and its tools. Anvil bundles `rg` on Windows (`data/core/project_files.lua`). Git is not bundled: the Git plugin uses `git` from `PATH` or a configured path (`data/plugins/git/backend.lua`). LSP servers and formatters are also external. The Machine service lists which tools are available, and a Client hides the features that need a missing tool.
+
+The user installs Pi and its packages on each of their PCs.
 
 ## Terminals on many devices
 
@@ -325,17 +374,23 @@ Programs ask the terminal questions: the cursor position, the colours, light or 
 
 ### Handoff
 
-The host gives control. Each grant has a new control token. The host rejects input, resize and answers with an old token, so late messages from the old Controller cannot reach the program.
+The host gives control. Each grant has a new control generation. The host rejects input, resize and answers with an old generation, so late messages from the old Controller cannot reach the program.
 
 A handoff has a fixed order:
 
-1. A Client asks for control.
-2. The host gives a new token and tells all Clients.
-3. The host resizes to the new Controller's size.
-4. The host sends a snapshot at the new size.
-5. The host accepts input from the new Controller.
+1. A Client asks for control. The request names the control generation that the Client saw last. If the action that took control was a keystroke, the request carries it.
+2. If that generation is not the current one, the host refuses. So two requests cannot both win. The Client can try again.
+3. The host makes a new generation and tells all Clients.
+4. The host resizes to the new Controller's size.
+5. The host sends a snapshot at the new size. The snapshot names the last output record that it contains. Output after that record follows it.
+6. The new Controller shows the snapshot and confirms.
+7. The host then sends the held keystroke to the program, and accepts input from the new Controller.
 
-If two Clients ask at the same time, the host takes the first request. If the Controller disconnects, the session has no Controller until a Client asks. A Controller that reconnects with an old token is a Viewer.
+A query that comes before the handoff goes to the old Controller. If the old Controller does not answer before its generation ends, the query stays unanswered. This is the same as today, when no editor is attached.
+
+If the Controller disconnects, the session has no Controller until a Client asks. A Controller that reconnects with an old generation is a Viewer.
+
+Today, the host orders a snapshot and the output after it with its model lock and its replay state (`src/terminal_host.c`). The new boundary uses the same mechanism.
 
 ### Changes to the Terminal host
 
@@ -378,7 +433,7 @@ A vault on the phone is a Project on the phone's own Machine. The Companion runs
 
 ### Unsaved text on the phone
 
-Android can stop a background app at any time, and a Machine can be offline for hours. The Companion writes each unsaved edit to its own storage at once, together with the open save IDs. At the next start, it restores them and continues the saves. Without this, the Companion does not edit files.
+Android can stop a background app at any time. The Companion keeps a [recovery](#recovery) record for each unsaved Buffer, as the desktop does. Without it, the Companion does not edit files.
 
 ### Agents on the phone
 
@@ -401,13 +456,15 @@ The Android UI is native and is not shared.
 
 ### Markdown logic to port to C
 
-The editing rules are Lua today, in `data/core/markdown`. Under the C policy, these are port candidates. Each one becomes a module that takes text, a parse tree and the caret, and returns edits or styled ranges. Port one only when the Companion needs it, in this order:
+The editing rules are Lua today, in `data/core/markdown`. Under the C policy, these are port candidates. Each one becomes a module that takes text, a parse tree and the caret, and returns edits or styled ranges. Port one only when the Companion needs it. The list is not an order:
 
 1. Links and anchors: `links.lua`, `parser.lua`, `anchors.lua`. They are pure and small.
 2. Link rename edits: `rename_links.lua`
 3. The table model and formatting: `serialize_model` and `pad_cell` in `tables.lua`
 4. Block formatting rules: the prefix rules in `format.lua` for headings, lists, quotes and callouts
 5. The Live Preview decisions in `live_render.lua`: which ranges to hide and which to style at the caret
+
+The first Companion test needs only the presentation rules for headings, bold text and wikilinks. It can write them in a quick form. That code is thrown away after the test.
 
 Item 5 is also part of the layout pipeline target in `AGENTS.md`. The desktop draws the styled ranges with its own renderer. The Companion applies them as Android text styles. Wrapping and row heights stay separate on each platform.
 
@@ -416,7 +473,7 @@ Item 5 is also part of the layout pipeline target in `AGENTS.md`. The desktop dr
 [Shared editing](shared-editing.md) has a separate plan: a reload engine, Disk Conflicts, and later shared notes through a sync tool such as Nextcloud, and then live editing. That plan is not part of this one. The two plans meet here:
 
 - The reload engine also merges changes from other Clients. If the Companion saves a note on a PC while desktop Anvil has it open, desktop Anvil sees a changed file and reloads it.
-- Several Clients that edit one file need the dirty merge. See [Merges](#merges).
+- Several Clients that edit one file need the dirty merge (step 3 of that plan) and its C merge module. See [Merges](#merges). Companion editing therefore makes step 3 required.
 - Live Document is only a reserved service name. Ordered messages and a range format do not keep concurrent edits by themselves. Two inserts at one place need transform rules. Before that service starts, it needs:
   - transform rules for concurrent edits
   - an ID for each edit
@@ -457,7 +514,7 @@ Start with one thin vertical slice. It tests the hardest assumptions before the 
 Decide before code:
 
 - Machine-qualified identity
-- the ownership rules
+- the ownership rules, for operations and for state
 - the server lifetime
 - the protocol envelope and version
 - the two authority levels
@@ -465,14 +522,20 @@ Decide before code:
 ### Desktop
 
 1. **Loopback slice.** `anvil serve` on the same PC, with one Project and one authenticated read.
-2. **One file, end to end.** Open, edit, save conditionally, disconnect and reconnect one file. Test a conflict and a save with an unknown result.
+2. **One file, end to end.** Use the real Buffer load and save flow through a minimal `core.fs`. Do not use a special test path. The Machine's folder has the same path as a Client folder, with different contents. The test fails if any code reads the Client's copy. Test these cases:
+   - open, edit, save conditionally
+   - a conflict
+   - a save with an unknown result
+   - a disconnect, a change on the Machine during the disconnect, and a reconnect
+   - a crash and a restart from the recovery record
 3. **Pairing and transport** between real PCs, before any service that runs commands.
 4. **The full call-site audit**, then `core.fs` with its local backend and the guard. Users see no change.
-5. **Files and Search services**, the local metadata copy, and the picker data sources. Read-only Projects on another Machine ship here.
-6. **Writes** with today's conflict prompt.
+5. **Files and Search services**, the Machine's Project list and Project configuration, the local metadata copy, and the picker data sources. Read-only Projects on another Machine ship here.
+6. **Writes** with recovery and today's conflict prompt.
 7. **Terminal service** with Controller and Viewers.
 8. **Agent service** and the split of `core.control`.
-9. **Process service** for LSP and formatters.
+9. **Git and Index services**, when the first Client feature needs them.
+10. **Process service** for LSP and formatters.
 
 ### Companion
 
@@ -482,7 +545,7 @@ The first test runs in parallel with the desktop work.
 2. **Machines and Projects** with Agent Status, read only.
 3. **Terminal view**, first as a Viewer, then as a Controller.
 4. **Files and code** with highlighting, and File Search.
-5. **Markdown editing**, on the phone and on Machines, with saved unsaved edits.
+5. **Markdown editing**, on the phone and on Machines, with recovery. Editing on Machines needs step 3 of [Shared editing](shared-editing.md#order-of-work).
 6. **Text Search and Git** views.
 7. **Pi chat:** start Pi, send messages, read its session file.
 

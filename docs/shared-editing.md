@@ -151,7 +151,7 @@ The base rule handles this case. The base is the Disk text of the last merge, so
 
 - **Two Project processes.** Each loaded Project has its own process, and Buffer reuse works only inside one process. Two Projects can open the same file and both write it. The reload engine lets them converge through the disk, but each one sees the other's saves as external changes.
 - **Autosave timing.** Autosave saves 3 seconds after typing stops, at the latest after 30 seconds, and when focus moves. Each save is atomic, and it checks the disk first. An external writer can still save between that check and the write. Every editor has this window.
-- **Unsaved text while Autosave cannot save.** A failed save or an open Disk Conflict keeps edits only in memory. A crash during that time loses them. Anvil has no separate safety copy of unsaved text, by choice: the window is small, and a copy adds storage, cleanup, and a restore flow. Add one only if this loses text in real use. This choice holds for local Projects. A Project on another Machine and the Companion app can keep unsaved text for hours, so [Machines](machines.md#unsaved-text-on-the-phone) needs a durable copy there.
+- **Unsaved text while Autosave cannot save.** A failed save or an open Disk Conflict keeps edits only in memory. A crash during that time loses them. Anvil has no separate safety copy of unsaved text, by choice: the window is small, and a copy adds storage, cleanup, and a restore flow. Add one only if this loses text in real use. This choice holds for local Projects. A Project on another Machine and the Companion app can keep unsaved text for hours, so [Machines](machines.md#recovery) keeps a recovery record there.
 - **Line endings and encodings.** Loading converts text to UTF-8 with LF lines, and saving converts it back. Compare texts in Buffer form only.
 - **Rename and delete.** An external delete marks the Buffer's file missing. Anvil cannot tell a rename from a delete.
 
@@ -162,7 +162,7 @@ The base rule handles this case. The base is the Disk text of the last merge, so
 3. **Reload engine, dirty Buffers.** Keep the base as described above. A three-way merge with words compared inside lines. Until step 4 exists, true conflicts keep today's prompt. Add Disk Conflict to `CONTEXT.md`. Write the merge in C, and port the line and word comparison in `data/core/buffer/text_edits.lua` to C with it. The Companion app needs the same merge.
 4. **Disk Conflict blocks.** The inline block, the choices, the status, POI navigation, and the close question.
 
-Steps 3 and 4 are worth it only if the reload prompt for dirty Buffers shows up in real use. If it is rare, stop after step 2.
+Steps 3 and 4 are worth it if the reload prompt for dirty Buffers shows up in real use, or when the Companion app edits files on a Machine. [Machines](machines.md#merges) needs step 3 for that. Otherwise, stop after step 2.
 
 ## Later: shared notes
 
@@ -189,7 +189,8 @@ Rules:
 
 - When a conflict copy of an open file appears, Anvil warns at once and names the copy.
 - The merge treats the copy as Mine and the original path as Disk. Overlaps show as Disk Conflict blocks. Anvil deletes the copy when the user resolves them.
-- The merge needs the common ancestor: the last version that synced. Anvil cannot know it. Anvil uses the last text that it read from disk through a load or reload. That text can be older than the true ancestor. That is safe: the user's edits that already synced are in both versions, and the same change on both sides merges without UI.
+- The merge needs the common ancestor: the last version that synced. Anvil cannot know it from the disk. An older text is not a safe replacement. Example: Anvil last read "Monday". Alice saves "Tuesday", and it syncs. Bob changes "Tuesday" to "Wednesday". Alice changes it back to "Monday". With "Monday" as the base, Alice's version looks unchanged, and the merge silently takes "Wednesday".
+- So the merge runs only with a known ancestor, for example a version that the sync tool keeps. Without one, Anvil shows both versions as Disk Conflict blocks and merges nothing automatically.
 
 Each sync tool names its conflict copies differently. Check the chosen tool's names and behavior first. Also check that it marks read-only shares as read-only files, so Anvil opens them as read-only Buffers.
 
