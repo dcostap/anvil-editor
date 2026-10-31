@@ -62,18 +62,18 @@ local function find_device(id)
 end
 
 -- A pairing code works one time, for PAIRING_TIME seconds, with PAIRING_ATTEMPTS wrong attempts.
--- Returns the new device and its token.
+-- Returns the new device and its token, or nil and an error code.
 local function pair_device(params)
   local pairing = server.pairing
   if not pairing or system.get_time() > pairing.expires then
     server.pairing = nil
-    return nil
+    return nil, "pairing_ended"
   end
   if params.pair ~= pairing.code then
     pairing.attempts = pairing.attempts + 1
     if pairing.attempts >= PAIRING_ATTEMPTS then server.pairing = nil end
     log("Machine server refused a pairing code: attempt %d", pairing.attempts)
-    return nil
+    return nil, "unauthorized"
   end
   server.pairing = nil
   local token = net.random_token()
@@ -86,11 +86,13 @@ local function pair_device(params)
   return device, token
 end
 
--- Returns the access level and the device, or nothing when the credentials are not valid.
+-- Returns the access level, the device and a new device's token. Returns nil and an error code
+-- when the credentials are not valid.
 local function log_in(params)
   if params.pair ~= nil then
     local device, token = pair_device(params)
-    if device then return device.level, device, token end
+    if not device then return nil, token end
+    return device.level, device, token
   elseif params.device ~= nil then
     local device = find_device(params.device)
     if device and type(params.token) == "string" and machine.content_version(params.token) == device.token then
@@ -273,6 +275,11 @@ local function handle(client, id, body, bytes)
     local level, device, token = log_in(params)
     if not level then
       client.closing = true
+      if device == "pairing_ended" then
+        log("Machine server refused a pairing code: no code is active")
+        return fail(client, id, "pairing_ended",
+          "The pairing code has ended. Make a new code on the Machine with: anvil machine code full")
+      end
       log("Machine server refused a Client: credentials not valid")
       return fail(client, id, "unauthorized", "The credentials are not valid")
     end

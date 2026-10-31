@@ -168,7 +168,7 @@ test.describe("Machine server", function()
     client.socket:close()
 
     client = connect(context.discovery)
-    test.equal(call(client, "hello", {protocol = 1, pair = code, name = "Again"}).error.code, "unauthorized")
+    test.equal(call(client, "hello", {protocol = 1, pair = code, name = "Again"}).error.code, "pairing_ended")
     client.socket:close()
     client = connect(context.discovery)
     test.equal(call(client, "hello", {protocol = 1, device = device.id, token = string.rep("0", 64)}).error.code,
@@ -205,7 +205,7 @@ test.describe("Machine server", function()
       client.socket:close()
     end
     local client = connect(context.discovery)
-    test.equal(call(client, "hello", {protocol = 1, pair = code, name = "Laptop"}).error.code, "unauthorized")
+    test.equal(call(client, "hello", {protocol = 1, pair = code, name = "Laptop"}).error.code, "pairing_ended")
     client.socket:close()
   end)
 
