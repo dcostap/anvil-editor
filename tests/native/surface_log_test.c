@@ -8,9 +8,8 @@
  * Each child uses the real user-directory resolver and log output callback. */
 #define CHECK(value) do { if (!(value)) { fprintf(stderr, "FAIL line %d: %s (Windows error %lu)\n", __LINE__, #value, GetLastError()); return 1; } } while (0)
 
-static int run_child(const wchar_t *role) {
-  wchar_t exe[32768], command[32832];
-  CHECK(GetModuleFileNameW(NULL, exe, SDL_arraysize(exe)));
+static int run_child(const wchar_t *exe, const wchar_t *role) {
+  wchar_t command[32832];
   _snwprintf(command, SDL_arraysize(command), L"\"%ls\" child %ls", exe, role);
   STARTUPINFOW startup = {.cb = sizeof(startup)};
   PROCESS_INFORMATION process;
@@ -55,6 +54,11 @@ int main(int argc, char **argv) {
   CHECK(GetTempPathW(SDL_arraysize(temp), temp));
   CHECK(GetTempFileNameW(temp, L"avl", 0, root));
   CHECK(DeleteFileW(root) && CreateDirectoryW(root, NULL));
+  /* An adjacent user folder overrides ANVIL_USERDIR. Isolate the child image. */
+  wchar_t exe[32768], child[MAX_PATH];
+  CHECK(GetModuleFileNameW(NULL, exe, SDL_arraysize(exe)));
+  _snwprintf(child, SDL_arraysize(child), L"%ls\\surface_log_test.exe", root);
+  CHECK(CopyFileW(exe, child, TRUE));
   /* Timing capture stays off disk until stopped and starts each run empty. */
   _snwprintf(path, SDL_arraysize(path), L"%ls\\timing.csv", root);
   char *timing_path = SDL_iconv_string("UTF-8", "UTF-16LE", (char *)path,
@@ -87,8 +91,8 @@ int main(int argc, char **argv) {
   _snwprintf(logs, SDL_arraysize(logs), L"%ls\\logs", user);
   CHECK(SetEnvironmentVariableW(L"ANVIL_USERDIR", user));
   CHECK(SetEnvironmentVariableW(L"ANVIL_SURFACE_LOG", NULL));
-  CHECK(run_child(L"shell") == 0);
-  CHECK(run_child(L"hosted") == 0);
+  CHECK(run_child(child, L"shell") == 0);
+  CHECK(run_child(child, L"hosted") == 0);
   _snwprintf(pattern, SDL_arraysize(pattern), L"%ls\\anvil-*-native.log", logs);
   WIN32_FIND_DATAW entry;
   HANDLE scan = FindFirstFileW(pattern, &entry);
@@ -106,11 +110,12 @@ int main(int argc, char **argv) {
   /* An explicit shared path remains available to existing probes. */
   _snwprintf(path, SDL_arraysize(path), L"%ls\\override.log", root);
   CHECK(SetEnvironmentVariableW(L"ANVIL_SURFACE_LOG", path));
-  CHECK(run_child(L"shell") == 0);
-  CHECK(run_child(L"hosted") == 0);
+  CHECK(run_child(child, L"shell") == 0);
+  CHECK(run_child(child, L"hosted") == 0);
   roles = 0;
   CHECK(check_log(path, true, &roles) == 0 && roles == 3);
   CHECK(GetFileAttributesW(logs) == INVALID_FILE_ATTRIBUTES);
+  CHECK(DeleteFileW(child));
   CHECK(RemoveDirectoryW(root));
   puts("native diagnostics persist by default; explicit shared logs still work");
   return 0;

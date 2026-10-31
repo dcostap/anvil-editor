@@ -15,13 +15,14 @@ function M.open(control)
   local deadline = system.get_time() + 5
   while address:get_status() == "waiting" and system.get_time() < deadline do coroutine.yield(0.01) end
   assert(address:get_status() == "success", "Cannot resolve loopback address")
-  local listener, port
+  local listener, port, err
   for i = 1, 128 do
-    port = 49152 + (tonumber(token:sub(1, 4), 16) + i) % 16384
-    listener = net.create_server(address, port)
+    -- Spread attempts across the range: Windows can exclude many adjacent ports.
+    port = 49152 + (tonumber(token:sub(1, 4), 16) + i * 127) % 16384
+    listener, err = net.create_server(address, port)
     if listener then break end
   end
-  assert(listener, "Cannot open local control listener")
+  assert(listener, "Cannot open local control listener: " .. tostring(err))
   return setmetatable({ listener = listener, token = token, clients = {}, credentials = {},
     url = "http://127.0.0.1:" .. port, host = "127.0.0.1:" .. port,
     control = control or Control.new() }, M)

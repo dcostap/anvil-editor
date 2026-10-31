@@ -2415,7 +2415,10 @@ test.describe("Terminal View", function()
       local record_text = assert(native.read_session_record(view.session_id))
       local record = assert(load(record_text, "session record", "t", {}))()
       test.ok(record.snapshot_path, "session record has no snapshot path")
-      test.ok(os.remove(record.snapshot_path), "could not remove the saved snapshot")
+      -- A new host can end before its first disk snapshot. Keep it absent to prevent revival.
+      local removed, remove_error, errno = os.remove(record.snapshot_path)
+      test.ok(removed or errno == 2, remove_error)
+      test.is_nil(system.get_file_info(record.snapshot_path), "the saved snapshot still exists")
 
       local deadline = system.get_time() + 5
       repeat

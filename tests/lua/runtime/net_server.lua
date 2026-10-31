@@ -17,7 +17,8 @@ test.describe("Local network server", function()
     test.equal(address:wait_until_resolved(5000), "success")
     local server, port
     for i = 1, 100 do
-      port = 49152 + (tonumber(token:sub(1, 4), 16) + i) % 16384
+      -- Avoid keeping every attempt inside one Windows port exclusion range.
+      port = 49152 + (tonumber(token:sub(1, 4), 16) + i * 127) % 16384
       server = net.create_server(address, port)
       if server then break end
     end

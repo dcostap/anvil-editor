@@ -3,6 +3,36 @@ local http = require "core.http"
 local json = require "core.json"
 local test = require "core.test"
 
+-- Seam: listener startup when the OS rejects a range of ports or every bind.
+test.describe("Anvil control listener", function()
+  test.it("opens outside an unavailable port range", function()
+    local net = require "net"
+    local create, random = net.create_server, net.random_token
+    net.random_token = function() return string.rep("0", 64) end
+    net.create_server = function(address, port)
+      if port >= 49152 and port <= 50175 then return nil, "Port range unavailable" end
+      return create(address, port)
+    end
+    local ok, server = pcall(require("core.control_server").open)
+    net.create_server, net.random_token = create, random
+    test.ok(ok, server)
+    local port = server.listener:get_port()
+    server:close()
+    test.ok(port < 49152 or port > 50175)
+  end)
+
+  test.it("reports the bind error when no listener can open", function()
+    local net = require "net"
+    local create = net.create_server
+    net.create_server = function() return nil, "Bind denied by test policy" end
+    local ok, err = pcall(require("core.control_server").open)
+    net.create_server = create
+    if ok then err:close() end
+    test.equal(ok, false)
+    test.contains(err, "Bind denied by test policy")
+  end)
+end)
+
 -- Seam: authenticated MCP over a real loopback connection.
 test.describe("Anvil MCP", function()
   test.it("discovers tools and refuses unauthorized or browser requests", function()
