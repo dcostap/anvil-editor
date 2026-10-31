@@ -1,20 +1,22 @@
 -- A connection from this process to a Machine server. It never blocks the UI thread:
 -- a scheduler thread connects, sends `hello` and reads the replies.
+-- After a disconnect it connects again. It reads the discovery file each time, because a
+-- restarted server has a new port and token.
 local core = require "core"
 local json = require "core.json"
 local machine = require "machine"
 local net = require "net"
 
-local PROTOCOL, CONNECT_TIMEOUT = 1, 10
+local PROTOCOL, CONNECT_TIMEOUT, MAX_RETRY_DELAY = 1, 10, 5
 
 ---@class core.machine_client
 local MachineClient = {}
 MachineClient.__index = MachineClient
 
--- `discovery` is the path of the server's `server.json`.
-function MachineClient.new(discovery)
-  local self = setmetatable({discovery = discovery, state = "connecting", next_id = 1, pending = {}, held = {}},
-    MachineClient)
+-- `discovery` is the path of the server's `server.json`. `on_connect(reconnect)` runs after each `hello`.
+function MachineClient.new(discovery, on_connect)
+  local self = setmetatable({discovery = discovery, on_connect = on_connect, state = "connecting", next_id = 1,
+    connections = 0, pending = {}, held = {}}, MachineClient)
   self.thread = core.add_thread(function() self:run() end)
   return self
 end
@@ -31,10 +33,11 @@ local function read_discovery(path)
 end
 
 -- Sends one request. `on_reply(err, result, bytes)` runs once: with the result, or with an error
--- from the Machine (`err.code`) or from the connection (`disconnected`). A conflict also sends bytes.
+-- from the Machine (`err.code`). A conflict also sends bytes. Two errors come from the connection:
+-- `offline` when the request was not sent, and `disconnected` when its reply did not arrive.
 function MachineClient:request(method, params, bytes, on_reply)
-  if self.state == "closed" or self.state == "failed" then
-    return on_reply({code = "disconnected", message = self.error or "The Machine connection is closed"})
+  if self.state == "closed" or self.state == "waiting" then
+    return core.try(on_reply, {code = "offline", message = self.error or "The Machine is not connected"})
   end
   local id = self.next_id
   self.next_id = id + 1
@@ -43,7 +46,7 @@ function MachineClient:request(method, params, bytes, on_reply)
   if self.state == "ready" or method == "hello" then
     self.socket:write(frame)
   else
-    self.held[#self.held + 1] = frame
+    self.held[#self.held + 1] = {id = id, frame = frame}
   end
   if self.thread then core.wake_thread(self.thread) end
 end
@@ -51,7 +54,7 @@ end
 function MachineClient:fail(message)
   if self.state == "closed" then return end
   core.log_quiet("Machine connection failed: %s", message)
-  self.state, self.error = "failed", message
+  self.state, self.error = "waiting", message
   self:drop()
 end
 
@@ -62,12 +65,15 @@ end
 
 function MachineClient:drop()
   if self.socket then self.socket:close() end
-  self.socket, self.held = nil, {}
-  local pending = self.pending
-  self.pending = {}
-  for _, on_reply in pairs(pending) do
-    core.try(on_reply, {code = "disconnected", message = self.error or "The Machine connection is closed"})
+  local pending, held = self.pending, self.held
+  self.socket, self.pending, self.held = nil, {}, {}
+  local message = self.error or "The Machine connection is closed"
+  for _, request in ipairs(held) do
+    local on_reply = pending[request.id]
+    pending[request.id] = nil
+    core.try(on_reply, {code = "offline", message = message})
   end
+  for _, on_reply in pairs(pending) do core.try(on_reply, {code = "disconnected", message = message}) end
 end
 
 function MachineClient:dispatch(id, body, bytes)
@@ -105,8 +111,10 @@ function MachineClient:connect()
     if hello_err then return self:fail(hello_err.message or hello_err.code) end
     self.state, self.machine, self.epoch, self.features = "ready", hello.machine, hello.epoch, hello.features
     core.log_quiet("Machine connection ready: machine=%s epoch=%s", tostring(hello.machine), tostring(hello.epoch))
-    for _, frame in ipairs(self.held) do self.socket:write(frame) end
+    for _, request in ipairs(self.held) do self.socket:write(request.frame) end
     self.held = {}
+    self.connections = self.connections + 1
+    if self.on_connect then core.try(self.on_connect, self.connections > 1) end
   end)
 end
 
@@ -132,8 +140,17 @@ function MachineClient:receive()
 end
 
 function MachineClient:run()
-  self:connect()
-  self:receive()
+  local delay = 0.1
+  while self.state ~= "closed" do
+    self.state = "connecting"
+    local connections = self.connections
+    self:connect()
+    self:receive()
+    if self.state == "closed" then break end
+    if self.connections > connections then delay = 0.1 end
+    coroutine.yield(delay)
+    delay = math.min(delay * 2, MAX_RETRY_DELAY)
+  end
   self.thread = nil
 end
 

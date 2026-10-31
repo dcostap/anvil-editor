@@ -64,9 +64,13 @@ local function read_file_contents(filename)
   return contents, contents ~= nil
 end
 
--- On a Machine, the Machine refuses a save over a changed file, so there is no local disk state.
+-- On a Machine, the Machine refuses a save over a changed file. Its last refusal is the only
+-- known disk state.
 local function capture_disk_state(buffer)
-  if fs.machine then return nil end
+  if fs.machine then
+    local conflict = buffer and buffer.machine_conflict
+    return conflict and { exists = conflict.version ~= nil, version = conflict.version }
+  end
   if buffer and buffer.abs_filename then
     local info = system.get_file_info(buffer.abs_filename)
     if info then
@@ -96,6 +100,7 @@ local function disk_states_differ(old, current)
   if not old or not current then return false end
   if old.exists ~= current.exists then return true end
   if not old.exists then return false end
+  if old.version ~= current.version then return true end
   if old.file_id and current.file_id and old.file_id ~= current.file_id then return true end
   if old.modified ~= current.modified or old.size ~= current.size then return true end
   if old.content_read == false or current.content_read == false then return true end
@@ -104,12 +109,16 @@ local function disk_states_differ(old, current)
 end
 
 local function save_target_missing(buffer)
-  if fs.machine or not buffer or not buffer.abs_filename then return false end
+  if fs.machine then
+    return buffer and buffer.machine_conflict and buffer.machine_conflict.version == nil or false
+  end
+  if not buffer or not buffer.abs_filename then return false end
   if not system.get_file_info(buffer.abs_filename) then return true end
   return false
 end
 
 local function disk_changed_since_load_or_save(buffer)
+  if fs.machine then return buffer and buffer.machine_conflict ~= nil or false end
   if not buffer or not buffer.abs_filename then return false end
   local old = disk_state[buffer]
   return disk_states_differ(old, capture_disk_state(buffer))
@@ -275,12 +284,15 @@ local function show_conflict_prompt(buffer)
         { font = style.font, text = "Cancel", default_no = true },
       }
     end
-    return {
+    local buttons = {
       { font = style.font, text = "Overwrite Disk" },
       { font = style.font, text = "Reload From Disk (Discard Anvil Edits)" },
       { font = style.font, text = "Save Copy of Current File" },
       { font = style.font, text = "Cancel", default_no = true },
     }
+    -- A copy opens a second Buffer through the local path, so Machine files do not offer it yet.
+    if fs.machine then table.remove(buttons, 3) end
+    return buttons
   end
   local buttons = prompt_buttons()
   local on_select
@@ -314,6 +326,7 @@ local function show_conflict_prompt(buffer)
       if disk_states_differ(prompt_disk_state, capture_disk_state(buffer)) then
         return disk_changed_again()
       end
+      buffer:accept_machine_version()
       local saved = save_buffer_recreating_missing_target(buffer, name, prompt_disk_state)
       if not saved and save_failures[buffer] and save_failures[buffer].conflict then
         return disk_changed_again()
@@ -330,6 +343,7 @@ local function show_conflict_prompt(buffer)
           or prompt_disk_state.content_read == false then
         return disk_changed_again()
       end
+      buffer:accept_machine_version()
       buffer.autosave_ignore_next_conflict = true
       buffer.autosave_expected_disk_state = prompt_disk_state
       local ok, err = pcall(buffer.save, buffer)
@@ -740,6 +754,12 @@ function Buffer:save(filename, abs_filename)
   clear_dirty_if_clean(self)
   if was_untitled then untitled_recovery.flush_all("save as") end
   return result
+end
+
+-- The Machine refused a save, or the file changed there while the Buffer has unsaved text.
+function Buffer:on_machine_conflict()
+  save_failures[self] = { conflict = true }
+  if not self.deferred_reload then show_conflict_prompt(self) end
 end
 
 local on_close = Buffer.on_close

@@ -6,9 +6,10 @@ local machine = require "machine"
 local net = require "net"
 
 local core = {}
-local PROTOCOL, FEATURES = 1, {"files.read", "files.write"}
+local PROTOCOL, FEATURES = 1, {"files.read", "files.write", "files.save_result"}
 local MAX_CLIENTS, MAX_REQUEST_JSON, MAX_FILE, HELLO_TIMEOUT = 32, 64 * 1024, 16 * 1024 * 1024, 10
-local server, test_root
+local MAX_SAVES = 1024
+local server, test_root, lose_reply
 
 -- A server often ends by a forced stop, and it logs little. So each record goes to disk at once.
 local function log(...)
@@ -51,6 +52,12 @@ local function open_listener(token)
 end
 
 local function reply(client, id, value, bytes)
+  -- `--test-lose-reply <method>` does the first such request, then closes the connection without its reply.
+  if lose_reply and lose_reply == client.method then
+    lose_reply, client.dead = nil, true
+    log("Machine server lost the reply to %s for a test", client.method)
+    return
+  end
   client.socket:write(machine.frame("reply", id, json.encode(value), bytes))
 end
 
@@ -101,13 +108,22 @@ local function read_file(client, id, params)
   reply(client, id, {result = {size = #bytes, version = machine.content_version(bytes)}}, bytes)
 end
 
--- `files.write {path, base}` replaces the whole file, but only while it has the version `base`.
+-- The server keeps the result of each recent save ID, so a Client that lost a reply can ask for it.
+local function remember_save(save, version)
+  if server.saves[save] == nil then
+    server.save_order[#server.save_order + 1] = save
+    if #server.save_order > MAX_SAVES then server.saves[table.remove(server.save_order, 1)] = nil end
+  end
+  server.saves[save] = version
+end
+
+-- `files.write {path, base, save}` replaces the whole file, but only while it has the version `base`.
 -- Without `base`, it only creates a file. A conflict sends the current version and bytes.
 local function write_file_request(client, id, params, bytes)
   local path = request_path(client, id, params)
   if not path then return end
-  if params.base ~= nil and type(params.base) ~= "string" then
-    return fail(client, id, "invalid_request", "The base must be a content version")
+  if params.base ~= nil and type(params.base) ~= "string" or params.save ~= nil and type(params.save) ~= "string" then
+    return fail(client, id, "invalid_request", "The base and the save ID must be strings")
   end
   local disk = disk_path(path)
   local current, code, message = load_file(disk)
@@ -127,12 +143,22 @@ local function write_file_request(client, id, params, bytes)
     os.remove(temporary)
     return fail(client, id, "write_failed", tostring(err or "The file was not written"))
   end
-  reply(client, id, {result = {version = machine.content_version(bytes)}})
+  local written = machine.content_version(bytes)
+  if params.save then remember_save(params.save, written) end
+  reply(client, id, {result = {version = written}})
+end
+
+-- `files.save_result {save}` gives the version that a save wrote. A restarted server knows no saves.
+local function save_result(client, id, params)
+  local version = type(params.save) == "string" and server.saves[params.save]
+  if not version then return fail(client, id, "unknown_save", "This Machine has no result for the save") end
+  reply(client, id, {result = {version = version}})
 end
 
 local function handle(client, id, body, bytes)
   local ok, request = pcall(json.decode, body)
   local params = ok and type(request) == "table" and (request.params or {})
+  client.method = type(params) == "table" and request.method or nil
   if type(params) ~= "table" or type(request.method) ~= "string" then
     if not client.authorized then client.closing = true end
     return fail(client, id, "invalid_request", "The request needs a method and a params object")
@@ -159,6 +185,7 @@ local function handle(client, id, body, bytes)
   end
   if request.method == "files.read" then return read_file(client, id, params) end
   if request.method == "files.write" then return write_file_request(client, id, params, bytes) end
+  if request.method == "files.save_result" then return save_result(client, id, params) end
   fail(client, id, "unknown_method", "This Machine has no method " .. request.method)
 end
 
@@ -168,7 +195,7 @@ local function poll_client(client)
     if not chunk then client.dead = true; return end
     if chunk == "" then break end
     client.decoder:feed(chunk)
-    while not client.closing do
+    while not client.closing and not client.dead do
       local kind, id, body, bytes = client.decoder:next()
       if not kind then
         if id then client.dead = true end
@@ -205,8 +232,15 @@ function core.init()
   common.mkdirp(USERDIR)
   core.session_log = require("core.session_log").start(USERDIR .. PATHSEP .. "logs")
   local projects, first = {}, 3
-  if ARGS[3] == "--test-root" then
-    test_root, first = system.absolute_path(ARGS[4] or "."), 5
+  while true do
+    if ARGS[first] == "--test-root" then
+      test_root = system.absolute_path(ARGS[first + 1] or ".")
+    elseif ARGS[first] == "--test-lose-reply" then
+      lose_reply = ARGS[first + 1]
+    else
+      break
+    end
+    first = first + 2
   end
   for i = first, #ARGS do
     local path = system.absolute_path(ARGS[i])
@@ -222,6 +256,7 @@ function core.init()
   local token = net.random_token()
   local listener, port = open_listener(token)
   server = {listener = listener, port = port, token = token, projects = projects, clients = {},
+    saves = {}, save_order = {},
     machine = machine_id(directory), epoch = net.random_token():sub(1, 16),
     discovery = directory .. PATHSEP .. "server.json"}
   write_file(server.discovery, json.encode {version = 1, port = port, token = token,

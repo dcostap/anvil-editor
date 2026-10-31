@@ -7,6 +7,8 @@ local syntax = require "core.syntax"
 local config = require "core.config"
 local common = require "core.common"
 local fs = require "core.fs"
+local machine = require "machine"
+local net = require "net"
 local language_mode = require "core.language_mode"
 local linewrapping = require "core.linewrapping"
 
@@ -404,7 +406,7 @@ function Buffer:load_async(filename, on_finish, opts)
     request.status, request.error = status, err
     request.total_ms = (system.get_time() - request.started) * 1000
     request.data, request.source_lines, request.finish = nil, nil, nil
-    if status == "loaded" then self.machine_version = request.version end
+    if status == "loaded" then self.machine_version, self.machine_conflict = request.version, nil end
     core.redraw = true
     core.log_quiet("Background load %s for %s: %s", status, filename, err or "complete")
     if status == "loaded" then
@@ -534,10 +536,14 @@ function Buffer:apply_lines(lines, change_type)
 end
 
 
+local reload_from_machine
+
 ---Take the file's current text as edits, so the view and the selections stay
 ---on their text. The reload is one undo step, and the Buffer is clean after it.
+---On a Machine, the reload waits for the file's bytes.
 function Buffer:reload()
   if not self.filename then return end
+  if fs.machine then return reload_from_machine(self) end
   if self:is_loading() or self.load_error or self.binary then
     self:load(self.abs_filename)
     self:clean()
@@ -893,6 +899,92 @@ local function encode_text(self)
   return output
 end
 
+-- Machine files. The Machine refuses a write over a file that changed since the Buffer read it.
+-- The Buffer then keeps its text and records the Machine's version in `machine_conflict`.
+
+---A Machine refused a save, or the file changed on the Machine while the Buffer has unsaved text.
+---Autosave replaces this with its conflict choice.
+function Buffer:on_machine_conflict()
+  core.warn("%s changed on the Machine. Anvil did not save it.", self:get_name())
+end
+
+---Make the Machine's version from the last conflict the base of the next save, so that save
+---replaces the Machine's file. After a conflict with a missing file, the save creates the file.
+function Buffer:accept_machine_version()
+  local conflict = self.machine_conflict
+  if not conflict then return end
+  self.machine_version, self.machine_conflict = conflict.version, nil
+end
+
+local function machine_conflict(self, version)
+  self.machine_conflict = { version = version }
+  core.log_quiet("Machine conflict for %s: machine version=%s", self:get_name(), tostring(version))
+  self:on_machine_conflict()
+end
+
+-- Bytes from the Machine as UTF-8 text, in this Buffer's encoding.
+local function decode_bytes(self, bytes)
+  if not self.encoding then
+    self.encoding, self.bom = encoding.detect_string(bytes)
+    self.encoding = self.encoding or "UTF-8"
+  elseif self.bom then
+    self.bom = encoding.get_charset_bom(self.encoding)
+  end
+  if self:needs_encoding_conversion() then
+    return assert(encoding.convert("UTF-8", self.encoding, bytes, { strict = false, handle_from_bom = true }))
+  end
+  return encoding.strip_bom(bytes, "UTF-8")
+end
+
+-- Takes the Machine's file as edits, as a local reload does. The Buffer is clean after it.
+local function apply_machine_file(self, bytes, version)
+  local text = decode_bytes(self, bytes)
+  local lines, _, _, crlf, binary = encoding.split_lines(text)
+  if binary then
+    self:replace_snapshot(text)
+  else
+    self:apply_lines(lines, "reload")
+    self.crlf = crlf
+  end
+  self.machine_version, self.machine_conflict, self.new_file = version, nil, false
+  self:clean()
+  core.log_quiet("Reloaded %s from the Machine", self:get_name())
+end
+
+reload_from_machine = function(self)
+  fs.read(self.abs_filename, function(err, bytes, version)
+    if err then
+      core.error("Cannot reload %s from the Machine: %s", self:get_name(), err.message or err.code)
+      return
+    end
+    apply_machine_file(self, bytes, version)
+  end)
+end
+
+local function finish_machine_save(self, request, err, version)
+  self.machine_save = nil
+  if err then
+    if err.code == "conflict" then
+      machine_conflict(self, err.version)
+    elseif err.code == "offline" then
+      -- The save did not leave this PC. It runs again after the reconnect.
+      self.machine_offline_save = true
+      core.log_quiet("Machine save for %s waits for the connection", request.filename)
+    else
+      core.error("Cannot save %s on the Machine: %s", request.filename, err.message or err.code)
+    end
+    return
+  end
+  if not request.same_file then self:set_filename(request.filename, request.abs_filename) end
+  self.machine_version, self.new_file = version, false
+  -- Only the sent text is saved. Later edits stay unsaved.
+  self.clean_change_id = request.change_id
+  core.log_quiet("Machine save finished for %s at revision %d", request.filename, request.revision)
+  if core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
+  core.redraw = true
+  if request.again and self:is_dirty() then self:save() end
+end
+
 -- A Machine save runs in the background. The Buffer stays dirty until the Machine confirms
 -- the text that the save sent. A save during another save sends again after the reply.
 local function save_on_machine(self, filename, abs_filename)
@@ -901,26 +993,75 @@ local function save_on_machine(self, filename, abs_filename)
     return
   end
   local same_file = common.path_equals(abs_filename, self.abs_filename)
-  local request = { change_id = self:get_change_id(), revision = self.text_revision }
-  self.machine_save = request
-  local base = same_file and not self.new_file and self.machine_version or nil
-  core.log_quiet("Machine save started for %s at revision %d", filename, request.revision)
-  fs.write(abs_filename, encode_text(self), base, function(err, version)
+  local bytes = encode_text(self)
+  local request = {
+    id = net.random_token():sub(1, 24), change_id = self:get_change_id(), revision = self.text_revision,
+    filename = filename, abs_filename = abs_filename, same_file = same_file,
+    base = same_file and not self.new_file and self.machine_version or nil,
+    sent = machine.content_version(bytes),
+  }
+  self.machine_save, self.machine_offline_save = request, nil
+  core.log_quiet("Machine save %s started for %s at revision %d", request.id, filename, request.revision)
+  fs.write(abs_filename, bytes, request.base, request.id, function(err, version)
     if self.machine_save ~= request then return end
-    self.machine_save = nil
-    if err then
-      core.error("Cannot save %s on the Machine: %s", filename, err.message or err.code)
+    if err and err.code == "disconnected" then
+      -- The Machine can have written the file. The Client asks for the result after the reconnect.
+      request.unknown = true
+      core.log_quiet("Machine save %s for %s has an unknown result", request.id, filename)
       return
     end
-    if not same_file then self:set_filename(filename, abs_filename) end
-    self.machine_version, self.new_file = version, false
-    self.clean_change_id = request.change_id
-    core.log_quiet("Machine save finished for %s at revision %d", filename, request.revision)
-    if core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
-    core.redraw = true
-    if request.again and self:is_dirty() then self:save() end
+    finish_machine_save(self, request, err, version)
   end)
 end
+
+-- After a reconnect, find the result of a save whose reply did not arrive. A restarted server
+-- does not know the save, so the file's version tells: the sent bytes, the base, or other work.
+local function resolve_machine_save(self, request)
+  fs.save_result(request.id, function(err, version)
+    if self.machine_save ~= request then return end
+    if not err then return finish_machine_save(self, request, nil, version) end
+    if err.code ~= "unknown_save" then return end
+    fs.read(request.abs_filename, function(read_err, _, current)
+      if self.machine_save ~= request then return end
+      if read_err and read_err.code ~= "not_found" then return end
+      if current == request.sent then return finish_machine_save(self, request, nil, current) end
+      self.machine_save = nil
+      if current ~= request.base then return machine_conflict(self, current) end
+      -- The save did not happen. Never send its old bytes: save the current text.
+      if self:is_dirty() then
+        if request.same_file then self:save() else self:save(request.filename, request.abs_filename) end
+      end
+    end)
+  end)
+end
+
+-- After a reconnect, the Client missed the Machine's changes. A clean Buffer whose file changed
+-- reloads. A Buffer with unsaved text keeps it, and gets a conflict.
+local function check_machine_file(self)
+  fs.read(self.abs_filename, function(err, bytes, version)
+    if self.machine_save or self:is_loading() then return end
+    if err and err.code ~= "not_found" then return end
+    if version == self.machine_version then
+      if self.machine_offline_save and self:is_dirty() then self:save() end
+      return
+    end
+    if bytes and not self:is_dirty() then return apply_machine_file(self, bytes, version) end
+    machine_conflict(self, version)
+  end)
+end
+
+fs.on_reconnect(function()
+  for _, buffer in ipairs(core.buffer_registry:list()) do
+    if buffer.abs_filename and not buffer:is_loading() and not buffer.load_error then
+      local request = buffer.machine_save
+      if request and request.unknown then
+        resolve_machine_save(buffer, request)
+      elseif not request then
+        check_machine_file(buffer)
+      end
+    end
+  end
+end)
 
 function Buffer:save(filename, abs_filename)
   assert(not self:is_loading() and not self.load_error, self.load_error or "file is still loading")

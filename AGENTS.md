@@ -567,14 +567,21 @@ The first request must be `hello` with `protocol` and `token`. The server checks
 `files.read` takes an absolute `path` in one of the server's Projects. Its reply has `size` and `version` in the JSON and the file's bytes after it. The version is the SHA-256 of the bytes.
 `files.write` takes `path`, `base` and the new bytes. It replaces the whole file only while the file has the version `base`. Without `base`, it only creates a file.
 Otherwise it sends a `conflict` error with the current `version` and bytes. Request bodies can hold bytes only after `hello`. Both limits are 16 MiB.
+A write can carry a `save` ID. `files.save_result {save}` gives the version that the save wrote. The server keeps the last 1024 results in memory, so a restarted server answers `unknown_save`.
 An error reply is `{"error": {"code": ..., "message": ...}}`. The server ignores unknown fields.
 The server polls its sockets. A link inside a Project can point outside it, as in a local Project.
 `--test-root <folder>` before the Projects maps each Machine path into that folder: `C:\a\b` is `<folder>\C\a\b`. Only tests use it, so one PC can hold a Client copy and a different Machine copy at the same path.
+`--test-lose-reply <method>` does the first request of that method, then closes the connection without its reply. Only tests use it.
 `core.machine_client` is the Client. A scheduler thread connects through the discovery file and sends `hello`. `request` holds other requests until `hello` succeeds, and it never blocks the UI thread.
+After a disconnect, the Client connects again with a growing delay, up to 5 seconds. It reads the discovery file each time, because a restarted server has a new port and token.
+A request that was not sent fails with `offline`. A request whose reply did not arrive fails with `disconnected`: the Machine can have done it.
 `core.fs` holds the Project content of a Project process. `fs.use_machine(discovery)` makes the process use a Machine. Only tests call it until Projects on other Machines exist.
 On a Machine, `core.open_buffer` loads each file in the background. The Machine sends the bytes, and the `buffer_read` worker decodes them from its payload. A missing file opens as a new file.
 `Buffer:save` sends the whole file with the version that the Buffer loaded or saved last. The Buffer stays dirty until the Machine confirms. A save during another save sends again after the reply.
-Autosave keeps no local disk state for Machine files, because the Machine refuses a write over a changed file.
+A refused save records the Machine's version in `buffer.machine_conflict` and calls `Buffer:on_machine_conflict`. Autosave shows its normal conflict choice there, without Save Copy. Overwrite and Save as New File first call `Buffer:accept_machine_version`.
+Each save has a save ID. When its reply is lost, the Buffer stays dirty. After the reconnect it asks `files.save_result`. On `unknown_save` the file's version decides: the sent bytes mean saved, the base means not saved, other bytes mean a conflict. The Buffer never sends the old bytes again.
+After each reconnect, each open Buffer reads its file again. A clean Buffer whose file changed reloads through edits. A dirty Buffer keeps its text and gets a conflict. A save that went `offline` runs again.
+Autosave keeps no local disk state for Machine files. Its disk state is the last conflict.
 Project lookup, Git and the Markdown vault index still use the local disk. The call-site audit (step 4 in the plan) moves them.
 Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Pass one file to each `--test-args`: the runner reads only the first path.
 
