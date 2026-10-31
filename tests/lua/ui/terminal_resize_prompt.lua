@@ -3,6 +3,9 @@ local test = require "core.test"
 local terminal = require "plugins.terminal"
 local next_id = 0
 
+-- Known PSReadLine 2.4.5 resize failure: tests/README.md#known-failures.
+-- Keep this regression enabled. Do not hide it with a fixed sleep.
+
 local function console_width(path)
   local file = io.open(path, "rb")
   if not file then return nil end

@@ -64,3 +64,34 @@ Short paths under `tests/lua` are also accepted:
 meson test -C build-windows-x86_64 anvil:lua-runtime --test-args runtime/tokenizer.lua
 meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/markdown_live_editor.lua
 ```
+
+## Known failures
+
+### Terminal input after a width change: PSReadLine 2.4.5
+
+**Status: known external defect; accept this failure for now.** Keep the test enabled. Anvil has no workaround for this defect.
+
+`ui/terminal_resize_prompt.lua` can fail its wider-resize case with `typed input left the prompt`. Input appears below the visible prompt. The narrow-then-wide case can still pass. The investigation reproduced the failure on 2026-10-31 with PSReadLine 2.4.5 and bundled ConPTY 1.25.2609.30003. Both PowerShell 5.1 and PowerShell 7 used that PSReadLine module and reproduced the failure.
+
+PSReadLine skips resize checks for 50 ms after its last render. A resize and another key during that interval can leave its cached prompt coordinates unchanged. ConPTY accepts Anvil's correct cursor-position reply, but PSReadLine then sends absolute cursor moves to the old row. One capture corrected the cursor to row 14, then drew input at row 24.
+
+The branch came from [PSReadLine PR #4448](https://github.com/PowerShell/PSReadLine/pull/4448). The [upstream source checked during the investigation](https://github.com/PowerShell/PSReadLine/blob/a2d143f78904/PSReadLine/Render.cs#L223-L250) still contains it. This PR introduced the optimization; it is not a fix for this failure.
+
+#### Evidence
+
+- A direct ConPTY probe reproduced the failure without Anvil code, Ghostty, or the test's background width-reporting thread.
+- Two private PSReadLine copies ran in alternating order, without added waits. The stock copy failed 12 of 12 runs. A copy with only the resize-check time limit changed from 50 ms to zero passed all 12 runs. The separate queued-key rendering limit stayed unchanged.
+- The unchanged Anvil test failed with the stock module and passed both cases with the diagnostic copy.
+- The installed PSReadLine module stayed unchanged. The diagnostic copy was not installed or bundled.
+
+#### Test policy
+
+Do not skip this test, mark it as an expected failure, or add a fixed sleep to make it pass. Users can type during resize, so the test checks valid behavior. Do not delay Anvil input or change the installed PSReadLine module to hide the failure.
+
+After a PSReadLine fix, rerun the unchanged test:
+
+```sh
+meson test -C build-windows-x86_64 anvil:lua-ui --test-args ui/terminal_resize_prompt.lua --print-errorlogs
+```
+
+Match the test name and failure text before attributing a suite failure to this defect. Other Terminal failures still need investigation.

@@ -53,6 +53,7 @@ A width change reflows wrapped lines differently in ConPTY and in the Terminal V
 ConPTY 1.25 and later then asks the terminal for the cursor position (DSR CPR) and moves its cursor there. The editor answers.
 Do not go back to an earlier ConPTY. Typed input then appears above the visible prompt.
 Run `ui/terminal_mouse_wheel.lua`, `ui/terminal_resize_prompt.lua` and the standalone smoke test after ConPTY updates.
+The resize test has a known PSReadLine 2.4.5 failure. See [known test failures](tests/README.md#known-failures); keep it enabled.
 
 Middle-click scrolling uses Terminal history when the active screen has history. With no history, it sends wheel input through the normal wheel route. Reaching a history boundary does not send application input. Wheel input uses the original click position and keeps fractional movement between frames. Each frame sends a bounded number of events and discards excess whole ticks. Run `ui/middle_click_autoscroll.lua` and `ui/terminal_mouse_wheel.lua` after changes. Use the `terminal-autoscroll-history` scenario to measure history scrolling.
 
