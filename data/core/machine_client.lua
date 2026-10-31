@@ -66,7 +66,7 @@ function MachineClient:drop()
   local pending = self.pending
   self.pending = {}
   for _, on_reply in pairs(pending) do
-    on_reply({code = "disconnected", message = self.error or "The Machine connection is closed"})
+    core.try(on_reply, {code = "disconnected", message = self.error or "The Machine connection is closed"})
   end
 end
 
@@ -76,10 +76,11 @@ function MachineClient:dispatch(id, body, bytes)
   self.pending[id] = nil
   local ok, value = pcall(json.decode, body)
   if not ok or type(value) ~= "table" then
-    return on_reply({code = "invalid_reply", message = "The Machine sent an invalid reply"})
+    return core.try(on_reply, {code = "invalid_reply", message = "The Machine sent an invalid reply"})
   end
-  if value.error then return on_reply(value.error, nil, bytes) end
-  on_reply(nil, value.result, bytes)
+  -- An error in a callback must not end the connection's thread.
+  if value.error then return core.try(on_reply, value.error, nil, bytes) end
+  core.try(on_reply, nil, value.result, bytes)
 end
 
 function MachineClient:connect()

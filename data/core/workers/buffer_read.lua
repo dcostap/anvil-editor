@@ -1,25 +1,37 @@
 -- Read and decode away from the UI. The worker channel supplies backpressure.
+-- A file from a Machine arrives as `payload.bytes`, and the worker does not touch the disk.
 require "core.encoding"
 local worker = {}
 
 function worker.run(payload, context)
   local started = system.get_time()
-  local info, err = system.get_file_info(payload.path)
-  assert(info and info.type == "file", err or "source file is unavailable")
+  local text, info, err = payload.bytes, nil, nil
+  if not text then
+    info, err = system.get_file_info(payload.path)
+    assert(info and info.type == "file", err or "source file is unavailable")
+  end
   local charset, bom = payload.encoding, payload.bom
   local detection_error
   if not charset then
-    charset, bom, detection_error = encoding.detect(payload.path)
+    if text then
+      charset, bom, detection_error = encoding.detect_string(text)
+    else
+      charset, bom, detection_error = encoding.detect(payload.path)
+    end
     charset = charset or "UTF-8"
   elseif bom then
     bom = encoding.get_charset_bom(charset)
   end
   if context.cancelled() then return end
-  local file = assert(io.open(payload.path, "rb"))
-  local text, read_error = file:read("*a")
-  local closed, close_error = file:close()
-  assert(text, read_error or "could not read file text")
-  assert(closed, close_error)
+  if not text then
+    local file = assert(io.open(payload.path, "rb"))
+    local read_error
+    text, read_error = file:read("*a")
+    local closed, close_error = file:close()
+    assert(text, read_error or "could not read file text")
+    assert(closed, close_error)
+  end
+  local size = #text
   if context.cancelled() then return end
   if charset ~= "UTF-8" and charset ~= "ASCII" then
     text = assert(encoding.convert("UTF-8", charset, text, {
@@ -29,9 +41,13 @@ function worker.run(payload, context)
     text = encoding.strip_bom(text, "UTF-8")
   end
   local read_ms = (system.get_time() - started) * 1000
-  local current = system.get_file_info(payload.path)
-  assert(current and current.file_id == info.file_id and current.size == info.size
-    and current.modified == info.modified, "source changed during loading")
+  if info then
+    local current = system.get_file_info(payload.path)
+    assert(current and current.file_id == info.file_id and current.size == info.size
+      and current.modified == info.modified, "source changed during loading")
+  else
+    info = {size = size}
+  end
   -- Count before delivery so the UI can reserve its line arrays once.
   local ends, line_count, first, scan, batch_lines = {}, 0, 1, 1, 0
   while true do

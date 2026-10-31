@@ -6,6 +6,7 @@ local core = require "core"
 local syntax = require "core.syntax"
 local config = require "core.config"
 local common = require "core.common"
+local fs = require "core.fs"
 local language_mode = require "core.language_mode"
 local linewrapping = require "core.linewrapping"
 
@@ -376,11 +377,13 @@ end
 ---Read and decode on a worker. Construct lines in batches, then publish once.
 ---The Buffer rejects edits and saves until the load succeeds.
 ---Set `opts.backup_prompt` to false for read-only copies, such as previews.
+---On a Machine, the Buffer first gets the file's bytes. A missing file makes a new file.
 ---@param opts? { backup_prompt?: boolean }
 function Buffer:load_async(filename, on_finish, opts)
   self:cancel_load()
   cancel_pending_save(self)
-  if prompt_stale_backup and not (opts and opts.backup_prompt == false) then
+  -- Save backups belong to local saves.
+  if prompt_stale_backup and not fs.machine and not (opts and opts.backup_prompt == false) then
     prompt_stale_backup(filename)
   end
   local request = {
@@ -401,6 +404,7 @@ function Buffer:load_async(filename, on_finish, opts)
     request.status, request.error = status, err
     request.total_ms = (system.get_time() - request.started) * 1000
     request.data, request.source_lines, request.finish = nil, nil, nil
+    if status == "loaded" then self.machine_version = request.version end
     core.redraw = true
     core.log_quiet("Background load %s for %s: %s", status, filename, err or "complete")
     if status == "loaded" then
@@ -447,49 +451,74 @@ function Buffer:load_async(filename, on_finish, opts)
     for line, value in pairs(clean) do data.clean[offset + line] = value end
     data.crlf, data.binary = data.crlf or crlf, data.binary or binary
   end
-  local job, err = request.pool:submit {
-    kind = "buffer_read", priority = "interactive",
-    payload = { path = filename, encoding = self.encoding, bom = self.bom },
-    on_result = function(message)
-      local ok, failure = pcall(accept, message)
-      if not ok then
-        request.pool:cancel(request.job)
-        finish("failed", tostring(failure))
-      end
-    end,
-    on_complete = function()
-      if request.status ~= "pending" then return end
-      if not current() then abandon(); return end
-      local data = request.data
-      if #data.lines ~= request.expected_lines or not data.info then
-        finish("failed", "file loading returned incomplete text")
-        return
-      end
-      local info = system.get_file_info(filename)
-      if not info or info.file_id ~= data.info.file_id or info.size ~= data.info.size
-        or info.modified ~= data.info.modified then
-        finish("failed", "source changed during file loading")
-        return
-      end
-      if data.detection_error then core.error("%s", data.detection_error) end
-      request.read_ms = data.read_ms
-      local publish_started = system.get_time()
-      local ok, failure = pcall(self.load, self, filename, data)
-      request.publish_ms = (system.get_time() - publish_started) * 1000
-      if not ok then finish("failed", tostring(failure)); return end
-      self.new_file = false
+  local function submit(bytes)
+    local job, err = request.pool:submit {
+      kind = "buffer_read", priority = "interactive",
+      payload = { path = filename, encoding = self.encoding, bom = self.bom, bytes = bytes },
+      on_result = function(message)
+        local ok, failure = pcall(accept, message)
+        if not ok then
+          request.pool:cancel(request.job)
+          finish("failed", tostring(failure))
+        end
+      end,
+      on_complete = function()
+        if request.status ~= "pending" then return end
+        if not current() then abandon(); return end
+        local data = request.data
+        if #data.lines ~= request.expected_lines or not data.info then
+          finish("failed", "file loading returned incomplete text")
+          return
+        end
+        -- Bytes from a Machine came with their version. The local disk does not matter.
+        local info = not request.version and system.get_file_info(filename)
+        if not request.version and (not info or info.file_id ~= data.info.file_id
+          or info.size ~= data.info.size or info.modified ~= data.info.modified) then
+          finish("failed", "source changed during file loading")
+          return
+        end
+        if data.detection_error then core.error("%s", data.detection_error) end
+        request.read_ms = data.read_ms
+        local publish_started = system.get_time()
+        local ok, failure = pcall(self.load, self, filename, data)
+        request.publish_ms = (system.get_time() - publish_started) * 1000
+        if not ok then finish("failed", tostring(failure)); return end
+        self.new_file = false
+        self:clean()
+        finish("loaded")
+      end,
+      on_error = function(message)
+        if not current() then abandon(); return end
+        finish("failed", message.error or "file loading failed")
+      end,
+      on_cancelled = function() finish("cancelled", "file loading was cancelled") end,
+    }
+    request.job = job
+    if not job then finish("failed", err) end
+    return job, err
+  end
+  if not fs.machine then
+    local job, err = submit()
+    if not job then return nil, err end
+    core.log_quiet("Background load started for %s", filename)
+    return request
+  end
+  fs.read(filename, function(read_err, bytes, version)
+    if request.status ~= "pending" then return end
+    if not current() then abandon(); return end
+    if read_err and read_err.code == "not_found" then
+      self.new_file = true
+      self.crlf = config.line_endings == "crlf"
       self:clean()
       finish("loaded")
-    end,
-    on_error = function(message)
-      if not current() then abandon(); return end
-      finish("failed", message.error or "file loading failed")
-    end,
-    on_cancelled = function() finish("cancelled", "file loading was cancelled") end,
-  }
-  request.job = job
-  if not job then finish("failed", err); return nil, err end
-  core.log_quiet("Background load started for %s", filename)
+    elseif read_err then
+      finish("failed", read_err.message or read_err.code)
+    else
+      request.version = version
+      submit(bytes)
+    end
+  end)
+  core.log_quiet("Machine load started for %s", filename)
   return request
 end
 
@@ -845,6 +874,54 @@ function Buffer.write_text_safely(filename, text)
 end
 
 
+-- The file's bytes for this Buffer's text, line endings, encoding and BOM.
+local function encode_text(self)
+  local output = table.concat(self.lines)
+  if self.crlf then output = output:gsub("\n", "\r\n") end
+  if self:needs_encoding_conversion() then
+    local errmsg
+    output, errmsg = encoding.convert(self.encoding, "UTF-8", output, {
+      strict = true
+    })
+    if not output then
+      self.new_file = true
+      core.error("%s", errmsg)
+      error(errmsg)
+    end
+  end
+  if self.bom then output = self.bom .. output end
+  return output
+end
+
+-- A Machine save runs in the background. The Buffer stays dirty until the Machine confirms
+-- the text that the save sent. A save during another save sends again after the reply.
+local function save_on_machine(self, filename, abs_filename)
+  if self.machine_save then
+    self.machine_save.again = true
+    return
+  end
+  local same_file = common.path_equals(abs_filename, self.abs_filename)
+  local request = { change_id = self:get_change_id(), revision = self.text_revision }
+  self.machine_save = request
+  local base = same_file and not self.new_file and self.machine_version or nil
+  core.log_quiet("Machine save started for %s at revision %d", filename, request.revision)
+  fs.write(abs_filename, encode_text(self), base, function(err, version)
+    if self.machine_save ~= request then return end
+    self.machine_save = nil
+    if err then
+      core.error("Cannot save %s on the Machine: %s", filename, err.message or err.code)
+      return
+    end
+    if not same_file then self:set_filename(filename, abs_filename) end
+    self.machine_version, self.new_file = version, false
+    self.clean_change_id = request.change_id
+    core.log_quiet("Machine save finished for %s at revision %d", filename, request.revision)
+    if core.set_recent_file_edited then core.set_recent_file_edited(self.abs_filename) end
+    core.redraw = true
+    if request.again and self:is_dirty() then self:save() end
+  end)
+end
+
 function Buffer:save(filename, abs_filename)
   assert(not self:is_loading() and not self.load_error, self.load_error or "file is still loading")
   local prepared = self.prepared_save
@@ -862,23 +939,10 @@ function Buffer:save(filename, abs_filename)
       and not core.buffer_registry:can_use_identity(self, abs_filename) then
     error("another Buffer already has this file identity")
   end
+  if fs.machine then return save_on_machine(self, filename, abs_filename) end
 
   local output
-  if not prepared and self:needs_encoding_conversion() then
-    output = table.concat(self.lines)
-    if self.crlf then output = output:gsub("\n", "\r\n") end
-    local errmsg
-    output, errmsg = encoding.convert(self.encoding, "UTF-8", output, {
-      strict = true
-    })
-    if not output then
-      self.new_file = true
-      core.error("%s", errmsg)
-      error(errmsg)
-    elseif self.bom then
-      output = self.bom .. output
-    end
-  end
+  if not prepared and self:needs_encoding_conversion() then output = encode_text(self) end
 
   write_file_safely(abs_filename, function(fp)
     if prepared then
@@ -922,7 +986,7 @@ end
 
 ---Return whether a worker can prepare this file without changing save rules.
 function Buffer:can_save_async()
-  if self:is_loading() or self.load_error then return false end
+  if fs.machine or self:is_loading() or self.load_error then return false end
   if not self.abs_filename or self:needs_encoding_conversion()
     or config.safe_write == false or not system.sync_file
     or not system.atomic_replace_file then return false end

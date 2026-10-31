@@ -571,7 +571,12 @@ An error reply is `{"error": {"code": ..., "message": ...}}`. The server ignores
 The server polls its sockets. A link inside a Project can point outside it, as in a local Project.
 `--test-root <folder>` before the Projects maps each Machine path into that folder: `C:\a\b` is `<folder>\C\a\b`. Only tests use it, so one PC can hold a Client copy and a different Machine copy at the same path.
 `core.machine_client` is the Client. A scheduler thread connects through the discovery file and sends `hello`. `request` holds other requests until `hello` succeeds, and it never blocks the UI thread.
-Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes.
+`core.fs` holds the Project content of a Project process. `fs.use_machine(discovery)` makes the process use a Machine. Only tests call it until Projects on other Machines exist.
+On a Machine, `core.open_buffer` loads each file in the background. The Machine sends the bytes, and the `buffer_read` worker decodes them from its payload. A missing file opens as a new file.
+`Buffer:save` sends the whole file with the version that the Buffer loaded or saved last. The Buffer stays dirty until the Machine confirms. A save during another save sends again after the reply.
+Autosave keeps no local disk state for Machine files, because the Machine refuses a write over a changed file.
+Project lookup, Git and the Markdown vault index still use the local disk. The call-site audit (step 4 in the plan) moves them.
+Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Pass one file to each `--test-args`: the runner reads only the first path.
 
 ## Agent control
 

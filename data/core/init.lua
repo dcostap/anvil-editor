@@ -1975,6 +1975,7 @@ function core.open_buffer(filename, opts)
   end
   local operation = filename and file_open_begin(filename, "core.open_buffer")
   local total_stage = operation and file_open_stage_begin("core_open_buffer")
+  local machine = require("core.fs").machine ~= nil
   local new_file = true
   local abs_filename
   local close_textview = false
@@ -1995,10 +1996,11 @@ function core.open_buffer(filename, opts)
       error(string.format("invalid filename: %q", abs_filename or filename))
     end
     local stat_stage = file_open_stage_begin("buffer_file_stat")
-    local file_info = system.get_file_info(abs_filename)
+    -- The Machine has the file. Its load finds out if the file exists.
+    local file_info = not machine and system.get_file_info(abs_filename)
     file_open_stage_end(stat_stage)
     file_size = file_info and file_info.size or 0
-    new_file = not file_info
+    new_file = not file_info and not machine
     if file_info and file_info.size > config.file_size_limit * 1e6 then
       local size = file_info.size / 1024 / 1024
       core.error(
@@ -2012,8 +2014,8 @@ function core.open_buffer(filename, opts)
     end
     local existing = core.buffer_registry:find(abs_filename)
     if existing then
-      if existing.load_error or (existing:is_loading() and not opts.background) then
-        if opts.background then
+      if existing.load_error or (existing:is_loading() and not opts.background and not machine) then
+        if opts.background or machine then
           existing:load_async(abs_filename, loaded)
         else
           existing:load(abs_filename)
@@ -2031,7 +2033,9 @@ function core.open_buffer(filename, opts)
   local construct_stage = file_open_stage_begin("buffer_construct")
   -- Ordinary UI opens can prepare large files without blocking input. Callers
   -- that need immediate contents keep the synchronous Buffer contract.
-  local background = opts.background == true and not new_file and file_size >= 16 * 1024 * 1024
+  -- A Machine file always loads in the background, because the network can be slow.
+  local background = machine and filename ~= nil
+    or opts.background == true and not new_file and file_size >= 16 * 1024 * 1024
   local buffer = Buffer(filename, abs_filename, new_file or background)
   file_open_stage_end(construct_stage)
   core.buffer_registry:register(buffer, abs_filename)

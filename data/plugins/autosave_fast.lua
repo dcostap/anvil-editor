@@ -2,6 +2,7 @@
 local core = require "core"
 local common = require "core.common"
 local config = require "core.config"
+local fs = require "core.fs"
 local style = require "core.style"
 local Buffer = require "core.buffer"
 local TextView = require "core.textview"
@@ -63,7 +64,9 @@ local function read_file_contents(filename)
   return contents, contents ~= nil
 end
 
+-- On a Machine, the Machine refuses a save over a changed file, so there is no local disk state.
 local function capture_disk_state(buffer)
+  if fs.machine then return nil end
   if buffer and buffer.abs_filename then
     local info = system.get_file_info(buffer.abs_filename)
     if info then
@@ -101,7 +104,7 @@ local function disk_states_differ(old, current)
 end
 
 local function save_target_missing(buffer)
-  if not buffer or not buffer.abs_filename then return false end
+  if fs.machine or not buffer or not buffer.abs_filename then return false end
   if not system.get_file_info(buffer.abs_filename) then return true end
   return false
 end
