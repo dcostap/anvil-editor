@@ -9,13 +9,13 @@ function Actions:new(clock, timeout)
   self.sequence = 0
 end
 
-function Actions:start(name, dispatch, ready, visible)
+function Actions:start(name, dispatch, ready, visible, drawn)
   assert(not self.pending, "benchmark action is still pending")
   self.sequence = self.sequence + 1
   local start = self.clock()
   self.pending = {
     id = self.sequence, name = name, started = start,
-    start_ms = (start - self.origin) * 1000, redraws = 0, ready = ready, visible = visible,
+    start_ms = (start - self.origin) * 1000, redraws = 0, ready = ready, visible = visible, drawn = drawn,
   }
   dispatch()
   self.pending.dispatch_ms = (self.clock() - start) * 1000
@@ -53,6 +53,7 @@ function Actions:after_frame(did_redraw)
     pending.visible_ms = (self.clock() - pending.started) * 1000
   end
   if not pending.draw_ready then return end
+  if pending.drawn and not pending.drawn() then return end
   assert(visible == nil or pending.visible_ms, "completed action has no visible redraw")
   self.pending = nil
   return {

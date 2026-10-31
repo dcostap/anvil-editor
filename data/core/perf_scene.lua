@@ -11,6 +11,9 @@ function Scene.new(settings, root)
                         module = module, context = context,
                         action_visible = module.action_visible and function()
                           return module.action_visible(context)
+                        end,
+                        action_drawn = module.action_drawn and function()
+                          return module.action_drawn(context)
                         end }, Scene)
 end
 

@@ -1212,7 +1212,8 @@ local function perform_action()
         benchmark.workload:dispatch(index)
         benchmark.view = benchmark.workload.view
       end, function() return benchmark.workload:action_ready() end,
-        benchmark.workload.action_visible and function() return benchmark.workload:action_visible() end)
+        benchmark.workload.action_visible and function() return benchmark.workload:action_visible() end,
+        benchmark.workload.action_drawn and function() return benchmark.workload:action_drawn() end)
       core.perf_frame_stats = frame_stats
       benchmark.pending_action_ms = benchmark.actions.pending.dispatch_ms
       benchmark.action_count = index

@@ -358,10 +358,11 @@ local function display_text(text, max_len)
 end
 
 local function translate_start_of_word(buffer, line, col)
+  local non_word_chars = buffer:get_non_word_chars(true)
   while true do
     local line2, col2 = buffer:position_offset(line, col, -1)
     local char = buffer:get_char(line2, col2)
-    if buffer:get_non_word_chars(true):find(char, nil, true)
+    if non_word_chars:find(char, nil, true)
     or line == line2 and col == col2 then
       break
     end
@@ -529,6 +530,8 @@ local selection_highlight = RowHighlight(RowHighlight.selection)
 local last_line, last_col
 local last_buffer
 local pending_tree_sitter_completion
+local project_completion
+local project_completion_thread
 local pending_deletion_buffer
 local pending_paste_buffer
 
@@ -1091,7 +1094,84 @@ function DescriptionView:draw_at(x, y, width, height, background, show_scrollbar
 end
 
 
+local function cancel_project_completion()
+  if not project_completion then return end
+  for _, query in ipairs(project_completion.queries) do
+    if query.request then query.request:cancel() end
+  end
+  project_completion = nil
+end
+
+local function project_completion_current(view)
+  local state = project_completion
+  if not state or view ~= state.view or view.buffer ~= state.buffer then return false end
+  local line, col = view.buffer:get_selection()
+  return state.change_id == view.buffer:get_change_id() and state.line == line and state.col == col
+    and state.paths_generation == project_paths.generation()
+    and state.language_id == (view.buffer.treesitter and view.buffer.treesitter.language_id)
+end
+
+local function wake_project_completion()
+  if project_completion_thread then return end
+  project_completion_thread = core.add_thread(function()
+    while project_completion and not project_completion.published do
+      for _, query in ipairs(project_completion.queries) do
+        if query.request and query.request.done and not query.done then
+          core.redraw = true
+          break
+        end
+      end
+      coroutine.yield(0.005)
+    end
+    project_completion_thread = nil
+  end)
+end
+
+local function prepare_project_completion(buffer, language_ids)
+  if not language_ids then cancel_project_completion(); return end
+  if project_completion_current(core.active_view) then return end
+  local previous = project_completion
+  cancel_project_completion()
+  local line, col = buffer:get_selection()
+  local receiver = member_completion_receiver(buffer)
+  local language = buffer.treesitter and buffer.treesitter.language
+  local language_id = buffer.treesitter and buffer.treesitter.language_id
+  if previous and (previous.view ~= core.active_view or previous.buffer ~= buffer
+    or previous.paths_generation ~= project_paths.generation() or previous.language_id ~= language_id) then
+    previous = nil
+  end
+  local state = {
+    view = core.active_view, buffer = buffer, change_id = buffer:get_change_id(),
+    line = line, col = col, paths_generation = project_paths.generation(), queries = {},
+    receiver = receiver, language_id = language_id,
+  }
+  local function add(query, parent_names, kinds, prior)
+    -- These rows are provisional. Always search the new query, even if they still match.
+    local entry = { query = query, results = prior and prior.results, opts = {
+      kind = "autocomplete", language_ids = language_ids, parent_names = parent_names,
+      symbol_kinds = kinds, limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
+      allow_stale = true,
+    } }
+    state.queries[#state.queries + 1] = entry
+    return entry
+  end
+  if receiver then
+    state.members = add(partial, { receiver }, nil,
+      previous and previous.receiver == receiver and previous.members)
+  end
+  if partial ~= "" then
+    local kinds = language and language.bare_completion_symbol_kinds
+    state.direct = add(partial, nil, kinds, previous and previous.direct)
+    local chunk_query = code_symbol_chunk_query(partial)
+    if chunk_query and chunk_query ~= partial then
+      state.chunks = add(chunk_query, nil, kinds, previous and previous.chunks)
+    end
+  end
+  project_completion = state
+end
+
 local function reset_suggestions(skip_close)
+  cancel_project_completion()
   suggestions_offset = 1
   suggestions_idx = 1
   suggestions = {}
@@ -1128,6 +1208,7 @@ function update_suggestions()
   desc_rect = nil
 
   if provider_completion then
+    cancel_project_completion()
     for i, item in ipairs(provider_completion.items) do
       if i > config.plugins.autocomplete.max_suggestions then break end
       suggestions[i] = annotate_match(item, provider_completion.query)
@@ -1140,6 +1221,9 @@ function update_suggestions()
   local contextual_member_count = 0
 
   local lsp_available = has_lsp_completion(buffer)
+  local markdown = require("core.markdown.live_render").is_markdown_buffer(buffer)
+  prepare_project_completion(buffer, not provider_completion and not lsp_available and force_basic_suggestions
+    and not markdown and project_completion_language_ids(buffer))
 
   -- get all relevant suggestions for given filename
   local items = {}
@@ -1205,7 +1289,6 @@ function update_suggestions()
 
   -- Append the global, local or related text symbols if applicable
   local scope = config.plugins.autocomplete.suggestions_scope
-  local markdown = require("core.markdown.live_render").is_markdown_buffer(buffer)
   if markdown then scope = "local" end
 
   if not lsp_available and force_basic_suggestions then
@@ -1279,9 +1362,14 @@ function update_suggestions()
           if suggestion_text(item) ~= partial then kept[#kept + 1] = item end
         end
         if #kept > 0 and not member_completion_receiver(buffer) then
-          suggestions = annotate_matches(kept, partial)
-          suggestions_idx, suggestions_offset = 1, 1
-          return 0
+          if not project_completion or not project_completion.published then
+            suggestions = annotate_matches(kept, partial)
+            suggestions_idx, suggestions_offset = 1, 1
+            return 0
+          end
+          for _, item in ipairs(kept) do add_candidate_item(item, false) end
+          -- Keep semantic rows while the new parse is pending, without suppressing a Project result.
+          visible_symbols = true
         end
       end
     end
@@ -1325,8 +1413,7 @@ function update_suggestions()
     add_cache_symbols(text_symbols)
 
     local symbol_index = tree_sitter_symbol_index_module()
-    local project_language_ids = not markdown and project_completion_language_ids(buffer)
-    if symbol_index and project_language_ids then
+    if symbol_index and project_completion then
       local function project_item(symbol)
         local name = symbol.name
         if not name or name == "" or #name > max_symbol_length() then return nil end
@@ -1352,20 +1439,6 @@ function update_suggestions()
         return setmetatable(item, mt)
       end
 
-      local function query_project_symbols(query, query_opts)
-        query_opts = query_opts or {}
-        local project_symbols, _reason, project_status = symbol_index.workspace_symbols(query, {
-          kind = "autocomplete",
-          language_ids = project_language_ids,
-          parent_names = query_opts.parent_names,
-          symbol_kinds = query_opts.symbol_kinds,
-          limit = math.max(20, config.plugins.autocomplete.max_suggestions * 2),
-          allow_stale = true,
-        })
-        if project_status ~= "fresh" and project_status ~= "stale" then return {} end
-        return project_symbols or {}
-      end
-
       local contextual_names = {}
       local receiver = member_completion_receiver(buffer)
       if receiver then
@@ -1377,7 +1450,7 @@ function update_suggestions()
           })
           for _, symbol in ipairs(current_symbols or {}) do contextual_symbols[#contextual_symbols + 1] = symbol end
         end
-        for _, symbol in ipairs(query_project_symbols(partial, { parent_names = { receiver } })) do
+        for _, symbol in ipairs(project_completion.members and project_completion.members.results or {}) do
           contextual_symbols[#contextual_symbols + 1] = symbol
         end
         local active_path = common.normalize_path(buffer.abs_filename or buffer.filename or "")
@@ -1409,22 +1482,15 @@ function update_suggestions()
       end
 
       local function add_project_symbols(query)
-        if not query or query == "" then return end
-        local language = buffer.treesitter and buffer.treesitter.language
-        for _, symbol in ipairs(query_project_symbols(query, {
-          symbol_kinds = language and language.bare_completion_symbol_kinds,
-        })) do
+        for _, symbol in ipairs(query and query.results or {}) do
           if not contextual_names[tostring(symbol.name or "")] then
             local item = project_item(symbol)
             if item then add_candidate_item(item, item_richness(item) > 0) end
           end
         end
       end
-      if partial ~= "" then
-        add_project_symbols(partial)
-        local chunk_query = code_symbol_chunk_query(partial)
-        if chunk_query and chunk_query ~= partial then add_project_symbols(chunk_query) end
-      end
+      add_project_symbols(project_completion.direct)
+      add_project_symbols(project_completion.chunks)
     end
   end
 
@@ -2066,7 +2132,7 @@ local function show_autocomplete(opts)
       end
       local contextual_member_count = update_suggestions()
       if member_receiver and not should_open_normally and contextual_member_count == 0 then
-        if pending_tree_sitter_completion then
+        if pending_tree_sitter_completion or (project_completion and not project_completion.published) then
           suggestions = {}
         else
           reset_suggestions()
@@ -2162,7 +2228,7 @@ end
 
 Buffer.register_text_transaction_handler("autocomplete", function(buffer, transaction)
   if transaction and transaction.type == "paste" then pending_paste_buffer = buffer end
-  if buffer ~= last_buffer or #suggestions == 0 then return end
+  if buffer ~= last_buffer or (#suggestions == 0 and not project_completion) then return end
 
   local deleted = transaction and transaction.edits and #transaction.edits > 0
   for _, edit in ipairs(transaction and transaction.edits or {}) do
@@ -2175,6 +2241,7 @@ Buffer.register_text_transaction_handler("autocomplete", function(buffer, transa
 end)
 
 Buffer.on_close = function(self)
+  if project_completion and project_completion.buffer == self then cancel_project_completion() end
   on_buffer_close(self)
   if cache[self] then cache[self] = nil end
 end
@@ -2189,7 +2256,7 @@ RootPanel.update = function(...)
   local av = get_active_view()
   if av then
     local line, col = av.buffer:get_selection()
-    local deleted = pending_deletion_buffer == av.buffer and #suggestions > 0
+    local deleted = pending_deletion_buffer == av.buffer and (#suggestions > 0 or project_completion ~= nil)
     pending_deletion_buffer = nil
     -- A paste opens completion only where a provider owns the caret, such as a Markdown link target.
     local pasted = pending_paste_buffer == av.buffer
@@ -2215,14 +2282,55 @@ RootPanel.update = function(...)
     end
   end
 
-  local pending = pending_tree_sitter_completion
-  if not pending then return end
-  local buffer = pending.buffer
-  local line, col = buffer:get_selection()
-  if av ~= pending.view or av.buffer ~= buffer or buffer:get_change_id() ~= pending.change_id
-    or line ~= pending.line or col ~= pending.col then
+  local refresh = false
+  local state = project_completion
+  if state and not project_completion_current(av) then
     reset_suggestions()
-  elseif buffer.treesitter and buffer.treesitter.status == "ready" then
+    state = nil
+  end
+  -- Start only the final input context in this frame. A burst must not queue obsolete searches.
+  if state and not state.published then
+    wake_project_completion()
+    local complete = true
+    local index = tree_sitter_symbol_index_module()
+    for _, query in ipairs(state.queries) do
+      if not query.done then
+        local request = query.request
+        if request and request.done then
+          query.request = nil
+          if request.status == "fresh" or request.status == "stale" then
+            query.results, query.done = request.results, true
+          elseif request.status ~= "stale-cancelled" then
+            query.results, query.done = nil, true
+            core.log_quiet("Autocomplete: Project query failed: %s", tostring(request.reason))
+          end
+        end
+        if not query.done and not query.request then
+          local reason, status
+          query.request, reason, status = index.workspace_symbols_async(query.query, query.opts)
+          if not query.request and status ~= "pending" then
+            query.results, query.done = nil, true
+            core.log_quiet("Autocomplete: Project query unavailable: %s", tostring(reason))
+          end
+        end
+        if not query.done then complete = false end
+      end
+    end
+    if complete then state.published, refresh = true, true end
+  end
+
+  local pending = pending_tree_sitter_completion
+  if pending then
+    local buffer = pending.buffer
+    local line, col = buffer:get_selection()
+    if av ~= pending.view or av.buffer ~= buffer or buffer:get_change_id() ~= pending.change_id
+      or line ~= pending.line or col ~= pending.col then
+      reset_suggestions()
+      return
+    end
+    refresh = refresh or (buffer.treesitter and buffer.treesitter.status == "ready")
+  end
+  if refresh then
     local selected = suggestions[suggestions_idx]
     local offset = suggestions_offset
     show_autocomplete({ keep_open = #suggestions > 0 })
@@ -2237,7 +2345,7 @@ RootPanel.update = function(...)
       end
     end
     core.redraw = true
-    core.log_quiet("Autocomplete: refreshed %d suggestion(s) after parsing %s", #suggestions, buffer:get_name())
+    core.log_quiet("Autocomplete: refreshed %d suggestion(s) in %s", #suggestions, av.buffer:get_name())
   end
 end
 
@@ -2304,6 +2412,13 @@ end
 ---@return boolean
 function autocomplete.is_open()
   return #suggestions > 0
+end
+
+---Check whether completion is waiting for parsing or a search result.
+function autocomplete.is_pending()
+  return pending_tree_sitter_completion ~= nil
+    or (project_completion ~= nil and not project_completion.published)
+    or (lsp_completion_context ~= nil and lsp_completion_context.pending == true)
 end
 
 ---Return the currently selected completion item, if any.
@@ -2537,6 +2652,7 @@ command.add(predicate, {
 
 command.add(function()
   return predicate() or (pending_tree_sitter_completion and pending_tree_sitter_completion.view == get_active_view())
+    or (project_completion and project_completion.view == get_active_view())
 end, {
   ["autocomplete:cancel"] = function()
     reset_suggestions()

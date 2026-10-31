@@ -684,6 +684,16 @@ A Text View without row measurements keeps its top line when lines change above 
 See [shared editing](docs/shared-editing.md) for the plan: dirty-Buffer merges and Disk Conflicts.
 Run `ui/buffer_reload.lua` and `runtime/buffer_apply_lines.lua` after changes.
 
+## Autocomplete searches
+
+Autocomplete runs Project symbol searches through `workspace_symbols_async`. It submits only the last input context in each frame. A new Buffer edit, caret position, View, Project Paths generation, or close cancels the old requests. Parse refresh reuses the current requests. Results request a redraw even when normal frame pacing leaves the UI idle. Local symbols and matching visible suggestions remain available while Project searches run.
+
+Native Project queries prepare their fuzzy query once and check path and language rules once per file. Keep their matching, ranking, scope filters, and cancellation behavior unchanged. `autocomplete.is_pending()` reports unfinished completion work, including an empty-result search.
+
+Run `ui/autocomplete_batch.lua`, `ui/autocomplete_parse_refresh.lua`, `ui/autocomplete_matching.lua`, `ui/autocomplete_layout.lua`, `runtime/worker_pool_native.lua`, `runtime/fuzzy.lua`, `runtime/symbol_search_case.lua`, and `runtime/treesitter_global_symbols.lua` after changes. Run the `autocomplete` scenario suite for timing checks. Its no-match actions must wait for search completion, not only an empty popup.
+
+Changes Baseline checks file identity once before a pending diff, not on each key. Patch export and Revert also check any pending identity before using the baseline. Run `ui/file_changes_baseline.lua` after changes.
+
 ## Panes behind the Fuzzy Searcher
 
 While the Fuzzy Searcher is open, each Pane View draws a Draw Capture of its last draw.

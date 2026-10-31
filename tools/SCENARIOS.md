@@ -117,9 +117,11 @@ The large-index scenes use a small Odin file and a generated library with 75,000
 
 The small-index control and four uncapped large-index scenarios also run in `smoke`. They enforce the standard frame-work and action budgets. The normal-paced case also runs in `response`; presentation waits do not count as uncapped frame-work failures.
 
-Each action checks the typed text and waits for parsing. Completion actions require the expected symbol, icon, source path, and popup draw. Disabling completion cannot pass these checks. Visible latency ends when the edited line draws; completed latency also includes the verified completion draw.
+Each action checks the typed text and waits for parsing and pending completion searches. This includes no-match actions: an empty popup does not prove that a search finished. Completion actions require the expected symbol, icon, source path, and popup draw. Disabling completion cannot pass these checks. Visible latency ends when the edited line draws; completed latency also includes the verified completion draw.
 
 Burst events use `core.on_event` and editor commands. They cover repeated handler work before a redraw, not native OS delivery or queue delay. Setup and fixture generation stay outside measurement. Each run restores the fixture-owned edited file. These scenarios refuse `--project`.
+
+Fixture setup gives outline and usage queries a longer deadline, so worker scheduling does not leave an incomplete index. The scene restores the normal deadlines before measurement. Frame and completion budgets do not change. Skipped files still fail setup, with their path and reason.
 
 A failed scene readiness check reports its original error. It does not wait for the external timeout or record a performance score.
 
@@ -230,8 +232,8 @@ A scene module returns a table with these functions:
 - `ready(context)` is optional. It returns true when setup has settled.
 - `action_name(context, index)` is optional.
 - `dispatch(context, index)` performs one action.
-- `action_ready(context, index)` returns `true, result` when the action's
-  effect is visible.
+- `action_ready(context, index)` returns `true, result` when the action's state is ready to draw.
+- `action_drawn(context)` is optional. It verifies the result's draw after the frame finishes. Use it when the scene observes a draw method. Keep `action_ready` as the pre-draw state check, so completion does not wait for an extra frame.
 - `action_visible(context)` is optional. It returns true after the scene observes the first draw of the edited text.
   Return false while waiting, or nil for actions without this measurement. Completion still uses `action_ready`.
 - `state(context)` is optional. Its values appear in the report state.

@@ -52,6 +52,7 @@ test.describe("Changes Baseline file changes", function()
     if context.buffer then context.buffer:on_close() end
     if context.path then os.remove(context.path) end
     for _, path in ipairs(context.extra_paths or {}) do os.remove(path) end
+    if context.temp_root then test.ok(test.remove_tree(context.temp_root)) end
   end)
 
   test.it("does not make ordinary Untitled typing a baseline", function(context)
@@ -309,5 +310,30 @@ test.describe("Changes Baseline file changes", function()
     core.active_view = view
     wait_until(function() return file_change_count(view) > 0 end,
       "Save As removed the old file's Changes Baseline")
+  end)
+
+  test.it("rejects a replaced file before exporting its pending changes", function(context)
+    local root = USERDIR .. PATHSEP .. "baseline-replacement-" .. system.get_process_id()
+    context.temp_root = root
+    common.mkdirp(root)
+    local path = root .. PATHSEP .. "current.txt"
+    local function write(contents)
+      local file = assert(io.open(path, "wb"))
+      assert(file:write(contents))
+      assert(file:close())
+    end
+    write("original file\n")
+    local buffer = Buffer(path, path, false)
+    local view = Editor(buffer)
+    context.buffer, context.view = buffer, view
+    core.active_view = view
+    wait_until(function() return file_changes.get_patch_source(buffer) ~= nil end)
+    -- Keep the old file alive so its identity cannot be reused.
+    assert(os.rename(path, root .. PATHSEP .. "original.txt"))
+    write("replacement file\n")
+    buffer:insert(1, 1, "edit ")
+    test.is_nil(file_changes.get_patch_source(buffer), "a patch must not use the replaced file's baseline")
+    wait_until(function() return file_changes.is_settled(buffer) end)
+    test.equal(file_change_count(view), 0)
   end)
 end)

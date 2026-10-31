@@ -35,6 +35,20 @@ test.describe("benchmark action completion", function()
     test.match(tostring(err), "missing result")
   end)
 
+  test.it("checks an observed result draw in the frame that draws it", function()
+    local now, drawn = 0, false
+    local actions = Actions(function() return now end, 1)
+    actions:start("completion", function() end, function() return true end,
+      nil, function() return drawn end)
+    actions:before_draw()
+    now = 0.010
+    test.is_nil(actions:after_frame(true), "ready data alone is not a verified draw")
+    drawn = true
+    now = 0.020
+    local row = test.not_nil(actions:after_frame(true))
+    test.equal(row.latency_ms, 20, "do not wait for another frame after the verified draw")
+  end)
+
   test.it("keeps the first visible redraw separate from the published redraw", function()
     local now, ready, visible = 0, false, false
     local actions = Actions(function() return now end, 1)

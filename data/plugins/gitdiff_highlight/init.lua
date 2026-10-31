@@ -161,6 +161,7 @@ local function activate_changes_baseline(buffer, text, origin, persist)
 	state.changes_baseline_text = text
 	state.changes_baseline_origin = origin or "automatic"
 	state.changes_baseline_file_id = current_file_id(buffer)
+	state.changes_baseline_check_pending = false
 	state.awaiting_initial_baseline = false
 	state.baseline_kind = "changes"
 	state.base_text = text
@@ -253,6 +254,22 @@ local function clear_changes_baseline(buffer, reload_git)
 	end
 	core.redraw = true
 	return true
+end
+
+local function check_changes_baseline_identity(buffer, state)
+	if not state.changes_baseline_check_pending then return true end
+	state.changes_baseline_check_pending = false
+	if not state.changes_baseline_text or not state.changes_baseline_file_id then return true end
+	local file_id = current_file_id(buffer)
+	if not file_id or state.changes_baseline_file_id == file_id then return true end
+	remove_persisted_identity(baseline_identity(buffer))
+	state.changes_baseline_text = nil
+	state.changes_baseline_origin = nil
+	state.changes_baseline_file_id = nil
+	clear_state(buffer, "file identity changed")
+	state.initial_text = nil
+	core.redraw = true
+	return false
 end
 
 local function git_executable()
@@ -545,7 +562,12 @@ schedule_local_diff = function(buffer, reason)
 		end
 
 		local current_state = ensure_state(buffer)
-		if current_state.closed then
+		if current_state.closed or not current_state.base_lines then
+			current_state.local_worker_running = false
+			return
+		end
+		-- Check once for the pending diff, not once for each key in an input burst.
+		if not check_changes_baseline_identity(buffer, current_state) then
 			current_state.local_worker_running = false
 			return
 		end
@@ -878,16 +900,7 @@ function Buffer:on_text_change(change_type, transaction, ...)
 	local result = old_text_change(self, change_type, transaction, ...)
 	if not buffer_gitdiff_disabled(self) then
 		local state = ensure_state(self)
-		local file_id = current_file_id(self)
-		if state.changes_baseline_text and state.changes_baseline_file_id
-			and file_id and state.changes_baseline_file_id ~= file_id then
-			remove_persisted_identity(baseline_identity(self))
-			state.changes_baseline_text = nil
-			state.changes_baseline_origin = nil
-			state.changes_baseline_file_id = nil
-			clear_state(self, "file identity changed")
-			state.initial_text = nil
-		end
+		state.changes_baseline_check_pending = true
 		if change_type == "paste" and not state.base_lines
 			and (self.intellij_untitled or self.new_file or state.awaiting_initial_baseline)
 			and transaction and type(transaction.edits) == "table" and #transaction.edits == 1 then
@@ -1039,6 +1052,7 @@ end
 
 function gitdiff_highlight.get_patch_source(buffer)
 	local state = get_state(buffer)
+	check_changes_baseline_identity(buffer, state)
 	local unavailable = file_change_unavailable_message(state)
 	if unavailable or state.closed or buffer_gitdiff_disabled(buffer) or not state.base_lines then
 		return nil, unavailable or "File changes unavailable"
@@ -1229,6 +1243,7 @@ command.add(changes_editor, {
 	["editor:revert_file_change"] = function(view)
 		local buffer = view.buffer
 		local state = get_state(buffer)
+		check_changes_baseline_identity(buffer, state)
 		if file_change_unavailable_message(state) or not state.base_lines or state.closed then return end
 		-- Rebuild now: the displayed markers can lag behind unsaved edits.
 		local current_ranges, meta = ranges.build(state.base_lines, buffer.lines, {

@@ -10,6 +10,26 @@ typedef enum {
   FUZZY_MODE_PATH = 1,
 } FuzzyMode;
 
+#define FUZZY_MAX_QUERY_WORDS 32
+#define FUZZY_MAX_WORD_LEN 128
+
+typedef struct {
+  char text[FUZZY_MAX_WORD_LEN];
+  uint32_t len;
+} FuzzyWord;
+
+/* Normalize a query once when scoring many already-normalized candidates. */
+typedef struct {
+  FuzzyWord words[FUZZY_MAX_QUERY_WORDS];
+  uint32_t word_count;
+  FuzzyMode mode;
+  bool case_sensitive;
+} FuzzyQuery;
+
+void fuzzy_query_prepare(FuzzyQuery *prepared, FuzzyMode mode, const char *query, bool case_sensitive);
+int fuzzy_query_score(const FuzzyQuery *query, const char *text, const char *lower,
+  uint32_t len, uint32_t basename_start, int *out_boundary_score);
+
 typedef enum {
   FUZZY_MATCH_NONE = 0,
   FUZZY_MATCH_LOOSE = 1,

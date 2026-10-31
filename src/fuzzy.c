@@ -14,14 +14,7 @@
 #include <string.h>
 
 #define FUZZY_SCORE_NO_MATCH INT_MIN
-#define FUZZY_MAX_QUERY_WORDS 32
-#define FUZZY_MAX_WORD_LEN 128
 #define FUZZY_MAX_RETURN_SPANS 256
-
-typedef struct {
-  char text[FUZZY_MAX_WORD_LEN];
-  uint32_t len;
-} FuzzyWord;
 
 static char lower_ascii_char(char c) {
   unsigned char uc = (unsigned char)c;
@@ -621,15 +614,27 @@ int fuzzy_match_score_case(FuzzyMode mode, const char *text, const char *lower, 
 }
 
 int fuzzy_match_score_parts_case(FuzzyMode mode, const char *text, const char *lower, uint32_t len, uint32_t basename_start, const char *query, bool case_sensitive, int *out_boundary_score) {
-  FuzzyWord words[FUZZY_MAX_QUERY_WORDS];
-  uint32_t word_count = parse_query_words(mode, query, words, case_sensitive);
+  FuzzyQuery prepared;
+  fuzzy_query_prepare(&prepared, mode, query, case_sensitive);
+  return fuzzy_query_score(&prepared, text, lower, len, basename_start, out_boundary_score);
+}
+
+void fuzzy_query_prepare(FuzzyQuery *prepared, FuzzyMode mode, const char *query, bool case_sensitive) {
+  prepared->mode = mode;
+  prepared->case_sensitive = case_sensitive;
+  prepared->word_count = parse_query_words(mode, query, prepared->words, case_sensitive);
+}
+
+int fuzzy_query_score(const FuzzyQuery *query, const char *text, const char *lower,
+  uint32_t len, uint32_t basename_start, int *out_boundary_score) {
   int boundary_score = 0;
   if (out_boundary_score) *out_boundary_score = 0;
-  if (word_count == 0) return 0 - (int)(len / 8);
+  if (query->word_count == 0) return 0 - (int)(len / 8);
 
   int total = 0;
-  for (uint32_t i = 0; i < word_count; ++i) {
-    int score = score_word(mode, text, case_sensitive ? text : lower, len, basename_start, &words[i], &boundary_score);
+  for (uint32_t i = 0; i < query->word_count; ++i) {
+    int score = score_word(query->mode, text, query->case_sensitive ? text : lower,
+      len, basename_start, &query->words[i], &boundary_score);
     if (score == FUZZY_SCORE_NO_MATCH) return FUZZY_SCORE_NO_MATCH;
     total += score;
   }
@@ -674,12 +679,14 @@ FuzzySearchResult *fuzzy_index_search_case(const FuzzyIndex *idx, const char *qu
   FuzzySearchResult *top = (FuzzySearchResult *)malloc(sizeof(FuzzySearchResult) * keep);
   if (!top) return NULL;
 
+  FuzzyQuery prepared;
+  fuzzy_query_prepare(&prepared, idx->mode, query, case_sensitive);
   uint32_t top_count = 0;
   for (uint32_t i = 0; i < idx->count; ++i) {
     const FuzzyEntry *e = &idx->entries[i];
     const char *text = idx->match_arena + e->match_offset;
     const char *lower = idx->lower_arena + e->lower_offset;
-    int score = fuzzy_match_score_case(idx->mode, text, lower, e->len, e->basename_start, query, case_sensitive);
+    int score = fuzzy_query_score(&prepared, text, lower, e->len, e->basename_start, NULL);
     if (score == FUZZY_SCORE_NO_MATCH) continue;
     FuzzySearchResult r = { i, e->source_index, score };
     insert_top(idx, top, &top_count, keep, r);

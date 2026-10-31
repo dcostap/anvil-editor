@@ -18,6 +18,7 @@ typedef struct ProjectFileEntry {
 typedef struct ProjectRecordRef {
   AnvilTSProjectFileResult *file;
   uint32_t index;
+  uint32_t file_index;
 } ProjectRecordRef;
 
 typedef struct ProjectUsageNameEntry {
@@ -752,14 +753,14 @@ AnvilTSProjectSnapshot *anvil_ts_project_builder_snapshot_cancellable(
       if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
         return cancel_snapshot(snapshot, error);
       }
-      snapshot->symbols[symbol_index++] = (ProjectRecordRef) { file, i };
+      snapshot->symbols[symbol_index++] = (ProjectRecordRef) { file, i, file_index };
     }
     count = anvil_ts_project_file_usage_count(file);
     for (uint32_t i = 0; i < count && usage_index < snapshot->usage_count; i++) {
       if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
         return cancel_snapshot(snapshot, error);
       }
-      snapshot->usages[usage_index++] = (ProjectRecordRef) { file, i };
+      snapshot->usages[usage_index++] = (ProjectRecordRef) { file, i, file_index };
     }
   }
   qsort(snapshot->symbols, snapshot->symbol_count, sizeof(*snapshot->symbols), symbol_ref_compare);
@@ -983,6 +984,7 @@ static const ProjectPathRuleSlot *project_path_rule_lookup(
 }
 
 static bool query_path_excluded(const char *path, const ProjectPathRuleSet *rules) {
+  if (!rules->slot_count) return false;
   path = path ? path : "";
   uint64_t hash = UINT64_C(1469598103934665603);
   const ProjectPathRuleSlot *matched = NULL;
@@ -1113,13 +1115,10 @@ static bool query_symbol_allowed(
   uint32_t kind_count,
   const char *const *parent_names,
   uint32_t parent_name_count,
-  const char *const *languages,
-  uint32_t language_count,
-  const ProjectPathRuleSet *path_rules
+  const bool *allowed_files
 ) {
   ProjectRecordRef ref = snapshot->symbols[symbol_index];
-  if (query_path_excluded(anvil_ts_project_file_path(ref.file), path_rules)) return false;
-  if (!query_symbol_language_allowed(ref.file, languages, language_count)) return false;
+  if (!allowed_files[ref.file_index]) return false;
   AnvilTSProjectSymbolView symbol;
   return anvil_ts_project_file_symbol_at(ref.file, ref.index, &symbol) &&
     query_symbol_kind_allowed(&symbol, kinds, kind_count) &&
@@ -1155,15 +1154,12 @@ static void query_insert_fuzzy(
 static uint32_t query_collect_fuzzy_symbols(
   const AnvilTSProjectSnapshot *snapshot,
   const FuzzyIndex *fuzzy,
-  const char *query,
-  bool case_sensitive,
+  const FuzzyQuery *query,
   const char *const *kinds,
   uint32_t kind_count,
   const char *const *parent_names,
   uint32_t parent_name_count,
-  const char *const *languages,
-  uint32_t language_count,
-  const ProjectPathRuleSet *path_rules,
+  const bool *allowed_files,
   const FuzzySearchResult *after,
   FuzzySearchResult *top,
   uint32_t capacity,
@@ -1179,11 +1175,11 @@ static uint32_t query_collect_fuzzy_symbols(
       return 0;
     }
     if (!query_symbol_allowed(snapshot, i, kinds, kind_count, parent_names, parent_name_count,
-        languages, language_count, path_rules)) continue;
+        allowed_files)) continue;
     const FuzzyEntry *entry = &fuzzy->entries[i];
     const char *text = fuzzy->match_arena + entry->match_offset;
     const char *lower = fuzzy->lower_arena + entry->lower_offset;
-    int score = fuzzy_match_score_case(FUZZY_MODE_GENERIC, text, lower, entry->len, entry->basename_start, query, case_sensitive);
+    int score = fuzzy_query_score(query, text, lower, entry->len, entry->basename_start, NULL);
     if (score == INT_MIN) continue;
     FuzzySearchResult candidate = { i, i + 1, score };
     matched++;
@@ -1229,26 +1225,42 @@ bool anvil_ts_project_snapshot_query_symbols(
   ProjectPathRuleSet path_rules;
   if (!project_path_rules_build(&path_rules, excluded_paths, excluded_path_count,
       included_paths, included_path_count)) return false;
+  bool *allowed_files = snapshot->file_count ? (bool *)malloc(snapshot->file_count * sizeof(*allowed_files)) : NULL;
+  if (snapshot->file_count && !allowed_files) { project_path_rules_free(&path_rules); return false; }
+  /* Scope and language belong to files, not symbols. A library can have many symbols in each file. */
+  for (uint32_t i = 0; i < snapshot->file_count; i++) {
+    if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
+      free(allowed_files);
+      project_path_rules_free(&path_rules);
+      return false;
+    }
+    AnvilTSProjectFileResult *file = snapshot->files[i].file;
+    allowed_files[i] = !query_path_excluded(anvil_ts_project_file_path(file), &path_rules) &&
+      query_symbol_language_allowed(file, languages, language_count);
+  }
+  project_path_rules_free(&path_rules);
   if (offset > snapshot->symbol_count) offset = snapshot->symbol_count;
   uint32_t *out = limit ? (uint32_t *)malloc((size_t)limit * sizeof(*out)) : NULL;
-  if (limit && !out) { project_path_rules_free(&path_rules); return false; }
+  if (limit && !out) { free(allowed_files); return false; }
   uint32_t matched = 0, out_count = 0;
   query = query ? query : "";
   if (!*query) {
     for (uint32_t i = 0; i < snapshot->symbol_count; i++) {
       if ((i & 255u) == 0 && cancel && cancel(cancel_payload)) {
         free(out);
-        project_path_rules_free(&path_rules);
+        free(allowed_files);
         return false;
       }
       if (!query_symbol_allowed(snapshot, i, kinds, kind_count, parent_names, parent_name_count,
-          languages, language_count, &path_rules)) continue;
+          allowed_files)) continue;
       if (matched >= offset && out_count < limit) out[out_count++] = i;
       matched++;
     }
   } else {
     const FuzzyIndex *fuzzy = search_declaration
       ? &snapshot->symbol_declaration_fuzzy : &snapshot->symbol_fuzzy;
+    FuzzyQuery prepared;
+    fuzzy_query_prepare(&prepared, FUZZY_MODE_GENERIC, query, case_sensitive);
     FuzzySearchResult cursor;
     const FuzzySearchResult *after = NULL;
     uint32_t remaining = offset;
@@ -1256,12 +1268,12 @@ bool anvil_ts_project_snapshot_query_symbols(
     while (remaining) {
       uint32_t step = remaining < 4096 ? remaining : 4096;
       FuzzySearchResult *scratch = (FuzzySearchResult *)malloc((size_t)step * sizeof(*scratch));
-      if (!scratch) { free(out); project_path_rules_free(&path_rules); return false; }
+      if (!scratch) { free(out); free(allowed_files); return false; }
       bool cancelled = false;
-      uint32_t top_count = query_collect_fuzzy_symbols(snapshot, fuzzy, query, case_sensitive, kinds, kind_count,
-        parent_names, parent_name_count, languages, language_count, &path_rules, after, scratch,
+      uint32_t top_count = query_collect_fuzzy_symbols(snapshot, fuzzy, &prepared, kinds, kind_count,
+        parent_names, parent_name_count, allowed_files, after, scratch,
         step, &matched, cancel, cancel_payload, &cancelled);
-      if (cancelled) { free(scratch); free(out); project_path_rules_free(&path_rules); return false; }
+      if (cancelled) { free(scratch); free(out); free(allowed_files); return false; }
       if (top_count < step) {
         beyond_end = true;
         free(scratch);
@@ -1274,12 +1286,12 @@ bool anvil_ts_project_snapshot_query_symbols(
     }
     if (!beyond_end) {
       FuzzySearchResult *page = limit ? (FuzzySearchResult *)malloc((size_t)limit * sizeof(*page)) : NULL;
-      if (limit && !page) { free(out); project_path_rules_free(&path_rules); return false; }
+      if (limit && !page) { free(out); free(allowed_files); return false; }
       bool cancelled = false;
-      uint32_t page_count = query_collect_fuzzy_symbols(snapshot, fuzzy, query, case_sensitive, kinds, kind_count,
-        parent_names, parent_name_count, languages, language_count, &path_rules, after, page,
+      uint32_t page_count = query_collect_fuzzy_symbols(snapshot, fuzzy, &prepared, kinds, kind_count,
+        parent_names, parent_name_count, allowed_files, after, page,
         limit, &matched, cancel, cancel_payload, &cancelled);
-      if (cancelled) { free(page); free(out); project_path_rules_free(&path_rules); return false; }
+      if (cancelled) { free(page); free(out); free(allowed_files); return false; }
       for (uint32_t i = 0; i < page_count; i++) out[out_count++] = page[i].entry_index;
       free(page);
     }
@@ -1288,7 +1300,7 @@ bool anvil_ts_project_snapshot_query_symbols(
   if (count) *count = out_count;
   if (total) *total = matched;
   if (has_more) *has_more = matched > offset + out_count;
-  project_path_rules_free(&path_rules);
+  free(allowed_files);
   return true;
 }
 

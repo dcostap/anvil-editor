@@ -137,6 +137,16 @@ local function wait_for_suggestion(view, expected, timeout)
   return false
 end
 
+local function wait_for_completion()
+  local deadline = system.get_time() + 10
+  repeat
+    core.root_panel:update()
+    if not autocomplete.is_pending() then return end
+    coroutine.yield(0.01)
+  until system.get_time() >= deadline
+  test.fail("completion did not finish")
+end
+
 test.describe("autocomplete batch behavior", function()
   test.before_each(function()
     panes.reset_for_tests()
@@ -485,7 +495,8 @@ test.describe("autocomplete batch behavior", function()
 
     autocomplete.trigger()
 
-    test.ok(not autocomplete.is_open(), "external JavaScript should not receive Odin Project symbols")
+    wait_for_completion()
+    test.not_ok(autocomplete.is_open(), "external JavaScript should not receive Odin Project symbols")
   end)
 
   test.it("does not offer Project symbols from an incompatible language", function(context)
@@ -494,6 +505,7 @@ test.describe("autocomplete batch behavior", function()
 
     autocomplete.trigger()
 
+    wait_for_completion()
     test.ok(not autocomplete.is_open(), "Kotlin should not receive Odin Project symbols")
   end)
 
@@ -510,6 +522,7 @@ test.describe("autocomplete batch behavior", function()
 
     autocomplete.trigger()
 
+    wait_for_completion()
     test.ok(not autocomplete.is_open(), "a struct field should require Contextual Member Completion")
   end)
 
@@ -519,6 +532,7 @@ test.describe("autocomplete batch behavior", function()
 
     autocomplete.trigger()
 
+    wait_for_completion()
     test.ok(not autocomplete.is_open(), "an Odin enum member should require its enum receiver")
   end)
 
@@ -535,6 +549,7 @@ test.describe("autocomplete batch behavior", function()
 
     autocomplete.trigger()
 
+    wait_for_completion()
     test.ok(autocomplete.is_open())
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "resolve_message")
   end)
@@ -552,6 +567,7 @@ test.describe("autocomplete batch behavior", function()
     local source_pane = panes.pane_for_view(source_view)
 
     autocomplete.trigger()
+    wait_for_completion()
     test.ok(autocomplete.is_open())
     test.ok(command.perform("core:activate_point_of_interest_alternate"))
 
@@ -577,6 +593,7 @@ test.describe("autocomplete batch behavior", function()
 
     core.root_panel:on_text_input("xec")
 
+    wait_for_completion()
     test.ok(autocomplete.is_open(), "a short, fuzzy Project symbol should remain available automatically")
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "exec")
   end)
@@ -588,6 +605,7 @@ test.describe("autocomplete batch behavior", function()
 
     autocomplete.trigger()
 
+    wait_for_completion()
     test.ok(autocomplete.is_open())
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "RESOLVE")
     test.ok(command.perform("autocomplete:complete"))
@@ -597,7 +615,7 @@ test.describe("autocomplete batch behavior", function()
   test.it("opens after a container dot and prioritizes that container's members", function(context)
     local root, active_path = seed_odin_project_symbol(context, "current.odin")
     local index = symbol_index.status(root)
-    index.symbols[#index.symbols + 1] = common.merge({}, index.symbols[1], {
+    index.symbols[#index.symbols + 1] = common.merge(common.merge({}, index.symbols[1]), {
       parent_name = "Other_Message_Type",
       path = common.normalize_path(root .. PATHSEP .. "other.odin"),
       file = "other.odin",
@@ -608,9 +626,11 @@ test.describe("autocomplete batch behavior", function()
 
     core.root_panel:on_text_input(".")
 
-    test.ok(autocomplete.is_open(), "expected member completion to open immediately after the dot")
+    wait_for_completion()
+    test.ok(autocomplete.is_open(), "expected member completion after the dot")
     core.root_panel:on_text_input("R")
     test.ok(autocomplete.is_open(), "expected member completion to remain open below the normal minimum length")
+    wait_for_completion()
     local item = test.not_nil(autocomplete.get_selected_suggestion())
     test.equal(item.text, "RESOLVE")
     test.equal(item.preview_context, "Route_Message_Type")
@@ -631,6 +651,7 @@ test.describe("autocomplete batch behavior", function()
 
     core.root_panel:on_text_input(".")
 
+    wait_for_completion()
     test.ok(autocomplete.is_open())
     local item = test.not_nil(autocomplete.get_selected_suggestion())
     test.equal(item.text, "count")
@@ -663,6 +684,7 @@ test.describe("autocomplete batch behavior", function()
 
     core.root_panel:on_text_input(".")
 
+    wait_for_completion()
     test.ok(not autocomplete.is_open(), "an unresolved instance receiver should not force generic suggestions")
   end)
 
@@ -680,6 +702,7 @@ test.describe("autocomplete batch behavior", function()
 
     core.root_panel:on_text_input("::")
 
+    wait_for_completion()
     test.ok(autocomplete.is_open())
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "reset")
     test.ok(command.perform("autocomplete:complete"))
@@ -698,9 +721,54 @@ test.describe("autocomplete batch behavior", function()
 
     autocomplete.trigger()
 
+    wait_for_completion()
     test.ok(autocomplete.is_open())
     test.equal(test.not_nil(autocomplete.get_selected_suggestion()).text, "RED")
     test.ok(command.perform("autocomplete:complete"))
     test.equal(table.concat(buffer.lines), "RED\n")
+  end)
+
+  for _, action in ipairs({ "close", "move caret", "change View" }) do
+    test.it("does not restore a pending Project completion after " .. action, function(context)
+      local _, path = seed_odin_project_symbol(context, "current.odin")
+      write_file(path, "Route_Message_Type.")
+      local view, buffer = open_file_editor(context, path)
+      autocomplete.trigger()
+      core.root_panel:update()
+      test.ok(autocomplete.is_pending(), "expected a pending Project search")
+      if action == "close" then
+        test.ok(command.perform("autocomplete:cancel"))
+      elseif action == "move caret" then
+        view:with_selection_state(function() buffer:set_selection(1, 1) end)
+      else
+        panes.place(function() return Editor(buffer) end, { placement = "new", focus = true })
+      end
+      wait_for_completion()
+      coroutine.yield(0.02)
+      core.root_panel:update()
+      test.not_ok(autocomplete.is_open(), "an obsolete Project result must not open completion")
+    end)
+  end
+
+  test.it("replaces a pending receiver search with the current receiver", function(context)
+    local root, path = seed_odin_project_symbol(context, "current.odin")
+    local index = symbol_index.status(root)
+    index.symbols[#index.symbols + 1] = common.merge(common.merge({}, index.symbols[1]), {
+      name = "COUNT", text = "COUNT", parent_name = "Other_Type",
+    })
+    write_file(path, "Route_Message_Type")
+    local view, buffer = open_file_editor(context, path)
+    core.root_panel:on_text_input(".")
+    core.root_panel:update()
+    view:with_selection_state(function() buffer:set_selection(1, 1, 1, math.huge) end)
+    core.root_panel:on_text_input("Other_Type.")
+    test.equal(table.concat(buffer.lines), "Other_Type.\n")
+    test.ok(autocomplete.is_pending(), "replacement must start a new completion")
+    wait_for_completion()
+    local item = test.not_nil(autocomplete.get_selected_suggestion())
+    test.equal(item.text, "COUNT")
+    test.equal(item.preview_context, "Other_Type")
+    test.ok(command.perform("autocomplete:complete"))
+    test.equal(table.concat(buffer.lines), "Other_Type.COUNT\n")
   end)
 end)

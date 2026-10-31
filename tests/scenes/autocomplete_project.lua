@@ -4,6 +4,7 @@ local command = require "core.command"
 local common = require "core.common"
 local autocomplete = require "plugins.autocomplete"
 local symbol_index = require "core.treesitter.symbol_index"
+local registry = require "core.treesitter.registry"
 local support = require "scenes.support"
 
 local scene = {}
@@ -18,6 +19,13 @@ end
 function scene.setup(context)
   local mode = context.settings.mode
   assert(mode == "type" or mode == "members" or mode == "refresh" or mode == "burst")
+  -- Fixture construction is not timed. A busy machine can suspend a worker past
+  -- its normal query deadline even for these small generated source files.
+  context.index_language = assert(registry.get(context.path("main.odin"), ""))
+  context.outline_timeout = context.index_language.outline_query_timeout_ms
+  context.usages_timeout = context.index_language.usages_query_timeout_ms
+  context.index_language.outline_query_timeout_ms = 1000
+  context.index_language.usages_query_timeout_ms = 1000
   local view = assert(core.open_file(context.path("main.odin"), { placement = "current", focus = true }))
   local buffer = view.buffer
   context.query = mode == "members" and "LatencyMode"
@@ -57,10 +65,18 @@ function scene.ready(context)
   end
   local summary = index.native_snapshot:summary()
   local worker = index.diagnostics and index.diagnostics.worker
-  assert(worker and worker.files_skipped == 0, "completion fixture index skipped source files")
+  assert(worker and worker.files_skipped == 0, string.format(
+    "completion fixture index skipped source files: %s (%s)",
+    tostring(worker and worker.first_skipped_reason), tostring(worker and worker.first_skipped_path)))
   assert(summary.symbols >= context.settings.symbols, "completion fixture did not index its symbol library")
   context.indexed_symbols = summary.symbols
-  return support.background_settled(context)
+  if not support.background_settled(context) then return false end
+  if context.index_language then
+    context.index_language.outline_query_timeout_ms = context.outline_timeout
+    context.index_language.usages_query_timeout_ms = context.usages_timeout
+    context.index_language = nil
+  end
+  return true
 end
 
 function scene.action_name(context, index)
@@ -113,7 +129,7 @@ end
 
 function scene.action_ready(context)
   local buffer = context.view.buffer
-  if not parse_ready(buffer) then return false end
+  if not parse_ready(buffer) or autocomplete.is_pending() then return false end
   local item = autocomplete.get_selected_suggestion()
   if context.no_matches and autocomplete.is_open() then return false end
   if context.expected then
@@ -121,14 +137,15 @@ function scene.action_ready(context)
     local expected_path = context.path("library/targets.odin")
     assert(item.source_path and common.path_equals(item.source_path, expected_path),
       "completion did not use its real symbol source")
-    if context.drawn_suggestion ~= context.expected or context.suggestion_revision ~= context.revision then
-      return false
-    end
-    if context.settings.mode == "refresh" and context.parsed_suggestion_revision ~= context.revision then
-      return false
-    end
   end
   return true, context.expected or "text-updated"
+end
+
+function scene.action_drawn(context)
+  if context.suggestion_revision ~= context.revision then return false end
+  if context.expected and context.drawn_suggestion ~= context.expected then return false end
+  if context.no_matches and context.drawn_suggestion ~= nil then return false end
+  return context.settings.mode ~= "refresh" or context.parsed_suggestion_revision == context.revision
 end
 
 function scene.action_visible(context)
