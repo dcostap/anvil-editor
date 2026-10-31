@@ -3,6 +3,7 @@ local common = require "core.common"
 local core = require "core"
 local fs = require "core.fs"
 local machine_server = dofile("tests/fixtures/machine_server.lua")
+local storage = require "core.storage"
 local test = require "core.test"
 
 -- Seam: the normal Buffer open, edit and save flow in a Project process that uses a Machine.
@@ -47,6 +48,15 @@ test.describe("Buffer on a Machine", function()
   end
 
   local function text(buffer) return table.concat(buffer.lines) end
+
+  local function record_count() return #storage.keys("machine_recovery") end
+
+  -- A crash loses the Buffer and the connection. Only the recovery record stays.
+  local function crash(context, buffer)
+    core.buffer_registry:release(buffer, context)
+    core.buffer_registry:remove(buffer, true)
+    fs.use_local()
+  end
 
   local function start_server(context, ...)
     local args = { "--test-root", context.store, ... }
@@ -112,6 +122,7 @@ test.describe("Buffer on a Machine", function()
       core.buffer_registry:remove(buffer, true)
     end
     fs.use_local()
+    storage.clear("machine_recovery")
     machine_server.stop(context.server)
     test.ok(test.remove_tree(context.root))
   end)
@@ -214,5 +225,54 @@ test.describe("Buffer on a Machine", function()
     wait_until(function() return text(dirty) == "Idea changed during the disconnect\n" end,
       "The dirty Buffer did not reload")
     test.not_ok(dirty:is_dirty())
+  end)
+
+  test.it("restores unsaved text after a crash", function(context)
+    start_server(context)
+    local discovery = machine_server.discovery_path(context.user)
+    fs.use_machine(discovery)
+    local buffer = open(context, context.notes)
+    buffer:insert(1, 1, "Unsaved ")
+    wait_until(function() return record_count() == 1 end, "The recovery record was not written")
+    crash(context, buffer)
+
+    fs.use_machine(discovery)
+    local restored = open(context, context.notes)
+    test.equal(text(restored), "Unsaved Machine copy\n")
+    test.ok(restored:is_dirty())
+    restored:save()
+    wait_until(function() return not restored:is_dirty() end, "The save did not finish")
+    test.equal(read_file(machine_copy(context, context.notes)), "Unsaved Machine copy\n")
+    wait_until(function() return record_count() == 0 end, "The saved Buffer kept its recovery record")
+    test.is_nil(context.prompt)
+  end)
+
+  test.it("after a crash during a save, knows the save from the record", function(context)
+    start_server(context, "--test-lose-reply", "files.write")
+    local discovery = machine_server.discovery_path(context.user)
+    fs.use_machine(discovery)
+    local buffer = open(context, context.notes)
+    buffer:insert(1, 1, "Saved ")
+    buffer:save()
+    buffer:insert(1, 1, "Later ")
+    -- Stop the Machine before the Client asks for the save's result. A restarted server does not know it.
+    wait_until(function() return read_file(machine_copy(context, context.notes)) == "Saved Machine copy\n" end,
+      "The save did not reach the Machine")
+    machine_server.stop(context.server)
+    wait_until(function()
+      local record = storage.load("machine_recovery", storage.keys("machine_recovery")[1] or "")
+      return type(record) == "table" and record.text == "Later Saved Machine copy\n"
+    end, "The recovery record did not get the later edit")
+    crash(context, buffer)
+
+    start_server(context)
+    fs.use_machine(discovery)
+    local restored = open(context, context.notes)
+    test.equal(text(restored), "Later Saved Machine copy\n")
+    test.ok(restored:is_dirty())
+    restored:save()
+    wait_until(function() return not restored:is_dirty() end, "The save did not finish")
+    test.equal(read_file(machine_copy(context, context.notes)), "Later Saved Machine copy\n")
+    test.is_nil(context.prompt)
   end)
 end)

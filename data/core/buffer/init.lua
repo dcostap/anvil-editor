@@ -7,6 +7,7 @@ local syntax = require "core.syntax"
 local config = require "core.config"
 local common = require "core.common"
 local fs = require "core.fs"
+local storage = require "core.storage"
 local machine = require "machine"
 local net = require "net"
 local language_mode = require "core.language_mode"
@@ -381,6 +382,8 @@ end
 ---Set `opts.backup_prompt` to false for read-only copies, such as previews.
 ---On a Machine, the Buffer first gets the file's bytes. A missing file makes a new file.
 ---@param opts? { backup_prompt?: boolean }
+local restore_machine_record
+
 function Buffer:load_async(filename, on_finish, opts)
   self:cancel_load()
   cancel_pending_save(self)
@@ -406,7 +409,10 @@ function Buffer:load_async(filename, on_finish, opts)
     request.status, request.error = status, err
     request.total_ms = (system.get_time() - request.started) * 1000
     request.data, request.source_lines, request.finish = nil, nil, nil
-    if status == "loaded" then self.machine_version, self.machine_conflict = request.version, nil end
+    if status == "loaded" and fs.machine then
+      self.machine_version, self.machine_conflict = request.version, nil
+      restore_machine_record(self)
+    end
     core.redraw = true
     core.log_quiet("Background load %s for %s: %s", status, filename, err or "complete")
     if status == "loaded" then
@@ -922,6 +928,64 @@ local function machine_conflict(self, version)
   self:on_machine_conflict()
 end
 
+-- Recovery records keep the unsaved text of Machine files through a crash. Each dirty Buffer has
+-- one record. It holds the text, the version that the text is based on, and the open save.
+local RECORD_DELAY = 0.5
+local records_due, records_thread = setmetatable({}, { __mode = "k" }), nil
+
+local function record_key(path)
+  local identity = path:gsub("/", "\\")
+  if PLATFORM == "Windows" then identity = identity:lower() end
+  return fs.machine.machine .. "-" .. machine.content_version(identity):sub(1, 32)
+end
+
+local function write_machine_record(self)
+  if not fs.machine or not fs.machine.machine or not self.abs_filename then return end
+  local key = record_key(self.abs_filename)
+  if not self:is_dirty() then return storage.clear("machine_recovery", key) end
+  local save = self.machine_save
+  storage.save("machine_recovery", key, {
+    path = self.abs_filename, text = table.concat(self.lines), crlf = self.crlf,
+    encoding = self.encoding, bom = self.bom, base = self.machine_version,
+    sent = save and save.same_file and save.sent or nil,
+  })
+end
+
+local function machine_record_due(self)
+  records_due[self] = true
+  if records_thread then return end
+  records_thread = core.add_thread(function()
+    coroutine.yield(RECORD_DELAY)
+    records_thread = nil
+    for buffer in pairs(records_due) do
+      records_due[buffer] = nil
+      core.try(write_machine_record, buffer)
+    end
+  end)
+end
+
+-- After a crash, the Buffer takes the record's text as one edit. The Machine's version decides:
+-- the same bytes mean saved, the record's base or sent save means unsaved, other bytes a conflict.
+restore_machine_record = function(self)
+  local record = storage.load("machine_recovery", record_key(self.abs_filename))
+  if type(record) ~= "table" or type(record.text) ~= "string" then return end
+  local current = self.machine_version
+  self.encoding, self.bom = record.encoding, record.bom
+  self:apply_lines((encoding.split_lines(record.text)), "recovery")
+  self.crlf = record.crlf
+  local ok, bytes = pcall(encode_text, self)
+  if ok and machine.content_version(bytes) == current then
+    self:clean()
+  elseif current == record.base or current and current == record.sent then
+    self.new_file = current == nil
+  else
+    self.machine_version, self.new_file = record.base, record.base == nil
+    machine_conflict(self, current)
+  end
+  core.log_quiet("Restored %s from its recovery record: dirty=%s", self:get_name(), tostring(self:is_dirty()))
+  write_machine_record(self)
+end
+
 -- Bytes from the Machine as UTF-8 text, in this Buffer's encoding.
 local function decode_bytes(self, bytes)
   if not self.encoding then
@@ -963,6 +1027,7 @@ end
 
 local function finish_machine_save(self, request, err, version)
   self.machine_save = nil
+  machine_record_due(self)
   if err then
     if err.code == "conflict" then
       machine_conflict(self, err.version)
@@ -1001,6 +1066,8 @@ local function save_on_machine(self, filename, abs_filename)
     sent = machine.content_version(bytes),
   }
   self.machine_save, self.machine_offline_save = request, nil
+  -- The record names the save before it leaves, so a restart can find its result.
+  write_machine_record(self)
   core.log_quiet("Machine save %s started for %s at revision %d", request.id, filename, request.revision)
   fs.write(abs_filename, bytes, request.base, request.id, function(err, version)
     if self.machine_save ~= request then return end
@@ -1026,6 +1093,7 @@ local function resolve_machine_save(self, request)
       if read_err and read_err.code ~= "not_found" then return end
       if current == request.sent then return finish_machine_save(self, request, nil, current) end
       self.machine_save = nil
+      machine_record_due(self)
       if current ~= request.base then return machine_conflict(self, current) end
       -- The save did not happen. Never send its old bytes: save the current text.
       if self:is_dirty() then
@@ -1922,6 +1990,7 @@ local function pop_undo(self, undo_stack, redo_stack, modified)
   end
 
   if modified then
+    if fs.machine then machine_record_due(self) end
     self:on_text_change("undo")
   end
   return cmd.change_type or cmd.type
@@ -2404,6 +2473,7 @@ function Buffer:apply_edits(edits, opts)
       push_batch_undo(self.undo_stack, time, transaction, old_selections, old_last_selection, transaction.new_selections, transaction.new_last_selection)
     end
     self.text_revision = (self.text_revision or 0) + 1
+    if fs.machine then machine_record_due(self) end
     local transaction_started = system.get_time()
     self:on_text_transaction(transaction)
     local transaction_ms = (system.get_time() - transaction_started) * 1000

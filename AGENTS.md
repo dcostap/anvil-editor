@@ -582,6 +582,10 @@ A refused save records the Machine's version in `buffer.machine_conflict` and ca
 Each save has a save ID. When its reply is lost, the Buffer stays dirty. After the reconnect it asks `files.save_result`. On `unknown_save` the file's version decides: the sent bytes mean saved, the base means not saved, other bytes mean a conflict. The Buffer never sends the old bytes again.
 After each reconnect, each open Buffer reads its file again. A clean Buffer whose file changed reloads through edits. A dirty Buffer keeps its text and gets a conflict. A save that went `offline` runs again.
 Autosave keeps no local disk state for Machine files. Its disk state is the last conflict.
+Each dirty Machine Buffer has a recovery record in `core.storage` (`machine_recovery`, one key for each Machine and path). It holds the text, encoding, line endings, base version and the sent version of the open save.
+An edit writes it after 0.5 seconds. A save writes it before the request leaves. A clean Buffer deletes it. Records are written on the UI thread, as Untitled recovery is.
+When a Machine file loads and has a record, the Buffer takes the record's text as one edit. The Machine's version decides: the same bytes mean clean, the base or the sent version mean dirty, other bytes mean a conflict.
+A record stays when the user closes a dirty Buffer without a save. The close prompt for unconfirmed saves comes later.
 Project lookup, Git and the Markdown vault index still use the local disk. The call-site audit (step 4 in the plan) moves them.
 Run `runtime/machine_serve.lua`, `runtime/machine_client.lua`, `runtime/machine_buffer.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes. Pass one file to each `--test-args`: the runner reads only the first path.
 

@@ -533,12 +533,7 @@ These decisions come before code. This doc answers identity, ownership and the a
 ### Desktop
 
 1. **Loopback slice.** `anvil serve` on the same PC, with one Project and one authenticated read. Done: see "Machine server" in `AGENTS.md`.
-2. **One file, end to end.** Use the real Buffer load and save flow through a minimal `core.fs`. Do not use a special test path. The Machine's folder has the same path as a Client folder, with different contents. The test fails if any code reads the Client's copy. On one PC, one path is one folder, so the test server gets a test-only option that maps its paths into a private folder. Test these cases:
-   - open, edit, save conditionally
-   - a conflict
-   - a save with an unknown result
-   - a disconnect, a change on the Machine during the disconnect, and a reconnect
-   - a crash and a restart from the recovery record
+2. **One file, end to end.** Done: see "Machine server" in `AGENTS.md`. The Buffer load and save flow uses a minimal `core.fs`. The test server maps its paths into a private folder (`--test-root`), and the tests fail if code reads the Client's copy. They cover an open, edit and conditional save, a conflict, a save with an unknown result, a disconnect with a change on the Machine and a reconnect, and a crash with a restart from the recovery record. The record keeps the base version, not the base text: the dirty merge adds the text.
 3. **Pairing and transport** between real PCs, before any service that runs commands.
 4. **The full call-site audit**, then `core.fs` with its local backend and the guard. Users see no change.
 5. **Files and Search services**, the Machine's Project list and Project configuration, the local metadata copy, and the picker data sources. Read-only Projects on another Machine ship here.
