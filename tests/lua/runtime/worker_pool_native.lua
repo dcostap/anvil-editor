@@ -878,6 +878,34 @@ Route_Message_Type :: enum c.uchar {
     timeout_builder:close()
     languages[1].parse_timeout_ms = 1000
 
+    local rejected_builder = native_pool.new_project_builder({ usage_cap = 100, base_snapshot = snapshot })
+    languages[1].outline_query = "(not_a_c_node) @name"
+    local rejected_handle = test.not_nil(pool:submit({
+      kind = "treesitter_project_run",
+      project_builder = rejected_builder,
+      project_root = root,
+      project_scoped = true,
+      scan_paths = { root .. PATHSEP .. "b.c" },
+      project_usage_cap = 100,
+      max_file_bytes = 1024 * 1024,
+      languages = languages,
+    }))
+    local rejected_payload
+    test.ok(drain_until(pool, function(message)
+      if message.job_id == rejected_handle:status().id and message.type == "result" then
+        rejected_payload = message.payload
+      end
+      return message.job_id == rejected_handle:status().id and message.type == "final"
+    end, 10000))
+    test.not_nil(rejected_payload)
+    test.equal(rejected_payload.files_skipped, 1)
+    test.ok(common.path_equals(test.not_nil(rejected_payload.first_skipped_path), root .. PATHSEP .. "b.c"))
+    test.ok(#test.not_nil(rejected_payload.first_skipped_reason) > 0)
+    test.equal(#rejected_payload.snapshot:query_symbols("beta", { limit = 10 }), 0,
+      "a rejected query must not retain the file's old symbols")
+    rejected_builder:close()
+    languages[1].outline_query = outline_query
+
     os.remove(root .. PATHSEP .. "a.c")
     local missing_builder = native_pool.new_project_builder({ usage_cap = 100, base_snapshot = snapshot })
     local missing_handle = test.not_nil(pool:submit({

@@ -3345,6 +3345,9 @@ static int SDLCALL project_run_thread_main(void *userdata) {
     }
     const char *outline_status = anvil_worker_treesitter_index_result_status(result, "outline");
     if (!outline_status || (strcmp(outline_status, "ready") && strcmp(outline_status, "limit"))) {
+      const char *reason = anvil_worker_treesitter_index_result_error(result, "outline");
+      project_run_record_file_skip(execution, i, file->path,
+        reason ? reason : outline_status, PROJECT_RUN_FILE_PARSE);
       anvil_worker_treesitter_index_result_free(result);
       local_skipped++;
       continue;
