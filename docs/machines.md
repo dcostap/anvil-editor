@@ -94,7 +94,7 @@ On a Machine, split `core.control` into two parts:
 
 ### Server lifetime
 
-- Anvil starts `anvil serve` when it starts. One server runs for each user on each Machine. If a server already runs, Anvil uses it.
+- Anvil starts `anvil serve` when it starts. One server runs for each executable and user folder. If that server already runs, Anvil uses it.
 - The local shell connects to the server like any other Client.
 - A server that Anvil started ends when Anvil ends. Terminal Sessions keep running, as they do today, but other devices cannot reach them until Anvil starts again.
 - For a Machine that other devices must always reach, the user runs `anvil serve` alone. That server runs without a UI and does not end with Anvil.
@@ -424,6 +424,17 @@ Machines → a Machine → Projects, Terminals and Agents → a Project → File
 
 Each viewer is a separate module: a code viewer, a Markdown editor, a Terminal view and an agent chat.
 
+### Repository
+
+The Companion lives in `android/` in this repo. A protocol change then touches the codec, the server and the Companion in one commit, and the Companion uses the same dependency pins and patches as the desktop.
+
+- `android/` is a Gradle project. Its CMake build, through the NDK, compiles the shared C files from `src/` and `subprojects/`. It copies no files.
+- The Meson subprojects download at configure time. A script runs `meson subprojects download` before the Android build. Check that this also applies the wrap patches, such as `tree-sitter-markdown-scanner-state-bounds.patch`.
+- Meson does not read `android/`. The release workflow runs only for version tags, so Android changes start no desktop build.
+- Android build outputs go in `.gitignore`.
+- Stored protocol fixtures are shared by the desktop tests and the Companion tests.
+- Add an Android section to `AGENTS.md` when `android/` exists.
+
 ### The phone as a Machine
 
 A vault on the phone is a Project on the phone's own Machine. The Companion runs the Files, Search and Index services in its own process, with the same interface. Local and remote vaults then use one code path.
@@ -512,17 +523,17 @@ Start with one thin vertical slice. It tests the hardest assumptions before the 
 
 ### Step 0: decisions
 
-Decide before code:
+Decide before code. This doc already answers identity, ownership and the authority levels. The other answers below are proposals. Approve or change them before step 1.
 
-- Machine-qualified identity
-- the ownership rules, for operations and for state
-- the protocol envelope and version
-- the two authority levels
+- **Server language.** The transport and the message codec are C, because the Companion uses them too. The server runs Anvil's Lua without a window, in the same executable. So it reuses `project_files.lua`, the worker pool, `rg` and the Git plugin. New server logic that needs no Lua objects goes in C, as "C and Lua" in `AGENTS.md` says.
+- **Message format.** Each frame has a small binary header: type, request ID and length. Its body is JSON. File contents and Terminal output travel as raw bytes after the JSON. The `hello` exchange carries the protocol version.
+- **Machine ID.** A random ID that the server makes at its first start and saves in `USERDIR`. A path or a PC name can change, so the ID uses neither. One server runs for each executable and user folder, as the shell does (see "Launch mode" in `AGENTS.md`). So a second Anvil install with its own user folder is a second Machine.
+- **Repository.** Decided: one repo. See [Repository](#repository).
 
 ### Desktop
 
 1. **Loopback slice.** `anvil serve` on the same PC, with one Project and one authenticated read.
-2. **One file, end to end.** Use the real Buffer load and save flow through a minimal `core.fs`. Do not use a special test path. The Machine's folder has the same path as a Client folder, with different contents. The test fails if any code reads the Client's copy. Test these cases:
+2. **One file, end to end.** Use the real Buffer load and save flow through a minimal `core.fs`. Do not use a special test path. The Machine's folder has the same path as a Client folder, with different contents. The test fails if any code reads the Client's copy. On one PC, one path is one folder, so the test server gets a test-only option that maps its paths into a private folder. Test these cases:
    - open, edit, save conditionally
    - a conflict
    - a save with an unknown result
@@ -541,7 +552,7 @@ Decide before code:
 
 The first test runs in parallel with the desktop work.
 
-1. **First test:** a minimal NDK library with `markdown_parser.c` and its dependencies, and a Compose screen that edits a note with Live Preview for headings, bold text and wikilinks. Type into it with Gboard, with swipe typing and Spanish accents, while it hides and shows syntax at the caret. If the styles and the caret stay correct, the native approach works.
+1. **First test:** in `android/`, a minimal NDK library with `markdown_parser.c` and its dependencies, and a Compose screen that edits a note with Live Preview for headings, bold text and wikilinks. Type into it with Gboard, with swipe typing and Spanish accents, while it hides and shows syntax at the caret. If the styles and the caret stay correct, the native approach works.
 2. **Machines and Projects** with Agent Status, read only.
 3. **Terminal view**, first as a Viewer, then as a Controller.
 4. **Files and code** with highlighting, and File Search.
