@@ -40,7 +40,7 @@
 /* How far from the Sidebar's edge, in points, the pointer grabs it. */
 #define SHELL_SIDEBAR_GRIP_POINTS 4
 /* The Sidebar slides open or closed over this time. */
-#define SHELL_SIDEBAR_SLIDE_MS 80
+#define SHELL_SIDEBAR_SLIDE_MS 100
 #define SHELL_CONNECT_TIMEOUT_MS 30000
 /* A launch with files waits this long at most for the first Sidebar list. Without it, files route only by folder. */
 #define SHELL_LAUNCH_LIST_WAIT_MS 5000
