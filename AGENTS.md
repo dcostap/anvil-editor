@@ -448,6 +448,8 @@ Project Sidebar visibility belongs to each Window. The first Window and each New
 Restored Windows use their saved visibility, including a lone Window saved with its Sidebar hidden.
 Focus slides a hidden Sidebar open until the Sidebar loses focus. The Window still saves it as hidden.
 The toggle closes a visible Sidebar, also a hidden Sidebar that focus shows.
+A slide shows one step at each display refresh. The Project keeps its widest layout during the slide and takes its final width when the slide ends.
+The shell moves the Project's last frame to the Sidebar's edge, so a Project that has not drawn its new width shows no content under the Sidebar.
 Sidebar width and the Project list remain shared. Each Window saves its own Project and group folds.
 Loaded Projects start expanded unless this Window has a saved manual fold.
 Selecting a Project expands it and saves that state. It stays expanded after it loses the selection. The first selection in a restored Window keeps its saved fold.

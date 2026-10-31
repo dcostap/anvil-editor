@@ -40,8 +40,7 @@
 /* How far from the Sidebar's edge, in points, the pointer grabs it. */
 #define SHELL_SIDEBAR_GRIP_POINTS 4
 /* The Sidebar slides open or closed over this time. */
-#define SHELL_SIDEBAR_SLIDE_MS 180
-#define SHELL_SIDEBAR_SLIDE_TIMER 0x8102u
+#define SHELL_SIDEBAR_SLIDE_MS 120
 #define SHELL_CONNECT_TIMEOUT_MS 30000
 /* A launch with files waits this long at most for the first Sidebar list. Without it, files route only by folder. */
 #define SHELL_LAUNCH_LIST_WAIT_MS 5000
@@ -234,6 +233,9 @@ typedef struct {
    * resize, so a left- or top-edge drag does not move the content. */
   POINT anchor;
   bool anchored;
+  /* Where the last frame's Project area starts. The shell moves a frame that starts left of the Sidebar's edge to
+   * that edge, so a slide or a Project that has not drawn its new layout yet shows no content under the Sidebar. */
+  int content_x;
   /* The last frame has premultiplied alpha; the shell blends it instead of copying it. */
   bool transparent;
   /* The last frame's areas that the shell shows above the other layer, in surface pixels: a Project's modal UI
@@ -319,6 +321,7 @@ struct ShellWindow {
   bool sidebar_hidden;
   float sidebar_slide_from;
   Uint64 sidebar_slide_start;
+  unsigned sidebar_slide_steps; /* shown widths of the current slide, for diagnostics */
   bool sidebar_sliding;
   bool sidebar_grip_hover, sidebar_dragging;
   float sidebar_drag_offset;
@@ -1632,7 +1635,10 @@ static void send_configure(ShellProject *project) {
   config.origin_y = 0;
   /* Both surfaces cover the whole client area. A Project lays out its UI right of content_x; the Sidebar lays out
    * its strip left of it and draws only popups beyond it. */
-  config.content_x = SDL_min(project->sidebar ? window->sidebar_full_w : window->sidebar_w, SDL_max(0, config.pixel_w - 1));
+  /* A Project keeps one layout while the Sidebar slides: the widest, so the shell can move it with the Sidebar's edge
+   * and clip it at the right. It takes its final width when the slide ends. */
+  int project_x = window->sidebar_sliding ? 0 : window->sidebar_w;
+  config.content_x = SDL_min(project->sidebar ? window->sidebar_full_w : project_x, SDL_max(0, config.pixel_w - 1));
   config.refresh_hz = current_refresh_rate(window);
   typedef UINT(WINAPI * DpiForWindow)(HWND);
   typedef int(WINAPI * MetricForDpi)(int, UINT);
@@ -2920,6 +2926,7 @@ static void composite_and_present(ShellWindow *window) {
       x += content->anchor.x - origin.x;
       y += content->anchor.y - origin.y;
     }
+    x += SDL_max(0, window->sidebar_w - content->content_x);
     /* Clip to the Project area of the backbuffer. */
     int left = SDL_max(x, config->origin_x), top = SDL_max(y, config->origin_y);
     int right = SDL_min(x + content->surface_w, config->origin_x + config->pixel_w);
@@ -3107,6 +3114,7 @@ static bool load_pending_frame(ShellProject *project, ShellPresentation *surface
   set_surface_busy(window, surface, false);
   anvil_timing_note("frame-load-end", frame->generation, project->id, project->sidebar);
   surface->have_surface = true;
+  surface->content_x = project->last_config.content_x;
   if (project->pane_request) {
     SDL_Log("Shell presented Pane request: Project=%u request=%llu", project->id,
             (unsigned long long)project->pane_request);
@@ -4228,18 +4236,40 @@ static bool sidebar_shown(ShellWindow *window) {
   return !window->sidebar_hidden || window->sidebar_focused;
 }
 
+static bool can_slide(ShellWindow *window) {
+  return window->shown && !window->revealing && !window->live_resize && !window->render_failed && window->rtv &&
+         window->present_ready_event && !IsIconic(window->hwnd);
+}
+
+/* A sliding Sidebar shows one step at each refresh: the shell's next step runs when DXGI can take a frame. */
+static void continue_slide(ShellWindow *window) {
+  window->frame_present_pending = true;
+  if (window->present_wait) return;
+  if (!window->present_ready &&
+      RegisterWaitForSingleObject(&window->present_wait, window->present_ready_event, presentation_ready, window,
+                                  INFINITE, WT_EXECUTEONLYONCE))
+    return;
+  /* The swapchain can take a frame now. A failed wait fails the presentation in the next step. */
+  presentation_ready(window, FALSE);
+}
+
+/* Sets the shown width for the current time. The Project gets its final width when the slide ends. */
 static void slide_sidebar(ShellWindow *window) {
   float target = sidebar_shown(window) ? 1.0f : 0.0f;
-  float t = (float)(SDL_GetTicks() - window->sidebar_slide_start) / SHELL_SIDEBAR_SLIDE_MS;
-  if (t >= 1.0f || !window->shown || IsIconic(window->hwnd)) {
-    KillTimer(window->hwnd, SHELL_SIDEBAR_SLIDE_TIMER);
+  float t = (float)(SDL_GetTicksNS() - window->sidebar_slide_start) / (SHELL_SIDEBAR_SLIDE_MS * SDL_NS_PER_MS);
+  int shown = window->sidebar_w;
+  if (t >= 1.0f || !can_slide(window)) {
     window->sidebar_sliding = false;
     window->sidebar_open = target;
   } else
     window->sidebar_open = window->sidebar_slide_from + (target - window->sidebar_slide_from) * ease_out(t);
+  window->frame_present_pending = true;
   apply_sidebar_layout(window);
-  if (!window->sidebar_sliding)
-    SDL_Log("Shell Sidebar slide ended: Window=%u width=%d", window->id, window->sidebar_w);
+  if (window->sidebar_w != shown) window->sidebar_slide_steps++;
+  if (window->sidebar_sliding) return;
+  send_configure(window->selected);
+  SDL_Log("Shell Sidebar slide ended: Window=%u width=%d steps=%u", window->id, window->sidebar_w,
+          window->sidebar_slide_steps);
 }
 
 /* Only this Window slides its Sidebar. A Window that is not shown changes at once. */
@@ -4247,15 +4277,17 @@ static void start_sidebar_slide(ShellWindow *window) {
   bool hidden = !sidebar_shown(window);
   window->sidebar_dragging = window->sidebar_grip_hover = false;
   window->sidebar_slide_from = window->sidebar_open;
-  window->sidebar_slide_start = SDL_GetTicks();
-  if (window->shown && !window->revealing && !IsIconic(window->hwnd) &&
-      SetTimer(window->hwnd, SHELL_SIDEBAR_SLIDE_TIMER, USER_TIMER_MINIMUM, NULL)) {
-    window->sidebar_sliding = true;
+  window->sidebar_slide_start = SDL_GetTicksNS();
+  window->sidebar_slide_steps = 0;
+  window->sidebar_sliding = can_slide(window);
+  if (window->sidebar_sliding) {
     if (hidden) leave_sidebar(window);
+    send_configure(window->selected);
+    continue_slide(window);
   } else {
-    window->sidebar_sliding = false;
     window->sidebar_open = hidden ? 0.0f : 1.0f;
     apply_sidebar_layout(window);
+    send_configure(window->selected);
   }
 }
 
@@ -5393,10 +5425,6 @@ static LRESULT CALLBACK shell_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
   }
   if (msg == WM_TIMER && wparam == SHELL_REVEAL_TIMER) {
     reveal_window(window, "timed out");
-    return 0;
-  }
-  if (msg == WM_TIMER && wparam == SHELL_SIDEBAR_SLIDE_TIMER) {
-    slide_sidebar(window);
     return 0;
   }
   if (msg == WM_TIMER && wparam == SHELL_GPU_REBUILD_TIMER) {
@@ -8035,9 +8063,12 @@ SDL_AppResult anvil_shell_iterate(void *appstate) {
   /* Copy all queued surface updates before waiting for a refresh. Each Window gets one frame presentation
    * per iteration, so SDL can return to Windows input instead of presenting each incoming frame notice. */
   for (ShellWindow *window = shell.windows; window; window = window->next) {
-    if (!window->frame_present_pending) continue;
-    composite_and_present(window);
-    reveal_when_ready(window);
+    if (window->sidebar_sliding) slide_sidebar(window);
+    if (window->frame_present_pending) {
+      composite_and_present(window);
+      reveal_when_ready(window);
+    }
+    if (window->sidebar_sliding) continue_slide(window);
   }
   anvil_timing_note("shell-step-end", 0, 0, 0);
   return shell.windows ? SDL_APP_CONTINUE : SDL_APP_SUCCESS;
