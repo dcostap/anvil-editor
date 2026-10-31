@@ -2034,7 +2034,9 @@ function GitView:draw_log_tab(tab, x, y)
       style.dim
     )
   end
+  core.push_clip_rect(list.position.x, list.position.y, list.size.x, list.size.y)
   list:draw()
+  core.pop_clip_rect()
   renderer.draw_rect(list_right, self.position.y, 1 * SCALE, self.size.y, style.divider)
   details:draw()
 end

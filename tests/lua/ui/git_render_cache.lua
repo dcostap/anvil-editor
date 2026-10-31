@@ -1,9 +1,50 @@
 local GitView = require "plugins.git.view"
+local core = require "core"
 local renderer = require "renderer"
 local renwindow = require "renwindow"
 local test = require "core.test"
 
 test.describe("Git commit rendering", function()
+  test.after_each(function(context)
+    if context.clip_rect_stack then core.clip_rect_stack = context.clip_rect_stack end
+  end)
+
+  test.it("keeps the commit graph below the header while scrolling", function(context)
+    local view = GitView({ path = USERDIR }, { defer_refresh = true })
+    view.position.x, view.position.y = 20, 20
+    view.size.x, view.size.y = 600, 320
+    local tab = view.model:log_tab()
+    tab.commits = {}
+    for index = 1, 30 do
+      tab.commits[index] = {
+        hash = tostring(index), subject = "Commit " .. index,
+        parents = index < 30 and { tostring(index + 1) } or {},
+      }
+    end
+    view:update_pane_buffers()
+    local list = view:pane_view("log-list")
+    context.clip_rect_stack = core.clip_rect_stack
+
+    local function draw(window, scroll)
+      list.scroll.y, list.scroll.to.y = scroll, scroll
+      core.clip_rect_stack = { { 0, 0, 640, 360 } }
+      renderer.begin_frame(window)
+      renderer.set_clip_rect(0, 0, 640, 360)
+      view:draw()
+      renderer.end_frame()
+    end
+
+    local initial = renwindow.create("Git header", 640, 360)
+    local scrolled = renwindow.create("Scrolled Git header", 640, 360)
+    draw(initial, 0)
+    draw(scrolled, list:get_line_height() * 1.75)
+    for y = view.position.y, math.ceil(list.position.y) - 1 do
+      for x = list.position.x, math.floor(list.position.x + list.size.x) - 1 do
+        test.same(renwindow.get_color(scrolled, x, y), renwindow.get_color(initial, x, y))
+      end
+    end
+  end)
+
   test.it("keeps commit rows current when commit data changes", function()
     local view = GitView({ path = USERDIR }, { defer_refresh = true })
     local tab = view.model:log_tab()
