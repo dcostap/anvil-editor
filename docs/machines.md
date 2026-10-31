@@ -547,7 +547,7 @@ These decisions come before code. This doc answers identity, ownership and the a
 
 The first test runs in parallel with the desktop work.
 
-1. **First test:** in `android/`, a minimal NDK library with `markdown_parser.c` and its dependencies, and a Compose screen that edits a note with Live Preview for headings, bold text and wikilinks. Type into it with Gboard, with swipe typing and Spanish accents, while it hides and shows syntax at the caret. If the styles and the caret stay correct, the native approach works. The app and its JNI test are in `android/`: see "Companion (Android)" in `AGENTS.md`. The Gboard test on a phone is still open.
+1. **First test:** in `android/`, a minimal NDK library with `markdown_parser.c` and its dependencies, and a Compose screen that edits a note with Live Preview for headings, bold text and wikilinks. Type into it with Gboard, with swipe typing and Spanish accents, while it hides and shows syntax at the caret. If the styles and the caret stay correct, the native approach works. Done: see "Companion (Android)" in `AGENTS.md`. On a phone with Gboard, typing, swipe typing and Spanish accents kept the styles and the caret correct. Gboard sent no composing region. The older Compose text field let the keyboard cover the tapped line, so the editor uses `TextFieldState`. Compose's word selection takes the punctuation before a word when a long-press moves. Live Preview does not cause it, and the real editor must handle it.
 2. **Machines and Projects** with Agent Status, read only.
 3. **Terminal view**, first as a Viewer, then as a Controller.
 4. **Files and code** with highlighting, and File Search.
