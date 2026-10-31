@@ -1,12 +1,12 @@
 # Machines: remote Projects, shared Terminals and the Companion app
 
-This document is a plan. Nothing in it is shipped. It records the design that we agreed on, so the work can grow in small steps without a redesign.
+This document is a plan. Nothing in it is shipped. It records the agreed design, so the work can grow in small steps without a redesign.
 
 ## Goal
 
 - Open a Project, the Scratch Project or a Pi session that runs on another PC, and work on it as if it were local.
 - See and control the Terminal Sessions of any of your PCs, including Pi, from another PC or from a phone.
-- Use a native Android app to browse your PCs' Projects, read their files, edit Markdown, and follow Pi.
+- Use a native Android app to browse your PCs' Projects, read their files, edit Markdown and follow Pi.
 - Edit a Markdown vault that is stored on the phone itself.
 
 Not everything ships at once. The rule for each step is: it must not make a later step much harder.
@@ -16,84 +16,182 @@ Not everything ships at once. The rule for each step is: it must not make a late
 - **Pixel or frame streaming.** It is unusable at phone size. Hardware video codecs blur coloured text. Renderer command streaming stays a fallback idea only.
 - **Credentials on a random PC.** Pi on such a PC needs inference without your real logins. That problem is separate from Anvil. See [Later: Pi on a random PC](#later-pi-on-a-random-pc).
 - **An Anvil port to Android.** The phone app is a native Android app. See [Why a native app](#why-a-native-app).
+- **Other people.** The first versions have one owner. Access for a second person is a later design.
 
 ## Proposed terms
 
-These names are not in `CONTEXT.md` yet. Add them when they are accepted. "Remote" already means **Remote POI Source** in `CONTEXT.md`, so the plan does not use "Remote" as a term.
+These names are not in `CONTEXT.md` yet. Add them when they are accepted. "Remote" already means **Remote POI Source** in `CONTEXT.md`, so this plan does not use "Remote" as a term.
 
 - **Machine:** a computer that runs Anvil and that you paired. Your phone is also a Machine for its local vault.
 - **Swarm:** all your paired Machines.
 - **Companion:** the native Android app.
-- **Controller:** the one device that sets a Terminal Session's size, sends its input and answers its terminal queries.
-- **Viewer:** a device that shows a Terminal Session that another device controls.
+- **Client:** a desktop Anvil or a Companion that is connected to a Machine.
+- **Controller:** the one Client that sets a Terminal Session's size, sends its input and answers its terminal queries.
+- **Viewer:** a Client that shows a Terminal Session that another Client controls.
 
-## Main rule: one Machine API for all clients
+## Main rule: one Machine API for all Clients
 
-Each Machine runs `anvil serve`. It is the same executable in headless mode. It owns the Project's files, processes, indexes and Terminal Sessions on that Machine.
+Each Machine runs `anvil serve`. It is the same executable, without a UI. Desktop Anvil, when it opens a Project on another Machine, and the Companion both use this one API.
 
-Desktop Anvil, when it opens a Project on another Machine, and the Companion are both clients of that server. They use the same API.
-
-Do not make a separate API for the phone. It would become a second product that drifts from the first. With one API, each new server feature is available to both clients.
+Do not make a separate API for the phone. It would become a second product that drifts from the first. With one API, each new server feature is available to both Clients.
 
 ### Services
 
-The API is a set of services. Each service matches a part of Anvil, not a screen of a client.
+The API is a set of services. Each service matches a part of Anvil, not a screen of a Client.
 
 | Service | What it gives |
 |---|---|
-| Machine | Identity, pairing, and the Projects list (loaded and Dormant), from the Project Sidebar model |
-| Files | File list snapshots with generations, read, conditional write, stat, and change hints |
+| Machine | Identity, the Machine's OS, pairing, and the Projects list (loaded and Dormant) from the Project Sidebar model |
+| Files | File list snapshots, bounded reads, conditional whole-file writes, stat, and change hints |
 | Search | Text search as a stream of matches from `rg` on the Machine |
-| Git | Status, branches, diffs and logs |
+| Git | Structured operations: status, branches, diffs and logs |
 | Terminal | The Terminal Session list, attach as Controller or Viewer, snapshot then output, input, resize |
-| Agent | Agent Status, Pi conversations, and send, wait and interrupt. These are the `core.control` operations that exist today. |
+| Agent | Agent Status, Pi conversations, and send, wait and interrupt for a Pi in a Terminal Session |
 | Index | Symbols, and Markdown links and backlinks |
+| Process | Starts a configured tool, such as an LSP server or a formatter, and carries its standard input and output as a byte stream |
 
-A later Live Document service has a reserved place. See [Shared editing](#shared-editing).
+Git stays structured. Do not use the Process service as a generic command runner for Git.
 
-### Capabilities
+A later Live Document service has a reserved name. See [Shared editing](#shared-editing).
 
-At connect, the server lists the services and the features of each service that it supports. A client uses only what the server lists, and hides the rest. Either side can then grow without the other.
+## Ownership
 
-This replaces the idea of "the same build on both ends". The Companion is a different program, so the API must be versioned and documented anyway. Desktop clients follow the same rule.
+The Machine is not only a file server. Terminal Sessions and Pi live there. Each operation has one clear owner:
 
-### Sync rule
+- **The Terminal host owns its Terminal Session.** This is true today: each session is an `anvil --terminal-session` process that lives on after the editor closes. The host accepts several Clients (see [Terminals on many devices](#terminals-on-many-devices)).
+- **The Machine owns Machine operations.** The Terminal, Agent, Files, Search, Git, Index and Process services work with no Client connected. They need no View.
+- **A Client owns editor operations.** Operations such as "open a Pane" or "show this file" need a UI. Each such request names its target Client. With no Client connected, the request fails with a clear error.
+- **Anvil on the Machine itself is also a Client.** If you sit at PC A, your local Anvil uses the same Terminal hosts and the same Machine operations as a Client on PC B. PC A has no second owner.
 
-All remote state uses the rule that `data/core/project_files.lua` already uses locally:
+Two desktops can open the same Project on a Machine. Each one has its own Buffers and Views. They meet only through the Machine's files and Terminal Sessions.
 
-- A snapshot is the truth. Each snapshot has a generation number.
-- Events are hints that mean "look again". A client never patches its state from an event.
-- A client sends its generation at reconnect. If the server has a newer one, it sends a new snapshot.
+### Pi control
 
-The local code works this way today. `reconcile` checks changed paths on disk, and does a full scan when the set of files changes. A watcher overflow causes a full scan after 0.5 seconds without events. Each scan increments a generation, and subscribers discard older results.
+Today, `core.control` mixes the two kinds of operation, and it depends on Views. For example, `terminal` raises "Terminal Session has no View in this Project" (`data/core/control.lua:234`), and `launch` opens through a Terminal View. `control_runtime.lua` publishes the discovery files based on which Project process owns the View.
 
-Start with whole snapshots. If a measurement shows that they are too large on a real link, send differences with these rules:
+On a Machine, split `core.control` into two parts:
 
-- The server computes a difference by comparing two full snapshots, never from events.
-- Each difference names its start and end generation and carries a hash of the result.
-- A client applies a difference only if it holds the start generation and the hash matches. Otherwise it asks for a full snapshot.
+- **Machine operations:** start a Terminal or Pi, read its state, send, wait and interrupt. `anvil serve` answers these, so they work with no Client.
+- **Editor operations:** `open_file`, `pane` and `workspace_state`. The Machine forwards them to a named Client, or to the Client that started the Pi. With no Client, they fail.
 
-### Message rules
+`anvil serve` publishes Pi's discovery files on the Machine, so their owner does not depend on a View.
 
-- Messages carry plain data: paths, text, ranges, states. They are not shaped like Lua tables or other internals.
-- One position unit for all text ranges. Anvil counts UTF-8 bytes, and Android counts UTF-16 units. Choose one unit for the protocol, and convert in one place on each client. Test the conversion with Spanish text and emoji.
-- One edit format: a range, its new text, and the base version. File writes use it first. Live editing can use it later.
-- One codec in C. Both ends encode and decode messages with the same C module, so they cannot disagree on the format.
+`agent_read` gives status and bounded task results today. It does not give the conversation history. A chat view reads Pi's session file through the Files service.
 
-### Identity and scopes
+### Server lifetime
 
-- Identity is a person plus a device. Pairing gives the device identity. A second person can join later without a protocol change.
-- Each paired device gets scopes, for example: read files, write files, type in Terminals, control Pi.
-- Revocation works for one device. A lost phone loses access without changes to other devices.
+Terminal Sessions and Machine operations must work with no UI, so `anvil serve` must run while Anvil's UI is closed. Proposal: start it at login, with one server for each user on each Machine. The local shell connects to it like any other Client. This is still an open question. Decide it before the Terminal or Agent service ships.
 
-## Transport and pairing
+## Identity
 
-- Machines reach each other through Tailscale or another private network. The server listens on loopback, and Tailscale Serve exposes it.
-- Network identity alone is not enough. Any local process can reach loopback, so each request carries a pairing token.
-- Pairing uses a short code that the user confirms on both devices. The token is stored per device and can be revoked.
-- Reference: t3code uses pairing with scoped sessions, read-only guest links and an optional cloud relay. Its server owns all execution, and each client is a thin view.
+### Machine-qualified identity
 
-Open question: does `anvil serve` run only while Anvil runs, or from login? A server from login keeps Terminals and Pi reachable when no Anvil Window is open.
+Two Machines can both have `C:\Projects\notes`. Today, the shell, Workspace storage and control routing identify a Project by its path:
+
+- `src/anvil_shell.c` finds a Project's identity by opening a local folder.
+- `src/shell_state.c` saves Project paths.
+- `data/core/control_server.lua` routes Projects by path.
+
+Every boundary between processes must use a Machine ID plus a path. This includes the Sidebar model, Shell App State, Workspace storage keys, the Scratch Project, Pane requests and control routing. Inside one Project process, paths stay native paths, so the code needs no URIs.
+
+### Path rules
+
+Lua's path functions in `data/core/common.lua` follow the Client's OS. A Windows Client cannot apply Windows rules to Linux paths.
+
+Terminal hosts are Windows-only today, so the first Machines are Windows. The Machine service reports its OS. A desktop Client refuses a Machine with other path rules until a real need appears. The Companion never reads a Machine path as a path on the phone.
+
+## Protocol
+
+### Envelope
+
+- Each message has one small envelope with a protocol version.
+- A Client and a server with incompatible versions refuse to connect, with a clear message.
+- Optional features are listed at connect. A Client uses only what the server lists, and hides the rest. Either side can grow without the other.
+- The protocol defines unknown-field rules, error replies, message size limits and cancellation.
+- Terminal snapshots carry the ID and version of their format. A Ghostty update can change the format.
+- Cross-version tests use stored message fixtures.
+
+### Rules for each kind of data
+
+The four kinds of data have different rules.
+
+1. **File list.** A snapshot with a generation. A change to the set of files gives a new snapshot. Today, `data/core/project_files.lua` scans again when the set of files changes, and increments the generation after each successful scan.
+2. **File content.** Each read returns a content version: a hash of the bytes. A file list generation says nothing about file text. A text change does not change the file list.
+3. **Change hints.** A hint says "this path changed, look again". A Client drops its cached text or metadata for that path and reads again when it needs it. It never patches state from a hint.
+4. **Ordered streams.** Terminal output, `rg` matches, Process streams and later live edits. Each record has a sequence number. After a gap or a reconnect, the stream starts again with a snapshot.
+
+Each server start gets a new **epoch**. A Client sends its epoch and generations at reconnect. If the epoch differs, the Client drops all cached state and starts from snapshots. A generation alone is not enough, because it starts at zero again after a restart.
+
+Start with whole file list snapshots. Send differences only if a measurement shows that snapshots are too large on a real link.
+
+### Positions
+
+Anvil counts UTF-8 bytes. Android counts UTF-16 units. Text ranges in the protocol use one unit. Each Client converts in one place. Test the conversion with Spanish text and emoji.
+
+File writes replace whole files, so they need no ranges. Ranges appear first in search matches and index results.
+
+### Metadata states
+
+A Client's copy of the file list is not a full stat cache. The scan applies ignore rules, and Project Paths outside the root, generated files and files opened directly can be missing from it. For each path, the copy knows one of four states:
+
+- **present**
+- **absent**
+- **unknown:** not in the copy
+- **stale:** a hint arrived after the copy was made
+
+"Not in the copy" never means "does not exist". The server confirms each create, overwrite, rename and delete.
+
+## Writes
+
+### Conditional whole-file writes
+
+- A write sends the whole file's bytes and the content version that the Client read last.
+- The server writes only if the file still has that version. Otherwise it returns the current bytes and version, and the Client merges (see [Merges](#merges)).
+- The server puts the writes of its own Clients in order. It cannot stop Pi, Git, formatters or other editors on the Machine from writing between its check and its write. That window stays, as it does on a local disk.
+- Encodings and line endings follow the Buffer's normal load and save rules. The version identifies bytes on disk, not Buffer text.
+
+### Save IDs
+
+A server can complete a save and lose its reply. A Client can also keep typing while a save is open. So each save carries:
+
+- a save ID
+- the base content version
+- the Buffer revision that it sent
+
+The reply gives the new content version. An acknowledgement marks only the sent revision as saved, not the current Buffer.
+
+After a reconnect, a Client with an open save asks for the result of its save ID. If the server does not know it, the Client compares the file's current version with the version of its sent bytes. It never sends an old open save over newer saved work.
+
+### Merges
+
+Today only clean Buffers reload as edits. The dirty-Buffer merge is step 3 of [Shared editing](shared-editing.md#order-of-work).
+
+- Read-only access ships first.
+- Writes then ship with today's conflict prompt for dirty Buffers.
+- Smooth editing by several Clients needs the dirty merge. It becomes a required step when the Companion edits files that desktop Anvil also has open.
+
+## Authority and pairing
+
+### Two levels
+
+The first version has one owner and two levels for each paired device:
+
+- **View:** read the Projects list, files, Git state, Agent Status and Terminal screens.
+- **Full control:** everything else. This includes file writes, Terminal input, Pi control and the Process service.
+
+The levels are not finer, because finer scopes do not hold. Terminal input runs any command. Pi can read, write and run anything. A file write can change scripts and configuration. Full control therefore gives the full power of the user account on that Machine.
+
+Full control covers all Projects on the Machine. Limits for each Project are a later design.
+
+### Pairing
+
+- The Machine shows a short pairing code. The code works one time, for a few minutes, with a limited number of attempts.
+- The paired device stores its token in the OS's protected storage: Android Keystore on the phone, DPAPI on Windows.
+- Revocation removes the token and closes the device's open connections and streams at once.
+- Machines reach each other through Tailscale or another private network. The server listens on loopback, and Tailscale Serve exposes it. The network is not the authority: each request carries the device token, because any local process can reach loopback.
+- Each identity has a person field and a device field. Only the owner exists at first.
+
+Reference: t3code uses pairing with scoped sessions, read-only guest links and an optional cloud relay. Its server owns all execution, and each client is a thin view.
 
 ## Desktop: Projects on another Machine
 
@@ -105,6 +203,7 @@ This follows the model of VS Code Remote. The UI stays local. The Project's file
 - Buffers, undo, selections and unsaved text
 - Themes, keymaps, config and plugins
 - Tree-sitter parses of open Buffers, and Live Preview
+- LSP clients
 
 ### What runs on the Machine
 
@@ -115,22 +214,25 @@ This follows the model of VS Code Remote. The UI stays local. The Project's file
 
 ### One Machine for each Project process
 
-Each hosted Project process uses exactly one Machine. Paths stay native paths on that Machine, so the code needs no URIs. A Project on another Machine is a separate Project in the Sidebar.
+Each hosted Project process uses exactly one Machine. A Project on another Machine is a separate Project in the Sidebar, with a Machine-qualified identity.
 
 ### The file seam (`core.fs`)
 
 Anvil's file access is synchronous and path-based. VS Code was asynchronous and URI-based from the start. This is the main difficulty.
 
 - Add a `core.fs` module for Project content. Its local backend calls the current primitives. Its Machine backend sends requests.
-- Local state does not use `core.fs`. `USERDIR`, `DATADIR` and `TEMP` stay on the local disk.
-- In a Project on another Machine, a raw primitive that touches a path outside those local folders raises an error. This guard fails closed, so a missed call site shows as an error and not as a read of the wrong disk.
+- Local state uses explicit APIs: `core.storage` and helpers for `USERDIR`, `DATADIR` and `TEMP`. A path prefix does not decide which disk a call means, because a Machine path can have the same spelling as a local folder.
+- In a Project process on another Machine, the raw primitives raise an error for every path. Only `core.fs` and the local-state APIs work.
+- This guard stops mistakes. It is not a security boundary.
+- The audit includes native code and workers, not only Lua: `src/api/encoding.c` and `src/worker_pool.c` open files, `markdown_vault_index.c` reads through SDL, image loading reads files, and `src/api/thread.c` makes Lua states with the standard libraries.
 - Plugins that call `io.open` directly on Project files hit the guard. They must move to `core.fs`.
 
-Call sites in `data/` today:
+Lines that match each primitive in `data/` today (one line can hold several uses):
 
-| Primitive | Uses | Files |
+| Primitive | Lines | Files |
 |---|---|---|
 | `system.get_file_info` | 232 | 65 |
+| `worker_pool` | 187 | 26 |
 | `io.open` | 105 | 57 |
 | `os.remove` | 70 | 27 |
 | `system.absolute_path` | 51 | 22 |
@@ -139,19 +241,12 @@ Call sites in `data/` today:
 | `system.chdir` | 14 | 6 |
 | `os.rename` | 9 | 4 |
 | `dirwatch` | 8 | 6 |
-| `worker_pool` | 187 | 26 |
 
-Many of these calls touch local state, not Project content. The first task is to classify each call site:
-
-- Project content or local state
-- synchronous or asynchronous
-- UI thread or worker
-
-The UI thread calls files synchronously in some places, for example in `data/core/buffer/init.lua` and `data/plugins/filetree/init.lua`. These must become asynchronous, or read the local metadata copy.
+Many of these calls touch local state, not Project content. Classify each call site: Project content or local state, synchronous or asynchronous, UI thread or worker. The UI thread calls files synchronously in some places, for example in `data/core/buffer/init.lua` and `data/plugins/filetree/init.lua`. These must become asynchronous, or read the local metadata copy.
 
 ### Local metadata copy
 
-UI code reads small data often, such as "does this path exist" or "is it a folder". A network round trip in each frame is not acceptable. So each client keeps a local copy of the Machine's file list and the metadata it needs, and refreshes it by the sync rule. UI-thread metadata calls read the copy. Large data, such as file text, is fetched only when needed.
+UI code reads small data often, such as "does this path exist" or "is it a folder". A network round trip in each frame is not acceptable. So each Client keeps a local copy of the Machine's file list and the metadata it needs, with the [metadata states](#metadata-states). UI-thread metadata calls read the copy. File text is fetched only when needed.
 
 ### File Search, Text Search and previews
 
@@ -161,28 +256,33 @@ The picker's screen code does not change. Only its data sources change.
 |---|---|---|
 | Typing in File Search | None. Fuzzy matching runs on the local copy of the file list. | None |
 | Text Search query | The query out, the matches back as a stream | One round trip, plus `rg` time |
-| Selecting a row to preview | One file's text, then cached. Nearby rows can be fetched in advance. | One round trip |
+| Selecting a row to preview | A bounded part of the file, then cached. Nearby rows can be fetched in advance. | One round trip |
 | Opening a file | The file's bytes, one time | One round trip |
-| Typing in an open file | None. The Buffer is local. | None |
-| Saving | The new text, as a conditional write | In the background |
+| Typing in an open file | None, unless an LSP server is active. Then the LSP stream carries the changes. | None |
+| Saving | The whole file, as a conditional write | In the background |
 
 `stat_paths` already takes many paths in one call. On a Machine it becomes one request.
 
-### Writes
+Previews read at most a fixed number of bytes and can be cancelled. The server applies Anvil's binary rule (`common.is_binary`) before it sends text.
 
-A write is conditional. The client sends the version that it last read. The server writes only if the file is still that version. Otherwise it returns the current text, and the client merges through the reload engine.
+### LSP and formatters
 
-On a local disk, an external writer can save between Autosave's check and its write. On a Machine, the server does the check and the write as one step, so this race goes away.
+- The LSP client stays local. The Process service starts the LSP server on the Machine and carries its standard input and output. Today's transport in `data/core/lsp/process.lua` starts a local process. A Machine backend replaces only that process.
+- LSP paths are Machine paths, because each Project process uses one Machine.
+- After a disconnect, the LSP server stops. At reconnect, the client starts it again and sends the open documents again.
+- A formatter gets the text of one Buffer revision. Its result applies only if the Buffer still has that revision.
+
+### Indexes and unsaved Buffers
+
+Symbol search today merges disk results with the text of open Buffers, and hides old disk entries for files with local changes (`data/core/treesitter/symbol_index.lua`). With a Machine, the index runs on the Machine. The Client still adds its open Buffers on top and hides old results for files that it changed.
 
 ### Pi in a Project on another Machine
 
-Pi runs in a Terminal Session on the Machine, so its tools act on that Machine. Pi needs no change.
-
-Pi finds Anvil's control server through discovery files. On a Machine, these files are on the Machine's disk. The server must publish them there and carry the control requests back to the client's Project process.
+Pi runs in a Terminal Session on the Machine, so its tools act on that Machine. Pi needs no change. Its control requests go to `anvil serve` (see [Pi control](#pi-control)).
 
 ### Leaks to the wrong PC
 
-These features act on the local PC by nature. Each one needs a decision when its Project is on another Machine:
+These features act on the local PC by nature. Each one needs a decision for a Project on another Machine:
 
 - the clipboard
 - native file dialogs
@@ -192,14 +292,15 @@ These features act on the local PC by nature. Each one needs a decision when its
 
 ### Disconnects
 
-- Unsaved text stays in local Buffers and is safe.
-- Saves, searches and Terminals stop until the link returns.
-- Saves wait and retry. The Pane Status Bar shows the Machine as offline.
+- A disconnect does not discard the live Buffer.
+- Saves, searches, LSP and Terminals stop until the link returns. Open saves follow the [save ID](#save-ids) rules.
+- The Pane Status Bar shows the Machine as offline.
+- Closing a Project that has unconfirmed saves asks first. Its edits did not reach the Machine.
 - Terminal Sessions keep running on the Machine, and attach again with a snapshot.
 
 ### Bootstrap
 
-A Machine needs `anvil serve` and its tools, such as `rg` and Git. A Machine that runs Anvil already has them. Pi and its packages are installed by the user on each of their PCs.
+A Machine needs `anvil serve` and its tools, such as `rg` and Git. A Machine that runs Anvil already has them. The user installs Pi and its packages on each of their PCs.
 
 ## Terminals on many devices
 
@@ -209,24 +310,38 @@ A Terminal Session has one size in rows and columns. Programs draw for that size
 
 If each device forced its own size, each switch would make the program redraw. A TUI places text at fixed positions, so output that it drew at 45 columns stays narrow in the history. A width change also makes ConPTY and the Terminal View reflow lines differently.
 
-### One device answers queries
+### One Client answers queries
 
-Programs ask the terminal questions: the cursor position, the colours, light or dark mode, keyboard modes. The terminal answers by typing into the program's input. If two devices answered, the program would get two answers, and the second one could show as stray text.
+Programs ask the terminal questions: the cursor position, the colours, light or dark mode, keyboard modes. The terminal answers through the program's input. Today, answers and typed input use the same route (`src/api/terminal_native.c`). If two Clients answered, the program would get two answers, and the second one could show as stray text.
 
 ### Controller and Viewers
 
-- Each Terminal Session has one **Controller**. It sets the size, sends input and answers queries.
+- Each Terminal Session has at most one **Controller**. It sets the size, sends input and answers queries.
 - **Viewers** show the Controller's screen at its size. They scale it to fit, with zoom and panning on the phone. A small bar shows the Controller's device and a Take Control button.
-- **Input takes control.** On the desktop, typing in the Terminal takes control at once. On the phone, a tap that opens the keyboard takes control. Take Control does the same.
-- When control moves, the host resizes to the new Controller and the program redraws. The old Controller becomes a Viewer.
-- When no device is connected, the session keeps its last size.
+- Viewers do not answer queries and have no other side effects, such as clipboard writes.
+- **Input takes control.** On the desktop, typing in the Terminal takes control. On the phone, a tap that opens the keyboard takes control. Take Control does the same.
+- When no Client is connected, the session keeps its last size. Queries then get no answer, as they do today when no editor is attached (`host_reader` in `src/terminal_host.c`). ConPTY itself answers cursor-position requests.
+- Viewers are not blurred. A Viewer is most useful to check whether Pi still works or asks a question.
 
-Viewers are not blurred. A Viewer is most useful to check whether Pi still works or asks a question.
+### Handoff
+
+The host gives control. Each grant has a new control token. The host rejects input, resize and answers with an old token, so late messages from the old Controller cannot reach the program.
+
+A handoff has a fixed order:
+
+1. A Client asks for control.
+2. The host gives a new token and tells all Clients.
+3. The host resizes to the new Controller's size.
+4. The host sends a snapshot at the new size.
+5. The host accepts input from the new Controller.
+
+If two Clients ask at the same time, the host takes the first request. If the Controller disconnects, the session has no Controller until a Client asks. A Controller that reconnects with an old token is a Viewer.
 
 ### Changes to the Terminal host
 
-- Today the host accepts one client (`attach_client` in `src/terminal_host.c`). Each client has an 8 MB queue and a 10-second stall timeout. A detached host waits 10 minutes for a client.
-- The host must accept several clients: one Controller and any number of Viewers. A slow Viewer must not stall the Controller. Give each client its own queue, and drop a Viewer that stalls. It attaches again with a snapshot.
+- Today the host accepts one client (`attach_client` in `src/terminal_host.c`). That client has an 8 MiB queue and a 10-second stall timeout.
+- A detached host that is not busy and has no new output for 10 minutes ends. A busy host, such as a working Pi, keeps running.
+- The host must accept one Controller and any number of Viewers. Each Client has its own queue. A Viewer that stalls is dropped and attaches again with a snapshot. A slow Viewer never stalls the Controller.
 - The host already keeps the Ghostty screen model, so Viewers only display it.
 - Ghostty snapshots contain no images. A Viewer that joins sees no inline images until the program sends them again. Reconnects have the same limit today.
 - Terminal hosts are Windows-only today, because they use ConPTY. Other host systems need a PTY backend.
@@ -247,7 +362,7 @@ An Anvil port would reuse the parts that matter least on a phone. A native app g
 
 ### What the Companion does
 
-The Companion is a client for your Machines, not only a Markdown editor. Its sections follow the services:
+The Companion is a Client for your Machines, not only a Markdown editor. Its sections follow the services:
 
 Machines → a Machine → Projects, Terminals and Agents → a Project → Files, Search, Git and Terminals.
 
@@ -258,8 +373,12 @@ Each viewer is a separate module: a code viewer, a Markdown editor, a Terminal v
 A vault on the phone is a Project on the phone's own Machine. The Companion runs the Files, Search and Index services in its own process, with the same interface. Local and remote vaults then use one code path.
 
 - Files are in a normal folder. Use the "All files access" permission. Google Play restricts it, but an installed APK can use it. Do not use document picker URIs, because they are not paths.
-- Android blocks binaries that an app downloads. It allows binaries inside the APK's native library folder. So the APK can include `rg` or Git, if a feature needs them. A vault of a few thousand notes does not need `rg`.
+- Android blocks binaries that an app downloads. It allows binaries inside the APK's native library folder. So the APK can include `rg` or Git if a feature needs them. A vault of a few thousand notes does not need `rg`.
 - For offline editing of a PC's notes, keep a Git clone or a synced folder on the phone as a local vault. That is sync, not part of this plan.
+
+### Unsaved text on the phone
+
+Android can stop a background app at any time, and a Machine can be offline for hours. The Companion writes each unsaved edit to its own storage at once, together with the open save IDs. At the next start, it restores them and continues the saves. Without this, the Companion does not edit files.
 
 ### Agents on the phone
 
@@ -269,20 +388,22 @@ The best phone view of Pi is not its TUI. It is a chat view made from Pi's sessi
 
 Shared C modules include no Lua headers. A binding in `src/api` exposes each one to Lua, and a JNI binding exposes it to the Companion. See "C and Lua" in `AGENTS.md`.
 
-- The protocol codec
-- The Terminal model: libghostty-vt. t3code runs it on Android too.
+- The protocol codec, so both ends agree on the format
+- The Terminal model: libghostty-vt. t3code runs it on Android too. This does not prove that Anvil's own bindings and snapshots build for Android.
 - Tree-sitter and the highlight queries from `data/treesitter`, so code has the same colours
 - `fuzzy.c`, so file search ranks the same
-- The Markdown modules: `markdown_parser.c`, `markdown_extensions.c` and `markdown_vault_index.c`. These are already C with no Lua headers.
-- The text merge engine, after its port (see below)
+- The Markdown modules `markdown_parser.c` and `markdown_extensions.c`
+- The text merge engine, after its port (see [Merges](#merges))
+
+"No Lua headers" does not mean "ready for Android". `markdown_parser.c` uses the language registry, which lists all grammars, and SDL's timer and atomics. `markdown_vault_index.c` also uses the file manifest, snapshots, `fuzzy.c` and SDL, and it reads files. Split its file loading from its index work before the Companion uses it.
 
 The Android UI is native and is not shared.
 
 ### Markdown logic to port to C
 
-The editing rules are Lua today, in `data/core/markdown`. Under the C policy, these are port candidates. Each one becomes a module that takes text, a parse tree and the caret, and returns edits or styled ranges. In this order:
+The editing rules are Lua today, in `data/core/markdown`. Under the C policy, these are port candidates. Each one becomes a module that takes text, a parse tree and the caret, and returns edits or styled ranges. Port one only when the Companion needs it, in this order:
 
-1. Links and anchors: `links.lua`, `parser.lua`, `anchors.lua`. They are pure and small, so they prove the pattern.
+1. Links and anchors: `links.lua`, `parser.lua`, `anchors.lua`. They are pure and small.
 2. Link rename edits: `rename_links.lua`
 3. The table model and formatting: `serialize_model` and `pad_cell` in `tables.lua`
 4. Block formatting rules: the prefix rules in `format.lua` for headings, lists, quotes and callouts
@@ -292,14 +413,17 @@ Item 5 is also part of the layout pipeline target in `AGENTS.md`. The desktop dr
 
 ## Shared editing
 
-[Shared editing](shared-editing.md) has a separate plan: a reload engine, Disk Conflicts, and later shared notes through a sync tool such as Nextcloud, and then live editing. That plan is not part of this one. These rules keep the two plans compatible:
+[Shared editing](shared-editing.md) has a separate plan: a reload engine, Disk Conflicts, and later shared notes through a sync tool such as Nextcloud, and then live editing. That plan is not part of this one. The two plans meet here:
 
-- The reload engine also merges changes from other clients. If the Companion saves a note on a PC while desktop Anvil has it open, desktop Anvil sees a changed file and merges it. This plan needs no merge of its own.
-- Writes are conditional. See [Writes](#writes).
-- The protocol fixes one position unit and one edit format.
-- Identity is a person plus a device.
-- The capability list reserves a Live Document service. For files on one Machine, `anvil serve` can order the edits. The edit server in the shared-editing plan can use the same protocol on another host.
-- The line and word comparison is Lua today (`data/core/buffer/text_edits.lua`). The Companion needs the same merge. Port it to C when step 3 of the shared-editing plan starts.
+- The reload engine also merges changes from other Clients. If the Companion saves a note on a PC while desktop Anvil has it open, desktop Anvil sees a changed file and reloads it.
+- Several Clients that edit one file need the dirty merge. See [Merges](#merges).
+- Live Document is only a reserved service name. Ordered messages and a range format do not keep concurrent edits by themselves. Two inserts at one place need transform rules. Before that service starts, it needs:
+  - transform rules for concurrent edits
+  - an ID for each edit
+  - caret mapping
+  - undo that skips other people's edits
+
+  The transform rules are shared C. The Buffer side stays in Lua until it has a clean seam. Normal file saves never use this machinery.
 
 ## Pi on your Machines
 
@@ -316,44 +440,58 @@ This is deferred. The options, from simple to complex:
 
 ## Risks
 
-- The `core.fs` seam touches about 70 files, and `io.open` mixes Project content with local state.
+- The `core.fs` seam touches about 70 Lua files and some native code. `io.open` mixes Project content with local state.
 - Synchronous file calls on the UI thread must change before a Project can run on a Machine.
+- Machine-qualified identity touches the shell, Shell App State, Workspace storage and control routing.
 - The POSIX branches of the native code have no CI job. They may be broken.
 - The Companion's text styling must stay correct while Gboard edits text near hidden Markdown syntax.
 - Position conversion between UTF-8 and UTF-16 is a source of off-by-one bugs.
-- A Terminal host with several clients must not let one slow client stall the others.
+- A Terminal host with several Clients must not let one slow Client stall the others.
 
 ## Order of work
 
-Each stage adds services to the same server, so desktop and Companion grow together.
+Start with one thin vertical slice. It tests the hardest assumptions before the large audit.
+
+### Step 0: decisions
+
+Decide before code:
+
+- Machine-qualified identity
+- the ownership rules
+- the server lifetime
+- the protocol envelope and version
+- the two authority levels
 
 ### Desktop
 
-1. **Classify the call sites** of the primitives above.
-2. **Add `core.fs`** with a local backend only, plus the fail-closed guard. Users see no change.
-3. **Add `anvil serve`** with loopback Machines on one PC. The `lua-ui` suites can then run Projects through the server.
-4. **Files and Search services**, the local metadata copy, and the picker data sources.
-5. **Terminal service** with Controller and Viewers.
-6. **Pairing and transport** between real PCs.
-7. **Pi control discovery** through the link.
+1. **Loopback slice.** `anvil serve` on the same PC, with one Project and one authenticated read.
+2. **One file, end to end.** Open, edit, save conditionally, disconnect and reconnect one file. Test a conflict and a save with an unknown result.
+3. **Pairing and transport** between real PCs, before any service that runs commands.
+4. **The full call-site audit**, then `core.fs` with its local backend and the guard. Users see no change.
+5. **Files and Search services**, the local metadata copy, and the picker data sources. Read-only Projects on another Machine ship here.
+6. **Writes** with today's conflict prompt.
+7. **Terminal service** with Controller and Viewers.
+8. **Agent service** and the split of `core.control`.
+9. **Process service** for LSP and formatters.
 
 ### Companion
 
-1. **Machines and Projects** with Agent Status, read only.
-2. **Terminal view**, first as a Viewer, then as a Controller.
-3. **Files and code** with highlighting, and File Search.
-4. **Markdown editing**, on the phone and on Machines.
-5. **Text Search and Git** views.
-6. **Pi chat**: start Pi, send messages, read its session file.
+The first test runs in parallel with the desktop work.
 
-### First tests
+1. **First test:** a minimal NDK library with `markdown_parser.c` and its dependencies, and a Compose screen that edits a note with Live Preview for headings, bold text and wikilinks. Type into it with Gboard, with swipe typing and Spanish accents, while it hides and shows syntax at the caret. If the styles and the caret stay correct, the native approach works.
+2. **Machines and Projects** with Agent Status, read only.
+3. **Terminal view**, first as a Viewer, then as a Controller.
+4. **Files and code** with highlighting, and File Search.
+5. **Markdown editing**, on the phone and on Machines, with saved unsaved edits.
+6. **Text Search and Git** views.
+7. **Pi chat:** start Pi, send messages, read its session file.
 
-- A Compose screen that edits a note with Live Preview for headings, bold text and wikilinks, using `markdown_parser.c` through JNI. Type into it with Gboard, with swipe typing and Spanish accents, while it hides and shows syntax at the caret. If the styles and the caret stay correct, the native approach works.
-- Measure the size of a full file list snapshot for a large Project, compressed.
+Also measure the compressed size of a full file list snapshot for a large Project.
 
 ## Open questions
 
-- Does `anvil serve` run only while Anvil runs, or from login?
-- Are the names Machine, Swarm, Companion, Controller and Viewer accepted?
+- Does `anvil serve` start at login? This plan proposes yes.
+- Are the names Machine, Swarm, Companion, Client, Controller and Viewer accepted?
 - Which position unit does the protocol use?
 - What do the clipboard, file dialogs, drag and drop and Show in File Explorer do for a Project on another Machine?
+- Where does an editor request go when several Clients are connected and none started the Pi?

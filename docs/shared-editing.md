@@ -151,7 +151,7 @@ The base rule handles this case. The base is the Disk text of the last merge, so
 
 - **Two Project processes.** Each loaded Project has its own process, and Buffer reuse works only inside one process. Two Projects can open the same file and both write it. The reload engine lets them converge through the disk, but each one sees the other's saves as external changes.
 - **Autosave timing.** Autosave saves 3 seconds after typing stops, at the latest after 30 seconds, and when focus moves. Each save is atomic, and it checks the disk first. An external writer can still save between that check and the write. Every editor has this window.
-- **Unsaved text while Autosave cannot save.** A failed save or an open Disk Conflict keeps edits only in memory. A crash during that time loses them. Anvil has no separate safety copy of unsaved text, by choice: the window is small, and a copy adds storage, cleanup, and a restore flow. Add one only if this loses text in real use.
+- **Unsaved text while Autosave cannot save.** A failed save or an open Disk Conflict keeps edits only in memory. A crash during that time loses them. Anvil has no separate safety copy of unsaved text, by choice: the window is small, and a copy adds storage, cleanup, and a restore flow. Add one only if this loses text in real use. This choice holds for local Projects. A Project on another Machine and the Companion app can keep unsaved text for hours, so [Machines](machines.md#unsaved-text-on-the-phone) needs a durable copy there.
 - **Line endings and encodings.** Loading converts text to UTF-8 with LF lines, and saving converts it back. Compare texts in Buffer form only.
 - **Rename and delete.** An external delete marks the Buffer's file missing. Anvil cannot tell a rename from a delete.
 
@@ -199,7 +199,7 @@ Live editing lets people see each other type. It needs a small edit server, and 
 
 - The server gives each edit the next version number and sends it to the other clients. Each Anvil applies it as a small edit, about one network round trip later.
 - The server checks each user's login with the system that holds the accounts, for example Nextcloud. It writes the user ID on each message, so a client cannot claim another name.
-- While online, edits do not conflict: the server orders them. After a long offline time, the client merges like a reload, with the server text in the place of the Disk text.
+- Each client sends an edit with the version that it is based on. The server transforms the edit against the edits that it ordered after that version, so two inserts at one place both stay. The transform rules are shared C. After a long offline time, the client merges like a reload, with the server text in the place of the Disk text.
 - Remote carets and selections show in each person's colour.
 
 #### Who writes the file
