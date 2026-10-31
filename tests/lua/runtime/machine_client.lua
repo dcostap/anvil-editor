@@ -1,4 +1,6 @@
 local common = require "core.common"
+local json = require "core.json"
+local machine = require "machine"
 local MachineClient = require "core.machine_client"
 local machine_server = dofile("tests/fixtures/machine_server.lua")
 local test = require "core.test"
@@ -46,12 +48,14 @@ test.describe("Machine client", function()
     test.ok(common.mkdirp(context.user))
     write_file(context.notes, "Client copy\n")
     write_file(machine_copy(context, context.notes), "Machine copy\n")
-    context.server = machine_server.start(context.user, { "--test-root", context.store, context.project })
+    context.server, context.discovery = machine_server.start(context.user,
+      { "--test-root", context.store, context.project })
     context.client = MachineClient.new(machine_server.discovery_path(context.user))
   end)
 
   test.after_each(function(context)
     context.client:close()
+    if context.device then context.device:close() end
     machine_server.stop(context.server)
     test.ok(test.remove_tree(context.root))
   end)
@@ -77,6 +81,45 @@ test.describe("Machine client", function()
     test.equal(conflict.version, written.version)
     test.equal(current, "Saved\n")
     test.equal(read_file(machine_copy(context, context.notes)), "Saved\n")
+  end)
+
+  local function pair(context, code)
+    local done, reply
+    MachineClient.pair("127.0.0.1", context.discovery.port, code, "Laptop", function(...)
+      done, reply = true, table.pack(...)
+    end)
+    local deadline = system.get_time() + 10
+    while not done and system.get_time() < deadline do coroutine.yield(0.01) end
+    test.ok(done, "The pairing did not end")
+    return table.unpack(reply, 1, reply.n)
+  end
+
+  test.it("pairs with a Machine and connects through its saved record", function(context)
+    local _, pairing = call(context.client, "pairing.start", {level = "view"})
+    local err, path = pair(context, pairing.code)
+    test.is_nil(err)
+
+    -- The record keeps the device's token only in protected form.
+    local text = read_file(path)
+    local record = json.decode(text)
+    local token = machine.unprotect((record.protected_token:gsub("%x%x", function(pair)
+      return string.char(tonumber(pair, 16))
+    end)))
+    test.ok(#token >= 32)
+    test.is_nil(text:find(token, 1, true))
+
+    context.device = MachineClient.new(path)
+    local read_err, _, bytes = call(context.device, "files.read", {path = context.notes})
+    test.is_nil(read_err)
+    test.equal(bytes, "Machine copy\n")
+    test.equal(context.device.level, "view")
+  end)
+
+  test.it("saves no record when the pairing code is wrong", function(context)
+    local _, pairing = call(context.client, "pairing.start", {level = "full"})
+    local err = pair(context, pairing.code == "000000" and "111111" or "000000")
+    test.equal(err.code, "unauthorized")
+    test.is_nil(system.get_file_info(USERDIR .. PATHSEP .. "machines" .. PATHSEP .. context.client.machine .. ".json"))
   end)
 
   test.it("creates a file only when the Machine has none", function(context)

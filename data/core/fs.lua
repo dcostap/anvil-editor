@@ -9,11 +9,11 @@ local reconnect_listeners = {}
 ---@type core.machine_client?
 fs.machine = nil
 
--- `discovery` names the Machine server's `server.json`. Only tests call this until
--- Projects on other Machines exist.
-function fs.use_machine(discovery)
+-- `path` names a Machine file: the local server's `server.json` or a paired Machine's record.
+-- Only tests call this until Projects on other Machines exist.
+function fs.use_machine(path)
   fs.use_local()
-  fs.machine = MachineClient.new(discovery, function(reconnect)
+  fs.machine = MachineClient.new(path, function(reconnect)
     if not reconnect then return end
     for _, listener in ipairs(reconnect_listeners) do listener() end
   end)

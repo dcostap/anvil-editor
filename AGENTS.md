@@ -580,8 +580,10 @@ An error reply is `{"error": {"code": ..., "message": ...}}`. The server ignores
 The server polls its sockets. A link inside a Project can point outside it, as in a local Project.
 `--test-root <folder>` before the Projects maps each Machine path into that folder: `C:\a\b` is `<folder>\C\a\b`. Only tests use it, so one PC can hold a Client copy and a different Machine copy at the same path.
 `--test-lose-reply <method>` does the first request of that method, then closes the connection without its reply. Only tests use it.
-`core.machine_client` is the Client. A scheduler thread connects through the discovery file and sends `hello`. `request` holds other requests until `hello` succeeds, and it never blocks the UI thread.
-After a disconnect, the Client connects again with a growing delay, up to 5 seconds. It reads the discovery file each time, because a restarted server has a new port and token.
+`core.machine_client` is the Client. A scheduler thread connects through a Machine file and sends `hello`. `request` holds other requests until `hello` succeeds, and it never blocks the UI thread.
+A Machine file is the local discovery file or the record of a paired Machine. After a disconnect, the Client connects again with a growing delay, up to 5 seconds. It reads the Machine file each time, because a restarted local server has a new port and token.
+`MachineClient.pair(host, port, code, name, on_done)` sends a pairing code one time and saves the record in `USERDIR/machines/<machine id>.json`. The folder is private. A wrong code saves nothing and does not try again, because each attempt counts.
+The record keeps the host, the port, the device ID and the token, protected with `machine.protect`. On Windows that is DPAPI for the current user. Other platforms keep the token as it is and rely on the private folder.
 A request that was not sent fails with `offline`. A request whose reply did not arrive fails with `disconnected`: the Machine can have done it.
 `core.fs` holds the Project content of a Project process. `fs.use_machine(discovery)` makes the process use a Machine. Only tests call it until Projects on other Machines exist.
 On a Machine, `core.open_buffer` loads each file in the background. The Machine sends the bytes, and the `buffer_read` worker decodes them from its payload. A missing file opens as a new file.

@@ -2,6 +2,10 @@
 #include <stdint.h>
 #include <psa/crypto.h>
 #include "../machine_frame.h"
+#ifdef _WIN32
+#include <windows.h>
+#include <dpapi.h>
+#endif
 
 #define API_TYPE_MACHINE_DECODER "MachineDecoder"
 
@@ -107,10 +111,39 @@ static int f_content_version(lua_State *L) {
   return 1;
 }
 
+/* machine.protect(bytes) and machine.unprotect(bytes) keep a secret for the current Windows user with DPAPI.
+   Other platforms return the bytes unchanged: their secrets rely on a private folder. Returns nil, error on failure. */
+static int protect_data(lua_State *L, int unprotect) {
+  size_t length;
+  const char *bytes = luaL_checklstring(L, 1, &length);
+#ifdef _WIN32
+  DATA_BLOB in = { (DWORD)length, (BYTE *)bytes }, out = { 0 };
+  BOOL ok = unprotect
+    ? CryptUnprotectData(&in, NULL, NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &out)
+    : CryptProtectData(&in, L"Anvil Machine", NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &out);
+  if (!ok) {
+    lua_pushnil(L);
+    lua_pushfstring(L, "DPAPI failed with error %d", (int)GetLastError());
+    return 2;
+  }
+  lua_pushlstring(L, (const char *)out.pbData, out.cbData);
+  LocalFree(out.pbData);
+#else
+  (void)unprotect;
+  lua_pushlstring(L, bytes, length);
+#endif
+  return 1;
+}
+
+static int f_protect(lua_State *L) { return protect_data(L, 0); }
+static int f_unprotect(lua_State *L) { return protect_data(L, 1); }
+
 static const luaL_Reg machine_lib[] = {
   { "frame",           f_frame           },
   { "decoder",         f_decoder         },
   { "content_version", f_content_version },
+  { "protect",         f_protect         },
+  { "unprotect",       f_unprotect       },
   { NULL, NULL }
 };
 

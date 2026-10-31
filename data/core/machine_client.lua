@@ -1,7 +1,7 @@
 -- A connection from this process to a Machine server. It never blocks the UI thread:
 -- a scheduler thread connects, sends `hello` and reads the replies.
--- After a disconnect it connects again. It reads the discovery file each time, because a
--- restarted server has a new port and token.
+-- After a disconnect it connects again. It reads its Machine file each time, because a
+-- restarted local server has a new port and token.
 local core = require "core"
 local json = require "core.json"
 local machine = require "machine"
@@ -13,23 +13,115 @@ local PROTOCOL, CONNECT_TIMEOUT, MAX_RETRY_DELAY = 1, 10, 5
 local MachineClient = {}
 MachineClient.__index = MachineClient
 
--- `discovery` is the path of the server's `server.json`. `on_connect(reconnect)` runs after each `hello`.
-function MachineClient.new(discovery, on_connect)
-  local self = setmetatable({discovery = discovery, on_connect = on_connect, state = "connecting", next_id = 1,
+-- `path` is a Machine file: the local server's `server.json`, or the record of a paired Machine.
+-- `on_connect(reconnect)` runs after each `hello`.
+function MachineClient.new(path, on_connect)
+  local self = setmetatable({path = path, on_connect = on_connect, state = "connecting", next_id = 1,
     connections = 0, pending = {}, held = {}}, MachineClient)
   self.thread = core.add_thread(function() self:run() end)
   return self
 end
 
-local function read_discovery(path)
+local function to_hex(bytes)
+  return (bytes:gsub(".", function(c) return string.format("%02x", c:byte()) end))
+end
+
+local function from_hex(text)
+  return (text:gsub("%x%x", function(pair) return string.char(tonumber(pair, 16)) end))
+end
+
+-- Returns the host, the port and the `hello` credentials of a Machine file.
+local function read_machine_file(path)
   local file = io.open(path, "rb")
   if not file then return nil, "The Machine server is not running" end
   local ok, found = pcall(json.decode, file:read("*a") or "")
   file:close()
-  if not ok or type(found) ~= "table" or type(found.port) ~= "number" or type(found.token) ~= "string" then
-    return nil, "The Machine server's discovery file is not valid"
+  if not ok or type(found) ~= "table" or type(found.port) ~= "number" then
+    return nil, "The Machine file is not valid"
   end
-  return found
+  if type(found.host) == "string" and type(found.device) == "string" and type(found.protected_token) == "string" then
+    local token, err = machine.unprotect(from_hex(found.protected_token))
+    if not token then return nil, "Cannot read the Machine's token: " .. err end
+    return {host = found.host, port = found.port, hello = {device = found.device, token = token}}
+  end
+  if type(found.token) ~= "string" then return nil, "The Machine file is not valid" end
+  return {host = "127.0.0.1", port = found.port, hello = {token = found.token}}
+end
+
+-- Connects without blocking the UI thread. Returns the socket, or nil and an error.
+local function open_socket(host, port, deadline, stopped)
+  local address = net.resolve_address(host)
+  while address and address:get_status() == "waiting" and system.get_time() < deadline do coroutine.yield(0.01) end
+  if not address or address:get_status() ~= "success" then return nil, "Cannot resolve " .. host end
+  local socket, err = net.open_tcp(address, port)
+  if not socket then return nil, tostring(err) end
+  local status
+  repeat
+    status, err = socket:get_status()
+    if status == "waiting" then coroutine.yield(0.01) end
+  until status ~= "waiting" or system.get_time() >= deadline or stopped()
+  if status ~= "success" then
+    socket:close()
+    return nil, err or "Cannot connect to the Machine"
+  end
+  return socket
+end
+
+local function write_file(path, text)
+  local temporary = path .. ".tmp" .. system.get_process_id()
+  local file, err = io.open(temporary, "wb")
+  if not file then return nil, err end
+  file:write(text)
+  file:close()
+  return system.replace_file(temporary, path)
+end
+
+-- Pairs with the Machine at `host` and `port` through a pairing code. Saves the Machine's record in
+-- `USERDIR/machines` with its token protected for this user, then calls `on_done(err, path)`.
+-- A failure does not try again, because each wrong code counts as an attempt.
+function MachineClient.pair(host, port, code, name, on_done)
+  core.add_thread(function()
+    local function done(...) core.try(on_done, ...) end
+    local deadline = system.get_time() + CONNECT_TIMEOUT
+    local socket, err = open_socket(host, port, deadline, function() return false end)
+    if not socket then return done({code = "offline", message = err}) end
+    local decoder, reply = machine.decoder()
+    socket:write(machine.frame("request", 1, json.encode({method = "hello",
+      params = {protocol = PROTOCOL, pair = code, name = name}})))
+    while not reply and system.get_time() < deadline do
+      local chunk = socket:read(65536)
+      if not chunk then break end
+      if chunk == "" then
+        coroutine.yield(0.01)
+      else
+        decoder:feed(chunk)
+        local kind, _, body = decoder:next()
+        if kind == "reply" then reply = body end
+      end
+    end
+    socket:close()
+    local ok, value = pcall(json.decode, reply or "")
+    if not ok or type(value) ~= "table" then
+      return done({code = "disconnected", message = "The Machine did not answer the pairing"})
+    end
+    if value.error then return done(value.error) end
+    local hello = value.result
+    -- The Machine ID names the record's file, so it must be a plain ID.
+    if type(hello) ~= "table" or type(hello.device) ~= "table" or type(hello.machine) ~= "string"
+        or not hello.machine:match("^%x+$") then
+      return done({code = "invalid_reply", message = "The Machine sent an invalid pairing reply"})
+    end
+    local protected, protect_err = machine.protect(hello.device.token)
+    if not protected then return done({code = "protect_failed", message = protect_err}) end
+    local directory = USERDIR .. PATHSEP .. "machines"
+    net.private_directory(directory)
+    local path = directory .. PATHSEP .. hello.machine .. ".json"
+    ok, err = write_file(path, json.encode {version = 1, machine = hello.machine, host = host, port = port,
+      device = hello.device.id, level = hello.level, protected_token = to_hex(protected)})
+    if not ok then return done({code = "write_failed", message = tostring(err)}) end
+    core.log_quiet("Paired with Machine %s for %s access", hello.machine, tostring(hello.level))
+    done(nil, path)
+  end)
 end
 
 -- Sends one request. `on_reply(err, result, bytes)` runs once: with the result, or with an error
@@ -90,26 +182,22 @@ function MachineClient:dispatch(id, body, bytes)
 end
 
 function MachineClient:connect()
-  local found, err = read_discovery(self.discovery)
+  local found, err = read_machine_file(self.path)
   if not found then return self:fail(err) end
-  local address = net.resolve_address("127.0.0.1")
-  local deadline = system.get_time() + CONNECT_TIMEOUT
-  while address and address:get_status() == "waiting" and system.get_time() < deadline do coroutine.yield(0.01) end
-  if not address or address:get_status() ~= "success" then return self:fail("Cannot resolve the loopback address") end
   local socket
-  socket, err = net.open_tcp(address, found.port)
-  if not socket then return self:fail(tostring(err)) end
+  socket, err = open_socket(found.host, found.port, system.get_time() + CONNECT_TIMEOUT,
+    function() return self.state == "closed" end)
+  if self.state == "closed" then
+    if socket then socket:close() end
+    return
+  end
+  if not socket then return self:fail(err) end
   self.socket, self.decoder = socket, machine.decoder()
-  local status
-  repeat
-    status, err = socket:get_status()
-    if status == "waiting" then coroutine.yield(0.01) end
-  until status ~= "waiting" or system.get_time() >= deadline or self.state == "closed"
-  if self.state == "closed" then return end
-  if status ~= "success" then return self:fail(err or "Cannot connect to the Machine server") end
-  self:request("hello", {protocol = PROTOCOL, token = found.token}, nil, function(hello_err, hello)
+  found.hello.protocol = PROTOCOL
+  self:request("hello", found.hello, nil, function(hello_err, hello)
     if hello_err then return self:fail(hello_err.message or hello_err.code) end
     self.state, self.machine, self.epoch, self.features = "ready", hello.machine, hello.epoch, hello.features
+    self.level = hello.level
     core.log_quiet("Machine connection ready: machine=%s epoch=%s", tostring(hello.machine), tostring(hello.epoch))
     for _, request in ipairs(self.held) do self.socket:write(request.frame) end
     self.held = {}
