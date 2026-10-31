@@ -801,3 +801,27 @@ _Avoid_: empty diff popup
 **Clipboard Comparison**:
 A Text Diff View with editable clipboard text on the left and the current file or selected file fragment on the right. A Project-file side remains connected to that file's Buffer.
 _Avoid_: clipboard snapshot diff
+
+**Machine**:
+A computer that runs Anvil and that the user paired with their other devices. The phone is a Machine for the vault that it stores.
+_Avoid_: Remote, host, server, node
+
+**Swarm**:
+All of the user's paired Machines.
+_Avoid_: Fleet, cluster
+
+**Companion**:
+The Anvil app for Android. Its name on the phone is Anvil.
+_Avoid_: Mobile app, phone client
+
+**Client**:
+A desktop Anvil or a Companion that is connected to a Machine.
+_Avoid_: Frontend, remote
+
+**Controller**:
+The one Client that drives a Terminal Session that several Clients show. It sets the session's size and sends its input.
+_Avoid_: Owner, host
+
+**Viewer**:
+A Client that shows a Terminal Session that another Client drives.
+_Avoid_: Observer, spectator

@@ -18,13 +18,13 @@ Not everything ships at once. The rule for each step is: it must not make a late
 - **An Anvil port to Android.** The phone app is a native Android app. See [Why a native app](#why-a-native-app).
 - **Other people.** The first versions have one owner. Access for a second person is a later design.
 
-## Proposed terms
+## Terms
 
-These names are not in `CONTEXT.md` yet. Add them when they are accepted. "Remote" already means **Remote POI Source** in `CONTEXT.md`, so this plan does not use "Remote" as a term.
+`CONTEXT.md` defines these terms. "Remote" already means **Remote POI Source** there, so this plan does not use "Remote" as a term.
 
 - **Machine:** a computer that runs Anvil and that you paired. Your phone is also a Machine for its local vault.
 - **Swarm:** all your paired Machines.
-- **Companion:** the native Android app.
+- **Companion:** the native Android app. Its name on the phone is Anvil.
 - **Client:** a desktop Anvil or a Companion that is connected to a Machine.
 - **Controller:** the one Client that sets a Terminal Session's size, sends its input and answers its terminal queries.
 - **Viewer:** a Client that shows a Terminal Session that another Client controls.
@@ -86,7 +86,7 @@ Today, `core.control` mixes the two kinds of operation, and it depends on Views.
 On a Machine, split `core.control` into two parts:
 
 - **Machine operations:** start a Terminal or Pi, read its state, send, wait and interrupt. `anvil serve` answers these, so they work with no Client.
-- **Editor operations:** `open_file`, `pane` and `workspace_state`. The Machine forwards them to a named Client, or to the Client that started the Pi. With no Client, they fail.
+- **Editor operations:** `open_file`, `pane` and `workspace_state`. A request that names a Client goes to that Client. Other requests go to the Client that the user used last, as an external launch opens in the Anvil Window that the user activated last. With no Client, they fail with a clear message.
 
 `anvil serve` publishes Pi's discovery files on the Machine, so their owner does not depend on a View.
 
@@ -94,7 +94,11 @@ On a Machine, split `core.control` into two parts:
 
 ### Server lifetime
 
-Terminal Sessions and Machine operations must work with no UI, so `anvil serve` must run while Anvil's UI is closed. Proposal: start it at login, with one server for each user on each Machine. The local shell connects to it like any other Client. This is still an open question. Decide it before the Terminal or Agent service ships.
+- Anvil starts `anvil serve` when it starts. One server runs for each user on each Machine. If a server already runs, Anvil uses it.
+- The local shell connects to the server like any other Client.
+- A server that Anvil started ends when Anvil ends. Terminal Sessions keep running, as they do today, but other devices cannot reach them until Anvil starts again.
+- For a Machine that other devices must always reach, the user runs `anvil serve` alone. That server runs without a UI and does not end with Anvil.
+- Connections from other devices are a setting, off by default. Without it, the server accepts only local connections.
 
 ## Identity
 
@@ -512,7 +516,6 @@ Decide before code:
 
 - Machine-qualified identity
 - the ownership rules, for operations and for state
-- the server lifetime
 - the protocol envelope and version
 - the two authority levels
 
@@ -547,9 +550,3 @@ The first test runs in parallel with the desktop work.
 7. **Pi chat:** start Pi, send messages, read its session file.
 
 Also measure the compressed size of a full file list snapshot for a large Project.
-
-## Open questions
-
-- Does `anvil serve` start at login? This plan proposes yes.
-- Are the names Machine, Swarm, Companion, Client, Controller and Viewer accepted?
-- Where does an editor request go when several Clients are connected and none started the Pi?
