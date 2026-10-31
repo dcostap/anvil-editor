@@ -468,7 +468,7 @@ The Current View whose focus scope receives input, including input received by o
 _Avoid_: Focused active view, globally active view
 
 **Tab**:
-An item representing one Pane. It shows the Pane's number if it has one, its Current View's name, and the View Icon or agent icon. The Project Sidebar shows Tabs under their Project. The Title Bar shows them only when the Project Sidebar is hidden or absent.
+An item representing one Pane. It shows the Pane's number if it has one, its Current View's name, and the View Icon or agent icon. The Project Sidebar shows Tabs under their Project. The Title Bar shows them only when the Project Sidebar is hidden or absent. The user can also keep Title Bar Tabs hidden.
 _Avoid_: Pane Tab, file tab, buffer tab, View tab, Node tab
 
 **File Tree**:

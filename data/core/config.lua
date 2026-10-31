@@ -139,7 +139,7 @@ config.max_visible_commands = 10
 ---@type integer
 config.max_visited_files = 20
 
----Always hide tabs even if multiple Buffers are open.
+---Always hide Title Bar Tabs, including when the Project Sidebar is hidden.
 ---
 ---The default is false.
 ---@type boolean

@@ -484,8 +484,8 @@ settings.add("User Interface",
       min = 1
     },
     {
-      label = "Hide Tabs",
-      description = "Always hide tabs even if multiple Buffers are open.",
+      label = "Always Hide Title Bar Tabs",
+      description = "Hide Title Bar Tabs even when the Project Sidebar is hidden.",
       path = "hide_tabs",
       type = settings.type.TOGGLE,
       default = false
@@ -1220,6 +1220,16 @@ local function save_settings()
     fp:write("return ", output)
     fp:close()
   end
+end
+
+---Apply and save a config value from a command.
+---@param path string
+---@param value any
+function settings.set(path, value)
+  set_config_value(config, path, value)
+  set_config_value(settings.config, path, value)
+  save_settings()
+  core.redraw = true
 end
 
 local function find_color_theme(name)

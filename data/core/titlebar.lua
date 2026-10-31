@@ -187,9 +187,9 @@ local function preferred_tab_width(number, pane, row_height)
   return common.clamp(width, min_width, math.max(min_width, max_width))
 end
 
--- The Project Sidebar lists the Tabs while it shows. The Title Bar shows them while no Sidebar does.
+-- The Title Bar shows Tabs only when they are enabled and no Project Sidebar shows them.
 local function tabs_shown()
-  return system.get_window_content_x() <= 0
+  return not config.hide_tabs and system.get_window_content_x() <= 0
 end
 
 local function draw_tab_tile(x, y, w, h, color)

@@ -1,4 +1,5 @@
 local core = require "core"
+local command = require "core.command"
 local config = require "core.config"
 local layout = require "core.pane_layout"
 local panes = require "core.panes"
@@ -46,7 +47,7 @@ end
 test.describe("Global title bar Pane entries", function()
   local set_active_view, projects, window, window_mode, set_window_mode,
     set_window_hit_test, quit, zoom, set_clip_rect, transitions, scroll_transition, fps,
-    configured_fps, live_resize, animation_rate
+    configured_fps, live_resize, animation_rate, hide_tabs, get_content_x
 
   test.before_each(function()
     panes.reset_for_tests()
@@ -66,6 +67,7 @@ test.describe("Global title bar Pane entries", function()
     configured_fps, live_resize, animation_rate = config.fps, core.in_live_resize_frame, config.animation_rate
     config.fps, core.in_live_resize_frame, config.animation_rate = 60, false, 1
     core.set_active_view = function(view) core.active_view = view end
+    hide_tabs, get_content_x = config.hide_tabs, system.get_window_content_x
   end)
 
   test.after_each(function()
@@ -82,6 +84,40 @@ test.describe("Global title bar Pane entries", function()
     renderer.set_clip_rect = set_clip_rect
     config.transitions, config.disabled_transitions.scroll, core.fps = transitions, scroll_transition, fps
     config.fps, core.in_live_resize_frame, config.animation_rate = configured_fps, live_resize, animation_rate
+    config.hide_tabs, system.get_window_content_x = hide_tabs, get_content_x
+  end)
+
+  test.it("keeps Title Bar Tabs hidden until the saved toggle is turned on again", function()
+    panes.create { factory = factory("one") }
+    panes.create { factory = factory("two") }
+    system.get_window_content_x = function() return 0 end
+    config.hide_tabs = false
+    local title = TitleBar()
+    title.size.x = 900
+    title:update()
+    local entry = title:get_pane_entries()[1]
+    test.ok(entry.w, "Tabs must show without the Sidebar")
+    local x, y = entry.x + entry.w / 2, entry.y + entry.h / 2
+
+    test.ok(command.perform("core:toggle_tabs"))
+    title:update()
+    test.equal(title:get_pane_entries()[1].w, nil, "the toggle must hide Title Bar Tabs")
+    test.equal(title:entry_at(x, y), nil, "hidden Tabs must not accept clicks")
+    test.ok(title.size.y > 0, "hiding Tabs must keep the Title Bar")
+    local saved = dofile(USERDIR .. "/user_settings.lua")
+    test.equal(saved.config.hide_tabs, true)
+
+    system.get_window_content_x = function() return 240 end
+    title:update()
+    system.get_window_content_x = function() return 0 end
+    title:update()
+    test.equal(title:get_pane_entries()[1].w, nil, "closing the Sidebar must not show hidden Tabs")
+
+    test.ok(command.perform("core:toggle_tabs"))
+    title:update()
+    test.ok(title:get_pane_entries()[1].w, "the toggle must restore Tabs")
+    saved = dofile(USERDIR .. "/user_settings.lua")
+    test.equal(saved.config.hide_tabs, false)
   end)
 
   test.it("keeps Tab order while numbering pending Panes FIFO", function()

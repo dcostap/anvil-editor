@@ -415,11 +415,16 @@ command.add(nil, {
 
 command.add_toggle("core:toggle_tabs", {
   palette = true,
+  metadata = { keywords = { "always hide tabs", "title bar" } },
   get = function()
     return not config.hide_tabs
   end,
   set = function(enabled)
     config.hide_tabs = not enabled
+    local settings = package.loaded["plugins.settings"]
+    if settings then settings.set("hide_tabs", config.hide_tabs) end
+    core.redraw = true
+    core.log_quiet("Title Bar Tabs: enabled=%s", tostring(enabled))
   end,
 })
 
