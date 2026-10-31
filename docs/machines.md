@@ -532,7 +532,7 @@ These decisions come before code. This doc answers identity, ownership and the a
 
 ### Desktop
 
-1. **Loopback slice.** `anvil serve` on the same PC, with one Project and one authenticated read.
+1. **Loopback slice.** `anvil serve` on the same PC, with one Project and one authenticated read. Done: see "Machine server" in `AGENTS.md`.
 2. **One file, end to end.** Use the real Buffer load and save flow through a minimal `core.fs`. Do not use a special test path. The Machine's folder has the same path as a Client folder, with different contents. The test fails if any code reads the Client's copy. On one PC, one path is one folder, so the test server gets a test-only option that maps its paths into a private folder. Test these cases:
    - open, edit, save conditionally
    - a conflict

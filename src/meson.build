@@ -358,6 +358,13 @@ launch_mode_test = executable('launch_mode_test',
 )
 test('launch-mode', launch_mode_test, env: anvil_test_env, suite: 'anvil')
 
+machine_frame_test = executable('machine_frame_test',
+    ['../tests/native/machine_frame_test.c', 'machine_frame.c'],
+    include_directories: anvil_includes,
+    c_args: anvil_cargs,
+)
+test('machine-frame', machine_frame_test, env: anvil_test_env, suite: 'anvil')
+
 if host_machine.system() == 'windows'
     keymap_layout_test = executable('keymap_layout_test',
         ['../tests/native/keymap_layout_test.c'],
@@ -556,7 +563,7 @@ if get_option('net')
 
     anvil_deps += [mbedtls_dep, mbedx509_dep, tfpsacrypto_dep]
 
-    anvil_sources += 'api/net.c'
+    anvil_sources += ['api/net.c', 'api/machine.c', 'machine_frame.c']
     anvil_cargs += '-DANVIL_NET'
 endif
 

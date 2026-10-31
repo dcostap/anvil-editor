@@ -40,6 +40,7 @@ int main(void) {
   CHECK(!LAUNCH("repl"));
   CHECK(!LAUNCH("run", "script.lua"));
   CHECK(!LAUNCH("edit", "notes.md"));
+  CHECK(!LAUNCH("serve", "C:\Projects\a"));
   CHECK(!LAUNCH("--version"));
   CHECK(!LAUNCH("-h"));
 

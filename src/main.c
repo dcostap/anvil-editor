@@ -145,6 +145,7 @@ typedef struct {
   uint64_t   resize_request_same_size;
   bool       pending_resize_frame;
   bool       running_lua_tests;
+  bool       serve;
   SDL_Window *pending_resize_window;
   char       pending_resize_reason[64];
   Uint32     last_rendered_resize_window_id;
@@ -246,7 +247,8 @@ static const char *init_code =
   "  local exedir = match(EXEFILE, '^(.*)" ANVIL_PATHSEP_PATTERN ANVIL_NONPATHSEP_PATTERN "$')\n"
   "  local prefix = os.getenv('ANVIL_PREFIX') or match(exedir, '^(.*)" ANVIL_PATHSEP_PATTERN "bin$')\n"
   "  dofile((EMBEDDED_DATADIR or MACOS_RESOURCES or (prefix and prefix .. '/share/anvil' or exedir .. '/data')) .. '/core/start.lua')\n"
-  "  core = require(system.is_sidebar_surface() and 'core.sidebar_app' or os.getenv('ANVIL_RUNTIME') or 'core')\n"
+  "  core = require(system.is_sidebar_surface() and 'core.sidebar_app' or ARGS[2] == 'serve' and 'core.serve'\n"
+  "    or os.getenv('ANVIL_RUNTIME') or 'core')\n"
   "  core.init()\n"
   "  core.run()\n"
   "end, function(err)\n"
@@ -263,7 +265,8 @@ static const char *init_code =
   "    fp:close()\n"
   "    error_path = system.absolute_path(error_path)\n"
   "  end\n"
-  "  if not RUNNING_LUA_TESTS and not os.getenv('ANVIL_HEADLESS_TEST') and not system.is_sidebar_surface() then\n"
+  "  if not RUNNING_LUA_TESTS and not os.getenv('ANVIL_HEADLESS_TEST') and not system.is_sidebar_surface()\n"
+  "      and ARGS[2] ~= 'serve' then\n"
   "    system.show_fatal_error('Anvil internal error',\n"
   "      'An internal error occurred in a critical part of the application.\\n\\n'..\n"
   "      'Error: '..tostring(err)..'\\n\\n'..\n"
@@ -394,8 +397,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   }
   anvil_surface_log_init(hosted ? "hosted" : "direct");
   anvil_latency_probe_init(hosted ? "hosted" : "direct");
+  /* `anvil serve` is the headless Machine server. It shows no window and forwards nothing to an editor. */
+  bool serve = argc > 1 && strcmp(argv[1], "serve") == 0;
 #ifdef _WIN32
-  if (!hosted && anvil_single_instance_forward_or_own(argc, argv)) {
+  if (!hosted && !serve && anvil_single_instance_forward_or_own(argc, argv)) {
     return SDL_APP_SUCCESS;
   }
 #endif
@@ -465,7 +470,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   }
   custom_events_initialized = true;
 
-  if (!hosted && !anvil_single_instance_start_server()) {
+  if (!hosted && !serve && !anvil_single_instance_start_server()) {
     /* Non-fatal: release native ownership so secondaries do not wait on a
      * pipe server that is unavailable. Existing Lua IPC remains fallback. */
     anvil_single_instance_stop();
@@ -490,6 +495,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   app->resize_request_same_size = 0;
   app->pending_resize_frame = false;
   app->running_lua_tests = false;
+  app->serve = serve;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "test") == 0) {
       app->running_lua_tests = true;
@@ -563,7 +569,7 @@ static SDL_AppResult app_run_step_ex(AppState *app, bool immediate, const char *
     fprintf(stderr, "Error in core.run_step: %s\n", errmsg);
     report_run_step_error(app->L, errmsg);
 
-    if (!app->running_lua_tests && !SDL_getenv("ANVIL_HEADLESS_TEST") &&
+    if (!app->running_lua_tests && !app->serve && !SDL_getenv("ANVIL_HEADLESS_TEST") &&
         !anvil_hosted_surface_sidebar()) {
       lua_getglobal(app->L, "system");
       lua_getfield(app->L, -1, "show_fatal_error");

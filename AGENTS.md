@@ -390,6 +390,7 @@ These launches run the Lua application without a shell:
 
 - `--direct`, which is removed before the Lua command line is parsed
 - CLI commands such as `test`, `help`, `list`, `repl`, `run`, and `edit`
+- `serve`, the Machine server
 - `--help`, `-h`, `--version`, and `-v`
 - the shell's own Project and Sidebar processes
 
@@ -554,6 +555,19 @@ First-party plugin code may assume its required first-party config/style keys ex
 When adding or changing first-party plugin behavior, do not parameterize every constant by default. Promote a value into config/style only when it has a clear user-facing purpose and effect, and when it makes sense as something customizable now or likely to be changed on the fly/future-tuned. Once promoted, keep its default in the appropriate defaults file rather than in the plugin implementation.
 
 When adding a new first-party style key, ensure the base style schema remains complete so switching themes does not leave missing keys. Themes should override keys, not be the only place where required first-party keys are defined.
+
+## Machine server
+
+`anvil serve <project>...` is the Machine server from [Machines](docs/machines.md). It runs Anvil's Lua (`core.serve`) without a window. It does not forward its launch to a running editor.
+It listens on loopback only. At start it writes `USERDIR/machine/server.json` with its port, token, process ID, Machine ID and epoch. The folder is private.
+The Machine ID is in `USERDIR/machine/id` and stays across restarts. Each start gets a new epoch and a new token.
+`src/machine_frame.c` is the frame codec. It has no Lua or SDL headers, because the Companion uses it too. `src/api/machine.c` exposes it to Lua as `machine`.
+A frame has a 13-byte header: the type (1 request, 2 reply), then the request ID, the JSON length and the byte length, each 4 bytes big-endian. The JSON body follows, then the raw bytes.
+The first request must be `hello` with `protocol` and `token`. The server checks the version first. A wrong version or token gets an error reply, then the server closes the connection.
+`files.read` takes an absolute `path` in one of the server's Projects. Its reply has `size` and `version` in the JSON and the file's bytes after it. The version is the SHA-256 of the bytes.
+An error reply is `{"error": {"code": ..., "message": ...}}`. The server ignores unknown fields.
+The server polls its sockets. A link inside a Project can point outside it, as in a local Project.
+Run `runtime/machine_serve.lua`, `anvil:machine-frame` and `anvil:launch-mode` after changes.
 
 ## Agent control
 

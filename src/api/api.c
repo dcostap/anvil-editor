@@ -28,7 +28,8 @@ int luaopen_worker_pool_native(lua_State *L);
 
 #ifdef ANVIL_NET
   int luaopen_net(lua_State* L);
-  #define LUA_NET { "net",  luaopen_net  },
+  int luaopen_machine(lua_State* L);
+  #define LUA_NET { "net",  luaopen_net  }, { "machine", luaopen_machine },
 #else
   #define LUA_NET
 #endif
