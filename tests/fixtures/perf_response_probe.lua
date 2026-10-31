@@ -30,6 +30,7 @@ function scene.setup(context)
 end
 
 function scene.ready(context)
+  assert(not context.settings.ready_error, "probe readiness failed")
   return require("scenes.support").background_settled(context)
 end
 

@@ -50,8 +50,13 @@ class ResponseLatencyTests(unittest.TestCase):
                           root=str(self.project), cadence=cadence,
                           window_width=800, window_height=600, **settings),
             run_dir=work / "run", frames=100, warmup_frames=2, screenshot=False,
-            total_timeout_seconds=90, startup_timeout_seconds=60,
+            total_timeout_seconds=15 if settings.get("ready_error") else 90, startup_timeout_seconds=60,
             heartbeat_timeout_seconds=30, action_timeout_seconds=3)
+
+    def test_readiness_errors_fail_with_the_original_error(self):
+        with self.assertRaises(gate.BenchmarkCaseError) as caught:
+            self.run_probe(ready_error=True)
+        self.assertIn("probe readiness failed", caught.exception.details["error"])
 
     def test_missing_redraw_fails_instead_of_getting_one_from_the_harness(self):
         with self.assertRaises(gate.BenchmarkCaseError) as caught:

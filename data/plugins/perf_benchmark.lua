@@ -2002,12 +2002,20 @@ core.add_background_thread(function()
   -- current. The external heartbeat watchdog bounds this wait.
   set_phase("await_ready", "readiness_wait_started")
   local settle_frames = 0
+  local function setup_ready()
+    return scenario_is_ready() and decorations_are_settled()
+  end
   repeat
     core.redraw = true
     heartbeat(false)
     coroutine.yield()
     settle_frames = settle_frames + 1
-  until settle_frames >= 30 and scenario_is_ready() and decorations_are_settled()
+    if settle_frames >= 30 then
+      local checked, ready = xpcall(setup_ready, debug.traceback)
+      if not checked then fail(ready); return end
+      if ready then break end
+    end
+  until false
   mark_lifecycle("scenario_ready")
   for _ = 1, 5 do
     core.redraw = true
