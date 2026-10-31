@@ -155,7 +155,7 @@ Start with whole file list snapshots. Send differences only if a measurement sho
 
 ### Positions
 
-Anvil counts UTF-8 bytes. Android counts UTF-16 units. Text ranges in the protocol use one unit. Each Client converts in one place. Test the conversion with Spanish text and emoji.
+Text ranges in the protocol count UTF-8 bytes, as Anvil does. Android counts UTF-16 units, so the Companion converts in one place, at its JNI boundary. Test the conversion with Spanish text and emoji.
 
 File writes replace whole files, so they need no ranges. Ranges appear first in search matches and index results.
 
@@ -329,13 +329,10 @@ Pi runs in a Terminal Session on the Machine, so its tools act on that Machine. 
 
 ### Leaks to the wrong PC
 
-These features act on the local PC by nature. Each one needs a decision for a Project on another Machine:
+These features act on the local PC by nature. For a Project on another Machine:
 
-- the clipboard
-- native file dialogs
-- drag and drop of files
-- Show in File Explorer
-- Open with the default app
+- **The clipboard works as usual.** Buffers are local, so copy and paste move local text. A Terminal program's clipboard write goes to the Controller's clipboard.
+- **These do nothing and show a short message:** native file dialogs, drag and drop of files from the local PC, Show in File Explorer, and Open with the default app. Anvil's own pickers, such as File Search, still work, because they read the Machine's file list.
 
 ### Disconnects
 
@@ -555,6 +552,4 @@ Also measure the compressed size of a full file list snapshot for a large Projec
 
 - Does `anvil serve` start at login? This plan proposes yes.
 - Are the names Machine, Swarm, Companion, Client, Controller and Viewer accepted?
-- Which position unit does the protocol use?
-- What do the clipboard, file dialogs, drag and drop and Show in File Explorer do for a Project on another Machine?
 - Where does an editor request go when several Clients are connected and none started the Pi?
